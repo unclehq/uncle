@@ -33,6 +33,32 @@ CONFIG_STAGES = [
 ]
 RUNNERS = ["cline", "claude", "kimi", "codex"]
 
+# Models offered in the Configure → model picker, grouped by plan.
+MODEL_CATALOG = [
+    ("Subscribed (ClinePass)", [
+        "cline-pass/qwen3.8-max",
+        "GLM-5.2",
+        "DeepSeek V4 Pro",
+        "GLM-5.3-Flash",
+        "Kimi K3",
+        "GLM-5.3",
+        "Kimi K2.7 Code",
+        "DeepSeek V4 Flash",
+        "Kimi K2.6",
+        "Qwen3.7 Plus",
+        "Qwen3.7 Max",
+        "MiniMax-M3",
+        "MiMo-V2.5-Pro",
+        "MiMo-V2.5",
+    ]),
+    ("Free", [
+        "DeepSeek V4 Flash",
+        "GLM-5.3-Flash",
+        "LongCat 2.0",
+        "Laguna S 2.1",
+    ]),
+]
+
 # Full description for each Configure item. Only the description of the row
 # currently under the cursor is shown, in a panel to the right of the options.
 CONFIG_DESC = {
@@ -146,8 +172,20 @@ LOGO = [
 LOGO_W = max(len(line) for line in LOGO)
 
 
+# Sentinel meaning "the global / default value, not a specific stage".
+GLOBAL = "__global__"
+
+
+def _env_name(prefix, stage):
+    return prefix + "".join(c if c.isalnum() else "_" for c in stage.upper())
+
+
 def stage_env_var(stage):
-    return "WORKFLOW_MODEL_" + "".join(c if c.isalnum() else "_" for c in stage.upper())
+    return _env_name("WORKFLOW_MODEL_", stage)
+
+
+def stage_effort_var(stage):
+    return _env_name("WORKFLOW_EFFORT_", stage)
 
 
 def runner_commands(runner):
@@ -218,8 +256,15 @@ class UncleTUI:
         self.completed_tokens = 0
         self.current_tokens = 0
         self.config = {}
+        self.stage_efforts = {}
         self.runner = "cline"
         self.config_sel = 0
+        self.config_scroll = 0
+        self.pick_sel = 0
+        self.pick_scroll = 0
+        self.pick_filter = ""
+        self.picker_kind = "model"
+        self.picker_target = None
         self.load_config()
 
     # ---- colors (cline's CLI palette) ----
@@ -266,33 +311,186 @@ class UncleTUI:
             return self._config_items()
         return []
 
-    def _config_stage_name(self):
-        if self.config_sel == 0:
-            return "runner"
-        if self.config_sel == 1:
-            return "model"
-        if self.config_sel == 2:
-            return "effort"
-        idx = self.config_sel - 3
-        if 0 <= idx < len(CONFIG_STAGES):
-            return CONFIG_STAGES[idx]
+    # ---- config rows ----
+    # Each row is a (kind, target) pair. kind is one of runner/model/effort;
+    # target is None (runner) or GLOBAL (global model/effort) or a stage name.
+    def _config_row_defs(self):
+        rows = [("runner", None), ("model", GLOBAL), ("effort", GLOBAL)]
+        for s in CONFIG_STAGES:
+            rows.append(("model", s))
+            rows.append(("effort", s))
+        return rows
+
+    def _config_row(self):
+        defs = self._config_row_defs()
+        if 0 <= self.config_sel < len(defs):
+            return defs[self.config_sel]
+        return ("", None)
+
+    def _row_value(self, kind, target):
+        if kind == "runner":
+            return self.runner
+        if kind == "model":
+            return self.model if target is GLOBAL else self.config.get(target, "")
+        if kind == "effort":
+            return self.effort if target is GLOBAL else self.stage_efforts.get(target, "")
         return ""
 
-    def _config_items(self):
-        def fmt(key, value):
-            return "%s: %s" % (key.ljust(20), value)
+    def _row_label(self, kind, target):
+        if kind == "runner":
+            return "runner"
+        if kind == "model":
+            return "model" if target is GLOBAL else target
+        if kind == "effort":
+            return "effort" if target is GLOBAL else "%s effort" % target
+        return ""
 
-        rows = [
-            fmt("runner", self.runner),
-            fmt("model", self.model or "(cline default)"),
-            fmt("effort", self.effort),
-        ]
-        rows += [fmt(s, self.config.get(s) or "(default)") for s in CONFIG_STAGES]
+    def _row_display(self, kind, target):
+        val = self._row_value(kind, target)
+        if kind == "model":
+            if not val:
+                return "(cline default)" if target is GLOBAL else "(default)"
+            return val
+        if kind == "effort":
+            if not val:
+                return self.effort if target is GLOBAL else "(default)"
+            return val
+        return val
+
+    def _set_row_value(self, kind, target, value):
+        value = (value or "").strip()
+        if kind == "runner":
+            self.runner = value or "cline"
+        elif kind == "model":
+            if target is GLOBAL:
+                self.model = value
+            elif value:
+                self.config[target] = value
+            else:
+                self.config.pop(target, None)
+        elif kind == "effort":
+            if target is GLOBAL:
+                self.effort = value or self.effort or "medium"
+            elif value:
+                self.stage_efforts[target] = value
+            else:
+                self.stage_efforts.pop(target, None)
+        self.save_config()
+
+    def _clear_row(self):
+        kind, target = self._config_row()
+        self._set_row_value(kind, target, "")
+
+    def _config_items(self):
+        defs = self._config_row_defs()
+        rows = []
+        for kind, target in defs:
+            rows.append("%s: %s" % (self._row_label(kind, target).ljust(20),
+                                    self._row_display(kind, target)))
         return rows
 
     def _config_desc(self):
         """Full description for the currently highlighted Configure row."""
-        return CONFIG_DESC.get(self._config_stage_name(), "")
+        kind, target = self._config_row()
+        if kind == "runner":
+            return CONFIG_DESC["runner"]
+        if kind == "model":
+            if target is GLOBAL:
+                return CONFIG_DESC["model"]
+            return CONFIG_DESC.get(target, "")
+        if kind == "effort":
+            base = CONFIG_DESC["effort"]
+            if target is not GLOBAL:
+                base += (" Set a value here to give the %s stage its own reasoning "
+                         "effort instead of inheriting the global effort above. "
+                         "Leave it at (default) to use %s.") % (target, self.effort)
+            return base
+        return ""
+
+    # ---- generic picker (model / effort / runner) ----
+    def _picker_rows(self):
+        """Rows for the active picker: (kind, text), kind in header/option/model/custom."""
+        if self.picker_kind == "effort":
+            return [("option", e) for e in EFFORTS] + [("custom", "Custom… (type an effort)")]
+        if self.picker_kind == "runner":
+            return [("option", r) for r in RUNNERS] + [("custom", "Custom… (type a runner)")]
+        rows = [("header", "Subscribed (ClinePass)")]
+        for m in MODEL_CATALOG[0][1]:
+            rows.append(("model", m))
+        rows.append(("header", "Free"))
+        for m in MODEL_CATALOG[1][1]:
+            rows.append(("model", m))
+        rows.append(("custom", "Custom… (type a model id)"))
+        return rows
+
+    def _picker_filtered(self):
+        flt = self.pick_filter.strip().lower()
+        rows = self._picker_rows()
+        if not flt:
+            return rows
+        out = []
+        for kind, text in rows:
+            if kind == "header":
+                continue
+            if kind == "custom" or flt in text.lower():
+                out.append((kind, text))
+        return out
+
+    def _picker_current(self):
+        """The value the active picker is choosing on behalf of."""
+        if self.picker_kind == "runner":
+            return self.runner
+        return self._row_value(self.picker_kind, self.picker_target)
+
+    def _open_picker(self, kind, target):
+        self.picker_kind = kind
+        self.picker_target = target
+        self.pick_filter = ""
+        cur = (self._picker_current() or "").lower()
+        rows = self._picker_filtered()
+        self.pick_sel = 0
+        for i, (k, text) in enumerate(rows):
+            if k in ("model", "option") and text.lower() == cur:
+                self.pick_sel = i
+                break
+        sel_idx = [i for i, (k, _) in enumerate(rows) if k != "header"]
+        if self.pick_sel not in sel_idx and sel_idx:
+            self.pick_sel = sel_idx[0]
+        self.pick_scroll = 0
+        self.state = "picker"
+
+    def _picker_move(self, delta):
+        """Move selection to the next selectable (non-header) row, wrapping."""
+        rows = self._picker_filtered()
+        n = len(rows)
+        if n == 0:
+            return
+        sel_idx = [i for i, (k, _) in enumerate(rows) if k != "header"]
+        if not sel_idx:
+            return
+        pos = sel_idx.index(self.pick_sel) if self.pick_sel in sel_idx else 0
+        self.pick_sel = sel_idx[(pos + delta) % len(sel_idx)]
+
+    def _reset_pick_sel(self):
+        """Set selection to the first selectable (non-header) row, if any."""
+        rows = self._picker_filtered()
+        for i, (k, _) in enumerate(rows):
+            if k != "header":
+                self.pick_sel = i
+                return
+        self.pick_sel = 0
+
+    def _picker_confirm(self):
+        rows = self._picker_filtered()
+        if not rows:
+            return
+        kind, text = rows[self.pick_sel]
+        if kind == "custom":
+            self.state = "config_edit"
+            self.input_buf = self.pick_filter.strip() or self._picker_current()
+            return
+        self._set_row_value(self.picker_kind, self.picker_target, text)
+        self.state = "config"
 
     def cmd_for(self):
         if self.workflow_idx == 1:
@@ -305,7 +503,10 @@ class UncleTUI:
     # ---- config ----
     def load_config(self):
         self.config = {}
+        self.stage_efforts = {}
         self.runner = "cline"
+        self.model = ""
+        self.effort = "medium"
         try:
             with open(CONFIG_PATH) as fh:
                 for line in fh:
@@ -321,15 +522,18 @@ class UncleTUI:
                             self.model = val
                         elif key == "effort":
                             self.effort = val
+                        elif key.endswith(".effort"):
+                            self.stage_efforts[key[:-len(".effort")]] = val
                         else:
                             self.config[key] = val
         except Exception:
             pass
 
     def save_config(self):
-        header = ("# Uncle per-stage model config.\n"
+        header = ("# Uncle per-stage model/effort config.\n"
                   "# Format: STAGE VALUE  (STAGE = a stage log name, `reviewer`, `runner`,\n"
-                  "#   `model`, or `effort`; VALUE = cline model id, a runner name, or an effort).\n")
+                  "#   `model`, `effort`, or `STAGE.effort`; VALUE = a cline model id, a\n"
+                  "#   runner name, or a reasoning effort).\n")
         try:
             with open(CONFIG_PATH, "w") as fh:
                 fh.write(header)
@@ -340,6 +544,8 @@ class UncleTUI:
                 for stage in CONFIG_STAGES:
                     if self.config.get(stage):
                         fh.write("%s %s\n" % (stage, self.config[stage]))
+                    if self.stage_efforts.get(stage):
+                        fh.write("%s.effort %s\n" % (stage, self.stage_efforts[stage]))
         except Exception:
             pass
 
@@ -387,6 +593,8 @@ class UncleTUI:
                 env["UNCLE_CLINE_REVIEWER_MODEL"] = model
             else:
                 env[stage_env_var(stage)] = model
+        for stage, effort in self.stage_efforts.items():
+            env[stage_effort_var(stage)] = effort
         env["UNCLE_CLINE_MODEL"] = self.model
         env["UNCLE_CLINE_EFFORT"] = self.effort
         env["UNCLE_STATUS_FILE"] = self.status_path
@@ -447,12 +655,20 @@ class UncleTUI:
                 pass
 
     def _title(self):
+        if self.state == "picker":
+            if self.picker_kind == "effort":
+                return "Pick an effort (type to filter, Enter select, Esc back)"
+            if self.picker_kind == "runner":
+                return "Pick a runner (type to filter, Enter select, Esc back)"
+            return "Pick a model (type to filter, Enter select, Esc back)"
+        if self.state == "config_edit":
+            kind, target = self._config_row()
+            return "Value for %s (Enter save, Esc back)" % (self._row_label(kind, target) or "?")
         return {
             "menu": "The man from uncle",
             "issue_mode": "Seed as",
             "issue": "Issue number or URL",
-            "config": "Configure — Enter: cycle runner/effort or edit, d reset, q back",
-            "config_edit": "Value for %s (Enter save, Esc back)" % self._config_stage_name(),
+            "config": "Configure — Enter: pick model/effort/runner, d reset, q back",
         }.get(self.state, "")
 
     def _draw_logo(self, h, w):
@@ -483,7 +699,8 @@ class UncleTUI:
 
     def _draw_config_desc(self, top, bottom, h, w, cx):
         """Show the full description of the highlighted option on the right."""
-        key = self._config_stage_name()
+        kind, target = self._config_row()
+        key = self._row_label(kind, target) or ""
         desc = self._config_desc()
         if not desc:
             return
@@ -519,6 +736,43 @@ class UncleTUI:
             except curses.error:
                 pass
 
+    def _draw_picker(self, h, w, cx, top):
+        rows = self._picker_filtered()
+        height = max(1, h - top - 1)
+        if self.pick_sel < self.pick_scroll:
+            self.pick_scroll = self.pick_sel
+        if self.pick_sel >= self.pick_scroll + height:
+            self.pick_scroll = self.pick_sel - height + 1
+        for i in range(height):
+            idx = self.pick_scroll + i
+            if idx >= len(rows):
+                break
+            kind, text = rows[idx]
+            selected = idx == self.pick_sel and kind != "header"
+            if kind == "header":
+                marker = "── " if selected else "   "
+                attr = self.color["title"]
+                disp = marker + text
+            else:
+                prefix = "> " if selected else "  "
+                attr = self.color["sel"] if selected else self.color["accent"]
+                cur = kind in ("model", "option") and \
+                    text.lower() == (self._picker_current() or "").lower()
+                marker = "  <current>" if cur else ""
+                disp = prefix + text + marker
+            try:
+                self.stdscr.addnstr(top + i, cx, disp, w - 1 - cx, attr)
+            except curses.error:
+                pass
+        if not rows:
+            try:
+                if self.pick_filter:
+                    self.stdscr.addnstr(top, cx, "no match for %r" % self.pick_filter, w - 1 - cx, self.color["accent"])
+                else:
+                    self.stdscr.addnstr(top, cx, "no matches", w - 1 - cx, self.color["accent"])
+            except curses.error:
+                pass
+
     def _draw_prompt(self, h, w):
         cx = self._draw_logo(h, w)
         row = 0
@@ -541,17 +795,38 @@ class UncleTUI:
         if self.state in ("menu", "issue_mode", "config"):
             sel_idx = self.config_sel if self.state == "config" else self.sel
             top = row
-            for i, item in enumerate(self.items()):
-                selected = i == sel_idx
-                prefix = "> " if selected else "  "
-                attr = self.color["sel"] if selected else 0
-                try:
-                    self.stdscr.addnstr(row, cx, prefix + item, w - 1 - cx, attr)
-                except curses.error:
-                    pass
-                row += 1
+            if self.state == "config":
+                items = self.items()
+                vis = max(1, h - top - 1)
+                if self.config_scroll > sel_idx:
+                    self.config_scroll = sel_idx
+                if sel_idx >= self.config_scroll + vis:
+                    self.config_scroll = sel_idx - vis + 1
+                window = items[self.config_scroll:self.config_scroll + vis]
+                for i, item in enumerate(window):
+                    idx = self.config_scroll + i
+                    selected = idx == sel_idx
+                    prefix = "> " if selected else "  "
+                    attr = self.color["sel"] if selected else 0
+                    try:
+                        self.stdscr.addnstr(row, cx, prefix + item, w - 1 - cx, attr)
+                    except curses.error:
+                        pass
+                    row += 1
+            else:
+                for i, item in enumerate(self.items()):
+                    selected = i == sel_idx
+                    prefix = "> " if selected else "  "
+                    attr = self.color["sel"] if selected else 0
+                    try:
+                        self.stdscr.addnstr(row, cx, prefix + item, w - 1 - cx, attr)
+                    except curses.error:
+                        pass
+                    row += 1
             if self.state == "config":
                 self._draw_config_desc(top, row, h, w, cx)
+        elif self.state == "picker":
+            self._draw_picker(h, w, cx, row)
         else:
             try:
                 self.stdscr.addnstr(row, cx, self.input_buf, w - 1 - cx)
@@ -605,42 +880,21 @@ class UncleTUI:
             return
 
         if self.state == "config":
-            nrows = len(CONFIG_STAGES) + 3
+            nrows = len(self._config_row_defs())
             if k == curses.KEY_UP or k in (ord("k"), ord("K")):
                 self.config_sel = (self.config_sel - 1) % nrows
             elif k == curses.KEY_DOWN or k in (ord("j"), ord("J")):
                 self.config_sel = (self.config_sel + 1) % nrows
             elif k in (10, 13):
-                sel = self.config_sel
-                if sel == 0:
-                    self.runner = RUNNERS[(RUNNERS.index(self.runner) + 1) % len(RUNNERS)]
-                    self.save_config()
-                elif sel == 1:
-                    self.state = "config_edit"
-                    self.input_buf = self.model
-                elif sel == 2:
-                    if self.effort in EFFORTS:
-                        self.effort = EFFORTS[(EFFORTS.index(self.effort) + 1) % len(EFFORTS)]
-                    else:
-                        self.effort = "medium"
-                    self.save_config()
-                else:
-                    self.state = "config_edit"
-                    self.input_buf = self.config.get(self._config_stage_name(), "")
+                kind, target = self._config_row()
+                if kind == "runner":
+                    self._open_picker("runner", None)
+                elif kind == "model":
+                    self._open_picker("model", target)
+                elif kind == "effort":
+                    self._open_picker("effort", target)
             elif k in (ord("d"), ord("D")):
-                sel = self.config_sel
-                if sel == 0:
-                    self.runner = "cline"
-                    self.save_config()
-                elif sel == 1:
-                    self.model = ""
-                    self.save_config()
-                elif sel == 2:
-                    self.effort = "medium"
-                    self.save_config()
-                else:
-                    self.config.pop(self._config_stage_name(), None)
-                    self.save_config()
+                self._clear_row()
             elif k in (ord("q"), ord("Q")):
                 self.state = "menu"
                 self.sel = 0
@@ -660,6 +914,23 @@ class UncleTUI:
                 self._quit()
             return
 
+        if self.state == "picker":
+            rows = self._picker_filtered()
+            n = len(rows)
+            if k == curses.KEY_UP or k in (ord("k"), ord("K")):
+                self._picker_move(-1)
+            elif k == curses.KEY_DOWN or k in (ord("j"), ord("J")):
+                self._picker_move(1)
+            elif k in (10, 13):
+                self._picker_confirm()
+            elif k == curses.KEY_BACKSPACE:
+                self.pick_filter = self.pick_filter[:-1]
+                self._reset_pick_sel()
+            elif 32 <= k <= 126:
+                self.pick_filter += chr(k)
+                self._reset_pick_sel()
+            return
+
         if self.state in ("issue", "config_edit"):
             if k in (10, 13):
                 self._confirm_text()
@@ -677,6 +948,8 @@ class UncleTUI:
         elif self.state == "config":
             self.state = "menu"
         elif self.state == "config_edit":
+            self.state = "config"
+        elif self.state == "picker":
             self.state = "config"
         self.sel = 0
 
@@ -710,18 +983,8 @@ class UncleTUI:
             self.state = "issue_mode"
             self.sel = 0
         elif self.state == "config_edit":
-            stage = self._config_stage_name()
             val = self.input_buf.strip()
-            if stage == "model":
-                self.model = val
-            elif stage == "effort":
-                self.effort = val or "medium"
-            else:
-                if val:
-                    self.config[stage] = val
-                else:
-                    self.config.pop(stage, None)
-            self.save_config()
+            self._set_row_value(self.picker_kind, self.picker_target, val)
             self.input_buf = ""
             self.state = "config"
 

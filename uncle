@@ -63,8 +63,14 @@ stage_env_var() {
         "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
 }
 
-# Read .uncle.config and export WORKFLOW_MODEL_<STAGE> plus UNCLE_CLINE_REVIEWER_MODEL
-# so the drivers resolve the configured per-stage cline models.
+effort_env_var() {
+    printf 'WORKFLOW_EFFORT_%s' \
+        "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
+}
+
+# Read .uncle.config and export WORKFLOW_MODEL_<STAGE>, WORKFLOW_EFFORT_<STAGE>,
+# plus UNCLE_CLINE_REVIEWER_MODEL so the drivers resolve the configured per-stage
+# cline models and reasoning efforts.
 apply_config() {
     local line stage model var
     [[ -s "$UNCLE_CONFIG" ]] || return 0
@@ -82,7 +88,11 @@ apply_config() {
             model)    CL_MODEL="$model" ;;
             effort)   CL_EFFORT="$model" ;;
             *)
-                var="$(stage_env_var "$stage")"
+                if [[ "$stage" == *.effort ]]; then
+                    var="$(effort_env_var "${stage%.effort}")"
+                else
+                    var="$(stage_env_var "$stage")"
+                fi
                 export "$var=$model"
                 ;;
         esac

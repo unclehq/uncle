@@ -4,10 +4,14 @@ This guide gets you from zero to a running workflow in a few minutes.
 
 ## Prerequisites
 
-- `claude` CLI (or set `WORKFLOW_AGENT_CMD` to a compatible alternative)
+- `cline` CLI (for the `./uncle` launcher), or `claude` + `kimi` (the
+  `scripts/agent-kimi.sh` default) — or set `WORKFLOW_AGENT_CMD` to any compatible CLI
 - `codex` CLI (or set `WORKFLOW_REVIEWER_CMD` to a compatible alternative)
 - `jq`
 - `bash` 3.2+
+
+Run `./uncle` to pick a workflow and set the model, reasoning effort, and
+per-stage overrides from a menu instead of calling a driver directly.
 
 ## 1. New application
 
@@ -44,12 +48,6 @@ Fill in `CHANGE_REQUEST.md`, commit or stash unrelated work, then run:
 
 ```sh
 ./scripts/change-workflow.sh
-```
-
-For a small, focused change, use the small track:
-
-```sh
-WORKFLOW_TRACK=small ./scripts/change-workflow.sh
 ```
 
 ### Start from a GitHub issue

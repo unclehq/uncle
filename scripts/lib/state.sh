@@ -58,3 +58,10 @@ state_write() {
         printf '%s\n' "$stage" > "$file"
     fi
 }
+
+# context_exhausted <file> — true when the file contains a token/context
+# exhaustion message. That failure is recoverable: the user changes the model
+# and resumes the stage, so the drivers call this out instead of a bare error.
+context_exhausted() {
+    grep -qiE 'context (length|window)|maximum context|out of (tokens|context)|token limit|too many tokens|context_length_exceeded' "$1"
+}

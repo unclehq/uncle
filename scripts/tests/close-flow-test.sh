@@ -474,9 +474,10 @@ expect_out "cannot be proven to belong to owner/repo#42"
 new_case preflight-standalone-unaffected
 printf 'IMPLEMENT\n' > "$REPO/.workflow/state"
 printf 'other/repo\t99\n' > "$REPO/.workflow/origin"
-run_driver WORKFLOW_TRACK=bogus
-# No STAGEGATE_ORIGIN_*: the preflight is skipped entirely, so the run fails on
-# its own unrelated validation instead of refusing.
+run_driver
+# No STAGEGATE_ORIGIN_*: the preflight is skipped entirely, so the run reaches
+# the state machine and fails on its own missing-approval check instead of
+# refusing to resume.
 expect_status 1
 expect_not_out "Refusing to resume"
 

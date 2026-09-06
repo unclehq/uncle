@@ -44,12 +44,6 @@ mkdir -p "$APPROVAL_DIR" "$LOG_DIR"
 # Tunables
 # ---------------------------------------------------------------------------
 
-# Track. `full` runs baseline, spec, and plan as three separate stages.
-# `small` produces all three artifacts in one call, sized to a change whose
-# analysis does not justify three cold starts. Every review gate, the
-# adversarial review, the checklist, and the final audit run on both tracks.
-TRACK="${WORKFLOW_TRACK:-full}"
-
 # Stage models. Opus is reserved for the two stages where a wrong answer is
 # expensive to undo: the plan everything else hangs off, and the implementation
 # itself. The stages that were on Sonnet now run on kimi, which is cheaper
@@ -66,7 +60,6 @@ MODEL_CHANGE_PLAN="${WORKFLOW_MODEL_CHANGE_PLAN:-opus}"
 MODEL_UPDATED_PLAN="${WORKFLOW_MODEL_UPDATED_PLAN:-kimi}"
 MODEL_IMPLEMENT="${WORKFLOW_MODEL_IMPLEMENT:-opus}"
 MODEL_EXECUTE="${WORKFLOW_MODEL_EXECUTE:-kimi}"
-MODEL_SMALL="${WORKFLOW_MODEL_SMALL:-opus}"
 
 EFFORT_CHANGE_SPEC="${WORKFLOW_EFFORT_CHANGE_SPEC:-medium}"
 EFFORT_UPDATED_PLAN="${WORKFLOW_EFFORT_UPDATED_PLAN:-medium}"
@@ -82,7 +75,6 @@ BUDGET_CHANGE_PLAN="${WORKFLOW_BUDGET_CHANGE_PLAN:-12}"
 BUDGET_UPDATED_PLAN="${WORKFLOW_BUDGET_UPDATED_PLAN:-5}"
 BUDGET_IMPLEMENT="${WORKFLOW_BUDGET_IMPLEMENT:-40}"
 BUDGET_EXECUTE="${WORKFLOW_BUDGET_EXECUTE:-20}"
-BUDGET_SMALL="${WORKFLOW_BUDGET_SMALL:-12}"
 
 # Codex reasoning effort. The two judgement stages think; the two checklist
 # stages transcribe an approved specification into checks.
@@ -738,106 +730,120 @@ run_claude() {
 
     require_file "$prompt_file"
 
-    local -a flags=(
-        -p
-        --model "$model"
-        --max-turns "$max_turns"
-        --output-format stream-json
-        --verbose
-        --strict-mcp-config
-        --exclude-dynamic-system-prompt-sections
-        --allowedTools "$CLAUDE_TOOLS"
-    )
+    while true; do
+        local -a flags=(
+            -p
+            --model "$model"
+            --max-turns "$max_turns"
+            --output-format stream-json
+            --verbose
+            --strict-mcp-config
+            --exclude-dynamic-system-prompt-sections
+            --allowedTools "$CLAUDE_TOOLS"
+        )
 
-    if [[ -n "$effort" ]]; then
-        flags+=(--effort "$effort")
-    fi
-
-    if [[ -n "$budget" ]]; then
-        flags+=(--max-budget-usd "$budget")
-    fi
-
-    # Forking inherits the previous stage's whole transcript. That is faster
-    # but costs more every turn, so it is off unless asked for. Forking leaves
-    # the parent session untouched, so a failed stage retries from the same
-    # point.
-    local head=""
-    if [[ "$SESSION_REUSE" == "1" && -s "$SESSION_FILE" ]]; then
-        head="$(cat "$SESSION_FILE")"
-        flags+=(--resume "$head" --fork-session)
-    fi
-
-    echo
-    echo "Launching agent ($AGENT_CMD): $log_name"
-    echo "Model: $model${effort:+  Effort: $effort}${budget:+  Cap: \$$budget}"
-    if [[ -n "$head" ]]; then
-        echo "Forking session: $head"
-    fi
-    echo
-
-    # Use stdin for the prompt because --allowedTools is variadic and can
-    # otherwise consume a trailing positional prompt. Streaming also makes a
-    # long-running stage visibly active instead of buffering until completion.
-    local start="$SECONDS"
-    local status=0
-    "$AGENT_CMD" "${flags[@]}" \
-        < "$prompt_file" \
-        2>&1 \
-        | tee "$LOG_DIR/${log_name}.jsonl" \
-        | progress_tap "${PROGRESS_TOTAL:-0}" "${PROGRESS_LABEL:-stage}" \
-        | format_claude_stream || status=$?
-    progress_end
-
-    local elapsed="$((SECONDS - start))"
-    local log="$LOG_DIR/${log_name}.jsonl"
-
-    # The final result event, if the run produced one.
-    local result
-    result="$(jq -R -c 'fromjson? | select(.type == "result")' < "$log" | tail -n 1)"
-
-    if [[ -n "$result" ]]; then
-        record_cost "agent:$log_name" "$elapsed" \
-            "$(printf '%s' "$result" | jq -r '.total_cost_usd // 0')" \
-            "$(printf '%s' "$result" | jq -r '.usage.input_tokens // 0')" \
-            "$(printf '%s' "$result" | jq -r '.usage.output_tokens // 0')" \
-            "$(printf '%s' "$result" | jq -r '.usage.cache_read_input_tokens // 0')" \
-            "$(printf '%s' "$result" | jq -r '.usage.cache_creation_input_tokens // 0')"
-    else
-        record_cost "agent:$log_name" "$elapsed" - - - - -
-    fi
-
-    if [[ "$status" -ne 0 ]]; then
-        echo "Agent ($AGENT_CMD) exited with status $status."
-        echo "Raw event log: $log"
-        exit "$status"
-    fi
-
-    # A budget breach, a turn-limit stop, and an API failure all exit 0 and
-    # report themselves only inside the result event. Without this check the
-    # stage would look like a success and the pipeline would advance on a
-    # partial artifact.
-    if [[ -z "$result" ]]; then
-        echo "No result event in $log; treating $log_name as failed."
-        exit 1
-    fi
-
-    local is_error subtype
-    is_error="$(printf '%s' "$result" | jq -r '.is_error // false')"
-    subtype="$(printf '%s' "$result" | jq -r '.subtype // "unknown"')"
-
-    if [[ "$is_error" == "true" ]]; then
-        echo
-        echo "Stage $log_name reported failure: $subtype"
-        if [[ "$subtype" == *budget* ]]; then
-            echo "The \$$budget cap for this stage was reached."
-            echo "Raise it with the matching WORKFLOW_BUDGET_* variable and re-run."
+        if [[ -n "$effort" ]]; then
+            flags+=(--effort "$effort")
         fi
-        echo "Raw event log: $log"
-        show_spend
-        exit 1
-    fi
 
-    show_spend
+        if [[ -n "$budget" ]]; then
+            flags+=(--max-budget-usd "$budget")
+        fi
+
+        # Forking inherits the previous stage's whole transcript. That is faster
+        # but costs more every turn, so it is off unless asked for. Forking leaves
+        # the parent session untouched, so a failed stage retries from the same
+        # point.
+        local head=""
+        if [[ "$SESSION_REUSE" == "1" && -s "$SESSION_FILE" ]]; then
+            head="$(cat "$SESSION_FILE")"
+            flags+=(--resume "$head" --fork-session)
+        fi
+
+        echo
+        echo "Launching agent ($AGENT_CMD): $log_name"
+        echo "Model: $model${effort:+  Effort: $effort}${budget:+  Cap: \$$budget}"
+        if [[ -n "$head" ]]; then
+            echo "Forking session: $head"
+        fi
+        echo
+
+        # Use stdin for the prompt because --allowedTools is variadic and can
+        # otherwise consume a trailing positional prompt. Streaming also makes a
+        # long-running stage visibly active instead of buffering until completion.
+        local start="$SECONDS"
+        local status=0
+        "$AGENT_CMD" "${flags[@]}" \
+            < "$prompt_file" \
+            2>&1 \
+            | tee "$LOG_DIR/${log_name}.jsonl" \
+            | progress_tap "${PROGRESS_TOTAL:-0}" "${PROGRESS_LABEL:-stage}" \
+            | format_claude_stream || status=$?
+        progress_end
+
+        local elapsed="$((SECONDS - start))"
+        local log="$LOG_DIR/${log_name}.jsonl"
+
+        # The final result event, if the run produced one.
+        local result
+        result="$(jq -R -c 'fromjson? | select(.type == "result")' < "$log" | tail -n 1)"
+
+        if [[ -n "$result" ]]; then
+            record_cost "agent:$log_name" "$elapsed" \
+                "$(printf '%s' "$result" | jq -r '.total_cost_usd // 0')" \
+                "$(printf '%s' "$result" | jq -r '.usage.input_tokens // 0')" \
+                "$(printf '%s' "$result" | jq -r '.usage.output_tokens // 0')" \
+                "$(printf '%s' "$result" | jq -r '.usage.cache_read_input_tokens // 0')" \
+                "$(printf '%s' "$result" | jq -r '.usage.cache_creation_input_tokens // 0')"
+        else
+            record_cost "agent:$log_name" "$elapsed" - - - - -
+        fi
+
+        if [[ "$status" -ne 0 ]]; then
+            echo "Agent ($AGENT_CMD) exited with status $status."
+            echo "Raw event log: $log"
+            exit "$status"
+        fi
+
+        # A budget breach, a turn-limit stop, and an API failure all exit 0 and
+        # report themselves only inside the result event. Without this check the
+        # stage would look like a success and the pipeline would advance on a
+        # partial artifact.
+        if [[ -z "$result" ]]; then
+            echo "No result event in $log; treating $log_name as failed."
+            exit 1
+        fi
+
+        local is_error subtype
+        is_error="$(printf '%s' "$result" | jq -r '.is_error // false')"
+        subtype="$(printf '%s' "$result" | jq -r '.subtype // "unknown"')"
+
+        if [[ "$is_error" == "true" ]]; then
+            echo
+            echo "Stage $log_name reported failure: $subtype"
+            if [[ "$subtype" == "context_length_exceeded" ]]; then
+                echo "The model ran out of context/tokens."
+                echo
+                printf '%s' "Enter a new model id to retry this stage (or Enter to stop): "
+                local new_model
+                if read -r new_model && [[ -n "$new_model" ]]; then
+                    model="$(printf '%s' "$new_model" | tr -d '[:space:]')"
+                    continue
+                fi
+                echo
+            fi
+            if [[ "$subtype" == *budget* ]]; then
+                echo "The \$$budget cap for this stage was reached."
+                echo "Raise it with the matching WORKFLOW_BUDGET_* variable and re-run."
+            fi
+            echo "Raw event log: $log"
+            show_spend
+            exit 1
+        fi
+
+        show_spend
+        break
+    done
 
     if [[ "$SESSION_REUSE" == "1" ]]; then
         local next
@@ -888,10 +894,18 @@ run_codex() {
     echo "Launching reviewer ($REVIEWER_CMD): $log_name${effort:+  Effort: $effort}"
 
     local start="$SECONDS"
+    local status=0
     "$REVIEWER_CMD" "${flags[@]}" "$(cat "$prompt_file")" \
-        2>&1 | tee "$LOG_DIR/${log_name}.log"
+        2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
 
     record_codex_cost "$log_name" "$((SECONDS - start))"
+
+    if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
+        echo
+        echo "The reviewer ran out of context/tokens."
+        echo "Change the reviewer model (Configure → reviewer) and re-run to resume this stage."
+    fi
+
     require_file "$output_file"
 }
 
@@ -959,7 +973,12 @@ wait_codex_bg() {
     record_codex_cost "$label" "$((SECONDS - BG_START))"
 
     if [[ "$status" -ne 0 ]]; then
-        echo "Background Codex stage $label failed with status $status."
+        if context_exhausted "$LOG_DIR/${label}.log"; then
+            echo "Background Codex stage $label ran out of context/tokens."
+            echo "Change the reviewer model (Configure → reviewer) and re-run to resume this stage."
+        else
+            echo "Background Codex stage $label failed with status $status."
+        fi
         echo "Log: $LOG_DIR/${label}.log"
         exit "$status"
     fi
@@ -971,13 +990,6 @@ wait_codex_bg() {
 # ---------------------------------------------------------------------------
 # State machine
 # ---------------------------------------------------------------------------
-
-case "$TRACK" in
-    full|small) ;;
-    *) echo "Unknown WORKFLOW_TRACK: $TRACK (expected 'full' or 'small')"; exit 1 ;;
-esac
-
-echo "Track: $TRACK"
 
 acquire_lock
 origin_preflight
@@ -1008,48 +1020,23 @@ while true; do
             # A fresh run legitimately claims this checkout for its issue.
             write_origin
 
-            if [[ "$TRACK" == "small" ]]; then
-                # One call writes all three analysis artifacts, so downstream
-                # prompts, approval hashes, and Codex stages are unchanged.
-                run_claude prompts/change/small-analysis.md small-analysis \
-                    "$MODEL_SMALL" "" 100 "$BUDGET_SMALL"
-                require_file BASELINE_REPORT.md
-                require_file CHANGE_SPEC.md
-                require_file CHANGE_PLAN.md
+            run_claude prompts/change/baseline.md baseline \
+                "$MODEL_BASELINE" "" 120 "$BUDGET_BASELINE"
+            require_file BASELINE_REPORT.md
 
-                run_codex \
-                    prompts/change/adversarial-review.md \
-                    ADVERSARIAL_REVIEW.md \
-                    adversarial-review \
-                    "$CODEX_EFFORT_REVIEW"
-            else
-                run_claude prompts/change/baseline.md baseline \
-                    "$MODEL_BASELINE" "" 120 "$BUDGET_BASELINE"
-                require_file BASELINE_REPORT.md
-
-                run_claude prompts/change/change-spec.md change-spec \
-                    "$MODEL_CHANGE_SPEC" "$EFFORT_CHANGE_SPEC" 60 \
-                    "$BUDGET_CHANGE_SPEC"
-                require_file CHANGE_SPEC.md
-            fi
+            run_claude prompts/change/change-spec.md change-spec \
+                "$MODEL_CHANGE_SPEC" "$EFFORT_CHANGE_SPEC" 60 \
+                "$BUDGET_CHANGE_SPEC"
+            require_file CHANGE_SPEC.md
 
             set_state WAIT_ANALYSIS_APPROVAL
             ;;
 
         WAIT_ANALYSIS_APPROVAL)
-            if [[ "$TRACK" == "small" ]]; then
-                human_gate ACKNOWLEDGE \
-                    BASELINE_REPORT.md BASELINE_REPORT \
-                    CHANGE_SPEC.md CHANGE_SPEC \
-                    CHANGE_PLAN.md CHANGE_PLAN \
-                    ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
-                set_state UPDATED_PLAN
-            else
-                human_gate APPROVE \
-                    BASELINE_REPORT.md BASELINE_REPORT \
-                    CHANGE_SPEC.md CHANGE_SPEC
-                set_state PLAN
-            fi
+            human_gate APPROVE \
+                BASELINE_REPORT.md BASELINE_REPORT \
+                CHANGE_SPEC.md CHANGE_SPEC
+            set_state PLAN
             ;;
 
         PLAN)

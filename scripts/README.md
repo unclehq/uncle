@@ -261,3 +261,44 @@ driver fails the stage instead of parking on it.
 
 Set `WORKFLOW_AGENT_CMD=claude` to take every stage back to Claude, or set an
 individual stage back with e.g. `WORKFLOW_MODEL_BASELINE=sonnet`.
+
+### uncle — interactive launcher
+
+`uncle` (repo root) is an interactive launcher for the three drivers. The model,
+reasoning effort, and per-stage overrides are set in the Configure menu (menu
+option 4) and persisted to `.uncle.config`; when a driver runs they are exported
+as `UNCLE_CLINE_MODEL`/`UNCLE_CLINE_EFFORT`, and
+`WORKFLOW_AGENT_CMD`/`WORKFLOW_REVIEWER_CMD` are set to the matching shims. When
+stdin and stdout are real terminals it opens a full-screen TUI (`uncle_tui.py`);
+otherwise it falls back to a line menu. The config is `STAGE VALUE` lines:
+
+| Key | Meaning |
+|---|---|
+| `runner` | `cline` (default), `claude`, `kimi`, or `codex` — picks the agent/reviewer commands |
+| `model` | cline model id for agent stages (`UNCLE_CLINE_MODEL`); empty = cline default |
+| `effort` | reasoning effort (`high`/`medium`/`low`) |
+| `reviewer` | cline model id for reviewer stages (`UNCLE_CLINE_REVIEWER_MODEL`) |
+| `<stage>` | cline model id for that stage (`WORKFLOW_MODEL_<STAGE>`) |
+
+Valid stage keys: `requirements`, `project-plan`, `updated-plan`,
+`implementation`, `execute-checklist`, `baseline`, `change-spec`, `change-plan`,
+`updated-change-plan`.
+
+### agent-cline.sh / reviewer-cline.sh
+
+The cline runner (the `uncle` default). `agent-cline.sh` translates the drivers'
+`claude -p` flag set onto `cline` and rewrites cline's `--json` NDJSON
+(`agent_event` / `content_end` / `usage` / `run_result`) into the stream-json
+schema the drivers render and cost. `reviewer-cline.sh` translates `codex exec`
+onto `cline -p`; plan mode enforces read-only, and the review text and token
+totals come from `run_result` (falling back to a `done` event).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `WORKFLOW_CLINE_CMD` | `cline` | cline binary for both shims |
+| `UNCLE_CLINE_MODEL` | (none) | cline model id for agent stages; overrides the driver `--model` |
+| `UNCLE_CLINE_REVIEWER_MODEL` | (none) | cline model id for reviewer stages |
+| `UNCLE_CLINE_EFFORT` | `medium` | reasoning effort (`none`/`low`/`medium`/`high`/`xhigh`) |
+
+Both are covered by `scripts/tests/agent-cline-test.sh` and
+`scripts/tests/reviewer-cline-test.sh`.

@@ -325,41 +325,57 @@ run_claude() {
 
     require_file "$prompt_file"
 
-    echo
-    echo "Launching agent ($AGENT_CMD): $log_name"
-    echo "Model: $model (effort: $effort, max turns: $turns)"
-    echo "Tools: $tools"
-    echo
+    while true; do
+        echo
+        echo "Launching agent ($AGENT_CMD): $log_name"
+        echo "Model: $model (effort: $effort, max turns: $turns)"
+        echo "Tools: $tools"
+        echo
 
-    # Plain `$AGENT_CMD -p` buffers the entire session and prints nothing until
-    # it exits, which is indistinguishable from a hang. Stream events instead.
-    #
-    # The prompt goes in on stdin, not as a positional argument: --allowedTools
-    # is variadic and silently swallows a trailing prompt argument, which fails
-    # with "Input must be provided either through stdin or as a prompt argument".
-    #
-    # --strict-mcp-config with no --mcp-config loads zero MCP servers. No stage
-    # needs one, and skipping them removes both server startup and their tool
-    # schemas from every request.
-    local status=0
-    "$AGENT_CMD" -p \
-        --model "$model" \
-        --effort "$effort" \
-        --strict-mcp-config \
-        --max-turns "$turns" \
-        --output-format stream-json \
-        --verbose \
-        --allowedTools "$tools" \
-        < "$prompt_file" \
-        2>&1 \
-        | tee "$LOG_DIR/${log_name}.jsonl" \
-        | format_claude_stream || status=$?
+        # Plain `$AGENT_CMD -p` buffers the entire session and prints nothing until
+        # it exits, which is indistinguishable from a hang. Stream events instead.
+        #
+        # The prompt goes in on stdin, not as a positional argument: --allowedTools
+        # is variadic and silently swallows a trailing prompt argument, which fails
+        # with "Input must be provided either through stdin or as a prompt argument".
+        #
+        # --strict-mcp-config with no --mcp-config loads zero MCP servers. No stage
+        # needs one, and skipping them removes both server startup and their tool
+        # schemas from every request.
+        local status=0
+        "$AGENT_CMD" -p \
+            --model "$model" \
+            --effort "$effort" \
+            --strict-mcp-config \
+            --max-turns "$turns" \
+            --output-format stream-json \
+            --verbose \
+            --allowedTools "$tools" \
+            < "$prompt_file" \
+            2>&1 \
+            | tee "$LOG_DIR/${log_name}.jsonl" \
+            | format_claude_stream || status=$?
 
-    if [[ "$status" -ne 0 ]]; then
-        echo "Agent ($AGENT_CMD) exited with status $status."
-        echo "Raw event log: $LOG_DIR/${log_name}.jsonl"
-        exit "$status"
-    fi
+        if [[ "$status" -ne 0 ]]; then
+            local log="$LOG_DIR/${log_name}.jsonl"
+            if grep -qiE 'context (length|window)|maximum context|out of (tokens|context)|token limit|too many tokens|context_length_exceeded' "$log"; then
+                echo
+                echo "The model ran out of context/tokens."
+                printf '%s' "Enter a new model id to retry this stage (or Enter to stop): "
+                local new_model
+                if read -r new_model && [[ -n "$new_model" ]]; then
+                    model="$(printf '%s' "$new_model" | tr -d '[:space:]')"
+                    continue
+                fi
+                echo
+            fi
+            echo "Agent ($AGENT_CMD) exited with status $status."
+            echo "Raw event log: $log"
+            exit "$status"
+        fi
+
+        break
+    done
 }
 
 run_codex_review() {
@@ -382,13 +398,20 @@ run_codex_review() {
         echo "Model: $model"
     fi
 
+    local status=0
     "$REVIEWER_CMD" exec \
         --ephemeral \
         --sandbox read-only \
         "${model_args[@]+"${model_args[@]}"}" \
         --output-last-message "$output_file" \
         "$(cat "$prompt_file")" \
-        2>&1 | tee "$LOG_DIR/${log_name}.log"
+        2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
+
+    if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
+        echo
+        echo "The reviewer ran out of context/tokens."
+        echo "Change the reviewer model (Configure → reviewer) and re-run to resume this stage."
+    fi
 
     require_file "$output_file"
 }

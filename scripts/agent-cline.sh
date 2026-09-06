@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# Agent-CLI shim that runs `cline` for the drivers' agent stages.
+#
+# The drivers call $AGENT_CMD with `claude -p` flags and the prompt on stdin.
+# cline is not flag-compatible, so this translates:
+#   -p, --verbose, --strict-mcp-config,
+#   --exclude-dynamic-system-prompt-sections              dropped
+#   --model X / --effort X                                captured (effort -> --thinking)
+#   --max-turns, --max-budget-usd, --allowedTools,
+#   --output-format, --resume, --fork-session, --mcp-config  consumed and dropped
+#   prompt on stdin                                       cline positional prompt, act mode
+#
+# cline streams its own NDJSON. This rewrites the final text of each assistant
+# block into the Claude stream-json schema the drivers' format_claude_stream
+# renders, and synthesizes the terminal `result` event the drivers use for
+# success/failure detection and cost accounting.
+set -euo pipefail
+
+CLINE_CMD="${WORKFLOW_CLINE_CMD:-cline}"
+
+model=""
+effort=""
+prompt_extra=""
+skip_value=0
+pending=""
+for arg in "$@"; do
+    if [[ "$skip_value" == "1" ]]; then
+        case "$pending" in
+            model)  model="$arg" ;;
+            effort) effort="$arg" ;;
+        esac
+        skip_value=0
+        pending=""
+        continue
+    fi
+    case "$arg" in
+        --model)  skip_value=1; pending="model" ;;
+        --effort) skip_value=1; pending="effort" ;;
+        --max-turns|--max-budget-usd|--allowedTools|--output-format|--resume|--mcp-config)
+            skip_value=1; pending="" ;;
+        -p|--verbose|--strict-mcp-config|--exclude-dynamic-system-prompt-sections|--fork-session)
+            ;;
+        -*) ;;
+        *) prompt_extra="$arg" ;;
+    esac
+done
+
+# `uncle` exports these when the user picks a model / performance; they win over
+# the driver's per-stage flags. Invoked without them, the shim honors the
+# driver's --model/--effort as a fallback.
+# A cline model id carried by the driver's --model (from WORKFLOW_MODEL_<STAGE>)
+# wins over the global pick; a tier name (opus/kimi/sonnet) falls back to the
+# global pick, then cline's own default.
+case "$model" in
+    ""|opus|sonnet|kimi|kimi:*)
+        model="${UNCLE_CLINE_MODEL:-}"
+        ;;
+    *) ;;
+esac
+if [[ -n "${UNCLE_CLINE_EFFORT+x}" ]]; then
+    effort="$UNCLE_CLINE_EFFORT"
+fi
+if [[ -z "$effort" ]]; then
+    effort="medium"
+fi
+
+prompt="$(cat)"
+if [[ -z "$prompt" ]]; then
+    prompt="$prompt_extra"
+fi
+if [[ -z "$prompt" ]]; then
+    echo "agent-cline.sh: no prompt on stdin" >&2
+    exit 2
+fi
+
+args=(--json --auto-approve true)
+if [[ -n "$model" ]]; then
+    args+=(-m "$model")
+fi
+args+=(--thinking "$effort")
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+raw="$work/events.ndjson"
+status_file="${UNCLE_STATUS_FILE:-}"
+
+# Announce the stage to the TUI status channel (model + mode, zero tokens) so
+# the status bar flips to the right model/mode before any usage event lands.
+if [[ -n "$status_file" ]]; then
+    printf '{"event":"start","model":"%s","mode":"act"}\n' "$model" >> "$status_file"
+fi
+
+# Stream cline's NDJSON through a translator that emits one Claude `assistant`
+# event per completed text block, while tee keeps the raw feed for the result
+# event synthesized below. When a status channel is configured, a second tee
+# mirrors cline's cumulative `usage` events into it for live token accounting.
+set +e
+if [[ -n "$status_file" ]]; then
+    "$CLINE_CMD" "${args[@]}" "$prompt" \
+        | tee "$raw" \
+        | tee >(jq -R -r --unbuffered --arg model "$model" '
+            (fromjson? // empty) as $e
+            | if $e.type == "agent_event" and $e.event.type == "usage" then
+                  {event:"usage", model:$model, mode:"act",
+                   total_tokens: (($e.event.totalInputTokens // 0)
+                                + ($e.event.totalOutputTokens // 0)
+                                + ($e.event.totalCacheReadTokens // 0)
+                                + ($e.event.totalCacheWriteTokens // 0))} | tojson
+              else empty end
+          ' >> "$status_file") \
+        | jq -R -r --unbuffered '
+            (fromjson? // empty) as $e
+            | if $e.type == "agent_event" and $e.event.type == "content_end"
+                  and $e.event.contentType == "text" then
+                  {type: "assistant", message: {content: [{type: "text", text: $e.event.text}]}} | tojson
+              else empty end
+          '
+    cline_status="${PIPESTATUS[0]}"
+else
+    "$CLINE_CMD" "${args[@]}" "$prompt" \
+        | tee "$raw" \
+        | jq -R -r --unbuffered '
+            (fromjson? // empty) as $e
+            | if $e.type == "agent_event" and $e.event.type == "content_end"
+                  and $e.event.contentType == "text" then
+                  {type: "assistant", message: {content: [{type: "text", text: $e.event.text}]}} | tojson
+              else empty end
+          '
+    cline_status="${PIPESTATUS[0]}"
+fi
+set -e
+
+# Synthesize the terminal result event from cline's run_result (or fail loudly).
+result="$(jq -R -s -c '
+  [split("\n")[] | fromjson? // empty] as $events
+  | ($events | map(select(.type == "run_result")) | .[-1]) as $r
+  | if $r == null then
+      {type:"result", subtype:"error_during_execution", is_error:"true",
+       num_turns:1, duration_ms:0, total_cost_usd:0,
+       usage:{input_tokens:0, output_tokens:0,
+              cache_read_input_tokens:0, cache_creation_input_tokens:0}}
+    else
+      {type:"result",
+       subtype: (if $r.finishReason == "completed" then "success" else "error_during_execution" end),
+       is_error: (if $r.finishReason == "completed" then "false" else "true" end),
+       num_turns: ($r.iterations // 1),
+       duration_ms: ($r.durationMs // 0),
+       total_cost_usd: ($r.usage.totalCost // 0),
+       usage: {input_tokens: ($r.usage.inputTokens // 0),
+               output_tokens: ($r.usage.outputTokens // 0),
+               cache_read_input_tokens: ($r.usage.cacheReadTokens // 0),
+               cache_creation_input_tokens: ($r.usage.cacheWriteTokens // 0)}}
+    end
+' "$raw")"
+# A context/token exhaustion is a distinct, recoverable failure: surface it as
+# its own subtype so the driver can offer to change the model and retry.
+if [[ "$(printf '%s' "$result" | jq -r '.is_error // "true"')" == "true" ]] \
+    && grep -qiE 'context (length|window)|maximum context|out of (tokens|context)|token limit|too many tokens|context_length_exceeded' "$raw"; then
+    result="$(printf '%s' "$result" | jq -c '.subtype = "context_length_exceeded"')"
+fi
+
+printf '%s\n' "$result"
+
+if [[ "$cline_status" -ne 0 ]]; then
+    exit "$cline_status"
+fi
+if [[ "$(printf '%s' "$result" | jq -r '.is_error // "true"')" == "true" ]]; then
+    exit 1
+fi
+exit 0

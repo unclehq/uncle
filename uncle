@@ -1,0 +1,454 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+
+# ANSI palette matching cline's CLI. Disabled when stdout is not a terminal or
+# NO_COLOR is set, so piped/scripted output stays machine-readable.
+if [[ -t 1 ]] && [[ -z "${NO_COLOR:-}" ]]; then
+    C_RESET=$'\033[0m'
+    C_DIM=$'\033[2m'
+    C_BOLD=$'\033[1m'
+    C_CYAN=$'\033[36m'
+    C_GREEN=$'\033[32m'
+    C_YELLOW=$'\033[33m'
+    C_RED=$'\033[31m'
+    C_GRAY=$'\033[90m'
+else
+    C_RESET='' C_DIM='' C_BOLD='' C_CYAN='' C_GREEN='' C_YELLOW='' C_RED='' C_GRAY=''
+fi
+
+usage() {
+    cat <<'EOF'
+Usage: uncle [-h|--help]
+
+Interactive launcher for the governed-CI workflows. Picks one of the three
+drivers and runs the stages through `cline` using the model, reasoning effort,
+and per-stage overrides from `.uncle.config` (menu option 4).
+
+  1) New application   -> ./scripts/stagegate.sh
+  2) From GitHub issue -> ./scripts/from-issue.sh
+  3) Change request    -> ./scripts/change-workflow.sh
+  4) Configure stages  -> .uncle.config
+  q) Quit
+
+Runs with no arguments. -h / --help print this message and exit 0.
+EOF
+}
+
+case "$#:${1:-}" in
+    0:)                 ;;
+    1:-h|1:--help)      usage; exit 0 ;;
+    *)                  printf 'Unknown argument: %s\n' "${1:-}" >&2; usage >&2; exit 1 ;;
+esac
+
+# Full-screen terminal UI when both stdin and stdout are real terminals; the
+# line-based menu below remains for pipes and scripts.
+if [[ -t 0 && -t 1 ]] && command -v python3 >/dev/null 2>&1; then
+    if python3 "$ROOT/uncle_tui.py"; then
+        exit 0
+    fi
+    # TUI failed (e.g. unsupported terminal); fall through to the line menu.
+fi
+
+CLINE_CONFIG="${CLINE_CONFIG:-$HOME/.cline/data/settings/providers.json}"
+CL_MODEL=""
+CL_EFFORT="medium"
+UNCLE_CONFIG="${UNCLE_CONFIG:-$ROOT/.uncle.config}"
+CONFIG_STAGES="requirements project-plan updated-plan implementation execute-checklist baseline change-spec change-plan updated-change-plan reviewer"
+
+stage_env_var() {
+    printf 'WORKFLOW_MODEL_%s' \
+        "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
+}
+
+# Read .uncle.config and export WORKFLOW_MODEL_<STAGE> plus UNCLE_CLINE_REVIEWER_MODEL
+# so the drivers resolve the configured per-stage cline models.
+apply_config() {
+    local line stage model var
+    [[ -s "$UNCLE_CONFIG" ]] || return 0
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(printf '%s' "$line" | tr -s '[:space:]' ' ')"
+        [[ -n "$line" ]] || continue
+        stage="${line%% *}"
+        model="${line#* }"
+        model="$(printf '%s' "$model" | tr -d '[:space:]')"
+        [[ -n "$stage" && -n "$model" ]] || continue
+        case "$stage" in
+            runner)   export UNCLE_RUNNER="$model" ;;
+            reviewer) export UNCLE_CLINE_REVIEWER_MODEL="$model" ;;
+            model)    CL_MODEL="$model" ;;
+            effort)   CL_EFFORT="$model" ;;
+            *)
+                var="$(stage_env_var "$stage")"
+                export "$var=$model"
+                ;;
+        esac
+    done < "$UNCLE_CONFIG"
+}
+
+# Map the configured runner to the agent/reviewer commands. `cline` is the
+# default (uses the cline shims); the others use the native CLIs (or the repo's
+# existing compatible shim for that CLI).
+agent_cmd_for() {
+    case "${UNCLE_RUNNER:-cline}" in
+        claude) printf 'claude' ;;
+        kimi)   printf '%s' "$ROOT/scripts/agent-kimi.sh" ;;
+        codex)  printf 'claude' ;;
+        *)      printf '%s' "$ROOT/scripts/agent-cline.sh" ;;
+    esac
+}
+
+reviewer_cmd_for() {
+    case "${UNCLE_RUNNER:-cline}" in
+        claude) printf '%s' "$ROOT/scripts/reviewer-claude.sh" ;;
+        kimi)   printf 'codex' ;;
+        codex)  printf 'codex' ;;
+        *)      printf '%s' "$ROOT/scripts/reviewer-cline.sh" ;;
+    esac
+}
+
+# ASCII mark: a fedora'd face with a mustache, one row per line.
+logo_lines() {
+    cat <<'LOGO'
+                    #@@@@@@##@@@@@@#
+                    @@@@@@@@@@@@@@@@
+                    @@@@@@@@@@@@@@@@
+                   #@@@@@@@@@@@@@@@@#
+                   @@@@@@@@@@@@@@@@@@
+        #@@@@@@@@@ @@@@@@@@@@@@@@@@@@ @@@@@@@@@#
+        @@@@@@@@@@                    @@@@@@@@@@
+         @@@@@@@@@@@@@@##########@@@@@@@@@@@@@@
+           #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+              #@@##@@@@@@@@@@@@@@@@@##@@@#
+           #@@@@@# @@@@@@@@##@@@@@@@@ @@@@@@#
+         @@@@@@@@@  @@@@@@    @@@@@@  @@@@@@@@@
+        @@@@@@@@@@@                  @@@@@@@@@@@
+         @@@@@@@@@@@                @@@@@@@@@@@
+          #@@@@@@@@@@              @@@@@@@@@@#
+           ##@@@@@@@@@@          @@@@@@@@@@##
+        #@@@@@@@@@@@@@@@@#    #@@@@@@@@@@@@@@@@#
+      @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+    #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+     #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+        #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+           #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+LOGO
+}
+
+print_logo() {
+    local line w maxw pad
+    w="${COLUMNS:-0}"
+    [[ "$w" =~ ^[0-9]+$ ]] || w=0
+    maxw=0
+    while IFS= read -r line; do
+        if (( ${#line} > maxw )); then maxw=${#line}; fi
+    done < <(logo_lines)
+    pad=''
+    if (( w > maxw )); then
+        pad="$(printf '%*s' "$(( (w - maxw) / 2 ))" '')"
+    fi
+    while IFS= read -r line; do
+        printf '%s%s%s%s\n' "$pad" "$C_CYAN" "$line" "$C_RESET"
+    done < <(logo_lines)
+}
+
+print_menu() {
+    local model_hint
+    model_hint="${CL_MODEL:-cline default}"
+    cat <<EOF
+
+EOF
+    print_logo
+    cat <<EOF
+
+  ${C_CYAN}${C_BOLD}1)${C_RESET} New application   ${C_GRAY}-> ./scripts/stagegate.sh${C_RESET}
+  ${C_CYAN}${C_BOLD}2)${C_RESET} From GitHub issue ${C_GRAY}-> ./scripts/from-issue.sh${C_RESET}
+  ${C_CYAN}${C_BOLD}3)${C_RESET} Change request    ${C_GRAY}-> ./scripts/change-workflow.sh${C_RESET}
+  ${C_CYAN}${C_BOLD}4)${C_RESET} Configure stages  ${C_GRAY}-> .uncle.config${C_RESET}
+  ${C_CYAN}${C_BOLD}q)${C_RESET} Quit
+
+  model: ${C_CYAN}$model_hint${C_RESET}   performance: ${C_CYAN}$CL_EFFORT${C_RESET}
+
+EOF
+}
+
+# Run a workflow command, report a non-zero exit, and always return success so
+# the menu keeps looping after a driver fails.
+launch() {
+    local status=0
+    "$@" || status=$?
+    if [[ "$status" -ne 0 ]]; then
+        printf '\n%s%s exited with status %s.%s\n' "$C_RED" "$1" "$status" "$C_RESET"
+    fi
+    return 0
+}
+
+choose_model() {
+    local models_file line n sel idx
+    models_file="$(mktemp)"
+    jq -r '.providers[]?.settings.model // empty' "$CLINE_CONFIG" 2>/dev/null > "$models_file" || true
+
+    while true; do
+        echo
+        printf 'Model (current: %s)\n' "${C_CYAN}${CL_MODEL:-cline default}${C_RESET}"
+        n=0
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            n=$((n+1))
+            printf '  %s%d)%s %s\n' "$C_CYAN" "$n" "$C_RESET" "$line"
+        done < "$models_file"
+        printf '  %sc)%s custom model id\n' "$C_CYAN" "$C_RESET"
+
+        if (( n > 0 )); then
+            printf '%s' "Choice [1-$n/c/Enter=keep]: "
+        else
+            printf '%s' "Choice [c/Enter=keep]: "
+        fi
+        if ! read -r sel; then
+            echo
+            break
+        fi
+        sel="$(printf '%s' "$sel" | tr -d '[:space:]')"
+
+        case "$sel" in
+            "")
+                break ;;
+            c|C)
+                printf '%s' "Model id: "
+                if read -r CL_MODEL; then
+                    CL_MODEL="$(printf '%s' "$CL_MODEL" | tr -d '[:space:]')"
+                else
+                    echo
+                    CL_MODEL=""
+                fi
+                break ;;
+            *)
+                if [[ "$sel" =~ ^[0-9]+$ ]] && (( n > 0 && sel >= 1 && sel <= n )); then
+                    idx=0
+                    while IFS= read -r line; do
+                        [[ -z "$line" ]] && continue
+                        idx=$((idx+1))
+                        if (( idx == sel )); then
+                            CL_MODEL="$line"
+                            break
+                        fi
+                    done < "$models_file"
+                    break
+                fi
+                printf 'Unrecognized choice: %s\n' "$sel"
+                ;;
+        esac
+    done
+    rm -f "$models_file"
+    return 0
+}
+
+choose_effort() {
+    local sel
+    while true; do
+        printf '%s' "Performance [h]igh/[m]edium/[l]ow (current: ${C_CYAN}$CL_EFFORT${C_RESET}, Enter=keep): "
+        if ! read -r sel; then
+            echo
+            break
+        fi
+        sel="$(printf '%s' "$sel" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+        case "$sel" in
+            "") break ;;
+            h|high)   CL_EFFORT="high"; break ;;
+            m|medium) CL_EFFORT="medium"; break ;;
+            l|low)    CL_EFFORT="low"; break ;;
+            *) printf 'Unrecognized choice: %s\n' "$sel" ;;
+        esac
+    done
+    return 0
+}
+
+run_workflow() {
+    apply_config
+    export WORKFLOW_AGENT_CMD="$(agent_cmd_for)"
+    export WORKFLOW_REVIEWER_CMD="$(reviewer_cmd_for)"
+    export UNCLE_CLINE_MODEL="$CL_MODEL"
+    export UNCLE_CLINE_EFFORT="$CL_EFFORT"
+    launch "$@"
+}
+
+config_write_header() {
+    cat <<'EOF'
+# Uncle per-stage model config.
+# Format: STAGE VALUE  (STAGE = a stage log name, `reviewer`, `runner`,
+#   `model`, or `effort`; VALUE = cline model id, a runner name, or an effort).
+# Agent stages: requirements project-plan updated-plan implementation
+#   execute-checklist baseline change-spec change-plan updated-change-plan
+EOF
+}
+
+config_read() {
+    local line
+    [[ -s "$UNCLE_CONFIG" ]] || return 0
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(printf '%s' "$line" | tr -s '[:space:]' ' ')"
+        [[ -n "$line" ]] || continue
+        printf '%s\n' "$line"
+    done < "$UNCLE_CONFIG"
+}
+
+config_set() {
+    local stage="$1" model="$2" tmp found=0
+    tmp="$(mktemp)"
+    while IFS= read -r line; do
+        if [[ "${line%% *}" == "$stage" ]]; then
+            printf '%s %s\n' "$stage" "$model"
+            found=1
+        else
+            printf '%s\n' "$line"
+        fi
+    done < <(config_read) > "$tmp"
+    [[ "$found" == "0" ]] && printf '%s %s\n' "$stage" "$model" >> "$tmp"
+    config_write_header > "$UNCLE_CONFIG"
+    cat "$tmp" >> "$UNCLE_CONFIG"
+    rm -f "$tmp"
+}
+
+config_clear() {
+    local stage="$1" tmp
+    tmp="$(mktemp)"
+    while IFS= read -r line; do
+        [[ "${line%% *}" == "$stage" ]] || printf '%s\n' "$line"
+    done < <(config_read) > "$tmp"
+    config_write_header > "$UNCLE_CONFIG"
+    cat "$tmp" >> "$UNCLE_CONFIG"
+    rm -f "$tmp"
+}
+
+configure_menu() {
+    local sel stage model
+    while true; do
+        echo
+        echo "${C_CYAN}${C_BOLD}Configure stages${C_RESET} (${C_GRAY}$UNCLE_CONFIG${C_RESET})"
+        config_read | sed -E "s|^([^ ]+) (.*)|  ${C_CYAN}\1${C_RESET} \2|"
+        echo
+        echo "  ${C_DIM}Valid keys: runner, model, effort, $CONFIG_STAGES${C_RESET}"
+        echo "  ${C_CYAN}r)${C_RESET} set runner (cline/claude/kimi/codex)"
+        echo "  ${C_CYAN}m)${C_RESET} set model    ${C_CYAN}e)${C_RESET} set effort (high/medium/low)"
+        echo "  ${C_CYAN}s)${C_RESET} set a stage's model    ${C_CYAN}d)${C_RESET} clear a key"
+        echo "  ${C_CYAN}q)${C_RESET} back"
+        printf '%s' "Choose [${C_CYAN}r/m/e/s/d/q${C_RESET}]: "
+        if ! read -r sel; then echo; return 0; fi
+        sel="$(printf '%s' "$sel" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+        case "$sel" in
+            r)
+                printf '%s' "Runner (cline/claude/kimi/codex): "
+                if ! read -r model; then echo; return 0; fi
+                model="$(printf '%s' "$model" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+                case "$model" in
+                    cline|claude|kimi|codex) config_set runner "$model" ;;
+                    *) printf '%sUnrecognized runner: %s%s\n' "$C_YELLOW" "$model" "$C_RESET" ;;
+                esac
+                ;;
+            m)
+                choose_model
+                if [[ -n "$CL_MODEL" ]]; then
+                    config_set model "$CL_MODEL"
+                else
+                    config_clear model
+                fi
+                ;;
+            e)
+                choose_effort
+                config_set effort "$CL_EFFORT"
+                ;;
+            s)
+                printf '%s' "Stage name: "
+                if ! read -r stage; then echo; return 0; fi
+                stage="$(printf '%s' "$stage" | tr -d '[:space:]')"
+                [[ -n "$stage" ]] || continue
+                printf '%s' "Model id: "
+                if ! read -r model; then echo; return 0; fi
+                model="$(printf '%s' "$model" | tr -d '[:space:]')"
+                [[ -n "$model" ]] || continue
+                config_set "$stage" "$model"
+                ;;
+            d)
+                printf '%s' "Stage to clear: "
+                if ! read -r stage; then echo; return 0; fi
+                stage="$(printf '%s' "$stage" | tr -d '[:space:]')"
+                [[ -n "$stage" ]] || continue
+                config_clear "$stage"
+                ;;
+            q|Q|"") return 0 ;;
+            *) printf 'Unrecognized choice: %s\n' "$sel" ;;
+        esac
+    done
+}
+
+run_new_application() {
+    run_workflow "$ROOT/scripts/stagegate.sh"
+}
+
+run_from_issue() {
+    local issue mode flag
+    issue=""
+    while [[ -z "$issue" ]]; do
+        printf '%s' "Issue number or URL: "
+        if ! read -r issue; then
+            echo
+            return 0
+        fi
+        issue="$(printf '%s' "$issue" | tr -d '[:space:]')"
+    done
+
+    flag=""
+    while true; do
+        printf '%s' "Seed as [c]hange request or [n]ew application? [c/n/Enter=auto]: "
+        if ! read -r mode; then
+            echo
+            break
+        fi
+        mode="$(printf '%s' "$mode" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+        case "$mode" in
+            c|change) flag="--change"; break ;;
+            n|new)    flag="--new"; break ;;
+            "")       break ;;
+            *)        printf 'Unrecognized choice: %s\n' "$mode" ;;
+        esac
+    done
+
+    if [[ -n "$flag" ]]; then
+        run_workflow "$ROOT/scripts/from-issue.sh" "$issue" "$flag"
+    else
+        run_workflow "$ROOT/scripts/from-issue.sh" "$issue"
+    fi
+    return 0
+}
+
+run_change_workflow() {
+    run_workflow "$ROOT/scripts/change-workflow.sh"
+}
+
+# Load the persisted runner/model/effort/stage config once so the menu shows
+# the effective values before any workflow runs.
+apply_config
+
+while true; do
+    print_menu
+    printf '%s' "Choose [${C_CYAN}1-4/q${C_RESET}]: "
+    if ! read -r choice; then
+        echo
+        break
+    fi
+    choice="$(printf '%s' "$choice" | tr -d '[:space:]')"
+    case "$choice" in
+        1) run_new_application ;;
+        2) run_from_issue ;;
+        3) run_change_workflow ;;
+        4) configure_menu ;;
+        q|Q|"") break ;;
+        *) printf '%sUnrecognized choice: %s%s\n' "$C_YELLOW" "$choice" "$C_RESET" ;;
+    esac
+done
+
+exit 0

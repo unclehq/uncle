@@ -8,8 +8,10 @@
 Stagegate is a human-gated, adversarially-audited CI pipeline for
 AI-generated code. A primary agent plans, implements, and verifies; an
 independent reviewer audits adversarially; a human approves at every gate.
-By default the primary agent is `claude` and the reviewer is `codex`, but both
-are configurable (e.g., `kimi` + `codex`). Approved artifacts are SHA-256 pinned
+By default the primary agent is `scripts/agent-kimi.sh` (kimi for the kimi-tier
+stages, `claude` otherwise) and the reviewer is `codex`, but both are
+configurable — for example `kimi` + `codex`, or `cline` for every stage via the
+`./uncle` launcher. Approved artifacts are SHA-256 pinned
 and reviewer-owned files are immutable, so what ships is exactly what was
 reviewed.
 
@@ -57,13 +59,6 @@ to add a feature, fix a bug, refactor, or otherwise change existing behavior.
   change.
 - The driver records `git diff` as the authoritative change record.
 
-The change workflow also has a `small` track that collapses baseline, spec, and
-plan into one call for focused changes:
-
-```sh
-WORKFLOW_TRACK=small ./scripts/change-workflow.sh
-```
-
 ---
 
 ## How to run it
@@ -72,14 +67,19 @@ WORKFLOW_TRACK=small ./scripts/change-workflow.sh
 
 | Tool | Used for | Check |
 |---|---|---|
-| Primary agent CLI (default `claude`) | planning, implementation, verification stages | `claude --version` |
+| Primary agent CLI (default `scripts/agent-kimi.sh`) | planning, implementation, verification stages | `claude --version` (kimi stages use `kimi`) |
 | Reviewer CLI (default `codex`) | adversarial review, manual checklist, final audit | `codex --version` |
+| `cline` CLI | every stage via the `./uncle` launcher | `cline --version` |
 | `jq` | rendering the agent event stream as progress lines | `jq --version` |
 | `bash` 3.2+ | the driver (macOS system bash is fine) | `bash --version` |
 
 The reviewer CLI runs with `--sandbox read-only` and `--ephemeral`, so it can
 never write source. Primary-agent stages run with an explicit tool allowlist and
 never with permission-bypass flags.
+
+Instead of driving a script directly, you can run `./uncle`: set the model,
+reasoning effort, and per-stage overrides in its Configure menu (persisted to
+`.uncle.config`), then launch a driver.
 
 ### Run a new-application build
 
@@ -237,7 +237,7 @@ the log names: `REQUIREMENTS`, `PROJECT_PLAN`, `ADVERSARIAL_REVIEW`,
 | Variable | Default | Effect |
 |---|---|---|
 | `WORKFLOW_SPECULATE` | `1` | Run the next stage during a gate |
-| `WORKFLOW_AGENT_CMD` | `claude` | Primary agent CLI or wrapper |
+| `WORKFLOW_AGENT_CMD` | `scripts/agent-kimi.sh` | Primary agent CLI or wrapper |
 | `WORKFLOW_REVIEWER_CMD` | `codex` | Reviewer CLI or wrapper |
 | `WORKFLOW_MODEL_<STAGE>` | `opus`; `sonnet` for requirements and checklist execution | Model for one stage |
 | `WORKFLOW_EFFORT_<STAGE>` | `high`; `medium` for those two | Reasoning effort |
@@ -263,9 +263,9 @@ The swapped CLI must accept the same flags the driver passes. If the flags
 differ, provide a wrapper script that translates them and set the variable to
 that wrapper's path.
 
-`change-workflow.sh` has additional knobs for tracks, per-stage dollar budgets,
-and parallel checklist generation. Defaults and documentation are in the
-header of `scripts/change-workflow.sh`. One more it is worth knowing about:
+`change-workflow.sh` has additional knobs for per-stage dollar budgets and
+parallel checklist generation. Defaults and documentation are in the header of
+`scripts/change-workflow.sh`. One more it is worth knowing about:
 
 | Variable | Default | Effect |
 |---|---|---|

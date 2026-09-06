@@ -185,11 +185,30 @@ run_runner() {
 # running this suite from inside a live stagegate session otherwise leaks them
 # into every case and trips the origin preflight.
 run_driver() {
+    run_driver_stdin /dev/null "$@"
+}
+
+# The driver now has gates that can be reached from a state this suite sets up,
+# so stdin is always given explicitly: inherited stdin would block a developer
+# running the suite from a terminal, and silently decline everywhere else.
+run_driver_stdin() {
+    local stdin_file="$1"
+    shift
+
     cp "$ROOT/scripts/change-workflow.sh" "$REPO/scripts/change-workflow.sh"
     env -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u STAGEGATE_RUN_ID \
         PATH="$CASE/bin:$PATH" GH_LOG_FILE="$GH_LOG" "$@" \
-        bash "$REPO/scripts/change-workflow.sh" > "$OUT" 2>&1
+        bash "$REPO/scripts/change-workflow.sh" \
+        < "$stdin_file" > "$OUT" 2>&1
     RC=$?
+}
+
+# gate_input <line>... — a file holding the keystrokes one human_gate consumes:
+# the ENTER after reviewing, then the Y/N answer.
+gate_input() {
+    local f="$CASE/gate-input"
+    printf '%s\n' "$@" > "$f"
+    printf '%s' "$f"
 }
 
 # Prepares the scratch repo to run the real driver's FINAL_AUDIT stage with a
@@ -637,14 +656,70 @@ expect_out "Closed owner/repo#42 (verdict: READY)."
 expect_closed
 expect_marker
 
-new_case direct-run-not-ready-stays-open
+# A NOT READY audit no longer completes the run. It stops at the override
+# gate, and declining there leaves the state — and the issue — where they are.
+new_case direct-run-not-ready-stops-at-gate
 setup_audit_stage "NOT READY"
 printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
 printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
+expect_out "Audit verdict: NOT_READY"
+expect_out "FINAL AUDIT: NOT_READY"
+expect_out "Gate not accepted."
+expect_not_out "Change workflow complete."
+expect_state "42:WAIT_AUDIT_OVERRIDE"
+expect_not_closed
+expect_no_marker
+
+# An audit whose last line is not one of the three verdict phrases is not a
+# pass either: UNKNOWN reaches the same gate.
+new_case direct-run-unknown-verdict-stops-at-gate
+setup_audit_stage "probably fine, ship it"
+printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
+    STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
+expect_status 0
+expect_out "Audit verdict: UNKNOWN"
+expect_out "An unreadable verdict is not a pass."
+expect_state "42:WAIT_AUDIT_OVERRIDE"
+expect_not_closed
+
+# Overriding finishes the run, records the decision, and still does not close
+# the issue: an override is a human accepting a failure, not a passing audit.
+new_case direct-run-not-ready-override-completes
+setup_audit_stage "NOT READY"
+printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+run_driver_stdin "$(gate_input '' y)" \
+    WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
+    STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
+expect_status 0
+expect_out "Change workflow complete."
+expect_out "Completed over a failing final audit, by human override:"
+expect_out "The originating issue was not closed."
+expect_state "42:COMPLETE"
+expect_not_closed
+expect_no_marker
+COUNT=$((COUNT + 1))
+if ! grep -q "NOT_READY" "$REPO/.workflow/audit-override"; then
+    fail "the override record must name the verdict it overrode"
+fi
+
+# The kill switch restores the old behavior, and says so.
+new_case direct-run-audit-gate-disabled
+setup_audit_stage "NOT READY"
+printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+run_driver WORKFLOW_AUDIT_GATE=0 \
+    WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
+    STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
+expect_status 0
+expect_out "Audit gate disabled (WORKFLOW_AUDIT_GATE=0); completing on a NOT_READY verdict."
 expect_out "Final audit verdict: NOT_READY — leaving owner/repo#42 open."
+expect_state "42:COMPLETE"
 expect_not_closed
 expect_no_marker
 

@@ -67,3 +67,13 @@ summary line, and the failures in full. Do not paste whole test transcripts:
 two later stages read this file.
 
 Do not claim tests passed unless they were executed.
+
+## What happens to this work next
+
+The driver re-runs UPDATED_PROJECT_PLAN.md's `## Verification commands` block
+itself, with no agent in the path, and a human then reads the real diff —
+generated from the working tree, including the files you created — next to
+IMPLEMENTATION_NOTES.md and AUTOMATED_TEST_REPORT.md.
+
+A check you reported as passing but did not run shows up in that comparison.
+Run the checks, and report what actually happened.

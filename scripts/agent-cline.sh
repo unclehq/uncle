@@ -84,10 +84,22 @@ trap 'rm -rf "$work"' EXIT
 raw="$work/events.ndjson"
 status_file="${UNCLE_STATUS_FILE:-}"
 
-# Announce the stage to the TUI status channel (model + mode, zero tokens) so
-# the status bar flips to the right model/mode before any usage event lands.
+# The workflow script exports the current stage context (name, its 1-based
+# index, the total stage count, and that stage's turn cap) so the status bar
+# can show "stage N/M" and a within-stage completion estimate. Names are
+# workflow-controlled identifiers (e.g. implementation, change-plan), so the
+# shell-injected values never need JSON escaping.
+stage="${UNCLE_STATUS_STAGE:-}"
+stage_index="${UNCLE_STATUS_STAGE_INDEX:-0}"
+stage_total="${UNCLE_STATUS_STAGE_TOTAL:-0}"
+stage_turns="${UNCLE_STATUS_STAGE_TURNS:-0}"
+
+# Announce the stage to the TUI status channel (model + mode + stage context,
+# zero tokens) so the status bar flips to the right model/mode before any
+# usage event lands.
 if [[ -n "$status_file" ]]; then
-    printf '{"event":"start","model":"%s","mode":"act"}\n' "$model" >> "$status_file"
+    printf '{"event":"start","model":"%s","mode":"act","stage":"%s","stage_index":%s,"stage_total":%s,"stage_turns":%s}\n' \
+        "$model" "$stage" "$stage_index" "$stage_total" "$stage_turns" >> "$status_file"
 fi
 
 # Stream cline's NDJSON through a translator that emits one Claude `assistant`

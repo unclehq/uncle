@@ -55,7 +55,7 @@ fi
 CLINE_CONFIG="${CLINE_CONFIG:-$HOME/.cline/data/settings/providers.json}"
 CL_MODEL=""
 CL_EFFORT="medium"
-UNCLE_CONFIG="${UNCLE_CONFIG:-$ROOT/.uncle.config}"
+UNCLE_CONFIG="${UNCLE_CONFIG:-$PWD/.uncle.config}"
 CONFIG_STAGES="requirements project-plan updated-plan implementation execute-checklist baseline change-spec change-plan updated-change-plan reviewer"
 
 stage_env_var() {
@@ -442,6 +442,12 @@ run_change_workflow() {
 # Load the persisted runner/model/effort/stage config once so the menu shows
 # the effective values before any workflow runs.
 apply_config
+
+# First time in this project root (no .uncle.config yet): go straight to the
+# configure menu so this project gets set up before any workflow runs.
+if [[ ! -s "$UNCLE_CONFIG" ]]; then
+    configure_menu
+fi
 
 while true; do
     print_menu

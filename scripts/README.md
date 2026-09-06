@@ -114,7 +114,13 @@ State files this contract depends on, all under the gitignored `.workflow/`:
 | File | Written by | Meaning |
 |---|---|---|
 | `origin` | `from-issue.sh` on confirmation; `change-workflow.sh` in `ANALYZE` | `<owner/repo>TAB<issue>[TAB<gh\|curl>]` that owns this checkout's in-flight run. The third field records how the issue was fetched; only `gh` may authorize a close, and a two-field file written before this field existed reads as `curl` |
-| `audit-verdict` | `change-workflow.sh` in `FINAL_AUDIT` | `<run-id>TAB<class>TAB<sha256 of FINAL_AUDIT.md>` |
+| `audit-verdict` | `change-workflow.sh` in `FINAL_AUDIT` | `<run-id>TAB<class>TAB<sha256 of FINAL_AUDIT.md>`; `stagegate.sh` writes `<class>TAB<sha256>` |
+| `audit-override` | either driver in `WAIT_AUDIT_OVERRIDE` | `<utc>TAB<class>TAB<sha256 of FINAL_AUDIT.md>`; a human chose to finish over a failing audit, and the issue is never closed |
+| `IMPLEMENTATION_REVIEW.md` | either driver, at the implementation gate | the generated document the operator approves: file list, green check, agent notes and test report, and the full diff. Rebuilt from the tree on every gate entry |
+| `green-check.baseline.tsv` | `change-workflow.sh` in `PLAN` | `<exit status>TAB<command>` for the approved command list, run before anything changed |
+| `green-check.tsv` | either driver after implementation | `<PASS\|FIXED\|PREEXISTING\|REGRESSION>TAB<command>` |
+| `green-check-override` | either driver at the implementation gate | `<utc>TAB<n> regression(s) overridden`; a human approved over a failing check |
+| `untracked-before.txt` | either driver at the start of implementation | untracked paths that already existed, so they are not charged to the change |
 | `issue-closed` | `change-workflow.sh` after a successful close | `<run-id>TAB<owner/repo>TAB<issue>`; absence means no driver-side close happened |
 | `state` | either driver on every transition | `<STAGE>`, or `<issue>:<STAGE>` when the issue is known. The prefix is informational; a bare token stays valid |
 | `lock/pid` | `change-workflow.sh` for the length of a run | pid of the run holding the checkout |
@@ -193,6 +199,9 @@ under "Configuration". The two that decide which external CLI is spawned:
 | Variable | Default | Used by |
 |---|---|---|
 | `WORKFLOW_STEPWISE_IMPLEMENT` | `0` | `change-workflow.sh` |
+| `WORKFLOW_DIFF_GATE` | `1` | both drivers |
+| `WORKFLOW_GREEN_CHECK` | `1` | both drivers |
+| `WORKFLOW_AUDIT_GATE` | `1` | both drivers |
 | `WORKFLOW_AGENT_CMD` | `scripts/agent-kimi.sh` | `stagegate.sh`, `change-workflow.sh` |
 | `WORKFLOW_REVIEWER_CMD` | `codex` | both drivers and both `codex-*` helpers |
 
@@ -212,6 +221,19 @@ did not name is allowed — a review disposition routinely requires it — but i
 must be named in `IMPLEMENTATION_NOTES.md` with a reason, which the workflow
 already required and did not enforce. An unrecorded one fails the stage.
 
+The check reads the same file set the operator is shown at the implementation
+gate — `change_diff_files` — rather than `git diff` alone. `git diff` reports
+only tracked changes, so a file the agent *created* escaped the frozen scope
+entirely, which is the largest kind of scope creep there is. Untracked paths
+that already existed when implementation started are recorded in
+`.workflow/untracked-before.txt` and excluded: a scratch file in the operator's
+checkout is not something the agent did.
+
+`scripts/lib/workflow-artifacts.sh` holds the one list of files the workflow
+writes, shared by this check and the review diff. They previously carried two
+different copies, and the difference could not surface while only tracked files
+were examined: none of these artifacts is committed in a target repository.
+
 A plan with no change-impact table is a warning, not a failure: the scope is
 unknown rather than empty, and failing every file would punish plan formatting
 rather than scope creep.
@@ -230,6 +252,50 @@ default: it changes how the most consequential stage runs, and a step boundary
 in the wrong place costs coherence, which is worth more than tokens.
 
 Covered by `scripts/tests/plan-scope-test.sh`.
+
+### The gates around implementation
+
+`scripts/lib/green-check.sh` and `scripts/lib/implementation-review.sh` carry
+the two checks that sit between the implementation stage and everything that
+reads its output.
+
+`verify_commands` reads a command list out of a fenced block under a document's
+verification-command heading — section 8 of `BASELINE_REPORT.md`, or
+`## Verification commands` in `UPDATED_PROJECT_PLAN.md`. Nothing outside that
+block is read, and the block is only taken from a document that has already
+passed a human gate: the driver executes these commands with its own
+privileges, so what it runs has to be something the operator approved.
+
+`green_run` records `<exit status>TAB<command>` per line, with stdin closed so
+a command that reads it cannot consume the rest of the list. `green_classify`
+compares a post-change run against the baseline run: `PREEXISTING` for a check
+that was already failing, `REGRESSION` for one that was green and is not. A
+command with no baseline entry that fails is a `REGRESSION` — an unrecorded
+baseline is not evidence of a prior failure. The new-application pipeline has
+no baseline at all, so every failure there is a failure of the build.
+
+`write_change_diff` materializes the change: everything the tree changed
+against `HEAD` plus untracked files, with workflow artifacts removed. Untracked
+files matter — a file the agent created is the one file in the change with no
+prior reviewer — and are rendered with `git diff --no-index`, which never
+writes to the index. `write_implementation_review` composes the document the
+gate shows.
+
+The document is generated rather than agent-written, so it is reproducible:
+rebuilding it from an unchanged tree yields the same bytes. That is what turns
+the approval digest into a check on the tree. The stage after the gate rebuilds
+it and compares; a mismatch re-opens the gate on the current tree instead of
+carrying a stale approval forward.
+
+A failing check does not end the run. It changes the gate's wording from
+approve to override and records the override, which keeps the decision with the
+operator. With `WORKFLOW_DIFF_GATE=0` there is no operator in the path, so the
+driver refuses to continue past a regression instead.
+
+Covered by `scripts/tests/green-check-test.sh`,
+`scripts/tests/implementation-review-test.sh`, and
+`scripts/tests/gates-test.sh`, which drives both real drivers through these
+states in a scratch git repository against stub CLIs.
 
 ### agent-kimi.sh
 

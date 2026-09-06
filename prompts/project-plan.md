@@ -20,7 +20,8 @@ Include:
 8. Domain invariants
 9. Failure handling
 10. Concurrency model
-11. Automated-test strategy
+11. Automated-test strategy, ending in a `## Verification commands` block:
+    one fenced block, one runnable command per line, from the repository root
 12. Manual-test strategy
 13. Requirement traceability
 14. Implementation order

@@ -37,6 +37,24 @@ Retain and update:
 
 Clearly identify changes from PROJECT_PLAN.md.
 
+Include a section titled exactly:
+
+## Verification commands
+
+Under it, one fenced block and nothing else, holding the commands that
+demonstrate the build is working — formatter, type checker, linter, tests,
+build, startup smoke — one per line, run from the repository root.
+
+The driver runs this block itself after implementation, and the operator sees
+the result next to the diff before anything downstream reads either. It is the
+one part of this plan that is executed rather than read, so:
+
+- no prompt prefixes, no comments, no prose, no placeholders;
+- no command that needs a human, a browser, or a network service;
+- nothing that only the implementing agent's machine could run.
+
+Approving this plan approves those commands.
+
 This document is the sole plan input to implementation, checklist creation, and
 the final audit — none of them will read PROJECT_PLAN.md or
 ADVERSARIAL_REVIEW.md. So it must stand alone. Standing alone means every

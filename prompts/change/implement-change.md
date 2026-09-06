@@ -95,6 +95,23 @@ You run the most commands of any stage, so this is where it costs most.
 - IMPLEMENTATION_NOTES.md is one row per changed file plus the deviations. It
   is not a narrative of how you worked.
 
+## What happens to this work next
+
+Two things read your output before any other stage does, and neither takes
+your word for anything.
+
+The driver re-runs BASELINE_REPORT.md's command list itself, with no agent in
+the path, and compares the result against the same commands run before you
+started. A check you reported as passing but did not run shows up here. A
+check that was already failing before you started does not count against you;
+one that was green and is now red stops the pipeline for a human decision. Run
+the checks, and report what actually happened.
+
+Then a human reads the diff — the real one, generated from the working tree,
+including files you created — next to IMPLEMENTATION_NOTES.md and
+CHANGE_TEST_REPORT.md. Write both for that reader: they will be looking at the
+same lines you are describing.
+
 Do not invoke the reviewer CLI. An independent reviewer is already running
 against the approved artifacts while you implement.
 

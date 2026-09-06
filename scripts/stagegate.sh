@@ -32,6 +32,30 @@ LOG_DIR="$STATE_DIR/logs"
 SPEC_DIR="$STATE_DIR/speculative"
 STATE_FILE="$STATE_DIR/state"
 
+# Post-implementation gate: the generated document the operator reads, and the
+# diff it is built from.
+REVIEW_FILE="$STATE_DIR/IMPLEMENTATION_REVIEW.md"
+DIFF_FILE="$STATE_DIR/change.diff"
+
+# Green check. There is no baseline in a new application: nothing was passing
+# before, so every failing command is this build's problem.
+GREEN_CMDS="$STATE_DIR/green-check.commands"
+GREEN_CUR="$STATE_DIR/green-check.current.tsv"
+GREEN_CLASS="$STATE_DIR/green-check.tsv"
+GREEN_MD="$STATE_DIR/green-check.md"
+
+# The audit verdict, and the records of a human choosing to finish over a
+# failing check.
+VERDICT_FILE="$STATE_DIR/audit-verdict"
+GREEN_OVERRIDE_FILE="$STATE_DIR/green-check-override"
+AUDIT_OVERRIDE_FILE="$STATE_DIR/audit-override"
+
+# Untracked paths that existed before implementation started. Read by
+# change_diff_files, so the review diff shows what this build produced rather
+# than whatever was already sitting in the directory.
+UNTRACKED_BASELINE="$STATE_DIR/untracked-before.txt"
+WORKFLOW_UNTRACKED_BASELINE="$UNTRACKED_BASELINE"
+
 mkdir -p "$APPROVAL_DIR" "$LOG_DIR" "$SPEC_DIR"
 
 # Run the stage that follows a human gate in the background while the human is
@@ -58,6 +82,46 @@ REVIEWER_CMD="${WORKFLOW_REVIEWER_CMD:-codex}"
 #   WORKFLOW_MODEL_REQUIREMENTS=opus WORKFLOW_EFFORT_REQUIREMENTS=high
 DEFAULT_MODEL="opus"
 DEFAULT_EFFORT="high"
+
+# Stop after implementation and show the operator the actual diff, the green
+# check, and the agent's own notes, before anything downstream reads them.
+#
+# Stages 1-4 gate prose. Without this gate, stages 5-8 — implementation,
+# checklist, checklist execution, audit — run unattended, and the person who
+# approved the plan never sees the code it produced.
+#
+# Set to 0 only when something else reviews the diff. The driver then refuses
+# to continue past a failing green check, because no human gate is left to
+# weigh it.
+DIFF_GATE="${WORKFLOW_DIFF_GATE:-1}"
+
+# Re-run the plan's own verification commands from the driver after
+# implementation. AUTOMATED_TEST_REPORT.md is the implementing agent's account
+# of checks the implementing agent ran; this runs them with no agent in the
+# path. The commands come from UPDATED_PROJECT_PLAN.md, which the operator has
+# already approved.
+#
+# Set to 0 to return to trusting the report.
+GREEN_CHECK="${WORKFLOW_GREEN_CHECK:-1}"
+
+# Refuse to reach COMPLETE on an audit that did not say the build is ready.
+# Finishing anyway takes an explicit, recorded human override.
+#
+# Set to 0 to complete on any verdict, as before.
+AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
+
+# The FINAL_AUDIT.md verdict classifier, the independent verification run, and
+# the generated document the post-implementation gate shows. Sourced
+# self-relative so the driver still runs from any CWD.
+#
+# state.sh is here for context_exhausted, which run_codex_review has always
+# called and this driver never defined: the recovery hint after a reviewer runs
+# out of tokens could not print, because the test for it failed as a missing
+# command.
+. "$ROOT/scripts/lib/state.sh"
+. "$ROOT/scripts/lib/audit-verdict.sh"
+. "$ROOT/scripts/lib/green-check.sh"
+. "$ROOT/scripts/lib/implementation-review.sh"
 
 hash_file() {
     shasum -a 256 "$1" | awk '{print $1}'
@@ -149,6 +213,29 @@ stage_tools() {
             ;;
     esac
     stage_setting TOOLS "$1" "$fallback"
+}
+
+# New application pipeline stage order, used to report "stage N/M" to the TUI.
+# Matches run_stage's case arms.
+STATUS_STAGE_SEQ="requirements project-plan adversarial-review updated-plan implementation manual-checklist execute-checklist final-audit"
+
+# Export the current stage context for the TUI status channel: the stage name,
+# its 1-based index within the pipeline, the total stage count, and that
+# stage's turn cap (used to estimate within-stage completion from token use).
+status_stage_context() {
+    local log_name="$1"
+    local s i=1 index=0 n=0
+    for s in $STATUS_STAGE_SEQ; do
+        n=$((n + 1))
+        if [[ "$s" == "$log_name" ]]; then
+            index=$i
+        fi
+        i=$((i + 1))
+    done
+    export UNCLE_STATUS_STAGE="$log_name"
+    export UNCLE_STATUS_STAGE_INDEX="$index"
+    export UNCLE_STATUS_STAGE_TOTAL="$n"
+    export UNCLE_STATUS_STAGE_TURNS="$(stage_turns "$log_name")"
 }
 
 set_state() {
@@ -324,6 +411,7 @@ run_claude() {
     turns="$(stage_turns "$log_name")"
 
     require_file "$prompt_file"
+    status_stage_context "$log_name"
 
     while true; do
         echo
@@ -387,6 +475,7 @@ run_codex_review() {
 
     echo
     echo "Launching reviewer ($REVIEWER_CMD): $log_name"
+    status_stage_context "$log_name"
 
     # Keep the reviewer read-only. The shell writes the reviewer's final
     # message into the designated review artifact.
@@ -463,6 +552,103 @@ run_stage() {
             exit 1
             ;;
     esac
+}
+
+# --- Green check ------------------------------------------------------------
+# The driver runs the plan's own verification commands itself.
+#
+# The list comes from UPDATED_PROJECT_PLAN.md and nowhere else: the driver
+# executes these with its own privileges, so they have to be commands the
+# operator approved at the updated-plan gate, not commands an agent wrote after
+# it. There is no baseline to compare against — nothing existed before this
+# build — so any failure is a failure of the change.
+#
+# It reports; it does not decide. A failure turns the implementation gate from
+# an approval into an explicit override, and the decision is recorded.
+run_green_check() {
+    if [[ "$GREEN_CHECK" != "1" ]]; then
+        {
+            echo "## Green check"
+            echo
+            echo "DISABLED (\`WORKFLOW_GREEN_CHECK=0\`). The driver did not run"
+            echo "the plan's verification commands, so AUTOMATED_TEST_REPORT.md"
+            echo "below is the implementing agent's unverified account of them."
+        } > "$GREEN_MD"
+        return 0
+    fi
+
+    verify_commands UPDATED_PROJECT_PLAN.md > "$GREEN_CMDS"
+
+    if [[ ! -s "$GREEN_CMDS" ]]; then
+        : > "$GREEN_CLASS"
+        green_report "$GREEN_CLASS" "$GREEN_MD" UPDATED_PROJECT_PLAN.md \
+            "$LOG_DIR/green-check.log" 0
+        echo
+        echo "Green check NOT RUN: UPDATED_PROJECT_PLAN.md has no fenced block"
+        echo "under a 'Verification commands' heading, so the driver has no"
+        echo "approved commands to run."
+        return 0
+    fi
+
+    echo
+    echo "Re-running the plan's verification commands from the driver:"
+    green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log"
+
+    # No baseline file: green_classify treats every failure as a regression,
+    # which is the correct reading for a new application.
+    green_classify "$STATE_DIR/green-check.no-baseline" "$GREEN_CUR" > "$GREEN_CLASS"
+    green_report "$GREEN_CLASS" "$GREEN_MD" UPDATED_PROJECT_PLAN.md \
+        "$LOG_DIR/green-check.log" 0
+
+    local failures
+    failures="$(green_regressions "$GREEN_CLASS")"
+
+    if [[ "$failures" -gt 0 ]]; then
+        echo
+        echo "$failures verification command(s) failed:"
+        awk '
+            { t = index($0, "\t") }
+            t > 0 && substr($0, 1, t - 1) == "REGRESSION" {
+                printf "  %s\n", substr($0, t + 1)
+            }
+        ' "$GREEN_CLASS"
+        echo
+        echo "Full output: $LOG_DIR/green-check.log"
+        return 1
+    fi
+
+    echo
+    echo "Green check: all verification commands passed."
+    return 0
+}
+
+# --- Post-implementation review document ------------------------------------
+
+# Rebuilt from the working tree every time the gate opens, so the approval
+# digest attests to the tree rather than to a file somebody could edit.
+build_implementation_review() {
+    write_change_diff "$DIFF_FILE"
+    write_implementation_review "$REVIEW_FILE" "$DIFF_FILE" "$GREEN_MD" \
+        IMPLEMENTATION_NOTES.md AUTOMATED_TEST_REPORT.md
+}
+
+# Regenerate the document and compare it with what was approved. A mismatch
+# means the code moved after the operator read it, so the gate re-opens on the
+# current tree rather than the pipeline carrying a stale approval forward.
+verify_implementation_review() {
+    local approval="$APPROVAL_DIR/IMPLEMENTATION_REVIEW.sha256"
+
+    require_file "$approval"
+    build_implementation_review
+
+    if [[ "$(hash_file "$REVIEW_FILE")" != "$(cat "$approval")" ]]; then
+        echo
+        echo "The working tree changed after the implementation was approved."
+        echo "$REVIEW_FILE has been rebuilt from the current tree."
+        set_state WAIT_IMPLEMENT_APPROVAL
+        echo "Re-run the driver to review and approve what is there now."
+        exit 0
+    fi
 }
 
 # --- Speculative execution across human gates -------------------------------
@@ -641,11 +827,84 @@ while true; do
             verify_approval \
                 UPDATED_PROJECT_PLAN.md \
                 UPDATED_PROJECT_PLAN
+            # Taken before the agent runs, so a file that was already sitting
+            # in the directory is not read as something this build produced.
+            snapshot_untracked "$UNTRACKED_BASELINE"
+
             run_stage IMPLEMENT
+
+            # Independent of the agent that just claimed its checks passed.
+            # The result is carried to the gate rather than ending the run: a
+            # failure is for the operator to weigh against the diff, and
+            # killing the run here would throw away the stage that produced it.
+            run_green_check || true
+
+            set_state WAIT_IMPLEMENT_APPROVAL
+            ;;
+
+        WAIT_IMPLEMENT_APPROVAL)
+            green_failed="$(green_regressions "$GREEN_CLASS")"
+
+            if [[ "$DIFF_GATE" != "1" ]]; then
+                if [[ "$green_failed" -gt 0 ]]; then
+                    echo
+                    echo "Refusing to continue: $green_failed verification"
+                    echo "check(s) failed, and WORKFLOW_DIFF_GATE=0 leaves no"
+                    echo "human gate to weigh that against the diff."
+                    echo "Fix the failure, or re-enable the gate."
+                    exit 1
+                fi
+                echo
+                echo "Implementation gate disabled (WORKFLOW_DIFF_GATE=0);" \
+                     "no human reads the diff."
+                set_state MANUAL_CHECKLIST
+                continue
+            fi
+
+            build_implementation_review
+
+            gate_wording=approve
+            if [[ "$green_failed" -gt 0 ]]; then
+                gate_wording=override
+                echo
+                echo "=================================================="
+                echo "GREEN CHECK FAILED: $green_failed command(s)"
+                echo "=================================================="
+                echo
+                echo "The plan's own verification commands do not pass. They are"
+                echo "listed in the review document and in"
+                echo "$LOG_DIR/green-check.log."
+                echo
+                echo "Approving here is an override, and it is recorded."
+            fi
+
+            echo
+            echo "$REVIEW_FILE is generated from the working tree: the diff, the"
+            echo "green check, and the agent's own notes and test report. Edit"
+            echo "the code, not the document — it is rebuilt each time this gate"
+            echo "opens, and the approval records the state of the tree."
+
+            review_and_approve \
+                "$REVIEW_FILE" \
+                IMPLEMENTATION_REVIEW \
+                "$gate_wording"
+
+            if [[ "$green_failed" -gt 0 ]]; then
+                printf '%s\t%s\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                    "$green_failed failing check(s) overridden" \
+                    > "$GREEN_OVERRIDE_FILE"
+            else
+                rm -f "$GREEN_OVERRIDE_FILE"
+            fi
+
             set_state MANUAL_CHECKLIST
             ;;
 
         MANUAL_CHECKLIST)
+            if [[ "$DIFF_GATE" == "1" ]]; then
+                verify_implementation_review
+            fi
             run_stage MANUAL_CHECKLIST
             set_state EXECUTE_CHECKLIST
             ;;
@@ -656,7 +915,72 @@ while true; do
             ;;
 
         FINAL_AUDIT)
+            # Removed first so run_codex_review's require_file cannot read a
+            # previous run's audit as this one's output.
+            rm -f FINAL_AUDIT.md
             run_stage FINAL_AUDIT
+
+            audit_class="$(classify_audit_verdict FINAL_AUDIT.md)"
+            printf '%s\t%s\n' "$audit_class" "$(hash_file FINAL_AUDIT.md)" \
+                > "$VERDICT_FILE"
+            echo
+            echo "Audit verdict: $audit_class"
+
+            # The audit's conclusion decides whether the run finishes. A
+            # NOT READY verdict, or one whose last line cannot be read as a
+            # verdict at all, is not a pass.
+            case "$audit_class" in
+                READY|READY_WITH_NON_BLOCKING_ISSUES)
+                    set_state COMPLETE
+                    ;;
+                *)
+                    if [[ "$AUDIT_GATE" == "1" ]]; then
+                        set_state WAIT_AUDIT_OVERRIDE
+                    else
+                        echo "Audit gate disabled (WORKFLOW_AUDIT_GATE=0);" \
+                             "completing on a $audit_class verdict."
+                        set_state COMPLETE
+                    fi
+                    ;;
+            esac
+            ;;
+
+        WAIT_AUDIT_OVERRIDE)
+            require_file "$VERDICT_FILE"
+            audit_class="$(awk -F'\t' 'NR == 1 {print $1}' "$VERDICT_FILE")"
+
+            echo
+            echo "=================================================="
+            echo "FINAL AUDIT: $audit_class"
+            echo "=================================================="
+            echo
+
+            if [[ "$audit_class" == "NOT_READY" ]]; then
+                echo "The independent auditor says this build is not ready."
+            else
+                echo "FINAL_AUDIT.md does not end in one of the three verdict"
+                echo "phrases, so the auditor's conclusion could not be read."
+                echo "An unreadable verdict is not a pass."
+            fi
+
+            echo
+            echo "This run does not finish on that by itself. Either fix what"
+            echo "the audit found and re-run the implementation stage:"
+            echo
+            echo "  printf '%s\\n' IMPLEMENT > $STATE_FILE"
+            echo "  ./scripts/stagegate.sh"
+            echo
+            echo "or record an explicit decision to finish anyway. An override"
+            echo "is written to $AUDIT_OVERRIDE_FILE and reported at COMPLETE."
+
+            review_and_approve FINAL_AUDIT.md FINAL_AUDIT_OVERRIDE override
+
+            printf '%s\t%s\t%s\n' \
+                "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                "$audit_class" \
+                "$(hash_file FINAL_AUDIT.md)" \
+                > "$AUDIT_OVERRIDE_FILE"
+
             set_state COMPLETE
             ;;
 
@@ -674,6 +998,23 @@ while true; do
             echo "  MANUAL_CHECKLIST.md"
             echo "  VERIFICATION_REPORT.md"
             echo "  FINAL_AUDIT.md"
+            echo "  $DIFF_FILE"
+
+            # An overridden check is not a passed check. Whatever else this
+            # summary says, it says that first.
+            if [[ -s "$GREEN_OVERRIDE_FILE" ]]; then
+                echo
+                echo "Completed with a failing green check, by human override:"
+                sed 's/^/  /' "$GREEN_OVERRIDE_FILE"
+                echo "  Detail: $GREEN_MD"
+            fi
+
+            if [[ -s "$AUDIT_OVERRIDE_FILE" ]]; then
+                echo
+                echo "Completed over a failing final audit, by human override:"
+                sed 's/^/  /' "$AUDIT_OVERRIDE_FILE"
+            fi
+
             exit 0
             ;;
 

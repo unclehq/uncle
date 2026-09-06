@@ -151,6 +151,11 @@ During implementation:
 6. Do not weaken an invariant merely to make a test pass.
 7. Do not change an approved requirement without recording the deviation.
 
+After implementation, the driver runs the plan's `## Verification commands`
+block itself and stops at a human gate on the real diff. Neither is optional
+and neither is yours to run: the point is that the stage which wrote the code
+is not the only witness to whether it works.
+
 ## Stage 5: Automated verification
 
 Run every applicable automated check, including:
@@ -236,7 +241,10 @@ The user is the approval authority. Never bypass an approval gate.
 7. Do not weaken tests to accommodate the implementation.
 8. For reproducible bugs, add a regression test before the fix where practical.
 9. Record every material deviation from the approved `CHANGE_PLAN.md`.
-10. Never claim a check passed unless it was executed.
+10. Never claim a check passed unless it was executed. The driver re-runs
+    `BASELINE_REPORT.md`'s command list independently and compares it against
+    the same list run before the change, so a claim and a result are two
+    different things here.
 11. Treat prototypes as isolated experiments.
 12. Do not modify reviewer-owned artifacts.
 13. Do not overwrite unrelated uncommitted work.
@@ -269,6 +277,8 @@ Any RELAXED or REMOVED invariant requires explicit human approval.
 | Artifact | Owner |
 |---|---|
 | CHANGE_REQUEST.md | Human |
+| .workflow/IMPLEMENTATION_REVIEW.md | Driver |
+| .workflow/green-check.md | Driver |
 | BASELINE_REPORT.md | Primary agent |
 | CHANGE_SPEC.md | Primary agent |
 | CHANGE_PLAN.md | Primary agent (revised in place after review) |
@@ -279,6 +289,21 @@ Any RELAXED or REMOVED invariant requires explicit human approval.
 | MANUAL_CHECKLIST.md | Reviewer |
 | VERIFICATION_REPORT.md | Primary agent |
 | FINAL_AUDIT.md | Reviewer |
+
+## Gates around implementation
+
+Implementation is followed by two checks the primary agent does not control:
+
+- the driver re-runs the approved verification commands and compares them
+  against the pre-change baseline;
+- a human reads the generated diff, the check result, and the implementation
+  notes, and approves or declines.
+
+A check that regressed turns that approval into an explicit override, which is
+recorded. A final audit that does not say the change is ready stops the run
+before COMPLETE. Do not write around any of this, and do not edit the generated
+review document — it is rebuilt from the working tree every time the gate
+opens.
 
 ## Completion rule
 

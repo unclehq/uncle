@@ -169,9 +169,11 @@ command — they pick up from `.workflow/state`.
 | 3 | Adversarial review | Reviewer | `ADVERSARIAL_REVIEW.md` | `Y/N` |
 | 4 | Updated plan | Primary agent | `UPDATED_PROJECT_PLAN.md` | `Y/N` |
 | 5 | Implementation | Primary agent | source, `IMPLEMENTATION_NOTES.md`, `AUTOMATED_TEST_REPORT.md` | — |
+| 5a | Green check | Driver | `.workflow/green-check.md` | machine |
+| 5b | Implementation review | Driver | `.workflow/IMPLEMENTATION_REVIEW.md` | `Y/N` |
 | 6 | Manual checklist | Reviewer | `MANUAL_CHECKLIST.md` | — |
 | 7 | Checklist execution | Primary agent | `VERIFICATION_REPORT.md`, `DEFECTS.md` | — |
-| 8 | Final audit | Reviewer | `FINAL_AUDIT.md` | — |
+| 8 | Final audit | Reviewer | `FINAL_AUDIT.md` | verdict |
 
 `UPDATED_PROJECT_PLAN.md` is the sole plan input to stages 5–8; it must stand
 alone, because nothing downstream reads `PROJECT_PLAN.md` or
@@ -184,10 +186,12 @@ alone, because nothing downstream reads `PROJECT_PLAN.md` or
 | `ANALYZE` | Primary agent | `BASELINE_REPORT.md`, `CHANGE_SPEC.md` | `Y/N` |
 | `PLAN` | Primary agent + reviewer | `CHANGE_PLAN.md`, `ADVERSARIAL_REVIEW.md` | `Y/N` |
 | `UPDATED_PLAN` | Primary agent | `CHANGE_PLAN.md` (revised in place) | `Y/N` |
-| `IMPLEMENT` | Primary agent + reviewer | source, `IMPLEMENTATION_NOTES.md`, `CHANGE_TEST_REPORT.md` | — |
+| `IMPLEMENT` | Primary agent + reviewer + driver | source, `IMPLEMENTATION_NOTES.md`, `CHANGE_TEST_REPORT.md`, `.workflow/green-check.md` | machine |
+| `WAIT_IMPLEMENT_APPROVAL` | Driver | `.workflow/IMPLEMENTATION_REVIEW.md` | `Y/N` |
 | `CHECKLIST` | Reviewer | `MANUAL_CHECKLIST.md` | — |
 | `EXECUTE_CHECKLIST` | Primary agent | `VERIFICATION_REPORT.md`, `DEFECTS.md` | — |
-| `FINAL_AUDIT` | Reviewer | `FINAL_AUDIT.md` | — |
+| `FINAL_AUDIT` | Reviewer | `FINAL_AUDIT.md` | verdict |
+| `WAIT_AUDIT_OVERRIDE` | Driver | `.workflow/audit-override` | `Y/N`, only on a failing verdict |
 
 `CHANGE_PLAN.md` is the sole plan input to implementation and verification.
 The `UPDATED_PLAN` stage answers the adversarial review by editing that file in
@@ -225,6 +229,57 @@ the approved updated plan (`UPDATED_PROJECT_PLAN.md` or the revised
 Disable it with `WORKFLOW_SPECULATE=0` if you routinely edit documents mid-review
 or want strictly serial token spend.
 
+### The implementation gate
+
+The four planning gates approve prose. This one approves code.
+
+After implementation, the driver builds `.workflow/IMPLEMENTATION_REVIEW.md`
+from the working tree: the list of changed files, the green-check result, the
+agent's own `IMPLEMENTATION_NOTES.md` and test report embedded with their
+digests, and the full diff — including files the agent created, which
+`git diff` alone would not show. Workflow artifacts are left out, so what you
+read is the change and not the paperwork about it.
+
+The document is generated, not written by an agent, and is rebuilt every time
+the gate opens. That is what makes the approval digest a check on the tree
+rather than on a file: if the code moves after you approve it, the next stage
+notices, rebuilds the document, and re-opens the gate instead of carrying a
+stale approval forward.
+
+### The green check
+
+`CHANGE_TEST_REPORT.md` is the implementing agent's account of checks the
+implementing agent ran, and every stage downstream reads that account rather
+than the checks. The driver now runs them itself, with no agent in the path.
+
+The command list is never invented by the driver. It is read from a document
+you already approved — `BASELINE_REPORT.md` section 8 for a change,
+`UPDATED_PROJECT_PLAN.md`'s `## Verification commands` block for a new
+application — so what runs is what you signed off on.
+
+For a change, the same list is run twice: once at `PLAN`, before anything is
+edited, and once after implementation. A command that was already failing is
+recorded as `PREEXISTING` and does not block; one that passed before and fails
+now is a `REGRESSION`. A regression does not kill the run — it turns the
+implementation gate from an approval into an explicit override, recorded in
+`.workflow/green-check-override` and reported again at `COMPLETE`. With
+`WORKFLOW_DIFF_GATE=0` there is no human left to weigh it, so the driver stops
+instead.
+
+If the source document has no command block, the gate says `NOT RUN` rather
+than implying a pass.
+
+### The verdict gate
+
+`FINAL_AUDIT.md`'s verdict was always classified and recorded; it just did not
+decide anything, so a `NOT READY` audit — or one whose last line could not be
+read as a verdict at all — reached `COMPLETE` and reported success.
+
+Now only `READY` and `READY WITH NON-BLOCKING ISSUES` complete the run on their
+own. Anything else stops at `WAIT_AUDIT_OVERRIDE`, which either sends you back
+to fix what the audit found or records an explicit decision to finish anyway in
+`.workflow/audit-override`. An override never closes the originating issue.
+
 ---
 
 ## Configuration
@@ -234,9 +289,16 @@ the log names: `REQUIREMENTS`, `PROJECT_PLAN`, `ADVERSARIAL_REVIEW`,
 `UPDATED_PLAN`, `IMPLEMENTATION`, `MANUAL_CHECKLIST`, `EXECUTE_CHECKLIST`,
 `FINAL_AUDIT`.
 
+The three gate switches above default to on and are the only settings that
+change what the workflow refuses to do. Turning one off is a decision to be
+made once, deliberately — not a way past a gate that is currently red.
+
 | Variable | Default | Effect |
 |---|---|---|
 | `WORKFLOW_SPECULATE` | `1` | Run the next stage during a gate |
+| `WORKFLOW_DIFF_GATE` | `1` | Stop after implementation and show a human the diff |
+| `WORKFLOW_GREEN_CHECK` | `1` | Re-run the approved verification commands from the driver |
+| `WORKFLOW_AUDIT_GATE` | `1` | Refuse to complete on a failing or unreadable audit verdict |
 | `WORKFLOW_AGENT_CMD` | `scripts/agent-kimi.sh` | Primary agent CLI or wrapper |
 | `WORKFLOW_REVIEWER_CMD` | `codex` | Reviewer CLI or wrapper |
 | `WORKFLOW_MODEL_<STAGE>` | `opus`; `sonnet` for requirements and checklist execution | Model for one stage |

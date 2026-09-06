@@ -61,14 +61,19 @@ Avoid:
 
 ## Testing
 
-There is no test suite yet. The minimal checks we run are:
+Syntax-check every script, then run the suites in `scripts/tests/`:
 
 ```sh
-for f in scripts/*.sh; do bash -n "$f"; done
+for f in scripts/*.sh scripts/lib/*.sh scripts/tests/*.sh; do bash -n "$f"; done
+for t in scripts/tests/*-test.sh; do bash "$t" || exit 1; done
 ```
 
-If you add a script, include it in this check. If you add CI, make this check
-run automatically.
+Every suite is hermetic: no network, no model calls, and no writes outside its
+own `mktemp -d`. The ones that exercise a driver run it in a scratch git
+repository against stub agent and reviewer CLIs.
+
+If you add a script, include it in the syntax check. If you add behavior to a
+driver, add a case to the suite that covers that driver.
 
 ## Submitting changes
 

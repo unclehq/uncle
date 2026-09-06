@@ -25,7 +25,16 @@ WORKFLOWS = [
 ]
 EFFORTS = ["high", "medium", "low"]
 ISSUE_MODES = [("auto", ""), ("change request", "--change"), ("new application", "--new")]
-CONFIG_PATH = os.environ.get("UNCLE_CONFIG", os.path.join(ROOT, ".uncle.config"))
+# The per-project config lives in the current project root (cwd), so each
+# project gets its own model/effort/runner settings. `UNCLE_CONFIG` overrides.
+_CONFIGURE_FIRST_RUN = object()  # sentinel: leave in place until set in __init__
+
+
+def _default_config_path():
+    return os.path.join(os.getcwd(), ".uncle.config")
+
+
+CONFIG_PATH = os.environ.get("UNCLE_CONFIG", _default_config_path())
 CONFIG_STAGES = [
     "requirements", "project-plan", "updated-plan", "implementation",
     "execute-checklist", "baseline", "change-spec", "change-plan",
@@ -253,6 +262,10 @@ class UncleTUI:
         self.status_pos = 0
         self.status_model = ""
         self.status_mode = ""
+        self.status_stage = ""
+        self.status_stage_index = 0
+        self.status_stage_total = 0
+        self.status_stage_turns = 0
         self.completed_tokens = 0
         self.current_tokens = 0
         self.config = {}
@@ -265,7 +278,13 @@ class UncleTUI:
         self.pick_filter = ""
         self.picker_kind = "model"
         self.picker_target = None
+        self.first_run = False
         self.load_config()
+        if self.state == "menu" and self.first_run:
+            # First time in this project root: open the Configure screen so
+            # this project gets set up before anything runs.
+            self.state = "config"
+            self.config_sel = 0
 
     # ---- colors (cline's CLI palette) ----
     def _setup_colors(self):
@@ -502,11 +521,18 @@ class UncleTUI:
 
     # ---- config ----
     def load_config(self):
+        exists = os.path.exists(CONFIG_PATH)
         self.config = {}
         self.stage_efforts = {}
         self.runner = "cline"
         self.model = ""
         self.effort = "medium"
+        if not exists:
+            # First time in this project root: no config file yet. Mark it so
+            # the TUI can drop straight into the Configure screen.
+            self.first_run = True
+            return self.first_run
+        self.first_run = False
         try:
             with open(CONFIG_PATH) as fh:
                 for line in fh:
@@ -528,6 +554,7 @@ class UncleTUI:
                             self.config[key] = val
         except Exception:
             pass
+        return self.first_run
 
     def save_config(self):
         header = ("# Uncle per-stage model/effort config.\n"
@@ -575,10 +602,28 @@ class UncleTUI:
             self.current_tokens = 0
             self.status_model = ev.get("model", "")
             self.status_mode = ev.get("mode", "")
+            self.status_stage = ev.get("stage", "")
+            self.status_stage_index = int(ev.get("stage_index", 0) or 0)
+            self.status_stage_total = int(ev.get("stage_total", 0) or 0)
+            self.status_stage_turns = int(ev.get("stage_turns", 0) or 0)
         elif ev.get("event") == "usage":
             self.current_tokens = int(ev.get("total_tokens", 0) or 0)
             self.status_model = ev.get("model", self.status_model)
             self.status_mode = ev.get("mode", self.status_mode)
+
+    def _stage_percent(self):
+        """Estimated completion of the current stage, from token use.
+
+        A stage's turn cap is its worst case; a healthy stage uses roughly
+        8k tokens per turn (input grows each turn but most turns are small).
+        Returns None when the workflow did not report stage context, else a
+        0–99 value: 100 is only claimed by starting the next stage.
+        """
+        if not self.status_stage_turns:
+            return None
+        budget = self.status_stage_turns * 8000
+        pct = int(self.current_tokens * 100 / max(1, budget))
+        return min(99, max(0, pct))
 
     # ---- running ----
     def start_workflow(self):
@@ -635,6 +680,10 @@ class UncleTUI:
         self.current_tokens = 0
         self.status_model = ""
         self.status_mode = ""
+        self.status_stage = ""
+        self.status_stage_index = 0
+        self.status_stage_total = 0
+        self.status_stage_turns = 0
 
     # ---- drawing ----
     def draw(self):
@@ -664,12 +713,15 @@ class UncleTUI:
         if self.state == "config_edit":
             kind, target = self._config_row()
             return "Value for %s (Enter save, Esc back)" % (self._row_label(kind, target) or "?")
-        return {
+        title = {
             "menu": "The man from uncle",
             "issue_mode": "Seed as",
             "issue": "Issue number or URL",
             "config": "Configure — Enter: pick model/effort/runner, d reset, q back",
         }.get(self.state, "")
+        if self.state == "config" and getattr(self, "first_run", False):
+            title = "Configure this project (first run) — %s" % title
+        return title
 
     def _draw_logo(self, h, w):
         """Draw the mark in the upper-left; return the content column, or 0."""
@@ -850,12 +902,23 @@ class UncleTUI:
             else:
                 mode = "—"
                 bar_attr = 0
+            stage = "stage: %s" % (self.status_stage or "—")
+            if self.status_stage_index and self.status_stage_total:
+                stage = "stage: %s (%d/%d)" % (
+                    self.status_stage, self.status_stage_index, self.status_stage_total)
+            pct = self._stage_percent()
+            if pct is not None:
+                stage += " %d%%" % pct
         else:
             model = self.model or self.default_model or "default"
             tokens = 0
             mode = "—"
             bar_attr = 0
-        text = " model: %s   tokens: %d   mode: %s " % (model, tokens, mode)
+            stage = ""
+        parts = " model: %s   tokens: %d   mode: %s " % (model, tokens, mode)
+        if stage:
+            parts += "  %s" % stage
+        text = parts
         try:
             self.stdscr.attrset(bar_attr | curses.A_REVERSE)
             self.stdscr.addnstr(h - 1, 0, text.ljust(w)[: w - 1], w - 1)

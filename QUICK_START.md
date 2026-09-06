@@ -63,17 +63,26 @@ The workflow runs stages and pauses at gates:
 
 | Pipeline | Stages |
 |---|---|
-| New app | Requirements → Plan → Adversarial review → Updated plan → Implementation → Manual checklist → Execution → Final audit |
-| Change request | Analyze → Plan → Adversarial review → Updated plan → Implement → Checklist → Execution → Final audit |
+| New app | Requirements → Plan → Adversarial review → Updated plan → Implementation → **Review the code** → Manual checklist → Execution → Final audit |
+| Change request | Analyze → Plan → Adversarial review → Updated plan → Implement → **Review the code** → Checklist → Execution → Final audit |
 
 At each gate, open the listed file, read it, and answer `y` to approve.
+
+The gate after implementation is the one that shows you code. Open
+`.workflow/IMPLEMENTATION_REVIEW.md`: it holds the diff, the result of the
+driver re-running your project's own test commands, and the agent's notes.
+
+If those commands passed before the change and fail now, the gate says so and
+asks you to *override* rather than approve. The run also stops before
+`COMPLETE` if the final audit did not say the change is ready.
 
 ## 4. Reading the result
 
 When the driver reaches `COMPLETE`, read in this order:
 
 1. `FINAL_AUDIT.md` — ends with `READY`, `READY WITH NON-BLOCKING ISSUES`, or
-   `NOT READY`.
+   `NOT READY`. Only the first two reach `COMPLETE` on their own; anything else
+   needs a recorded human override, which the final summary reports.
 2. `VERIFICATION_REPORT.md` — what was actually run.
 3. Test report (`AUTOMATED_TEST_REPORT.md` or `CHANGE_TEST_REPORT.md`).
 4. The source diff or implementation notes.
@@ -88,6 +97,9 @@ The workflow is stateful:
 
 # Restart a specific stage
 echo REQUIREMENTS > .workflow/state
+
+# Send a rejected implementation back to be redone
+echo IMPLEMENT > .workflow/state
 ./scripts/stagegate.sh
 
 # Full reset

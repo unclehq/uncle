@@ -80,8 +80,15 @@ trap 'rm -rf "$work"' EXIT
 raw="$work/events.ndjson"
 status_file="${UNCLE_STATUS_FILE:-}"
 
+# Stage context exported by the workflow script; see agent-cline.sh.
+stage="${UNCLE_STATUS_STAGE:-}"
+stage_index="${UNCLE_STATUS_STAGE_INDEX:-0}"
+stage_total="${UNCLE_STATUS_STAGE_TOTAL:-0}"
+stage_turns="${UNCLE_STATUS_STAGE_TURNS:-0}"
+
 if [[ -n "$status_file" ]]; then
-    printf '{"event":"start","model":"%s","mode":"plan"}\n' "$model" >> "$status_file"
+    printf '{"event":"start","model":"%s","mode":"plan","stage":"%s","stage_index":%s,"stage_total":%s,"stage_turns":%s}\n' \
+        "$model" "$stage" "$stage_index" "$stage_total" "$stage_turns" >> "$status_file"
 fi
 
 set +e

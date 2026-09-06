@@ -95,11 +95,22 @@ check_eq "unplanned file is a deviation" "app/config.py" \
 check_eq "basename-only scope entry matches its path" "" \
     "$(plan_out_of_scope "$PLAN" app/static/admin.html)"
 
-# Artifacts the workflow itself writes are never deviations.
-for artifact in IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md DEFECTS.md .workflow/change.diff; do
+# Artifacts the workflow itself writes are never deviations. The list covers
+# both pipelines and every stage: once untracked files are examined, a report
+# the workflow wrote itself would otherwise read as scope creep.
+for artifact in IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md DEFECTS.md \
+                .workflow/change.diff BASELINE_REPORT.md CHANGE_SPEC.md \
+                CHANGE_REQUEST.md ADVERSARIAL_REVIEW.md FINAL_AUDIT.md \
+                AUTOMATED_TEST_REPORT.md UPDATED_PROJECT_PLAN.md \
+                REQUIREMENTS_INTERPRETATION.md; do
     check_eq "workflow artifact '$artifact' is not a deviation" "" \
         "$(plan_out_of_scope "$PLAN" "$artifact")"
 done
+
+# A source file that merely looks like one is still a deviation: the list is
+# exact paths, not a pattern.
+check_eq "a lookalike path is still a deviation" "docs/FINAL_AUDIT.md" \
+    "$(plan_out_of_scope "$PLAN" docs/FINAL_AUDIT.md)"
 
 check_eq "mixed set reports only the deviations" "app/config.py migrations/0004.py" \
     "$(plan_out_of_scope "$PLAN" app/domain/records.py app/config.py \

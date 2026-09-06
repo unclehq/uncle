@@ -9,6 +9,12 @@
 #
 # bash 3.2 compatible: no associative arrays, no ${var^^}.
 
+# The list of files the workflow writes, shared with implementation-review.sh.
+# Until untracked files were examined, this check and that one carried two
+# different copies of it, and the difference could not show up: none of these
+# artifacts is committed in a target repository, so `git diff` never named one.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workflow-artifacts.sh"
+
 # plan_scope_files <plan> — repo-relative paths from the change-impact table,
 # one per line, unique, sorted.
 #
@@ -81,12 +87,9 @@ plan_out_of_scope() {
 
     local f
     for f in "$@"; do
-        case "$f" in
-            IMPLEMENTATION_NOTES.md|CHANGE_TEST_REPORT.md|CHANGE_PLAN.md|\
-            DEFECTS.md|VERIFICATION_REPORT.md|MANUAL_CHECKLIST.md|.workflow/*)
-                continue
-                ;;
-        esac
+        if workflow_artifact "$f"; then
+            continue
+        fi
         # A plan cell may name a sibling by basename alone
         # ("`app/static/admin.js`, `admin.html`"), so a scope entry with no
         # directory matches on basename. Tolerant in the safe direction: it

@@ -81,4 +81,23 @@ here is paid for six times over.
 Section 8 and section 9 are never omitted: the exact commands you ran and their
 results are the evidence the rest of the workflow depends on.
 
+## Section 8 is executed, not just read
+
+The driver re-runs section 8 itself — once now, against the unmodified tree,
+and once after the change — and compares the two. That is how the workflow
+knows a check passed, rather than taking the implementation stage's word for
+it. So write section 8 as a command list a shell can run:
+
+- one fenced block, immediately under the heading, and nothing else in it;
+- one command per line, exactly as you ran it, from the repository root;
+- no prompt prefixes, no comments, no prose, no placeholders;
+- no command that needs a human, a password, a browser, or a network service
+  you cannot reach here — leave those to the manual checklist instead;
+- no command that changes the repository. These run twice, and the first run
+  must leave the tree exactly as it found it.
+
+A check that is already failing is still listed. The driver records that it
+failed before the change, so it will not be blamed on the change; omitting it
+only hides it.
+
 Write BASELINE_REPORT.md and stop.

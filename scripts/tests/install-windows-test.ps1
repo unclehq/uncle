@@ -15,6 +15,16 @@ function scoop {
     Set-Content (Join-Path $current 'install.json') '{"bucket":"uncle-github"}'
 }
 function Assert($condition, $message) { if (!$condition) { throw $message } }
+function Assert-InstallerArchive($archivePath) {
+    $zip = [IO.Compression.ZipFile]::OpenRead($archivePath)
+    try {
+        # Windows PowerShell 5.1 Compress-Archive can write backslashes, unlike
+        # PowerShell 7 on Unix. Check the payload identically for either form.
+        $names = @($zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+        Assert (@($names | Where-Object { $_ -match '(^|/)\.uncle/' }).Count -eq 0) 'Packaged workflow state'
+        Assert (@($names | Where-Object { $_ -eq 'uncle/packaging/windows/uncle.ps1' }).Count -eq 1) 'Launcher absent'
+    } finally { $zip.Dispose() }
+}
 function Invoke-RestMethod {
     param($Headers, $Uri)
     $global:UncleTestGitHubUri = $Uri
@@ -25,6 +35,22 @@ function Invoke-WebRequest {
     Copy-Item $global:UncleTestGitHubZip $OutFile
 }
 try {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    New-Item -ItemType Directory -Force $work | Out-Null
+    # Explicit fixtures cover the legacy Windows layout even on a Unix host.
+    foreach ($separator in @('/', '\')) {
+        $fixture = Join-Path $work ([Guid]::NewGuid().ToString('N') + '.zip')
+        $zip = [IO.Compression.ZipFile]::Open($fixture, [IO.Compression.ZipArchiveMode]::Create)
+        try { $zip.CreateEntry(('uncle/packaging/windows/uncle.ps1').Replace('/', $separator)) | Out-Null }
+        finally { $zip.Dispose() }
+        Assert-InstallerArchive $fixture
+        $zip = [IO.Compression.ZipFile]::Open($fixture, [IO.Compression.ZipArchiveMode]::Update)
+        try { $zip.CreateEntry(('uncle/.uncle/workspace/state').Replace('/', $separator)) | Out-Null }
+        finally { $zip.Dispose() }
+        $rejected = $false
+        try { Assert-InstallerArchive $fixture } catch { $rejected = $_.Exception.Message -eq 'Packaged workflow state' }
+        Assert $rejected 'Workflow state was not rejected in ZIP fixture'
+    }
     foreach ($path in @('install.ps1','packaging/windows/uncle.ps1')) {
         $tokens = $null; $errors = $null
         [Management.Automation.Language.Parser]::ParseFile((Join-Path $root $path), [ref]$tokens, [ref]$errors) | Out-Null
@@ -40,13 +66,7 @@ try {
     Assert ($manifest.hash -eq (Get-FileHash $archive -Algorithm SHA256).Hash) 'Incorrect manifest hash'
     Assert ($manifest.extract_dir -eq 'uncle') 'Wrong extraction root'
     Assert ($manifest.depends -contains 'python') 'Missing Python dependency'
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $zip = [IO.Compression.ZipFile]::OpenRead($archive)
-    try {
-        $names = $zip.Entries.FullName
-        Assert (@($names | Where-Object { $_ -match '(^|/)\.uncle/' }).Count -eq 0) 'Packaged workflow state'
-        Assert (@($names | Where-Object { $_ -match 'packaging/windows/uncle.ps1$' }).Count -eq 1) 'Launcher absent'
-    } finally { $zip.Dispose() }
+    Assert-InstallerArchive $archive
     & (Join-Path $root 'install.ps1') -SourceDir $root
     Assert ($global:UncleScoopTestCalls -contains 'update uncle --force') 'Reinstall did not update through Scoop'
     $githubRoot = Join-Path $work ('uncle-' + ('a' * 40))
@@ -69,6 +89,14 @@ try {
     Assert $failed 'Invalid ref accepted'
     Write-Host 'install-windows-test: passed'
     $global:LASTEXITCODE = 0
+} catch {
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        # Expose the actual failure in check annotations, even when access to
+        # the full Actions log is unavailable.
+        $message = $_.Exception.Message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+        Write-Output "::error title=Windows installer tests::$message"
+    }
+    throw
 } finally {
     $env:SCOOP = $oldScoop
     Remove-Item function:scoop

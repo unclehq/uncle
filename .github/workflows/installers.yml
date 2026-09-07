@@ -44,6 +44,9 @@ jobs:
       - uses: actions/checkout@v6
       - name: PowerShell installer tests
         run: ./scripts/tests/install-windows-test.ps1
+      - name: PowerShell 7 installer tests
+        shell: pwsh
+        run: ./scripts/tests/install-windows-test.ps1
       - name: Install Scoop on the disposable runner
         run: |
           Invoke-WebRequest -UseBasicParsing https://get.scoop.sh -OutFile "$env:RUNNER_TEMP/scoop-install.ps1"

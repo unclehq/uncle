@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import importlib.util
+import webbrowser
 
 try:
     import curses
@@ -936,6 +937,8 @@ class UncleTUI:
         self.status_pos = 0
         self.panel_scroll = None
         self.proc_done = False
+        self.workflow_completed = False
+        self.support_checked = False
         metrics = os.path.join(_project_root(), ".uncle", "workspace", "metrics")
         self.session_stats = {"active": {}, "live": {}, "records": [], "tick": -1,
                               "seen": set(os.listdir(metrics)) if os.path.isdir(metrics) else set()}
@@ -998,8 +1001,40 @@ class UncleTUI:
             pass
         if got:
             self.prompt_seen = 0
-        self._detect_prompt()
+        if self.proc_done:
+            self._offer_support()
+        else:
+            self._detect_prompt()
         return got or before != (self.proc_done, self.prompt_kind)
+
+    def _offer_support(self):
+        """Offer once per local user, only after this workflow finishes."""
+        if getattr(self, "support_checked", False) or not self.proc:
+            return
+        code = self.proc.poll()
+        if code is None:
+            return
+        self.support_checked = True
+        self.prompt_kind = ""
+        if code != 0 or not getattr(self, "workflow_completed", False):
+            return
+        base = os.environ.get("XDG_STATE_HOME")
+        if not base or not os.path.isabs(base):
+            base = os.path.join(os.path.expanduser("~"), ".local", "state")
+        marker = os.path.join(base, "uncle", "star-prompt-shown")
+        try:
+            os.makedirs(os.path.dirname(marker), exist_ok=True)
+            # Exclusive creation also prevents simultaneous runs from asking twice.
+            with open(marker, "x") as fh:
+                fh.write("shown\n")
+        except OSError:
+            # Never interrupt completion or show a prompt we cannot remember.
+            return
+        self.prompt_kind = "support"
+        self.prompt_text = (
+            "Your workflow is complete! Support Uncle by adding a star on GitHub: "
+            "https://github.com/unclehq/uncle. "
+            "This popup won't bother you again.")
 
     def _absorb_line(self, line):
         self.output.append(line)
@@ -1014,6 +1049,8 @@ class UncleTUI:
     # model, which was never this stage's model at all.
     def _read_banner(self, line):
         text = line.strip()
+        if text in ("Workflow complete.", "Change workflow complete."):
+            self.workflow_completed = True
         # A gate opens with this banner, then reads a bare newline before it
         # asks the real question. bash prints a `read -p` prompt only to a
         # terminal, so over a pipe that read is invisible: nothing appears and
@@ -1716,6 +1753,8 @@ class UncleTUI:
             footer = "[y] approve      [n] decline"
             if self.gate_file:
                 footer = "[y] approve      [n] decline      [v] view file"
+        elif self.prompt_kind == "support":
+            footer = "[s] open GitHub to star      [Enter/Esc] dismiss"
         elif self.prompt_kind == "enter":
             footer = "[Enter] continue      [Esc] decline"
         else:
@@ -1730,7 +1769,7 @@ class UncleTUI:
         box_h = len(body) + 4
         top = max(0, (h - box_h) // 2)
         left = max(0, (w - box_w) // 2)
-        title = {"confirm": " approve ", "enter": " review ", "input": " input "}.get(
+        title = {"confirm": " approve ", "enter": " review ", "input": " input ", "support": " support Uncle "}.get(
             self.prompt_kind, " uncle ")
 
         border = self.color["title"]
@@ -1796,6 +1835,17 @@ class UncleTUI:
 
     # ---- input ----
     def handle_key(self, k):
+        if self.state == "running" and getattr(self, "prompt_kind", "") == "support":
+            if k in (ord("s"), ord("S")):
+                self.prompt_kind = ""
+                threading.Thread(target=webbrowser.open,
+                                 args=("https://github.com/unclehq/uncle",),
+                                 daemon=True).start()
+            elif k in (10, 13, 27, ord("q"), ord("Q")):
+                self.prompt_kind = ""
+            elif k == 3:
+                self._quit()
+            return
         if self.state in ("running", "viewer") and getattr(self, "prompt_kind", "") != "input":
             if k in (ord("["), ord("]"), ord("\\")):
                 if k == ord("\\"):

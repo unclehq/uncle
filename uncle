@@ -71,7 +71,7 @@ CL_EFFORT="medium"
 UNCLE_CONFIG="${UNCLE_CONFIG:-$PROJECT_ROOT/.uncle/config}"
 export UNCLE_CONFIG
 export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
-CONFIG_STAGES="requirements project-plan updated-plan implementation execute-checklist baseline change-spec change-plan updated-change-plan reviewer"
+CONFIG_STAGES="requirements project-plan updated-plan implementation execute-checklist baseline change-spec change-plan updated-change-plan adversarial-review manual-checklist final-audit"
 
 # Full-screen terminal UI when both stdin and stdout are real terminals; the
 # line-based menu below remains for pipes and scripts.
@@ -83,6 +83,25 @@ if [[ -t 0 && -t 1 ]] && command -v python3 >/dev/null 2>&1; then
 fi
 
 
+# Per-stage settings, as the drivers' variables.
+#
+# Every stage is configured on its own: a runner, a reasoning effort, and — for
+# a cline stage only — a model. The other runners are given no model flag and
+# use their own default, so `uncle` never invents one for them.
+CONFIG_STAGE_SIDE_reviewer=" adversarial-review manual-checklist final-audit "
+DEFAULT_RUNNER="cline"
+DEFAULT_EFFORT="medium"
+DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
+AGENT_RUNNERS="cline claude kimi"
+REVIEWER_RUNNERS="cline codex claude"
+
+stage_side() {
+    case "$CONFIG_STAGE_SIDE_reviewer" in
+        *" $1 "*) printf 'reviewer' ;;
+        *)        printf 'agent' ;;
+    esac
+}
+
 stage_env_var() {
     printf 'WORKFLOW_MODEL_%s' \
         "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
@@ -93,62 +112,74 @@ effort_env_var() {
         "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
 }
 
-# Read .uncle/config and export WORKFLOW_MODEL_<STAGE>, WORKFLOW_EFFORT_<STAGE>,
-# plus UNCLE_CLINE_REVIEWER_MODEL so the drivers resolve the configured per-stage
-# cline models and reasoning efforts.
-apply_config() {
-    local line stage model var
-    [[ -s "$UNCLE_CONFIG" ]] || return 0
-    while IFS= read -r line; do
-        line="${line%%#*}"
-        line="$(printf '%s' "$line" | tr -s '[:space:]' ' ')"
-        [[ -n "$line" ]] || continue
-        stage="${line%% *}"
-        model="${line#* }"
-        # Trim the ends only. Stripping every space mangles a stale display
-        # name ("Laguna S 2.1" -> "LagunaS2.1") into a value no error message
-        # can be traced back to the config line that holds it.
-        model="$(printf '%s' "$model" | sed -e 's/^ *//' -e 's/ *$//')"
-        [[ -n "$stage" && -n "$model" ]] || continue
-        case "$stage" in
-            runner)   export UNCLE_RUNNER="$model" ;;
-            reviewer) export UNCLE_CLINE_REVIEWER_MODEL="$model" ;;
-            model)    CL_MODEL="$model" ;;
-            effort)   CL_EFFORT="$model" ;;
-            *)
-                if [[ "$stage" == *.effort ]]; then
-                    var="$(effort_env_var "${stage%.effort}")"
-                else
-                    var="$(stage_env_var "$stage")"
-                fi
-                export "$var=$model"
-                ;;
-        esac
-    done < "$UNCLE_CONFIG"
+cmd_env_var() {
+    local prefix="WORKFLOW_AGENT_CMD_"
+    [[ "$(stage_side "$1")" == "reviewer" ]] && prefix="WORKFLOW_REVIEWER_CMD_"
+    printf '%s%s' "$prefix" \
+        "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
 }
 
-# Map the configured runner to the agent/reviewer commands. `cline` is the
-# default (uses the cline shims); the others use the native CLIs (or the repo's
-# existing compatible shim for that CLI).
-agent_cmd_for() {
-    case "${UNCLE_RUNNER:-cline}" in
+# The CLI that runs one stage. The two sides are not interchangeable: an agent
+# stage writes code, a reviewer stage must stay read-only, and codex has no
+# agent shim.
+runner_cmd() {
+    local runner="$1" side="$2"
+    if [[ "$side" == "reviewer" ]]; then
+        case "$runner" in
+            codex)  printf 'codex' ;;
+            claude) printf '%s' "$ROOT/scripts/reviewer-claude.sh" ;;
+            *)      printf '%s' "$ROOT/scripts/reviewer-cline.sh" ;;
+        esac
+        return 0
+    fi
+    case "$runner" in
         claude) printf 'claude' ;;
         kimi)   printf '%s' "$ROOT/scripts/agent-kimi.sh" ;;
-        codex)  printf 'claude' ;;
         *)      printf '%s' "$ROOT/scripts/agent-cline.sh" ;;
     esac
 }
 
-reviewer_cmd_for() {
-    case "${UNCLE_RUNNER:-cline}" in
-        claude) printf '%s' "$ROOT/scripts/reviewer-claude.sh" ;;
-        kimi)   printf 'codex' ;;
-        codex)  printf 'codex' ;;
-        *)      printf '%s' "$ROOT/scripts/reviewer-cline.sh" ;;
-    esac
+# Read one stage's setting out of .uncle/config: `<stage>.<field> VALUE`.
+config_get() {
+    local key="$1" line
+    while IFS= read -r line; do
+        if [[ "${line%% *}" == "$key" ]]; then
+            printf '%s' "${line#* }"
+            return 0
+        fi
+    done < <(config_read)
+    return 0
 }
 
-# ASCII mark: a fedora'd face with a mustache, one row per line.
+# Resolve every stage and export it, so the drivers see exactly what the
+# Configure screen shows. A non-cline stage gets an explicitly empty model,
+# which the drivers read as "pass no model flag".
+apply_config() {
+    local stage runner effort model side
+    for stage in $CONFIG_STAGES; do
+        side="$(stage_side "$stage")"
+        runner="$(config_get "$stage.runner")"
+        [[ -n "$runner" ]] || runner="$DEFAULT_RUNNER"
+        effort="$(config_get "$stage.effort")"
+        [[ -n "$effort" ]] || effort="$DEFAULT_EFFORT"
+        if [[ "$runner" == "cline" ]]; then
+            model="$(config_get "$stage.model")"
+            [[ -n "$model" ]] || model="$DEFAULT_CLINE_MODEL"
+        else
+            model=""
+        fi
+        export "$(cmd_env_var "$stage")=$(runner_cmd "$runner" "$side")"
+        export "$(stage_env_var "$stage")=$model"
+        export "$(effort_env_var "$stage")=$effort"
+    done
+    # Fallback for any stage key a driver resolves under a different name.
+    export WORKFLOW_AGENT_CMD="$(runner_cmd \
+        "$(config_get implementation.runner)" agent)"
+    export WORKFLOW_REVIEWER_CMD="$(runner_cmd \
+        "$(config_get adversarial-review.runner)" reviewer)"
+}
+
+
 logo_lines() {
     cat <<'LOGO'
                     #@@@@@@##@@@@@@#
@@ -194,8 +225,6 @@ print_logo() {
 }
 
 print_menu() {
-    local model_hint
-    model_hint="${CL_MODEL:-cline default}"
     cat <<EOF
 
 EOF
@@ -208,7 +237,7 @@ EOF
   ${C_CYAN}${C_BOLD}4)${C_RESET} Configure stages  ${C_GRAY}-> .uncle/config${C_RESET}
   ${C_CYAN}${C_BOLD}q)${C_RESET} Quit
 
-  model: ${C_CYAN}$model_hint${C_RESET}   performance: ${C_CYAN}$CL_EFFORT${C_RESET}
+  config: ${C_GRAY}$UNCLE_CONFIG${C_RESET}
 
 EOF
 }
@@ -315,21 +344,20 @@ choose_effort() {
 }
 
 run_workflow() {
+    # UNCLE_CLINE_MODEL / UNCLE_CLINE_EFFORT are deliberately not exported:
+    # they are global overrides inside the cline shims and would win over the
+    # per-stage values apply_config sets.
     apply_config
-    export WORKFLOW_AGENT_CMD="$(agent_cmd_for)"
-    export WORKFLOW_REVIEWER_CMD="$(reviewer_cmd_for)"
-    export UNCLE_CLINE_MODEL="$CL_MODEL"
-    export UNCLE_CLINE_EFFORT="$CL_EFFORT"
     launch "$@"
 }
 
 config_write_header() {
     cat <<'EOF'
-# Uncle per-stage model config.
-# Format: STAGE VALUE  (STAGE = a stage log name, `reviewer`, `runner`,
-#   `model`, or `effort`; VALUE = cline model id, a runner name, or an effort).
-# Agent stages: requirements project-plan updated-plan implementation
-#   execute-checklist baseline change-spec change-plan updated-change-plan
+# Uncle per-stage config: every stage picks its own runner, reasoning effort,
+# and -- for a cline stage -- model.
+# Format: <stage>.runner | <stage>.effort | <stage>.model VALUE
+#   (VALUE = a runner name, a reasoning effort, or a cline model id in
+#   modelType/model form). Edit from `uncle` -> Configure, or by hand.
 EOF
 }
 
@@ -372,64 +400,106 @@ config_clear() {
     rm -f "$tmp"
 }
 
-configure_menu() {
-    local sel stage model
+# One stage at a time: pick the stage, then its runner, effort, and — only
+# when the runner is cline — its model. This is the fallback for a terminal the
+# full-screen TUI cannot drive; both write the same file.
+configure_stage() {
+    local stage="$1" side sel runner
+    side="$(stage_side "$stage")"
     while true; do
         echo
-        echo "${C_CYAN}${C_BOLD}Configure stages${C_RESET} (${C_GRAY}$UNCLE_CONFIG${C_RESET})"
-        config_read | sed -E "s|^([^ ]+) (.*)|  ${C_CYAN}\1${C_RESET} \2|"
-        echo
-        echo "  ${C_DIM}Valid keys: runner, model, effort, $CONFIG_STAGES${C_RESET}"
-        echo "  ${C_CYAN}r)${C_RESET} set runner (cline/claude/kimi/codex)"
-        echo "  ${C_CYAN}m)${C_RESET} set model    ${C_CYAN}e)${C_RESET} set effort (high/medium/low)"
-        echo "  ${C_CYAN}s)${C_RESET} set a stage's model    ${C_CYAN}d)${C_RESET} clear a key"
-        echo "  ${C_CYAN}q)${C_RESET} back"
-        printf '%s' "Choose [${C_CYAN}r/m/e/s/d/q${C_RESET}]: "
+        printf '%s%s%s  (%s stage)\n' "$C_CYAN$C_BOLD" "$stage" "$C_RESET" "$side"
+        printf '  runner  %s\n' "$(config_get "$stage.runner")${C_DIM}${C_RESET}"
+        printf '  effort  %s\n' "$(config_get "$stage.effort")"
+        if [[ "$(config_get "$stage.runner")" == "cline" || -z "$(config_get "$stage.runner")" ]]; then
+            printf '  model   %s\n' "$(config_get "$stage.model")"
+            printf '%s' "Set [${C_CYAN}r${C_RESET}]unner [${C_CYAN}e${C_RESET}]ffort [${C_CYAN}m${C_RESET}]odel, [${C_CYAN}d${C_RESET}]efaults, [${C_CYAN}q${C_RESET}]back: "
+        else
+            printf '  model   %s(runner default)%s\n' "$C_DIM" "$C_RESET"
+            printf '%s' "Set [${C_CYAN}r${C_RESET}]unner [${C_CYAN}e${C_RESET}]ffort, [${C_CYAN}d${C_RESET}]efaults, [${C_CYAN}q${C_RESET}]back: "
+        fi
         if ! read -r sel; then echo; return 0; fi
         sel="$(printf '%s' "$sel" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
         case "$sel" in
             r)
-                printf '%s' "Runner (cline/claude/kimi/codex): "
-                if ! read -r model; then echo; return 0; fi
-                model="$(printf '%s' "$model" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-                case "$model" in
-                    cline|claude|kimi|codex) config_set runner "$model" ;;
-                    *) printf '%sUnrecognized runner: %s%s\n' "$C_YELLOW" "$model" "$C_RESET" ;;
+                local choices="$AGENT_RUNNERS"
+                [[ "$side" == "reviewer" ]] && choices="$REVIEWER_RUNNERS"
+                printf 'Runner (%s): ' "$choices"
+                if ! read -r runner; then echo; return 0; fi
+                runner="$(printf '%s' "$runner" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+                case " $choices " in
+                    *" $runner "*)
+                        config_set "$stage.runner" "$runner"
+                        # A model only means something to cline.
+                        [[ "$runner" != "cline" ]] && config_clear "$stage.model"
+                        ;;
+                    *) printf '%sNot a %s runner: %s%s\n' "$C_YELLOW" "$side" "$runner" "$C_RESET" ;;
                 esac
+                ;;
+            e)
+                choose_effort
+                config_set "$stage.effort" "$CL_EFFORT"
                 ;;
             m)
                 choose_model
                 if [[ -n "$CL_MODEL" ]]; then
-                    config_set model "$CL_MODEL"
+                    config_set "$stage.model" "$CL_MODEL"
                 else
-                    config_clear model
+                    config_clear "$stage.model"
                 fi
                 ;;
-            e)
-                choose_effort
-                config_set effort "$CL_EFFORT"
-                ;;
-            s)
-                printf '%s' "Stage name: "
-                if ! read -r stage; then echo; return 0; fi
-                stage="$(printf '%s' "$stage" | tr -d '[:space:]')"
-                [[ -n "$stage" ]] || continue
-                printf '%s' "Model id: "
-                if ! read -r model; then echo; return 0; fi
-                model="$(printf '%s' "$model" | tr -d '[:space:]')"
-                [[ -n "$model" ]] || continue
-                config_set "$stage" "$model"
-                ;;
             d)
-                printf '%s' "Stage to clear: "
-                if ! read -r stage; then echo; return 0; fi
-                stage="$(printf '%s' "$stage" | tr -d '[:space:]')"
-                [[ -n "$stage" ]] || continue
-                config_clear "$stage"
+                config_clear "$stage.runner"
+                config_clear "$stage.effort"
+                config_clear "$stage.model"
                 ;;
-            q|Q|"") return 0 ;;
+            q|"") return 0 ;;
             *) printf 'Unrecognized choice: %s\n' "$sel" ;;
         esac
+    done
+}
+
+configure_menu() {
+    local sel stage n idx runner effort model
+    while true; do
+        echo
+        echo "${C_CYAN}${C_BOLD}Configure stages${C_RESET} (${C_GRAY}$UNCLE_CONFIG${C_RESET})"
+        n=0
+        for stage in $CONFIG_STAGES; do
+            n=$((n+1))
+            runner="$(config_get "$stage.runner")"
+            [[ -n "$runner" ]] || runner="$DEFAULT_RUNNER"
+            effort="$(config_get "$stage.effort")"
+            [[ -n "$effort" ]] || effort="$DEFAULT_EFFORT"
+            if [[ "$runner" == "cline" ]]; then
+                model="$(config_get "$stage.model")"
+                [[ -n "$model" ]] || model="$DEFAULT_CLINE_MODEL"
+                printf '  %s%2d)%s %-22s %s · %s · %s\n' \
+                    "$C_CYAN" "$n" "$C_RESET" "$stage" "$runner" "$model" "$effort"
+            else
+                printf '  %s%2d)%s %-22s %s · %s\n' \
+                    "$C_CYAN" "$n" "$C_RESET" "$stage" "$runner" "$effort"
+            fi
+        done
+        echo
+        printf '%s' "Stage to configure [${C_CYAN}1-$n${C_RESET}/${C_CYAN}q${C_RESET}]: "
+        if ! read -r sel; then echo; return 0; fi
+        sel="$(printf '%s' "$sel" | tr -d '[:space:]')"
+        case "$sel" in
+            q|Q|"") return 0 ;;
+        esac
+        if [[ "$sel" =~ ^[0-9]+$ ]] && (( sel >= 1 && sel <= n )); then
+            idx=0
+            for stage in $CONFIG_STAGES; do
+                idx=$((idx+1))
+                if (( idx == sel )); then
+                    configure_stage "$stage"
+                    break
+                fi
+            done
+        else
+            printf 'Unrecognized choice: %s\n' "$sel"
+        fi
     done
 }
 
@@ -489,7 +559,13 @@ if [[ ! -s "$UNCLE_CONFIG" ]]; then
     configure_menu
     # Configure may quit without saving anything; write a minimal default so
     # this is still recognized as configured on the next run.
-    [[ -s "$UNCLE_CONFIG" ]] || printf 'runner cline\neffort medium\n' > "$UNCLE_CONFIG"
+    # Configure may quit without saving; write the defaults explicitly for the
+    # first stage so the project still counts as configured next run.
+    [[ -s "$UNCLE_CONFIG" ]] || {
+        config_write_header > "$UNCLE_CONFIG"
+        printf 'requirements.runner %s\nrequirements.effort %s\n' \
+            "$DEFAULT_RUNNER" "$DEFAULT_EFFORT" >> "$UNCLE_CONFIG"
+    }
 fi
 
 while true; do

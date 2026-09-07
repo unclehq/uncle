@@ -45,12 +45,44 @@ def _default_config_path():
 
 
 CONFIG_PATH = os.environ.get("UNCLE_CONFIG", _default_config_path())
-CONFIG_STAGES = [
-    "requirements", "project-plan", "updated-plan", "implementation",
-    "execute-checklist", "baseline", "change-spec", "change-plan",
-    "updated-change-plan", "reviewer",
+
+# Every stage is configured on its own: which runner drives it, how much
+# reasoning effort it gets, and — only when that runner is cline, which is the
+# one runner whose CLI takes no useful default — which model it runs.
+#
+# Keys are the drivers' stage log names, so a key maps straight onto the
+# WORKFLOW_*_<STAGE> variables the drivers already read.
+AGENT, REVIEWER = "agent", "reviewer"
+STAGES = [
+    ("requirements", AGENT),
+    ("project-plan", AGENT),
+    ("updated-plan", AGENT),
+    ("implementation", AGENT),
+    ("execute-checklist", AGENT),
+    ("baseline", AGENT),
+    ("change-spec", AGENT),
+    ("change-plan", AGENT),
+    ("updated-change-plan", AGENT),
+    ("adversarial-review", REVIEWER),
+    ("manual-checklist", REVIEWER),
+    ("final-audit", REVIEWER),
 ]
-RUNNERS = ["cline", "claude", "kimi", "codex"]
+STAGE_SIDE = dict(STAGES)
+CONFIG_STAGES = [name for name, _ in STAGES]
+
+# Runners are offered per side, because the two sides are not interchangeable:
+# an agent stage writes code and needs an agent CLI, a reviewer stage must be
+# read-only. codex has no agent shim, and offering it for an agent stage would
+# silently run claude instead.
+AGENT_RUNNERS = ["cline", "claude", "kimi"]
+REVIEWER_RUNNERS = ["cline", "codex", "claude"]
+
+# Applied to any stage the operator has not configured.
+DEFAULT_RUNNER = "cline"
+DEFAULT_EFFORT = "medium"
+DEFAULT_CLINE_MODEL = "cline-pass/deepseek-v4-pro"
+
+STAGE_FIELDS = ("runner", "effort", "model")
 
 # Models offered in the Configure → model picker, grouped by plan.
 #
@@ -93,6 +125,45 @@ def valid_model_id(value):
 # Full description for each Configure item. Only the description of the row
 # currently under the cursor is shown, in a panel to the right of the options.
 CONFIG_DESC = {
+    "field:runner": (
+        "The CLI that drives this stage. cline, claude, and kimi write code, "
+        "so they run agent stages; cline, codex, and claude can run the "
+        "read-only reviewer stages. Each stage picks its own, so a cheap model "
+        "can transcribe requirements while a strong one plans, and the "
+        "reviewer can be a different program from the implementer. Only cline "
+        "takes a model below: claude, kimi, and codex are given no model flag "
+        "and use their own default."
+    ),
+    "field:effort": (
+        "Reasoning effort for this stage: high, medium, or low. Higher effort "
+        "usually means more careful work and more tokens. Every runner "
+        "supports it — cline as --thinking, claude as an effort flag, codex as "
+        "model_reasoning_effort."
+    ),
+    "field:model": (
+        "The cline model this stage runs, as a `modelType/model` id (for "
+        "example cline-pass/kimi-k3). Shown only when the runner is cline, "
+        "because it is the only runner uncle passes a model to. A display "
+        "name such as \"Kimi K3\" is not an id and is refused before the "
+        "stage starts."
+    ),
+    "adversarial-review": (
+        "The reviewer stage that attacks the plan before any code is written, "
+        "looking for gaps, wrong assumptions, and unstated failure modes. It "
+        "is read-only and owns its own artifact, so give it a runner that did "
+        "not write the plan it is reviewing."
+    ),
+    "manual-checklist": (
+        "The reviewer stage that writes the manual verification checklist from "
+        "the frozen, approved artifacts. It reads the plan, the source, and "
+        "the automated test report, and produces the checks a human runs by "
+        "hand."
+    ),
+    "final-audit": (
+        "The reviewer stage that audits the finished change and returns the "
+        "verdict that decides whether the run can complete. READY or READY "
+        "WITH NON-BLOCKING ISSUES finishes; anything else stops the run."
+    ),
     "runner": (
         "The CLI program that drives the agent and reviewer stages of every "
         "workflow. Choose one of cline, claude, kimi, or codex. The runner "
@@ -219,15 +290,32 @@ def stage_effort_var(stage):
     return _env_name("WORKFLOW_EFFORT_", stage)
 
 
-def runner_commands(runner):
-    if runner == "claude":
-        return ("claude", os.path.join(ROOT, "scripts", "reviewer-claude.sh"))
-    if runner == "kimi":
-        return (os.path.join(ROOT, "scripts", "agent-kimi.sh"), "codex")
-    if runner == "codex":
-        return ("claude", "codex")
-    return (os.path.join(ROOT, "scripts", "agent-cline.sh"),
-            os.path.join(ROOT, "scripts", "reviewer-cline.sh"))
+def runner_command(runner, side):
+    """The CLI that runs one stage, on the agent side or the reviewer side."""
+    shim = lambda name: os.path.join(ROOT, "scripts", name)
+    if side == REVIEWER:
+        table = {
+            "cline": shim("reviewer-cline.sh"),
+            "codex": "codex",
+            "claude": shim("reviewer-claude.sh"),
+        }
+        return table.get(runner, table["cline"])
+    table = {
+        "cline": shim("agent-cline.sh"),
+        "claude": "claude",
+        "kimi": shim("agent-kimi.sh"),
+    }
+    return table.get(runner, table["cline"])
+
+
+def runners_for(side):
+    return REVIEWER_RUNNERS if side == REVIEWER else AGENT_RUNNERS
+
+
+def stage_runner_var(stage):
+    prefix = ("WORKFLOW_REVIEWER_CMD_" if STAGE_SIDE.get(stage) == REVIEWER
+              else "WORKFLOW_AGENT_CMD_")
+    return _env_name(prefix, stage)
 
 
 def list_models():
@@ -269,8 +357,6 @@ class UncleTUI:
         self.stdscr = stdscr
         self.models = list_models()
         self.default_model = default_model()
-        self.model = ""
-        self.effort = "medium"
         self.state = "menu"
         self.sel = 0
         self.workflow_idx = None
@@ -290,17 +376,20 @@ class UncleTUI:
         self.status_stage_turns = 0
         self.completed_tokens = 0
         self.current_tokens = 0
-        self.config = {}
+        # Per-stage settings, keyed by stage log name. Absent means "default".
+        self.stage_runners = {}
+        self.stage_models = {}
         self.stage_efforts = {}
-        self.runner = "cline"
         self.notice = ""
         self.config_sel = 0
         self.config_scroll = 0
+        self.stage_target = CONFIG_STAGES[0]
+        self.stage_sel = 0
         self.pick_sel = 0
         self.pick_scroll = 0
         self.pick_filter = ""
         self.picker_kind = "model"
-        self.picker_target = None
+        self.picker_target = CONFIG_STAGES[0]
         self.first_run = False
         self.load_config()
         if self.state == "menu" and self.first_run:
@@ -356,103 +445,124 @@ class UncleTUI:
             return [m[0] for m in ISSUE_MODES]
         if self.state == "config":
             return self._config_items()
+        if self.state == "stage":
+            return self._stage_items()
         return []
 
     # ---- config rows ----
-    # Each row is a (kind, target) pair. kind is one of runner/model/effort;
-    # target is None (runner) or GLOBAL (global model/effort) or a stage name.
-    def _config_row_defs(self):
-        rows = [("runner", None), ("model", GLOBAL), ("effort", GLOBAL)]
-        for s in CONFIG_STAGES:
-            rows.append(("model", s))
-            rows.append(("effort", s))
-        return rows
-
+    # The Configure screen lists stages, one row each. Enter opens that
+    # stage's own popup, which is where runner / effort / model are chosen.
+    # There are no global rows: a setting that applies to one stage is easier
+    # to reason about than an inheritance chain, and the runner already
+    # decides whether a model is meaningful at all.
     def _config_row(self):
-        defs = self._config_row_defs()
-        if 0 <= self.config_sel < len(defs):
-            return defs[self.config_sel]
-        return ("", None)
-
-    def _row_value(self, kind, target):
-        if kind == "runner":
-            return self.runner
-        if kind == "model":
-            return self.model if target is GLOBAL else self.config.get(target, "")
-        if kind == "effort":
-            return self.effort if target is GLOBAL else self.stage_efforts.get(target, "")
+        if 0 <= self.config_sel < len(CONFIG_STAGES):
+            return CONFIG_STAGES[self.config_sel]
         return ""
 
-    def _row_label(self, kind, target):
-        if kind == "runner":
-            return "runner"
-        if kind == "model":
-            return "model" if target is GLOBAL else target
-        if kind == "effort":
-            return "effort" if target is GLOBAL else "%s effort" % target
+    # ---- effective values ----
+    def stage_runner(self, stage):
+        runner = self.stage_runners.get(stage, "")
+        if runner in runners_for(STAGE_SIDE.get(stage, AGENT)):
+            return runner
+        return runner or DEFAULT_RUNNER
+
+    def stage_effort(self, stage):
+        return self.stage_efforts.get(stage, "") or DEFAULT_EFFORT
+
+    def stage_model(self, stage):
+        """The model for a stage, or "" when its runner takes none."""
+        if self.stage_runner(stage) != "cline":
+            return ""
+        return self.stage_models.get(stage, "") or DEFAULT_CLINE_MODEL
+
+    def stage_fields(self, stage):
+        """The fields this stage's popup shows: model only for cline."""
+        if self.stage_runner(stage) == "cline":
+            return ["runner", "effort", "model"]
+        return ["runner", "effort"]
+
+    def _field_value(self, stage, field):
+        """The stored value, empty when the stage inherits the default."""
+        if field == "runner":
+            return self.stage_runners.get(stage, "")
+        if field == "effort":
+            return self.stage_efforts.get(stage, "")
+        if field == "model":
+            return self.stage_models.get(stage, "")
         return ""
 
-    def _row_display(self, kind, target):
-        val = self._row_value(kind, target)
-        if kind == "model":
-            if not val:
-                return "(cline default)" if target is GLOBAL else "(default)"
-            return val
-        if kind == "effort":
-            if not val:
-                return self.effort if target is GLOBAL else "(default)"
-            return val
-        return val
+    def _field_display(self, stage, field):
+        stored = self._field_value(stage, field)
+        if stored:
+            if field == "model":
+                label = MODEL_LABELS.get(stored, "")
+                return "%s  %s" % (stored, label) if label else stored
+            return stored
+        if field == "runner":
+            return "%s  (default)" % DEFAULT_RUNNER
+        if field == "effort":
+            return "%s  (default)" % DEFAULT_EFFORT
+        label = MODEL_LABELS.get(DEFAULT_CLINE_MODEL, "")
+        return "%s  (default)%s" % (DEFAULT_CLINE_MODEL, "  " + label if label else "")
 
-    def _set_row_value(self, kind, target, value):
+    def _set_field(self, stage, field, value):
         value = (value or "").strip()
-        if kind == "runner":
-            self.runner = value or "cline"
-        elif kind == "model":
-            if target is GLOBAL:
-                self.model = value
-            elif value:
-                self.config[target] = value
-            else:
-                self.config.pop(target, None)
-        elif kind == "effort":
-            if target is GLOBAL:
-                self.effort = value or self.effort or "medium"
-            elif value:
-                self.stage_efforts[target] = value
-            else:
-                self.stage_efforts.pop(target, None)
+        store = {"runner": self.stage_runners,
+                 "effort": self.stage_efforts,
+                 "model": self.stage_models}.get(field)
+        if store is None:
+            return
+        if value:
+            store[stage] = value
+        else:
+            store.pop(stage, None)
         self.save_config()
 
-    def _clear_row(self):
-        kind, target = self._config_row()
-        self._set_row_value(kind, target, "")
-
     def _config_items(self):
-        defs = self._config_row_defs()
+        """One row per stage: the stage, its runner, and what that runner uses."""
+        width = max(len(s) for s in CONFIG_STAGES)
         rows = []
-        for kind, target in defs:
-            rows.append("%s: %s" % (self._row_label(kind, target).ljust(20),
-                                    self._row_display(kind, target)))
+        for stage in CONFIG_STAGES:
+            parts = [self.stage_runner(stage)]
+            model = self.stage_model(stage)
+            if model:
+                parts.append(MODEL_LABELS.get(model, model))
+            parts.append(self.stage_effort(stage))
+            rows.append("%s  %s" % (stage.ljust(width), " · ".join(parts)))
         return rows
 
-    def _config_desc(self):
-        """Full description for the currently highlighted Configure row."""
-        kind, target = self._config_row()
-        if kind == "runner":
-            return CONFIG_DESC["runner"]
-        if kind == "model":
-            if target is GLOBAL:
-                return CONFIG_DESC["model"]
-            return CONFIG_DESC.get(target, "")
-        if kind == "effort":
-            base = CONFIG_DESC["effort"]
-            if target is not GLOBAL:
-                base += (" Set a value here to give the %s stage its own reasoning "
-                         "effort instead of inheriting the global effort above. "
-                         "Leave it at (default) to use %s.") % (target, self.effort)
-            return base
+    def _stage_items(self):
+        """Rows of the open stage's popup."""
+        stage = self.stage_target
+        rows = []
+        for field in self.stage_fields(stage):
+            rows.append("%s  %s" % (field.ljust(7), self._field_display(stage, field)))
+        return rows
+
+    def _stage_field(self):
+        fields = self.stage_fields(self.stage_target)
+        if 0 <= self.stage_sel < len(fields):
+            return fields[self.stage_sel]
         return ""
+
+    def _open_stage(self, stage):
+        self.stage_target = stage
+        self.stage_sel = 0
+        self.notice = ""
+        self.state = "stage"
+
+    def _config_desc(self):
+        """Description of the highlighted stage, or of the highlighted field."""
+        if self.state == "stage":
+            field = self._stage_field()
+            desc = CONFIG_DESC.get("field:%s" % field, "")
+            if field == "runner":
+                side = STAGE_SIDE.get(self.stage_target, AGENT)
+                desc += " This is a %s stage, so its choices are %s." % (
+                    side, ", ".join(runners_for(side)))
+            return desc
+        return CONFIG_DESC.get(self._config_row(), "")
 
     # ---- generic picker (model / effort / runner) ----
     def _picker_rows(self):
@@ -460,7 +570,8 @@ class UncleTUI:
         if self.picker_kind == "effort":
             return [("option", e) for e in EFFORTS] + [("custom", "Custom… (type an effort)")]
         if self.picker_kind == "runner":
-            return [("option", r) for r in RUNNERS] + [("custom", "Custom… (type a runner)")]
+            side = STAGE_SIDE.get(self.picker_target, AGENT)
+            return [("option", r) for r in runners_for(side)]
         rows = []
         for group, entries in MODEL_CATALOG:
             rows.append(("header", group))
@@ -484,10 +595,13 @@ class UncleTUI:
         return out
 
     def _picker_current(self):
-        """The value the active picker is choosing on behalf of."""
+        """The effective value the active picker is choosing on behalf of."""
+        stage = self.picker_target
         if self.picker_kind == "runner":
-            return self.runner
-        return self._row_value(self.picker_kind, self.picker_target)
+            return self.stage_runner(stage)
+        if self.picker_kind == "effort":
+            return self.stage_effort(stage)
+        return self.stage_model(stage)
 
     def _open_picker(self, kind, target):
         self.notice = ""
@@ -538,8 +652,11 @@ class UncleTUI:
             self.notice = ""
             self.input_buf = self.pick_filter.strip() or self._picker_current()
             return
-        self._set_row_value(self.picker_kind, self.picker_target, text)
-        self.state = "config"
+        self._set_field(self.picker_target, self.picker_kind, text)
+        # Choosing a non-cline runner drops the model row out of the popup.
+        self.stage_sel = min(self.stage_sel,
+                             len(self.stage_fields(self.picker_target)) - 1)
+        self.state = "stage"
 
     def cmd_for(self):
         if self.workflow_idx == 1:
@@ -550,19 +667,31 @@ class UncleTUI:
         return list(WORKFLOWS[self.workflow_idx][1])
 
     # ---- config ----
+    #
+    # Grammar, one setting per line:
+    #
+    #   <stage>.runner  cline | claude | kimi | codex
+    #   <stage>.effort  high | medium | low
+    #   <stage>.model   a cline model id, and only for a cline stage
+    #
+    # Older files carried global `runner` / `model` / `effort` lines, a bare
+    # `<stage> <model>` line, and a `reviewer <model>` line. Those are still
+    # read — as the seed for stages the file does not configure explicitly —
+    # and are never written back, so the first save migrates the file.
+    LEGACY_REVIEWER_KEY = "reviewer"
+
     def load_config(self):
         exists = os.path.exists(CONFIG_PATH)
-        self.config = {}
+        self.stage_runners = {}
+        self.stage_models = {}
         self.stage_efforts = {}
-        self.runner = "cline"
-        self.model = ""
-        self.effort = "medium"
         if not exists:
             # First time in this project root: no config file yet. Mark it so
             # the TUI can drop straight into the Configure screen.
             self.first_run = True
             return self.first_run
         self.first_run = False
+        legacy = {"runner": "", "model": "", "effort": "", "reviewer": ""}
         try:
             with open(CONFIG_PATH) as fh:
                 for line in fh:
@@ -570,41 +699,96 @@ class UncleTUI:
                     if not line:
                         continue
                     parts = line.split(None, 1)
-                    if len(parts) == 2:
-                        key, val = parts[0].strip(), parts[1].strip()
-                        if key == "runner":
-                            self.runner = val
-                        elif key == "model":
-                            self.model = val
-                        elif key == "effort":
-                            self.effort = val
-                        elif key.endswith(".effort"):
-                            self.stage_efforts[key[:-len(".effort")]] = val
-                        else:
-                            self.config[key] = val
+                    if len(parts) != 2:
+                        continue
+                    key, val = parts[0].strip(), parts[1].strip()
+                    if key in legacy:
+                        legacy[key] = val
+                    elif "." in key:
+                        stage, field = key.rsplit(".", 1)
+                        if stage in STAGE_SIDE and field in STAGE_FIELDS:
+                            self._store_for(field)[stage] = val
+                    elif key in STAGE_SIDE:
+                        # Legacy bare "<stage> <model>".
+                        self.stage_models[key] = val
         except Exception:
             pass
+        self._seed_from_legacy(legacy)
         return self.first_run
 
+    def _store_for(self, field):
+        return {"runner": self.stage_runners,
+                "effort": self.stage_efforts,
+                "model": self.stage_models}[field]
+
+    def _seed_from_legacy(self, legacy):
+        """Turn old global settings into per-stage ones, without overwriting."""
+        for stage in CONFIG_STAGES:
+            if legacy["runner"] and stage not in self.stage_runners:
+                self.stage_runners[stage] = legacy["runner"]
+            if legacy["effort"] and stage not in self.stage_efforts:
+                self.stage_efforts[stage] = legacy["effort"]
+            model = legacy["model"]
+            if STAGE_SIDE.get(stage) == REVIEWER and legacy["reviewer"]:
+                model = legacy["reviewer"]
+            if model and stage not in self.stage_models:
+                self.stage_models[stage] = model
+
     def save_config(self):
-        header = ("# Uncle per-stage model/effort config.\n"
-                  "# Format: STAGE VALUE  (STAGE = a stage log name, `reviewer`, `runner`,\n"
-                  "#   `model`, `effort`, or `STAGE.effort`; VALUE = a cline model id, a\n"
-                  "#   runner name, or a reasoning effort).\n")
+        header = (
+            "# Uncle per-stage config: every stage picks its own runner,\n"
+            "# reasoning effort, and \u2014 for a cline stage \u2014 model.\n"
+            "# Format: <stage>.runner | <stage>.effort | <stage>.model VALUE\n"
+            "#   (VALUE = a runner name, a reasoning effort, or a cline model\n"
+            "#   id in modelType/model form). Edit from `uncle` -> Configure,\n"
+            "#   or by hand.\n"
+        )
         try:
             with open(CONFIG_PATH, "w") as fh:
                 fh.write(header)
-                fh.write("runner %s\n" % self.runner)
-                if self.model:
-                    fh.write("model %s\n" % self.model)
-                fh.write("effort %s\n" % self.effort)
                 for stage in CONFIG_STAGES:
-                    if self.config.get(stage):
-                        fh.write("%s %s\n" % (stage, self.config[stage]))
+                    lines = []
+                    runner = self.stage_runners.get(stage, "")
+                    if runner:
+                        lines.append("%s.runner %s\n" % (stage, runner))
                     if self.stage_efforts.get(stage):
-                        fh.write("%s.effort %s\n" % (stage, self.stage_efforts[stage]))
+                        lines.append("%s.effort %s\n" % (stage, self.stage_efforts[stage]))
+                    # A model belongs to a cline stage only; keeping one on a
+                    # claude/kimi/codex stage would be a value nothing reads.
+                    if self.stage_models.get(stage) and self.stage_runner(stage) == "cline":
+                        lines.append("%s.model %s\n" % (stage, self.stage_models[stage]))
+                    if lines:
+                        fh.write("\n")
+                        for line in lines:
+                            fh.write(line)
         except Exception:
             pass
+
+    def stage_env(self):
+        """Every stage's runner, model, and effort, as driver variables.
+
+        One command variable per stage, so a run can mix runners; the global
+        pair stays set as the fallback for any stage key a driver resolves
+        under a different name.
+
+        A stage whose runner is not cline gets an explicitly empty model, and
+        the drivers read that as "pass no model flag": claude, kimi, and codex
+        then use their own default rather than a model uncle invented for them.
+        UNCLE_CLINE_MODEL / UNCLE_CLINE_EFFORT are deliberately not set — they
+        are global overrides inside the shims and would win over these.
+        """
+        env = {}
+        for stage in CONFIG_STAGES:
+            runner = self.stage_runner(stage)
+            side = STAGE_SIDE.get(stage, AGENT)
+            env[stage_runner_var(stage)] = runner_command(runner, side)
+            env[stage_env_var(stage)] = self.stage_model(stage)
+            env[stage_effort_var(stage)] = self.stage_effort(stage)
+        env["WORKFLOW_AGENT_CMD"] = runner_command(
+            self.stage_runner("implementation"), AGENT)
+        env["WORKFLOW_REVIEWER_CMD"] = runner_command(
+            self.stage_runner("adversarial-review"), REVIEWER)
+        return env
 
     # ---- status channel ----
     def poll_status(self):
@@ -660,18 +844,7 @@ class UncleTUI:
         fd, self.status_path = tempfile.mkstemp(prefix="uncle-status-", suffix=".jsonl")
         os.close(fd)
         env = dict(os.environ)
-        agent_cmd, reviewer_cmd = runner_commands(self.runner)
-        env["WORKFLOW_AGENT_CMD"] = agent_cmd
-        env["WORKFLOW_REVIEWER_CMD"] = reviewer_cmd
-        for stage, model in self.config.items():
-            if stage == "reviewer":
-                env["UNCLE_CLINE_REVIEWER_MODEL"] = model
-            else:
-                env[stage_env_var(stage)] = model
-        for stage, effort in self.stage_efforts.items():
-            env[stage_effort_var(stage)] = effort
-        env["UNCLE_CLINE_MODEL"] = self.model
-        env["UNCLE_CLINE_EFFORT"] = self.effort
+        env.update(self.stage_env())
         env["UNCLE_STATUS_FILE"] = self.status_path
         self.output = []
         self.proc = subprocess.Popen(self.cmd_for(), cwd=_project_root(), env=env,
@@ -741,15 +914,18 @@ class UncleTUI:
                 return "Pick a runner (type to filter, Enter select, Esc back)"
             return "Pick a model (type to filter, Enter select, Esc back)"
         if self.state == "config_edit":
-            kind, target = self._config_row()
             if getattr(self, "notice", ""):
                 return self.notice
-            return "Value for %s (Enter save, Esc back)" % (self._row_label(kind, target) or "?")
+            return "%s %s (Enter save, Esc back)" % (self.picker_target, self.picker_kind)
+        if self.state == "stage":
+            if getattr(self, "notice", ""):
+                return self.notice
+            return "%s — Enter: change, d: default, q back" % self.stage_target
         title = {
             "menu": "The man from uncle",
             "issue_mode": "Seed as",
             "issue": "Issue number or URL",
-            "config": "Configure — Enter: pick model/effort/runner, d reset, q back",
+            "config": "Configure — Enter opens a stage, q back",
         }.get(self.state, "")
         if self.state == "config" and getattr(self, "first_run", False):
             title = "Configure this project (first run) — %s" % title
@@ -783,8 +959,10 @@ class UncleTUI:
 
     def _draw_config_desc(self, top, bottom, h, w, cx):
         """Show the full description of the highlighted option on the right."""
-        kind, target = self._config_row()
-        key = self._row_label(kind, target) or ""
+        if self.state == "stage":
+            key = "%s %s" % (self.stage_target, self._stage_field())
+        else:
+            key = self._config_row()
         desc = self._config_desc()
         if not desc:
             return
@@ -877,8 +1055,13 @@ class UncleTUI:
                 pass
             row = 1
 
-        if self.state in ("menu", "issue_mode", "config"):
-            sel_idx = self.config_sel if self.state == "config" else self.sel
+        if self.state in ("menu", "issue_mode", "config", "stage"):
+            if self.state == "config":
+                sel_idx = self.config_sel
+            elif self.state == "stage":
+                sel_idx = self.stage_sel
+            else:
+                sel_idx = self.sel
             top = row
             if self.state == "config":
                 items = self.items()
@@ -908,7 +1091,7 @@ class UncleTUI:
                     except curses.error:
                         pass
                     row += 1
-            if self.state == "config":
+            if self.state in ("config", "stage"):
                 self._draw_config_desc(top, row, h, w, cx)
         elif self.state == "picker":
             self._draw_picker(h, w, cx, row)
@@ -943,7 +1126,7 @@ class UncleTUI:
             if pct is not None:
                 stage += " %d%%" % pct
         else:
-            model = self.model or self.default_model or "default"
+            model = self.status_model or self.default_model or "default"
             tokens = 0
             mode = "—"
             bar_attr = 0
@@ -976,24 +1159,33 @@ class UncleTUI:
             return
 
         if self.state == "config":
-            nrows = len(self._config_row_defs())
+            nrows = len(CONFIG_STAGES)
             if k == curses.KEY_UP or k in (ord("k"), ord("K")):
                 self.config_sel = (self.config_sel - 1) % nrows
             elif k == curses.KEY_DOWN or k in (ord("j"), ord("J")):
                 self.config_sel = (self.config_sel + 1) % nrows
             elif k in (10, 13):
-                kind, target = self._config_row()
-                if kind == "runner":
-                    self._open_picker("runner", None)
-                elif kind == "model":
-                    self._open_picker("model", target)
-                elif kind == "effort":
-                    self._open_picker("effort", target)
-            elif k in (ord("d"), ord("D")):
-                self._clear_row()
+                self._open_stage(self._config_row())
             elif k in (ord("q"), ord("Q")):
                 self.state = "menu"
                 self.sel = 0
+            return
+
+        if self.state == "stage":
+            fields = self.stage_fields(self.stage_target)
+            nrows = len(fields)
+            if k == curses.KEY_UP or k in (ord("k"), ord("K")):
+                self.stage_sel = (self.stage_sel - 1) % nrows
+            elif k == curses.KEY_DOWN or k in (ord("j"), ord("J")):
+                self.stage_sel = (self.stage_sel + 1) % nrows
+            elif k in (10, 13):
+                self._open_picker(self._stage_field(), self.stage_target)
+            elif k in (ord("d"), ord("D")):
+                self._set_field(self.stage_target, self._stage_field(), "")
+                self.stage_sel = min(self.stage_sel,
+                                     len(self.stage_fields(self.stage_target)) - 1)
+            elif k in (ord("q"), ord("Q")):
+                self.state = "config"
             return
 
         if self.state in ("menu", "issue_mode"):
@@ -1043,10 +1235,12 @@ class UncleTUI:
             self.state = "issue"
         elif self.state == "config":
             self.state = "menu"
+        elif self.state == "stage":
+            self.state = "config"
         elif self.state == "config_edit":
-            self.state = "config"
+            self.state = "stage"
         elif self.state == "picker":
-            self.state = "config"
+            self.state = "stage"
         self.sel = 0
 
     def _confirm(self):
@@ -1085,9 +1279,11 @@ class UncleTUI:
                 self.notice = "not a cline model id: %s (expected modelType/model)" % val
                 return
             self.notice = ""
-            self._set_row_value(self.picker_kind, self.picker_target, val)
+            self._set_field(self.picker_target, self.picker_kind, val)
             self.input_buf = ""
-            self.state = "config"
+            self.stage_sel = min(self.stage_sel,
+                                 len(self.stage_fields(self.picker_target)) - 1)
+            self.state = "stage"
 
     def _run(self):
         self.state = "running"

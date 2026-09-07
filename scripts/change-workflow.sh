@@ -109,16 +109,21 @@ mkdir -p "$APPROVAL_DIR" "$LOG_DIR"
 # `kimi` routes through scripts/agent-kimi.sh; `kimi:<alias>` picks a specific
 # model from ~/.kimi-code/config.toml. Set any of these back to `sonnet` to
 # return that one stage to Claude.
-MODEL_BASELINE="${WORKFLOW_MODEL_BASELINE:-kimi}"
-MODEL_CHANGE_SPEC="${WORKFLOW_MODEL_CHANGE_SPEC:-kimi}"
-MODEL_CHANGE_PLAN="${WORKFLOW_MODEL_CHANGE_PLAN:-opus}"
-MODEL_UPDATED_PLAN="${WORKFLOW_MODEL_UPDATED_PLAN:-kimi}"
-MODEL_IMPLEMENT="${WORKFLOW_MODEL_IMPLEMENT:-opus}"
-MODEL_EXECUTE="${WORKFLOW_MODEL_EXECUTE:-kimi}"
+# Each is keyed by the stage's log name first, because that is what `uncle`
+# writes and what stagegate.sh already uses; the older key stays as a fallback
+# so an existing environment keeps working. A variable that is *set and empty*
+# means "pass no model": claude, kimi, and codex have their own defaults, and
+# only cline needs to be told which model to run.
+MODEL_BASELINE="${WORKFLOW_MODEL_BASELINE-kimi}"
+MODEL_CHANGE_SPEC="${WORKFLOW_MODEL_CHANGE_SPEC-kimi}"
+MODEL_CHANGE_PLAN="${WORKFLOW_MODEL_CHANGE_PLAN-opus}"
+MODEL_UPDATED_PLAN="${WORKFLOW_MODEL_UPDATED_CHANGE_PLAN-${WORKFLOW_MODEL_UPDATED_PLAN-kimi}}"
+MODEL_IMPLEMENT="${WORKFLOW_MODEL_IMPLEMENTATION-${WORKFLOW_MODEL_IMPLEMENT-opus}}"
+MODEL_EXECUTE="${WORKFLOW_MODEL_EXECUTE_CHECKLIST-${WORKFLOW_MODEL_EXECUTE-kimi}}"
 
 EFFORT_CHANGE_SPEC="${WORKFLOW_EFFORT_CHANGE_SPEC:-medium}"
-EFFORT_UPDATED_PLAN="${WORKFLOW_EFFORT_UPDATED_PLAN:-medium}"
-EFFORT_EXECUTE="${WORKFLOW_EFFORT_EXECUTE:-medium}"
+EFFORT_UPDATED_PLAN="${WORKFLOW_EFFORT_UPDATED_CHANGE_PLAN:-${WORKFLOW_EFFORT_UPDATED_PLAN:-medium}}"
+EFFORT_EXECUTE="${WORKFLOW_EFFORT_EXECUTE_CHECKLIST:-${WORKFLOW_EFFORT_EXECUTE:-medium}}"
 
 # Per-stage stop-loss, in dollars. This is a runaway guard, not a target: the
 # cap is checked between turns, so a stage stops shortly after crossing it
@@ -200,6 +205,39 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 # allowedTools, stdin prompt). The reviewer CLI must accept the same flags as
 # `codex exec` (ephemeral, sandbox read-only, model, output-last-message).
 AGENT_CMD="${WORKFLOW_AGENT_CMD:-$ROOT/scripts/agent-kimi.sh}"
+
+# Which CLI runs one stage, and that stage's own reasoning effort. `uncle`
+# exports one variable per stage so a run can put different runners on
+# different stages; the global command stays the fallback for a driver invoked
+# without the launcher.
+stage_var() {
+    printf 'WORKFLOW_%s_%s' "$1" \
+        "$(printf '%s' "$2" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
+}
+
+stage_agent_cmd() {
+    local var
+    var="$(stage_var AGENT_CMD "$1")"
+    eval "printf '%s' \"\${$var:-$AGENT_CMD}\""
+}
+
+stage_reviewer_cmd() {
+    local var
+    var="$(stage_var REVIEWER_CMD "$1")"
+    eval "printf '%s' \"\${$var:-$REVIEWER_CMD}\""
+}
+
+stage_effort_for() {
+    local var
+    var="$(stage_var EFFORT "$1")"
+    eval "printf '%s' \"\${$var:-}\""
+}
+
+stage_model_for() {
+    local var
+    var="$(stage_var MODEL "$1")"
+    eval "printf '%s' \"\${$var-$2}\""
+}
 REVIEWER_CMD="${WORKFLOW_REVIEWER_CMD:-codex}"
 
 # Close the originating GitHub issue on reaching COMPLETE with a READY verdict.
@@ -990,6 +1028,14 @@ run_claude() {
     local effort="${4:-}"
     local max_turns="${5:-80}"
     local budget="${6:-}"
+    local cmd
+
+    cmd="$(stage_agent_cmd "$log_name")"
+    # A stage configured in `uncle` overrides what the call site asked for.
+    model="$(stage_model_for "$log_name" "$model")"
+    if [[ -z "$effort" ]]; then
+        effort="$(stage_effort_for "$log_name")"
+    fi
 
     require_file "$prompt_file"
 
@@ -997,7 +1043,6 @@ run_claude() {
         status_stage_context "$log_name" "$max_turns"
         local -a flags=(
             -p
-            --model "$model"
             --max-turns "$max_turns"
             --output-format stream-json
             --verbose
@@ -1005,6 +1050,10 @@ run_claude() {
             --exclude-dynamic-system-prompt-sections
             --allowedTools "$CLAUDE_TOOLS"
         )
+
+        if [[ -n "$model" ]]; then
+            flags+=(--model "$model")
+        fi
 
         if [[ -n "$effort" ]]; then
             flags+=(--effort "$effort")
@@ -1025,8 +1074,8 @@ run_claude() {
         fi
 
         echo
-        echo "Launching agent ($AGENT_CMD): $log_name"
-        echo "Model: $model${effort:+  Effort: $effort}${budget:+  Cap: \$$budget}"
+        echo "Launching agent ($cmd): $log_name"
+        echo "Model: ${model:-(runner default)}${effort:+  Effort: $effort}${budget:+  Cap: \$$budget}"
         if [[ -n "$head" ]]; then
             echo "Forking session: $head"
         fi
@@ -1039,7 +1088,7 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
-        "$AGENT_CMD" "${flags[@]}" \
+        "$cmd" "${flags[@]}" \
             < "$effective_prompt" \
             2>&1 \
             | tee "$LOG_DIR/${log_name}.jsonl" \
@@ -1066,7 +1115,7 @@ run_claude() {
         fi
 
         if [[ "$status" -ne 0 ]]; then
-            echo "Agent ($AGENT_CMD) exited with status $status."
+            echo "Agent ($cmd) exited with status $status."
             echo "Raw event log: $log"
             exit "$status"
         fi
@@ -1143,6 +1192,15 @@ run_codex() {
     local output_file="$2"
     local log_name="$3"
     local effort="${4:-}"
+    local cmd
+    cmd="$(stage_reviewer_cmd "$log_name")"
+    if [[ -z "$effort" ]]; then
+        effort="$(stage_effort_for "$log_name")"
+    fi
+    local -a model_args=()
+    local model
+    model="$(stage_model_for "$log_name" "${CODEX_MODEL:-}")"
+    [[ -n "$model" ]] && model_args=(-m "$model")
 
     require_file "$prompt_file"
 
@@ -1150,6 +1208,7 @@ run_codex() {
         exec
         --ephemeral
         --sandbox read-only
+        "${model_args[@]+"${model_args[@]}"}"
         --output-last-message "$output_file"
     )
 
@@ -1158,12 +1217,12 @@ run_codex() {
     fi
 
     echo
-    echo "Launching reviewer ($REVIEWER_CMD): $log_name${effort:+  Effort: $effort}"
+    echo "Launching reviewer ($cmd): $log_name${effort:+  Effort: $effort}${model:+  Model: $model}"
     status_stage_context "$log_name"
 
     local start="$SECONDS"
     local status=0
-    "$REVIEWER_CMD" "${flags[@]}" "$(cat "$prompt_file")" \
+    "$cmd" "${flags[@]}" "$(cat "$prompt_file")" \
         2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
 
     record_codex_cost "$log_name" "$((SECONDS - start))"
@@ -1196,6 +1255,15 @@ start_codex_bg() {
     local output_file="$2"
     local log_name="$3"
     local effort="${4:-}"
+    local cmd
+    cmd="$(stage_reviewer_cmd "$log_name")"
+    if [[ -z "$effort" ]]; then
+        effort="$(stage_effort_for "$log_name")"
+    fi
+    local -a model_args=()
+    local model
+    model="$(stage_model_for "$log_name" "${CODEX_MODEL:-}")"
+    [[ -n "$model" ]] && model_args=(-m "$model")
 
     require_file "$prompt_file"
     rm -f "$output_file"
@@ -1205,6 +1273,7 @@ start_codex_bg() {
         exec
         --ephemeral
         --sandbox read-only
+        "${model_args[@]+"${model_args[@]}"}"
         --output-last-message "$output_file"
     )
 
@@ -1213,10 +1282,10 @@ start_codex_bg() {
     fi
 
     echo
-    echo "Starting background reviewer ($REVIEWER_CMD) stage: $log_name${effort:+  Effort: $effort}"
+    echo "Starting background reviewer ($cmd) stage: $log_name${effort:+  Effort: $effort}${model:+  Model: $model}"
     echo "Log: $LOG_DIR/${log_name}.log"
 
-    "$REVIEWER_CMD" "${flags[@]}" "$(cat "$prompt_file")" \
+    "$cmd" "${flags[@]}" "$(cat "$prompt_file")" \
         > "$LOG_DIR/${log_name}.log" 2>&1 &
 
     BG_PID=$!

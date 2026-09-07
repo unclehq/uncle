@@ -69,15 +69,18 @@ uncle
 ```
 
 That is the whole interface. The first run in a project opens the Configure
-screen so you pick the runner, model, and reasoning effort; everything is saved
-to `.uncle/config` in that project. Later runs go straight to the menu:
+screen, which lists every stage of the pipeline. Open a stage and you pick the
+runner that drives it, its reasoning effort, and — only when that runner is
+cline — the model it runs; claude, kimi, and codex are given no model and use
+their own default. Settings are saved per stage to `.uncle/config` in that
+project. Later runs go straight to the menu:
 
 | Menu item | You provide | What happens |
 |---|---|---|
 | **New application** | `REQUIREMENTS.md` | Plans and builds a project from a requirements brief. |
 | **From GitHub issue** | an issue number or URL | Seeds the right workflow from the issue, then runs it. |
 | **Change request** | `CHANGE_REQUEST.md` | Baselines, specs, plans, and implements a change to an existing codebase. |
-| **Configure stages** | — | Runner, model, effort, and per-stage overrides. |
+| **Configure stages** | — | Per-stage runner, effort, and cline model. |
 
 Both pipelines are resumable. Interrupt one and re-run `uncle` — it picks up
 where it stopped, from `.uncle/workspace/` in your project. That directory is

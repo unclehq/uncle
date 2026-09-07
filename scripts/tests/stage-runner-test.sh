@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Fixture tests for per-stage runners in both drivers.
+# Hermetic: stub agent/reviewer commands under a temp directory, no real calls.
+#
+# Each stage resolves its own command and its own model. The property that
+# matters most is the empty model: a stage configured with no model must be
+# invoked with no --model flag at all, because claude, kimi, and codex have
+# their own defaults and only cline needs to be told. A stage that names a
+# model must still get it.
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+FAILED=0
+COUNT=0
+
+fail() {
+    echo "FAIL: $1"
+    FAILED=$((FAILED + 1))
+}
+
+check_eq() {
+    local name="$1" expected="$2" actual="$3"
+    COUNT=$((COUNT + 1))
+    if [[ "$actual" != "$expected" ]]; then
+        fail "$name — expected '$expected', got '$actual'"
+    fi
+}
+
+check_contains() {
+    local name="$1" needle="$2" hay="$3"
+    COUNT=$((COUNT + 1))
+    case "$hay" in
+        *"$needle"*) ;;
+        *) fail "$name — '$needle' not in: $hay" ;;
+    esac
+}
+
+check_absent() {
+    local name="$1" needle="$2" hay="$3"
+    COUNT=$((COUNT + 1))
+    case "$hay" in
+        *"$needle"*) fail "$name — '$needle' should not be in: $hay" ;;
+    esac
+}
+
+# --- stubs ------------------------------------------------------------------
+
+make_agent_stub() {
+    local path="$1" tag="$2"
+    cat > "$path" <<EOF
+#!/usr/bin/env bash
+printf '$tag %s\n' "\$*" >> "\$ARGV_LOG"
+cat > /dev/null
+printf '# artifact\n' > REQUIREMENTS_INTERPRETATION.md
+printf '# baseline\n\n## 8. Verification commands\n\n\`\`\`sh\ntrue\n\`\`\`\n' > BASELINE_REPORT.md
+printf '# spec\n' > CHANGE_SPEC.md
+echo '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":1,"total_cost_usd":0}'
+EOF
+    chmod +x "$path"
+}
+
+make_agent_stub "$TMP/agent-global" "GLOBAL"
+make_agent_stub "$TMP/agent-stage" "STAGE"
+
+# --- stagegate: the stage's own command wins, and an empty model is honored -
+
+PROJ="$TMP/newapp"
+mkdir -p "$PROJ"
+printf '# Project brief\n\n## Summary\nToy.\n' > "$PROJ/REQUIREMENTS.md"
+ARGV="$TMP/sg.argv"
+: > "$ARGV"
+
+out="$(cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
+    UNCLE_PROJECT_ROOT="$PROJ" \
+    WORKFLOW_AGENT_CMD="$TMP/agent-global" \
+    WORKFLOW_AGENT_CMD_REQUIREMENTS="$TMP/agent-stage" \
+    WORKFLOW_MODEL_REQUIREMENTS= \
+    WORKFLOW_EFFORT_REQUIREMENTS=low \
+    WORKFLOW_SPECULATE=0 \
+    bash "$ROOT/scripts/stagegate.sh" 2>&1)"
+
+argv="$(cat "$ARGV")"
+check_contains "stagegate: stage command ran" "STAGE " "$argv"
+check_absent "stagegate: global command did not run" "GLOBAL " "$argv"
+check_absent "stagegate: empty model emits no --model" "--model" "$argv"
+check_contains "stagegate: stage effort is used" "--effort low" "$argv"
+check_contains "stagegate: banner names the runner default" "(runner default)" "$out"
+
+# A model that is set is still passed.
+rm -rf "$PROJ/.uncle" "$PROJ/REQUIREMENTS_INTERPRETATION.md"
+: > "$ARGV"
+(cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
+    UNCLE_PROJECT_ROOT="$PROJ" \
+    WORKFLOW_AGENT_CMD="$TMP/agent-global" \
+    WORKFLOW_MODEL_REQUIREMENTS=cline-pass/kimi-k3 \
+    WORKFLOW_SPECULATE=0 \
+    bash "$ROOT/scripts/stagegate.sh" > /dev/null 2>&1) || true
+check_contains "stagegate: a set model is passed" \
+    "--model cline-pass/kimi-k3" "$(cat "$ARGV")"
+
+# --- change-workflow: same two properties ----------------------------------
+
+if command -v git > /dev/null 2>&1; then
+    CPROJ="$TMP/change"
+    mkdir -p "$CPROJ"
+    (
+        cd "$CPROJ"
+        git init -q .
+        git config user.email t@e.st
+        git config user.name t
+        echo hi > app.txt
+        git add -A
+        git commit -qm init
+    )
+    printf '## Summary\nChange it.\n\n## Motivation\nTesting.\n' > "$CPROJ/CHANGE_REQUEST.md"
+    ARGV="$TMP/cw.argv"
+    : > "$ARGV"
+
+    out="$(cd "$CPROJ" && echo n | ARGV_LOG="$ARGV" \
+        UNCLE_PROJECT_ROOT="$CPROJ" \
+        WORKFLOW_AGENT_CMD="$TMP/agent-global" \
+        WORKFLOW_AGENT_CMD_BASELINE="$TMP/agent-stage" \
+        WORKFLOW_MODEL_BASELINE= \
+        WORKFLOW_EFFORT_BASELINE=high \
+        WORKFLOW_MODEL_CHANGE_SPEC=cline-pass/glm-5.3 \
+        WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
+        bash "$ROOT/scripts/change-workflow.sh" 2>&1)"
+
+    baseline_argv="$(grep '^STAGE ' "$ARGV" || true)"
+    spec_argv="$(grep '^GLOBAL ' "$ARGV" || true)"
+    check_contains "change: baseline ran on its own command" "--effort high" "$baseline_argv"
+    check_absent "change: baseline empty model emits no --model" "--model" "$baseline_argv"
+    check_contains "change: change-spec ran on the global command" \
+        "--model cline-pass/glm-5.3" "$spec_argv"
+else
+    echo "NOTE skipped change-workflow cases: git is not available"
+fi
+
+# --- report -----------------------------------------------------------------
+
+if [[ "$FAILED" -ne 0 ]]; then
+    echo "stage-runner-test.sh: $FAILED of $COUNT checks failed"
+    exit 1
+fi
+
+echo "stage-runner-test.sh: $COUNT checks passed"

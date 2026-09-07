@@ -203,12 +203,37 @@ stage_setting() {
     eval "printf '%s' \"\${$var:-$fallback}\""
 }
 
+# Same lookup, but only an *unset* variable falls back. A stage configured
+# with an empty model is asking for no model at all: claude, kimi, and codex
+# have their own defaults, and passing one uncle invented for them is worse
+# than passing none. Only cline needs to be told, and it is told explicitly.
+stage_setting_opt() {
+    local kind="$1"
+    local stage="$2"
+    local fallback="$3"
+    local var
+
+    var="WORKFLOW_${kind}_$(upper "$stage" | tr -c 'A-Z0-9' '_')"
+    eval "printf '%s' \"\${$var-$fallback}\""
+}
+
 stage_model() {
     local fallback="$DEFAULT_MODEL"
     case "$1" in
         requirements|execute-checklist) fallback="kimi" ;;
     esac
-    stage_setting MODEL "$1" "$fallback"
+    stage_setting_opt MODEL "$1" "$fallback"
+}
+
+# Which CLI runs one stage. `uncle` exports one variable per stage, so a run
+# can put different runners on different stages; the global command remains
+# the fallback for a driver invoked without the launcher.
+stage_agent_cmd() {
+    stage_setting AGENT_CMD "$1" "$AGENT_CMD"
+}
+
+stage_reviewer_cmd() {
+    stage_setting REVIEWER_CMD "$1" "$REVIEWER_CMD"
 }
 
 stage_effort() {
@@ -438,18 +463,20 @@ run_claude() {
     local model
     local effort
     local turns
+    local cmd
 
     model="$(stage_model "$log_name")"
     effort="$(stage_effort "$log_name")"
     turns="$(stage_turns "$log_name")"
+    cmd="$(stage_agent_cmd "$log_name")"
 
     require_file "$prompt_file"
     status_stage_context "$log_name"
 
     while true; do
         echo
-        echo "Launching agent ($AGENT_CMD): $log_name"
-        echo "Model: $model (effort: $effort, max turns: $turns)"
+        echo "Launching agent ($cmd): $log_name"
+        echo "Model: ${model:-(runner default)} (effort: $effort, max turns: $turns)"
         echo "Tools: $tools"
         echo
 
@@ -466,8 +493,10 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
-        "$AGENT_CMD" -p \
-            --model "$model" \
+        local -a model_args=()
+        [[ -n "$model" ]] && model_args=(--model "$model")
+        "$cmd" -p \
+            "${model_args[@]+"${model_args[@]}"}" \
             --effort "$effort" \
             --strict-mcp-config \
             --max-turns "$turns" \
@@ -492,7 +521,7 @@ run_claude() {
                 fi
                 echo
             fi
-            echo "Agent ($AGENT_CMD) exited with status $status."
+            echo "Agent ($cmd) exited with status $status."
             echo "Raw event log: $log"
             exit "$status"
         fi
@@ -509,22 +538,25 @@ run_codex_review() {
 
     require_file "$prompt_file"
 
+    local cmd
+    cmd="$(stage_reviewer_cmd "$log_name")"
+
     echo
-    echo "Launching reviewer ($REVIEWER_CMD): $log_name"
+    echo "Launching reviewer ($cmd): $log_name"
     status_stage_context "$log_name"
 
     # Keep the reviewer read-only. The shell writes the reviewer's final
     # message into the designated review artifact.
     local model_args=()
     local model
-    model="$(stage_setting MODEL "$log_name" "${CODEX_MODEL:-}")"
+    model="$(stage_setting_opt MODEL "$log_name" "${CODEX_MODEL:-}")"
     if [[ -n "$model" ]]; then
         model_args=(-m "$model")
         echo "Model: $model"
     fi
 
     local status=0
-    "$REVIEWER_CMD" exec \
+    "$cmd" exec \
         --ephemeral \
         --sandbox read-only \
         "${model_args[@]+"${model_args[@]}"}" \

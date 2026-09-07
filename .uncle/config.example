@@ -1,26 +1,70 @@
-# Uncle per-stage model/effort config.
-# Format: STAGE VALUE  (STAGE = a stage log name, `reviewer`, `runner`,
-#   `model`, `effort`, or `STAGE.effort`; VALUE = a cline model id, a
-#   runner name, or a reasoning effort).
+# Uncle per-stage config: every stage picks its own runner, reasoning effort,
+# and -- for a cline stage -- model.
 #
-# Model values are cline model ids in `modelType/model` form, exactly as
-# `cline -m` takes them (e.g. cline-pass/kimi-k3). A display name such as
-# "Kimi K3" is not an id and is refused before the stage starts.
-runner cline
-model cline-pass/deepseek-v4-pro
-effort high
+# Format: <stage>.runner | <stage>.effort | <stage>.model VALUE
+#
+#   .runner  cline | claude | kimi   for an agent stage
+#            cline | codex | claude  for a reviewer stage
+#   .effort  high | medium | low
+#   .model   a cline model id in modelType/model form, and only for a cline
+#            stage: claude, kimi, and codex are given no model flag and use
+#            their own default.
+#
+# A stage that is not listed here runs on the defaults: cline, medium effort,
+# and cline-pass/deepseek-v4-pro. Edit from `uncle` -> Configure, or by hand.
 
-# Transcription-shaped stages do not need the top tier.
-requirements cline-pass/deepseek-v4-flash
+# --- new application ---------------------------------------------------------
+
+# Reading a brief and writing it out again does not need the top tier.
+requirements.runner cline
+requirements.model cline-pass/deepseek-v4-flash
 requirements.effort medium
-execute-checklist cline-pass/deepseek-v4-flash
+
+# The plan carries the design.
+project-plan.runner cline
+project-plan.model cline-pass/kimi-k3
+project-plan.effort high
+
+updated-plan.runner cline
+updated-plan.model cline-pass/kimi-k3
+updated-plan.effort high
+
+# Implementation is the stage worth paying for.
+implementation.runner claude
+implementation.effort high
+
+execute-checklist.runner cline
+execute-checklist.model cline-pass/deepseek-v4-flash
 execute-checklist.effort medium
 
-# The plan stages carry the design.
-project-plan cline-pass/kimi-k3
-updated-plan cline-pass/kimi-k3
-change-plan cline-pass/kimi-k3
-updated-change-plan cline-pass/kimi-k3
+# --- change request ----------------------------------------------------------
 
-# The reviewer reads, it does not write.
-reviewer cline-pass/glm-5.3
+baseline.runner cline
+baseline.model cline-pass/deepseek-v4-flash
+baseline.effort medium
+
+change-spec.runner cline
+change-spec.model cline-pass/deepseek-v4-pro
+change-spec.effort medium
+
+change-plan.runner cline
+change-plan.model cline-pass/kimi-k3
+change-plan.effort high
+
+updated-change-plan.runner cline
+updated-change-plan.model cline-pass/kimi-k3
+updated-change-plan.effort high
+
+# --- review (both workflows) -------------------------------------------------
+
+# A critic that did not write the code is the point, so these are worth
+# pointing at a different program from the implementer.
+adversarial-review.runner codex
+adversarial-review.effort high
+
+manual-checklist.runner cline
+manual-checklist.model cline-pass/glm-5.3
+manual-checklist.effort medium
+
+final-audit.runner codex
+final-audit.effort high

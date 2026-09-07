@@ -211,6 +211,27 @@ under "Configuration". The two that decide which external CLI is spawned:
 Setting both to `false` is a convenient way to exercise the argument-handling
 paths without spawning a real agent.
 
+Every stage can override those two, and its model and effort, on its own:
+
+| Variable | Effect |
+|---|---|
+| `WORKFLOW_AGENT_CMD_<STAGE>` | the agent CLI for one stage; falls back to `WORKFLOW_AGENT_CMD` |
+| `WORKFLOW_REVIEWER_CMD_<STAGE>` | the reviewer CLI for one stage; falls back to `WORKFLOW_REVIEWER_CMD` |
+| `WORKFLOW_MODEL_<STAGE>` | the model for one stage — **set and empty means pass no model flag** |
+| `WORKFLOW_EFFORT_<STAGE>` | the reasoning effort for one stage |
+
+`<STAGE>` is the stage's log name, upper-cased with non-alphanumerics replaced
+by `_`: `REQUIREMENTS`, `PROJECT_PLAN`, `ADVERSARIAL_REVIEW`, `IMPLEMENTATION`,
+`FINAL_AUDIT`, and so on.
+
+The empty-model rule is what lets one run mix runners. cline needs to be told
+which model to use; claude, kimi, and codex have their own defaults, and a
+model uncle invented for them would be wrong more often than right. So a stage
+configured for one of those exports an empty model, and the driver omits
+`--model` entirely rather than substituting its own default. An *unset*
+variable still falls back to the driver's built-in default, which is what keeps
+a driver run directly, with no launcher, behaving as before.
+
 ### Frozen scope and stepwise implementation
 
 `scripts/lib/plan-scope.sh` reads the two machine-usable structures out of

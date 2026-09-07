@@ -725,28 +725,34 @@ run_codex_review() {
     [[ -z "$model" ]] || echo "Model: $model"
     status_stage_context "$log_name" "${model:-}" review
     local status=0
-    local started="$SECONDS"
-    # stdin is the operator's gate-answer channel, not stage input: codex
-    # appends a non-TTY stdin to the prompt and would block on it forever.
-    # Project dirs need not be git repos; the read-only sandbox is the boundary.
-    "$cmd" exec \
-        --ephemeral \
-        --skip-git-repo-check \
-        --sandbox read-only \
-        "${model_args[@]+"${model_args[@]}"}" \
-        --output-last-message "$output_file" \
-        "$(cat "$prompt_file")" \
-        < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
-    perf_record reviewer "$log_name" "$((SECONDS-started))" "$status" \
-        "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
+    local started retry_answer
+    while true; do
+        started="$SECONDS"
+        # stdin is the operator's gate-answer channel, not stage input: codex
+        # appends a non-TTY stdin to the prompt and would block on it forever.
+        # Project dirs need not be git repos; the read-only sandbox is the boundary.
+        "$cmd" exec \
+            --ephemeral \
+            --skip-git-repo-check \
+            --sandbox read-only \
+            "${model_args[@]+"${model_args[@]}"}" \
+            --output-last-message "$output_file" \
+            "$(cat "$prompt_file")" \
+            < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
+        perf_record reviewer "$log_name" "$((SECONDS-started))" "$status" \
+            "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
 
-    if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
-        echo
-        echo "The reviewer ran out of context/tokens."
-        echo "Change the reviewer model (Configure → reviewer) and re-run to resume this stage."
-    fi
+        if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
+            echo
+            echo "The reviewer ran out of context/tokens."
+            echo "Change the reviewer model (Configure → reviewer) and re-run to resume this stage."
+        fi
 
-    [[ "$status" == 0 ]] || return "$status"
+        [[ "$status" != 0 ]] || break
+        gate_prompt "Reviewer $log_name failed (exit $status). Retry this reviewer stage? [Y/N]"
+        if ! IFS= read -r retry_answer; then return "$status"; fi
+        case "$retry_answer" in y|Y) status=0 ;; *) return "$status" ;; esac
+    done
     require_file "$output_file"
     # Do not reuse results if inputs changed while the reviewer was reading them.
     if [[ -n "$review_key" && "$review_key" == "$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")" ]]; then

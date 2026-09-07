@@ -119,6 +119,19 @@ set +e
 status=$?
 set -e
 
+# Keep the original diagnostics even when the CLI exits before a final review.
+log_dir="${UNCLE_PROJECT_ROOT:-$PWD}/.uncle/workspace/logs"
+mkdir -p "$log_dir"
+raw_saved="$(mktemp "$log_dir/reviewer-cline.XXXXXX")"
+cp "$raw" "$raw_saved"
+echo "Cline raw event log: $raw_saved" >&2
+finish_reason="$(jq -R -s -r '[split("\n")[] | fromjson? | select(.type == "run_result")] | last | .finishReason // empty' "$raw")"
+if [[ "$status" -ne 0 || ( -n "$finish_reason" && "$finish_reason" != completed ) ]]; then
+    echo "Cline reviewer failed (finish reason: ${finish_reason:-unavailable}). Recent events:" >&2
+    tail -c 12000 "$raw" >&2
+    [[ "$status" -ne 0 ]] || status=1
+fi
+
 review="$(jq -R -s -r '
   [split("\n")[] | fromjson? // empty] as $events
   | ($events | map(select(.type == "run_result")) | .[-1] | .text // null) as $rr

@@ -1,3 +1,11 @@
+Uncle is a model-agnostic app creation and change request engine.
+
+- Uses GitHub issues
+- Creates PRs of finished work for human review
+- Requires human feedback for project plans
+- Requires human review to ensure the project is built correctly
+- Uses Cline open-weight models, Claude, Codex, and/or Kimi
+
 > **Just testing uncle?** Use Cline with open-weight models and a
 > [ClinePass subscription](https://cline.bot/blog/clinepass-best-of-value-for-open-weight-models).
 > Expect slower runs, but dramatically lower costs than premium models billed

@@ -49,7 +49,7 @@ if [[ -n "${ARGV_FILE:-}" ]]; then
     printf '%s\n' "$*" > "$ARGV_FILE"
 fi
 if [[ "${EMIT_RESULT:-1}" == "1" ]]; then
-    echo '{"type":"run_result","finishReason":"completed","iterations":1,"usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":2,"cacheWriteTokens":1,"totalCost":0.01},"durationMs":99,"text":"REVIEW TEXT","model":"m"}'
+    echo '{"type":"run_result","finishReason":"completed","iterations":1,"usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":2,"cacheWriteTokens":1,"totalCost":0.01},"durationMs":99,"text":"REVIEW TEXT","model":"m"}' | sed "s/completed/${FAKE_FINISH:-completed}/"
 elif [[ "${EMIT_DONE:-0}" == "1" ]]; then
     echo '{"type":"agent_event","event":{"type":"done","reason":"completed","text":"DONE TEXT","iterations":1}}'
 fi
@@ -58,7 +58,7 @@ EOF
 chmod +x "$TMP/fake-cline"
 
 run_shim() {
-    WORKFLOW_CLINE_CMD="$TMP/fake-cline" "$SHIM" "$@"
+    UNCLE_PROJECT_ROOT="$TMP" WORKFLOW_CLINE_CMD="$TMP/fake-cline" "$SHIM" "$@"
 }
 
 # The drivers' record_codex_cost extraction and nothing more.
@@ -221,6 +221,16 @@ case "$(cat "$err")" in
     *) fail "invalid model: error does not name the offending value" ;;
 esac
 COUNT=$((COUNT + 1))
+
+# A CLI success exit must not bless an interrupted or failed run_result.
+status=0
+FAKE_FINISH=error run_shim exec --output-last-message "$TMP/incomplete.md" P > "$TMP/error-log" 2>&1 || status=$?
+check_eq "incomplete result: rejected" 1 "$status"
+check_absent "incomplete result: no artifact" "$TMP/incomplete.md"
+COUNT=$((COUNT + 1))
+grep -q 'finish reason: error' "$TMP/error-log" || fail 'missing failure reason'
+COUNT=$((COUNT + 1))
+ls "$TMP/.uncle/workspace/logs"/reviewer-cline.* >/dev/null || fail 'raw log not preserved'
 
 # --- report -----------------------------------------------------------------
 

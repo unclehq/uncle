@@ -90,6 +90,13 @@ project. Later runs go straight to the menu:
 | **Change request** | `CHANGE_REQUEST.md` | Baselines, specs, plans, and implements a change to an existing codebase. |
 | **Configure stages** | — | Per-stage runner, effort, and cline model. |
 
+Runners are per side. An agent stage — which writes code — can run on `cline`,
+`claude`, `kimi`, or `codex`; a reviewer stage, which must stay read-only, on
+`cline`, `codex`, or `claude`. The same runner is not the same thing on both
+sides: codex runs `--sandbox workspace-write` as an agent and
+`--sandbox read-only` as a reviewer, and that is enforced by the shim, not by
+the prompt.
+
 Both pipelines are resumable. Interrupt one and re-run `uncle` — it picks up
 where it stopped, from `.uncle/workspace/` in your project. That directory is
 the only thing uncle adds to your tree.

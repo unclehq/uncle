@@ -3,8 +3,8 @@
 #
 # Format: <stage>.runner | <stage>.effort | <stage>.model VALUE
 #
-#   .runner  cline | claude | kimi   for an agent stage
-#            cline | codex | claude  for a reviewer stage
+#   .runner  cline | claude | kimi | codex  for an agent stage
+#            cline | codex | claude         for a reviewer stage
 #   .effort  high | medium | low
 #   .model   a cline model id in modelType/model form, and only for a cline
 #            stage: claude, kimi, and codex are given no model flag and use

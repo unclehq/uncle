@@ -72,6 +72,7 @@ uncle_runner_cmd() {
     case "$runner" in
         claude) printf 'claude' ;;
         kimi)   printf '%s' "$root/scripts/agent-kimi.sh" ;;
+        codex)  printf '%s' "$root/scripts/agent-codex.sh" ;;
         *)      printf '%s' "$root/scripts/agent-cline.sh" ;;
     esac
 }

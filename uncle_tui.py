@@ -83,10 +83,12 @@ STAGE_SIDE = dict(STAGES)
 CONFIG_STAGES = [name for name, _ in STAGES]
 
 # Runners are offered per side, because the two sides are not interchangeable:
-# an agent stage writes code and needs an agent CLI, a reviewer stage must be
-# read-only. codex has no agent shim, and offering it for an agent stage would
-# silently run claude instead.
-AGENT_RUNNERS = ["cline", "claude", "kimi"]
+# an agent stage writes code and needs an agent CLI running with write access,
+# a reviewer stage must be read-only. Each side has its own shim per runner —
+# scripts/agent-*.sh and scripts/reviewer-*.sh — and the shim is what enforces
+# that difference. codex, for instance, runs `--sandbox workspace-write` as an
+# agent and `--sandbox read-only` as a reviewer.
+AGENT_RUNNERS = ["cline", "claude", "kimi", "codex"]
 REVIEWER_RUNNERS = ["cline", "codex", "claude"]
 
 # Applied to any stage the operator has not configured.
@@ -138,9 +140,9 @@ def valid_model_id(value):
 # currently under the cursor is shown, in a panel to the right of the options.
 CONFIG_DESC = {
     "field:runner": (
-        "The CLI that drives this stage. cline, claude, and kimi write code, "
-        "so they run agent stages; cline, codex, and claude can run the "
-        "read-only reviewer stages. Each stage picks its own, so a cheap model "
+        "The CLI that drives this stage. cline, claude, kimi, and codex can "
+        "run an agent stage, where they write code; cline, codex, and claude "
+        "can run the read-only reviewer stages. Each stage picks its own, so a cheap model "
         "can transcribe requirements while a strong one plans, and the "
         "reviewer can be a different program from the implementer. Only cline "
         "takes a model below: claude, kimi, and codex are given no model flag "
@@ -316,6 +318,7 @@ def runner_command(runner, side):
         "cline": shim("agent-cline.sh"),
         "claude": "claude",
         "kimi": shim("agent-kimi.sh"),
+        "codex": shim("agent-codex.sh"),
     }
     return table.get(runner, table["cline"])
 

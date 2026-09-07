@@ -75,13 +75,18 @@ check("claude hides the model field", ["runner", "effort"],
 check("claude resolves to no model", "", t.stage_model("requirements"))
 
 # Runner choices are side-appropriate: codex has no agent shim.
-check("agent runners", ["cline", "claude", "kimi"], m.runners_for(m.AGENT))
+check("agent runners", ["cline", "claude", "kimi", "codex"], m.runners_for(m.AGENT))
 check("reviewer runners", ["cline", "codex", "claude"], m.runners_for(m.REVIEWER))
-check("codex is not an agent choice", False, "codex" in m.runners_for(m.AGENT))
 check("an agent stage runs an agent shim", True,
       m.runner_command("cline", m.AGENT).endswith("agent-cline.sh"))
 check("a reviewer stage runs a reviewer shim", True,
       m.runner_command("cline", m.REVIEWER).endswith("reviewer-cline.sh"))
+# codex runs both sides, and the side decides which shim — write access for an
+# agent stage, read-only for a reviewer stage.
+check("codex as an agent runs the agent shim", True,
+      m.runner_command("codex", m.AGENT).endswith("agent-codex.sh"))
+check("codex as a reviewer runs codex itself", "codex",
+      m.runner_command("codex", m.REVIEWER))
 
 # The environment the driver is given. Per-stage settings are deliberately
 # absent: the drivers read .uncle/config themselves, at the moment each stage
@@ -102,7 +107,7 @@ if failed:
     for f in failed:
         print("FAIL: " + f)
     raise SystemExit(1)
-print("  fields/defaults/env: %d checks passed" % 18)
+print("  fields/defaults/env: %d checks passed" % 19)
 PY
 
 # --- round trip, and migration off the old global format -------------------

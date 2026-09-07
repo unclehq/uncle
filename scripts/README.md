@@ -232,6 +232,25 @@ configured for one of those exports an empty model, and the driver omits
 variable still falls back to the driver's built-in default, which is what keeps
 a driver run directly, with no launcher, behaving as before.
 
+### Runner shims
+
+One shim per runner per side, and the side is the difference that matters:
+
+| Runner | Agent stage | Reviewer stage |
+|---|---|---|
+| `cline` | `agent-cline.sh` (act mode) | `reviewer-cline.sh` (plan mode) |
+| `claude` | `claude` | `reviewer-claude.sh` |
+| `kimi` | `agent-kimi.sh` | — |
+| `codex` | `agent-codex.sh` (`--sandbox workspace-write`) | `codex` (`--sandbox read-only`) |
+
+Each shim takes the flags the drivers send (`claude -p`'s set for an agent
+stage, `codex exec`'s for a reviewer stage) and translates them onto its own
+CLI, then rewrites that CLI's event stream into the stream-json schema the
+drivers render and cost-account against. A shim that cannot express one of the
+driver's limits says so in its header: `agent-codex.sh` drops `--max-turns`,
+`--max-budget-usd`, and `--allowedTools` because codex exec has no equivalent,
+so a stage on that runner is bounded by its sandbox and nothing else.
+
 ### Output rules and plan gates
 
 Every stage that writes a markdown document for a human to read gets

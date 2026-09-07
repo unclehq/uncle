@@ -92,7 +92,7 @@ CONFIG_STAGE_SIDE_reviewer=" adversarial-review manual-checklist final-audit "
 DEFAULT_RUNNER="cline"
 DEFAULT_EFFORT="medium"
 DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
-AGENT_RUNNERS="cline claude kimi"
+AGENT_RUNNERS="cline claude kimi codex"
 REVIEWER_RUNNERS="cline codex claude"
 
 stage_side() {
@@ -135,6 +135,7 @@ runner_cmd() {
     case "$runner" in
         claude) printf 'claude' ;;
         kimi)   printf '%s' "$ROOT/scripts/agent-kimi.sh" ;;
+        codex)  printf '%s' "$ROOT/scripts/agent-codex.sh" ;;
         *)      printf '%s' "$ROOT/scripts/agent-cline.sh" ;;
     esac
 }

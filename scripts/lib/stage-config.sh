@@ -63,6 +63,7 @@ uncle_runner_cmd() {
     local runner="$1" side="$2" root="${ROOT:-.}"
     if [[ "$side" == "reviewer" ]]; then
         case "$runner" in
+            kimi)   printf '%s' "$root/scripts/reviewer-kimi.sh" ;;
             codex)  printf 'codex' ;;
             claude) printf '%s' "$root/scripts/reviewer-claude.sh" ;;
             *)      printf '%s' "$root/scripts/reviewer-cline.sh" ;;

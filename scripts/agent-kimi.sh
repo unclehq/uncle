@@ -3,8 +3,8 @@
 #
 # The drivers call one $AGENT_CMD for every stage and select the tier with
 # --model, so swapping the whole command would move the opus stages too. This
-# shim dispatches instead: a kimi* model runs on kimi, anything else is passed
-# through to claude untouched.
+# shim dispatches instead: no model or a kimi tier runs on kimi; an explicit
+# non-Kimi model is passed through to claude untouched.
 #
 # kimi is not flag-compatible with `claude -p`, so the kimi path translates:
 # the prompt moves from stdin to -p, claude-only flags are dropped, and kimi's
@@ -16,7 +16,7 @@ KIMI_CMD="${WORKFLOW_KIMI_CMD:-kimi}"
 KIMI_MODEL="${WORKFLOW_KIMI_MODEL:-moonshot-ai/kimi-k2.7-code-highspeed}"
 
 # Find --model without disturbing the argument list.
-model=""
+model="kimi"
 prev=""
 for arg in "$@"; do
     if [[ "$prev" == "--model" ]]; then
@@ -100,7 +100,7 @@ set +e
 # fifo's write end open, and the reader below then blocks on a stream that will
 # never reach EOF -- a different hang in place of the one being fixed.
 set -m
-"$KIMI_CMD" -p "$prompt" -m "$resolved" --output-format stream-json \
+"$KIMI_CMD" --print -p "$prompt" -m "$resolved" --output-format stream-json \
     ${kimi_args[@]+"${kimi_args[@]}"} > "$fifo" 2>&1 &
 kimi_pid=$!
 set +m

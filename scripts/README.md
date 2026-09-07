@@ -329,7 +329,7 @@ One shim per runner per side, and the side is the difference that matters:
 |---|---|---|
 | `cline` | `agent-cline.sh` (act mode) | `reviewer-cline.sh` (plan mode) |
 | `claude` | `claude` | `reviewer-claude.sh` |
-| `kimi` | `agent-kimi.sh` | — |
+| `kimi` | `agent-kimi.sh` | `reviewer-kimi.sh` (ReadFile, Glob, Grep only) |
 | `codex` | `agent-codex.sh` (`--sandbox workspace-write`) | `codex` (`--sandbox read-only`) |
 
 Each shim takes the flags the drivers send (`claude -p`'s set for an agent
@@ -515,3 +515,8 @@ totals come from `run_result` (falling back to a `done` event).
 
 Both are covered by `scripts/tests/agent-cline-test.sh` and
 `scripts/tests/reviewer-cline-test.sh`.
+
+Kimi reviewer stages require Kimi CLI custom YAML agents (`--agent-file`).
+The reviewer uses `lib/kimi/reviewer.yaml` with an explicit read-only tool list.
+Set `WORKFLOW_KIMI_CMD` to the Kimi executable and `WORKFLOW_KIMI_MODEL` to its
+configured model alias when needed. No model override now correctly selects Kimi.

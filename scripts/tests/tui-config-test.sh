@@ -76,7 +76,9 @@ check("claude resolves to no model", "", t.stage_model("requirements"))
 
 # Runner choices are side-appropriate: codex has no agent shim.
 check("agent runners", ["cline", "claude", "kimi", "codex"], m.runners_for(m.AGENT))
-check("reviewer runners", ["cline", "codex", "claude"], m.runners_for(m.REVIEWER))
+check("reviewer runners", ["cline", "codex", "claude", "kimi"], m.runners_for(m.REVIEWER))
+check("kimi reviewer resolves to its own shim", True,
+      m.runner_command("kimi", m.REVIEWER).endswith("reviewer-kimi.sh"))
 check("an agent stage runs an agent shim", True,
       m.runner_command("cline", m.AGENT).endswith("agent-cline.sh"))
 check("a reviewer stage runs a reviewer shim", True,

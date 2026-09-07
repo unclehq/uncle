@@ -90,7 +90,7 @@ CONFIG_STAGES = [name for name, _ in STAGES]
 # that difference. codex, for instance, runs `--sandbox workspace-write` as an
 # agent and `--sandbox read-only` as a reviewer.
 AGENT_RUNNERS = ["cline", "claude", "kimi", "codex"]
-REVIEWER_RUNNERS = ["cline", "codex", "claude"]
+REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi"]
 
 # Applied to any stage the operator has not configured.
 DEFAULT_RUNNER = "cline"
@@ -152,7 +152,7 @@ CONFIG_DESC = {
     ),
     "field:runner": (
         "The CLI that drives this stage. cline, claude, kimi, and codex can "
-        "run an agent stage, where they write code; cline, codex, and claude "
+        "run an agent stage, where they write code; cline, codex, claude, and kimi "
         "can run the read-only reviewer stages. Each stage picks its own, so a cheap model "
         "can transcribe requirements while a strong one plans, and the "
         "reviewer can be a different program from the implementer. Only cline "
@@ -323,6 +323,7 @@ def runner_command(runner, side):
             "cline": shim("reviewer-cline.sh"),
             "codex": "codex",
             "claude": shim("reviewer-claude.sh"),
+            "kimi": shim("reviewer-kimi.sh"),
         }
         return table.get(runner, table["cline"])
     table = {

@@ -95,7 +95,7 @@ DEFAULT_RUNNER="cline"
 DEFAULT_EFFORT="medium"
 DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
 AGENT_RUNNERS="cline claude kimi codex"
-REVIEWER_RUNNERS="cline codex claude"
+REVIEWER_RUNNERS="cline codex claude kimi"
 
 stage_side() {
     case "$CONFIG_STAGE_SIDE_reviewer" in
@@ -128,6 +128,7 @@ runner_cmd() {
     local runner="$1" side="$2"
     if [[ "$side" == "reviewer" ]]; then
         case "$runner" in
+            kimi)   printf '%s' "$ROOT/scripts/reviewer-kimi.sh" ;;
             codex)  printf 'codex' ;;
             claude) printf '%s' "$ROOT/scripts/reviewer-claude.sh" ;;
             *)      printf '%s' "$ROOT/scripts/reviewer-cline.sh" ;;

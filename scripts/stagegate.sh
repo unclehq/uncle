@@ -727,8 +727,9 @@ run_codex_review() {
         echo "Change the reviewer model (Configure → reviewer) and re-run to resume this stage."
     fi
 
+    [[ "$status" == 0 ]] || return "$status"
     require_file "$output_file"
-    check_document_budget "$output_file" || exit 1
+    finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
 }
 
 # Every stage's actual work, with no state transitions and no approval checks,
@@ -755,6 +756,7 @@ run_stage() {
             ;;
         IMPLEMENT)
             run_claude prompts/implement.md implementation
+            require_artifact IMPLEMENTATION_NOTES.md
             require_artifact AUTOMATED_TEST_REPORT.md
             ;;
         PREFLIGHT)
@@ -772,6 +774,7 @@ run_stage() {
             ;;
         REPAIR)
             run_claude prompts/repair.md implementation
+            require_artifact IMPLEMENTATION_NOTES.md
             require_artifact AUTOMATED_TEST_REPORT.md
             ;;
         MANUAL_CHECKLIST)
@@ -784,6 +787,7 @@ run_stage() {
             rm -f VERIFICATION_REPORT.md
             run_claude prompts/execute-checklist.md execute-checklist
             require_artifact VERIFICATION_REPORT.md
+            require_artifact DEFECTS.md
             ;;
         FINAL_AUDIT)
             run_codex_review \

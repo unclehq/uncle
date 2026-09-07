@@ -170,19 +170,50 @@ Integrity hashing uses one Python process when available, with the complete
 portable shell implementation as a fallback. The terminal redraws on changes
 instead of on every idle poll. These optimizations preserve the acceptance gates.
 
-Planning stages now produce compact execution documents directly. The driver
-checks newly generated requirements interpretations, plans, adversarial reviews,
-change specs, and baseline reports before they advance. Defaults are 20,000 UTF-8
-bytes and 400 lines; prompts target 12,000 bytes when all obligations fit. Exact
-acceptance assertions, commands, protected paths, and finding dispositions must
-remain complete. Detailed evidence is cited at its existing location.
+Every document-producing stage receives a per-file budget, checked before the
+workflow advances. This includes background reviews, implementation steps,
+repairs, and acceptance reports. Defaults are:
 
-An oversized artifact is preserved and the workflow pauses without advancing.
-Resume after removing repeated prose, or explicitly raise `WORKFLOW_DOC_MAX_BYTES`
-and `WORKFLOW_DOC_MAX_LINES` in the launch environment when the complete contract
-needs more room. These controls are environment variables, not configuration-screen
-fields. Existing approved documents are not automatically summarized or rewritten.
-Acceptance reports and execution evidence are not subject to this planning budget.
+| Documents | UTF-8 bytes | Lines |
+|---|---:|---:|
+| Requirements interpretation | Source size, bounded to 4,000–20,000 | 160 |
+| Change spec | Change request size, bounded to 4,000–8,000 | 160 |
+| Plans and revised plans | 12,000 | 300 |
+| Baseline, checklists, test and verification reports | 8,000 | 240 |
+| Adversarial/test reviews, final audit | 6,000 | 180 |
+| Implementation notes, preflight, defects | 4,000 | 120 |
+
+These are ceilings, not output targets. Stages cite settled upstream requirements
+and existing evidence instead of repeating them. Exact acceptance assertions,
+commands, protected paths, finding dispositions, and required result rows remain
+complete. Source code, raw logs, and driver-generated diff/evidence files are not
+limited by document budgets. Generated output never increases the next budget.
+
+Oversized reviewer output gets one editorial compaction pass using the same
+read-only reviewer, with a 120-second timeout. It shortens the existing review
+without redoing repository analysis. The original and candidate are archived in
+`.uncle/workspace/logs/review-compact-*/`; only a candidate within budget that
+preserves headings, finding IDs, table rows, severity/status lines, inline code,
+numeric references, fenced commands and verdict can replace it. These are
+structural safeguards, not proof of semantic equivalence: human review remains
+required. Compaction attempts have separate performance records.
+
+Set `WORKFLOW_REVIEW_COMPACT=0` to disable this pass, or
+`WORKFLOW_REVIEW_COMPACT_SECONDS` to a timeout from 1 to 600 seconds. If it fails,
+the original stays in place and the stage pauses; there is no automatic loop.
+Other oversized artifacts also pause without advancing.
+Remove repeated prose before retrying, or increase the limit when mandatory
+content needs more room. Environment overrides apply globally via
+`WORKFLOW_DOC_MAX_BYTES` / `WORKFLOW_DOC_MAX_LINES`, or to one artifact via its
+uppercase filename without `.md` (replace dots/hyphens with underscores):
+
+```sh
+WORKFLOW_DOC_MAX_BYTES_VERIFICATION_REPORT=12000 uncle
+```
+
+Per-artifact overrides take precedence over global overrides. These are launch
+environment variables, not Configure fields. Existing approved documents are not
+automatically rewritten, and checks are never dropped to fit a budget.
 
 
 ## Documentation

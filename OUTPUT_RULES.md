@@ -74,11 +74,23 @@ none.
 
 ## Rule 5 — Length
 
-- Planning artifacts target 12,000 UTF-8 bytes. The driver enforces 20,000 bytes
-  and 400 lines by default, configurable with `WORKFLOW_DOC_MAX_BYTES` and
-  `WORKFLOW_DOC_MAX_LINES`. Its appended budget takes precedence over these defaults.
-- Other documents target 400 lines; sections target 40 lines. Required acceptance
-  rows, evidence, and exact commands take precedence over these targets.
+- Every stage document has an enforced per-file byte and line budget, including
+  implementation, repair, review, checklist, and acceptance reports. The appended
+  budget lists the exact limits; ceilings are not targets to fill.
+- Default caps: plans 12,000 bytes / 300 lines; baseline, checklists and test or
+  verification reports 8,000 / 240; reviews and audits 6,000 / 180; implementation
+  notes, preflight and defects 4,000 / 120.
+- Requirements interpretation uses source size with a 4,000-byte floor and
+  20,000-byte ceiling. Change specs use CHANGE_REQUEST.md size with a 4,000-byte
+  floor and 8,000-byte ceiling. Both have a 160-line cap. Generated upstream
+  artifacts never enlarge downstream budgets.
+- Reference settled upstream obligations by file and ID instead of recataloging
+  them. Preserve required acceptance rows and the complete executable plan.
+  Update current rows during revisions and repairs, retaining IDs and dispositions;
+  do not append a narrative for every attempt.
+- `WORKFLOW_DOC_MAX_BYTES` and `WORKFLOW_DOC_MAX_LINES` override defaults.
+  Artifact-specific variables (e.g. `WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT`)
+  take precedence over global overrides. The appended budget is authoritative.
 - Keep the execution contract complete in the named artifact. Cite existing logs
   and evidence by file and section; avoid copying transcripts and repeated rationale.
   Do not create a second summary artifact or move obligations out of the contract.

@@ -46,6 +46,8 @@ if [[ "$expected" != "$actual" ]]; then
 fi
 
 REVIEWER_CMD="${WORKFLOW_REVIEWER_CMD:-codex}"
+. "$ROOT/scripts/lib/gates.sh"
+budget_prompt="$(document_budget_prompt manual-checklist)"
 
 "$REVIEWER_CMD" exec \
     --ephemeral \
@@ -113,7 +115,10 @@ Separate the checklist into:
 
 End with a requirements-to-check traceability table.
 PROMPT
+printf '%s\n' "$budget_prompt"
 )"
 
-test -s MANUAL_CHECKLIST.md
+LOG_DIR="$ROOT/.uncle/workspace/logs"
+mkdir -p "$LOG_DIR"
+finish_review_budget MANUAL_CHECKLIST.md "$REVIEWER_CMD" "" "" manual-checklist
 echo "Created MANUAL_CHECKLIST.md"

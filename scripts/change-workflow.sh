@@ -976,6 +976,10 @@ run_stepwise_implementation() {
         run_claude "$prompt" "implementation-step-$i" \
             "$MODEL_IMPLEMENT" "" "$turns" "$BUDGET_IMPLEMENT"
 
+        check_document_budget IMPLEMENTATION_NOTES.md || exit 1
+        if [[ "$i" -eq "$total" ]]; then
+            check_document_budget CHANGE_TEST_REPORT.md || exit 1
+        fi
         printf '%s\n' "$i" > "$done_file"
     done < "$steps_file"
 
@@ -1279,13 +1283,17 @@ run_codex() {
         echo "Change the reviewer model (Configure → reviewer) and re-run to resume this stage."
     fi
 
+    [[ "$status" == 0 ]] || return "$status"
     require_file "$output_file"
-    check_document_budget "$output_file" || exit 1
+    finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
 }
 
 BG_PID=""
 BG_LABEL=""
 BG_START=0
+BG_CMD=""
+BG_MODEL=""
+BG_EFFORT=""
 
 cleanup_bg() {
     if [[ -n "$BG_PID" ]] && kill -0 "$BG_PID" 2>/dev/null; then
@@ -1351,6 +1359,9 @@ start_codex_bg() {
     ) &
 
     BG_PID=$!
+    BG_CMD="$cmd"
+    BG_MODEL="$model"
+    BG_EFFORT="$effort"
     BG_LABEL="$log_name"
     BG_START="$SECONDS"
 }
@@ -1385,7 +1396,7 @@ wait_codex_bg() {
     fi
 
     require_file "$output_file"
-    check_document_budget "$output_file" || exit 1
+    finish_review_budget "$output_file" "$BG_CMD" "$BG_MODEL" "$BG_EFFORT" "$label" || exit 1
     echo "Background Codex stage complete: $label"
 }
 
@@ -1539,6 +1550,8 @@ while true; do
             fi
             require_file IMPLEMENTATION_NOTES.md
             require_file CHANGE_TEST_REPORT.md
+            check_document_budget IMPLEMENTATION_NOTES.md || exit 1
+            check_document_budget CHANGE_TEST_REPORT.md || exit 1
 
             check_scope_deviations
 
@@ -1647,6 +1660,10 @@ while true; do
                 "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 200 "$BUDGET_EXECUTE"
             PROGRESS_TOTAL=0
             require_file VERIFICATION_REPORT.md
+            check_document_budget VERIFICATION_REPORT.md || exit 1
+            if [[ -e DEFECTS.md ]]; then
+                check_document_budget DEFECTS.md || exit 1
+            fi
             set_state FINAL_AUDIT
             ;;
 

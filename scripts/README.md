@@ -354,6 +354,14 @@ path, then the project's own copy, then the copy installed with uncle. The
 driver logs which source it used, and the rules are appended to the prompt it
 sends, never written into the prompt files on disk.
 
+Every document stage also receives per-file byte and line ceilings from
+`scripts/lib/gates.sh`, enforced before advancement. This includes stepwise
+handoffs, background checklists, repairs, test reports, and acceptance evidence
+summaries. Raw logs and source code are uncapped. See the root README's budget
+table and `WORKFLOW_DOC_MAX_BYTES_<ARTIFACT>` / `WORKFLOW_DOC_MAX_LINES_<ARTIFACT>`
+overrides. An oversized document is preserved and stops the stage; required
+checks, evidence, and dispositions must not be dropped to fit.
+
 ### Frozen scope and stepwise implementation
 
 `scripts/lib/plan-scope.sh` reads the two machine-usable structures out of
@@ -516,7 +524,15 @@ totals come from `run_result` (falling back to a `done` event).
 Both are covered by `scripts/tests/agent-cline-test.sh` and
 `scripts/tests/reviewer-cline-test.sh`.
 
-Kimi reviewer stages require Kimi CLI custom YAML agents (`--agent-file`).
-The reviewer uses `lib/kimi/reviewer.yaml` with an explicit read-only tool list.
+Kimi reviewer stages use the current Kimi Code CLI Markdown agents (`--agent-file`).
+The reviewer uses `lib/kimi/reviewer.md` with an explicit read-only tool list.
 Set `WORKFLOW_KIMI_CMD` to the Kimi executable and `WORKFLOW_KIMI_MODEL` to its
 configured model alias when needed. No model override now correctly selects Kimi.
+
+Oversized reviewer artifacts (including background checklists) receive one bounded
+compaction pass, using the same runner/model/effort and read-only sandbox. No new
+review is requested. Original text and candidates stay in the stage log directory;
+failed compaction never replaces the original. `WORKFLOW_REVIEW_COMPACT=0` opts
+out; `WORKFLOW_REVIEW_COMPACT_SECONDS` defaults to 120 (range 1–600). The checks
+preserve structural anchors; the human still judges whether meaning is retained.
+Covered by `scripts/tests/review-compaction-test.sh`.

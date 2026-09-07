@@ -234,9 +234,9 @@ PY
 actual="$(
     UNCLE_CONFIG="$TMP/proj/.uncle/config" ROOT="$ROOT" bash -c '
         . "$ROOT/scripts/lib/stage-config.sh"
-        for stage in requirements project-plan updated-plan preflight implementation \
-                     execute-checklist baseline change-spec change-plan \
-                     updated-change-plan adversarial-review test-review manual-checklist \
+        for stage in requirements baseline change-spec project-plan change-plan \
+                     adversarial-review updated-plan updated-change-plan preflight \
+                     implementation test-review manual-checklist execute-checklist \
                      final-audit; do
             effort="$(uncle_stage_effort "$stage")"
             printf "%s\t%s\t%s\t%s\n" "$stage" "$(uncle_stage_runner "$stage")" \

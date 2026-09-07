@@ -133,6 +133,7 @@ gated_prompt() {
     case "$PLAN_STAGES" in
         *" $log_name "*) is_plan=1 ;;
     esac
+    case "$log_name" in implementation-step-*) is_doc=1 ;; esac
     case "$DOC_STAGES" in
         *" $log_name "*) is_doc=1 ;;
     esac
@@ -143,7 +144,7 @@ gated_prompt() {
     [[ "$is_plan" == "1" ]] && gates="$(gates_file)"
     [[ "$is_doc" == "1" ]] && rules="$(output_rules_file)"
 
-    if [[ -z "$gates" && -z "$rules" ]]; then
+    if [[ "$is_doc" == "0" && -z "$gates" && -z "$rules" ]]; then
         printf '%s\n' "$prompt_file"
         return 0
     fi
@@ -160,7 +161,7 @@ gated_prompt() {
             load_gates
         fi
         if [[ "$is_doc" == "1" ]]; then
-            printf '\n\n# Compact output budget\n\nPlanning artifacts are checked by the driver: at most %s UTF-8 bytes and %s lines. Target 12,000 bytes where the complete contract fits. Preserve every required ID, assertion, threshold, failure behavior, disposition, command and protected path. Remove duplicated rationale and background. Cite existing evidence by file and section instead of copying it. Keep all normative content in the named document; do not create summary sidecars or move obligations into evidence files. If mandatory content cannot fit, preserve it in full; the driver will pause for an explicit budget adjustment.\n' "${WORKFLOW_DOC_MAX_BYTES:-20000}" "${WORKFLOW_DOC_MAX_LINES:-400}"
+            document_budget_prompt "$log_name" || return 1
         fi
         if [[ "$role" == "reviewer" ]]; then
             printf '\n\n---\n\n# Reviewer output (binding)\n\nYou run read-only: you cannot write files, so Rule 0 above cannot apply to\nyou. The document the stage asked for is your final assistant message:\nreturn it in full as that message — not a path, not a summary, not a note\nabout a file you could not write.\n'
@@ -171,26 +172,152 @@ gated_prompt() {
     printf '%s\n' "$combined"
 }
 
-# Check newly produced planning artifacts only; never rewrite approved inputs.
-check_document_budget() {
-    local file="$1" bytes lines max_bytes="${WORKFLOW_DOC_MAX_BYTES:-20000}" max_lines="${WORKFLOW_DOC_MAX_LINES:-400}"
-    case "${file##*/}" in
-        REQUIREMENTS_INTERPRETATION.md|PROJECT_PLAN.md|UPDATED_PROJECT_PLAN.md|ADVERSARIAL_REVIEW.md|BASELINE_REPORT.md|CHANGE_SPEC.md|CHANGE_PLAN.md) ;;
-        *) return 0 ;;
+# One artifact registry supplies both prompt limits and post-stage enforcement.
+# Limits apply to authored documents, never source code or raw execution logs.
+stage_documents() {
+    case "$1" in
+        requirements) echo REQUIREMENTS_INTERPRETATION.md ;;
+        project-plan) echo PROJECT_PLAN.md ;;
+        updated-plan) echo UPDATED_PROJECT_PLAN.md ;;
+        baseline) echo BASELINE_REPORT.md ;;
+        change-spec) echo CHANGE_SPEC.md ;;
+        change-plan|updated-change-plan) echo CHANGE_PLAN.md ;;
+        adversarial-review) echo ADVERSARIAL_REVIEW.md ;;
+        preflight) echo PREFLIGHT_REPORT.md ;;
+        implementation|implementation-step-*)
+            printf '%s\n' IMPLEMENTATION_NOTES.md AUTOMATED_TEST_REPORT.md CHANGE_TEST_REPORT.md ;;
+        test-review) echo TEST_REVIEW.md ;;
+        manual-checklist|manual-checklist-delta) echo MANUAL_CHECKLIST.md ;;
+        manual-checklist-base) echo MANUAL_CHECKLIST.base.md ;;
+        execute-checklist) printf '%s\n' VERIFICATION_REPORT.md DEFECTS.md ;;
+        final-audit) echo FINAL_AUDIT.md ;;
     esac
-    [[ -s "$file" ]] || { echo "Required planning artifact is missing or empty: $file" >&2; return 1; }
+}
+
+# basename -> default bytes, lines, optional authoritative source.
+# Generated upstream output never sets the budget for the next stage.
+document_budget_defaults() {
+    case "${1##*/}" in
+        REQUIREMENTS_INTERPRETATION.md) echo '20000 160 REQUIREMENTS.md' ;;
+        CHANGE_SPEC.md) echo '8000 160 CHANGE_REQUEST.md' ;;
+        PROJECT_PLAN.md|UPDATED_PROJECT_PLAN.md|CHANGE_PLAN.md|UPDATED_CHANGE_PLAN.md)
+            echo '12000 300' ;;
+        BASELINE_REPORT.md|MANUAL_CHECKLIST.md|MANUAL_CHECKLIST.base.md|AUTOMATED_TEST_REPORT.md|CHANGE_TEST_REPORT.md|VERIFICATION_REPORT.md)
+            echo '8000 240' ;;
+        ADVERSARIAL_REVIEW.md|TEST_REVIEW.md|FINAL_AUDIT.md) echo '6000 180' ;;
+        IMPLEMENTATION_NOTES.md|PREFLIGHT_REPORT.md|DEFECTS.md) echo '4000 120' ;;
+        *) return 1 ;;
+    esac
+}
+
+# Artifact-specific override wins over the global override, then defaults.
+# Bash 3.2 indirect expansion avoids eval of operator-provided values.
+document_budget() {
+    local file="${1##*/}" defaults max_bytes max_lines source="" key byte_key line_key
+    defaults="$(document_budget_defaults "$file")" || return 1
+    read -r max_bytes max_lines source <<< "$defaults"
+    if [[ -n "$source" ]]; then
+        if [[ -s "$source" ]]; then
+            max_bytes=$(wc -c < "$source" | awk -v cap="$max_bytes" '{n=$1; if(n<4000)n=4000; if(n>cap)n=cap; print n}')
+        else
+            max_bytes=4000
+        fi
+    fi
+    key=$(printf '%s' "${file%.md}" | tr '[:lower:].-' '[:upper:]__')
+    byte_key="WORKFLOW_DOC_MAX_BYTES_$key"
+    line_key="WORKFLOW_DOC_MAX_LINES_$key"
+    max_bytes="${!byte_key:-${WORKFLOW_DOC_MAX_BYTES:-$max_bytes}}"
+    max_lines="${!line_key:-${WORKFLOW_DOC_MAX_LINES:-$max_lines}}"
     case "$max_bytes$max_lines" in
-        *[!0-9]*|"") echo "Document budgets must be positive integers." >&2; return 1 ;;
+        *[!0-9]*|"") echo "Document budgets for $file must be positive integers." >&2; return 1 ;;
     esac
     if ! awk -v b="$max_bytes" -v l="$max_lines" 'BEGIN {exit !(b>0 && l>0)}'; then
-        echo "Document budgets must be positive integers." >&2; return 1
+        echo "Document budgets for $file must be positive integers." >&2; return 1
     fi
+    printf '%s %s\n' "$max_bytes" "$max_lines"
+}
+
+requirements_document_max_bytes() {
+    local limits
+    limits="$(document_budget REQUIREMENTS_INTERPRETATION.md)" || return 1
+    printf '%s\n' "${limits%% *}"
+}
+
+document_budget_prompt() {
+    local stage="$1" file limits bytes lines
+    printf '\n\n# Compact output budgets (binding)\n\n'
+    while IFS= read -r file; do
+        limits="$(document_budget "$file")" || return 1
+        read -r bytes lines <<< "$limits"
+        printf -- '- %s: at most %s UTF-8 bytes and %s lines.\n' "$file" "$bytes" "$lines"
+    done < <(stage_documents "$stage")
+    cat <<'BUDGET'
+
+These are per-file ceilings, not targets. Apply only to files the stage asks
+for; this list does not authorize extra outputs. The driver checks new documents
+before advancing, including reviewer output, repair reports, and step handoffs.
+
+Reference unchanged upstream requirements and evidence by file plus ID or
+section. Do not rebuild their catalogs or repeat background. Write only this
+stage's decisions, changes, findings, results, and unresolved prerequisites.
+Keep required headings; use a short reference or "None" for settled sections.
+Consolidate shared causes, and cross-reference details instead of repeating them.
+In revisions and repairs, update current rows in place; do not append narratives
+of each attempt. Retain finding IDs, dispositions, and evidence references.
+
+Preserve every required acceptance row, status, assertion, threshold, failure
+behavior, exact command, and protected path. Execution plans must retain their
+complete executable contract. Reports cite existing raw logs instead of copying
+transcripts; never drop checks or evidence needed to assess their results.
+Do not create summary sidecars or move obligations out to evade these limits.
+If mandatory content alone cannot fit, preserve it: the driver keeps the artifact
+and pauses for an explicit budget adjustment. Never truncate required content.
+BUDGET
+}
+
+# Check newly authored stage artifacts; never rewrite approved inputs.
+check_document_budget() {
+    local file="$1" bytes lines limits max_bytes max_lines key
+    document_budget_defaults "$file" > /dev/null || return 0
+    limits="$(document_budget "$file")" || return 1
+    read -r max_bytes max_lines <<< "$limits"
+    [[ -s "$file" ]] || { echo "Required document is missing or empty: $file" >&2; return 1; }
     bytes=$(wc -c < "$file")
     lines=$(awk 'END {print NR+0}' "$file")
     if ! awk -v b="$bytes" -v l="$lines" -v mb="$max_bytes" -v ml="$max_lines" 'BEGIN {exit !(b<=mb && l<=ml)}'; then
+        key=$(printf '%s' "${file##*/}" | sed 's/\.md$//' | tr '[:lower:].-' '[:upper:]__')
         echo "Document budget exceeded: $file ($bytes bytes, $lines lines; limits $max_bytes bytes, $max_lines lines)." >&2
         echo "Artifact preserved. Shorten repeated prose, never mandatory rows or commands. Re-run to resume." >&2
-        echo "If the complete contract requires more space, explicitly raise WORKFLOW_DOC_MAX_BYTES / WORKFLOW_DOC_MAX_LINES before resuming." >&2
+        echo "If mandatory content needs more room, set WORKFLOW_DOC_MAX_BYTES_$key / WORKFLOW_DOC_MAX_LINES_$key (or global WORKFLOW_DOC_MAX_BYTES / WORKFLOW_DOC_MAX_LINES)." >&2
         return 1
     fi
+}
+
+# Reviewers return documents rather than editing files. Give an oversized result
+# one bounded editorial pass, using the same reviewer and its read-only contract.
+finish_review_budget() {
+    local file="$1" cmd="$2" model="$3" effort="$4" stage="$5"
+    local limits bytes lines status=0 started="$SECONDS" log
+    local -a flags=(exec --ephemeral --skip-git-repo-check --sandbox read-only)
+    limits="$(document_budget "$file")" || return 1
+    [[ -s "$file" ]] || { check_document_budget "$file"; return 1; }
+    check_document_budget "$file" 2>/dev/null && return 0
+    if [[ "${WORKFLOW_REVIEW_COMPACT:-1}" == 0 ]]; then
+        check_document_budget "$file"
+        return 1
+    fi
+    read -r bytes lines <<< "$limits"
+    [[ -z "$model" ]] || flags+=(-m "$model")
+    [[ -z "$effort" ]] || flags+=(-c "model_reasoning_effort=$effort")
+    log="$LOG_DIR/${stage}.compact.log"
+    python3 "$ROOT/scripts/lib/compact-review.py" --output "$file" --log "$log" \
+        --max-bytes "$bytes" --max-lines "$lines" \
+        --seconds "${WORKFLOW_REVIEW_COMPACT_SECONDS:-120}" \
+        -- "$cmd" "${flags[@]}" || status=$?
+    if declare -F perf_record > /dev/null; then
+        perf_record reviewer "${stage}-compact" "$((SECONDS-started))" "$status" \
+            "$log" "$cmd" "$model" "$effort"
+    fi
+    [[ "$status" == 0 ]] || { check_document_budget "$file"; return 1; }
+    check_document_budget "$file"
 }

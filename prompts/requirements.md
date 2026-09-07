@@ -36,4 +36,20 @@ Do not invoke another agent.
 
 Write only REQUIREMENTS_INTERPRETATION.md and stop.
 
-Reference source requirements by stable ID. Concentrate prose on ambiguities and decisions; do not paraphrase every requirement in multiple sections. Keep each behavior and acceptance obligation explicit once, then cross-reference its ID.
+This is a companion to REQUIREMENTS.md, not a replacement specification.
+Reference unchanged requirements by stable ID, or source line range when IDs
+are absent. Do not create a second catalog of every source requirement.
+Sections with no new interpretation should contain only a source reference
+and "No additional interpretation." Do not fill sections to make them look complete.
+
+Use behavior rows only for behavior that needs clarification beyond the source;
+otherwise retain the table header and state that no additional behaviors need
+interpretation. Refer to those rows from Failure behaviors instead of repeating
+them. In Definition of done retain one row per mandatory acceptance criterion
+or test, citing its source for the expected result and verification method;
+add only missing details and observed or unknown prerequisites.
+
+Consolidate unknowns with a shared cause into one item (for example, a missing
+source PDF), and cross-reference it. Do not invent speculative assumptions.
+Preserve the source's modality: "prefer" and "not required" do not mean
+"must" or "forbidden." Concentrate prose on ambiguities and decisions.

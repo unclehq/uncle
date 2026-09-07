@@ -64,20 +64,22 @@ CONFIG_PATH = os.environ.get("UNCLE_CONFIG", _default_config_path())
 # Keys are the drivers' stage log names, so a key maps straight onto the
 # WORKFLOW_*_<STAGE> variables the drivers already read.
 AGENT, REVIEWER = "agent", "reviewer"
+# Merge both workflow sequences, keeping branch-specific stages beside their
+# counterparts and shared review/execution stages in execution order.
 STAGES = [
     ("requirements", AGENT),
-    ("project-plan", AGENT),
-    ("updated-plan", AGENT),
-    ("preflight", AGENT),
-    ("implementation", AGENT),
-    ("execute-checklist", AGENT),
     ("baseline", AGENT),
     ("change-spec", AGENT),
+    ("project-plan", AGENT),
     ("change-plan", AGENT),
-    ("updated-change-plan", AGENT),
     ("adversarial-review", REVIEWER),
+    ("updated-plan", AGENT),
+    ("updated-change-plan", AGENT),
+    ("preflight", AGENT),
+    ("implementation", AGENT),
     ("test-review", REVIEWER),
     ("manual-checklist", REVIEWER),
+    ("execute-checklist", AGENT),
     ("final-audit", REVIEWER),
 ]
 STAGE_SIDE = dict(STAGES)

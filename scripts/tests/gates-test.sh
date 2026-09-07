@@ -208,7 +208,12 @@ while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
     shift
 done
-printf 'MC-1 Check the greeting.\n\nREADY\n' > "$out"
+if [[ "${FAKE_COMPACT_REVIEW:-0}" == 1 && "$out" == *MANUAL_CHECKLIST.base.md ]]; then
+    printf 'Repeated background that adds no findings. Repeated background that adds no findings.\n' > "$out"
+else
+    : > "$out"
+fi
+printf 'MC-1 Check the greeting.\n\nREADY\n' >> "$out"
 REV
     chmod +x "$CASE/bin/fake-reviewer"
 }
@@ -569,7 +574,12 @@ if [[ "$out" == TEST_REVIEW.md ]]; then
         printf '| %s | YES | %s | stub evidence |\n' "$id" "$status" >> "$out"
     done
 else
-    printf 'MC-1 Check the greeting.\n\n%s\n' "${FAKE_AUDIT:-READY}" > "$out"
+    if [[ "${FAKE_COMPACT_REVIEW:-0}" == 1 && "$out" == FINAL_AUDIT.md ]]; then
+        printf 'Repeated background that adds no findings. Repeated background that adds no findings.\n' > "$out"
+    else
+        : > "$out"
+    fi
+    printf 'MC-1 Check the greeting.\n\n%s\n' "${FAKE_AUDIT:-READY}" >> "$out"
 fi
 REV
     chmod +x "$CASE/bin/fake-reviewer"
@@ -630,6 +640,7 @@ case "$prompt" in
             [[ -e .uncle/workspace/repaired ]] || status=FAIL
         fi
         gate_report VERIFICATION_REPORT.md "$status"
+        printf '# Defects\n\nNo unresolved defects in fixture.\n' > DEFECTS.md
         if [[ -n "${FAKE_VERIFY_EDIT:-}" ]]; then bash -c "$FAKE_VERIFY_EDIT"; fi
         ;;
 esac
@@ -897,6 +908,81 @@ expect_status 1
 expect_state PREFLIGHT
 expect_no_file .uncle/workspace/implemented
 
+
+# Newly capped outputs must stop both drivers before the next gate/state.
+for artifact in IMPLEMENTATION_NOTES AUTOMATED_TEST_REPORT VERIFICATION_REPORT DEFECTS FINAL_AUDIT; do
+    new_stagegate_case "sg-budget-$artifact"
+    stagegate_agent
+    set_state IMPLEMENT
+    run_stagegate WORKFLOW_DIFF_GATE=0 "WORKFLOW_DOC_MAX_BYTES_$artifact=1"
+    expect_status 1
+    expect_out "Document budget exceeded: $artifact.md"
+    expect_file "$artifact.md"
+    expect_not_out "Workflow complete."
+    case "$artifact" in
+        IMPLEMENTATION_NOTES|AUTOMATED_TEST_REPORT) expect_state IMPLEMENT ;;
+        VERIFICATION_REPORT|DEFECTS) expect_state EXECUTE_CHECKLIST ;;
+        FINAL_AUDIT) expect_state FINAL_AUDIT ;;
+    esac
+done
+
+for artifact in IMPLEMENTATION_NOTES CHANGE_TEST_REPORT VERIFICATION_REPORT; do
+    new_case "change-budget-$artifact"
+    green_baseline 0 'bash app/test.sh'
+    set_state IMPLEMENT
+    run_driver WORKFLOW_DIFF_GATE=0 "WORKFLOW_DOC_MAX_BYTES_$artifact=1"
+    expect_status 1
+    expect_out "Document budget exceeded: $artifact.md"
+    expect_file "$artifact.md"
+    case "$artifact" in
+        VERIFICATION_REPORT) expect_state EXECUTE_CHECKLIST ;;
+        *) expect_state IMPLEMENT ;;
+    esac
+done
+
+new_case change-budget-background-checklist
+green_baseline 0 'bash app/test.sh'
+printf 'write a base checklist\n' > "$REPO/prompts/change/manual-checklist-base.md"
+set_state IMPLEMENT
+run_driver WORKFLOW_PARALLEL_CHECKLIST=1 WORKFLOW_DOC_MAX_BYTES_MANUAL_CHECKLIST_BASE=1
+expect_status 1
+expect_out 'Document budget exceeded:'
+expect_file '.uncle/workspace/MANUAL_CHECKLIST.base.md'
+expect_state IMPLEMENT
+
+new_case change-budget-step-handoff
+green_baseline 0 'bash app/test.sh'
+printf '\n## 20. Implementation sequence\n\n1. First step.\n2. Second step.\n' >> "$REPO/CHANGE_PLAN.md"
+hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workspace/approvals/CHANGE_PLAN.sha256"
+set_state IMPLEMENT
+run_driver WORKFLOW_STEPWISE_IMPLEMENT=1 WORKFLOW_DOC_MAX_BYTES_IMPLEMENTATION_NOTES=1
+expect_status 1
+expect_out 'Document budget exceeded: IMPLEMENTATION_NOTES.md'
+expect_state IMPLEMENT
+expect_no_file '.uncle/workspace/implement-step-done'
+expect_in_file '.uncle/workspace/logs/implementation-step-1.gated-prompt.md' 'Compact output budgets'
+
+# A successful compaction reuses the generated review and permits advancement.
+new_stagegate_case sg-compact-final-audit
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_COMPACT_REVIEW=1 WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=50
+expect_status 0
+expect_out 'Compaction accepted:'
+expect_state COMPLETE
+expect_file FINAL_AUDIT.md
+COUNT=$((COUNT + 1))
+[[ -e "$REPO/.uncle/workspace/logs/final-audit.compact.log" ]] || fail 'compaction log missing'
+
+new_case change-compact-background-checklist
+green_baseline 0 'bash app/test.sh'
+printf 'write a base checklist\n' > "$REPO/prompts/change/manual-checklist-base.md"
+set_state IMPLEMENT
+run_driver WORKFLOW_PARALLEL_CHECKLIST=1 FAKE_COMPACT_REVIEW=1 WORKFLOW_DOC_MAX_BYTES_MANUAL_CHECKLIST_BASE=50
+expect_status 0
+expect_out 'Compaction accepted:'
+expect_state WAIT_IMPLEMENT_APPROVAL
+expect_file '.uncle/workspace/MANUAL_CHECKLIST.base.md'
 
 if [[ "$FAILED" -ne 0 ]]; then
     echo "gates-test.sh: $FAILED of $COUNT checks failed"

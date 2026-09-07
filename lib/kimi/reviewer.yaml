@@ -1,8 +1,0 @@
-version: 1
-agent:
-  name: uncle-reviewer
-  system_prompt_path: ./reviewer.md
-  tools:
-    - "kimi_cli.tools.file:ReadFile"
-    - "kimi_cli.tools.file:Glob"
-    - "kimi_cli.tools.file:Grep"

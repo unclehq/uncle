@@ -23,8 +23,7 @@ stream=$(mktemp)
 trap 'rm -f "$stream"' EXIT
 # The fixed tool allowlist grants no shell, writes, delegation, or inherited tools.
 printf '%s' "$prompt" | "$ROOT/scripts/agent-kimi.sh" --model "$model" \
-    --agent-file "$ROOT/lib/kimi/reviewer.yaml" \
-    --mcp-config-file "$ROOT/lib/kimi/mcp.json" | tee "$stream"
+    --agent-file "$ROOT/lib/kimi/reviewer.md" | tee "$stream"
 # Use the last assistant text, not intermediate reasoning or tool-call messages.
 review=$(jq -rs '[.[] | select(.type == "assistant") |
     [.message.content[]? | select(.type == "text") | .text] | join("") |

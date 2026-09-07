@@ -73,7 +73,7 @@ CL_EFFORT="medium"
 UNCLE_CONFIG="${UNCLE_CONFIG:-$PROJECT_ROOT/.uncle/config}"
 export UNCLE_CONFIG
 export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
-CONFIG_STAGES="requirements project-plan updated-plan preflight implementation execute-checklist baseline change-spec change-plan updated-change-plan adversarial-review test-review manual-checklist final-audit"
+CONFIG_STAGES="requirements baseline change-spec project-plan change-plan adversarial-review updated-plan updated-change-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
 
 # Full-screen terminal UI when both stdin and stdout are real terminals; the
 # line-based menu below remains for pipes and scripts.

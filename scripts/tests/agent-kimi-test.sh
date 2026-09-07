@@ -36,6 +36,9 @@ check_eq() {
 # Speaks kimi's OpenAI-shaped dialect, including a non-JSON startup line.
 cat > "$TMP/fake-kimi" <<'EOF'
 #!/usr/bin/env bash
+for arg in "$@"; do
+    if [[ "$arg" == --print ]]; then echo "unknown option --print" >&2; exit 2; fi
+done
 echo 'startup notice, not json'
 echo '{"role":"assistant","content":"Working."}'
 echo '{"role":"assistant","tool_calls":[{"function":{"name":"Bash"}}]}'

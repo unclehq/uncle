@@ -7,6 +7,9 @@ export KIMI_ARGS="$tmp/args"
 cat > "$tmp/kimi" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$KIMI_ARGS"
+for arg in "$@"; do
+    case "$arg" in --print|--mcp-config-file|*.yaml) exit 2 ;; esac
+done
 case "${TEST_MODE:-ok}" in
     fail) exit 7 ;;
     empty) exit 0 ;;
@@ -20,10 +23,16 @@ export WORKFLOW_KIMI_CMD="$tmp/kimi"
 bash "$ROOT/scripts/reviewer-kimi.sh" exec --sandbox read-only --ephemeral \
     -c model_reasoning_effort=high --output-last-message "$tmp/review" 'Review files' > "$tmp/log"
 [[ $(cat "$tmp/review") == 'final review' ]]
-grep -Fx -- '--print' "$KIMI_ARGS"
+grep -Fx -- '-p' "$KIMI_ARGS"
 grep -Fx -- '--agent-file' "$KIMI_ARGS"
-grep -Fx -- "$ROOT/lib/kimi/mcp.json" "$KIMI_ARGS"
-grep -Fx -- "$ROOT/lib/kimi/reviewer.yaml" "$KIMI_ARGS"
+grep -Fx -- "$ROOT/lib/kimi/reviewer.md" "$KIMI_ARGS"
+python3 - "$ROOT/lib/kimi/reviewer.md" <<'PY'
+import sys
+from pathlib import Path
+header = Path(sys.argv[1]).read_text().split('---')[1]
+assert 'subagents: []' in header
+assert [line.strip() for line in header.splitlines() if line.startswith('  - ')] == ['- Read', '- Glob', '- Grep']
+PY
 for mode in fail empty; do
     printf "stale review" > "$tmp/$mode"
     if TEST_MODE="$mode" bash "$ROOT/scripts/reviewer-kimi.sh" exec \

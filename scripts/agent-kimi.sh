@@ -100,7 +100,7 @@ set +e
 # fifo's write end open, and the reader below then blocks on a stream that will
 # never reach EOF -- a different hang in place of the one being fixed.
 set -m
-"$KIMI_CMD" --print -p "$prompt" -m "$resolved" --output-format stream-json \
+"$KIMI_CMD" -p "$prompt" -m "$resolved" --output-format stream-json \
     ${kimi_args[@]+"${kimi_args[@]}"} > "$fifo" 2>&1 &
 kimi_pid=$!
 set +m

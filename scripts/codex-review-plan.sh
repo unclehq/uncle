@@ -44,6 +44,8 @@ if [[ "$expected" != "$actual" ]]; then
 fi
 
 REVIEWER_CMD="${WORKFLOW_REVIEWER_CMD:-codex}"
+. "$ROOT/scripts/lib/gates.sh"
+budget_prompt="$(document_budget_prompt adversarial-review)"
 
 "$REVIEWER_CMD" exec \
     --ephemeral \
@@ -92,8 +94,11 @@ End with:
 
 Write only the review. Do not claim that any implementation exists.
 PROMPT
+printf '%s\n' "$budget_prompt"
 )"
 
-test -s ADVERSARIAL_REVIEW.md
+LOG_DIR="$ROOT/.uncle/workspace/logs"
+mkdir -p "$LOG_DIR"
+finish_review_budget ADVERSARIAL_REVIEW.md "$REVIEWER_CMD" "" "" adversarial-review
 echo "Created ADVERSARIAL_REVIEW.md"
 echo "Workflow paused for human review."

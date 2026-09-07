@@ -6,7 +6,6 @@ want to change before writing a lot of code.
 
 ## Quick links
 
-- [`GOOD_FIRST_ISSUES.md`](GOOD_FIRST_ISSUES.md) — small starter tasks
 - [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — community standards
 - [`QUICK_START.md`](QUICK_START.md) — run the workflows end-to-end
 
@@ -19,8 +18,7 @@ want to change before writing a lot of code.
    for f in scripts/*.sh; do bash -n "$f"; done
    ```
 
-3. Pick an issue from [`GOOD_FIRST_ISSUES.md`](GOOD_FIRST_ISSUES.md) or open a
-   new one to discuss your idea.
+3. Pick an open issue, or open a new one to discuss your idea.
 
 ## Development setup
 

@@ -32,3 +32,25 @@ Do not put literal pipe characters in cells. Missing mandatory prerequisites
 must remain required. The driver will pause until all required rows pass.
 
 Write only PREFLIGHT_REPORT.md.
+
+## Preflight gate scope (binding)
+
+The Acceptance gate table contains only prerequisites that must be satisfied
+BEFORE implementation starts. It must not contain future product acceptance
+results, implementation outputs, or tests that require those outputs. Otherwise
+the driver cannot start the work needed to satisfy its own gate.
+
+Keep AC/AT/TV results, future README execution, and implementation-time
+normalization documentation in Findings as NOT RUN. Do not copy those rows into
+the Acceptance gate, mark them PASS, or relabel mandatory acceptance as optional.
+Their later verification and independent-review gates remain mandatory.
+
+Gate on the runtime/tool availability, source inputs, reviewer arrangements,
+and any explicitly required pre-implementation approvals or frozen fixtures.
+A missing pre-implementation approval or input remains required and BLOCKED.
+For example: available Python is a PASS prerequisite; an unbuilt site's content
+test is a future NOT RUN result outside this table. Named reviewer access is a
+prerequisite; final HTML sign-off is a future result outside this table.
+
+Before writing, inspect each gate row: if completing it requires creating the
+implementation, move that row to Findings with its real pending status.

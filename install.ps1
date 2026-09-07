@@ -28,7 +28,9 @@ try {
         # Local packages use the same allowlist as the Debian/Homebrew builder.
         $source = $SourceDir
         $archive = Join-Path $work 'uncle.zip'
-        $stage = Join-Path $work 'uncle'
+        # Scoop's 7-Zip extraction moves contents up in place. The wrapper
+        # must not share a name with the launcher file inside it.
+        $stage = Join-Path $work 'uncle-package'
         New-Item -ItemType Directory -Path $stage | Out-Null
         $names = @('uncle','uncle_tui.py','scripts','prompts','lib','OUTPUT_RULES.md','README.md','uncle.png','LICENSE','VERSION','packaging','install.sh','install.ps1','Formula')
         foreach ($name in $names) {
@@ -49,7 +51,7 @@ try {
         $saved = Join-Path $localCache "uncle-$version.zip"
         Copy-Item $archive $saved
         $url = [Uri]::new($saved, [UriKind]::Absolute).AbsoluteUri
-        $extractDir = 'uncle'
+        $extractDir = 'uncle-package'
         $version = '0.0.0-local' + $version
     } else {
         $headers = @{ 'User-Agent' = 'uncle-installer'; 'Accept' = 'application/vnd.github+json' }

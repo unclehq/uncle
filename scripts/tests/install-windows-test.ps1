@@ -22,7 +22,7 @@ function Assert-InstallerArchive($archivePath) {
         # PowerShell 7 on Unix. Check the payload identically for either form.
         $names = @($zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
         Assert (@($names | Where-Object { $_ -match '(^|/)\.uncle/' }).Count -eq 0) 'Packaged workflow state'
-        Assert (@($names | Where-Object { $_ -eq 'uncle/packaging/windows/uncle.ps1' }).Count -eq 1) 'Launcher absent'
+        Assert (@($names | Where-Object { $_ -eq 'uncle-package/packaging/windows/uncle.ps1' }).Count -eq 1) 'Launcher absent'
     } finally { $zip.Dispose() }
 }
 function Invoke-RestMethod {
@@ -44,11 +44,11 @@ try {
     foreach ($separator in @('/', '\')) {
         $fixture = Join-Path $work ([Guid]::NewGuid().ToString('N') + '.zip')
         $zip = [IO.Compression.ZipFile]::Open($fixture, [IO.Compression.ZipArchiveMode]::Create)
-        try { $zip.CreateEntry(('uncle/packaging/windows/uncle.ps1').Replace('/', $separator)) | Out-Null }
+        try { $zip.CreateEntry(('uncle-package/packaging/windows/uncle.ps1').Replace('/', $separator)) | Out-Null }
         finally { $zip.Dispose() }
         Assert-InstallerArchive $fixture
         $zip = [IO.Compression.ZipFile]::Open($fixture, [IO.Compression.ZipArchiveMode]::Update)
-        try { $zip.CreateEntry(('uncle/.uncle/workspace/state').Replace('/', $separator)) | Out-Null }
+        try { $zip.CreateEntry(('uncle-package/.uncle/workspace/state').Replace('/', $separator)) | Out-Null }
         finally { $zip.Dispose() }
         $rejected = $false
         try { Assert-InstallerArchive $fixture } catch { $rejected = $_.Exception.Message -eq 'Packaged workflow state' }
@@ -67,9 +67,23 @@ try {
     $archive = ([Uri]$manifest.url).LocalPath
     Assert (Test-Path $archive) 'Local archive disappeared after installation'
     Assert ($manifest.hash -eq (Get-FileHash $archive -Algorithm SHA256).Hash) 'Incorrect manifest hash'
-    Assert ($manifest.extract_dir -eq 'uncle') 'Wrong extraction root'
+    Assert ($manifest.extract_dir -eq 'uncle-package') 'Wrong extraction root'
     Assert ($manifest.depends -contains 'python') 'Missing Python dependency'
     Assert-InstallerArchive $archive
+    # Model Scoop's 7-Zip path: extract into the destination, then move the
+    # wrapper's children up in place. A wrapper named "uncle" collides with
+    # the launcher file and leaves a directory where Bash expects a script.
+    $extracted = Join-Path $work 'extracted with spaces'
+    Expand-Archive -Path $archive -DestinationPath $extracted
+    $wrapper = Join-Path $extracted $manifest.extract_dir
+    $children = @(Get-ChildItem -LiteralPath $wrapper -Force)
+    foreach ($child in $children) {
+        Assert (!(Test-Path (Join-Path $extracted $child.Name))) "Extraction name collision: $($child.Name)"
+        Move-Item -LiteralPath $child.FullName -Destination $extracted
+    }
+    Remove-Item -LiteralPath $wrapper
+    Assert (Test-Path (Join-Path $extracted 'uncle') -PathType Leaf) 'Extracted launcher is not a file'
+    Assert (Test-Path (Join-Path $extracted 'packaging/windows/uncle.ps1') -PathType Leaf) 'Extracted Windows wrapper absent'
     & (Join-Path $root 'install.ps1') -SourceDir $root
     Assert ($global:UncleScoopTestCalls -contains 'update uncle --force') 'Reinstall did not update through Scoop'
     $githubRoot = Join-Path $work ('uncle-' + ('a' * 40))

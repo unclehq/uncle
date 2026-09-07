@@ -4,7 +4,22 @@ set -euo pipefail
 # The caller's working directory is the project being configured; the scripts
 # cd to the install dir ($ROOT), so capture it before that happens.
 PROJECT_ROOT="$PWD"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# $ROOT must be the directory holding uncle_tui.py, scripts/, prompts/, and
+# lib/ -- not the directory this was invoked from. A packaged install (Homebrew
+# puts the payload in libexec and links bin/uncle to it) reaches us through one
+# or more symlinks, and BASH_SOURCE reports the link, not its target, so walk
+# the chain by hand. macOS ships BSD readlink, which has no -f.
+uncle_self="${BASH_SOURCE[0]}"
+while [[ -L "$uncle_self" ]]; do
+    uncle_link="$(readlink "$uncle_self")"
+    case "$uncle_link" in
+        /*) uncle_self="$uncle_link" ;;
+        *)  uncle_self="$(cd "$(dirname "$uncle_self")" && pwd)/$uncle_link" ;;
+    esac
+done
+ROOT="$(cd "$(dirname "$uncle_self")" && pwd)"
+unset uncle_self uncle_link
 cd "$ROOT"
 
 # ANSI palette matching cline's CLI. Disabled when stdout is not a terminal or

@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import threading
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.realpath(__file__))
 CLINE_CONFIG = os.environ.get("CLINE_CONFIG", os.path.expanduser("~/.cline/data/settings/providers.json"))
 
 WORKFLOWS = [

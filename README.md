@@ -1,5 +1,3 @@
-<div align="center">
-
 ```
                 #@@@@@@##@@@@@@#
                 @@@@@@@@@@@@@@@@
@@ -23,10 +21,9 @@
  #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
     #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
        #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
-
 ```
 
-<p align="center">
+<div align="center">
 
 # uncle
 
@@ -35,7 +32,7 @@
 > Everyone else is building agents that run unsupervised. This is the approval
 > layer that makes them acceptable in production.
 
-</p>
+</div>
 
 uncle is a human-gated, adversarially-audited CI pipeline for AI-generated code. A primary agent plans, implements, and verifies; an independent reviewer
 audits adversarially; a human approves at every gate. By default the primary

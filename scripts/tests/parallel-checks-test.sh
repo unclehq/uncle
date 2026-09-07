@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export UNCLE_TEST_ROOT="$ROOT"
+python3 -B - <<'PY'
+import os, pathlib, signal, subprocess, sys, tempfile, time, unittest
+sys.path.insert(0, os.environ['UNCLE_TEST_ROOT']+'/scripts/lib')
+from verification_manifest import manifest
+
+class Checks(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root=pathlib.Path(self.tmp.name)
+    def run_checks(self, commands, groups, protected=False):
+        (self.root/'commands').write_text('\n'.join(commands)+'\n')
+        (self.root/'groups').write_text(groups)
+        argv=[sys.executable, '-B', os.environ['UNCLE_TEST_ROOT']+'/scripts/lib/parallel_checks.py',
+              '--commands','commands','--groups','groups','--out','results','--log','log','--jobs','2']
+        if protected:
+            (self.root/'scopes').write_text('fixture\n')
+            import hashlib
+            (self.root/'expected').write_text(hashlib.sha256(b'original\n').hexdigest()+'\tfixture\n')
+            argv+=['--paths','scopes','--expected','expected','--integrity-log','integrity']
+        return subprocess.run(argv, cwd=self.root, capture_output=True, text=True, timeout=15)
+    def test_overlap_and_barrier(self):
+        commands=[]
+        for i,other in [(1,2),(2,1)]:
+            commands.append(f'touch ready{i}; for n in {{1..50}}; do if test -f ready{other}; then touch done{i}; echo check{i}; exit 0; fi; sleep .1; done; exit 7')
+        commands.append('test -f done1 && test -f done2 && echo barrier')
+        r=self.run_checks(commands, '1 2\n')
+        self.assertEqual(r.returncode,0,r.stderr)
+        self.assertEqual([s.split('\t')[0] for s in (self.root/'results').read_text().splitlines()], ['0']*3)
+        log=(self.root/'log').read_text()
+        self.assertLess(log.index('\ncheck1\n'),log.index('\ncheck2\n'))
+    def test_test_failure_is_recorded(self):
+        r=self.run_checks(['exit 7','echo still-runs'], '1 2\n')
+        self.assertEqual(r.returncode,0,r.stderr)
+        self.assertTrue((self.root/'results').read_text().startswith('7\t'))
+    def test_invalid_groups_execute_nothing(self):
+        for groups in ['0 1\n','2 1\n','1 3\n','1 2\n1 2\n']:
+            r=self.run_checks(['touch ran','touch ran'],groups)
+            self.assertEqual(r.returncode,2,r.stderr)
+            self.assertFalse((self.root/'ran').exists())
+    def test_restored_peer_cannot_hide_a_mutation(self):
+        (self.root/'fixture').write_text('original\n')
+        r=self.run_checks(["sleep .1; printf 'changed\\n' > fixture",
+                           "sleep .5; printf 'original\\n' > fixture",'touch must-not-run'],
+                          '1 2\n',protected=True)
+        self.assertEqual(r.returncode,3,r.stderr)
+        self.assertFalse((self.root/'must-not-run').exists())
+        self.assertIn('changed',(self.root/'integrity').read_text())
+    def test_interruption_stops_children(self):
+        (self.root/'commands').write_text('echo $$ > pid1; sleep 30\necho $$ > pid2; sleep 30\n')
+        (self.root/'groups').write_text('1 2\n')
+        p=subprocess.Popen([sys.executable,'-B',os.environ['UNCLE_TEST_ROOT']+'/scripts/lib/parallel_checks.py',
+                            '--commands','commands','--groups','groups','--out','results','--log','log'],
+                           cwd=self.root,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        try:
+            deadline=time.monotonic()+5
+            while not all((self.root/name).exists() for name in ('pid1','pid2')) and time.monotonic()<deadline:
+                time.sleep(.02)
+            self.assertTrue((self.root/'pid2').exists())
+            p.send_signal(signal.SIGTERM)
+            _,errors=p.communicate(timeout=5)
+            self.assertEqual(p.returncode,130,errors)
+            for name in ('pid1','pid2'):
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(int((self.root/name).read_text()),0)
+        finally:
+            if p.poll() is None:
+                p.send_signal(signal.SIGTERM)
+                p.communicate(timeout=5)
+
+unittest.main()
+PY

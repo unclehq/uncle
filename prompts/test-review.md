@@ -20,6 +20,8 @@ Check all of the following; each is a required Acceptance gate row:
 - COVERAGE: every mandatory automated acceptance check is reached by the
   approved Verification commands block, including applicable browser tests
   and development/update tools. Formatting and compilation are insufficient.
+  Any Parallel verification groups must have isolated state, ports, and outputs;
+  tests must retain their assertions and failure propagation under concurrency.
 - INTEGRITY: the plan's Protected verification paths cover the complete suite,
   fixtures/oracles, helpers, and test-selection configuration. No test can be
   weakened by editing an unprotected expected value or test runner. On repair,

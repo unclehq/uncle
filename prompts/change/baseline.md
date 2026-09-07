@@ -91,7 +91,7 @@ it. So write section 8 as a command list a shell can run:
 - one fenced block, immediately under the heading, and nothing else in it;
 - one command per line, exactly as you ran it, from the repository root;
 - no prompt prefixes, no comments, no prose, no placeholders;
-- no command that needs a human, a password, a browser, or a network service
+- no command that needs a human, a password, an interactive browser, or a network service
   you cannot reach here — leave those to the manual checklist instead;
 - no command that changes the repository. These run twice, and the first run
   must leave the tree exactly as it found it.
@@ -99,5 +99,13 @@ it. So write section 8 as a command list a shell can run:
 A check that is already failing is still listed. The driver records that it
 failed before the change, so it will not be blamed on the change; omitting it
 only hides it.
+
+Automated browsers and local test servers are permitted when required for
+acceptance. Optionally append `## Parallel verification groups` with one fenced
+block of consecutive, one-based command positions per line (for example `2 3`).
+Use ordered, disjoint groups only when commands have independent ports, outputs,
+fixtures, and state. Explain their independence in the test coverage section.
+The driver uses the approved groups for both baseline and post-change checks;
+do not regroup commands after approval.
 
 Write BASELINE_REPORT.md and stop.

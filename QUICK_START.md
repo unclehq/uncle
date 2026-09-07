@@ -101,6 +101,11 @@ When the driver reaches `COMPLETE`, read in this order:
 
 ## 5. Resume or reset
 
+To see where the current project's run spends time, run `uncle --performance`.
+It lists completed attempts, approval waits, and available token usage. Timing
+for overlapping work is not additive. New records are collected by default;
+earlier runs are not retrospectively estimated.
+
 The workflow is stateful:
 
 ```sh

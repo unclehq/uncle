@@ -39,7 +39,7 @@ fi
 
 usage() {
     cat <<'EOF'
-Usage: uncle [-h|--help]
+Usage: uncle [-h|--help|--performance]
 
 Interactive launcher for the governed-CI workflows. Picks one of the three
 drivers and runs the stages through `cline` using the model, reasoning effort,
@@ -52,12 +52,14 @@ and per-stage overrides from `.uncle/config` (menu option 4).
   q) Quit
 
 Runs with no arguments. -h / --help print this message and exit 0.
+--performance reports recorded runtime and token usage for the current project.
 EOF
 }
 
 case "$#:${1:-}" in
     0:)                 ;;
     1:-h|1:--help)      usage; exit 0 ;;
+    1:--performance)    exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
     *)                  printf 'Unknown argument: %s\n' "${1:-}" >&2; usage >&2; exit 1 ;;
 esac
 

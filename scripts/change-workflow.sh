@@ -315,6 +315,7 @@ legacy_word_notice() {
 . "$ROOT/scripts/lib/green-check.sh"
 . "$ROOT/scripts/lib/implementation-review.sh"
 . "$ROOT/scripts/lib/gates.sh"
+. "$ROOT/scripts/lib/performance.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
 
 require_file() {
@@ -559,6 +560,7 @@ verify_approval() {
 #
 # Usage: human_gate ACTION file1 approval_name1 [file2 approval_name2 ...]
 human_gate() {
+    local gate_start="$SECONDS"
     local action="$1"
     shift
 
@@ -598,6 +600,7 @@ human_gate() {
         prompt="Press ENTER after reviewing all documents above..."
     fi
     if ! read -r -p "$prompt"; then
+        if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 1; fi
         echo
         echo "Gate not accepted. Workflow remains paused."
         exit 0
@@ -625,6 +628,7 @@ human_gate() {
     case "$response" in
         y|Y) ;;
         *)
+            if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 1; fi
             echo "Gate not accepted. Workflow remains paused."
             legacy_word_notice "$response"
             exit 0
@@ -635,6 +639,7 @@ human_gate() {
     # document cannot leave a half-approved gate behind.
     for i in "${!files[@]}"; do
         if [[ "$(hash_file "${files[$i]}")" != "${digests[$i]}" ]]; then
+            if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 1; fi
             echo "${files[$i]} changed after it was shown for approval."
             echo "Gate not accepted. Workflow remains paused."
             exit 0
@@ -645,6 +650,7 @@ human_gate() {
         printf '%s\n' "${digests[$i]}" > "$APPROVAL_DIR/${names[$i]}.sha256"
         echo "Recorded approval for ${files[$i]}"
     done
+    if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi
 }
 
 # Render Claude's streaming JSON event feed as readable progress. Startup
@@ -804,7 +810,8 @@ capture_green_baseline() {
     sed 's/^/  /' "$GREEN_CMDS"
     echo
 
-    green_run "$GREEN_CMDS" "$GREEN_BASE" "$LOG_DIR/green-check-baseline.log"
+    verify_parallel_groups BASELINE_REPORT.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups" || exit 1
+    green_run "$GREEN_CMDS" "$GREEN_BASE" "$LOG_DIR/green-check-baseline.log" "" "$STATE_DIR/green-check.groups" || exit $?
     hash_file BASELINE_REPORT.md > "$GREEN_SOURCE"
 }
 
@@ -837,7 +844,8 @@ run_green_check() {
 
     echo
     echo "Re-running this project's checks from the driver:"
-    green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log"
+    verify_parallel_groups BASELINE_REPORT.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups" || exit 1
+    green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" "" "$STATE_DIR/green-check.groups" || exit $?
     green_classify "$GREEN_BASE" "$GREEN_CUR" > "$GREEN_CLASS"
     green_report "$GREEN_CLASS" "$GREEN_MD" BASELINE_REPORT.md \
         "$LOG_DIR/green-check.log"
@@ -1126,6 +1134,7 @@ run_claude() {
 
         local elapsed="$((SECONDS - start))"
         local log="$LOG_DIR/${log_name}.jsonl"
+        perf_record agent "$log_name" "$elapsed" "$status" "$log" "$cmd" "$model" "$effort"
 
         # The final result event, if the run produced one.
         local result
@@ -1261,6 +1270,8 @@ run_codex() {
         < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
 
     record_codex_cost "$log_name" "$((SECONDS - start))"
+    perf_record reviewer "$log_name" "$((SECONDS-start))" "$status" \
+        "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
 
     if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
         echo
@@ -1325,8 +1336,18 @@ start_codex_bg() {
     echo "Starting background reviewer ($cmd) stage: $log_name${effort:+  Effort: $effort}${model:+  Model: $model}"
     echo "Log: $LOG_DIR/${log_name}.log"
 
-    "$cmd" "${flags[@]}" "$(cat "$prompt_file")" \
-        < /dev/null > "$LOG_DIR/${log_name}.log" 2>&1 &
+    (
+        local started="$SECONDS" status=0 child=""
+        trap 'if [[ -n "$child" ]]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi; exit 130' INT TERM
+        "$cmd" "${flags[@]}" "$(cat "$prompt_file")" \
+            < /dev/null > "$LOG_DIR/${log_name}.log" 2>&1 &
+        child=$!
+        wait "$child" || status=$?
+        child=""
+        UNCLE_SPECULATIVE=true perf_record reviewer "$log_name" "$((SECONDS-started))" "$status" \
+            "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
+        exit "$status"
+    ) &
 
     BG_PID=$!
     BG_LABEL="$log_name"

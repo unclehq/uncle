@@ -2,6 +2,7 @@
 # Approved path scopes cover tests, fixtures/oracles, helpers and test config.
 # Verification may produce reports, but must not change these inputs.
 . "$(dirname "${BASH_SOURCE[0]}")/sha256.sh"
+VERIFICATION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 verification_paths() {
     awk '
@@ -19,6 +20,23 @@ verification_paths() {
 # Prints one deterministic manifest. Directory inventories detect additions
 # and deletions as well as edits. Python bytecode is not a verification input.
 verification_manifest() {
+    case "${WORKFLOW_HASH_BACKEND:-auto}" in
+        auto|python)
+            if command -v python3 > /dev/null 2>&1 && [[ -f "$VERIFICATION_LIB_DIR/verification_manifest.py" ]]; then
+                python3 -B "$VERIFICATION_LIB_DIR/verification_manifest.py" "$1"
+                return $?
+            elif [[ "${WORKFLOW_HASH_BACKEND:-auto}" == python ]]; then
+                echo 'Python manifest backend is unavailable.' >&2
+                return 1
+            fi
+            ;;
+        shell) ;;
+        *) echo 'WORKFLOW_HASH_BACKEND must be auto, python, or shell.' >&2; return 1 ;;
+    esac
+    verification_manifest_shell "$1"
+}
+
+verification_manifest_shell() {
     local paths="$1" path file component prefix digest links
     while IFS= read -r path; do
         case "$path" in

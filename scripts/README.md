@@ -70,6 +70,54 @@ adopt the new report tables and plan block before using these stages. An old
 run resumed at final audit is sent back for missing acceptance evidence; a plan
 missing the new path block needs amendment and renewed approval.
 
+### Performance controls and reports
+
+Run `uncle --performance` from a project, or
+`bash /path/to/uncle/scripts/performance-report.sh /path/to/project`.
+Both drivers write atomic per-attempt JSON records under
+`.uncle/workspace/metrics/`; reports sort stages by accumulated work time.
+Agent and reviewer records include the runner, configured model and effort,
+workflow state (including repair), and speculative-execution flag. No telemetry
+is sent elsewhere. `WORKFLOW_METRICS=0` disables collection without affecting
+verification. Shell timings resolve whole seconds; Python check timings have
+subsecond resolution. Token values are copied from the last runner result or
+final token trailer, with unknown values left null; cache fields and reported
+totals are not added to input/output counts. Stage runtime includes model and
+tool execution. Parallel work overlaps, and killed attempts may lack records.
+
+The approved command source may optionally include this separate section:
+
+````md
+## Parallel verification groups
+
+```text
+2 3
+5 6
+```
+````
+
+Numbers are consecutive, one-based positions in the verification command list.
+Groups must be ordered, disjoint, and in range. Ungrouped commands and boundaries
+between groups remain sequential. Use this only for checks with independent
+ports, outputs, fixtures, and state. New applications read groups from
+`UPDATED_PROJECT_PLAN.md`; changes read them from approved `BASELINE_REPORT.md`,
+using the same grouping before and after the change. `WORKFLOW_VERIFY_JOBS`
+limits concurrency to 1–8 (default 2). Without Python or a compatible guard,
+execution falls back to sequential checks. Missing dependencies in a check
+still fail that check. Output is collected per command and combined in approved
+order; failures remain visible. Interrupting the executor stops its children.
+
+For new applications, each concurrent command checks protected inputs before
+and after running. Any observed mutation invalidates the verification even if
+another check later restores the file. Already running checks are joined before
+the driver enters repair, and later groups do not start. The same independent
+test review must approve the concurrency assumptions.
+
+`WORKFLOW_HASH_BACKEND=auto` uses a single Python process for complete content
+hashing, falling back to the shell implementation only when Python is unavailable.
+Set `shell` or `python` to select a backend explicitly. Backend failures never
+trigger a fallback that could hide an unreadable or missing protected input.
+
 ### `change-workflow.sh` — existing-code change workflow driver
 
 Runs the human-gated existing-code change workflow from `CHANGE_REQUEST.md`.

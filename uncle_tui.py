@@ -871,7 +871,9 @@ class UncleTUI:
     # ---- status channel ----
     def poll_status(self):
         if not self.status_path:
-            return
+            return False
+        before = (self.status_model, self.status_mode, self.status_stage,
+                  self.status_stage_index, self.status_stage_total)
         try:
             with open(self.status_path) as fh:
                 fh.seek(self.status_pos)
@@ -880,6 +882,8 @@ class UncleTUI:
                 self.status_pos = fh.tell()
         except Exception:
             pass
+        return before != (self.status_model, self.status_mode, self.status_stage,
+                          self.status_stage_index, self.status_stage_total)
 
     def _apply_status(self, line):
         line = line.strip()
@@ -947,6 +951,7 @@ class UncleTUI:
 
     def drain_output(self):
         got = False
+        before = (self.proc_done, self.prompt_kind)
         try:
             while True:
                 chunk = self.out_q.get_nowait()
@@ -963,6 +968,7 @@ class UncleTUI:
         if got:
             self.prompt_seen = 0
         self._detect_prompt()
+        return got or before != (self.proc_done, self.prompt_kind)
 
     def _absorb_line(self, line):
         self.output.append(line)
@@ -1762,21 +1768,28 @@ class UncleTUI:
         self.stdscr.keypad(True)
         self.stdscr.timeout(80)
         self._setup_colors()
+        dirty = True
+        size = None
         while self.state != "quit":
-            self.poll_status()
+            dirty = self.poll_status() or dirty
             if self.state == "running":
-                self.drain_output()
+                dirty = self.drain_output() or dirty
             else:
                 # ~1s: often enough that an edit in another window shows up
                 # while you are looking at the screen, cheap enough to ignore.
                 self._reload_tick += 1
                 if self._reload_tick >= 12:
                     self._reload_tick = 0
-                    self.maybe_reload()
+                    dirty = self.maybe_reload() or dirty
             k = self.stdscr.getch()
             if k != -1:
                 self.handle_key(k)
-            self.draw()
+                dirty = True
+            current_size = self.stdscr.getmaxyx()
+            if self.state != "quit" and (dirty or current_size != size):
+                self.draw()
+                dirty = False
+                size = current_size
         self.stop_workflow()
 
 
@@ -1786,5 +1799,4 @@ def main(stdscr):
 
 if __name__ == "__main__":
     curses.wrapper(main)
-
 

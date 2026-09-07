@@ -8,9 +8,16 @@ cd "$TMP"
 mkdir tests
 printf 'assert actual == expected\n' > tests/test.txt
 printf 'source result\n' > tests/expected.txt
+mkdir 'tests/with space'
+printf '\000\001binary\377\n' > 'tests/with space/résumé.dat'
 printf 'tests\n' > paths
 baseline="$(verification_manifest paths)"
 COUNT=0
+if command -v python3 > /dev/null; then
+    COUNT=$((COUNT+1))
+    [[ "$(WORKFLOW_HASH_BACKEND=python verification_manifest paths)" == "$(WORKFLOW_HASH_BACKEND=shell verification_manifest paths)" ]] \
+        || { echo 'FAIL: manifest backends disagree'; exit 1; }
+fi
 changed() {
     COUNT=$((COUNT + 1))
     if [[ "$(verification_manifest paths)" == "$baseline" ]]; then
@@ -53,7 +60,7 @@ rm tests/link
 printf 'control\n' > control.txt
 printf 'tests\ncontrol.txt\n' > paths
 find() { command find "$@"; return 1; }
-rejected
+WORKFLOW_HASH_BACKEND=shell rejected
 unset -f find
 printf '## Protected verification paths\n\n```text\ntests\n```\n' > plan.md
 COUNT=$((COUNT + 1))

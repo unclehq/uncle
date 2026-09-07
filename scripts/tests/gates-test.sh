@@ -105,6 +105,7 @@ new_case() {
     : > "$OUT"
 
     cp "$ROOT"/scripts/lib/*.sh "$REPO/scripts/lib/"
+    cp "$ROOT"/scripts/lib/*.py "$REPO/scripts/lib/"
 
     # Prompt files the driver reads and pipes to the stub CLIs. Each carries a
     # token the stub agent switches on.
@@ -843,6 +844,58 @@ expect_no_file FINAL_AUDIT.md
 expect_no_file .uncle/workspace/approvals/IMPLEMENTATION_REVIEW.sha256
 expect_no_file .uncle/workspace/second-command
 expect_in_file .uncle/workspace/VERIFICATION_INTEGRITY.md app/test.sh
+
+# The real driver executes approved groups concurrently and still gates the
+# complete results; the two checks rendezvous, so sequential execution fails.
+new_stagegate_case sg-approved-parallel-checks
+stagegate_agent
+cat > "$REPO/UPDATED_PROJECT_PLAN.md" <<'EOF'
+## Verification commands
+```
+bash app/concurrent.sh 1 2
+bash app/concurrent.sh 2 1
+test -f .uncle/workspace/done1 && test -f .uncle/workspace/done2
+```
+## Protected verification paths
+```
+app
+```
+## Parallel verification groups
+```
+1 2
+```
+EOF
+cat > "$REPO/app/concurrent.sh" <<'EOF'
+touch ".uncle/workspace/ready$1"
+for n in {1..50}; do
+    if test -f ".uncle/workspace/ready$2"; then
+        touch ".uncle/workspace/done$1"
+        exit 0
+    fi
+    sleep .1
+done
+exit 7
+EOF
+hash_file "$REPO/UPDATED_PROJECT_PLAN.md" > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0
+expect_status 0
+expect_state COMPLETE
+expect_in_file .uncle/workspace/green-check.tsv PASS
+COUNT=$((COUNT+1))
+if [[ "$(find "$REPO/.uncle/workspace/metrics" -name '*.json' -exec cat {} + | jq -s '[.[]|select(.kind=="check")]|length')" != 3 ]]; then
+    fail 'driver did not record each concurrent check'
+fi
+
+new_stagegate_case sg-invalid-parallel-plan
+stagegate_agent
+printf '\n## Parallel verification groups\n```\n1 3\n```\n' >> "$REPO/UPDATED_PROJECT_PLAN.md"
+hash_file "$REPO/UPDATED_PROJECT_PLAN.md" > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
+set_state IMPLEMENT
+run_stagegate
+expect_status 1
+expect_state PREFLIGHT
+expect_no_file .uncle/workspace/implemented
 
 
 if [[ "$FAILED" -ne 0 ]]; then

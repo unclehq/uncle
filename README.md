@@ -146,6 +146,30 @@ it does not make an agent with filesystem access physically unable to edit them.
 
 ---
 
+## Performance
+
+To inspect runtime and reported token usage for the current project:
+
+```sh
+uncle --performance
+```
+
+The report separates agent/reviewer attempts, approval waits, driver checks,
+and integrity checks. Stage runtime includes the model and its tool calls;
+missing token usage is shown as unknown. Records accumulate across repairs and
+restarts, so compare attempts as well as elapsed time when tuning stage effort.
+Reviewer model and effort choices in Configure are passed to the reviewer CLI.
+
+Independent checks can run concurrently when their positions are listed in an
+approved `Parallel verification groups` plan section. Concurrency defaults to
+two workers (`WORKFLOW_VERIFY_JOBS=1` forces sequential execution; maximum 8).
+Ungrouped checks remain sequential. Protected inputs are checked around each
+command, and the driver retains separate exit statuses and logs.
+
+Integrity hashing uses one Python process when available, with the complete
+portable shell implementation as a fallback. The terminal redraws on changes
+instead of on every idle poll. These optimizations preserve the acceptance gates.
+
 ## Documentation
 
 - [`QUICK_START.md`](QUICK_START.md) — end-to-end in a few minutes.

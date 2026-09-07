@@ -157,6 +157,7 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/stage-config.sh"
 . "$ROOT/scripts/lib/acceptance.sh"
 . "$ROOT/scripts/lib/verification-integrity.sh"
+. "$ROOT/scripts/lib/performance.sh"
 
 . "$ROOT/scripts/lib/sha256.sh"
 
@@ -243,7 +244,7 @@ capture_verification_inputs() {
 }
 
 check_verification_inputs() {
-    local actual
+    local actual started="$SECONDS"
     if ! actual="$(verification_manifest "$STATE_DIR/verification.paths" 2> "$STATE_DIR/verification-integrity.log")"; then
         verification_integrity_failure
     fi
@@ -252,6 +253,7 @@ check_verification_inputs() {
             > "$STATE_DIR/verification-integrity.log" || true
         verification_integrity_failure
     fi
+    perf_record integrity manifest "$((SECONDS-started))" 0
 }
 
 # bash 3.2 (macOS system bash) has no ${var^^}.
@@ -482,6 +484,7 @@ verify_approval() {
 }
 
 review_and_approve() {
+    local gate_start="$SECONDS"
     local file="$1"
     local name="$2"
     local wording
@@ -513,6 +516,7 @@ review_and_approve() {
         # Y/N prompt, so EOF is routed to the same decline path as any other
         # non-answer.
         if ! read -r -p "Press ENTER after reviewing the file..."; then
+            if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 1; fi
             echo
             echo "Gate not accepted. Workflow paused."
             exit 0
@@ -529,6 +533,7 @@ review_and_approve() {
         case "$response" in
             y|Y) ;;
             *)
+                if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 1; fi
                 echo "Gate not accepted. Workflow paused."
                 legacy_word_notice "$response"
                 exit 0
@@ -554,6 +559,7 @@ review_and_approve() {
     # landed after the check.
     printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
     echo "Recorded approval for $file"
+    if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
 }
 
 # Render the stream-json event feed as readable progress lines.
@@ -627,6 +633,7 @@ run_claude() {
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
         local -a model_args=()
         [[ -n "$model" ]] && model_args=(--model "$model")
+        local started="$SECONDS"
         "$cmd" -p \
             "${model_args[@]+"${model_args[@]}"}" \
             --effort "$effort" \
@@ -639,6 +646,8 @@ run_claude() {
             2>&1 \
             | tee "$LOG_DIR/${log_name}.jsonl" \
             | format_claude_stream || status=$?
+        perf_record agent "$log_name" "$((SECONDS-started))" "$status" \
+            "$LOG_DIR/${log_name}.jsonl" "$cmd" "$model" "$effort"
 
         if [[ "$status" -ne 0 ]]; then
             local log="$LOG_DIR/${log_name}.jsonl"
@@ -676,15 +685,18 @@ run_codex_review() {
     # Keep the reviewer read-only. The shell writes the reviewer's final
     # message into the designated review artifact.
     local model_args=()
-    local model
-    model="$(stage_setting_opt MODEL "$log_name" "${CODEX_MODEL:-}")"
+    local model effort fallback="${CODEX_MODEL:-}"
+    if uncle_has_config; then fallback="$(uncle_stage_model "$log_name")"; fi
+    model="$(stage_setting_opt MODEL "$log_name" "$fallback")"
+    effort="$(stage_effort "$log_name")"
+    [[ -z "$effort" ]] || model_args+=(-c "model_reasoning_effort=$effort")
 
     echo
     echo "Launching reviewer ($cmd): $log_name"
     status_stage_context "$log_name" "${model:-}" review
 
     if [[ -n "$model" ]]; then
-        model_args=(-m "$model")
+        model_args+=(-m "$model")
         echo "Model: $model"
     fi
 
@@ -693,6 +705,7 @@ run_codex_review() {
     prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
 
     local status=0
+    local started="$SECONDS"
     # stdin is the operator's gate-answer channel, not stage input: codex
     # appends a non-TTY stdin to the prompt and would block on it forever.
     # Project dirs need not be git repos; the read-only sandbox is the boundary.
@@ -704,6 +717,8 @@ run_codex_review() {
         --output-last-message "$output_file" \
         "$(cat "$prompt_file")" \
         < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
+    perf_record reviewer "$log_name" "$((SECONDS-started))" "$status" \
+        "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
 
     if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
         echo
@@ -805,6 +820,10 @@ run_green_check() {
     fi
 
     verify_commands UPDATED_PROJECT_PLAN.md > "$GREEN_CMDS"
+    if ! verify_parallel_groups UPDATED_PROJECT_PLAN.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups"; then
+        echo 'Invalid Parallel verification groups. Amend the plan and renew approval.'
+        exit 1
+    fi
 
     if [[ ! -s "$GREEN_CMDS" ]]; then
         : > "$GREEN_CLASS"
@@ -819,7 +838,10 @@ run_green_check() {
 
     echo
     echo "Re-running the plan's verification commands from the driver:"
-    green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" check_verification_inputs
+    local execution_status=0
+    green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" \
+        check_verification_inputs "$STATE_DIR/green-check.groups" || execution_status=$?
+    [[ "$execution_status" == 0 ]] || exit "$execution_status"
 
     # No baseline file: green_classify treats every failure as a regression,
     # which is the correct reading for a new application.
@@ -924,7 +946,7 @@ speculate() {
 
     # Fully detached from this terminal: the gate prompt owns stdin, and stage
     # output would otherwise interleave with it.
-    run_stage "$stage" > "$LOG_DIR/${stage}.speculative.log" 2>&1 < /dev/null &
+    UNCLE_SPECULATIVE=true run_stage "$stage" > "$LOG_DIR/${stage}.speculative.log" 2>&1 < /dev/null &
     spec_pid=$!
     spec_stage="$stage"
 }
@@ -1054,8 +1076,13 @@ while true; do
 
         PREFLIGHT)
             verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
-            if [[ -z "$(verify_commands UPDATED_PROJECT_PLAN.md)" ]]; then
+            verify_commands UPDATED_PROJECT_PLAN.md > "$GREEN_CMDS"
+            if [[ ! -s "$GREEN_CMDS" ]]; then
                 echo "No Verification commands in UPDATED_PROJECT_PLAN.md. Amend the plan and renew its approval."
+                exit 1
+            fi
+            if ! verify_parallel_groups UPDATED_PROJECT_PLAN.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups"; then
+                echo 'Invalid Parallel verification groups. Amend the plan and renew approval.'
                 exit 1
             fi
             if ! verification_paths UPDATED_PROJECT_PLAN.md > /dev/null; then

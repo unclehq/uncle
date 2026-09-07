@@ -201,6 +201,38 @@ check_contains "explicit WORKFLOW_AGENT_CMD wins over the file's runner" \
 
 # --- report -----------------------------------------------------------------
 
+# Reviewer effort/model settings must reach the actual command as well.
+. "$ROOT/scripts/lib/sha256.sh"
+RPROJ="$TMP/reviewer-settings"
+mkdir -p "$RPROJ/.uncle/workspace/approvals"
+printf 'plan\n' > "$RPROJ/PROJECT_PLAN.md"
+hash_file "$RPROJ/PROJECT_PLAN.md" > "$RPROJ/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
+cat > "$TMP/config-reviewer" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$ARGV_LOG"
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == --output-last-message ]]; then printf 'review\n' > "$2"; break; fi
+    shift
+done
+EOF
+chmod +x "$TMP/config-reviewer"
+printf 'adversarial-review.runner cline\nadversarial-review.model vendor/reviewer\nadversarial-review.effort low\n' > "$RPROJ/.uncle/config"
+printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workspace/state"
+UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \
+    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null
+argv="$(cat "$TMP/reviewer.argv")"
+check_contains 'reviewer: configured model is used' '-m vendor/reviewer' "$argv"
+check_contains 'reviewer: configured effort is used' 'model_reasoning_effort=low' "$argv"
+check_contains 'reviewer: sandbox is retained' '--sandbox read-only' "$argv"
+printf 'adversarial-review.runner codex\nadversarial-review.effort high\n' > "$RPROJ/.uncle/config"
+printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workspace/state"
+UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \
+    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_EFFORT_ADVERSARIAL_REVIEW=low \
+    bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null
+argv="$(cat "$TMP/reviewer.argv")"
+check_contains 'reviewer: explicit effort wins' 'model_reasoning_effort=low' "$argv"
+check_absent 'reviewer: default model is not invented' '-m vendor/reviewer' "$argv"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "stage-runner-test.sh: $FAILED of $COUNT checks failed"
     exit 1

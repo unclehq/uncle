@@ -23,6 +23,25 @@
 # command only blocks when it passed then and fails now.
 #
 # bash 3.2 compatible: no associative arrays, no ${var^^}.
+GREEN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$GREEN_LIB_DIR/performance.sh"
+
+# Optional approved groups refer to consecutive, one-based command positions.
+# Absence preserves sequential execution. Bad declarations fail before tests.
+verify_parallel_groups() {
+    local plan="$1" commands="$2"
+    awk -v count="$(wc -l < "$commands" | tr -d ' ')" '
+        /^## Parallel verification groups[ \t\r]*$/ { active=1; sections++; next }
+        active && /^```/ { if (opened) { closed=1; active=0 } else opened=1; next }
+        active && /^#/ { bad=1; active=0 }
+        active && opened && NF {
+            if ($0 !~ /^[0-9 \t\r]+$/ || NF < 2 || $1 <= last || $NF > count) bad=1
+            for (i=2; i<=NF; i++) if ($i != $(i-1)+1) bad=1
+            last=$NF; rows++; print
+        }
+        END { if (sections && (sections != 1 || !closed || !rows || bad)) exit 1 }
+    ' "$plan"
+}
 
 # verify_commands <file> — one command per line, from the first fenced block
 # under the document's verification-command heading.
@@ -72,6 +91,27 @@ verify_commands() {
 green_run() {
     local cmds="$1" out="$2" log="$3"
     local cmd status guard="${4:-}"
+    local groups="${5:-}" started
+
+    if [[ -n "$groups" && -s "$groups" ]] \
+        && command -v python3 > /dev/null 2>&1 \
+        && [[ -f "$GREEN_LIB_DIR/parallel_checks.py" ]] \
+        && [[ -z "$guard" || "$guard" == check_verification_inputs ]]; then
+        local -a flags=(--commands "$cmds" --out "$out" --log "$log"
+                       --groups "$groups" --jobs "${WORKFLOW_VERIFY_JOBS:-2}")
+        if [[ -n "$guard" ]]; then
+            flags+=(--paths "$STATE_DIR/verification.paths"
+                    --expected "$STATE_DIR/verification.manifest"
+                    --integrity-log "$STATE_DIR/verification-integrity.log")
+        fi
+        if [[ "${WORKFLOW_METRICS:-1}" == 1 && -n "${STATE_DIR:-}" ]]; then
+            flags+=(--metrics "$STATE_DIR/metrics")
+        fi
+        status=0
+        python3 -B "$GREEN_LIB_DIR/parallel_checks.py" "${flags[@]}" || status=$?
+        if [[ "$status" == 3 && -n "$guard" ]]; then verification_integrity_failure; fi
+        return "$status"
+    fi
 
     : > "$out"
     : > "$log"
@@ -83,7 +123,9 @@ green_run() {
         printf '\n$ %s\n' "$cmd" >> "$log"
 
         status=0
+        started="$SECONDS"
         bash -c "$cmd" < /dev/null >> "$log" 2>&1 || status=$?
+        perf_record check "$cmd" "$((SECONDS-started))" "$status"
 
         printf '%s\t%s\n' "$status" "$cmd" >> "$out"
         if [[ -n "$guard" ]]; then "$guard" || return 1; fi

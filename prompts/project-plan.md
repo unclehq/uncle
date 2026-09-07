@@ -57,6 +57,11 @@ Identify the test, fixture, helper, configuration, and source-oracle paths that
 the updated plan will freeze during verification. Keep generated test outputs
 outside those protected paths.
 
+Identify independent verification commands that can run concurrently. Commands
+sharing ports, writable fixtures, generated outputs, or ordered state must stay
+sequential. Use isolated output directories and local test-server ports where
+concurrency is appropriate; do not weaken checks to make them parallel.
+
 Write densely. Five later stages read this document, so length here is paid
 for repeatedly:
 

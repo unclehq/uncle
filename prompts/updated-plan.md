@@ -67,6 +67,15 @@ capabilities remain blockers rather than becoming optional checks.
 
 Approving this plan approves those commands.
 
+Optionally add `## Parallel verification groups` with a fenced block of
+one-based positions from the Verification commands block. Each line is a group
+of at least two consecutive command numbers, for example `2 3`. Groups must be
+ordered and disjoint. Only group checks proven independent: no shared ports,
+writable fixtures, outputs, or prerequisite ordering. Explain that independence
+in the testing strategy. The driver limits concurrency with WORKFLOW_VERIFY_JOBS
+(default 2, maximum 8), preserves per-command outcomes and integrity checks,
+and runs unlisted commands sequentially. Omit this section when none qualify.
+
 Include `## Protected verification paths` with one fenced block of literal
 repository-relative file or directory paths, one per line. List all tests,
 expected results and fixtures, test helpers, and configuration that determines

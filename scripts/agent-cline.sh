@@ -85,7 +85,9 @@ if [[ -z "$prompt" ]]; then
     exit 2
 fi
 
-args=(--json --auto-approve true)
+# Without an explicit mode Cline inherits its saved planActMode, even though
+# CLI help describes act as the default. Agent stages must write artifacts.
+args=(--act --json --auto-approve true)
 if [[ -n "$model" ]]; then
     args+=(-m "$model")
 fi

@@ -160,7 +160,9 @@ ARGV_FILE="$TMP/argv" run_shim -p --model vendor/some-model --max-turns 120 \
 
 argv="$(cat "$TMP/argv")"
 
-for flag in --json --auto-approve "-m vendor/some-model" "--thinking medium"; do
+# An omitted mode inherits Cline's saved planActMode, which may be plan.
+# Document-producing stages must explicitly select act even in that case.
+for flag in --act --json --auto-approve "-m vendor/some-model" "--thinking medium"; do
     COUNT=$((COUNT + 1))
     case " $argv " in
         *" $flag "*) ;;
@@ -265,4 +267,3 @@ if [[ "$FAILED" -ne 0 ]]; then
 fi
 
 echo "agent-cline-test.sh: $COUNT checks passed"
-

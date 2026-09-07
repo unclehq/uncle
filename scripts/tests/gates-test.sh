@@ -1037,6 +1037,25 @@ for attempt in 1 2; do
 done
 expect_out 'Reusing completed plan review'
 
+# Explicit source prerequisites stop both drivers before any planning launch.
+new_stagegate_case sg-early-source
+printf 'Use `resume.pdf` as the authoritative source.\n' > "$REPO/REQUIREMENTS.md"
+set_state REQUIREMENTS
+run_stagegate
+expect_status 42
+expect_state REQUIREMENTS
+expect_out 'missing or empty source file: resume.pdf'
+expect_not_out 'Launching agent'
+
+new_case change-early-source
+printf 'Use `data.csv` as the authoritative source.\n' > "$REPO/CHANGE_REQUEST.md"
+set_state PLAN
+run_driver
+expect_status 42
+expect_state PLAN
+expect_out 'missing or empty source file: data.csv'
+expect_not_out 'Launching agent'
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "gates-test.sh: $FAILED of $COUNT checks failed"
     exit 1

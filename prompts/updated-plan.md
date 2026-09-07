@@ -7,7 +7,13 @@ Read these in one parallel batch of tool calls:
 - PROJECT_PLAN.md
 - ADVERSARIAL_REVIEW.md
 
-Create UPDATED_PROJECT_PLAN.md.
+Create UPDATED_PROJECT_PLAN.md as a focused revision of PROJECT_PLAN.md.
+Use the original plan as the base, retaining unaffected normative rows and exact
+commands. Edit the sections invalidated by findings; do not redesign unaffected
+architecture or repeat repository exploration without a specific unresolved
+finding. If UPDATED_PROJECT_PLAN.md already exists from an interrupted attempt,
+read it and complete the remaining work, validating it against current inputs.
+Do not restart the document from scratch.
 
 For every adversarial finding, record:
 
@@ -103,8 +109,7 @@ normative row survives, not every sentence:
 - reference requirements by identifier rather than restating them;
 - no preamble and no closing recap.
 
-Keep the implementation contract compact: target 12,000 UTF-8 bytes, subject to
-the driver budget appended below. Preserve complete normative rows and exact
+Keep the implementation contract within the driver budget appended below. Preserve complete normative rows and exact
 commands. Do not copy the original plan or review narrative. Supporting evidence
 stays in its original artifact, cited by file and finding ID; implementation must
 not need that evidence to discover an obligation.
@@ -113,4 +118,4 @@ Do not implement code.
 Do not invoke another agent.
 Do not draft the plan in chat before writing it.
 
-Write only UPDATED_PROJECT_PLAN.md, in a single Write call, and stop.
+Write only UPDATED_PROJECT_PLAN.md. Preserve a complete standalone plan and stop.

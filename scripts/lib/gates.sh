@@ -259,15 +259,18 @@ requirements_document_max_bytes() {
 }
 
 document_budget_prompt() {
-    local stage="$1" file limits bytes lines
+    local stage="$1" file limits bytes lines target
     printf '\n\n# Compact output budgets (binding)\n\n'
     while IFS= read -r file; do
         limits="$(document_budget "$file")" || return 1
         read -r bytes lines <<< "$limits"
-        printf -- '- %s: at most %s UTF-8 bytes and %s lines.\n' "$file" "$bytes" "$lines"
+        target=$(awk -v b="$bytes" 'BEGIN {printf "%.0f", int(b * 0.85)}')
+        printf -- '- %s: at most %s UTF-8 bytes and %s lines. Draft toward %s bytes to leave revision room.\n' "$file" "$bytes" "$lines" "$target"
     done < <(stage_documents "$stage")
     cat <<'BUDGET'
 
+These numeric limits supersede any fixed byte target in earlier instructions.
+The drafting target is advisory; preserving mandatory content takes precedence.
 These are per-file ceilings, not targets. Apply only to files the stage asks
 for; this list does not authorize extra outputs. The driver checks new documents
 before advancing, including reviewer output, repair reports, and step handoffs.

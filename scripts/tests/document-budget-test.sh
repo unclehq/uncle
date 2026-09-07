@@ -114,6 +114,10 @@ WORKFLOW_DOC_MAX_BYTES=1 WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=7 \
 rg -qF 'FINAL_AUDIT.md: at most 7 UTF-8 bytes' "$(cat resolved)"
 rg -q 'Reviewer output' "$(cat resolved)"
 if WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=invalid gated_prompt prompt.md final-audit 2>/dev/null; then exit 1; fi
+# Draft targets use the effective override, including leading-zero integers.
+WORKFLOW_DOC_MAX_BYTES=01000 gated_prompt prompt.md updated-plan > resolved
+rg -qF 'Draft toward 850 bytes' "$(cat resolved)"
+rg -qF 'supersede any fixed byte target' "$(cat resolved)"
 # No installed/local output rules must not disable prompt budgets.
 ROOT_SAVED="$ROOT"
 ROOT=""

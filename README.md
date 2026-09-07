@@ -170,6 +170,25 @@ Integrity hashing uses one Python process when available, with the complete
 portable shell implementation as a fallback. The terminal redraws on changes
 instead of on every idle poll. These optimizations preserve the acceptance gates.
 
+Before requirements analysis or planning, both workflow drivers perform a local
+prerequisite check. It detects local files explicitly named by an instruction
+such as “Use `resume.pdf` as the authoritative source.” Missing or empty inputs
+stop the stage before launching an agent. This intentionally narrow check does
+not infer every dependency from prose or replace the full preflight.
+
+For other required inputs and tools, declare `.uncle/prerequisites.json`:
+
+```json
+{"files": ["resume.pdf"], "commands": ["pdftotext", "pdftoppm", "pdfinfo"]}
+```
+
+Files must be repository-relative; commands are executable names checked on PATH,
+never shell expressions. The gate reruns on each planning attempt, so adding an
+input or installing a tool clears the corresponding blocker without a reset.
+Revised plans retain unaffected content and resolve findings through focused
+edits. Prompts use the calculated budget as the single byte limit and suggest
+an 85% drafting target to leave room for corrections.
+
 Every document-producing stage receives a per-file budget, checked before the
 workflow advances. This includes background reviews, implementation steps,
 repairs, and acceptance reports. Defaults are:

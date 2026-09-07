@@ -391,6 +391,8 @@ stage_turns() {
 stage_tools() {
     local fallback="Read,Glob,Grep,Write"
     case "$1" in
+        updated-plan)
+            fallback="Read,Glob,Grep,Write,Edit" ;;
         implementation|execute-checklist|preflight)
             fallback="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
             ;;
@@ -599,6 +601,11 @@ run_claude() {
     local prompt_file
     prompt_file="$(resolve_prompt "$1")"
     local log_name="$2"
+    case "$log_name" in
+        requirements|project-plan|baseline|change-spec|change-plan)
+            python3 "$ROOT/scripts/lib/early-prerequisites.py" "$DOCUMENT_BUDGET_SOURCE" || exit $? ;;
+    esac
+
     local tools="${3:-$(stage_tools "$log_name")}"
     local model
     local effort

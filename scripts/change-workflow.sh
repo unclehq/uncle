@@ -1065,6 +1065,11 @@ run_claude() {
     local prompt_file
     prompt_file="$(resolve_prompt "$1")"
     local log_name="$2"
+    case "$log_name" in
+        requirements|project-plan|baseline|change-spec|change-plan)
+            python3 "$ROOT/scripts/lib/early-prerequisites.py" "$DOCUMENT_BUDGET_SOURCE" || exit $? ;;
+    esac
+
     local model="$3"
     local effort="${4:-}"
     local max_turns="${5:-80}"

@@ -13,6 +13,7 @@ class Uncle < Formula
   def install
     libexec.install "uncle", "uncle_tui.py", "scripts", "prompts", "lib", "OUTPUT_RULES.md"
     prefix.install_metafiles
+    prefix.install "uncle.png"
 
     # The launcher shells out to bare `python3` for the TUI; python@3.13 keeps
     # its unversioned python3 symlink in libexec/bin, off PATH by default.

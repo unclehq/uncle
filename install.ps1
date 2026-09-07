@@ -30,7 +30,7 @@ try {
         $archive = Join-Path $work 'uncle.zip'
         $stage = Join-Path $work 'uncle'
         New-Item -ItemType Directory -Path $stage | Out-Null
-        $names = @('uncle','uncle_tui.py','scripts','prompts','lib','OUTPUT_RULES.md','README.md','LICENSE','VERSION','packaging','install.sh','install.ps1','Formula')
+        $names = @('uncle','uncle_tui.py','scripts','prompts','lib','OUTPUT_RULES.md','README.md','uncle.png','LICENSE','VERSION','packaging','install.sh','install.ps1','Formula')
         foreach ($name in $names) {
             $item = Join-Path $source $name
             if (!(Test-Path $item)) { throw "Missing payload: $name" }

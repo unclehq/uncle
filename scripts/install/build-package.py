@@ -13,7 +13,7 @@ from pathlib import Path
 
 PAYLOAD = (
     "uncle", "uncle_tui.py", "scripts", "prompts", "lib", "OUTPUT_RULES.md",
-    "README.md", "LICENSE", "VERSION", "packaging", "install.sh", "install.ps1",
+    "README.md", "uncle.png", "LICENSE", "VERSION", "packaging", "install.sh", "install.ps1",
     "Formula",
 )
 

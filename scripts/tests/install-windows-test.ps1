@@ -35,6 +35,9 @@ function Invoke-WebRequest {
     Copy-Item $global:UncleTestGitHubZip $OutFile
 }
 try {
+    # Windows PowerShell 5.1 needs the enum's assembly loaded explicitly;
+    # FileSystem supplies ZipFile but does not expose ZipArchiveMode by itself.
+    Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     New-Item -ItemType Directory -Force $work | Out-Null
     # Explicit fixtures cover the legacy Windows layout even on a Unix host.

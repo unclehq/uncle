@@ -41,7 +41,18 @@ Required rows must all PASS. FAIL routes test review or execution to `REPAIR`;
 BLOCKED/NOT RUN/N/A on a required row pauses the current stage. Malformed or
 missing tables fail closed. Preflight failures always pause before code changes.
 
-Repairs use the `implementation` runner and `prompts/repair.md`. They preserve
+Test review receives the current driver verification summary directly in its
+prompt, plus exact paths and hashes for hidden workspace evidence. Historical
+failures must be reconciled with current results. Additional regression cases
+inside approved commands are assessed against requirements and scope; a longer
+defect-ID list alone is not a reason to remove coverage or require reapproval.
+
+Repairs use a fresh `implementation` runner and `prompts/repair.md`. Context is
+limited to current blocking findings, matching approved constraints, protected
+paths, and affected source/tests. The agent expands those inputs only when the
+fix requires it and runs failing commands and targeted checks; the driver still
+runs the complete approved verification suite. Earlier passes are not reported
+as fresh repair evidence. Repairs preserve
 the failed report, update code and implementation reports, and return through
 driver verification, fresh human diff approval, independent test review, and
 checklist execution. `.uncle/workspace/repair-source` identifies the report;

@@ -702,6 +702,12 @@ run_codex_review() {
     # The reviewer writes a document a human reads, so it gets the output
     # rules the same way an agent stage does.
     prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+    if [[ "$log_name" == test-review ]]; then
+        local evidence_prompt="$LOG_DIR/test-review.evidence-prompt.md"
+        cat "$prompt_file" > "$evidence_prompt"
+        python3 "$ROOT/scripts/lib/test-review-context.py" "$PWD" "$STATE_DIR" >> "$evidence_prompt" || return 1
+        prompt_file="$evidence_prompt"
+    fi
 
     local review_key
     review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"

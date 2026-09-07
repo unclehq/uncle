@@ -1,0 +1,62 @@
+name: Installers
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unix:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Syntax and hermetic tests
+        run: |
+          bash -n install.sh
+          bash -n scripts/install/homebrew.sh
+          ruby -c Formula/uncle.rb
+          python3 scripts/tests/install-test.py
+      - name: Install local checkout through the native package manager
+        run: bash install.sh --source-dir "$PWD"
+      - name: Smoke test outside the checkout
+        run: |
+          cd "$RUNNER_TEMP"
+          uncle --help
+          uncle --performance
+      - name: Build Debian artifact
+        if: runner.os == 'Linux'
+        run: python3 scripts/install/build-package.py deb --source "$PWD" --output "$RUNNER_TEMP/packages"
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Linux'
+        with:
+          name: uncle-debian
+          path: ${{ runner.temp }}/packages/*.deb
+          if-no-files-found: error
+  windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v6
+      - name: PowerShell installer tests
+        run: ./scripts/tests/install-windows-test.ps1
+      - name: Install Scoop on the disposable runner
+        run: |
+          Invoke-WebRequest -UseBasicParsing https://get.scoop.sh -OutFile "$env:RUNNER_TEMP/scoop-install.ps1"
+          & "$env:RUNNER_TEMP/scoop-install.ps1" -RunAsAdmin
+          "$HOME/scoop/shims" | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Install and update the local checkout
+        run: |
+          ./install.ps1 -SourceDir $PWD
+          ./install.ps1 -SourceDir $PWD
+      - name: Smoke test outside the checkout
+        run: |
+          Set-Location $env:RUNNER_TEMP
+          uncle --help
+          if ($LASTEXITCODE -ne 0) { throw 'Uncle help failed' }
+          uncle --performance
+          if ($LASTEXITCODE -ne 0) { throw 'Uncle Python launcher failed' }

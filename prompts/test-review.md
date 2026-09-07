@@ -1,5 +1,17 @@
 Act as the independent test reviewer before acceptance execution.
 
+Start with the driver-supplied evidence appended to this prompt, when present.
+It contains current verification results and exact paths for hidden workspace
+files. Read those paths directly: an empty Glob/search result does not establish
+that a .uncle file is absent. If an explicitly listed file cannot be read,
+report the exact path and read error, not an assumption that it is missing.
+Without an appended packet, directly read .uncle/workspace/green-check.md first.
+Reconcile each earlier blocker with the current command results and relevant
+log excerpts. Old sandbox/socket/browser errors are historical when the same
+checks now pass in the driver; retain blockers for checks still failing, missing,
+or unsupported by current evidence. Do not treat a reviewer tool restriction
+as a failure of a command that the driver successfully executed.
+
 Read REQUIREMENTS.md, UPDATED_PROJECT_PLAN.md, PREFLIGHT_REPORT.md,
 AUTOMATED_TEST_REPORT.md, and .uncle/workspace/green-check.md. Inspect the
 source and assertions behind their claims. Read .uncle/workspace/previous-test-review.md,
@@ -51,6 +63,16 @@ external prerequisites are BLOCKED; unknown results are NOT RUN. If approved
 commands need changing, mark BLOCKED and identify the plan change needing
 renewed approval; do not authorize new commands yourself. Nonblocking findings
 may use Required NO, with justification. Preserve finding IDs across repairs.
+
+Additional regression tests inside existing approved command entry points do
+not by themselves require a plan amendment. Check their requirement mapping,
+assertions, fixtures, dependencies, protected paths, and scope. A plan listing
+representative defect IDs is not automatically an exclusive test allowlist.
+Record justified additive coverage as nonblocking when it preserves approved
+behavior and acceptance. Explicit scope exclusions or exhaustive frozen lists,
+changed commands/prerequisites, weakened assertions, and changed expected
+behavior still require the applicable repair or approval. Never recommend
+deleting a valid regression test solely to match the number of planned IDs.
 
 End with exactly one `## Acceptance gate` containing only a table with columns
 `ID`, `Required`, `Status`, `Evidence`, in that order. Required is YES or NO;

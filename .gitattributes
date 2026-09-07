@@ -1,0 +1,5 @@
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+/uncle text eol=lf
+/packaging/windows/python3 text eol=lf

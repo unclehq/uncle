@@ -1,14 +1,11 @@
 class Uncle < Formula
   desc "Terminal UI and launcher for governed-CI agent workflows"
   homepage "https://github.com/unclehq/uncle"
-  url "https://github.com/unclehq/uncle/archive/refs/tags/v0.1.0.tar.gz"
-  # TODO(release): replace with the sha256 of the GitHub-generated v0.1.0 tarball:
-  #   curl -sL https://github.com/unclehq/uncle/archive/refs/tags/v0.1.0.tar.gz | shasum -a 256
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
   head "https://github.com/unclehq/uncle.git", branch: "main"
 
   depends_on "gh"
+  depends_on "git"
   depends_on "jq"
   depends_on "python@3.13"
   uses_from_macos "curl"

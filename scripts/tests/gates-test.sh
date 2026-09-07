@@ -555,12 +555,14 @@ EOF
     cat > "$CASE/bin/fake-reviewer" <<'REV'
 #!/usr/bin/env bash
 out=""
+review_prompt="${!#}"
 while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
     shift
 done
 printf '%s\n' "$out" >> .uncle/workspace/reviewer-calls
 if [[ "$out" == TEST_REVIEW.md ]]; then
+    printf '%s\n' "$review_prompt" > .uncle/workspace/received-test-review-prompt.md
     status="${FAKE_TEST_REVIEW:-PASS}"
     if [[ "$status" == FAIL_ONCE ]]; then
         status=PASS
@@ -766,6 +768,9 @@ run_stagegate_stdin "$(gate_input '' y)" FAKE_TEST_REVIEW=FAIL_ONCE
 expect_status 0
 expect_state COMPLETE
 expect_in_file .uncle/workspace/repair-count '1'
+expect_in_file .uncle/workspace/received-test-review-prompt.md 'Driver-supplied test review evidence'
+expect_in_file .uncle/workspace/received-test-review-prompt.md 'All verification commands passed.'
+expect_in_file .uncle/workspace/received-test-review-prompt.md "$REPO/.uncle/workspace/TEST_CHANGES.diff"
 
 # A failed acceptance check repairs, reruns driver commands, repeats review,
 # and reaches audit only after a fresh successful verification.

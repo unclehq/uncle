@@ -1,16 +1,3 @@
-Uncle is a model-agnostic app creation and change request engine.
-
-- Uses GitHub issues
-- Creates PRs of finished work for human review
-- Requires human feedback for project plans
-- Requires human review to ensure the project is built correctly
-- Uses Cline open-weight models, Claude, Codex, and/or Kimi
-
-> **Just testing uncle?** Use Cline with open-weight models and a
-> [ClinePass subscription](https://cline.bot/blog/clinepass-best-of-value-for-open-weight-models).
-> Expect slower runs, but dramatically lower costs than premium models billed
-> per token—a good tradeoff while trying out the workflow.
-
 ```
                 #@@@@@@##@@@@@@#
                 @@@@@@@@@@@@@@@@
@@ -62,6 +49,11 @@ every stage, on both sides.
 Use it when the cost of an agent silently shipping the wrong thing is higher
 than the cost of waiting for a human to say yes.
 
+> **Just testing uncle?** Use Cline with open-weight models and a
+> [ClinePass subscription](https://cline.bot/blog/clinepass-best-of-value-for-open-weight-models).
+> Expect slower runs, but dramatically lower costs than premium models billed
+> per token—a good tradeoff while trying out the workflow.
+
 ---
 
 ## Usage
@@ -72,19 +64,141 @@ than the cost of waiting for a human to say yes.
 
 ## Install
 
+Install directly from GitHub. The bootstrap selects Homebrew on macOS, apt on
+Debian/Ubuntu (including WSL), and Scoop on Windows. Have Homebrew or Scoop
+installed first; on Linux, apt installs the bootstrap dependencies using sudo.
+Agent CLIs and account authentication remain separate prerequisites.
+
+**macOS, Linux, or Git Bash on Windows:**
+
 ```sh
-brew install uncle
+curl -fsSL https://raw.githubusercontent.com/unclehq/uncle/main/install.sh -o install.sh
+bash install.sh
 ```
 
-You also need the `cline` CLI, `jq`, and bash 3.2+ (macOS system bash is fine).
+**Windows PowerShell:**
 
-Optionally install `glow` or `bat`, anywhere on your `$PATH`: a gate can then
-render the document you are approving in the same window. Without one, it
-shows the raw text.
+```powershell
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/unclehq/uncle/main/install.ps1 -OutFile install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
 
-Runs on macOS and Linux. On Windows use WSL or Git Bash — the drivers are bash
-— and `pip install windows-curses` for the full-screen menu; without curses,
-`uncle` falls back to a line-based menu.
+Both installers default to `main`. Select a GitHub branch, tag, or commit with
+`--ref` (PowerShell: `-Ref`); select a public fork with `--repo OWNER/REPO`
+(PowerShell: `-Repo OWNER/REPO`). Each install resolves the ref to a commit.
+Homebrew and Scoop verify a SHA-256 checksum of that commit's downloaded archive.
+Use `--dry-run` / `-DryRun` to inspect the selected route without installing.
+The chosen ref must contain the installer files.
+
+| Platform | Package installed | Update | Uninstall |
+|---|---|---|---|
+| macOS | Homebrew formula in the generated `unclehq/github-install` tap | Rerun `install.sh` with the desired ref | `brew uninstall unclehq/github-install/uncle` |
+| Debian/Ubuntu/WSL | Locally built `uncle` `.deb`, installed with apt and its declared dependencies | Rerun `install.sh` with the desired ref | `sudo apt remove uncle` |
+| Windows | Scoop package in the generated `uncle-github` bucket | Rerun `install.ps1` with the desired ref | `scoop uninstall uncle` |
+
+The generated tap and bucket retain the selected revision; they do not follow
+GitHub changes until the installer is rerun. The apt route builds from GitHub
+and installs a local package, so no separate apt repository is required.
+Switching an existing Homebrew or Scoop installation from another tap/bucket
+may require uninstalling that package first. Project `.uncle` state lives in
+your projects and is not part of the installed package.
+
+To use Homebrew's GitHub source directly without the bootstrap:
+
+```sh
+brew tap unclehq/uncle https://github.com/unclehq/uncle.git
+brew install --HEAD unclehq/uncle/uncle
+```
+
+For local development, run `bash install.sh --source-dir "$PWD"`, or
+`.\install.ps1 -SourceDir $PWD` in PowerShell, from a checkout. This includes
+local edits. See [packaging documentation](packaging/README.md) for package
+builds and platform validation.
+
+## Prerequisites
+
+Install these tools in the environment where you run Uncle: macOS, Linux, or
+Windows with WSL/Git Bash. Commands must be available on that shell's `PATH`.
+Use Homebrew on macOS, apt on Debian/Ubuntu, or [Scoop](https://scoop.sh) on Windows.
+
+| Tool | Needed for | Installation notes |
+|---|---|---|
+| Bash 3.2+ (`bash`) | Workflow scripts | Included with macOS and most Linux distributions; use WSL or Git Bash on Windows. |
+| Git (`git`) | Source diffs and review gates | Install through your platform's package manager. |
+| Python 3 (`python3`) | The terminal UI, verification, and workflow helpers | Installed by each package; Homebrew uses `python@3.13`. |
+| jq (`jq`) | Agent event streams and JSON processing | Installed by each package. |
+| curl (`curl`) | Installer download, HTTP requests, and public GitHub issue fallback | Included with macOS and Git Bash; use `sudo apt install curl` if missing on Linux. |
+| An agent CLI: `cline`, `claude`, `kimi`, or `codex` | Planning, implementation, and independent review | Install and authenticate every runner selected in Configure. The default configuration uses `cline`; these CLIs are installed separately from Uncle. |
+| GitHub CLI (`gh`) | Authenticated GitHub issue and pull-request workflows | Installed by each package. Run `gh auth login` before using authenticated GitHub features. |
+
+Package managers install tools, but they do not authenticate GitHub or agent
+accounts. Configure the selected agent CLIs with their required
+account or API credentials and model access before starting a workflow. They
+also need network access to their providers.
+
+### macOS — Homebrew
+
+For a source checkout, install the core tools yourself:
+
+```sh
+brew install git jq python@3.13 gh
+```
+
+If `python3` is not available afterward, follow `brew info python@3.13` to add
+its command directory to your `PATH`.
+
+### Linux — apt (Debian/Ubuntu)
+
+```sh
+sudo apt update
+sudo apt install bash git python3 python3-venv jq curl gh
+```
+
+These commands install dependencies, not Uncle itself. If your distribution
+cannot locate `gh`, follow the [GitHub CLI Linux installation instructions](https://github.com/cli/cli/blob/trunk/docs/install_linux.md).
+Other Linux distributions can install equivalent packages with their package
+manager.
+
+### Windows — Scoop or WSL
+
+For native Windows installation, install [Scoop](https://scoop.sh) in a normal
+user PowerShell session, then run `install.ps1` above. The generated package
+installs Git (including Git Bash), Python, jq, and GitHub CLI through Scoop.
+Its `uncle` shim launches Bash and supplies the `python3` command required by
+Uncle's helpers. For the full-screen menu, install curses support into Scoop's
+Python with:
+
+```powershell
+python -m pip install windows-curses
+```
+
+Alternatively, use WSL to run the Linux package. In an administrator PowerShell:
+
+```powershell
+wsl --install
+```
+
+Restart when prompted, open Ubuntu, and follow the Linux install steps inside
+WSL. Install and authenticate your agent CLIs inside WSL as well. Linux Python
+does not need `windows-curses`. See
+[Microsoft's WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install).
+
+### Project-specific tools
+
+Optional tools depend on the project:
+
+| Tool | When to install it |
+|---|---|
+| `glow` or `bat` | To render approval documents in the terminal; otherwise Uncle shows plain text. |
+| Language runtimes, compilers, and package managers | When the project's build or approved test commands require them, such as Node.js for a JavaScript project. |
+| A browser and browser-test dependencies | When acceptance includes browser checks. The test environment must also permit local server sockets and browser execution. |
+| PDF tools such as Poppler (`pdftotext`, `pdftoppm`) | When the project requires PDF extraction or rendered PDF comparison. |
+
+The project's preflight stage checks its specific tools, versions, source
+files, and required reviewers. Install those prerequisites before implementation
+so repair attempts are not spent on missing tools or unavailable permissions.
+
+Without curses support, `uncle` falls back to a line-based menu.
 
 ---
 

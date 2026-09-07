@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Windows Python normally installs python.exe, while Uncle calls python3.
+exec "$(cygpath -u "${UNCLE_WINDOWS_PYTHON:?Launch Uncle through its Scoop shim}")" "$@"

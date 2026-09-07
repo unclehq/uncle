@@ -1,0 +1,12 @@
+{
+    "version": "@VERSION@",
+    "description": "Human-gated workflows for coding agents",
+    "homepage": "https://github.com/unclehq/uncle",
+    "license": "MIT",
+    "url": "@URL@",
+    "hash": "@SHA256@",
+    "extract_dir": "@EXTRACT_DIR@",
+    "depends": ["git", "python", "jq", "gh"],
+    "bin": [["packaging/windows/uncle.ps1", "uncle"]],
+    "notes": "Install and authenticate your selected agent CLIs. For the full-screen UI: python -m pip install windows-curses."
+}

@@ -61,6 +61,18 @@ case "$#:${1:-}" in
     *)                  printf 'Unknown argument: %s\n' "${1:-}" >&2; usage >&2; exit 1 ;;
 esac
 
+# Per-project paths/config. Resolve and export these BEFORE launching the TUI:
+# the launcher has already cd'd into the install libexec, so without this the
+# TUI would key its per-project state off the install dir and write
+# .uncle/config to the wrong place. UNCLE_CONFIG wins if the caller sets it.
+CLINE_CONFIG="${CLINE_CONFIG:-$HOME/.cline/data/settings/providers.json}"
+CL_MODEL=""
+CL_EFFORT="medium"
+UNCLE_CONFIG="${UNCLE_CONFIG:-$PROJECT_ROOT/.uncle/config}"
+export UNCLE_CONFIG
+export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
+CONFIG_STAGES="requirements project-plan updated-plan implementation execute-checklist baseline change-spec change-plan updated-change-plan reviewer"
+
 # Full-screen terminal UI when both stdin and stdout are real terminals; the
 # line-based menu below remains for pipes and scripts.
 if [[ -t 0 && -t 1 ]] && command -v python3 >/dev/null 2>&1; then
@@ -70,17 +82,6 @@ if [[ -t 0 && -t 1 ]] && command -v python3 >/dev/null 2>&1; then
     # TUI failed (e.g. unsupported terminal); fall through to the line menu.
 fi
 
-CLINE_CONFIG="${CLINE_CONFIG:-$HOME/.cline/data/settings/providers.json}"
-CL_MODEL=""
-CL_EFFORT="medium"
-UNCLE_CONFIG="${UNCLE_CONFIG:-$PROJECT_ROOT/.uncle/config}"
-export UNCLE_CONFIG
-# Tell the TUI (and any sub-processed driver) which project root we were
-# invoked from. The launcher cd's into the install dir, so without this the
-# TUI would key its per-project state off the install directory instead of
-# the caller's cwd -- and config edits would be written to the wrong .uncle/.
-export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
-CONFIG_STAGES="requirements project-plan updated-plan implementation execute-checklist baseline change-spec change-plan updated-change-plan reviewer"
 
 stage_env_var() {
     printf 'WORKFLOW_MODEL_%s' \

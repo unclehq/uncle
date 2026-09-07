@@ -1426,7 +1426,9 @@ class UncleTUI:
             costs.extend(group["costs"])
         if not groups:
             lines += ["Waiting for stage…", ""]
-        lines += ["SESSION TOTALS", "Tokens " + subtotal(tokens, count),
+        lines += ["SESSION TOTALS",
+                  "Time   " + duration(sum(group["seconds"] for group in groups.values())),
+                  "Tokens " + subtotal(tokens, count),
                   "Cost   " + subtotal(costs, dollars), "Reported + projected"]
         return lines
 

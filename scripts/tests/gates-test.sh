@@ -895,8 +895,8 @@ expect_status 0
 expect_state COMPLETE
 expect_in_file .uncle/workspace/green-check.tsv PASS
 COUNT=$((COUNT+1))
-if [[ "$(find "$REPO/.uncle/workspace/metrics" -name '*.json' -exec cat {} + | jq -s '[.[]|select(.kind=="check")]|length')" != 3 ]]; then
-    fail 'driver did not record each concurrent check'
+if [[ "$(find "$REPO/.uncle/workspace/metrics" -name '*.json' -exec cat {} + | jq -s '[.[]|select(.kind=="check")]|length')" != 6 ]]; then
+    fail 'driver did not record each check at implementation and checklist execution'
 fi
 
 new_stagegate_case sg-invalid-parallel-plan

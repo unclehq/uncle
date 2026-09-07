@@ -398,3 +398,28 @@ save_plan_review() {
     python3 "$ROOT/scripts/lib/review-cache.py" save --output "$1" --key "$2" \
         --cache-dir "$LOG_DIR/../review-cache"
 }
+
+# Snapshot only checks executed immediately before checklist verification.
+# Disabled/missing commands must never expose earlier successful logs as fresh.
+snapshot_checklist_checks() {
+    local directory="$STATE_DIR/checklist-driver-checks"
+    mkdir -p "$directory"
+    rm -f "$directory/output.log" "$directory/results.tsv"
+    {
+        echo '# Driver checks for checklist execution'
+        printf '\nRecorded: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        if [[ "${GREEN_CHECK:-0}" == 1 && -s "$GREEN_CMDS" && -f "$GREEN_CUR" ]]; then
+            cp "$GREEN_CUR" "$directory/results.tsv"
+            cp "$LOG_DIR/green-check.log" "$directory/output.log"
+            echo
+            echo 'The driver executed the approved commands immediately before this stage.'
+            echo 'Use results.tsv for command exit codes and output.log for assertion evidence.'
+            echo 'A nonzero exit is a failure, not a sandbox blocker or a pass.'
+        else
+            echo
+            echo 'NOT RUN: driver verification is disabled or no approved commands are available.'
+        fi
+        echo 'This evidence covers only the commands and assertions actually executed.'
+        echo 'It does not establish manual browser checks or human acceptance.'
+    } > "$directory/README.md"
+}

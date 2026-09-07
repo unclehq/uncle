@@ -64,6 +64,12 @@ than the cost of waiting for a human to say yes.
 
 ---
 
+## Usage
+
+1. Install Uncle.
+2. Create a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue.
+3. Run `uncle`.
+
 ## Install
 
 ```sh
@@ -356,3 +362,9 @@ terminal prompt) to approve a larger limit for that document. Approval continues
 with the preserved artifact and saves the limit in `.uncle/workspace/document-budgets/`
 for the current source brief. Declining leaves the workflow pending. Automated
 runs without a session UI or terminal require explicit environment overrides.
+
+Before checklist execution, the driver reruns approved automated checks and
+saves fresh command results and assertion logs in
+`.uncle/workspace/checklist-driver-checks/`. The verification agent uses that
+evidence for covered checks, avoiding duplicate local-server tests inside its
+sandbox. Manual checks and human acceptance still require separate evidence.

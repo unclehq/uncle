@@ -1679,6 +1679,8 @@ while true; do
             ;;
 
         EXECUTE_CHECKLIST)
+            run_green_check || true
+            snapshot_checklist_checks
             PROGRESS_TOTAL="$(grep -oE 'MC-[0-9]+' MANUAL_CHECKLIST.md 2>/dev/null \
                 | sort -u | grep -c . || echo 0)"
             PROGRESS_LABEL="checklist"

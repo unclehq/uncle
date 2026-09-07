@@ -10,6 +10,25 @@ Run checks concurrently where they are independent. Serialize only checks that
 share a port, a fixture, a build artifact, or ordered state. Record the results
 as you go and write the report once at the end.
 
+
+## Fresh driver verification evidence
+
+Read `.uncle/workspace/checklist-driver-checks/README.md` first. The driver
+runs the approved automated verification commands immediately before this stage,
+outside the agent sandbox, and records command exits in `results.tsv` and
+assertion output in `output.log` in that directory. If README says NOT RUN,
+there is no fresh driver evidence; do not substitute older green-check logs.
+
+For checklist items covered by those exact assertions, cite the driver command,
+exit code, and relevant output as the action and evidence. Do not repeat covered
+server/browser commands inside the agent sandbox. A sandbox permission error
+from an attempted duplicate does not invalidate a successful driver execution.
+Check that evidence actually measures each item's expected result: a passing
+suite alone cannot satisfy additional assertions, manual visual comparisons,
+real keyboard/zoom interactions, or Brian's required sign-off. Execute remaining
+feasible checks, record genuine failures, and mark unmet human or environmental
+prerequisites BLOCKED or NOT RUN. Never broaden permissions or invent a PASS.
+
 Create VERIFICATION_REPORT.md.
 
 For every check record:

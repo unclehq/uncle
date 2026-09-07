@@ -1290,9 +1290,17 @@ while true; do
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
+            run_green_check || true
+            check_verification_inputs
+            snapshot_checklist_checks
             run_stage EXECUTE_CHECKLIST
             check_verification_inputs
-            acceptance_transition VERIFICATION_REPORT.md FINAL_AUDIT
+            if [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then
+                printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
+                set_state REPAIR
+            else
+                acceptance_transition VERIFICATION_REPORT.md FINAL_AUDIT
+            fi
             ;;
 
         FINAL_AUDIT)

@@ -64,6 +64,18 @@ if [[ -z "$effort" ]]; then
     effort="medium"
 fi
 
+# cline requires a model id in `modelType/model` form (e.g. cline-pass/kimi-k3).
+# A bare display name — from a hand-edited .uncle/config, or a picker entry that
+# offered a label instead of an id — is only rejected by cline itself, one turn
+# into the stage and after the driver has already announced it. Fail here, where
+# the offending value can be named.
+if [[ -n "$model" && "$model" != */* ]]; then
+    printf '%s: invalid cline model id: %s\n' "agent-cline.sh" "$model" >&2
+    printf '  cline expects modelType/model, e.g. cline-pass/deepseek-v4-pro.\n' >&2
+    printf '  Fix it in .uncle/config, or in uncle -> Configure.\n' >&2
+    exit 2
+fi
+
 prompt="$(cat)"
 if [[ -z "$prompt" ]]; then
     prompt="$prompt_extra"

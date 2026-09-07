@@ -2,13 +2,25 @@
 # Format: STAGE VALUE  (STAGE = a stage log name, `reviewer`, `runner`,
 #   `model`, `effort`, or `STAGE.effort`; VALUE = a cline model id, a
 #   runner name, or a reasoning effort).
+#
+# Model values are cline model ids in `modelType/model` form, exactly as
+# `cline -m` takes them (e.g. cline-pass/kimi-k3). A display name such as
+# "Kimi K3" is not an id and is refused before the stage starts.
 runner cline
-effort medium
-requirements DeepSeek V4 Pro
+model cline-pass/deepseek-v4-pro
+effort high
+
+# Transcription-shaped stages do not need the top tier.
+requirements cline-pass/deepseek-v4-flash
 requirements.effort medium
-project-plan Codex
-updated-plan Claude
-implementation Codex
-change-spec DeepSeek V4 Flash
-change-plan Codex
-updated-change-plan Claude
+execute-checklist cline-pass/deepseek-v4-flash
+execute-checklist.effort medium
+
+# The plan stages carry the design.
+project-plan cline-pass/kimi-k3
+updated-plan cline-pass/kimi-k3
+change-plan cline-pass/kimi-k3
+updated-change-plan cline-pass/kimi-k3
+
+# The reviewer reads, it does not write.
+reviewer cline-pass/glm-5.3

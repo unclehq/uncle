@@ -1,8 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Two roots, and they are not the same directory for a packaged install.
+#
+# ROOT is where uncle itself lives: the prompts, the libs, and the agent shims
+# it ships. For a Homebrew install that is the read-only Cellar libexec.
+#
+# PROJECT_ROOT is the project being worked on: .uncle/workspace, the artifacts,
+# the diff, the project's own gates. `uncle` exports UNCLE_PROJECT_ROOT (the
+# directory it was launched from); a driver run directly falls back to $ROOT,
+# which is the checkout it lives in.
+# Conflating the two writes a project's state into the install directory and
+# reads the wrong .uncle/config.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+PROJECT_ROOT="${UNCLE_PROJECT_ROOT:-$ROOT}"
+if [[ ! -d "$PROJECT_ROOT" ]]; then
+    echo "Project root does not exist: $PROJECT_ROOT" >&2
+    exit 1
+fi
+cd "$PROJECT_ROOT"
+PROJECT_ROOT="$PWD"
+
+# Prompt files are named relative to the uncle install, but the cwd is now the
+# project. Resolve them the way gates are resolved: the project's own copy
+# wins, otherwise the prompt that shipped with uncle. An absolute path or a
+# path that exists in the project is returned untouched, which is what keeps
+# composed prompts under .uncle/workspace working.
+resolve_prompt() {
+    local p="$1"
+    if [[ -e "$p" ]]; then
+        printf '%s' "$p"
+    else
+        printf '%s' "$ROOT/$p"
+    fi
+}
 
 STAGEGATE_VERSION="0.1.0"
 
@@ -400,7 +431,8 @@ format_claude_stream() {
 # Pass a third argument to run_claude to override the grant for one stage.
 
 run_claude() {
-    local prompt_file="$1"
+    local prompt_file
+    prompt_file="$(resolve_prompt "$1")"
     local log_name="$2"
     local tools="${3:-$(stage_tools "$log_name")}"
     local model
@@ -470,7 +502,8 @@ run_claude() {
 }
 
 run_codex_review() {
-    local prompt_file="$1"
+    local prompt_file
+    prompt_file="$(resolve_prompt "$1")"
     local output_file="$2"
     local log_name="$3"
 

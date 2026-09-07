@@ -53,30 +53,42 @@ CONFIG_STAGES = [
 RUNNERS = ["cline", "claude", "kimi", "codex"]
 
 # Models offered in the Configure → model picker, grouped by plan.
+#
+# Each entry is (label, id). The id is what gets written to .uncle/config and
+# passed to `cline -m`, and cline requires it in `modelType/model` form; the
+# label is display only. A bare display name is rejected by cline with
+# "invalid model format", so the picker must never store one.
 MODEL_CATALOG = [
     ("Subscribed (ClinePass)", [
-        "cline-pass/qwen3.8-max",
-        "GLM-5.2",
-        "DeepSeek V4 Pro",
-        "GLM-5.3-Flash",
-        "Kimi K3",
-        "GLM-5.3",
-        "Kimi K2.7 Code",
-        "DeepSeek V4 Flash",
-        "Kimi K2.6",
-        "Qwen3.7 Plus",
-        "Qwen3.7 Max",
-        "MiniMax-M3",
-        "MiMo-V2.5-Pro",
-        "MiMo-V2.5",
+        ("Qwen3.8 Max", "cline-pass/qwen3.8-max"),
+        ("GLM-5.2", "cline-pass/glm-5.2"),
+        ("DeepSeek V4 Pro", "cline-pass/deepseek-v4-pro"),
+        ("GLM-5.3-Flash", "cline-pass/glm-5.3-flash"),
+        ("Kimi K3", "cline-pass/kimi-k3"),
+        ("GLM-5.3", "cline-pass/glm-5.3"),
+        ("Kimi K2.7 Code", "cline-pass/kimi-k2.7-code"),
+        ("DeepSeek V4 Flash", "cline-pass/deepseek-v4-flash"),
+        ("Kimi K2.6", "cline-pass/kimi-k2.6"),
+        ("Qwen3.7 Plus", "cline-pass/qwen3.7-plus"),
+        ("Qwen3.7 Max", "cline-pass/qwen3.7-max"),
+        ("MiniMax-M3", "cline-pass/minimax-m3"),
+        ("MiMo-V2.5-Pro", "cline-pass/mimo-v2.5-pro"),
+        ("MiMo-V2.5", "cline-pass/mimo-v2.5"),
     ]),
     ("Free", [
-        "DeepSeek V4 Flash",
-        "GLM-5.3-Flash",
-        "LongCat 2.0",
-        "Laguna S 2.1",
+        ("DeepSeek V4 Flash", "deepseek/deepseek-v4-flash"),
+        ("GLM-5.3-Flash", "z-ai/glm-5.3-flash"),
+        ("Laguna S 2.1", "poolside/laguna-s-2.1"),
     ]),
 ]
+
+# id -> label, for the picker's display column and its filter.
+MODEL_LABELS = {mid: label for _, entries in MODEL_CATALOG for label, mid in entries}
+
+
+def valid_model_id(value):
+    """cline model ids are `modelType/model`; an empty value means its default."""
+    return not value or "/" in value
 
 # Full description for each Configure item. Only the description of the row
 # currently under the cursor is shown, in a panel to the right of the options.
@@ -281,6 +293,7 @@ class UncleTUI:
         self.config = {}
         self.stage_efforts = {}
         self.runner = "cline"
+        self.notice = ""
         self.config_sel = 0
         self.config_scroll = 0
         self.pick_sel = 0
@@ -448,12 +461,11 @@ class UncleTUI:
             return [("option", e) for e in EFFORTS] + [("custom", "Custom… (type an effort)")]
         if self.picker_kind == "runner":
             return [("option", r) for r in RUNNERS] + [("custom", "Custom… (type a runner)")]
-        rows = [("header", "Subscribed (ClinePass)")]
-        for m in MODEL_CATALOG[0][1]:
-            rows.append(("model", m))
-        rows.append(("header", "Free"))
-        for m in MODEL_CATALOG[1][1]:
-            rows.append(("model", m))
+        rows = []
+        for group, entries in MODEL_CATALOG:
+            rows.append(("header", group))
+            for _label, mid in entries:
+                rows.append(("model", mid))
         rows.append(("custom", "Custom… (type a model id)"))
         return rows
 
@@ -466,7 +478,8 @@ class UncleTUI:
         for kind, text in rows:
             if kind == "header":
                 continue
-            if kind == "custom" or flt in text.lower():
+            label = MODEL_LABELS.get(text, "")
+            if kind == "custom" or flt in text.lower() or flt in label.lower():
                 out.append((kind, text))
         return out
 
@@ -477,6 +490,7 @@ class UncleTUI:
         return self._row_value(self.picker_kind, self.picker_target)
 
     def _open_picker(self, kind, target):
+        self.notice = ""
         self.picker_kind = kind
         self.picker_target = target
         self.pick_filter = ""
@@ -521,6 +535,7 @@ class UncleTUI:
         kind, text = rows[self.pick_sel]
         if kind == "custom":
             self.state = "config_edit"
+            self.notice = ""
             self.input_buf = self.pick_filter.strip() or self._picker_current()
             return
         self._set_row_value(self.picker_kind, self.picker_target, text)
@@ -727,6 +742,8 @@ class UncleTUI:
             return "Pick a model (type to filter, Enter select, Esc back)"
         if self.state == "config_edit":
             kind, target = self._config_row()
+            if getattr(self, "notice", ""):
+                return self.notice
             return "Value for %s (Enter save, Esc back)" % (self._row_label(kind, target) or "?")
         title = {
             "menu": "The man from uncle",
@@ -826,7 +843,8 @@ class UncleTUI:
                 cur = kind in ("model", "option") and \
                     text.lower() == (self._picker_current() or "").lower()
                 marker = "  <current>" if cur else ""
-                disp = prefix + text + marker
+                label = MODEL_LABELS.get(text, "") if kind == "model" else ""
+                disp = prefix + text + ("  %s" % label if label else "") + marker
             try:
                 self.stdscr.addnstr(top + i, cx, disp, w - 1 - cx, attr)
             except curses.error:
@@ -1062,6 +1080,11 @@ class UncleTUI:
             self.sel = 0
         elif self.state == "config_edit":
             val = self.input_buf.strip()
+            if self.picker_kind == "model" and not valid_model_id(val):
+                # Storing it would only surface as a failed stage later.
+                self.notice = "not a cline model id: %s (expected modelType/model)" % val
+                return
+            self.notice = ""
             self._set_row_value(self.picker_kind, self.picker_target, val)
             self.input_buf = ""
             self.state = "config"

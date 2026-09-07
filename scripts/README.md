@@ -1,8 +1,11 @@
 # scripts/
 
-Six standalone bash scripts. Each resolves the repository root from its own
-location and `cd`s there first, so any of them can be run from any working
-directory. All are bash 3.2 compatible (macOS system bash).
+Six standalone bash scripts. Each resolves two roots: the install root, from
+its own location, which supplies the prompts, libs, and agent shims; and the
+project root, which is `UNCLE_PROJECT_ROOT` when the `uncle` launcher exports
+it and the install root otherwise. The driver `cd`s to the project root, so
+`.uncle/workspace`, the artifacts, and the diff belong to the project being
+worked on rather than to the directory uncle is installed in. All are bash 3.2 compatible (macOS system bash).
 
 Every script accepts `-h` / `--help`, prints a usage summary, and exits 0
 without performing any other work — no directory creation, no precondition

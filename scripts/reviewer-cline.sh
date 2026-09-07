@@ -57,8 +57,31 @@ if [[ -n "${UNCLE_CLINE_REVIEWER_MODEL:-}" ]]; then
 elif [[ -n "${UNCLE_CLINE_MODEL+x}" ]]; then
     model="$UNCLE_CLINE_MODEL"
 fi
+
+# A reviewer tier name carried over from the codex flags (the drivers default
+# the reviewer model to CODEX_MODEL) is not a cline model id. Treat it the way
+# the agent shim does: fall back to the configured cline model, then to cline's
+# own default.
+case "$model" in
+    opus|sonnet|kimi|kimi:*)
+        model="${UNCLE_CLINE_REVIEWER_MODEL:-${UNCLE_CLINE_MODEL:-}}"
+        ;;
+    *) ;;
+esac
 if [[ -n "${UNCLE_CLINE_EFFORT+x}" ]]; then
     effort="$UNCLE_CLINE_EFFORT"
+fi
+
+# cline requires a model id in `modelType/model` form (e.g. cline-pass/kimi-k3).
+# A bare display name — from a hand-edited .uncle/config, or a picker entry that
+# offered a label instead of an id — is only rejected by cline itself, one turn
+# into the stage and after the driver has already announced it. Fail here, where
+# the offending value can be named.
+if [[ -n "$model" && "$model" != */* ]]; then
+    printf '%s: invalid cline model id: %s\n' "reviewer-cline.sh" "$model" >&2
+    printf '  cline expects modelType/model, e.g. cline-pass/deepseek-v4-pro.\n' >&2
+    printf '  Fix it in .uncle/config, or in uncle -> Configure.\n' >&2
+    exit 2
 fi
 if [[ -z "$effort" ]]; then
     effort="medium"

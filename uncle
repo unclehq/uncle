@@ -105,7 +105,10 @@ apply_config() {
         [[ -n "$line" ]] || continue
         stage="${line%% *}"
         model="${line#* }"
-        model="$(printf '%s' "$model" | tr -d '[:space:]')"
+        # Trim the ends only. Stripping every space mangles a stale display
+        # name ("Laguna S 2.1" -> "LagunaS2.1") into a value no error message
+        # can be traced back to the config line that holds it.
+        model="$(printf '%s' "$model" | sed -e 's/^ *//' -e 's/ *$//')"
         [[ -n "$stage" && -n "$model" ]] || continue
         case "$stage" in
             runner)   export UNCLE_RUNNER="$model" ;;
@@ -224,7 +227,11 @@ launch() {
 choose_model() {
     local models_file line n sel idx
     models_file="$(mktemp)"
-    jq -r '.providers[]?.settings.model // empty' "$CLINE_CONFIG" 2>/dev/null > "$models_file" || true
+    # `select(contains("/"))`: cline needs modelType/model, and providers.json
+    # can hold a stale display name as a provider's last-used model. Offering
+    # one here is how it ends up in .uncle/config and then in `cline -m`.
+    jq -r '.providers[]?.settings.model // empty | select(contains("/"))' \
+        "$CLINE_CONFIG" 2>/dev/null | sort -u > "$models_file" || true
 
     while true; do
         echo
@@ -252,9 +259,15 @@ choose_model() {
             "")
                 break ;;
             c|C)
-                printf '%s' "Model id: "
-                if read -r CL_MODEL; then
-                    CL_MODEL="$(printf '%s' "$CL_MODEL" | tr -d '[:space:]')"
+                printf '%s' "Model id (modelType/model, e.g. cline-pass/kimi-k3): "
+                if read -r sel; then
+                    sel="$(printf '%s' "$sel" | tr -d '[:space:]')"
+                    if [[ -n "$sel" && "$sel" != */* ]]; then
+                        printf '%sNot a cline model id: %s (expected modelType/model)%s\n' \
+                            "$C_YELLOW" "$sel" "$C_RESET"
+                        continue
+                    fi
+                    CL_MODEL="$sel"
                 else
                     echo
                     CL_MODEL=""

@@ -82,12 +82,12 @@ check_eq "token line parses" "18" "$(tokens_from "$TMP/stdout")"
 # --- the codex-only flags must not reach cline ------------------------------
 
 ARGV_FILE="$TMP/argv" run_shim exec --ephemeral --sandbox read-only \
-    --output-last-message "$TMP/x.md" -m sonnet -c model_reasoning_effort=high \
+    --output-last-message "$TMP/x.md" -m cline-pass/kimi-k3 -c model_reasoning_effort=high \
     "REVIEW THE PLAN" > /dev/null
 
 argv="$(cat "$TMP/argv")"
 
-for flag in --json -p "-m sonnet" "--thinking high"; do
+for flag in --json -p "-m cline-pass/kimi-k3" "--thinking high"; do
     COUNT=$((COUNT + 1))
     case " $argv " in
         *" $flag "*) ;;
@@ -129,26 +129,26 @@ done
 # --- model precedence -------------------------------------------------------
 # Dedicated reviewer model > global pick > driver -m.
 
-UNCLE_CLINE_REVIEWER_MODEL=reviewer-model ARGV_FILE="$TMP/argv1" \
-    run_shim exec -m driver-model "P" > /dev/null
+UNCLE_CLINE_REVIEWER_MODEL=vendor/reviewer-model ARGV_FILE="$TMP/argv1" \
+    run_shim exec -m vendor/driver-model "P" > /dev/null
 COUNT=$((COUNT + 1))
 case " $(cat "$TMP/argv1") " in
-    *" -m reviewer-model "*) ;;
+    *" -m vendor/reviewer-model "*) ;;
     *) fail "model: UNCLE_CLINE_REVIEWER_MODEL did not win over -m" ;;
 esac
 
-UNCLE_CLINE_MODEL=global-model ARGV_FILE="$TMP/argv2" \
-    run_shim exec -m driver-model "P" > /dev/null
+UNCLE_CLINE_MODEL=vendor/global-model ARGV_FILE="$TMP/argv2" \
+    run_shim exec -m vendor/driver-model "P" > /dev/null
 COUNT=$((COUNT + 1))
 case " $(cat "$TMP/argv2") " in
-    *" -m global-model "*) ;;
+    *" -m vendor/global-model "*) ;;
     *) fail "model: UNCLE_CLINE_MODEL did not win over -m when no reviewer model set" ;;
 esac
 
-ARGV_FILE="$TMP/argv3" run_shim exec -m driver-model "P" > /dev/null
+ARGV_FILE="$TMP/argv3" run_shim exec -m vendor/driver-model "P" > /dev/null
 COUNT=$((COUNT + 1))
 case " $(cat "$TMP/argv3") " in
-    *" -m driver-model "*) ;;
+    *" -m vendor/driver-model "*) ;;
     *) fail "model: driver -m was not passed through when no override set" ;;
 esac
 
@@ -190,6 +190,36 @@ status=0
 run_shim exec --output-last-message "$TMP/none.md" > /dev/null 2>&1 || status=$?
 check_eq "missing prompt: exit 2" "2" "$status"
 check_absent "missing prompt: no artifact" "$TMP/none.md"
+
+# --- reviewer tier names and unparseable ids --------------------------------
+
+# The drivers default the reviewer model to CODEX_MODEL, so a codex tier name
+# can reach this shim. It is not a cline id: fall back to the configured cline
+# model, and emit no -m when there is none.
+
+UNCLE_CLINE_MODEL=vendor/global-model ARGV_FILE="$TMP/argv-tier1" \
+    run_shim exec -m sonnet "P" > /dev/null
+COUNT=$((COUNT + 1))
+case " $(cat "$TMP/argv-tier1") " in
+    *" -m vendor/global-model "*) ;;
+    *) fail "tier: 'sonnet' did not fall back to the configured cline model" ;;
+esac
+
+ARGV_FILE="$TMP/argv-tier2" run_shim exec -m sonnet "P" > /dev/null
+COUNT=$((COUNT + 1))
+case " $(cat "$TMP/argv-tier2") " in
+    *" -m "*) fail "tier: with no configured model a tier must emit no -m flag" ;;
+esac
+
+status=0
+err="$TMP/badmodel.err"
+run_shim exec -m "LagunaS2.1" "P" > /dev/null 2>"$err" || status=$?
+check_eq "invalid model: exit 2" "2" "$status"
+case "$(cat "$err")" in
+    *"LagunaS2.1"*) ;;
+    *) fail "invalid model: error does not name the offending value" ;;
+esac
+COUNT=$((COUNT + 1))
 
 # --- report -----------------------------------------------------------------
 

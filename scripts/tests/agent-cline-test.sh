@@ -68,7 +68,7 @@ driver_result() {
 # --- the cline path emits a terminal result event ---------------------------
 
 status=0
-run_shim -p --model some-model --max-turns 120 --output-format stream-json \
+run_shim -p --model vendor/some-model --max-turns 120 --output-format stream-json \
     --verbose --allowedTools "Bash Read" <<< "the prompt" > "$TMP/out.jsonl" || status=$?
 
 check_eq "success: shim exit status" "0" "$status"
@@ -110,7 +110,7 @@ check_eq "success: assistant text translated" "1" \
 # --- a non-completed finishReason is a failed stage, not a parked one -------
 
 status=0
-FINISH_REASON=max_iterations run_shim -p --model some-model <<< "the prompt" \
+FINISH_REASON=max_iterations run_shim -p --model vendor/some-model <<< "the prompt" \
     > "$TMP/fail.jsonl" || status=$?
 
 check_eq "non-completed: shim exit status" "1" "$status"
@@ -129,7 +129,7 @@ check_eq "non-completed: subtype"  "error_during_execution" \
 # event) must still surface a terminal result so the driver fails fast.
 
 status=0
-EMIT_RESULT=0 run_shim -p --model some-model <<< "the prompt" \
+EMIT_RESULT=0 run_shim -p --model vendor/some-model <<< "the prompt" \
     > "$TMP/noresult.jsonl" || status=$?
 
 check_eq "no run_result: shim exit status" "1" "$status"
@@ -146,21 +146,21 @@ check_eq "no run_result: subtype"  "error_during_execution" \
 # --- a non-zero cline exit propagates ---------------------------------------
 
 status=0
-FAKE_EXIT=7 run_shim -p --model some-model <<< "the prompt" > /dev/null || status=$?
+FAKE_EXIT=7 run_shim -p --model vendor/some-model <<< "the prompt" > /dev/null || status=$?
 check_eq "cline failure: exit status propagates" "7" "$status"
 
 # --- flag translation --------------------------------------------------------
 # The drivers pass `claude -p` flags. cline keeps --json/--auto-approve/-m/
 # --thinking; the rest are dropped.
 
-ARGV_FILE="$TMP/argv" run_shim -p --model some-model --max-turns 120 \
+ARGV_FILE="$TMP/argv" run_shim -p --model vendor/some-model --max-turns 120 \
     --output-format stream-json --verbose --strict-mcp-config \
     --exclude-dynamic-system-prompt-sections --allowedTools "Bash Read" \
     --max-budget-usd 12 --effort medium <<< "the prompt" > /dev/null
 
 argv="$(cat "$TMP/argv")"
 
-for flag in --json --auto-approve "-m some-model" "--thinking medium"; do
+for flag in --json --auto-approve "-m vendor/some-model" "--thinking medium"; do
     COUNT=$((COUNT + 1))
     case " $argv " in
         *" $flag "*) ;;
@@ -179,7 +179,7 @@ done
 
 # --- the prompt moves from stdin to a positional arg -------------------------
 
-ARGV_FILE="$TMP/prompt-argv" run_shim -p --model some-model \
+ARGV_FILE="$TMP/prompt-argv" run_shim -p --model vendor/some-model \
     <<< "promptbody" > /dev/null
 
 check_eq "prompt: moved to a positional arg" \
@@ -189,11 +189,11 @@ check_eq "prompt: moved to a positional arg" \
 # A cline model id carried by the driver wins; a tier name falls back to the
 # global pick, then to cline's own default (no -m).
 
-UNCLE_CLINE_MODEL=global-model ARGV_FILE="$TMP/argv1" \
+UNCLE_CLINE_MODEL=vendor/global-model ARGV_FILE="$TMP/argv1" \
     run_shim -p --model opus <<< "the prompt" > /dev/null
 COUNT=$((COUNT + 1))
 case " $(cat "$TMP/argv1") " in
-    *" -m global-model "*) ;;
+    *" -m vendor/global-model "*) ;;
     *) fail "model: tier 'opus' did not fall back to UNCLE_CLINE_MODEL" ;;
 esac
 
@@ -203,16 +203,16 @@ case " $(cat "$TMP/argv2") " in
     *" -m "*) fail "model: with no global pick a tier must emit no -m flag" ;;
 esac
 
-ARGV_FILE="$TMP/argv3" run_shim -p --model some-specific-model-id \
+ARGV_FILE="$TMP/argv3" run_shim -p --model vendor/specific-model-id \
     <<< "the prompt" > /dev/null
 COUNT=$((COUNT + 1))
 case " $(cat "$TMP/argv3") " in
-    *" -m some-specific-model-id "*) ;;
+    *" -m vendor/specific-model-id "*) ;;
     *) fail "model: a real cline model id was rewritten instead of passed through" ;;
 esac
 
 UNCLE_CLINE_EFFORT=high ARGV_FILE="$TMP/argv4" \
-    run_shim -p --model some-model --effort low <<< "the prompt" > /dev/null
+    run_shim -p --model vendor/some-model --effort low <<< "the prompt" > /dev/null
 COUNT=$((COUNT + 1))
 case " $(cat "$TMP/argv4") " in
     *" --thinking high "*) ;;
@@ -222,8 +222,40 @@ esac
 # --- missing prompt fails fast ----------------------------------------------
 
 status=0
-run_shim -p --model some-model < /dev/null > /dev/null 2>&1 || status=$?
+run_shim -p --model vendor/some-model < /dev/null > /dev/null 2>&1 || status=$?
 check_eq "missing prompt: exit 2" "2" "$status"
+
+# --- a model id cline cannot parse is refused before cline runs -------------
+
+# cline needs modelType/model. A display name ("Laguna S 2.1", or the
+# space-stripped "LagunaS2.1" a stale config produces) is otherwise only
+# rejected by cline itself, one turn into the stage.
+
+status=0
+err="$TMP/badmodel.err"
+argv="$TMP/badmodel.argv"
+rm -f "$argv"
+ARGV_FILE="$argv" run_shim -p --model "LagunaS2.1" <<< "the prompt" \
+    > /dev/null 2>"$err" || status=$?
+check_eq "invalid model: exit 2" "2" "$status"
+check_eq "invalid model: cline was not invoked" "absent" \
+    "$([[ -e "$argv" ]] && echo present || echo absent)"
+case "$(cat "$err")" in
+    *"LagunaS2.1"*) ;;
+    *) fail "invalid model: error does not name the offending value" ;;
+esac
+COUNT=$((COUNT + 1))
+
+# The global pick is validated too, not just the driver flag.
+status=0
+UNCLE_CLINE_MODEL="Laguna S 2.1" run_shim -p --model opus <<< "the prompt" \
+    > /dev/null 2>&1 || status=$?
+check_eq "invalid global pick: exit 2" "2" "$status"
+
+# A well-formed id and an empty pick both still run.
+status=0
+UNCLE_CLINE_MODEL="" run_shim -p --model opus <<< "the prompt" > /dev/null 2>&1 || status=$?
+check_eq "no model at all: still runs" "0" "$status"
 
 # --- report -----------------------------------------------------------------
 

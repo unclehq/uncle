@@ -249,10 +249,7 @@ stage_reviewer_cmd() {
 }
 
 stage_effort_for() {
-    local var fallback=""
-    uncle_has_config && fallback="$(uncle_stage_effort "$1")"
-    var="$(stage_var EFFORT "$1")"
-    eval "printf '%s' \"\${$var:-$fallback}\""
+    uncle_effective_stage_effort "$1"
 }
 
 stage_model_for() {
@@ -1079,9 +1076,7 @@ run_claude() {
     cmd="$(stage_agent_cmd "$log_name")"
     # A stage configured in `uncle` overrides what the call site asked for.
     model="$(stage_model_for "$log_name" "$model")"
-    if [[ -z "$effort" ]]; then
-        effort="$(stage_effort_for "$log_name")"
-    fi
+    effort="$(stage_effort_for "$log_name")"
 
     require_file "$prompt_file"
 
@@ -1252,9 +1247,7 @@ run_codex() {
     local effort="${4:-}"
     local cmd
     cmd="$(stage_reviewer_cmd "$log_name")"
-    if [[ -z "$effort" ]]; then
-        effort="$(stage_effort_for "$log_name")"
-    fi
+    effort="$(stage_effort_for "$log_name")"
     local -a model_args=()
     local model
     model="$(stage_model_for "$log_name" "${CODEX_MODEL:-}")"
@@ -1344,9 +1337,7 @@ start_codex_bg() {
     local effort="${4:-}"
     local cmd
     cmd="$(stage_reviewer_cmd "$log_name")"
-    if [[ -z "$effort" ]]; then
-        effort="$(stage_effort_for "$log_name")"
-    fi
+    effort="$(stage_effort_for "$log_name")"
     local -a model_args=()
     local model
     model="$(stage_model_for "$log_name" "${CODEX_MODEL:-}")"

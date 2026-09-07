@@ -21,6 +21,7 @@ done
 ROOT="$(cd "$(dirname "$uncle_self")" && pwd)"
 unset uncle_self uncle_link
 cd "$ROOT"
+. "$ROOT/scripts/lib/stage-config.sh"
 
 # ANSI palette matching cline's CLI. Disabled when stdout is not a terminal or
 # NO_COLOR is set, so piped/scripted output stays machine-readable.
@@ -388,7 +389,7 @@ configure_stage() {
         echo
         printf '%s%s%s  (%s stage)\n' "$C_CYAN$C_BOLD" "$stage" "$C_RESET" "$side"
         printf '  runner  %s\n' "$(config_get "$stage.runner")${C_DIM}${C_RESET}"
-        printf '  effort  %s\n' "$(config_get "$stage.effort")"
+        printf '  effort  %s\n' "$(uncle_stage_effort "$stage")"
         if [[ "$(config_get "$stage.runner")" == "cline" || -z "$(config_get "$stage.runner")" ]]; then
             printf '  model   %s\n' "$(config_get "$stage.model")"
             printf '%s' "Set [${C_CYAN}r${C_RESET}]unner [${C_CYAN}e${C_RESET}]ffort [${C_CYAN}m${C_RESET}]odel, [${C_CYAN}d${C_RESET}]efaults, [${C_CYAN}q${C_RESET}]back: "
@@ -447,7 +448,7 @@ configure_menu() {
             n=$((n+1))
             runner="$(config_get "$stage.runner")"
             [[ -n "$runner" ]] || runner="$DEFAULT_RUNNER"
-            effort="$(config_get "$stage.effort")"
+            effort="$(uncle_stage_effort "$stage")"
             [[ -n "$effort" ]] || effort="$DEFAULT_EFFORT"
             if [[ "$runner" == "cline" ]]; then
                 model="$(config_get "$stage.model")"

@@ -87,9 +87,10 @@ uncle_stage_runner() {
 
 uncle_stage_effort() {
     local stage="$1" v
+    case "$stage" in implementation-step-*) stage=implementation ;; esac
     v="$(uncle_config_get "$stage.effort")"
     [[ -n "$v" ]] || v="$(uncle_config_get effort)"
-    printf '%s' "$v"
+    printf '%s' "${v:-$UNCLE_DEFAULT_EFFORT}"
 }
 
 # Only cline is passed a model: claude, kimi, and codex have their own default,
@@ -116,4 +117,16 @@ uncle_stage_cmd() {
 # to re-read, and the drivers keep their own built-in defaults.
 uncle_has_config() {
     [[ -s "$(uncle_config_file)" ]]
+}
+
+# Shared execution precedence: explicit stage environment, config, medium.
+uncle_effective_stage_effort() {
+    local stage="$1" var value
+    var="WORKFLOW_EFFORT_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
+    value="${!var:-}"
+    if [[ -z "$value" && "$stage" == implementation-step-* ]]; then
+        value="${WORKFLOW_EFFORT_IMPLEMENTATION:-}"
+    fi
+    [[ -n "$value" ]] || value="$(uncle_stage_effort "$stage")"
+    printf '%s' "$value"
 }

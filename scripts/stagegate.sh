@@ -113,7 +113,7 @@ REVIEWER_CMD="${WORKFLOW_REVIEWER_CMD:-codex}"
 # Override any of these from the environment, e.g.
 #   WORKFLOW_MODEL_REQUIREMENTS=opus WORKFLOW_EFFORT_REQUIREMENTS=high
 DEFAULT_MODEL="opus"
-DEFAULT_EFFORT="high"
+DEFAULT_EFFORT="medium"
 
 # Stop after implementation and show the operator the actual diff, the green
 # check, and the agent's own notes, before anything downstream reads them.
@@ -362,16 +362,7 @@ stage_reviewer_cmd() {
 }
 
 stage_effort() {
-    local fallback="$DEFAULT_EFFORT"
-    case "$1" in
-        requirements|execute-checklist) fallback="medium" ;;
-    esac
-    if uncle_has_config; then
-        local configured
-        configured="$(uncle_stage_effort "$1")"
-        [[ -n "$configured" ]] && fallback="$configured"
-    fi
-    stage_setting EFFORT "$1" "$fallback"
+    uncle_effective_stage_effort "$1"
 }
 
 # Turn caps bound the worst case — a stage looping on a broken command — and

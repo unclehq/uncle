@@ -240,7 +240,7 @@ actual="$(
                      final-audit; do
             effort="$(uncle_stage_effort "$stage")"
             printf "%s\t%s\t%s\t%s\n" "$stage" "$(uncle_stage_runner "$stage")" \
-                "$(uncle_stage_model "$stage")" "${effort:-medium}"
+                "$(uncle_stage_model "$stage")" "$effort"
         done'
 )"
 

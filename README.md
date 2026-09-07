@@ -350,3 +350,9 @@ configured token-price estimate otherwise; they are not a prediction of all
 remaining work. Partial session totals are labeled. Session totals are saved in `.uncle/workspace/session-totals.json` and restored
 on subsequent launches. Changed REQUIREMENTS.md, CHANGE_REQUEST.md, or GitHub issue
 identity starts fresh totals; `uncle --performance` retains the full recorded history.
+
+When a document exceeds its size budget, Uncle offers a session popup (or
+terminal prompt) to approve a larger limit for that document. Approval continues
+with the preserved artifact and saves the limit in `.uncle/workspace/document-budgets/`
+for the current source brief. Declining leaves the workflow pending. Automated
+runs without a session UI or terminal require explicit environment overrides.

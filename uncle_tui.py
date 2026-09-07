@@ -413,6 +413,7 @@ class UncleTUI:
         self.status_pos = 0
         self.session_stats = None
         self.status_model = ""
+        self.status_effort = ""
         self.status_mode = ""
         self.status_stage = ""
         self.status_stage_index = 0
@@ -916,6 +917,7 @@ class UncleTUI:
                 stats["live"][stage] = ev
         if ev.get("event") == "start":
             self.status_model = ev.get("model", "")
+            self.status_effort = ev.get("effort", "")
             self.status_mode = ev.get("mode", "")
             self.status_stage = ev.get("stage", "")
             self.status_stage_index = int(ev.get("stage_index", 0) or 0)
@@ -945,6 +947,7 @@ class UncleTUI:
         self.prompt_buf = ""
         self.prompt_seen = 0
         self.status_model = ""
+        self.status_effort = ""
         self.status_runner = ""
         self.status_stage = ""
         self.gate_file = ""
@@ -1033,6 +1036,7 @@ class UncleTUI:
                 self.status_stage = stage.replace("stage: ", "").strip() or self.status_stage
                 self.status_mode = mode
                 self.status_model = ""
+                self.status_effort = ""
                 return
         if text.startswith("Model: "):
             model = text[len("Model: "):]
@@ -1230,6 +1234,7 @@ class UncleTUI:
                 self.proc.kill()
         self.proc = None
         self.status_model = ""
+        self.status_effort = ""
         self.status_mode = ""
         self.status_stage = ""
         self.status_stage_index = 0
@@ -1674,6 +1679,8 @@ class UncleTUI:
         box_h = len(body) + 4
         top = max(0, (h - box_h) // 2)
         left = max(0, (w - box_w) // 2)
+        if self.prompt_text.startswith("Document budget exceeded:"):
+            title = " document budget "
         if self.prompt_text.startswith("Repair limit reached:"):
             title = " repair limit "
         border = self.color["title"]
@@ -1770,7 +1777,11 @@ class UncleTUI:
             bar_attr = 0
             stage = ""
         runner = self.status_runner or "—"
-        parts = " runner: %s   model: %s   mode: %s " % (runner, model, mode)
+        effort = "—"
+        if self.state == "running" and self.status_stage:
+            effort = (getattr(self, "status_effort", "") or
+                      getattr(self, "stage_efforts", {}).get(self.status_stage) or DEFAULT_EFFORT)
+        parts = " runner: %s   model: %s   effort: %s   mode: %s " % (runner, model, effort, mode)
         if stage:
             parts += "  %s" % stage
         text = parts

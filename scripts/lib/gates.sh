@@ -220,6 +220,16 @@ document_budget_source() {
     esac
 }
 
+# Scope approved increases to this source document, never to another project brief.
+document_budget_override_path() {
+    local source fingerprint key
+    source="$(document_budget_source "$1")"
+    fingerprint="$(cksum 2>/dev/null < "$source" | awk '{print $1 "-" $2}')" || fingerprint=missing
+    [[ -n "$fingerprint" ]] || fingerprint=missing
+    key=$(printf '%s' "${1##*/}" | tr -c 'A-Za-z0-9._-' '_')
+    printf '%s/document-budgets/%s-%s\n' "${STATE_DIR:-.uncle/workspace}" "$fingerprint" "$key"
+}
+
 # Artifact-specific override wins over the global override, then defaults.
 # Bash 3.2 indirect expansion avoids eval of operator-provided values.
 document_budget() {
@@ -248,6 +258,16 @@ document_budget() {
     esac
     if ! awk -v b="$max_bytes" -v l="$max_lines" 'BEGIN {exit !(b>0 && l>0)}'; then
         echo "Document budgets for $file must be positive integers." >&2; return 1
+    fi
+    local saved_path saved_bytes saved_lines
+    saved_path="$(document_budget_override_path "$file")"
+    if [[ -s "$saved_path" ]]; then
+        read -r saved_bytes saved_lines < "$saved_path" || return 1
+        if ! [[ "$saved_bytes $saved_lines" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            echo "Invalid saved document budget: $saved_path" >&2
+            return 1
+        fi
+        read -r max_bytes max_lines <<< "$(awk -v b="$max_bytes" -v l="$max_lines" -v sb="$saved_bytes" -v sl="$saved_lines" 'BEGIN {printf "%.0f %.0f", (b>sb?b:sb), (l>sl?l:sl)}')"
     fi
     printf '%s %s\n' "$max_bytes" "$max_lines"
 }
@@ -295,7 +315,7 @@ BUDGET
 
 # Check newly authored stage artifacts; never rewrite approved inputs.
 check_document_budget() {
-    local file="$1" bytes lines limits max_bytes max_lines key
+    local file="$1" bytes lines limits max_bytes max_lines key answer proposed_bytes proposed_lines saved_path temporary
     document_budget_defaults "$file" > /dev/null || return 0
     limits="$(document_budget "$file")" || return 1
     read -r max_bytes max_lines <<< "$limits"
@@ -307,6 +327,25 @@ check_document_budget() {
         echo "Document budget exceeded: $file ($bytes bytes, $lines lines; limits $max_bytes bytes, $max_lines lines)." >&2
         echo "Artifact preserved. Shorten repeated prose, never mandatory rows or commands. Re-run to resume." >&2
         echo "If mandatory content needs more room, set WORKFLOW_DOC_MAX_BYTES_$key / WORKFLOW_DOC_MAX_LINES_$key (or global WORKFLOW_DOC_MAX_BYTES / WORKFLOW_DOC_MAX_LINES)." >&2
+        [[ "${2:-}" != probe ]] || return 1
+        if [[ -t 0 || -n "${UNCLE_STATUS_FILE:-}" || "${WORKFLOW_BUDGET_PROMPT:-0}" == 1 ]]; then
+            read -r proposed_bytes proposed_lines <<< "$(awk -v b="$bytes" -v l="$lines" -v mb="$max_bytes" -v ml="$max_lines" 'BEGIN {printf "%.0f %.0f", (b>mb?int((b*1.1+999)/1000)*1000:mb), (l>ml?int((l*1.1+9)/10)*10:ml)}')"
+            printf 'Document budget exceeded: %s. Increase limits from %s bytes / %s lines to %s bytes / %s lines and continue with the preserved document? [Y/N]' "$file" "$max_bytes" "$max_lines" "$proposed_bytes" "$proposed_lines" >&2
+            if IFS= read -r answer; then
+                case "$answer" in
+                    y|Y)
+                        saved_path="$(document_budget_override_path "$file")"
+                        mkdir -p "$(dirname "$saved_path")" || return 1
+                        temporary="$(mktemp "${saved_path}.XXXXXX")" || return 1
+                        printf '%s %s\n' "$proposed_bytes" "$proposed_lines" > "$temporary"
+                        mv "$temporary" "$saved_path" || return 1
+                        echo "Document budget increase saved for $file." >&2
+                        return 0
+                        ;;
+                esac
+            fi
+            echo 'No budget increase authorized; workflow remains pending.' >&2
+        fi
         return 1
     fi
 }
@@ -319,10 +358,10 @@ finish_review_budget() {
     local -a flags=(exec --ephemeral --skip-git-repo-check --sandbox read-only)
     limits="$(document_budget "$file")" || return 1
     [[ -s "$file" ]] || { check_document_budget "$file"; return 1; }
-    check_document_budget "$file" 2>/dev/null && return 0
+    check_document_budget "$file" probe 2>/dev/null && return 0
     if [[ "${WORKFLOW_REVIEW_COMPACT:-1}" == 0 ]]; then
         check_document_budget "$file"
-        return 1
+        return $?
     fi
     read -r bytes lines <<< "$limits"
     [[ -z "$model" ]] || flags+=(-m "$model")
@@ -336,7 +375,6 @@ finish_review_budget() {
         perf_record reviewer "${stage}-compact" "$((SECONDS-started))" "$status" \
             "$log" "$cmd" "$model" "$effort"
     fi
-    [[ "$status" == 0 ]] || { check_document_budget "$file"; return 1; }
     check_document_budget "$file"
 }
 

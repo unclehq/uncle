@@ -4,8 +4,7 @@
 A curses interface: pick a workflow, then run the chosen driver while streaming
 its output. The cline model, reasoning effort, and per-stage overrides are set
 in the Configure screen (persisted to `.uncle/config`). A fixed status bar shows
-the current model, cumulative tokens used, and Act/Plan mode for the running
-stage.
+the current model and Act/Plan mode for the running stage.
 """
 import shlex
 import shutil
@@ -400,9 +399,6 @@ class UncleTUI:
         self.status_stage = ""
         self.status_stage_index = 0
         self.status_stage_total = 0
-        self.status_stage_turns = 0
-        self.completed_tokens = 0
-        self.current_tokens = 0
         # Per-stage settings, keyed by stage log name. Absent means "default".
         self.stage_runners = {}
         self.stage_models = {}
@@ -882,32 +878,14 @@ class UncleTUI:
         except Exception:
             return
         if ev.get("event") == "start":
-            self.completed_tokens += self.current_tokens
-            self.current_tokens = 0
             self.status_model = ev.get("model", "")
             self.status_mode = ev.get("mode", "")
             self.status_stage = ev.get("stage", "")
             self.status_stage_index = int(ev.get("stage_index", 0) or 0)
             self.status_stage_total = int(ev.get("stage_total", 0) or 0)
-            self.status_stage_turns = int(ev.get("stage_turns", 0) or 0)
         elif ev.get("event") == "usage":
-            self.current_tokens = int(ev.get("total_tokens", 0) or 0)
             self.status_model = ev.get("model", self.status_model)
             self.status_mode = ev.get("mode", self.status_mode)
-
-    def _stage_percent(self):
-        """Estimated completion of the current stage, from token use.
-
-        A stage's turn cap is its worst case; a healthy stage uses roughly
-        8k tokens per turn (input grows each turn but most turns are small).
-        Returns None when the workflow did not report stage context, else a
-        0–99 value: 100 is only claimed by starting the next stage.
-        """
-        if not self.status_stage_turns:
-            return None
-        budget = self.status_stage_turns * 8000
-        pct = int(self.current_tokens * 100 / max(1, budget))
-        return min(99, max(0, pct))
 
     # ---- running ----
     def start_workflow(self):
@@ -1205,14 +1183,11 @@ class UncleTUI:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
         self.proc = None
-        self.completed_tokens = 0
-        self.current_tokens = 0
         self.status_model = ""
         self.status_mode = ""
         self.status_stage = ""
         self.status_stage_index = 0
         self.status_stage_total = 0
-        self.status_stage_turns = 0
 
     # ---- drawing ----
     def draw(self):
@@ -1523,7 +1498,6 @@ class UncleTUI:
             return
         if self.state == "running":
             model = self.status_model or "—"
-            tokens = self.completed_tokens + self.current_tokens
             if self.prompt_kind:
                 mode = "Waiting for you"
                 bar_attr = self.color["sel"]
@@ -1540,18 +1514,13 @@ class UncleTUI:
             if self.status_stage_index and self.status_stage_total:
                 stage = "stage: %s (%d/%d)" % (
                     self.status_stage, self.status_stage_index, self.status_stage_total)
-            pct = self._stage_percent()
-            if pct is not None:
-                stage += " %d%%" % pct
         else:
             model = "—"
-            tokens = 0
             mode = "—"
             bar_attr = 0
             stage = ""
         runner = self.status_runner or "—"
-        parts = " runner: %s   model: %s   tokens: %d   mode: %s " % (
-            runner, model, tokens, mode)
+        parts = " runner: %s   model: %s   mode: %s " % (runner, model, mode)
         if stage:
             parts += "  %s" % stage
         text = parts

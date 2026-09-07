@@ -120,10 +120,14 @@ DOC_STAGES=" requirements project-plan updated-plan implementation execute-check
 PLAN_STAGES=" project-plan updated-plan change-plan updated-change-plan "
 
 # Echo the prompt path the stage should read: the original prompt file for
-# non-plan stages, or a temp copy with the gates appended for plan stages.
+# stages with nothing to append, or a temp copy with the output rules (and the
+# plan gates for plan stages) appended. A reviewer stage additionally gets a
+# final note reconciling Rule 0 with the reviewer contract: the reviewer is
+# read-only, so the document is its final message, not a file it cannot write.
 gated_prompt() {
     local prompt_file="$1"
     local log_name="$2"
+    local role="${3:-agent}"
 
     local is_plan=0 is_doc=0
     case "$PLAN_STAGES" in
@@ -154,6 +158,9 @@ gated_prompt() {
         if [[ -n "$gates" ]]; then
             printf '\n\n---\n\n# Output gates (binding)\n\nThe plan you write must pass every gate below. Resolve the gates in this\norder: a project-local GATES.md or .uncle/gates/GATES.md wins; otherwise the\ngates installed with uncle apply.\n\n'
             load_gates
+        fi
+        if [[ "$role" == "reviewer" ]]; then
+            printf '\n\n---\n\n# Reviewer output (binding)\n\nYou run read-only: you cannot write files, so Rule 0 above cannot apply to\nyou. The document the stage asked for is your final assistant message:\nreturn it in full as that message — not a path, not a summary, not a note\nabout a file you could not write.\n'
         fi
     } > "$combined"
     [[ -n "$rules" ]] && echo "Output rules: $(output_rules_source) ($rules)" >&2

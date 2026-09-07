@@ -594,16 +594,18 @@ run_codex_review() {
 
     # The reviewer writes a document a human reads, so it gets the output
     # rules the same way an agent stage does.
-    prompt_file="$(gated_prompt "$prompt_file" "$log_name")"
+    prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
 
     local status=0
+    # stdin is the operator's gate-answer channel, not stage input: codex
+    # appends a non-TTY stdin to the prompt and would block on it forever.
     "$cmd" exec \
         --ephemeral \
         --sandbox read-only \
         "${model_args[@]+"${model_args[@]}"}" \
         --output-last-message "$output_file" \
         "$(cat "$prompt_file")" \
-        2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
+        < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
 
     if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
         echo

@@ -1233,7 +1233,7 @@ run_codex() {
     require_file "$prompt_file"
     # The reviewer writes a document a human reads, so it gets the output
     # rules the same way an agent stage does.
-    prompt_file="$(gated_prompt "$prompt_file" "$log_name")"
+    prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
 
     local -a flags=(
         exec
@@ -1253,8 +1253,10 @@ run_codex() {
 
     local start="$SECONDS"
     local status=0
+    # stdin is the operator's gate-answer channel, not stage input: codex
+    # appends a non-TTY stdin to the prompt and would block on it forever.
     "$cmd" "${flags[@]}" "$(cat "$prompt_file")" \
-        2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
+        < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
 
     record_codex_cost "$log_name" "$((SECONDS - start))"
 
@@ -1299,7 +1301,7 @@ start_codex_bg() {
     require_file "$prompt_file"
     # The reviewer writes a document a human reads, so it gets the output
     # rules the same way an agent stage does.
-    prompt_file="$(gated_prompt "$prompt_file" "$log_name")"
+    prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
     rm -f "$output_file"
     status_stage_context "$log_name" 0 "${model:-}" review
 
@@ -1320,7 +1322,7 @@ start_codex_bg() {
     echo "Log: $LOG_DIR/${log_name}.log"
 
     "$cmd" "${flags[@]}" "$(cat "$prompt_file")" \
-        > "$LOG_DIR/${log_name}.log" 2>&1 &
+        < /dev/null > "$LOG_DIR/${log_name}.log" 2>&1 &
 
     BG_PID=$!
     BG_LABEL="$log_name"

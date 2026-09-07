@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The caller's working directory is the project being configured; the scripts
+# cd to the install dir ($ROOT), so capture it before that happens.
+PROJECT_ROOT="$PWD"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
@@ -55,7 +58,7 @@ fi
 CLINE_CONFIG="${CLINE_CONFIG:-$HOME/.cline/data/settings/providers.json}"
 CL_MODEL=""
 CL_EFFORT="medium"
-UNCLE_CONFIG="${UNCLE_CONFIG:-$PWD/.uncle.config}"
+UNCLE_CONFIG="${UNCLE_CONFIG:-$PROJECT_ROOT/.uncle.config}"
 CONFIG_STAGES="requirements project-plan updated-plan implementation execute-checklist baseline change-spec change-plan updated-change-plan reviewer"
 
 stage_env_var() {
@@ -443,10 +446,15 @@ run_change_workflow() {
 # the effective values before any workflow runs.
 apply_config
 
-# First time in this project root (no .uncle.config yet): go straight to the
-# configure menu so this project gets set up before any workflow runs.
+# First time in this project root (no .uncle.config yet): create the workspace
+# dir the scripts write state/logs into, then go straight to the configure menu
+# so this project gets set up before any workflow runs.
 if [[ ! -s "$UNCLE_CONFIG" ]]; then
+    mkdir -p "$PROJECT_ROOT/.uncle/workspace"
     configure_menu
+    # Configure may quit without saving anything; write a minimal default so
+    # this is still recognized as configured on the next run.
+    [[ -s "$UNCLE_CONFIG" ]] || printf 'runner cline\neffort medium\n' > "$UNCLE_CONFIG"
 fi
 
 while true; do

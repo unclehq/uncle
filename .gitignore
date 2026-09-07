@@ -1,11 +1,11 @@
-.workflow
+.uncle/workspace/
 
 # Local agent workflow state
-.workflow/state
-.workflow/approvals/
-.workflow/logs/
-.workflow/change.diff
-.workflow/change-stat.txt
+.uncle/workspace/state
+.uncle/workspace/approvals/
+.uncle/workspace/logs/
+.uncle/workspace/change.diff
+.uncle/workspace/change-stat.txt
 
 # Python bytecode
 __pycache__/

@@ -142,7 +142,7 @@ new_case() {
     OUT="$CASE/out.txt"
     RC=0
 
-    mkdir -p "$REPO/scripts" "$REPO/.workflow/approvals"
+    mkdir -p "$REPO/scripts" "$REPO/.uncle/workspace/approvals"
     : > "$OUT"
 
     local doc
@@ -182,7 +182,7 @@ write_cw_harness() {
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail
-APPROVAL_DIR="\$PWD/.workflow/approvals"
+APPROVAL_DIR="\$PWD/.uncle/workspace/approvals"
 show_spend() { :; }
 . "$CASE/fns.sh"
 $HARNESS_PRELUDE
@@ -198,7 +198,7 @@ write_sg_harness() {
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail
-APPROVAL_DIR="\$PWD/.workflow/approvals"
+APPROVAL_DIR="\$PWD/.uncle/workspace/approvals"
 cancel_speculation() { echo "CANCEL_SPECULATION"; }
 . "$CASE/fns.sh"
 $HARNESS_PRELUDE
@@ -263,7 +263,7 @@ for answer in y Y; do
     expect_status 0
     expect_out "Ready to approve PROJECT_PLAN.md? [Y/N]"
     expect_out "Approved PROJECT_PLAN.md"
-    expect_hash_of "$REPO/.workflow/approvals/PROJECT_PLAN.sha256" "$REPO/PROJECT_PLAN.md"
+    expect_hash_of "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256" "$REPO/PROJECT_PLAN.md"
 done
 
 # The digest printed at the prompt is the digest that gets recorded.
@@ -276,7 +276,7 @@ for answer in "n" "N" "foo" "" "APPROVE" "ACKNOWLEDGE"; do
     run_workflow "$answer\n" approve-plan
     expect_status 1
     expect_out "Approval cancelled."
-    expect_no_approval "$REPO/.workflow/approvals/PROJECT_PLAN.sha256"
+    expect_no_approval "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
 done
 
 for answer in APPROVE ACKNOWLEDGE approve acknowledge; do
@@ -284,25 +284,25 @@ for answer in APPROVE ACKNOWLEDGE approve acknowledge; do
     run_workflow "$answer\n" approve-plan
     expect_status 1
     expect_out "requires 'y' to approve"
-    expect_no_approval "$REPO/.workflow/approvals/PROJECT_PLAN.sha256"
+    expect_no_approval "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
 done
 
 setup_workflow "g1-eof"
 run_workflow "" approve-plan
 expect_status 1
 expect_out "Approval cancelled."
-expect_no_approval "$REPO/.workflow/approvals/PROJECT_PLAN.sha256"
+expect_no_approval "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
 
 setup_workflow "g1-other-subcommands"
 run_workflow "y\n" approve-review
 expect_status 0
 expect_out "Ready to approve ADVERSARIAL_REVIEW.md? [Y/N]"
-expect_hash_of "$REPO/.workflow/approvals/ADVERSARIAL_REVIEW.sha256" "$REPO/ADVERSARIAL_REVIEW.md"
+expect_hash_of "$REPO/.uncle/workspace/approvals/ADVERSARIAL_REVIEW.sha256" "$REPO/ADVERSARIAL_REVIEW.md"
 
 setup_workflow "g1-updated-plan"
 run_workflow "y\n" approve-updated-plan
 expect_status 0
-expect_hash_of "$REPO/.workflow/approvals/UPDATED_PROJECT_PLAN.sha256" \
+expect_hash_of "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256" \
     "$REPO/UPDATED_PROJECT_PLAN.md"
 
 # Mutating the file after the prompt is shown must decline, not record the
@@ -310,7 +310,7 @@ expect_hash_of "$REPO/.workflow/approvals/UPDATED_PROJECT_PLAN.sha256" \
 setup_workflow "g1-race"
 run_workflow_racing PROJECT_PLAN.md approve-plan
 expect_status 1
-expect_no_approval "$REPO/.workflow/approvals/PROJECT_PLAN.sha256"
+expect_no_approval "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
 
 echo "== G2: scripts/change-workflow.sh human_gate =="
 
@@ -350,7 +350,7 @@ for s in 0 1 2 3; do
     expect_out "? [Y/N]"
     for i in "${!site_files[@]}"; do
         expect_out "${site_files[$i]}"
-        expect_hash_of "$REPO/.workflow/approvals/${site_names[$i]}.sha256" \
+        expect_hash_of "$REPO/.uncle/workspace/approvals/${site_names[$i]}.sha256" \
             "$REPO/${site_files[$i]}"
     done
 
@@ -361,7 +361,7 @@ for s in 0 1 2 3; do
     expect_out "Gate not accepted. Workflow remains paused."
     expect_not_out "GATE_ACCEPTED"
     for i in "${!site_names[@]}"; do
-        expect_no_approval "$REPO/.workflow/approvals/${site_names[$i]}.sha256"
+        expect_no_approval "$REPO/.uncle/workspace/approvals/${site_names[$i]}.sha256"
     done
 done
 
@@ -386,7 +386,7 @@ write_cw_harness
 run_gate "\nY\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
 expect_status 0
 expect_out "GATE_ACCEPTED"
-expect_hash_of "$REPO/.workflow/approvals/UPDATED_CHANGE_PLAN.sha256" \
+expect_hash_of "$REPO/.uncle/workspace/approvals/UPDATED_CHANGE_PLAN.sha256" \
     "$REPO/UPDATED_CHANGE_PLAN.md"
 
 for answer in "N" "foo" "" "APPROVE" "ACKNOWLEDGE"; do
@@ -396,7 +396,7 @@ for answer in "N" "foo" "" "APPROVE" "ACKNOWLEDGE"; do
     expect_status 0
     expect_out "Gate not accepted. Workflow remains paused."
     expect_not_out "GATE_ACCEPTED"
-    expect_no_approval "$REPO/.workflow/approvals/UPDATED_CHANGE_PLAN.sha256"
+    expect_no_approval "$REPO/.uncle/workspace/approvals/UPDATED_CHANGE_PLAN.sha256"
 done
 
 for answer in APPROVE ACKNOWLEDGE; do
@@ -412,7 +412,7 @@ write_cw_harness
 run_gate "\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
 expect_status 0
 expect_out "Gate not accepted. Workflow remains paused."
-expect_no_approval "$REPO/.workflow/approvals/UPDATED_CHANGE_PLAN.sha256"
+expect_no_approval "$REPO/.uncle/workspace/approvals/UPDATED_CHANGE_PLAN.sha256"
 
 # AR-001: EOF at the preliminary "Press ENTER" read must not trip `set -e`.
 for site in 0 3; do
@@ -423,8 +423,8 @@ for site in 0 3; do
     expect_status 0
     expect_out "Gate not accepted. Workflow remains paused."
     expect_not_out "GATE_ACCEPTED"
-    expect_no_approval "$REPO/.workflow/approvals/BASELINE_REPORT.sha256"
-    expect_no_approval "$REPO/.workflow/approvals/UPDATED_CHANGE_PLAN.sha256"
+    expect_no_approval "$REPO/.uncle/workspace/approvals/BASELINE_REPORT.sha256"
+    expect_no_approval "$REPO/.uncle/workspace/approvals/UPDATED_CHANGE_PLAN.sha256"
 done
 
 # A gated file mutated between the prompt digest and the response must decline.
@@ -435,8 +435,8 @@ run_gate "\ny\n" MUTATE_AFTER_HASH_CALL=1 -- ACKNOWLEDGE \
     ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
 expect_status 0
 expect_not_out "GATE_ACCEPTED"
-expect_no_approval "$REPO/.workflow/approvals/CHANGE_PLAN.sha256"
-expect_no_approval "$REPO/.workflow/approvals/ADVERSARIAL_REVIEW.sha256"
+expect_no_approval "$REPO/.uncle/workspace/approvals/CHANGE_PLAN.sha256"
+expect_no_approval "$REPO/.uncle/workspace/approvals/ADVERSARIAL_REVIEW.sha256"
 
 echo "== G3: scripts/stagegate.sh review_and_approve =="
 
@@ -472,7 +472,7 @@ for s in 0 1 2 3; do
     expect_status 0
     expect_out "GATE_ACCEPTED"
     expect_out "Ready to $verb $file? [Y/N]"
-    expect_hash_of "$REPO/.workflow/approvals/${name}.sha256" "$REPO/$file"
+    expect_hash_of "$REPO/.uncle/workspace/approvals/${name}.sha256" "$REPO/$file"
 
     new_case "g3-site$s-decline"
     write_sg_harness
@@ -480,7 +480,7 @@ for s in 0 1 2 3; do
     expect_status 0
     expect_out "Gate not accepted. Workflow paused."
     expect_not_out "GATE_ACCEPTED"
-    expect_no_approval "$REPO/.workflow/approvals/${name}.sha256"
+    expect_no_approval "$REPO/.uncle/workspace/approvals/${name}.sha256"
 done
 
 # The default wording is still `approve`.
@@ -495,7 +495,7 @@ write_sg_harness
 run_gate "\nY\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
 expect_status 0
 expect_out "GATE_ACCEPTED"
-expect_hash_of "$REPO/.workflow/approvals/PROJECT_PLAN.sha256" "$REPO/PROJECT_PLAN.md"
+expect_hash_of "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256" "$REPO/PROJECT_PLAN.md"
 
 for answer in "N" "foo" "" "APPROVE" "ACKNOWLEDGE"; do
     new_case "g3-decline-${answer:-empty}"
@@ -503,7 +503,7 @@ for answer in "N" "foo" "" "APPROVE" "ACKNOWLEDGE"; do
     run_gate "\n$answer\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
     expect_status 0
     expect_out "Gate not accepted. Workflow paused."
-    expect_no_approval "$REPO/.workflow/approvals/PROJECT_PLAN.sha256"
+    expect_no_approval "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
 done
 
 for answer in APPROVE ACKNOWLEDGE; do
@@ -518,7 +518,7 @@ write_sg_harness
 run_gate "\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
 expect_status 0
 expect_out "Gate not accepted. Workflow paused."
-expect_no_approval "$REPO/.workflow/approvals/PROJECT_PLAN.sha256"
+expect_no_approval "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
 
 new_case "g3-eof-preliminary"
 write_sg_harness
@@ -526,7 +526,7 @@ run_gate "" -- PROJECT_PLAN.md PROJECT_PLAN approve
 expect_status 0
 expect_out "Gate not accepted. Workflow paused."
 expect_not_out "GATE_ACCEPTED"
-expect_no_approval "$REPO/.workflow/approvals/PROJECT_PLAN.sha256"
+expect_no_approval "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
 
 # I-3: edited during review — the gate re-opens and speculation is cancelled.
 # The second pass then approves the bytes actually read.
@@ -537,7 +537,7 @@ expect_status 0
 expect_out "changed while you were reviewing it."
 expect_out "CANCEL_SPECULATION"
 expect_out "GATE_ACCEPTED"
-expect_hash_of "$REPO/.workflow/approvals/PROJECT_PLAN.sha256" "$REPO/PROJECT_PLAN.md"
+expect_hash_of "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256" "$REPO/PROJECT_PLAN.md"
 
 # AR-003: edited between the validating compare and the recording step. The
 # recorded digest must be the validated one, not a re-read of the new bytes.
@@ -546,9 +546,9 @@ write_sg_harness
 SG_PRE_RACE_DIGEST="$(shasum -a 256 "$REPO/PROJECT_PLAN.md" | awk '{print $1}')"
 run_gate "\ny\n" MUTATE_AFTER_HASH_CALL=2 -- PROJECT_PLAN.md PROJECT_PLAN approve
 expect_status 0
-expect_hash_literal "$REPO/.workflow/approvals/PROJECT_PLAN.sha256" "$SG_PRE_RACE_DIGEST"
+expect_hash_literal "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256" "$SG_PRE_RACE_DIGEST"
 COUNT=$((COUNT + 1))
-if [[ "$(cat "$REPO/.workflow/approvals/PROJECT_PLAN.sha256" 2>/dev/null)" == \
+if [[ "$(cat "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256" 2>/dev/null)" == \
       "$(shasum -a 256 "$REPO/PROJECT_PLAN.md" | awk '{print $1}')" ]]; then
     fail "approval recorded the post-race bytes instead of the reviewed bytes"
 fi
@@ -626,26 +626,26 @@ setup_workflow "g5-leading-space-workflow"
 run_workflow " y\n" approve-plan
 expect_status 1
 expect_out "Approval cancelled."
-expect_no_approval "$REPO/.workflow/approvals/PROJECT_PLAN.sha256"
+expect_no_approval "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
 
 setup_workflow "g5-trailing-space-workflow"
 run_workflow "y \n" approve-plan
 expect_status 1
-expect_no_approval "$REPO/.workflow/approvals/PROJECT_PLAN.sha256"
+expect_no_approval "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
 
 new_case "g5-leading-space-cw"
 write_cw_harness
 run_gate "\n y\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
 expect_status 0
 expect_not_out "GATE_ACCEPTED"
-expect_no_approval "$REPO/.workflow/approvals/UPDATED_CHANGE_PLAN.sha256"
+expect_no_approval "$REPO/.uncle/workspace/approvals/UPDATED_CHANGE_PLAN.sha256"
 
 new_case "g5-leading-space-sg"
 write_sg_harness
 run_gate "\n y\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
 expect_status 0
 expect_not_out "GATE_ACCEPTED"
-expect_no_approval "$REPO/.workflow/approvals/PROJECT_PLAN.sha256"
+expect_no_approval "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
 
 echo
 if [[ "$FAILED" -gt 0 ]]; then

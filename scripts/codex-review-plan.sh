@@ -12,7 +12,7 @@ Run the reviewer CLI against the approved PROJECT_PLAN.md and write
 ADVERSARIAL_REVIEW.md (Stage 2 of the new-application workflow).
 
 Takes no positional arguments. Requires REQUIREMENTS.md, PROJECT_PLAN.md, and
-a matching approval record in .workflow/approvals/PROJECT_PLAN.sha256.
+a matching approval record in .uncle/workspace/approvals/PROJECT_PLAN.sha256.
 Configuration is via WORKFLOW_* environment variables (see scripts/README.md).
 EOF
 }
@@ -25,9 +25,9 @@ esac
 
 test -s REQUIREMENTS.md
 test -s PROJECT_PLAN.md
-test -s .workflow/approvals/PROJECT_PLAN.sha256
+test -s .uncle/workspace/approvals/PROJECT_PLAN.sha256
 
-expected="$(cat .workflow/approvals/PROJECT_PLAN.sha256)"
+expected="$(cat .uncle/workspace/approvals/PROJECT_PLAN.sha256)"
 actual="$(shasum -a 256 PROJECT_PLAN.md | awk '{print $1}')"
 
 if [[ "$expected" != "$actual" ]]; then

@@ -166,7 +166,7 @@ check_eq "no classified rows: no regressions" "0" "$(green_regressions "$TMP/abs
 
 # --- green_report ----------------------------------------------------------
 
-green_report "$TMP/class.tsv" "$TMP/green.md" BASELINE_REPORT.md .workflow/logs/green-check.log
+green_report "$TMP/class.tsv" "$TMP/green.md" BASELINE_REPORT.md .uncle/workspace/logs/green-check.log
 
 check_contains "report names the regressed command" "make test" "$TMP/green.md"
 check_contains "report states the regression count" "2 command(s) regressed" "$TMP/green.md"

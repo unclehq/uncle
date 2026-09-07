@@ -7,7 +7,7 @@
 # from-issue.sh's post-run check — so neither can drift into a second, looser
 # check (CHANGE_SPEC §11).
 #
-# .workflow/origin grammar:  <owner/repo> TAB <issue> [TAB <gh|curl>]
+# .uncle/workspace/origin grammar:  <owner/repo> TAB <issue> [TAB <gh|curl>]
 # The third field records how the binding was fetched. It is written going
 # forward; a pre-existing two-field file reads as `curl` and therefore cannot
 # authorize a close until the next write refreshes it (fail closed).
@@ -22,7 +22,7 @@
 # enforces on a host with neither timeout nor gtimeout.
 ISSUE_CLOSE_TIMEOUT_SECS="${STAGEGATE_CLOSE_TIMEOUT:-30}"
 
-# origin_field <file> <n> — field n of .workflow/origin, empty when absent.
+# origin_field <file> <n> — field n of .uncle/workspace/origin, empty when absent.
 origin_field() {
     local file="$1" n="$2"
 
@@ -54,7 +54,7 @@ issue_close_timeout_cmd() {
 
 # state_origin_agree <state_file> <origin_file>
 #
-# 0 when the state file's issue prefix and .workflow/origin's issue agree, when
+# 0 when the state file's issue prefix and .uncle/workspace/origin's issue agree, when
 # either is absent, or when the state names a *finished* run of another issue.
 # Non-zero, with the reason printed, when an unfinished run disagrees: normal
 # operation cannot produce that combination, so it is treated as corruption
@@ -73,7 +73,7 @@ state_origin_agree() {
     fi
 
     # A COMPLETE state is the residue of a run that finished, not a hand edit.
-    # Seeding the next issue writes .workflow/origin and leaves that residue
+    # Seeding the next issue writes .uncle/workspace/origin and leaves that residue
     # behind, so refusing here would make every checkout single-use: the second
     # issue could never start without deleting files by hand. The caller rebinds
     # the state to this issue instead.
@@ -94,7 +94,7 @@ state_origin_agree() {
 #                      <run_owns_verdict> <fetch_method>
 #
 #   allow_close       1 unless the caller's kill switch is off
-#   origin_bound      1 when the caller can prove it owns .workflow/origin for
+#   origin_bound      1 when the caller can prove it owns .uncle/workspace/origin for
 #                     this invocation rather than having found it on disk
 #   run_owns_verdict  1 when the caller can prove this run produced the verdict
 #                     record (in-process, or a retry on the same concrete run id)
@@ -173,7 +173,7 @@ issue_close_if_ready() {
         return 1
     fi
 
-    # A leftover .workflow/origin found on disk by an otherwise fresh run proves
+    # A leftover .uncle/workspace/origin found on disk by an otherwise fresh run proves
     # nothing about what this invocation is working on.
     if [[ "$origin_bound" != "1" ]]; then
         echo "This run cannot prove it owns $origin_file: the state file carried no"
@@ -202,7 +202,7 @@ issue_close_if_ready() {
         return 1
     fi
 
-    comment="Closed by stagegate: change workflow completed with FINAL_AUDIT.md verdict \`$verdict\`. See FINAL_AUDIT.md and .workflow/change.diff in the working tree."
+    comment="Closed by stagegate: change workflow completed with FINAL_AUDIT.md verdict \`$verdict\`. See FINAL_AUDIT.md and .uncle/workspace/change.diff in the working tree."
 
     tmo="$(issue_close_timeout_cmd)"
     rc=0

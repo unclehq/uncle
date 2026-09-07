@@ -45,7 +45,7 @@ environment variables. Seed `CHANGE_REQUEST.md` from a GitHub issue with
 ### `workflow.sh` — manual approval helper
 
 Records a human approval by writing the SHA-256 of the approved file to
-`.workflow/approvals/`, and reports approval status.
+`.uncle/workspace/approvals/`, and reports approval status.
 
 ```sh
 ./scripts/workflow.sh approve-plan
@@ -88,9 +88,9 @@ Closing the issue additionally requires `gh`: if the issue was fetched over the
 `curl` fallback, or `gh` is missing or unauthenticated at close time, the close
 is skipped with a message and the run is still a success.
 
-The issue is closed only if all of these hold: `.workflow/audit-verdict` records
+The issue is closed only if all of these hold: `.uncle/workspace/audit-verdict` records
 this run's id, its verdict class is `READY` or `READY_WITH_NON_BLOCKING_ISSUES`,
-`.workflow/origin` still names this issue, and `FINAL_AUDIT.md` still hashes to
+`.uncle/workspace/origin` still names this issue, and `FINAL_AUDIT.md` still hashes to
 the value recorded when it was classified. Any mismatch leaves the issue open
 and prints the reason. A driver exit code other than 0 is propagated and no
 close is attempted.
@@ -100,16 +100,16 @@ so a run started or resumed directly — without going back through
 `from-issue.sh` — still closes its issue. The decision lives in one place,
 `scripts/lib/issue-close.sh`, and both entry points call it. The driver's close
 additionally requires that the run can prove which issue it owns: either
-`.workflow/state` already carried an issue prefix when the run started, or
+`.uncle/workspace/state` already carried an issue prefix when the run started, or
 `STAGEGATE_ORIGIN_REPO`/`STAGEGATE_ORIGIN_ISSUE` were set for that invocation.
-A leftover `.workflow/origin` found on disk by an otherwise fresh run is not
+A leftover `.uncle/workspace/origin` found on disk by an otherwise fresh run is not
 enough. `WORKFLOW_CLOSE_ISSUE=0` disables the driver-side close entirely. After
-a successful close the driver writes `.workflow/issue-closed`, and
+a successful close the driver writes `.uncle/workspace/issue-closed`, and
 `from-issue.sh`'s own post-run check — now a defensive fallback rather than the
 only path — sees that marker and does not close a second time. A close that
 fails leaves no marker, so a later rerun of the same run id may retry it.
 
-State files this contract depends on, all under the gitignored `.workflow/`:
+State files this contract depends on, all under the gitignored `.uncle/workspace/`:
 
 | File | Written by | Meaning |
 |---|---|---|
@@ -125,17 +125,17 @@ State files this contract depends on, all under the gitignored `.workflow/`:
 | `state` | either driver on every transition | `<STAGE>`, or `<issue>:<STAGE>` when the issue is known. The prefix is informational; a bare token stays valid |
 | `lock/pid` | `change-workflow.sh` for the length of a run | pid of the run holding the checkout |
 
-A state file whose issue prefix disagrees with `.workflow/origin`'s issue is
+A state file whose issue prefix disagrees with `.uncle/workspace/origin`'s issue is
 treated as corruption by both the driver's preflight and `from-issue.sh`'s seed
 gate: they refuse and exit 1 rather than resolve it in either file's favour.
 
-`from-issue.sh --change` refuses to seed when `.workflow/state` shows an
-in-flight run whose `.workflow/origin` names a different issue, or names nothing
+`from-issue.sh --change` refuses to seed when `.uncle/workspace/state` shows an
+in-flight run whose `.uncle/workspace/origin` names a different issue, or names nothing
 at all. When the origin matches the issue being seeded, `CHANGE_REQUEST.md` is
 left as it is — hand edits survive a resume — and only the prompt is repeated.
 `change-workflow.sh` performs the mirror-image check when launched by
 `from-issue.sh`, and refuses to start at all while another run holds
-`.workflow/lock`. The refusal names the exact command that clears the state
+`.uncle/workspace/lock`. The refusal names the exact command that clears the state
 deliberately; neither script ever clears it automatically.
 
 ### `codex-review-plan.sh` — adversarial plan review (Stage 2)
@@ -150,7 +150,7 @@ Runs the reviewer CLI against the approved `PROJECT_PLAN.md` and writes
 ```
 
 Takes no positional arguments. Requires `REQUIREMENTS.md`, `PROJECT_PLAN.md`,
-and a matching approval record in `.workflow/approvals/PROJECT_PLAN.sha256`.
+and a matching approval record in `.uncle/workspace/approvals/PROJECT_PLAN.sha256`.
 Normally invoked by the driver; can be run by hand.
 
 ### `codex-create-checklist.sh` — manual checklist generation (Stage 6)
@@ -166,7 +166,7 @@ automated-test report, and writes `MANUAL_CHECKLIST.md`.
 
 Takes no positional arguments. Requires `REQUIREMENTS.md`,
 `UPDATED_PROJECT_PLAN.md`, `AUTOMATED_TEST_REPORT.md`, and a matching approval
-record in `.workflow/approvals/UPDATED_PROJECT_PLAN.sha256`. Normally invoked
+record in `.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256`. Normally invoked
 by the driver; can be run by hand.
 
 ## Argument handling summary
@@ -226,7 +226,7 @@ gate — `change_diff_files` — rather than `git diff` alone. `git diff` report
 only tracked changes, so a file the agent *created* escaped the frozen scope
 entirely, which is the largest kind of scope creep there is. Untracked paths
 that already existed when implementation started are recorded in
-`.workflow/untracked-before.txt` and excluded: a scratch file in the operator's
+`.uncle/workspace/untracked-before.txt` and excluded: a scratch file in the operator's
 checkout is not something the agent did.
 
 `scripts/lib/workflow-artifacts.sh` holds the one list of files the workflow
@@ -247,7 +247,7 @@ so the fixed part is paid N times while the growing part is paid once per step.
 `IMPLEMENTATION_NOTES.md` and the code on disk are the handoff between steps.
 
 The turn cap is divided across the steps rather than multiplied, and
-`.workflow/implement-step-done` makes a partial run resumable. It is off by
+`.uncle/workspace/implement-step-done` makes a partial run resumable. It is off by
 default: it changes how the most consequential stage runs, and a step boundary
 in the wrong place costs coherence, which is worth more than tokens.
 

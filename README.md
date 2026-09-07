@@ -1,19 +1,47 @@
-# Stagegate
+<div align="center">
+
+```
+                #@@@@@@##@@@@@@#
+                @@@@@@@@@@@@@@@@
+                @@@@@@@@@@@@@@@@
+               #@@@@@@@@@@@@@@@@#
+               @@@@@@@@@@@@@@@@@@
+    #@@@@@@@@@ @@@@@@@@@@@@@@@@@@ @@@@@@@@@#
+    @@@@@@@@@@                    @@@@@@@@@@
+     @@@@@@@@@@@@@@##########@@@@@@@@@@@@@@
+       #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+          #@@##@@@@@@@@@@@@@@@@@@##@@#
+       #@@@@@# @@@@@@@@##@@@@@@@@ #@@@@@#
+     @@@@@@@@@  @@@@@@    @@@@@@  @@@@@@@@@
+    @@@@@@@@@@@                  @@@@@@@@@@@
+     @@@@@@@@@@@                @@@@@@@@@@@
+      #@@@@@@@@@@              @@@@@@@@@@#
+       ##@@@@@@@@@@          @@@@@@@@@@##
+    #@@@@@@@@@@@@@@@@#    #@@@@@@@@@@@@@@@@#
+  @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+ #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+    #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+       #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+```
+
+# uncle
 
 > Governed CI for coding agents.
 >
 > Everyone else is building agents that run unsupervised. This is the approval
 > layer that makes them acceptable in production.
 
-Stagegate is a human-gated, adversarially-audited CI pipeline for
-AI-generated code. A primary agent plans, implements, and verifies; an
-independent reviewer audits adversarially; a human approves at every gate.
-By default the primary agent is `scripts/agent-kimi.sh` (kimi for the kimi-tier
-stages, `claude` otherwise) and the reviewer is `codex`, but both are
-configurable — for example `kimi` + `codex`, or `cline` for every stage via the
-`./uncle` launcher. Approved artifacts are SHA-256 pinned
-and reviewer-owned files are immutable, so what ships is exactly what was
-reviewed.
+</div>
+
+uncle is a human-gated, adversarially-audited CI pipeline for AI-generated
+code. A primary agent plans, implements, and verifies; an independent reviewer
+audits adversarially; a human approves at every gate. By default the primary
+agent is `scripts/agent-kimi.sh` (kimi for the kimi-tier stages, `claude`
+otherwise) and the reviewer is `codex`, but both are configurable — for
+example `kimi` + `codex`, or `cline` for every stage via the `./uncle`
+launcher. Approved artifacts are SHA-256 pinned and reviewer-owned files are
+immutable, so what ships is exactly what was reviewed.
 
 What makes this different from a generic agent framework:
 
@@ -29,9 +57,47 @@ than the cost of waiting for a human to say yes.
 
 ---
 
+## First run
+
+uncle configures itself per project. The first time you run it in a new
+project root it sets that project up before anything else happens:
+
+```sh
+cd /path/to/your/project
+uncle          # or ./uncle from a checkout of this repo
+```
+
+On first run uncle:
+
+1. **Creates `.uncle/workspace/`** — the directory every workflow writes its
+   state, logs, approvals, and locks into. Nothing else in your tree is
+   touched.
+2. **Opens the Configure screen** (instead of the main menu) so you pick the
+   project's settings before running a workflow.
+3. **Writes `.uncle.config`** when you save — per-project, next to the
+   workspace. The second run goes straight to the main menu.
+
+In Configure, walk the rows with the arrow keys; `Enter` opens a picker:
+
+| Row | Pick from | Meaning |
+|---|---|---|
+| `runner` | cline, claude, kimi, codex | which CLI pair drives agent + reviewer stages |
+| `model` | the model catalog | global model for agent stages (empty = cline default) |
+| `effort` | high, medium, low | reasoning effort for every stage |
+| `<stage>` / `<stage> effort` | model catalog / effort list | per-stage overrides; `(default)` inherits the global |
+
+Type to filter a picker, `Enter` to select, `Esc` to go back, `d` to reset a
+row. When you are done, `q` leaves Configure; the settings persist to
+`.uncle.config` and apply to every workflow you run in that directory.
+
+After configuring, pick a workflow from the main menu (or run a driver
+directly — see [How to run it](#how-to-run-it)).
+
+---
+
 ## What this does
 
-Stagegate runs one of two pipelines. Both share the same gate model: the
+uncle runs one of two pipelines. Both share the same gate model: the
 primary agent plans/implements/verifies, the reviewer adversarially audits, and
 you approve every gate.
 
@@ -144,17 +210,106 @@ authenticated `gh`.
 The prompt blocks even when stdin is a pipe — a non-interactive caller of
 `--change` waits for the word rather than being auto-declined.
 
-`--change` also binds the checkout to one issue in `.workflow/origin`. Seeding a
+`--change` also binds the checkout to one issue in `.uncle/workspace/origin`. Seeding a
 different issue while a run is in flight is refused rather than overwriting the
 first issue's `CHANGE_REQUEST.md`; finish or reset that run first. Only one
 `change-workflow.sh` may run per checkout at a time — a second one refuses to
-start and names the process holding `.workflow/lock`.
+start and names the process holding `.uncle/workspace/lock`.
 
 `--new` writes the project brief to `REQUIREMENTS.md` for
 `./scripts/stagegate.sh`. It is unchanged: no prompt, no auto-run, no close.
 
 Both drivers are resumable state machines. Interrupt them and re-run the same
-command — they pick up from `.workflow/state`.
+command — they pick up from `.uncle/workspace/state`.
+
+---
+
+## Input formats
+
+### GitHub issue format
+
+`./scripts/from-issue.sh` turns an existing GitHub issue into a workflow seed.
+The issue needs two things:
+
+- **Title** — becomes the `## Summary` of the seed document. One line that
+  names the change.
+- **Body** — becomes `## Motivation`, verbatim. Write it in plain prose or
+  markdown; the driver copies it as-is.
+
+Everything else the seed document needs (Change Type, Observed Current
+Behavior, Desired Behavior, Reproduction, Constraints, Known Relevant Files,
+Out of Scope, Success Criteria) is filled in with placeholder guidance for you
+to edit before the run starts. The seed is written, printed, and confirmed with
+an explicit `RUN` — the issue body is the input, but the human window is the
+generated `CHANGE_REQUEST.md`.
+
+A well-formed issue body answers: what is wrong today, what should happen
+instead, how to reproduce it (for bugs), and what must not change.
+
+Live example: [unclehq/uncle#1](https://github.com/unclehq/uncle/issues/1).
+The in-repo artifact that one produced —
+[`CHANGE_REQUEST.md`](CHANGE_REQUEST.md) — shows the exact seeded shape.
+
+### Requirements format
+
+The new-application pipeline reads everything below the `# Project brief`
+heading in [`REQUIREMENTS.md`](REQUIREMENTS.md). Fill the brief in before
+running `./scripts/stagegate.sh`; keep it unambiguous and let it carry the
+requirements. The template's subsections are:
+
+| Section | What to write |
+|---|---|
+| `## Summary` | one or two sentences: what is being built, and for whom |
+| `## Problem` | what is wrong today, and what changes for the user |
+| `## Scope` | what is in, and explicitly what is out |
+| `## Non-goals` | behavior or components that must not change |
+| `## Functional requirements` | required functionality, numbered and testable |
+| `## User-visible behavior` | what the user sees and does |
+| `## Domain rules and invariants` | rules that must always hold |
+| `## Data and state` | authoritative state, models, persistence |
+| `## Interfaces` | APIs, CLIs, protocols the project exposes or consumes |
+| `## Constraints` | compatibility, security, performance, timing |
+| `## Failure behavior` | what happens when things go wrong |
+| `## Verification` | runnable commands that prove it works |
+| `## Definition of done` | observable evidence the work is complete |
+| `## Open questions` | what is undecided, and who decides it |
+
+Be specific and testable. Vague lines here become ambiguities in
+`REQUIREMENTS_INTERPRETATION.md`, findings in `ADVERSARIAL_REVIEW.md`, and
+guesses in the implementation. Delete the per-subsection guidance when you
+fill it in — leaving it in produces requirements about the template.
+
+Example: [`REQUIREMENTS.md`](REQUIREMENTS.md) in this repository is the
+working template — copy it into a new project, replace the brief, and run the
+driver.
+
+### Output gates format
+
+Plan-producing stages (`project-plan`, `updated-plan`, `change-plan`,
+`updated-change-plan`) must satisfy the output gates defined in
+[`lib/gates/GATES.md`](lib/gates/GATES.md): a fixed section template
+(Goal / Constraints / Steps / Risks / Done when), length caps, and a banned-word
+list, so plans stay reviewable and comparable.
+
+uncle resolves the gates in this order and uses the first one it finds:
+
+1. `GATES.md` at the project root — project override.
+2. `.uncle/gates/GATES.md` in the project — project override, kept out of the
+   tree root.
+3. `lib/gates/GATES.md` — the gates installed with uncle. This is the default
+   when a project defines none.
+
+The resolved file is appended to the plan stage's prompt (never written into
+your prompt files), and the driver logs which source was used:
+
+```
+Output gates: local (./GATES.md)
+Output gates: installed (/opt/homebrew/lib/.../lib/gates/GATES.md)
+```
+
+To tighten the gates for one project, copy the installed file to the project
+root and edit it; set `UNCLE_GATES=/path/to/gates.md` to point at a gates file
+anywhere else.
 
 ---
 
@@ -169,8 +324,8 @@ command — they pick up from `.workflow/state`.
 | 3 | Adversarial review | Reviewer | `ADVERSARIAL_REVIEW.md` | `Y/N` |
 | 4 | Updated plan | Primary agent | `UPDATED_PROJECT_PLAN.md` | `Y/N` |
 | 5 | Implementation | Primary agent | source, `IMPLEMENTATION_NOTES.md`, `AUTOMATED_TEST_REPORT.md` | — |
-| 5a | Green check | Driver | `.workflow/green-check.md` | machine |
-| 5b | Implementation review | Driver | `.workflow/IMPLEMENTATION_REVIEW.md` | `Y/N` |
+| 5a | Green check | Driver | `.uncle/workspace/green-check.md` | machine |
+| 5b | Implementation review | Driver | `.uncle/workspace/IMPLEMENTATION_REVIEW.md` | `Y/N` |
 | 6 | Manual checklist | Reviewer | `MANUAL_CHECKLIST.md` | — |
 | 7 | Checklist execution | Primary agent | `VERIFICATION_REPORT.md`, `DEFECTS.md` | — |
 | 8 | Final audit | Reviewer | `FINAL_AUDIT.md` | verdict |
@@ -186,12 +341,12 @@ alone, because nothing downstream reads `PROJECT_PLAN.md` or
 | `ANALYZE` | Primary agent | `BASELINE_REPORT.md`, `CHANGE_SPEC.md` | `Y/N` |
 | `PLAN` | Primary agent + reviewer | `CHANGE_PLAN.md`, `ADVERSARIAL_REVIEW.md` | `Y/N` |
 | `UPDATED_PLAN` | Primary agent | `CHANGE_PLAN.md` (revised in place) | `Y/N` |
-| `IMPLEMENT` | Primary agent + reviewer + driver | source, `IMPLEMENTATION_NOTES.md`, `CHANGE_TEST_REPORT.md`, `.workflow/green-check.md` | machine |
-| `WAIT_IMPLEMENT_APPROVAL` | Driver | `.workflow/IMPLEMENTATION_REVIEW.md` | `Y/N` |
+| `IMPLEMENT` | Primary agent + reviewer + driver | source, `IMPLEMENTATION_NOTES.md`, `CHANGE_TEST_REPORT.md`, `.uncle/workspace/green-check.md` | machine |
+| `WAIT_IMPLEMENT_APPROVAL` | Driver | `.uncle/workspace/IMPLEMENTATION_REVIEW.md` | `Y/N` |
 | `CHECKLIST` | Reviewer | `MANUAL_CHECKLIST.md` | — |
 | `EXECUTE_CHECKLIST` | Primary agent | `VERIFICATION_REPORT.md`, `DEFECTS.md` | — |
 | `FINAL_AUDIT` | Reviewer | `FINAL_AUDIT.md` | verdict |
-| `WAIT_AUDIT_OVERRIDE` | Driver | `.workflow/audit-override` | `Y/N`, only on a failing verdict |
+| `WAIT_AUDIT_OVERRIDE` | Driver | `.uncle/workspace/audit-override` | `Y/N`, only on a failing verdict |
 
 `CHANGE_PLAN.md` is the sole plan input to implementation and verification.
 The `UPDATED_PLAN` stage answers the adversarial review by editing that file in
@@ -210,7 +365,7 @@ Reviewer-owned artifacts (`ADVERSARIAL_REVIEW.md`, `MANUAL_CHECKLIST.md`,
 ## How the gates work
 
 An approval records the SHA-256 of the exact bytes you read, in
-`.workflow/approvals/`. Downstream stages re-hash the file and refuse to run if
+`.uncle/workspace/approvals/`. Downstream stages re-hash the file and refuse to run if
 it changed. Edit an approved document and the pipeline stops until you approve
 it again.
 
@@ -233,7 +388,7 @@ or want strictly serial token spend.
 
 The four planning gates approve prose. This one approves code.
 
-After implementation, the driver builds `.workflow/IMPLEMENTATION_REVIEW.md`
+After implementation, the driver builds `.uncle/workspace/IMPLEMENTATION_REVIEW.md`
 from the working tree: the list of changed files, the green-check result, the
 agent's own `IMPLEMENTATION_NOTES.md` and test report embedded with their
 digests, and the full diff — including files the agent created, which
@@ -262,7 +417,7 @@ edited, and once after implementation. A command that was already failing is
 recorded as `PREEXISTING` and does not block; one that passed before and fails
 now is a `REGRESSION`. A regression does not kill the run — it turns the
 implementation gate from an approval into an explicit override, recorded in
-`.workflow/green-check-override` and reported again at `COMPLETE`. With
+`.uncle/workspace/green-check-override` and reported again at `COMPLETE`. With
 `WORKFLOW_DIFF_GATE=0` there is no human left to weigh it, so the driver stops
 instead.
 
@@ -278,7 +433,7 @@ read as a verdict at all — reached `COMPLETE` and reported success.
 Now only `READY` and `READY WITH NON-BLOCKING ISSUES` complete the run on their
 own. Anything else stops at `WAIT_AUDIT_OVERRIDE`, which either sends you back
 to fix what the audit found or records an explicit decision to finish anyway in
-`.workflow/audit-override`. An override never closes the originating issue.
+`.uncle/workspace/audit-override`. An override never closes the originating issue.
 
 ---
 
@@ -337,24 +492,24 @@ parallel checklist generation. Defaults and documentation are in the header of
 
 ## State and logs
 
-Everything under `.workflow/` is gitignored:
+Everything under `.uncle/workspace/` is gitignored:
 
 ```
-.workflow/state              current stage, as <STAGE> or <issue>:<STAGE>
-.workflow/approvals/*.sha256 recorded approvals
-.workflow/logs/*.jsonl       raw primary-agent event streams
-.workflow/logs/*.log         reviewer transcripts, speculative stage output
-.workflow/speculative/       input hashes for speculative stages (stagegate.sh)
-.workflow/cost.tsv           per-stage spend ledger (change-workflow.sh)
-.workflow/change.diff        authoritative diff the final audit reads (change-workflow.sh)
-.workflow/issue-closed       which run closed the originating issue (change-workflow.sh)
+.uncle/workspace/state              current stage, as <STAGE> or <issue>:<STAGE>
+.uncle/workspace/approvals/*.sha256 recorded approvals
+.uncle/workspace/logs/*.jsonl       raw primary-agent event streams
+.uncle/workspace/logs/*.log         reviewer transcripts, speculative stage output
+.uncle/workspace/speculative/       input hashes for speculative stages (stagegate.sh)
+.uncle/workspace/cost.tsv           per-stage spend ledger (change-workflow.sh)
+.uncle/workspace/change.diff        authoritative diff the final audit reads (change-workflow.sh)
+.uncle/workspace/issue-closed       which run closed the originating issue (change-workflow.sh)
 ```
 
-To redo a stage, write its name into `.workflow/state` and re-run. A bare stage
+To redo a stage, write its name into `.uncle/workspace/state` and re-run. A bare stage
 name is always accepted; `change-workflow.sh` adds the `<issue>:` prefix itself
 when it knows which issue it is working on, and the prefix is informational —
-`.workflow/origin` remains the only thing that decides issue ownership. To start
-over, delete `.workflow/` and the generated `*.md` artifacts.
+`.uncle/workspace/origin` remains the only thing that decides issue ownership. To start
+over, delete `.uncle/workspace/` and the generated `*.md` artifacts.
 
 ---
 
@@ -367,7 +522,7 @@ over, delete `.workflow/` and the generated `*.md` artifacts.
 - **"changed after approval"** — the file was edited post-approval; approve it
   again.
 - **No output for a long stretch** — implementation legitimately runs long;
-  tail `.workflow/logs/implementation.jsonl`.
+  tail `.uncle/workspace/logs/implementation.jsonl`.
 
 ---
 
@@ -388,6 +543,8 @@ of all six scripts.
 
 - [`QUICK_START.md`](QUICK_START.md) — run the workflows end-to-end in a few
   minutes.
+- [`lib/gates/GATES.md`](lib/gates/GATES.md) — the output gates applied to
+  every plan a project produces.
 - [`AGENTIC.md`](AGENTIC.md) — the design philosophy behind the gates.
 - [`CLAUDE.md`](CLAUDE.md) — the agent instruction contract.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — the contributor guide.

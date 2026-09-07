@@ -27,7 +27,7 @@ case "$#:${1:-}" in
     *)                  printf 'Unknown argument: %s\n' "${1:-}" >&2; usage >&2; exit 1 ;;
 esac
 
-STATE_DIR=".workflow"
+STATE_DIR=".uncle/workspace"
 APPROVAL_DIR="$STATE_DIR/approvals"
 LOG_DIR="$STATE_DIR/logs"
 STATE_FILE="$STATE_DIR/state"
@@ -215,7 +215,7 @@ legacy_word_notice() {
 # self-relative so the driver still runs from any CWD.
 . "$ROOT/scripts/lib/audit-verdict.sh"
 
-# .workflow/state grammar, and the shared INV-3 close gate.
+# .uncle/workspace/state grammar, and the shared INV-3 close gate.
 . "$ROOT/scripts/lib/state.sh"
 . "$ROOT/scripts/lib/plan-scope.sh"
 . "$ROOT/scripts/lib/progress.sh"
@@ -225,6 +225,7 @@ legacy_word_notice() {
 # post-implementation gate shows.
 . "$ROOT/scripts/lib/green-check.sh"
 . "$ROOT/scripts/lib/implementation-review.sh"
+. "$ROOT/scripts/lib/gates.sh"
 
 require_file() {
     if [[ ! -s "$1" ]]; then
@@ -233,8 +234,8 @@ require_file() {
     fi
 }
 
-# The issue number written into .workflow/state is informational only;
-# .workflow/origin stays the sole identity source (INV-1).
+# The issue number written into .uncle/workspace/state is informational only;
+# .uncle/workspace/origin stays the sole identity source (INV-1).
 current_issue() {
     if [[ -n "${STAGEGATE_ORIGIN_ISSUE:-}" ]]; then
         printf '%s' "$STAGEGATE_ORIGIN_ISSUE"
@@ -252,7 +253,7 @@ get_state() {
 }
 
 # --- Single-writer lock -----------------------------------------------------
-# One run owns a checkout's .workflow/ for its whole lifetime. mkdir is atomic,
+# One run owns a checkout's .uncle/workspace/ for its whole lifetime. mkdir is atomic,
 # so it is the lock primitive; the pid file only exists to detect a lock left
 # behind by a killed run.
 
@@ -295,7 +296,7 @@ acquire_lock() {
 }
 
 # --- Origin binding ---------------------------------------------------------
-# .workflow/origin binds in-flight state to one (repo, issue) so a resumed run
+# .uncle/workspace/origin binds in-flight state to one (repo, issue) so a resumed run
 # cannot act on — or later close — a different issue's work. Enforced only when
 # the driver was launched by from-issue.sh, which exports STAGEGATE_ORIGIN_*; a
 # human running the driver by hand is unaffected.
@@ -1003,8 +1004,10 @@ run_claude() {
         # long-running stage visibly active instead of buffering until completion.
         local start="$SECONDS"
         local status=0
+        local effective_prompt
+        effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
         "$AGENT_CMD" "${flags[@]}" \
-            < "$prompt_file" \
+            < "$effective_prompt" \
             2>&1 \
             | tee "$LOG_DIR/${log_name}.jsonl" \
             | progress_tap "${PROGRESS_TOTAL:-0}" "${PROGRESS_LABEL:-stage}" \
@@ -1226,7 +1229,7 @@ wait_codex_bg() {
 acquire_lock
 origin_preflight
 
-# Whether this invocation can prove it owns .workflow/origin, rather than having
+# Whether this invocation can prove it owns .uncle/workspace/origin, rather than having
 # found a leftover one on disk. Computed once here, before this run performs any
 # state write, so a run that only *becomes* issue-bound mid-run cannot later
 # read as resumed.

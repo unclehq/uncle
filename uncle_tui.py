@@ -282,9 +282,14 @@ class UncleTUI:
         self.load_config()
         if self.state == "menu" and self.first_run:
             # First time in this project root: open the Configure screen so
-            # this project gets set up before anything runs.
+            # this project gets set up before anything runs, and create the
+            # workspace dir the scripts will write their state/logs into.
             self.state = "config"
             self.config_sel = 0
+            try:
+                os.makedirs(os.path.join(os.getcwd(), ".uncle", "workspace"), exist_ok=True)
+            except Exception:
+                pass
 
     # ---- colors (cline's CLI palette) ----
     def _setup_colors(self):

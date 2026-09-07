@@ -60,7 +60,7 @@ expect_not_out() {
 expect_state() {
     COUNT=$((COUNT + 1))
     local actual
-    actual="$(cat "$REPO/.workflow/state" 2>/dev/null)"
+    actual="$(cat "$REPO/.uncle/workspace/state" 2>/dev/null)"
     if [[ "$actual" != "$1" ]]; then
         fail "expected state '$1', got '$actual'"
     fi
@@ -100,7 +100,7 @@ new_case() {
     OUT="$CASE/out.txt"
 
     mkdir -p "$REPO/scripts/lib" "$REPO/prompts/change" \
-             "$REPO/.workflow/approvals" "$REPO/app" "$CASE/bin"
+             "$REPO/.uncle/workspace/approvals" "$REPO/app" "$CASE/bin"
     : > "$OUT"
 
     cp "$ROOT"/scripts/lib/*.sh "$REPO/scripts/lib/"
@@ -154,7 +154,7 @@ EOF
     local f
     for f in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN; do
         shasum -a 256 "$REPO/${f}.md" | awk '{print $1}' \
-            > "$REPO/.workflow/approvals/${f}.sha256"
+            > "$REPO/.uncle/workspace/approvals/${f}.sha256"
     done
 
     # The project under change: one script, one test that checks it.
@@ -213,14 +213,14 @@ REV
 
 # green_baseline <status> <command> — the record the PLAN stage would have left.
 green_baseline() {
-    printf '%s\t%s\n' "$1" "$2" > "$REPO/.workflow/green-check.baseline.tsv"
-    printf '%s\n' "$2" > "$REPO/.workflow/green-check.commands"
+    printf '%s\t%s\n' "$1" "$2" > "$REPO/.uncle/workspace/green-check.baseline.tsv"
+    printf '%s\n' "$2" > "$REPO/.uncle/workspace/green-check.commands"
     shasum -a 256 "$REPO/BASELINE_REPORT.md" | awk '{print $1}' \
-        > "$REPO/.workflow/green-check.source"
+        > "$REPO/.uncle/workspace/green-check.source"
 }
 
 set_state() {
-    printf '%s\n' "$1" > "$REPO/.workflow/state"
+    printf '%s\n' "$1" > "$REPO/.uncle/workspace/state"
 }
 
 # gate_input <line>... — the keystrokes one human_gate consumes: the ENTER
@@ -264,14 +264,14 @@ expect_out "HUMAN REVIEW REQUIRED"
 expect_out "Gate not accepted."
 expect_not_out "Change workflow complete."
 expect_state "WAIT_IMPLEMENT_APPROVAL"
-expect_file ".workflow/IMPLEMENTATION_REVIEW.md"
+expect_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md"
 
 # The document the operator is shown is the change, not a description of it.
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "echo goodbye"
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "- app/main.sh"
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "## Green check"
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "Changed app/main.sh."
-expect_no_file ".workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "echo goodbye"
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "- app/main.sh"
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "## Green check"
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "Changed app/main.sh."
+expect_no_file ".uncle/workspace/approvals/IMPLEMENTATION_REVIEW.sha256"
 
 # A new file the agent created is in the diff. It is the one file in the change
 # with no prior reviewer, and `git diff` alone would not show it.
@@ -281,8 +281,8 @@ set_state IMPLEMENT
 run_driver FAKE_IMPL="printf 'TOKEN_NEW_FILE\n' > app/added.sh"
 expect_status 0
 expect_state "WAIT_IMPLEMENT_APPROVAL"
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "TOKEN_NEW_FILE"
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "- app/added.sh"
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "TOKEN_NEW_FILE"
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "- app/added.sh"
 
 # Approving runs the rest of the pipeline through to COMPLETE.
 new_case approval-advances-to-complete
@@ -291,12 +291,12 @@ set_state IMPLEMENT
 run_driver_stdin "$(gate_input '' y)" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
-expect_out "Recorded approval for .workflow/IMPLEMENTATION_REVIEW.md"
+expect_out "Recorded approval for .uncle/workspace/IMPLEMENTATION_REVIEW.md"
 expect_out "Change workflow complete."
 expect_state "COMPLETE"
-expect_file ".workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
-expect_no_file ".workflow/green-check-override"
-expect_no_file ".workflow/audit-override"
+expect_file ".uncle/workspace/approvals/IMPLEMENTATION_REVIEW.sha256"
+expect_no_file ".uncle/workspace/green-check-override"
+expect_no_file ".uncle/workspace/audit-override"
 
 # Declining leaves the state where it was, so re-running re-opens the gate
 # rather than skipping it.
@@ -308,14 +308,14 @@ run_driver_stdin "$(gate_input '' n)" \
 expect_status 0
 expect_out "Gate not accepted."
 expect_state "WAIT_IMPLEMENT_APPROVAL"
-expect_no_file ".workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
+expect_no_file ".uncle/workspace/approvals/IMPLEMENTATION_REVIEW.sha256"
 
 # The approval attests to the tree. Code that moves after it re-opens the gate
 # instead of carrying a stale approval into verification.
 new_case tree-moved-after-approval
 green_baseline 0 'bash app/test.sh'
 printf 'not-the-digest-of-anything\n' \
-    > "$REPO/.workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
+    > "$REPO/.uncle/workspace/approvals/IMPLEMENTATION_REVIEW.sha256"
 printf '#!/bin/sh\necho edited\n' > "$REPO/app/main.sh"
 set_state CHECKLIST
 run_driver
@@ -360,7 +360,7 @@ expect_status 0
 expect_not_out "scratch.txt"
 expect_state "WAIT_IMPLEMENT_APPROVAL"
 COUNT=$((COUNT + 1))
-if grep -qF "my scratch notes" "$REPO/.workflow/IMPLEMENTATION_REVIEW.md"; then
+if grep -qF "my scratch notes" "$REPO/.uncle/workspace/IMPLEMENTATION_REVIEW.md"; then
     fail "a pre-existing untracked file leaked into the reviewed diff"
 fi
 
@@ -392,8 +392,8 @@ expect_out "GREEN CHECK FAILED: 1 regression(s)"
 expect_out "Approving here is an override, and it is recorded."
 expect_out "Ready to override"
 expect_state "WAIT_IMPLEMENT_APPROVAL"
-expect_in_file ".workflow/green-check.tsv" "REGRESSION"
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "1 command(s) regressed"
+expect_in_file ".uncle/workspace/green-check.tsv" "REGRESSION"
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "1 command(s) regressed"
 
 # Overriding a failing check is allowed, recorded, and reported at the end.
 new_case regression-override-is-recorded
@@ -403,8 +403,8 @@ run_driver_stdin "$(gate_input '' y)" FAKE_IMPL="printf 'exit 1\n' > app/test.sh
 expect_status 0
 expect_out "Change workflow complete."
 expect_out "Completed with a failing green check, by human override:"
-expect_file ".workflow/green-check-override"
-expect_in_file ".workflow/green-check-override" "1 regression(s) overridden"
+expect_file ".uncle/workspace/green-check-override"
+expect_in_file ".uncle/workspace/green-check-override" "1 regression(s) overridden"
 
 # A check that was already failing before the change is not this change's
 # regression, and does not turn the gate into an override.
@@ -416,7 +416,7 @@ expect_status 0
 expect_out "Green check: no regressions."
 expect_not_out "GREEN CHECK FAILED"
 expect_out "Ready to approve"
-expect_in_file ".workflow/green-check.tsv" "PREEXISTING"
+expect_in_file ".uncle/workspace/green-check.tsv" "PREEXISTING"
 
 # A check that passes stays out of the way entirely.
 new_case passing-check-is-quiet
@@ -425,7 +425,7 @@ set_state IMPLEMENT
 run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
 expect_out "Green check: no regressions."
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "No regressions."
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "No regressions."
 
 # With no commands to run, the gate says so rather than implying a pass.
 new_case no-commands-is-reported-as-not-run
@@ -433,7 +433,7 @@ set_state IMPLEMENT
 run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
 expect_out "Green check NOT RUN: no commands were found in BASELINE_REPORT.md."
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "NOT RUN"
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "NOT RUN"
 expect_state "WAIT_IMPLEMENT_APPROVAL"
 
 # ---------------------------------------------------------------------------
@@ -470,8 +470,8 @@ run_driver_stdin "$(gate_input '')" WORKFLOW_GREEN_CHECK=0 \
     FAKE_IMPL="printf 'exit 1\n' > app/test.sh"
 expect_status 0
 expect_out "Ready to approve"
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "DISABLED"
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "unverified account"
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "DISABLED"
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "unverified account"
 
 # ---------------------------------------------------------------------------
 # The baseline capture
@@ -484,10 +484,10 @@ set_state PLAN
 run_driver
 expect_status 0
 expect_out "Recording the green-check baseline before anything changes."
-expect_file ".workflow/green-check.baseline.tsv"
-expect_in_file ".workflow/green-check.baseline.tsv" "bash app/test.sh"
+expect_file ".uncle/workspace/green-check.baseline.tsv"
+expect_in_file ".uncle/workspace/green-check.baseline.tsv" "bash app/test.sh"
 COUNT=$((COUNT + 1))
-if [[ "$(awk -F'\t' 'NR==1 {print $1}' "$REPO/.workflow/green-check.baseline.tsv")" != "0" ]]; then
+if [[ "$(awk -F'\t' 'NR==1 {print $1}' "$REPO/.uncle/workspace/green-check.baseline.tsv")" != "0" ]]; then
     fail "the unmodified tree should have recorded a passing baseline"
 fi
 
@@ -495,12 +495,12 @@ fi
 new_case baseline-without-commands-warns
 printf '# Baseline Report\n\nNo commands section.\n' > "$REPO/BASELINE_REPORT.md"
 shasum -a 256 "$REPO/BASELINE_REPORT.md" | awk '{print $1}' \
-    > "$REPO/.workflow/approvals/BASELINE_REPORT.sha256"
+    > "$REPO/.uncle/workspace/approvals/BASELINE_REPORT.sha256"
 set_state PLAN
 run_driver
 expect_status 0
 expect_out "has no fenced command block"
-expect_no_file ".workflow/green-check.baseline.tsv"
+expect_no_file ".uncle/workspace/green-check.baseline.tsv"
 
 # ---------------------------------------------------------------------------
 # The new-application driver
@@ -532,7 +532,7 @@ bash app/test.sh
 ## Non-goals
 EOF
     shasum -a 256 "$REPO/UPDATED_PROJECT_PLAN.md" | awk '{print $1}' \
-        > "$REPO/.workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
+        > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
 }
 
 run_stagegate() {
@@ -584,11 +584,11 @@ stagegate_agent
 set_state IMPLEMENT
 run_stagegate FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
-expect_out "HUMAN REVIEW REQUIRED: .workflow/IMPLEMENTATION_REVIEW.md"
+expect_out "HUMAN REVIEW REQUIRED: .uncle/workspace/IMPLEMENTATION_REVIEW.md"
 expect_out "Green check: all verification commands passed."
 expect_state "WAIT_IMPLEMENT_APPROVAL"
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "echo goodbye"
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "Built app/main.sh."
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "echo goodbye"
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "Built app/main.sh."
 
 # No baseline exists in a new application, so any failing command is a failure
 # of the build, and approving it is an override.
@@ -606,12 +606,12 @@ new_stagegate_case sg-plan-without-commands
 stagegate_agent
 printf '# Updated Project Plan\n\nNo commands.\n' > "$REPO/UPDATED_PROJECT_PLAN.md"
 shasum -a 256 "$REPO/UPDATED_PROJECT_PLAN.md" | awk '{print $1}' \
-    > "$REPO/.workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
+    > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
 run_stagegate FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
 expect_out "Green check NOT RUN"
-expect_in_file ".workflow/IMPLEMENTATION_REVIEW.md" "NOT RUN"
+expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "NOT RUN"
 
 # Approving carries the run through the remaining stages to COMPLETE.
 new_stagegate_case sg-approval-advances-to-complete
@@ -620,7 +620,7 @@ set_state IMPLEMENT
 run_stagegate_stdin "$(gate_input '' y)" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
-expect_out "Recorded approval for .workflow/IMPLEMENTATION_REVIEW.md"
+expect_out "Recorded approval for .uncle/workspace/IMPLEMENTATION_REVIEW.md"
 expect_out "Audit verdict: READY"
 expect_out "Workflow complete."
 expect_state "COMPLETE"

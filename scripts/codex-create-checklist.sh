@@ -14,7 +14,7 @@ new-application workflow).
 
 Takes no positional arguments. Requires REQUIREMENTS.md,
 UPDATED_PROJECT_PLAN.md, AUTOMATED_TEST_REPORT.md, and a matching approval
-record in .workflow/approvals/UPDATED_PROJECT_PLAN.sha256.
+record in .uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256.
 Configuration is via WORKFLOW_* environment variables (see scripts/README.md).
 EOF
 }
@@ -28,9 +28,9 @@ esac
 test -s REQUIREMENTS.md
 test -s UPDATED_PROJECT_PLAN.md
 test -s AUTOMATED_TEST_REPORT.md
-test -s .workflow/approvals/UPDATED_PROJECT_PLAN.sha256
+test -s .uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256
 
-expected="$(cat .workflow/approvals/UPDATED_PROJECT_PLAN.sha256)"
+expected="$(cat .uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256)"
 actual="$(shasum -a 256 UPDATED_PROJECT_PLAN.md | awk '{print $1}')"
 
 if [[ "$expected" != "$actual" ]]; then

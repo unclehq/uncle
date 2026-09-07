@@ -277,8 +277,8 @@ Any RELAXED or REMOVED invariant requires explicit human approval.
 | Artifact | Owner |
 |---|---|
 | CHANGE_REQUEST.md | Human |
-| .workflow/IMPLEMENTATION_REVIEW.md | Driver |
-| .workflow/green-check.md | Driver |
+| .uncle/workspace/IMPLEMENTATION_REVIEW.md | Driver |
+| .uncle/workspace/green-check.md | Driver |
 | BASELINE_REPORT.md | Primary agent |
 | CHANGE_SPEC.md | Primary agent |
 | CHANGE_PLAN.md | Primary agent (revised in place after review) |

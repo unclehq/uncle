@@ -18,7 +18,7 @@
 # something to lose: whichever half is wrong fails closed on the other pipeline.
 workflow_artifact() {
     case "$1" in
-        .workflow/*|\
+        .uncle/workspace/*|\
         REQUIREMENTS_INTERPRETATION.md|PROJECT_PLAN.md|UPDATED_PROJECT_PLAN.md|\
         BASELINE_REPORT.md|CHANGE_REQUEST.md|CHANGE_SPEC.md|CHANGE_PLAN.md|\
         UPDATED_CHANGE_PLAN.md|ADVERSARIAL_REVIEW.md|IMPLEMENTATION_NOTES.md|\

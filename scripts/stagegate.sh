@@ -26,7 +26,7 @@ case "$#:${1:-}" in
     *)                  printf 'Unknown argument: %s\n' "${1:-}" >&2; usage >&2; exit 1 ;;
 esac
 
-STATE_DIR=".workflow"
+STATE_DIR=".uncle/workspace"
 APPROVAL_DIR="$STATE_DIR/approvals"
 LOG_DIR="$STATE_DIR/logs"
 SPEC_DIR="$STATE_DIR/speculative"
@@ -122,6 +122,7 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/audit-verdict.sh"
 . "$ROOT/scripts/lib/green-check.sh"
 . "$ROOT/scripts/lib/implementation-review.sh"
+. "$ROOT/scripts/lib/gates.sh"
 
 hash_file() {
     shasum -a 256 "$1" | awk '{print $1}'
@@ -431,6 +432,8 @@ run_claude() {
         # needs one, and skipping them removes both server startup and their tool
         # schemas from every request.
         local status=0
+        local effective_prompt
+        effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
         "$AGENT_CMD" -p \
             --model "$model" \
             --effort "$effort" \
@@ -439,7 +442,7 @@ run_claude() {
             --output-format stream-json \
             --verbose \
             --allowedTools "$tools" \
-            < "$prompt_file" \
+            < "$effective_prompt" \
             2>&1 \
             | tee "$LOG_DIR/${log_name}.jsonl" \
             | format_claude_stream || status=$?

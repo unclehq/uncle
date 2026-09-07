@@ -46,7 +46,7 @@ check_not_contains() {
 # --- workflow_artifact: the paper trail is not the change ------------------
 
 for a in IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md CHANGE_PLAN.md \
-         FINAL_AUDIT.md AUTOMATED_TEST_REPORT.md .workflow/change.diff; do
+         FINAL_AUDIT.md AUTOMATED_TEST_REPORT.md .uncle/workspace/change.diff; do
     COUNT=$((COUNT + 1))
     if ! workflow_artifact "$a"; then
         fail "$a should be excluded from the reviewed diff"
@@ -82,8 +82,8 @@ printf 'SECRET = 1\n' > app/new_module.py
 rm app/other.py
 printf '# notes\n' > IMPLEMENTATION_NOTES.md
 printf '# tests\n' > CHANGE_TEST_REPORT.md
-mkdir -p .workflow
-printf 'state\n' > .workflow/state
+mkdir -p .uncle/workspace
+printf 'state\n' > .uncle/workspace/state
 
 files="$(change_diff_files | tr '\n' ' ')"
 check_eq "the changed source is listed" \
@@ -91,7 +91,7 @@ check_eq "the changed source is listed" \
 
 COUNT=$((COUNT + 1))
 case "$files" in
-    *IMPLEMENTATION_NOTES*|*CHANGE_TEST_REPORT*|*.workflow*)
+    *IMPLEMENTATION_NOTES*|*CHANGE_TEST_REPORT*|*.uncle/workspace*)
         fail "a workflow artifact leaked into the reviewed file list" ;;
 esac
 

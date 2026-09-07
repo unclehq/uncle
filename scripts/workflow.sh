@@ -19,7 +19,7 @@ case "$#:${1:-}" in
     1:-h|1:--help) usage; exit 0 ;;
 esac
 
-mkdir -p .workflow/approvals
+mkdir -p .uncle/workspace/approvals
 
 hash_file() {
     shasum -a 256 "$1" | awk '{print $1}'
@@ -88,7 +88,7 @@ approve_file() {
         exit 1
     fi
 
-    printf '%s\n' "$captured" > ".workflow/approvals/${approval_name}.sha256"
+    printf '%s\n' "$captured" > ".uncle/workspace/approvals/${approval_name}.sha256"
     echo "Approved $file"
 }
 
@@ -112,7 +112,7 @@ case "$#:${1:-}" in
     1:status)
         echo "Approval status:"
         for item in PROJECT_PLAN ADVERSARIAL_REVIEW UPDATED_PROJECT_PLAN; do
-            approval=".workflow/approvals/${item}.sha256"
+            approval=".uncle/workspace/approvals/${item}.sha256"
             file="${item}.md"
 
             if [[ -s "$approval" && -s "$file" ]]; then

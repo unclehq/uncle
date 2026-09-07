@@ -64,14 +64,14 @@ expect_not_closed() {
 
 expect_driver_ran() {
     COUNT=$((COUNT + 1))
-    if [[ ! -s "$REPO/.workflow/driver.log" ]]; then
+    if [[ ! -s "$REPO/.uncle/workspace/driver.log" ]]; then
         fail "expected the driver to have run"
     fi
 }
 
 expect_driver_not_run() {
     COUNT=$((COUNT + 1))
-    if [[ -s "$REPO/.workflow/driver.log" ]]; then
+    if [[ -s "$REPO/.uncle/workspace/driver.log" ]]; then
         fail "expected the driver NOT to have run"
     fi
 }
@@ -87,7 +87,7 @@ new_case() {
     OUT="$CASE/out.txt"
     GH_LOG="$CASE/gh.log"
 
-    mkdir -p "$REPO/scripts/lib" "$REPO/.workflow" "$CASE/bin" "$CASE/emptybin"
+    mkdir -p "$REPO/scripts/lib" "$REPO/.uncle/workspace" "$CASE/bin" "$CASE/emptybin"
     cp "$ROOT/scripts/from-issue.sh" "$REPO/scripts/from-issue.sh"
     cp "$ROOT"/scripts/lib/*.sh "$REPO/scripts/lib/"
     : > "$GH_LOG"
@@ -119,10 +119,10 @@ GH
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-mkdir -p .workflow
-echo "ran" >> .workflow/driver.log
+mkdir -p .uncle/workspace
+echo "ran" >> .uncle/workspace/driver.log
 if [[ -n "${FAKE_DRIVER_ORIGIN:-}" ]]; then
-    printf '%s\n' "$FAKE_DRIVER_ORIGIN" > .workflow/origin
+    printf '%s\n' "$FAKE_DRIVER_ORIGIN" > .uncle/workspace/origin
 fi
 if [[ -n "${FAKE_DRIVER_VERDICT_TEXT:-}" ]]; then
     printf '%s\n' "$FAKE_DRIVER_VERDICT_TEXT" > FINAL_AUDIT.md
@@ -131,14 +131,14 @@ if [[ -n "${FAKE_DRIVER_VERDICT_TEXT:-}" ]]; then
     hash="$(shasum -a 256 FINAL_AUDIT.md | awk '{print $1}')"
     printf '%s\t%s\t%s\n' \
         "${FAKE_DRIVER_RUN_ID:-${STAGEGATE_RUN_ID:--}}" "$class" "$hash" \
-        > .workflow/audit-verdict
+        > .uncle/workspace/audit-verdict
 fi
 if [[ "${FAKE_DRIVER_CLOSED_MARKER:-0}" == "1" ]]; then
     printf '%s\t%s\t%s\n' "${STAGEGATE_RUN_ID:--}" \
         "${STAGEGATE_ORIGIN_REPO:-}" "${STAGEGATE_ORIGIN_ISSUE:-}" \
-        > .workflow/issue-closed
+        > .uncle/workspace/issue-closed
 elif [[ -n "${FAKE_DRIVER_MARKER_TEXT:-}" ]]; then
-    printf '%s\n' "$FAKE_DRIVER_MARKER_TEXT" > .workflow/issue-closed
+    printf '%s\n' "$FAKE_DRIVER_MARKER_TEXT" > .uncle/workspace/issue-closed
 fi
 if [[ "${FAKE_DRIVER_TAMPER:-0}" == "1" ]]; then
     printf 'tampered\n' >> FINAL_AUDIT.md
@@ -230,22 +230,22 @@ REV
 
 expect_state() {
     COUNT=$((COUNT + 1))
-    if [[ "$(cat "$REPO/.workflow/state" 2>/dev/null)" != "$1" ]]; then
-        fail "expected state '$1', got '$(cat "$REPO/.workflow/state" 2>/dev/null)'"
+    if [[ "$(cat "$REPO/.uncle/workspace/state" 2>/dev/null)" != "$1" ]]; then
+        fail "expected state '$1', got '$(cat "$REPO/.uncle/workspace/state" 2>/dev/null)'"
     fi
 }
 
 expect_marker() {
     COUNT=$((COUNT + 1))
-    if [[ ! -s "$REPO/.workflow/issue-closed" ]]; then
+    if [[ ! -s "$REPO/.uncle/workspace/issue-closed" ]]; then
         fail "expected the close marker to be written"
     fi
 }
 
 expect_no_marker() {
     COUNT=$((COUNT + 1))
-    if [[ -e "$REPO/.workflow/issue-closed" ]]; then
-        fail "expected no close marker, got: $(cat "$REPO/.workflow/issue-closed")"
+    if [[ -e "$REPO/.uncle/workspace/issue-closed" ]]; then
+        fail "expected no close marker, got: $(cat "$REPO/.uncle/workspace/issue-closed")"
     fi
 }
 
@@ -330,7 +330,7 @@ expect_out "No audit verdict was recorded"
 expect_not_closed
 
 new_case malformed-verdict-file
-printf 'garbage\n' > "$REPO/.workflow/audit-verdict"
+printf 'garbage\n' > "$REPO/.uncle/workspace/audit-verdict"
 run_runner confirm "RUN\n"
 expect_status 0
 expect_out "malformed"
@@ -408,29 +408,29 @@ expect_closed
 # ---------------------------------------------------------------------------
 
 new_case seed-gate-foreign-origin
-printf 'IMPLEMENT\n' > "$REPO/.workflow/state"
-printf 'other/repo\t99\n' > "$REPO/.workflow/origin"
+printf 'IMPLEMENT\n' > "$REPO/.uncle/workspace/state"
+printf 'other/repo\t99\n' > "$REPO/.uncle/workspace/origin"
 run_runner seed_gate ""
 expect_status 1
 expect_out "Refusing to seed owner/repo#42"
 expect_out "other/repo"
 
 new_case seed-gate-unowned-state
-printf 'IMPLEMENT\n' > "$REPO/.workflow/state"
+printf 'IMPLEMENT\n' > "$REPO/.uncle/workspace/state"
 run_runner seed_gate ""
 expect_status 1
 expect_out "absent — the in-flight state has no provable owner"
 
 new_case seed-gate-same-origin-resumes
-printf 'IMPLEMENT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\n' > "$REPO/.workflow/origin"
+printf 'IMPLEMENT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\n' > "$REPO/.uncle/workspace/origin"
 run_runner seed_gate ""
 expect_status 0
 expect_out "SEED_SKIPPED"
 
 new_case seed-gate-complete-state-reseeds
-printf 'COMPLETE\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\n' > "$REPO/.workflow/origin"
+printf 'COMPLETE\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\n' > "$REPO/.uncle/workspace/origin"
 run_runner seed_gate ""
 expect_status 0
 expect_out "SEED_WRITE"
@@ -445,14 +445,14 @@ expect_out "SEED_WRITE"
 # ---------------------------------------------------------------------------
 
 new_case lock-held-by-live-pid
-mkdir -p "$REPO/.workflow/lock"
-printf '%s\n' "$$" > "$REPO/.workflow/lock/pid"
-printf 'COMPLETE\n' > "$REPO/.workflow/state"
+mkdir -p "$REPO/.uncle/workspace/lock"
+printf '%s\n' "$$" > "$REPO/.uncle/workspace/lock/pid"
+printf 'COMPLETE\n' > "$REPO/.uncle/workspace/state"
 run_driver
 expect_status 1
 expect_out "another change-workflow.sh run (pid $$) holds this checkout"
 COUNT=$((COUNT + 1))
-if [[ ! -f "$REPO/.workflow/lock/pid" ]]; then
+if [[ ! -f "$REPO/.uncle/workspace/lock/pid" ]]; then
     fail "the live holder's lock must not be removed"
 fi
 
@@ -461,38 +461,38 @@ DEAD_PID=""
 ( exit 0 ) &
 DEAD_PID=$!
 wait "$DEAD_PID" 2>/dev/null
-mkdir -p "$REPO/.workflow/lock"
-printf '%s\n' "$DEAD_PID" > "$REPO/.workflow/lock/pid"
-printf 'COMPLETE\n' > "$REPO/.workflow/state"
+mkdir -p "$REPO/.uncle/workspace/lock"
+printf '%s\n' "$DEAD_PID" > "$REPO/.uncle/workspace/lock/pid"
+printf 'COMPLETE\n' > "$REPO/.uncle/workspace/state"
 run_driver
 expect_status 0
 expect_out "Clearing stale lock"
 expect_out "Change workflow complete."
 COUNT=$((COUNT + 1))
-if [[ -d "$REPO/.workflow/lock" ]]; then
+if [[ -d "$REPO/.uncle/workspace/lock" ]]; then
     fail "lock must be released on exit"
 fi
 
 new_case preflight-origin-mismatch
-printf 'IMPLEMENT\n' > "$REPO/.workflow/state"
-printf 'other/repo\t99\n' > "$REPO/.workflow/origin"
+printf 'IMPLEMENT\n' > "$REPO/.uncle/workspace/state"
+printf 'other/repo\t99\n' > "$REPO/.uncle/workspace/origin"
 run_driver STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 1
 expect_out "Refusing to resume: this checkout is mid-run"
 COUNT=$((COUNT + 1))
-if [[ "$(cat "$REPO/.workflow/state")" != "IMPLEMENT" ]]; then
+if [[ "$(cat "$REPO/.uncle/workspace/state")" != "IMPLEMENT" ]]; then
     fail "a refused preflight must not touch the state file"
 fi
 
 new_case preflight-origin-absent
-printf 'IMPLEMENT\n' > "$REPO/.workflow/state"
+printf 'IMPLEMENT\n' > "$REPO/.uncle/workspace/state"
 run_driver STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 1
 expect_out "cannot be proven to belong to owner/repo#42"
 
 new_case preflight-standalone-unaffected
-printf 'IMPLEMENT\n' > "$REPO/.workflow/state"
-printf 'other/repo\t99\n' > "$REPO/.workflow/origin"
+printf 'IMPLEMENT\n' > "$REPO/.uncle/workspace/state"
+printf 'other/repo\t99\n' > "$REPO/.uncle/workspace/origin"
 run_driver
 # No STAGEGATE_ORIGIN_*: the preflight is skipped entirely, so the run reaches
 # the state machine and fails on its own missing-approval check instead of
@@ -501,8 +501,8 @@ expect_status 1
 expect_not_out "Refusing to resume"
 
 new_case preflight-complete-state-passes
-printf 'COMPLETE\n' > "$REPO/.workflow/state"
-printf 'other/repo\t99\n' > "$REPO/.workflow/origin"
+printf 'COMPLETE\n' > "$REPO/.uncle/workspace/state"
+printf 'other/repo\t99\n' > "$REPO/.uncle/workspace/origin"
 run_driver STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
 expect_out "Change workflow complete."
@@ -517,16 +517,16 @@ new_case stale-audit-rejected
 mkdir -p "$REPO/prompts/change"
 cp "$ROOT/prompts/change/final-audit.md" "$REPO/prompts/change/final-audit.md"
 printf 'READY\n' > "$REPO/FINAL_AUDIT.md"
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
 run_driver WORKFLOW_REVIEWER_CMD=/usr/bin/true STAGEGATE_RUN_ID=run-1
 expect_status 1
 expect_out "Required file missing or empty: FINAL_AUDIT.md"
 COUNT=$((COUNT + 1))
-if [[ -e "$REPO/.workflow/audit-verdict" ]]; then
+if [[ -e "$REPO/.uncle/workspace/audit-verdict" ]]; then
     fail "no verdict may be recorded when the audit was not produced"
 fi
 COUNT=$((COUNT + 1))
-if [[ "$(cat "$REPO/.workflow/state")" != "FINAL_AUDIT" ]]; then
+if [[ "$(cat "$REPO/.uncle/workspace/state")" != "FINAL_AUDIT" ]]; then
     fail "state must not advance past a failed audit"
 fi
 
@@ -543,14 +543,14 @@ done
 printf 'Audit body.\n\nREADY\n' > "$out"
 REV
 chmod +x "$CASE/bin/fake-reviewer"
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1
 expect_status 0
 expect_out "Audit verdict: READY"
 COUNT=$((COUNT + 1))
 expected_record="$(printf 'run-1\tREADY\t%s' "$(shasum -a 256 "$REPO/FINAL_AUDIT.md" | awk '{print $1}')")"
-if [[ "$(cat "$REPO/.workflow/audit-verdict")" != "$expected_record" ]]; then
-    fail "verdict record mismatch: $(cat "$REPO/.workflow/audit-verdict")"
+if [[ "$(cat "$REPO/.uncle/workspace/audit-verdict")" != "$expected_record" ]]; then
+    fail "verdict record mismatch: $(cat "$REPO/.uncle/workspace/audit-verdict")"
 fi
 
 # ---------------------------------------------------------------------------
@@ -561,28 +561,28 @@ fi
 # format, and no fetch provenance keeps the close gate out of it.
 new_case state-prefix-written
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1
 expect_status 0
 expect_state "42:COMPLETE"
 
 new_case state-bare-still-read
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1
 expect_status 0
 expect_out "Audit verdict: READY"
 
 new_case state-no-origin-stays-bare
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1
 expect_status 0
 expect_state "COMPLETE"
 
 new_case state-unknown-prefix-refused
-printf 'abc:IMPLEMENT\n' > "$REPO/.workflow/state"
+printf 'abc:IMPLEMENT\n' > "$REPO/.uncle/workspace/state"
 run_driver
 expect_status 1
 expect_out "Unknown workflow state: abc:IMPLEMENT"
@@ -590,15 +590,15 @@ expect_out "Unknown workflow state: abc:IMPLEMENT"
 # --- Regression tests for R-1: a prefixed COMPLETE must still read as done ---
 
 new_case seed-gate-prefixed-complete-reseeds
-printf '42:COMPLETE\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf '42:COMPLETE\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_runner seed_gate ""
 expect_status 0
 expect_out "SEED_WRITE"
 
 new_case seed-gate-prefixed-inflight-refuses
-printf '99:IMPLEMENT\n' > "$REPO/.workflow/state"
-printf 'other/repo\t99\tgh\n' > "$REPO/.workflow/origin"
+printf '99:IMPLEMENT\n' > "$REPO/.uncle/workspace/state"
+printf 'other/repo\t99\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_runner seed_gate ""
 expect_status 1
 expect_out "Refusing to seed owner/repo#42"
@@ -606,8 +606,8 @@ expect_out "Refusing to seed owner/repo#42"
 # The origin here is foreign by repo, not by issue: a foreign *issue* number
 # beside a prefixed state is the AR-004 corruption case, covered separately.
 new_case preflight-prefixed-complete-passes
-printf '42:COMPLETE\n' > "$REPO/.workflow/state"
-printf 'other/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf '42:COMPLETE\n' > "$REPO/.uncle/workspace/state"
+printf 'other/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_driver STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
 expect_out "Change workflow complete."
@@ -617,23 +617,23 @@ expect_out "Change workflow complete."
 # ---------------------------------------------------------------------------
 
 new_case seed-gate-mismatch-prints-guidance
-printf 'IMPLEMENT\n' > "$REPO/.workflow/state"
-printf 'other/repo\t99\tgh\n' > "$REPO/.workflow/origin"
+printf 'IMPLEMENT\n' > "$REPO/.uncle/workspace/state"
+printf 'other/repo\t99\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_runner seed_gate ""
 expect_status 1
-expect_out "rm -f .workflow/state .workflow/origin"
+expect_out "rm -f .uncle/workspace/state .uncle/workspace/origin"
 
 # ---------------------------------------------------------------------------
 # State-prefix / origin-issue corruption (AR-004)
 # ---------------------------------------------------------------------------
 
 new_case state-origin-issue-mismatch-refused
-printf '99:IMPLEMENT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf '99:IMPLEMENT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_runner seed_gate ""
 expect_status 1
 expect_out "Refusing to act on corrupt workflow state"
-expect_out "99 but .workflow/origin names issue 42."
+expect_out "99 but .uncle/workspace/origin names issue 42."
 expect_not_out "Refusing to seed"
 run_driver STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 1
@@ -647,8 +647,8 @@ expect_state "99:IMPLEMENT"
 
 new_case direct-run-closes
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
@@ -660,8 +660,8 @@ expect_marker
 # gate, and declining there leaves the state — and the issue — where they are.
 new_case direct-run-not-ready-stops-at-gate
 setup_audit_stage "NOT READY"
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
@@ -677,8 +677,8 @@ expect_no_marker
 # pass either: UNKNOWN reaches the same gate.
 new_case direct-run-unknown-verdict-stops-at-gate
 setup_audit_stage "probably fine, ship it"
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
@@ -691,8 +691,8 @@ expect_not_closed
 # the issue: an override is a human accepting a failure, not a passing audit.
 new_case direct-run-not-ready-override-completes
 setup_audit_stage "NOT READY"
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_driver_stdin "$(gate_input '' y)" \
     WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
@@ -704,15 +704,15 @@ expect_state "42:COMPLETE"
 expect_not_closed
 expect_no_marker
 COUNT=$((COUNT + 1))
-if ! grep -q "NOT_READY" "$REPO/.workflow/audit-override"; then
+if ! grep -q "NOT_READY" "$REPO/.uncle/workspace/audit-override"; then
     fail "the override record must name the verdict it overrode"
 fi
 
 # The kill switch restores the old behavior, and says so.
 new_case direct-run-audit-gate-disabled
 setup_audit_stage "NOT READY"
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_AUDIT_GATE=0 \
     WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
@@ -725,7 +725,7 @@ expect_no_marker
 
 new_case direct-run-no-origin-skips-close
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1
 expect_status 0
 expect_out "Change workflow complete."
@@ -734,8 +734,8 @@ expect_no_marker
 
 new_case direct-run-gh-unauth-skips-close
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42 FAKE_GH_AUTH_RC=1
 expect_status 0
@@ -745,8 +745,8 @@ expect_no_marker
 
 new_case direct-run-close-flag-off
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42 WORKFLOW_CLOSE_ISSUE=0
 expect_status 0
@@ -756,8 +756,8 @@ expect_no_marker
 
 new_case direct-run-close-fails-still-completes
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42 FAKE_GH_CLOSE_RC=1
 expect_status 0
@@ -787,18 +787,18 @@ expect_closed
 
 new_case direct-run-stale-origin-fresh-state-skips-close
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'other/repo\t99\tgh\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'other/repo\t99\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1
 expect_status 0
-expect_out "cannot prove it owns .workflow/origin"
+expect_out "cannot prove it owns .uncle/workspace/origin"
 expect_not_closed
 expect_no_marker
 
 new_case direct-run-explicit-origin-env-closes
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
@@ -811,8 +811,8 @@ expect_closed
 
 new_case direct-run-close-retries-on-rerun
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42 FAKE_GH_CLOSE_RC=1
 expect_status 0
@@ -826,11 +826,11 @@ expect_close_count 2
 
 new_case direct-run-stale-sentinel-run-id-no-retry
 printf 'READY\n' > "$REPO/FINAL_AUDIT.md"
-printf '42:COMPLETE\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+printf '42:COMPLETE\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 printf -- '-\tREADY\t%s\n' \
     "$(shasum -a 256 "$REPO/FINAL_AUDIT.md" | awk '{print $1}')" \
-    > "$REPO/.workflow/audit-verdict"
+    > "$REPO/.uncle/workspace/audit-verdict"
 run_driver
 expect_status 0
 expect_not_closed
@@ -842,8 +842,8 @@ expect_no_marker
 
 new_case curl-fallback-driver-side-skips-close
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\tcurl\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\tcurl\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
@@ -853,8 +853,8 @@ expect_no_marker
 
 new_case legacy-two-field-origin-skips-close
 setup_audit_stage READY
-printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-printf 'owner/repo\t42\n' > "$REPO/.workflow/origin"
+printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+printf 'owner/repo\t42\n' > "$REPO/.uncle/workspace/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
@@ -871,8 +871,8 @@ if ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1
     echo "NOTE [$CASE_NAME] skipped: neither timeout nor gtimeout is available"
 else
     setup_audit_stage READY
-    printf 'FINAL_AUDIT\n' > "$REPO/.workflow/state"
-    printf 'owner/repo\t42\tgh\n' > "$REPO/.workflow/origin"
+    printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workspace/state"
+    printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
     run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
         STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42 \
         STAGEGATE_CLOSE_TIMEOUT=1 FAKE_GH_CLOSE_SLEEP=5
@@ -881,15 +881,15 @@ else
     expect_out "gh issue close failed for owner/repo#42."
     expect_no_marker
     COUNT=$((COUNT + 1))
-    if [[ -d "$REPO/.workflow/lock" ]]; then
+    if [[ -d "$REPO/.uncle/workspace/lock" ]]; then
         fail "lock must be released after a timed-out close"
     fi
 fi
 
 # --- state/origin agreement across a completed run -------------------------
 #
-# Seeding a new issue writes .workflow/origin and leaves the finished run's
-# .workflow/state behind. Treating that as corruption made a checkout
+# Seeding a new issue writes .uncle/workspace/origin and leaves the finished run's
+# .uncle/workspace/state behind. Treating that as corruption made a checkout
 # single-use: the second issue could not start without deleting files by hand.
 
 CASE_NAME="state_origin_agree"

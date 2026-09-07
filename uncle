@@ -74,6 +74,12 @@ CLINE_CONFIG="${CLINE_CONFIG:-$HOME/.cline/data/settings/providers.json}"
 CL_MODEL=""
 CL_EFFORT="medium"
 UNCLE_CONFIG="${UNCLE_CONFIG:-$PROJECT_ROOT/.uncle/config}"
+export UNCLE_CONFIG
+# Tell the TUI (and any sub-processed driver) which project root we were
+# invoked from. The launcher cd's into the install dir, so without this the
+# TUI would key its per-project state off the install directory instead of
+# the caller's cwd -- and config edits would be written to the wrong .uncle/.
+export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
 CONFIG_STAGES="requirements project-plan updated-plan implementation execute-checklist baseline change-spec change-plan updated-change-plan reviewer"
 
 stage_env_var() {

@@ -25,13 +25,23 @@ WORKFLOWS = [
 ]
 EFFORTS = ["high", "medium", "low"]
 ISSUE_MODES = [("auto", ""), ("change request", "--change"), ("new application", "--new")]
-# The per-project config lives in the current project root (cwd), so each
-# project gets its own model/effort/runner settings. `UNCLE_CONFIG` overrides.
+# The per-project config lives in the caller's project root, so each project
+# gets its own model/effort/runner settings. The `uncle` launcher exports
+# UNCLE_PROJECT_ROOT (= the cwd it was invoked from) because it cd's into the
+# install libexec before launching this TUI; without it os.getcwd() would be
+# the install dir and config edits would land in the wrong .uncle/.
 _CONFIGURE_FIRST_RUN = object()  # sentinel: leave in place until set in __init__
 
 
+def _project_root():
+    root = os.environ.get("UNCLE_PROJECT_ROOT")
+    if root and os.path.isabs(root):
+        return root
+    return os.getcwd()
+
+
 def _default_config_path():
-    return os.path.join(os.getcwd(), ".uncle", "config")
+    return os.path.join(_project_root(), ".uncle", "config")
 
 
 CONFIG_PATH = os.environ.get("UNCLE_CONFIG", _default_config_path())
@@ -287,7 +297,7 @@ class UncleTUI:
             self.state = "config"
             self.config_sel = 0
             try:
-                os.makedirs(os.path.join(os.getcwd(), ".uncle", "workspace"), exist_ok=True)
+                                os.makedirs(os.path.join(_project_root(), ".uncle", "workspace"), exist_ok=True)
             except Exception:
                 pass
 
@@ -649,7 +659,7 @@ class UncleTUI:
         env["UNCLE_CLINE_EFFORT"] = self.effort
         env["UNCLE_STATUS_FILE"] = self.status_path
         self.output = []
-        self.proc = subprocess.Popen(self.cmd_for(), cwd=ROOT, env=env,
+        self.proc = subprocess.Popen(self.cmd_for(), cwd=_project_root(), env=env,
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      text=True, bufsize=1)
         threading.Thread(target=self._reader, daemon=True).start()

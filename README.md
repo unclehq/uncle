@@ -23,19 +23,21 @@
  #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
     #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
        #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+
 ```
+
+<p align="center">
 
 # uncle
 
 > Governed CI for coding agents.
->
+
 > Everyone else is building agents that run unsupervised. This is the approval
 > layer that makes them acceptable in production.
 
-</div>
+</p>
 
-uncle is a human-gated, adversarially-audited CI pipeline for AI-generated
-code. A primary agent plans, implements, and verifies; an independent reviewer
+uncle is a human-gated, adversarially-audited CI pipeline for AI-generated code. A primary agent plans, implements, and verifies; an independent reviewer
 audits adversarially; a human approves at every gate. By default the primary
 agent is `scripts/agent-kimi.sh` (kimi for the kimi-tier stages, `claude`
 otherwise) and the reviewer is `codex`, but both are configurable — for
@@ -74,7 +76,7 @@ On first run uncle:
    touched.
 2. **Opens the Configure screen** (instead of the main menu) so you pick the
    project's settings before running a workflow.
-3. **Writes `.uncle.config`** when you save — per-project, next to the
+3. **Writes `.uncle/config`** when you save — per-project, next to the
    workspace. The second run goes straight to the main menu.
 
 In Configure, walk the rows with the arrow keys; `Enter` opens a picker:
@@ -88,7 +90,7 @@ In Configure, walk the rows with the arrow keys; `Enter` opens a picker:
 
 Type to filter a picker, `Enter` to select, `Esc` to go back, `d` to reset a
 row. When you are done, `q` leaves Configure; the settings persist to
-`.uncle.config` and apply to every workflow you run in that directory.
+`uncle/config` and apply to every workflow you run in that directory.
 
 After configuring, pick a workflow from the main menu (or run a driver
 directly — see [How to run it](#how-to-run-it)).
@@ -145,7 +147,7 @@ never with permission-bypass flags.
 
 Instead of driving a script directly, you can run `./uncle`: set the model,
 reasoning effort, and per-stage overrides in its Configure menu (persisted to
-`.uncle.config`), then launch a driver.
+`.uncle/config`), then launch a driver.
 
 ### Run a new-application build
 

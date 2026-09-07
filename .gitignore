@@ -7,6 +7,9 @@
 .uncle/workspace/change.diff
 .uncle/workspace/change-stat.txt
 
+# Per-project local config (committed template lives at .uncle/config.example)
+.uncle/config
+
 # Python bytecode
 __pycache__/
 *.pyc

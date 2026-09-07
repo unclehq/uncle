@@ -28,12 +28,12 @@ Usage: uncle [-h|--help]
 
 Interactive launcher for the governed-CI workflows. Picks one of the three
 drivers and runs the stages through `cline` using the model, reasoning effort,
-and per-stage overrides from `.uncle.config` (menu option 4).
+and per-stage overrides from `.uncle/config` (menu option 4).
 
   1) New application   -> ./scripts/stagegate.sh
   2) From GitHub issue -> ./scripts/from-issue.sh
   3) Change request    -> ./scripts/change-workflow.sh
-  4) Configure stages  -> .uncle.config
+    4) Configure stages  -> .uncle/config
   q) Quit
 
 Runs with no arguments. -h / --help print this message and exit 0.
@@ -58,7 +58,7 @@ fi
 CLINE_CONFIG="${CLINE_CONFIG:-$HOME/.cline/data/settings/providers.json}"
 CL_MODEL=""
 CL_EFFORT="medium"
-UNCLE_CONFIG="${UNCLE_CONFIG:-$PROJECT_ROOT/.uncle.config}"
+UNCLE_CONFIG="${UNCLE_CONFIG:-$PROJECT_ROOT/.uncle/config}"
 CONFIG_STAGES="requirements project-plan updated-plan implementation execute-checklist baseline change-spec change-plan updated-change-plan reviewer"
 
 stage_env_var() {
@@ -71,7 +71,7 @@ effort_env_var() {
         "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
 }
 
-# Read .uncle.config and export WORKFLOW_MODEL_<STAGE>, WORKFLOW_EFFORT_<STAGE>,
+# Read .uncle/config and export WORKFLOW_MODEL_<STAGE>, WORKFLOW_EFFORT_<STAGE>,
 # plus UNCLE_CLINE_REVIEWER_MODEL so the drivers resolve the configured per-stage
 # cline models and reasoning efforts.
 apply_config() {
@@ -180,7 +180,7 @@ EOF
   ${C_CYAN}${C_BOLD}1)${C_RESET} New application   ${C_GRAY}-> ./scripts/stagegate.sh${C_RESET}
   ${C_CYAN}${C_BOLD}2)${C_RESET} From GitHub issue ${C_GRAY}-> ./scripts/from-issue.sh${C_RESET}
   ${C_CYAN}${C_BOLD}3)${C_RESET} Change request    ${C_GRAY}-> ./scripts/change-workflow.sh${C_RESET}
-  ${C_CYAN}${C_BOLD}4)${C_RESET} Configure stages  ${C_GRAY}-> .uncle.config${C_RESET}
+  ${C_CYAN}${C_BOLD}4)${C_RESET} Configure stages  ${C_GRAY}-> .uncle/config${C_RESET}
   ${C_CYAN}${C_BOLD}q)${C_RESET} Quit
 
   model: ${C_CYAN}$model_hint${C_RESET}   performance: ${C_CYAN}$CL_EFFORT${C_RESET}
@@ -446,7 +446,7 @@ run_change_workflow() {
 # the effective values before any workflow runs.
 apply_config
 
-# First time in this project root (no .uncle.config yet): create the workspace
+# First time in this project root (no .uncle/config yet): create the workspace
 # dir the scripts write state/logs into, then go straight to the configure menu
 # so this project gets set up before any workflow runs.
 if [[ ! -s "$UNCLE_CONFIG" ]]; then

@@ -332,7 +332,7 @@ individual stage back with e.g. `WORKFLOW_MODEL_BASELINE=sonnet`.
 
 `uncle` (repo root) is an interactive launcher for the three drivers. The model,
 reasoning effort, and per-stage overrides are set in the Configure menu (menu
-option 4) and persisted to `.uncle.config`; when a driver runs they are exported
+option 4) and persisted to `.uncle/config`; when a driver runs they are exported
 as `UNCLE_CLINE_MODEL`/`UNCLE_CLINE_EFFORT`, and
 `WORKFLOW_AGENT_CMD`/`WORKFLOW_REVIEWER_CMD` are set to the matching shims. When
 stdin and stdout are real terminals it opens a full-screen TUI (`uncle_tui.py`);

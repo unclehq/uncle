@@ -3,7 +3,7 @@
 
 A curses interface: pick a workflow, then run the chosen driver while streaming
 its output. The cline model, reasoning effort, and per-stage overrides are set
-in the Configure screen (persisted to `.uncle.config`). A fixed status bar shows
+in the Configure screen (persisted to `.uncle/config`). A fixed status bar shows
 the current model, cumulative tokens used, and Act/Plan mode for the running
 stage.
 """
@@ -31,7 +31,7 @@ _CONFIGURE_FIRST_RUN = object()  # sentinel: leave in place until set in __init_
 
 
 def _default_config_path():
-    return os.path.join(os.getcwd(), ".uncle.config")
+    return os.path.join(os.getcwd(), ".uncle", "config")
 
 
 CONFIG_PATH = os.environ.get("UNCLE_CONFIG", _default_config_path())

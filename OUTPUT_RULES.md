@@ -16,7 +16,10 @@ that breaks one and note the breakage in the text.
 
 - Write exactly the file the stage asked for, at exactly that path. Do not
   rename it, do not add a suffix, do not write a second copy elsewhere.
-- Print nothing to the conversation except the path of the file written, on one
+- When the stage explicitly requires multiple artifacts, write each named
+  artifact and print its path on its own line. This exception also permits
+  source and test edits explicitly required by implementation or repair stages.
+- Print nothing to the conversation except the output artifact paths, one per
   line.
 - No preamble, no closing summary, no "here is your document", no offer to
   continue.
@@ -61,6 +64,11 @@ none.
   `## Assumptions`, `## Open questions` — in that order.
 - Tables for anything enumerable: behaviors, invariants, findings,
   dispositions, checks. One row per item, one item per row.
+- Preserve any driver-parsed section, columns, status vocabulary, and required
+  rows exactly as specified by the stage. Never omit mandatory acceptance rows
+  to meet a length limit; shorten surrounding prose first. If required rows
+  alone exceed a section or document cap, retain them and report that exception
+  in Open questions.
 - Give every enumerated item a stable identifier (`B-3`, `I-2`, `AR-004`,
   `MC-7`) so later stages and humans can cite it.
 

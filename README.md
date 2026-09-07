@@ -122,6 +122,28 @@ approval into an explicit, recorded override. A final audit that does not say th
 
 Runs end in `READY`, `READY WITH NON-BLOCKING ISSUES`, or `NOT READY`.
 
+For new applications, a prerequisite check runs before implementation. It
+verifies access to the tools, browsers, source inputs, and reviewers required
+for acceptance. Missing prerequisites pause the run. Approved verification
+commands must cover the full automated acceptance suite, including browser
+tests when applicable.
+
+After the code gate, an independent test review checks coverage, assertions,
+expected results, and evidence that critical tests reject representative
+defects. Failed reviews or acceptance checks return to repair, then repeat the
+driver checks, human diff approval, test review, and checklist. Two repair
+attempts are allowed across restarts by default (`WORKFLOW_MAX_REPAIRS`, 0–100).
+Missing evidence or external prerequisites pauses verification instead of
+consuming repair attempts. Final audit starts only after required checks pass;
+an implementation green-check override does not waive acceptance.
+
+The updated plan also names protected tests, fixtures, helpers, and test
+configuration. The driver hashes these files and directory inventories before
+verification and rejects changes even when commands report success. Repairs
+may change tests, but must explain each change and pass another diff approval
+and independent test review. This detects changed inputs at stage boundaries;
+it does not make an agent with filesystem access physically unable to edit them.
+
 ---
 
 ## Documentation

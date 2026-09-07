@@ -29,6 +29,10 @@ updated-plan.runner cline
 updated-plan.model cline-pass/kimi-k3
 updated-plan.effort high
 
+preflight.runner cline
+preflight.model cline-pass/deepseek-v4-flash
+preflight.effort medium
+
 # Implementation is the stage worth paying for.
 implementation.runner claude
 implementation.effort high
@@ -61,6 +65,9 @@ updated-change-plan.effort high
 # pointing at a different program from the implementer.
 adversarial-review.runner codex
 adversarial-review.effort high
+
+test-review.runner codex
+test-review.effort high
 
 manual-checklist.runner cline
 manual-checklist.model cline-pass/glm-5.3

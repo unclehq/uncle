@@ -155,8 +155,104 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/implementation-review.sh"
 . "$ROOT/scripts/lib/gates.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
+. "$ROOT/scripts/lib/acceptance.sh"
+. "$ROOT/scripts/lib/verification-integrity.sh"
 
 . "$ROOT/scripts/lib/sha256.sh"
+
+# A repair always comes back through the independent checks and human diff
+# gate. Bound retries across restarts so an unfixable defect cannot spin.
+MAX_REPAIRS="${WORKFLOW_MAX_REPAIRS:-2}"
+case "$MAX_REPAIRS" in
+    ''|*[!0-9]*) echo "WORKFLOW_MAX_REPAIRS must be an integer from 0 to 100." >&2; exit 1 ;;
+esac
+if [[ ${#MAX_REPAIRS} -gt 3 ]]; then
+    echo "WORKFLOW_MAX_REPAIRS must be an integer from 0 to 100." >&2
+    exit 1
+fi
+MAX_REPAIRS=$((10#$MAX_REPAIRS))
+if [[ "$MAX_REPAIRS" -gt 100 ]]; then
+    echo "WORKFLOW_MAX_REPAIRS must be an integer from 0 to 100." >&2
+    exit 1
+fi
+
+acceptance_transition() {
+    local report="$1" next="$2" result
+    result="$(acceptance_result "$report" "${3:-}")"
+    case "$result" in
+        PASS) set_state "$next" ;;
+        REPAIR)
+            printf '%s\n' "$report" > "$STATE_DIR/repair-source"
+            set_state REPAIR
+            ;;
+        *)
+            echo "Acceptance $result: $report. Resolve its prerequisites or report errors and rerun."
+            echo "The current stage remains pending; no acceptance pass was recorded."
+            exit 1
+            ;;
+    esac
+}
+
+verification_integrity_failure() {
+    {
+        echo '## Verification input changes'
+        echo
+        echo 'Verification changed protected inputs or could not establish their integrity.'
+        echo 'Repair the tests or runner explicitly; do not accept regenerated expectations.'
+        echo 'Record each test change and its requirement-based justification in IMPLEMENTATION_NOTES.md.'
+        echo
+        echo '```text'
+        cat "$STATE_DIR/verification-integrity.log"
+        echo '```'
+    } > "$STATE_DIR/VERIFICATION_INTEGRITY.md"
+    printf '%s\n' "$STATE_DIR/VERIFICATION_INTEGRITY.md" > "$STATE_DIR/repair-source"
+    set_state REPAIR
+    echo "Verification inputs changed or are unavailable. See $STATE_DIR/VERIFICATION_INTEGRITY.md."
+    exit 1
+}
+
+capture_verification_inputs() {
+    local snapshot digest file
+    verification_paths UPDATED_PROJECT_PLAN.md > "$STATE_DIR/verification.paths" \
+        || { echo 'Missing Protected verification paths in approved plan.' > "$STATE_DIR/verification-integrity.log"; verification_integrity_failure; }
+    if ! verification_manifest "$STATE_DIR/verification.paths" \
+        > "$STATE_DIR/verification.manifest" 2> "$STATE_DIR/verification-integrity.log"; then
+        verification_integrity_failure
+    fi
+    EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
+    [[ -n "$EXPECTED_VERIFICATION" ]] || verification_integrity_failure
+    # Keep actual earlier assertions, not just their hashes or the repair
+    # agent's description. New snapshots never overwrite prior evidence.
+    snapshot="$(mktemp -d "$STATE_DIR/verification-snapshot.XXXXXX")"
+    while IFS=$'\t' read -r digest file; do
+        [[ "$digest" != DIRECTORY ]] || continue
+        mkdir -p "$snapshot/$(dirname "$file")"
+        cp "$file" "$snapshot/$file"
+    done < "$STATE_DIR/verification.manifest"
+    : > "$STATE_DIR/TEST_CHANGES.diff"
+    if [[ -n "${PREVIOUS_VERIFICATION_SNAPSHOT:-}" && -d "$PREVIOUS_VERIFICATION_SNAPSHOT" ]]; then
+        diff -ru "$PREVIOUS_VERIFICATION_SNAPSHOT" "$snapshot" \
+            > "$STATE_DIR/TEST_CHANGES.diff" || [[ "$?" == 1 ]]
+        if [[ ! -s "$STATE_DIR/TEST_CHANGES.diff" ]]; then
+            printf 'No protected verification input changes in this repair.\n' > "$STATE_DIR/TEST_CHANGES.diff"
+        fi
+    else
+        printf 'Initial snapshot; no prior test version to compare.\n' > "$STATE_DIR/TEST_CHANGES.diff"
+    fi
+    printf '%s\n' "$snapshot" > "$STATE_DIR/verification-snapshot"
+}
+
+check_verification_inputs() {
+    local actual
+    if ! actual="$(verification_manifest "$STATE_DIR/verification.paths" 2> "$STATE_DIR/verification-integrity.log")"; then
+        verification_integrity_failure
+    fi
+    if [[ "$actual" != "$EXPECTED_VERIFICATION" ]]; then
+        diff -u <(printf '%s\n' "$EXPECTED_VERIFICATION") <(printf '%s\n' "$actual") \
+            > "$STATE_DIR/verification-integrity.log" || true
+        verification_integrity_failure
+    fi
+}
 
 # bash 3.2 (macOS system bash) has no ${var^^}.
 upper() {
@@ -292,7 +388,7 @@ stage_turns() {
 stage_tools() {
     local fallback="Read,Glob,Grep,Write"
     case "$1" in
-        implementation|execute-checklist)
+        implementation|execute-checklist|preflight)
             fallback="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
             ;;
     esac
@@ -301,7 +397,7 @@ stage_tools() {
 
 # New application pipeline stage order, used to report "stage N/M" to the TUI.
 # Matches run_stage's case arms.
-STATUS_STAGE_SEQ="requirements project-plan adversarial-review updated-plan implementation manual-checklist execute-checklist final-audit"
+STATUS_STAGE_SEQ="requirements project-plan adversarial-review updated-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
 
 # Report the current stage to the TUI status channel. The exports feed the
 # agent shims' own status writes; the start event written here covers every
@@ -644,6 +740,23 @@ run_stage() {
             run_claude prompts/implement.md implementation
             require_artifact AUTOMATED_TEST_REPORT.md
             ;;
+        PREFLIGHT)
+            rm -f PREFLIGHT_REPORT.md
+            run_claude prompts/preflight.md preflight
+            require_artifact PREFLIGHT_REPORT.md
+            ;;
+        TEST_REVIEW)
+            # Preserve the previous findings for the next review and repairs.
+            if [[ -s TEST_REVIEW.md ]]; then
+                cp TEST_REVIEW.md "$STATE_DIR/previous-test-review.md"
+            fi
+            rm -f TEST_REVIEW.md
+            run_codex_review prompts/test-review.md TEST_REVIEW.md test-review
+            ;;
+        REPAIR)
+            run_claude prompts/repair.md implementation
+            require_artifact AUTOMATED_TEST_REPORT.md
+            ;;
         MANUAL_CHECKLIST)
             run_codex_review \
                 prompts/manual-checklist.md \
@@ -651,6 +764,7 @@ run_stage() {
                 manual-checklist
             ;;
         EXECUTE_CHECKLIST)
+            rm -f VERIFICATION_REPORT.md
             run_claude prompts/execute-checklist.md execute-checklist
             require_artifact VERIFICATION_REPORT.md
             ;;
@@ -705,7 +819,7 @@ run_green_check() {
 
     echo
     echo "Re-running the plan's verification commands from the driver:"
-    green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log"
+    green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" check_verification_inputs
 
     # No baseline file: green_classify treats every failure as a regression,
     # which is the correct reading for a new application.
@@ -742,7 +856,9 @@ run_green_check() {
 build_implementation_review() {
     write_change_diff "$DIFF_FILE"
     write_implementation_review "$REVIEW_FILE" "$DIFF_FILE" "$GREEN_MD" \
-        IMPLEMENTATION_NOTES.md AUTOMATED_TEST_REPORT.md
+        IMPLEMENTATION_NOTES.md AUTOMATED_TEST_REPORT.md \
+        "$STATE_DIR/verification.paths" "$STATE_DIR/verification.manifest" \
+        "$STATE_DIR/verification-snapshot" "$STATE_DIR/TEST_CHANGES.diff"
 }
 
 # Regenerate the document and compare it with what was approved. A mismatch
@@ -933,6 +1049,26 @@ while true; do
                 UPDATED_PROJECT_PLAN.md \
                 UPDATED_PROJECT_PLAN \
                 approve
+            set_state PREFLIGHT
+            ;;
+
+        PREFLIGHT)
+            verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
+            if [[ -z "$(verify_commands UPDATED_PROJECT_PLAN.md)" ]]; then
+                echo "No Verification commands in UPDATED_PROJECT_PLAN.md. Amend the plan and renew its approval."
+                exit 1
+            fi
+            if ! verification_paths UPDATED_PROJECT_PLAN.md > /dev/null; then
+                echo "Missing Protected verification paths. Amend UPDATED_PROJECT_PLAN.md and renew approval."
+                exit 1
+            fi
+            run_stage PREFLIGHT
+            preflight_result="$(acceptance_result PREFLIGHT_REPORT.md)"
+            if [[ "$preflight_result" != PASS ]]; then
+                echo "Prerequisites $preflight_result: see PREFLIGHT_REPORT.md. Resolve and rerun."
+                exit 1
+            fi
+            hash_file UPDATED_PROJECT_PLAN.md > "$STATE_DIR/preflight-plan.sha256"
             set_state IMPLEMENT
             ;;
 
@@ -940,17 +1076,29 @@ while true; do
             verify_approval \
                 UPDATED_PROJECT_PLAN.md \
                 UPDATED_PROJECT_PLAN
+            if [[ ! -s "$STATE_DIR/preflight-plan.sha256" ]] \
+                || [[ "$(cat "$STATE_DIR/preflight-plan.sha256")" != "$(hash_file UPDATED_PROJECT_PLAN.md)" ]] \
+                || [[ "$(acceptance_result PREFLIGHT_REPORT.md)" != PASS ]]; then
+                set_state PREFLIGHT
+                continue
+            fi
             # Taken before the agent runs, so a file that was already sitting
             # in the directory is not read as something this build produced.
-            snapshot_untracked "$UNTRACKED_BASELINE"
+            if [[ ! -e "$UNTRACKED_BASELINE" ]]; then
+                snapshot_untracked "$UNTRACKED_BASELINE"
+            fi
 
             run_stage IMPLEMENT
+            verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
+            PREVIOUS_VERIFICATION_SNAPSHOT=""
+            capture_verification_inputs
 
             # Independent of the agent that just claimed its checks passed.
             # The result is carried to the gate rather than ending the run: a
             # failure is for the operator to weigh against the diff, and
             # killing the run here would throw away the stage that produced it.
             run_green_check || true
+            check_verification_inputs
 
             set_state WAIT_IMPLEMENT_APPROVAL
             ;;
@@ -970,7 +1118,7 @@ while true; do
                 echo
                 echo "Implementation gate disabled (WORKFLOW_DIFF_GATE=0);" \
                      "no human reads the diff."
-                set_state MANUAL_CHECKLIST
+                set_state TEST_REVIEW
                 continue
             fi
 
@@ -1011,7 +1159,58 @@ while true; do
                 rm -f "$GREEN_OVERRIDE_FILE"
             fi
 
-            set_state MANUAL_CHECKLIST
+            set_state TEST_REVIEW
+            ;;
+
+        TEST_REVIEW)
+            if [[ "$DIFF_GATE" == "1" ]]; then
+                verify_implementation_review
+            fi
+            require_file "$STATE_DIR/verification.manifest"
+            EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
+            check_verification_inputs
+            run_stage TEST_REVIEW
+            check_verification_inputs
+            if [[ "$GREEN_CHECK" != 1 || ! -s "$GREEN_CLASS" ]]; then
+                echo "Acceptance BLOCKED: the driver must run the approved verification suite."
+                echo "Enable WORKFLOW_GREEN_CHECK and rerun IMPLEMENT to capture its results."
+                exit 1
+            fi
+            if [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
+                && [[ "$(acceptance_result TEST_REVIEW.md 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS')" == PASS ]]; then
+                printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
+                set_state REPAIR
+            else
+                acceptance_transition TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+            fi
+            ;;
+
+        REPAIR)
+            verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
+            require_file "$STATE_DIR/repair-source"
+            repair_count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"
+            case "$repair_count" in
+                ''|*[!0-9]*) echo "Invalid repair-count; inspect $STATE_DIR/repair-count."; exit 1 ;;
+            esac
+            if [[ ${#repair_count} -gt 3 ]]; then
+                echo "Invalid repair-count; inspect $STATE_DIR/repair-count."
+                exit 1
+            fi
+            repair_count=$((10#$repair_count))
+            if [[ "$repair_count" -ge "$MAX_REPAIRS" ]]; then
+                echo "Repair limit ($MAX_REPAIRS) reached. Inspect $(cat "$STATE_DIR/repair-source")."
+                echo "Resolve the blocker, or raise WORKFLOW_MAX_REPAIRS deliberately and rerun."
+                exit 1
+            fi
+            repair_count=$((repair_count + 1))
+            printf '%s\n' "$repair_count" > "$STATE_DIR/repair-count"
+            PREVIOUS_VERIFICATION_SNAPSHOT="$(cat "$STATE_DIR/verification-snapshot" 2>/dev/null || true)"
+            run_stage REPAIR
+            verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
+            capture_verification_inputs
+            run_green_check || true
+            check_verification_inputs
+            set_state WAIT_IMPLEMENT_APPROVAL
             ;;
 
         MANUAL_CHECKLIST)
@@ -1023,11 +1222,32 @@ while true; do
             ;;
 
         EXECUTE_CHECKLIST)
+            if [[ "$DIFF_GATE" == "1" ]]; then
+                verify_implementation_review
+            fi
+            require_file "$STATE_DIR/verification.manifest"
+            EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
+            check_verification_inputs
             run_stage EXECUTE_CHECKLIST
-            set_state FINAL_AUDIT
+            check_verification_inputs
+            acceptance_transition VERIFICATION_REPORT.md FINAL_AUDIT
             ;;
 
         FINAL_AUDIT)
+            if [[ "$(acceptance_result TEST_REVIEW.md 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS')" != PASS ]]; then
+                set_state TEST_REVIEW
+                continue
+            fi
+            if [[ "$(acceptance_result VERIFICATION_REPORT.md)" != PASS ]]; then
+                set_state EXECUTE_CHECKLIST
+                continue
+            fi
+            if [[ "$DIFF_GATE" == "1" ]]; then
+                verify_implementation_review
+            fi
+            require_file "$STATE_DIR/verification.manifest"
+            EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
+            check_verification_inputs
             # Removed first so run_codex_review's require_file cannot read a
             # previous run's audit as this one's output.
             rm -f FINAL_AUDIT.md

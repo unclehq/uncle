@@ -20,7 +20,7 @@
 # file does not configure, so a config written before the per-stage format
 # keeps working until it is next saved.
 
-UNCLE_REVIEWER_STAGES=" adversarial-review manual-checklist final-audit "
+UNCLE_REVIEWER_STAGES=" adversarial-review test-review manual-checklist final-audit "
 UNCLE_DEFAULT_RUNNER="cline"
 UNCLE_DEFAULT_EFFORT="medium"
 UNCLE_DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"

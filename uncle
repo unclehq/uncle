@@ -71,7 +71,7 @@ CL_EFFORT="medium"
 UNCLE_CONFIG="${UNCLE_CONFIG:-$PROJECT_ROOT/.uncle/config}"
 export UNCLE_CONFIG
 export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
-CONFIG_STAGES="requirements project-plan updated-plan implementation execute-checklist baseline change-spec change-plan updated-change-plan adversarial-review manual-checklist final-audit"
+CONFIG_STAGES="requirements project-plan updated-plan preflight implementation execute-checklist baseline change-spec change-plan updated-change-plan adversarial-review test-review manual-checklist final-audit"
 
 # Full-screen terminal UI when both stdin and stdout are real terminals; the
 # line-based menu below remains for pipes and scripts.
@@ -88,7 +88,7 @@ fi
 # Every stage is configured on its own: a runner, a reasoning effort, and — for
 # a cline stage only — a model. The other runners are given no model flag and
 # use their own default, so `uncle` never invents one for them.
-CONFIG_STAGE_SIDE_reviewer=" adversarial-review manual-checklist final-audit "
+CONFIG_STAGE_SIDE_reviewer=" adversarial-review test-review manual-checklist final-audit "
 DEFAULT_RUNNER="cline"
 DEFAULT_EFFORT="medium"
 DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"

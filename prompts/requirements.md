@@ -1,9 +1,5 @@
 You are the primary requirements analyst.
 
-Print one status line per step, in the form:
-
-STATUS: <step> — <result>
-
 Read REQUIREMENTS.md and inspect the repository. Issue the reads and searches you
 need as parallel tool calls in a single message rather than one at a time.
 
@@ -19,6 +15,13 @@ Create REQUIREMENTS_INTERPRETATION.md containing:
 8. Assumptions
 9. Explicit non-goals
 10. Definition of done
+
+In Definition of done, map every mandatory acceptance criterion to its
+observable result, verification method, and prerequisite. Identify browser or
+GUI access, source rendering, representative data, external services, and
+independent reviewers where needed. Label availability as observed or unknown;
+do not assume tools or people will be available later. Preserve required
+checks even when the current environment cannot execute them.
 
 Use a behavior table:
 

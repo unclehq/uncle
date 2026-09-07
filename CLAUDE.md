@@ -38,6 +38,8 @@ The user is the approval authority. Never bypass a human review gate.
 | Source code | Primary agent |
 | MANUAL_CHECKLIST.md | Reviewer |
 | VERIFICATION_REPORT.md | Primary agent |
+| PREFLIGHT_REPORT.md | Primary agent |
+| TEST_REVIEW.md | Reviewer |
 
 ## Stage 1: Initial project plan
 
@@ -141,6 +143,12 @@ record.
 
 Implement according to the approved updated plan.
 
+For the new-application driver, implementation also requires a passing
+PREFLIGHT_REPORT.md: mandatory tools, browser access, input data, and reviewer
+arrangements must be available. The approved plan names the complete automated
+Verification commands and Protected verification paths for tests, oracles,
+helpers, and test configuration.
+
 During implementation:
 
 1. Build the smallest working vertical slice first.
@@ -171,6 +179,12 @@ Run every applicable automated check, including:
 
 Save command results in AUTOMATED_TEST_REPORT.md.
 
+Do not edit tests, fixtures, expected results, or test configuration during
+verification to make a command pass. The new-application driver compares their
+hashes and directory inventories around verification. Test changes belong in a
+separate repair stage, with a requirement-based explanation and another review.
+Critical tests must have evidence of rejecting representative defects.
+
 For each check record:
 
 - command;
@@ -181,6 +195,12 @@ For each check record:
 - unresolved warnings.
 
 ## Stage 6: Independent manual checklist
+
+In the new-application driver, TEST_REVIEW.md first reviews assertion quality,
+coverage, oracle provenance, protected file scope, and defect-injection evidence.
+Failing review or acceptance rows return to a bounded repair stage. Repairs
+repeat driver checks, human diff approval, independent test review, and checklist
+execution. Missing prerequisites pause the run; they cannot become passes.
 
 After implementation and automated checks, invoke:
 

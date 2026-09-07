@@ -63,7 +63,7 @@ verify_commands() {
         || true
 }
 
-# green_run <commands_file> <out_tsv> <log_file> — run each command from the
+# green_run <commands_file> <out_tsv> <log_file> [integrity_guard] — run each command from the
 # repository root and record "<exit status>TAB<command>", one per line.
 #
 # Commands run with the driver's own privileges, exactly as the operator would
@@ -71,13 +71,14 @@ verify_commands() {
 # the rest of the command list.
 green_run() {
     local cmds="$1" out="$2" log="$3"
-    local cmd status
+    local cmd status guard="${4:-}"
 
     : > "$out"
     : > "$log"
 
     while IFS= read -r cmd; do
         [[ -n "$cmd" ]] || continue
+        if [[ -n "$guard" ]]; then "$guard" || return 1; fi
 
         printf '\n$ %s\n' "$cmd" >> "$log"
 
@@ -85,6 +86,7 @@ green_run() {
         bash -c "$cmd" < /dev/null >> "$log" 2>&1 || status=$?
 
         printf '%s\t%s\n' "$status" "$cmd" >> "$out"
+        if [[ -n "$guard" ]]; then "$guard" || return 1; fi
 
         if [[ "$status" -eq 0 ]]; then
             printf '  PASS      %s\n' "$cmd"

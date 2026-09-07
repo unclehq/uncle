@@ -20,6 +20,10 @@ Create findings covering:
 - incorrect state ownership;
 - concurrency and race conditions;
 - tests that could pass despite incorrect behavior;
+- mandatory automated checks omitted from the Verification commands block;
+- missing prerequisites for actual acceptance execution;
+- expected results derived from the output under test, or critical assertions
+  without a representative defect that must make them fail;
 - failure and recovery gaps;
 - unnecessary complexity;
 - unrealistic scope;

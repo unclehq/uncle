@@ -518,6 +518,9 @@ new_stagegate_case() {
     mkdir -p "$REPO/prompts"
     printf 'STUB:implement\n' > "$REPO/prompts/implement.md"
     printf 'STUB:execute\n'   > "$REPO/prompts/execute-checklist.md"
+    printf 'STUB:preflight\n' > "$REPO/prompts/preflight.md"
+    printf 'STUB:repair\n' > "$REPO/prompts/repair.md"
+    printf 'review tests\n' > "$REPO/prompts/test-review.md"
     printf 'write a checklist\n' > "$REPO/prompts/manual-checklist.md"
     printf 'audit it\n'          > "$REPO/prompts/final-audit.md"
 
@@ -531,9 +534,44 @@ bash app/test.sh
 ```
 
 ## Non-goals
+
+## Protected verification paths
+
+```
+app/test.sh
+```
 EOF
     hash_file "$REPO/UPDATED_PROJECT_PLAN.md" \
         > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
+    # New-app reviewer with a real acceptance table, configurable failures,
+    # and an invocation log so tests can prove stages were not reached.
+    cat > "$CASE/bin/fake-reviewer" <<'REV'
+#!/usr/bin/env bash
+out=""
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
+    shift
+done
+printf '%s\n' "$out" >> .uncle/workspace/reviewer-calls
+if [[ "$out" == TEST_REVIEW.md ]]; then
+    status="${FAKE_TEST_REVIEW:-PASS}"
+    if [[ "$status" == FAIL_ONCE ]]; then
+        status=PASS
+        [[ -e .uncle/workspace/repaired ]] || status=FAIL
+    fi
+    if [[ "$status" == MALFORMED ]]; then
+        printf 'PASS\n' > "$out"
+        exit 0
+    fi
+    printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n' > "$out"
+    for id in COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS; do
+        printf '| %s | YES | %s | stub evidence |\n' "$id" "$status" >> "$out"
+    done
+else
+    printf 'MC-1 Check the greeting.\n\n%s\n' "${FAKE_AUDIT:-READY}" > "$out"
+fi
+REV
+    chmod +x "$CASE/bin/fake-reviewer"
 }
 
 run_stagegate() {
@@ -561,8 +599,21 @@ stagegate_agent() {
     cat > "$CASE/bin/fake-agent" <<'AGENT'
 #!/usr/bin/env bash
 prompt="$(cat)"
+gate_report() {
+    printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n| MC-1 | YES | %s | stub observation |\n' "$2" > "$1"
+}
 case "$prompt" in
+    *STUB:preflight*)
+        gate_report PREFLIGHT_REPORT.md "${FAKE_PREFLIGHT:-PASS}"
+        ;;
+    *STUB:repair*)
+        printf 'repaired\n' > .uncle/workspace/repaired
+        printf '\nRepair disposition.\n' >> IMPLEMENTATION_NOTES.md
+        printf '\nRetested.\n' >> AUTOMATED_TEST_REPORT.md
+        if [[ -n "${FAKE_REPAIR:-}" ]]; then bash -c "$FAKE_REPAIR"; fi
+        ;;
     *STUB:implement*)
+        printf 'implemented\n' > .uncle/workspace/implemented
         printf '# Implementation Notes\n\nBuilt app/main.sh.\n' \
             > IMPLEMENTATION_NOTES.md
         printf '# Automated Test Report\n\nAll green. Trust me.\n' \
@@ -572,7 +623,13 @@ case "$prompt" in
         fi
         ;;
     *STUB:execute*)
-        printf '# Verification Report\n\nMC-1 PASS\n' > VERIFICATION_REPORT.md
+        status="${FAKE_VERIFICATION:-PASS}"
+        if [[ "$status" == FAIL_ONCE ]]; then
+            status=PASS
+            [[ -e .uncle/workspace/repaired ]] || status=FAIL
+        fi
+        gate_report VERIFICATION_REPORT.md "$status"
+        if [[ -n "${FAKE_VERIFY_EDIT:-}" ]]; then bash -c "$FAKE_VERIFY_EDIT"; fi
         ;;
 esac
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1},"session_id":"stub"}'
@@ -602,7 +659,7 @@ expect_out "GREEN CHECK FAILED: 1 command(s)"
 expect_out "Ready to override"
 expect_state "WAIT_IMPLEMENT_APPROVAL"
 
-# A plan with no command block cannot be checked, and the gate says so.
+# A plan with no command block stops before implementation.
 new_stagegate_case sg-plan-without-commands
 stagegate_agent
 printf '# Updated Project Plan\n\nNo commands.\n' > "$REPO/UPDATED_PROJECT_PLAN.md"
@@ -610,9 +667,10 @@ hash_file "$REPO/UPDATED_PROJECT_PLAN.md" \
     > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
 run_stagegate FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
-expect_status 0
-expect_out "Green check NOT RUN"
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "NOT RUN"
+expect_status 1
+expect_out "No Verification commands"
+expect_state PREFLIGHT
+expect_no_file ".uncle/workspace/implemented"
 
 # Approving carries the run through the remaining stages to COMPLETE.
 new_stagegate_case sg-approval-advances-to-complete
@@ -630,24 +688,161 @@ expect_state "COMPLETE"
 # NOT READY audit now stops the run instead of completing it.
 new_stagegate_case sg-not-ready-stops-at-gate
 stagegate_agent
-cat > "$CASE/bin/fake-reviewer" <<'REV'
-#!/usr/bin/env bash
-out=""
-while [[ $# -gt 0 ]]; do
-    if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
-    shift
-done
-printf 'MC-1 Check it.\n\nNOT READY\n' > "$out"
-REV
-chmod +x "$CASE/bin/fake-reviewer"
 set_state IMPLEMENT
 run_stagegate_stdin "$(gate_input '' y)" \
+    FAKE_AUDIT="NOT READY" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
 expect_out "Audit verdict: NOT_READY"
 expect_out "The independent auditor says this build is not ready."
 expect_not_out "Workflow complete."
 expect_state "WAIT_AUDIT_OVERRIDE"
+
+# Unavailable prerequisites stop before source changes, then resume in place.
+new_stagegate_case sg-preflight-blocked
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate FAKE_PREFLIGHT=BLOCKED
+expect_status 1
+expect_state PREFLIGHT
+expect_no_file .uncle/workspace/implemented
+run_stagegate
+expect_status 0
+expect_state WAIT_IMPLEMENT_APPROVAL
+expect_file .uncle/workspace/implemented
+
+# Missing browser/reviewer access cannot be replaced by a passing narrative.
+for result in BLOCKED 'NOT RUN'; do
+    new_stagegate_case "sg-verification-$result"
+    stagegate_agent
+    set_state IMPLEMENT
+    run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION="$result"
+    expect_status 1
+    expect_state EXECUTE_CHECKLIST
+    expect_no_file FINAL_AUDIT.md
+    expect_no_file .uncle/workspace/repaired
+done
+
+# A malformed review cannot pass or trigger unbounded implementation work.
+new_stagegate_case sg-test-review-malformed
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=MALFORMED
+expect_status 1
+expect_state TEST_REVIEW
+expect_no_file FINAL_AUDIT.md
+expect_no_file .uncle/workspace/repaired
+
+# Repair goes back through the human diff gate, preserving the original file
+# inventory. Declining that gate must prevent acceptance execution and audit.
+new_stagegate_case sg-test-failure-repairs-and-regates
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate_stdin "$(gate_input '' y)" FAKE_TEST_REVIEW=FAIL_ONCE \
+    FAKE_IMPL="printf 'new source\n' > app/new.sh" \
+    FAKE_REPAIR="printf '#!/bin/sh\nsh app/main.sh | grep -qx hello\n' > app/test.sh"
+expect_status 0
+expect_state WAIT_IMPLEMENT_APPROVAL
+expect_file .uncle/workspace/repaired
+expect_in_file .uncle/workspace/IMPLEMENTATION_REVIEW.md 'app/new.sh'
+expect_in_file .uncle/workspace/TEST_CHANGES.diff '-sh app/main.sh | grep -q . || exit 1'
+expect_in_file .uncle/workspace/IMPLEMENTATION_REVIEW.md '+sh app/main.sh | grep -qx hello'
+expect_no_file VERIFICATION_REPORT.md
+expect_no_file FINAL_AUDIT.md
+run_stagegate_stdin "$(gate_input '' y)" FAKE_TEST_REVIEW=FAIL_ONCE
+expect_status 0
+expect_state COMPLETE
+expect_in_file .uncle/workspace/repair-count '1'
+
+# A failed acceptance check repairs, reruns driver commands, repeats review,
+# and reaches audit only after a fresh successful verification.
+new_stagegate_case sg-verification-repairs-and-retests
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION=FAIL_ONCE
+expect_status 0
+expect_state COMPLETE
+expect_in_file .uncle/workspace/repair-source VERIFICATION_REPORT.md
+expect_in_file .uncle/workspace/green-check.tsv PASS
+COUNT=$((COUNT + 1))
+if [[ "$(grep -c '^TEST_REVIEW.md$' "$REPO/.uncle/workspace/reviewer-calls")" != 2 ]]; then
+    fail 'repair did not repeat independent test review'
+fi
+
+# A persistent defect is bounded across restarts, not just within one process.
+new_stagegate_case sg-repair-limit
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL WORKFLOW_MAX_REPAIRS=1
+expect_status 1
+expect_state REPAIR
+expect_in_file .uncle/workspace/repair-count '1'
+expect_no_file FINAL_AUDIT.md
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL WORKFLOW_MAX_REPAIRS=1
+expect_status 1
+expect_state REPAIR
+expect_in_file .uncle/workspace/repair-count '1'
+expect_out 'Repair limit (1) reached'
+
+# A reviewer cannot overrule the driver failure by returning PASS.
+new_stagegate_case sg-review-cannot-bless-failed-command
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate_stdin "$(gate_input '' y)" FAKE_IMPL="printf 'exit 1\n' > app/test.sh" \
+    WORKFLOW_MAX_REPAIRS=0
+expect_status 1
+expect_state REPAIR
+expect_in_file .uncle/workspace/repair-source green-check.md
+expect_no_file FINAL_AUDIT.md
+
+new_stagegate_case sg-missing-driver-results-block
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 WORKFLOW_GREEN_CHECK=0
+expect_status 1
+expect_state TEST_REVIEW
+expect_no_file FINAL_AUDIT.md
+
+# Legacy/manual resumes cannot take a pre-existing ready audit past missing
+# acceptance evidence. The pending review runs and rejects the malformed report.
+new_stagegate_case sg-old-final-audit-resume
+stagegate_agent
+printf 'READY\n' > "$REPO/FINAL_AUDIT.md"
+printf 'app/test.sh\n' > "$REPO/.uncle/workspace/verification.paths"
+printf '%s\tapp/test.sh\n' "$(hash_file "$REPO/app/test.sh")" > "$REPO/.uncle/workspace/verification.manifest"
+set_state FINAL_AUDIT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=MALFORMED
+expect_status 1
+expect_state TEST_REVIEW
+expect_not_out 'Workflow complete.'
+
+# Even a reported PASS is invalid when the verifier weakens a protected test.
+new_stagegate_case sg-verifier-rewrites-test
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFY_EDIT="printf 'exit 0\n' > app/test.sh"
+expect_status 1
+expect_state REPAIR
+expect_no_file FINAL_AUDIT.md
+expect_in_file .uncle/workspace/VERIFICATION_INTEGRITY.md app/test.sh
+
+# A test command that updates its own expected result cannot report green.
+new_stagegate_case sg-command-rewrites-test
+stagegate_agent
+# The second command must never run against the rewritten suite.
+sed '/^bash app\/test.sh$/a\
+printf ran > .uncle/workspace/second-command
+' "$REPO/UPDATED_PROJECT_PLAN.md" > "$CASE/plan.md"
+cp "$CASE/plan.md" "$REPO/UPDATED_PROJECT_PLAN.md"
+hash_file "$REPO/UPDATED_PROJECT_PLAN.md" > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
+set_state IMPLEMENT
+run_stagegate FAKE_IMPL="printf 'echo exit 0 > app/test.sh\n' > app/test.sh"
+expect_status 1
+expect_state REPAIR
+expect_no_file FINAL_AUDIT.md
+expect_no_file .uncle/workspace/approvals/IMPLEMENTATION_REVIEW.sha256
+expect_no_file .uncle/workspace/second-command
+expect_in_file .uncle/workspace/VERIFICATION_INTEGRITY.md app/test.sh
 
 
 if [[ "$FAILED" -ne 0 ]]; then

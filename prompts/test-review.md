@@ -1,0 +1,52 @@
+Act as the independent test reviewer before acceptance execution.
+
+Read REQUIREMENTS.md, UPDATED_PROJECT_PLAN.md, PREFLIGHT_REPORT.md,
+AUTOMATED_TEST_REPORT.md, and .uncle/workspace/green-check.md. Inspect the
+source and assertions behind their claims. Read .uncle/workspace/previous-test-review.md,
+VERIFICATION_REPORT.md, and DEFECTS.md if present to check previous findings.
+On repair passes, read .uncle/workspace/TEST_CHANGES.diff: it compares captured
+test inputs before and after repair, independently of the implementation notes.
+Check every changed assertion or expectation against the requirement and the
+original defect. Reject weakened coverage even when the current suite passes.
+Do not modify source or run destructive probes. Use existing test results,
+read-only probes, or isolated temporary copies to verify claims.
+
+Create TEST_REVIEW.md with these sections: Summary, Findings, Assumptions,
+Open questions, Acceptance gate. Findings use stable TR IDs, requirement IDs,
+file/symbol evidence, required corrections, and whether they block acceptance.
+
+Check all of the following; each is a required Acceptance gate row:
+
+- COVERAGE: every mandatory automated acceptance check is reached by the
+  approved Verification commands block, including applicable browser tests
+  and development/update tools. Formatting and compilation are insufficient.
+- INTEGRITY: the plan's Protected verification paths cover the complete suite,
+  fixtures/oracles, helpers, and test-selection configuration. No test can be
+  weakened by editing an unprotected expected value or test runner. On repair,
+  inspect changes to assertions and expected results against requirements and
+  defect evidence; a reduced assertion needs a requirement-grounded reason.
+- ASSERTIONS: assertions measure the promised result. Distinguish DOM text
+  presence from visibility, container bounds from text overflow, and received
+  responses from request attempts. Apply these examples only where relevant.
+- ORACLE: expected values are independently grounded in authoritative inputs;
+  regenerating fixtures cannot bless stale evidence or fabricated output.
+- NEGATIVE: critical tests have evidence of failing for representative defects
+  and passing after restoration. Input rejection preserves prior artifacts
+  when required. A missing tool or syntax error is not a successful mutation.
+- RESULTS: required automated checks actually ran and passed, including the
+  driver run. Mandatory skips or unavailable evidence are not passes.
+
+Add required rows for any other blocking findings. Missing test coverage or
+incorrect assertions are FAIL, with concrete repair instructions. Missing
+external prerequisites are BLOCKED; unknown results are NOT RUN. If approved
+commands need changing, mark BLOCKED and identify the plan change needing
+renewed approval; do not authorize new commands yourself. Nonblocking findings
+may use Required NO, with justification. Preserve finding IDs across repairs.
+
+End with exactly one `## Acceptance gate` containing only a table with columns
+`ID`, `Required`, `Status`, `Evidence`, in that order. Required is YES or NO;
+Status is PASS, FAIL, BLOCKED, NOT RUN, or N/A. Every row needs nonempty evidence
+or a finding reference; no literal pipes within cells. No mandatory row may be
+marked optional or inapplicable to allow the run to proceed.
+
+Return the complete review as your final message.

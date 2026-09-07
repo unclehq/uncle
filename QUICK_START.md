@@ -63,7 +63,7 @@ The workflow runs stages and pauses at gates:
 
 | Pipeline | Stages |
 |---|---|
-| New app | Requirements → Plan → Adversarial review → Updated plan → Implementation → **Review the code** → Manual checklist → Execution → Final audit |
+| New app | Requirements → Plan → Adversarial review → Updated plan → Prerequisites → Implementation → **Review the code** → Test review → Manual checklist → Execution → Final audit |
 | Change request | Analyze → Plan → Adversarial review → Updated plan → Implement → **Review the code** → Checklist → Execution → Final audit |
 
 At each gate, open the listed file, read it, and answer `y` to approve.
@@ -75,6 +75,18 @@ driver re-running your project's own test commands, and the agent's notes.
 If those commands passed before the change and fail now, the gate says so and
 asks you to *override* rather than approve. The run also stops before
 `COMPLETE` if the final audit did not say the change is ready.
+
+For a new application, inspect `PREFLIGHT_REPORT.md` if prerequisites block
+implementation, and `TEST_REVIEW.md` if tests need correction. Required checks
+marked BLOCKED or NOT RUN pause execution; resolve the missing prerequisite
+and rerun. Failed reviews or checks enter repair and return to the code gate.
+The default limit is two repair attempts across restarts. After inspecting an
+unresolved defect, set `WORKFLOW_MAX_REPAIRS=3` (for example) to permit one more.
+
+The updated plan must list the complete automated acceptance commands and
+`Protected verification paths`: tests, fixtures, helpers, and test configuration.
+Verification cannot change those inputs and still pass. Test corrections belong
+in repair, with a documented reason and renewed review.
 
 ## 4. Reading the result
 

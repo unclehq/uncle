@@ -5,6 +5,7 @@ Read:
 - REQUIREMENTS.md
 - REQUIREMENTS_INTERPRETATION.md
 - UPDATED_PROJECT_PLAN.md
+- PREFLIGHT_REPORT.md and TEST_REVIEW.md;
 - AUTOMATED_TEST_REPORT.md;
 - MANUAL_CHECKLIST.md;
 - VERIFICATION_REPORT.md;
@@ -27,6 +28,8 @@ Audit for:
 - unresolved blocking defects;
 - stale or contradictory documentation;
 - untested failure paths.
+- acceptance gate rows that omit mandatory checks or mislabel them optional;
+- missing evidence that critical tests reject representative defects.
 
 For each finding include:
 

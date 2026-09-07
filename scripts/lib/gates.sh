@@ -110,7 +110,7 @@ output_rules_source() {
 
 # Stages that write a markdown document for a human to read. Every one of them
 # gets the output rules; the plan stages additionally get the plan template.
-DOC_STAGES=" requirements project-plan updated-plan implementation execute-checklist baseline change-spec change-plan updated-change-plan adversarial-review manual-checklist manual-checklist-base manual-checklist-delta final-audit "
+DOC_STAGES=" requirements project-plan updated-plan preflight implementation execute-checklist baseline change-spec change-plan updated-change-plan adversarial-review test-review manual-checklist manual-checklist-base manual-checklist-delta final-audit "
 
 # Stages that write a plan must satisfy the output gates. The gates file is
 # resolved local-first (project GATES.md, then .uncle/gates/GATES.md) and

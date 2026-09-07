@@ -7,6 +7,7 @@ Inspect:
 - UPDATED_PROJECT_PLAN.md
 - IMPLEMENTATION_NOTES.md, if present
 - AUTOMATED_TEST_REPORT.md
+- PREFLIGHT_REPORT.md and TEST_REVIEW.md
 - the source code and tests
 
 UPDATED_PROJECT_PLAN.md supersedes PROJECT_PLAN.md and carries a disposition
@@ -25,6 +26,8 @@ For every check include:
 
 - Check ID
 - Priority
+- Required for acceptance: YES or NO, justified from requirements rather than
+  inferred from priority
 - Related requirement
 - Related behavior
 - Related invariant
@@ -49,6 +52,10 @@ Include sections for:
 10. Regression checks
 
 End with a traceability matrix.
+Cover every mandatory acceptance criterion, even if its prerequisites are
+unavailable. Identify any remaining test-review findings and their regression
+checks. Do not substitute DOM presence for visibility, emulation for required
+interactive behavior, or one browser for another named in the requirements.
 
 Keep it dense. Reference requirements, behaviors, and invariants by identifier
 instead of restating them — this checklist is read by two later stages, so

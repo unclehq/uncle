@@ -39,6 +39,24 @@ Use this traceability table:
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
 
+For each mandatory acceptance criterion, the testing strategy must name the
+observable assertion, independently grounded expected result, prerequisites,
+and evidence to retain. Plan representative defect injections for critical
+assertions: identify the defect and the specific test that must reject it.
+Include development/update tooling and input/provenance failures where these
+are delivered. Avoid testing only the happy path or copying implementation
+logic into the oracle.
+
+The Verification commands block must reach every required automated check,
+including browser checks when applicable. Automated local browsers and test
+servers are allowed. Commands must run unattended, fail on missing mandatory
+dependencies or skipped mandatory checks, and require no live third-party
+service unless requirements explicitly demand one. List interactive checks
+and unresolved prerequisites separately in the manual-test strategy.
+Identify the test, fixture, helper, configuration, and source-oracle paths that
+the updated plan will freeze during verification. Keep generated test outputs
+outside those protected paths.
+
 Write densely. Five later stages read this document, so length here is paid
 for repeatedly:
 

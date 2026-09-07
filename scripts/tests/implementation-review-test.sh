@@ -57,7 +57,8 @@ check_not_contains() {
 # --- workflow_artifact: the paper trail is not the change ------------------
 
 for a in IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md CHANGE_PLAN.md \
-         FINAL_AUDIT.md AUTOMATED_TEST_REPORT.md .uncle/workspace/change.diff; do
+         FINAL_AUDIT.md AUTOMATED_TEST_REPORT.md PREFLIGHT_REPORT.md TEST_REVIEW.md \
+         .uncle/workspace/change.diff; do
     COUNT=$((COUNT + 1))
     if ! workflow_artifact "$a"; then
         fail "$a should be excluded from the reviewed diff"

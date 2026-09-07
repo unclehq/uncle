@@ -5,6 +5,7 @@ Read these in one parallel batch of tool calls:
 - REQUIREMENTS.md
 - REQUIREMENTS_INTERPRETATION.md
 - UPDATED_PROJECT_PLAN.md
+- PREFLIGHT_REPORT.md
 
 That is the whole input set. UPDATED_PROJECT_PLAN.md is the approved plan: it
 supersedes PROJECT_PLAN.md and records a disposition for every finding in
@@ -24,6 +25,13 @@ Rules:
 6. Record deviations in IMPLEMENTATION_NOTES.md.
 7. Add requirement and invariant identifiers to relevant tests.
 8. Do not invoke the reviewer CLI.
+9. Prove critical acceptance tests fail for the representative defects in the
+   plan, in temporary copies or isolated test state. Record the defect, command,
+   expected assertion failure, observed failure, and passing restored result.
+   A crash caused by missing dependencies does not prove the assertion works.
+10. Include all required automated acceptance checks in the approved command
+    entry points. Cover delivered update tooling and browser behavior where
+    applicable. Missing required dependencies and mandatory skips must fail.
 
 Work efficiently. This stage is a long loop, and everything already in the
 conversation is re-sent on every turn, so avoid pulling in what you will not
@@ -47,6 +55,7 @@ artifacts or ports should be launched together, not serially:
 - unit tests;
 - property tests;
 - integration tests;
+- applicable automated browser and update-tool failure-path tests;
 - frontend build;
 - startup smoke tests.
 
@@ -58,7 +67,7 @@ Create AUTOMATED_TEST_REPORT.md containing:
 - exact command;
 - exit status;
 - meaningful output;
-- PASS or FAIL;
+- PASS, FAIL, BLOCKED, or NOT RUN;
 - unresolved warnings;
 - untested requirements.
 
@@ -67,6 +76,10 @@ summary line, and the failures in full. Do not paste whole test transcripts:
 two later stages read this file.
 
 Do not claim tests passed unless they were executed.
+Include evidence for the critical defect-injection checks, distinguishing
+measured behavior from DOM presence or static inspection. Do not alter approved
+plans or requirements to make a test pass. Record a needed plan amendment as a
+blocker requiring renewed approval.
 
 ## What happens to this work next
 

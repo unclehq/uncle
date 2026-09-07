@@ -50,10 +50,34 @@ the result next to the diff before anything downstream reads either. It is the
 one part of this plan that is executed rather than read, so:
 
 - no prompt prefixes, no comments, no prose, no placeholders;
-- no command that needs a human, a browser, or a network service;
+- no command that needs interactive human input; automated browsers and local
+  test servers are allowed and required when they establish acceptance;
+- no live third-party dependency unless the requirements demand it and the
+  prerequisite and failure behavior are explicitly documented;
 - nothing that only the implementing agent's machine could run.
 
+In the testing strategy, map every mandatory automated acceptance check to a
+command in this block. Include browser checks and delivered update-tool
+failure paths where applicable; do not substitute compilation or source
+inspection. Missing dependencies or skipped mandatory checks must fail the
+verification entry point. Carry forward observable assertions, independent
+expected results, representative defect injections that prove critical tests
+fail, and prerequisites for both automated and manual acceptance. Missing
+capabilities remain blockers rather than becoming optional checks.
+
 Approving this plan approves those commands.
+
+Include `## Protected verification paths` with one fenced block of literal
+repository-relative file or directory paths, one per line. List all tests,
+expected results and fixtures, test helpers, and configuration that determines
+which tests run. Prefer complete test directories so new tests cannot be
+silently added during verification. Include authoritative source inputs when
+they are test oracles. No globs, symlinks, parent traversal, or workspace-state
+paths. Paths must exist after implementation. Put generated test outputs in
+temporary directories outside these scopes. Python bytecode caches are ignored.
+The driver hashes these inputs before running verification and rejects changed,
+added, or deleted inputs. Repairs may edit them, but require a fresh diff review
+and independent test review. Explain the scope in the testing strategy.
 
 This document is the sole plan input to implementation, checklist creation, and
 the final audit — none of them will read PROJECT_PLAN.md or

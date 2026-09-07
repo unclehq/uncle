@@ -68,6 +68,7 @@ STAGES = [
     ("requirements", AGENT),
     ("project-plan", AGENT),
     ("updated-plan", AGENT),
+    ("preflight", AGENT),
     ("implementation", AGENT),
     ("execute-checklist", AGENT),
     ("baseline", AGENT),
@@ -75,6 +76,7 @@ STAGES = [
     ("change-plan", AGENT),
     ("updated-change-plan", AGENT),
     ("adversarial-review", REVIEWER),
+    ("test-review", REVIEWER),
     ("manual-checklist", REVIEWER),
     ("final-audit", REVIEWER),
 ]
@@ -138,6 +140,16 @@ def valid_model_id(value):
 # Full description for each Configure item. Only the description of the row
 # currently under the cursor is shown, in a panel to the right of the options.
 CONFIG_DESC = {
+    "preflight": (
+        "Checks required tools, browser access, input data, and reviewer "
+        "arrangements before a new application is implemented. Missing "
+        "prerequisites pause the run."
+    ),
+    "test-review": (
+        "Independently reviews acceptance coverage, assertions, expected "
+        "results, and evidence that critical tests reject defects. Failures "
+        "return the new application to repair and a fresh diff approval."
+    ),
     "field:runner": (
         "The CLI that drives this stage. cline, claude, kimi, and codex can "
         "run an agent stage, where they write code; cline, codex, and claude "
@@ -1774,6 +1786,5 @@ def main(stdscr):
 
 if __name__ == "__main__":
     curses.wrapper(main)
-
 
 

@@ -29,6 +29,47 @@ Takes no positional arguments. All configuration is via `WORKFLOW_*`
 environment variables (see [Configuration](#configuration)). Approvals are
 recorded with `./scripts/workflow.sh`.
 
+New applications run `PREFLIGHT` after updated-plan approval, then `IMPLEMENT`,
+the human diff gate, `TEST_REVIEW`, `MANUAL_CHECKLIST`, `EXECUTE_CHECKLIST`, and
+`FINAL_AUDIT`. Preflight requires both a `Verification commands` block and a
+`Protected verification paths` block in the approved plan. Automated browsers
+and local test servers belong in the commands when acceptance needs them.
+
+`PREFLIGHT_REPORT.md`, `TEST_REVIEW.md`, and `VERIFICATION_REPORT.md` have an
+`Acceptance gate` table with `ID`, `Required`, `Status`, and `Evidence` columns.
+Required rows must all PASS. FAIL routes test review or execution to `REPAIR`;
+BLOCKED/NOT RUN/N/A on a required row pauses the current stage. Malformed or
+missing tables fail closed. Preflight failures always pause before code changes.
+
+Repairs use the `implementation` runner and `prompts/repair.md`. They preserve
+the failed report, update code and implementation reports, and return through
+driver verification, fresh human diff approval, independent test review, and
+checklist execution. `.uncle/workspace/repair-source` identifies the report;
+`repair-count` records attempts across restarts. `WORKFLOW_MAX_REPAIRS` defaults
+to 2 (0 disables automatic repair; maximum 100). An exhausted limit leaves the
+state at `REPAIR`; inspect the defect before deliberately raising the limit.
+
+The driver stores protected path scopes and SHA-256 inventories in
+`verification.paths` and `verification.manifest` under `.uncle/workspace` and
+includes them in the implementation review. Test commands and checklist
+execution must preserve those inputs. Edits, additions, or deletions invalidate
+verification, produce `VERIFICATION_INTEGRITY.md` in that workspace, and leave
+the run at `REPAIR`. Python bytecode caches are excluded; other generated outputs
+must go outside protected scopes. Test reviewers check that scopes include all
+test helpers, expected values, and runner configuration. Hash comparisons detect
+changes around each driver command and at stage boundaries; they are not an
+OS-level write restriction.
+The driver retains copies in `verification-snapshot.*` directories. After a
+repair, `TEST_CHANGES.diff` compares the old and new protected inputs and is
+included in the human implementation review and independent test review. This
+preserves the previous assertions even when the project has no Git history.
+
+These acceptance transitions apply to the new-application driver. Existing
+change-workflow transitions are unchanged. Project-local prompt overrides must
+adopt the new report tables and plan block before using these stages. An old
+run resumed at final audit is sent back for missing acceptance evidence; a plan
+missing the new path block needs amendment and renewed approval.
+
 ### `change-workflow.sh` — existing-code change workflow driver
 
 Runs the human-gated existing-code change workflow from `CHANGE_REQUEST.md`.
@@ -404,8 +445,9 @@ otherwise it falls back to a line menu. The config is `STAGE VALUE` lines:
 | `<stage>` | cline model id for that stage (`WORKFLOW_MODEL_<STAGE>`) |
 
 Valid stage keys: `requirements`, `project-plan`, `updated-plan`,
-`implementation`, `execute-checklist`, `baseline`, `change-spec`, `change-plan`,
-`updated-change-plan`.
+`preflight`, `implementation`, `execute-checklist`, `baseline`, `change-spec`,
+`change-plan`, `updated-change-plan`, `adversarial-review`, `test-review`,
+`manual-checklist`, `final-audit`. Repairs use the `implementation` settings.
 
 ### agent-cline.sh / reviewer-cline.sh
 

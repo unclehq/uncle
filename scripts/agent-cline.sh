@@ -124,14 +124,15 @@ set +e
 if [[ -n "$status_file" ]]; then
     "$CLINE_CMD" "${args[@]}" "$prompt" \
         | tee "$raw" \
-        | tee >(jq -R -r --unbuffered --arg model "$model" '
+        | tee >(jq -R -r --unbuffered --arg model "$model" --arg stage "$stage" '
             (fromjson? // empty) as $e
             | if $e.type == "agent_event" and $e.event.type == "usage" then
-                  {event:"usage", model:$model, mode:"act",
+                  {event:"usage", stage:$stage, model:$model, mode:"act",
+                   total_cost_usd:($e.event.totalCost // null), input_includes_cache:true,
+                   usage:{input_tokens:$e.event.totalInputTokens,output_tokens:$e.event.totalOutputTokens,
+                          cache_read_input_tokens:$e.event.totalCacheReadTokens,cache_creation_input_tokens:$e.event.totalCacheWriteTokens},
                    total_tokens: (($e.event.totalInputTokens // 0)
-                                + ($e.event.totalOutputTokens // 0)
-                                + ($e.event.totalCacheReadTokens // 0)
-                                + ($e.event.totalCacheWriteTokens // 0))} | tojson
+                                + ($e.event.totalOutputTokens // 0))} | tojson
               else empty end
           ' >> "$status_file") \
         | jq -R -r --unbuffered '
@@ -162,7 +163,7 @@ result="$(jq -R -s -c '
   | ($events | map(select(.type == "run_result")) | .[-1]) as $r
   | if $r == null then
       {type:"result", subtype:"error_during_execution", is_error:"true",
-       num_turns:1, duration_ms:0, total_cost_usd:0,
+       num_turns:1, duration_ms:0, total_cost_usd:null,
        usage:{input_tokens:0, output_tokens:0,
               cache_read_input_tokens:0, cache_creation_input_tokens:0}}
     else
@@ -171,7 +172,8 @@ result="$(jq -R -s -c '
        is_error: (if $r.finishReason == "completed" then "false" else "true" end),
        num_turns: ($r.iterations // 1),
        duration_ms: ($r.durationMs // 0),
-       total_cost_usd: ($r.usage.totalCost // 0),
+       total_cost_usd: ($r.usage.totalCost // null),
+       input_includes_cache: true,
        usage: {input_tokens: ($r.usage.inputTokens // 0),
                output_tokens: ($r.usage.outputTokens // 0),
                cache_read_input_tokens: ($r.usage.cacheReadTokens // 0),

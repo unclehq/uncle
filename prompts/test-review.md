@@ -38,7 +38,14 @@ Check all of the following; each is a required Acceptance gate row:
 - RESULTS: required automated checks actually ran and passed, including the
   driver run. Mandatory skips or unavailable evidence are not passes.
 
-Add required rows for any other blocking findings. Missing test coverage or
+This gate reviews automated verification before MANUAL_CHECKLIST and
+EXECUTE_CHECKLIST. A final human comparison scheduled for those later stages
+is not a prerequisite for this review. Record it in Findings as pending for
+EXECUTE_CHECKLIST, not as a required row in this stage's Acceptance gate.
+It remains mandatory in VERIFICATION_REPORT.md before final acceptance.
+Earlier prerequisite approvals (such as source/oracle review) are still required.
+
+Add required rows for any other findings blocking this stage. Missing test coverage or
 incorrect assertions are FAIL, with concrete repair instructions. Missing
 external prerequisites are BLOCKED; unknown results are NOT RUN. If approved
 commands need changing, mark BLOCKED and identify the plan change needing

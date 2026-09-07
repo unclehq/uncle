@@ -531,7 +531,7 @@ ledger_total() {
 }
 
 show_spend() {
-    echo "  Stage cost so far: \$$(ledger_total)"
+    echo "  Reported stage cost so far (partial): \$$(ledger_total); estimates: uncle --performance"
 }
 
 verify_approval() {
@@ -672,7 +672,7 @@ format_claude_stream() {
                   else tostring end)
                | "  [tool ERROR] \(.[0:200])")
           elif $e.type == "result" then
-              "\n[done] \($e.subtype) — \($e.num_turns) turns, \($e.duration_ms / 1000 | floor)s, $\($e.total_cost_usd // 0 | .*100 | round / 100)"
+              "\n[done] \($e.subtype) — \($e.num_turns) turns, \($e.duration_ms / 1000 | floor)s, \(if $e.total_cost_usd == null then "cost unknown" else "$" + ($e.total_cost_usd | .*100 | round / 100 | tostring) end)"
           else empty end
     '
 }
@@ -1152,7 +1152,7 @@ run_claude() {
 
         if [[ -n "$result" ]]; then
             record_cost "agent:$log_name" "$elapsed" \
-                "$(printf '%s' "$result" | jq -r '.total_cost_usd // 0')" \
+                "$(printf '%s' "$result" | jq -r '.total_cost_usd // "-"')" \
                 "$(printf '%s' "$result" | jq -r '.usage.input_tokens // 0')" \
                 "$(printf '%s' "$result" | jq -r '.usage.output_tokens // 0')" \
                 "$(printf '%s' "$result" | jq -r '.usage.cache_read_input_tokens // 0')" \
@@ -1230,7 +1230,18 @@ record_codex_cost() {
         tokens="$(awk '/tokens used/ {getline; gsub(/[^0-9]/, "", $0); if ($0 != "") t = $0} END {print (t == "" ? "-" : t)}' "$log")"
     fi
 
-    record_cost "reviewer:$log_name" "$elapsed" - - - - "$tokens"
+    local result
+    result="$(jq -R -c 'fromjson? | select(.type == "result")' "$log" | tail -n 1)"
+    if [[ -n "$result" ]]; then
+        record_cost "reviewer:$log_name" "$elapsed" \
+            "$(printf '%s' "$result" | jq -r '.total_cost_usd // "-"')" \
+            "$(printf '%s' "$result" | jq -r '.usage.input_tokens // "-"')" \
+            "$(printf '%s' "$result" | jq -r '.usage.output_tokens // "-"')" \
+            "$(printf '%s' "$result" | jq -r '.usage.cache_read_input_tokens // "-"')" \
+            "$(printf '%s' "$result" | jq -r '.usage.cache_creation_input_tokens // "-"')"
+    else
+        record_cost "reviewer:$log_name" "$elapsed" - - - - "$tokens"
+    fi
 }
 
 run_codex() {
@@ -1439,6 +1450,9 @@ fi
 if [[ -n "${STAGEGATE_ORIGIN_REPO:-}" && -n "${STAGEGATE_ORIGIN_ISSUE:-}" ]]; then
     ORIGIN_BOUND=1
 fi
+
+python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" CHANGE_REQUEST.md \
+    "${STAGEGATE_ORIGIN_REPO:-}#${STAGEGATE_ORIGIN_ISSUE:-}" || true
 
 VERDICT_WRITTEN_THIS_RUN=0
 

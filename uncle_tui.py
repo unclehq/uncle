@@ -15,6 +15,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+import importlib.util
 
 try:
     import curses
@@ -409,6 +411,7 @@ class UncleTUI:
         self.view_scroll = 0
         self.status_path = None
         self.status_pos = 0
+        self.session_stats = None
         self.status_model = ""
         self.status_mode = ""
         self.status_stage = ""
@@ -462,7 +465,7 @@ class UncleTUI:
 
     # ---- colors (cline's CLI palette) ----
     def _setup_colors(self):
-        self.color = {"title": 0, "accent": 0, "good": 0, "sel": 0, "cursor": 0}
+        self.color = {"title": 0, "accent": 0, "good": 0, "sel": 0, "cursor": 0, "warning": curses.A_BOLD, "bad": curses.A_BOLD, "muted": curses.A_DIM}
         if not curses.has_colors():
             return
         try:
@@ -484,6 +487,8 @@ class UncleTUI:
         reg("title", curses.COLOR_CYAN, curses.A_BOLD)
         reg("accent", curses.COLOR_CYAN)
         reg("good", curses.COLOR_GREEN)
+        reg("warning", curses.COLOR_YELLOW)
+        reg("bad", curses.COLOR_RED, curses.A_BOLD)
         idx[0] += 1
         curses.init_pair(idx[0], curses.COLOR_BLACK, curses.COLOR_CYAN)
         self.color["sel"] = curses.color_pair(idx[0]) | curses.A_BOLD
@@ -877,16 +882,21 @@ class UncleTUI:
             return False
         before = (self.status_model, self.status_mode, self.status_stage,
                   self.status_stage_index, self.status_stage_total)
+        changed = False
         try:
             with open(self.status_path) as fh:
                 fh.seek(self.status_pos)
-                for line in fh:
+                while True:
+                    line = fh.readline()
+                    if not line or not line.endswith("\n"):
+                        break
                     self._apply_status(line)
-                self.status_pos = fh.tell()
-        except Exception:
+                    self.status_pos = fh.tell()
+                    changed = True
+        except OSError:
             pass
-        return before != (self.status_model, self.status_mode, self.status_stage,
-                          self.status_stage_index, self.status_stage_total)
+        return changed or before != (self.status_model, self.status_mode, self.status_stage,
+                                     self.status_stage_index, self.status_stage_total)
 
     def _apply_status(self, line):
         line = line.strip()
@@ -896,6 +906,14 @@ class UncleTUI:
             ev = json.loads(line)
         except Exception:
             return
+        self._restore_session_totals()
+        stats = getattr(self, "session_stats", None)
+        stage = ev.get("stage") or self.status_stage
+        if stats is not None and stage:
+            if ev.get("event") == "start":
+                stats["active"].setdefault(stage, time.time())
+            elif ev.get("event") == "usage":
+                stats["live"][stage] = ev
         if ev.get("event") == "start":
             self.status_model = ev.get("model", "")
             self.status_mode = ev.get("mode", "")
@@ -913,6 +931,13 @@ class UncleTUI:
         env = dict(os.environ)
         env.update(self.stage_env())
         env["UNCLE_STATUS_FILE"] = self.status_path
+        self.status_pos = 0
+        self.panel_scroll = None
+        self.proc_done = False
+        metrics = os.path.join(_project_root(), ".uncle", "workspace", "metrics")
+        self.session_stats = {"active": {}, "live": {}, "records": [], "tick": -1,
+                              "seen": set(os.listdir(metrics)) if os.path.isdir(metrics) else set()}
+        self._restore_session_totals()
         self.output = []
         self.partial = ""
         self.prompt_kind = ""
@@ -1215,7 +1240,10 @@ class UncleTUI:
         h, w = self.stdscr.getmaxyx()
         self.stdscr.erase()
         if self.state in ("running", "viewer"):
-            self._draw_running(h, w)
+            panel = min(34, w // 3) if w >= 60 else 0
+            self._draw_running(h, w - panel)
+            if panel:
+                self._draw_session_stats(h, w, panel)
         elif self.state == "notice":
             self._draw_notice(h, w)
         else:
@@ -1237,6 +1265,205 @@ class UncleTUI:
                 pass
         if self.prompt_kind:
             self._draw_modal(h, w)
+
+    def _restore_session_totals(self):
+        stats = getattr(self, "session_stats", None)
+        if stats is None:
+            return
+        path = os.path.join(_project_root(), ".uncle", "workspace", "session-totals.json")
+        try:
+            with open(path) as fh:
+                saved = json.load(fh)
+            if not isinstance(saved.get("records"), list):
+                return
+        except (OSError, ValueError, AttributeError):
+            return
+        if stats.get("session_id") != saved.get("id"):
+            stats["active"].clear()
+            stats["live"].clear()
+            stats.pop("stopped_at", None)
+        previous_records = stats["records"] if stats.get("session_id") == saved.get("id") else []
+        for row in saved["records"]:
+            if row in previous_records:
+                continue
+            stage = row.get("stage")
+            if stats["active"].get(stage, float("inf")) <= row.get("ended_at", 0) + 1:
+                stats["active"].pop(stage, None)
+                stats["live"].pop(stage, None)
+        stats.update(session_id=saved.get("id"), records=saved["records"],
+                     seen=set(saved.get("seen", [])))
+
+    def poll_session_stats(self):
+        stats = getattr(self, "session_stats", None)
+        if self.state not in ("running", "viewer") or stats is None:
+            return False
+        tick = int(time.time())
+        if stats["tick"] == tick:
+            return False
+        self._restore_session_totals()
+        stats["tick"] = tick
+        if getattr(self, "proc_done", False):
+            stats.setdefault("stopped_at", time.time())
+        directory = os.path.join(_project_root(), ".uncle", "workspace", "metrics")
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            names = []
+        for name in names:
+            if not name.endswith(".json") or name in stats["seen"]:
+                continue
+            try:
+                with open(os.path.join(directory, name)) as fh:
+                    row = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            stats["seen"].add(name)
+            if row.get("kind") not in ("agent", "reviewer"):
+                continue
+            stats["records"].append(row)
+            stage = row.get("stage")
+            # A late completion must not clear a newer attempt of the same stage.
+            if stats["active"].get(stage, 0) <= row.get("ended_at", 0) + 1:
+                stats["active"].pop(stage, None)
+                stats["live"].pop(stage, None)
+        return True
+
+    @staticmethod
+    def _token_total(row):
+        for key in ("total_tokens", "reported_total_tokens"):
+            if isinstance(row.get(key), (int, float)):
+                return row[key]
+        fields = ["input_tokens", "output_tokens"]
+        inclusive = row.get("input_includes_cache") or "cline" in row.get("runner", "")
+        if not inclusive:
+            fields += ["cache_read_tokens", "cache_write_tokens"]
+        if all(isinstance(row.get(k), (int, float)) for k in fields):
+            return sum(row[k] for k in fields)
+        return None
+
+    def _live_cost(self, event):
+        if isinstance(event.get("total_cost_usd"), (int, float)):
+            return event["total_cost_usd"]
+        usage = event.get("usage") or {}
+        row = dict(model=event.get("model", ""), reported_cost_usd=None,
+                   input_tokens=usage.get("input_tokens"), output_tokens=usage.get("output_tokens"),
+                   cache_read_tokens=usage.get("cache_read_input_tokens"),
+                   cache_write_tokens=usage.get("cache_creation_input_tokens"),
+                   input_includes_cache=event.get("input_includes_cache", False))
+        try:
+            if not hasattr(self, "_estimate_cost"):
+                spec = importlib.util.spec_from_file_location("uncle_usage_cost", os.path.join(ROOT, "scripts", "lib", "usage-cost.py"))
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                self._estimate_cost = module.enrich
+            return self._estimate_cost(row).get("estimated_cost_usd")
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+
+    def _session_panel_lines(self):
+        stats = getattr(self, "session_stats", None)
+        if stats is None:
+            return []
+        def duration(value):
+            value = int(value)
+            return "%d:%02d:%02d" % (value // 3600, value // 60 % 60, value % 60)
+        def count(value):
+            return "Unavailable" if value is None else format(int(value), ",")
+        def dollars(value):
+            return "Unavailable" if value is None else "$%.4f" % value
+        def subtotal(values, formatter):
+            known = [v for v in values if isinstance(v, (int, float))]
+            text = formatter(sum(known) if known else None)
+            return text + (" (partial)" if known and len(known) < len(values) else "")
+        groups = {}
+        for row in sorted(stats["records"], key=lambda r: r.get("started_at", 0)):
+            stage = row.get("stage", "")
+            group = groups.setdefault(stage, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf")})
+            group["started"] = min(group["started"], row.get("started_at", row.get("ended_at", 0) - row.get("elapsed_seconds", 0)))
+            group["seconds"] += row.get("elapsed_seconds", 0)
+            group["tokens"].append(self._token_total(row))
+            cost = row.get("reported_cost_usd")
+            group["costs"].append(cost if cost is not None else row.get("estimated_cost_usd"))
+            group["attempts"] += 1
+            group["last_result"] = row
+        for stage, started in stats["active"].items():
+            group = groups.setdefault(stage, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf")})
+            group["started"] = min(group["started"], started)
+            event = stats["live"].get(stage, {})
+            group["seconds"] += max(0, stats.get("stopped_at", time.time()) - started)
+            group["tokens"].append(event.get("total_tokens"))
+            group["costs"].append(self._live_cost(event) if event else None)
+            group["attempts"] += 1
+        lines = ["EACH STAGE", "Cost of usage so far", ""]
+        tokens, costs = [], []
+        self._panel_stage_styles = {}
+        for stage, group in sorted(groups.items(), key=lambda item: item[1]["started"]):
+            active = stage in stats["active"]
+            title = ("> " if active else "") + stage
+            if group["attempts"] > 1:
+                title += " (%d attempts)" % group["attempts"]
+            result = group.get("last_result", {})
+            failed = result.get("process_exit") not in (None, 0) or result.get("reported_error") in (True, "true")
+            if active and "stopped_at" not in stats:
+                style = "title"
+            elif failed:
+                title += " [failed]"
+                style = "bad"
+            elif not active and result.get("process_exit") == 0:
+                style = "good"
+            else:
+                style = "warning"
+            self._panel_stage_styles[title] = style
+            lines += [title, "Time   " + duration(group["seconds"]),
+                      "Tokens " + subtotal(group["tokens"], count),
+                      "Cost   " + subtotal(group["costs"], dollars), ""]
+            tokens.extend(group["tokens"])
+            costs.extend(group["costs"])
+        if not groups:
+            lines += ["Waiting for stage…", ""]
+        lines += ["SESSION TOTALS", "Tokens " + subtotal(tokens, count),
+                  "Cost   " + subtotal(costs, dollars), "Reported + projected"]
+        return lines
+
+    def _session_panel_attr(self, line):
+        palette = getattr(self, "color", {})
+        stage_style = getattr(self, "_panel_stage_styles", {}).get(line)
+        if stage_style:
+            return palette.get(stage_style, 0)
+        if line in ("EACH STAGE", "SESSION TOTALS"):
+            return palette.get("title", 0) | curses.A_BOLD
+        if "Unavailable" in line or "(partial)" in line or line.startswith("Waiting"):
+            return palette.get("warning", 0)
+        if line.startswith("Cost   "):
+            return palette.get("accent", 0)
+        if line in ("Cost of usage so far", "Reported + projected"):
+            return palette.get("muted", curses.A_DIM)
+        return 0
+
+    def _draw_session_stats(self, h, w, panel):
+        left = w - panel
+        for y in range(h - 1):
+            try:
+                self.stdscr.addnstr(y, left, "│", 1, getattr(self, "color", {}).get("muted", curses.A_DIM))
+            except curses.error:
+                pass
+        lines = self._session_panel_lines()
+        body = max(0, h - 2)
+        offset = getattr(self, "panel_scroll", None)
+        if offset is None:
+            # Follow the latest stages until the user explicitly scrolls.
+            offset = max(0, len(lines) - body)
+        offset = max(0, min(offset, max(0, len(lines) - body)))
+        self.panel_visible_offset = offset
+        for y, line in enumerate(lines[offset:offset + body]):
+            try:
+                self.stdscr.addnstr(y, left + 2, line, panel - 3, self._session_panel_attr(line))
+            except curses.error:
+                pass
+        try:
+            self.stdscr.addnstr(h - 2, left + 2, r"[ ] stages; \ follow", panel - 3, getattr(self, "color", {}).get("muted", curses.A_DIM))
+        except curses.error:
+            pass
 
     def _title(self):
         if self.state == "picker":
@@ -1447,6 +1674,8 @@ class UncleTUI:
         box_h = len(body) + 4
         top = max(0, (h - box_h) // 2)
         left = max(0, (w - box_w) // 2)
+        if self.prompt_text.startswith("Repair limit reached:"):
+            title = " repair limit "
         border = self.color["title"]
         try:
             self.stdscr.addnstr(top, left,
@@ -1554,6 +1783,13 @@ class UncleTUI:
 
     # ---- input ----
     def handle_key(self, k):
+        if self.state in ("running", "viewer") and getattr(self, "prompt_kind", "") != "input":
+            if k in (ord("["), ord("]"), ord("\\")):
+                if k == ord("\\"):
+                    self.panel_scroll = None
+                else:
+                    self.panel_scroll = max(0, getattr(self, "panel_visible_offset", 0) + (-5 if k == ord("[") else 5))
+                return
         if k == 3:  # Ctrl-C
             self._quit()
             return
@@ -1775,6 +2011,7 @@ class UncleTUI:
         size = None
         while self.state != "quit":
             dirty = self.poll_status() or dirty
+            dirty = self.poll_session_stats() or dirty
             if self.state == "running":
                 dirty = self.drain_output() or dirty
             else:

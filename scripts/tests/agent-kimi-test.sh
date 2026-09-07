@@ -85,7 +85,7 @@ check_eq "kimi success: is_error"  "false"   "$(printf '%s' "$result" | jq -r '.
 check_eq "kimi success: subtype"   "success" "$(printf '%s' "$result" | jq -r '.subtype')"
 
 # record_cost reads these with `// 0`; they must be present and numeric.
-check_eq "kimi success: cost is numeric"     "number" "$(printf '%s' "$result" | jq -r '.total_cost_usd | type')"
+check_eq "kimi success: unknown cost is null" "null" "$(printf '%s' "$result" | jq -r '.total_cost_usd | type')"
 check_eq "kimi success: turns is numeric"    "number" "$(printf '%s' "$result" | jq -r '.num_turns | type')"
 check_eq "kimi success: duration is numeric" "number" "$(printf '%s' "$result" | jq -r '.duration_ms | type')"
 

@@ -130,20 +130,27 @@ tokens="$(jq -R -s -r '
   [split("\n")[] | fromjson? // empty]
   | map(select(.type == "run_result")) | .[-1]
   | ((.usage.inputTokens // 0) + (.usage.outputTokens // 0)
-     + (.usage.cacheReadTokens // 0) + (.usage.cacheWriteTokens // 0) | tostring)
+     | tostring)
 ' "$raw")"
 
 if [[ -n "$status_file" ]]; then
-    jq -R -s -r --arg model "$model" '
+    jq -R -s -r --arg model "$model" --arg stage "$stage" '
       [split("\n")[] | fromjson? // empty]
       | map(select(.type == "run_result")) | .[-1] as $r
-      | {event:"usage", model:$model, mode:"plan",
-         total_tokens: (($r.usage.totalInputTokens // 0)
-                      + ($r.usage.totalOutputTokens // 0)
-                      + ($r.usage.totalCacheReadTokens // 0)
-                      + ($r.usage.totalCacheWriteTokens // 0))} | tojson
+      | {event:"usage", stage:$stage, model:$model, mode:"plan", total_cost_usd:($r.usage.totalCost // null),
+         total_tokens: (($r.usage.inputTokens // 0) + ($r.usage.outputTokens // 0))} | tojson
     ' "$raw" >> "$status_file"
 fi
+
+# Preserve billing fields previously discarded by the reviewer adapter.
+jq -R -s -c --arg model "$model" '
+  [split("\n")[] | fromjson? | select(.type == "run_result")] | last
+  | select(. != null) | . as $r
+  | {type:"result", model:$model, input_includes_cache:true, total_cost_usd:($r.usage.totalCost // null),
+     usage:{input_tokens:$r.usage.inputTokens, output_tokens:$r.usage.outputTokens,
+            cache_read_input_tokens:$r.usage.cacheReadTokens,
+            cache_creation_input_tokens:$r.usage.cacheWriteTokens}}
+' "$raw"
 
 if [[ "$status" -ne 0 ]]; then
     echo "reviewer-cline.sh: $CLINE_CMD exited with status $status" >&2

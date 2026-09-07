@@ -30,7 +30,7 @@ for status in FAIL BLOCKED 'NOT RUN' N/A; do
     if [[ "$status" == FAIL ]]; then check REPAIR; else check BLOCKED; fi
 done
 report $'| C1 | YES | FAIL | assertion failed |\n| C2 | YES | BLOCKED | browser unavailable |'
-check BLOCKED
+check REPAIR
 report $'| C1 | YES | PASS | observed result |\n| C2 | NO | N/A | requirement excludes it |'
 check PASS
 check UNKNOWN 'C1 C2'
@@ -60,4 +60,10 @@ report '| C1 | YES | PASS | observed result |'
 sed 's/$/\r/' "$TMP/report.md" > "$TMP/crlf.md"
 mv "$TMP/crlf.md" "$TMP/report.md"
 check PASS
+report $'| ASSERTIONS | YES | FAIL | missing list assertion |\n| AT-01/AC-02 | YES | NOT RUN | final human comparison pending |'
+check REPAIR ASSERTIONS
+report '| AT-01/AC-02 | YES | NOT RUN | final human comparison pending |'
+check BLOCKED
+report $'| ASSERTIONS | YES | FAIL | missing assertion |\n| BAD | YES | INVALID | malformed report must not authorize repair |'
+check UNKNOWN
 echo "acceptance-test.sh: $COUNT checks passed"

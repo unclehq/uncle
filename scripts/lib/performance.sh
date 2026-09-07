@@ -19,7 +19,7 @@ perf_record() (
         | ($results[-1] // {}) as $r
         | [scan("tokens used[\\r\\n ]+([0-9,]+)") | .[0] | gsub(","; "") | tonumber] as $totals
         | {schema:1, kind:$kind, stage:$stage, workflow_state:$state,
-           runner:$runner, model:$model, effort:$effort, speculative:$speculative,
+           runner:$runner, model:($r.model // $model), effort:$effort, speculative:$speculative,
            ended_at:$ended, started_at:($ended-$elapsed), elapsed_seconds:$elapsed,
            process_exit:$exit_code, reported_error:$r.is_error,
            turns:($r.num_turns // null), input_tokens:($r.usage.input_tokens // null),
@@ -28,9 +28,14 @@ perf_record() (
            cache_read_tokens:($r.usage.cache_read_input_tokens // $r.usage.cached_input_tokens // null),
            cache_write_tokens:($r.usage.cache_creation_input_tokens // $r.usage.cache_write_input_tokens // null),
            reported_cost_usd:($r.total_cost_usd // null),
-           usage_scope:"last reported result", log:$log}
+           usage_scope:($r.usage_scope // "last reported result"),
+           usage_source:($r.usage_source // null),
+           input_includes_cache:($r.input_includes_cache // false),
+           log:$log}
     ' "$log" > "$tmp"; then
+        python3 "$(dirname "${BASH_SOURCE[0]}")/usage-cost.py" "$tmp" || true
         mv "$tmp" "$tmp.json"
+        python3 "$(dirname "${BASH_SOURCE[0]}")/session-totals.py" "$STATE_DIR" || true
     else
         rm -f "$tmp"
     fi

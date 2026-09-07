@@ -125,6 +125,8 @@ set -e
 status="${claude_pipe[1]}"
 
 result="$(jq -R -c 'fromjson? | select(.type == "result")' < "$stream" | tail -n 1)"
+# Preserve usage even if this review subsequently fails.
+[[ -z "$result" ]] || printf '%s\n' "$result"
 
 if [[ "$status" -ne 0 ]]; then
     echo "reviewer-claude.sh: $CLAUDE_CMD exited with status $status" >&2

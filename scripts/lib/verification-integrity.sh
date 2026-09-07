@@ -37,8 +37,13 @@ verification_manifest() {
 }
 
 verification_manifest_shell() {
-    local paths="$1" path file component prefix digest links
+    local paths="$1" path file component prefix digest links directory_only
     while IFS= read -r path; do
+        directory_only=0
+        if [[ "$path" == */ ]]; then
+            directory_only=1
+            path="${path%/}"
+        fi
         case "$path" in
             ''|-*|/*|*/../*|../*|*/..|..|.|./*|*/./*|*/.|*//*|*/|*$'\t'*|.git|.git/*|.uncle|.uncle/*)
                 echo "Invalid protected verification path: $path" >&2; return 1 ;;
@@ -59,7 +64,7 @@ verification_manifest_shell() {
             fi
             printf 'DIRECTORY\t%s\n' "$path"
             find "$path" -type f ! -name '*.pyc' ! -path '*/__pycache__/*' -print || return 1
-        elif [[ -f "$path" ]]; then
+        elif [[ -f "$path" && "$directory_only" == 0 ]]; then
             printf '%s\n' "$path"
         else
             echo "Missing protected verification path: $path" >&2; return 1

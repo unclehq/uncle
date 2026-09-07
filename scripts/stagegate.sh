@@ -157,6 +157,7 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/gates.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
 . "$ROOT/scripts/lib/acceptance.sh"
+. "$ROOT/scripts/lib/repair-limit.sh"
 . "$ROOT/scripts/lib/verification-integrity.sh"
 . "$ROOT/scripts/lib/performance.sh"
 
@@ -253,6 +254,9 @@ check_verification_inputs() {
         diff -u <(printf '%s\n' "$EXPECTED_VERIFICATION") <(printf '%s\n' "$actual") \
             > "$STATE_DIR/verification-integrity.log" || true
         verification_integrity_failure
+    fi
+    if [[ -f "$STATE_DIR/VERIFICATION_INTEGRITY.md" ]]; then
+        mv "$STATE_DIR/VERIFICATION_INTEGRITY.md" "$STATE_DIR/VERIFICATION_INTEGRITY.previous.md"
     fi
     perf_record integrity manifest "$((SECONDS-started))" 0
 }
@@ -1034,6 +1038,9 @@ run_gated_stage() {
     run_stage "$stage"
 }
 
+python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" REQUIREMENTS.md \
+    "${STAGEGATE_ORIGIN_REPO:-}#${STAGEGATE_ORIGIN_ISSUE:-}" || true
+
 while true; do
     state="$(get_state)"
 
@@ -1259,11 +1266,7 @@ while true; do
                 exit 1
             fi
             repair_count=$((10#$repair_count))
-            if [[ "$repair_count" -ge "$MAX_REPAIRS" ]]; then
-                echo "Repair limit ($MAX_REPAIRS) reached. Inspect $(cat "$STATE_DIR/repair-source")."
-                echo "Resolve the blocker, or raise WORKFLOW_MAX_REPAIRS deliberately and rerun."
-                exit 1
-            fi
+            ensure_repair_capacity "$repair_count" || exit 1
             repair_count=$((repair_count + 1))
             printf '%s\n' "$repair_count" > "$STATE_DIR/repair-count"
             PREVIOUS_VERIFICATION_SNAPSHOT="$(cat "$STATE_DIR/verification-snapshot" 2>/dev/null || true)"

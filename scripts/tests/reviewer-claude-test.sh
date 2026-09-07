@@ -46,7 +46,7 @@ printf 'ARGV: %s\n' "$*" > "$ARGV_FILE"
 printf 'STDIN: %s\n' "$(cat)" >> "$ARGV_FILE"
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Reading."}]}}'
 echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}'
-echo '{"type":"result","subtype":"success","is_error":false,"result":"## AR-001: Finding\n\nNOT READY","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":50,"cache_creation_input_tokens":25}}'
+echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.02,"result":"## AR-001: Finding\n\nNOT READY","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":50,"cache_creation_input_tokens":25}}'
 exit "${FAKE_EXIT:-0}"
 EOF
 
@@ -116,6 +116,8 @@ done
 check_eq "artifact content" "## AR-001: Finding
 
 NOT READY" "$(cat "$out")"
+
+check_eq "native review cost preserved" "0.02" "$(jq -R -r 'fromjson? | select(.type == "result") | .total_cost_usd' "$TMP/stdout")"
 
 check_eq "token line parses" "375" \
     "$(awk '/tokens used/ {getline; gsub(/[^0-9]/, "", $0); if ($0 != "") t = $0} END {print (t == "" ? "-" : t)}' "$TMP/stdout")"

@@ -206,7 +206,7 @@ UNCLE_STATUS_FILE="$TMP/status.jsonl" UNCLE_STATUS_STAGE=implementation \
     run_shim -p --model o3 <<< "the prompt" > /dev/null
 check_eq "status: a start event names the stage" "implementation" \
     "$(jq -R -r 'fromjson? | select(.event == "start") | .stage' < "$TMP/status.jsonl" | head -1)"
-check_eq "status: usage totals the turn" "180" \
+check_eq "status: usage totals the turn without double-counting cache" "150" \
     "$(jq -R -r 'fromjson? | select(.event == "usage") | .total_tokens' < "$TMP/status.jsonl" | tail -1)"
 
 # --- report ---------------------------------------------------------------

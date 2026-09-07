@@ -77,7 +77,8 @@ run_shim exec --ephemeral --sandbox read-only \
 check_eq "success: shim exit status" "0" "$status"
 check_eq "artifact content" "REVIEW TEXT" "$(cat "$out")"
 check_eq "review printed to stdout" "1" "$(grep -c '^REVIEW TEXT$' "$TMP/stdout")"
-check_eq "token line parses" "18" "$(tokens_from "$TMP/stdout")"
+check_eq "review cost preserved" "0.01" "$(jq -R -r 'fromjson? | select(.type == "result") | .total_cost_usd' "$TMP/stdout")"
+check_eq "token line excludes duplicate cache counts" "15" "$(tokens_from "$TMP/stdout")"
 
 # --- the codex-only flags must not reach cline ------------------------------
 

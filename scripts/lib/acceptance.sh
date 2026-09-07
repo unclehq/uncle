@@ -22,7 +22,7 @@ acceptance_result() {
                 for (i=2; i<=5; i++) if (trim($i) !~ /^:?-{3,}:?$/) bad=1
                 separator=1; next
             }
-            if (id !~ /^[A-Za-z0-9][A-Za-z0-9_.-]*$/ || seen[id]++ || evidence == "" ||
+            if (id !~ /^[A-Za-z0-9][A-Za-z0-9_.\/-]*$/ || seen[id]++ || evidence == "" ||
                 (required != "YES" && required != "NO") ||
                 (status != "PASS" && status != "FAIL" && status != "BLOCKED" && status != "NOT RUN" && status != "N/A")) bad=1
             if (required == "YES") {
@@ -36,8 +36,8 @@ acceptance_result() {
             n=split(expected, ids, " ")
             for (i=1; i<=n; i++) if (!(ids[i] in required_ids)) bad=1
             if (bad || sections != 1 || !separator || !mandatory) print "UNKNOWN"
-            else if (blocked) print "BLOCKED"
             else if (failed) print "REPAIR"
+            else if (blocked) print "BLOCKED"
             else print "PASS"
         }
     ' "$file"

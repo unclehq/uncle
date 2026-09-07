@@ -92,6 +92,16 @@ mtime_of() {
     stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
 }
 
+usage_helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/kimi-usage.py"
+printf '%s' "$prompt" | python3 "$usage_helper" snapshot "$work/usage-before.json" || true
+publish_usage() {
+    [[ -n "${UNCLE_STATUS_FILE:-}" ]] || return 0
+    python3 "$usage_helper" collect "$work/usage-before.json" | jq -c \
+        --arg stage "${UNCLE_STATUS_STAGE:-}" '
+        select(.usage != null) | . + {event:"usage",stage:$stage,
+        total_tokens:([.usage.input_tokens,.usage.output_tokens,.usage.cache_read_input_tokens,.usage.cache_creation_input_tokens]|add)}' \
+        >> "$UNCLE_STATUS_FILE" || true
+}
 start="$SECONDS"
 set +e
 
@@ -111,6 +121,7 @@ set +m
     while kill -0 "$kimi_pid" 2>/dev/null; do
         sleep 10
         kill -0 "$kimi_pid" 2>/dev/null || break
+        publish_usage
         quiet=$(( $(date +%s) - $(mtime_of "$beat") ))
         if [[ "$quiet" -ge "$IDLE_TIMEOUT" ]]; then
             echo "agent-kimi.sh: no output for ${quiet}s (limit ${IDLE_TIMEOUT}s); stopping kimi." >&2
@@ -168,8 +179,8 @@ fi
 # stage fail no matter how well it went. Synthesizing it here keeps the check
 # meaningful for claude instead of relaxing it for both.
 #
-# kimi reports neither a turn count nor a spend figure, so those fields are
-# zero rather than invented; the ledger already reads them with `// 0`.
+# Kimi does not report dollars. Recover token buckets from its local session;
+# pricing estimates are attached by the metrics collector, separately from billing.
 if [[ "$status" -eq 0 ]]; then
     subtype="success"
     is_error="false"
@@ -178,7 +189,13 @@ else
     is_error="true"
 fi
 
-printf '{"type":"result","subtype":"%s","is_error":%s,"num_turns":0,"duration_ms":%d,"total_cost_usd":0}\n' \
-    "$subtype" "$is_error" "$(( (SECONDS - start) * 1000 ))"
+publish_usage
+usage_json="$(python3 "$usage_helper" collect "$work/usage-before.json")"
+[[ -n "$usage_json" ]] || usage_json='{}'
+printf '%s' "$usage_json" | jq -c --arg subtype "$subtype" --argjson error "$is_error" \
+    --argjson duration "$(( (SECONDS - start) * 1000 ))" '
+    . + {type:"result", subtype:$subtype, is_error:$error, num_turns:0,
+         duration_ms:$duration, total_cost_usd:null}'
+
 
 exit "$status"

@@ -1,3 +1,8 @@
+> **Just testing uncle?** Use Cline with open-weight models and a
+> [ClinePass subscription](https://cline.bot/blog/clinepass-best-of-value-for-open-weight-models).
+> Expect slower runs, but dramatically lower costs than premium models billed
+> per token—a good tradeoff while trying out the workflow.
+
 ```
                 #@@@@@@##@@@@@@#
                 @@@@@@@@@@@@@@@@
@@ -133,6 +138,9 @@ expected results, and evidence that critical tests reject representative
 defects. Failed reviews or acceptance checks return to repair, then repeat the
 driver checks, human diff approval, test review, and checklist. Two repair
 attempts are allowed across restarts by default (`WORKFLOW_MAX_REPAIRS`, 0–100).
+At the limit, a session popup (or terminal prompt) lets you enter a higher total
+limit or stop with the run pending. Increases are saved in
+`.uncle/workspace/repair-limit` across restarts; no answer authorizes no extra work.
 Missing evidence or external prerequisites pauses verification instead of
 consuming repair attempts. Final audit starts only after required checks pass;
 an implementation green-check override does not waive acceptance.
@@ -274,3 +282,63 @@ automatically rewritten, and checks are never dropped to fit a budget.
 - [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — before participating.
 
 Open an issue to discuss larger changes before spending time on them.
+
+### Cost accounting
+
+`uncle --performance` shows input, output, cached and total tokens for model
+stages, plus reported dollar costs. Unavailable costs are labeled `Unavailable`;
+non-model steps show `N/A`. Token and cost coverage identify partial totals.
+Cached tokens are included exactly once. Set `WORKFLOW_SHOW_COST_ESTIMATES=1`
+to display a separate estimate column; estimates are hidden by default. Cline and Claude reviewer adapters retain their native
+cost results, including failed reviews. Missing costs are null, never synthetic
+zero-dollar charges. Estimates do not represent subscription invoices, discounts,
+taxes, tool fees, or account-specific billing.
+
+Kimi token counts are recovered from its local `usage.record` events. Uncle
+matches a newly created session by working directory and exact prompt; ambiguous
+matches remain unknown. Counts include cached input and any child-agent records.
+`WORKFLOW_KIMI_SESSIONS_DIR` overrides the default `~/.kimi-code/sessions`.
+Standard and high-speed Kimi K2.7 Code estimates use the official
+[pricing table](https://platform.kimi.ai/docs/pricing/chat-k27-code), checked
+2026-09-07. Each estimated record stores the model, rates and pricing source.
+
+For other models/providers or negotiated rates, set `WORKFLOW_PRICING_FILE` to a
+JSON file mapping the exact recorded model identifier to all four USD-per-million
+rates, for example:
+
+```json
+{"your-exact-model-id": {"input": 1.0, "output": 4.0, "cache_read": 0.1, "cache_write": 1.0}}
+```
+
+These illustrative rates are not a provider quote. Native reported costs take
+precedence. An unknown model, absent rates, incomplete token buckets, or ambiguous
+session remains unknown rather than receiving a guessed charge.
+
+Existing Kimi attempts can be recovered from retained local sessions:
+
+```sh
+python3 /opt/homebrew/opt/uncle/libexec/scripts/backfill-kimi-costs.py /path/to/project
+# Inspect the dry run, then persist recovered usage and estimates:
+python3 /opt/homebrew/opt/uncle/libexec/scripts/backfill-kimi-costs.py /path/to/project --apply
+```
+
+Backfill requires an unambiguous session within the recorded attempt interval;
+resumed or overlapping sessions are skipped. Originals are retained outside the
+metrics directory, and repeated backfills do not double-count attempts. Historical
+charges cannot be recovered when provider usage was never retained.
+
+### Live session panel
+
+During a workflow, the right side of the terminal shows time, tokens and projected
+cost for every stage that has started, followed by session totals. Repeated
+attempts are combined under their stage with an attempt count. Use `[` / `]`
+to scroll stages and `\` to resume following the latest stages. It is hidden on the home and configuration screens.
+Terminals narrower than 60 columns use the full width for workflow output.
+
+Token/cost values refresh as runners report usage; Kimi is polled every ten
+seconds. Runners that report only at completion show unavailable values until
+then. Projected costs combine native reported costs where available with the
+configured token-price estimate otherwise; they are not a prediction of all
+remaining work. Partial session totals are labeled. Session totals are saved in `.uncle/workspace/session-totals.json` and restored
+on subsequent launches. Changed REQUIREMENTS.md, CHANGE_REQUEST.md, or GitHub issue
+identity starts fresh totals; `uncle --performance` retains the full recorded history.

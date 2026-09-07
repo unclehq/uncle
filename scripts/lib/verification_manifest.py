@@ -8,6 +8,9 @@ import sys
 def manifest(scopes_file):
     entries = set()
     for scope in Path(scopes_file).read_text().splitlines():
+        directory_only = scope.endswith("/")
+        if directory_only:
+            scope = scope[:-1]  # One optional directory suffix, not arbitrary cleanup.
         parts = scope.split("/")
         if (not scope or scope.startswith(("/", "-"))
                 or any(p in ("", ".", "..") for p in parts)
@@ -37,7 +40,7 @@ def manifest(scopes_file):
                     child = Path(parent) / name
                     if child.is_file() and not name.endswith(".pyc") and "__pycache__" not in child.parts:
                         entries.add(str(child))
-        elif path.is_file():
+        elif path.is_file() and not directory_only:
             entries.add(scope)
         else:
             raise ValueError(f"Missing protected verification path: {scope}")

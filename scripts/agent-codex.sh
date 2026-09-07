@@ -128,14 +128,14 @@ set +e
 if [[ -n "$status_file" ]]; then
     printf '%s' "$prompt" | "$CODEX_CMD" "${args[@]}" \
         | tee "$raw" \
-        | tee >(jq -R -r --unbuffered --arg model "${model:-codex default}" '
+        | tee >(jq -R -r --unbuffered --arg model "${model:-codex default}" --arg stage "$stage" '
             (fromjson? // empty) as $e
             | if $e.type == "turn.completed" then
-                  {event:"usage", model:$model, mode:"act",
+                  {event:"usage", stage:$stage, model:$model, mode:"act", input_includes_cache:true,
+                   usage:{input_tokens:$e.usage.input_tokens,output_tokens:$e.usage.output_tokens,
+                          cache_read_input_tokens:$e.usage.cached_input_tokens,cache_creation_input_tokens:($e.usage.cache_write_input_tokens // 0)},
                    total_tokens: (($e.usage.input_tokens // 0)
-                                + ($e.usage.output_tokens // 0)
-                                + ($e.usage.cached_input_tokens // 0)
-                                + ($e.usage.cache_write_input_tokens // 0))} | tojson
+                                + ($e.usage.output_tokens // 0))} | tojson
               else empty end
           ' >> "$status_file") \
         | translate
@@ -152,17 +152,18 @@ set -e
 # exit status and the last turn's usage. A run that produced no turn at all is
 # a failure even when the process exited 0: the drivers treat a missing result
 # as a failed stage, and a stage that said nothing did not do the work.
-result="$(jq -R -s -c --argjson exit "$codex_status" '
+result="$(jq -R -s -c --argjson exit "$codex_status" --arg model "$model" '
   [split("\n")[] | fromjson? // empty] as $events
   | ($events | map(select(.type == "turn.completed")) | .[-1]) as $t
   | ($events | map(select(.type == "turn.started")) | length) as $turns
   | (if $exit == 0 and $t != null then true else false end) as $ok
-  | {type:"result",
+  | {type:"result", model:$model,
      subtype: (if $ok then "success" else "error_during_execution" end),
      is_error: (if $ok then "false" else "true" end),
      num_turns: (if $turns > 0 then $turns else 1 end),
      duration_ms: 0,
-     total_cost_usd: 0,
+     total_cost_usd: null,
+     input_includes_cache: true,
      usage: {input_tokens: ($t.usage.input_tokens // 0),
              output_tokens: ($t.usage.output_tokens // 0),
              cache_read_input_tokens: ($t.usage.cached_input_tokens // 0),

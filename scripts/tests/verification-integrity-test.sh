@@ -30,6 +30,34 @@ rejected() {
         echo 'FAIL: invalid or missing scope was accepted'; exit 1
     fi
 }
+# Directory suffixes canonicalize identically in both backends, while malformed
+# paths and file/symlink scopes with a directory suffix remain rejected.
+for backend in python shell; do
+    for scope in tests/ 'tests/with space/'; do
+        printf '%s\n' "${scope%/}" > paths
+        canonical="$(WORKFLOW_HASH_BACKEND="$backend" verification_manifest paths)"
+        printf '%s\n' "$scope" > paths
+        COUNT=$((COUNT+1))
+        [[ "$(WORKFLOW_HASH_BACKEND="$backend" verification_manifest paths)" == "$canonical" ]]
+    done
+    printf 'tests\ntests/\n' > paths
+    COUNT=$((COUNT+1))
+    [[ "$(WORKFLOW_HASH_BACKEND="$backend" verification_manifest paths)" == "$baseline" ]]
+    for scope in tests// tests/./ tests/../ / ./ ../ tests/test.txt/ .git/ .uncle/; do
+        printf '%s\n' "$scope" > paths
+        WORKFLOW_HASH_BACKEND="$backend" rejected
+    done
+    ln -s tests alias-dir
+    printf 'alias-dir/\n' > paths
+    WORKFLOW_HASH_BACKEND="$backend" rejected
+    rm alias-dir
+    printf 'tests/\n' > paths
+    printf 'new test\n' > tests/new.txt
+    COUNT=$((COUNT+1))
+    [[ "$(WORKFLOW_HASH_BACKEND="$backend" verification_manifest paths)" != "$baseline" ]]
+    rm tests/new.txt
+ done
+printf 'tests\n' > paths
 printf 'assert True\n' > tests/test.txt
 changed
 printf 'assert actual == expected\n' > tests/test.txt

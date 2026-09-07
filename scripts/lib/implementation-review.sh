@@ -19,6 +19,9 @@
 # checks cannot drift apart on it. They are gated on their own terms, and
 # including them here would bury the code change in the paper trail describing
 # it.
+# hash_file, which this lib uses and its tests source it without.
+. "$(dirname "${BASH_SOURCE[0]}")/sha256.sh"
+
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workflow-artifacts.sh"
 
 # A file listing the untracked paths that already existed when implementation
@@ -115,7 +118,7 @@ embed_document() {
 
     echo "## $path"
     echo
-    echo "\`sha256:$(shasum -a 256 "$path" | awk '{print $1}')\`"
+    echo "\`sha256:$(hash_file "$path")\`"
     echo
     cat "$path"
 }

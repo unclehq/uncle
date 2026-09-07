@@ -21,9 +21,7 @@ esac
 
 mkdir -p .uncle/workspace/approvals
 
-hash_file() {
-    shasum -a 256 "$1" | awk '{print $1}'
-}
+. "$ROOT/scripts/lib/sha256.sh"
 
 # One bold prompt line. `read -p` suppresses its prompt when stdin is not a
 # terminal, so the text is printed separately. Escapes are emitted only for a

@@ -154,10 +154,9 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/green-check.sh"
 . "$ROOT/scripts/lib/implementation-review.sh"
 . "$ROOT/scripts/lib/gates.sh"
+. "$ROOT/scripts/lib/stage-config.sh"
 
-hash_file() {
-    shasum -a 256 "$1" | awk '{print $1}'
-}
+. "$ROOT/scripts/lib/sha256.sh"
 
 # bash 3.2 (macOS system bash) has no ${var^^}.
 upper() {
@@ -217,23 +216,46 @@ stage_setting_opt() {
     eval "printf '%s' \"\${$var-$fallback}\""
 }
 
+# Precedence, for every per-stage setting: an explicit WORKFLOW_* variable
+# wins, then the project's .uncle/config, then the driver's built-in default.
+# The config file is read at the moment the stage starts, so an edit made at a
+# human gate applies to the stages after it.
 stage_model() {
     local fallback="$DEFAULT_MODEL"
     case "$1" in
         requirements|execute-checklist) fallback="kimi" ;;
     esac
+    if uncle_has_config; then
+        fallback="$(uncle_stage_model "$1")"
+    fi
     stage_setting_opt MODEL "$1" "$fallback"
 }
 
-# Which CLI runs one stage. `uncle` exports one variable per stage, so a run
-# can put different runners on different stages; the global command remains
-# the fallback for a driver invoked without the launcher.
+# Which CLI runs one stage. An explicit variable always wins over the config
+# file — a driver invoked with WORKFLOW_AGENT_CMD set means it — and the
+# built-in default applies only when the project has no config at all.
 stage_agent_cmd() {
-    stage_setting AGENT_CMD "$1" "$AGENT_CMD"
+    local fallback
+    if [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
+        fallback="$WORKFLOW_AGENT_CMD"
+    elif uncle_has_config; then
+        fallback="$(uncle_stage_cmd "$1")"
+    else
+        fallback="$AGENT_CMD"
+    fi
+    stage_setting AGENT_CMD "$1" "$fallback"
 }
 
 stage_reviewer_cmd() {
-    stage_setting REVIEWER_CMD "$1" "$REVIEWER_CMD"
+    local fallback
+    if [[ -n "${WORKFLOW_REVIEWER_CMD:-}" ]]; then
+        fallback="$WORKFLOW_REVIEWER_CMD"
+    elif uncle_has_config; then
+        fallback="$(uncle_stage_cmd "$1")"
+    else
+        fallback="$REVIEWER_CMD"
+    fi
+    stage_setting REVIEWER_CMD "$1" "$fallback"
 }
 
 stage_effort() {
@@ -241,6 +263,11 @@ stage_effort() {
     case "$1" in
         requirements|execute-checklist) fallback="medium" ;;
     esac
+    if uncle_has_config; then
+        local configured
+        configured="$(uncle_stage_effort "$1")"
+        [[ -n "$configured" ]] && fallback="$configured"
+    fi
     stage_setting EFFORT "$1" "$fallback"
 }
 
@@ -554,6 +581,10 @@ run_codex_review() {
         model_args=(-m "$model")
         echo "Model: $model"
     fi
+
+    # The reviewer writes a document a human reads, so it gets the output
+    # rules the same way an agent stage does.
+    prompt_file="$(gated_prompt "$prompt_file" "$log_name")"
 
     local status=0
     "$cmd" exec \

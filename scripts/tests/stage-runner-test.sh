@@ -141,6 +141,64 @@ else
     echo "NOTE skipped change-workflow cases: git is not available"
 fi
 
+# --- the config file is read per stage, not snapshotted at launch ----------
+
+# A run stops at four gates, and that is when an operator changes their mind
+# about the next stage. The driver must therefore read .uncle/config when the
+# stage starts, not keep what it was launched with.
+
+CPROJ2="$TMP/reread"
+mkdir -p "$CPROJ2/.uncle"
+printf '# Project brief\n\n## Summary\nToy.\n' > "$CPROJ2/REQUIREMENTS.md"
+ARGV="$TMP/reread.argv"
+
+run_reread() {
+    : > "$ARGV"
+    rm -rf "$CPROJ2/.uncle/workspace" "$CPROJ2/REQUIREMENTS_INTERPRETATION.md"
+    (cd "$CPROJ2" && echo n | ARGV_LOG="$ARGV" \
+        UNCLE_PROJECT_ROOT="$CPROJ2" UNCLE_CONFIG="$CPROJ2/.uncle/config" \
+        WORKFLOW_AGENT_CMD="$TMP/agent-global" \
+        WORKFLOW_SPECULATE=0 \
+        bash "$ROOT/scripts/stagegate.sh" > /dev/null 2>&1) || true
+    cat "$ARGV"
+}
+
+printf 'requirements.runner cline\nrequirements.model cline-pass/kimi-k3\nrequirements.effort high\n' \
+    > "$CPROJ2/.uncle/config"
+argv="$(run_reread)"
+check_contains "config: model comes from the file" "--model cline-pass/kimi-k3" "$argv"
+check_contains "config: effort comes from the file" "--effort high" "$argv"
+
+# The same driver, the same command line, a different config file.
+printf 'requirements.runner cline\nrequirements.model cline-pass/glm-5.3\nrequirements.effort low\n' \
+    > "$CPROJ2/.uncle/config"
+argv="$(run_reread)"
+check_contains "config: an edited model is picked up" "--model cline-pass/glm-5.3" "$argv"
+check_contains "config: an edited effort is picked up" "--effort low" "$argv"
+check_absent "config: the old model is gone" "cline-pass/kimi-k3" "$argv"
+
+# A non-cline runner in the file means no model flag at all.
+printf 'requirements.runner kimi\nrequirements.effort medium\n' > "$CPROJ2/.uncle/config"
+argv="$(run_reread)"
+check_absent "config: a kimi stage gets no --model" "--model" "$argv"
+
+# An explicit variable still outranks the file.
+printf 'requirements.runner cline\nrequirements.model cline-pass/kimi-k3\n' \
+    > "$CPROJ2/.uncle/config"
+: > "$ARGV"
+rm -rf "$CPROJ2/.uncle/workspace" "$CPROJ2/REQUIREMENTS_INTERPRETATION.md"
+(cd "$CPROJ2" && echo n | ARGV_LOG="$ARGV" \
+    UNCLE_PROJECT_ROOT="$CPROJ2" UNCLE_CONFIG="$CPROJ2/.uncle/config" \
+    WORKFLOW_AGENT_CMD="$TMP/agent-global" \
+    WORKFLOW_MODEL_REQUIREMENTS=vendor/override \
+    WORKFLOW_SPECULATE=0 \
+    bash "$ROOT/scripts/stagegate.sh" > /dev/null 2>&1) || true
+check_contains "env overrides the config file" "--model vendor/override" "$(cat "$ARGV")"
+
+# And the command the operator passed explicitly is the one that runs.
+check_contains "explicit WORKFLOW_AGENT_CMD wins over the file's runner" \
+    "GLOBAL " "$(cat "$ARGV")"
+
 # --- report -----------------------------------------------------------------
 
 if [[ "$FAILED" -ne 0 ]]; then

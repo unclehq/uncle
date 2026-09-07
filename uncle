@@ -151,34 +151,9 @@ config_get() {
     return 0
 }
 
-# Resolve every stage and export it, so the drivers see exactly what the
-# Configure screen shows. A non-cline stage gets an explicitly empty model,
-# which the drivers read as "pass no model flag".
-apply_config() {
-    local stage runner effort model side
-    for stage in $CONFIG_STAGES; do
-        side="$(stage_side "$stage")"
-        runner="$(config_get "$stage.runner")"
-        [[ -n "$runner" ]] || runner="$DEFAULT_RUNNER"
-        effort="$(config_get "$stage.effort")"
-        [[ -n "$effort" ]] || effort="$DEFAULT_EFFORT"
-        if [[ "$runner" == "cline" ]]; then
-            model="$(config_get "$stage.model")"
-            [[ -n "$model" ]] || model="$DEFAULT_CLINE_MODEL"
-        else
-            model=""
-        fi
-        export "$(cmd_env_var "$stage")=$(runner_cmd "$runner" "$side")"
-        export "$(stage_env_var "$stage")=$model"
-        export "$(effort_env_var "$stage")=$effort"
-    done
-    # Fallback for any stage key a driver resolves under a different name.
-    export WORKFLOW_AGENT_CMD="$(runner_cmd \
-        "$(config_get implementation.runner)" agent)"
-    export WORKFLOW_REVIEWER_CMD="$(runner_cmd \
-        "$(config_get adversarial-review.runner)" reviewer)"
-}
-
+# Nothing per-stage is exported: the drivers read .uncle/config themselves, at
+# the moment each stage starts, so an edit made at a human gate applies to the
+# stages after it. UNCLE_CONFIG (exported above) tells them which file to read.
 
 logo_lines() {
     cat <<'LOGO'
@@ -346,8 +321,7 @@ choose_effort() {
 run_workflow() {
     # UNCLE_CLINE_MODEL / UNCLE_CLINE_EFFORT are deliberately not exported:
     # they are global overrides inside the cline shims and would win over the
-    # per-stage values apply_config sets.
-    apply_config
+    # per-stage settings the drivers resolve from .uncle/config.
     launch "$@"
 }
 

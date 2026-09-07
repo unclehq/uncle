@@ -1,115 +1,91 @@
-# GATES.md — Project Plan Output Gates
+# Output Rules
 
-These rules apply whenever you produce a project plan. Every gate must pass before output is written. If a gate fails, fix the plan and re-check; do not emit a failing plan.
+These rules apply to every markdown document a stage writes for a human to
+read: the requirements interpretation, the baseline, the specs, the plans, the
+notes, the test reports, the checklists, the verification reports, the audits.
 
-## Gate 0 — Output target
+They are appended to the prompt of every document-producing stage, so they
+bind whatever agent runs it. They are about the shape of the document, not its
+content: a stage's own prompt says what to write, and `lib/gates/GATES.md`
+adds the section template that plans must follow.
 
-- Write the plan to a markdown file: `plans/<slug>.md` (slug = lowercase, hyphens, ≤ 40 chars, derived from the goal).
-- If a plan with that slug exists, write `plans/<slug>-v<N>.md` with the next integer.
-- Print nothing else to the conversation except the file path on one line.
-- No preamble, no closing summary, no "here is your plan."
+If a rule fails, fix the document before writing it. Do not emit a document
+that breaks one and note the breakage in the text.
 
-## Gate 1 — Audience
+## Rule 0 — Output target
 
-Write for a senior engineer who already knows the domain. Do not explain what tools are, why testing matters, or what the project is for beyond the one-sentence goal.
+- Write exactly the file the stage asked for, at exactly that path. Do not
+  rename it, do not add a suffix, do not write a second copy elsewhere.
+- Print nothing to the conversation except the path of the file written, on one
+  line.
+- No preamble, no closing summary, no "here is your document", no offer to
+  continue.
 
-## Gate 2 — Template (exact sections, exact order, nothing else)
+## Rule 1 — Audience
 
-```
-# <Plan title, ≤ 8 words>
+Write for a senior engineer who already knows the domain and is about to
+approve or reject this document at a gate.
 
-## Goal
-<1 sentence>
+- Do not explain what a tool is, why testing matters, or what the project is
+  for beyond the single sentence that states the goal.
+- Do not restate the prompt, the requirements, or a previous stage's document.
+  Reference it by name and move on.
 
-## Constraints
-- <bullet>            (max 5)
+## Rule 2 — One claim per line, every claim checkable
 
-## Steps
-1. <≤ 20 words; names a concrete file, command, function, or artifact>
-                      (max 12 steps)
+- A statement about the code names the file, and the symbol or line when the
+  claim is about one place: `scripts/stagegate.sh:402`.
+- A statement about behavior names how it was observed: a command that was
+  run, output that was read, a file that was inspected.
+- A statement about what will happen is marked as a plan, not as a fact.
 
-## Risks
-- <risk> — <one-line mitigation>   (max 3)
+## Rule 3 — Say what is not known
 
-## Done when
-- <testable condition>            (1–3 items)
-```
-
-Rejected: any additional heading, intro paragraph, "Overview," "Background," "Next steps," "Conclusion," tables of stakeholders, timelines with weeks unless the user asked for dates.
-
-## Gate 3 — Length caps
-
-- Total body: ≤ 300 words (title and headings excluded).
-- Goal: 1 sentence. Constraints: ≤ 5 bullets. Steps: ≤ 12, each ≤ 20 words. Risks: ≤ 3. Done when: ≤ 3.
-- If over any cap, delete the lowest-information item first. Never compress by merging two steps into one vague step.
-
-## Gate 4 — Language
-
-- Plain declarative sentences. Active voice. Imperative mood in Steps ("Add `retry()` to `client.py`").
-- Every step names something concrete: a file path, a command, a function, a schema, a number.
-- No adjectives that don't change what an engineer would do.
-
-Banned (hard fail if any appear): leverage, robust, seamless, seamlessly, scalable, scalability, streamline, holistic, best-in-class, world-class, ecosystem, synergy, synergize, empower, cutting-edge, state-of-the-art, comprehensive, innovative, optimize (unless a metric is named), enhance, facilitate, utilize, "ensure that", "it is important to note", "in order to", "going forward", "moving forward", "at the end of the day", "stakeholders" (name the people or teams instead), "solution" (name the thing), "robustness", "best practices".
-
-## Gate 5 — Reference example (match this register)
+Anything unverified is labeled, in place, with what would settle it:
 
 ```
-# Add rate limiting to public API
-
-## Goal
-Limit unauthenticated requests to 100/min per IP so the scraper traffic stops taking down `/search`.
-
-## Constraints
-- No new infrastructure; use existing Redis.
-- p99 latency increase under 2 ms.
-- Authenticated users are exempt.
-
-## Steps
-1. Add `RateLimiter` class in `api/middleware/ratelimit.py` using Redis `INCR` + `EXPIRE`.
-2. Register middleware in `api/app.py` before auth middleware.
-3. Return 429 with `Retry-After` header when limit hit.
-4. Add `RATE_LIMIT_PER_MIN` to `config.py`, default 100.
-5. Write tests in `tests/test_ratelimit.py` for under-limit, at-limit, and key expiry.
-6. Load test with `hey -n 5000 -c 200 /search`; record p99 before and after.
-
-## Risks
-- Redis down takes the API down — fail open when Redis is unreachable, log a warning.
-- Shared NAT IPs get throttled — log 429s by IP for a week before tightening.
-
-## Done when
-- `pytest tests/test_ratelimit.py` passes.
-- 5000-request load test shows 429s after request 100 and p99 delta < 2 ms.
+ASSUMPTION: the resume PDF describes one role per page.
+  Unverified: pdftoppm is not installed, so the file was not read.
+  Settled by: installing poppler and re-running this stage.
 ```
 
-## Gate 6 — Self-check pass (run before writing the file)
+An assumption presented as a finding is the failure this whole workflow exists
+to prevent. A document with no assumptions section is claiming there were
+none.
 
-After drafting, rewrite once with only these instructions:
+## Rule 4 — Structure is fixed, not invented
 
-1. Delete any sentence that does not tell an engineer what to do or what to check.
-2. Replace any category word ("the service," "the data layer") with the specific name.
-3. Scan for every banned term; replace or delete.
-4. Count words; if over 300, cut until under.
-5. Confirm the section list matches Gate 2 exactly.
+- Use the sections the stage's prompt names, in that order, with those exact
+  headings. Add nothing, drop nothing, reorder nothing.
+- When the prompt names no sections, use `## Summary`, `## Findings`,
+  `## Assumptions`, `## Open questions` — in that order.
+- Tables for anything enumerable: behaviors, invariants, findings,
+  dispositions, checks. One row per item, one item per row.
+- Give every enumerated item a stable identifier (`B-3`, `I-2`, `AR-004`,
+  `MC-7`) so later stages and humans can cite it.
 
-Only the rewritten version is written to the file.
+## Rule 5 — Length
 
-## Gate 7 — Structured intermediate (optional, for scripted use)
+- No document over 400 lines. A stage that needs more is doing more than one
+  stage's work; say so in `## Open questions` and write the smaller document.
+- No section over 40 lines.
+- No sentence that survives having its adjectives removed unchanged in
+  meaning. Cut it instead.
 
-When invoked from a script with `--json`, produce this object instead of markdown and let the caller render it. Same caps apply to the field contents.
+## Rule 6 — Banned
 
-```json
-{
-  "title": "",
-  "goal": "",
-  "constraints": [],
-  "steps": [{"n": 1, "action": "", "artifact": ""}],
-  "risks": [{"risk": "", "mitigation": ""}],
-  "done_when": []
-}
-```
+These add length without adding information, and their presence is a defect:
 
-## Generation settings (for the calling script)
+- "comprehensive", "robust", "seamless", "leverage", "utilize", "in order to",
+  "it is important to note", "as mentioned above", "best practices",
+  "production-ready", "enterprise-grade", "cutting-edge".
+- Emoji, decorative rules, ASCII art, and horizontal separators between every
+  section.
+- Praise of the plan, the code, the requirements, or the reader.
+- Any sentence whose subject is "we" and whose verb is a promise.
 
-- temperature: 0–0.3
-- max_tokens: 700 (forces prioritization; raise only if Gate 3 caps are raised)
-- Put this file's contents in the system prompt. Put the user's request in the user turn. Nothing else.
+## Rule 7 — Diffs and code
+
+- Quote code only when the document's claim depends on the exact text. Quote
+  the smallest span that carries the claim, and cite its location.
+- Never paste a whole file. Never paste a diff the driver already records.

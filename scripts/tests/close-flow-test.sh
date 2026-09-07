@@ -7,6 +7,7 @@ set -uo pipefail
 # gh and a stubbed driver on PATH.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+. "$ROOT/scripts/lib/sha256.sh"   # hash_file, portable across platforms
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -127,8 +128,9 @@ fi
 if [[ -n "${FAKE_DRIVER_VERDICT_TEXT:-}" ]]; then
     printf '%s\n' "$FAKE_DRIVER_VERDICT_TEXT" > FINAL_AUDIT.md
     . "$ROOT/scripts/lib/audit-verdict.sh"
+    . "$ROOT/scripts/lib/sha256.sh"
     class="$(classify_audit_verdict FINAL_AUDIT.md)"
-    hash="$(shasum -a 256 FINAL_AUDIT.md | awk '{print $1}')"
+    hash="$(hash_file FINAL_AUDIT.md)"
     printf '%s\t%s\t%s\n' \
         "${FAKE_DRIVER_RUN_ID:-${STAGEGATE_RUN_ID:--}}" "$class" "$hash" \
         > .uncle/workspace/audit-verdict
@@ -548,7 +550,7 @@ run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-
 expect_status 0
 expect_out "Audit verdict: READY"
 COUNT=$((COUNT + 1))
-expected_record="$(printf 'run-1\tREADY\t%s' "$(shasum -a 256 "$REPO/FINAL_AUDIT.md" | awk '{print $1}')")"
+expected_record="$(printf 'run-1\tREADY\t%s' "$(hash_file "$REPO/FINAL_AUDIT.md")")"
 if [[ "$(cat "$REPO/.uncle/workspace/audit-verdict")" != "$expected_record" ]]; then
     fail "verdict record mismatch: $(cat "$REPO/.uncle/workspace/audit-verdict")"
 fi
@@ -829,7 +831,7 @@ printf 'READY\n' > "$REPO/FINAL_AUDIT.md"
 printf '42:COMPLETE\n' > "$REPO/.uncle/workspace/state"
 printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workspace/origin"
 printf -- '-\tREADY\t%s\n' \
-    "$(shasum -a 256 "$REPO/FINAL_AUDIT.md" | awk '{print $1}')" \
+    "$(hash_file "$REPO/FINAL_AUDIT.md")" \
     > "$REPO/.uncle/workspace/audit-verdict"
 run_driver
 expect_status 0

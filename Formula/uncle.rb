@@ -12,6 +12,7 @@ class Uncle < Formula
     libexec.install "scripts"
     libexec.install "prompts"
     libexec.install "lib"
+    libexec.install "OUTPUT_RULES.md"
 
     bin.install_symlink libexec/"uncle"
   end

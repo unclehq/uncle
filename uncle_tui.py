@@ -7,13 +7,25 @@ in the Configure screen (persisted to `.uncle/config`). A fixed status bar shows
 the current model, cumulative tokens used, and Act/Plan mode for the running
 stage.
 """
-import curses
+import shlex
+import shutil
 import json
 import os
 import queue
 import subprocess
+import sys
 import tempfile
 import threading
+
+try:
+    import curses
+except ImportError:  # Windows has no curses in the stdlib
+    sys.stderr.write(
+        "uncle: this screen needs curses.\n"
+        "  Windows: pip install windows-curses\n"
+        "  Linux:   install your distribution's python3 curses package\n"
+        "The line-based menu in `uncle` is used instead.\n")
+    raise SystemExit(1)
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
 CLINE_CONFIG = os.environ.get("CLINE_CONFIG", os.path.expanduser("~/.cline/data/settings/providers.json"))
@@ -366,6 +378,18 @@ class UncleTUI:
         self.output = []
         self.proc = None
         self.out_q = queue.Queue()
+        self.partial = ""
+        self.proc_done = False
+        self.prompt_kind = ""
+        self.prompt_text = ""
+        self.prompt_buf = ""
+        self.prompt_seen = 0
+        self.status_runner = ""
+        self.gate_file = ""
+        self.notice_lines = []
+        self.view_lines = []
+        self.view_title = ""
+        self.view_scroll = 0
         self.status_path = None
         self.status_pos = 0
         self.status_model = ""
@@ -391,6 +415,8 @@ class UncleTUI:
         self.picker_kind = "model"
         self.picker_target = CONFIG_STAGES[0]
         self.first_run = False
+        self._config_stamp = None
+        self._reload_tick = 0
         self.load_config()
         if self.state == "menu" and self.first_run:
             # First time in this project root: open the Configure screen so
@@ -399,9 +425,26 @@ class UncleTUI:
             self.state = "config"
             self.config_sel = 0
             try:
-                                os.makedirs(os.path.join(_project_root(), ".uncle", "workspace"), exist_ok=True)
+                os.makedirs(os.path.join(_project_root(), ".uncle", "workspace"),
+                            exist_ok=True)
             except Exception:
                 pass
+            # Every gate asks you to approve a markdown document. Without a
+            # reader installed, the [v] key falls back to raw text — worth
+            # saying once, on the way to Configure, rather than at the gate.
+            if not self._viewer_command("x"):
+                self.state = "notice"
+                self.notice_lines = [
+                    "Gates ask you to approve a markdown document.",
+                    "uncle can show it to you in this window, with:",
+                    "",
+                    "    brew install glow      (preferred)",
+                    "    brew install bat",
+                    "",
+                    "Neither is installed, so [v] at a gate will show",
+                    "the raw text instead. Install either one and it is",
+                    "picked up on the next run.",
+                ]
 
     # ---- colors (cline's CLI palette) ----
     def _setup_colors(self):
@@ -508,6 +551,7 @@ class UncleTUI:
 
     def _set_field(self, stage, field, value):
         value = (value or "").strip()
+        self.maybe_reload()
         store = {"runner": self.stage_runners,
                  "effort": self.stage_efforts,
                  "model": self.stage_models}.get(field)
@@ -689,6 +733,7 @@ class UncleTUI:
             # First time in this project root: no config file yet. Mark it so
             # the TUI can drop straight into the Configure screen.
             self.first_run = True
+            self._config_stamp = None
             return self.first_run
         self.first_run = False
         legacy = {"runner": "", "model": "", "effort": "", "reviewer": ""}
@@ -714,7 +759,40 @@ class UncleTUI:
         except Exception:
             pass
         self._seed_from_legacy(legacy)
+        self._config_stamp = self._stamp()
         return self.first_run
+
+    def _stamp(self):
+        """Cheap identity of the config file, to notice edits from outside."""
+        try:
+            st = os.stat(CONFIG_PATH)
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
+    def maybe_reload(self):
+        """Re-read .uncle/config if it changed since we last read or wrote it.
+
+        Someone editing the file by hand — or a second uncle in another
+        terminal — should not be silently overwritten by this screen's stale
+        copy, and should not have to restart uncle to see their change.
+        """
+        if self._stamp() == self._config_stamp:
+            return False
+        first_run = self.first_run
+        self.load_config()
+        self.first_run = first_run
+        self._clamp_selection()
+        return True
+
+    def _clamp_selection(self):
+        """Keep the cursors on rows that still exist after a reload."""
+        self.config_sel = max(0, min(getattr(self, "config_sel", 0),
+                                     len(CONFIG_STAGES) - 1))
+        if getattr(self, "stage_target", "") not in STAGE_SIDE:
+            self.stage_target = CONFIG_STAGES[0]
+        fields = self.stage_fields(self.stage_target)
+        self.stage_sel = max(0, min(getattr(self, "stage_sel", 0), len(fields) - 1))
 
     def _store_for(self, field):
         return {"runner": self.stage_runners,
@@ -763,32 +841,21 @@ class UncleTUI:
                             fh.write(line)
         except Exception:
             pass
+        self._config_stamp = self._stamp()
 
     def stage_env(self):
-        """Every stage's runner, model, and effort, as driver variables.
+        """What the driver needs in its environment — which is almost nothing.
 
-        One command variable per stage, so a run can mix runners; the global
-        pair stays set as the fallback for any stage key a driver resolves
-        under a different name.
+        Per-stage settings are deliberately *not* exported. A run stops at four
+        human gates, and that is exactly when an operator decides the next
+        stage should run somewhere else; a snapshot taken at launch could not
+        see that edit. So the drivers read .uncle/config themselves, at the
+        moment each stage starts, and this only tells them which file that is.
 
-        A stage whose runner is not cline gets an explicitly empty model, and
-        the drivers read that as "pass no model flag": claude, kimi, and codex
-        then use their own default rather than a model uncle invented for them.
-        UNCLE_CLINE_MODEL / UNCLE_CLINE_EFFORT are deliberately not set — they
-        are global overrides inside the shims and would win over these.
+        Everything the screen changes is written to that file immediately, so
+        the file and the screen never disagree.
         """
-        env = {}
-        for stage in CONFIG_STAGES:
-            runner = self.stage_runner(stage)
-            side = STAGE_SIDE.get(stage, AGENT)
-            env[stage_runner_var(stage)] = runner_command(runner, side)
-            env[stage_env_var(stage)] = self.stage_model(stage)
-            env[stage_effort_var(stage)] = self.stage_effort(stage)
-        env["WORKFLOW_AGENT_CMD"] = runner_command(
-            self.stage_runner("implementation"), AGENT)
-        env["WORKFLOW_REVIEWER_CMD"] = runner_command(
-            self.stage_runner("adversarial-review"), REVIEWER)
-        return env
+        return {"UNCLE_CONFIG": CONFIG_PATH}
 
     # ---- status channel ----
     def poll_status(self):
@@ -847,29 +914,285 @@ class UncleTUI:
         env.update(self.stage_env())
         env["UNCLE_STATUS_FILE"] = self.status_path
         self.output = []
+        self.partial = ""
+        self.prompt_kind = ""
+        self.prompt_text = ""
+        self.prompt_buf = ""
+        self.prompt_seen = 0
+        self.status_model = ""
+        self.status_runner = ""
+        self.status_stage = ""
+        self.gate_file = ""
+        # stdin is a pipe because the workflow asks questions: four human
+        # gates, plus the odd retry or confirmation. Under curses the driver
+        # cannot have the terminal, so the answers are typed into this screen
+        # and written down the pipe.
         self.proc = subprocess.Popen(self.cmd_for(), cwd=_project_root(), env=env,
+                                     stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     text=True, bufsize=1)
+                                     bufsize=0)
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self):
+        """Read raw chunks, not lines.
+
+        A question is written without a trailing newline — `[Y/N] ` and then a
+        blocking read — so iterating by line would block on the very output
+        that needs answering.
+        """
+        fd = self.proc.stdout.fileno()
         try:
-            for line in self.proc.stdout:
-                self.out_q.put(line)
+            while True:
+                # os.read returns as soon as anything is there; a buffered
+                # read(n) would sit on a prompt waiting for n characters.
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    break
+                self.out_q.put(chunk.decode("utf-8", "replace"))
         finally:
             self.out_q.put(None)
 
     def drain_output(self):
+        got = False
         try:
             while True:
-                line = self.out_q.get_nowait()
-                if line is None:
-                    return
-                self.output.append(line.rstrip("\n"))
-                if len(self.output) > 4000:
-                    del self.output[:500]
+                chunk = self.out_q.get_nowait()
+                if chunk is None:
+                    self.proc_done = True
+                    break
+                got = True
+                self.partial += chunk
+                while "\n" in self.partial:
+                    line, self.partial = self.partial.split("\n", 1)
+                    self._absorb_line(line.rstrip("\r"))
         except queue.Empty:
             pass
+        if got:
+            self.prompt_seen = 0
+        self._detect_prompt()
+
+    def _absorb_line(self, line):
+        self.output.append(line)
+        if len(self.output) > 4000:
+            del self.output[:500]
+        self._read_banner(line)
+
+    # The drivers announce each stage before running it. Parsing that is how
+    # this screen knows what is running: only the cline shims report through
+    # the status channel, so a kimi or codex stage would otherwise leave the
+    # status bar showing whatever ran last — or, worse, cline's own last-used
+    # model, which was never this stage's model at all.
+    def _read_banner(self, line):
+        text = line.strip()
+        # A gate opens with this banner, then reads a bare newline before it
+        # asks the real question. bash prints a `read -p` prompt only to a
+        # terminal, so over a pipe that read is invisible: nothing appears and
+        # the run looks hung. Answer it here — the decision is the [Y/N] that
+        # follows, and that one gets a modal.
+        if text.startswith("HUMAN REVIEW REQUIRED:"):
+            self.gate_file = text.split(":", 1)[1].strip()
+            self._send_raw("")
+            return
+        if text.startswith("Ready to approve") or text.startswith("Ready to acknowledge"):
+            return
+        for prefix, mode in (("Launching agent (", "act"),
+                             ("Launching reviewer (", "review"),
+                             ("Starting background reviewer (", "review")):
+            if text.startswith(prefix):
+                rest = text[len(prefix):]
+                cmd, _, tail = rest.partition(")")
+                self.status_runner = self._runner_name(cmd)
+                stage = tail.split(":", 1)[1].strip() if ":" in tail else ""
+                self.status_stage = stage.replace("stage: ", "").strip() or self.status_stage
+                self.status_mode = mode
+                self.status_model = ""
+                return
+        if text.startswith("Model: "):
+            model = text[len("Model: "):]
+            for sep in ("  Effort:", " (effort:", "  Cap:"):
+                model = model.split(sep, 1)[0]
+            self.status_model = model.strip()
+
+    @staticmethod
+    def _runner_name(cmd):
+        """`.../scripts/agent-kimi.sh` reads as `kimi`; a bare `codex` as itself."""
+        name = os.path.basename(cmd.strip())
+        if name.endswith(".sh"):
+            name = name[:-3]
+        for prefix in ("agent-", "reviewer-"):
+            if name.startswith(prefix):
+                name = name[len(prefix):]
+        return name
+
+    # ---- viewing the document a gate is about ----
+    #
+    # The driver's advice is to open the file in another terminal. That works,
+    # but a gate that cannot show you what you are approving is half a gate.
+    #
+    # A rendered markdown reader is worth handing the screen to, so glow and
+    # bat are used when they are installed, in that order, in this window: the
+    # screen is released, the reader runs as it normally would, and the TUI is
+    # restored when it exits. Without either, the built-in pager below shows
+    # the raw text rather than refusing.
+    def _viewer_command(self, full):
+        """glow, then bat, whichever is on PATH — installed anywhere.
+
+        `less` is only used when it is there too: it is standard on macOS and
+        Linux and present in Git Bash, but not in a bare Windows shell, and
+        glow pages well enough on its own.
+        """
+        quoted = shlex.quote(full)
+        if shutil.which("glow"):
+            if shutil.which("less"):
+                return "glow %s | less" % quoted
+            return "glow -p %s" % quoted
+        if shutil.which("bat"):
+            return "bat %s" % quoted
+        return ""
+
+    def _open_viewer(self, path):
+        full = path if os.path.isabs(path) else os.path.join(_project_root(), path)
+        if not os.path.exists(full):
+            self.view_lines = ["not found: %s" % full]
+            self.view_title = path
+            self.view_scroll = 0
+            self.state = "viewer"
+            return
+
+        cmd = self._viewer_command(full)
+        if cmd:
+            self._run_in_terminal(cmd)
+            return
+
+        try:
+            with open(full, errors="replace") as fh:
+                self.view_lines = fh.read().splitlines() or ["(empty file)"]
+        except Exception as exc:
+            self.view_lines = ["could not read %s" % full, str(exc)]
+        self.view_title = path
+        self.view_scroll = 0
+        self.state = "viewer"
+
+    def _run_in_terminal(self, cmd):
+        """Hand the terminal to an external reader, then take it back.
+
+        def_prog_mode saves the curses screen state; endwin restores the
+        terminal so the reader gets a normal tty. After it exits,
+        reset_prog_mode and a full redraw put the TUI back as it was.
+        """
+        try:
+            curses.def_prog_mode()
+            curses.endwin()
+        except curses.error:
+            pass
+        try:
+            subprocess.call(cmd, shell=True)
+        except Exception:
+            pass
+        try:
+            curses.reset_prog_mode()
+            self.stdscr.clearok(True)
+            self.stdscr.refresh()
+        except curses.error:
+            pass
+
+    def _draw_viewer(self, h, w):
+        head = " %s  —  j/k or arrows scroll, q back " % self.view_title
+        try:
+            self.stdscr.attrset(self.color["sel"] | curses.A_REVERSE)
+            self.stdscr.addnstr(0, 0, head.ljust(w)[: w - 1], w - 1)
+            self.stdscr.attrset(0)
+        except curses.error:
+            self.stdscr.attrset(0)
+        body = max(1, h - 2)
+        self.view_scroll = max(0, min(self.view_scroll,
+                                      max(0, len(self.view_lines) - body)))
+        for i in range(body):
+            idx = self.view_scroll + i
+            if idx >= len(self.view_lines):
+                break
+            try:
+                self.stdscr.addnstr(1 + i, 0, self.view_lines[idx], w - 1)
+            except curses.error:
+                pass
+        pos = " %d-%d of %d " % (self.view_scroll + 1,
+                                 min(len(self.view_lines), self.view_scroll + body),
+                                 len(self.view_lines))
+        try:
+            self.stdscr.attrset(curses.A_REVERSE)
+            self.stdscr.addnstr(h - 1, 0, pos.ljust(w)[: w - 1], w - 1)
+            self.stdscr.attrset(0)
+        except curses.error:
+            self.stdscr.attrset(0)
+
+    # ---- questions from the driver ----
+    def _detect_prompt(self):
+        """A stable, unterminated line means the driver is waiting on us.
+
+        Everything the drivers print ends in a newline except a prompt, so the
+        leftover partial line is the question. It has to be stable for a few
+        ticks, so a chunk that arrives mid-line is not mistaken for one.
+        """
+        if self.prompt_kind:
+            return
+        text = self.partial.strip()
+        if not text:
+            return
+        self.prompt_seen += 1
+        if self.prompt_seen < 3:
+            return
+        plain = self._strip_ansi(text)
+        upper = plain.upper()
+        if "[Y/N]" in upper:
+            self.prompt_kind = "confirm"
+        elif "PRESS ENTER" in upper:
+            self.prompt_kind = "enter"
+        else:
+            self.prompt_kind = "input"
+        self.prompt_text = plain
+        self.prompt_buf = ""
+
+    @staticmethod
+    def _strip_ansi(text):
+        out = []
+        i = 0
+        while i < len(text):
+            if text[i] == "\033":
+                while i < len(text) and text[i] not in "m":
+                    i += 1
+                i += 1
+                continue
+            out.append(text[i])
+            i += 1
+        return "".join(out)
+
+    def _send_raw(self, answer):
+        """Write one line to the driver's stdin without touching modal state."""
+        if not self.proc or self.proc.poll() is not None:
+            return
+        try:
+            self.proc.stdin.write((answer + "\n").encode())
+            self.proc.stdin.flush()
+        except Exception:
+            pass
+
+    def answer_prompt(self, answer):
+        """Send one line down the driver's stdin and close the modal."""
+        if not self.proc or self.proc.poll() is not None:
+            self.prompt_kind = ""
+            return
+        try:
+            self.proc.stdin.write((answer + "\n").encode())
+            self.proc.stdin.flush()
+        except Exception:
+            pass
+        # Keep the answer in the transcript, so the log reads like a session.
+        self._absorb_line("%s%s" % (self.partial.rstrip(), answer))
+        self.partial = ""
+        self.prompt_kind = ""
+        self.prompt_text = ""
+        self.prompt_buf = ""
+        self.prompt_seen = 0
 
     def stop_workflow(self):
         if self.proc and self.proc.poll() is None:
@@ -892,19 +1215,29 @@ class UncleTUI:
     def draw(self):
         h, w = self.stdscr.getmaxyx()
         self.stdscr.erase()
-        if self.state == "running":
+        if self.state in ("running", "viewer"):
             self._draw_running(h, w)
+        elif self.state == "notice":
+            self._draw_notice(h, w)
         else:
             self._draw_prompt(h, w)
         self._draw_status(h, w)
         self.stdscr.refresh()
 
     def _draw_running(self, h, w):
-        for i, line in enumerate(self.output[-(h - 1):]):
+        if self.state == "viewer":
+            self._draw_viewer(h, w)
+            return
+        tail = list(self.output)
+        if self.partial.strip() and not self.prompt_kind:
+            tail.append(self.partial.rstrip())
+        for i, line in enumerate(tail[-(h - 1):]):
             try:
                 self.stdscr.addnstr(i, 0, line, w - 1)
             except curses.error:
                 pass
+        if self.prompt_kind:
+            self._draw_modal(h, w)
 
     def _title(self):
         if self.state == "picker":
@@ -926,6 +1259,8 @@ class UncleTUI:
             "issue_mode": "Seed as",
             "issue": "Issue number or URL",
             "config": "Configure — Enter opens a stage, q back",
+            "notice": "Enter to continue to Configure",
+            "running": "q stops the run",
         }.get(self.state, "")
         if self.state == "config" and getattr(self, "first_run", False):
             title = "Configure this project (first run) — %s" % title
@@ -1105,15 +1440,95 @@ class UncleTUI:
             except curses.error:
                 pass
 
+    def _draw_notice(self, h, w):
+        """A centered box with one OK, shown before the first Configure."""
+        body = list(self.notice_lines) + ["", "[ OK ]"]
+        box_w = min(w - 4, max(len(l) for l in body) + 6)
+        box_w = max(box_w, 34)
+        box_h = len(body) + 4
+        top = max(0, (h - box_h) // 2)
+        left = max(0, (w - box_w) // 2)
+        border = self.color["title"]
+        try:
+            self.stdscr.addnstr(top, left,
+                                "\u250c" + " markdown reader ".center(box_w - 2, "\u2500") + "\u2510",
+                                box_w, border)
+            for i in range(box_h - 2):
+                self.stdscr.addnstr(top + 1 + i, left,
+                                    "\u2502" + " " * (box_w - 2) + "\u2502", box_w, border)
+            self.stdscr.addnstr(top + box_h - 1, left,
+                                "\u2514" + "\u2500" * (box_w - 2) + "\u2518", box_w, border)
+        except curses.error:
+            pass
+        for i, line in enumerate(body):
+            attr = self.color["sel"] if line == "[ OK ]" else self.color["accent"]
+            col = left + (box_w - len(line)) // 2 if line == "[ OK ]" else left + 3
+            try:
+                self.stdscr.addnstr(top + 2 + i, col, line, box_w - 6, attr)
+            except curses.error:
+                pass
+
+    def _draw_modal(self, h, w):
+        """The driver's question, in the middle of the screen.
+
+        A gate is the one moment the workflow is waiting on a person, so it
+        gets the middle of the screen rather than one more line of scrollback.
+        """
+        lines = self._wrap(self.prompt_text, max(20, min(72, w - 12)))
+        if self.prompt_kind == "confirm":
+            footer = "[y] approve      [n] decline"
+            if self.gate_file:
+                footer = "[y] approve      [n] decline      [v] view file"
+        elif self.prompt_kind == "enter":
+            footer = "[Enter] continue      [Esc] decline"
+        else:
+            footer = "type an answer, [Enter] send, [Esc] cancel"
+        body = list(lines)
+        if self.prompt_kind == "input":
+            body += ["", "> " + self.prompt_buf + "\u2588"]
+        body += ["", footer]
+
+        box_w = min(w - 4, max(len(l) for l in body + [footer]) + 6)
+        box_w = max(box_w, 30)
+        box_h = len(body) + 4
+        top = max(0, (h - box_h) // 2)
+        left = max(0, (w - box_w) // 2)
+        title = {"confirm": " approve ", "enter": " review ", "input": " input "}.get(
+            self.prompt_kind, " uncle ")
+
+        border = self.color["title"]
+        try:
+            self.stdscr.addnstr(top, left, "\u250c" + title.center(box_w - 2, "\u2500") + "\u2510", box_w, border)
+            for i in range(box_h - 2):
+                self.stdscr.addnstr(top + 1 + i, left, "\u2502" + " " * (box_w - 2) + "\u2502", box_w, border)
+            self.stdscr.addnstr(top + box_h - 1, left, "\u2514" + "\u2500" * (box_w - 2) + "\u2518", box_w, border)
+        except curses.error:
+            pass
+        for i, line in enumerate(body):
+            attr = self.color["accent"]
+            if line is body[-1]:
+                attr = self.color["sel"]
+            elif self.prompt_kind == "input" and line.startswith("> "):
+                attr = self.color["cursor"]
+            try:
+                self.stdscr.addnstr(top + 2 + i, left + 3, line, box_w - 6, attr)
+            except curses.error:
+                pass
+
     def _draw_status(self, h, w):
+        if self.state == "viewer":
+            return
         if self.state == "running":
-            model = self.status_model or self.default_model or "default"
+            model = self.status_model or "—"
             tokens = self.completed_tokens + self.current_tokens
-            if self.status_mode == "act":
+            if self.prompt_kind:
+                mode = "Waiting for you"
+                bar_attr = self.color["sel"]
+            elif self.status_mode == "act":
                 mode = "Act"
                 bar_attr = self.color["good"]
-            elif self.status_mode == "plan":
-                mode = "Plan"
+            elif self.status_mode in ("plan", "review"):
+                mode = "Review" if self.status_mode == "review" else "Plan"
                 bar_attr = self.color["accent"]
             else:
                 mode = "—"
@@ -1126,12 +1541,14 @@ class UncleTUI:
             if pct is not None:
                 stage += " %d%%" % pct
         else:
-            model = self.status_model or self.default_model or "default"
+            model = "—"
             tokens = 0
             mode = "—"
             bar_attr = 0
             stage = ""
-        parts = " model: %s   tokens: %d   mode: %s " % (model, tokens, mode)
+        runner = self.status_runner or "—"
+        parts = " runner: %s   model: %s   tokens: %d   mode: %s " % (
+            runner, model, tokens, mode)
         if stage:
             parts += "  %s" % stage
         text = parts
@@ -1148,10 +1565,70 @@ class UncleTUI:
             self._quit()
             return
         if k == 27:  # Esc
+            if self.state == "notice":
+                self.state = "config"
+                self.config_sel = 0
+                return
+            if self.state == "running" and self.prompt_kind:
+                if self.prompt_kind == "confirm":
+                    self.answer_prompt("n")     # anything but y declines
+                elif self.prompt_kind == "input":
+                    self.prompt_kind = ""       # leave the question standing
+                    self.prompt_seen = 0
+                return
             self._go_back()
             return
 
+        if self.state == "notice":
+            # Any key is OK; that is what an OK box is.
+            self.state = "config"
+            self.config_sel = 0
+            return
+
+        if self.state == "viewer":
+            body = 20
+            if k == curses.KEY_UP or k in (ord("k"), ord("K")):
+                self.view_scroll -= 1
+            elif k == curses.KEY_DOWN or k in (ord("j"), ord("J")):
+                self.view_scroll += 1
+            elif k == curses.KEY_NPAGE or k == ord(" "):
+                self.view_scroll += body
+            elif k == curses.KEY_PPAGE:
+                self.view_scroll -= body
+            elif k in (ord("g"),):
+                self.view_scroll = 0
+            elif k in (ord("G"),):
+                self.view_scroll = max(0, len(self.view_lines))
+            elif k in (ord("q"), ord("Q"), 27, 10, 13):
+                self.state = "running"
+            self.view_scroll = max(0, self.view_scroll)
+            return
+
         if self.state == "running":
+            if self.prompt_kind == "confirm":
+                if k in (ord("y"), ord("Y")):
+                    self.answer_prompt("y")
+                elif k in (ord("n"), ord("N")):
+                    self.answer_prompt("n")
+                elif k in (ord("v"), ord("V")) and self.gate_file:
+                    self._open_viewer(self.gate_file)
+                return
+            if self.prompt_kind == "enter":
+                if k in (10, 13):
+                    self.answer_prompt("")
+                elif k == 27:
+                    self.stop_workflow()
+                    self.state = "menu"
+                    self.sel = 0
+                return
+            if self.prompt_kind == "input":
+                if k in (10, 13):
+                    self.answer_prompt(self.prompt_buf)
+                elif k in (curses.KEY_BACKSPACE, 127, 8):
+                    self.prompt_buf = self.prompt_buf[:-1]
+                elif 32 <= k <= 126:
+                    self.prompt_buf += chr(k)
+                return
             if k in (ord("q"), ord("Q")):
                 self.stop_workflow()
                 self.state = "menu"
@@ -1286,6 +1763,9 @@ class UncleTUI:
             self.state = "stage"
 
     def _run(self):
+        # The run reads the file, so make sure we are not about to launch on
+        # top of an edit we have not seen.
+        self.maybe_reload()
         self.state = "running"
         self.start_workflow()
 
@@ -1302,6 +1782,13 @@ class UncleTUI:
             self.poll_status()
             if self.state == "running":
                 self.drain_output()
+            else:
+                # ~1s: often enough that an edit in another window shows up
+                # while you are looking at the screen, cheap enough to ignore.
+                self._reload_tick += 1
+                if self._reload_tick >= 12:
+                    self._reload_tick = 0
+                    self.maybe_reload()
             k = self.stdscr.getch()
             if k != -1:
                 self.handle_key(k)

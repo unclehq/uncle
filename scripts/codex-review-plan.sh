@@ -28,7 +28,14 @@ test -s PROJECT_PLAN.md
 test -s .uncle/workspace/approvals/PROJECT_PLAN.sha256
 
 expected="$(cat .uncle/workspace/approvals/PROJECT_PLAN.sha256)"
-actual="$(shasum -a 256 PROJECT_PLAN.md | awk '{print $1}')"
+# shasum on macOS, sha256sum on Linux, openssl anywhere else.
+if command -v shasum > /dev/null 2>&1; then
+    actual="$(shasum -a 256 PROJECT_PLAN.md | awk '{print $1}')"
+elif command -v sha256sum > /dev/null 2>&1; then
+    actual="$(sha256sum PROJECT_PLAN.md | awk '{print $1}')"
+else
+    actual="$(openssl dgst -sha256 PROJECT_PLAN.md | awk '{print $NF}')"
+fi
 
 if [[ "$expected" != "$actual" ]]; then
     echo "PROJECT_PLAN.md changed after approval."

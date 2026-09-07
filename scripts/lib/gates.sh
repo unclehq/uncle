@@ -58,6 +58,59 @@ load_gates() {
     cat "$f"
 }
 
+# Output rules: the shape every reviewed document must have.
+#
+# GATES.md below is the plan template, and it binds the plan stages only.
+# OUTPUT_RULES.md is broader — audience, checkable claims, marked assumptions,
+# fixed structure, length, banned filler — and applies to every stage that
+# writes a markdown document for a human to approve, the requirements
+# interpretation included.
+#
+# Resolved the same way as the gates: an explicit override, then the project's
+# own copy, then the copy that ships with uncle.
+OUTPUT_RULES_BASENAME="OUTPUT_RULES.md"
+
+output_rules_file() {
+    local f
+    if [[ -n "${UNCLE_OUTPUT_RULES:-}" && -s "$UNCLE_OUTPUT_RULES" ]]; then
+        printf '%s\n' "$UNCLE_OUTPUT_RULES"
+        return 0
+    fi
+    for f in "$PWD/$OUTPUT_RULES_BASENAME" \
+             "$PWD/.uncle/$OUTPUT_RULES_BASENAME"; do
+        if [[ -s "$f" ]]; then
+            printf '%s\n' "$f"
+            return 0
+        fi
+    done
+    for f in "${ROOT:-}/lib/gates/$OUTPUT_RULES_BASENAME" \
+             "${ROOT:-}/$OUTPUT_RULES_BASENAME"; do
+        if [[ -n "${ROOT:-}" && -s "$f" ]]; then
+            printf '%s\n' "$f"
+            return 0
+        fi
+    done
+    return 0
+}
+
+output_rules_source() {
+    local f
+    f="$(output_rules_file)"
+    if [[ -z "$f" ]]; then
+        printf 'none\n'
+    elif [[ -n "${UNCLE_OUTPUT_RULES:-}" && "$f" == "$UNCLE_OUTPUT_RULES" ]]; then
+        printf 'override\n'
+    elif [[ "$f" == "$PWD/"* ]]; then
+        printf 'local\n'
+    else
+        printf 'installed\n'
+    fi
+}
+
+# Stages that write a markdown document for a human to read. Every one of them
+# gets the output rules; the plan stages additionally get the plan template.
+DOC_STAGES=" requirements project-plan updated-plan implementation execute-checklist baseline change-spec change-plan updated-change-plan adversarial-review manual-checklist manual-checklist-base manual-checklist-delta final-audit "
+
 # Stages that write a plan must satisfy the output gates. The gates file is
 # resolved local-first (project GATES.md, then .uncle/gates/GATES.md) and
 # falls back to the gates installed with uncle (lib/gates/GATES.md). The
@@ -70,22 +123,39 @@ PLAN_STAGES=" project-plan updated-plan change-plan updated-change-plan "
 gated_prompt() {
     local prompt_file="$1"
     local log_name="$2"
+
+    local is_plan=0 is_doc=0
     case "$PLAN_STAGES" in
-        *" $log_name "*) ;;
-        *) printf '%s\n' "$prompt_file"; return 0 ;;
+        *" $log_name "*) is_plan=1 ;;
     esac
-    local gates
-    gates="$(gates_file)"
-    if [[ -z "$gates" ]]; then
+    case "$DOC_STAGES" in
+        *" $log_name "*) is_doc=1 ;;
+    esac
+
+    local gates rules
+    gates=""
+    rules=""
+    [[ "$is_plan" == "1" ]] && gates="$(gates_file)"
+    [[ "$is_doc" == "1" ]] && rules="$(output_rules_file)"
+
+    if [[ -z "$gates" && -z "$rules" ]]; then
         printf '%s\n' "$prompt_file"
         return 0
     fi
+
     local combined="$LOG_DIR/${log_name}.gated-prompt.md"
     {
         cat "$prompt_file"
-        printf '\n\n---\n\n# Output gates (binding)\n\nThe plan you write must pass every gate below. Resolve the gates in this\norder: a project-local GATES.md or .uncle/gates/GATES.md wins; otherwise the\ngates installed with uncle apply.\n\n'
-        load_gates
+        if [[ -n "$rules" ]]; then
+            printf '\n\n---\n\n# Output rules (binding)\n\nThe document you write must satisfy every rule below. They govern its shape;\nthis stage'"'"'s instructions above govern its content. Where they disagree about\nshape, these rules win.\n\n'
+            cat "$rules"
+        fi
+        if [[ -n "$gates" ]]; then
+            printf '\n\n---\n\n# Output gates (binding)\n\nThe plan you write must pass every gate below. Resolve the gates in this\norder: a project-local GATES.md or .uncle/gates/GATES.md wins; otherwise the\ngates installed with uncle apply.\n\n'
+            load_gates
+        fi
     } > "$combined"
-    echo "Output gates: $(gates_source) ($(gates_file))" >&2
+    [[ -n "$rules" ]] && echo "Output rules: $(output_rules_source) ($rules)" >&2
+    [[ -n "$gates" ]] && echo "Output gates: $(gates_source) ($gates)" >&2
     printf '%s\n' "$combined"
 }

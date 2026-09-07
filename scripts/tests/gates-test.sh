@@ -16,6 +16,7 @@ set -uo pipefail
 # owns the FINAL_AUDIT fixtures.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+. "$ROOT/scripts/lib/sha256.sh"   # hash_file, portable across platforms
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -153,7 +154,7 @@ EOF
 
     local f
     for f in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN; do
-        shasum -a 256 "$REPO/${f}.md" | awk '{print $1}' \
+        hash_file "$REPO/${f}.md" \
             > "$REPO/.uncle/workspace/approvals/${f}.sha256"
     done
 
@@ -215,7 +216,7 @@ REV
 green_baseline() {
     printf '%s\t%s\n' "$1" "$2" > "$REPO/.uncle/workspace/green-check.baseline.tsv"
     printf '%s\n' "$2" > "$REPO/.uncle/workspace/green-check.commands"
-    shasum -a 256 "$REPO/BASELINE_REPORT.md" | awk '{print $1}' \
+    hash_file "$REPO/BASELINE_REPORT.md" \
         > "$REPO/.uncle/workspace/green-check.source"
 }
 
@@ -494,7 +495,7 @@ fi
 # A baseline report with no command block is a warning, not a stopped run.
 new_case baseline-without-commands-warns
 printf '# Baseline Report\n\nNo commands section.\n' > "$REPO/BASELINE_REPORT.md"
-shasum -a 256 "$REPO/BASELINE_REPORT.md" | awk '{print $1}' \
+hash_file "$REPO/BASELINE_REPORT.md" \
     > "$REPO/.uncle/workspace/approvals/BASELINE_REPORT.sha256"
 set_state PLAN
 run_driver
@@ -531,7 +532,7 @@ bash app/test.sh
 
 ## Non-goals
 EOF
-    shasum -a 256 "$REPO/UPDATED_PROJECT_PLAN.md" | awk '{print $1}' \
+    hash_file "$REPO/UPDATED_PROJECT_PLAN.md" \
         > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
 }
 
@@ -605,7 +606,7 @@ expect_state "WAIT_IMPLEMENT_APPROVAL"
 new_stagegate_case sg-plan-without-commands
 stagegate_agent
 printf '# Updated Project Plan\n\nNo commands.\n' > "$REPO/UPDATED_PROJECT_PLAN.md"
-shasum -a 256 "$REPO/UPDATED_PROJECT_PLAN.md" | awk '{print $1}' \
+hash_file "$REPO/UPDATED_PROJECT_PLAN.md" \
     > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
 run_stagegate FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"

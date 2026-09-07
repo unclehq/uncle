@@ -215,28 +215,50 @@ stage_var() {
         "$(printf '%s' "$2" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
 }
 
+# Precedence, for every per-stage setting: an explicit WORKFLOW_* variable
+# wins, then the project's .uncle/config, then what the call site asked for.
+# The config file is read at the moment the stage starts, so an edit made at a
+# human gate applies to the stages after it.
+# An explicit variable always wins over the config file; the built-in default
+# applies only when the project has no config at all.
 stage_agent_cmd() {
-    local var
+    local var fallback
+    if [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
+        fallback="$WORKFLOW_AGENT_CMD"
+    elif uncle_has_config; then
+        fallback="$(uncle_stage_cmd "$1")"
+    else
+        fallback="$AGENT_CMD"
+    fi
     var="$(stage_var AGENT_CMD "$1")"
-    eval "printf '%s' \"\${$var:-$AGENT_CMD}\""
+    eval "printf '%s' \"\${$var:-$fallback}\""
 }
 
 stage_reviewer_cmd() {
-    local var
+    local var fallback
+    if [[ -n "${WORKFLOW_REVIEWER_CMD:-}" ]]; then
+        fallback="$WORKFLOW_REVIEWER_CMD"
+    elif uncle_has_config; then
+        fallback="$(uncle_stage_cmd "$1")"
+    else
+        fallback="$REVIEWER_CMD"
+    fi
     var="$(stage_var REVIEWER_CMD "$1")"
-    eval "printf '%s' \"\${$var:-$REVIEWER_CMD}\""
+    eval "printf '%s' \"\${$var:-$fallback}\""
 }
 
 stage_effort_for() {
-    local var
+    local var fallback=""
+    uncle_has_config && fallback="$(uncle_stage_effort "$1")"
     var="$(stage_var EFFORT "$1")"
-    eval "printf '%s' \"\${$var:-}\""
+    eval "printf '%s' \"\${$var:-$fallback}\""
 }
 
 stage_model_for() {
-    local var
+    local var fallback="$2"
+    uncle_has_config && fallback="$(uncle_stage_model "$1")"
     var="$(stage_var MODEL "$1")"
-    eval "printf '%s' \"\${$var-$2}\""
+    eval "printf '%s' \"\${$var-$fallback}\""
 }
 REVIEWER_CMD="${WORKFLOW_REVIEWER_CMD:-codex}"
 
@@ -254,9 +276,7 @@ CLAUDE_TOOLS="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
 # Helpers
 # ---------------------------------------------------------------------------
 
-hash_file() {
-    shasum -a 256 "$1" | awk '{print $1}'
-}
+. "$ROOT/scripts/lib/sha256.sh"
 
 # One bold prompt line. `read -p` suppresses its prompt when stdin is not a
 # terminal, so the text is printed separately. Escapes are emitted only for a
@@ -295,6 +315,7 @@ legacy_word_notice() {
 . "$ROOT/scripts/lib/green-check.sh"
 . "$ROOT/scripts/lib/implementation-review.sh"
 . "$ROOT/scripts/lib/gates.sh"
+. "$ROOT/scripts/lib/stage-config.sh"
 
 require_file() {
     if [[ ! -s "$1" ]]; then
@@ -1203,6 +1224,9 @@ run_codex() {
     [[ -n "$model" ]] && model_args=(-m "$model")
 
     require_file "$prompt_file"
+    # The reviewer writes a document a human reads, so it gets the output
+    # rules the same way an agent stage does.
+    prompt_file="$(gated_prompt "$prompt_file" "$log_name")"
 
     local -a flags=(
         exec
@@ -1266,6 +1290,9 @@ start_codex_bg() {
     [[ -n "$model" ]] && model_args=(-m "$model")
 
     require_file "$prompt_file"
+    # The reviewer writes a document a human reads, so it gets the output
+    # rules the same way an agent stage does.
+    prompt_file="$(gated_prompt "$prompt_file" "$log_name")"
     rm -f "$output_file"
     status_stage_context "$log_name"
 

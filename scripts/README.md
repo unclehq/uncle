@@ -232,6 +232,19 @@ configured for one of those exports an empty model, and the driver omits
 variable still falls back to the driver's built-in default, which is what keeps
 a driver run directly, with no launcher, behaving as before.
 
+### Output rules and plan gates
+
+Every stage that writes a markdown document for a human to read gets
+`OUTPUT_RULES.md` appended to its prompt — the requirements interpretation, the
+specs, the plans, the notes and reports, and the reviewer's own artifacts.
+Plan-producing stages additionally get `lib/gates/GATES.md`, which is the
+section template a plan must follow.
+
+Both resolve local-first: an explicit `UNCLE_OUTPUT_RULES` / `UNCLE_GATES`
+path, then the project's own copy, then the copy installed with uncle. The
+driver logs which source it used, and the rules are appended to the prompt it
+sends, never written into the prompt files on disk.
+
 ### Frozen scope and stepwise implementation
 
 `scripts/lib/plan-scope.sh` reads the two machine-usable structures out of

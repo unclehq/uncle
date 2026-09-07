@@ -18,6 +18,7 @@ set -uo pipefail
 # failure fails the suite instead of passing vacuously.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+. "$ROOT/scripts/lib/sha256.sh"   # hash_file, portable across platforms
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -69,7 +70,7 @@ expect_not_out() {
 expect_hash_of() {
     COUNT=$((COUNT + 1))
     local approval="$1" src="$2" want have
-    want="$(shasum -a 256 "$src" | awk '{print $1}')"
+    want="$(hash_file "$src")"
     have="$(cat "$approval" 2>/dev/null)"
     if [[ "$have" != "$want" ]]; then
         fail "approval $approval: expected $want, got '${have}'"
@@ -167,7 +168,13 @@ hash_file() {
     local n digest
     n=$(( $(cat "$HASH_COUNT_FILE") + 1 ))
     printf '%s' "$n" > "$HASH_COUNT_FILE"
-    digest="$(shasum -a 256 "$1" | awk '{print $1}')"
+    if command -v shasum > /dev/null 2>&1; then
+        digest="$(shasum -a 256 "$1" | awk '{print $1}')"
+    elif command -v sha256sum > /dev/null 2>&1; then
+        digest="$(sha256sum "$1" | awk '{print $1}')"
+    else
+        digest="$(openssl dgst -sha256 "$1" | awk '{print $NF}')"
+    fi
     if [[ "$MUTATE_AFTER_HASH_CALL" != "0" && "$MUTATE_AFTER_HASH_CALL" == "$n" ]]; then
         printf 'raced\n' >> "$1"
     fi
@@ -178,7 +185,7 @@ PRELUDE
 
 write_cw_harness() {
     extract_fns "$ROOT/scripts/change-workflow.sh" "$CASE/fns.sh" \
-        gate_prompt legacy_word_notice hash_file require_file human_gate
+        gate_prompt legacy_word_notice require_file human_gate
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail
@@ -193,7 +200,7 @@ HARNESS
 
 write_sg_harness() {
     extract_fns "$ROOT/scripts/stagegate.sh" "$CASE/fns.sh" \
-        gate_prompt legacy_word_notice hash_file upper lower require_file \
+        gate_prompt legacy_word_notice upper lower require_file \
         review_and_approve
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
@@ -255,6 +262,10 @@ echo "== G1: scripts/workflow.sh approve_file =="
 setup_workflow() {
     new_case "$1"
     cp "$ROOT/scripts/workflow.sh" "$REPO/scripts/workflow.sh"
+    # workflow.sh sources the portable sha256 helper, so the fake checkout
+    # needs it too — the same way a real one has it.
+    mkdir -p "$REPO/scripts/lib"
+    cp "$ROOT/scripts/lib/sha256.sh" "$REPO/scripts/lib/sha256.sh"
 }
 
 for answer in y Y; do
@@ -269,7 +280,7 @@ done
 # The digest printed at the prompt is the digest that gets recorded.
 setup_workflow "g1-digest-shown"
 run_workflow "y\n" approve-plan
-expect_out "SHA-256: $(shasum -a 256 "$REPO/PROJECT_PLAN.md" | awk '{print $1}')"
+expect_out "SHA-256: $(hash_file "$REPO/PROJECT_PLAN.md")"
 
 for answer in "n" "N" "foo" "" "APPROVE" "ACKNOWLEDGE"; do
     setup_workflow "g1-decline-${answer:-empty}"
@@ -543,13 +554,13 @@ expect_hash_of "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256" "$REPO/PRO
 # recorded digest must be the validated one, not a re-read of the new bytes.
 new_case "g3-race-after-response"
 write_sg_harness
-SG_PRE_RACE_DIGEST="$(shasum -a 256 "$REPO/PROJECT_PLAN.md" | awk '{print $1}')"
+SG_PRE_RACE_DIGEST="$(hash_file "$REPO/PROJECT_PLAN.md")"
 run_gate "\ny\n" MUTATE_AFTER_HASH_CALL=2 -- PROJECT_PLAN.md PROJECT_PLAN approve
 expect_status 0
 expect_hash_literal "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256" "$SG_PRE_RACE_DIGEST"
 COUNT=$((COUNT + 1))
 if [[ "$(cat "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256" 2>/dev/null)" == \
-      "$(shasum -a 256 "$REPO/PROJECT_PLAN.md" | awk '{print $1}')" ]]; then
+      "$(hash_file "$REPO/PROJECT_PLAN.md")" ]]; then
     fail "approval recorded the post-race bytes instead of the reviewed bytes"
 fi
 

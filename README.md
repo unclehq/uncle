@@ -59,6 +59,14 @@ brew install uncle
 
 You also need the `cline` CLI, `jq`, and bash 3.2+ (macOS system bash is fine).
 
+Optionally install `glow` or `bat`, anywhere on your `$PATH`: a gate can then
+render the document you are approving in the same window. Without one, it
+shows the raw text.
+
+Runs on macOS and Linux. On Windows use WSL or Git Bash — the drivers are bash
+— and `pip install windows-curses` for the full-screen menu; without curses,
+`uncle` falls back to a line-based menu.
+
 ---
 
 ## Run it
@@ -90,9 +98,10 @@ the only thing uncle adds to your tree.
 
 ## The gates
 
-Each stage produces one document and stops. uncle prints the file, you read it,
-and you answer `y` to continue — anything else pauses the run and exits
-cleanly.
+Each stage produces one document and stops. uncle asks whether to approve it
+in a box in the middle of the screen: `y` continues, anything else pauses the
+run and exits cleanly, and `v` opens the document itself — through `glow` or
+`bat` when either is installed.
 
 An approval records the SHA-256 of the exact bytes you read. Downstream stages
 re-hash the file and refuse to run if it changed, so editing an approved
@@ -113,6 +122,8 @@ Runs end in `READY`, `READY WITH NON-BLOCKING ISSUES`, or `NOT READY`.
 - [`QUICK_START.md`](QUICK_START.md) — end-to-end in a few minutes.
 - [`REQUIREMENTS.md`](REQUIREMENTS.md) — the requirements-brief template.
 - [`CHANGE_REQUEST.md`](CHANGE_REQUEST.md) — the change-request template.
+- [`OUTPUT_RULES.md`](OUTPUT_RULES.md) — the shape every document a stage
+  writes for you to review must have.
 - [`lib/gates/GATES.md`](lib/gates/GATES.md) — the output gates every plan must
   satisfy.
 - [`AGENTIC.md`](AGENTIC.md) — the design philosophy behind the gates.

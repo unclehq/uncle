@@ -15,6 +15,9 @@
 # bash 3.2 compatible.
 
 # state_issue lives next door and is needed by state_origin_agree.
+# hash_file, which this lib uses and its tests source it without.
+. "$(dirname "${BASH_SOURCE[0]}")/sha256.sh"
+
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/state.sh"
 
 # Deadline for the gh issue close call itself, so a hung network call cannot
@@ -150,7 +153,7 @@ issue_close_if_ready() {
         return 1
     fi
 
-    actual_hash="$(shasum -a 256 "$audit_file" | awk '{print $1}')"
+    actual_hash="$(hash_file "$audit_file")"
     if [[ "$actual_hash" != "$recorded_hash" ]]; then
         echo "FINAL_AUDIT.md changed after it was classified;"
         echo "leaving $repo#$issue open."

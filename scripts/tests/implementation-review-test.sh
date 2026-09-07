@@ -14,6 +14,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Digest of stdin, portable: shasum on macOS, sha256sum on Linux, else openssl.
+hash_stdin() {
+    if command -v shasum > /dev/null 2>&1; then
+        shasum -a 256
+    elif command -v sha256sum > /dev/null 2>&1; then
+        sha256sum
+    else
+        openssl dgst -sha256
+    fi
+}
+
 FAILED=0
 COUNT=0
 
@@ -130,7 +141,7 @@ write_change_diff "$TMP/change2.diff"
 write_implementation_review "$TMP/review2.md" "$TMP/change2.diff" "$TMP/green.md" \
     IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md MISSING_REPORT.md
 check_eq "an unchanged tree regenerates the same document" \
-    "$(shasum -a 256 < "$TMP/review.md")" "$(shasum -a 256 < "$TMP/review2.md")"
+    "$(hash_stdin < "$TMP/review.md")" "$(hash_stdin < "$TMP/review2.md")"
 
 # Touching source after approval must change the document, or the gate would
 # be attesting to bytes that no longer describe the tree.
@@ -139,7 +150,7 @@ write_change_diff "$TMP/change3.diff"
 write_implementation_review "$TMP/review3.md" "$TMP/change3.diff" "$TMP/green.md" \
     IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md MISSING_REPORT.md
 COUNT=$((COUNT + 1))
-if [[ "$(shasum -a 256 < "$TMP/review.md")" == "$(shasum -a 256 < "$TMP/review3.md")" ]]; then
+if [[ "$(hash_stdin < "$TMP/review.md")" == "$(hash_stdin < "$TMP/review3.md")" ]]; then
     fail "editing source after approval left the review document unchanged"
 fi
 

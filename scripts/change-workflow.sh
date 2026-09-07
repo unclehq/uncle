@@ -1018,12 +1018,14 @@ progress_tap() {
 # normalized to the base stage before lookup.
 STATUS_STAGE_SEQ="baseline change-spec change-plan adversarial-review updated-change-plan implementation manual-checklist execute-checklist final-audit"
 
-# Export the current stage context for the TUI status channel: the stage name,
-# its 1-based index within the pipeline, the total stage count, and that
-# stage's turn cap (used to estimate within-stage completion from token use).
+# Report the current stage to the TUI status channel. The exports feed the
+# agent shims' own status writes; the start event written here covers every
+# stage directly, including runners with no shim (plain claude, reviewers).
 status_stage_context() {
     local log_name="$1"
     local turns="${2:-0}"
+    local model="${3:-(runner default)}"
+    local mode="${4:-act}"
     local base="${log_name%%-step-*}"     # implementation-step-3 -> implementation
     base="${base%-base}"                   # manual-checklist-base -> manual-checklist
     base="${base%-delta}"                  # manual-checklist-delta -> manual-checklist
@@ -1039,6 +1041,11 @@ status_stage_context() {
     export UNCLE_STATUS_STAGE_INDEX="$index"
     export UNCLE_STATUS_STAGE_TOTAL="$n"
     export UNCLE_STATUS_STAGE_TURNS="$turns"
+    if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
+        printf '{"event":"start","model":"%s","mode":"%s","stage":"%s","stage_index":%s,"stage_total":%s,"stage_turns":%s}\n' \
+            "$model" "$mode" "$log_name" "$index" "$n" "$turns" \
+            >> "$UNCLE_STATUS_FILE"
+    fi
 }
 
 run_claude() {
@@ -1061,7 +1068,7 @@ run_claude() {
     require_file "$prompt_file"
 
     while true; do
-        status_stage_context "$log_name" "$max_turns"
+        status_stage_context "$log_name" "$max_turns" "${model:-}" act
         local -a flags=(
             -p
             --max-turns "$max_turns"
@@ -1242,7 +1249,7 @@ run_codex() {
 
     echo
     echo "Launching reviewer ($cmd): $log_name${effort:+  Effort: $effort}${model:+  Model: $model}"
-    status_stage_context "$log_name"
+    status_stage_context "$log_name" 0 "${model:-}" review
 
     local start="$SECONDS"
     local status=0
@@ -1294,7 +1301,7 @@ start_codex_bg() {
     # rules the same way an agent stage does.
     prompt_file="$(gated_prompt "$prompt_file" "$log_name")"
     rm -f "$output_file"
-    status_stage_context "$log_name"
+    status_stage_context "$log_name" 0 "${model:-}" review
 
     local -a flags=(
         exec

@@ -303,11 +303,13 @@ stage_tools() {
 # Matches run_stage's case arms.
 STATUS_STAGE_SEQ="requirements project-plan adversarial-review updated-plan implementation manual-checklist execute-checklist final-audit"
 
-# Export the current stage context for the TUI status channel: the stage name,
-# its 1-based index within the pipeline, the total stage count, and that
-# stage's turn cap (used to estimate within-stage completion from token use).
+# Report the current stage to the TUI status channel. The exports feed the
+# agent shims' own status writes; the start event written here covers every
+# stage directly, including runners with no shim (plain claude, reviewers).
 status_stage_context() {
     local log_name="$1"
+    local model="${2:-(runner default)}"
+    local mode="${3:-act}"
     local s i=1 index=0 n=0
     for s in $STATUS_STAGE_SEQ; do
         n=$((n + 1))
@@ -316,10 +318,17 @@ status_stage_context() {
         fi
         i=$((i + 1))
     done
+    local turns
+    turns="$(stage_turns "$log_name")"
     export UNCLE_STATUS_STAGE="$log_name"
     export UNCLE_STATUS_STAGE_INDEX="$index"
     export UNCLE_STATUS_STAGE_TOTAL="$n"
-    export UNCLE_STATUS_STAGE_TURNS="$(stage_turns "$log_name")"
+    export UNCLE_STATUS_STAGE_TURNS="$turns"
+    if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
+        printf '{"event":"start","model":"%s","mode":"%s","stage":"%s","stage_index":%s,"stage_total":%s,"stage_turns":%s}\n' \
+            "$model" "$mode" "$log_name" "$index" "$n" "$turns" \
+            >> "$UNCLE_STATUS_FILE"
+    fi
 }
 
 set_state() {
@@ -498,7 +507,7 @@ run_claude() {
     cmd="$(stage_agent_cmd "$log_name")"
 
     require_file "$prompt_file"
-    status_stage_context "$log_name"
+    status_stage_context "$log_name" "${model:-}" act
 
     while true; do
         echo
@@ -568,15 +577,16 @@ run_codex_review() {
     local cmd
     cmd="$(stage_reviewer_cmd "$log_name")"
 
-    echo
-    echo "Launching reviewer ($cmd): $log_name"
-    status_stage_context "$log_name"
-
     # Keep the reviewer read-only. The shell writes the reviewer's final
     # message into the designated review artifact.
     local model_args=()
     local model
     model="$(stage_setting_opt MODEL "$log_name" "${CODEX_MODEL:-}")"
+
+    echo
+    echo "Launching reviewer ($cmd): $log_name"
+    status_stage_context "$log_name" "${model:-}" review
+
     if [[ -n "$model" ]]; then
         model_args=(-m "$model")
         echo "Model: $model"

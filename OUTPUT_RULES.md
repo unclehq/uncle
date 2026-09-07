@@ -7,7 +7,7 @@ notes, the test reports, the checklists, the verification reports, the audits.
 They are appended to the prompt of every document-producing stage, so they
 bind whatever agent runs it. They are about the shape of the document, not its
 content: a stage's own prompt says what to write, and `lib/gates/GATES.md`
-adds the section template that plans must follow.
+adds the quality gates a plan must pass.
 
 If a rule fails, fix the document before writing it. Do not emit a document
 that breaks one and note the breakage in the text.

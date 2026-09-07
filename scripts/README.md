@@ -257,7 +257,8 @@ Every stage that writes a markdown document for a human to read gets
 `OUTPUT_RULES.md` appended to its prompt — the requirements interpretation, the
 specs, the plans, the notes and reports, and the reviewer's own artifacts.
 Plan-producing stages additionally get `lib/gates/GATES.md`, which is the
-section template a plan must follow.
+quality bar a plan must pass; the stage's prompt owns the target file and the
+section list.
 
 Both resolve local-first: an explicit `UNCLE_OUTPUT_RULES` / `UNCLE_GATES`
 path, then the project's own copy, then the copy installed with uncle. The

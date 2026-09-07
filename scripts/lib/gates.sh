@@ -60,7 +60,8 @@ load_gates() {
 
 # Output rules: the shape every reviewed document must have.
 #
-# GATES.md below is the plan template, and it binds the plan stages only.
+# GATES.md below is the quality bar for plans, and it binds the plan stages
+# only; the stage's prompt owns the target file and the section list.
 # OUTPUT_RULES.md is broader — audience, checkable claims, marked assumptions,
 # fixed structure, length, banned filler — and applies to every stage that
 # writes a markdown document for a human to approve, the requirements

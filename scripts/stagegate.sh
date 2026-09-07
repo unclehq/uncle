@@ -599,8 +599,10 @@ run_codex_review() {
     local status=0
     # stdin is the operator's gate-answer channel, not stage input: codex
     # appends a non-TTY stdin to the prompt and would block on it forever.
+    # Project dirs need not be git repos; the read-only sandbox is the boundary.
     "$cmd" exec \
         --ephemeral \
+        --skip-git-repo-check \
         --sandbox read-only \
         "${model_args[@]+"${model_args[@]}"}" \
         --output-last-message "$output_file" \

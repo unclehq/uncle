@@ -1238,6 +1238,8 @@ run_codex() {
     local -a flags=(
         exec
         --ephemeral
+        # Project dirs need not be git repos; the read-only sandbox is the boundary.
+        --skip-git-repo-check
         --sandbox read-only
         "${model_args[@]+"${model_args[@]}"}"
         --output-last-message "$output_file"
@@ -1308,6 +1310,8 @@ start_codex_bg() {
     local -a flags=(
         exec
         --ephemeral
+        # Project dirs need not be git repos; the read-only sandbox is the boundary.
+        --skip-git-repo-check
         --sandbox read-only
         "${model_args[@]+"${model_args[@]}"}"
         --output-last-message "$output_file"

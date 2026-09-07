@@ -194,35 +194,50 @@ stage_documents() {
     esac
 }
 
-# basename -> default bytes, lines, optional authoritative source.
-# Generated upstream output never sets the budget for the next stage.
+# basename -> byte floor, ceiling, source multiplier, line floor, ceiling.
+# Only authoritative input sets defaults; generated plans never compound budgets.
 document_budget_defaults() {
     case "${1##*/}" in
-        REQUIREMENTS_INTERPRETATION.md) echo '20000 160 REQUIREMENTS.md' ;;
-        CHANGE_SPEC.md) echo '8000 160 CHANGE_REQUEST.md' ;;
+        REQUIREMENTS_INTERPRETATION.md) echo '4000 20000 1 160 160' ;;
+        CHANGE_SPEC.md) echo '4000 8000 1 160 160' ;;
         PROJECT_PLAN.md|UPDATED_PROJECT_PLAN.md|CHANGE_PLAN.md|UPDATED_CHANGE_PLAN.md)
-            echo '12000 300' ;;
+            echo '6000 24000 2 150 600' ;;
         BASELINE_REPORT.md|MANUAL_CHECKLIST.md|MANUAL_CHECKLIST.base.md|AUTOMATED_TEST_REPORT.md|CHANGE_TEST_REPORT.md|VERIFICATION_REPORT.md)
-            echo '8000 240' ;;
-        ADVERSARIAL_REVIEW.md|TEST_REVIEW.md|FINAL_AUDIT.md) echo '6000 180' ;;
-        IMPLEMENTATION_NOTES.md|PREFLIGHT_REPORT.md|DEFECTS.md) echo '4000 120' ;;
+            echo '4000 16000 2 120 480' ;;
+        ADVERSARIAL_REVIEW.md|TEST_REVIEW.md|FINAL_AUDIT.md) echo '4000 12000 2 120 360' ;;
+        IMPLEMENTATION_NOTES.md|PREFLIGHT_REPORT.md|DEFECTS.md) echo '2000 8000 1 60 240' ;;
         *) return 1 ;;
+    esac
+}
+
+document_budget_source() {
+    case "${1##*/}" in
+        REQUIREMENTS_INTERPRETATION.md|PROJECT_PLAN.md|UPDATED_PROJECT_PLAN.md)
+            echo REQUIREMENTS.md ;;
+        CHANGE_SPEC.md|CHANGE_PLAN.md|UPDATED_CHANGE_PLAN.md|BASELINE_REPORT.md|CHANGE_TEST_REPORT.md)
+            echo CHANGE_REQUEST.md ;;
+        *) echo "${DOCUMENT_BUDGET_SOURCE:-REQUIREMENTS.md}" ;;
     esac
 }
 
 # Artifact-specific override wins over the global override, then defaults.
 # Bash 3.2 indirect expansion avoids eval of operator-provided values.
 document_budget() {
-    local file="${1##*/}" defaults max_bytes max_lines source="" key byte_key line_key
+    local file="${1##*/}" defaults max_bytes max_lines source key byte_key line_key
+    local floor ceiling multiplier line_floor line_ceiling source_bytes=0
     defaults="$(document_budget_defaults "$file")" || return 1
-    read -r max_bytes max_lines source <<< "$defaults"
-    if [[ -n "$source" ]]; then
-        if [[ -s "$source" ]]; then
-            max_bytes=$(wc -c < "$source" | awk -v cap="$max_bytes" '{n=$1; if(n<4000)n=4000; if(n>cap)n=cap; print n}')
-        else
-            max_bytes=4000
-        fi
+    read -r floor ceiling multiplier line_floor line_ceiling <<< "$defaults"
+    source="$(document_budget_source "$file")"
+    if [[ -s "$source" ]]; then
+        source_bytes=$(wc -c < "$source")
     fi
+    read -r max_bytes max_lines <<< "$(awk -v n="$source_bytes" -v m="$multiplier" \
+        -v lo="$floor" -v hi="$ceiling" -v ll="$line_floor" -v lh="$line_ceiling" '
+        BEGIN {
+            b=n*m; if(b<lo)b=lo; if(b>hi)b=hi;
+            l=int((b*ll+lo-1)/lo); if(l>lh)l=lh;
+            printf "%.0f %.0f\n", b, l;
+        }')"
     key=$(printf '%s' "${file%.md}" | tr '[:lower:].-' '[:upper:]__')
     byte_key="WORKFLOW_DOC_MAX_BYTES_$key"
     line_key="WORKFLOW_DOC_MAX_LINES_$key"
@@ -320,4 +335,25 @@ finish_review_budget() {
     fi
     [[ "$status" == 0 ]] || { check_document_budget "$file"; return 1; }
     check_document_budget "$file"
+}
+
+# Cache only plan reviews; later execution/audit stages still gather fresh evidence.
+review_input_key() {
+    local output="$1" prompt="$2" cmd="$3" model="$4" effort="$5" stage="$6"
+    [[ "$stage" == adversarial-review && "${WORKFLOW_REVIEW_CACHE:-1}" != 0 ]] || return 0
+    python3 "$ROOT/scripts/lib/review-cache.py" key --output "$output" \
+        --prompt "$prompt" --runner "$cmd" --model "$model" --effort "$effort" || true
+}
+
+restore_plan_review() {
+    [[ -n "$2" ]] || return 1
+    python3 "$ROOT/scripts/lib/review-cache.py" restore --output "$1" --key "$2" \
+        --cache-dir "$LOG_DIR/../review-cache" || return 1
+    echo "Reusing completed plan review: local inputs and reviewer settings are unchanged."
+}
+
+save_plan_review() {
+    [[ -n "$2" ]] || return 0
+    python3 "$ROOT/scripts/lib/review-cache.py" save --output "$1" --key "$2" \
+        --cache-dir "$LOG_DIR/../review-cache"
 }

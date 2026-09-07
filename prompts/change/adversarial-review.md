@@ -39,20 +39,20 @@ Challenge the plan for:
 19. Unclear acceptance criteria
 20. AI-generated-code failure modes
 
-Use this format for each finding:
+Write each distinct defect once, ranked by severity. Use this compact format:
 
-## AR-XXX: Title
+## AR-XXX: Short title
+- Severity: High
+- References: source requirement, plan behavior/invariant/component IDs, and evidence location.
+- Failure: concrete defect and why the current checks miss it.
+- Fix: specific correction.
+- Verify: the assertion or experiment that must reject the defect.
 
-- Severity:
-- Affected behavior:
-- Affected invariant:
-- Affected component:
-- Failure scenario:
-- Evidence:
-- Why current tests may miss it:
-- Recommended correction:
-- Proposed verification:
-- Blocks implementation: Yes or No
+Keep reference fields as IDs/locations, not prose. Combine the failure scenario
+and verification gap in one sentence. Aim for 35–50 words of prose per finding;
+allocate the document budget across all findings before writing. Merge findings
+with the same cause, retaining each distinct consequence and required correction.
+Never omit a real blocking finding to meet a count or length target.
 
 End with:
 
@@ -73,7 +73,7 @@ search directions, not an output template.
 - One line per field. No preamble, no restatement of the plan.
 - Rank findings by severity, most severe first.
 
-Ten sharp findings beat forty padded ones. A short review that a reader
-finishes is worth more than a long one they skim.
+Closing sections contain finding IDs and decisions only, never finding summaries.
+Reserve at most 400 bytes for these closing sections.
 
 Return only the review.

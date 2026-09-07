@@ -30,18 +30,20 @@ Create findings covering:
 - AI-generated-code failure risks;
 - features that should be cut first.
 
-Use this format for every finding:
+Write each distinct defect once, ranked by severity. Use this compact format:
 
-## AR-XXX: Finding title
+## AR-XXX: Short title
+- Severity: High
+- References: source requirement, plan behavior/invariant/component IDs, and evidence location.
+- Failure: concrete defect and why the current checks miss it.
+- Fix: specific correction.
+- Verify: the assertion or experiment that must reject the defect.
 
-- Severity:
-- Affected requirement:
-- Affected behavior:
-- Affected invariant:
-- Failure scenario:
-- Why current verification may miss it:
-- Recommended correction:
-- Proposed verification:
+Keep reference fields as IDs/locations, not prose. Combine the failure scenario
+and verification gap in one sentence. Aim for 35–50 words of prose per finding;
+allocate the document budget across all findings before writing. Merge findings
+with the same cause, retaining each distinct consequence and required correction.
+Never omit a real blocking finding to meet a count or length target.
 
 End with:
 
@@ -54,9 +56,9 @@ End with:
 Keep each field to what it needs. Cite plan sections and requirement
 identifiers rather than quoting them back. The closing sections are lists of
 finding IDs, not restatements. Do not manufacture findings to fill the
-categories above — a category with nothing real in it gets one line saying so.
+categories above — omit clean categories entirely.
 A short review of genuine defects is worth more than a long one padded out.
 
 Return only the review.
 
-Use concise field values and concrete failure examples. Keep each finding to roughly 100 words when possible without losing its failure scenario, correction, or proposed verification. Do not repeat plan content or summarize findings again in the closing sections.
+Use concise field values and concrete failure examples. Use the compact format above; avoid a paragraph for each field. Do not repeat plan content or summarize findings again in the closing sections.

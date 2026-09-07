@@ -20,6 +20,7 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
+export DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md
 
 # Prompt files are named relative to the uncle install, but the cwd is now the
 # project. Resolve them the way gates are resolved: the project's own copy
@@ -1248,6 +1249,14 @@ run_codex() {
     # rules the same way an agent stage does.
     prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
 
+    local review_key
+    review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"
+    if restore_plan_review "$output_file" "$review_key"; then
+        finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || { [[ "$log_name" != adversarial-review ]] || exit 42; exit 1; }
+        save_plan_review "$output_file" "$review_key"
+        return 0
+    fi
+
     local -a flags=(
         exec
         --ephemeral
@@ -1285,7 +1294,14 @@ run_codex() {
 
     [[ "$status" == 0 ]] || return "$status"
     require_file "$output_file"
-    finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
+    # Do not reuse results if inputs changed while the reviewer was reading them.
+    if [[ -n "$review_key" && "$review_key" == "$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")" ]]; then
+        save_plan_review "$output_file" "$review_key"
+    else
+        review_key=""
+    fi
+    finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || { [[ "$log_name" != adversarial-review ]] || exit 42; exit 1; }
+    save_plan_review "$output_file" "$review_key"
 }
 
 BG_PID=""

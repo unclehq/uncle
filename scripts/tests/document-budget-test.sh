@@ -60,12 +60,52 @@ for stage in $DOC_STAGES implementation-step-2; do
         [[ $(cat "$file") == $'abc\ndef' ]]
     done < <(stage_documents "$stage")
 done
-[[ $(document_budget PROJECT_PLAN.md) == '12000 300' ]]
-[[ $(document_budget IMPLEMENTATION_NOTES.md) == '4000 120' ]]
-[[ $(document_budget FINAL_AUDIT.md) == '6000 180' ]]
-[[ $(document_budget VERIFICATION_REPORT.md) == '8000 240' ]]
+[[ $(document_budget PROJECT_PLAN.md) == '24000 600' ]]
+[[ $(document_budget IMPLEMENTATION_NOTES.md) == '8000 240' ]]
+[[ $(document_budget FINAL_AUDIT.md) == '12000 360' ]]
+[[ $(document_budget VERIFICATION_REPORT.md) == '16000 480' ]]
 printf 'small change' > CHANGE_REQUEST.md
 [[ $(document_budget CHANGE_SPEC.md) == '4000 160' ]]
+# Shared artifacts use workflow context when both authoritative inputs exist.
+[[ $(DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md document_budget FINAL_AUDIT.md) == '4000 120' ]]
+[[ $(DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md document_budget FINAL_AUDIT.md) == '12000 360' ]]
+[[ $(DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md document_budget CHANGE_PLAN.md) == '6000 150' ]]
+[[ $(DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md document_budget PROJECT_PLAN.md) == '24000 600' ]]
+# Every artifact has bounded, monotonic defaults; generated output has no effect.
+for stage in $DOC_STAGES implementation-step-2; do
+    while IFS= read -r file; do
+        read -r floor cap mult lf lc <<< "$(document_budget_defaults "$file")"
+        source=$(document_budget_source "$file")
+        rm -f "$source"
+        [[ $(document_budget "$file") == "$floor $lf" ]]
+        : > "$source"
+        [[ $(document_budget "$file") == "$floor $lf" ]]
+        python3 - "$source" <<'PYDATA'
+from pathlib import Path
+import sys
+Path(sys.argv[1]).write_bytes(b'x' * 5001)
+PYDATA
+        read -r bytes lines <<< "$(document_budget "$file")"
+        expected=$((5001 * mult))
+        (( expected < floor )) && expected=$floor
+        (( expected > cap )) && expected=$cap
+        expected_lines=$(((expected * lf + floor - 1) / floor))
+        (( expected_lines > lc )) && expected_lines=$lc
+        [[ "$bytes $lines" == "$expected $expected_lines" ]]
+        python3 - "$source" <<'PYDATA'
+from pathlib import Path
+import sys
+Path(sys.argv[1]).write_bytes(b'x' * 100000)
+PYDATA
+        [[ $(document_budget "$file") == "$cap $lc" ]]
+    done < <(stage_documents "$stage")
+done
+before=$(document_budget FINAL_AUDIT.md)
+printf 'generated plan changed substantially' > UPDATED_PROJECT_PLAN.md
+[[ $(document_budget FINAL_AUDIT.md) == "$before" ]]
+# Restore artifacts used by override and guard checks below.
+printf 'abc\ndef' > PROJECT_PLAN.md
+printf 'abc\ndef' > FINAL_AUDIT.md
 WORKFLOW_DOC_MAX_BYTES=1 WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=7 \
     WORKFLOW_DOC_MAX_LINES=1 WORKFLOW_DOC_MAX_LINES_FINAL_AUDIT=2 \
     check_document_budget FINAL_AUDIT.md

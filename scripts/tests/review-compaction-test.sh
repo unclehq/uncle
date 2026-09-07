@@ -84,7 +84,9 @@ import sys
 spec=importlib.util.spec_from_file_location('compact', Path(sys.argv[1])/'scripts/lib/compact-review.py')
 m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 original=Path('candidate.md').read_text()
+m.validate(original, original.replace('Severity: High', 'Severity: High; References: R-1'), 1000, 100)
 for candidate in [original.replace('320', '321'), original.replace('Severity: High', 'Severity: Low'),
+                  original.replace('Severity: High', 'Severity: High; Severity: Low'),
                   original.replace('node tests/text.mjs', 'true'), original.replace('## Commands', '## Other'),
                   original.replace('NOT READY', 'READY'), original.replace('`tests/text.mjs`', '`tests/other.mjs`')]:
     try: m.validate(original,candidate,1000,100)

@@ -536,3 +536,12 @@ failed compaction never replaces the original. `WORKFLOW_REVIEW_COMPACT=0` opts
 out; `WORKFLOW_REVIEW_COMPACT_SECONDS` defaults to 120 (range 1–600). The checks
 preserve structural anchors; the human still judges whether meaning is retained.
 Covered by `scripts/tests/review-compaction-test.sh`.
+
+Adversarial plan-review retries use `.uncle/workspace/review-cache/` when local
+inputs, Git HEAD, review instructions and reviewer settings match. Budget changes
+do not invalidate the review. A speculative review rejected on size returns 42
+and pauses without replaying the full stage. Set `WORKFLOW_REVIEW_CACHE=0` to
+force fresh analysis. Caching is disabled for later evidence/audit stages,
+symlink inputs, and snapshots over 100 MB. Existing reviews without a snapshot
+are not retroactively trusted. Tests: `scripts/tests/review-cache-test.sh` and
+the cache/retry cases in `scripts/tests/gates-test.sh`.

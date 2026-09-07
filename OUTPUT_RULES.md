@@ -77,13 +77,12 @@ none.
 - Every stage document has an enforced per-file byte and line budget, including
   implementation, repair, review, checklist, and acceptance reports. The appended
   budget lists the exact limits; ceilings are not targets to fill.
-- Default caps: plans 12,000 bytes / 300 lines; baseline, checklists and test or
-  verification reports 8,000 / 240; reviews and audits 6,000 / 180; implementation
-  notes, preflight and defects 4,000 / 120.
-- Requirements interpretation uses source size with a 4,000-byte floor and
-  20,000-byte ceiling. Change specs use CHANGE_REQUEST.md size with a 4,000-byte
-  floor and 8,000-byte ceiling. Both have a 160-line cap. Generated upstream
-  artifacts never enlarge downstream budgets.
+- Default budgets scale from authoritative REQUIREMENTS.md (new builds) or
+  CHANGE_REQUEST.md (changes), with artifact-specific floors and ceilings listed
+  in README.md. Plans, reports and reviews use twice the source byte size;
+  interpretations, change specs and notes use source size. Line limits also scale
+  within bounds, except interpretations and change specs retain 160 lines.
+  Generated upstream artifacts never enlarge downstream budgets.
 - Reference settled upstream obligations by file and ID instead of recataloging
   them. Preserve required acceptance rows and the complete executable plan.
   Update current rows during revisions and repairs, retaining IDs and dispositions;

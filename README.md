@@ -174,14 +174,23 @@ Every document-producing stage receives a per-file budget, checked before the
 workflow advances. This includes background reviews, implementation steps,
 repairs, and acceptance reports. Defaults are:
 
-| Documents | UTF-8 bytes | Lines |
-|---|---:|---:|
-| Requirements interpretation | Source size, bounded to 4,000–20,000 | 160 |
-| Change spec | Change request size, bounded to 4,000–8,000 | 160 |
-| Plans and revised plans | 12,000 | 300 |
-| Baseline, checklists, test and verification reports | 8,000 | 240 |
-| Adversarial/test reviews, final audit | 6,000 | 180 |
-| Implementation notes, preflight, defects | 4,000 | 120 |
+Defaults use the UTF-8 byte size of `REQUIREMENTS.md` for new builds and
+`CHANGE_REQUEST.md` for change workflows. Missing or empty input uses the floor;
+this does not waive source prerequisites. Shared artifacts use the active workflow's
+source even when both inputs exist. Standalone new-build helpers use requirements.
+
+| Documents | Source multiplier | Byte floor–ceiling | Line floor–ceiling |
+|---|---:|---:|---:|
+| Requirements interpretation | 1× | 4,000–20,000 | 160–160 |
+| Change spec | 1× | 4,000–8,000 | 160–160 |
+| Plans and revised plans | 2× | 6,000–24,000 | 150–600 |
+| Baseline, checklists, test and verification reports | 2× | 4,000–16,000 | 120–480 |
+| Adversarial/test reviews, final audit | 2× | 4,000–12,000 | 120–360 |
+| Implementation notes, preflight, defects | 1× | 2,000–8,000 | 60–240 |
+
+Bytes are source size times the multiplier, clamped to the listed bounds.
+Lines scale with the resulting byte budget relative to its floor, rounded up
+and capped at the listed ceiling. Explicit budget overrides still take precedence.
 
 These are ceilings, not output targets. Stages cite settled upstream requirements
 and existing evidence instead of repeating them. Exact acceptance assertions,
@@ -202,6 +211,19 @@ Set `WORKFLOW_REVIEW_COMPACT=0` to disable this pass, or
 `WORKFLOW_REVIEW_COMPACT_SECONDS` to a timeout from 1 to 600 seconds. If it fails,
 the original stays in place and the stage pauses; there is no automatic loop.
 Other oversized artifacts also pause without advancing.
+
+Completed adversarial plan reviews are saved under
+`.uncle/workspace/review-cache/` before compaction. A retry reuses that result only
+when the review prompt (excluding budgets), local input snapshot, Git HEAD, and
+reviewer settings match. Increasing a byte/line cap does not require a new review.
+A failed speculative compaction pauses immediately instead of falling through to
+another full review. A manual retry may retry compaction on the saved review.
+Use `WORKFLOW_REVIEW_CACHE=0` to request a fresh review. This cache is limited to
+plan reviews; test reviews and final audits still gather fresh evidence. Symlinks
+or input snapshots over 100 MB disable caching conservatively. Logs and workflow
+state are excluded from snapshots; source files and project configuration are not.
+Old reviews without a saved input snapshot cannot be safely reused automatically.
+
 Remove repeated prose before retrying, or increase the limit when mandatory
 content needs more room. Environment overrides apply globally via
 `WORKFLOW_DOC_MAX_BYTES` / `WORKFLOW_DOC_MAX_LINES`, or to one artifact via its

@@ -208,6 +208,7 @@ while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
     shift
 done
+printf '%s\n' "$out" >> .uncle/workspace/reviewer-calls
 if [[ "${FAKE_COMPACT_REVIEW:-0}" == 1 && "$out" == *MANUAL_CHECKLIST.base.md ]]; then
     printf 'Repeated background that adds no findings. Repeated background that adds no findings.\n' > "$out"
 else
@@ -983,6 +984,58 @@ expect_status 0
 expect_out 'Compaction accepted:'
 expect_state WAIT_IMPLEMENT_APPROVAL
 expect_file '.uncle/workspace/MANUAL_CHECKLIST.base.md'
+
+# Budget failures reuse the finished review, not a new full reviewer run.
+new_stagegate_case sg-review-cache
+printf 'requirements\n' > "$REPO/REQUIREMENTS.md"
+printf 'plan\n' > "$REPO/PROJECT_PLAN.md"
+printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
+hash_file "$REPO/PROJECT_PLAN.md" > "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
+set_state ADVERSARIAL_REVIEW
+for attempt in 1 2; do
+    run_stagegate WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+    expect_status 42
+    expect_state ADVERSARIAL_REVIEW
+    COUNT=$((COUNT + 1))
+    [[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workspace/reviewer-calls") == 1 ]] || fail 'full review repeated'
+done
+expect_out 'Reusing completed plan review'
+# Raising only the budget adopts the preserved review without another call.
+run_stagegate WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=100
+expect_status 0
+expect_state WAIT_REVIEW_ACKNOWLEDGEMENT
+COUNT=$((COUNT + 1))
+[[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workspace/reviewer-calls") == 1 ]] || fail 'budget adjustment reran reviewer'
+# Real input changes force a new review.
+printf 'changed requirements\n' >> "$REPO/REQUIREMENTS.md"
+set_state ADVERSARIAL_REVIEW
+run_stagegate WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+expect_status 42
+COUNT=$((COUNT + 1))
+[[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workspace/reviewer-calls") == 2 ]] || fail 'changed inputs reused stale review'
+
+new_stagegate_case sg-speculative-budget-pause
+printf 'requirements\n' > "$REPO/REQUIREMENTS.md"
+printf 'plan\n' > "$REPO/PROJECT_PLAN.md"
+printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
+set_state WAIT_PLAN_APPROVAL
+run_stagegate_stdin "$(gate_input '' y)" WORKFLOW_SPECULATE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+expect_status 42
+expect_state ADVERSARIAL_REVIEW
+expect_out 'pausing without another full review'
+COUNT=$((COUNT + 1))
+[[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workspace/reviewer-calls") == 1 ]] || fail 'speculative budget failure repeated review'
+
+new_case change-review-cache
+set_state PLAN
+for attempt in 1 2; do
+    run_driver WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+    expect_status 42
+    expect_state PLAN
+    COUNT=$((COUNT + 1))
+    [[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workspace/reviewer-calls") == 1 ]] || fail 'change workflow repeated review'
+done
+expect_out 'Reusing completed plan review'
 
 if [[ "$FAILED" -ne 0 ]]; then
     echo "gates-test.sh: $FAILED of $COUNT checks failed"

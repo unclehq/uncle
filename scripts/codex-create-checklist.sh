@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+export DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md
 
 usage() {
     cat <<'EOF'

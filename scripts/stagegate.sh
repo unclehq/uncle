@@ -20,6 +20,7 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
+export DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md
 
 # Prompt files are named relative to the uncle install, but the cwd is now the
 # project. Resolve them the way gates are resolved: the project's own copy
@@ -692,19 +693,26 @@ run_codex_review() {
     effort="$(stage_effort "$log_name")"
     [[ -z "$effort" ]] || model_args+=(-c "model_reasoning_effort=$effort")
 
-    echo
-    echo "Launching reviewer ($cmd): $log_name"
-    status_stage_context "$log_name" "${model:-}" review
-
     if [[ -n "$model" ]]; then
         model_args+=(-m "$model")
-        echo "Model: $model"
     fi
 
     # The reviewer writes a document a human reads, so it gets the output
     # rules the same way an agent stage does.
     prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
 
+    local review_key
+    review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"
+    if restore_plan_review "$output_file" "$review_key"; then
+        finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || { [[ "$log_name" != adversarial-review ]] || exit 42; exit 1; }
+        save_plan_review "$output_file" "$review_key"
+        return 0
+    fi
+
+    echo
+    echo "Launching reviewer ($cmd): $log_name"
+    [[ -z "$model" ]] || echo "Model: $model"
+    status_stage_context "$log_name" "${model:-}" review
     local status=0
     local started="$SECONDS"
     # stdin is the operator's gate-answer channel, not stage input: codex
@@ -729,7 +737,14 @@ run_codex_review() {
 
     [[ "$status" == 0 ]] || return "$status"
     require_file "$output_file"
-    finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
+    # Do not reuse results if inputs changed while the reviewer was reading them.
+    if [[ -n "$review_key" && "$review_key" == "$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")" ]]; then
+        save_plan_review "$output_file" "$review_key"
+    else
+        review_key=""
+    fi
+    finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || { [[ "$log_name" != adversarial-review ]] || exit 42; exit 1; }
+    save_plan_review "$output_file" "$review_key"
 }
 
 # Every stage's actual work, with no state transitions and no approval checks,
@@ -972,6 +987,13 @@ adopt_speculation() {
     wait "$spec_pid" || status=$?
     spec_pid=""
     spec_stage=""
+
+    if [[ "$status" == 42 && "$(cat "$SPEC_DIR/${stage}.input")" == "$(hash_file "$gate_file")" ]]; then
+        echo "Speculative $stage completed its review but could not fit the document budget."
+        echo "Original preserved; pausing without another full review."
+        echo "Log: $LOG_DIR/${stage}.speculative.log"
+        exit 42
+    fi
 
     if [[ "$status" -ne 0 ]]; then
         echo "Speculative $stage failed (status $status). Running it again."

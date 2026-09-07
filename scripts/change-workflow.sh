@@ -1280,6 +1280,7 @@ run_codex() {
     fi
 
     require_file "$output_file"
+    check_document_budget "$output_file" || exit 1
 }
 
 BG_PID=""
@@ -1384,6 +1385,7 @@ wait_codex_bg() {
     fi
 
     require_file "$output_file"
+    check_document_budget "$output_file" || exit 1
     echo "Background Codex stage complete: $label"
 }
 
@@ -1423,11 +1425,13 @@ while true; do
             run_claude prompts/change/baseline.md baseline \
                 "$MODEL_BASELINE" "" 120 "$BUDGET_BASELINE"
             require_file BASELINE_REPORT.md
+            check_document_budget BASELINE_REPORT.md || exit 1
 
             run_claude prompts/change/change-spec.md change-spec \
                 "$MODEL_CHANGE_SPEC" "$EFFORT_CHANGE_SPEC" 60 \
                 "$BUDGET_CHANGE_SPEC"
             require_file CHANGE_SPEC.md
+            check_document_budget CHANGE_SPEC.md || exit 1
 
             set_state WAIT_ANALYSIS_APPROVAL
             ;;
@@ -1451,6 +1455,7 @@ while true; do
             run_claude prompts/change/change-plan.md change-plan \
                 "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"
             require_file CHANGE_PLAN.md
+            check_document_budget CHANGE_PLAN.md || exit 1
 
             run_codex \
                 prompts/change/adversarial-review.md \
@@ -1486,6 +1491,7 @@ while true; do
                 "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \
                 "$BUDGET_UPDATED_PLAN"
             require_file CHANGE_PLAN.md
+            check_document_budget CHANGE_PLAN.md || exit 1
 
             set_state WAIT_UPDATED_PLAN_APPROVAL
             ;;

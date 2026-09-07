@@ -58,3 +58,5 @@ categories above — a category with nothing real in it gets one line saying so.
 A short review of genuine defects is worth more than a long one padded out.
 
 Return only the review.
+
+Use concise field values and concrete failure examples. Keep each finding to roughly 100 words when possible without losing its failure scenario, correction, or proposed verification. Do not repeat plan content or summarize findings again in the closing sections.

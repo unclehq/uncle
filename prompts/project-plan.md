@@ -77,3 +77,5 @@ Do not invoke another agent.
 Do not draft the plan in chat before writing it.
 
 Write only PROJECT_PLAN.md, in a single Write call, and stop.
+
+Use one canonical row per behavior, invariant, and acceptance obligation. Later strategy and implementation sections reference those IDs instead of repeating the rows. Keep rationale only where it explains a decision or constraint.

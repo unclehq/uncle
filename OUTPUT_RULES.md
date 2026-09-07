@@ -74,9 +74,16 @@ none.
 
 ## Rule 5 — Length
 
-- No document over 400 lines. A stage that needs more is doing more than one
-  stage's work; say so in `## Open questions` and write the smaller document.
-- No section over 40 lines.
+- Planning artifacts target 12,000 UTF-8 bytes. The driver enforces 20,000 bytes
+  and 400 lines by default, configurable with `WORKFLOW_DOC_MAX_BYTES` and
+  `WORKFLOW_DOC_MAX_LINES`. Its appended budget takes precedence over these defaults.
+- Other documents target 400 lines; sections target 40 lines. Required acceptance
+  rows, evidence, and exact commands take precedence over these targets.
+- Keep the execution contract complete in the named artifact. Cite existing logs
+  and evidence by file and section; avoid copying transcripts and repeated rationale.
+  Do not create a second summary artifact or move obligations out of the contract.
+- If mandatory content alone exceeds the driver budget, retain it. The driver
+  preserves the artifact and pauses; an operator can explicitly increase the budget.
 - No sentence that survives having its adjectives removed unchanged in
   meaning. Cut it instead.
 

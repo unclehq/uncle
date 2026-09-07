@@ -460,6 +460,7 @@ require_artifact() {
         echo "State has not advanced, so the stage replays cleanly."
         exit 1
     fi
+    check_document_budget "$1" || exit 1
 }
 
 verify_approval() {
@@ -727,6 +728,7 @@ run_codex_review() {
     fi
 
     require_file "$output_file"
+    check_document_budget "$output_file" || exit 1
 }
 
 # Every stage's actual work, with no state transitions and no approval checks,

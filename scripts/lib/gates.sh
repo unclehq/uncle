@@ -159,6 +159,9 @@ gated_prompt() {
             printf '\n\n---\n\n# Output gates (binding)\n\nThe plan you write must pass every gate below. Resolve the gates in this\norder: a project-local GATES.md or .uncle/gates/GATES.md wins; otherwise the\ngates installed with uncle apply.\n\n'
             load_gates
         fi
+        if [[ "$is_doc" == "1" ]]; then
+            printf '\n\n# Compact output budget\n\nPlanning artifacts are checked by the driver: at most %s UTF-8 bytes and %s lines. Target 12,000 bytes where the complete contract fits. Preserve every required ID, assertion, threshold, failure behavior, disposition, command and protected path. Remove duplicated rationale and background. Cite existing evidence by file and section instead of copying it. Keep all normative content in the named document; do not create summary sidecars or move obligations into evidence files. If mandatory content cannot fit, preserve it in full; the driver will pause for an explicit budget adjustment.\n' "${WORKFLOW_DOC_MAX_BYTES:-20000}" "${WORKFLOW_DOC_MAX_LINES:-400}"
+        fi
         if [[ "$role" == "reviewer" ]]; then
             printf '\n\n---\n\n# Reviewer output (binding)\n\nYou run read-only: you cannot write files, so Rule 0 above cannot apply to\nyou. The document the stage asked for is your final assistant message:\nreturn it in full as that message — not a path, not a summary, not a note\nabout a file you could not write.\n'
         fi
@@ -166,4 +169,28 @@ gated_prompt() {
     [[ -n "$rules" ]] && echo "Output rules: $(output_rules_source) ($rules)" >&2
     [[ -n "$gates" ]] && echo "Output gates: $(gates_source) ($gates)" >&2
     printf '%s\n' "$combined"
+}
+
+# Check newly produced planning artifacts only; never rewrite approved inputs.
+check_document_budget() {
+    local file="$1" bytes lines max_bytes="${WORKFLOW_DOC_MAX_BYTES:-20000}" max_lines="${WORKFLOW_DOC_MAX_LINES:-400}"
+    case "${file##*/}" in
+        REQUIREMENTS_INTERPRETATION.md|PROJECT_PLAN.md|UPDATED_PROJECT_PLAN.md|ADVERSARIAL_REVIEW.md|BASELINE_REPORT.md|CHANGE_SPEC.md|CHANGE_PLAN.md) ;;
+        *) return 0 ;;
+    esac
+    [[ -s "$file" ]] || { echo "Required planning artifact is missing or empty: $file" >&2; return 1; }
+    case "$max_bytes$max_lines" in
+        *[!0-9]*|"") echo "Document budgets must be positive integers." >&2; return 1 ;;
+    esac
+    if ! awk -v b="$max_bytes" -v l="$max_lines" 'BEGIN {exit !(b>0 && l>0)}'; then
+        echo "Document budgets must be positive integers." >&2; return 1
+    fi
+    bytes=$(wc -c < "$file")
+    lines=$(awk 'END {print NR+0}' "$file")
+    if ! awk -v b="$bytes" -v l="$lines" -v mb="$max_bytes" -v ml="$max_lines" 'BEGIN {exit !(b<=mb && l<=ml)}'; then
+        echo "Document budget exceeded: $file ($bytes bytes, $lines lines; limits $max_bytes bytes, $max_lines lines)." >&2
+        echo "Artifact preserved. Shorten repeated prose, never mandatory rows or commands. Re-run to resume." >&2
+        echo "If the complete contract requires more space, explicitly raise WORKFLOW_DOC_MAX_BYTES / WORKFLOW_DOC_MAX_LINES before resuming." >&2
+        return 1
+    fi
 }

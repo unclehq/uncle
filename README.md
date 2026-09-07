@@ -170,6 +170,21 @@ Integrity hashing uses one Python process when available, with the complete
 portable shell implementation as a fallback. The terminal redraws on changes
 instead of on every idle poll. These optimizations preserve the acceptance gates.
 
+Planning stages now produce compact execution documents directly. The driver
+checks newly generated requirements interpretations, plans, adversarial reviews,
+change specs, and baseline reports before they advance. Defaults are 20,000 UTF-8
+bytes and 400 lines; prompts target 12,000 bytes when all obligations fit. Exact
+acceptance assertions, commands, protected paths, and finding dispositions must
+remain complete. Detailed evidence is cited at its existing location.
+
+An oversized artifact is preserved and the workflow pauses without advancing.
+Resume after removing repeated prose, or explicitly raise `WORKFLOW_DOC_MAX_BYTES`
+and `WORKFLOW_DOC_MAX_LINES` in the launch environment when the complete contract
+needs more room. These controls are environment variables, not configuration-screen
+fields. Existing approved documents are not automatically summarized or rewritten.
+Acceptance reports and execution evidence are not subject to this planning budget.
+
+
 ## Documentation
 
 - [`QUICK_START.md`](QUICK_START.md) — end-to-end in a few minutes.

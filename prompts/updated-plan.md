@@ -103,12 +103,11 @@ normative row survives, not every sentence:
 - reference requirements by identifier rather than restating them;
 - no preamble and no closing recap.
 
-UPDATED_PROJECT_PLAN.md must not exceed the combined length of PROJECT_PLAN.md
-and ADVERSARIAL_REVIEW.md, both of which you have just read. It supersedes
-them, so it replaces their cost rather than adding to it — three later stages
-read this file, and one re-sends it on every turn of a long loop, so every
-paragraph here is paid many times over. If the rows do not fit in that budget,
-cut prose, never rows.
+Keep the implementation contract compact: target 12,000 UTF-8 bytes, subject to
+the driver budget appended below. Preserve complete normative rows and exact
+commands. Do not copy the original plan or review narrative. Supporting evidence
+stays in its original artifact, cited by file and finding ID; implementation must
+not need that evidence to discover an obligation.
 
 Do not implement code.
 Do not invoke another agent.

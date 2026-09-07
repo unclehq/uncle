@@ -35,3 +35,5 @@ Do not implement code.
 Do not invoke another agent.
 
 Write only REQUIREMENTS_INTERPRETATION.md and stop.
+
+Reference source requirements by stable ID. Concentrate prose on ambiguities and decisions; do not paraphrase every requirement in multiple sections. Keep each behavior and acceptance obligation explicit once, then cross-reference its ID.

@@ -107,6 +107,24 @@ If the checklist is a table, head those two columns `Excl` and `Deps`. Both
 spellings are read, but a column headed something else is not read at all, and
 an unread declaration silently costs the concurrency it was written to enable.
 
+For a browser or desktop resource, declare the system default browser
+(`browser:system`) unless the requirements name a specific one, in which case
+name that (`browser:safari`). The check's action drives it through the
+platform's opener -- `open` on macOS, `start` on Windows -- rather than a
+hardcoded application path, so the same checklist runs on either.
+
+Do not name a browser the preflight report has not shown to be installed.
+Chrome is a download on every platform, Safari does not exist off macOS, and a
+headless or CDP-based harness can only drive Chrome, Chromium, or Edge -- so a
+row naming one of those is a row that records BLOCKED on a machine without it.
+
+The default browser is a per-user, per-machine setting, so `browser:system`
+resolves to different engines for different operators. That is the right
+default for a requirement written about "the user's browser", but it means the
+check's Evidence must record which browser it actually used. A result that does
+not say what it ran in cannot be reproduced or trusted, and a second engine
+needs its own row naming that engine.
+
 ## Output economy
 
 The twenty categories above are search directions, not an output template.

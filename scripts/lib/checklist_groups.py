@@ -400,6 +400,22 @@ def main(argv=None):
         with open(groups_path, "w") as fh:
             for g in groups:
                 fh.write(" ".join(g) + "\n")
+
+    # What the checklist needs, token by token, with the checks that need it.
+    # A stage cannot serve a page it is forbidden to bind a port for, and no
+    # amount of retrying changes that, so the driver reads this before running
+    # rather than discovering it one BLOCKED row at a time.
+    resources_path = os.path.join(args.out_dir, "resources.tsv")
+    if os.path.exists(resources_path):
+        os.remove(resources_path)
+    if checks:
+        needed = {}
+        for c in checks:
+            for token in sorted(c.needs):
+                needed.setdefault(token, []).append(c.id)
+        with open(resources_path, "w") as fh:
+            for token in sorted(needed):
+                fh.write("%s\t%s\n" % (token, ",".join(needed[token])))
     with open(readme_path, "w") as fh:
         fh.write(render_readme(groups, checks, errors,
                                os.path.basename(args.checklist)))

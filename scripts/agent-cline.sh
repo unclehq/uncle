@@ -182,8 +182,24 @@ result="$(jq -R -s -c '
 ' "$raw")"
 # A context/token exhaustion is a distinct, recoverable failure: surface it as
 # its own subtype so the driver can offer to change the model and retry.
+#
+# Matched against the failure text only, never the whole stream. cline's
+# run_result carries a catalogue of available models, and those descriptions
+# say things like "Frontier reasoning and coding with 1M context window" -- so
+# scanning the transcript labelled every cline failure context exhaustion,
+# a weekly billing limit included, and sent the operator to change models when
+# the fix was to change providers or wait. Assistant text is out of scope for
+# the same reason: a stage that writes the words "token limit" into its own
+# output must not thereby change how its failure is classified.
+cline_failure_text="$(jq -R -r '
+    (fromjson? // empty) as $e
+    | if $e.type == "error" then ($e.message // "")
+      elif $e.type == "run_result" then ($e.text // "")
+      elif $e.type == "agent_event" and $e.event.type == "done" then ($e.event.text // "")
+      else empty end
+' "$raw" 2>/dev/null || true)"
 if [[ "$(printf '%s' "$result" | jq -r '.is_error // "true"')" == "true" ]] \
-    && grep -qiE 'context (length|window)|maximum context|out of (tokens|context)|token limit|too many tokens|context_length_exceeded' "$raw"; then
+    && printf '%s' "$cline_failure_text" | grep -qiE 'context (length|window)|maximum context|out of (tokens|context)|token limit|too many tokens|context_length_exceeded'; then
     result="$(printf '%s' "$result" | jq -c '.subtype = "context_length_exceeded"')"
 fi
 

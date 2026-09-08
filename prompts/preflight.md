@@ -32,8 +32,20 @@ bundle is not evidence that it can be used.
 
 Concretely, for a prerequisite that later checks depend on:
 
-- a browser: launch it headless against a local URL and capture the result.
-  `/Applications/Google Chrome.app/...` existing is not a PASS.
+- a browser: launch the system default browser against a local URL and
+  capture the result -- `open` on macOS, `start` on Windows, `xdg-open`
+  on Linux. Record which browser answered: that setting is per-user, so
+  the report has to say what the checks will actually run in rather than
+  assume. A browser binary existing at some path is not a PASS, and
+  neither is a headless run standing in for a check that needs a real
+  window.
+- a specific browser or automation protocol: prove that browser is
+  installed here, not that some browser is. Chrome is a download on every
+  platform, Safari does not exist off macOS, and CDP-based or headless
+  harnesses drive only Chrome, Chromium, and Edge -- Safari needs
+  `safaridriver` (admin, one-time) and Firefox needs `geckodriver`. If a
+  planned check names an engine this machine does not have, that row is
+  BLOCKED now, at preflight, where it is cheap.
 - a local server or any check that serves the product: bind the port the check
   will use and record the bind succeeding. Sandboxed stages are denied network
   access -- including loopback binds -- unless the stage sets `network true` in

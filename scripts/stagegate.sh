@@ -160,6 +160,7 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/stage-config.sh"
 . "$ROOT/scripts/lib/acceptance.sh"
 . "$ROOT/scripts/lib/repair-limit.sh"
+. "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/verification-integrity.sh"
 . "$ROOT/scripts/lib/performance.sh"
 
@@ -1306,6 +1307,7 @@ while true; do
             check_verification_inputs
             snapshot_checklist_checks
             snapshot_checklist_groups
+            ensure_checklist_runner execute-checklist || exit 1
             run_stage EXECUTE_CHECKLIST
             check_verification_inputs
             if [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then

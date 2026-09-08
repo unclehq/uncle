@@ -51,7 +51,8 @@ def check(name, expected, actual):
         failed.append("%s — expected %r, got %r" % (name, expected, actual))
 
 t = m.UncleTUI.__new__(m.UncleTUI)          # the screen's state, without curses
-t.stage_runners, t.stage_models, t.stage_efforts, t.stage_networks = {}, {}, {}, {}
+t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
+t.stage_networks, t.stage_billings = {}, {}
 t._config_stamp, t._reload_tick, t.first_run = None, 0, False
 
 # There are no global rows left: every row is a stage.
@@ -67,10 +68,10 @@ check("default effort", m.DEFAULT_EFFORT, t.stage_effort("requirements"))
 check("default cline model", m.DEFAULT_CLINE_MODEL, t.stage_model("requirements"))
 
 # cline is the only runner with a model field.
-check("cline shows a model field", ["runner", "effort", "model"],
+check("cline shows billing and model", ["runner", "effort", "billing", "model"],
       t.stage_fields("requirements"))
 t.stage_runners["requirements"] = "claude"
-check("claude hides the model field", ["runner", "effort"],
+check("claude hides both", ["runner", "effort"],
       t.stage_fields("requirements"))
 check("claude resolves to no model", "", t.stage_model("requirements"))
 
@@ -82,6 +83,8 @@ check("codex shows a network field", ["runner", "effort", "network"],
       t.stage_fields("execute-checklist"))
 check("cline has no network field", False,
       "network" in t.stage_fields("project-plan"))
+check("codex has no billing field", False,
+      "billing" in t.stage_fields("execute-checklist"))
 check("kimi has no network field", False,
       "network" in t.stage_fields("requirements"))
 check("network is off by default", "false", t.stage_network("execute-checklist"))
@@ -96,6 +99,80 @@ check("the network picker takes no custom value", False,
 check("the network picker knows the current value", "false", t._picker_current())
 t.stage_networks["execute-checklist"] = "true"
 check("the network picker follows the stage", "true", t._picker_current())
+
+# --- billing decides which model list exists ---------------------------------
+# cline takes no billing flag: the modelType prefix is what cline reads, so
+# `cline-pass/kimi-k3` and a vendor-prefixed `kimi-k3` are two purchases of
+# the same model. Picking billing is picking which catalogue the model row
+# offers, and the two must not bleed into each other.
+check("billing defaults to the subscription", m.DEFAULT_BILLING,
+      t.stage_billing("project-plan"))
+check("the subscription list leads with the clinepass group",
+      ["Subscribed (ClinePass)", "Free"], [g for g, _ in m.model_catalog(m.CLINEPASS)])
+check("usage billing offers a different list", True,
+      [g for g, _ in m.model_catalog(m.CLINE_USAGE)] != [g for g, _ in m.model_catalog(m.CLINEPASS)])
+check("every subscription id is prefixed", True,
+      all(i.startswith("cline-pass/")
+          for g, e in m.model_catalog(m.CLINEPASS) if g != "Free" for _, i in e))
+check("no usage id is", True,
+      not any(i.startswith("cline-pass/")
+              for _, e in m.model_catalog(m.CLINE_USAGE) for _, i in e))
+
+# The id decides on its own, so a custom id the catalogue never heard of still
+# lands on the right side.
+check("a cline-pass id reads as the subscription", m.CLINEPASS,
+      m.billing_of_model("cline-pass/anything"))
+check("a vendor id reads as usage billing", m.CLINE_USAGE,
+      m.billing_of_model("some-vendor/anything"))
+
+# An explicit paid model settles billing even with no billing set. A free one
+# does not, because it runs under either.
+t.stage_models["project-plan"] = "anthropic/claude-opus-5"
+check("a paid model settles it", m.CLINE_USAGE, t.stage_billing("project-plan"))
+t.stage_models["project-plan"] = "poolside/laguna-s-2.1"
+check("a free model settles nothing", m.DEFAULT_BILLING, t.stage_billing("project-plan"))
+check("a free model suits the subscription", True,
+      m.model_suits_billing("poolside/laguna-s-2.1", m.CLINEPASS))
+check("and suits usage billing", True,
+      m.model_suits_billing("poolside/laguna-s-2.1", m.CLINE_USAGE))
+check("a clinepass model does not suit usage billing", False,
+      m.model_suits_billing("cline-pass/kimi-k3", m.CLINE_USAGE))
+del t.stage_models["project-plan"]
+
+# The free group is offered under both billings -- the same four models, since
+# they cost nothing either way.
+free_clinepass = [i for g, e in m.model_catalog(m.CLINEPASS) if g == "Free" for _, i in e]
+free_usage = [i for g, e in m.model_catalog(m.CLINE_USAGE) if g == "Free" for _, i in e]
+check("the free group appears under the subscription", True, len(free_clinepass) > 0)
+check("the free group is identical in both", free_clinepass, free_usage)
+check("Laguna is offered in both", True,
+      "poolside/laguna-s-2.1" in free_clinepass and "poolside/laguna-s-2.1" in free_usage)
+
+# The default model follows the billing, since the lists are disjoint.
+t.stage_billings["project-plan"] = m.CLINE_USAGE
+check("usage billing has its own default model",
+      m.DEFAULT_MODEL_FOR_BILLING[m.CLINE_USAGE], t.stage_model("project-plan"))
+t.stage_billings["project-plan"] = m.CLINEPASS
+check("the subscription keeps the old default",
+      m.DEFAULT_MODEL_FOR_BILLING[m.CLINEPASS], t.stage_model("project-plan"))
+
+# The picker offers the list for the stage it was opened on.
+t.picker_kind, t.picker_target, t.pick_filter = "model", "project-plan", ""
+check("the picker offers subscription models under the subscription", True,
+      any(i.startswith("cline-pass/")
+          for k, i in t._picker_rows() if k == "model"))
+t.stage_billings["project-plan"] = m.CLINE_USAGE
+check("and none of them under usage billing", True,
+      not any(i.startswith("cline-pass/")
+              for k, i in t._picker_rows() if k == "model"))
+check("while the free models stay on offer", True,
+      any(i in m.FREE_MODEL_IDS for k, i in t._picker_rows() if k == "model"))
+t.picker_kind = "billing"
+check("the billing picker offers both purses",
+      [("option", m.CLINEPASS), ("option", m.CLINE_USAGE)], t._picker_rows())
+check("it takes no custom value", False,
+      any(k == "custom" for k, _ in t._picker_rows()))
+t.stage_billings.clear()
 
 # Which stage can open a socket is worth seeing without opening a popup, and
 # only where it means something: a value left on a cline stage is not a socket.
@@ -142,7 +219,7 @@ if failed:
     for f in failed:
         print("FAIL: " + f)
     raise SystemExit(1)
-print("  fields/defaults/env: %d checks passed" % 29)
+print("  fields/defaults/env: %d checks passed" % 53)
 PY
 
 # --- round trip, and migration off the old global format -------------------
@@ -162,7 +239,8 @@ def check(name, expected, actual):
 
 def fresh():
     t = m.UncleTUI.__new__(m.UncleTUI)
-    t.stage_runners, t.stage_models, t.stage_efforts, t.stage_networks = {}, {}, {}, {}
+    t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
+    t.stage_networks, t.stage_billings = {}, {}
     t._config_stamp, t._reload_tick, t.first_run = None, 0, False
     return t
 
@@ -197,6 +275,35 @@ back.save_config()
 again = fresh()
 again.load_config()
 check("and survives the next one too", "true", again.stage_networks.get("project-plan"))
+
+# Switching billing drops a model belonging to the other purse, rather than
+# carrying it across and quietly spending the wrong one.
+t = fresh()
+t._set_field("project-plan", "runner", "cline")
+t._set_field("project-plan", "model", "cline-pass/kimi-k3")
+t.picker_kind, t.picker_target, t.pick_filter = "billing", "project-plan", ""
+t.pick_sel = [i for i, (k, v) in enumerate(t._picker_rows()) if v == m.CLINE_USAGE][0]
+t._picker_confirm()
+check("the other purse's model is dropped", "", t.stage_models.get("project-plan", ""))
+check("the new billing is stored", m.CLINE_USAGE, t.stage_billings.get("project-plan"))
+check("so the stage falls back to the usage default",
+      m.DEFAULT_MODEL_FOR_BILLING[m.CLINE_USAGE], t.stage_model("project-plan"))
+
+# A model belonging to the chosen purse survives the same switch.
+t = fresh()
+t._set_field("project-plan", "runner", "cline")
+t._set_field("project-plan", "billing", m.CLINE_USAGE)
+t._set_field("project-plan", "model", "deepseek/deepseek-v4-flash")
+t.picker_kind, t.picker_target, t.pick_filter = "billing", "project-plan", ""
+t.pick_sel = [i for i, (k, v) in enumerate(t._picker_rows()) if v == m.CLINE_USAGE][0]
+t._picker_confirm()
+check("a matching model is kept", "deepseek/deepseek-v4-flash",
+      t.stage_models.get("project-plan"))
+
+# Billing round-trips through the file, and the drivers read it back.
+back = fresh()
+back.load_config()
+check("billing round-trips", m.CLINE_USAGE, back.stage_billings.get("project-plan"))
 
 # Clearing the row (d, for default) takes the line back out.
 again._set_field("execute-checklist", "network", "")
@@ -245,7 +352,7 @@ if failed:
     for f in failed:
         print("FAIL: " + f)
     raise SystemExit(1)
-print("  round-trip/migration: %d checks passed" % 21)
+print("  round-trip/migration: %d checks passed" % 27)
 PY
 
 # --- the screen and the drivers must read the same file the same way -------
@@ -259,7 +366,8 @@ sys.modules["tui"] = m
 spec.loader.exec_module(m)
 
 t = m.UncleTUI.__new__(m.UncleTUI)
-t.stage_runners, t.stage_models, t.stage_efforts, t.stage_networks = {}, {}, {}, {}
+t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
+t.stage_networks, t.stage_billings = {}, {}
 t._config_stamp, t._reload_tick, t.first_run = None, 0, False
 t._set_field("requirements", "runner", "kimi")
 t._set_field("requirements", "effort", "low")
@@ -282,7 +390,8 @@ spec = importlib.util.spec_from_file_location("tui", os.environ["UNCLE_TUI"])
 m = importlib.util.module_from_spec(spec); sys.modules["tui"] = m
 spec.loader.exec_module(m)
 t = m.UncleTUI.__new__(m.UncleTUI)
-t.stage_runners, t.stage_models, t.stage_efforts, t.stage_networks = {}, {}, {}, {}
+t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
+t.stage_networks, t.stage_billings = {}, {}
 t._config_stamp, t._reload_tick, t.first_run = None, 0, False
 t.load_config()
 for stage in m.CONFIG_STAGES:

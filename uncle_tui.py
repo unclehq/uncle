@@ -102,7 +102,7 @@ DEFAULT_RUNNER = "cline"
 DEFAULT_EFFORT = "medium"
 DEFAULT_CLINE_MODEL = "cline-pass/deepseek-v4-pro"
 
-STAGE_FIELDS = ("runner", "effort", "model", "network")
+STAGE_FIELDS = ("runner", "effort", "model", "network", "billing")
 # Only codex sandboxes a stage, so only a codex stage has a network to open.
 NETWORK_CHOICES = ["false", "true"]
 
@@ -112,7 +112,7 @@ NETWORK_CHOICES = ["false", "true"]
 # passed to `cline -m`, and cline requires it in `modelType/model` form; the
 # label is display only. A bare display name is rejected by cline with
 # "invalid model format", so the picker must never store one.
-MODEL_CATALOG = [
+MODEL_CATALOG_CLINEPASS = [
     ("Subscribed (ClinePass)", [
         ("Qwen3.8 Max", "cline-pass/qwen3.8-max"),
         ("GLM-5.2", "cline-pass/glm-5.2"),
@@ -129,12 +129,86 @@ MODEL_CATALOG = [
         ("MiMo-V2.5-Pro", "cline-pass/mimo-v2.5-pro"),
         ("MiMo-V2.5", "cline-pass/mimo-v2.5"),
     ]),
+]
+
+# Usage-based billing is a different catalogue, not a different flag: within
+# cline's default provider the modelType prefix is what selects how the run is
+# paid for, so `cline-pass/kimi-k3` and a vendor-prefixed `kimi-k3` are two
+# different purchases of the same model. Keeping the paid lists apart is what
+# stops a stage from being configured to spend the wrong one.
+#
+# The two catalogues share a slug and differ in the prefix, the way
+# `cline-pass/glm-5.3-flash` and `z-ai/glm-5.3-flash` do. Every id below was
+# checked against cline's installed catalogue rather than inferred -- see
+# cline-model-ids-test.sh, which fails if one of these stops existing.
+#
+# This list is shorter than cline's own Recommended group on purpose. cline
+# fetches that group from its server at runtime
+# (@cline/llms fetchClineRecommendedModelsPayload), so it carries models the
+# installed build has never heard of -- "GPT-6 Astra" appears in the picker
+# and nowhere in the package or the hub binary. Those cannot be verified here,
+# and an id cline rejects is worse than an absent one, so new arrivals go in
+# through the picker's Custom row until they exist locally.
+MODEL_CATALOG_USAGE_PAID = [
+    ("Recommended", [
+        ("Kimi K3", "moonshot-ai/kimi-k3"),
+        ("Claude Opus 5", "anthropic/claude-opus-5"),
+        ("Grok 4.5", "x-ai/grok-4.5"),
+    ]),
+]
+
+# Free models cost nothing under either billing, so they belong to both lists
+# and are never swapped out when the billing changes.
+MODEL_CATALOG_FREE = [
     ("Free", [
         ("DeepSeek V4 Flash", "deepseek/deepseek-v4-flash"),
         ("GLM-5.3-Flash", "z-ai/glm-5.3-flash"),
+        ("LongCat 2.0", "meituan/longcat-2.0"),
         ("Laguna S 2.1", "poolside/laguna-s-2.1"),
     ]),
 ]
+
+FREE_MODEL_IDS = frozenset(mid for _, entries in MODEL_CATALOG_FREE
+                           for _label, mid in entries)
+
+CLINEPASS, CLINE_USAGE = "clinepass", "cline-usage"
+BILLING_CHOICES = [CLINEPASS, CLINE_USAGE]
+DEFAULT_BILLING = CLINEPASS
+# The model a stage falls back to under each billing choice.
+DEFAULT_MODEL_FOR_BILLING = {
+    CLINEPASS: "cline-pass/deepseek-v4-pro",
+    CLINE_USAGE: "deepseek/deepseek-v4-flash",
+}
+
+
+def model_catalog(billing):
+    """The picker's groups for one billing choice, free models included."""
+    paid = MODEL_CATALOG_USAGE_PAID if billing == CLINE_USAGE else MODEL_CATALOG_CLINEPASS
+    return paid + MODEL_CATALOG_FREE
+
+
+def billing_of_model(model):
+    """Which billing a model id spends, read from the id itself.
+
+    Mechanical rather than table-driven on purpose: a custom id the catalogue
+    has never heard of still has to land on the right side of this. A free
+    model spends neither, and returns "" -- see model_suits_billing.
+    """
+    if str(model) in FREE_MODEL_IDS:
+        return ""
+    return CLINEPASS if str(model).startswith("cline-pass/") else CLINE_USAGE
+
+
+def model_suits_billing(model, billing):
+    """Whether this model can be run under this billing.
+
+    A free model suits both, so switching billing must not throw it away.
+    """
+    spends = billing_of_model(model)
+    return not spends or spends == billing
+
+
+MODEL_CATALOG = MODEL_CATALOG_CLINEPASS + MODEL_CATALOG_USAGE_PAID + MODEL_CATALOG_FREE
 
 # id -> label, for the picker's display column and its filter.
 MODEL_LABELS = {mid: label for _, entries in MODEL_CATALOG for label, mid in entries}
@@ -181,6 +255,15 @@ CONFIG_DESC = {
         "verifies — codex's workspace-write sandbox denies even a loopback "
         "bind, so without it a checklist row that needs the running site "
         "records BLOCKED, and no repair attempt can grant it a port."
+    ),
+    "field:billing": (
+        "How this cline stage is paid for: `clinepass` spends the ClinePass "
+        "subscription, `cline-usage` spends usage-based billing. It is not a "
+        "flag passed to cline -- within cline's default provider the model id "
+        "itself decides, so `cline-pass/kimi-k3` and a vendor-prefixed "
+        "`kimi-k3` are two different purchases of the same model. Choosing "
+        "here is choosing which model list the row below offers, and a model "
+        "from the other list is dropped rather than carried across."
     ),
     "field:model": (
         "The cline model this stage runs, as a `modelType/model` id (for "
@@ -436,6 +519,7 @@ class UncleTUI:
         self.stage_models = {}
         self.stage_efforts = {}
         self.stage_networks = {}
+        self.stage_billings = {}
         self.notice = ""
         self.config_sel = 0
         self.config_scroll = 0
@@ -551,22 +635,43 @@ class UncleTUI:
         """Whether this stage's sandbox may reach the network. Default off."""
         return self.stage_networks.get(stage, "") or "false"
 
+    def stage_billing(self, stage):
+        """How a cline stage is paid for: a ClinePass subscription or usage."""
+        billing = self.stage_billings.get(stage, "")
+        if billing in BILLING_CHOICES:
+            return billing
+        # An explicit model settles it on its own: a stage carrying a
+        # `cline-pass/` id is spending the subscription whatever else is set.
+        # A free model spends neither and settles nothing, so it falls through.
+        model = self.stage_models.get(stage, "")
+        if model:
+            spends = billing_of_model(model)
+            if spends:
+                return spends
+        return DEFAULT_BILLING
+
     def stage_model(self, stage):
         """The model for a stage, or "" when its runner takes none."""
         if self.stage_runner(stage) != "cline":
             return ""
-        return self.stage_models.get(stage, "") or DEFAULT_CLINE_MODEL
+        model = self.stage_models.get(stage, "")
+        if model:
+            return model
+        return DEFAULT_MODEL_FOR_BILLING.get(self.stage_billing(stage),
+                                             DEFAULT_CLINE_MODEL)
 
     def stage_fields(self, stage):
         """The fields this stage's popup shows.
 
-        A model belongs to cline alone. Network belongs to codex alone: it is
-        the only runner that sandboxes a stage, and so the only one where the
-        setting changes anything.
+        A model and its billing belong to cline alone -- it is the only runner
+        uncle passes a model to. Network belongs to codex alone: it is the only
+        runner that sandboxes a stage, and so the only one where the setting
+        changes anything.
         """
         runner = self.stage_runner(stage)
         if runner == "cline":
-            return ["runner", "effort", "model"]
+            # Billing sits above model because it decides which models exist.
+            return ["runner", "effort", "billing", "model"]
         if runner == "codex":
             return ["runner", "effort", "network"]
         return ["runner", "effort"]
@@ -581,6 +686,8 @@ class UncleTUI:
             return self.stage_models.get(stage, "")
         if field == "network":
             return self.stage_networks.get(stage, "")
+        if field == "billing":
+            return self.stage_billings.get(stage, "")
         return ""
 
     def _field_display(self, stage, field):
@@ -596,8 +703,12 @@ class UncleTUI:
             return "%s  (default)" % DEFAULT_EFFORT
         if field == "network":
             return "false  (default)"
-        label = MODEL_LABELS.get(DEFAULT_CLINE_MODEL, "")
-        return "%s  (default)%s" % (DEFAULT_CLINE_MODEL, "  " + label if label else "")
+        if field == "billing":
+            return "%s  (default)" % DEFAULT_BILLING
+        fallback = DEFAULT_MODEL_FOR_BILLING.get(self.stage_billing(stage),
+                                                 DEFAULT_CLINE_MODEL)
+        label = MODEL_LABELS.get(fallback, "")
+        return "%s  (default)%s" % (fallback, "  " + label if label else "")
 
     def _set_field(self, stage, field, value):
         value = (value or "").strip()
@@ -605,7 +716,8 @@ class UncleTUI:
         store = {"runner": self.stage_runners,
                  "effort": self.stage_efforts,
                  "model": self.stage_models,
-                 "network": self.stage_networks}.get(field)
+                 "network": self.stage_networks,
+                 "billing": self.stage_billings}.get(field)
         if store is None:
             return
         if value:
@@ -671,13 +783,16 @@ class UncleTUI:
         if self.picker_kind == "runner":
             side = STAGE_SIDE.get(self.picker_target, AGENT)
             return [("option", r) for r in runners_for(side)]
+        if self.picker_kind == "billing":
+            # Two purchases, no custom row: a typed value would not be one.
+            return [("option", b) for b in BILLING_CHOICES]
         if self.picker_kind == "network":
             # Two states and no custom row: the sandbox is either open or it
             # is not, and a typed value here would read as a setting while
             # meaning nothing to the flag it becomes.
             return [("option", v) for v in NETWORK_CHOICES]
         rows = []
-        for group, entries in MODEL_CATALOG:
+        for group, entries in model_catalog(self.stage_billing(self.picker_target)):
             rows.append(("header", group))
             for _label, mid in entries:
                 rows.append(("model", mid))
@@ -707,6 +822,8 @@ class UncleTUI:
             return self.stage_effort(stage)
         if self.picker_kind == "network":
             return self.stage_network(stage)
+        if self.picker_kind == "billing":
+            return self.stage_billing(stage)
         return self.stage_model(stage)
 
     def _open_picker(self, kind, target):
@@ -758,6 +875,14 @@ class UncleTUI:
             self.notice = ""
             self.input_buf = self.pick_filter.strip() or self._picker_current()
             return
+        if self.picker_kind == "billing":
+            # The stored model belongs to one billing or the other. Carrying a
+            # `cline-pass/` id into usage billing would quietly spend the wrong
+            # thing, so a model from the other list is dropped and the new
+            # billing's default applies until something is picked.
+            current = self.stage_models.get(self.picker_target, "")
+            if current and not model_suits_billing(current, text):
+                self._set_field(self.picker_target, "model", "")
         self._set_field(self.picker_target, self.picker_kind, text)
         # Choosing a non-cline runner drops the model row out of the popup.
         self.stage_sel = min(self.stage_sel,
@@ -795,6 +920,7 @@ class UncleTUI:
         self.stage_models = {}
         self.stage_efforts = {}
         self.stage_networks = {}
+        self.stage_billings = {}
         if not exists:
             # First time in this project root: no config file yet. Mark it so
             # the TUI can drop straight into the Configure screen.
@@ -864,7 +990,8 @@ class UncleTUI:
         return {"runner": self.stage_runners,
                 "effort": self.stage_efforts,
                 "model": self.stage_models,
-                "network": self.stage_networks}[field]
+                "network": self.stage_networks,
+                "billing": self.stage_billings}[field]
 
     def _seed_from_legacy(self, legacy):
         """Turn old global settings into per-stage ones, without overwriting."""
@@ -909,6 +1036,10 @@ class UncleTUI:
                     # survives this rewrite instead of being silently dropped.
                     if self.stage_networks.get(stage):
                         lines.append("%s.network %s\n" % (stage, self.stage_networks[stage]))
+                    # Billing, like model, is a cline-only setting; written
+                    # whenever set so a hand-edited line survives the rewrite.
+                    if self.stage_billings.get(stage) and self.stage_runner(stage) == "cline":
+                        lines.append("%s.billing %s\n" % (stage, self.stage_billings[stage]))
                     if lines:
                         fh.write("\n")
                         for line in lines:
@@ -1576,6 +1707,8 @@ class UncleTUI:
                 return "Pick a runner (type to filter, Enter select, Esc back)"
             if self.picker_kind == "network":
                 return "Network access in the sandbox (Enter select, Esc back)"
+            if self.picker_kind == "billing":
+                return "How this cline stage is paid for (Enter select, Esc back)"
             return "Pick a model (type to filter, Enter select, Esc back)"
         if self.state == "config_edit":
             if getattr(self, "notice", ""):

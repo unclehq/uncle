@@ -24,6 +24,11 @@ UNCLE_REVIEWER_STAGES=" adversarial-review test-review manual-checklist final-au
 UNCLE_DEFAULT_RUNNER="cline"
 UNCLE_DEFAULT_EFFORT="medium"
 UNCLE_DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
+UNCLE_DEFAULT_CLINE_USAGE_MODEL="deepseek/deepseek-v4-flash"
+# Free models cost nothing under either billing, so they are offered in both
+# lists and say nothing about which purse a stage spends. Kept in step with
+# uncle_tui.py's MODEL_CATALOG_FREE by tui-config-test.sh.
+UNCLE_CLINE_FREE_MODELS="deepseek/deepseek-v4-flash z-ai/glm-5.3-flash meituan/longcat-2.0 poolside/laguna-s-2.1"
 
 uncle_config_file() {
     printf '%s' "${UNCLE_CONFIG:-${PROJECT_ROOT:-$PWD}/.uncle/config}"
@@ -104,7 +109,49 @@ uncle_stage_model() {
         v="$(uncle_config_get reviewer)"
     fi
     [[ -n "$v" ]] || v="$(uncle_config_get model)"
-    printf '%s' "${v:-$UNCLE_DEFAULT_CLINE_MODEL}"
+    if [[ -z "$v" ]]; then
+        # No model configured: the default depends on how the stage is paid
+        # for, because the two billings are two different model catalogues.
+        if [[ "$(uncle_stage_billing "$stage")" == "cline-usage" ]]; then
+            v="$UNCLE_DEFAULT_CLINE_USAGE_MODEL"
+        else
+            v="$UNCLE_DEFAULT_CLINE_MODEL"
+        fi
+    fi
+    printf '%s' "$v"
+}
+
+# How a cline stage is paid for: clinepass | cline-usage. Default clinepass.
+#
+# Not a flag: within cline's default provider the modelType prefix decides, so
+# `cline-pass/kimi-k3` spends the subscription and a vendor-prefixed `kimi-k3`
+# spends usage billing. An explicit model therefore settles this on its own,
+# and it wins over the setting -- the id is what cline actually receives, and a
+# setting that disagreed with it would describe a run that never happened.
+uncle_stage_billing() {
+    local stage="$1" v model
+    case "$stage" in implementation-step-*) stage=implementation ;; esac
+    model="$(uncle_config_get "$stage.model")"
+    [[ -n "$model" ]] || model="$(uncle_config_get "$stage")"
+    if [[ -n "$model" ]]; then
+        # A free model is not evidence either way: it runs under both.
+        case " $UNCLE_CLINE_FREE_MODELS " in
+            *" $model "*) model="" ;;
+        esac
+    fi
+    if [[ -n "$model" ]]; then
+        case "$model" in
+            cline-pass/*) printf 'clinepass' ;;
+            *)            printf 'cline-usage' ;;
+        esac
+        return 0
+    fi
+    v="$(uncle_config_get "$stage.billing")"
+    [[ -n "$v" ]] || v="$(uncle_config_get billing)"
+    case "$(printf '%s' "${v:-clinepass}" | tr '[:upper:]' '[:lower:]')" in
+        cline-usage|usage|usage-based|cline_usage) printf 'cline-usage' ;;
+        *)                                        printf 'clinepass' ;;
+    esac
 }
 
 uncle_stage_cmd() {

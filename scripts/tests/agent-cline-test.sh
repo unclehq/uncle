@@ -50,7 +50,7 @@ if [[ "${EMIT_USAGE:-0}" == "1" ]]; then
     echo '{"type":"agent_event","event":{"type":"usage","inputTokens":10,"outputTokens":5,"cacheReadTokens":2,"cacheWriteTokens":1,"cost":0.01,"totalInputTokens":100,"totalOutputTokens":50,"totalCacheReadTokens":20,"totalCacheWriteTokens":10,"totalCost":0.5}}'
 fi
 if [[ "${EMIT_RESULT:-1}" == "1" ]]; then
-    echo '{"type":"run_result","finishReason":"'"${FINISH_REASON:-completed}"'","iterations":3,"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":20,"cacheWriteTokens":10,"totalCost":0.5},"durationMs":1234,"text":"Final answer","model":"test-model"}'
+    echo '{"type":"run_result","finishReason":"'"${FINISH_REASON:-completed}"'","iterations":3,"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":20,"cacheWriteTokens":10,"totalCost":0.5},"durationMs":1234,"text":"'"${RESULT_TEXT:-Final answer}"'","model":"test-model","models":{"catalogue":{"description":"'"${CATALOGUE_TEXT:-Frontier reasoning and coding with 1M context window}"'"}}}'
 fi
 exit "${FAKE_EXIT:-0}"
 EOF
@@ -122,6 +122,30 @@ if [[ -z "$result" ]]; then
 fi
 check_eq "non-completed: is_error" "true" "$(printf '%s' "$result" | jq -r '.is_error')"
 check_eq "non-completed: subtype"  "error_during_execution" \
+    "$(printf '%s' "$result" | jq -r '.subtype')"
+
+# --- context exhaustion is read from the failure, not from the transcript ----
+# cline's run_result carries a catalogue of models, and those descriptions say
+# things like "1M context window". Scanning the whole stream therefore labelled
+# every cline failure as context exhaustion -- a weekly billing limit included
+# -- which sends the operator to change models when the real fix is to change
+# providers or wait. Observed against cline 3.0.61.
+result="$(FINISH_REASON=error FAKE_EXIT=1 \
+    RESULT_TEXT="You have reached your weekly Clinepass limit. The limit resets in 5d 14h." \
+    run_shim -p <<< "prompt" | grep '"type":"result"' || true)"
+check_eq "a quota limit is not context exhaustion" "error_during_execution" \
+    "$(printf '%s' "$result" | jq -r '.subtype')"
+
+# The real thing still classifies, from the same field.
+result="$(FINISH_REASON=error FAKE_EXIT=1 \
+    RESULT_TEXT="Request failed: maximum context length exceeded" \
+    run_shim -p <<< "prompt" | grep '"type":"result"' || true)"
+check_eq "real context exhaustion is named" "context_length_exceeded" \
+    "$(printf '%s' "$result" | jq -r '.subtype')"
+
+# And a success is never relabelled, catalogue or no catalogue.
+result="$(run_shim -p <<< "prompt" | grep '"type":"result"' || true)"
+check_eq "a successful run keeps its subtype" "success" \
     "$(printf '%s' "$result" | jq -r '.subtype')"
 
 # --- a missing run_result is a failed stage, not a hung one -----------------

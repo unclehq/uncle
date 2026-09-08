@@ -1,7 +1,8 @@
 # Uncle per-stage config: every stage picks its own runner, reasoning effort,
 # and -- for a cline stage -- model.
 #
-# Format: <stage>.runner | <stage>.effort | <stage>.model | <stage>.network VALUE
+# Format: <stage>.runner | <stage>.effort | <stage>.model | <stage>.network
+#         | <stage>.billing VALUE
 #
 #   .runner  cline | claude | kimi | codex  for an agent stage
 #            cline | codex | claude         for a reviewer stage
@@ -9,6 +10,13 @@
 #   .model   a cline model id in modelType/model form, and only for a cline
 #            stage: claude, kimi, and codex are given no model flag and use
 #            their own default.
+#   .billing clinepass | cline-usage (default clinepass) -- which cline
+#            catalogue and purse a cline stage uses. Not a flag: cline reads
+#            it from the model id, so `cline-pass/kimi-k3` spends the
+#            subscription and a vendor-prefixed `kimi-k3` spends usage
+#            billing. An explicit .model therefore settles it and wins over
+#            this line; the setting decides the default model and which list
+#            the Configure picker offers.
 #   .network true | false (default false) -- whether the stage's sandbox may
 #            reach the network. Only codex sandboxes its stages; cline, kimi,
 #            and claude ignore this. A stage that has to serve the product it

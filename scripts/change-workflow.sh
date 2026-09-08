@@ -315,6 +315,7 @@ legacy_word_notice() {
 . "$ROOT/scripts/lib/green-check.sh"
 . "$ROOT/scripts/lib/implementation-review.sh"
 . "$ROOT/scripts/lib/gates.sh"
+. "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/performance.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
 
@@ -1688,6 +1689,7 @@ while true; do
             run_green_check || true
             snapshot_checklist_groups
             snapshot_checklist_checks
+            ensure_checklist_runner execute-checklist || exit 1
             PROGRESS_TOTAL="$(grep -oE 'MC-[0-9]+' MANUAL_CHECKLIST.md 2>/dev/null \
                 | sort -u | grep -c . || echo 0)"
             PROGRESS_LABEL="checklist"

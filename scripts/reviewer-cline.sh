@@ -120,7 +120,7 @@ status=$?
 set -e
 
 # Keep the original diagnostics even when the CLI exits before a final review.
-log_dir="${UNCLE_PROJECT_ROOT:-$PWD}/.uncle/workspace/logs"
+log_dir="${UNCLE_PROJECT_ROOT:-$PWD}/.uncle/workflow/logs"
 mkdir -p "$log_dir"
 raw_saved="$(mktemp "$log_dir/reviewer-cline.XXXXXX")"
 cp "$raw" "$raw_saved"

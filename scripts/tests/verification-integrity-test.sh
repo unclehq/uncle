@@ -73,7 +73,7 @@ mkdir tests/__pycache__
 printf 'bytecode\n' > tests/__pycache__/test.pyc
 COUNT=$((COUNT + 1))
 [[ "$(verification_manifest paths)" == "$baseline" ]] || { echo 'FAIL: bytecode changed manifest'; exit 1; }
-for path in missing ../outside /etc/passwd ./tests .git .uncle/workspace tests/../tests; do
+for path in missing ../outside /etc/passwd ./tests .git .uncle/workflow tests/../tests; do
     printf '%s\n' "$path" > paths
     rejected
 done

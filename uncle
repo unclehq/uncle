@@ -21,6 +21,8 @@ done
 ROOT="$(cd "$(dirname "$uncle_self")" && pwd)"
 unset uncle_self uncle_link
 cd "$ROOT"
+. "$ROOT/scripts/lib/workflow-directory.sh"
+workflow_directory_migrate "$PROJECT_ROOT"
 . "$ROOT/scripts/lib/stage-config.sh"
 
 # ANSI palette matching cline's CLI. Disabled when stdout is not a terminal or
@@ -530,11 +532,11 @@ run_change_workflow() {
 # the effective values before any workflow runs.
 apply_config
 
-# First time in this project root (no .uncle/config yet): create the workspace
+# First time in this project root (no .uncle/config yet): create the workflow directory
 # dir the scripts write state/logs into, then go straight to the configure menu
 # so this project gets set up before any workflow runs.
 if [[ ! -s "$UNCLE_CONFIG" ]]; then
-    mkdir -p "$PROJECT_ROOT/.uncle/workspace"
+    mkdir -p "$PROJECT_ROOT/.uncle/workflow"
     configure_menu
     # Configure may quit without saving anything; write a minimal default so
     # this is still recognized as configured on the next run.

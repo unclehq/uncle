@@ -69,7 +69,7 @@ The workflow runs stages and pauses at gates:
 At each gate, open the listed file, read it, and answer `y` to approve.
 
 The gate after implementation is the one that shows you code. Open
-`.uncle/workspace/IMPLEMENTATION_REVIEW.md`: it holds the diff, the result of the
+`.uncle/workflow/IMPLEMENTATION_REVIEW.md`: it holds the diff, the result of the
 driver re-running your project's own test commands, and the agent's notes.
 
 If those commands passed before the change and fail now, the gate says so and
@@ -113,14 +113,14 @@ The workflow is stateful:
 ./scripts/stagegate.sh
 
 # Restart a specific stage
-echo REQUIREMENTS > .uncle/workspace/state
+echo REQUIREMENTS > .uncle/workflow/state
 
 # Send a rejected implementation back to be redone
-echo IMPLEMENT > .uncle/workspace/state
+echo IMPLEMENT > .uncle/workflow/state
 ./scripts/stagegate.sh
 
 # Full reset
-rm -rf .uncle/workspace
+rm -rf .uncle/workflow
 ```
 
 See [`README.md`](README.md) for full configuration options and

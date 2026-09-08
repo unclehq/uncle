@@ -140,7 +140,7 @@ fi
 (WORKFLOW_DOC_MAX_BYTES=7 require_artifact PROJECT_PLAN.md; touch advanced)
 [[ -e advanced ]]
 # Standalone reviewer entry points also advertise and enforce the same cap.
-mkdir -p standalone/scripts/lib standalone/.uncle/workspace/approvals
+mkdir -p standalone/scripts/lib standalone/.uncle/workflow/approvals
 cp "$ROOT/scripts/lib/gates.sh" "$ROOT/scripts/lib/compact-review.py" standalone/scripts/lib/
 cp "$ROOT/scripts/codex-review-plan.sh" "$ROOT/scripts/codex-create-checklist.sh" standalone/scripts/
 cat > standalone/reviewer <<'STUB'
@@ -162,7 +162,7 @@ chmod +x standalone/reviewer
     printf 'plan' > UPDATED_PROJECT_PLAN.md
     printf 'tests' > AUTOMATED_TEST_REPORT.md
     for plan in PROJECT_PLAN UPDATED_PROJECT_PLAN; do
-        shasum -a 256 "$plan.md" | awk '{print $1}' > ".uncle/workspace/approvals/$plan.sha256"
+        shasum -a 256 "$plan.md" | awk '{print $1}' > ".uncle/workflow/approvals/$plan.sha256"
     done
     for script in codex-review-plan.sh codex-create-checklist.sh; do
         if WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_REVIEWER_CMD="$PWD/reviewer" WORKFLOW_DOC_MAX_BYTES=1 \

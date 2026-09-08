@@ -6,7 +6,7 @@ set -euo pipefail
 # ROOT is where uncle itself lives: the prompts, the libs, and the agent shims
 # it ships. For a Homebrew install that is the read-only Cellar libexec.
 #
-# PROJECT_ROOT is the project being worked on: .uncle/workspace, the artifacts,
+# PROJECT_ROOT is the project being worked on: .uncle/workflow, the artifacts,
 # the diff, the project's own gates. `uncle` exports UNCLE_PROJECT_ROOT (the
 # directory it was launched from); a driver run directly falls back to $ROOT,
 # which is the checkout it lives in.
@@ -20,13 +20,15 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
+. "$ROOT/scripts/lib/workflow-directory.sh"
+workflow_directory_migrate "$PROJECT_ROOT"
 export DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md
 
 # Prompt files are named relative to the uncle install, but the cwd is now the
 # project. Resolve them the way gates are resolved: the project's own copy
 # wins, otherwise the prompt that shipped with uncle. An absolute path or a
 # path that exists in the project is returned untouched, which is what keeps
-# composed prompts under .uncle/workspace working.
+# composed prompts under .uncle/workflow working.
 resolve_prompt() {
     local p="$1"
     if [[ -e "$p" ]]; then
@@ -59,7 +61,7 @@ case "$#:${1:-}" in
     *)                  printf 'Unknown argument: %s\n' "${1:-}" >&2; usage >&2; exit 1 ;;
 esac
 
-STATE_DIR=".uncle/workspace"
+STATE_DIR=".uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
 LOG_DIR="$STATE_DIR/logs"
 STATE_FILE="$STATE_DIR/state"
@@ -302,7 +304,7 @@ legacy_word_notice() {
 # self-relative so the driver still runs from any CWD.
 . "$ROOT/scripts/lib/audit-verdict.sh"
 
-# .uncle/workspace/state grammar, and the shared INV-3 close gate.
+# .uncle/workflow/state grammar, and the shared INV-3 close gate.
 . "$ROOT/scripts/lib/state.sh"
 . "$ROOT/scripts/lib/plan-scope.sh"
 . "$ROOT/scripts/lib/progress.sh"
@@ -323,8 +325,8 @@ require_file() {
     fi
 }
 
-# The issue number written into .uncle/workspace/state is informational only;
-# .uncle/workspace/origin stays the sole identity source (INV-1).
+# The issue number written into .uncle/workflow/state is informational only;
+# .uncle/workflow/origin stays the sole identity source (INV-1).
 current_issue() {
     if [[ -n "${STAGEGATE_ORIGIN_ISSUE:-}" ]]; then
         printf '%s' "$STAGEGATE_ORIGIN_ISSUE"
@@ -342,7 +344,7 @@ get_state() {
 }
 
 # --- Single-writer lock -----------------------------------------------------
-# One run owns a checkout's .uncle/workspace/ for its whole lifetime. mkdir is atomic,
+# One run owns a checkout's .uncle/workflow/ for its whole lifetime. mkdir is atomic,
 # so it is the lock primitive; the pid file only exists to detect a lock left
 # behind by a killed run.
 
@@ -385,7 +387,7 @@ acquire_lock() {
 }
 
 # --- Origin binding ---------------------------------------------------------
-# .uncle/workspace/origin binds in-flight state to one (repo, issue) so a resumed run
+# .uncle/workflow/origin binds in-flight state to one (repo, issue) so a resumed run
 # cannot act on — or later close — a different issue's work. Enforced only when
 # the driver was launched by from-issue.sh, which exports STAGEGATE_ORIGIN_*; a
 # human running the driver by hand is unaffected.
@@ -1430,7 +1432,7 @@ wait_codex_bg() {
 acquire_lock
 origin_preflight
 
-# Whether this invocation can prove it owns .uncle/workspace/origin, rather than having
+# Whether this invocation can prove it owns .uncle/workflow/origin, rather than having
 # found a leftover one on disk. Computed once here, before this run performs any
 # state write, so a run that only *becomes* issue-bound mid-run cannot later
 # read as resumed.

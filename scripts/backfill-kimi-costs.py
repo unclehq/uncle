@@ -27,7 +27,7 @@ def backfill(project, apply=False):
         if len(prompts) == 1:
             sessions.append((session, prompts[0].get('time', 0) / 1000))
     count = 0
-    for path in sorted((project / '.uncle/workspace/metrics').glob('*.json')):
+    for path in sorted((project / '.uncle/workflow/metrics').glob('*.json')):
         row = json.loads(path.read_text())
         if not row.get('runner', '').endswith(('agent-kimi.sh', 'reviewer-kimi.sh')) or row.get('usage_source'):
             continue

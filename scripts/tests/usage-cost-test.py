@@ -41,7 +41,7 @@ class UsageTests(unittest.TestCase):
     def test_unique_session_matching_and_summing(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp); cwd=root/'project';cwd.mkdir()
-            session=root/'workspace/session';wire=session/'agents/main/wire.jsonl';wire.parent.mkdir(parents=True)
+            session=root/'workflow/session';wire=session/'agents/main/wire.jsonl';wire.parent.mkdir(parents=True)
             (session/'state.json').write_text(json.dumps({'cwd':str(cwd)}))
             prompt=dict(type='turn.prompt', input=[dict(type='text',text='my prompt')])
             usage=dict(type='usage.record', usageScope='turn', model='moonshot-ai/kimi-k2.7-code-highspeed',
@@ -58,17 +58,17 @@ class UsageTests(unittest.TestCase):
             self.assertEqual(kimi.collect(root,cwd,snap),{})
             snap['prompt_sha256']=kimi.prompt_hash(prompt)
             import shutil
-            shutil.copytree(session,root/'workspace/another')
+            shutil.copytree(session,root/'workflow/another')
             self.assertEqual(kimi.collect(root,cwd,snap),{})
 
     def test_backfill_is_dry_by_default_and_idempotent(self):
         import subprocess
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp); project=root/'project'
-            metrics=project/'.uncle/workspace/metrics';metrics.mkdir(parents=True)
+            metrics=project/'.uncle/workflow/metrics';metrics.mkdir(parents=True)
             row=dict(kind='agent',stage='implementation',runner='/scripts/agent-kimi.sh',started_at=1000,ended_at=1010,reported_cost_usd=0)
             metric=metrics/'attempt.json';metric.write_text(json.dumps(row))
-            session=root/'sessions/workspace/session'
+            session=root/'sessions/workflow/session'
             wire=session/'agents/main/wire.jsonl';wire.parent.mkdir(parents=True)
             (session/'state.json').write_text(json.dumps({'cwd':str(project)}))
             records=[dict(type='turn.prompt',time=1002000,input=[]),

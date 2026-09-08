@@ -99,7 +99,7 @@ check_eq "basename-only scope entry matches its path" "" \
 # both pipelines and every stage: once untracked files are examined, a report
 # the workflow wrote itself would otherwise read as scope creep.
 for artifact in IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md DEFECTS.md \
-                .uncle/workspace/change.diff BASELINE_REPORT.md CHANGE_SPEC.md \
+                .uncle/workflow/change.diff BASELINE_REPORT.md CHANGE_SPEC.md \
                 CHANGE_REQUEST.md ADVERSARIAL_REVIEW.md FINAL_AUDIT.md \
                 AUTOMATED_TEST_REPORT.md UPDATED_PROJECT_PLAN.md \
                 REQUIREMENTS_INTERPRETATION.md; do

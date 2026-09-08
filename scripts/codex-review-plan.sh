@@ -13,7 +13,7 @@ Run the reviewer CLI against the approved PROJECT_PLAN.md and write
 ADVERSARIAL_REVIEW.md (Stage 2 of the new-application workflow).
 
 Takes no positional arguments. Requires REQUIREMENTS.md, PROJECT_PLAN.md, and
-a matching approval record in .uncle/workspace/approvals/PROJECT_PLAN.sha256.
+a matching approval record in .uncle/workflow/approvals/PROJECT_PLAN.sha256.
 Configuration is via WORKFLOW_* environment variables (see scripts/README.md).
 EOF
 }
@@ -26,9 +26,9 @@ esac
 
 test -s REQUIREMENTS.md
 test -s PROJECT_PLAN.md
-test -s .uncle/workspace/approvals/PROJECT_PLAN.sha256
+test -s .uncle/workflow/approvals/PROJECT_PLAN.sha256
 
-expected="$(cat .uncle/workspace/approvals/PROJECT_PLAN.sha256)"
+expected="$(cat .uncle/workflow/approvals/PROJECT_PLAN.sha256)"
 # shasum on macOS, sha256sum on Linux, openssl anywhere else.
 if command -v shasum > /dev/null 2>&1; then
     actual="$(shasum -a 256 PROJECT_PLAN.md | awk '{print $1}')"
@@ -98,7 +98,7 @@ PROMPT
 printf '%s\n' "$budget_prompt"
 )"
 
-LOG_DIR="$ROOT/.uncle/workspace/logs"
+LOG_DIR="$ROOT/.uncle/workflow/logs"
 mkdir -p "$LOG_DIR"
 finish_review_budget ADVERSARIAL_REVIEW.md "$REVIEWER_CMD" "" "" adversarial-review
 echo "Created ADVERSARIAL_REVIEW.md"

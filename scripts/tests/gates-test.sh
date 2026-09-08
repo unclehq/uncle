@@ -61,7 +61,7 @@ expect_not_out() {
 expect_state() {
     COUNT=$((COUNT + 1))
     local actual
-    actual="$(cat "$REPO/.uncle/workspace/state" 2>/dev/null)"
+    actual="$(cat "$REPO/.uncle/workflow/state" 2>/dev/null)"
     if [[ "$actual" != "$1" ]]; then
         fail "expected state '$1', got '$actual'"
     fi
@@ -101,7 +101,7 @@ new_case() {
     OUT="$CASE/out.txt"
 
     mkdir -p "$REPO/scripts/lib" "$REPO/prompts/change" \
-             "$REPO/.uncle/workspace/approvals" "$REPO/app" "$CASE/bin"
+             "$REPO/.uncle/workflow/approvals" "$REPO/app" "$CASE/bin"
     : > "$OUT"
 
     cp "$ROOT"/scripts/lib/*.sh "$REPO/scripts/lib/"
@@ -156,7 +156,7 @@ EOF
     local f
     for f in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN; do
         hash_file "$REPO/${f}.md" \
-            > "$REPO/.uncle/workspace/approvals/${f}.sha256"
+            > "$REPO/.uncle/workflow/approvals/${f}.sha256"
     done
 
     # The project under change: one script, one test that checks it.
@@ -208,7 +208,7 @@ while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
     shift
 done
-printf '%s\n' "$out" >> .uncle/workspace/reviewer-calls
+printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
 if [[ "${FAKE_COMPACT_REVIEW:-0}" == 1 && "$out" == *MANUAL_CHECKLIST.base.md ]]; then
     printf 'Repeated background that adds no findings. Repeated background that adds no findings.\n' > "$out"
 else
@@ -221,14 +221,14 @@ REV
 
 # green_baseline <status> <command> — the record the PLAN stage would have left.
 green_baseline() {
-    printf '%s\t%s\n' "$1" "$2" > "$REPO/.uncle/workspace/green-check.baseline.tsv"
-    printf '%s\n' "$2" > "$REPO/.uncle/workspace/green-check.commands"
+    printf '%s\t%s\n' "$1" "$2" > "$REPO/.uncle/workflow/green-check.baseline.tsv"
+    printf '%s\n' "$2" > "$REPO/.uncle/workflow/green-check.commands"
     hash_file "$REPO/BASELINE_REPORT.md" \
-        > "$REPO/.uncle/workspace/green-check.source"
+        > "$REPO/.uncle/workflow/green-check.source"
 }
 
 set_state() {
-    printf '%s\n' "$1" > "$REPO/.uncle/workspace/state"
+    printf '%s\n' "$1" > "$REPO/.uncle/workflow/state"
 }
 
 # gate_input <line>... — the keystrokes one human_gate consumes: the ENTER
@@ -272,14 +272,14 @@ expect_out "HUMAN REVIEW REQUIRED"
 expect_out "Gate not accepted."
 expect_not_out "Change workflow complete."
 expect_state "WAIT_IMPLEMENT_APPROVAL"
-expect_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md"
+expect_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md"
 
 # The document the operator is shown is the change, not a description of it.
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "echo goodbye"
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "- app/main.sh"
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "## Green check"
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "Changed app/main.sh."
-expect_no_file ".uncle/workspace/approvals/IMPLEMENTATION_REVIEW.sha256"
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "echo goodbye"
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "- app/main.sh"
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "## Green check"
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "Changed app/main.sh."
+expect_no_file ".uncle/workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
 
 # A new file the agent created is in the diff. It is the one file in the change
 # with no prior reviewer, and `git diff` alone would not show it.
@@ -289,8 +289,8 @@ set_state IMPLEMENT
 run_driver FAKE_IMPL="printf 'TOKEN_NEW_FILE\n' > app/added.sh"
 expect_status 0
 expect_state "WAIT_IMPLEMENT_APPROVAL"
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "TOKEN_NEW_FILE"
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "- app/added.sh"
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "TOKEN_NEW_FILE"
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "- app/added.sh"
 
 # Approving runs the rest of the pipeline through to COMPLETE.
 new_case approval-advances-to-complete
@@ -299,12 +299,12 @@ set_state IMPLEMENT
 run_driver_stdin "$(gate_input '' y)" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
-expect_out "Recorded approval for .uncle/workspace/IMPLEMENTATION_REVIEW.md"
+expect_out "Recorded approval for .uncle/workflow/IMPLEMENTATION_REVIEW.md"
 expect_out "Change workflow complete."
 expect_state "COMPLETE"
-expect_file ".uncle/workspace/approvals/IMPLEMENTATION_REVIEW.sha256"
-expect_no_file ".uncle/workspace/green-check-override"
-expect_no_file ".uncle/workspace/audit-override"
+expect_file ".uncle/workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
+expect_no_file ".uncle/workflow/green-check-override"
+expect_no_file ".uncle/workflow/audit-override"
 
 # Declining leaves the state where it was, so re-running re-opens the gate
 # rather than skipping it.
@@ -316,14 +316,14 @@ run_driver_stdin "$(gate_input '' n)" \
 expect_status 0
 expect_out "Gate not accepted."
 expect_state "WAIT_IMPLEMENT_APPROVAL"
-expect_no_file ".uncle/workspace/approvals/IMPLEMENTATION_REVIEW.sha256"
+expect_no_file ".uncle/workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
 
 # The approval attests to the tree. Code that moves after it re-opens the gate
 # instead of carrying a stale approval into verification.
 new_case tree-moved-after-approval
 green_baseline 0 'bash app/test.sh'
 printf 'not-the-digest-of-anything\n' \
-    > "$REPO/.uncle/workspace/approvals/IMPLEMENTATION_REVIEW.sha256"
+    > "$REPO/.uncle/workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
 printf '#!/bin/sh\necho edited\n' > "$REPO/app/main.sh"
 set_state CHECKLIST
 run_driver
@@ -368,7 +368,7 @@ expect_status 0
 expect_not_out "scratch.txt"
 expect_state "WAIT_IMPLEMENT_APPROVAL"
 COUNT=$((COUNT + 1))
-if grep -qF "my scratch notes" "$REPO/.uncle/workspace/IMPLEMENTATION_REVIEW.md"; then
+if grep -qF "my scratch notes" "$REPO/.uncle/workflow/IMPLEMENTATION_REVIEW.md"; then
     fail "a pre-existing untracked file leaked into the reviewed diff"
 fi
 
@@ -400,8 +400,8 @@ expect_out "GREEN CHECK FAILED: 1 regression(s)"
 expect_out "Approving here is an override, and it is recorded."
 expect_out "Ready to override"
 expect_state "WAIT_IMPLEMENT_APPROVAL"
-expect_in_file ".uncle/workspace/green-check.tsv" "REGRESSION"
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "1 command(s) regressed"
+expect_in_file ".uncle/workflow/green-check.tsv" "REGRESSION"
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "1 command(s) regressed"
 
 # Overriding a failing check is allowed, recorded, and reported at the end.
 new_case regression-override-is-recorded
@@ -411,8 +411,8 @@ run_driver_stdin "$(gate_input '' y)" FAKE_IMPL="printf 'exit 1\n' > app/test.sh
 expect_status 0
 expect_out "Change workflow complete."
 expect_out "Completed with a failing green check, by human override:"
-expect_file ".uncle/workspace/green-check-override"
-expect_in_file ".uncle/workspace/green-check-override" "1 regression(s) overridden"
+expect_file ".uncle/workflow/green-check-override"
+expect_in_file ".uncle/workflow/green-check-override" "1 regression(s) overridden"
 
 # A check that was already failing before the change is not this change's
 # regression, and does not turn the gate into an override.
@@ -424,7 +424,7 @@ expect_status 0
 expect_out "Green check: no regressions."
 expect_not_out "GREEN CHECK FAILED"
 expect_out "Ready to approve"
-expect_in_file ".uncle/workspace/green-check.tsv" "PREEXISTING"
+expect_in_file ".uncle/workflow/green-check.tsv" "PREEXISTING"
 
 # A check that passes stays out of the way entirely.
 new_case passing-check-is-quiet
@@ -433,7 +433,7 @@ set_state IMPLEMENT
 run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
 expect_out "Green check: no regressions."
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "No regressions."
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "No regressions."
 
 # With no commands to run, the gate says so rather than implying a pass.
 new_case no-commands-is-reported-as-not-run
@@ -441,7 +441,7 @@ set_state IMPLEMENT
 run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
 expect_out "Green check NOT RUN: no commands were found in BASELINE_REPORT.md."
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "NOT RUN"
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "NOT RUN"
 expect_state "WAIT_IMPLEMENT_APPROVAL"
 
 # ---------------------------------------------------------------------------
@@ -478,8 +478,8 @@ run_driver_stdin "$(gate_input '')" WORKFLOW_GREEN_CHECK=0 \
     FAKE_IMPL="printf 'exit 1\n' > app/test.sh"
 expect_status 0
 expect_out "Ready to approve"
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "DISABLED"
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "unverified account"
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "DISABLED"
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "unverified account"
 
 # ---------------------------------------------------------------------------
 # The baseline capture
@@ -492,10 +492,10 @@ set_state PLAN
 run_driver
 expect_status 0
 expect_out "Recording the green-check baseline before anything changes."
-expect_file ".uncle/workspace/green-check.baseline.tsv"
-expect_in_file ".uncle/workspace/green-check.baseline.tsv" "bash app/test.sh"
+expect_file ".uncle/workflow/green-check.baseline.tsv"
+expect_in_file ".uncle/workflow/green-check.baseline.tsv" "bash app/test.sh"
 COUNT=$((COUNT + 1))
-if [[ "$(awk -F'\t' 'NR==1 {print $1}' "$REPO/.uncle/workspace/green-check.baseline.tsv")" != "0" ]]; then
+if [[ "$(awk -F'\t' 'NR==1 {print $1}' "$REPO/.uncle/workflow/green-check.baseline.tsv")" != "0" ]]; then
     fail "the unmodified tree should have recorded a passing baseline"
 fi
 
@@ -503,12 +503,12 @@ fi
 new_case baseline-without-commands-warns
 printf '# Baseline Report\n\nNo commands section.\n' > "$REPO/BASELINE_REPORT.md"
 hash_file "$REPO/BASELINE_REPORT.md" \
-    > "$REPO/.uncle/workspace/approvals/BASELINE_REPORT.sha256"
+    > "$REPO/.uncle/workflow/approvals/BASELINE_REPORT.sha256"
 set_state PLAN
 run_driver
 expect_status 0
 expect_out "has no fenced command block"
-expect_no_file ".uncle/workspace/green-check.baseline.tsv"
+expect_no_file ".uncle/workflow/green-check.baseline.tsv"
 
 # ---------------------------------------------------------------------------
 # The new-application driver
@@ -549,7 +549,7 @@ app/test.sh
 ```
 EOF
     hash_file "$REPO/UPDATED_PROJECT_PLAN.md" \
-        > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
+        > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
     # New-app reviewer with a real acceptance table, configurable failures,
     # and an invocation log so tests can prove stages were not reached.
     cat > "$CASE/bin/fake-reviewer" <<'REV'
@@ -560,13 +560,13 @@ while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
     shift
 done
-printf '%s\n' "$out" >> .uncle/workspace/reviewer-calls
+printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
 if [[ "$out" == TEST_REVIEW.md ]]; then
-    printf '%s\n' "$review_prompt" > .uncle/workspace/received-test-review-prompt.md
+    printf '%s\n' "$review_prompt" > .uncle/workflow/received-test-review-prompt.md
     status="${FAKE_TEST_REVIEW:-PASS}"
     if [[ "$status" == FAIL_ONCE ]]; then
         status=PASS
-        [[ -e .uncle/workspace/repaired ]] || status=FAIL
+        [[ -e .uncle/workflow/repaired ]] || status=FAIL
     fi
     if [[ "$status" == MALFORMED ]]; then
         printf 'PASS\n' > "$out"
@@ -621,13 +621,13 @@ case "$prompt" in
         gate_report PREFLIGHT_REPORT.md "${FAKE_PREFLIGHT:-PASS}"
         ;;
     *STUB:repair*)
-        printf 'repaired\n' > .uncle/workspace/repaired
+        printf 'repaired\n' > .uncle/workflow/repaired
         printf '\nRepair disposition.\n' >> IMPLEMENTATION_NOTES.md
         printf '\nRetested.\n' >> AUTOMATED_TEST_REPORT.md
         if [[ -n "${FAKE_REPAIR:-}" ]]; then bash -c "$FAKE_REPAIR"; fi
         ;;
     *STUB:implement*)
-        printf 'implemented\n' > .uncle/workspace/implemented
+        printf 'implemented\n' > .uncle/workflow/implemented
         printf '# Implementation Notes\n\nBuilt app/main.sh.\n' \
             > IMPLEMENTATION_NOTES.md
         printf '# Automated Test Report\n\nAll green. Trust me.\n' \
@@ -640,7 +640,7 @@ case "$prompt" in
         status="${FAKE_VERIFICATION:-PASS}"
         if [[ "$status" == FAIL_ONCE ]]; then
             status=PASS
-            [[ -e .uncle/workspace/repaired ]] || status=FAIL
+            [[ -e .uncle/workflow/repaired ]] || status=FAIL
         fi
         gate_report VERIFICATION_REPORT.md "$status"
         printf '# Defects\n\nNo unresolved defects in fixture.\n' > DEFECTS.md
@@ -657,11 +657,11 @@ stagegate_agent
 set_state IMPLEMENT
 run_stagegate FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
-expect_out "HUMAN REVIEW REQUIRED: .uncle/workspace/IMPLEMENTATION_REVIEW.md"
+expect_out "HUMAN REVIEW REQUIRED: .uncle/workflow/IMPLEMENTATION_REVIEW.md"
 expect_out "Green check: all verification commands passed."
 expect_state "WAIT_IMPLEMENT_APPROVAL"
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "echo goodbye"
-expect_in_file ".uncle/workspace/IMPLEMENTATION_REVIEW.md" "Built app/main.sh."
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "echo goodbye"
+expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "Built app/main.sh."
 
 # No baseline exists in a new application, so any failing command is a failure
 # of the build, and approving it is an override.
@@ -679,13 +679,13 @@ new_stagegate_case sg-plan-without-commands
 stagegate_agent
 printf '# Updated Project Plan\n\nNo commands.\n' > "$REPO/UPDATED_PROJECT_PLAN.md"
 hash_file "$REPO/UPDATED_PROJECT_PLAN.md" \
-    > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
+    > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
 run_stagegate FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 1
 expect_out "No Verification commands"
 expect_state PREFLIGHT
-expect_no_file ".uncle/workspace/implemented"
+expect_no_file ".uncle/workflow/implemented"
 
 # Approving carries the run through the remaining stages to COMPLETE.
 new_stagegate_case sg-approval-advances-to-complete
@@ -694,7 +694,7 @@ set_state IMPLEMENT
 run_stagegate_stdin "$(gate_input '' y)" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
-expect_out "Recorded approval for .uncle/workspace/IMPLEMENTATION_REVIEW.md"
+expect_out "Recorded approval for .uncle/workflow/IMPLEMENTATION_REVIEW.md"
 expect_out "Audit verdict: READY"
 expect_out "Workflow complete."
 expect_state "COMPLETE"
@@ -720,11 +720,11 @@ set_state IMPLEMENT
 run_stagegate FAKE_PREFLIGHT=BLOCKED
 expect_status 1
 expect_state PREFLIGHT
-expect_no_file .uncle/workspace/implemented
+expect_no_file .uncle/workflow/implemented
 run_stagegate
 expect_status 0
 expect_state WAIT_IMPLEMENT_APPROVAL
-expect_file .uncle/workspace/implemented
+expect_file .uncle/workflow/implemented
 
 # Missing browser/reviewer access cannot be replaced by a passing narrative.
 for result in BLOCKED 'NOT RUN'; do
@@ -735,7 +735,7 @@ for result in BLOCKED 'NOT RUN'; do
     expect_status 1
     expect_state EXECUTE_CHECKLIST
     expect_no_file FINAL_AUDIT.md
-    expect_no_file .uncle/workspace/repaired
+    expect_no_file .uncle/workflow/repaired
 done
 
 # A malformed review cannot pass or trigger unbounded implementation work.
@@ -746,7 +746,7 @@ run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=MALFORMED
 expect_status 1
 expect_state TEST_REVIEW
 expect_no_file FINAL_AUDIT.md
-expect_no_file .uncle/workspace/repaired
+expect_no_file .uncle/workflow/repaired
 
 # Repair goes back through the human diff gate, preserving the original file
 # inventory. Declining that gate must prevent acceptance execution and audit.
@@ -758,19 +758,19 @@ run_stagegate_stdin "$(gate_input '' y)" FAKE_TEST_REVIEW=FAIL_ONCE \
     FAKE_REPAIR="printf '#!/bin/sh\nsh app/main.sh | grep -qx hello\n' > app/test.sh"
 expect_status 0
 expect_state WAIT_IMPLEMENT_APPROVAL
-expect_file .uncle/workspace/repaired
-expect_in_file .uncle/workspace/IMPLEMENTATION_REVIEW.md 'app/new.sh'
-expect_in_file .uncle/workspace/TEST_CHANGES.diff '-sh app/main.sh | grep -q . || exit 1'
-expect_in_file .uncle/workspace/IMPLEMENTATION_REVIEW.md '+sh app/main.sh | grep -qx hello'
+expect_file .uncle/workflow/repaired
+expect_in_file .uncle/workflow/IMPLEMENTATION_REVIEW.md 'app/new.sh'
+expect_in_file .uncle/workflow/TEST_CHANGES.diff '-sh app/main.sh | grep -q . || exit 1'
+expect_in_file .uncle/workflow/IMPLEMENTATION_REVIEW.md '+sh app/main.sh | grep -qx hello'
 expect_no_file VERIFICATION_REPORT.md
 expect_no_file FINAL_AUDIT.md
 run_stagegate_stdin "$(gate_input '' y)" FAKE_TEST_REVIEW=FAIL_ONCE
 expect_status 0
 expect_state COMPLETE
-expect_in_file .uncle/workspace/repair-count '1'
-expect_in_file .uncle/workspace/received-test-review-prompt.md 'Driver-supplied test review evidence'
-expect_in_file .uncle/workspace/received-test-review-prompt.md 'All verification commands passed.'
-expect_in_file .uncle/workspace/received-test-review-prompt.md "$REPO/.uncle/workspace/TEST_CHANGES.diff"
+expect_in_file .uncle/workflow/repair-count '1'
+expect_in_file .uncle/workflow/received-test-review-prompt.md 'Driver-supplied test review evidence'
+expect_in_file .uncle/workflow/received-test-review-prompt.md 'All verification commands passed.'
+expect_in_file .uncle/workflow/received-test-review-prompt.md "$REPO/.uncle/workflow/TEST_CHANGES.diff"
 
 # A failed acceptance check repairs, reruns driver commands, repeats review,
 # and reaches audit only after a fresh successful verification.
@@ -780,10 +780,10 @@ set_state IMPLEMENT
 run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION=FAIL_ONCE
 expect_status 0
 expect_state COMPLETE
-expect_in_file .uncle/workspace/repair-source VERIFICATION_REPORT.md
-expect_in_file .uncle/workspace/green-check.tsv PASS
+expect_in_file .uncle/workflow/repair-source VERIFICATION_REPORT.md
+expect_in_file .uncle/workflow/green-check.tsv PASS
 COUNT=$((COUNT + 1))
-if [[ "$(grep -c '^TEST_REVIEW.md$' "$REPO/.uncle/workspace/reviewer-calls")" != 2 ]]; then
+if [[ "$(grep -c '^TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 2 ]]; then
     fail 'repair did not repeat independent test review'
 fi
 
@@ -794,12 +794,12 @@ set_state IMPLEMENT
 run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL WORKFLOW_MAX_REPAIRS=1
 expect_status 1
 expect_state REPAIR
-expect_in_file .uncle/workspace/repair-count '1'
+expect_in_file .uncle/workflow/repair-count '1'
 expect_no_file FINAL_AUDIT.md
 run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL WORKFLOW_MAX_REPAIRS=1
 expect_status 1
 expect_state REPAIR
-expect_in_file .uncle/workspace/repair-count '1'
+expect_in_file .uncle/workflow/repair-count '1'
 expect_out 'Repair limit (1) reached'
 
 # A reviewer cannot overrule the driver failure by returning PASS.
@@ -810,7 +810,7 @@ run_stagegate_stdin "$(gate_input '' y)" FAKE_IMPL="printf 'exit 1\n' > app/test
     WORKFLOW_MAX_REPAIRS=0
 expect_status 1
 expect_state REPAIR
-expect_in_file .uncle/workspace/repair-source green-check.md
+expect_in_file .uncle/workflow/repair-source green-check.md
 expect_no_file FINAL_AUDIT.md
 
 new_stagegate_case sg-missing-driver-results-block
@@ -826,8 +826,8 @@ expect_no_file FINAL_AUDIT.md
 new_stagegate_case sg-old-final-audit-resume
 stagegate_agent
 printf 'READY\n' > "$REPO/FINAL_AUDIT.md"
-printf 'app/test.sh\n' > "$REPO/.uncle/workspace/verification.paths"
-printf '%s\tapp/test.sh\n' "$(hash_file "$REPO/app/test.sh")" > "$REPO/.uncle/workspace/verification.manifest"
+printf 'app/test.sh\n' > "$REPO/.uncle/workflow/verification.paths"
+printf '%s\tapp/test.sh\n' "$(hash_file "$REPO/app/test.sh")" > "$REPO/.uncle/workflow/verification.manifest"
 set_state FINAL_AUDIT
 run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=MALFORMED
 expect_status 1
@@ -842,25 +842,25 @@ run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFY_EDIT="printf 'exit 0\n' > app/tes
 expect_status 1
 expect_state REPAIR
 expect_no_file FINAL_AUDIT.md
-expect_in_file .uncle/workspace/VERIFICATION_INTEGRITY.md app/test.sh
+expect_in_file .uncle/workflow/VERIFICATION_INTEGRITY.md app/test.sh
 
 # A test command that updates its own expected result cannot report green.
 new_stagegate_case sg-command-rewrites-test
 stagegate_agent
 # The second command must never run against the rewritten suite.
 sed '/^bash app\/test.sh$/a\
-printf ran > .uncle/workspace/second-command
+printf ran > .uncle/workflow/second-command
 ' "$REPO/UPDATED_PROJECT_PLAN.md" > "$CASE/plan.md"
 cp "$CASE/plan.md" "$REPO/UPDATED_PROJECT_PLAN.md"
-hash_file "$REPO/UPDATED_PROJECT_PLAN.md" > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
+hash_file "$REPO/UPDATED_PROJECT_PLAN.md" > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
 run_stagegate FAKE_IMPL="printf 'echo exit 0 > app/test.sh\n' > app/test.sh"
 expect_status 1
 expect_state REPAIR
 expect_no_file FINAL_AUDIT.md
-expect_no_file .uncle/workspace/approvals/IMPLEMENTATION_REVIEW.sha256
-expect_no_file .uncle/workspace/second-command
-expect_in_file .uncle/workspace/VERIFICATION_INTEGRITY.md app/test.sh
+expect_no_file .uncle/workflow/approvals/IMPLEMENTATION_REVIEW.sha256
+expect_no_file .uncle/workflow/second-command
+expect_in_file .uncle/workflow/VERIFICATION_INTEGRITY.md app/test.sh
 
 # The real driver executes approved groups concurrently and still gates the
 # complete results; the two checks rendezvous, so sequential execution fails.
@@ -871,7 +871,7 @@ cat > "$REPO/UPDATED_PROJECT_PLAN.md" <<'EOF'
 ```
 bash app/concurrent.sh 1 2
 bash app/concurrent.sh 2 1
-test -f .uncle/workspace/done1 && test -f .uncle/workspace/done2
+test -f .uncle/workflow/done1 && test -f .uncle/workflow/done2
 ```
 ## Protected verification paths
 ```
@@ -883,36 +883,36 @@ app
 ```
 EOF
 cat > "$REPO/app/concurrent.sh" <<'EOF'
-touch ".uncle/workspace/ready$1"
+touch ".uncle/workflow/ready$1"
 for n in {1..50}; do
-    if test -f ".uncle/workspace/ready$2"; then
-        touch ".uncle/workspace/done$1"
+    if test -f ".uncle/workflow/ready$2"; then
+        touch ".uncle/workflow/done$1"
         exit 0
     fi
     sleep .1
 done
 exit 7
 EOF
-hash_file "$REPO/UPDATED_PROJECT_PLAN.md" > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
+hash_file "$REPO/UPDATED_PROJECT_PLAN.md" > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
 run_stagegate WORKFLOW_DIFF_GATE=0
 expect_status 0
 expect_state COMPLETE
-expect_in_file .uncle/workspace/green-check.tsv PASS
+expect_in_file .uncle/workflow/green-check.tsv PASS
 COUNT=$((COUNT+1))
-if [[ "$(find "$REPO/.uncle/workspace/metrics" -name '*.json' -exec cat {} + | jq -s '[.[]|select(.kind=="check")]|length')" != 6 ]]; then
+if [[ "$(find "$REPO/.uncle/workflow/metrics" -name '*.json' -exec cat {} + | jq -s '[.[]|select(.kind=="check")]|length')" != 6 ]]; then
     fail 'driver did not record each check at implementation and checklist execution'
 fi
 
 new_stagegate_case sg-invalid-parallel-plan
 stagegate_agent
 printf '\n## Parallel verification groups\n```\n1 3\n```\n' >> "$REPO/UPDATED_PROJECT_PLAN.md"
-hash_file "$REPO/UPDATED_PROJECT_PLAN.md" > "$REPO/.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256"
+hash_file "$REPO/UPDATED_PROJECT_PLAN.md" > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
 run_stagegate
 expect_status 1
 expect_state PREFLIGHT
-expect_no_file .uncle/workspace/implemented
+expect_no_file .uncle/workflow/implemented
 
 
 # Newly capped outputs must stop both drivers before the next gate/state.
@@ -953,20 +953,20 @@ set_state IMPLEMENT
 run_driver WORKFLOW_PARALLEL_CHECKLIST=1 WORKFLOW_DOC_MAX_BYTES_MANUAL_CHECKLIST_BASE=1
 expect_status 1
 expect_out 'Document budget exceeded:'
-expect_file '.uncle/workspace/MANUAL_CHECKLIST.base.md'
+expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
 expect_state IMPLEMENT
 
 new_case change-budget-step-handoff
 green_baseline 0 'bash app/test.sh'
 printf '\n## 20. Implementation sequence\n\n1. First step.\n2. Second step.\n' >> "$REPO/CHANGE_PLAN.md"
-hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workspace/approvals/CHANGE_PLAN.sha256"
+hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
 set_state IMPLEMENT
 run_driver WORKFLOW_STEPWISE_IMPLEMENT=1 WORKFLOW_DOC_MAX_BYTES_IMPLEMENTATION_NOTES=1
 expect_status 1
 expect_out 'Document budget exceeded: IMPLEMENTATION_NOTES.md'
 expect_state IMPLEMENT
-expect_no_file '.uncle/workspace/implement-step-done'
-expect_in_file '.uncle/workspace/logs/implementation-step-1.gated-prompt.md' 'Compact output budgets'
+expect_no_file '.uncle/workflow/implement-step-done'
+expect_in_file '.uncle/workflow/logs/implementation-step-1.gated-prompt.md' 'Compact output budgets'
 
 # A successful compaction reuses the generated review and permits advancement.
 new_stagegate_case sg-compact-final-audit
@@ -978,7 +978,7 @@ expect_out 'Compaction accepted:'
 expect_state COMPLETE
 expect_file FINAL_AUDIT.md
 COUNT=$((COUNT + 1))
-[[ -e "$REPO/.uncle/workspace/logs/final-audit.compact.log" ]] || fail 'compaction log missing'
+[[ -e "$REPO/.uncle/workflow/logs/final-audit.compact.log" ]] || fail 'compaction log missing'
 
 new_case change-compact-background-checklist
 green_baseline 0 'bash app/test.sh'
@@ -988,21 +988,21 @@ run_driver WORKFLOW_PARALLEL_CHECKLIST=1 FAKE_COMPACT_REVIEW=1 WORKFLOW_DOC_MAX_
 expect_status 0
 expect_out 'Compaction accepted:'
 expect_state WAIT_IMPLEMENT_APPROVAL
-expect_file '.uncle/workspace/MANUAL_CHECKLIST.base.md'
+expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
 
 # Budget failures reuse the finished review, not a new full reviewer run.
 new_stagegate_case sg-review-cache
 printf 'requirements\n' > "$REPO/REQUIREMENTS.md"
 printf 'plan\n' > "$REPO/PROJECT_PLAN.md"
 printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
-hash_file "$REPO/PROJECT_PLAN.md" > "$REPO/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
+hash_file "$REPO/PROJECT_PLAN.md" > "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
 set_state ADVERSARIAL_REVIEW
 for attempt in 1 2; do
     run_stagegate WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
     expect_status 42
     expect_state ADVERSARIAL_REVIEW
     COUNT=$((COUNT + 1))
-    [[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workspace/reviewer-calls") == 1 ]] || fail 'full review repeated'
+    [[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'full review repeated'
 done
 expect_out 'Reusing completed plan review'
 # Raising only the budget adopts the preserved review without another call.
@@ -1010,14 +1010,14 @@ run_stagegate WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=100
 expect_status 0
 expect_state WAIT_REVIEW_ACKNOWLEDGEMENT
 COUNT=$((COUNT + 1))
-[[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workspace/reviewer-calls") == 1 ]] || fail 'budget adjustment reran reviewer'
+[[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'budget adjustment reran reviewer'
 # Real input changes force a new review.
 printf 'changed requirements\n' >> "$REPO/REQUIREMENTS.md"
 set_state ADVERSARIAL_REVIEW
 run_stagegate WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
 expect_status 42
 COUNT=$((COUNT + 1))
-[[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workspace/reviewer-calls") == 2 ]] || fail 'changed inputs reused stale review'
+[[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'changed inputs reused stale review'
 
 new_stagegate_case sg-speculative-budget-pause
 printf 'requirements\n' > "$REPO/REQUIREMENTS.md"
@@ -1029,7 +1029,7 @@ expect_status 42
 expect_state ADVERSARIAL_REVIEW
 expect_out 'pausing without another full review'
 COUNT=$((COUNT + 1))
-[[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workspace/reviewer-calls") == 1 ]] || fail 'speculative budget failure repeated review'
+[[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'speculative budget failure repeated review'
 
 new_case change-review-cache
 set_state PLAN
@@ -1038,7 +1038,7 @@ for attempt in 1 2; do
     expect_status 42
     expect_state PLAN
     COUNT=$((COUNT + 1))
-    [[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workspace/reviewer-calls") == 1 ]] || fail 'change workflow repeated review'
+    [[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'change workflow repeated review'
 done
 expect_out 'Reusing completed plan review'
 

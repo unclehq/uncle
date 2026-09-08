@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Stage-token grammar for .uncle/workspace/state, shared by change-workflow.sh and
+# Stage-token grammar for .uncle/workflow/state, shared by change-workflow.sh and
 # from-issue.sh so the two cannot drift apart on it.
 #
 #   <STAGE>            the legacy form; still written when no issue is known
 #   <issue>:<STAGE>    written when an issue number is resolvable
 #
-# The prefix is informational. .uncle/workspace/origin remains the sole authority for
+# The prefix is informational. .uncle/workflow/origin remains the sole authority for
 # every origin-match decision (INV-1), so nothing reads the prefix as an
 # identity. Reading is tolerant in both directions: a bare token written by an
 # older driver, by hand, or by a test fixture stays valid indefinitely.

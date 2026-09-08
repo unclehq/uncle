@@ -230,7 +230,7 @@ check_absent "incomplete result: no artifact" "$TMP/incomplete.md"
 COUNT=$((COUNT + 1))
 grep -q 'finish reason: error' "$TMP/error-log" || fail 'missing failure reason'
 COUNT=$((COUNT + 1))
-ls "$TMP/.uncle/workspace/logs"/reviewer-cline.* >/dev/null || fail 'raw log not preserved'
+ls "$TMP/.uncle/workflow/logs"/reviewer-cline.* >/dev/null || fail 'raw log not preserved'
 
 # --- report -----------------------------------------------------------------
 

@@ -7,7 +7,7 @@ cat > "$tmp/kimi" <<'STUB'
 #!/usr/bin/env python3
 import json,os,sys
 from pathlib import Path
-session=Path(os.environ['WORKFLOW_KIMI_SESSIONS_DIR'])/'workspace/new-session'
+session=Path(os.environ['WORKFLOW_KIMI_SESSIONS_DIR'])/'workflow/new-session'
 wire=session/'agents/main/wire.jsonl';wire.parent.mkdir(parents=True)
 (session/'state.json').write_text(json.dumps({'cwd':os.getcwd()}))
 prompt=sys.argv[sys.argv.index('-p')+1]
@@ -25,7 +25,7 @@ export UNCLE_STATUS_STAGE=implementation
 printf 'unique fixture prompt' | bash "$ROOT/scripts/agent-kimi.sh" --model kimi > "$tmp/result"
 jq -s -e 'last | .usage.input_tokens == 1000 and .total_cost_usd == null' "$tmp/result" > /dev/null
 . "$ROOT/scripts/lib/performance.sh"
-STATE_DIR="$tmp/workspace"
+STATE_DIR="$tmp/workflow"
 perf_record agent implementation 1 0 "$tmp/result" "$WORKFLOW_KIMI_CMD" kimi high
 python3 - "$STATE_DIR/metrics" <<'PY'
 import json,sys

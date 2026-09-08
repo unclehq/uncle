@@ -51,7 +51,7 @@ class Panel(unittest.TestCase):
     def test_completed_record_replaces_live_without_double_count(self):
         ui=self.ui()
         with tempfile.TemporaryDirectory() as temp, patch('uncle_tui._project_root',return_value=temp):
-            p=Path(temp)/'.uncle/workspace/metrics';p.mkdir(parents=True)
+            p=Path(temp)/'.uncle/workflow/metrics';p.mkdir(parents=True)
             row=dict(kind='agent',stage='implementation',ended_at=time.time(),elapsed_seconds=65,input_tokens=100,output_tokens=20,cache_read_tokens=10,cache_write_tokens=0,reported_cost_usd=.02)
             (p/'one.json').write_text(json.dumps(row))
             self.assertTrue(ui.poll_session_stats());self.assertFalse(ui.poll_session_stats())

@@ -154,7 +154,7 @@ ARGV="$TMP/reread.argv"
 
 run_reread() {
     : > "$ARGV"
-    rm -rf "$CPROJ2/.uncle/workspace" "$CPROJ2/REQUIREMENTS_INTERPRETATION.md"
+    rm -rf "$CPROJ2/.uncle/workflow" "$CPROJ2/REQUIREMENTS_INTERPRETATION.md"
     (cd "$CPROJ2" && echo n | ARGV_LOG="$ARGV" \
         UNCLE_PROJECT_ROOT="$CPROJ2" UNCLE_CONFIG="$CPROJ2/.uncle/config" \
         WORKFLOW_AGENT_CMD="$TMP/agent-global" \
@@ -186,7 +186,7 @@ check_absent "config: a kimi stage gets no --model" "--model" "$argv"
 printf 'requirements.runner cline\nrequirements.model cline-pass/kimi-k3\n' \
     > "$CPROJ2/.uncle/config"
 : > "$ARGV"
-rm -rf "$CPROJ2/.uncle/workspace" "$CPROJ2/REQUIREMENTS_INTERPRETATION.md"
+rm -rf "$CPROJ2/.uncle/workflow" "$CPROJ2/REQUIREMENTS_INTERPRETATION.md"
 (cd "$CPROJ2" && echo n | ARGV_LOG="$ARGV" \
     UNCLE_PROJECT_ROOT="$CPROJ2" UNCLE_CONFIG="$CPROJ2/.uncle/config" \
     WORKFLOW_AGENT_CMD="$TMP/agent-global" \
@@ -204,9 +204,9 @@ check_contains "explicit WORKFLOW_AGENT_CMD wins over the file's runner" \
 # Reviewer effort/model settings must reach the actual command as well.
 . "$ROOT/scripts/lib/sha256.sh"
 RPROJ="$TMP/reviewer-settings"
-mkdir -p "$RPROJ/.uncle/workspace/approvals"
+mkdir -p "$RPROJ/.uncle/workflow/approvals"
 printf 'plan\n' > "$RPROJ/PROJECT_PLAN.md"
-hash_file "$RPROJ/PROJECT_PLAN.md" > "$RPROJ/.uncle/workspace/approvals/PROJECT_PLAN.sha256"
+hash_file "$RPROJ/PROJECT_PLAN.md" > "$RPROJ/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
 cat > "$TMP/config-reviewer" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$ARGV_LOG"
@@ -217,7 +217,7 @@ done
 EOF
 chmod +x "$TMP/config-reviewer"
 printf 'adversarial-review.runner cline\nadversarial-review.model vendor/reviewer\nadversarial-review.effort low\n' > "$RPROJ/.uncle/config"
-printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workspace/state"
+printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workflow/state"
 UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \
     ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null
 argv="$(cat "$TMP/reviewer.argv")"
@@ -225,7 +225,7 @@ check_contains 'reviewer: configured model is used' '-m vendor/reviewer' "$argv"
 check_contains 'reviewer: configured effort is used' 'model_reasoning_effort=low' "$argv"
 check_contains 'reviewer: sandbox is retained' '--sandbox read-only' "$argv"
 printf 'adversarial-review.runner codex\nadversarial-review.effort high\n' > "$RPROJ/.uncle/config"
-printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workspace/state"
+printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workflow/state"
 UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \
     ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_EFFORT_ADVERSARIAL_REVIEW=low \
     bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null

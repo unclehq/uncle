@@ -17,7 +17,7 @@ class ReviewContextTest(unittest.TestCase):
     def test_current_evidence_is_inline_and_history_is_only_referenced(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            state = root / ".uncle/workspace"
+            state = root / ".uncle/workflow"
             state.mkdir(parents=True)
             (state / "green-check.md").write_text("All verification commands passed.")
             (state / "green-check.tsv").write_text("PASS\tbash tests/browser.sh\n")
@@ -37,7 +37,7 @@ class ReviewContextTest(unittest.TestCase):
     def test_missing_empty_and_truncated_results_are_explicit(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            state = root / ".uncle/workspace"
+            state = root / ".uncle/workflow"
             state.mkdir(parents=True)
             output = context.render(root, state)
             self.assertIn("MISSING", output)

@@ -38,8 +38,8 @@ class Uncle < Formula
     assert_match "Usage: uncle", shell_output("#{bin}/uncle --help")
     assert_match "Unknown argument", shell_output("#{bin}/uncle --bogus 2>&1", 1)
 
-    (testpath/".uncle/workspace/metrics").mkpath
-    (testpath/".uncle/workspace/metrics/sample.json").write <<~JSON
+    (testpath/".uncle/workflow/metrics").mkpath
+    (testpath/".uncle/workflow/metrics/sample.json").write <<~JSON
       {"kind":"agent","stage":"requirements","elapsed_seconds":3,"input_tokens":10,"output_tokens":5,"reported_total_tokens":15}
     JSON
     assert_match "requirements", shell_output("#{bin}/uncle --performance")

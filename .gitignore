@@ -1,11 +1,11 @@
-.uncle/workspace/
+.uncle/workflow/
 
 # Local agent workflow state
-.uncle/workspace/state
-.uncle/workspace/approvals/
-.uncle/workspace/logs/
-.uncle/workspace/change.diff
-.uncle/workspace/change-stat.txt
+.uncle/workflow/state
+.uncle/workflow/approvals/
+.uncle/workflow/logs/
+.uncle/workflow/change.diff
+.uncle/workflow/change-stat.txt
 
 # Per-project local config (committed template lives at .uncle/config.example)
 .uncle/config
@@ -13,3 +13,6 @@
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Legacy state, retained until the next run migrates it.
+.uncle/workspace/

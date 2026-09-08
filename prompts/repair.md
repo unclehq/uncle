@@ -3,7 +3,7 @@ This is a focused repair pass, not a new implementation of the approved plan.
 
 ## Repair context budget
 
-1. Read .uncle/workspace/repair-source to locate the current failure report.
+1. Read .uncle/workflow/repair-source to locate the current failure report.
    Search that report for failing commands, required FAIL rows, and actionable
    blocking finding IDs. Read those findings and their supporting evidence in
    bounded sections; omit passing checks, resolved findings, and unrelated logs.

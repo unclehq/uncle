@@ -91,8 +91,8 @@ done
     def test_archive_excludes_state_and_runs_from_path_with_spaces(self):
         source = self.work / "source"
         shutil.copytree(ROOT, source, ignore=shutil.ignore_patterns(".git", ".uncle", "__pycache__"))
-        (source / ".uncle/workspace").mkdir(parents=True)
-        (source / ".uncle/workspace/secret").write_text("do not ship")
+        (source / ".uncle/workflow").mkdir(parents=True)
+        (source / ".uncle/workflow/secret").write_text("do not ship")
         (source / "UNRELATED_PRIVATE_FILE").write_text("do not ship")
         output = self.work / "packages"
         output.mkdir()

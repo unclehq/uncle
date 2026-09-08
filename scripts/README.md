@@ -4,7 +4,7 @@ Six standalone bash scripts. Each resolves two roots: the install root, from
 its own location, which supplies the prompts, libs, and agent shims; and the
 project root, which is `UNCLE_PROJECT_ROOT` when the `uncle` launcher exports
 it and the install root otherwise. The driver `cd`s to the project root, so
-`.uncle/workspace`, the artifacts, and the diff belong to the project being
+`.uncle/workflow`, the artifacts, and the diff belong to the project being
 worked on rather than to the directory uncle is installed in. All are bash 3.2 compatible (macOS system bash).
 
 Every script accepts `-h` / `--help`, prints a usage summary, and exits 0
@@ -42,7 +42,7 @@ BLOCKED/NOT RUN/N/A on a required row pauses the current stage. Malformed or
 missing tables fail closed. Preflight failures always pause before code changes.
 
 Test review receives the current driver verification summary directly in its
-prompt, plus exact paths and hashes for hidden workspace evidence. Historical
+prompt, plus exact paths and hashes for hidden workflow evidence. Historical
 failures must be reconciled with current results. Additional regression cases
 inside approved commands are assessed against requirements and scope; a longer
 defect-ID list alone is not a reason to remove coverage or require reapproval.
@@ -55,16 +55,16 @@ runs the complete approved verification suite. Earlier passes are not reported
 as fresh repair evidence. Repairs preserve
 the failed report, update code and implementation reports, and return through
 driver verification, fresh human diff approval, independent test review, and
-checklist execution. `.uncle/workspace/repair-source` identifies the report;
+checklist execution. `.uncle/workflow/repair-source` identifies the report;
 `repair-count` records attempts across restarts. `WORKFLOW_MAX_REPAIRS` defaults
 to 2 (0 disables automatic repair; maximum 100). An exhausted limit leaves the
 state at `REPAIR`; inspect the defect before deliberately raising the limit.
 
 The driver stores protected path scopes and SHA-256 inventories in
-`verification.paths` and `verification.manifest` under `.uncle/workspace` and
+`verification.paths` and `verification.manifest` under `.uncle/workflow` and
 includes them in the implementation review. Test commands and checklist
 execution must preserve those inputs. Edits, additions, or deletions invalidate
-verification, produce `VERIFICATION_INTEGRITY.md` in that workspace, and leave
+verification, produce `VERIFICATION_INTEGRITY.md` in that workflow, and leave
 the run at `REPAIR`. Python bytecode caches are excluded; other generated outputs
 must go outside protected scopes. Test reviewers check that scopes include all
 test helpers, expected values, and runner configuration. Hash comparisons detect
@@ -86,7 +86,7 @@ missing the new path block needs amendment and renewed approval.
 Run `uncle --performance` from a project, or
 `bash /path/to/uncle/scripts/performance-report.sh /path/to/project`.
 Both drivers write atomic per-attempt JSON records under
-`.uncle/workspace/metrics/`; reports sort stages by accumulated work time.
+`.uncle/workflow/metrics/`; reports sort stages by accumulated work time.
 Agent and reviewer records include the runner, configured model and effort,
 workflow state (including repair), and speculative-execution flag. No telemetry
 is sent elsewhere. `WORKFLOW_METRICS=0` disables collection without affecting
@@ -148,7 +148,7 @@ environment variables. Seed `CHANGE_REQUEST.md` from a GitHub issue with
 ### `workflow.sh` — manual approval helper
 
 Records a human approval by writing the SHA-256 of the approved file to
-`.uncle/workspace/approvals/`, and reports approval status.
+`.uncle/workflow/approvals/`, and reports approval status.
 
 ```sh
 ./scripts/workflow.sh approve-plan
@@ -191,9 +191,9 @@ Closing the issue additionally requires `gh`: if the issue was fetched over the
 `curl` fallback, or `gh` is missing or unauthenticated at close time, the close
 is skipped with a message and the run is still a success.
 
-The issue is closed only if all of these hold: `.uncle/workspace/audit-verdict` records
+The issue is closed only if all of these hold: `.uncle/workflow/audit-verdict` records
 this run's id, its verdict class is `READY` or `READY_WITH_NON_BLOCKING_ISSUES`,
-`.uncle/workspace/origin` still names this issue, and `FINAL_AUDIT.md` still hashes to
+`.uncle/workflow/origin` still names this issue, and `FINAL_AUDIT.md` still hashes to
 the value recorded when it was classified. Any mismatch leaves the issue open
 and prints the reason. A driver exit code other than 0 is propagated and no
 close is attempted.
@@ -203,16 +203,16 @@ so a run started or resumed directly — without going back through
 `from-issue.sh` — still closes its issue. The decision lives in one place,
 `scripts/lib/issue-close.sh`, and both entry points call it. The driver's close
 additionally requires that the run can prove which issue it owns: either
-`.uncle/workspace/state` already carried an issue prefix when the run started, or
+`.uncle/workflow/state` already carried an issue prefix when the run started, or
 `STAGEGATE_ORIGIN_REPO`/`STAGEGATE_ORIGIN_ISSUE` were set for that invocation.
-A leftover `.uncle/workspace/origin` found on disk by an otherwise fresh run is not
+A leftover `.uncle/workflow/origin` found on disk by an otherwise fresh run is not
 enough. `WORKFLOW_CLOSE_ISSUE=0` disables the driver-side close entirely. After
-a successful close the driver writes `.uncle/workspace/issue-closed`, and
+a successful close the driver writes `.uncle/workflow/issue-closed`, and
 `from-issue.sh`'s own post-run check — now a defensive fallback rather than the
 only path — sees that marker and does not close a second time. A close that
 fails leaves no marker, so a later rerun of the same run id may retry it.
 
-State files this contract depends on, all under the gitignored `.uncle/workspace/`:
+State files this contract depends on, all under the gitignored `.uncle/workflow/`:
 
 | File | Written by | Meaning |
 |---|---|---|
@@ -228,17 +228,17 @@ State files this contract depends on, all under the gitignored `.uncle/workspace
 | `state` | either driver on every transition | `<STAGE>`, or `<issue>:<STAGE>` when the issue is known. The prefix is informational; a bare token stays valid |
 | `lock/pid` | `change-workflow.sh` for the length of a run | pid of the run holding the checkout |
 
-A state file whose issue prefix disagrees with `.uncle/workspace/origin`'s issue is
+A state file whose issue prefix disagrees with `.uncle/workflow/origin`'s issue is
 treated as corruption by both the driver's preflight and `from-issue.sh`'s seed
 gate: they refuse and exit 1 rather than resolve it in either file's favour.
 
-`from-issue.sh --change` refuses to seed when `.uncle/workspace/state` shows an
-in-flight run whose `.uncle/workspace/origin` names a different issue, or names nothing
+`from-issue.sh --change` refuses to seed when `.uncle/workflow/state` shows an
+in-flight run whose `.uncle/workflow/origin` names a different issue, or names nothing
 at all. When the origin matches the issue being seeded, `CHANGE_REQUEST.md` is
 left as it is — hand edits survive a resume — and only the prompt is repeated.
 `change-workflow.sh` performs the mirror-image check when launched by
 `from-issue.sh`, and refuses to start at all while another run holds
-`.uncle/workspace/lock`. The refusal names the exact command that clears the state
+`.uncle/workflow/lock`. The refusal names the exact command that clears the state
 deliberately; neither script ever clears it automatically.
 
 ### `codex-review-plan.sh` — adversarial plan review (Stage 2)
@@ -253,7 +253,7 @@ Runs the reviewer CLI against the approved `PROJECT_PLAN.md` and writes
 ```
 
 Takes no positional arguments. Requires `REQUIREMENTS.md`, `PROJECT_PLAN.md`,
-and a matching approval record in `.uncle/workspace/approvals/PROJECT_PLAN.sha256`.
+and a matching approval record in `.uncle/workflow/approvals/PROJECT_PLAN.sha256`.
 Normally invoked by the driver; can be run by hand.
 
 ### `codex-create-checklist.sh` — manual checklist generation (Stage 6)
@@ -269,7 +269,7 @@ automated-test report, and writes `MANUAL_CHECKLIST.md`.
 
 Takes no positional arguments. Requires `REQUIREMENTS.md`,
 `UPDATED_PROJECT_PLAN.md`, `AUTOMATED_TEST_REPORT.md`, and a matching approval
-record in `.uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256`. Normally invoked
+record in `.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256`. Normally invoked
 by the driver; can be run by hand.
 
 ## Argument handling summary
@@ -391,7 +391,7 @@ gate — `change_diff_files` — rather than `git diff` alone. `git diff` report
 only tracked changes, so a file the agent *created* escaped the frozen scope
 entirely, which is the largest kind of scope creep there is. Untracked paths
 that already existed when implementation started are recorded in
-`.uncle/workspace/untracked-before.txt` and excluded: a scratch file in the operator's
+`.uncle/workflow/untracked-before.txt` and excluded: a scratch file in the operator's
 checkout is not something the agent did.
 
 `scripts/lib/workflow-artifacts.sh` holds the one list of files the workflow
@@ -412,7 +412,7 @@ so the fixed part is paid N times while the growing part is paid once per step.
 `IMPLEMENTATION_NOTES.md` and the code on disk are the handoff between steps.
 
 The turn cap is divided across the steps rather than multiplied, and
-`.uncle/workspace/implement-step-done` makes a partial run resumable. It is off by
+`.uncle/workflow/implement-step-done` makes a partial run resumable. It is off by
 default: it changes how the most consequential stage runs, and a step boundary
 in the wrong place costs coherence, which is worth more than tokens.
 
@@ -548,7 +548,7 @@ out; `WORKFLOW_REVIEW_COMPACT_SECONDS` defaults to 120 (range 1–600). The chec
 preserve structural anchors; the human still judges whether meaning is retained.
 Covered by `scripts/tests/review-compaction-test.sh`.
 
-Adversarial plan-review retries use `.uncle/workspace/review-cache/` when local
+Adversarial plan-review retries use `.uncle/workflow/review-cache/` when local
 inputs, Git HEAD, review instructions and reviewer settings match. Budget changes
 do not invalidate the review. A speculative review rejected on size returns 42
 and pauses without replaying the full stage. Set `WORKFLOW_REVIEW_CACHE=0` to

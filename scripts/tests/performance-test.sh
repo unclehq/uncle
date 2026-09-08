@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$ROOT/scripts/lib/performance.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-STATE_DIR="$TMP/.uncle/workspace"
+STATE_DIR="$TMP/.uncle/workflow"
 mkdir -p "$STATE_DIR"
 cat > "$TMP/log" <<'EOF'
 startup text
@@ -51,8 +51,8 @@ if head -n 1 "$TMP/report" | grep -qF 'Estimated USD'; then exit 1; fi
 grep -qF 'Unavailable' "$TMP/report"
 WORKFLOW_SHOW_COST_ESTIMATES=1 bash "$ROOT/scripts/performance-report.sh" "$TMP" > "$TMP/estimates"
 head -n 1 "$TMP/estimates" | grep -qF 'Estimated USD'
-mkdir -p "$TMP/totals/.uncle/workspace/metrics"
-cat > "$TMP/totals/.uncle/workspace/metrics/input.json" <<'EOF'
+mkdir -p "$TMP/totals/.uncle/workflow/metrics"
+cat > "$TMP/totals/.uncle/workflow/metrics/input.json" <<'EOF'
 {"kind":"agent","stage":"mixed","elapsed_seconds":1,"input_tokens":100,"output_tokens":50,"cache_read_tokens":20,"cache_write_tokens":10,"input_includes_cache":true}
 {"kind":"agent","stage":"mixed","elapsed_seconds":1,"input_tokens":100,"output_tokens":50,"cache_read_tokens":20,"cache_write_tokens":10,"input_includes_cache":false}
 EOF

@@ -16,7 +16,7 @@ Execute every feasible Critical and Important check.
 
 ## Fresh driver verification evidence
 
-Read `.uncle/workspace/checklist-driver-checks/README.md` first. The driver
+Read `.uncle/workflow/checklist-driver-checks/README.md` first. The driver
 runs the approved automated verification commands immediately before this stage,
 outside the agent sandbox, and records command exits in `results.tsv` and
 assertion output in `output.log` in that directory. If README says NOT RUN,

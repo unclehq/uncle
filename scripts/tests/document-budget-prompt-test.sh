@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 cd "$work"
-STATE_DIR=.uncle/workspace
+STATE_DIR=.uncle/workflow
 WORKFLOW_BUDGET_PROMPT=1
 printf 'Brief\n' > REQUIREMENTS.md
 python3 - <<'PY'

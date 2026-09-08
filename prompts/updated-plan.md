@@ -87,7 +87,7 @@ repository-relative file or directory paths, one per line. List all tests,
 expected results and fixtures, test helpers, and configuration that determines
 which tests run. Prefer complete test directories so new tests cannot be
 silently added during verification. Include authoritative source inputs when
-they are test oracles. No globs, symlinks, parent traversal, or workspace-state
+they are test oracles. No globs, symlinks, parent traversal, or workflow-state
 paths. Paths must exist after implementation. Put generated test outputs in
 temporary directories outside these scopes. Python bytecode caches are ignored.
 The driver hashes these inputs before running verification and rejects changed,

@@ -4,7 +4,9 @@ case "${1:-}" in
     -h|--help) echo 'Usage: performance-report.sh [project-directory]'; exit 0 ;;
 esac
 [[ $# -le 1 ]] || { echo 'Expected at most one project directory.' >&2; exit 1; }
-dir="${1:-.}/.uncle/workspace/metrics"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/workflow-directory.sh"
+workflow_directory_migrate "${1:-.}"
+dir="${1:-.}/.uncle/workflow/metrics"
 if [[ ! -d "$dir" ]]; then
     echo 'No performance records yet. Run a workflow with WORKFLOW_METRICS=1.'
     exit 0

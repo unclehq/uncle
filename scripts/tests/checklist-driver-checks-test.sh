@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 . "$ROOT/scripts/lib/gates.sh"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-STATE_DIR="$work/workspace"
+STATE_DIR="$work/workflow"
 LOG_DIR="$STATE_DIR/logs"
 mkdir -p "$LOG_DIR"
 GREEN_CMDS="$STATE_DIR/commands"

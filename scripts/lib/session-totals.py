@@ -10,11 +10,11 @@ import tempfile
 import uuid
 
 
-def update(workspace, source=None, origin=''):
-    workspace = Path(workspace)
-    workspace.mkdir(parents=True, exist_ok=True)
-    path = workspace / 'session-totals.json'
-    with (workspace / '.session-totals.lock').open('a') as lock:
+def update(workflow, source=None, origin=''):
+    workflow = Path(workflow)
+    workflow.mkdir(parents=True, exist_ok=True)
+    path = workflow / 'session-totals.json'
+    with (workflow / '.session-totals.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             saved = json.loads(path.read_text())
@@ -25,11 +25,11 @@ def update(workspace, source=None, origin=''):
             source = Path(source)
             if origin == '#':
                 try:
-                    origin = '#'.join((workspace / 'origin').read_text().splitlines()[0].split()[:2])
+                    origin = '#'.join((workflow / 'origin').read_text().splitlines()[0].split()[:2])
                 except (OSError, IndexError):
                     origin = '#'
             identity = [source.name, hashlib.sha256(source.read_bytes()).hexdigest(), origin]
-        metrics = workspace / 'metrics'
+        metrics = workflow / 'metrics'
         names = sorted(p.name for p in metrics.glob('*.json'))
         if saved is None or (identity is not None and saved['identity'] != identity):
             # On first adoption include existing metrics. A new source starts at zero.
@@ -48,7 +48,7 @@ def update(workspace, source=None, origin=''):
             if row.get('kind') in ('agent', 'reviewer'):
                 records.append(row)
         saved.update(records=records, seen=list(baseline) + seen)
-        fd, temporary = tempfile.mkstemp(prefix='.session-totals-', dir=workspace)
+        fd, temporary = tempfile.mkstemp(prefix='.session-totals-', dir=workflow)
         try:
             with os.fdopen(fd, 'w') as out:
                 json.dump(saved, out)

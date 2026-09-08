@@ -48,7 +48,7 @@ try {
         finally { $zip.Dispose() }
         Assert-InstallerArchive $fixture
         $zip = [IO.Compression.ZipFile]::Open($fixture, [IO.Compression.ZipArchiveMode]::Update)
-        try { $zip.CreateEntry(('uncle-package/.uncle/workspace/state').Replace('/', $separator)) | Out-Null }
+        try { $zip.CreateEntry(('uncle-package/.uncle/workflow/state').Replace('/', $separator)) | Out-Null }
         finally { $zip.Dispose() }
         $rejected = $false
         try { Assert-InstallerArchive $fixture } catch { $rejected = $_.Exception.Message -eq 'Packaged workflow state' }

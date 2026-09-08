@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/workflow-directory.sh"
+workflow_directory_migrate "$ROOT"
 
 # ---------------------------------------------------------------------------
 # Change-workflow chaining
@@ -13,14 +15,14 @@ cd "$ROOT"
 # globals resolved further down (OWNER, REPO, ISSUE_NUM, USED_GH) at call time.
 # ---------------------------------------------------------------------------
 
-STATE_DIR=".uncle/workspace"
+STATE_DIR=".uncle/workflow"
 STATE_FILE="$STATE_DIR/state"
 ORIGIN_FILE="$STATE_DIR/origin"
 VERDICT_FILE="$STATE_DIR/audit-verdict"
 MARKER_FILE="$STATE_DIR/issue-closed"
 CONFIRM_WORD="RUN"
 
-# .uncle/workspace/state grammar, and the shared INV-3 close gate the driver also uses.
+# .uncle/workflow/state grammar, and the shared INV-3 close gate the driver also uses.
 . "$ROOT/scripts/lib/state.sh"
 . "$ROOT/scripts/lib/issue-close.sh"
 
@@ -34,7 +36,7 @@ origin_line() {
     fi
 }
 
-# .uncle/workspace/origin's first two fields name this invocation's issue. The third
+# .uncle/workflow/origin's first two fields name this invocation's issue. The third
 # field is fetch provenance and is deliberately not part of the identity.
 origin_matches_this() {
     [[ "$(origin_field "$ORIGIN_FILE" 1)" == "$OWNER/$REPO" \
@@ -85,7 +87,7 @@ seed_is_current() {
     run_in_flight && origin_matches_this
 }
 
-# .uncle/workspace/origin's third field records how this binding was fetched. Only an
+# .uncle/workflow/origin's third field records how this binding was fetched. Only an
 # authenticated gh fetch can later authorize a close; a two-field file written
 # before this field existed reads as `curl` and fails closed.
 write_origin() {

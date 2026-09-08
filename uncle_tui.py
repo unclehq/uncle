@@ -440,11 +440,11 @@ class UncleTUI:
         if self.state == "menu" and self.first_run:
             # First time in this project root: open the Configure screen so
             # this project gets set up before anything runs, and create the
-            # workspace dir the scripts will write their state/logs into.
+            # workflow dir the scripts will write their state/logs into.
             self.state = "config"
             self.config_sel = 0
             try:
-                os.makedirs(os.path.join(_project_root(), ".uncle", "workspace"),
+                os.makedirs(os.path.join(_project_root(), ".uncle", "workflow"),
                             exist_ok=True)
             except Exception:
                 pass
@@ -939,7 +939,7 @@ class UncleTUI:
         self.proc_done = False
         self.workflow_completed = False
         self.support_checked = False
-        metrics = os.path.join(_project_root(), ".uncle", "workspace", "metrics")
+        metrics = os.path.join(_project_root(), ".uncle", "workflow", "metrics")
         self.session_stats = {"active": {}, "live": {}, "records": [], "tick": -1,
                               "seen": set(os.listdir(metrics)) if os.path.isdir(metrics) else set()}
         self._restore_session_totals()
@@ -1312,7 +1312,7 @@ class UncleTUI:
         stats = getattr(self, "session_stats", None)
         if stats is None:
             return
-        path = os.path.join(_project_root(), ".uncle", "workspace", "session-totals.json")
+        path = os.path.join(_project_root(), ".uncle", "workflow", "session-totals.json")
         try:
             with open(path) as fh:
                 saved = json.load(fh)
@@ -1346,7 +1346,7 @@ class UncleTUI:
         stats["tick"] = tick
         if getattr(self, "proc_done", False):
             stats.setdefault("stopped_at", time.time())
-        directory = os.path.join(_project_root(), ".uncle", "workspace", "metrics")
+        directory = os.path.join(_project_root(), ".uncle", "workflow", "metrics")
         try:
             names = os.listdir(directory)
         except OSError:

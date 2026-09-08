@@ -6,7 +6,7 @@ set -euo pipefail
 # ROOT is where uncle itself lives: the prompts, the libs, and the agent shims
 # it ships. For a Homebrew install that is the read-only Cellar libexec.
 #
-# PROJECT_ROOT is the project being worked on: .uncle/workspace, the artifacts,
+# PROJECT_ROOT is the project being worked on: .uncle/workflow, the artifacts,
 # the diff, the project's own gates. `uncle` exports UNCLE_PROJECT_ROOT (the
 # directory it was launched from); a driver run directly falls back to $ROOT,
 # which is the checkout it lives in.
@@ -20,13 +20,15 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
+. "$ROOT/scripts/lib/workflow-directory.sh"
+workflow_directory_migrate "$PROJECT_ROOT"
 export DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md
 
 # Prompt files are named relative to the uncle install, but the cwd is now the
 # project. Resolve them the way gates are resolved: the project's own copy
 # wins, otherwise the prompt that shipped with uncle. An absolute path or a
 # path that exists in the project is returned untouched, which is what keeps
-# composed prompts under .uncle/workspace working.
+# composed prompts under .uncle/workflow working.
 resolve_prompt() {
     local p="$1"
     if [[ -e "$p" ]]; then
@@ -58,7 +60,7 @@ case "$#:${1:-}" in
     *)                  printf 'Unknown argument: %s\n' "${1:-}" >&2; usage >&2; exit 1 ;;
 esac
 
-STATE_DIR=".uncle/workspace"
+STATE_DIR=".uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
 LOG_DIR="$STATE_DIR/logs"
 SPEC_DIR="$STATE_DIR/speculative"

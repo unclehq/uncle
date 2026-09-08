@@ -227,7 +227,7 @@ document_budget_override_path() {
     fingerprint="$(cksum 2>/dev/null < "$source" | awk '{print $1 "-" $2}')" || fingerprint=missing
     [[ -n "$fingerprint" ]] || fingerprint=missing
     key=$(printf '%s' "${1##*/}" | tr -c 'A-Za-z0-9._-' '_')
-    printf '%s/document-budgets/%s-%s\n' "${STATE_DIR:-.uncle/workspace}" "$fingerprint" "$key"
+    printf '%s/document-budgets/%s-%s\n' "${STATE_DIR:-.uncle/workflow}" "$fingerprint" "$key"
 }
 
 # Artifact-specific override wins over the global override, then defaults.

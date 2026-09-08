@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/workflow-directory.sh"
+workflow_directory_migrate "$ROOT"
 
 usage() {
     cat <<'USAGE'
@@ -19,7 +21,7 @@ case "$#:${1:-}" in
     1:-h|1:--help) usage; exit 0 ;;
 esac
 
-mkdir -p .uncle/workspace/approvals
+mkdir -p .uncle/workflow/approvals
 
 . "$ROOT/scripts/lib/sha256.sh"
 
@@ -86,7 +88,7 @@ approve_file() {
         exit 1
     fi
 
-    printf '%s\n' "$captured" > ".uncle/workspace/approvals/${approval_name}.sha256"
+    printf '%s\n' "$captured" > ".uncle/workflow/approvals/${approval_name}.sha256"
     echo "Approved $file"
 }
 
@@ -110,7 +112,7 @@ case "$#:${1:-}" in
     1:status)
         echo "Approval status:"
         for item in PROJECT_PLAN ADVERSARIAL_REVIEW UPDATED_PROJECT_PLAN; do
-            approval=".uncle/workspace/approvals/${item}.sha256"
+            approval=".uncle/workflow/approvals/${item}.sha256"
             file="${item}.md"
 
             if [[ -s "$approval" && -s "$file" ]]; then

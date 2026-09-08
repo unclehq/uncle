@@ -5,8 +5,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cd "$tmp"
-mkdir -p .uncle/workspace/logs
-LOG_DIR="$PWD/.uncle/workspace/logs"
+mkdir -p .uncle/workflow/logs
+LOG_DIR="$PWD/.uncle/workflow/logs"
 printf 'requirements' > REQUIREMENTS.md
 printf 'plan' > PROJECT_PLAN.md
 printf 'original review' > ADVERSARIAL_REVIEW.md
@@ -21,7 +21,7 @@ restore_plan_review ADVERSARIAL_REVIEW.md "$(review_key)"
 # Budget increases and workflow log/state writes do not force another review.
 sed 's/6000/12000/' "$LOG_DIR/prompt" > "$LOG_DIR/next"
 mv "$LOG_DIR/next" "$LOG_DIR/prompt"
-printf 'WAIT_APPROVAL' > .uncle/workspace/state
+printf 'WAIT_APPROVAL' > .uncle/workflow/state
 printf 'log output' > "$LOG_DIR/trace"
 [[ $(review_key) == "$key" ]]
 # Every local source addition/edit/deletion changes the snapshot.

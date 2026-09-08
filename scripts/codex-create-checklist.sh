@@ -15,7 +15,7 @@ new-application workflow).
 
 Takes no positional arguments. Requires REQUIREMENTS.md,
 UPDATED_PROJECT_PLAN.md, AUTOMATED_TEST_REPORT.md, and a matching approval
-record in .uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256.
+record in .uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256.
 Configuration is via WORKFLOW_* environment variables (see scripts/README.md).
 EOF
 }
@@ -29,9 +29,9 @@ esac
 test -s REQUIREMENTS.md
 test -s UPDATED_PROJECT_PLAN.md
 test -s AUTOMATED_TEST_REPORT.md
-test -s .uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256
+test -s .uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256
 
-expected="$(cat .uncle/workspace/approvals/UPDATED_PROJECT_PLAN.sha256)"
+expected="$(cat .uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256)"
 # shasum on macOS, sha256sum on Linux, openssl anywhere else.
 if command -v shasum > /dev/null 2>&1; then
     actual="$(shasum -a 256 UPDATED_PROJECT_PLAN.md | awk '{print $1}')"
@@ -119,7 +119,7 @@ PROMPT
 printf '%s\n' "$budget_prompt"
 )"
 
-LOG_DIR="$ROOT/.uncle/workspace/logs"
+LOG_DIR="$ROOT/.uncle/workflow/logs"
 mkdir -p "$LOG_DIR"
 finish_review_budget MANUAL_CHECKLIST.md "$REVIEWER_CMD" "" "" manual-checklist
 echo "Created MANUAL_CHECKLIST.md"

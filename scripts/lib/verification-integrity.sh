@@ -4,9 +4,19 @@
 . "$(dirname "${BASH_SOURCE[0]}")/sha256.sh"
 VERIFICATION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# The heading is matched the way verify_commands matches its own: by the words
+# it contains, at any level, with or without a section number. An exact-string
+# match cost a run and a human approval when a plan said "## Protected paths"
+# -- the block was there, correct, and unreadable for one missing word.
 verification_paths() {
     awk '
-        /^## Protected verification paths[ \t\r]*$/ { section=1; sections++; next }
+        /^#+[ \t]/ {
+            h = tolower($0)
+            sub(/\r$/, "", h)
+            if (index(h, "protected") > 0 && index(h, "paths") > 0) {
+                section = 1; sections++; next
+            }
+        }
         section && /^```/ {
             if (opened) { closed=1; section=0 } else opened=1
             next

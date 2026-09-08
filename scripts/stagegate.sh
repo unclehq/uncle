@@ -289,6 +289,12 @@ preflight_acceptable() {
 # missing block spent a human review and then demanded the approval be renewed.
 # Checked before the gate now; still checked after, because that is the copy
 # the run actually executes.
+# "Missing X" is unhelpful when the plan contains something one word away from
+# X. Show what headings it does have, so a rename is obvious.
+plan_headings() {
+    grep -nE '^#+[ \t]' "$1" 2>/dev/null | sed 's/^/    /' | head -30
+}
+
 plan_structure_problem() {
     local plan="$1" commands
     commands="$(mktemp)" || return 0
@@ -1317,6 +1323,7 @@ while true; do
             plan_problem="$(plan_structure_problem UPDATED_PROJECT_PLAN.md)" && {
                 echo
                 echo "UPDATED_PROJECT_PLAN.md has $plan_problem."
+                plan_headings UPDATED_PROJECT_PLAN.md
                 echo "The driver reads that block to run and protect verification,"
                 echo "so amend the plan before approving it; you are not being asked"
                 echo "to approve a plan that the next stage would reject."
@@ -1343,7 +1350,11 @@ while true; do
                 exit 1
             fi
             if ! verification_paths UPDATED_PROJECT_PLAN.md > /dev/null; then
-                echo "Missing Protected verification paths. Amend UPDATED_PROJECT_PLAN.md and renew approval."
+                echo "Missing Protected verification paths in UPDATED_PROJECT_PLAN.md."
+                echo "The heading needs the words 'protected' and 'paths', followed by"
+                echo "one fenced block of repository-relative paths. Its headings are:"
+                plan_headings UPDATED_PROJECT_PLAN.md
+                echo "Amend the plan and renew its approval."
                 exit 1
             fi
             run_stage PREFLIGHT

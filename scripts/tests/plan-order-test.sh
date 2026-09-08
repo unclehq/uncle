@@ -44,6 +44,41 @@ MD
 [ "$(plan_structure_problem PLAN.md)" = "no Protected verification paths block" ] \
     || fail "a missing protected-paths block must be named: $(plan_structure_problem PLAN.md)"
 
+# A shortened heading is read, not rejected. A plan that said
+# "## Protected paths" -- block present, paths correct -- cost a run and a
+# human approval to one missing word.
+cat > PLAN.md <<'MD'
+## Verification commands
+
+```
+python3 -m unittest discover
+```
+
+## Protected paths
+
+```
+tests/
+```
+MD
+! plan_structure_problem PLAN.md > /dev/null \
+    || fail "a shortened protected-paths heading must be read: $(plan_structure_problem PLAN.md)"
+
+cat > PLAN.md <<'MD'
+## Verification commands
+
+```
+python3 -m unittest discover
+```
+
+### 9. Protected Verification Paths
+
+```
+tests/
+```
+MD
+! plan_structure_problem PLAN.md > /dev/null \
+    || fail "a numbered, differently-cased heading must be read: $(plan_structure_problem PLAN.md)"
+
 # The gate order itself: the check has to precede the approval call.
 python3 - "$ROOT/scripts/stagegate.sh" <<'PY' || exit 1
 import io, sys

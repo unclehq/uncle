@@ -82,7 +82,9 @@ in the testing strategy. The driver limits concurrency with WORKFLOW_VERIFY_JOBS
 (default 2, maximum 8), preserves per-command outcomes and integrity checks,
 and runs unlisted commands sequentially. Omit this section when none qualify.
 
-Include `## Protected verification paths` with one fenced block of literal
+Include `## Protected verification paths` -- the heading is matched on the
+words "protected" and "paths", so a shortened one is read, but write it in
+full -- with one fenced block of literal
 repository-relative file or directory paths, one per line. List all tests,
 expected results and fixtures, test helpers, and configuration that determines
 which tests run. Prefer complete test directories so new tests cannot be

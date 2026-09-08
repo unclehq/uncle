@@ -229,11 +229,38 @@ Write VERIFICATION_REPORT.md containing:
 - action performed;
 - expected result;
 - actual result;
-- PASS, FAIL, BLOCKED, or NOT RUN;
+- PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, or NOT RUN;
 - evidence;
 - defect reference when applicable.
 
-Never convert BLOCKED or NOT RUN into PASS.
+Never convert a blocked or NOT RUN check into PASS.
+
+A blocked check must say which kind of blocked it is, because the three are
+not the same problem and the driver acts on them differently:
+
+- `BLOCKED-SETUP` -- one action would make it available; name the action. The
+  driver lists these and pauses so they can be done and the stage rerun.
+- `BLOCKED-HUMAN` -- it waits on a person; name who and for what. This is what
+  a human-gated workflow is for, not a fault, so the run continues to its
+  audit rather than stopping. It still cannot complete on an unsigned required
+  check.
+- `BLOCKED-IMPOSSIBLE` -- this environment cannot perform it as specified, and
+  no effort will change that; name the limit. The driver stops and points at
+  the plan, because the fix is to amend the plan or the requirement.
+
+A bare `BLOCKED` is read as `BLOCKED-SETUP`, which claims the problem is
+arrangeable. Do not leave it unclassified when it is not.
+
+Checks that cannot be performed here should be caught at preflight, where the
+plan is still cheap to change: the driver publishes what preflight proved to
+`.uncle/workflow/preflight-capabilities/`, and the checklist must cite the id
+behind any capability its checks need.
+
+A required check marked BLOCKED-IMPOSSIBLE stops the run. If it genuinely
+cannot be verified in this environment, the operator may record a waiver --
+a typed reason kept with the run -- and the run continues to its audit. A
+waiver never turns the check into a PASS; the report still says it was not
+performed.
 
 ## Completion
 

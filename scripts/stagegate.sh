@@ -198,9 +198,40 @@ waived_ids() {
 }
 
 record_waiver() {
-    local report="$1" answer reason
+    local report="$1" reason
     shift
     local ids=("$@")
+
+    # A popup, when there is a terminal to draw one on. Waiving a required
+    # check is the most consequential thing an operator does at this gate, and
+    # it should look like a decision rather than another line of log output.
+    #
+    # Exit 2 means there was no terminal -- a piped or scripted run -- and the
+    # text prompt below still has to work: a run that cannot draw a window
+    # must still be able to decline.
+    local popup="$ROOT/scripts/lib/waiver-popup.py" out status=2
+    if [[ -f "$popup" ]] && command -v python3 > /dev/null 2>&1; then
+        out="$(mktemp)" || out=""
+        if [[ -n "$out" ]]; then
+            status=0
+            python3 "$popup" --report "$report" --out "$out" "${ids[@]}" || status=$?
+            if [[ "$status" == 0 ]]; then
+                reason="$(cat "$out")"
+                rm -f "$out"
+                if [[ -n "$reason" ]]; then
+                    write_waivers "$report" "$reason" "${ids[@]}" || return 1
+                    return 0
+                fi
+                status=1
+            fi
+            rm -f "$out"
+        fi
+    fi
+    if [[ "$status" == 1 ]]; then
+        echo 'No waiver recorded; the run remains pending.'
+        return 1
+    fi
+
     echo
     echo "These required checks cannot be performed in this environment:"
     local id
@@ -218,8 +249,16 @@ record_waiver() {
         echo 'No waiver recorded; the run remains pending.'
         return 1
     fi
+    write_waivers "$report" "$reason" "${ids[@]}"
+}
+
+# One writer for both the popup and the prompt: a waiver recorded one way must
+# be indistinguishable from one recorded the other.
+write_waivers() {
+    local report="$1" reason="$2" id
+    shift 2
     mkdir -p "$STATE_DIR/waivers" || return 1
-    for id in "${ids[@]}"; do
+    for id in "$@"; do
         {
             printf 'id: %s\n' "$id"
             printf 'report: %s\n' "$report"
@@ -227,14 +266,55 @@ record_waiver() {
             printf 'reason: %s\n' "$reason"
         } > "$(waive_file "$id")" || return 1
     done
-    echo "Waiver recorded for ${#ids[@]} check(s); it is kept in $STATE_DIR/waivers."
+    echo "Waiver recorded for $# check(s); it is kept in $STATE_DIR/waivers."
     return 0
 }
 
+# What to print when the only thing missing is an action someone can take.
+acceptance_setup_pause() {
+    local report="$1"
+    echo
+    echo "Acceptance BLOCKED-SETUP: $report."
+    echo "Outstanding setup, one action each:"
+    acceptance_blocked_ids "$report" BLOCKED-SETUP | sed 's/^/  /'
+    echo "Do them and rerun; each is doable in this environment."
+    echo "The current stage remains pending; no acceptance pass was recorded."
+}
+
+# Waiting on a person is what this workflow is for, not a fault. Everything a
+# machine could check has been checked, so the run goes on to its audit, which
+# reads the report and decides.
+acceptance_human_continue() {
+    local report="$1" next="$2"
+    echo
+    echo "Awaiting human sign-off in $report:"
+    acceptance_blocked_ids "$report" BLOCKED-HUMAN | sed 's/^/  /'
+    echo "Nothing else is outstanding. Continuing to $next, which reads the"
+    echo "report and judges it; the run cannot complete on an unsigned"
+    echo "required check."
+    set_state "$next"
+}
+
+# A waiver settles the check it names and nothing else. Whatever is still
+# outstanding is still outstanding -- otherwise accepting one check no machine
+# can perform would quietly skip the checks a machine could have performed
+# after one commit.
+acceptance_after_waiver() {
+    local report="$1" next="$2"
+    if [[ -n "$(acceptance_blocked_ids "$report" BLOCKED-SETUP)" ]]; then
+        acceptance_setup_pause "$report"
+        exit 1
+    fi
+    if [[ -n "$(acceptance_blocked_ids "$report" BLOCKED-HUMAN)" ]]; then
+        acceptance_human_continue "$report" "$next"
+        return 0
+    fi
+    set_state "$next"
+}
+
 acceptance_transition() {
-    local report="$1" next="$2" result
+    local report="$1" next="$2" result ids
     result="$(acceptance_result "$report" "${3:-}")"
-    local ids
     case "$result" in
         PASS) set_state "$next" ;;
         REPAIR)
@@ -242,41 +322,32 @@ acceptance_transition() {
             set_state REPAIR
             ;;
         BLOCKED-HUMAN)
-            # Waiting on a person is what this workflow is for, not a fault.
-            # Everything a machine could check has been checked, so the run
-            # goes on to its audit, which reads the report and decides.
-            echo
-            echo "Awaiting human sign-off in $report:"
-            acceptance_blocked_ids "$report" BLOCKED-HUMAN | sed 's/^/  /'
-            echo "Nothing else is outstanding. Continuing to $next, which reads"
-            echo "the report and judges it; the run cannot complete on an"
-            echo "unsigned required check."
-            set_state "$next"
+            acceptance_human_continue "$report" "$next"
+            ;;
+        BLOCKED-SETUP)
+            acceptance_setup_pause "$report"
+            exit 1
             ;;
         BLOCKED-IMPOSSIBLE)
             ids="$(acceptance_blocked_ids "$report" BLOCKED-IMPOSSIBLE)"
+            if [[ -z "$ids" ]]; then
+                echo "Acceptance $result: $report, but no required check names itself impossible."
+                echo "The current stage remains pending; no acceptance pass was recorded."
+                exit 1
+            fi
             # shellcheck disable=SC2086
-            if [[ -n "$ids" ]] && waived_ids $ids; then
+            if waived_ids $ids; then
                 echo
-                echo "Required checks $(printf '%s' "$ids" | tr '\n' ' ')are waived for this run; see $STATE_DIR/waivers."
-                set_state "$next"
-                return 0
-            fi
+                echo "Required check(s) $(printf '%s' "$ids" | tr '\n' ' ')waived for this run; see $STATE_DIR/waivers."
             # shellcheck disable=SC2086
-            if [[ -n "$ids" ]] && record_waiver "$report" $ids; then
-                set_state "$next"
-                return 0
+            elif ! record_waiver "$report" $ids; then
+                echo "The current stage remains pending; no acceptance pass was recorded."
+                exit 1
             fi
-            echo "The current stage remains pending; no acceptance pass was recorded."
-            exit 1
+            acceptance_after_waiver "$report" "$next"
             ;;
         *)
             echo "Acceptance $result: $report. Resolve its prerequisites or report errors and rerun."
-            if [[ "$result" == BLOCKED-SETUP ]]; then
-                echo "Outstanding setup, one action each:"
-                acceptance_blocked_ids "$report" BLOCKED-SETUP | sed 's/^/  /'
-                echo "Do them and rerun; each is doable in this environment."
-            fi
             echo "The current stage remains pending; no acceptance pass was recorded."
             exit 1
             ;;

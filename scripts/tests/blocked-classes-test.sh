@@ -24,6 +24,11 @@ gate_prompt() { printf '%s' "$1"; }
 eval "$(awk '/^waive_file\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
 eval "$(awk '/^waived_ids\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
 eval "$(awk '/^record_waiver\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+eval "$(awk '/^write_waivers\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+ROOT="$ROOT"   # record_waiver looks for the popup helper under it
+eval "$(awk '/^acceptance_setup_pause\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+eval "$(awk '/^acceptance_human_continue\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+eval "$(awk '/^acceptance_after_waiver\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
 eval "$(awk '/^acceptance_transition\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
 
 # The transition both sets state and, on some paths, exits the shell. Run it in
@@ -102,6 +107,33 @@ report $'| C1 | YES | PASS | ok |\n| C3 | YES | BLOCKED-IMPOSSIBLE | different c
 STATE=""
 run_transition report.md NEXT < /dev/null && fail "a waiver must not cover another check"
 [ -z "$STATE" ] || fail "an unwaived check must not advance on another's waiver"
+
+# --- a waiver settles one check, not the report -----------------------------
+# The worst class wins the verdict, so an impossible check outranks a setup
+# one. Waiving it must not carry the setup checks along: those could still
+# pass, and skipping them would lose real verification to a formality.
+rm -rf "$STATE_DIR/waivers"
+report $'| C1 | YES | PASS | ok |\n| C2 | YES | BLOCKED-IMPOSSIBLE | no window under 500px |\n| C3 | YES | BLOCKED-SETUP | tree not committed |'
+STATE=""
+run_transition report.md NEXT <<< 'accepted: the platform cannot do it' \
+    && fail "outstanding setup must still pause after a waiver"
+[ -z "$STATE" ] || fail "a waiver must not advance past outstanding setup, went to '$STATE'"
+[ -s "$STATE_DIR/waivers/C2" ] || fail "the waiver should still be recorded"
+grep -q "C3" <<< "$OUT" || fail "it must name the setup check that remains"
+
+# With the setup done, the same waiver lets it reach the audit -- and the
+# signature that remains is announced rather than treated as a failure.
+report $'| C1 | YES | PASS | ok |\n| C2 | YES | BLOCKED-IMPOSSIBLE | no window under 500px |\n| C3 | YES | BLOCKED-HUMAN | awaiting Brian |'
+STATE=""
+run_transition report.md FINAL_AUDIT < /dev/null || fail "a waived impossible check plus a signature must continue"
+[ "$STATE" = "FINAL_AUDIT" ] || fail "it must reach the audit, went to '$STATE'"
+grep -q "C3" <<< "$OUT" || fail "it must name who it waits on"
+
+# And with nothing else outstanding, it simply advances.
+report $'| C1 | YES | PASS | ok |\n| C2 | YES | BLOCKED-IMPOSSIBLE | no window under 500px |'
+STATE=""
+run_transition report.md NEXT < /dev/null || fail "a waived impossible check alone must advance"
+[ "$STATE" = "NEXT" ] || fail "it must advance, went to '$STATE'"
 
 # --- a waiver never turns into a pass ---------------------------------------
 # The report still says the check was not performed; the waiver only records

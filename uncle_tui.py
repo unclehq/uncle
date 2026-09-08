@@ -1609,11 +1609,17 @@ class UncleTUI:
             group["seconds"] += row.get("elapsed_seconds", 0)
             group["tokens"].append(self._token_total(row))
             cost = row.get("reported_cost_usd")
-            # A runner that consumed tokens did not do it for nothing: a
-            # reported zero is a runner that declined to say, and rendering it
-            # as $0.0000 understates the session total with a number that
-            # reads like a fact. Treat it as unknown, which is what it is.
-            if cost == 0 and self._token_total(row):
+            # A runner that consumed tokens did not usually do it for nothing:
+            # a reported zero is normally a runner that declined to say, and
+            # rendering it as $0.0000 understates the session total with a
+            # number that reads like a fact.
+            #
+            # A free model is the exception, and it is not a rare one -- it is
+            # what a stage runs on once a subscription is exhausted. There the
+            # zero is the fact, and calling it unknown hides a real total
+            # behind "Unavailable" on every row.
+            if cost == 0 and self._token_total(row) \
+                    and (row.get("model") or "") not in FREE_MODEL_IDS:
                 cost = None
             group["costs"].append(cost if cost is not None else row.get("estimated_cost_usd"))
             group["attempts"] += 1

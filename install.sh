@@ -5,11 +5,13 @@ repo=unclehq/uncle
 ref=main
 source_dir=""
 dry_run=0
+force_live=0
 usage() {
     cat <<'HELP'
 Usage: bash install.sh [--repo OWNER/REPO] [--ref BRANCH|TAG|COMMIT]
                        [--source-dir PATH] [--dry-run]
 macOS: Homebrew; Debian/Ubuntu (including WSL): apt; Windows Git Bash: Scoop.
+Refuses to install while a workflow is running; --force-live overrides.
 Downloads from GitHub by default. --source-dir packages a local checkout instead.
 Install Homebrew or Scoop first. Linux uses sudo when not running as root.
 HELP
@@ -21,6 +23,7 @@ while [[ $# -gt 0 ]]; do
             case "$1" in --repo) repo="$2" ;; --ref) ref="$2" ;; --source-dir) source_dir="$2" ;; esac
             shift 2 ;;
         --dry-run) dry_run=1; shift ;;
+        --force-live) force_live=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -41,6 +44,11 @@ if [[ -n "$source_dir" ]]; then
 fi
 printf 'Installer: %s; source: %s (%s)\n' "$platform" "$repo" "${source_dir:-$ref}"
 [[ "$dry_run" == 0 ]] || exit 0
+# Never swap the scripts out from under a running driver. See lib/running-workflow.sh.
+if [[ "$force_live" == 0 && -n "$source_dir" && -f "$source_dir/scripts/lib/running-workflow.sh" ]]; then
+    . "$source_dir/scripts/lib/running-workflow.sh"
+    if running_workflow_report; then exit 1; fi
+fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 if [[ "$platform" == scoop ]]; then

@@ -17,7 +17,13 @@ class Uncle < Formula
 
     # The launcher shells out to bare `python3` for the TUI; python@3.13 keeps
     # its unversioned python3 symlink in libexec/bin, off PATH by default.
-    (bin/"uncle").write_env_script libexec/"uncle",
+    #
+    # opt_libexec, not libexec: the versioned keg path is deleted and recreated
+    # by `brew reinstall`, and a workflow can run for hours. Launching from the
+    # versioned path meant an upgrade mid-run pulled the scripts out from under
+    # a live driver, which then failed on files that no longer existed. The opt
+    # symlink always resolves to the installed version instead.
+    (bin/"uncle").write_env_script opt_libexec/"uncle",
                                   PATH: "#{formula_opt_libexec("python@3.13")}/bin:$PATH"
   end
 

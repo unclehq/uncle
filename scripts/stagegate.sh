@@ -284,6 +284,32 @@ preflight_acceptable() {
     esac
 }
 
+# The plan has to carry three machine-read blocks, and the driver used to look
+# for them only after the operator had read the plan and approved it -- so a
+# missing block spent a human review and then demanded the approval be renewed.
+# Checked before the gate now; still checked after, because that is the copy
+# the run actually executes.
+plan_structure_problem() {
+    local plan="$1" commands
+    commands="$(mktemp)" || return 0
+    if ! verify_commands "$plan" > "$commands" || [[ ! -s "$commands" ]]; then
+        rm -f "$commands"
+        printf 'no Verification commands block'
+        return 0
+    fi
+    if ! verify_parallel_groups "$plan" "$commands" > /dev/null; then
+        rm -f "$commands"
+        printf 'invalid Parallel verification groups'
+        return 0
+    fi
+    rm -f "$commands"
+    if ! verification_paths "$plan" > /dev/null; then
+        printf 'no Protected verification paths block'
+        return 0
+    fi
+    return 1
+}
+
 acceptance_setup_pause() {
     local report="$1"
     echo
@@ -1285,6 +1311,17 @@ while true; do
             ;;
 
         WAIT_UPDATED_PLAN_APPROVAL)
+            # Reject a structurally incomplete plan before asking anyone to
+            # read it. Approving a plan the next state will refuse wastes the
+            # one thing this workflow cannot generate more of.
+            plan_problem="$(plan_structure_problem UPDATED_PROJECT_PLAN.md)" && {
+                echo
+                echo "UPDATED_PROJECT_PLAN.md has $plan_problem."
+                echo "The driver reads that block to run and protect verification,"
+                echo "so amend the plan before approving it; you are not being asked"
+                echo "to approve a plan that the next stage would reject."
+                exit 1
+            }
             # No speculation here: IMPLEMENT writes source code, and it may not
             # start before this approval exists.
             review_and_approve \

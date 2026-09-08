@@ -38,11 +38,11 @@ for backend in python shell; do
         canonical="$(WORKFLOW_HASH_BACKEND="$backend" verification_manifest paths)"
         printf '%s\n' "$scope" > paths
         COUNT=$((COUNT+1))
-        [[ "$(WORKFLOW_HASH_BACKEND="$backend" verification_manifest paths)" == "$canonical" ]]
+        [[ "$(WORKFLOW_HASH_BACKEND="$backend" verification_manifest paths)" == "$canonical" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     done
     printf 'tests\ntests/\n' > paths
     COUNT=$((COUNT+1))
-    [[ "$(WORKFLOW_HASH_BACKEND="$backend" verification_manifest paths)" == "$baseline" ]]
+    [[ "$(WORKFLOW_HASH_BACKEND="$backend" verification_manifest paths)" == "$baseline" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     for scope in tests// tests/./ tests/../ / ./ ../ tests/test.txt/ .git/ .uncle/; do
         printf '%s\n' "$scope" > paths
         WORKFLOW_HASH_BACKEND="$backend" rejected
@@ -54,7 +54,7 @@ for backend in python shell; do
     printf 'tests/\n' > paths
     printf 'new test\n' > tests/new.txt
     COUNT=$((COUNT+1))
-    [[ "$(WORKFLOW_HASH_BACKEND="$backend" verification_manifest paths)" != "$baseline" ]]
+    [[ "$(WORKFLOW_HASH_BACKEND="$backend" verification_manifest paths)" != "$baseline" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     rm tests/new.txt
  done
 printf 'tests\n' > paths
@@ -92,7 +92,7 @@ WORKFLOW_HASH_BACKEND=shell rejected
 unset -f find
 printf '## Protected verification paths\n\n```text\ntests\n```\n' > plan.md
 COUNT=$((COUNT + 1))
-[[ "$(verification_paths plan.md)" == tests ]]
+[[ "$(verification_paths plan.md)" == tests ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 printf '## Protected verification paths\n\n```\ntests\n' > plan.md
 COUNT=$((COUNT + 1))
 if verification_paths plan.md > /dev/null; then echo 'FAIL: unclosed scope fence'; exit 1; fi

@@ -29,13 +29,13 @@ status_stage_context() { :; }
 . "$TMP/function.sh"
 start_codex_bg "$TMP/prompt" "$TMP/review" test-review > /dev/null
 for i in {1..100}; do [[ ! -s "$FAKE_PID" ]] || break; sleep .02; done
-[[ -s "$FAKE_PID" ]]
+[[ -s "$FAKE_PID" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 child_pid="$(cat "$FAKE_PID")"
 kill "$BG_PID"
 status=0
 wait "$BG_PID" || status=$?
 BG_PID=""
-[[ "$status" == 130 ]]
+[[ "$status" == 130 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 if kill -0 "$child_pid" 2>/dev/null; then
     echo 'FAIL: instrumentation orphaned the background reviewer'
     exit 1

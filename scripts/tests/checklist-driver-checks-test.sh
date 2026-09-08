@@ -24,8 +24,8 @@ grep -q 'FAIL focus' "$STATE_DIR/checklist-driver-checks/output.log"
 GREEN_CHECK=0
 snapshot_checklist_checks
 grep -q 'NOT RUN' "$STATE_DIR/checklist-driver-checks/README.md"
-[[ ! -e "$STATE_DIR/checklist-driver-checks/results.tsv" ]]
-[[ ! -e "$STATE_DIR/checklist-driver-checks/output.log" ]]
+[[ ! -e "$STATE_DIR/checklist-driver-checks/results.tsv" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ ! -e "$STATE_DIR/checklist-driver-checks/output.log" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 GREEN_CHECK=1
 : > "$GREEN_CMDS"
 snapshot_checklist_checks

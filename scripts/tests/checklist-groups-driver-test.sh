@@ -31,7 +31,7 @@ check() {
 } > MANUAL_CHECKLIST.md
 
 out="$(snapshot_checklist_groups)"
-[[ -s "$DIR/groups.txt" ]]
+[[ -s "$DIR/groups.txt" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 [[ "$(cat "$DIR/groups.txt")" == "MC-001 MC-002 MC-003
 MC-004" ]]
 grep -q 'group(s) from' <<< "$out"
@@ -45,8 +45,8 @@ grep -q 'before starting the next' "$DIR/README.md"
 } > MANUAL_CHECKLIST.md
 status=0
 out="$(snapshot_checklist_groups)" || status=$?
-[[ "$status" == 0 ]]
-[[ ! -e "$DIR/groups.txt" ]]
+[[ "$status" == 0 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ ! -e "$DIR/groups.txt" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 grep -q 'NOT DECLARED' "$DIR/README.md"
 grep -q 'MC-404' "$DIR/README.md"
 grep -q 'one check at a time' <<< "$out"
@@ -58,7 +58,7 @@ printf 'MC-900 MC-901\n' > "$DIR/groups.txt"
     printf '\n### MC-001\n- Exact action: run it\n'
 } > MANUAL_CHECKLIST.md
 snapshot_checklist_groups > /dev/null
-[[ "$(cat "$DIR/groups.txt")" == "MC-001" ]]
+[[ "$(cat "$DIR/groups.txt")" == "MC-001" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 grep -q 'scheduled alone' "$DIR/README.md"
 
 # --- no checklist at all -----------------------------------------------------
@@ -66,12 +66,29 @@ rm -f MANUAL_CHECKLIST.md
 printf 'MC-900 MC-901\n' > "$DIR/groups.txt"
 status=0
 snapshot_checklist_groups > /dev/null || status=$?
-[[ "$status" == 0 ]]
-[[ ! -e "$DIR/groups.txt" ]]
+[[ "$status" == 0 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ ! -e "$DIR/groups.txt" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+grep -q 'NOT DECLARED' "$DIR/README.md"
+
+# --- the deriver cannot run at all -------------------------------------------
+# No python3, or a checkout without the helper. The stage still has to be told
+# there is no plan, and a previous run's plan must not survive to be read as
+# this run's: that file is the only thing standing between "no grouping" and
+# a grouping for a checklist nobody derived.
+{
+    echo '# Manual checklist'
+    check MC-001 none none
+    check MC-002 none none
+} > MANUAL_CHECKLIST.md
+printf 'MC-900 MC-901\n' > "$DIR/groups.txt"
+status=0
+( GATES_LIB_DIR="$work/nowhere"; snapshot_checklist_groups > /dev/null ) || status=$?
+[[ "$status" == 0 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ ! -e "$DIR/groups.txt" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 grep -q 'NOT DECLARED' "$DIR/README.md"
 
 # --- the prompt and the driver agree on where the plan lives -----------------
 grep -q '\.uncle/workflow/checklist-groups/README\.md' "$ROOT/prompts/execute-checklist.md"
 grep -q '\.uncle/workflow/checklist-groups/README\.md' "$ROOT/prompts/change/execute-change-checklist.md"
 
-echo 'checklist-groups-driver-test.sh: plan written, bad declarations degrade to serial, stale plans removed'
+echo 'checklist-groups-driver-test.sh: plan written, bad declarations and a missing deriver degrade to serial, stale plans removed'

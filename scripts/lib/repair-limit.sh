@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ask before spending more repair attempts. EOF/decline never grants attempts.
 ensure_repair_capacity() {
-    local used="$1" saved answer proposed
+    local used="$1" saved answer proposed relative
     if [[ -f "$STATE_DIR/repair-limit" ]]; then
         saved="$(cat "$STATE_DIR/repair-limit")"
         case "$saved" in
@@ -19,7 +19,7 @@ ensure_repair_capacity() {
         return 1
     fi
     while true; do
-        gate_prompt "Repair limit reached: $used attempts used. Enter a new total limit ($((used + 1))-100) to continue, or 'stop' to leave this run pending: "
+        gate_prompt "Repair limit reached: $used of $MAX_REPAIRS attempts used. Enter a new total ($((used + 1))-100), '+N' for N more attempts, or 'stop' to leave this run pending: "
         if ! IFS= read -r answer; then
             echo
             echo 'No additional repairs authorized; run remains pending.'
@@ -27,14 +27,28 @@ ensure_repair_capacity() {
         fi
         case "$answer" in
             ''|stop|STOP|n|N) echo 'Run remains pending; no additional repairs authorized.'; return 1 ;;
-            *[!0-9]*) echo "Enter a whole number or 'stop'."; continue ;;
+        esac
+        # "+3" means three more attempts from here. The prompt asks for a total,
+        # but "how many more" is how an operator who has just been stopped
+        # thinks about it, and reading a small number as a total rejects the
+        # answer of someone who meant to continue.
+        relative=""
+        case "$answer" in
+            +*) relative=1; answer="${answer#+}" ;;
+        esac
+        case "$answer" in
+            ''|*[!0-9]*) echo "Enter a whole number, '+N' for N more, or 'stop'."; continue ;;
         esac
         if [[ ${#answer} -le 3 ]]; then
-            proposed=$((10#$answer))
+            if [[ -n "$relative" ]]; then
+                proposed=$((used + 10#$answer))
+            else
+                proposed=$((10#$answer))
+            fi
             if [[ "$proposed" -gt "$used" && "$proposed" -le 100 ]]; then
                 printf '%s\n' "$proposed" > "$STATE_DIR/repair-limit" || return 1
                 MAX_REPAIRS="$proposed"
-                echo "Repair limit increased to $MAX_REPAIRS for this run."
+                echo "Repair limit increased to $MAX_REPAIRS for this run ($((MAX_REPAIRS - used)) more attempt(s))."
                 return 0
             fi
         fi

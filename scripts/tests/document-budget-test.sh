@@ -9,7 +9,7 @@ printf 'abc\ndef' > PROJECT_PLAN.md
 WORKFLOW_DOC_MAX_BYTES=7 WORKFLOW_DOC_MAX_LINES=2 check_document_budget PROJECT_PLAN.md
 if WORKFLOW_DOC_MAX_BYTES=6 check_document_budget PROJECT_PLAN.md 2>/dev/null; then exit 1; fi
 if WORKFLOW_DOC_MAX_LINES=1 check_document_budget PROJECT_PLAN.md 2>/dev/null; then exit 1; fi
-[[ $(cat PROJECT_PLAN.md) == $'abc\ndef' ]]
+[[ $(cat PROJECT_PLAN.md) == $'abc\ndef' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 for value in 0 invalid -1 1:2; do
     if WORKFLOW_DOC_MAX_BYTES="$value" check_document_budget PROJECT_PLAN.md 2>/dev/null; then exit 1; fi
 done
@@ -18,7 +18,7 @@ if WORKFLOW_DOC_MAX_BYTES=1 check_document_budget ADVERSARIAL_REVIEW.md 2>/dev/n
 WORKFLOW_DOC_MAX_BYTES=2 check_document_budget ADVERSARIAL_REVIEW.md
 printf 'mandatory acceptance evidence' > VERIFICATION_REPORT.md
 if WORKFLOW_DOC_MAX_BYTES=1 check_document_budget VERIFICATION_REPORT.md 2>/dev/null; then exit 1; fi
-[[ $(cat VERIFICATION_REPORT.md) == "mandatory acceptance evidence" ]]
+[[ $(cat VERIFICATION_REPORT.md) == "mandatory acceptance evidence" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 LOG_DIR="$tmp"
 printf 'stage instructions' > prompt.md
 WORKFLOW_DOC_MAX_BYTES=12345 gated_prompt prompt.md updated-plan > resolved
@@ -26,13 +26,13 @@ rg -q '12345 UTF-8 bytes' "$(cat resolved)"
 # Interpretation budgets follow source size, with a floor and ceiling, and
 # agree between the generated prompt and the post-agent guard.
 printf 'brief' > REQUIREMENTS.md
-[[ $(requirements_document_max_bytes) == 4000 ]]
+[[ $(requirements_document_max_bytes) == 4000 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 python3 - <<'PY'
 from pathlib import Path
 Path('REQUIREMENTS.md').write_bytes(b'x' * 5478)
 Path('REQUIREMENTS_INTERPRETATION.md').write_bytes(b'x' * 5479)
 PY
-[[ $(requirements_document_max_bytes) == 5478 ]]
+[[ $(requirements_document_max_bytes) == 5478 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 gated_prompt prompt.md requirements > resolved
 rg -q '5478 UTF-8 bytes' "$(cat resolved)"
 if rg -q 'Target 12,000' "$(cat resolved)"; then exit 1; fi
@@ -44,12 +44,12 @@ python3 - <<'PY'
 from pathlib import Path
 Path('REQUIREMENTS.md').write_bytes(b'x' * 25000)
 PY
-[[ $(requirements_document_max_bytes) == 20000 ]]
+[[ $(requirements_document_max_bytes) == 20000 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Every document stage (including step handoffs and background checklists)
 # advertises exactly the limits enforced for each named artifact.
 for stage in $DOC_STAGES implementation-step-2; do
     gated_prompt prompt.md "$stage" > resolved
-    [[ -n $(stage_documents "$stage") ]]
+    [[ -n $(stage_documents "$stage") ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     while IFS= read -r file; do
         read -r bytes lines <<< "$(document_budget "$file")"
         rg -qF -- "$file: at most $bytes UTF-8 bytes and $lines lines." "$(cat resolved)"
@@ -57,29 +57,29 @@ for stage in $DOC_STAGES implementation-step-2; do
         WORKFLOW_DOC_MAX_BYTES=7 WORKFLOW_DOC_MAX_LINES=2 check_document_budget "$file"
         if WORKFLOW_DOC_MAX_BYTES=6 check_document_budget "$file" 2>/dev/null; then exit 1; fi
         if WORKFLOW_DOC_MAX_LINES=1 check_document_budget "$file" 2>/dev/null; then exit 1; fi
-        [[ $(cat "$file") == $'abc\ndef' ]]
+        [[ $(cat "$file") == $'abc\ndef' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     done < <(stage_documents "$stage")
 done
-[[ $(document_budget PROJECT_PLAN.md) == '24000 600' ]]
-[[ $(document_budget IMPLEMENTATION_NOTES.md) == '8000 240' ]]
-[[ $(document_budget FINAL_AUDIT.md) == '12000 360' ]]
-[[ $(document_budget VERIFICATION_REPORT.md) == '16000 480' ]]
+[[ $(document_budget PROJECT_PLAN.md) == '24000 600' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ $(document_budget IMPLEMENTATION_NOTES.md) == '8000 240' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ $(document_budget FINAL_AUDIT.md) == '12000 360' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ $(document_budget VERIFICATION_REPORT.md) == '16000 480' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 printf 'small change' > CHANGE_REQUEST.md
-[[ $(document_budget CHANGE_SPEC.md) == '4000 160' ]]
+[[ $(document_budget CHANGE_SPEC.md) == '4000 160' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Shared artifacts use workflow context when both authoritative inputs exist.
-[[ $(DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md document_budget FINAL_AUDIT.md) == '4000 120' ]]
-[[ $(DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md document_budget FINAL_AUDIT.md) == '12000 360' ]]
-[[ $(DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md document_budget CHANGE_PLAN.md) == '6000 150' ]]
-[[ $(DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md document_budget PROJECT_PLAN.md) == '24000 600' ]]
+[[ $(DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md document_budget FINAL_AUDIT.md) == '4000 120' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ $(DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md document_budget FINAL_AUDIT.md) == '12000 360' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ $(DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md document_budget CHANGE_PLAN.md) == '6000 150' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ $(DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md document_budget PROJECT_PLAN.md) == '24000 600' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Every artifact has bounded, monotonic defaults; generated output has no effect.
 for stage in $DOC_STAGES implementation-step-2; do
     while IFS= read -r file; do
         read -r floor cap mult lf lc <<< "$(document_budget_defaults "$file")"
         source=$(document_budget_source "$file")
         rm -f "$source"
-        [[ $(document_budget "$file") == "$floor $lf" ]]
+        [[ $(document_budget "$file") == "$floor $lf" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
         : > "$source"
-        [[ $(document_budget "$file") == "$floor $lf" ]]
+        [[ $(document_budget "$file") == "$floor $lf" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
         python3 - "$source" <<'PYDATA'
 from pathlib import Path
 import sys
@@ -91,18 +91,18 @@ PYDATA
         (( expected > cap )) && expected=$cap
         expected_lines=$(((expected * lf + floor - 1) / floor))
         (( expected_lines > lc )) && expected_lines=$lc
-        [[ "$bytes $lines" == "$expected $expected_lines" ]]
+        [[ "$bytes $lines" == "$expected $expected_lines" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
         python3 - "$source" <<'PYDATA'
 from pathlib import Path
 import sys
 Path(sys.argv[1]).write_bytes(b'x' * 100000)
 PYDATA
-        [[ $(document_budget "$file") == "$cap $lc" ]]
+        [[ $(document_budget "$file") == "$cap $lc" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     done < <(stage_documents "$stage")
 done
 before=$(document_budget FINAL_AUDIT.md)
 printf 'generated plan changed substantially' > UPDATED_PROJECT_PLAN.md
-[[ $(document_budget FINAL_AUDIT.md) == "$before" ]]
+[[ $(document_budget FINAL_AUDIT.md) == "$before" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Restore artifacts used by override and guard checks below.
 printf 'abc\ndef' > PROJECT_PLAN.md
 printf 'abc\ndef' > FINAL_AUDIT.md
@@ -130,15 +130,15 @@ WORKFLOW_DOC_MAX_BYTES=1 check_document_budget raw.log
 # Exercise the driver's post-agent guard: oversized output cannot reach approval.
 awk '/^require_artifact\(\)/ {copy=1} copy {print} copy && /^}/ {exit}' \
     "$ROOT/scripts/stagegate.sh" > guard.sh
-[[ -s guard.sh ]]
+[[ -s guard.sh ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 bash -n guard.sh
 . ./guard.sh
 if (WORKFLOW_DOC_MAX_BYTES=1 require_artifact PROJECT_PLAN.md; touch advanced) 2>/dev/null; then
     exit 1
 fi
-[[ ! -e advanced && -s PROJECT_PLAN.md ]]
+[[ ! -e advanced && -s PROJECT_PLAN.md ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 (WORKFLOW_DOC_MAX_BYTES=7 require_artifact PROJECT_PLAN.md; touch advanced)
-[[ -e advanced ]]
+[[ -e advanced ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Standalone reviewer entry points also advertise and enforce the same cap.
 mkdir -p standalone/scripts/lib standalone/.uncle/workflow/approvals
 cp "$ROOT/scripts/lib/gates.sh" "$ROOT/scripts/lib/compact-review.py" standalone/scripts/lib/

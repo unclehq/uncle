@@ -17,7 +17,7 @@ if check_document_budget MANUAL_CHECKLIST.md <<<'n'; then exit 1; fi
 if check_document_budget MANUAL_CHECKLIST.md </dev/null; then exit 1; fi
 if check_document_budget MANUAL_CHECKLIST.md probe <<<'y'; then exit 1; fi
 check_document_budget MANUAL_CHECKLIST.md <<<'y'
-[[ "$(cksum MANUAL_CHECKLIST.md)" == "$before" ]]
+[[ "$(cksum MANUAL_CHECKLIST.md)" == "$before" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 check_document_budget MANUAL_CHECKLIST.md </dev/null
 printf 'Different brief\n' > REQUIREMENTS.md
 if check_document_budget MANUAL_CHECKLIST.md </dev/null; then exit 1; fi

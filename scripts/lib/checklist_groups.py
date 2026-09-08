@@ -56,6 +56,51 @@ FIELD = re.compile(
     r"(exclusive\s+resources?|depends\s+on)"
     r"(?:\*\*|__)?\s*:\s*(.*?)\s*$", re.I)
 
+# A dense checklist is a table, not a list of fields, and the prompt that asks
+# for density gets tables back. The column headers are abbreviated when they are
+# in a header row, so accept both spellings.
+ID_HEADERS = ("id", "check", "check id", "checkid")
+RESOURCE_HEADERS = ("excl", "exclusive", "exclusive resource", "exclusive resources",
+                    "resources", "resource")
+DEPEND_HEADERS = ("deps", "dep", "depends", "depends on", "dependencies",
+                  "dependency", "after")
+SEPARATOR = re.compile(r"^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$")
+
+
+def table_cells(line):
+    """The cells of a markdown table row, or None if this is not one."""
+    if "|" not in line:
+        return None
+    row = line.strip()
+    if not row.startswith("|"):
+        return None
+    cells = [c.strip() for c in row.strip("|").split("|")]
+    return cells
+
+
+def header_columns(cells):
+    """Map a header row to the columns worth reading, or None.
+
+    Both an ID column and at least one declaration column have to be present.
+    A table with neither -- the traceability matrix every checklist ends with,
+    whose ID column is full of check IDs -- must not be read as checks, or the
+    grouping would list rows that are not checks at all.
+    """
+    if not cells:
+        return None
+    want = {}
+    for i, cell in enumerate(cells):
+        name = cell.strip().strip("*_`").lower()
+        if name in ID_HEADERS and "id" not in want:
+            want["id"] = i
+        elif name in RESOURCE_HEADERS and "resources" not in want:
+            want["resources"] = i
+        elif name in DEPEND_HEADERS and "depends" not in want:
+            want["depends"] = i
+    if "id" not in want or ("resources" not in want and "depends" not in want):
+        return None
+    return want
+
 # The resource a check with no declaration is assumed to need: all of them.
 EVERYTHING = "*"
 
@@ -91,11 +136,56 @@ def is_none(value):
     return value.strip().lower().strip(".") in {w.strip(".") for w in NONE_WORDS}
 
 
+def set_resources(check, value):
+    value = value.strip().strip("`").strip("*_").strip()
+    if is_none(value) or not value:
+        check.resources = set()
+    else:
+        check.resources = {r.lower() for r in split_list(value)}
+
+
+def set_depends(check, value):
+    value = value.strip().strip("`").strip("*_").strip()
+    if is_none(value) or not value:
+        check.depends = []
+    else:
+        check.depends = [d.upper() for d in re.findall(ID, value.upper())]
+
+
 def parse(text):
     """Return the checks in document order, plus the parse warnings."""
     checks, by_id, warnings = [], {}, []
     current = None
-    for line in text.splitlines():
+    columns = None            # active table header, while one is in force
+    lines = text.splitlines()
+    for n, line in enumerate(lines):
+        cells = table_cells(line)
+        if cells is not None:
+            # A header row is one followed by a separator row. Re-evaluating on
+            # every header is what stops a later table -- the traceability
+            # matrix -- from being read through the previous table's columns.
+            nxt = lines[n + 1] if n + 1 < len(lines) else ""
+            if SEPARATOR.match(nxt) and "|" in nxt:
+                columns = header_columns(cells)
+                current = None
+                continue
+            if columns and not SEPARATOR.match(line):
+                idx = columns["id"]
+                cid = cells[idx] if idx < len(cells) else ""
+                found = re.match(r"^\**\s*(%s)\b" % ID, cid.strip().strip("`"), re.I)
+                if found:
+                    cid = found.group(1).upper()
+                    check = by_id.get(cid)
+                    if check is None:
+                        check = Check(cid, len(checks))
+                        checks.append(check)
+                        by_id[cid] = check
+                    if "resources" in columns and columns["resources"] < len(cells):
+                        set_resources(check, cells[columns["resources"]])
+                    if "depends" in columns and columns["depends"] < len(cells):
+                        set_depends(check, cells[columns["depends"]])
+                    current = None
+                    continue
         m = HEADING.match(line) or CHECK_ID.match(line)
         if m:
             cid = m.group(1).upper()
@@ -114,18 +204,10 @@ def parse(text):
         if not f:
             continue
         name, value = f.group(1).lower(), f.group(2)
-        # Strip a trailing "(reason)" and markdown emphasis around the value.
-        value = value.strip().strip("`").strip()
         if name.startswith("exclusive"):
-            if is_none(value) or not value:
-                current.resources = set()
-            else:
-                current.resources = {r.lower() for r in split_list(value)}
+            set_resources(current, value)
         else:
-            if is_none(value) or not value:
-                current.depends = []
-            else:
-                current.depends = [d.upper() for d in re.findall(ID, value.upper())]
+            set_depends(current, value)
     return checks, by_id, warnings
 
 
@@ -139,53 +221,97 @@ def validate(checks, by_id):
             elif d not in by_id:
                 errors.append("%s depends on %s, which is not a check in this "
                               "checklist" % (c.id, d))
-            elif by_id[d].order > c.order:
-                # Groups are consecutive runs of the checklist, so a dependency
-                # is satisfied by position. Pointing forward asks for a
-                # reordering, and reordering checks is how a checklist that
-                # relied on an undeclared setup step quietly stops working.
-                errors.append("%s depends on %s, which appears after it; put a "
-                              "check after the checks it depends on" % (c.id, d))
-    # No separate cycle detector: groups are consecutive runs, so every cycle
-    # contains at least one forward edge and is already reported above, with a
-    # message that names the two checks and what to do about it.
+    # Cycles, by iterative depth-first search over the declared edges. A
+    # forward edge is legal -- a section ordering that puts a check before the
+    # one it needs is a real thing reviewers write, and the declaration is the
+    # more reliable of the two signals -- so a cycle is genuinely possible and
+    # has to be found rather than inferred from direction.
+    WHITE, GREY, BLACK = 0, 1, 2
+    color = dict((c.id, WHITE) for c in checks)
+    for start in checks:
+        if color[start.id] != WHITE:
+            continue
+        stack = [(start.id, iter([d for d in start.depends if d in by_id]))]
+        color[start.id] = GREY
+        while stack:
+            node, it = stack[-1]
+            advanced = False
+            for nxt in it:
+                if color.get(nxt) == GREY:
+                    errors.append("dependency cycle through %s and %s" % (node, nxt))
+                    color[nxt] = BLACK
+                elif color.get(nxt) == WHITE:
+                    color[nxt] = GREY
+                    stack.append((nxt, iter([d for d in by_id[nxt].depends
+                                             if d in by_id])))
+                    advanced = True
+                    break
+            if not advanced:
+                color[node] = BLACK
+                stack.pop()
     return errors
 
 
 def runs(checks):
     """Pack the checks into ordered groups that may safely overlap.
 
-    A group is a consecutive run of the checklist. That is the same shape the
-    verification commands already use -- verify_parallel_groups requires
-    consecutive command positions -- and it is the reason this can be trusted:
-    document order is never rearranged, so a check that quietly assumes an
-    earlier check already ran keeps that assumption whether or not anyone
-    thought to declare it.
+    Two constraints pull against each other here.
 
-    A run extends to the next check while that check declares no resource the
-    run already holds and no dependency on a member of the run. Otherwise a new
-    run starts, and everything in the previous one finishes first.
+    Document order matters more than it looks like it does. A checklist row
+    often leans on state an earlier row left behind without saying so -- a
+    logged-in session, a built artifact, a server someone started three checks
+    ago -- so rearranging checks is a good way to break a checklist that worked.
 
-    A check that declared nothing needs EVERYTHING, which collides with every
-    run including an empty-resource one, so it lands alone and nothing joins it
-    afterwards. An undeclared check is therefore a full barrier, which is the
-    conservative reading of "nobody said what this touches".
+    A declared dependency matters more still. When a reviewer writes
+    `Depends on: MC-29` on a check that sits above MC-29, that is not a mistake
+    to reject; it is the reviewer naming a fact the section ordering could not
+    express. Explicit beats adjacent.
+
+    So: document order is the default and the tiebreak, a declared dependency
+    can defer a check past checks that come after it, and a check that declared
+    nothing is a hard barrier -- it runs alone, and nothing crosses it in either
+    direction, because a check whose needs are unknown is exactly the one you
+    must not reorder around.
     """
+    pending = list(checks)
+    placed = {}
     groups = []
-    current, held = [], set()
+    known = set(c.id for c in checks)
 
-    for c in checks:
-        needs = c.needs
-        conflict = bool(needs & held) or EVERYTHING in needs or EVERYTHING in held
-        depends_on_current = any(d in current for d in c.depends)
-        if current and (conflict or depends_on_current):
-            groups.append(current)
-            current, held = [], set()
-        current.append(c.id)
-        held |= needs
+    while pending:
+        # A check that never declared what it touches goes alone, and only when
+        # it is next in the document. Nothing is pulled forward past it, so a
+        # checklist with no declarations at all stays strictly serial.
+        if not pending[0].declared:
+            head = pending.pop(0)
+            placed[head.id] = len(groups)
+            groups.append([head.id])
+            continue
 
-    if current:
-        groups.append(current)
+        group, held = [], set()
+        for c in pending:
+            if not c.declared:
+                break                      # the barrier, and everything after it
+            if any(d not in placed for d in c.depends if d in known):
+                continue                   # deferred: its dependency is later
+            if group and (c.needs & held):
+                continue                   # would collide inside this group
+            group.append(c.id)
+            held |= c.needs
+
+        if not group:
+            # Nothing here can run: a check is waiting on a dependency that
+            # sits behind a check nobody declared, and crossing that barrier is
+            # the one thing this is not allowed to do. Say so instead of
+            # inventing an order.
+            return None
+
+        taken = set(group)
+        pending = [c for c in pending if c.id not in taken]
+        for cid in group:
+            placed[cid] = len(groups)
+        groups.append(group)
+
     return groups
 
 
@@ -253,7 +379,15 @@ def main(argv=None):
 
     checks, by_id, _ = parse(text)
     errors = validate(checks, by_id)
-    groups = [] if (errors or not checks) else runs(checks)
+    groups = []
+    if checks and not errors:
+        groups = runs(checks)
+        if groups is None:
+            groups = []
+            errors.append(
+                "a check depends on one that sits after a check with no "
+                "Exclusive resources line; declare that check's resources so "
+                "the dependency can be scheduled, or move it")
 
     if not os.path.isdir(args.out_dir):
         os.makedirs(args.out_dir)

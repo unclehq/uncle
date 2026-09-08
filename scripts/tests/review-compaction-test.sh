@@ -49,12 +49,12 @@ export WORKFLOW_DOC_MAX_BYTES=500 WORKFLOW_DOC_MAX_LINES=40
 cp original.md ADVERSARIAL_REVIEW.md
 finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" vendor/model high adversarial-review
 cmp candidate.md ADVERSARIAL_REVIEW.md
-[[ $(wc -l < "$CALLS") == 1 ]]
+[[ $(wc -l < "$CALLS") -eq 1 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 rg -q -- '--sandbox read-only -m vendor/model -c model_reasoning_effort=high' "$CALLS.argv"
-[[ $(find "$tmp" -name original.md | wc -l) -ge 2 ]]
+[[ $(find "$tmp" -name original.md | wc -l) -ge 2 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Already-fitting reviews cost no extra invocation.
 finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review
-[[ $(wc -l < "$CALLS") == 1 ]]
+[[ $(wc -l < "$CALLS") -eq 1 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 for mode in fail timeout oversized lost-id changed-status; do
     cp original.md ADVERSARIAL_REVIEW.md
     cp candidate.md good.md
@@ -69,13 +69,13 @@ for mode in fail timeout oversized lost-id changed-status; do
         echo "unexpected success: $mode"; exit 1
     fi
     cmp original.md ADVERSARIAL_REVIEW.md
-    [[ $(wc -l < "$CALLS") == $((before + 1)) ]]
+    [[ $(wc -l < "$CALLS") -eq $((before + 1)) ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     mv good.md candidate.md
 done
 # Explicit opt-out does not call the reviewer.
 before=$(wc -l < "$CALLS")
 if WORKFLOW_REVIEW_COMPACT=0 finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review > /dev/null 2>&1; then exit 1; fi
-[[ $(wc -l < "$CALLS") == "$before" ]]
+[[ $(wc -l < "$CALLS") -eq "$before" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Guard details independently: no table, command, heading, threshold or verdict loss.
 python3 - "$ROOT" <<'PY'
 import importlib.util

@@ -62,6 +62,10 @@ an omission costs wall-clock rather than correctness.
 Two checks that would fight over the same port must name the same token, spelled
 the same way. A resource token is only as good as that agreement.
 
+If the checklist is a table, head those two columns `Excl` and `Deps`. Both
+spellings are read, but a column headed something else is not read at all, and
+an unread declaration silently costs the concurrency it was written to enable.
+
 Include sections for:
 
 1. Smoke checks

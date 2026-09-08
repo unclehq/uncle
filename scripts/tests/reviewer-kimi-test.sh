@@ -22,7 +22,7 @@ chmod +x "$tmp/kimi"
 export WORKFLOW_KIMI_CMD="$tmp/kimi"
 bash "$ROOT/scripts/reviewer-kimi.sh" exec --sandbox read-only --ephemeral \
     -c model_reasoning_effort=high --output-last-message "$tmp/review" 'Review files' > "$tmp/log"
-[[ $(cat "$tmp/review") == 'final review' ]]
+[[ $(cat "$tmp/review") == 'final review' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 grep -Fx -- '-p' "$KIMI_ARGS"
 grep -Fx -- '--agent-file' "$KIMI_ARGS"
 grep -Fx -- "$ROOT/lib/kimi/reviewer.md" "$KIMI_ARGS"
@@ -37,11 +37,11 @@ for mode in fail empty; do
     printf "stale review" > "$tmp/$mode"
     if TEST_MODE="$mode" bash "$ROOT/scripts/reviewer-kimi.sh" exec \
         --output-last-message "$tmp/$mode" 'Review files' > "$tmp/log" 2>&1; then exit 1; fi
-    [[ ! -e "$tmp/$mode" ]]
+    [[ ! -e "$tmp/$mode" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 done
 # A Kimi selection without a stage model must invoke Kimi, never Claude.
 printf 'prompt' | WORKFLOW_CLAUDE_CMD=/nonexistent bash "$ROOT/scripts/agent-kimi.sh" -p > "$tmp/log"
 grep -Fx -- 'moonshot-ai/kimi-k2.7-code-highspeed' "$KIMI_ARGS"
 . "$ROOT/scripts/lib/stage-config.sh"
-[[ $(uncle_runner_cmd kimi reviewer) == "$ROOT/scripts/reviewer-kimi.sh" ]]
+[[ $(uncle_runner_cmd kimi reviewer) == "$ROOT/scripts/reviewer-kimi.sh" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 echo 'reviewer-kimi-test: passed'

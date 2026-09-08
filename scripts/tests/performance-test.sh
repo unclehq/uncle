@@ -33,7 +33,7 @@ PY
 bash "$ROOT/scripts/performance-report.sh" "$TMP" > "$TMP/report"
 grep -qF '| agent | implementation | 2 | 11 | 1/2 | 100 | 20 |' "$TMP/report"
 WORKFLOW_METRICS=0 perf_record check disabled 1 0
-[[ "$(find "$STATE_DIR/metrics" -name '*.json' | wc -l | tr -d ' ')" == 9 ]]
+[[ "$(find "$STATE_DIR/metrics" -name '*.json' | wc -l | tr -d ' ')" == 9 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 cat > "$TMP/kimi" <<'EOF'
 {"type":"result","model":"moonshot-ai/kimi-k2.7-code-highspeed","total_cost_usd":null,"usage":{"input_tokens":1000,"output_tokens":10,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0},"usage_scope":"sum of session usage.record turn events","usage_source":"session-fixture"}
 EOF

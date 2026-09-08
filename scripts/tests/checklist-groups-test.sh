@@ -85,7 +85,7 @@ class Groups(unittest.TestCase):
         groups, readme, code = self.derive(body)
         self.assertEqual(code, 2)
         self.assertEqual(groups, [])
-        self.assertIn('appears after it', readme)
+        self.assertIn('cycle', readme)
 
     def test_a_check_that_depends_on_itself_is_rejected(self):
         groups, readme, code = self.derive(self.check('MC-001', 'none', 'MC-001'))
@@ -135,8 +135,9 @@ class Groups(unittest.TestCase):
                 self.check('MC-003', 'port:8080'))
         groups, _, code = self.derive(body)
         self.assertEqual(code, 0)
-        # MC-002 collides with MC-001 and starts a run; MC-003 joins it.
-        self.assertEqual(groups, [['MC-001'], ['MC-002', 'MC-003']])
+        # MC-003 holds a different port and no dependency, so it joins the
+        # first group; MC-002, which wants MC-001's port, waits for the next.
+        self.assertEqual(groups, [['MC-001', 'MC-003'], ['MC-002']])
 
     def test_resource_tokens_are_matched_case_insensitively(self):
         body = (self.check('MC-001', 'Port:5173, Browser') +
@@ -151,26 +152,95 @@ class Groups(unittest.TestCase):
         groups, _, _ = self.derive(body)
         self.assertEqual(groups, [['MC-001'], ['MC-002'], ['MC-003']])
 
-    def test_a_forward_dependency_is_rejected_rather_than_reordered(self):
-        # MC-001 depends on MC-002, which appears later. Satisfying that would
-        # mean running the checklist out of order, and a checklist whose setup
-        # steps are implicit stops working when its order changes. Say so
-        # instead, and run serially.
+    def test_a_forward_dependency_defers_the_dependent_check(self):
+        # A reviewer who writes `Depends on: MC-002` on a check sitting above
+        # MC-002 is naming a fact the section ordering could not express. It is
+        # the more reliable of the two signals, so the check waits.
         body = (self.check('MC-001', 'none', 'MC-002') +
                 self.check('MC-002', 'none'))
-        groups, readme, code = self.derive(body)
-        self.assertEqual(code, 2)
-        self.assertEqual(groups, [])
-        self.assertIn('appears after it', readme)
+        groups, _, code = self.derive(body)
+        self.assertEqual(code, 0)
+        self.assertEqual(groups, [['MC-002'], ['MC-001']])
 
-    def test_document_order_is_never_rearranged(self):
-        # Groups are consecutive runs of the checklist, so a check never moves
-        # past another. MC-003 could overlap MC-001 on resources alone, but
-        # MC-002 sits between them and holds the group open no further.
+    def test_a_shared_resource_keeps_checks_in_document_order(self):
         body = (self.check('MC-001', 'db') + self.check('MC-002', 'db') +
                 self.check('MC-003', 'db'))
         groups, _, _ = self.derive(body)
         self.assertEqual(groups, [['MC-001'], ['MC-002'], ['MC-003']])
+
+    def test_nothing_is_deferred_across_an_undeclared_check(self):
+        # MC-001 needs MC-003, but MC-002 never said what it touches. Pulling
+        # MC-003 forward would reorder it around the one check whose needs are
+        # unknown, which is precisely the reordering that is not allowed.
+        body = (self.check('MC-001', 'none', 'MC-003') +
+                '\n### MC-002\n- Priority: Critical\n- Exact action: run it\n' +
+                self.check('MC-003', 'none'))
+        groups, readme, code = self.derive(body)
+        self.assertEqual(code, 2)
+        self.assertEqual(groups, [])
+        self.assertIn('Exclusive resources', readme)
+
+    # --- the layout a dense checklist actually uses --------------------------
+
+    def test_a_table_checklist_parses(self):
+        # What the reviewer prompt's "keep it dense" instruction produces: one
+        # row per check, with the two declarations as abbreviated columns.
+        body = """
+        | ID | Pri | Prereq | Excl | Deps | Action | Status |
+        |---|---|---|---|---|---|---|
+        | MC-1 | P0 | clean checkout | port:8000, chrome-user-profile | none | serve and load | NOT RUN |
+        | MC-2 | P0 | MC-1 | port:8000, chrome-user-profile | MC-1 | follow the footer link | NOT RUN |
+        | MC-3 | P1 | none | none | none | read the README | NOT RUN |
+        """
+        groups, _, code = self.derive(body)
+        self.assertEqual(code, 0)
+        self.assertEqual(groups, [['MC-1', 'MC-3'], ['MC-2']])
+
+    def test_a_table_traceability_matrix_is_not_read_as_checks(self):
+        # The matrix has an ID column full of check IDs and no declarations.
+        # Read through the previous table's columns it would invent checks, and
+        # a grouping that lists rows nobody wrote is worse than no grouping.
+        body = """
+        | ID | Excl | Deps | Action |
+        |---|---|---|---|
+        | MC-1 | none | none | run it |
+        | MC-2 | none | none | run it |
+
+        ## Traceability
+
+        | Check | Requirement | Behavior |
+        |---|---|---|
+        | MC-1 | R-1 | B-1 |
+        | MC-9 | R-9 | B-9 |
+        """
+        groups, _, code = self.derive(body)
+        self.assertEqual(code, 0)
+        self.assertEqual(groups, [['MC-1', 'MC-2']])
+
+    def test_a_table_row_without_declarations_is_scheduled_alone(self):
+        body = """
+        | ID | Excl | Deps |
+        |---|---|---|
+        | MC-1 | none | none |
+        | MC-2 |  |  |
+        | MC-3 | none | none |
+        """
+        # An empty Excl cell is a declaration of nothing shared, not a missing
+        # declaration: the reviewer filled the row in. It reads as `none`.
+        groups, _, code = self.derive(body)
+        self.assertEqual(code, 0)
+        self.assertEqual(groups, [['MC-1', 'MC-2', 'MC-3']])
+
+    def test_the_full_column_spellings_work_too(self):
+        body = """
+        | Check ID | Exclusive resources | Depends on |
+        |---|---|---|
+        | MC-1 | browser | none |
+        | MC-2 | browser | MC-1 |
+        """
+        groups, _, code = self.derive(body)
+        self.assertEqual(code, 0)
+        self.assertEqual(groups, [['MC-1'], ['MC-2']])
 
     def test_every_check_appears_exactly_once(self):
         body = ''.join(self.check('MC-%03d' % i, 'none' if i % 2 else 'db')

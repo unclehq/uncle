@@ -20,8 +20,6 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
-. "$ROOT/scripts/lib/workflow-directory.sh"
-workflow_directory_migrate "$PROJECT_ROOT"
 export DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md
 
 # Prompt files are named relative to the uncle install, but the cwd is now the

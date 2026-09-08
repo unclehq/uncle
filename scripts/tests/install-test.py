@@ -26,6 +26,7 @@ class InstallerTest(unittest.TestCase):
         self.bin.mkdir()
         self.log = self.work / "calls"
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", CALLS=str(self.log))
+        self.env["UNCLE_ALLOW_LIVE_INSTALL"] = "1"
 
     def stub(self, name, text):
         path = self.bin / name

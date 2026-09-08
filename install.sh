@@ -44,8 +44,15 @@ if [[ -n "$source_dir" ]]; then
 fi
 printf 'Installer: %s; source: %s (%s)\n' "$platform" "$repo" "${source_dir:-$ref}"
 [[ "$dry_run" == 0 ]] || exit 0
-# Never swap the scripts out from under a running driver. See lib/running-workflow.sh.
-if [[ "$force_live" == 0 && -n "$source_dir" && -f "$source_dir/scripts/lib/running-workflow.sh" ]]; then
+# Never swap the scripts out from under a running driver. See
+# lib/running-workflow.sh.
+#
+# UNCLE_ALLOW_LIVE_INSTALL exists because this check reads the whole process
+# table, which makes the installer's behavior depend on what else is on the
+# machine -- fine for an operator, wrong for a test of argument dispatch. The
+# guard itself is covered by install-safety-test.sh.
+if [[ "$force_live" == 0 && "${UNCLE_ALLOW_LIVE_INSTALL:-0}" == 0 \
+      && -n "$source_dir" && -f "$source_dir/scripts/lib/running-workflow.sh" ]]; then
     . "$source_dir/scripts/lib/running-workflow.sh"
     if running_workflow_report; then exit 1; fi
 fi

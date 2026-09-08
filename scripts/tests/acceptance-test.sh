@@ -46,7 +46,16 @@ report $'| C1 | YES | PASS | observed result |\n| C1 | YES | FAIL | duplicate |'
 check UNKNOWN
 report '| C1 | YES | PASS | unescaped | pipe |'
 check UNKNOWN
-report $'| C1 | YES | PASS | observed result |\n\nTrailing prose hiding a failure.'
+report $'| C1 | YES | PASS | observed result |\n\nA closing summary paragraph.'
+check PASS
+report $'| C1 | YES | PASS | observed result |\n\n## Notes\n\nA following section.'
+check PASS
+# ...but a row below the prose would be read as text and ignored, so a FAIL
+# could be buried. That stays a malformed report.
+report $'| C1 | YES | PASS | observed result |\n\nSummary.\n\n| C2 | YES | FAIL | hidden below prose |'
+check UNKNOWN
+# Prose before the table is still refused: rows have to start the section.
+printf '## Acceptance gate\n\nprose first\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n| C1 | YES | PASS | ok |\n' > "$TMP/report.md"
 check UNKNOWN
 report '| C1 | YES | PASS | observed result |'
 printf '\n## Hidden results\n\n| C2 | YES | FAIL | must not be ignored |\n' >> "$TMP/report.md"
@@ -111,4 +120,48 @@ COUNT=$((COUNT + 1))
 if acceptance_is_blocked PASS; then echo "FAIL: PASS is not blocked"; exit 1; fi
 COUNT=$((COUNT + 1))
 if acceptance_is_blocked REPAIR; then echo "FAIL: REPAIR is not blocked"; exit 1; fi
+# --- UNKNOWN has to say why ------------------------------------------------
+# A rejected report is one of a dozen rules away from valid, and the verdict
+# alone does not say which. Two runs died today on unactionable messages; this
+# is the one that turns a verdict into a line number.
+problem() { acceptance_problem "$TMP/report.md"; }
+expect_problem() {
+    COUNT=$((COUNT + 1))
+    if ! problem | grep -q -- "$1"; then
+        echo "FAIL: expected the diagnostic to mention '$1', got: $(problem)"
+        exit 1
+    fi
+}
+
+# The exact shape that killed a real run: a well-formed table with a summary
+# paragraph after it, inside the section.
+report '| C1 | YES | PASS | observed result |'
+printf '\nG-01..G-06 are satisfied; G-07 is BLOCKED.\n' >> "$TMP/report.md"
+check PASS
+report $'| C1 | YES | PASS | ok |\n\nSummary.\n\n| C2 | YES | FAIL | buried |'
+check UNKNOWN
+expect_problem "a table row after prose"
+expect_problem "line 13"          # the buried row, not the prose
+
+report '| C1 | YES | PASS | observed | extra |'
+expect_problem "not 4"
+report '| C1 | MAYBE | PASS | observed result |'
+expect_problem "must be YES or NO"
+report '| C1 | YES | SKIP | observed result |'
+expect_problem "it must be PASS, FAIL, BLOCKED-SETUP"
+report '| C1 | YES | PASS | |'
+expect_problem "empty Evidence"
+report $'| C1 | YES | PASS | observed |\n| C1 | YES | FAIL | again |'
+expect_problem "appears twice"
+report '| C1 | NO | PASS | observed result |'
+expect_problem "no row has Required YES"
+printf '## Findings\n\nNo gate at all.\n' > "$TMP/report.md"
+expect_problem 'no "## Acceptance gate" section'
+
+# A valid table must not be reported as broken.
+report '| C1 | YES | PASS | observed result |'
+check PASS
+COUNT=$((COUNT + 1))
+problem | grep -q "the table parses" || { echo "FAIL: a valid table should report no fault: $(problem)"; exit 1; }
+
 echo "acceptance-test.sh: $COUNT checks passed"

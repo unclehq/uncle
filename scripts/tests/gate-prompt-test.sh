@@ -262,12 +262,10 @@ echo "== G1: scripts/workflow.sh approve_file =="
 setup_workflow() {
     new_case "$1"
     cp "$ROOT/scripts/workflow.sh" "$REPO/scripts/workflow.sh"
-    # workflow.sh sources the portable sha256 helper and the workflow-directory
-    # migration, so the fake checkout needs them too — the same way a real one
-    # has them.
+    # workflow.sh sources the portable sha256 helper, so the fake checkout
+    # needs it too — the same way a real one has it.
     mkdir -p "$REPO/scripts/lib"
     cp "$ROOT/scripts/lib/sha256.sh" "$REPO/scripts/lib/sha256.sh"
-    cp "$ROOT/scripts/lib/workflow-directory.sh" "$REPO/scripts/lib/workflow-directory.sh"
 }
 
 for answer in y Y; do

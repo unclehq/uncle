@@ -21,8 +21,6 @@ done
 ROOT="$(cd "$(dirname "$uncle_self")" && pwd)"
 unset uncle_self uncle_link
 cd "$ROOT"
-. "$ROOT/scripts/lib/workflow-directory.sh"
-workflow_directory_migrate "$PROJECT_ROOT"
 . "$ROOT/scripts/lib/stage-config.sh"
 
 # ANSI palette matching cline's CLI. Disabled when stdout is not a terminal or

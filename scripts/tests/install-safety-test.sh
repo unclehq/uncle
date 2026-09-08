@@ -25,8 +25,12 @@ grep -q 'Formula/uncle.rb' "$ROOT/scripts/install/build-package.py" \
 # --- a running driver is detected ------------------------------------------
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-[ -z "$(running_workflow_pids | tr -d ' ')" ] \
-    || fail "no workflow should be detected before one is started"
+# Baseline first: the operator may well have a workflow open while this runs,
+# and a test that assumed an idle machine failed for that reason alone.
+# Must succeed with nothing running: a non-zero return here, under
+# `set -o pipefail`, aborted this test on any machine that happened to be idle.
+baseline=" $(running_workflow_pids) "
+[ -n "$baseline" ] || fail "the detector must return cleanly when nothing is running"
 
 # A process whose command line looks like a driver, which is all the detector
 # can see from outside. A script, not a copied binary: macOS kills a copy of a
@@ -44,7 +48,23 @@ case " $(running_workflow_pids) " in
     *" $fake "*) ;;
     *) kill "$fake" 2>/dev/null; fail "a running driver was not detected" ;;
 esac
+case "$baseline" in
+    *" $fake "*) kill "$fake" 2>/dev/null; fail "the fake pid was already in the baseline" ;;
+esac
 running_workflow_report 2> "$work/report.txt" || { kill "$fake" 2>/dev/null; fail "it must report a running workflow"; }
+
+# Reading a driver's source is not running one. Matching the path anywhere in a
+# command line counted a grep, and would refuse an install because someone had
+# the file open in an editor.
+( grep -q zzzz-no-such-pattern "$ROOT/scripts/stagegate.sh" || true; sleep 3 ) &
+reader=$!
+sleep 0.3
+case " $(running_workflow_pids) " in
+    *" $reader "*) kill "$reader" 2>/dev/null; kill "$fake" 2>/dev/null
+                   fail "a process merely mentioning the path is not a running driver" ;;
+esac
+kill "$reader" 2>/dev/null || true
+wait "$reader" 2>/dev/null || true
 grep -q "mid-run" "$work/report.txt" || { kill "$fake" 2>/dev/null; fail "the report must say why this matters"; }
 grep -q -- "--force-live" "$work/report.txt" || { kill "$fake" 2>/dev/null; fail "the report must name the override"; }
 

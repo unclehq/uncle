@@ -20,8 +20,6 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
-. "$ROOT/scripts/lib/workflow-directory.sh"
-workflow_directory_migrate "$PROJECT_ROOT"
 export DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md
 
 # Prompt files are named relative to the uncle install, but the cwd is now the
@@ -392,7 +390,12 @@ acceptance_transition() {
             acceptance_after_waiver "$report" "$next"
             ;;
         *)
-            echo "Acceptance $result: $report. Resolve its prerequisites or report errors and rerun."
+            echo "Acceptance $result: $report."
+            if [[ "$result" == UNKNOWN ]]; then
+                acceptance_problem "$report" | sed 's/^/  /'
+            else
+                echo "Resolve its prerequisites or report errors and rerun."
+            fi
             echo "The current stage remains pending; no acceptance pass was recorded."
             exit 1
             ;;
@@ -1360,8 +1363,9 @@ while true; do
             run_stage PREFLIGHT
             preflight_result="$(acceptance_result PREFLIGHT_REPORT.md)"
             case "$preflight_result" in
-                PASS) ;;
+                PASS) human_input_reset "$STATE_DIR" ;;
                 BLOCKED-HUMAN)
+                    human_input_reset "$STATE_DIR"
                     echo
                     echo "Prerequisites await a person, not an arrangement:"
                     acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-HUMAN | sed 's/^/  /'
@@ -1380,6 +1384,17 @@ while true; do
                     blocked_ids="$(acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-SETUP)"
                     human_records="$(mktemp)" || human_records=""
                     collected=1
+                    # shellcheck disable=SC2086
+                    if [[ -n "$blocked_ids" ]] && human_input_repeating "$STATE_DIR" $blocked_ids; then
+                        echo
+                        echo "These are the same prerequisites as the last attempt, so what was"
+                        echo "provided did not resolve them. Asking again would only repeat."
+                        echo "Check where each one is expected -- the evidence above names the"
+                        echo "path -- and provide it there, or amend the plan if it is not"
+                        echo "really needed before implementation."
+                        rm -f "$human_records"
+                        exit 1
+                    fi
                     if [[ -n "$human_records" && -n "$blocked_ids" ]]; then
                         collected=0
                         # shellcheck disable=SC2086
@@ -1396,7 +1411,14 @@ while true; do
                     exit 1
                     ;;
                 *)
-                    echo "Prerequisites $preflight_result: see PREFLIGHT_REPORT.md. Resolve and rerun."
+                    echo "Prerequisites $preflight_result: see PREFLIGHT_REPORT.md."
+                    if [[ "$preflight_result" == UNKNOWN ]]; then
+                        # UNKNOWN means the table did not parse. Name the line:
+                        # the verdict alone leaves an operator guessing which of
+                        # a dozen rules the report missed.
+                        acceptance_problem PREFLIGHT_REPORT.md | sed 's/^/  /'
+                    fi
+                    echo "Resolve and rerun."
                     exit 1
                     ;;
             esac
@@ -1575,9 +1597,17 @@ while true; do
             ;;
 
         FINAL_AUDIT)
+            if [[ "$(acceptance_result TEST_REVIEW.md 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS')" == UNKNOWN ]]; then
+                echo "TEST_REVIEW.md's acceptance gate did not parse:"
+                acceptance_problem TEST_REVIEW.md | sed 's/^/  /'
+            fi
             if [[ "$(acceptance_result TEST_REVIEW.md 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS')" != PASS ]]; then
                 set_state TEST_REVIEW
                 continue
+            fi
+            if [[ "$(acceptance_result VERIFICATION_REPORT.md)" == UNKNOWN ]]; then
+                echo "VERIFICATION_REPORT.md's acceptance gate did not parse:"
+                acceptance_problem VERIFICATION_REPORT.md | sed 's/^/  /'
             fi
             if [[ "$(acceptance_result VERIFICATION_REPORT.md)" != PASS ]]; then
                 set_state EXECUTE_CHECKLIST

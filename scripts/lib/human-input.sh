@@ -30,9 +30,7 @@ collect_human_inputs() {
         status="$(acceptance_row_status "$report" "$id")"
         evidence="$(acceptance_row_evidence "$report" "$id")"
         # The path the blocker needs is usually already written in its own
-        # evidence. Runs made before the state directory was renamed name the
-        # old one, so a suggestion that still says workspace is corrected here
-        # rather than being retyped by hand.
+        # evidence, so it is offered rather than retyped by hand.
         # A path first; failing that a bare filename, which is what evidence
         # often names. A filename with no directory is offered as-is rather
         # than guessed into one.
@@ -44,8 +42,6 @@ collect_human_inputs() {
                 | grep -oE "[A-Za-z0-9_-]+[.](json|md|pdf|txt|sha256|py|csv)" \
                 | head -1)"
         fi
-        # Runs made before the state directory was renamed name the old one.
-        suggestion="$(printf '%s' "$suggestion" | sed 's|[.]uncle/workspace/|.uncle/workflow/|')"
 
         echo
         echo "$id  [$status]"
@@ -86,6 +82,18 @@ collect_human_inputs() {
                 target=""
                 continue
             fi
+            if [[ -n "$suggestion" && "$target" != "$suggestion" ]]; then
+                # Writing somewhere else satisfies nothing: the next probe
+                # looks where the blocker said, finds it still missing, and
+                # blocks on the same prerequisite again.
+                echo "  $id names $suggestion, not $target."
+                gate_prompt "  Write to $target anyway? [y/N]: "
+                IFS= read -r confirm || return 1
+                case "$confirm" in
+                    y|Y) ;;
+                    *) target=""; continue ;;
+                esac
+            fi
             break
         done
         if [[ -z "$target" ]]; then
@@ -98,7 +106,7 @@ collect_human_inputs() {
                 # Recording prose into a path that plainly wants a file is how
                 # a sample PDF or a JSON fixture ends up containing the word
                 # "brian". The operator may still mean it, so this asks.
-                case "$(printf '%s' "$target" | tr '[:upper:]' '[:lower:]')" in
+                case "$(printf '%s' "${suggestion:-$target}" | tr '[:upper:]' '[:lower:]')" in
                     *.pdf|*.png|*.jpg|*.jpeg|*.zip|*.gz|*.sha256|*.json|*.csv|*.py)
                         echo "  $target looks like a file to supply, not a statement to write."
                         gate_prompt "  Write a typed statement there anyway? [y/N]: "
@@ -182,4 +190,31 @@ apply_human_inputs() {
         esac
     done < "$records"
     [[ "$applied" -gt 0 ]]
+}
+
+# human_input_repeating <state-dir> <id>... -- true when this exact set of
+# blockers has already been answered once and came back unchanged.
+#
+# Providing an input re-runs preflight, which is the point. But an answer that
+# does not resolve the blocker leaves the same set outstanding, and offering the
+# same dialog again produces a loop that only ends when the operator gives up:
+# three prerequisites, three statements written to the wrong paths, three
+# identical prompts, forever. One attempt per distinct set of blockers, then say
+# so and stop.
+human_input_repeating() {
+    local dir="$1" record signature
+    shift
+    [[ -n "$dir" ]] || return 1
+    record="$dir/human-input-attempted"
+    signature="$(printf '%s\n' "$@" | sort -u | tr '\n' ' ')"
+    if [[ -s "$record" ]] && [[ "$(cat "$record")" == "$signature" ]]; then
+        return 0
+    fi
+    printf '%s' "$signature" > "$record" 2>/dev/null || true
+    return 1
+}
+
+# Forget the recorded attempt, so a set that genuinely changes gets a turn.
+human_input_reset() {
+    rm -f "${1:-}/human-input-attempted" 2>/dev/null || true
 }

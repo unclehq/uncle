@@ -461,7 +461,3 @@ saves fresh command results and assertion logs in
 `.uncle/workflow/checklist-driver-checks/`. The verification agent uses that
 evidence for covered checks, avoiding duplicate local-server tests inside its
 sandbox. Manual checks and human acceptance still require separate evidence.
-
-Existing `.uncle/workspace` directories are renamed to `.uncle/workflow` on the next
-launcher or workflow run. If both directories exist, Uncle stops without merging
-or overwriting either directory; move the old directory aside before continuing.

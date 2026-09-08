@@ -22,7 +22,7 @@ cat > PREFLIGHT_REPORT.md <<'MD'
 | ID | Required | Status | Evidence |
 |---|---|---|---|
 | G-1 | YES | PASS | python3 3.14.7 found |
-| G-9 | YES | BLOCKED-SETUP | .uncle/workspace/preflight-evidence/SOURCE_REVIEW_APPROVAL.md absent |
+| G-9 | YES | BLOCKED-SETUP | .uncle/workflow/preflight-evidence/SOURCE_REVIEW_APPROVAL.md absent |
 | G-10 | YES | BLOCKED-SETUP | tests/fixtures/links_expected.json absent (ls tests/fixtures) |
 MD
 
@@ -39,14 +39,12 @@ elsewhere/links_expected.json
 ANSWERS
 [ -s records.tsv ] || fail "nothing was collected"
 
-# The blank answers above accepted the suggested paths -- including the
-# correction from the pre-rename directory name, which is the whole point of
-# suggesting rather than retyping.
+# The blank answers above accepted the suggested paths, which is the whole
+# point of suggesting rather than retyping.
 grep -q $'G-9\tstatement\t.uncle/workflow/preflight-evidence/SOURCE_REVIEW_APPROVAL.md\t' records.tsv \
-    || fail "the suggested path should be corrected to .uncle/workflow: $(cat records.tsv)"
+    || fail "the suggested path was not taken from the evidence: $(cat records.tsv)"
 grep -q $'G-10\tcopy\ttests/fixtures/links_expected.json\telsewhere/links_expected.json' records.tsv \
     || fail "the copy record is wrong: $(cat records.tsv)"
-grep -q '\.uncle/workspace' records.tsv && fail "the stale directory name must not survive"
 
 # --- applying them puts the files where the next run looks ------------------
 apply_human_inputs records.tsv > applied.txt || fail "applying should report success"
@@ -118,6 +116,7 @@ s
 somedir/
 somedir
 .uncle/workflow/preflight-evidence/APPROVAL.md
+y
 Brian approved it by email on 2026-09-07
 ANSWERS
 grep -q "is a directory" log5.txt || fail "a directory answer must be refused: $(cat log5.txt)"
@@ -151,6 +150,7 @@ rm -f rec8.tsv
 if collect_human_inputs PREFLIGHT_REPORT.md rec8.tsv G-10 > log8.txt <<'ANSWERS'
 s
 sample.pdf
+y
 n
 ANSWERS
 then fail "declining the confirmation must not count as provided"; fi
@@ -163,6 +163,7 @@ collect_human_inputs PREFLIGHT_REPORT.md rec9.tsv G-10 > /dev/null <<'ANSWERS' \
     || fail "a confirmed statement must count as provided"
 s
 notes.json
+y
 y
 the oracle was agreed verbally; this records that
 ANSWERS
@@ -187,4 +188,59 @@ ANSWERS
 grep -q "links_expected.json\]" log10.txt     || fail "a bare filename in the evidence should be suggested: $(cat log10.txt)"
 grep -q $'B-9	copy	links_expected.json	elsewhere/links_expected.json' rec10.tsv     || fail "accepting the bare suggestion should record it: $(cat rec10.tsv)"
 
-echo 'human-input-test.sh: statements recorded with provenance, files copied, paths corrected and validated, partial batches applied, skips and bad sources refused'
+# 5. A path unrelated to the blocker is questioned. Observed: an operator typed
+# "s21" for a blocker naming tests/fixtures/links_expected.json, so a statement
+# was written to ./s21 -- resolving nothing. The next probe blocked on the same
+# prerequisite, offered the dialog again, and the gate looped.
+rm -f rec11.tsv
+if collect_human_inputs PREFLIGHT_REPORT.md rec11.tsv G-10 > log11.txt <<'ANSWERS'
+s
+s21
+n
+ANSWERS
+then fail "declining the divergence must record nothing"; fi
+grep -q "names tests/fixtures/links_expected.json, not s21" log11.txt \
+    || fail "it must say what the blocker asked for: $(cat log11.txt)"
+[ ! -e s21 ] || fail "declining must not create the file"
+
+# Accepting the suggestion asks nothing extra.
+rm -f rec12.tsv
+collect_human_inputs PREFLIGHT_REPORT.md rec12.tsv G-10 > log12.txt <<'ANSWERS' \
+    || fail "taking the suggestion must record"
+f
+
+elsewhere/links_expected.json
+ANSWERS
+grep -q "names" log12.txt && fail "taking the suggestion must not ask about divergence"
+
+# 6. The same blockers twice means the dialog stops asking.
+# Observed: three prerequisites, three statements written to unrelated paths,
+# preflight re-probed, the same three came back, the dialog opened again --
+# indefinitely. One attempt per distinct set.
+state="$work/state"
+mkdir -p "$state"
+human_input_repeating "$state" P-3 P-11 P-13 \
+    && fail "the first time a set is seen must not count as repeating"
+human_input_repeating "$state" P-3 P-11 P-13 \
+    || fail "the same set a second time must be recognised as repeating"
+human_input_repeating "$state" P-13 P-3 P-11 \
+    || fail "order must not make the same set look new"
+
+# A different set gets its turn.
+human_input_repeating "$state" P-3 P-11 \
+    && fail "a set with one blocker resolved must not be treated as repeating"
+human_input_repeating "$state" P-3 P-11 \
+    || fail "that set repeating must then be recognised"
+
+# And progress clears the memory.
+human_input_reset "$state"
+human_input_repeating "$state" P-3 P-11 \
+    && fail "a reset must give the next set a turn"
+
+# The driver wires all three together.
+grep -q "human_input_repeating" "$ROOT/scripts/stagegate.sh" \
+    || fail "the driver must check for a repeating blocker set"
+grep -q "human_input_reset" "$ROOT/scripts/stagegate.sh" \
+    || fail "the driver must clear the memory when preflight moves on"
+
+echo 'human-input-test.sh: statements recorded with provenance, files copied, paths corrected and validated, partial batches applied, skips and bad sources refused, and a repeating blocker set stops the dialog'

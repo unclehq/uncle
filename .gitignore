@@ -14,5 +14,3 @@
 __pycache__/
 *.pyc
 
-# Legacy state, retained until the next run migrates it.
-.uncle/workspace/

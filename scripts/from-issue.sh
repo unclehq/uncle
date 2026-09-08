@@ -3,8 +3,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-. "$ROOT/scripts/lib/workflow-directory.sh"
-workflow_directory_migrate "$ROOT"
 
 # ---------------------------------------------------------------------------
 # Change-workflow chaining

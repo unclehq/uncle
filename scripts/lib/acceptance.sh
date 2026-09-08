@@ -100,3 +100,23 @@ acceptance_is_blocked() {
         *) return 1 ;;
     esac
 }
+
+# acceptance_row_status <file> <id> / acceptance_row_evidence <file> <id> --
+# one row's status and evidence, for a caller that has to say what a specific
+# check is waiting on rather than just how many are.
+acceptance_row_field() {
+    local file="$1" want="$2" field="$3"
+    [[ -s "$file" ]] || return 0
+    awk -F '|' -v want="$want" -v field="$field" '
+        function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+        /^## Acceptance gate[ \t\r]*$/ { active=1; next }
+        active && NF == 6 {
+            if (trim($2) != want) next
+            print trim($(field))
+            exit
+        }
+    ' "$file"
+}
+
+acceptance_row_status() { acceptance_row_field "$1" "$2" 4; }
+acceptance_row_evidence() { acceptance_row_field "$1" "$2" 5; }

@@ -15,7 +15,8 @@ A manual or independent review need not happen before there is a product, but
 its execution path must be confirmed: who or what will perform it, with what
 access, and how results will return to the workflow. Do not invent a reviewer
 or assume an interactive session is available. Missing required capabilities
-are BLOCKED. Give the action needed to resolve each blocker. Do not install
+are blocked, in the class that says why. Give the action needed to resolve
+each blocker. Do not install
 dependencies, alter requirements, or implement the application in this stage.
 
 End with exactly one `## Acceptance gate` section containing only this table:
@@ -51,8 +52,10 @@ Concretely, for a prerequisite that later checks depend on:
   access -- including loopback binds -- unless the stage sets `network true` in
   `.uncle/config`, so a bind that works in a shell can still fail in the stage.
 - a GUI, windowed, or interaction-dependent check: confirm the session can
-  actually drive it. If no GUI automation is available, the row is BLOCKED.
-- a human sign-off: an unsigned approval file is BLOCKED, not PASS.
+  actually drive it. If no GUI automation is available, the row is
+  BLOCKED-SETUP when consent or an install would provide it, and
+  BLOCKED-IMPOSSIBLE when the platform cannot do it at all.
+- a human sign-off: an unsigned approval file is BLOCKED-HUMAN, not PASS.
 
 Any capability that cannot be exercised now is blocked, and which kind of
 blocked is the most useful thing this report can say:
@@ -101,7 +104,18 @@ Their later verification and independent-review gates remain mandatory.
 
 Gate on the runtime/tool availability, source inputs, reviewer arrangements,
 and any explicitly required pre-implementation approvals or frozen fixtures.
-A missing pre-implementation approval or input remains required and BLOCKED.
+A missing approval or input remains required and blocked, and which class it
+gets decides whether the run may implement:
+
+- `BLOCKED-SETUP` when the next stage cannot proceed without it -- an input
+  file that has to exist before the code can be written against it. Name the
+  action. This stops the run here, which is the point of this gate.
+- `BLOCKED-HUMAN` when a person's sign-off is consumed later, at verification.
+  Implementation does not read a signature, so the run continues past it and
+  the verification gates block on it instead. Say who owes what.
+
+Do not mark a signature BLOCKED-SETUP to force an early stop, and do not mark
+a missing input BLOCKED-HUMAN to slip past this gate.
 For example: available Python is a PASS prerequisite; an unbuilt site's content
 test is a future NOT RUN result outside this table. Named reviewer access is a
 prerequisite; final HTML sign-off is a future result outside this table.

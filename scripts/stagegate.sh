@@ -161,6 +161,7 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/acceptance.sh"
 . "$ROOT/scripts/lib/repair-limit.sh"
 . "$ROOT/scripts/lib/checklist-capability.sh"
+. "$ROOT/scripts/lib/human-input.sh"
 . "$ROOT/scripts/lib/verification-integrity.sh"
 . "$ROOT/scripts/lib/performance.sh"
 
@@ -271,6 +272,18 @@ write_waivers() {
 }
 
 # What to print when the only thing missing is an action someone can take.
+# Implementation needs tools, inputs, and checks that can be performed. It
+# does not need a signature: nobody's approval is consumed by writing code, and
+# a run that stops here because a reviewer has not signed yet has stopped for
+# something the next stage was never going to use. The signature is consumed at
+# verification, and the gates there still block on it.
+preflight_acceptable() {
+    case "$1" in
+        PASS|BLOCKED-HUMAN) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 acceptance_setup_pause() {
     local report="$1"
     echo
@@ -1298,10 +1311,47 @@ while true; do
             fi
             run_stage PREFLIGHT
             preflight_result="$(acceptance_result PREFLIGHT_REPORT.md)"
-            if [[ "$preflight_result" != PASS ]]; then
-                echo "Prerequisites $preflight_result: see PREFLIGHT_REPORT.md. Resolve and rerun."
-                exit 1
-            fi
+            case "$preflight_result" in
+                PASS) ;;
+                BLOCKED-HUMAN)
+                    echo
+                    echo "Prerequisites await a person, not an arrangement:"
+                    acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-HUMAN | sed 's/^/  /'
+                    echo "Implementation does not consume a signature, so the run continues."
+                    echo "Verification does: these must be signed before the checklist can"
+                    echo "pass, and the gates there will say so again."
+                    ;;
+                BLOCKED-SETUP)
+                    echo "Prerequisites BLOCKED-SETUP: see PREFLIGHT_REPORT.md."
+                    echo "Outstanding, one action each:"
+                    acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-SETUP | sed 's/^/  /'
+                    # Offer to take them here. A prerequisite that is waiting
+                    # on a person is waiting on the person sitting at this
+                    # gate, and hand-editing markdown between runs is how its
+                    # path ends up spelled two ways.
+                    blocked_ids="$(acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-SETUP)"
+                    human_records="$(mktemp)" || human_records=""
+                    collected=2
+                    if [[ -n "$human_records" && -n "$blocked_ids" ]]; then
+                        collected=0
+                        # shellcheck disable=SC2086
+                        collect_human_inputs PREFLIGHT_REPORT.md "$human_records" $blocked_ids \
+                            || collected=$?
+                    fi
+                    if [[ "$collected" == 0 ]] && apply_human_inputs "$human_records"; then
+                        rm -f "$human_records"
+                        echo "Prerequisites provided; re-running preflight to probe them."
+                        continue
+                    fi
+                    rm -f "$human_records"
+                    echo "Do them and rerun. Each is doable in this environment."
+                    exit 1
+                    ;;
+                *)
+                    echo "Prerequisites $preflight_result: see PREFLIGHT_REPORT.md. Resolve and rerun."
+                    exit 1
+                    ;;
+            esac
             hash_file UPDATED_PROJECT_PLAN.md > "$STATE_DIR/preflight-plan.sha256"
             set_state IMPLEMENT
             ;;
@@ -1312,7 +1362,7 @@ while true; do
                 UPDATED_PROJECT_PLAN
             if [[ ! -s "$STATE_DIR/preflight-plan.sha256" ]] \
                 || [[ "$(cat "$STATE_DIR/preflight-plan.sha256")" != "$(hash_file UPDATED_PROJECT_PLAN.md)" ]] \
-                || [[ "$(acceptance_result PREFLIGHT_REPORT.md)" != PASS ]]; then
+                || ! preflight_acceptable "$(acceptance_result PREFLIGHT_REPORT.md)"; then
                 set_state PREFLIGHT
                 continue
             fi

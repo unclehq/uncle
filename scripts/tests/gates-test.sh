@@ -1067,3 +1067,22 @@ if [[ "$FAILED" -ne 0 ]]; then
 fi
 
 echo "gates-test.sh: $COUNT checks passed"
+
+# --- `local` inside the top-level state machine ----------------------------
+# Each driver's state machine is a `while true; do` loop at column 0, not a
+# function, so a `local` declaration inside it is a runtime error -- and
+# `bash -n` accepts it, so nothing else in this suite would notice. Anchored on
+# column 0 rather than counted braces: awk and jq snippets in these files carry
+# braces inside quotes, and counting them misreads the nesting.
+for driver in "$ROOT/scripts/stagegate.sh" "$ROOT/scripts/change-workflow.sh"; do
+    awk -v file="$driver" '
+        /^while true; do$/ { inloop = 1; next }
+        /^done$/           { inloop = 0; next }
+        inloop && $1 == "local" {
+            printf "FAIL: %s:%d declares `local` in the top-level state machine: %s\n", file, NR, $0
+            bad = 1
+        }
+        END { exit bad ? 1 : 0 }
+    ' "$driver" || exit 1
+done
+echo 'gates-test.sh: no `local` in the drivers state machines'

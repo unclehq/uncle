@@ -142,4 +142,36 @@ report $'| C1 | YES | PASS | ok |\n| C2 | YES | BLOCKED-IMPOSSIBLE | no window u
 [ "$(acceptance_result report.md)" = "BLOCKED-IMPOSSIBLE" ] \
     || fail "the verdict must stay BLOCKED-IMPOSSIBLE even with a waiver on disk"
 
+# --- preflight lets a pending signature through, and nothing else -----------
+# Implementation does not consume a signature. A run that stopped before
+# implementing because a reviewer had not signed yet stopped for something the
+# next stage was never going to read -- and because the IMPLEMENT state
+# re-checks the same report, letting it through in one place and not the other
+# is a loop between the two rather than a gate.
+eval "$(awk '/^preflight_acceptable\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+preflight_acceptable PASS          || fail "a passing preflight must implement"
+preflight_acceptable BLOCKED-HUMAN || fail "a pending signature must not stop implementation"
+preflight_acceptable BLOCKED-SETUP && fail "missing setup must stop implementation"
+preflight_acceptable BLOCKED-IMPOSSIBLE && fail "an impossible prerequisite must stop implementation"
+preflight_acceptable REPAIR        && fail "a failed prerequisite must stop implementation"
+preflight_acceptable UNKNOWN       && fail "an unreadable report must stop implementation"
+
+# The two gates that ask the question must ask it the same way.
+grep -q 'preflight_acceptable "$(acceptance_result PREFLIGHT_REPORT.md)"' \
+    "$ROOT/scripts/stagegate.sh" \
+    || fail "the IMPLEMENT re-check must use the same predicate as the PREFLIGHT gate"
+
+# --- the audit is told where the waivers are ---------------------------------
+# A waiver the auditor never reads is a waiver that buys nothing: the run
+# advances one stage and then stops on rows the audit cannot account for. The
+# path the driver writes and the path the prompt reads have to be the same one.
+grep -q '\.uncle/workflow/waivers' "$ROOT/prompts/final-audit.md" \
+    || fail "the final-audit prompt must point at the waiver directory"
+grep -q 'never verification' "$ROOT/prompts/final-audit.md" \
+    || fail "the audit must be told a waiver is not verification"
+case "$(waive_file EXAMPLE)" in
+    */.uncle/workflow/waivers/EXAMPLE|*/workflow/waivers/EXAMPLE) ;;
+    *) fail "waivers are written somewhere the prompt does not name: $(waive_file EXAMPLE)" ;;
+esac
+
 echo 'blocked-classes-test.sh: repair, setup pause, human continue, and waiver record/honor/scope passed'

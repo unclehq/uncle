@@ -6,12 +6,12 @@ Your job is to reconcile the two and emit the final checklist.
 
 Read:
 
-- .workflow/MANUAL_CHECKLIST.base.md
+- .uncle/workflow/MANUAL_CHECKLIST.base.md
 - CHANGE_SPEC.md
 - CHANGE_PLAN.md
 - IMPLEMENTATION_NOTES.md
 - CHANGE_TEST_REPORT.md
-- .workflow/change.diff
+- .uncle/workflow/change.diff
 - changed source files
 - relevant unchanged source files
 

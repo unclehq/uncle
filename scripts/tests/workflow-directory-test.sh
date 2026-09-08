@@ -25,3 +25,18 @@ if workflow_directory_migrate "$tmp" 2>/dev/null; then exit 1; fi
 [[ "$(cat "$tmp/.uncle/workflow/state")" == '42:IMPLEMENT' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 [[ "$(cat "$tmp/.uncle/workspace/state")" == old ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 echo 'workflow-directory-test: passed'
+
+# The rename left prompts pointing at the old directory, where the stages that
+# read them found nothing. A path in a prompt is as load-bearing as one in the
+# code, and nothing else checks it.
+for f in "$ROOT"/prompts/*.md "$ROOT"/prompts/change/*.md; do
+    if grep -qE '(^|[^.a-z])\.workflow/' "$f"; then
+        echo "FAIL: $f names .workflow/ instead of .uncle/workflow/" >&2
+        exit 1
+    fi
+    if grep -q '\.uncle/workspace' "$f"; then
+        echo "FAIL: $f names the pre-rename .uncle/workspace" >&2
+        exit 1
+    fi
+done
+echo 'workflow-directory-test.sh: prompts name the post-rename directory'

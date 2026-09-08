@@ -5,7 +5,7 @@ Read:
 - CHANGE_SPEC.md
 - CHANGE_PLAN.md
 - BASELINE_REPORT.md
-- source-code diff at .workflow/change.diff
+- source-code diff at .uncle/workflow/change.diff
 - changed tests
 - unchanged relevant tests
 - IMPLEMENTATION_NOTES.md
@@ -16,7 +16,7 @@ Read:
 
 Do not modify code.
 
-Start from .workflow/change.diff. It is the authoritative record of what
+Start from .uncle/workflow/change.diff. It is the authoritative record of what
 changed. Open a source file only where the diff alone cannot settle a
 question, and open the surrounding region rather than the whole file. You do
 not need CHANGE_REQUEST.md; CHANGE_SPEC.md supersedes it.

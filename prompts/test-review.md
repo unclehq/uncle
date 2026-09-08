@@ -76,7 +76,8 @@ deleting a valid regression test solely to match the number of planned IDs.
 
 End with exactly one `## Acceptance gate` containing only a table with columns
 `ID`, `Required`, `Status`, `Evidence`, in that order. Required is YES or NO;
-Status is PASS, FAIL, BLOCKED, NOT RUN, or N/A. Every row needs nonempty evidence
+Status is PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE,
+NOT RUN, or N/A. Every row needs nonempty evidence
 or a finding reference; no literal pipes within cells. No mandatory row may be
 marked optional or inapplicable to allow the run to proceed.
 

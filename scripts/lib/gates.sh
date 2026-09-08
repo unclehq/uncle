@@ -402,6 +402,67 @@ save_plan_review() {
         --cache-dir "$LOG_DIR/../review-cache"
 }
 
+# What this machine was proved able to do, published for the stages that write
+# checks against it.
+#
+# PREFLIGHT_REPORT.md already records one row per prerequisite, with evidence.
+# The driver used to read it as a single verdict and throw the rows away -- so
+# the stage that writes the checklist had no list of proven capabilities to
+# check its rows against, and could author a check nothing in this environment
+# can perform. That is how a required row demanding a real 320px browser
+# window gets written on a machine whose browser will not go below 500.
+#
+# Publishing the rows does not make the checklist obey them. The checklist
+# prompt does that, by requiring each row that needs a capability to cite the
+# id that proved it.
+snapshot_preflight_capabilities() {
+    local directory="$STATE_DIR/preflight-capabilities"
+    local report="${1:-PREFLIGHT_REPORT.md}"
+    mkdir -p "$directory"
+    rm -f "$directory/capabilities.tsv"
+    if [[ -s "$report" ]]; then
+        awk -F '|' '
+            function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+            /^## Acceptance gate[ \t\r]*$/ { active=1; next }
+            active && NF == 6 {
+                id=trim($2); required=trim($3); status=trim($4); evidence=trim($5)
+                if (id == "ID" || id ~ /^:?-{3,}:?$/) next
+                if (id == "") next
+                printf "%s\t%s\t%s\t%s\n", id, required, status, evidence
+            }
+        ' "$report" > "$directory/capabilities.tsv"
+    fi
+    {
+        echo '# Capabilities proved before implementation'
+        echo
+        if [[ ! -s "$directory/capabilities.tsv" ]]; then
+            echo "NOT DECLARED: $report has no acceptance-gate rows."
+            echo 'Nothing was proved about this environment, so a check that needs a'
+            echo 'capability has no evidence behind it. Do not assume one is available.'
+        else
+            printf 'From %s, one row per prerequisite:\n\n' "$report"
+            echo '```'
+            awk -F '\t' '{ printf "%-16s %-4s %-20s %s\n", $1, $2, $3, $4 }' \
+                "$directory/capabilities.tsv"
+            echo '```'
+            echo
+            echo 'PASS means it was exercised here and the output was recorded. Any'
+            echo 'other status means it was not: a check that needs it cannot pass,'
+            echo 'and writing one as though it could is how a run ends on a check'
+            echo 'nobody can perform.'
+            echo
+            echo 'Cite the id in any check that needs the capability. If its status'
+            echo 'is not PASS, give the check the matching status:'
+            echo '  BLOCKED-SETUP       one action would make it available'
+            echo '  BLOCKED-HUMAN       it waits on a person'
+            echo '  BLOCKED-IMPOSSIBLE  this environment cannot do it at all'
+        fi
+    } > "$directory/README.md"
+    if [[ -s "$directory/capabilities.tsv" ]]; then
+        echo "Preflight capabilities: $(wc -l < "$directory/capabilities.tsv" | tr -d ' ') prerequisite row(s) published for the checklist."
+    fi
+}
+
 # The checklist's own parallel-execution plan, derived from the reviewer's
 # per-check declarations immediately before the stage that follows them.
 #

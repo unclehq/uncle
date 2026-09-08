@@ -27,7 +27,7 @@ check UNKNOWN 'C1 C2'
 check PASS C1
 for status in FAIL BLOCKED 'NOT RUN' N/A; do
     report "| C1 | YES | $status | observed result |"
-    if [[ "$status" == FAIL ]]; then check REPAIR; else check BLOCKED; fi
+    if [[ "$status" == FAIL ]]; then check REPAIR; else check BLOCKED-SETUP; fi
 done
 report $'| C1 | YES | FAIL | assertion failed |\n| C2 | YES | BLOCKED | browser unavailable |'
 check REPAIR
@@ -63,7 +63,52 @@ check PASS
 report $'| ASSERTIONS | YES | FAIL | missing list assertion |\n| AT-01/AC-02 | YES | NOT RUN | final human comparison pending |'
 check REPAIR ASSERTIONS
 report '| AT-01/AC-02 | YES | NOT RUN | final human comparison pending |'
-check BLOCKED
+check BLOCKED-SETUP
 report $'| ASSERTIONS | YES | FAIL | missing assertion |\n| BAD | YES | INVALID | malformed report must not authorize repair |'
 check UNKNOWN
+
+# --- the three blocked classes are told apart -------------------------------
+# One word for three situations made them one dead stop. Setup is doable now,
+# a signature is what the workflow is for, and impossible means the plan is
+# wrong -- so the verdict has to distinguish them.
+for status in BLOCKED-SETUP BLOCKED-HUMAN BLOCKED-IMPOSSIBLE; do
+    report "| C1 | YES | $status | observed result |"
+    check "$status"
+done
+
+# Precedence, worst first: a defect outranks everything, then a check no
+# environment can perform, then one waiting on an action, then one waiting on
+# a person. Anything less and the report of the worse problem is lost.
+report $'| C1 | YES | FAIL | assertion failed |\n| C2 | YES | BLOCKED-IMPOSSIBLE | no window under 500px |'
+check REPAIR
+report $'| C1 | YES | BLOCKED-IMPOSSIBLE | no window under 500px |\n| C2 | YES | BLOCKED-SETUP | safaridriver not enabled |'
+check BLOCKED-IMPOSSIBLE
+report $'| C1 | YES | BLOCKED-SETUP | tree not committed |\n| C2 | YES | BLOCKED-HUMAN | awaiting sign-off |'
+check BLOCKED-SETUP
+report $'| C1 | YES | PASS | observed result |\n| C2 | YES | BLOCKED-HUMAN | awaiting sign-off |'
+check BLOCKED-HUMAN
+
+# A non-required row of any class never blocks the run.
+report $'| C1 | YES | PASS | observed result |\n| C2 | NO | BLOCKED-IMPOSSIBLE | optional and unreachable |'
+check PASS
+
+# The blocking rows can be named, so the driver can batch them or check them
+# against waivers rather than printing a verdict and stopping.
+report $'| C1 | YES | BLOCKED-IMPOSSIBLE | no window under 500px |\n| C2 | YES | BLOCKED-HUMAN | awaiting sign-off |\n| C3 | YES | BLOCKED | unclassified |\n| C4 | NO | BLOCKED-IMPOSSIBLE | optional |\n| C5 | YES | PASS | observed |'
+ids() { acceptance_blocked_ids "$TMP/report.md" "$1" | tr '\n' ' ' | sed 's/ $//'; }
+COUNT=$((COUNT + 1))
+[ "$(ids BLOCKED-IMPOSSIBLE)" = "C1" ] || { echo "FAIL: impossible ids: $(ids BLOCKED-IMPOSSIBLE)"; exit 1; }
+COUNT=$((COUNT + 1))
+[ "$(ids BLOCKED-HUMAN)" = "C2" ] || { echo "FAIL: human ids: $(ids BLOCKED-HUMAN)"; exit 1; }
+COUNT=$((COUNT + 1))
+[ "$(ids BLOCKED-SETUP)" = "C3" ] || { echo "FAIL: setup ids (a bare BLOCKED counts): $(ids BLOCKED-SETUP)"; exit 1; }
+
+COUNT=$((COUNT + 1))
+acceptance_is_blocked BLOCKED-HUMAN || { echo "FAIL: BLOCKED-HUMAN is a blocked class"; exit 1; }
+COUNT=$((COUNT + 1))
+acceptance_is_blocked BLOCKED || { echo "FAIL: a bare BLOCKED is a blocked class"; exit 1; }
+COUNT=$((COUNT + 1))
+if acceptance_is_blocked PASS; then echo "FAIL: PASS is not blocked"; exit 1; fi
+COUNT=$((COUNT + 1))
+if acceptance_is_blocked REPAIR; then echo "FAIL: REPAIR is not blocked"; exit 1; fi
 echo "acceptance-test.sh: $COUNT checks passed"

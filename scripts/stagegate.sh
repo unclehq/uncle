@@ -182,17 +182,101 @@ if [[ "$MAX_REPAIRS" -gt 100 ]]; then
     exit 1
 fi
 
+# A required row that no environment can satisfy is a dead end unless someone
+# can say so on the record. A waiver is that record: an operator's typed reason
+# for one id, kept with the run. It never turns a row into a PASS -- the report
+# still says the check was not performed -- it only stops the driver treating
+# an impossible check as a reason to abandon the run.
+waive_file() { printf '%s/waivers/%s' "$STATE_DIR" "$1"; }
+
+waived_ids() {
+    local id
+    for id in "$@"; do
+        [[ -s "$(waive_file "$id")" ]] || return 1
+    done
+    return 0
+}
+
+record_waiver() {
+    local report="$1" answer reason
+    shift
+    local ids=("$@")
+    echo
+    echo "These required checks cannot be performed in this environment:"
+    local id
+    for id in "${ids[@]}"; do
+        printf '  %s\n' "$id"
+    done
+    echo
+    echo "Effort will not clear them -- amending $report's plan or the"
+    echo "requirement behind it is the real fix, and is what should normally"
+    echo "happen here. A waiver is the other option: it records why a required"
+    echo "check cannot be performed and lets the run continue to its audit."
+    echo "It does not make the check pass, and the report keeps saying so."
+    gate_prompt "Type a reason to waive these checks for this run, or Enter to stop and amend the plan: "
+    if ! IFS= read -r reason || [[ -z "$reason" ]]; then
+        echo 'No waiver recorded; the run remains pending.'
+        return 1
+    fi
+    mkdir -p "$STATE_DIR/waivers" || return 1
+    for id in "${ids[@]}"; do
+        {
+            printf 'id: %s\n' "$id"
+            printf 'report: %s\n' "$report"
+            printf 'recorded: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            printf 'reason: %s\n' "$reason"
+        } > "$(waive_file "$id")" || return 1
+    done
+    echo "Waiver recorded for ${#ids[@]} check(s); it is kept in $STATE_DIR/waivers."
+    return 0
+}
+
 acceptance_transition() {
     local report="$1" next="$2" result
     result="$(acceptance_result "$report" "${3:-}")"
+    local ids
     case "$result" in
         PASS) set_state "$next" ;;
         REPAIR)
             printf '%s\n' "$report" > "$STATE_DIR/repair-source"
             set_state REPAIR
             ;;
+        BLOCKED-HUMAN)
+            # Waiting on a person is what this workflow is for, not a fault.
+            # Everything a machine could check has been checked, so the run
+            # goes on to its audit, which reads the report and decides.
+            echo
+            echo "Awaiting human sign-off in $report:"
+            acceptance_blocked_ids "$report" BLOCKED-HUMAN | sed 's/^/  /'
+            echo "Nothing else is outstanding. Continuing to $next, which reads"
+            echo "the report and judges it; the run cannot complete on an"
+            echo "unsigned required check."
+            set_state "$next"
+            ;;
+        BLOCKED-IMPOSSIBLE)
+            ids="$(acceptance_blocked_ids "$report" BLOCKED-IMPOSSIBLE)"
+            # shellcheck disable=SC2086
+            if [[ -n "$ids" ]] && waived_ids $ids; then
+                echo
+                echo "Required checks $(printf '%s' "$ids" | tr '\n' ' ')are waived for this run; see $STATE_DIR/waivers."
+                set_state "$next"
+                return 0
+            fi
+            # shellcheck disable=SC2086
+            if [[ -n "$ids" ]] && record_waiver "$report" $ids; then
+                set_state "$next"
+                return 0
+            fi
+            echo "The current stage remains pending; no acceptance pass was recorded."
+            exit 1
+            ;;
         *)
             echo "Acceptance $result: $report. Resolve its prerequisites or report errors and rerun."
+            if [[ "$result" == BLOCKED-SETUP ]]; then
+                echo "Outstanding setup, one action each:"
+                acceptance_blocked_ids "$report" BLOCKED-SETUP | sed 's/^/  /'
+                echo "Do them and rerun; each is doable in this environment."
+            fi
             echo "The current stage remains pending; no acceptance pass was recorded."
             exit 1
             ;;
@@ -1292,6 +1376,9 @@ while true; do
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
             fi
+            # The checklist is written against what this machine was proved to
+            # do, not against what the plan hoped for.
+            snapshot_preflight_capabilities
             run_stage MANUAL_CHECKLIST
             set_state EXECUTE_CHECKLIST
             ;;

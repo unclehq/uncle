@@ -64,7 +64,13 @@ For each check include:
 - Expected result
 - Actual result
 - Evidence
-- Status: PASS, FAIL, BLOCKED, or NOT RUN
+- Status: PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, or
+  NOT RUN. A blocked check has to say which kind: one action away
+  (BLOCKED-SETUP, and name the action), waiting on a person (BLOCKED-HUMAN,
+  and name who), or beyond this environment (BLOCKED-IMPOSSIBLE, and name the
+  limit). The driver treats the three differently -- it batches the first,
+  continues to the audit on the second, and stops to have the plan amended on
+  the third -- so a bare BLOCKED throws that away and is read as SETUP
 - Defect reference
 
 Rules:

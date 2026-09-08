@@ -57,7 +57,13 @@ For every check record:
 - Expected result
 - Actual result
 - Evidence
-- Status: PASS, FAIL, BLOCKED, or NOT RUN
+- Status: PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, or
+  NOT RUN. A blocked check has to say which kind: one action away
+  (BLOCKED-SETUP, and name the action), waiting on a person (BLOCKED-HUMAN,
+  and name who), or beyond this environment (BLOCKED-IMPOSSIBLE, and name the
+  limit). The driver treats the three differently -- it batches the first,
+  continues to the audit on the second, and stops to have the plan amended on
+  the third -- so a bare BLOCKED throws that away and is read as SETUP
 - Defect reference, when applicable
 
 Never mark an unexecuted check as PASS.
@@ -83,7 +89,8 @@ exactly one `## Acceptance gate` containing only this table:
 |---|---|---|---|
 
 Include every checklist ID and any mandatory requirement omitted from the
-checklist. Required is YES or NO; Status is PASS, FAIL, BLOCKED, NOT RUN, or N/A.
+checklist. Required is YES or NO; Status is PASS, FAIL, BLOCKED-SETUP,
+BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, NOT RUN, or N/A.
 Every row needs nonempty evidence or a reference to its detailed result; no
 literal pipe characters in cells. Required checks cannot become optional due
 to unavailable prerequisites. N/A is allowed only with a requirement-based

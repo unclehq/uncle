@@ -54,13 +54,31 @@ Concretely, for a prerequisite that later checks depend on:
   actually drive it. If no GUI automation is available, the row is BLOCKED.
 - a human sign-off: an unsigned approval file is BLOCKED, not PASS.
 
-Any capability that cannot be exercised now is BLOCKED with the action needed
-to resolve it. This gate exists so an unobtainable prerequisite stops the run
-here, cheaply, rather than after implementation -- where it becomes a blocked
-checklist row that no repair attempt can turn into a pass.
+Any capability that cannot be exercised now is blocked, and which kind of
+blocked is the most useful thing this report can say:
+
+- `BLOCKED-SETUP` -- one action would make it available. Name the action:
+  `safaridriver --enable` (admin), granting Accessibility consent, committing
+  the tree, installing a browser.
+- `BLOCKED-HUMAN` -- it waits on a person. Name who and for what.
+- `BLOCKED-IMPOSSIBLE` -- this environment cannot do it as specified, and no
+  effort will change that. Say what the limit is: a browser that will not size
+  a window below 500 CSS px cannot show a real 320px viewport; a protocol that
+  does not exist for an engine cannot drive it.
+
+That distinction is what later stages are held to. A row marked
+BLOCKED-IMPOSSIBLE tells the checklist not to write a check that depends on it
+and tells the operator to amend the plan or the requirement, which is cheap
+now and expensive after implementation. A bare `BLOCKED` is read as
+BLOCKED-SETUP, so leaving it unclassified claims the problem is arrangeable.
+
+Add a row for every capability the planned checks will need, not only the ones
+that worked. A capability nobody probed is a capability the checklist has no
+evidence for, and the checklist is required to cite these ids.
 
 Add one row for every prerequisite, with stable IDs. Required is YES or NO;
-Status is PASS, FAIL, BLOCKED, NOT RUN, or N/A. Evidence is nonempty and cites
+Status is PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE,
+NOT RUN, or N/A. Evidence is nonempty and cites
 observed output or a recorded arrangement, not an assertion of readiness.
 Use NO only for an explicitly optional or inapplicable prerequisite, citing
 the requirement that establishes this. Include at least one required row.

@@ -84,6 +84,36 @@ check's Evidence must record which browser it actually used. A result that does
 not say what it ran in cannot be reproduced or trusted, and a second engine
 needs its own row naming that engine.
 
+## Feasibility: cite what preflight proved
+
+Read `.uncle/workflow/preflight-capabilities/README.md` first. It lists one row
+per prerequisite that was probed before implementation, with its status and the
+observed evidence.
+
+Every check that needs a capability -- a port, a browser, a GUI, an account, a
+person -- must cite the preflight id that proved it, as `Needs: PF-7`. A check
+that needs nothing beyond the repository and its test tools cites nothing.
+
+If the cited id is not PASS, the capability was not available here, and the
+check cannot pass. Write the check anyway -- a requirement that cannot be
+verified must stay visible, and dropping it is the failure this workflow exists
+to prevent -- but give it the status that says which kind of unavailable it is:
+
+- `BLOCKED-SETUP` when one action would make it available
+- `BLOCKED-HUMAN` when it waits on a person
+- `BLOCKED-IMPOSSIBLE` when this environment cannot do it at all
+
+Do not write a check whose action this environment cannot perform and then
+leave it looking runnable. A row that reads like a normal check and can only
+ever record BLOCKED costs the executing stage a full attempt, teaches the
+operator nothing, and cannot be told apart from a check that failed.
+
+If a mandatory requirement can only be verified through a capability marked
+BLOCKED-IMPOSSIBLE, say so in Open questions and name what would have to change
+-- the requirement, the plan's verification strategy, or the environment. That
+is a decision for a human at a gate, not something to bury in a check that
+will never run.
+
 Include sections for:
 
 1. Smoke checks

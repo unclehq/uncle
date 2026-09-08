@@ -125,6 +125,33 @@ check's Evidence must record which browser it actually used. A result that does
 not say what it ran in cannot be reproduced or trusted, and a second engine
 needs its own row naming that engine.
 
+## Feasibility: say which kind of unavailable
+
+This pipeline has no preflight stage, so nothing has probed the environment on
+your behalf. Before writing a check that needs a capability -- a port, a
+browser, a GUI, an account, a person -- establish whether this machine has it,
+from BASELINE_REPORT.md's recorded commands or by reasoning about the platform.
+
+A capability that is not available does not mean dropping the check. A
+requirement that cannot be verified must stay visible, and hiding it is the
+failure this workflow exists to prevent. Write it, and give it the status that
+says which kind of unavailable it is:
+
+- `BLOCKED-SETUP` when one action would make it available
+- `BLOCKED-HUMAN` when it waits on a person
+- `BLOCKED-IMPOSSIBLE` when this environment cannot do it at all
+
+Do not write a check whose action this environment cannot perform and then
+leave it looking runnable. A row that reads like a normal check and can only
+ever record BLOCKED costs the executing stage a full attempt, teaches the
+operator nothing, and cannot be told apart from a check that failed.
+
+If an acceptance criterion can only be verified through a capability marked
+BLOCKED-IMPOSSIBLE, say so plainly and name what would have to change -- the
+criterion, the plan's verification strategy, or the environment. That is a
+decision for a human at a gate, not something to bury in a check that will
+never run.
+
 ## Output economy
 
 The twenty categories above are search directions, not an output template.

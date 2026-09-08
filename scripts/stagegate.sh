@@ -1331,7 +1331,7 @@ while true; do
                     # path ends up spelled two ways.
                     blocked_ids="$(acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-SETUP)"
                     human_records="$(mktemp)" || human_records=""
-                    collected=2
+                    collected=1
                     if [[ -n "$human_records" && -n "$blocked_ids" ]]; then
                         collected=0
                         # shellcheck disable=SC2086

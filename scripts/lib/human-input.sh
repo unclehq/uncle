@@ -9,24 +9,127 @@
 # project.
 HUMAN_INPUT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# collect_human_inputs <report> <out> <id>... -- draw the dialog.
-#   0 something was provided, 1 nothing was, 2 no terminal to draw on.
+# collect_human_inputs <report> <out> <id>... -- ask for each blocker.
+#   0 something was provided, 1 nothing was.
+#
+# Asked with gate_prompt and read, not with a curses window. The TUI runs the
+# driver with stdin, stdout and stderr all as pipes, so the driver has no
+# terminal to draw on -- and it does not need one: the TUI treats an
+# unterminated line on stdout as a question, renders it as a centered dialog
+# with an input line, and writes the answer back into the driver's stdin. The
+# prompt protocol is the dialog. A bare terminal shows the same questions as
+# plain prompts.
 collect_human_inputs() {
     local report="$1" out="$2"
     shift 2
-    local popup="$HUMAN_INPUT_LIB_DIR/human-input-popup.py"
-    [[ -f "$popup" ]] || return 2
-    command -v python3 > /dev/null 2>&1 || return 2
-    local -a specs=()
-    local id
+    local id answer target payload status evidence suggestion confirm
+    local attempts provided=0
+    : > "$out" || return 1
+
     for id in "$@"; do
-        # Each blocker reaches the dialog with the evidence it was blocked on,
-        # which is where the path it needs is usually already written down.
-        specs+=("$(printf '%s\t%s\t%s' "$id" \
-            "$(acceptance_row_status "$report" "$id")" \
-            "$(acceptance_row_evidence "$report" "$id")")")
+        status="$(acceptance_row_status "$report" "$id")"
+        evidence="$(acceptance_row_evidence "$report" "$id")"
+        # The path the blocker needs is usually already written in its own
+        # evidence. Runs made before the state directory was renamed name the
+        # old one, so a suggestion that still says workspace is corrected here
+        # rather than being retyped by hand.
+        # A path first; failing that a bare filename, which is what evidence
+        # often names. A filename with no directory is offered as-is rather
+        # than guessed into one.
+        suggestion="$(printf '%s' "$evidence" \
+            | grep -oE "[A-Za-z0-9_.-]*/[A-Za-z0-9_./-]+[.][A-Za-z0-9]+" \
+            | head -1)"
+        if [[ -z "$suggestion" ]]; then
+            suggestion="$(printf '%s' "$evidence" \
+                | grep -oE "[A-Za-z0-9_-]+[.](json|md|pdf|txt|sha256|py|csv)" \
+                | head -1)"
+        fi
+        # Runs made before the state directory was renamed name the old one.
+        suggestion="$(printf '%s' "$suggestion" | sed 's|[.]uncle/workspace/|.uncle/workflow/|')"
+
+        echo
+        echo "$id  [$status]"
+        [[ -z "$evidence" ]] || echo "  $evidence"
+        gate_prompt "Provide $id now? 's' to record a signed statement, 'f' to copy a file in, Enter to skip: "
+        IFS= read -r answer || return 1
+        case "$answer" in
+            s|S) ;;
+            f|F) ;;
+            *) echo "  skipped."; continue ;;
+        esac
+
+        target=""
+        attempts=0
+        # Five tries, not three: this is a person typing a path into a
+        # dialog, and giving up early throws away the answers they already
+        # gave for the other blockers.
+        while [[ "$attempts" -lt 5 ]]; do
+            attempts=$((attempts + 1))
+            gate_prompt "Path to write it to${suggestion:+ [$suggestion]}: "
+            IFS= read -r target || return 1
+            [[ -n "$target" ]] || target="$suggestion"
+            if [[ -z "$target" ]]; then
+                echo "  no path given, and none to suggest."
+                target=""
+                continue
+            fi
+            # A directory is the answer people give when they mean "here", and
+            # it used to be taken literally: the write failed, and because one
+            # failure aborted the whole apply, the answers already given for the
+            # other blockers were discarded with it.
+            case "$target" in
+                */|.|..) echo "  $target is a directory; give the file to write."
+                         target=""; continue ;;
+            esac
+            if [[ -d "$target" ]]; then
+                echo "  $target is an existing directory; give the file to write."
+                target=""
+                continue
+            fi
+            break
+        done
+        if [[ -z "$target" ]]; then
+            echo "  no usable path given; skipped."
+            continue
+        fi
+
+        case "$answer" in
+            s|S)
+                # Recording prose into a path that plainly wants a file is how
+                # a sample PDF or a JSON fixture ends up containing the word
+                # "brian". The operator may still mean it, so this asks.
+                case "$(printf '%s' "$target" | tr '[:upper:]' '[:lower:]')" in
+                    *.pdf|*.png|*.jpg|*.jpeg|*.zip|*.gz|*.sha256|*.json|*.csv|*.py)
+                        echo "  $target looks like a file to supply, not a statement to write."
+                        gate_prompt "  Write a typed statement there anyway? [y/N]: "
+                        IFS= read -r confirm || return 1
+                        case "$confirm" in
+                            y|Y) ;;
+                            *) echo "  skipped; use 'f' to copy the real file in."; continue ;;
+                        esac
+                        ;;
+                esac
+                gate_prompt "Statement -- who approved what, in your words: "
+                IFS= read -r payload || return 1
+                if [[ -z "$payload" ]]; then
+                    echo "  no statement given; skipped."
+                    continue
+                fi
+                printf '%s\tstatement\t%s\t%s\n' "$id" "$target" "$payload" >> "$out"
+                ;;
+            f|F)
+                gate_prompt "Path of the existing file to copy: "
+                IFS= read -r payload || return 1
+                if [[ -z "$payload" ]]; then
+                    echo "  no source given; skipped."
+                    continue
+                fi
+                printf '%s\tcopy\t%s\t%s\n' "$id" "$target" "$payload" >> "$out"
+                ;;
+        esac
+        provided=$((provided + 1))
     done
-    python3 "$popup" --report "$report" --out "$out" "${specs[@]}"
+    [[ "$provided" -gt 0 ]]
 }
 
 # apply_human_inputs <records> -- act on what the dialog collected.
@@ -42,14 +145,20 @@ apply_human_inputs() {
         [[ -n "$id" && -n "$target" ]] || continue
         case "$action" in
             statement)
-                mkdir -p "$(dirname "$target")" || return 1
+                if ! mkdir -p "$(dirname "$target")" 2> /dev/null; then
+                    echo "  $id: cannot create $(dirname "$target"); skipped" >&2
+                    continue
+                fi
                 {
                     printf '# %s\n\n' "$id"
                     printf 'Recorded by the operator at the preflight gate.\n'
                     printf 'When: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
                     printf 'Prerequisite: %s\n\n' "$id"
                     printf '%s\n' "$payload"
-                } > "$target" || return 1
+                } > "$target" 2> /dev/null || {
+                    echo "  $id: cannot write $target; skipped" >&2
+                    continue
+                }
                 echo "  $id: statement recorded in $target"
                 applied=$((applied + 1))
                 ;;
@@ -58,8 +167,14 @@ apply_human_inputs() {
                     echo "  $id: $payload does not exist; nothing copied" >&2
                     continue
                 fi
-                mkdir -p "$(dirname "$target")" || return 1
-                cp -R "$payload" "$target" || return 1
+                if ! mkdir -p "$(dirname "$target")" 2> /dev/null; then
+                    echo "  $id: cannot create $(dirname "$target"); skipped" >&2
+                    continue
+                fi
+                if ! cp -R "$payload" "$target" 2> /dev/null; then
+                    echo "  $id: cannot copy $payload to $target; skipped" >&2
+                    continue
+                fi
                 echo "  $id: copied $payload to $target"
                 applied=$((applied + 1))
                 ;;

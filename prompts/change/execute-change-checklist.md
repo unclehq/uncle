@@ -13,6 +13,24 @@ seen it. Read it in full from disk before executing anything.
 
 Execute every feasible Critical and Important check.
 
+## Parallel execution
+
+After reading the fresh driver evidence below, group the remaining checks by
+prerequisites and shared resources. Run independent checks concurrently using
+parallel tool calls or background processes; do not run them one at a time when
+they can safely overlap. Share read-only setup where possible.
+
+Run dependent checks in order. Serialize checks that share mutable fixtures,
+ports, browser sessions, accounts, build outputs, or other state, unless those
+resources can be isolated without changing what the check verifies. Keep
+concurrency within available resources to avoid introducing timing failures.
+
+Capture each check's output and exit status separately, tied to its checklist
+ID. Wait for every started check to finish before assigning results. A failed
+check must not discard results from other independent checks. Record why any
+dependent check could not run. Collect evidence as checks finish, then write
+VERIFICATION_REPORT.md and DEFECTS.md once after all results are collected; do
+not let concurrent checks write to the same report.
 
 ## Fresh driver verification evidence
 

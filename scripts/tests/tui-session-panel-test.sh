@@ -75,6 +75,30 @@ class Panel(unittest.TestCase):
         ui.handle_key(ord('['));self.assertEqual(ui.panel_scroll,ui.panel_visible_offset-5)
         ui.handle_key(ord('\\'));self.assertIsNone(ui.panel_scroll)
 
+    def test_zero_reported_cost_on_a_stage_that_burned_tokens_is_unknown(self):
+        # A runner that consumed millions of tokens did not do it for free.
+        # Reporting the sum as $0.0000 understated a real session total with a
+        # number that reads like a measurement, so a zero alongside tokens is
+        # treated as "did not say" and the subtotal is marked partial.
+        ui=self.ui();ui.session_stats['active']={}
+        ui.session_stats['records'].append(dict(stage='execute-checklist',started_at=1,elapsed_seconds=10,
+            input_tokens=4000,output_tokens=700,cache_read_tokens=0,cache_write_tokens=0,reported_cost_usd=0))
+        ui.session_stats['records'].append(dict(stage='execute-checklist',started_at=2,elapsed_seconds=10,
+            input_tokens=1000,output_tokens=300,cache_read_tokens=0,cache_write_tokens=0,reported_cost_usd=.5))
+        text='\n'.join(ui._session_panel_lines())
+        self.assertNotIn('$0.0000',text)
+        self.assertIn('$0.5000 (partial)',text)
+
+    def test_zero_reported_cost_with_no_tokens_is_still_zero(self):
+        # A stage that genuinely did nothing is not the same claim, and a real
+        # zero stays a real zero rather than becoming an unknown.
+        ui=self.ui();ui.session_stats['active']={}
+        ui.session_stats['records'].append(dict(stage='noop-stage',started_at=1,elapsed_seconds=1,
+            input_tokens=0,output_tokens=0,cache_read_tokens=0,cache_write_tokens=0,reported_cost_usd=0))
+        text='\n'.join(ui._session_panel_lines())
+        self.assertIn('$0.0000',text)
+        self.assertNotIn('partial',text)
+
     def test_start_order_survives_overlap_and_retries(self):
         ui=self.ui()
         ui.session_stats['active']={'early-stage':100, 'late-stage':400}

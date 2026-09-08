@@ -178,6 +178,26 @@ done
 # An implementing stage writes, but never outside the sandbox.
 check_absent "flags: no approval/sandbox bypass" "--dangerously-bypass" "$argv"
 check_absent "flags: not read-only" "read-only" "$argv"
+
+# --- sandbox network ---------------------------------------------------------
+# workspace-write denies loopback binds unless codex is told otherwise, which
+# is what stops a checklist stage from serving the product it is verifying.
+# Opt-in only: the default must stay closed.
+check_absent "network: closed by default" "network_access" "$argv"
+
+ARGV_FILE="$TMP/argv-net" UNCLE_STAGE_NETWORK=true run_shim -p <<< "p" > /dev/null
+check_contains "network: opt-in opens it" \
+    "-c sandbox_workspace_write.network_access=true" "$(cat "$TMP/argv-net")"
+check_contains "network: still sandboxed when open" \
+    "--sandbox workspace-write" "$(cat "$TMP/argv-net")"
+check_absent "network: opening it is not a bypass" \
+    "--dangerously-bypass" "$(cat "$TMP/argv-net")"
+
+for value in false "" 1 yes garbage; do
+    ARGV_FILE="$TMP/argv-net-off" UNCLE_STAGE_NETWORK="$value" run_shim -p <<< "p" > /dev/null
+    check_absent "network: '$value' does not open it" \
+        "network_access" "$(cat "$TMP/argv-net-off")"
+done
 check_eq "the prompt reaches codex on stdin" "the prompt" "$(cat "$TMP/stdin")"
 
 # --- a tier name is not a codex model id ----------------------------------

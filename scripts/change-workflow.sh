@@ -1053,6 +1053,10 @@ status_stage_context() {
     export UNCLE_STATUS_STAGE_INDEX="$index"
     export UNCLE_STATUS_STAGE_TOTAL="$n"
     export UNCLE_STATUS_STAGE_TURNS="$turns"
+    # Keyed on the normalized name, so a -step-/-base/-delta variant inherits
+    # the setting its parent stage was configured with.
+    UNCLE_STAGE_NETWORK="$(uncle_stage_network "$base")"
+    export UNCLE_STAGE_NETWORK
     if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
         printf '{"event":"start","model":"%s","mode":"%s","stage":"%s","stage_index":%s,"stage_total":%s,"stage_turns":%s}\n' \
             "$model" "$mode" "$log_name" "$index" "$n" "$turns" \

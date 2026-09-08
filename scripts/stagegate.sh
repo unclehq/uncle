@@ -422,6 +422,10 @@ status_stage_context() {
     export UNCLE_STATUS_STAGE_INDEX="$index"
     export UNCLE_STATUS_STAGE_TOTAL="$n"
     export UNCLE_STATUS_STAGE_TURNS="$turns"
+    # Read per stage, like every other setting: an operator who discovers at a
+    # gate that verification needs a local server can turn it on there.
+    UNCLE_STAGE_NETWORK="$(uncle_stage_network "$log_name")"
+    export UNCLE_STAGE_NETWORK
     if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
         printf '{"event":"start","model":"%s","mode":"%s","stage":"%s","stage_index":%s,"stage_total":%s,"stage_turns":%s}\n' \
             "$model" "$mode" "$log_name" "$index" "$n" "$turns" \

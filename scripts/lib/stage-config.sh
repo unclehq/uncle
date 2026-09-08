@@ -13,7 +13,7 @@
 # override, but nothing derives one from the file behind the operator's back.
 #
 # Format (see .uncle/config.example):
-#   <stage>.runner | <stage>.effort | <stage>.model VALUE
+#   <stage>.runner | <stage>.effort | <stage>.model | <stage>.network VALUE
 #
 # The older global keys (runner / model / effort / reviewer, and a bare
 # "<stage> <model>" line) are still honored as the fallback for a stage the
@@ -129,4 +129,27 @@ uncle_effective_stage_effort() {
     fi
     [[ -n "$value" ]] || value="$(uncle_stage_effort "$stage")"
     printf '%s' "$value"
+}
+
+# Whether a stage's sandbox may reach the network. Default false.
+#
+# codex's workspace-write sandbox denies network access unless its config says
+# otherwise, and that denial includes binding a loopback port. A checklist
+# stage that has to serve the site it is verifying cannot start that server, so
+# every row depending on the running page records BLOCKED -- and records it
+# again on every repair, because no amount of retrying grants a socket. That is
+# a prerequisite, not a failure, so it is a setting rather than a retry.
+#
+# It stays opt-in per stage because the boundary is the product: an agent that
+# writes code and can also open a socket is a different proposition from one
+# that cannot, and that trade belongs to the operator, not to a default.
+uncle_stage_network() {
+    local stage="$1" v
+    case "$stage" in implementation-step-*) stage=implementation ;; esac
+    v="$(uncle_config_get "$stage.network")"
+    [[ -n "$v" ]] || v="$(uncle_config_get network)"
+    case "$(printf '%s' "${v:-false}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) printf 'true' ;;
+        *)             printf 'false' ;;
+    esac
 }

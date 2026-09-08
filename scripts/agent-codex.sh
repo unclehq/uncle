@@ -80,6 +80,14 @@ fi
 # --dangerously-bypass-approvals-and-sandbox — the whole point of this
 # workflow is that an agent stays inside a boundary.
 args=(exec --json --ephemeral --skip-git-repo-check --sandbox workspace-write)
+
+# workspace-write denies network access unless codex is configured otherwise,
+# and that denial covers binding a loopback port -- so a stage that has to
+# serve the site it is verifying cannot start its own server. The driver sets
+# this from <stage>.network, which is false unless an operator turned it on.
+if [[ "${UNCLE_STAGE_NETWORK:-false}" == "true" ]]; then
+    args+=(-c sandbox_workspace_write.network_access=true)
+fi
 if [[ -n "$model" ]]; then
     args+=(-m "$model")
 fi

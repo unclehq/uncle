@@ -1,7 +1,7 @@
 # Uncle per-stage config: every stage picks its own runner, reasoning effort,
 # and -- for a cline stage -- model.
 #
-# Format: <stage>.runner | <stage>.effort | <stage>.model VALUE
+# Format: <stage>.runner | <stage>.effort | <stage>.model | <stage>.network VALUE
 #
 #   .runner  cline | claude | kimi | codex  for an agent stage
 #            cline | codex | claude         for a reviewer stage
@@ -9,6 +9,12 @@
 #   .model   a cline model id in modelType/model form, and only for a cline
 #            stage: claude, kimi, and codex are given no model flag and use
 #            their own default.
+#   .network true | false (default false) -- whether the stage's sandbox may
+#            reach the network. Only codex sandboxes its stages; cline, kimi,
+#            and claude ignore this. A stage that has to serve the product it
+#            is verifying needs it, because codex's workspace-write sandbox
+#            denies loopback binds. Leave it off everywhere else: an agent that
+#            writes code and can also open a socket is a different proposition.
 #
 # A stage that is not listed here runs on the defaults: cline, medium effort,
 # and cline-pass/deepseek-v4-pro. Edit from `uncle` -> Configure, or by hand.
@@ -29,17 +35,25 @@ updated-plan.runner cline
 updated-plan.model cline-pass/kimi-k3
 updated-plan.effort high
 
+# Preflight must exercise the capabilities later stages depend on, which means
+# it needs whatever they need -- otherwise it probes under conditions the real
+# stage will not have and passes a prerequisite that later blocks.
 preflight.runner cline
 preflight.model cline-pass/deepseek-v4-flash
 preflight.effort medium
+preflight.network true
 
 # Implementation is the stage worth paying for.
 implementation.runner claude
 implementation.effort high
 
+# Executing the checklist means running the product, which for anything that
+# serves over HTTP means binding a port. Without this the browser and GUI rows
+# record BLOCKED on every attempt, and repairs cannot fix a missing socket.
 execute-checklist.runner cline
 execute-checklist.model cline-pass/deepseek-v4-flash
 execute-checklist.effort medium
+execute-checklist.network true
 
 # --- change request ----------------------------------------------------------
 

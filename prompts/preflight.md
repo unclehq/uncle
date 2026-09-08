@@ -23,6 +23,30 @@ End with exactly one `## Acceptance gate` section containing only this table:
 | ID | Required | Status | Evidence |
 |---|---|---|---|
 
+## Probe the capability, not its installation (binding)
+
+A prerequisite is PASS only when you exercised the capability the acceptance
+check will actually use, in the environment that stage will run in, and
+recorded the output. The presence of a file, binary, package, or application
+bundle is not evidence that it can be used.
+
+Concretely, for a prerequisite that later checks depend on:
+
+- a browser: launch it headless against a local URL and capture the result.
+  `/Applications/Google Chrome.app/...` existing is not a PASS.
+- a local server or any check that serves the product: bind the port the check
+  will use and record the bind succeeding. Sandboxed stages are denied network
+  access -- including loopback binds -- unless the stage sets `network true` in
+  `.uncle/config`, so a bind that works in a shell can still fail in the stage.
+- a GUI, windowed, or interaction-dependent check: confirm the session can
+  actually drive it. If no GUI automation is available, the row is BLOCKED.
+- a human sign-off: an unsigned approval file is BLOCKED, not PASS.
+
+Any capability that cannot be exercised now is BLOCKED with the action needed
+to resolve it. This gate exists so an unobtainable prerequisite stops the run
+here, cheaply, rather than after implementation -- where it becomes a blocked
+checklist row that no repair attempt can turn into a pass.
+
 Add one row for every prerequisite, with stable IDs. Required is YES or NO;
 Status is PASS, FAIL, BLOCKED, NOT RUN, or N/A. Evidence is nonempty and cites
 observed output or a recorded arrangement, not an assertion of readiness.

@@ -51,7 +51,7 @@ def check(name, expected, actual):
         failed.append("%s — expected %r, got %r" % (name, expected, actual))
 
 t = m.UncleTUI.__new__(m.UncleTUI)          # the screen's state, without curses
-t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
+t.stage_runners, t.stage_models, t.stage_efforts, t.stage_networks = {}, {}, {}, {}
 t._config_stamp, t._reload_tick, t.first_run = None, 0, False
 
 # There are no global rows left: every row is a stage.
@@ -73,6 +73,39 @@ t.stage_runners["requirements"] = "claude"
 check("claude hides the model field", ["runner", "effort"],
       t.stage_fields("requirements"))
 check("claude resolves to no model", "", t.stage_model("requirements"))
+
+# codex is the only runner that sandboxes a stage, so it is the only one with a
+# network to open. Showing the row anywhere else would offer a setting that
+# changes nothing about how the stage runs.
+t.stage_runners["execute-checklist"] = "codex"
+check("codex shows a network field", ["runner", "effort", "network"],
+      t.stage_fields("execute-checklist"))
+check("cline has no network field", False,
+      "network" in t.stage_fields("project-plan"))
+check("kimi has no network field", False,
+      "network" in t.stage_fields("requirements"))
+check("network is off by default", "false", t.stage_network("execute-checklist"))
+
+# The picker behind the row. Two states and no custom row: a typed value would
+# read as a setting while meaning nothing to the flag it becomes.
+t.picker_kind, t.picker_target, t.pick_filter = "network", "execute-checklist", ""
+check("the network picker offers both states",
+      [("option", "false"), ("option", "true")], t._picker_rows())
+check("the network picker takes no custom value", False,
+      any(kind == "custom" for kind, _ in t._picker_rows()))
+check("the network picker knows the current value", "false", t._picker_current())
+t.stage_networks["execute-checklist"] = "true"
+check("the network picker follows the stage", "true", t._picker_current())
+
+# Which stage can open a socket is worth seeing without opening a popup, and
+# only where it means something: a value left on a cline stage is not a socket.
+t.stage_networks["project-plan"] = "true"
+rows = {r.split()[0]: r for r in t._config_items()}
+check("a codex stage with network on says so", True,
+      "network" in rows["execute-checklist"])
+check("a cline stage does not claim a network", False,
+      "network" in rows["project-plan"])
+t.stage_networks.clear()
 
 # Runner choices are side-appropriate: codex has no agent shim.
 check("agent runners", ["cline", "claude", "kimi", "codex"], m.runners_for(m.AGENT))
@@ -109,7 +142,7 @@ if failed:
     for f in failed:
         print("FAIL: " + f)
     raise SystemExit(1)
-print("  fields/defaults/env: %d checks passed" % 19)
+print("  fields/defaults/env: %d checks passed" % 29)
 PY
 
 # --- round trip, and migration off the old global format -------------------
@@ -129,7 +162,7 @@ def check(name, expected, actual):
 
 def fresh():
     t = m.UncleTUI.__new__(m.UncleTUI)
-    t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
+    t.stage_runners, t.stage_models, t.stage_efforts, t.stage_networks = {}, {}, {}, {}
     t._config_stamp, t._reload_tick, t.first_run = None, 0, False
     return t
 
@@ -146,6 +179,29 @@ check("runner round-trips", "claude", back.stage_runners.get("requirements"))
 check("model round-trips", "cline-pass/kimi-k3", back.stage_models.get("project-plan"))
 check("effort round-trips", "high", back.stage_efforts.get("project-plan"))
 check("reviewer runner round-trips", "codex", back.stage_runners.get("final-audit"))
+
+# The setting that decides whether a stage can bind a port has to survive the
+# file, and has to survive a rewrite of it even on a stage whose runner does not
+# read it — dropping a hand-edited line silently is how an operator ends up
+# rerunning a stage that quietly lost its network.
+t = fresh()
+t._set_field("execute-checklist", "runner", "codex")
+t._set_field("execute-checklist", "network", "true")
+t._set_field("project-plan", "network", "true")
+back = fresh()
+back.load_config()
+check("network round-trips", "true", back.stage_networks.get("execute-checklist"))
+check("a network line on a cline stage survives a rewrite", "true",
+      back.stage_networks.get("project-plan"))
+back.save_config()
+again = fresh()
+again.load_config()
+check("and survives the next one too", "true", again.stage_networks.get("project-plan"))
+
+# Clearing the row (d, for default) takes the line back out.
+again._set_field("execute-checklist", "network", "")
+text = open(os.environ["UNCLE_CONFIG"]).read()
+check("cleared network is not written", False, "execute-checklist.network" in text)
 
 # A model on a non-cline stage is not written: nothing would read it.
 t = fresh()
@@ -189,7 +245,7 @@ if failed:
     for f in failed:
         print("FAIL: " + f)
     raise SystemExit(1)
-print("  round-trip/migration: %d checks passed" % 17)
+print("  round-trip/migration: %d checks passed" % 21)
 PY
 
 # --- the screen and the drivers must read the same file the same way -------
@@ -203,12 +259,16 @@ sys.modules["tui"] = m
 spec.loader.exec_module(m)
 
 t = m.UncleTUI.__new__(m.UncleTUI)
-t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
+t.stage_runners, t.stage_models, t.stage_efforts, t.stage_networks = {}, {}, {}, {}
 t._config_stamp, t._reload_tick, t.first_run = None, 0, False
 t._set_field("requirements", "runner", "kimi")
 t._set_field("requirements", "effort", "low")
 t._set_field("project-plan", "model", "cline-pass/kimi-k3")
 t._set_field("final-audit", "runner", "codex")
+# Written by the screen, read back by the drivers: the setting that decides
+# whether a checklist stage can bind a port must survive the round trip.
+t._set_field("execute-checklist", "runner", "codex")
+t._set_field("execute-checklist", "network", "true")
 
 # What the screen thinks each stage will run, for the bash side to confirm.
 for stage in m.CONFIG_STAGES:
@@ -222,12 +282,13 @@ spec = importlib.util.spec_from_file_location("tui", os.environ["UNCLE_TUI"])
 m = importlib.util.module_from_spec(spec); sys.modules["tui"] = m
 spec.loader.exec_module(m)
 t = m.UncleTUI.__new__(m.UncleTUI)
-t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
+t.stage_runners, t.stage_models, t.stage_efforts, t.stage_networks = {}, {}, {}, {}
 t._config_stamp, t._reload_tick, t.first_run = None, 0, False
 t.load_config()
 for stage in m.CONFIG_STAGES:
-    print("%s\t%s\t%s\t%s" % (stage, t.stage_runner(stage),
-                                t.stage_model(stage), t.stage_effort(stage) or "medium"))
+    print("%s\t%s\t%s\t%s\t%s" % (stage, t.stage_runner(stage),
+                                t.stage_model(stage), t.stage_effort(stage) or "medium",
+                                t.stage_network(stage)))
 PY
 )"
 
@@ -239,8 +300,9 @@ actual="$(
                      implementation test-review manual-checklist execute-checklist \
                      final-audit; do
             effort="$(uncle_stage_effort "$stage")"
-            printf "%s\t%s\t%s\t%s\n" "$stage" "$(uncle_stage_runner "$stage")" \
-                "$(uncle_stage_model "$stage")" "$effort"
+            printf "%s\t%s\t%s\t%s\t%s\n" "$stage" "$(uncle_stage_runner "$stage")" \
+                "$(uncle_stage_model "$stage")" "$effort" \
+                "$(uncle_stage_network "$stage")"
         done'
 )"
 

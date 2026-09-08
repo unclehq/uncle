@@ -102,7 +102,9 @@ DEFAULT_RUNNER = "cline"
 DEFAULT_EFFORT = "medium"
 DEFAULT_CLINE_MODEL = "cline-pass/deepseek-v4-pro"
 
-STAGE_FIELDS = ("runner", "effort", "model")
+STAGE_FIELDS = ("runner", "effort", "model", "network")
+# Only codex sandboxes a stage, so only a codex stage has a network to open.
+NETWORK_CHOICES = ["false", "true"]
 
 # Models offered in the Configure → model picker, grouped by plan.
 #
@@ -169,6 +171,16 @@ CONFIG_DESC = {
         "usually means more careful work and more tokens. Every runner "
         "supports it — cline as --thinking, claude as an effort flag, codex as "
         "model_reasoning_effort."
+    ),
+    "field:network": (
+        "Whether this stage's sandbox may reach the network. Shown only when "
+        "the runner is codex, because it is the only runner that sandboxes a "
+        "stage. Off by default, and worth leaving off: an agent that writes "
+        "code and can also open a socket is a different proposition from one "
+        "that cannot. Turn it on for a stage that has to serve the product it "
+        "verifies — codex's workspace-write sandbox denies even a loopback "
+        "bind, so without it a checklist row that needs the running site "
+        "records BLOCKED, and no repair attempt can grant it a port."
     ),
     "field:model": (
         "The cline model this stage runs, as a `modelType/model` id (for "
@@ -423,6 +435,7 @@ class UncleTUI:
         self.stage_runners = {}
         self.stage_models = {}
         self.stage_efforts = {}
+        self.stage_networks = {}
         self.notice = ""
         self.config_sel = 0
         self.config_scroll = 0
@@ -534,6 +547,10 @@ class UncleTUI:
     def stage_effort(self, stage):
         return self.stage_efforts.get(stage, "") or DEFAULT_EFFORT
 
+    def stage_network(self, stage):
+        """Whether this stage's sandbox may reach the network. Default off."""
+        return self.stage_networks.get(stage, "") or "false"
+
     def stage_model(self, stage):
         """The model for a stage, or "" when its runner takes none."""
         if self.stage_runner(stage) != "cline":
@@ -541,9 +558,17 @@ class UncleTUI:
         return self.stage_models.get(stage, "") or DEFAULT_CLINE_MODEL
 
     def stage_fields(self, stage):
-        """The fields this stage's popup shows: model only for cline."""
-        if self.stage_runner(stage) == "cline":
+        """The fields this stage's popup shows.
+
+        A model belongs to cline alone. Network belongs to codex alone: it is
+        the only runner that sandboxes a stage, and so the only one where the
+        setting changes anything.
+        """
+        runner = self.stage_runner(stage)
+        if runner == "cline":
             return ["runner", "effort", "model"]
+        if runner == "codex":
+            return ["runner", "effort", "network"]
         return ["runner", "effort"]
 
     def _field_value(self, stage, field):
@@ -554,6 +579,8 @@ class UncleTUI:
             return self.stage_efforts.get(stage, "")
         if field == "model":
             return self.stage_models.get(stage, "")
+        if field == "network":
+            return self.stage_networks.get(stage, "")
         return ""
 
     def _field_display(self, stage, field):
@@ -567,6 +594,8 @@ class UncleTUI:
             return "%s  (default)" % DEFAULT_RUNNER
         if field == "effort":
             return "%s  (default)" % DEFAULT_EFFORT
+        if field == "network":
+            return "false  (default)"
         label = MODEL_LABELS.get(DEFAULT_CLINE_MODEL, "")
         return "%s  (default)%s" % (DEFAULT_CLINE_MODEL, "  " + label if label else "")
 
@@ -575,7 +604,8 @@ class UncleTUI:
         self.maybe_reload()
         store = {"runner": self.stage_runners,
                  "effort": self.stage_efforts,
-                 "model": self.stage_models}.get(field)
+                 "model": self.stage_models,
+                 "network": self.stage_networks}.get(field)
         if store is None:
             return
         if value:
@@ -594,6 +624,10 @@ class UncleTUI:
             if model:
                 parts.append(MODEL_LABELS.get(model, model))
             parts.append(self.stage_effort(stage))
+            # Named on the row, not just inside the popup: which stage can
+            # open a socket is the one setting here worth seeing at a glance.
+            if "network" in self.stage_fields(stage) and self.stage_network(stage) == "true":
+                parts.append("network")
             rows.append("%s  %s" % (stage.ljust(width), " · ".join(parts)))
         return rows
 
@@ -637,6 +671,11 @@ class UncleTUI:
         if self.picker_kind == "runner":
             side = STAGE_SIDE.get(self.picker_target, AGENT)
             return [("option", r) for r in runners_for(side)]
+        if self.picker_kind == "network":
+            # Two states and no custom row: the sandbox is either open or it
+            # is not, and a typed value here would read as a setting while
+            # meaning nothing to the flag it becomes.
+            return [("option", v) for v in NETWORK_CHOICES]
         rows = []
         for group, entries in MODEL_CATALOG:
             rows.append(("header", group))
@@ -666,6 +705,8 @@ class UncleTUI:
             return self.stage_runner(stage)
         if self.picker_kind == "effort":
             return self.stage_effort(stage)
+        if self.picker_kind == "network":
+            return self.stage_network(stage)
         return self.stage_model(stage)
 
     def _open_picker(self, kind, target):
@@ -738,6 +779,9 @@ class UncleTUI:
     #   <stage>.runner  cline | claude | kimi | codex
     #   <stage>.effort  high | medium | low
     #   <stage>.model   a cline model id, and only for a cline stage
+    #   <stage>.network true | false, and only for a codex stage — whether
+    #                   its workspace-write sandbox may reach the network,
+    #                   which includes binding a loopback port
     #
     # Older files carried global `runner` / `model` / `effort` lines, a bare
     # `<stage> <model>` line, and a `reviewer <model>` line. Those are still
@@ -750,6 +794,7 @@ class UncleTUI:
         self.stage_runners = {}
         self.stage_models = {}
         self.stage_efforts = {}
+        self.stage_networks = {}
         if not exists:
             # First time in this project root: no config file yet. Mark it so
             # the TUI can drop straight into the Configure screen.
@@ -818,7 +863,8 @@ class UncleTUI:
     def _store_for(self, field):
         return {"runner": self.stage_runners,
                 "effort": self.stage_efforts,
-                "model": self.stage_models}[field]
+                "model": self.stage_models,
+                "network": self.stage_networks}[field]
 
     def _seed_from_legacy(self, legacy):
         """Turn old global settings into per-stage ones, without overwriting."""
@@ -837,10 +883,12 @@ class UncleTUI:
         header = (
             "# Uncle per-stage config: every stage picks its own runner,\n"
             "# reasoning effort, and \u2014 for a cline stage \u2014 model.\n"
-            "# Format: <stage>.runner | <stage>.effort | <stage>.model VALUE\n"
-            "#   (VALUE = a runner name, a reasoning effort, or a cline model\n"
-            "#   id in modelType/model form). Edit from `uncle` -> Configure,\n"
-            "#   or by hand.\n"
+            "# Format: <stage>.runner | <stage>.effort | <stage>.model |\n"
+            "#         <stage>.network VALUE\n"
+            "#   (VALUE = a runner name, a reasoning effort, a cline model\n"
+            "#   id in modelType/model form, or true/false for network access\n"
+            "#   inside a codex stage's sandbox). Edit from `uncle` ->\n"
+            "#   Configure, or by hand.\n"
         )
         try:
             with open(CONFIG_PATH, "w") as fh:
@@ -856,6 +904,11 @@ class UncleTUI:
                     # claude/kimi/codex stage would be a value nothing reads.
                     if self.stage_models.get(stage) and self.stage_runner(stage) == "cline":
                         lines.append("%s.model %s\n" % (stage, self.stage_models[stage]))
+                    # Likewise network, which only a codex stage sandboxes. It
+                    # is written whenever it is set so that a hand-edited line
+                    # survives this rewrite instead of being silently dropped.
+                    if self.stage_networks.get(stage):
+                        lines.append("%s.network %s\n" % (stage, self.stage_networks[stage]))
                     if lines:
                         fh.write("\n")
                         for line in lines:
@@ -1425,6 +1478,12 @@ class UncleTUI:
             group["seconds"] += row.get("elapsed_seconds", 0)
             group["tokens"].append(self._token_total(row))
             cost = row.get("reported_cost_usd")
+            # A runner that consumed tokens did not do it for nothing: a
+            # reported zero is a runner that declined to say, and rendering it
+            # as $0.0000 understates the session total with a number that
+            # reads like a fact. Treat it as unknown, which is what it is.
+            if cost == 0 and self._token_total(row):
+                cost = None
             group["costs"].append(cost if cost is not None else row.get("estimated_cost_usd"))
             group["attempts"] += 1
             group["last_result"] = row
@@ -1515,6 +1574,8 @@ class UncleTUI:
                 return "Pick an effort (type to filter, Enter select, Esc back)"
             if self.picker_kind == "runner":
                 return "Pick a runner (type to filter, Enter select, Esc back)"
+            if self.picker_kind == "network":
+                return "Network access in the sandbox (Enter select, Esc back)"
             return "Pick a model (type to filter, Enter select, Esc back)"
         if self.state == "config_edit":
             if getattr(self, "notice", ""):

@@ -40,7 +40,7 @@ fi
 
 usage() {
     cat <<'EOF'
-Usage: uncle [-h|--help|--performance]
+Usage: uncle [-h|--help|--performance] [--unattended]
 
 Interactive launcher for the governed-CI workflows. Picks one of the three
 drivers and runs the stages through `cline` using the model, reasoning effort,
@@ -54,15 +54,22 @@ and per-stage overrides from `.uncle/config` (menu option 4).
 
 Runs with no arguments. -h / --help print this message and exit 0.
 --performance reports recorded runtime and token usage for the current project.
+--unattended is passed to the driver you pick: it runs every human gate
+without a person, records what nobody reviewed, and reports that at the end.
 EOF
 }
 
-case "$#:${1:-}" in
-    0:)                 ;;
-    1:-h|1:--help)      usage; exit 0 ;;
-    1:--performance)    exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
-    *)                  printf 'Unknown argument: %s\n' "${1:-}" >&2; usage >&2; exit 1 ;;
-esac
+# Collected here and handed to whichever driver the menu picks, so the choice
+# of workflow and the choice to run it unattended stay independent.
+UNCLE_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)     usage; exit 0 ;;
+        --performance) exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
+        --unattended)  UNCLE_ARGS+=(--unattended); shift ;;
+        *)             printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
+    esac
+done
 
 # Per-project paths/config. Resolve and export these BEFORE launching the TUI:
 # the launcher has already cd'd into the install libexec, so without this the
@@ -483,7 +490,7 @@ configure_menu() {
 }
 
 run_new_application() {
-    run_workflow "$ROOT/scripts/stagegate.sh"
+    run_workflow "$ROOT/scripts/stagegate.sh" ${UNCLE_ARGS[@]+"${UNCLE_ARGS[@]}"}
 }
 
 run_from_issue() {
@@ -523,7 +530,7 @@ run_from_issue() {
 }
 
 run_change_workflow() {
-    run_workflow "$ROOT/scripts/change-workflow.sh"
+    run_workflow "$ROOT/scripts/change-workflow.sh" ${UNCLE_ARGS[@]+"${UNCLE_ARGS[@]}"}
 }
 
 # Load the persisted runner/model/effort/stage config once so the menu shows

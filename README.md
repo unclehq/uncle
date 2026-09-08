@@ -18,7 +18,9 @@ code. A primary agent plans, implements, and verifies; an independent reviewer
 audits it adversarially; you approve at every gate. By default `cline` runs
 every stage, on both sides.
 
-- **Human approval gates** at every planning and review stage.
+- **Human approval gates** at every planning and review stage -- or
+  `--unattended`, which passes them without a person and records every
+  judgment nobody made.
 - **Adversarial review** by a second model that did not write the code.
 - **SHA-256 pinned specs** so approved artifacts cannot be silently modified.
 - **Immutable reviewer-owned files** the implementing agent cannot edit.

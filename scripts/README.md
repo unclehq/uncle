@@ -23,11 +23,31 @@ resumable state machine; re-run it to continue from the current stage.
 ./scripts/stagegate.sh -h
 ./scripts/stagegate.sh --help
 ./scripts/stagegate.sh --version    # prints 0.1.0
+./scripts/stagegate.sh --unattended # run with nobody at the terminal
 ```
 
 Takes no positional arguments. All configuration is via `WORKFLOW_*`
 environment variables (see [Configuration](#configuration)). Approvals are
 recorded with `./scripts/workflow.sh`.
+
+### `--unattended`
+
+Both drivers accept it, and `uncle --unattended` hands it to whichever driver
+the menu picks. Every gate that would wait for a person passes on its own:
+approvals are recorded against the real digest of the file, preflight
+prerequisites that nobody can supply are waived, and each one is appended to
+`.uncle/workflow/unattended-gates`. COMPLETE reports how many gates went
+unreviewed, so a run finished this way never reads as one a person signed off.
+
+What it does not do is make anything pass. A waiver records that a required
+check was not performed and keeps saying so; a failing verification suite, a
+regressed baseline, and a final audit that does not say READY all still stop
+the run, because those wait on a result rather than on a person. The change
+driver also leaves the originating GitHub issue open: closing it would tell
+everyone watching that a person accepted the change.
+
+It is opt-in and never inferred. A piped run with no terminal is still a run
+someone is watching; only the flag says otherwise.
 
 New applications run `PREFLIGHT` after updated-plan approval, then `IMPLEMENT`,
 the human diff gate, `TEST_REVIEW`, `MANUAL_CHECKLIST`, `EXECUTE_CHECKLIST`, and

@@ -40,10 +40,16 @@ STAGEGATE_VERSION="0.1.0"
 
 usage() {
     cat <<'EOF'
-Usage: stagegate.sh [-h|--help] [--version]
+Usage: stagegate.sh [-h|--help] [--version] [--unattended]
 
 Run the human-gated new-application workflow from REQUIREMENTS.md. The driver
 is a resumable state machine; re-run it to continue from the current stage.
+
+--unattended runs with nobody at the terminal: every gate that would wait for
+a person is auto-waived and recorded, and the run reports how many judgments
+no one made. It never turns a failing check into a passing one -- a failed
+verification suite still stops the run, because that waits on a result and not
+on a person.
 
 Takes no positional arguments; all configuration is via WORKFLOW_* environment
 variables (see scripts/README.md). Approvals are recorded with
@@ -51,12 +57,19 @@ variables (see scripts/README.md). Approvals are recorded with
 EOF
 }
 
-case "$#:${1:-}" in
-    0:)                 ;;
-    1:-h|1:--help)      usage; exit 0 ;;
-    1:--version)        printf '%s\n' "$STAGEGATE_VERSION"; exit 0 ;;
-    *)                  printf 'Unknown argument: %s\n' "${1:-}" >&2; usage >&2; exit 1 ;;
-esac
+# Unattended is opt-in and never inferred. A run that merely has no terminal
+# is a piped run, not a licence to approve on the operator's behalf; the only
+# thing that turns the gates off is someone typing the flag.
+UNATTENDED=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)    usage; exit 0 ;;
+        --version)    printf '%s\n' "$STAGEGATE_VERSION"; exit 0 ;;
+        --unattended) UNATTENDED=1; shift ;;
+        *)            printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+export UNCLE_UNATTENDED="$UNATTENDED"
 
 STATE_DIR=".uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
@@ -81,6 +94,9 @@ GREEN_MD="$STATE_DIR/green-check.md"
 VERDICT_FILE="$STATE_DIR/audit-verdict"
 GREEN_OVERRIDE_FILE="$STATE_DIR/green-check-override"
 AUDIT_OVERRIDE_FILE="$STATE_DIR/audit-override"
+# Every gate an unattended run passed through without a person. This is the
+# whole cost of the flag in one file, and COMPLETE reads it back.
+UNATTENDED_FILE="$STATE_DIR/unattended-gates"
 
 # Untracked paths that existed before implementation started. Read by
 # change_diff_files, so the review diff shows what this build produced rather
@@ -188,6 +204,16 @@ fi
 # an impossible check as a reason to abandon the run.
 waive_file() { printf '%s/waivers/%s' "$STATE_DIR" "$1"; }
 
+# An unattended run is still accountable for what it skipped. Each gate it
+# passed without a person is appended here, dated, so the summary can say what
+# nobody looked at rather than reporting a clean run.
+record_unattended_gate() {
+    local what="$1" detail="$2"
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+    printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$what" "$detail" \
+        >> "$UNATTENDED_FILE" 2>/dev/null || true
+}
+
 waived_ids() {
     local id
     for id in "$@"; do
@@ -200,6 +226,17 @@ record_waiver() {
     local report="$1" reason
     shift
     local ids=("$@")
+
+    # Unattended: there is nobody to type a reason, so the reason is the flag
+    # itself. This is deliberately the least flattering wording available --
+    # the waiver is what the audit reads, and it should not be mistakable for
+    # someone having considered the check and decided it was fine.
+    if [[ "${UNATTENDED:-0}" == 1 ]]; then
+        reason="Waived by an unattended run; no person assessed this check."
+        write_waivers "$report" "$reason" "${ids[@]}" || return 1
+        record_unattended_gate "waiver" "$report: ${ids[*]}"
+        return 0
+    fi
 
     # A popup, when there is a terminal to draw one on. Waiving a required
     # check is the most consequential thing an operator does at this gate, and
@@ -368,6 +405,24 @@ acceptance_transition() {
             acceptance_human_continue "$report" "$next"
             ;;
         BLOCKED-SETUP)
+            # "Do them and rerun" needs someone to do them. Unattended, that
+            # someone never arrives, so the choice is a waiver or a run that
+            # never ends -- and a waiver at least says what went unchecked.
+            if [[ "${UNATTENDED:-0}" == 1 ]]; then
+                ids="$(acceptance_blocked_ids "$report" BLOCKED-SETUP)"
+                # Not acceptance_after_waiver: that re-reads the report, which
+                # still says BLOCKED-SETUP for the rows just waived, and would
+                # pause on them again. A waiver settles the row, not the file.
+                # shellcheck disable=SC2086
+                if [[ -n "$ids" ]] && record_waiver "$report" $ids; then
+                    if [[ -n "$(acceptance_blocked_ids "$report" BLOCKED-HUMAN)" ]]; then
+                        acceptance_human_continue "$report" "$next"
+                    else
+                        set_state "$next"
+                    fi
+                    return 0
+                fi
+            fi
             acceptance_setup_pause "$report"
             exit 1
             ;;
@@ -703,6 +758,19 @@ review_and_approve() {
 
     local before
     local response
+
+    # Unattended: record the approval against the bytes on disk, and record in
+    # the run's own ledger that nobody read them. The digest still has to be
+    # real -- later stages compare against it, and an approval attesting to
+    # nothing would let a document change underneath them unnoticed.
+    if [[ "${UNATTENDED:-0}" == 1 ]]; then
+        before="$(hash_file "$file")"
+        printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
+        record_unattended_gate "$name" "$wording $file without human review"
+        echo "Unattended: recorded $wording of $file with no human review."
+        if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
+        return 0
+    fi
 
     while true; do
         before="$(hash_file "$file")"
@@ -1382,33 +1450,50 @@ while true; do
                     # gate, and hand-editing markdown between runs is how its
                     # path ends up spelled two ways.
                     blocked_ids="$(acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-SETUP)"
-                    human_records="$(mktemp)" || human_records=""
-                    collected=1
-                    # shellcheck disable=SC2086
-                    if [[ -n "$blocked_ids" ]] && human_input_repeating "$STATE_DIR" $blocked_ids; then
-                        echo
-                        echo "These are the same prerequisites as the last attempt, so what was"
-                        echo "provided did not resolve them. Asking again would only repeat."
-                        echo "Check where each one is expected -- the evidence above names the"
-                        echo "path -- and provide it there, or amend the plan if it is not"
-                        echo "really needed before implementation."
+                    # Unattended: nobody is sitting at this gate to supply the
+                    # prerequisite, so asking is the one thing that cannot
+                    # work. Waive them and go on -- the rows stay blocked in
+                    # the report, so implementation proceeds knowing an input
+                    # it expected is not there, which is a worse position than
+                    # a person providing it and an honest one.
+                    if [[ "${UNATTENDED:-0}" == 1 ]]; then
+                        # shellcheck disable=SC2086
+                        if [[ -z "$blocked_ids" ]] \
+                            || ! record_waiver PREFLIGHT_REPORT.md $blocked_ids; then
+                            echo "Unattended: could not record a waiver; stopping."
+                            exit 1
+                        fi
+                        echo "Unattended: prerequisites waived, continuing without them."
+                        human_input_reset "$STATE_DIR"
+                    else
+                        human_records="$(mktemp)" || human_records=""
+                        collected=1
+                        # shellcheck disable=SC2086
+                        if [[ -n "$blocked_ids" ]] && human_input_repeating "$STATE_DIR" $blocked_ids; then
+                            echo
+                            echo "These are the same prerequisites as the last attempt, so what was"
+                            echo "provided did not resolve them. Asking again would only repeat."
+                            echo "Check where each one is expected -- the evidence above names the"
+                            echo "path -- and provide it there, or amend the plan if it is not"
+                            echo "really needed before implementation."
+                            rm -f "$human_records"
+                            exit 1
+                        fi
+                        if [[ -n "$human_records" && -n "$blocked_ids" ]]; then
+                            collected=0
+                            # shellcheck disable=SC2086
+                            collect_human_inputs PREFLIGHT_REPORT.md "$human_records" $blocked_ids \
+                                || collected=$?
+                        fi
+                        if [[ "$collected" == 0 ]] && apply_human_inputs "$human_records"; then
+                            rm -f "$human_records"
+                            echo "Prerequisites provided; re-running preflight to probe them."
+                            continue
+                        fi
                         rm -f "$human_records"
+                        echo "Do them and rerun. Each is doable in this environment."
                         exit 1
                     fi
-                    if [[ -n "$human_records" && -n "$blocked_ids" ]]; then
-                        collected=0
-                        # shellcheck disable=SC2086
-                        collect_human_inputs PREFLIGHT_REPORT.md "$human_records" $blocked_ids \
-                            || collected=$?
-                    fi
-                    if [[ "$collected" == 0 ]] && apply_human_inputs "$human_records"; then
-                        rm -f "$human_records"
-                        echo "Prerequisites provided; re-running preflight to probe them."
-                        continue
-                    fi
-                    rm -f "$human_records"
-                    echo "Do them and rerun. Each is doable in this environment."
-                    exit 1
                     ;;
                 *)
                     echo "Prerequisites $preflight_result: see PREFLIGHT_REPORT.md."
@@ -1717,6 +1802,22 @@ while true; do
                 echo
                 echo "Completed over a failing final audit, by human override:"
                 sed 's/^/  /' "$AUDIT_OVERRIDE_FILE"
+            fi
+
+            # An unattended run reached the end; it did not earn the same
+            # sentence as one a person signed off. Say how many judgments were
+            # skipped and where they are written down, so "complete" is read
+            # with the qualifier it needs.
+            if [[ -s "$UNATTENDED_FILE" ]]; then
+                echo
+                echo "Unattended run: $(wc -l < "$UNATTENDED_FILE" | tr -d ' ') gate(s) passed with no human review."
+                cut -f2,3 "$UNATTENDED_FILE" | sed 's/^/  /'
+                echo "  Ledger: $UNATTENDED_FILE"
+                if [[ -d "$STATE_DIR/waivers" ]]; then
+                    echo "  Waivers: $STATE_DIR/waivers"
+                fi
+                echo "Waived checks were not performed. They are not passes, and this"
+                echo "summary is the only place that says so out loud."
             fi
 
             exit 0

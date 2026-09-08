@@ -18,6 +18,8 @@ or assume an interactive session is available. Missing required capabilities
 are blocked, in the class that says why. Give the action needed to resolve
 each blocker. Do not install
 dependencies, alter requirements, or implement the application in this stage.
+Creating the pre-implementation inputs the plan names is not implementing it;
+see `Files the plan says to create`.
 
 End with exactly one `## Acceptance gate` section containing only this table:
 
@@ -88,7 +90,8 @@ the requirement that establishes this. Include at least one required row.
 Do not put literal pipe characters in cells. Missing mandatory prerequisites
 must remain required. The driver will pause until all required rows pass.
 
-Write only PREFLIGHT_REPORT.md.
+Write PREFLIGHT_REPORT.md, and the pre-implementation input files that
+`Files the plan says to create` requires you to derive. Nothing else.
 
 ## Preflight gate scope (binding)
 
@@ -122,3 +125,48 @@ prerequisite; final HTML sign-off is a future result outside this table.
 
 Before writing, inspect each gate row: if completing it requires creating the
 implementation, move that row to Findings with its real pending status.
+
+## Files the plan says to create (binding)
+
+The plan names files that do not exist yet. Gating on one because it is absent
+fails the run for the expected condition: nothing has run yet, so of course it
+is absent. Before a file's absence becomes a gate row, decide which kind it is.
+
+**A product or implementation output** -- the application, its tests, its
+README, anything written against code that does not exist. It is not a
+prerequisite. It belongs in Findings as NOT RUN, never in the gate table.
+
+**A pre-implementation input derivable from a source that exists here** -- a
+frozen oracle, an expected-result fixture, a synthetic sample, the generator
+that reproduces one. Derive it now and record the command, the source it came
+from, and the hash of what you wrote. Then the row is PASS on that evidence.
+
+Preflight is the correct place to produce these, and the only correct one. An
+oracle exists to be compared against the product, so it must be derived from
+the source input rather than from the product; here there is no product yet to
+contaminate it. Deriving it later is how an expected result quietly becomes a
+copy of whatever the implementation happened to do. Derive from the named
+source input only, never from the application, and never by hand-writing the
+values you expect to see.
+
+**A pre-implementation input nothing here can derive** -- it needs a person, a
+credential, or a source input that is itself absent. That is a real blocker:
+give it the class that says why, and name the action.
+
+Two rules follow, and they are what keeps this from becoming a licence to
+invent inputs:
+
+- Never gate on a file that neither this stage nor any pre-implementation step
+  can produce. If the plan requires one, the plan is wrong and the report says
+  so in Open questions.
+- A derivation that finds nothing is a finding, not a failure, and not a file.
+  If the source carries no such data -- a PDF with no embedded links, a corpus
+  with no instances of the case -- record the probe, its output, and the
+  conclusion. Do not write an empty fixture to make a row green: an empty
+  frozen expected result passes against a product that dropped the data
+  entirely, which is the defect the oracle existed to catch. State in the
+  report that the fixture is deliberately absent and why, and mark the row
+  PASS on the probe evidence.
+
+List every file you derived in Summary, with its hash, so the next stage and
+the audit can see that this stage made it and what from.

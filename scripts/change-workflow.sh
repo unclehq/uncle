@@ -40,11 +40,16 @@ STAGEGATE_VERSION="0.1.0"
 
 usage() {
     cat <<'EOF'
-Usage: change-workflow.sh [-h|--help] [--version]
+Usage: change-workflow.sh [-h|--help] [--version] [--unattended]
 
 Run the human-gated existing-code change workflow from CHANGE_REQUEST.md. The
 driver is a resumable state machine; re-run it to continue from the current
 stage.
+
+--unattended runs with nobody at the terminal: every gate that would wait for
+a person is auto-approved and recorded, and the run reports how many judgments
+no one made. A regressed check or a failing audit still stops the run; those
+wait on a result, not on a person.
 
 Takes no positional arguments; all configuration is via WORKFLOW_* environment
 variables (see scripts/README.md). Seed CHANGE_REQUEST.md from a GitHub issue
@@ -52,15 +57,31 @@ with ./scripts/from-issue.sh.
 EOF
 }
 
-case "$#:${1:-}" in
-    0:)                 ;;
-    1:-h|1:--help)      usage; exit 0 ;;
-    1:--version)        printf '%s\n' "$STAGEGATE_VERSION"; exit 0 ;;
-    *)                  printf 'Unknown argument: %s\n' "${1:-}" >&2; usage >&2; exit 1 ;;
-esac
+# Opt-in only, never inferred from a missing terminal: a piped run is still a
+# run someone is watching, and only the flag says otherwise.
+UNATTENDED=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)    usage; exit 0 ;;
+        --version)    printf '%s\n' "$STAGEGATE_VERSION"; exit 0 ;;
+        --unattended) UNATTENDED=1; shift ;;
+        *)            printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
+    esac
+done
+export UNCLE_UNATTENDED="$UNATTENDED"
 
 STATE_DIR=".uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
+# Every gate an unattended run passed without a person, dated. The whole cost
+# of the flag in one file.
+UNATTENDED_FILE="$STATE_DIR/unattended-gates"
+
+record_unattended_gate() {
+    local what="$1" detail="$2"
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+    printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$what" "$detail" \
+        >> "$UNATTENDED_FILE" 2>/dev/null || true
+}
 LOG_DIR="$STATE_DIR/logs"
 STATE_FILE="$STATE_DIR/state"
 SESSION_FILE="$STATE_DIR/session-head"
@@ -487,6 +508,15 @@ close_origin_issue_if_ready() {
         return 0
     fi
 
+    # Closing the issue tells everyone watching it that a person accepted this
+    # change. On an unattended run nobody did, and the claim would be visible
+    # outside the repository where it cannot be taken back quietly. Leave it
+    # open; the marker is not written, so a later attended run still closes it.
+    if [[ -s "$UNATTENDED_FILE" ]]; then
+        echo "Unattended run: leaving the originating issue open for a human to close."
+        return 0
+    fi
+
     if [[ "$VERDICT_WRITTEN_THIS_RUN" == "1" ]]; then
         owns=1
     elif [[ -s "$VERDICT_FILE" ]]; then
@@ -572,6 +602,21 @@ human_gate() {
         names+=("$2")
         shift 2
     done
+
+    # Unattended: record each approval against the bytes on disk and log that
+    # nobody read them. The digests must still be real -- later stages compare
+    # against them to catch a document changing underneath an approval.
+    if [[ "${UNATTENDED:-0}" == 1 ]]; then
+        local j act
+        act="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
+        for j in "${!files[@]}"; do
+            printf '%s\n' "$(hash_file "${files[$j]}")" > "$APPROVAL_DIR/${names[$j]}.sha256"
+            record_unattended_gate "${names[$j]}" "$act ${files[$j]} without human review"
+        done
+        echo "Unattended: recorded $act of ${files[*]} with no human review."
+        if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi
+        return 0
+    fi
 
     echo
     echo "=================================================="
@@ -1814,6 +1859,17 @@ while true; do
                 echo
                 echo "  Total Claude spend: \$$(ledger_total)"
                 echo "  (Codex stages report tokens only; see the cache_w column.)"
+            fi
+            # An unattended run reached the end; it did not earn the same
+            # sentence as one a person signed off. Say how many judgments were
+            # skipped and where they are recorded.
+            if [[ -s "$UNATTENDED_FILE" ]]; then
+                echo
+                echo "Unattended run: $(wc -l < "$UNATTENDED_FILE" | tr -d ' ') gate(s) passed with no human review."
+                cut -f2,3 "$UNATTENDED_FILE" | sed 's/^/  /'
+                echo "  Ledger: $UNATTENDED_FILE"
+                echo "Waived checks were not performed. They are not passes, and this"
+                echo "summary is the only place that says so out loud."
             fi
             close_origin_issue_if_ready
             exit 0

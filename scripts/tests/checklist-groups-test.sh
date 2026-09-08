@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+# The checklist's parallel-execution plan, derived from the reviewer's per-check
+# declarations.
+#
+# The property under test is not "it finds parallelism". It is that it never
+# claims two checks are safe to overlap unless the reviewer said so: a missing
+# declaration, a bad declaration, or a dependency edge all have to end in less
+# concurrency, never more.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export UNCLE_TEST_ROOT="$ROOT"
+
+if ! command -v python3 > /dev/null 2>&1; then
+    echo "checklist-groups-test.sh: skipped, python3 is not available"
+    exit 0
+fi
+
+python3 -B - <<'PY'
+import os, subprocess, sys, tempfile, textwrap, unittest
+
+ROOT = os.environ['UNCLE_TEST_ROOT']
+SCRIPT = ROOT + '/scripts/lib/checklist_groups.py'
+
+
+class Groups(unittest.TestCase):
+    def derive(self, body, name='MANUAL_CHECKLIST.md'):
+        """Run the deriver over a checklist and return (groups, readme, exit)."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, name)
+        with open(path, 'w') as fh:
+            fh.write(textwrap.dedent(body))
+        out = os.path.join(tmp.name, 'out')
+        r = subprocess.run([sys.executable, '-B', SCRIPT, '--checklist', path,
+                            '--out-dir', out], capture_output=True, text=True,
+                           timeout=30)
+        groups_file = os.path.join(out, 'groups.txt')
+        groups = []
+        if os.path.exists(groups_file):
+            with open(groups_file) as fh:
+                groups = [l.split() for l in fh.read().splitlines() if l.strip()]
+        with open(os.path.join(out, 'README.md')) as fh:
+            readme = fh.read()
+        return groups, readme, r.returncode
+
+    def check(self, cid, resources, depends='none', extra=''):
+        return ('\n### %s\n- Priority: Critical\n- Exclusive resources: %s\n'
+                '- Depends on: %s\n- Exact action: run it\n%s'
+                % (cid, resources, depends, extra))
+
+    # --- the conservative direction -----------------------------------------
+
+    def test_a_checklist_without_declarations_runs_serially(self):
+        # Every checklist written before these fields existed. Nothing here
+        # says two checks may overlap, so nothing may overlap.
+        body = ''.join('\n### MC-00%d\n- Priority: Critical\n- Exact action: run it\n' % i
+                       for i in (1, 2, 3))
+        groups, readme, code = self.derive(body)
+        self.assertEqual(code, 0)
+        self.assertEqual(groups, [['MC-001'], ['MC-002'], ['MC-003']])
+        self.assertIn('scheduled alone', readme)
+
+    def test_one_undeclared_check_does_not_ride_along(self):
+        # Two safe checks and one that never said what it touches. The unknown
+        # one gets a group to itself rather than joining either.
+        body = (self.check('MC-001', 'none') +
+                '\n### MC-002\n- Priority: Critical\n- Exact action: run it\n' +
+                self.check('MC-003', 'none'))
+        groups, readme, code = self.derive(body)
+        self.assertEqual(code, 0)
+        self.assertEqual(groups, [['MC-001'], ['MC-002'], ['MC-003']])
+
+    def test_an_unknown_dependency_falls_back_to_serial(self):
+        body = self.check('MC-001', 'none') + self.check('MC-002', 'none', 'MC-099')
+        groups, readme, code = self.derive(body)
+        self.assertEqual(code, 2)
+        self.assertEqual(groups, [])
+        self.assertIn('NOT DECLARED', readme)
+        self.assertIn('MC-099', readme)
+        self.assertIn('one at a time', readme)
+
+    def test_a_dependency_cycle_falls_back_to_serial(self):
+        body = (self.check('MC-001', 'none', 'MC-002') +
+                self.check('MC-002', 'none', 'MC-001'))
+        groups, readme, code = self.derive(body)
+        self.assertEqual(code, 2)
+        self.assertEqual(groups, [])
+        self.assertIn('appears after it', readme)
+
+    def test_a_check_that_depends_on_itself_is_rejected(self):
+        groups, readme, code = self.derive(self.check('MC-001', 'none', 'MC-001'))
+        self.assertEqual(code, 2)
+        self.assertIn('itself', readme)
+
+    def test_a_missing_checklist_declares_nothing(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        out = os.path.join(tmp.name, 'out')
+        r = subprocess.run([sys.executable, '-B', SCRIPT,
+                            '--checklist', os.path.join(tmp.name, 'absent.md'),
+                            '--out-dir', out], capture_output=True, text=True,
+                           timeout=30)
+        self.assertEqual(r.returncode, 0)
+        self.assertFalse(os.path.exists(os.path.join(out, 'groups.txt')))
+        with open(os.path.join(out, 'README.md')) as fh:
+            self.assertIn('NOT DECLARED', fh.read())
+
+    def test_stale_groups_are_removed_rather_than_left_behind(self):
+        # A previous checklist's grouping read as current would overlap checks
+        # nobody cleared. The file has to disappear, not persist.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        out = os.path.join(tmp.name, 'out')
+        os.makedirs(out)
+        with open(os.path.join(out, 'groups.txt'), 'w') as fh:
+            fh.write('MC-900 MC-901\n')
+        path = os.path.join(tmp.name, 'MANUAL_CHECKLIST.md')
+        with open(path, 'w') as fh:
+            fh.write(self.check('MC-001', 'none', 'MC-099'))
+        subprocess.run([sys.executable, '-B', SCRIPT, '--checklist', path,
+                        '--out-dir', out], capture_output=True, text=True, timeout=30)
+        self.assertFalse(os.path.exists(os.path.join(out, 'groups.txt')))
+
+    # --- the useful direction ------------------------------------------------
+
+    def test_checks_with_no_shared_resource_overlap(self):
+        body = ''.join(self.check('MC-00%d' % i, 'none') for i in (1, 2, 3))
+        groups, _, code = self.derive(body)
+        self.assertEqual(code, 0)
+        self.assertEqual(groups, [['MC-001', 'MC-002', 'MC-003']])
+
+    def test_a_shared_resource_splits_a_group(self):
+        body = (self.check('MC-001', 'port:5173') +
+                self.check('MC-002', 'port:5173') +
+                self.check('MC-003', 'port:8080'))
+        groups, _, code = self.derive(body)
+        self.assertEqual(code, 0)
+        # MC-002 collides with MC-001 and starts a run; MC-003 joins it.
+        self.assertEqual(groups, [['MC-001'], ['MC-002', 'MC-003']])
+
+    def test_resource_tokens_are_matched_case_insensitively(self):
+        body = (self.check('MC-001', 'Port:5173, Browser') +
+                self.check('MC-002', 'browser'))
+        groups, _, _ = self.derive(body)
+        self.assertEqual(groups, [['MC-001'], ['MC-002']])
+
+    def test_a_dependency_lands_in_a_later_group(self):
+        body = (self.check('MC-001', 'none') +
+                self.check('MC-002', 'none', 'MC-001') +
+                self.check('MC-003', 'none', 'MC-002'))
+        groups, _, _ = self.derive(body)
+        self.assertEqual(groups, [['MC-001'], ['MC-002'], ['MC-003']])
+
+    def test_a_forward_dependency_is_rejected_rather_than_reordered(self):
+        # MC-001 depends on MC-002, which appears later. Satisfying that would
+        # mean running the checklist out of order, and a checklist whose setup
+        # steps are implicit stops working when its order changes. Say so
+        # instead, and run serially.
+        body = (self.check('MC-001', 'none', 'MC-002') +
+                self.check('MC-002', 'none'))
+        groups, readme, code = self.derive(body)
+        self.assertEqual(code, 2)
+        self.assertEqual(groups, [])
+        self.assertIn('appears after it', readme)
+
+    def test_document_order_is_never_rearranged(self):
+        # Groups are consecutive runs of the checklist, so a check never moves
+        # past another. MC-003 could overlap MC-001 on resources alone, but
+        # MC-002 sits between them and holds the group open no further.
+        body = (self.check('MC-001', 'db') + self.check('MC-002', 'db') +
+                self.check('MC-003', 'db'))
+        groups, _, _ = self.derive(body)
+        self.assertEqual(groups, [['MC-001'], ['MC-002'], ['MC-003']])
+
+    def test_every_check_appears_exactly_once(self):
+        body = ''.join(self.check('MC-%03d' % i, 'none' if i % 2 else 'db')
+                       for i in range(1, 12))
+        groups, _, _ = self.derive(body)
+        flat = [cid for g in groups for cid in g]
+        self.assertEqual(sorted(flat), sorted(set(flat)))
+        self.assertEqual(len(flat), 11)
+
+    # --- reading what reviewers actually write -------------------------------
+
+    def test_the_check_id_field_layout_parses(self):
+        body = '''
+        - Check ID: MC-001
+        - Exclusive resources: none
+        - Depends on: none
+
+        - Check ID: MC-002
+        - Exclusive resources: none
+        - Depends on: MC-001
+        '''
+        groups, _, _ = self.derive(body)
+        self.assertEqual(groups, [['MC-001'], ['MC-002']])
+
+    def test_bold_fields_parse(self):
+        body = ('\n### MC-001\n- **Exclusive resources:** none\n- **Depends on:** none\n'
+                '\n### MC-002\n- **Exclusive resources:** none\n- **Depends on:** MC-001\n')
+        groups, _, _ = self.derive(body)
+        self.assertEqual(groups, [['MC-001'], ['MC-002']])
+
+    def test_a_traceability_matrix_does_not_invent_checks(self):
+        # The matrix at the end of every checklist is full of ID tokens. A bare
+        # token is not a check, or the grouping would list rows that do not exist.
+        body = (self.check('MC-001', 'none') + self.check('MC-002', 'none') +
+                '\n## Traceability\n\n| Check | Requirement |\n|---|---|\n'
+                '| MC-001 | R-1 |\n| MC-002 | R-2 |\n| MC-404 | R-3 |\n')
+        groups, _, code = self.derive(body)
+        self.assertEqual(code, 0)
+        self.assertEqual(groups, [['MC-001', 'MC-002']])
+
+    def test_none_is_spelled_several_ways(self):
+        for word in ('none', 'None', 'N/A', '-', 'none.'):
+            body = (self.check('MC-001', word) + self.check('MC-002', word))
+            groups, _, _ = self.derive(body)
+            self.assertEqual(groups, [['MC-001', 'MC-002']],
+                             'resources spelled %r' % word)
+
+    def test_a_prefix_other_than_mc_works(self):
+        body = ('\n### CHK-1\n- Exclusive resources: none\n- Depends on: none\n'
+                '\n### CHK-2\n- Exclusive resources: none\n- Depends on: CHK-1\n')
+        groups, _, _ = self.derive(body)
+        self.assertEqual(groups, [['CHK-1'], ['CHK-2']])
+
+    def test_the_readme_tells_the_agent_the_barrier_rule(self):
+        groups, readme, _ = self.derive(
+            self.check('MC-001', 'none') + self.check('MC-002', 'port:1'))
+        self.assertIn('before starting the next', readme)
+        self.assertIn('permission, not obligation', readme)
+        self.assertIn('```', readme)
+
+
+res = unittest.TextTestRunner(verbosity=0).run(
+    unittest.TestLoader().loadTestsFromTestCase(Groups))
+if not res.wasSuccessful():
+    raise SystemExit(1)
+print('checklist-groups-test.sh: %d checks passed' % res.testsRun)
+PY

@@ -10,6 +10,9 @@
 #   load_gates              -> echo the gates content, prefixed with its source banner
 
 GATES_BASENAME="GATES.md"
+# This file's own directory, for helpers shipped beside it. $ROOT is the
+# installed uncle root, which is not the same place in a dev checkout.
+GATES_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 gates_file() {
     local f
@@ -397,6 +400,41 @@ save_plan_review() {
     [[ -n "$2" ]] || return 0
     python3 "$ROOT/scripts/lib/review-cache.py" save --output "$1" --key "$2" \
         --cache-dir "$LOG_DIR/../review-cache"
+}
+
+# The checklist's own parallel-execution plan, derived from the reviewer's
+# per-check declarations immediately before the stage that follows them.
+#
+# The executing agent is told to overlap independent checks. Deciding which
+# checks are independent is a judgment about ports, fixtures, and shared
+# accounts, and it belongs to the reviewer who wrote the checks -- not to the
+# agent whose results change depending on the answer. This turns those
+# declarations into an ordered plan the agent follows.
+#
+# Never fatal. A checklist with no declarations, or with declarations that do
+# not parse, produces a README saying NOT DECLARED and no groups file, and the
+# stage runs one check at a time exactly as it did before this existed.
+snapshot_checklist_groups() {
+    local directory="$STATE_DIR/checklist-groups"
+    mkdir -p "$directory"
+    rm -f "$directory/groups.txt"
+    if ! command -v python3 > /dev/null 2>&1 \
+        || [[ ! -f "$GATES_LIB_DIR/checklist_groups.py" ]]; then
+        {
+            echo '# Parallel execution groups for checklist execution'
+            echo
+            echo 'NOT DECLARED: python3 is unavailable, so no grouping was derived.'
+            echo 'Run the checklist one check at a time, in document order.'
+        } > "$directory/README.md"
+        return 0
+    fi
+    python3 -B "$GATES_LIB_DIR/checklist_groups.py" \
+        --checklist MANUAL_CHECKLIST.md --out-dir "$directory" > /dev/null || true
+    if [[ -s "$directory/groups.txt" ]]; then
+        echo "Checklist grouping: $(wc -l < "$directory/groups.txt" | tr -d ' ') group(s) from the reviewer's declarations."
+    else
+        echo "Checklist grouping: none declared; the checklist runs one check at a time."
+    fi
 }
 
 # Snapshot only checks executed immediately before checklist verification.

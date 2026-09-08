@@ -31,7 +31,12 @@ Do not claim any check passed.
 4. Delete checks that the diff makes provably inapplicable. For each deletion,
    record the check ID and the reason in a `Removed checks` section. Never
    delete a check merely because it looks hard to run.
-5. Leave every other base check exactly as written. Do not rewrite checks for
+5. Update `Exclusive resources` and `Depends on` on any check whose real
+   dependencies are only now visible. The base checklist was written while the
+   implementation was still in progress, so a check that could not know which
+   port it would bind may have declared nothing and been scheduled alone. New
+   checks carry both fields like every other check.
+6. Leave every other base check exactly as written. Do not rewrite checks for
    style.
 
 New checks continue the base numbering. Do not renumber existing checks; their

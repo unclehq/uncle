@@ -15,15 +15,20 @@ Execute every feasible Critical and Important check.
 
 ## Parallel execution
 
-After reading the fresh driver evidence below, group the remaining checks by
-prerequisites and shared resources. Run independent checks concurrently using
-parallel tool calls or background processes; do not run them one at a time when
-they can safely overlap. Share read-only setup where possible.
+Read `.uncle/workflow/checklist-groups/README.md` before running anything. The
+driver derives an ordered set of groups there from the `Exclusive resources` and
+`Depends on` fields the reviewer wrote, immediately before this stage. Checks on
+one line have no declared conflict and may overlap. Finish every check in a
+group before starting the next one.
 
-Run dependent checks in order. Serialize checks that share mutable fixtures,
-ports, browser sessions, accounts, build outputs, or other state, unless those
-resources can be isolated without changing what the check verifies. Keep
-concurrency within available resources to avoid introducing timing failures.
+Overlapping is permission, not obligation: run fewer at a time if the machine
+cannot take it. Never merge two lines, and never overlap checks the grouping
+separates. That grouping is the reviewer's judgment about ports, fixtures, and
+shared accounts, and your results are the thing that changes when it is wrong —
+two checks sharing a port produce a FAIL that reads like a product defect.
+
+If that README says NOT DECLARED, run every check one at a time in document
+order. Do not substitute a grouping of your own.
 
 Capture each check's output and exit status separately, tied to its checklist
 ID. Wait for every started check to finish before assigning results. A failed

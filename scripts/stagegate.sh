@@ -1305,6 +1305,7 @@ while true; do
             run_green_check || true
             check_verification_inputs
             snapshot_checklist_checks
+            snapshot_checklist_groups
             run_stage EXECUTE_CHECKLIST
             check_verification_inputs
             if [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then

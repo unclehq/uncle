@@ -213,6 +213,16 @@ automated-test report before creating MANUAL_CHECKLIST.md.
 
 Execute every feasible critical item in MANUAL_CHECKLIST.md.
 
+Checks may be run concurrently, but which checks may overlap is not the
+executing agent's call. The reviewer declares `Exclusive resources` and
+`Depends on` per check; the driver turns those into ordered groups in
+`.uncle/workflow/checklist-groups/`, where each group is a consecutive run of
+the checklist that shares no declared resource. Finish a group before starting
+the next. A checklist that declares nothing, or whose declarations do not
+parse, runs one check at a time — never on a grouping the executing agent
+invented, because two checks fighting over a port produce a FAIL that reads
+like a product defect.
+
 Write VERIFICATION_REPORT.md containing:
 
 - checklist identifier;

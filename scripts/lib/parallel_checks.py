@@ -3,7 +3,7 @@ from process_tree import bash_executable, group_options, kill_tree
 
 import argparse
 import difflib
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 import json
 import os
 from pathlib import Path
@@ -107,6 +107,11 @@ def run(args):
                 end = groups.get(index, index + 1)
                 futures = [pool.submit(check, i, Path(temporary.name)) for i in range(index, end)]
                 for i, future in zip(range(index, end), futures):
+                    # Python <=3.13 on Windows cannot dispatch SIGBREAK while
+                    # blocked in an unbounded condition wait. Return to Python
+                    # regularly so cancellation reaches the cleanup below.
+                    while not future.done():
+                        wait([future], timeout=0.1)
                     status, log = future.result()
                     results.write(f"{status}\t{commands[i]}\n")
                     results.flush()

@@ -6,7 +6,7 @@ python3 -B - <<'PY'
 import os, pathlib, signal, subprocess, sys, tempfile, time, unittest
 sys.path.insert(0, os.environ['UNCLE_TEST_ROOT']+'/scripts/lib')
 from verification_manifest import manifest
-from process_tree import bash_executable, group_options
+from process_tree import bash_executable, group_options, kill_tree
 
 class Checks(unittest.TestCase):
     def setUp(self):
@@ -55,20 +55,22 @@ class Checks(unittest.TestCase):
         self.assertFalse((self.root/'must-not-run').exists())
         self.assertIn('changed',(self.root/'integrity').read_text())
     def test_interruption_stops_children(self):
-        (self.root/'commands').write_text('echo $$ > pid1; sleep 30\necho $$ > pid2; sleep 30\n')
+        (self.root/'commands').write_text('echo $$ > pid1; sleep 30 & echo $! > child1; wait\necho $$ > pid2; sleep 30 & echo $! > child2; wait\ntouch must-not-run\n')
         (self.root/'groups').write_text('1 2\n')
         p=subprocess.Popen([sys.executable,'-B',os.environ['UNCLE_TEST_ROOT']+'/scripts/lib/parallel_checks.py',
                             '--commands','commands','--groups','groups','--out','results','--log','log'],
                            cwd=self.root,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True, **group_options())
         try:
             deadline=time.monotonic()+5
-            while not all((self.root/name).exists() for name in ('pid1','pid2')) and time.monotonic()<deadline:
+            names = ('pid1','pid2','child1','child2')
+            while not all((self.root/name).exists() and (self.root/name).stat().st_size for name in names) and time.monotonic()<deadline:
                 time.sleep(.02)
             self.assertTrue((self.root/'pid2').exists(), self.diagnostics())
             p.send_signal(signal.CTRL_BREAK_EVENT if os.name == 'nt' else signal.SIGTERM)
             _,errors=p.communicate(timeout=5)
             self.assertEqual(p.returncode,130,errors)
-            for name in ('pid1','pid2'):
+            self.assertFalse((self.root/'must-not-run').exists())
+            for name in names:
                 pid = int((self.root/name).read_text())
                 if os.name == 'nt':
                     check = subprocess.run([bash_executable(), '-c', f'kill -0 {pid}'], capture_output=True)
@@ -78,8 +80,10 @@ class Checks(unittest.TestCase):
                         os.kill(pid, 0)
         finally:
             if p.poll() is None:
-                p.send_signal(signal.CTRL_BREAK_EVENT if os.name == 'nt' else signal.SIGTERM)
-                p.communicate(timeout=5)
+                # Do not retry the same failed graceful stop and leave files
+                # locked, masking the original timeout during temp cleanup.
+                kill_tree(p)
+                p.communicate(timeout=15)
 
 unittest.main()
 PY

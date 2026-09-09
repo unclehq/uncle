@@ -1,5 +1,5 @@
 """Run explicitly approved independent check groups; keep evidence ordered."""
-from process_tree import group_options, kill_tree
+from process_tree import bash_executable, group_options, kill_tree
 
 import argparse
 import difflib
@@ -81,7 +81,7 @@ def run(args):
                 if halted.is_set():
                     output.write(b"NOT RUN: protected verification inputs changed.\n")
                     return 125, log
-                child = subprocess.Popen(["bash", "-c", command], stdin=subprocess.DEVNULL,
+                child = subprocess.Popen([bash_executable(), "-c", command], stdin=subprocess.DEVNULL,
                                          stdout=output, stderr=subprocess.STDOUT,
                                          **group_options())
                 children.add(child)

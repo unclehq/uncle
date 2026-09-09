@@ -6,13 +6,16 @@ python3 -B - <<'PY'
 import os, pathlib, signal, subprocess, sys, tempfile, time, unittest
 sys.path.insert(0, os.environ['UNCLE_TEST_ROOT']+'/scripts/lib')
 from verification_manifest import manifest
-from process_tree import group_options
+from process_tree import bash_executable, group_options
 
 class Checks(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root=pathlib.Path(self.tmp.name)
+    def diagnostics(self):
+        return '\n'.join(f'{name}:\n{(self.root/name).read_text(errors="replace")}'
+                         for name in ('results','log','integrity') if (self.root/name).exists())
     def run_checks(self, commands, groups, protected=False):
         (self.root/'commands').write_text('\n'.join(commands)+'\n')
         (self.root/'groups').write_text(groups)
@@ -31,13 +34,13 @@ class Checks(unittest.TestCase):
         commands.append('test -f done1 && test -f done2 && echo barrier')
         r=self.run_checks(commands, '1 2\n')
         self.assertEqual(r.returncode,0,r.stderr)
-        self.assertEqual([s.split('\t')[0] for s in (self.root/'results').read_text().splitlines()], ['0']*3)
+        self.assertEqual([s.split('\t')[0] for s in (self.root/'results').read_text().splitlines()], ['0']*3, self.diagnostics())
         log=(self.root/'log').read_text()
         self.assertLess(log.index('\ncheck1\n'),log.index('\ncheck2\n'))
     def test_test_failure_is_recorded(self):
         r=self.run_checks(['exit 7','echo still-runs'], '1 2\n')
         self.assertEqual(r.returncode,0,r.stderr)
-        self.assertTrue((self.root/'results').read_text().startswith('7\t'))
+        self.assertTrue((self.root/'results').read_text().startswith('7\t'), self.diagnostics())
     def test_invalid_groups_execute_nothing(self):
         for groups in ['0 1\n','2 1\n','1 3\n','1 2\n1 2\n']:
             r=self.run_checks(['touch ran','touch ran'],groups)
@@ -48,7 +51,7 @@ class Checks(unittest.TestCase):
         r=self.run_checks(["sleep .1; printf 'changed\\n' > fixture",
                            "sleep .5; printf 'original\\n' > fixture",'touch must-not-run'],
                           '1 2\n',protected=True)
-        self.assertEqual(r.returncode,3,r.stderr)
+        self.assertEqual(r.returncode,3,r.stderr + self.diagnostics())
         self.assertFalse((self.root/'must-not-run').exists())
         self.assertIn('changed',(self.root/'integrity').read_text())
     def test_interruption_stops_children(self):
@@ -61,14 +64,14 @@ class Checks(unittest.TestCase):
             deadline=time.monotonic()+5
             while not all((self.root/name).exists() for name in ('pid1','pid2')) and time.monotonic()<deadline:
                 time.sleep(.02)
-            self.assertTrue((self.root/'pid2').exists())
+            self.assertTrue((self.root/'pid2').exists(), self.diagnostics())
             p.send_signal(signal.CTRL_BREAK_EVENT if os.name == 'nt' else signal.SIGTERM)
             _,errors=p.communicate(timeout=5)
             self.assertEqual(p.returncode,130,errors)
             for name in ('pid1','pid2'):
                 pid = int((self.root/name).read_text())
                 if os.name == 'nt':
-                    check = subprocess.run(['bash', '-c', f'kill -0 {pid}'], capture_output=True)
+                    check = subprocess.run([bash_executable(), '-c', f'kill -0 {pid}'], capture_output=True)
                     self.assertNotEqual(check.returncode, 0)
                 else:
                     with self.assertRaises(ProcessLookupError):

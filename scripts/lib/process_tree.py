@@ -6,6 +6,16 @@ import subprocess
 from pathlib import Path
 
 
+def bash_executable():
+    # Resolve before CreateProcess: its bare-name search checks System32 (WSL)
+    # before PATH, even when Git Bash is first on PATH.
+    selected = os.environ.get('UNCLE_WINDOWS_BASH') if os.name == 'nt' else None
+    executable = shutil.which(selected or 'bash')
+    if not executable:
+        raise FileNotFoundError('Cannot locate Git Bash' if os.name == 'nt' else 'Cannot locate bash')
+    return str(Path(executable).absolute())
+
+
 def launch_command(command):
     if os.name != 'nt':
         return command
@@ -20,7 +30,7 @@ def launch_command(command):
         with open(executable, 'rb') as source:
             shebang = source.readline(256)
         if shebang.startswith(b'#!') and b'sh' in shebang:
-            return ['bash', Path(executable).as_posix(), *command[1:]]
+            return [bash_executable(), Path(executable).as_posix(), *command[1:]]
     return command
 
 

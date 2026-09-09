@@ -44,9 +44,33 @@ class Portability(unittest.TestCase):
             script = Path(directory) / 'runner with spaces'
             script.write_bytes(b'#!/usr/bin/env bash\necho test\n')
             fake_os = types.SimpleNamespace(name='nt', get_exec_path=lambda: [directory])
-            with patch.object(process_tree, 'os', fake_os), patch.object(process_tree.shutil, 'which', return_value=str(script)):
+            with patch.object(process_tree, 'os', fake_os), patch.object(process_tree.shutil, 'which', return_value=str(script)), \
+                 patch.object(process_tree, 'bash_executable', return_value='C:/Git/bin/bash.exe'):
                 self.assertEqual(process_tree.launch_command(['runner with spaces', 'arg']),
-                                 ['bash', script.as_posix(), 'arg'])
+                                 ['C:/Git/bin/bash.exe', script.as_posix(), 'arg'])
+
+    def test_windows_bash_selection(self):
+        with tempfile.TemporaryDirectory(prefix='git with spaces ') as directory:
+            bash = Path(directory) / 'bash.exe'
+            bash.touch()
+            fake_os = types.SimpleNamespace(name='nt', environ={})
+            with patch.object(process_tree, 'os', fake_os), \
+                 patch.object(process_tree.shutil, 'which', return_value=str(bash)) as which:
+                self.assertEqual(process_tree.bash_executable(), str(bash.absolute()))
+                which.assert_called_with('bash')
+                fake_os.environ['UNCLE_WINDOWS_BASH'] = str(bash)
+                self.assertEqual(process_tree.bash_executable(), str(bash.absolute()))
+                which.assert_called_with(str(bash))
+                which.return_value = None
+                with self.assertRaises(FileNotFoundError):
+                    process_tree.bash_executable()
+
+    def test_selected_bash_runs_in_working_directory(self):
+        with tempfile.TemporaryDirectory(prefix='bash working directory ') as directory:
+            result = subprocess.run([process_tree.bash_executable(), '-c', 'printf worked > marker; exit 7'],
+                                    cwd=directory, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertEqual((Path(directory)/'marker').read_bytes(), b'worked')
 
     def test_windows_lock_import_and_use(self):
         fake = types.SimpleNamespace(locking=Mock(), LK_LOCK=1)

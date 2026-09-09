@@ -5,10 +5,14 @@ import json
 import shutil
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts/lib'))
+from process_tree import bash_executable
+
 HELPER = ROOT / 'scripts/lib/audit-findings.py'
 TABLE = '''## Findings
 
@@ -31,7 +35,7 @@ class FindingsTests(unittest.TestCase):
         self.state = self.work / 'workflow'
 
     def run_review(self, answers):
-        return subprocess.run(['python3', '-B', str(HELPER), str(self.report), str(self.state)], input=answers, text=True, capture_output=True, timeout=10)
+        return subprocess.run([sys.executable, '-B', str(HELPER), str(self.report), str(self.state)], input=answers, text=True, capture_output=True, timeout=10)
 
     def record(self):
         sha = hashlib.sha256(self.report.read_bytes()).hexdigest()
@@ -76,7 +80,7 @@ class FindingsTests(unittest.TestCase):
         self.assertEqual(record['decisions']['FA-2']['decision'], 'human-reviewed')
         self.assertEqual(record['effective_verdict'], 'READY')
         self.assertEqual(self.run_review('').returncode, 0)
-        result = subprocess.run(['python3', '-B', str(HELPER), str(self.report), str(self.state), '--check'])
+        result = subprocess.run([sys.executable, '-B', str(HELPER), str(self.report), str(self.state), '--check'])
         self.assertEqual(result.returncode, 0)
 
     def test_table_wrappers_conclusion_and_escaped_pipes(self):
@@ -130,7 +134,7 @@ class FindingsTests(unittest.TestCase):
                 source = (ROOT / 'scripts' / driver).read_text()
                 arm = source.split('        WAIT_AUDIT_OVERRIDE)\n', 1)[1].split('\n        COMPLETE)', 1)[0]
                 harness = f'''set -euo pipefail
-ROOT={str(ROOT)!r}
+ROOT={ROOT.as_posix()!r}
 STATE_DIR=workflow
 STATE_FILE=workflow/state
 VERDICT_FILE=workflow/audit-verdict
@@ -154,10 +158,10 @@ done
                 (self.state / 'audit-verdict').write_bytes((prefix + 'NOT_READY\t' + sha + '\n').encode("utf-8"))
                 (self.state / 'state').write_bytes(('WAIT_AUDIT_OVERRIDE\n').encode("utf-8"))
                 (self.work / 'harness.sh').write_bytes((harness).encode("utf-8"))
-                result = subprocess.run(['bash', 'harness.sh'], cwd=self.work, input='s\nn\n', text=True, capture_output=True)
+                result = subprocess.run([bash_executable(), 'harness.sh'], cwd=self.work, input='s\nn\n', text=True, capture_output=True)
                 self.assertEqual(result.returncode, 1, result.stderr + result.stdout)
                 self.assertEqual((self.state / 'state').read_text().strip(), 'WAIT_AUDIT_OVERRIDE')
-                result = subprocess.run(['bash', 'harness.sh'], cwd=self.work, input='r\n', text=True, capture_output=True)
+                result = subprocess.run([bash_executable(), 'harness.sh'], cwd=self.work, input='r\n', text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                 self.assertEqual((self.state / 'state').read_text().strip(), 'COMPLETE')
                 self.assertEqual((self.state / 'audit-verdict').read_text().split('\t')[column], 'READY')
@@ -165,12 +169,12 @@ done
                 self.assertEqual(self.report.read_text(), TABLE)
                 # Crash after verdict persistence: resume without another vote.
                 (self.state / 'state').write_bytes(('WAIT_AUDIT_OVERRIDE\n').encode("utf-8"))
-                result = subprocess.run(['bash', 'harness.sh'], cwd=self.work, input='', text=True, capture_output=True)
+                result = subprocess.run([bash_executable(), 'harness.sh'], cwd=self.work, input='', text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                 # A revised audit must never inherit the effective READY.
                 self.report.write_bytes((TABLE + '\n').encode("utf-8"))
                 (self.state / 'state').write_bytes(('WAIT_AUDIT_OVERRIDE\n').encode("utf-8"))
-                result = subprocess.run(['bash', 'harness.sh'], cwd=self.work, input='', text=True, capture_output=True)
+                result = subprocess.run([bash_executable(), 'harness.sh'], cwd=self.work, input='', text=True, capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.report.write_bytes((TABLE).encode("utf-8"))
 

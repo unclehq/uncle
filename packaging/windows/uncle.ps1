@@ -37,13 +37,16 @@ if (!$bash -or !(Test-Path $bash) -or !$python) {
 $pythonRoot = Split-Path $python -Parent
 $oldPath = $env:PATH
 $oldPython = $env:UNCLE_WINDOWS_PYTHON
+$oldBash = $env:UNCLE_WINDOWS_BASH
 try {
     $env:UNCLE_WINDOWS_PYTHON = $python
+    $env:UNCLE_WINDOWS_BASH = $bash
     $env:PATH = "$PSScriptRoot;$gitRoot\usr\bin;$pythonRoot;$oldPath"
     & $bash --noprofile --norc ($root.Replace('\', '/') + '/uncle') @args
     $status = $LASTEXITCODE
 } finally {
     $env:PATH = $oldPath
     $env:UNCLE_WINDOWS_PYTHON = $oldPython
+    $env:UNCLE_WINDOWS_BASH = $oldBash
 }
 exit $status

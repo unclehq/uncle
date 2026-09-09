@@ -50,7 +50,10 @@ jobs:
       - name: Windows process detector tests
         run: ./scripts/tests/windows-process-test.ps1
       - name: Windows Python portability tests
-        run: python -B scripts/tests/windows-portability-test.py
+        shell: bash
+        run: |
+          export UNCLE_WINDOWS_BASH="$(cygpath -w "$BASH")"
+          python -B scripts/tests/windows-portability-test.py
       - name: Install Scoop on the disposable runner
         run: |
           Invoke-WebRequest -UseBasicParsing https://get.scoop.sh -OutFile "$env:RUNNER_TEMP/scoop-install.ps1"
@@ -65,6 +68,7 @@ jobs:
         run: |
           export PATH="$PWD/packaging/windows:$PATH"
           export UNCLE_WINDOWS_PYTHON="$(cygpath -w "$(command -v python)")"
+          export UNCLE_WINDOWS_BASH="$(cygpath -w "$BASH")"
           for test in verification-integrity checklist-groups parallel-checks review-compaction agent-kimi reviewer-claude document-budget provided-inputs windows-probes; do
             bash "scripts/tests/$test-test.sh"
           done

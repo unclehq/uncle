@@ -22,6 +22,7 @@ ROOT="$(cd "$(dirname "$uncle_self")" && pwd)"
 unset uncle_self uncle_link
 case "${OSTYPE:-}" in
     msys*|cygwin*|win32*)
+        export UNCLE_WINDOWS_BASH="$(cygpath -w "$BASH")"
         if ! python3 -c pass >/dev/null 2>&1; then
             export PATH="$ROOT/packaging/windows:$PATH"
         fi

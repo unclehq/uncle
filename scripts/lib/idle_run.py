@@ -9,7 +9,7 @@ import sys
 import tempfile
 import time
 
-from process_tree import group_options, kill_tree, launch_command
+from process_tree import start_check, finish_check, kill_tree, launch_command
 
 
 def run(seconds, command, usage_before=None):
@@ -27,8 +27,7 @@ def run(seconds, command, usage_before=None):
         path = Path(directory) / 'output'
         try:
             with path.open('wb') as output, path.open('rb') as reader:
-                child = subprocess.Popen(launch_command(command), stdout=output, stderr=subprocess.STDOUT,
-                                         stdin=subprocess.DEVNULL, **group_options())
+                child = start_check(launch_command(command), stdout=output, stderr=subprocess.STDOUT)
                 heartbeat = last_usage = time.monotonic()
                 while True:
                     data = reader.read(65536)
@@ -63,8 +62,11 @@ def run(seconds, command, usage_before=None):
                     time.sleep(.05)
         finally:
             if child is not None:
-                kill_tree(child)
-                child.wait()
+                try:
+                    kill_tree(child)
+                    child.wait()
+                finally:
+                    finish_check(child)
 
 
 if __name__ == '__main__':

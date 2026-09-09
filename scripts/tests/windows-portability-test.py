@@ -16,6 +16,35 @@ sys.path.insert(0, str(ROOT / 'scripts/lib'))
 import process_tree
 
 class Portability(unittest.TestCase):
+    def test_job_termination_waits_for_descendants(self):
+        import windows_job
+        job = windows_job.Job.__new__(windows_job.Job)
+        job.handle = 123
+        job.api = Mock()
+        counts = iter((2, 1, 0))
+        def query(handle, kind, info, size, returned):
+            info._obj.ActiveProcesses = next(counts)
+            return True
+        job.api.QueryInformationJobObject.side_effect = query
+        with patch.object(windows_job.time, 'sleep') as sleep:
+            job.terminate()
+        self.assertEqual(job.api.QueryInformationJobObject.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+        job.api.TerminateJobObject.assert_called_once_with(123, 130)
+
+    def test_job_termination_timeout_is_not_suppressed(self):
+        import windows_job
+        job = windows_job.Job.__new__(windows_job.Job)
+        job.handle = 123
+        job.api = Mock()
+        def query(handle, kind, info, size, returned):
+            info._obj.ActiveProcesses = 1
+            return True
+        job.api.QueryInformationJobObject.side_effect = query
+        with patch.object(windows_job.time, 'monotonic', side_effect=(0, 4)):
+            with self.assertRaises(TimeoutError):
+                job.terminate()
+
     def test_cleanup_retries_windows_handle_release(self):
         for code in (32, 33):
             with self.subTest(winerror=code), tempfile.TemporaryDirectory() as parent:

@@ -18,7 +18,7 @@ while [[ $# -gt 0 ]]; do
 done
 case "${MODE:-ok}" in
     fail) exit 7 ;;
-    timeout) sleep 30 ;;
+    timeout) sleep 30 & printf '%s\n' "$!" >> "$CALLS.children"; wait ;;
     flaky)
         if [[ -e "$FLAKY" ]]; then cp "$CANDIDATE" "$out"; else touch "$FLAKY"; exit 7; fi ;;
     *) cp "$CANDIDATE" "$out" ;;
@@ -75,6 +75,14 @@ for mode in fail timeout oversized lost-id changed-status; do
     grep -q 'still exceeds the budget after 3 attempts; continuing with the preserved original' exhausted \
         || { echo "FAIL $0:$LINENO $mode"; exit 1; }
     cmp original.md ADVERSARIAL_REVIEW.md
+    if [[ "$mode" == timeout ]]; then
+        while read -r child_pid; do
+            if kill -0 "$child_pid" 2>/dev/null; then
+                echo "FAIL $0:$LINENO compaction left child $child_pid alive" >&2; exit 1
+            fi
+        done < "$CALLS.children"
+        rm "$tmp"/adversarial-review.compact-*.log
+    fi
     [[ $(wc -l < "$CALLS") -eq $((before + 3)) ]] || { echo "FAIL $0:$LINENO $mode"; exit 1; }
     mv good.md candidate.md
 done

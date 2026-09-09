@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""Self-hosted configuration, isolation and existing adapter contracts."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT/'scripts/lib'))
+from self_hosted import read_keys, save_keys, settings, aider_invocation, run_aider, response_from_history
+from process_tree import bash_executable
+
+
+class SelfHosted(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='self hosted test ')
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.config = self.root/'.uncle/config'
+        self.config.parent.mkdir()
+        self.config.write_text('implementation.runner self-hosted\nimplementation.model local-model:Q4\nimplementation.base_url http://localhost:8123/v1\n', encoding='utf-8')
+        save_keys(self.config, {'implementation': 'secret-with-#-characters'})
+
+    def test_config_and_secret_storage(self):
+        with patch.dict(os.environ, {}, clear=True):
+            values = settings(self.config, 'implementation-step-3')
+        self.assertEqual(values['model'], 'local-model:Q4')
+        self.assertEqual(values['api_key'], 'secret-with-#-characters')
+        self.assertNotIn(values['api_key'], self.config.read_text())
+        self.assertIn('/self-hosted-keys.json', (self.config.parent/'.gitignore').read_text())
+        if os.name != 'nt':
+            self.assertEqual((self.config.parent/'self-hosted-keys.json').stat().st_mode & 0o777, 0o600)
+        self.assertEqual(values['base_url'], 'http://localhost:8123/v1')
+
+    def test_env_overrides_and_validation(self):
+        with patch.dict(os.environ, {'UNCLE_SELF_HOSTED_API_KEY':'env-key', 'UNCLE_SELF_HOSTED_MODEL':'other',
+                                     'UNCLE_SELF_HOSTED_BASE_URL':'https://example.test/api/v1'}):
+            self.assertEqual(settings(self.config, 'implementation')['api_key'], 'env-key')
+            self.assertEqual(settings(self.config, 'implementation')['model'], 'other')
+            for url in ('', 'file:///tmp/model', 'https://key@example.test/v1', 'https://example.test/v1?key=secret'):
+                os.environ['UNCLE_SELF_HOSTED_BASE_URL'] = url
+                if url:
+                    with self.assertRaises(ValueError): settings(self.config, 'implementation')
+
+    def test_named_connections_and_cli_selection(self):
+        self.config.write_text('implementation.runner self-hosted\nimplementation.model qwen\nfinal-audit.runner self-hosted\nfinal-audit.model qwen\n', encoding='utf-8')
+        profiles = {'qwen': {'base_url': 'http://localhost:9100/v1', 'api_key': 'named-secret'}}
+        save_keys(self.config, {'__aider_models__': profiles})
+        with patch.dict(os.environ, {}, clear=True):
+            for stage in ('implementation-step-2', 'final-audit'):
+                self.assertEqual(settings(self.config, stage), dict(model='qwen', **profiles['qwen']))
+            profiles['qwen']['base_url'] = 'http://localhost:9200/v1'
+            save_keys(self.config, {'__aider_models__': profiles})
+            self.assertEqual(settings(self.config, 'final-audit')['base_url'], 'http://localhost:9200/v1')
+            with self.assertRaises(ValueError):
+                settings(self.config, 'requirements')
+        for selection, success in (('qwen', True), ('cline-only-model', False)):
+            result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/lib/self_hosted.py'),
+                                     'choose-model', str(self.config)], input=selection+'\n',
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode == 0, success)
+            self.assertNotIn('named-secret', result.stdout + result.stderr)
+            if success:
+                self.assertEqual(result.stdout.strip(), 'qwen')
+
+    def values(self):
+        return {'api_key':'test-secret','model':'local-model:Q4','base_url':'http://localhost:8123/v1'}
+
+    def test_aider_config_and_modes(self):
+        for side in ('agent','reviewer'):
+            with self.subTest(side=side), tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+                'OPENAI_API_KEY':'unrelated-key','OPENAI_API_BASE':'https://unrelated.test', 'AIDER_LOAD':'unwanted'}):
+                command,env=aider_invocation(side,self.values(),'Test prompt',self.root,directory)
+                for flag in ('--model','--weak-model','--editor-model'):
+                    self.assertEqual(command[command.index(flag)+1],'openai/local-model:Q4')
+                self.assertEqual(command[command.index('--openai-api-base')+1],self.values()['base_url'])
+                self.assertEqual(env['OPENAI_API_KEY'],'test-secret')
+                self.assertEqual(env['AIDER_OPENAI_API_KEY'],'test-secret')
+                self.assertNotIn('AIDER_LOAD',env)
+                self.assertNotIn('test-secret',str(command))
+                self.assertNotIn('test-secret',Path(directory,'aider.yml').read_text())
+                self.assertIn('--no-auto-commits',command)
+                self.assertIn('--no-dirty-commits',command)
+                if side=='reviewer':
+                    self.assertEqual(command[command.index('--chat-mode')+1],'ask')
+                    self.assertIn('--dry-run',command)
+                    self.assertIn('--no-suggest-shell-commands',command)
+                else:
+                    self.assertEqual(command[command.index('--edit-format')+1],'whole')
+
+    def stub_environment(self):
+        stub=self.root/'fake_aider.py'
+        stub.write_text("""import json,os,pathlib,sys,time
+args=sys.argv[1:]
+assert os.environ['OPENAI_API_KEY']=='secret-with-#-characters'
+assert args[args.index('--openai-api-base')+1]=='http://localhost:8123/v1'
+assert args[args.index('--model')+1]=='openai/local-model:Q4'
+assert 'secret-with-#-characters' not in str(args)
+prompt=pathlib.Path(args[args.index('--message-file')+1])
+assert prompt.read_text(encoding='utf-8')=='Test prompt'
+pathlib.Path(os.environ['RECORD']).write_text(str(prompt.parent),encoding='utf-8')
+mode=os.environ.get('FAKE_AIDER_MODE','ok')
+if mode=='timeout': time.sleep(30)
+if mode!='empty':
+    pathlib.Path(args[args.index('--llm-history-file')+1]).write_bytes(b'TO LLM 2026-09-09T12:00:00\\nUSER Test prompt\\nLLM RESPONSE 2026-09-09T12:00:01\\nASSISTANT ## Findings\\nASSISTANT \\nASSISTANT NOT READY\\n')
+print('Aider banner and costs should not become the report')
+sys.exit(7 if mode=='fail' else 0)
+""",encoding='utf-8')
+        wrapper=self.root/'fake-aider'
+        wrapper.write_bytes(b'#!/usr/bin/env bash\nexec "$TEST_PYTHON" "$TEST_STUB" "$@"\n')
+        wrapper.chmod(0o755)
+        return dict(os.environ, WORKFLOW_AIDER_CMD=str(wrapper), TEST_PYTHON=sys.executable, TEST_STUB=str(stub),
+                    UNCLE_CONFIG=str(self.config),UNCLE_STATUS_STAGE='implementation',RECORD=str(self.root/'record'))
+
+    def test_both_adapters_preserve_response_and_cleanup(self):
+        env=self.stub_environment()
+        for side in ('agent','reviewer'):
+            with self.subTest(side=side):
+                out=self.root/'report.md'
+                command=[bash_executable(),(ROOT/f'scripts/{side}-self-hosted.sh').as_posix()]
+                command+=['-p','--model','opus'] if side=='agent' else ['exec','--output-last-message',str(out),'Test prompt']
+                result=subprocess.run(command,input='Test prompt' if side=='agent' else '',text=True,
+                                      env=env,cwd=self.root,capture_output=True,timeout=10)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                self.assertNotIn('Aider banner',result.stdout)
+                self.assertNotIn('secret-with-#-characters',result.stdout+result.stderr)
+                self.assertFalse(Path((self.root/'record').read_text()).exists())
+                if side=='reviewer':
+                    self.assertEqual(out.read_bytes(),b'## Findings\n\nNOT READY\n')
+                else:
+                    final=json.loads(result.stdout.splitlines()[-1])
+                    self.assertFalse(final['is_error'])
+                    self.assertEqual(final['result'],'## Findings\n\nNOT READY')
+                    self.assertIsNone(final['total_cost_usd'])
+
+    def test_failures_never_write_a_review(self):
+        env=self.stub_environment()
+        for mode in ('fail','empty','timeout'):
+            with self.subTest(mode=mode):
+                out=self.root/(mode+'.md')
+                env.update(FAKE_AIDER_MODE=mode,WORKFLOW_SELF_HOSTED_SECONDS='1')
+                result=subprocess.run([bash_executable(),(ROOT/'scripts/reviewer-self-hosted.sh').as_posix(),
+                    'exec','--output-last-message',str(out),'Test prompt'],env=env,cwd=self.root,
+                    text=True,capture_output=True,timeout=10)
+                self.assertNotEqual(result.returncode,0,result.stdout)
+                self.assertFalse(out.exists())
+                self.assertFalse(Path((self.root/'record').read_text()).exists())
+
+    def test_history_uses_last_response_preserving_markdown(self):
+        path=self.root/'llm.log'
+        path.write_bytes(b'LLM RESPONSE 2026-09-09T12:00:00\r\nASSISTANT old\r\nTO LLM 2026-09-09T12:01:00\r\nUSER question\r\nLLM RESPONSE 2026-09-09T12:01:01\r\nASSISTANT ## Final\r\nASSISTANT | A | B |\r\n')
+        self.assertEqual(response_from_history(path),('## Final\n| A | B |',2))
+        path.write_bytes(b'LLM RESPONSE 2026-09-09T12:00:00\n')
+        with self.assertRaises(ValueError): response_from_history(path)
+
+    def test_stage_dispatch(self):
+        for side, stage in (('agent','implementation'),('reviewer','final-audit')):
+            result = subprocess.run([bash_executable(), '-c',
+                '. "$1/scripts/lib/stage-config.sh"; ROOT="$1"; uncle_runner_cmd self-hosted "$2"',
+                '_',ROOT.as_posix(),side],capture_output=True,text=True,check=True)
+            self.assertTrue(result.stdout.endswith(f'{side}-self-hosted.sh'))
+
+    def test_tui_roundtrip_and_masking(self):
+        try:
+            import curses
+        except ImportError:
+            self.skipTest('curses unavailable')
+        spec=importlib.util.spec_from_file_location('self_hosted_tui',ROOT/'uncle_tui.py')
+        module=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with patch.object(module,'CONFIG_PATH',str(self.config)):
+            ui=module.UncleTUI.__new__(module.UncleTUI)
+            ui.load_config()
+            self.assertEqual(ui._config_items(), ['1. Configure stages', '2. Configure Aider / self hosting', '3. Miscellaneous'])
+            ui.config_section = 'misc'
+            with patch.object(ui, 'maybe_reload'):
+                ui._set_field('!misc', 'auto_mode', 'true')
+                ui._set_field('!misc', 'approval_name', 'Test Reviewer')
+            ui.load_config()
+            self.assertEqual(ui.misc, dict(auto_mode='true', approval_name='Test Reviewer'))
+            self.assertEqual(ui.stage_env()['UNCLE_APPROVAL_NAME'], 'Test Reviewer')
+            for index in range(len(module.WORKFLOWS)):
+                ui.workflow_idx = index
+                ui.issue, ui.issue_mode = '123', '--change'
+                self.assertIn('--unattended', ui.cmd_for())
+            from unittest.mock import Mock
+            ui.stdscr = Mock()
+            ui.color = {'title': 1}
+            ui._draw_logo(60, 160)
+            ui.stdscr.addnstr.assert_any_call(len(module.LOGO), (module.LOGO_W-5)//2, 'uncle', 5, 1)
+            ui.config_section = 'stages'
+            self.assertEqual(len(ui._config_items()), len(module.CONFIG_STAGES))
+            ui.config_section = 'aider'
+            self.assertEqual(ui._config_items()[1:], ['local-model:Q4'])
+            self.assertEqual(ui.stage_fields('implementation'),['runner','model'])
+            self.assertEqual(ui._field_display('@local-model:Q4','api_key'),'********')
+            ui.save_config()
+            ui.load_config()
+            self.assertEqual(ui.stage_model('implementation'),'local-model:Q4')
+            self.assertEqual(ui.stage_api_keys['__aider_models__']['local-model:Q4']['base_url'],'http://localhost:8123/v1')
+            self.assertEqual(read_keys(self.config)['__aider_models__']['local-model:Q4']['api_key'],'secret-with-#-characters')
+            ui._open_picker('model','implementation')
+            self.assertEqual(ui.state,'picker')
+            self.assertEqual(ui._picker_rows(), [('option', 'local-model:Q4')])
+            ui._open_stage('@new')
+            ui.input_buf = 'second-model'
+            with patch.object(ui, 'maybe_reload'):
+                ui._confirm_text()
+                self.assertEqual(ui.stage_target, '@second-model')
+                ui._set_field('@second-model', 'base_url', 'http://localhost:9999/v1')
+                ui._set_field('@second-model', 'api_key', 'second-secret')
+            ui._open_picker('model', 'implementation')
+            self.assertEqual(ui._picker_rows(), [('option', 'local-model:Q4'), ('option', 'second-model')])
+            self.assertNotIn('second-secret', str(ui._config_items()))
+            self.assertNotIn('second-secret', self.config.read_text())
+            ui.stage_target = 'implementation' 
+            with patch.object(ui, 'maybe_reload'):
+                ui._apply_aider_to_all_stages()
+            ui.load_config()
+            for stage in module.CONFIG_STAGES:
+                self.assertEqual(ui.stage_runner(stage), 'self-hosted')
+                with patch.dict(os.environ, {}, clear=True):
+                    connection = settings(self.config, stage)
+                self.assertEqual(connection['model'], 'local-model:Q4')
+                self.assertEqual(connection['base_url'], 'http://localhost:8123/v1')
+                self.assertEqual(connection['api_key'], 'secret-with-#-characters')
+
+
+if __name__ == '__main__':
+    unittest.main()

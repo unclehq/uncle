@@ -97,3 +97,10 @@ manual-checklist.effort medium
 
 final-audit.runner codex
 final-audit.effort high
+
+# Self-hosted Aider runner using an OpenAI-compatible endpoint.
+# Add models in Configure → Aider self-hosted models (name, Base URL, masked API key).
+# Select Aider (Self hosted) for a stage, then choose its saved model.
+# requirements.runner self-hosted
+# requirements.model local-model
+# Alternatively provide credentials with UNCLE_SELF_HOSTED_API_KEY.

@@ -30,6 +30,9 @@ except ImportError:  # Windows has no curses in the stdlib
     raise SystemExit(1)
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
+from self_hosted import key_file, read_keys, save_keys
+
 CLINE_CONFIG = os.environ.get("CLINE_CONFIG", os.path.expanduser("~/.cline/data/settings/providers.json"))
 
 WORKFLOWS = [
@@ -94,15 +97,15 @@ CONFIG_STAGES = [name for name, _ in STAGES]
 # scripts/agent-*.sh and scripts/reviewer-*.sh — and the shim is what enforces
 # that difference. codex, for instance, runs `--sandbox workspace-write` as an
 # agent and `--sandbox read-only` as a reviewer.
-AGENT_RUNNERS = ["cline", "claude", "kimi", "codex"]
-REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi"]
+AGENT_RUNNERS = ["cline", "claude", "kimi", "codex", "self-hosted"]
+REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi", "self-hosted"]
 
 # Applied to any stage the operator has not configured.
 DEFAULT_RUNNER = "cline"
 DEFAULT_EFFORT = "medium"
 DEFAULT_CLINE_MODEL = "cline-pass/deepseek-v4-pro"
 
-STAGE_FIELDS = ("runner", "effort", "model", "network", "billing")
+STAGE_FIELDS = ("runner", "effort", "model", "network", "billing", "base_url", "api_key")
 # Only codex sandboxes a stage, so only a codex stage has a network to open.
 NETWORK_CHOICES = ["false", "true"]
 
@@ -271,6 +274,8 @@ CONFIG_DESC = {
         "here is choosing which model list the row below offers, and a model "
         "from the other list is dropped rather than carried across."
     ),
+    "field:base_url": "The OpenAI-compatible API root Aider should use, for example http://localhost:8000/v1.",
+    "field:api_key": "Endpoint credential, hidden while editing and stored separately in .uncle/self-hosted-keys.json. Use a placeholder for a server without authentication.",
     "field:model": (
         "The cline model this stage runs, as a `modelType/model` id (for "
         "example cline-pass/kimi-k3). Shown only when the runner is cline, "
@@ -297,7 +302,7 @@ CONFIG_DESC = {
     ),
     "runner": (
         "The CLI program that drives the agent and reviewer stages of every "
-        "workflow. Choose one of cline, claude, kimi, or codex. The runner "
+        "workflow. Choose cline, claude, kimi, codex, or Self hosted (Aider). The runner "
         "decides which agent and reviewer scripts the workflow invokes, so you "
         "can plug in a different coding agent without touching the rest of the "
         "pipeline. Press Enter on this row to cycle through the runners."
@@ -426,6 +431,7 @@ def runner_command(runner, side):
     shim = lambda name: os.path.join(ROOT, "scripts", name)
     if side == REVIEWER:
         table = {
+            "self-hosted": shim("reviewer-self-hosted.sh"),
             "cline": shim("reviewer-cline.sh"),
             "codex": "codex",
             "claude": shim("reviewer-claude.sh"),
@@ -433,6 +439,7 @@ def runner_command(runner, side):
         }
         return table.get(runner, table["cline"])
     table = {
+        "self-hosted": shim("agent-self-hosted.sh"),
         "cline": shim("agent-cline.sh"),
         "claude": "claude",
         "kimi": shim("agent-kimi.sh"),
@@ -521,11 +528,14 @@ class UncleTUI:
         self.status_stage_index = 0
         self.status_stage_total = 0
         # Per-stage settings, keyed by stage log name. Absent means "default".
+        self.misc = {}
         self.stage_runners = {}
         self.stage_models = {}
         self.stage_efforts = {}
         self.stage_networks = {}
         self.stage_billings = {}
+        self.stage_base_urls = {}
+        self.stage_api_keys = read_keys(CONFIG_PATH)
         self.notice = ""
         self.config_sel = 0
         self.config_scroll = 0
@@ -603,7 +613,7 @@ class UncleTUI:
 
     # ---- item lists ----
     def menu_items(self):
-        return [w[0] for w in WORKFLOWS] + ["Configure stages", "Quit"]
+        return [w[0] for w in WORKFLOWS] + ["Configure", "Quit"]
 
     def items(self):
         if self.state == "menu":
@@ -623,13 +633,25 @@ class UncleTUI:
     # to reason about than an inheritance chain, and the runner already
     # decides whether a model is meaningful at all.
     def _config_row(self):
+        section = getattr(self, "config_section", "")
+        if not section:
+            return self._config_items()[self.config_sel]
+        if section == "aider":
+            return self._profile_targets()[self.config_sel]
+        if section == "misc":
+            return "!misc"
         if 0 <= self.config_sel < len(CONFIG_STAGES):
             return CONFIG_STAGES[self.config_sel]
-        return ""
+        return self._profile_targets()[self.config_sel - len(CONFIG_STAGES)]
+
+    def _profile_targets(self):
+        return ["@new"] + ["@" + name for name in sorted(self.stage_api_keys.get("__aider_models__", {}))]
 
     # ---- effective values ----
     def stage_runner(self, stage):
         runner = self.stage_runners.get(stage, "")
+        if runner == "aider":
+            return "self-hosted"
         if runner in runners_for(STAGE_SIDE.get(stage, AGENT)):
             return runner
         return runner or DEFAULT_RUNNER
@@ -658,6 +680,8 @@ class UncleTUI:
 
     def stage_model(self, stage):
         """The model for a stage, or "" when its runner takes none."""
+        if self.stage_runner(stage) == "self-hosted":
+            return self.stage_models.get(stage, "")
         if self.stage_runner(stage) != "cline":
             return ""
         model = self.stage_models.get(stage, "")
@@ -674,7 +698,11 @@ class UncleTUI:
         runner that sandboxes a stage, and so the only one where the setting
         changes anything.
         """
+        if stage.startswith("@"):
+            return ["name", "base_url", "api_key"]
         runner = self.stage_runner(stage)
+        if runner == "self-hosted":
+            return ["runner", "model"]
         if runner == "cline":
             # Billing sits above model because it decides which models exist.
             return ["runner", "effort", "billing", "model"]
@@ -684,6 +712,17 @@ class UncleTUI:
 
     def _field_value(self, stage, field):
         """The stored value, empty when the stage inherits the default."""
+        if stage == "!misc":
+            return getattr(self, "misc", {}).get(field, "")
+        if stage.startswith("@"):
+            name = stage[1:]
+            if field == "name":
+                return name
+            return self.stage_api_keys.get("__aider_models__", {}).get(name, {}).get(field, "")
+        if field == "base_url":
+            return self.stage_base_urls.get(stage, "")
+        if field == "api_key":
+            return self.stage_api_keys.get(stage, "")
         if field == "runner":
             return self.stage_runners.get(stage, "")
         if field == "effort":
@@ -698,6 +737,12 @@ class UncleTUI:
 
     def _field_display(self, stage, field):
         stored = self._field_value(stage, field)
+        if field == "api_key":
+            return "********" if stored else "not set"
+        if field == "base_url" or (field == "model" and self.stage_runner(stage) == "self-hosted"):
+            return stored or "not set"
+        if field == "runner" and stored == "self-hosted":
+            return "Aider (Self hosted)"
         if stored:
             if field == "model":
                 label = MODEL_LABELS.get(stored, "")
@@ -719,11 +764,50 @@ class UncleTUI:
     def _set_field(self, stage, field, value):
         value = (value or "").strip()
         self.maybe_reload()
+        if stage == "!misc":
+            self.misc[field] = value
+            self.save_config()
+            return
+        if stage.startswith("@"):
+
+            profiles = self.stage_api_keys.setdefault("__aider_models__", {})
+            name = stage[1:]
+            if field == "name":
+                if not value or any(c.isspace() for c in value) or '#' in value or value == 'new':
+                    self.notice = "Use a model name without spaces or #."
+                    return
+                if value != name and value in profiles:
+                    self.notice = "That Aider model already exists."
+                    return
+                profiles[value] = profiles.pop(name, {})
+                if value != name:
+                    profiles[value].pop("model", None)
+                for target in CONFIG_STAGES:
+                    if self.stage_runner(target) == "self-hosted" and self.stage_models.get(target) == name:
+                        self.stage_models[target] = value
+                self.stage_target = "@" + value
+                self.picker_target = self.stage_target
+            else:
+                if field == "base_url":
+                    from urllib.parse import urlsplit
+                    url = urlsplit(value)
+                    if url.scheme not in ("http", "https") or not url.netloc or url.username or url.password or url.query or url.fragment:
+                        self.notice = "Enter an http(s) Base URL without credentials, query, or fragment."
+                        return
+                profiles.setdefault(name, {})[field] = value
+            self.save_config()
+            return
+        if field == "runner" and value != self.stage_runner(stage):
+            self.stage_models.pop(stage, None)
+        if field == "model" and self.stage_runner(stage) == "self-hosted" and value and value not in self.stage_api_keys.get("__aider_models__", {}):
+            self.notice = "Choose a model from Aider self-hosted models."
+            return
         store = {"runner": self.stage_runners,
                  "effort": self.stage_efforts,
                  "model": self.stage_models,
                  "network": self.stage_networks,
-                 "billing": self.stage_billings}.get(field)
+                 "billing": self.stage_billings,
+                 "base_url": self.stage_base_urls, "api_key": self.stage_api_keys}.get(field)
         if store is None:
             return
         if value:
@@ -732,16 +816,44 @@ class UncleTUI:
             store.pop(stage, None)
         self.save_config()
 
+    def _apply_aider_to_all_stages(self):
+        """Use the selected stage's Aider connection throughout the workflow."""
+        self.maybe_reload()
+        source = self.stage_target
+        if self.stage_runner(source) != "self-hosted":
+            self.notice = "Select Self hosted and configure its connection first."
+            return
+        for store in (self.stage_models, self.stage_base_urls, self.stage_api_keys):
+            value = store.get(source, "")
+            for stage in CONFIG_STAGES:
+                if value:
+                    store[stage] = value
+                else:
+                    store.pop(stage, None)
+        for stage in CONFIG_STAGES:
+            self.stage_runners[stage] = "self-hosted"
+        self.save_config()
+        self.notice = "Aider and this LLM connection selected for all stages."
+
     def _config_items(self):
+        section = getattr(self, "config_section", "")
+        if not section:
+            return ["1. Configure stages", "2. Configure Aider / self hosting", "3. Miscellaneous"]
+        if section == "aider":
+            return ["Add Aider self-hosted model…"] + [target[1:] for target in self._profile_targets()[1:]]
+        if section == "misc":
+            return ["Auto mode: " + ("on" if getattr(self, "misc", {}).get("auto_mode") == "true" else "off"),
+                    "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set")]
         """One row per stage: the stage, its runner, and what that runner uses."""
         width = max(len(s) for s in CONFIG_STAGES)
         rows = []
         for stage in CONFIG_STAGES:
-            parts = [self.stage_runner(stage)]
+            parts = ["Self hosted (Aider)" if self.stage_runner(stage) == "self-hosted" else self.stage_runner(stage)]
             model = self.stage_model(stage)
             if model:
                 parts.append(MODEL_LABELS.get(model, model))
-            parts.append(self.stage_effort(stage))
+            if "effort" in self.stage_fields(stage):
+                parts.append(self.stage_effort(stage))
             # Named on the row, not just inside the popup: which stage can
             # open a socket is the one setting here worth seeing at a glance.
             if "network" in self.stage_fields(stage) and self.stage_network(stage) == "true":
@@ -754,7 +866,7 @@ class UncleTUI:
         stage = self.stage_target
         rows = []
         for field in self.stage_fields(stage):
-            rows.append("%s  %s" % (field.ljust(7), self._field_display(stage, field)))
+            rows.append("%s  %s" % ({"base_url": "Base URL", "api_key": "API key"}.get(field, field).ljust(8), self._field_display(stage, field)))
         return rows
 
     def _stage_field(self):
@@ -765,6 +877,14 @@ class UncleTUI:
 
     def _open_stage(self, stage):
         self.stage_target = stage
+        if stage == "@new":
+            self.picker_kind = "name"
+            self.picker_target = stage
+            self.input_buf = ""
+            self.state = "config_edit"
+            self.notice = "Enter the model name served by your endpoint."
+            self.stage_sel = 0
+            return
         self.stage_sel = 0
         self.notice = ""
         self.state = "stage"
@@ -774,11 +894,17 @@ class UncleTUI:
         if self.state == "stage":
             field = self._stage_field()
             desc = CONFIG_DESC.get("field:%s" % field, "")
+            if field == "model" and self.stage_runner(self.stage_target) == "self-hosted":
+                return "Choose one of your configured Aider self-hosted models. Manage names, Base URLs, and API keys in Configure → Configure Aider / self hosting."
             if field == "runner":
                 side = STAGE_SIDE.get(self.stage_target, AGENT)
                 desc += " This is a %s stage, so its choices are %s." % (
                     side, ", ".join(runners_for(side)))
             return desc
+        if getattr(self, "config_section", "") == "misc":
+            return "Auto mode runs unattended: human gates are recorded as waived; failing tests still stop the run. The approval name identifies your manual approvals."
+        if not getattr(self, "config_section", ""):
+            return "Choose a configuration section."
         return CONFIG_DESC.get(self._config_row(), "")
 
     # ---- generic picker (model / effort / runner) ----
@@ -797,6 +923,8 @@ class UncleTUI:
             # is not, and a typed value here would read as a setting while
             # meaning nothing to the flag it becomes.
             return [("option", v) for v in NETWORK_CHOICES]
+        if self.picker_kind == "model" and self.stage_runner(self.picker_target) == "self-hosted":
+            return [("option", name) for name in sorted(self.stage_api_keys.get("__aider_models__", {}))]
         rows = []
         for group, entries in model_catalog(self.stage_billing(self.picker_target)):
             rows.append(("header", group))
@@ -836,6 +964,13 @@ class UncleTUI:
         self.notice = ""
         self.picker_kind = kind
         self.picker_target = target
+        if kind in ("name", "base_url", "api_key", "approval_name"):
+            self.input_buf = self._field_value(target, kind)
+            self.state = "config_edit"
+            return
+        if kind == "model" and self.stage_runner(target) == "self-hosted" and not self.stage_api_keys.get("__aider_models__"):
+            self.notice = "Add a model in Configure → Configure Aider / self hosting first."
+            return
         self.pick_filter = ""
         cur = (self._picker_current() or "").lower()
         rows = self._picker_filtered()
@@ -896,12 +1031,13 @@ class UncleTUI:
         self.state = "stage"
 
     def cmd_for(self):
+        auto = ["--unattended"] if getattr(self, "misc", {}).get("auto_mode") == "true" else []
         if self.workflow_idx == 1:
             cmd = list(WORKFLOWS[1][1]) + [self.issue]
             if self.issue_mode:
                 cmd.append(self.issue_mode)
-            return cmd
-        return list(WORKFLOWS[self.workflow_idx][1])
+            return cmd + auto
+        return list(WORKFLOWS[self.workflow_idx][1]) + auto
 
     # ---- config ----
     #
@@ -922,11 +1058,14 @@ class UncleTUI:
 
     def load_config(self):
         exists = os.path.exists(CONFIG_PATH)
+        self.misc = {}
         self.stage_runners = {}
         self.stage_models = {}
         self.stage_efforts = {}
         self.stage_networks = {}
         self.stage_billings = {}
+        self.stage_base_urls = {}
+        self.stage_api_keys = read_keys(CONFIG_PATH)
         if not exists:
             # First time in this project root: no config file yet. Mark it so
             # the TUI can drop straight into the Configure screen.
@@ -945,11 +1084,13 @@ class UncleTUI:
                     if len(parts) != 2:
                         continue
                     key, val = parts[0].strip(), parts[1].strip()
-                    if key in legacy:
+                    if key in ("misc.auto_mode", "misc.approval_name"):
+                        self.misc[key.split(".", 1)[1]] = val
+                    elif key in legacy:
                         legacy[key] = val
                     elif "." in key:
                         stage, field = key.rsplit(".", 1)
-                        if stage in STAGE_SIDE and field in STAGE_FIELDS:
+                        if stage in STAGE_SIDE and field in STAGE_FIELDS and field != "api_key":
                             self._store_for(field)[stage] = val
                     elif key in STAGE_SIDE:
                         # Legacy bare "<stage> <model>".
@@ -957,6 +1098,21 @@ class UncleTUI:
         except Exception:
             pass
         self._seed_from_legacy(legacy)
+        # Preserve existing per-stage connections as reusable named models.
+        for stage in CONFIG_STAGES:
+            name = self.stage_models.get(stage, "")
+            if self.stage_runner(stage) != "self-hosted" or not name or not self.stage_base_urls.get(stage):
+                continue
+            profiles = self.stage_api_keys.setdefault("__aider_models__", {})
+            profile = dict(base_url=self.stage_base_urls[stage], api_key=self.stage_api_keys.get(stage, ""))
+            selected = name
+            if selected in profiles and profiles[selected] != profile:
+                selected = name + "-" + stage
+                profile['model'] = name
+            profiles.setdefault(selected, profile)
+            self.stage_models[stage] = selected
+            self.stage_base_urls.pop(stage, None)
+            self.stage_api_keys.pop(stage, None)
         self._config_stamp = self._stamp()
         return self.first_run
 
@@ -964,7 +1120,12 @@ class UncleTUI:
         """Cheap identity of the config file, to notice edits from outside."""
         try:
             st = os.stat(CONFIG_PATH)
-            return (st.st_mtime_ns, st.st_size)
+            try:
+                secret = key_file(CONFIG_PATH).stat()
+                secret_stamp = (secret.st_mtime_ns, secret.st_size)
+            except OSError:
+                secret_stamp = None
+            return (st.st_mtime_ns, st.st_size, secret_stamp)
         except OSError:
             return None
 
@@ -986,8 +1147,8 @@ class UncleTUI:
     def _clamp_selection(self):
         """Keep the cursors on rows that still exist after a reload."""
         self.config_sel = max(0, min(getattr(self, "config_sel", 0),
-                                     len(CONFIG_STAGES) - 1))
-        if getattr(self, "stage_target", "") not in STAGE_SIDE:
+                                     len(self._config_items()) - 1))
+        if getattr(self, "stage_target", "") not in STAGE_SIDE and not getattr(self, "stage_target", "").startswith("@"):
             self.stage_target = CONFIG_STAGES[0]
         fields = self.stage_fields(self.stage_target)
         self.stage_sel = max(0, min(getattr(self, "stage_sel", 0), len(fields) - 1))
@@ -997,7 +1158,8 @@ class UncleTUI:
                 "effort": self.stage_efforts,
                 "model": self.stage_models,
                 "network": self.stage_networks,
-                "billing": self.stage_billings}[field]
+                "billing": self.stage_billings,
+                 "base_url": self.stage_base_urls, "api_key": self.stage_api_keys}[field]
 
     def _seed_from_legacy(self, legacy):
         """Turn old global settings into per-stage ones, without overwriting."""
@@ -1015,17 +1177,19 @@ class UncleTUI:
     def save_config(self):
         header = (
             "# Uncle per-stage config: every stage picks its own runner,\n"
-            "# reasoning effort, and \u2014 for a cline stage \u2014 model.\n"
+            "# reasoning effort, and model where supported.\n"
             "# Format: <stage>.runner | <stage>.effort | <stage>.model |\n"
             "#         <stage>.network VALUE\n"
-            "#   (VALUE = a runner name, a reasoning effort, a cline model\n"
-            "#   id in modelType/model form, or true/false for network access\n"
-            "#   inside a codex stage's sandbox). Edit from `uncle` ->\n"
+            "#   (VALUE = runner, effort, model, or true/false for network).\n"
+            "# Aider connections and credentials are stored separately.\n"
+            "# Edit from `uncle` ->\n"
             "#   Configure, or by hand.\n"
         )
         try:
             with open(CONFIG_PATH, "w") as fh:
                 fh.write(header)
+                for key, value in getattr(self, "misc", {}).items():
+                    fh.write("misc.%s %s\n" % (key, value))
                 for stage in CONFIG_STAGES:
                     lines = []
                     runner = self.stage_runners.get(stage, "")
@@ -1035,7 +1199,7 @@ class UncleTUI:
                         lines.append("%s.effort %s\n" % (stage, self.stage_efforts[stage]))
                     # A model belongs to a cline stage only; keeping one on a
                     # claude/kimi/codex stage would be a value nothing reads.
-                    if self.stage_models.get(stage) and self.stage_runner(stage) == "cline":
+                    if self.stage_models.get(stage) and self.stage_runner(stage) in ("cline", "self-hosted"):
                         lines.append("%s.model %s\n" % (stage, self.stage_models[stage]))
                     # Likewise network, which only a codex stage sandboxes. It
                     # is written whenever it is set so that a hand-edited line
@@ -1046,12 +1210,15 @@ class UncleTUI:
                     # whenever set so a hand-edited line survives the rewrite.
                     if self.stage_billings.get(stage) and self.stage_runner(stage) == "cline":
                         lines.append("%s.billing %s\n" % (stage, self.stage_billings[stage]))
+                    if self.stage_base_urls.get(stage):
+                        lines.append("%s.base_url %s\n" % (stage, self.stage_base_urls[stage]))
                     if lines:
                         fh.write("\n")
                         for line in lines:
                             fh.write(line)
         except Exception:
             pass
+        save_keys(CONFIG_PATH, self.stage_api_keys)
         self._config_stamp = self._stamp()
 
     def stage_env(self):
@@ -1066,7 +1233,7 @@ class UncleTUI:
         Everything the screen changes is written to that file immediately, so
         the file and the screen never disagree.
         """
-        return {"UNCLE_CONFIG": CONFIG_PATH}
+        return dict({"UNCLE_CONFIG": CONFIG_PATH}, **({"UNCLE_APPROVAL_NAME": self.misc["approval_name"]} if getattr(self, "misc", {}).get("approval_name") else {}))
 
     # ---- status channel ----
     def poll_status(self):
@@ -1246,6 +1413,11 @@ class UncleTUI:
         # terminal, so over a pipe that read is invisible: nothing appears and
         # the run looks hung. Answer it here — the decision is the [Y/N] that
         # follows, and that one gets a modal.
+        if text.startswith("AUDIT REVIEW REQUIRED:"):
+            # Audit findings ask for a decision immediately, with no initial
+            # press-Enter gate. Never send a synthetic answer here.
+            self.gate_file = text.split(":", 1)[1].strip()
+            return
         if text.startswith("HUMAN REVIEW REQUIRED:"):
             self.gate_file = text.split(":", 1)[1].strip()
             self._send_raw("")
@@ -1753,12 +1925,14 @@ class UncleTUI:
         if self.state == "stage":
             if getattr(self, "notice", ""):
                 return self.notice
-            return "%s — Enter: change, d: default, q back" % self.stage_target
+            if self.stage_target.startswith("@"):
+                return "Aider self-hosted model %s — Enter: edit, q back" % self.stage_target[1:]
+            return "%s — Enter: change, a: use Aider for all stages, d: default, q back" % self.stage_target
         title = {
             "menu": "The man from uncle",
             "issue_mode": "Seed as",
             "issue": "Issue number or URL",
-            "config": "Configure — Enter opens a stage, q back",
+            "config": "Configure — Enter opens a section or setting, q back",
             "notice": "Enter to continue to Configure",
             "running": "q stops the run",
         }.get(self.state, "")
@@ -1774,6 +1948,10 @@ class UncleTUI:
                     self.stdscr.addnstr(i, 0, line, w - 1, self.color["title"])
                 except curses.error:
                     pass
+            try:
+                self.stdscr.addnstr(len(LOGO), (LOGO_W - len("uncle")) // 2, "uncle", 5, self.color["title"])
+            except curses.error:
+                pass
             return LOGO_W + 2
         return 0
 
@@ -1857,7 +2035,8 @@ class UncleTUI:
                     text.lower() == (self._picker_current() or "").lower()
                 marker = "  <current>" if cur else ""
                 label = MODEL_LABELS.get(text, "") if kind == "model" else ""
-                disp = prefix + text + ("  %s" % label if label else "") + marker
+                display_text = "Aider (Self hosted)" if self.picker_kind == "runner" and text == "self-hosted" else text
+                disp = prefix + display_text + ("  %s" % label if label else "") + marker
             try:
                 self.stdscr.addnstr(top + i, cx, disp, w - 1 - cx, attr)
             except curses.error:
@@ -1932,7 +2111,8 @@ class UncleTUI:
             self._draw_picker(h, w, cx, row)
         else:
             try:
-                self.stdscr.addnstr(row, cx, self.input_buf, w - 1 - cx)
+                shown_input = "*" * len(self.input_buf) if self.state == "config_edit" and self.picker_kind == "api_key" else self.input_buf
+                self.stdscr.addnstr(row, cx, shown_input, w - 1 - cx)
             except curses.error:
                 pass
             try:
@@ -2178,16 +2358,25 @@ class UncleTUI:
             return
 
         if self.state == "config":
-            nrows = len(CONFIG_STAGES)
+            nrows = len(self._config_items())
             if k == curses.KEY_UP or k in (ord("k"), ord("K")):
                 self.config_sel = (self.config_sel - 1) % nrows
             elif k == curses.KEY_DOWN or k in (ord("j"), ord("J")):
                 self.config_sel = (self.config_sel + 1) % nrows
             elif k in (10, 13):
-                self._open_stage(self._config_row())
+                section = getattr(self, "config_section", "")
+                if not section:
+                    self.config_section = ("stages", "aider", "misc")[self.config_sel]
+                    self.config_sel = self.config_scroll = 0
+                elif section == "misc":
+                    if self.config_sel == 0:
+                        self._set_field("!misc", "auto_mode", "false" if self.misc.get("auto_mode") == "true" else "true")
+                    else:
+                        self._open_picker("approval_name", "!misc")
+                else:
+                    self._open_stage(self._config_row())
             elif k in (ord("q"), ord("Q")):
-                self.state = "menu"
-                self.sel = 0
+                self._go_back()
             return
 
         if self.state == "stage":
@@ -2199,7 +2388,9 @@ class UncleTUI:
                 self.stage_sel = (self.stage_sel + 1) % nrows
             elif k in (10, 13):
                 self._open_picker(self._stage_field(), self.stage_target)
-            elif k in (ord("d"), ord("D")):
+            elif k in (ord("a"), ord("A")):
+                self._apply_aider_to_all_stages()
+            elif k in (ord("d"), ord("D")) and not self.stage_target.startswith("@"):
                 self._set_field(self.stage_target, self._stage_field(), "")
                 self.stage_sel = min(self.stage_sel,
                                      len(self.stage_fields(self.stage_target)) - 1)
@@ -2253,11 +2444,15 @@ class UncleTUI:
         elif self.state == "issue_mode":
             self.state = "issue"
         elif self.state == "config":
-            self.state = "menu"
+            if getattr(self, "config_section", ""):
+                self.config_section = ""
+                self.config_sel = self.config_scroll = 0
+            else:
+                self.state = "menu"
         elif self.state == "stage":
             self.state = "config"
         elif self.state == "config_edit":
-            self.state = "stage"
+            self.state = "config" if self.picker_target in ("@new", "!misc") else "stage"
         elif self.state == "picker":
             self.state = "stage"
         self.sel = 0
@@ -2293,13 +2488,18 @@ class UncleTUI:
             self.sel = 0
         elif self.state == "config_edit":
             val = self.input_buf.strip()
-            if self.picker_kind == "model" and not valid_model_id(val):
+            if self.picker_kind == "model" and self.stage_runner(self.picker_target) != "self-hosted" and not valid_model_id(val):
                 # Storing it would only surface as a failed stage later.
                 self.notice = "not a cline model id: %s (expected modelType/model)" % val
                 return
             self.notice = ""
             self._set_field(self.picker_target, self.picker_kind, val)
+            if self.notice:
+                return
             self.input_buf = ""
+            if self.picker_target == "!misc":
+                self.state = "config"
+                return
             self.stage_sel = min(self.stage_sel,
                                  len(self.stage_fields(self.picker_target)) - 1)
             self.state = "stage"

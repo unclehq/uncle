@@ -327,6 +327,138 @@ write_waivers() {
     return 0
 }
 
+# An attended gate decision the audit should see next to the waivers: a skip
+# is not a waiver a person justified id by id, and a decline is not a crash.
+# One dated line each, so the summary can say what the operator chose.
+record_gate_decision() {
+    local what="$1" detail="$2"
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+    printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$what" "$detail" \
+        >> "$STATE_DIR/gate-decisions" 2>/dev/null || true
+}
+
+# The blocker rows with their evidence, at the gate. The report already says
+# why each prerequisite is blocked and what would settle it; making the
+# operator open the file to learn that is how review gets skipped.
+preflight_blocked_review() {
+    local report="$1" id evidence
+    shift
+    for id in "$@"; do
+        echo
+        echo "$id [$(acceptance_row_status "$report" "$id")]"
+        evidence="$(acceptance_row_evidence "$report" "$id")"
+        [[ -z "$evidence" ]] || echo "  $evidence"
+    done
+    echo
+}
+
+# One question, four answers. Return codes, not stdout: the TUI dialog
+# protocol owns stdout, and a captured answer string would swallow the prompt.
+# A closed stdin is not a decision: the run stays pending rather than
+# recording a decline nobody chose.
+preflight_blocked_menu() {
+    local choice
+    while :; do
+        gate_prompt "Blocked prerequisites: [r]eview, [p]rovide, [s]kip, [d]ecline? "
+        if ! IFS= read -r choice; then
+            echo "No answer at the preflight gate; the run remains pending."
+            exit 1
+        fi
+        case "$choice" in
+            r|R) return 10 ;;
+            p|P) return 11 ;;
+            s|S) return 12 ;;
+            d|D|"") return 13 ;;
+            *) echo "  answer r, p, s, or d." ;;
+        esac
+    done
+}
+
+# review / provide / skip / decline for blocked prerequisites.
+#
+# A blocker used to offer two moves -- hand the input over through the provide
+# dialog, or sign a waiver for it -- and stopping was the failure case rather
+# than a choice. Reviewing first, skipping without a per-id signature, and
+# declining cleanly are all legitimate answers, so the gate asks and records
+# what was chosen. Skip writes one waiver per outstanding id with a reason
+# that says nobody assessed them; decline preserves the state and leaves with
+# the rerun instruction. Providing reuses the existing dialog and its
+# one-attempt-per-blocker-set guard, then returns to the menu for whatever is
+# still outstanding.
+preflight_blocked_gate() {
+    local report="$1" class="$2"
+    shift 2
+    local outstanding_ids="$*" menu_choice human_records collected blocked_id outstanding
+    while [[ -n "$outstanding_ids" ]]; do
+        echo
+        echo "Prerequisites $class: see $report."
+        echo "Outstanding:"
+        # shellcheck disable=SC2086
+        printf '  %s\n' $outstanding_ids
+        preflight_blocked_menu
+        menu_choice=$?
+        case "$menu_choice" in
+            10)
+                # shellcheck disable=SC2086
+                preflight_blocked_review "$report" $outstanding_ids
+                ;;
+            11)
+                # shellcheck disable=SC2086
+                if human_input_repeating "$STATE_DIR" $outstanding_ids; then
+                    echo "These are the same prerequisites as the last attempt, so what was"
+                    echo "provided did not resolve them. Providing again would only repeat;"
+                    echo "review the evidence, skip them, or decline and amend the plan."
+                else
+                    human_records="$(mktemp)" || human_records=""
+                    collected=1
+                    if [[ -n "$human_records" ]]; then
+                        collected=0
+                        # shellcheck disable=SC2086
+                        collect_human_inputs "$report" "$human_records" $outstanding_ids \
+                            || collected=$?
+                    fi
+                    if [[ "$collected" == 0 ]] && apply_human_inputs "$human_records"; then
+                        record_provided_inputs "$human_records" "$report"
+                    fi
+                    rm -f "$human_records"
+                fi
+                outstanding=""
+                while IFS= read -r blocked_id; do
+                    [[ -n "$blocked_id" ]] || continue
+                    [[ -s "$(provided_file "$blocked_id")" ]] \
+                        || outstanding="$outstanding $blocked_id"
+                done <<< "$outstanding_ids"
+                outstanding_ids="${outstanding# }"
+                if [[ -z "$outstanding_ids" ]]; then
+                    human_input_reset "$STATE_DIR"
+                    echo "Prerequisites settled at the gate; continuing."
+                fi
+                ;;
+            12)
+                # shellcheck disable=SC2086
+                if ! write_waivers "$report" \
+                    "Operator chose skip at the preflight gate: knowingly left unprovided and unassessed." \
+                    $outstanding_ids; then
+                    echo "Could not record the skip; the run remains pending."
+                    exit 1
+                fi
+                record_gate_decision skip "$class: $outstanding_ids"
+                human_input_reset "$STATE_DIR"
+                echo "Skipped $class at the gate; the report keeps the rows blocked."
+                return 0
+                ;;
+            13)
+                record_gate_decision decline "$class: $outstanding_ids"
+                echo
+                echo "Declined at the preflight gate; nothing was provided or signed."
+                echo "Amend the plan, or resolve the named action and rerun."
+                exit 0
+                ;;
+        esac
+    done
+    return 0
+}
+
 # What to print when the only thing missing is an action someone can take.
 # Implementation needs tools, inputs, and checks that can be performed. It
 # does not need a signature: nobody's approval is consumed by writing code, and
@@ -845,6 +977,7 @@ review_and_approve() {
     if [[ "${UNATTENDED:-0}" == 1 ]]; then
         before="$(hash_file "$file")"
         printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
+        printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > "$APPROVAL_DIR/${name}.approved-by"
         record_unattended_gate "$name" "$wording $file without human review"
         echo "Unattended: recorded $wording of $file with no human review."
         if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
@@ -914,6 +1047,7 @@ review_and_approve() {
     # what gets recorded. Re-hashing here would attest to bytes that could have
     # landed after the check.
     printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
+    printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > "$APPROVAL_DIR/${name}.approved-by"
     echo "Recorded approval for $file"
     if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
 }
@@ -1554,52 +1688,11 @@ while true; do
                         echo "Unattended: prerequisites waived, continuing without them."
                         human_input_reset "$STATE_DIR"
                     else
-                        human_records="$(mktemp)" || human_records=""
-                        collected=1
+                        # The operator's answer to a blocker is a choice, not
+                        # a signature: review the evidence, provide the input,
+                        # skip with one recorded decision, or decline cleanly.
                         # shellcheck disable=SC2086
-                        if [[ -n "$blocked_ids" ]] && human_input_repeating "$STATE_DIR" $blocked_ids; then
-                            echo
-                            echo "These are the same prerequisites as the last attempt, so what was"
-                            echo "provided did not resolve them. Asking again would only repeat."
-                            echo "Check where each one is expected -- the evidence above names the"
-                            echo "path -- and provide it there, or amend the plan if it is not"
-                            echo "really needed before implementation."
-                            rm -f "$human_records"
-                            exit 1
-                        fi
-                        if [[ -n "$human_records" && -n "$blocked_ids" ]]; then
-                            collected=0
-                            # shellcheck disable=SC2086
-                            collect_human_inputs PREFLIGHT_REPORT.md "$human_records" $blocked_ids \
-                                || collected=$?
-                        fi
-                        if [[ "$collected" == 0 ]] && apply_human_inputs "$human_records"; then
-                            record_provided_inputs "$human_records" PREFLIGHT_REPORT.md
-                        fi
-                        rm -f "$human_records"
-                        # Whatever the operator did not hand over is still
-                        # outstanding, and there are only two honest endings
-                        # for it: a waiver that records why it was not
-                        # provided, or a stop. Re-running the stage is neither
-                        # -- it re-reads the same disk and reports the same
-                        # blockers, having spent a full agent run to do it.
-                        outstanding=""
-                        while IFS= read -r blocked_id; do
-                            [[ -n "$blocked_id" ]] || continue
-                            [[ -s "$(provided_file "$blocked_id")" ]] \
-                                || outstanding="$outstanding $blocked_id"
-                        done <<< "$blocked_ids"
-                        if [[ -n "$outstanding" ]]; then
-                            echo
-                            echo "Still outstanding:$outstanding"
-                            # shellcheck disable=SC2086
-                            if ! record_waiver PREFLIGHT_REPORT.md $outstanding; then
-                                echo "Not provided and not waived; stopping before implementation."
-                                exit 1
-                            fi
-                        fi
-                        human_input_reset "$STATE_DIR"
-                        echo "Prerequisites settled at the gate; continuing to implementation."
+                        preflight_blocked_gate PREFLIGHT_REPORT.md BLOCKED-SETUP $blocked_ids
                     fi
                     ;;
                 *)
@@ -1609,6 +1702,18 @@ while true; do
                         # the verdict alone leaves an operator guessing which of
                         # a dozen rules the report missed.
                         acceptance_problem PREFLIGHT_REPORT.md | sed 's/^/  /'
+                        echo "Resolve and rerun."
+                        exit 1
+                    fi
+                    if [[ "$preflight_result" == BLOCKED-IMPOSSIBLE && "${UNATTENDED:-0}" != 1 ]]; then
+                        impossible_ids="$(acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-IMPOSSIBLE)"
+                        if [[ -n "$impossible_ids" ]]; then
+                            # Effort will not clear these, but the answer is
+                            # still a choice: review, provide out-of-band,
+                            # skip on the record, or decline and amend.
+                            # shellcheck disable=SC2086
+                            preflight_blocked_gate PREFLIGHT_REPORT.md BLOCKED-IMPOSSIBLE $impossible_ids
+                        fi
                     fi
                     echo "Resolve and rerun."
                     exit 1

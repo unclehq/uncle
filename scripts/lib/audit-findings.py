@@ -93,7 +93,7 @@ def review(report, state_dir, check_only=False):
             raise ValueError('Invalid saved audit decisions')
     if check_only:
         return 0 if all(accepted(record, item['id']) for item in blockers) else 1
-    print('HUMAN REVIEW REQUIRED: ' + str(report), flush=True)
+    print('AUDIT REVIEW REQUIRED: ' + str(report), flush=True)
     for index, item in enumerate(blockers, 1):
         identifier = item['id']
         previous = record['decisions'].get(identifier, {})
@@ -113,7 +113,7 @@ def review(report, state_dir, check_only=False):
             except EOFError:
                 print('\nNo decision received; audit remains pending.', flush=True)
                 return 1
-            if answer in ('s', 'r', 'y', 'n', ''):
+            if answer in ('s', 'r', 'y', 'n'):
                 break
             print('Choose S to skip, R to confirm human review, or N to keep blocking.', flush=True)
         if report.read_bytes() != original:
@@ -121,6 +121,7 @@ def review(report, state_dir, check_only=False):
         record['decisions'][identifier] = {
             'decision': {'s': 'skip', 'r': 'human-reviewed', 'y': 'ignore'}.get(answer, 'keep'),
             'recorded_at': datetime.now(timezone.utc).isoformat(),
+            'approved_by': os.environ.get('UNCLE_APPROVAL_NAME', ''),
             'finding': item,
         }
         record['effective_verdict'] = 'NOT_READY'

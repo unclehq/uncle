@@ -110,8 +110,8 @@ CONFIG_STAGE_SIDE_reviewer=" adversarial-review test-review manual-checklist fin
 DEFAULT_RUNNER="cline"
 DEFAULT_EFFORT="medium"
 DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
-AGENT_RUNNERS="cline claude kimi codex"
-REVIEWER_RUNNERS="cline codex claude kimi"
+AGENT_RUNNERS="cline claude kimi codex self-hosted"
+REVIEWER_RUNNERS="cline codex claude kimi self-hosted"
 
 stage_side() {
     case "$CONFIG_STAGE_SIDE_reviewer" in
@@ -217,6 +217,7 @@ print_logo() {
     while IFS= read -r line; do
         printf '%s%s%s%s\n' "$pad" "$C_CYAN" "$line" "$C_RESET"
     done < <(logo_lines)
+    printf '%s%*s%suncle%s\n' "$pad" "$(( (maxw - 5) / 2 ))" '' "$C_CYAN" "$C_RESET"
 }
 
 print_menu() {
@@ -342,7 +343,13 @@ run_workflow() {
     # UNCLE_CLINE_MODEL / UNCLE_CLINE_EFFORT are deliberately not exported:
     # they are global overrides inside the cline shims and would win over the
     # per-stage settings the drivers resolve from .uncle/config.
-    launch "$@"
+    local approval_name
+    approval_name="$(config_get misc.approval_name)"
+    if [[ "$(config_get misc.auto_mode)" == true ]]; then
+        UNCLE_APPROVAL_NAME="$approval_name" launch "$@" --unattended
+    else
+        UNCLE_APPROVAL_NAME="$approval_name" launch "$@"
+    fi
 }
 
 config_write_header() {
@@ -398,14 +405,17 @@ config_clear() {
 # when the runner is cline — its model. This is the fallback for a terminal the
 # full-screen TUI cannot drive; both write the same file.
 configure_stage() {
-    local stage="$1" side sel runner
+    local stage="$1" side sel runner model
     side="$(stage_side "$stage")"
     while true; do
         echo
         printf '%s%s%s  (%s stage)\n' "$C_CYAN$C_BOLD" "$stage" "$C_RESET" "$side"
         printf '  runner  %s\n' "$(config_get "$stage.runner")${C_DIM}${C_RESET}"
         printf '  effort  %s\n' "$(uncle_stage_effort "$stage")"
-        if [[ "$(config_get "$stage.runner")" == "cline" || -z "$(config_get "$stage.runner")" ]]; then
+        if [[ "$(config_get "$stage.runner")" == "self-hosted" ]]; then
+            printf '  model     %s\n' "$(config_get "$stage.model")"
+            printf 'Set [r]unner [m]odel, [a]pply Aider to all stages, [d]efaults, [q]back: '
+        elif [[ "$(config_get "$stage.runner")" == "cline" || -z "$(config_get "$stage.runner")" ]]; then
             printf '  model   %s\n' "$(config_get "$stage.model")"
             printf '%s' "Set [${C_CYAN}r${C_RESET}]unner [${C_CYAN}e${C_RESET}]ffort [${C_CYAN}m${C_RESET}]odel, [${C_CYAN}d${C_RESET}]efaults, [${C_CYAN}q${C_RESET}]back: "
         else
@@ -418,23 +428,61 @@ configure_stage() {
             r)
                 local choices="$AGENT_RUNNERS"
                 [[ "$side" == "reviewer" ]] && choices="$REVIEWER_RUNNERS"
-                printf 'Runner (%s): ' "$choices"
+                printf 'Runner (%s; aider = Self hosted): ' "$choices"
                 if ! read -r runner; then echo; return 0; fi
                 runner="$(printf '%s' "$runner" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+                [[ "$runner" != "selfhosted" && "$runner" != "aider" ]] || runner=self-hosted
                 case " $choices " in
                     *" $runner "*)
                         config_set "$stage.runner" "$runner"
-                        # A model only means something to cline.
-                        [[ "$runner" != "cline" ]] && config_clear "$stage.model"
+                        # Cline and self-hosted stages use an explicit model.
+                        [[ "$runner" == "cline" || "$runner" == "self-hosted" ]] || config_clear "$stage.model"
                         ;;
                     *) printf '%sNot a %s runner: %s%s\n' "$C_YELLOW" "$side" "$runner" "$C_RESET" ;;
                 esac
+                ;;
+            a)
+                if [[ "$(config_get "$stage.runner")" != "self-hosted" ]]; then
+                    echo 'Select Self hosted and configure its connection first.'
+                    continue
+                fi
+                local target field value
+                for target in $CONFIG_STAGES; do
+                    config_set "$target.runner" self-hosted
+                    for field in model base_url; do
+                        value="$(config_get "$stage.$field")"
+                        if [[ -n "$value" ]]; then
+                            config_set "$target.$field" "$value"
+                        else
+                            config_clear "$target.$field"
+                        fi
+                    done
+                done
+                python3 - "$ROOT/scripts/lib" "$UNCLE_CONFIG" "$stage" $CONFIG_STAGES <<'PYKEYS'
+import sys
+sys.path.insert(0, sys.argv[1])
+from self_hosted import read_keys, save_keys
+keys = read_keys(sys.argv[2])
+value = keys.get(sys.argv[3], '')
+for stage in sys.argv[4:]:
+    if value:
+        keys[stage] = value
+    else:
+        keys.pop(stage, None)
+save_keys(sys.argv[2], keys)
+PYKEYS
+                echo 'Aider and this LLM connection selected for all stages.'
                 ;;
             e)
                 choose_effort
                 config_set "$stage.effort" "$CL_EFFORT"
                 ;;
             m)
+                if [[ "$(config_get "$stage.runner")" == "self-hosted" ]]; then
+                    if ! model="$(python3 "$ROOT/scripts/lib/self_hosted.py" choose-model "$UNCLE_CONFIG")"; then continue; fi
+                    config_set "$stage.model" "$model"
+                    continue
+                fi
                 choose_model
                 if [[ -n "$CL_MODEL" ]]; then
                     config_set "$stage.model" "$CL_MODEL"
@@ -446,6 +494,8 @@ configure_stage() {
                 config_clear "$stage.runner"
                 config_clear "$stage.effort"
                 config_clear "$stage.model"
+                config_clear "$stage.base_url"
+                printf '' | python3 "$ROOT/scripts/lib/self_hosted.py" set-key "$UNCLE_CONFIG" "$stage"
                 ;;
             q|"") return 0 ;;
             *) printf 'Unrecognized choice: %s\n' "$sel" ;;
@@ -454,6 +504,27 @@ configure_stage() {
 }
 
 configure_menu() {
+    local choice value
+    while true; do
+        printf '\nConfigure\n  1) Configure stages\n  2) Configure Aider / self hosting\n  3) Miscellaneous\n  q) Back\nChoice: '
+        read -r choice || return 0
+        case "$choice" in
+            1) configure_stages_menu ;;
+            2) python3 "$ROOT/scripts/lib/self_hosted.py" models "$UNCLE_CONFIG" || true ;;
+            3)
+                printf 'Auto mode (true/false) [%s]: ' "$(config_get misc.auto_mode)"
+                read -r value || return 0
+                case "$value" in true|false) config_set misc.auto_mode "$value" ;; esac
+                printf 'Name for approvals [%s]: ' "$(config_get misc.approval_name)"
+                read -r value || return 0
+                [[ -z "$value" ]] || config_set misc.approval_name "$value"
+                ;;
+            q|Q|"") return 0 ;;
+        esac
+    done
+}
+
+configure_stages_menu() {
     local sel stage n idx runner effort model
     while true; do
         echo
@@ -481,6 +552,7 @@ configure_menu() {
         sel="$(printf '%s' "$sel" | tr -d '[:space:]')"
         case "$sel" in
             q|Q|"") return 0 ;;
+            m|M) python3 "$ROOT/scripts/lib/self_hosted.py" models "$UNCLE_CONFIG" || true; continue ;;
         esac
         if [[ "$sel" =~ ^[0-9]+$ ]] && (( sel >= 1 && sel <= n )); then
             idx=0

@@ -56,6 +56,7 @@ def check(name, expected, actual):
 
 t = m.UncleTUI.__new__(m.UncleTUI)          # the screen's state, without curses
 t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
+t.stage_base_urls, t.stage_api_keys = {}, {}
 t.stage_networks, t.stage_billings = {}, {}
 t._config_stamp, t._reload_tick, t.first_run = None, 0, False
 
@@ -181,6 +182,7 @@ t.stage_billings.clear()
 # Which stage can open a socket is worth seeing without opening a popup, and
 # only where it means something: a value left on a cline stage is not a socket.
 t.stage_networks["project-plan"] = "true"
+t.config_section = "stages"
 rows = {r.split()[0]: r for r in t._config_items()}
 check("a codex stage with network on says so", True,
       "network" in rows["execute-checklist"])
@@ -189,8 +191,8 @@ check("a cline stage does not claim a network", False,
 t.stage_networks.clear()
 
 # Runner choices are side-appropriate: codex has no agent shim.
-check("agent runners", ["cline", "claude", "kimi", "codex"], m.runners_for(m.AGENT))
-check("reviewer runners", ["cline", "codex", "claude", "kimi"], m.runners_for(m.REVIEWER))
+check("agent runners", ["cline", "claude", "kimi", "codex", "self-hosted"], m.runners_for(m.AGENT))
+check("reviewer runners", ["cline", "codex", "claude", "kimi", "self-hosted"], m.runners_for(m.REVIEWER))
 check("kimi reviewer resolves to its own shim", True,
       m.runner_command("kimi", m.REVIEWER).endswith("reviewer-kimi.sh"))
 check("an agent stage runs an agent shim", True,
@@ -244,6 +246,7 @@ def check(name, expected, actual):
 def fresh():
     t = m.UncleTUI.__new__(m.UncleTUI)
     t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
+    t.stage_base_urls, t.stage_api_keys = {}, {}
     t.stage_networks, t.stage_billings = {}, {}
     t._config_stamp, t._reload_tick, t.first_run = None, 0, False
     return t
@@ -371,6 +374,7 @@ spec.loader.exec_module(m)
 
 t = m.UncleTUI.__new__(m.UncleTUI)
 t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
+t.stage_base_urls, t.stage_api_keys = {}, {}
 t.stage_networks, t.stage_billings = {}, {}
 t._config_stamp, t._reload_tick, t.first_run = None, 0, False
 t._set_field("requirements", "runner", "kimi")
@@ -395,6 +399,7 @@ m = importlib.util.module_from_spec(spec); sys.modules["tui"] = m
 spec.loader.exec_module(m)
 t = m.UncleTUI.__new__(m.UncleTUI)
 t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
+t.stage_base_urls, t.stage_api_keys = {}, {}
 t.stage_networks, t.stage_billings = {}, {}
 t._config_stamp, t._reload_tick, t.first_run = None, 0, False
 t.load_config()

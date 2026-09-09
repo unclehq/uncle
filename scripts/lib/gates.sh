@@ -415,7 +415,7 @@ finish_review_budget() {
         started="$SECONDS"
         status=0
         log="$LOG_DIR/${stage}.compact-$attempt.log"
-        python3 "$ROOT/scripts/lib/compact-review.py" --output "$file" --log "$log" \
+        UNCLE_STATUS_STAGE="$stage" python3 "$ROOT/scripts/lib/compact-review.py" --output "$file" --log "$log" \
             --max-bytes "$bytes" --max-lines "$lines" \
             --seconds "${WORKFLOW_REVIEW_COMPACT_SECONDS:-120}" \
             -- "$cmd" "${flags[@]}" || status=$?

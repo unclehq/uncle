@@ -223,4 +223,93 @@ case "$(waive_file EXAMPLE)" in
     *) fail "waivers are written somewhere the prompt does not name: $(waive_file EXAMPLE)" ;;
 esac
 
-echo 'blocked-classes-test.sh: repair, setup pause, human continue, and waiver record/honor/scope passed'
+# --- the preflight blocker gate: review / provide / skip / decline ---------
+# A blocker used to mean "provide it or sign a waiver", and stopping was the
+# failure case. The gate now asks, and each answer is a recorded choice.
+eval "$(awk '/^record_gate_decision\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+eval "$(awk '/^preflight_blocked_review\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+eval "$(awk '/^preflight_blocked_menu\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+eval "$(awk '/^preflight_blocked_gate\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+eval "$(awk '/^record_provided_inputs\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+. "$ROOT/scripts/lib/human-input.sh"
+. "$ROOT/scripts/lib/sha256.sh"
+
+gate_work="$(mktemp -d)"
+trap 'rm -rf "$gate_work"' EXIT
+cd "$gate_work"
+STATE_DIR="$gate_work/.uncle/workflow"
+mkdir -p "$STATE_DIR"
+cat > PREFLIGHT_REPORT.md <<'MD'
+## Acceptance gate
+
+| ID | Required | Status | Evidence |
+|---|---|---|---|
+| P-1 | YES | PASS | python3 found |
+| P-2 | YES | BLOCKED-SETUP | tests/fixtures/oracle.json absent |
+MD
+
+run_gate() {
+    : > out.txt
+    local rc=0
+    ( preflight_blocked_gate "$@" > out.txt 2>&1 ) || rc=$?
+    OUT="$(cat out.txt)"
+    return "$rc"
+}
+
+# Review shows the evidence and asks again; decline stops cleanly, recorded.
+run_gate PREFLIGHT_REPORT.md BLOCKED-SETUP P-2 <<< $'r\nd' \
+    || fail "decline must exit cleanly"
+grep -q "oracle.json absent" <<< "$OUT" || fail "review must show the blocker evidence"
+grep -q "Declined at the preflight gate" <<< "$OUT" || fail "decline must say what happened"
+grep -q "decline" "$STATE_DIR/gate-decisions" || fail "a decline must be recorded"
+[ ! -e "$STATE_DIR/waivers/P-2" ] || fail "declining must not record a waiver"
+[ ! -e "$STATE_DIR/provided/P-2" ] || fail "declining must not mark anything provided"
+
+# An invalid answer re-asks rather than guessing.
+run_gate PREFLIGHT_REPORT.md BLOCKED-SETUP P-2 <<< $'x\nd' \
+    || fail "decline after an invalid answer must exit cleanly"
+grep -q "answer r, p, s, or d" <<< "$OUT" || fail "an invalid answer must re-ask"
+
+# A closed stdin is pending, not a decline nobody chose.
+run_gate PREFLIGHT_REPORT.md BLOCKED-SETUP P-2 < /dev/null \
+    && fail "no answer must not pass for a decision"
+grep -q "remains pending" <<< "$OUT" || fail "a closed stdin must leave the run pending"
+
+# Skip records one decision covering the outstanding ids -- no per-id popup.
+run_gate PREFLIGHT_REPORT.md BLOCKED-SETUP P-2 <<< 's' \
+    || fail "skip must let the run continue"
+grep -q "Skipped BLOCKED-SETUP" <<< "$OUT" || fail "skip must say what happened"
+grep -q "Operator chose skip" "$STATE_DIR/waivers/P-2" || fail "skip must record an honest waiver"
+grep -q "skip" "$STATE_DIR/gate-decisions" || fail "a skip must be recorded"
+# It settles the blocker for this run without marking it provided, and the
+# report row stays blocked: a skip is not a pass.
+preflight_settled BLOCKED-SETUP || fail "a skipped blocker must count as settled"
+[ ! -e "$STATE_DIR/provided/P-2" ] || fail "a skip is not a provided prerequisite"
+[ "$(acceptance_result PREFLIGHT_REPORT.md)" = "BLOCKED-SETUP" ] \
+    || fail "a skip must not turn the report row into a pass"
+
+# The same choices cover an impossible prerequisite.
+run_gate PREFLIGHT_REPORT.md BLOCKED-IMPOSSIBLE P-2 <<< 's' \
+    || fail "skip must cover an impossible prerequisite"
+grep -q "Skipped BLOCKED-IMPOSSIBLE" <<< "$OUT" || fail "skip must name the class"
+
+# Provide settles what lands; the statement goes where the blocker named it.
+rm -rf "$STATE_DIR/waivers" "$STATE_DIR/gate-decisions" "$STATE_DIR/human-input-attempted"
+run_gate PREFLIGHT_REPORT.md BLOCKED-SETUP P-2 <<< $'p\ns\n\ny\napproved by Brian at the gate\n' \
+    || fail "providing must settle the blocker"
+grep -q "Prerequisites settled at the gate" <<< "$OUT" || fail "it must say the gate settled"
+[ -s tests/fixtures/oracle.json ] || fail "the statement must land where the blocker named"
+grep -q "^id: P-2" "$STATE_DIR/provided/P-2" || fail "the provided record must name the id"
+preflight_settled "$(acceptance_result PREFLIGHT_REPORT.md)" \
+    || fail "a provided blocker must count as settled"
+
+# The provide guard: one dialog attempt per blocker set, then the menu says so.
+rm -rf "$STATE_DIR/provided" "$STATE_DIR/gate-decisions" "$STATE_DIR/human-input-attempted" tests
+run_gate PREFLIGHT_REPORT.md BLOCKED-SETUP P-2 <<< $'p\n\np\nd\n' \
+    || fail "decline after the guard must still exit cleanly"
+grep -q "did not resolve them" <<< "$OUT" || fail "a second identical provide must hit the guard"
+grep -q "Declined at the preflight gate" <<< "$OUT" || fail "decline must remain available"
+
+cd "$ROOT"
+
+echo 'blocked-classes-test.sh: repair, setup pause, human continue, waiver record/honor/scope, and preflight gate review/provide/skip/decline passed'

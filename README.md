@@ -496,3 +496,39 @@ SHA-256. The original `FINAL_AUDIT.md` remains unchanged; `audit-verdict` record
 the effective build verdict. A revised audit requires new decisions. Missing
 input, including in unattended mode, never counts as acceptance. A malformed audit
 cannot become `READY` through this mechanism.
+
+### Self hosted models with Aider
+
+In **Configure → Configure Aider / self hosting**, add a model with its **name**, **Base URL**,
+and **API key**. The name is the model ID served by the endpoint. Then open any
+stage, select **Aider (Self hosted)**, and choose from your saved Aider self-hosted models.
+The stage picker shows only these models; connection settings are edited centrally. Install Aider separately (tested with
+Aider 0.86.2). Uncle invokes Aider with your OpenAI-compatible endpoint; it does
+not use Cline or require an OpenAI account. For example, use model `qwen-coder`
+and Base URL `http://localhost:8000/v1`. Uncle adds Aider's `openai/` routing
+prefix unless it is already present. The main, weak, and editor models all use
+that same endpoint and model. For servers without authentication, enter a
+placeholder API key such as `local`.
+
+Agent stages use Aider's whole-file editing mode; reviewers use ask mode with
+dry-run and shell suggestions disabled. Automatic Git commits are disabled.
+Each stage is a single Aider message with its own temporary config and histories;
+the final assistant response, rather than console banners, becomes the workflow
+result. Aider controls its internal edit/reflection loop. Uncle enforces a
+15-minute process limit, configurable through `WORKFLOW_SELF_HOSTED_SECONDS`.
+Token counts and costs are left unknown rather than estimated from console text.
+`WORKFLOW_AIDER_CMD` can select a different Aider executable.
+
+Named model connections and their masked API keys are saved separately in
+`.uncle/self-hosted-keys.json`, with owner-only permissions on POSIX and a local
+Git ignore entry. It is not encrypted. Stage runner and model selections remain in `.uncle/config`. Existing per-stage
+connections are migrated into named models when saved from the configuration UI.
+For CI, `UNCLE_SELF_HOSTED_BASE_URL`, `UNCLE_SELF_HOSTED_MODEL`, and
+`UNCLE_SELF_HOSTED_API_KEY` override the saved settings. The API key is passed
+through the child environment, never command-line arguments. Settings are read
+again when each stage starts. Existing Aider YAML and dotenv configuration are
+not loaded for these workflow invocations.
+
+To use Aider for **every workflow stage**, select an Aider model for one stage, then press **a** in that stage’s configuration. This applies the same named model to all authoring and review stages, including implementation steps, checklist execution, and final audit. Later changes can still be made per stage.
+
+Configure has three sections: **Configure stages**, **Configure Aider / self hosting**, and **Miscellaneous**. Miscellaneous saves auto mode (off by default) and your name for approvals. Auto mode uses `--unattended`: human gates are recorded as waived, while failing verification checks still stop the run. Manual approval records include the configured name; unattended records are not attributed as human approvals. The lowercase `uncle` label is centered beneath the logo.

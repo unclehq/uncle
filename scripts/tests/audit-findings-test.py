@@ -62,10 +62,16 @@ class FindingsTests(unittest.TestCase):
         self.assertEqual(self.record()['decisions']['FA-1']['decision'], 'ignore')
         self.assertNotIn('FA-2', self.record()['decisions'])
 
-    def test_empty_is_keep_invalid_reprompts(self):
-        result = self.run_review('perhaps\n\ny\n')
+    def test_blank_and_invalid_answers_require_explicit_choice(self):
+        result = self.run_review('perhaps\n\ns\nr\n')
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self.record()['decisions']['FA-1']['decision'], 'skip')
+        self.assertEqual(result.stdout.count('Choose S to skip'), 2)
+
+    def test_blank_then_eof_does_not_record_keep(self):
+        result = self.run_review('\n')
         self.assertEqual(result.returncode, 1)
-        self.assertEqual(self.record()['decisions']['FA-1']['decision'], 'keep')
+        self.assertFalse((self.state / 'audit-dispositions').exists())
 
     def test_changed_audit_invalidates_ignores(self):
         self.run_review('y\ny\n')
@@ -107,6 +113,13 @@ class FindingsTests(unittest.TestCase):
         from uncle_tui import UncleTUI
         ui = UncleTUI.__new__(UncleTUI)
         ui.state = 'running'
+        raw_answers = []
+        ui._send_raw = raw_answers.append
+        ui._read_banner('AUDIT REVIEW REQUIRED: FINAL_AUDIT.md')
+        self.assertEqual(raw_answers, [])
+        self.assertEqual(ui.gate_file, 'FINAL_AUDIT.md')
+        ui._read_banner('HUMAN REVIEW REQUIRED: REQUIREMENTS.md')
+        self.assertEqual(raw_answers, [''])
         ui.prompt_kind = ''
         ui.partial = 'Audit finding FA-1. Choose [s] Skip, [r] Human reviewed — OK, [n] Keep blocking: '
         ui.prompt_seen = 2

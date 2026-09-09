@@ -87,6 +87,7 @@ approve_file() {
     fi
 
     printf '%s\n' "$captured" > ".uncle/workflow/approvals/${approval_name}.sha256"
+    printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > ".uncle/workflow/approvals/${approval_name}.approved-by"
     echo "Approved $file"
 }
 

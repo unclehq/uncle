@@ -68,6 +68,7 @@ uncle_runner_cmd() {
     local runner="$1" side="$2" root="${ROOT:-.}"
     if [[ "$side" == "reviewer" ]]; then
         case "$runner" in
+        aider|self-hosted) printf '%s' "$root/scripts/$side-self-hosted.sh" ;;
             kimi)   printf '%s' "$root/scripts/reviewer-kimi.sh" ;;
             codex)  printf 'codex' ;;
             claude) printf '%s' "$root/scripts/reviewer-claude.sh" ;;
@@ -76,6 +77,7 @@ uncle_runner_cmd() {
         return 0
     fi
     case "$runner" in
+        aider|self-hosted) printf '%s' "$root/scripts/$side-self-hosted.sh" ;;
         claude) printf 'claude' ;;
         kimi)   printf '%s' "$root/scripts/agent-kimi.sh" ;;
         codex)  printf '%s' "$root/scripts/agent-codex.sh" ;;
@@ -87,6 +89,7 @@ uncle_stage_runner() {
     local stage="$1" v
     v="$(uncle_config_get "$stage.runner")"
     [[ -n "$v" ]] || v="$(uncle_config_get runner)"
+    [[ "$v" != "aider" ]] || v=self-hosted
     printf '%s' "${v:-$UNCLE_DEFAULT_RUNNER}"
 }
 
@@ -98,10 +101,17 @@ uncle_stage_effort() {
     printf '%s' "${v:-$UNCLE_DEFAULT_EFFORT}"
 }
 
-# Only cline is passed a model: claude, kimi, and codex have their own default,
+# Cline and self-hosted stages use explicit models; other runners have their own default,
 # and a model uncle picked for them would be wrong more often than right.
 uncle_stage_model() {
     local stage="$1" v
+    case "$stage" in implementation-step-*) stage=implementation ;; esac
+    if [[ "$(uncle_stage_runner "$stage")" == "self-hosted" ]]; then
+        v="${UNCLE_SELF_HOSTED_MODEL:-$(uncle_config_get "$stage.model")}"
+        [[ -n "$v" ]] || v="$(uncle_config_get self-hosted.model)"
+        printf '%s' "$v"
+        return 0
+    fi
     [[ "$(uncle_stage_runner "$stage")" == "cline" ]] || return 0
     v="$(uncle_config_get "$stage.model")"
     [[ -n "$v" ]] || v="$(uncle_config_get "$stage")"

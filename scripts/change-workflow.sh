@@ -611,6 +611,7 @@ human_gate() {
         act="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
         for j in "${!files[@]}"; do
             printf '%s\n' "$(hash_file "${files[$j]}")" > "$APPROVAL_DIR/${names[$j]}.sha256"
+            printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > "$APPROVAL_DIR/${names[$j]}.approved-by"
             record_unattended_gate "${names[$j]}" "$act ${files[$j]} without human review"
         done
         echo "Unattended: recorded $act of ${files[*]} with no human review."
@@ -692,6 +693,7 @@ human_gate() {
 
     for i in "${!files[@]}"; do
         printf '%s\n' "${digests[$i]}" > "$APPROVAL_DIR/${names[$i]}.sha256"
+        printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > "$APPROVAL_DIR/${names[$i]}.approved-by"
         echo "Recorded approval for ${files[$i]}"
     done
     if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi

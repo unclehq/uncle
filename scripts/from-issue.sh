@@ -126,7 +126,12 @@ confirm_and_run_workflow() {
     # it is blocking on (CHANGE_SPEC §8).
     response=""
     printf '%s' "Type $CONFIRM_WORD exactly to start the change workflow: "
-    read -r response || true
+    if [[ " ${ISSUE_WORKFLOW_ARGS[*]-} " == *" --unattended "* ]]; then
+        response="$CONFIRM_WORD"
+        echo "Unattended: starting without human review."
+    else
+        read -r response || true
+    fi
     echo
 
     if [[ "$response" != "$CONFIRM_WORD" ]]; then
@@ -141,7 +146,7 @@ confirm_and_run_workflow() {
     STAGEGATE_RUN_ID="$run_id" \
     STAGEGATE_ORIGIN_REPO="$OWNER/$REPO" \
     STAGEGATE_ORIGIN_ISSUE="$ISSUE_NUM" \
-        "$ROOT/scripts/change-workflow.sh" || status=$?
+        "$ROOT/scripts/change-workflow.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"} || status=$?
 
     if [[ "$status" -ne 0 ]]; then
         echo
@@ -226,12 +231,14 @@ fi
 
 ISSUE_ARG="$1"
 MODE=""
+ISSUE_WORKFLOW_ARGS=()
 shift || true
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --change) MODE="change" ;;
         --new) MODE="new" ;;
+        --unattended) ISSUE_WORKFLOW_ARGS+=(--unattended) ;;
         *) echo "Unknown option: $1"; usage; exit 1 ;;
     esac
     shift

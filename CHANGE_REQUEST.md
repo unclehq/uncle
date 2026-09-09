@@ -6,118 +6,141 @@ Feature
 
 ## Summary
 
-Extend token-price cost estimation beyond Kimi models so stages running on
-`x-ai/grok-4.5` — and future non-Kimi models — get labeled cost estimates
-instead of "Unavailable".
+When preflight reports a blocker, the gate should offer the operator three
+explicit choices — review the blockers, skip them, or decline the run —
+instead of funneling them into supplying the input or signing a waiver.
 
 ## Motivation
 
-After the kimi-k3 change, a typical run shows estimates on the Kimi stages and
-"Unavailable" on the rest. In practice that is half the pipeline: the
-resume_viewer config (`.uncle/config`) runs adversarial-review,
-updated-change-plan, implementation, and manual-checklist on `x-ai/grok-4.5`
-via the cline driver — including implementation, the longest and most
-expensive stage. A cost panel that is blind to exactly the stages that cost
-the most still is not a cost picture.
+The preflight gate exists to make blockers cheap, but the moment one fires,
+the operator's only real moves are to hand over the missing prerequisite on
+the spot or to sign a waiver for it. Neither fits every case: sometimes the
+right response is to read the evidence first, sometimes the blocker genuinely
+does not matter for this run, and sometimes the right answer is to stop and
+amend the plan. Today those last two are only reachable through a per-id
+waiver justification ritual or an implicit failure exit, so operators sign
+waivers they do not mean just to get past the gate — which teaches the
+workflow that "waived" means "rubber-stamped".
 
 ## Observed Current Behavior
 
-- `RATES`/`SOURCES` in `scripts/lib/usage-cost.py` cover only
-  `moonshot-ai/*` models, sourced from the official Kimi pricing pages.
-  `enrich()` returns `cost_status: "unknown"` for everything else, so
-  grok-4.5 stages render "Unavailable" in the TUI, metrics, and
-  `--performance`.
-- The escape hatch exists (`WORKFLOW_PRICING_FILE`, README.md:410) but makes
-  every operator hand-maintain rates for models uncle could ship.
-- Public pricing is verifiable: the OpenRouter models API
-  (`https://openrouter.ai/api/v1/models`, fetched 2026-09-09) lists
-  `x-ai/grok-4.5` at $2/1M input, $6/1M output, $0.30/1M cache read —
-  **with a tier override: prompts ≥200k tokens bill at $4/1M input, $12/1M
-  output, $0.60/1M cache read.** The same API cross-checks kimi-k3 at
-  $3/$15/$0.30, matching the official Kimi page already in `RATES`.
-- Two complications the flat `RATES` schema does not currently handle:
-  1. **Tiered pricing.** grok-4.5 doubles above 200k prompt tokens. Workflow
-     stages routinely exceed that (a real preflight stage: ~4M tokens). Flat
-     base rates would underestimate long stages 2×; flat tier rates would
-     overestimate short ones 2×.
-  2. **Billing path is unconfirmed.** The config's model ids mix conventions
-     (`x-ai/grok-4.5` is OpenRouter spelling; `moonshot-ai/kimi-k3` is not).
-     Whether cline bills these via OpenRouter, xAI/Moonshot direct, or cline
-     credits determines which price list is the truthful estimate source, and
-     the markup differs.
-- `cline-pass/*` models (cline subscription) are per-plan, not per-token;
-  estimating them at API list prices would be fiction.
+In `scripts/stagegate.sh`, the `PREFLIGHT` state (lines ~1520-1615) reads
+`acceptance_result PREFLIGHT_REPORT.md` and, for attended runs:
+
+- `BLOCKED-SETUP`: the driver lists the blocked ids, then
+  `collect_human_inputs` asks the operator to provide each prerequisite
+  interactively. Anything still outstanding goes to `record_waiver`, which
+  requires a recorded justification per id (the waiver popup,
+  `scripts/lib/waiver-popup.py`). Declining that stops the run with
+  "Not provided and not waived; stopping before implementation." (exit 1).
+  If the same ids block the next attempt, `human_input_repeating` exits with
+  advice. There is no option to inspect the report from the pause, no way to
+  continue without either providing or signing, and no first-class "stop"
+  choice — stopping is the failure case, not an offered outcome.
+- `BLOCKED-IMPOSSIBLE` / `FAIL` / `UNKNOWN`: prints "Resolve and rerun." and
+  exits 1. The operator is not asked anything.
+- `BLOCKED-HUMAN` and `PASS`: continue (correct as-is).
+- Unattended mode auto-waives `BLOCKED-SETUP` and continues (correct as-is).
+
+The report's blocker rows print as bare ids (`acceptance_blocked_ids |
+sed 's/^/  /'`); the evidence column explaining each one is in
+PREFLIGHT_REPORT.md, which the gate tells the operator to open themselves.
 
 ## Desired Behavior
 
-- `x-ai/grok-4.5` stages show labeled `est` costs in the TUI status bar,
-  metrics rows, and `--performance`, same labeling rules as the Kimi models.
-- The pricing schema can represent the ≥200k-token tier, or the
-  implementation documents why it does not and picks a defensible single rate
-  (e.g. always the base rate, with the underestimate called out on the
-  surface). A schema that silently misprices 4M-token stages is worse than no
-  new rates.
-- Before rates are baked in, the implementation confirms the actual billing
-  path for `x-ai/*` and `moonshot-ai/*` ids in cline (OpenRouter vs provider
-  direct vs cline credits) and sources rates from that path. If it cannot be
-  confirmed, ship a documented `WORKFLOW_PRICING_FILE` template for grok-4.5
-  instead of baked rates — an explicit operator-set rate beats a wrong one.
-- `SOURCES` generalizes to non-Kimi providers; each entry keeps its own
-  source URL and `pricing_checked_at`.
-- `cline-pass/*` and other subscription models remain unestimated by default;
-  `WORKFLOW_PRICING_FILE` remains the opt-in for those.
+When preflight ends with any required row not PASS, the attended gate
+presents three explicit choices before anything is signed:
+
+1. **Review** — show the blocker rows with their Status and Evidence (and the
+   resolution action for BLOCKED-SETUP) in place, then return to the choice.
+   No opening files by hand, no re-running the stage.
+2. **Skip** — record one explicit operator decision covering the outstanding
+   blockers and continue to implementation. The skip is written down with the
+   same auditability a waiver has (which ids, when, by whom it was chosen),
+   but it is one decision, not a per-id justification popup, and it is
+   labeled as what it is: the operator proceeded with known-missing
+   prerequisites. Implementation and the checklist must still see the rows as
+   blocked-in-report; a skip is not a PASS and must not become one
+   downstream.
+3. **Decline** — stop the run cleanly as a deliberate outcome: state
+   preserved, blocker summary printed, and the next step named (amend the
+   plan / resolve the named action and rerun). Declining is a recorded
+   operator decision, not an error exit.
+
+Providing the prerequisite interactively stays available — it becomes one
+option inside review/skip/decline, not the only door. The current per-id
+waiver path may remain as the mechanism a skip records through, but the
+operator must be able to choose it once for all outstanding ids.
+
+BLOCKED-IMPOSSIBLE gets the same three choices rather than a bare "Resolve
+and rerun" — declining is the natural answer there, and skipping an
+impossible prerequisite must still be possible since the checklist is
+required to not depend on it.
+
+Unattended behavior is unchanged (auto-waive and continue, already recorded
+as such).
 
 ## Reproduction
 
-Not applicable (feature). To see the gap: run any stage on `x-ai/grok-4.5`
-and watch the cost cell stay "Unavailable" while a kimi-k3 stage estimates.
+Not applicable (feature). To see the current shape: run a workflow whose
+PREFLIGHT_REPORT.md has a BLOCKED-SETUP row; the gate immediately asks for
+the input or a signed waiver, with no review or decline option.
 
 ## Constraints
 
-- Never present an estimate as billed or reported cost; the `est` label rules
-  from the kimi change apply unchanged.
-- Rates must carry a source URL and verification date, and must match the
-  billing path cline actually uses, not just any public price list.
-- Model ids in `RATES` must match what the runner reports in usage events
-  verbatim (`x-ai/grok-4.5`, not `x-ai/grok-4.5-turbo` or an OpenRouter
-  alias).
-- No network calls in the status, render, or metrics path.
-- Do not change the behavior of `FREE_MODEL_IDS` (reported $0 on a free model
-  is a fact, not an unknown).
+- Auditability is not weakened: every skip and decline is recorded with the
+  ids it covered and is visible to the audit stage and in the workflow
+  records, at least at the level the current waiver records provide.
+- A skip must not flip any report row to PASS and must not satisfy
+  `preflight_settled` as if the prerequisite existed; downstream gates
+  (checklist, verification) keep seeing the blocker.
+- `human_input_repeating`'s protection stays: re-asking the same unresolved
+  ids verbatim must not loop.
+- No interactive prompt in unattended mode; the TUI and plain-terminal paths
+  both get the three choices (the TUI may render them as its own picker; the
+  shell gate as a prompt).
+- The y/n gate idiom from the earlier change applies to the choice prompt.
 
 ## Known Relevant Files
 
-- `scripts/lib/usage-cost.py` — `RATES`, `SOURCES`, `enrich()`; the tier
-  question lives here
-- `uncle_tui.py` — `_live_cost` (line ~1580), `FREE_MODEL_IDS` (line 177),
-  cost labeling (line ~1640)
-- `README.md` (line ~410) — `WORKFLOW_PRICING_FILE` documentation
-- `scripts/performance-report.sh` — Estimated USD column
-- `.uncle/config` in consuming projects — stage → model/billing mapping
-  (evidence for which models matter)
-- Tests: `scripts/tests/usage-cost-test.py`,
-  `scripts/tests/tui-session-panel-test.sh`,
-  `scripts/tests/performance-test.sh`,
-  `scripts/tests/kimi-cost-integration-test.sh`
+- `scripts/stagegate.sh` — `PREFLIGHT` state (~1500-1615),
+  `acceptance_setup_pause` (~433), `acceptance_human_continue` (~446),
+  `acceptance_after_waiver` (~461), `acceptance_transition` (~474),
+  `preflight_settled` (~349), waiver functions (`record_waiver`,
+  `write_waivers`, `waive_file`, `waived_ids`)
+- `scripts/lib/acceptance.sh` — `acceptance_result`,
+  `acceptance_blocked_ids`, `acceptance_problem`
+- `scripts/lib/waiver-popup.py` — the justification popup a skip should not
+  require per-id
+- `scripts/lib/human-input.sh` — `collect_human_inputs`,
+  `human_input_repeating`, `apply_human_inputs`
+- `uncle_tui.py` — if the TUI renders the gate
+- Tests: `scripts/tests/blocked-classes-test.sh`,
+  `scripts/tests/human-input-test.sh`, `scripts/tests/waiver-popup-test.sh`,
+  `scripts/tests/unattended-test.sh`
 
 ## Out of Scope
 
-- Changing cline or OpenRouter; reconciling against actual invoices.
-- Kimi models (covered by the previous change).
-- `cline-pass/*` subscription pricing semantics.
-- Tier/threshold pricing for models other than grok-4.5 unless the schema
-  work makes it free.
+- What the preflight agent reports or how blockers are classified
+  (prompts/preflight.md is unchanged).
+- Unattended-mode behavior.
+- The BLOCKED-HUMAN continue path.
+- Any change to implementation or later gates beyond what keeps a skipped
+  blocker visible as blocked.
 
 ## Success Criteria
 
-- A stage running `x-ai/grok-4.5` shows a labeled live estimate in the status
-  bar and an `est` cost line in the stage panel; metrics rows carry
-  `estimated_cost_usd`, `cost_status: "estimated"`, a grok-appropriate
-  `pricing_source`, and a current `pricing_checked_at`.
-- A stage whose prompt exceeds 200k tokens is priced per the implementation's
-  documented tier decision, with a test pinning that decision.
-- Kimi model estimates are byte-identical to before the change.
-- `cline-pass/*` stages still show "Unavailable" unless a pricing file
-  provides rates.
-- New/updated tests cover the grok rates, the tier behavior, and the
-  id-verbatim requirement; existing cost/TUI suites pass.
+- With a BLOCKED-SETUP row present, the gate offers review / skip / decline
+  (plus provide-input) and each choice does what this request says:
+  review shows evidence and returns to the menu; skip records one decision
+  covering the outstanding ids and the run reaches IMPLEMENT with the rows
+  still blocked in the report; decline exits with the blocker summary and
+  the rerun/amend instruction, state preserved at PREFLIGHT.
+- The same three choices appear for BLOCKED-IMPOSSIBLE.
+- A skipped run's records show the skip (ids, timestamp) in the same places a
+  waiver appears today, and the audit/final-audit stages can see it.
+- Re-running after a skip does not re-ask the same ids (the recorded decision
+  settles them for this run) and does not mark them provided.
+- Unattended runs behave exactly as before.
+- Updated `blocked-classes-test.sh` and `human-input-test.sh` cover the new
+  transitions; existing suites pass.

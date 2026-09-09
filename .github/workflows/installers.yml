@@ -86,6 +86,7 @@ jobs:
           for test in verification-integrity checklist-groups parallel-checks review-compaction agent-kimi reviewer-claude document-budget provided-inputs windows-probes; do
             run_suite "$test" bash "scripts/tests/$test-test.sh"
           done
+          run_suite self-hosted python3 -B scripts/tests/self-hosted-test.py
           run_suite session-totals python3 -B scripts/tests/session-totals-test.py
           run_suite audit-findings python3 -B scripts/tests/audit-findings-test.py
           echo "Regression suites failed: $failures"

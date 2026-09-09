@@ -5,11 +5,19 @@ import os
 from pathlib import Path
 import sys
 
-SOURCE = 'https://platform.kimi.ai/docs/pricing/chat-k27-code'
-# USD per million tokens; official page verified 2026-09-07.
+# USD per million tokens, from the official Kimi pricing pages, verified
+# 2026-09-09. The pages list cache-hit and cache-miss input prices only;
+# cache writes bill as ordinary (cache-miss) input.
+CHECKED = '2026-09-09'
+SOURCES = {
+    'moonshot-ai/kimi-k2.7-code': 'https://platform.kimi.ai/docs/pricing/chat-k27-code',
+    'moonshot-ai/kimi-k2.7-code-highspeed': 'https://platform.kimi.ai/docs/pricing/chat-k27-code',
+    'moonshot-ai/kimi-k3': 'https://platform.kimi.ai/docs/pricing/chat-k3',
+}
 RATES = {
     'moonshot-ai/kimi-k2.7-code': dict(input=0.95, output=4, cache_read=0.19, cache_write=0.95),
     'moonshot-ai/kimi-k2.7-code-highspeed': dict(input=1.9, output=8, cache_read=0.38, cache_write=1.9),
+    'moonshot-ai/kimi-k3': dict(input=3, output=15, cache_read=0.3, cache_write=3),
 }
 
 
@@ -22,7 +30,7 @@ def enrich(record):
         return record
     model = record.get('model', '')
     rates = RATES.get(model)
-    source = SOURCE if rates else None
+    source = SOURCES.get(model) if rates else None
     override = os.environ.get('WORKFLOW_PRICING_FILE')
     if override:
         custom = json.loads(Path(override).read_text())
@@ -43,7 +51,7 @@ def enrich(record):
         return record
     record.update(estimated_cost_usd=sum(values[k] * rates[k] for k, _ in keys) / 1_000_000,
                   cost_status='estimated', pricing_source=source, pricing_rates=rates,
-                  pricing_unit='USD per million tokens', pricing_checked_at='2026-09-07' if source == SOURCE else None)
+                  pricing_unit='USD per million tokens', pricing_checked_at=CHECKED if source in SOURCES.values() else None)
     return record
 
 

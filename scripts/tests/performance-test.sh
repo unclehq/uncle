@@ -47,10 +47,9 @@ assert row['cost_status']=='estimated'
 PYTEST
 bash "$ROOT/scripts/performance-report.sh" "$TMP" > "$TMP/report"
 grep -qF 'Total tokens' "$TMP/report"
-if head -n 1 "$TMP/report" | grep -qF 'Estimated USD'; then exit 1; fi
+head -n 1 "$TMP/report" | grep -qF 'Estimated USD'
 grep -qF 'Unavailable' "$TMP/report"
-WORKFLOW_SHOW_COST_ESTIMATES=1 bash "$ROOT/scripts/performance-report.sh" "$TMP" > "$TMP/estimates"
-head -n 1 "$TMP/estimates" | grep -qF 'Estimated USD'
+grep -qF 'not an invoice' "$TMP/report"
 mkdir -p "$TMP/totals/.uncle/workflow/metrics"
 cat > "$TMP/totals/.uncle/workflow/metrics/input.json" <<'EOF'
 {"kind":"agent","stage":"mixed","elapsed_seconds":1,"input_tokens":100,"output_tokens":50,"cache_read_tokens":20,"cache_write_tokens":10,"input_includes_cache":true}
@@ -58,4 +57,4 @@ cat > "$TMP/totals/.uncle/workflow/metrics/input.json" <<'EOF'
 EOF
 bash "$ROOT/scripts/performance-report.sh" "$TMP/totals" > "$TMP/totals-report"
 grep -qF '| 330 | 2/2 | Unavailable | 0/2 |' "$TMP/totals-report"
-echo 'performance-test.sh: concurrent records, unknown usage, cumulative results, report, and opt-out passed'
+echo 'performance-test.sh: concurrent records, unknown usage, cumulative results, report, and always-on estimates passed'

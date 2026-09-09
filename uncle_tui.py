@@ -1574,8 +1574,10 @@ class UncleTUI:
         return None
 
     def _live_cost(self, event):
+        # (value, estimated): reported dollars are authoritative; a token-price
+        # estimate only fills the gap and stays labeled as one.
         if isinstance(event.get("total_cost_usd"), (int, float)):
-            return event["total_cost_usd"]
+            return event["total_cost_usd"], False
         usage = event.get("usage") or {}
         row = dict(model=event.get("model", ""), reported_cost_usd=None,
                    input_tokens=usage.get("input_tokens"), output_tokens=usage.get("output_tokens"),
@@ -1588,9 +1590,10 @@ class UncleTUI:
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
                 self._estimate_cost = module.enrich
-            return self._estimate_cost(row).get("estimated_cost_usd")
+            estimate = self._estimate_cost(row).get("estimated_cost_usd")
         except (OSError, ValueError, TypeError, KeyError):
-            return None
+            estimate = None
+        return (estimate, True) if estimate is not None else (None, False)
 
     def _session_panel_lines(self):
         stats = getattr(self, "session_stats", None)
@@ -1607,6 +1610,17 @@ class UncleTUI:
             known = [v for v in values if isinstance(v, (int, float))]
             text = formatter(sum(known) if known else None)
             return text + (" (partial)" if known and len(known) < len(values) else "")
+        def cost_subtotal(entries):
+            # (value, estimated) pairs: a line that includes any estimate is
+            # labeled "est" so reported dollars never blend invisibly with
+            # projections.
+            known = [value for value, _ in entries if isinstance(value, (int, float))]
+            if not known:
+                return dollars(None)
+            text = dollars(sum(known))
+            if any(estimated for value, estimated in entries if isinstance(value, (int, float))):
+                text += " est"
+            return text + (" (partial)" if len(known) < len(entries) else "")
         groups = {}
         for row in sorted(stats["records"], key=lambda r: r.get("started_at", 0)):
             stage = row.get("stage", "")
@@ -1627,7 +1641,12 @@ class UncleTUI:
             if cost == 0 and self._token_total(row) \
                     and (row.get("model") or "") not in FREE_MODEL_IDS:
                 cost = None
-            group["costs"].append(cost if cost is not None else row.get("estimated_cost_usd"))
+            if cost is not None:
+                group["costs"].append((cost, False))
+            elif isinstance(row.get("estimated_cost_usd"), (int, float)):
+                group["costs"].append((row["estimated_cost_usd"], True))
+            else:
+                group["costs"].append((None, False))
             group["attempts"] += 1
             group["last_result"] = row
         for stage, started in stats["active"].items():
@@ -1636,7 +1655,7 @@ class UncleTUI:
             event = stats["live"].get(stage, {})
             group["seconds"] += max(0, stats.get("stopped_at", time.time()) - started)
             group["tokens"].append(event.get("total_tokens"))
-            group["costs"].append(self._live_cost(event) if event else None)
+            group["costs"].append(self._live_cost(event) if event else (None, False))
             group["attempts"] += 1
         lines = ["EACH STAGE", "Cost of usage so far", ""]
         tokens, costs = [], []
@@ -1660,7 +1679,7 @@ class UncleTUI:
             self._panel_stage_styles[title] = style
             lines += [title, "Time   " + duration(group["seconds"]),
                       "Tokens " + subtotal(group["tokens"], count),
-                      "Cost   " + subtotal(group["costs"], dollars), ""]
+                      "Cost   " + cost_subtotal(group["costs"]), ""]
             tokens.extend(group["tokens"])
             costs.extend(group["costs"])
         if not groups:
@@ -1668,7 +1687,7 @@ class UncleTUI:
         lines += ["SESSION TOTALS",
                   "Time   " + duration(sum(group["seconds"] for group in groups.values())),
                   "Tokens " + subtotal(tokens, count),
-                  "Cost   " + subtotal(costs, dollars), "Reported + projected"]
+                  "Cost   " + cost_subtotal(costs), "Reported + projected"]
         return lines
 
     def _session_panel_attr(self, line):
@@ -1679,6 +1698,8 @@ class UncleTUI:
         if line in ("EACH STAGE", "SESSION TOTALS"):
             return palette.get("title", 0) | curses.A_BOLD
         if "Unavailable" in line or "(partial)" in line or line.startswith("Waiting"):
+            return palette.get("warning", 0)
+        if line.startswith("Cost   ") and " est" in line:
             return palette.get("warning", 0)
         if line.startswith("Cost   "):
             return palette.get("accent", 0)

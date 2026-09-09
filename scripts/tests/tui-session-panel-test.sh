@@ -28,7 +28,20 @@ class Panel(unittest.TestCase):
         ui._apply_status(json.dumps(dict(event='usage',stage='implementation',model='moonshot-ai/kimi-k2.7-code-highspeed',total_tokens=2010,
              usage=dict(input_tokens=1000,output_tokens=10,cache_read_input_tokens=1000,cache_creation_input_tokens=0))))
         lines='\n'.join(ui._session_panel_lines())
-        self.assertIn('0:01:05',lines);self.assertIn('2,010',lines);self.assertIn('$0.0024',lines)
+        self.assertIn('0:01:05',lines);self.assertIn('2,010',lines);self.assertIn('$0.0024 est',lines)
+
+    def test_live_k3_estimate_and_completed_estimate_are_labeled(self):
+        ui=self.ui()
+        ui._apply_status(json.dumps(dict(event='usage',stage='implementation',model='moonshot-ai/kimi-k3',total_tokens=2000,
+             usage=dict(input_tokens=2000,output_tokens=0,cache_read_input_tokens=0,cache_creation_input_tokens=0))))
+        self.assertIn('$0.0060 est','\n'.join(ui._session_panel_lines()))
+        ui.session_stats['active']={}
+        ui.session_stats['records'].append(dict(stage='preflight',started_at=1,elapsed_seconds=10,
+            model='moonshot-ai/kimi-k3',input_tokens=1000000,output_tokens=100000,cache_read_tokens=0,cache_write_tokens=0,
+            reported_cost_usd=None,estimated_cost_usd=4.5,cost_status='estimated'))
+        text='\n'.join(ui._session_panel_lines())
+        self.assertIn('Cost   $4.5000 est',text)
+        self.assertNotIn('$4.5000\n',text)
 
     def test_partial_and_non_model_screens(self):
         ui=self.ui()
@@ -152,6 +165,7 @@ class Panel(unittest.TestCase):
         self.assertEqual(ui._session_panel_attr('Tokens Unavailable'),14)
         self.assertEqual(ui._session_panel_attr('Cost   $0.0100 (partial)'),14)
         self.assertEqual(ui._session_panel_attr('Cost   $0.0100'),15)
+        self.assertEqual(ui._session_panel_attr('Cost   $0.0100 est'),14)
         self.assertEqual(ui._session_panel_attr('Reported + projected'),16)
         ui.color={}
         self.assertEqual(ui._session_panel_attr('failed [failed]'),0)

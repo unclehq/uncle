@@ -27,6 +27,17 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(cost.enrich({'reported_cost_usd': 1})['reported_cost_usd'], 1)
         self.assertEqual(cost.enrich({'model': 'unknown'})['cost_status'], 'unknown')
 
+    def test_k3_rates_have_their_own_source(self):
+        row = dict(model='moonshot-ai/kimi-k3', reported_cost_usd=None,
+                   input_tokens=1000000, output_tokens=100000, cache_read_tokens=500000, cache_write_tokens=0)
+        self.assertAlmostEqual(cost.enrich(row)['estimated_cost_usd'], 4.65)
+        self.assertEqual(row['pricing_source'], 'https://platform.kimi.ai/docs/pricing/chat-k3')
+        self.assertEqual(row['pricing_checked_at'], cost.CHECKED)
+        row = dict(model='moonshot-ai/kimi-k2.7-code', reported_cost_usd=None,
+                   input_tokens=1000000, output_tokens=0, cache_read_tokens=0, cache_write_tokens=0)
+        self.assertEqual(cost.enrich(row)['pricing_source'],
+                         'https://platform.kimi.ai/docs/pricing/chat-k27-code')
+
     def test_custom_model_rates_and_missing_usage(self):
         with tempfile.TemporaryDirectory() as temp:
             p=Path(temp)/'rates.json'

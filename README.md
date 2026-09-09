@@ -499,10 +499,14 @@ cannot become `READY` through this mechanism.
 
 ### Self hosted models with Aider
 
-In **Configure → Configure Aider / self hosting**, add a model with its **name**, **Base URL**,
-and **API key**. The name is the model ID served by the endpoint. Then open any
+In **Configure → Configure Aider / self hosting**, enter only the **Base URL**
+and **API key**. Setup requests `<Base URL>/models` with Bearer authentication
+and loads the returned model IDs automatically. Then open any
 stage, select **Aider (Self hosted)**, and choose from your saved Aider self-hosted models.
-The stage picker shows only these models; connection settings are edited centrally. Install Aider separately (tested with
+The stage picker shows only discovered models; connection settings are edited centrally.
+Use **Refresh supported models** after changing the models served by the endpoint.
+Discovery errors preserve the previous catalog; successful refreshes replace it.
+Stages selecting a removed model must select an available one before running. Install Aider separately (tested with
 Aider 0.86.2). Uncle invokes Aider with your OpenAI-compatible endpoint; it does
 not use Cline or require an OpenAI account. For example, use model `qwen-coder`
 and Base URL `http://localhost:8000/v1`. Uncle adds Aider's `openai/` routing

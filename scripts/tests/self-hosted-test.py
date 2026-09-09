@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'scripts/lib'))
-from self_hosted import read_keys, save_keys, settings, aider_invocation, run_aider, response_from_history
+from self_hosted import read_keys, save_keys, settings, aider_invocation, run_aider, response_from_history, discover_models, refresh_models
 from process_tree import bash_executable
 
 
@@ -68,6 +68,61 @@ class SelfHosted(unittest.TestCase):
             if success:
                 self.assertEqual(result.stdout.strip(), 'qwen')
 
+    def test_discovery_and_failed_refresh_preserves_catalog(self):
+        import io
+        from urllib.error import HTTPError
+        from unittest.mock import Mock
+        opener = Mock()
+        response = io.BytesIO(b'{"data":[{"id":"model-b"},{"id":"model-a"},{"id":"model-b"}]}')
+        opener.open.return_value = response
+        with patch('urllib.request.build_opener', return_value=opener):
+            self.assertEqual(discover_models('http://localhost:1234/v1/', 'dummy-key'), ['model-a','model-b'])
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.full_url, 'http://localhost:1234/v1/models')
+        self.assertEqual(request.get_header('Authorization'), 'Bearer dummy-key')
+        self.assertEqual(opener.open.call_args.kwargs['timeout'], 10)
+        keys = {'__aider_models__': {'old-model': self.values()}}
+        before = json.dumps(keys)
+        with patch('urllib.request.build_opener', return_value=opener):
+            opener.open.side_effect = HTTPError('http://localhost', 401, 'private details', {}, None)
+            with self.assertRaisesRegex(ValueError, 'HTTP 401'):
+                refresh_models(keys, 'http://localhost:1234/v1', 'dummy-key')
+        self.assertEqual(json.dumps(keys), before)
+        with patch('self_hosted.discover_models', return_value=['new-model']):
+            refresh_models(keys, 'http://localhost:1234/v1', 'dummy-key')
+        self.assertEqual(list(keys['__aider_models__']), ['new-model'])
+
+    def test_discovery_rejects_empty_malformed_and_redirects(self):
+        import io
+        from unittest.mock import Mock
+        for raw in (b'{"data": []}', b'{}', b'not json', b'[]'):
+            opener = Mock()
+            opener.open.return_value = io.BytesIO(raw)
+            with patch('urllib.request.build_opener', return_value=opener):
+                with self.assertRaises(ValueError):
+                    discover_models('http://localhost:1234/v1', 'dummy-key')
+        opener = Mock()
+        opener.open.return_value = io.BytesIO(b'{"data":[{"id":"model"}]}')
+        with patch('urllib.request.build_opener', return_value=opener) as build:
+            discover_models('http://localhost:1234/v1', 'dummy-key')
+        handler = build.call_args.args[0]
+        self.assertIsNone(handler.redirect_request(None, None, 302, '', {}, 'https://elsewhere.test'))
+
+    def test_workflow_formatters_allow_missing_timing(self):
+        import re
+        import shutil
+        if not shutil.which('jq'):
+            self.skipTest('jq unavailable')
+        for driver in ('stagegate.sh', 'change-workflow.sh'):
+            source = (ROOT/'scripts'/driver).read_text()
+            formatter = re.search(r"format_claude_stream\(\) \{.*?\n\}", source, re.S).group()
+            for duration in (None, 1500, 'invalid'):
+                event = dict(type='result', subtype='success', num_turns=1, duration_ms=duration)
+                result = subprocess.run([bash_executable(), '-c', formatter+'\nformat_claude_stream'],
+                                        input=json.dumps(event)+'\n', capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('1s' if duration == 1500 else 'time unknown', result.stdout)
+
     def values(self):
         return {'api_key':'test-secret','model':'local-model:Q4','base_url':'http://localhost:8123/v1'}
 
@@ -84,6 +139,7 @@ class SelfHosted(unittest.TestCase):
                 self.assertNotIn('AIDER_LOAD',env)
                 self.assertNotIn('test-secret',str(command))
                 self.assertNotIn('test-secret',Path(directory,'aider.yml').read_text())
+                self.assertIn('--no-show-model-warnings',command)
                 self.assertIn('--no-auto-commits',command)
                 self.assertIn('--no-dirty-commits',command)
                 if side=='reviewer':
@@ -135,6 +191,8 @@ sys.exit(7 if mode=='fail' else 0)
                 else:
                     final=json.loads(result.stdout.splitlines()[-1])
                     self.assertFalse(final['is_error'])
+                    self.assertIsInstance(final['duration_ms'], int)
+                    self.assertGreaterEqual(final['duration_ms'], 0)
                     self.assertEqual(final['result'],'## Findings\n\nNOT READY')
                     self.assertIsNone(final['total_cost_usd'])
 
@@ -196,7 +254,7 @@ sys.exit(7 if mode=='fail' else 0)
             ui.config_section = 'stages'
             self.assertEqual(len(ui._config_items()), len(module.CONFIG_STAGES))
             ui.config_section = 'aider'
-            self.assertEqual(ui._config_items()[1:], ['local-model:Q4'])
+            self.assertIn('1 loaded', ui._config_items()[1])
             self.assertEqual(ui.stage_fields('implementation'),['runner','model'])
             self.assertEqual(ui._field_display('@local-model:Q4','api_key'),'********')
             ui.save_config()
@@ -207,18 +265,15 @@ sys.exit(7 if mode=='fail' else 0)
             ui._open_picker('model','implementation')
             self.assertEqual(ui.state,'picker')
             self.assertEqual(ui._picker_rows(), [('option', 'local-model:Q4')])
-            ui._open_stage('@new')
-            ui.input_buf = 'second-model'
-            with patch.object(ui, 'maybe_reload'):
-                ui._confirm_text()
-                self.assertEqual(ui.stage_target, '@second-model')
-                ui._set_field('@second-model', 'base_url', 'http://localhost:9999/v1')
-                ui._set_field('@second-model', 'api_key', 'second-secret')
+            ui._open_stage('@connection')
+            self.assertEqual(ui.stage_fields('@connection'), ['base_url', 'api_key'])
+            with patch.object(ui, 'maybe_reload'), patch('self_hosted.discover_models', return_value=['local-model:Q4', 'second-model']):
+                ui._set_field('@connection', 'api_key', 'secret-with-#-characters')
             ui._open_picker('model', 'implementation')
             self.assertEqual(ui._picker_rows(), [('option', 'local-model:Q4'), ('option', 'second-model')])
             self.assertNotIn('second-secret', str(ui._config_items()))
             self.assertNotIn('second-secret', self.config.read_text())
-            ui.stage_target = 'implementation' 
+            ui.stage_target = 'implementation'
             with patch.object(ui, 'maybe_reload'):
                 ui._apply_aider_to_all_stages()
             ui.load_config()

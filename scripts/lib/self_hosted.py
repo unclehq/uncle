@@ -40,6 +40,54 @@ def save_keys(config, keys):
             os.unlink(temporary)
 
 
+def discover_models(base_url, api_key):
+    """Query the configured OpenAI-compatible endpoint without redirecting secrets."""
+    from urllib.request import Request, build_opener, HTTPRedirectHandler
+    from urllib.error import HTTPError, URLError
+    url = urlsplit(base_url)
+    if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
+        raise ValueError('Enter an http(s) Base URL without credentials, query, or fragment')
+    if not api_key or any(c in api_key for c in ('\r', '\n')):
+        raise ValueError('Enter an API key; use local for an unauthenticated endpoint')
+    class NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+    request = Request(base_url.rstrip('/') + '/models', headers={'Authorization': 'Bearer ' + api_key, 'Accept': 'application/json'})
+    try:
+        with build_opener(NoRedirect).open(request, timeout=10) as response:
+            raw = response.read(2_000_001)
+        if len(raw) > 2_000_000:
+            raise ValueError('Model response is too large')
+        data = json.loads(raw)
+        entries = data['data']
+        if not isinstance(entries, list):
+            raise ValueError('Invalid models list')
+        names = sorted({item['id'] for item in entries if isinstance(item, dict) and isinstance(item.get('id'), str)
+                        and item['id'] and not any(c.isspace() for c in item['id']) and '#' not in item['id']})
+        if not names:
+            raise ValueError('The endpoint returned no usable models')
+        return names
+    except HTTPError as exc:
+        raise ValueError(f'Model discovery failed (HTTP {exc.code}); check the Base URL and API key') from None
+    except (URLError, OSError):
+        raise ValueError('Could not reach the models endpoint; check the Base URL and server') from None
+    except (KeyError, TypeError, json.JSONDecodeError, UnicodeError):
+        raise ValueError('Expected an OpenAI-compatible models response with data and model IDs') from None
+
+
+def connection_settings(keys):
+    return dict(keys.get('__aider_connection__') or next(iter(keys.get('__aider_models__', {}).values()), {}))
+
+
+def refresh_models(keys, base_url, api_key):
+    names = discover_models(base_url, api_key)
+    connection = dict(base_url=base_url.rstrip('/'), api_key=api_key)
+    # Commit only after a successful discovery; failures retain the old catalog.
+    keys['__aider_connection__'] = connection
+    keys['__aider_models__'] = {name: dict(connection) for name in names}
+    return names
+
+
 def settings(config, stage):
     if stage.startswith('implementation-step-'):
         stage = 'implementation'
@@ -143,7 +191,7 @@ def aider_invocation(side, values, prompt, root, directory):
         '--message-file', str(message), '--llm-history-file', str(work/'llm.log'),
         '--chat-history-file', str(work/'chat.md'), '--input-history-file', str(work/'input.history'),
         '--no-restore-chat-history', '--no-auto-commits', '--no-dirty-commits', '--no-gitignore',
-        '--no-check-update', '--no-analytics', '--no-stream', '--no-pretty', '--yes-always',
+        '--no-check-update', '--no-show-model-warnings', '--no-analytics', '--no-stream', '--no-pretty', '--yes-always',
         '--no-auto-lint', '--no-auto-test', '--no-detect-urls', '--encoding', 'utf-8', '--line-endings', 'lf']
     if side == 'reviewer':
         command += ['--chat-mode','ask','--dry-run','--no-suggest-shell-commands']
@@ -209,26 +257,18 @@ def profile_menu(config, choose=False):
             raise ValueError('Choose a configured Aider model; add models in Configure → Aider self-hosted models')
         print(name)
         return 0
-    print('Aider self-hosted models: ' + ', '.join(sorted(profiles)))
-    name = input('Model name to add or edit (blank to return): ').strip()
-    if not name:
-        return 0
-    if any(c.isspace() for c in name) or '#' in name:
-        raise ValueError('Model names cannot contain spaces or #')
-    old = profiles.get(name, {})
+    old = connection_settings(keys)
     url = input('Base URL [' + old.get('base_url', '') + ']: ').strip() or old.get('base_url', '')
-    parsed = urlsplit(url)
-    if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError('Enter an http(s) Base URL without credentials, query, or fragment')
     key = getpass.getpass('API key (hidden; blank keeps existing): ').strip() or old.get('api_key', '')
-    if not key:
-        raise ValueError('API key required; use local for an unauthenticated endpoint')
-    profiles[name] = dict(base_url=url, api_key=key)
+    print('Discovering Aider models…', flush=True)
+    names = refresh_models(keys, url, key)
     save_keys(config, keys)
+    print(f'Loaded {len(names)} Aider models: ' + ', '.join(names))
     return 0
 
 
 def main(side, args):
+    started = time.monotonic()
     if side in ('models', 'choose-model'):
         return profile_menu(args[0], side == 'choose-model')
     if side == 'set-key':
@@ -265,7 +305,7 @@ def main(side, args):
     else:
         print(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':text}]}}))
         print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':text,
-                          'model':values['model'],'num_turns':turns,'usage':{},'total_cost_usd':None}))
+                          'model':values['model'],'num_turns':turns,'duration_ms':int((time.monotonic()-started)*1000),'usage':{},'total_cost_usd':None}))
     return 0
 
 

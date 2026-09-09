@@ -31,7 +31,7 @@ except ImportError:  # Windows has no curses in the stdlib
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
-from self_hosted import key_file, read_keys, save_keys
+from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models
 
 CLINE_CONFIG = os.environ.get("CLINE_CONFIG", os.path.expanduser("~/.cline/data/settings/providers.json"))
 
@@ -637,7 +637,7 @@ class UncleTUI:
         if not section:
             return self._config_items()[self.config_sel]
         if section == "aider":
-            return self._profile_targets()[self.config_sel]
+            return "@connection"
         if section == "misc":
             return "!misc"
         if 0 <= self.config_sel < len(CONFIG_STAGES):
@@ -699,7 +699,7 @@ class UncleTUI:
         changes anything.
         """
         if stage.startswith("@"):
-            return ["name", "base_url", "api_key"]
+            return ["base_url", "api_key"]
         runner = self.stage_runner(stage)
         if runner == "self-hosted":
             return ["runner", "model"]
@@ -714,6 +714,8 @@ class UncleTUI:
         """The stored value, empty when the stage inherits the default."""
         if stage == "!misc":
             return getattr(self, "misc", {}).get(field, "")
+        if stage == "@connection":
+            return connection_settings(self.stage_api_keys).get(field, "")
         if stage.startswith("@"):
             name = stage[1:]
             if field == "name":
@@ -768,33 +770,19 @@ class UncleTUI:
             self.misc[field] = value
             self.save_config()
             return
-        if stage.startswith("@"):
-
-            profiles = self.stage_api_keys.setdefault("__aider_models__", {})
-            name = stage[1:]
-            if field == "name":
-                if not value or any(c.isspace() for c in value) or '#' in value or value == 'new':
-                    self.notice = "Use a model name without spaces or #."
+        if stage == "@connection":
+            connection = connection_settings(self.stage_api_keys)
+            connection[field] = value
+            if connection.get('base_url') and connection.get('api_key'):
+                self.notice = "Discovering supported Aider models…"
+                try:
+                    refresh_models(self.stage_api_keys, connection['base_url'], connection['api_key'])
+                except ValueError as exc:
+                    self.notice = str(exc)
                     return
-                if value != name and value in profiles:
-                    self.notice = "That Aider model already exists."
-                    return
-                profiles[value] = profiles.pop(name, {})
-                if value != name:
-                    profiles[value].pop("model", None)
-                for target in CONFIG_STAGES:
-                    if self.stage_runner(target) == "self-hosted" and self.stage_models.get(target) == name:
-                        self.stage_models[target] = value
-                self.stage_target = "@" + value
-                self.picker_target = self.stage_target
+                self.notice = ""
             else:
-                if field == "base_url":
-                    from urllib.parse import urlsplit
-                    url = urlsplit(value)
-                    if url.scheme not in ("http", "https") or not url.netloc or url.username or url.password or url.query or url.fragment:
-                        self.notice = "Enter an http(s) Base URL without credentials, query, or fragment."
-                        return
-                profiles.setdefault(name, {})[field] = value
+                self.stage_api_keys['__aider_connection__'] = connection
             self.save_config()
             return
         if field == "runner" and value != self.stage_runner(stage):
@@ -840,7 +828,7 @@ class UncleTUI:
         if not section:
             return ["1. Configure stages", "2. Configure Aider / self hosting", "3. Miscellaneous"]
         if section == "aider":
-            return ["Add Aider self-hosted model…"] + [target[1:] for target in self._profile_targets()[1:]]
+            return ["Aider connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__aider_models__", {}))]
         if section == "misc":
             return ["Auto mode: " + ("on" if getattr(self, "misc", {}).get("auto_mode") == "true" else "off"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set")]
@@ -877,14 +865,6 @@ class UncleTUI:
 
     def _open_stage(self, stage):
         self.stage_target = stage
-        if stage == "@new":
-            self.picker_kind = "name"
-            self.picker_target = stage
-            self.input_buf = ""
-            self.state = "config_edit"
-            self.notice = "Enter the model name served by your endpoint."
-            self.stage_sel = 0
-            return
         self.stage_sel = 0
         self.notice = ""
         self.state = "stage"
@@ -895,7 +875,7 @@ class UncleTUI:
             field = self._stage_field()
             desc = CONFIG_DESC.get("field:%s" % field, "")
             if field == "model" and self.stage_runner(self.stage_target) == "self-hosted":
-                return "Choose one of your configured Aider self-hosted models. Manage names, Base URLs, and API keys in Configure → Configure Aider / self hosting."
+                return "Choose one of your configured Aider self-hosted models. Set the Base URL and API key to discover models in Configure → Configure Aider / self hosting."
             if field == "runner":
                 side = STAGE_SIDE.get(self.stage_target, AGENT)
                 desc += " This is a %s stage, so its choices are %s." % (
@@ -969,7 +949,7 @@ class UncleTUI:
             self.state = "config_edit"
             return
         if kind == "model" and self.stage_runner(target) == "self-hosted" and not self.stage_api_keys.get("__aider_models__"):
-            self.notice = "Add a model in Configure → Configure Aider / self hosting first."
+            self.notice = "Set up your endpoint in Configure → Configure Aider / self hosting to discover models first."
             return
         self.pick_filter = ""
         cur = (self._picker_current() or "").lower()
@@ -1926,7 +1906,7 @@ class UncleTUI:
             if getattr(self, "notice", ""):
                 return self.notice
             if self.stage_target.startswith("@"):
-                return "Aider self-hosted model %s — Enter: edit, q back" % self.stage_target[1:]
+                return "Aider connection — Enter: edit, q back"
             return "%s — Enter: change, a: use Aider for all stages, d: default, q back" % self.stage_target
         title = {
             "menu": "The man from uncle",
@@ -1936,6 +1916,8 @@ class UncleTUI:
             "notice": "Enter to continue to Configure",
             "running": "q stops the run",
         }.get(self.state, "")
+        if self.state == "config" and getattr(self, "notice", ""):
+            return self.notice
         if self.state == "config" and getattr(self, "first_run", False):
             title = "Configure this project (first run) — %s" % title
         return title
@@ -2373,6 +2355,8 @@ class UncleTUI:
                         self._set_field("!misc", "auto_mode", "false" if self.misc.get("auto_mode") == "true" else "true")
                     else:
                         self._open_picker("approval_name", "!misc")
+                elif section == "aider" and self.config_sel == 1:
+                    self._set_field("@connection", "base_url", connection_settings(self.stage_api_keys).get("base_url", ""))
                 else:
                     self._open_stage(self._config_row())
             elif k in (ord("q"), ord("Q")):

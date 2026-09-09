@@ -1070,7 +1070,7 @@ format_claude_stream() {
                   else tostring end)
                | "  [tool ERROR] \(.[0:200])")
           elif $e.type == "result" then
-              "\n[done] \($e.subtype) — \($e.num_turns) turns, \($e.duration_ms / 1000 | floor)s\(if $e.error_detail then "\n  cause: \($e.error_detail)" else "" end)"
+              "\n[done] \($e.subtype) — \($e.num_turns) turns, \(if ($e.duration_ms | type) == "number" then (($e.duration_ms / 1000 | floor | tostring) + "s") else "time unknown" end)\(if $e.error_detail then "\n  cause: \($e.error_detail)" else "" end)"
           else empty end
     '
 }

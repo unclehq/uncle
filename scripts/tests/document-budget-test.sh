@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+. "$ROOT/scripts/lib/sha256.sh"
 . "$ROOT/scripts/lib/gates.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -181,7 +182,7 @@ chmod +x standalone/reviewer
     printf 'plan' > UPDATED_PROJECT_PLAN.md
     printf 'tests' > AUTOMATED_TEST_REPORT.md
     for plan in PROJECT_PLAN UPDATED_PROJECT_PLAN; do
-        shasum -a 256 "$plan.md" | awk '{print $1}' > ".uncle/workflow/approvals/$plan.sha256"
+        hash_file "$plan.md" > ".uncle/workflow/approvals/$plan.sha256"
     done
     for script in codex-review-plan.sh codex-create-checklist.sh; do
         if WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_REVIEWER_CMD="$PWD/reviewer" \

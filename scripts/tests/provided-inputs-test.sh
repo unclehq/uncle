@@ -7,6 +7,7 @@
 # follows is about what it must refuse to touch.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+. "$ROOT/scripts/lib/sha256.sh"
 MARK="$ROOT/scripts/lib/mark-provided.py"
 . "$ROOT/scripts/lib/acceptance.sh"
 WORK="$(mktemp -d)"
@@ -85,12 +86,12 @@ ok
 # An id with no blocked row is a mistake, not a licence to add one: the report
 # must come back untouched so the caller cannot half-apply a batch.
 fresh
-before="$(shasum -a 256 PREFLIGHT_REPORT.md | awk '{print $1}')"
+before="$(hash_file PREFLIGHT_REPORT.md)"
 if python3 "$MARK" PREFLIGHT_REPORT.md P-99=SOURCE_REVIEW_APPROVAL.md 2>/dev/null; then
     fail "marking an id with no blocked row should fail"
 fi
 ok
-[[ "$(shasum -a 256 PREFLIGHT_REPORT.md | awk '{print $1}')" == "$before" ]] \
+[[ "$(hash_file PREFLIGHT_REPORT.md)" == "$before" ]] \
     || fail "a failed marking must leave the report byte-identical"
 ok
 
@@ -111,7 +112,7 @@ if python3 "$MARK" PREFLIGHT_REPORT.md P-2=tests/fixtures/empty.json 2>/dev/null
     fail "an empty input must be refused"
 fi
 ok
-[[ "$(shasum -a 256 PREFLIGHT_REPORT.md | awk '{print $1}')" == "$before" ]] \
+[[ "$(hash_file PREFLIGHT_REPORT.md)" == "$before" ]] \
     || fail "a refused input must leave the report unchanged"
 ok
 

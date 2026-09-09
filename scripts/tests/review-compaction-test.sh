@@ -72,9 +72,18 @@ for mode in fail timeout oversized lost-id changed-status; do
     [[ $(wc -l < "$CALLS") -eq $((before + 1)) ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     mv good.md candidate.md
 done
-# Explicit opt-out does not call the reviewer.
+# Explicit opt-out does not call the reviewer. The document is left long, and
+# with the budget advisory that is a remark rather than a stop -- so what is
+# under test here is only that no compaction was attempted.
 before=$(wc -l < "$CALLS")
-if WORKFLOW_REVIEW_COMPACT=0 finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review > /dev/null 2>&1; then exit 1; fi
+WORKFLOW_REVIEW_COMPACT=0 finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review > /dev/null 2>&1 \
+    || { echo "FAIL $0:$LINENO opting out must not fail on length alone" >&2; exit 1; }
+[[ $(wc -l < "$CALLS") -eq "$before" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+# Enforcing, the same opt-out stops on the oversized document.
+if WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 \
+    finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review </dev/null > /dev/null 2>&1; then
+    echo "FAIL $0:$LINENO enforcing mode must still reject an oversized review" >&2; exit 1
+fi
 [[ $(wc -l < "$CALLS") -eq "$before" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Guard details independently: no table, command, heading, threshold or verdict loss.
 python3 - "$ROOT" <<'PY'

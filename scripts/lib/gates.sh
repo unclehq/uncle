@@ -199,16 +199,31 @@ stage_documents() {
 
 # basename -> byte floor, ceiling, source multiplier, line floor, ceiling.
 # Only authoritative input sets defaults; generated plans never compound budgets.
+# One rule for every generated document: twice the brief it came from.
+#
+# These used to be six different bands, and the per-document ceilings quietly
+# won -- a preflight report was capped at 8000 while twice its brief was 10956,
+# so the number the agent was given had little to do with the document it was
+# asked to write. Worse, the tight ones produced the failure they were meant to
+# prevent: an interpretation held to its brief's own length sent the agent into
+# rounds of self-trimming until the stage died with the work unsaved.
+#
+# So the size of the brief is the only input. A run whose REQUIREMENTS.md or
+# CHANGE_REQUEST.md is short gets short documents; one that arrives with a long
+# GitHub issue gets room to answer it. The floor keeps a one-line brief from
+# implying a one-line plan, and the ceiling is a backstop against a brief
+# pasted in from something enormous, not a per-document opinion.
+DOCUMENT_BUDGET_RULE='4000 40000 2 120 1000'
+
 document_budget_defaults() {
     case "${1##*/}" in
-        REQUIREMENTS_INTERPRETATION.md) echo '4000 20000 1 160 160' ;;
-        CHANGE_SPEC.md) echo '4000 8000 1 160 160' ;;
+        REQUIREMENTS_INTERPRETATION.md|CHANGE_SPEC.md) echo "$DOCUMENT_BUDGET_RULE" ;;
         PROJECT_PLAN.md|UPDATED_PROJECT_PLAN.md|CHANGE_PLAN.md|UPDATED_CHANGE_PLAN.md)
-            echo '6000 24000 2 150 600' ;;
+            echo "$DOCUMENT_BUDGET_RULE" ;;
         BASELINE_REPORT.md|MANUAL_CHECKLIST.md|MANUAL_CHECKLIST.base.md|AUTOMATED_TEST_REPORT.md|CHANGE_TEST_REPORT.md|VERIFICATION_REPORT.md)
-            echo '4000 16000 2 120 480' ;;
-        ADVERSARIAL_REVIEW.md|TEST_REVIEW.md|FINAL_AUDIT.md) echo '4000 12000 2 120 360' ;;
-        IMPLEMENTATION_NOTES.md|PREFLIGHT_REPORT.md|DEFECTS.md) echo '2000 8000 1 60 240' ;;
+            echo "$DOCUMENT_BUDGET_RULE" ;;
+        ADVERSARIAL_REVIEW.md|TEST_REVIEW.md|FINAL_AUDIT.md) echo "$DOCUMENT_BUDGET_RULE" ;;
+        IMPLEMENTATION_NOTES.md|PREFLIGHT_REPORT.md|DEFECTS.md) echo "$DOCUMENT_BUDGET_RULE" ;;
         *) return 1 ;;
     esac
 }
@@ -328,9 +343,23 @@ check_document_budget() {
     if ! awk -v b="$bytes" -v l="$lines" -v mb="$max_bytes" -v ml="$max_lines" 'BEGIN {exit !(b<=mb && l<=ml)}'; then
         key=$(printf '%s' "${file##*/}" | sed 's/\.md$//' | tr '[:lower:].-' '[:upper:]__')
         echo "Document budget exceeded: $file ($bytes bytes, $lines lines; limits $max_bytes bytes, $max_lines lines)." >&2
-        echo "Artifact preserved. Shorten repeated prose, never mandatory rows or commands. Re-run to resume." >&2
+        echo "Artifact preserved. Shorten repeated prose, never mandatory rows or commands." >&2
         echo "If mandatory content needs more room, set WORKFLOW_DOC_MAX_BYTES_$key / WORKFLOW_DOC_MAX_LINES_$key (or global WORKFLOW_DOC_MAX_BYTES / WORKFLOW_DOC_MAX_LINES)." >&2
+        # A probe is asking the size question and nothing else, so it still
+        # gets a straight answer.
         [[ "${2:-}" != probe ]] || return 1
+        # The budget is a target the agent is given, not a gate the run dies
+        # on. Enforcing it cost more documents than it ever shortened: a plan
+        # that had already been written was thrown away for being 3KB long, and
+        # an interpretation inside its limit was trimmed until the stage failed
+        # with the work unsaved. The number still reaches the agent through the
+        # prompt, which is where a length target does its work; here it is a
+        # remark on the way past. Set WORKFLOW_DOC_BUDGET_ENFORCE=1 to make it
+        # blocking again.
+        if [[ "${WORKFLOW_DOC_BUDGET_ENFORCE:-0}" != 1 ]]; then
+            echo "Continuing: the budget is advisory (WORKFLOW_DOC_BUDGET_ENFORCE=1 makes it blocking)." >&2
+            return 0
+        fi
         if [[ -t 0 || -n "${UNCLE_STATUS_FILE:-}" || "${WORKFLOW_BUDGET_PROMPT:-0}" == 1 ]]; then
             read -r proposed_bytes proposed_lines <<< "$(awk -v b="$bytes" -v l="$lines" -v mb="$max_bytes" -v ml="$max_lines" 'BEGIN {printf "%.0f %.0f", (b>mb?int((b*1.1+999)/1000)*1000:mb), (l>ml?int((l*1.1+9)/10)*10:ml)}')"
             printf 'Document budget exceeded: %s. Increase limits from %s bytes / %s lines to %s bytes / %s lines and continue with the preserved document? [Y/N]' "$file" "$max_bytes" "$max_lines" "$proposed_bytes" "$proposed_lines" >&2
@@ -379,6 +408,13 @@ finish_review_budget() {
             "$log" "$cmd" "$model" "$effort"
     fi
     check_document_budget "$file"
+    # The size verdict is advisory; the compaction result is not. This used to
+    # return the size check alone, so a candidate rejected for dropping a
+    # finding id or flipping a status was reported as a failure only because
+    # the document it refused to replace happened to still be too long. With
+    # length no longer fatal that coincidence disappears, and the rejection has
+    # to speak for itself.
+    return "$status"
 }
 
 # Cache only plan reviews; later execution/audit stages still gather fresh evidence.

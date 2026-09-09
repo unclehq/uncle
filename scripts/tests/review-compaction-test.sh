@@ -44,7 +44,7 @@ cp candidate.md original.md
 python3 - <<'PY'
 from pathlib import Path
 p=Path('original.md')
-s=p.read_text().replace('## Acceptance gate', 'Repeated background. ' * 100 + '\n## Acceptance gate')
+s=p.read_text(encoding='utf-8').replace('## Acceptance gate', 'Repeated background. ' * 100 + '\n## Acceptance gate')
 p.write_bytes(s.encode("utf-8"))
 PY
 export WORKFLOW_DOC_MAX_BYTES=500 WORKFLOW_DOC_MAX_LINES=40
@@ -137,7 +137,7 @@ from pathlib import Path
 import sys
 spec=importlib.util.spec_from_file_location('compact', Path(sys.argv[1])/'scripts/lib/compact-review.py')
 m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-original=Path('candidate.md').read_text()
+original=Path('candidate.md').read_text(encoding='utf-8')
 m.validate(original, original.replace('Severity: High', 'Severity: High; References: R-1'), 1000, 100)
 for candidate in [original.replace('320', '321'), original.replace('Severity: High', 'Severity: Low'),
                   original.replace('Severity: High', 'Severity: High; Severity: Low'),

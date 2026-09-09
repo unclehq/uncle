@@ -28,3 +28,22 @@ if OSTYPE=msys running_workflow_pids > /dev/null; then exit 1; fi
 OSTYPE=msys running_workflow_report 2> error
 grep -q 'refusing' error
 echo 'windows-probes-test: Store alias fallback and fail-closed process checks passed'
+# MSYS can report success from ln -s after copying the target. Verification
+# tests must not mistake a real directory for a forbidden symlink.
+mkdir -p "$work/links"
+cat > "$work/links/ln" <<'LN'
+#!/usr/bin/env bash
+[[ "${LINK_MODE:-copy}" != refuse ]] || exit 1
+[[ "$1" == -s ]] || exit 2
+target="$2"
+case "$target" in /*) ;; *) target="$(dirname "$3")/$target" ;; esac
+cp -R "$target" "$3"
+LN
+chmod +x "$work/links/ln"
+for mode in copy refuse; do
+    PATH="$work/links:$PATH" LINK_MODE="$mode" \
+        bash "$ROOT/scripts/tests/verification-integrity-test.sh" > "$work/symlink-$mode.log"
+    [[ "$(grep -c '^SKIP: real symlinks unavailable' "$work/symlink-$mode.log")" == 4 ]]
+    grep -q 'checks passed' "$work/symlink-$mode.log"
+done
+echo 'windows-probes-test: copied and unavailable symlink fixtures skip only symlink cases'

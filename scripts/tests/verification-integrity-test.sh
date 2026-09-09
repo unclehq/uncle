@@ -27,8 +27,22 @@ changed() {
 rejected() {
     COUNT=$((COUNT + 1))
     if verification_manifest paths > /dev/null 2>&1; then
-        echo 'FAIL: invalid or missing scope was accepted'; exit 1
+        printf 'FAIL: invalid or missing scope was accepted (backend=%s, scope=%s)\n' \
+            "${WORKFLOW_HASH_BACKEND:-auto}" "$(cat paths)"
+        exit 1
     fi
+}
+make_symlink() {
+    # Git Bash's default ln -s can silently copy the target. Request native
+    # links, then check the fixture rather than treating a copy as a symlink.
+    if MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" ln -s "$1" "$2" 2>/dev/null \
+        && [[ -L "$2" ]]; then
+        return 0
+    fi
+    # Destinations are fresh fixtures under this test's temporary directory.
+    rm -rf -- "$2"
+    printf 'SKIP: real symlinks unavailable for fixture %s\n' "$2"
+    return 1
 }
 # Directory suffixes canonicalize identically in both backends, while malformed
 # paths and file/symlink scopes with a directory suffix remain rejected.
@@ -47,10 +61,11 @@ for backend in python shell; do
         printf '%s\n' "$scope" > paths
         WORKFLOW_HASH_BACKEND="$backend" rejected
     done
-    ln -s tests alias-dir
-    printf 'alias-dir/\n' > paths
-    WORKFLOW_HASH_BACKEND="$backend" rejected
-    rm alias-dir
+    if make_symlink tests alias-dir; then
+        printf 'alias-dir/\n' > paths
+        WORKFLOW_HASH_BACKEND="$backend" rejected
+        rm alias-dir
+    fi
     printf 'tests/\n' > paths
     printf 'new test\n' > tests/new.txt
     COUNT=$((COUNT+1))
@@ -77,13 +92,16 @@ for path in missing ../outside /etc/passwd ./tests .git .uncle/workflow tests/..
     printf '%s\n' "$path" > paths
     rejected
 done
-ln -s tests alias
-printf 'alias/test.txt\n' > paths
-rejected
+if make_symlink tests alias; then
+    printf 'alias/test.txt\n' > paths
+    rejected
+    rm alias
+fi
 printf 'tests\n' > paths
-ln -s expected.txt tests/link
-rejected
-rm tests/link
+if make_symlink expected.txt tests/link; then
+    rejected
+    rm tests/link
+fi
 # A traversal error must not be hidden by a later, readable scope.
 printf 'control\n' > control.txt
 printf 'tests\ncontrol.txt\n' > paths

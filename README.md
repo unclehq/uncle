@@ -1,7 +1,6 @@
 <p align="center" style="text-align: center;">
   <img src="uncle.png" alt="Uncle logo" width="320" style="display: block; margin: 0 auto; max-width: 100%; height: auto;">
 </p>
-
 <div align="center">
 
 # uncle
@@ -18,9 +17,7 @@ code. A primary agent plans, implements, and verifies; an independent reviewer
 audits it adversarially; you approve at every gate. By default `cline` runs
 every stage, on both sides.
 
-- **Human approval gates** at every planning and review stage -- or
-  `--unattended`, which passes them without a person and records every
-  judgment nobody made.
+- **Human approval gates** at every planning and review stage.
 - **Adversarial review** by a second model that did not write the code.
 - **SHA-256 pinned specs** so approved artifacts cannot be silently modified.
 - **Immutable reviewer-owned files** the implementing agent cannot edit.
@@ -30,8 +27,7 @@ every stage, on both sides.
 Use it when the cost of an agent silently shipping the wrong thing is higher
 than the cost of waiting for a human to say yes.
 
-> **Just testing uncle?** Use Cline with open-weight models and a
-> [ClinePass subscription](https://cline.bot/blog/clinepass-best-of-value-for-open-weight-models).
+> **Just testing uncle?** Use Cline with open-weight models and configure your plan.
 > Expect slower runs, but dramatically lower costs than premium models billed
 > per token—a good tradeoff while trying out the workflow.
 
@@ -212,7 +208,7 @@ sides: codex runs `--sandbox workspace-write` as an agent and
 the prompt.
 
 Both pipelines are resumable. Interrupt one and re-run `uncle` — it picks up
-where it stopped, from `.uncle/workflow/` in your project. That directory is
+where it stopped, from `.uncle/workspace/` in your project. That directory is
 the only thing uncle adds to your tree.
 
 ---
@@ -249,7 +245,7 @@ driver checks, human diff approval, test review, and checklist. Two repair
 attempts are allowed across restarts by default (`WORKFLOW_MAX_REPAIRS`, 0–100).
 At the limit, a session popup (or terminal prompt) lets you enter a higher total
 limit or stop with the run pending. Increases are saved in
-`.uncle/workflow/repair-limit` across restarts; no answer authorizes no extra work.
+`.uncle/workspace/repair-limit` across restarts; no answer authorizes no extra work.
 Missing evidence or external prerequisites pauses verification instead of
 consuming repair attempts. Final audit starts only after required checks pass;
 an implementation green-check override does not waive acceptance.
@@ -337,7 +333,7 @@ limited by document budgets. Generated output never increases the next budget.
 Oversized reviewer output gets one editorial compaction pass using the same
 read-only reviewer, with a 120-second timeout. It shortens the existing review
 without redoing repository analysis. The original and candidate are archived in
-`.uncle/workflow/logs/review-compact-*/`; only a candidate within budget that
+`.uncle/workspace/logs/review-compact-*/`; only a candidate within budget that
 preserves headings, finding IDs, table rows, severity/status lines, inline code,
 numeric references, fenced commands and verdict can replace it. These are
 structural safeguards, not proof of semantic equivalence: human review remains
@@ -349,7 +345,7 @@ the original stays in place and the stage pauses; there is no automatic loop.
 Other oversized artifacts also pause without advancing.
 
 Completed adversarial plan reviews are saved under
-`.uncle/workflow/review-cache/` before compaction. A retry reuses that result only
+`.uncle/workspace/review-cache/` before compaction. A retry reuses that result only
 when the review prompt (excluding budgets), local input snapshot, Git HEAD, and
 reviewer settings match. Increasing a byte/line cap does not require a new review.
 A failed speculative compaction pauses immediately instead of falling through to
@@ -448,18 +444,18 @@ Token/cost values refresh as runners report usage; Kimi is polled every ten
 seconds. Runners that report only at completion show unavailable values until
 then. Projected costs combine native reported costs where available with the
 configured token-price estimate otherwise; they are not a prediction of all
-remaining work. Partial session totals are labeled. Session totals are saved in `.uncle/workflow/session-totals.json` and restored
+remaining work. Partial session totals are labeled. Session totals are saved in `.uncle/workspace/session-totals.json` and restored
 on subsequent launches. Changed REQUIREMENTS.md, CHANGE_REQUEST.md, or GitHub issue
 identity starts fresh totals; `uncle --performance` retains the full recorded history.
 
 When a document exceeds its size budget, Uncle offers a session popup (or
 terminal prompt) to approve a larger limit for that document. Approval continues
-with the preserved artifact and saves the limit in `.uncle/workflow/document-budgets/`
+with the preserved artifact and saves the limit in `.uncle/workspace/document-budgets/`
 for the current source brief. Declining leaves the workflow pending. Automated
 runs without a session UI or terminal require explicit environment overrides.
 
 Before checklist execution, the driver reruns approved automated checks and
 saves fresh command results and assertion logs in
-`.uncle/workflow/checklist-driver-checks/`. The verification agent uses that
+`.uncle/workspace/checklist-driver-checks/`. The verification agent uses that
 evidence for covered checks, avoiding duplicate local-server tests inside its
 sandbox. Manual checks and human acceptance still require separate evidence.

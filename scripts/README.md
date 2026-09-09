@@ -560,18 +560,22 @@ The reviewer uses `lib/kimi/reviewer.md` with an explicit read-only tool list.
 Set `WORKFLOW_KIMI_CMD` to the Kimi executable and `WORKFLOW_KIMI_MODEL` to its
 configured model alias when needed. No model override now correctly selects Kimi.
 
-Oversized reviewer artifacts (including background checklists) receive one bounded
-compaction pass, using the same runner/model/effort and read-only sandbox. No new
-review is requested. Original text and candidates stay in the stage log directory;
-failed compaction never replaces the original. `WORKFLOW_REVIEW_COMPACT=0` opts
-out; `WORKFLOW_REVIEW_COMPACT_SECONDS` defaults to 120 (range 1–600). The checks
+Oversized reviewer artifacts (including background checklists) receive up to
+three bounded compaction passes, using the same runner/model/effort and
+read-only sandbox. No new review is requested. Original text and candidates
+stay in the stage log directory; failed compaction never replaces the original.
+`WORKFLOW_REVIEW_COMPACT=0` opts out; `WORKFLOW_REVIEW_COMPACT_ATTEMPTS`
+defaults to 3; `WORKFLOW_REVIEW_COMPACT_SECONDS` defaults to 120 (range 1–600).
+When no pass fits, the run continues with the preserved original: the budget is
+advisory unless `WORKFLOW_DOC_BUDGET_ENFORCE=1` makes it blocking. The checks
 preserve structural anchors; the human still judges whether meaning is retained.
 Covered by `scripts/tests/review-compaction-test.sh`.
 
 Adversarial plan-review retries use `.uncle/workflow/review-cache/` when local
 inputs, Git HEAD, review instructions and reviewer settings match. Budget changes
-do not invalidate the review. A speculative review rejected on size returns 42
-and pauses without replaying the full stage. Set `WORKFLOW_REVIEW_CACHE=0` to
+do not invalidate the review. With budgets enforced, a speculative review rejected
+on size returns 42 and pauses without replaying the full stage. Set
+`WORKFLOW_REVIEW_CACHE=0` to
 force fresh analysis. Caching is disabled for later evidence/audit stages,
 symlink inputs, and snapshots over 100 MB. Existing reviews without a snapshot
 are not retroactively trusted. Tests: `scripts/tests/review-cache-test.sh` and

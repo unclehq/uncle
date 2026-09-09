@@ -915,21 +915,22 @@ expect_state PREFLIGHT
 expect_no_file .uncle/workflow/implemented
 
 
-# Newly capped outputs must stop both drivers before the next gate/state.
+# Newly capped outputs are reported and preserved, and both drivers keep
+# building: the budget is advisory. FINAL_AUDIT additionally burns its three
+# compaction attempts and continues with the preserved review. The blocking
+# form is covered by the enforced review-cache cases below and the budget
+# unit tests.
 for artifact in IMPLEMENTATION_NOTES AUTOMATED_TEST_REPORT VERIFICATION_REPORT DEFECTS FINAL_AUDIT; do
     new_stagegate_case "sg-budget-$artifact"
     stagegate_agent
     set_state IMPLEMENT
     run_stagegate WORKFLOW_DIFF_GATE=0 "WORKFLOW_DOC_MAX_BYTES_$artifact=1"
-    expect_status 1
+    expect_status 0
     expect_out "Document budget exceeded: $artifact.md"
+    expect_out 'budget is advisory'
     expect_file "$artifact.md"
-    expect_not_out "Workflow complete."
-    case "$artifact" in
-        IMPLEMENTATION_NOTES|AUTOMATED_TEST_REPORT) expect_state IMPLEMENT ;;
-        VERIFICATION_REPORT|DEFECTS) expect_state EXECUTE_CHECKLIST ;;
-        FINAL_AUDIT) expect_state FINAL_AUDIT ;;
-    esac
+    expect_out "Workflow complete."
+    expect_state COMPLETE
 done
 
 for artifact in IMPLEMENTATION_NOTES CHANGE_TEST_REPORT VERIFICATION_REPORT; do
@@ -937,13 +938,12 @@ for artifact in IMPLEMENTATION_NOTES CHANGE_TEST_REPORT VERIFICATION_REPORT; do
     green_baseline 0 'bash app/test.sh'
     set_state IMPLEMENT
     run_driver WORKFLOW_DIFF_GATE=0 "WORKFLOW_DOC_MAX_BYTES_$artifact=1"
-    expect_status 1
+    expect_status 0
     expect_out "Document budget exceeded: $artifact.md"
+    expect_out 'budget is advisory'
     expect_file "$artifact.md"
-    case "$artifact" in
-        VERIFICATION_REPORT) expect_state EXECUTE_CHECKLIST ;;
-        *) expect_state IMPLEMENT ;;
-    esac
+    expect_out "Change workflow complete."
+    expect_state COMPLETE
 done
 
 new_case change-budget-background-checklist
@@ -951,10 +951,10 @@ green_baseline 0 'bash app/test.sh'
 printf 'write a base checklist\n' > "$REPO/prompts/change/manual-checklist-base.md"
 set_state IMPLEMENT
 run_driver WORKFLOW_PARALLEL_CHECKLIST=1 WORKFLOW_DOC_MAX_BYTES_MANUAL_CHECKLIST_BASE=1
-expect_status 1
-expect_out 'Document budget exceeded:'
+expect_status 0
+expect_out 'still exceeds the budget after 3 attempts; continuing with the preserved original'
 expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
-expect_state IMPLEMENT
+expect_state WAIT_IMPLEMENT_APPROVAL
 
 new_case change-budget-step-handoff
 green_baseline 0 'bash app/test.sh'
@@ -962,9 +962,9 @@ printf '\n## 20. Implementation sequence\n\n1. First step.\n2. Second step.\n' >
 hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
 set_state IMPLEMENT
 run_driver WORKFLOW_STEPWISE_IMPLEMENT=1 WORKFLOW_DOC_MAX_BYTES_IMPLEMENTATION_NOTES=1
-expect_status 1
+expect_status 0
 expect_out 'Document budget exceeded: IMPLEMENTATION_NOTES.md'
-expect_state IMPLEMENT
+expect_state WAIT_IMPLEMENT_APPROVAL
 expect_no_file '.uncle/workflow/implement-step-done'
 expect_in_file '.uncle/workflow/logs/implementation-step-1.gated-prompt.md' 'Compact output budgets'
 
@@ -978,7 +978,7 @@ expect_out 'Compaction accepted:'
 expect_state COMPLETE
 expect_file FINAL_AUDIT.md
 COUNT=$((COUNT + 1))
-[[ -e "$REPO/.uncle/workflow/logs/final-audit.compact.log" ]] || fail 'compaction log missing'
+[[ -e "$REPO/.uncle/workflow/logs/final-audit.compact-1.log" ]] || fail 'compaction log missing'
 
 new_case change-compact-background-checklist
 green_baseline 0 'bash app/test.sh'
@@ -991,6 +991,8 @@ expect_state WAIT_IMPLEMENT_APPROVAL
 expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
 
 # Budget failures reuse the finished review, not a new full reviewer run.
+# The pause being tested here is the enforced path; by default an overrun is
+# advisory and the run would simply continue.
 new_stagegate_case sg-review-cache
 printf 'requirements\n' > "$REPO/REQUIREMENTS.md"
 printf 'plan\n' > "$REPO/PROJECT_PLAN.md"
@@ -998,7 +1000,7 @@ printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
 hash_file "$REPO/PROJECT_PLAN.md" > "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
 set_state ADVERSARIAL_REVIEW
 for attempt in 1 2; do
-    run_stagegate WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+    run_stagegate WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
     expect_status 42
     expect_state ADVERSARIAL_REVIEW
     COUNT=$((COUNT + 1))
@@ -1014,7 +1016,7 @@ COUNT=$((COUNT + 1))
 # Real input changes force a new review.
 printf 'changed requirements\n' >> "$REPO/REQUIREMENTS.md"
 set_state ADVERSARIAL_REVIEW
-run_stagegate WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+run_stagegate WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
 expect_status 42
 COUNT=$((COUNT + 1))
 [[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'changed inputs reused stale review'
@@ -1024,7 +1026,7 @@ printf 'requirements\n' > "$REPO/REQUIREMENTS.md"
 printf 'plan\n' > "$REPO/PROJECT_PLAN.md"
 printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
 set_state WAIT_PLAN_APPROVAL
-run_stagegate_stdin "$(gate_input '' y)" WORKFLOW_SPECULATE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+run_stagegate_stdin "$(gate_input '' y)" WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_SPECULATE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
 expect_status 42
 expect_state ADVERSARIAL_REVIEW
 expect_out 'pausing without another full review'
@@ -1034,7 +1036,7 @@ COUNT=$((COUNT + 1))
 new_case change-review-cache
 set_state PLAN
 for attempt in 1 2; do
-    run_driver WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+    run_driver WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
     expect_status 42
     expect_state PLAN
     COUNT=$((COUNT + 1))

@@ -328,8 +328,9 @@ behavior, exact command, and protected path. Execution plans must retain their
 complete executable contract. Reports cite existing raw logs instead of copying
 transcripts; never drop checks or evidence needed to assess their results.
 Do not create summary sidecars or move obligations out to evade these limits.
-If mandatory content alone cannot fit, preserve it: the driver keeps the artifact
-and pauses for an explicit budget adjustment. Never truncate required content.
+If mandatory content alone cannot fit, preserve it: the driver retries the fit
+(up to three compaction passes for reviewer output) and then continues with the
+preserved artifact. Never truncate required content.
 BUDGET
 }
 
@@ -385,10 +386,13 @@ check_document_budget() {
 }
 
 # Reviewers return documents rather than editing files. Give an oversized result
-# one bounded editorial pass, using the same reviewer and its read-only contract.
+# a few bounded editorial passes, using the same reviewer and its read-only
+# contract, then keep building with the preserved original: the budget is
+# advisory (check_document_budget), so a review that will not shrink is a
+# remark, not a stop -- unless WORKFLOW_DOC_BUDGET_ENFORCE=1 says otherwise.
 finish_review_budget() {
     local file="$1" cmd="$2" model="$3" effort="$4" stage="$5"
-    local limits bytes lines status=0 started="$SECONDS" log
+    local limits bytes lines status=0 started log attempt max_attempts
     local -a flags=(exec --ephemeral --skip-git-repo-check --sandbox read-only)
     limits="$(document_budget "$file")" || return 1
     [[ -s "$file" ]] || { check_document_budget "$file"; return 1; }
@@ -397,26 +401,36 @@ finish_review_budget() {
         check_document_budget "$file"
         return $?
     fi
+    max_attempts="${WORKFLOW_REVIEW_COMPACT_ATTEMPTS:-3}"
+    case "$max_attempts" in
+        *[!0-9]*|""|0*)
+            echo "WORKFLOW_REVIEW_COMPACT_ATTEMPTS must be a positive integer: $max_attempts" >&2
+            return 1 ;;
+    esac
     read -r bytes lines <<< "$limits"
     [[ -z "$model" ]] || flags+=(-m "$model")
     [[ -z "$effort" ]] || flags+=(-c "model_reasoning_effort=$effort")
-    log="$LOG_DIR/${stage}.compact.log"
-    python3 "$ROOT/scripts/lib/compact-review.py" --output "$file" --log "$log" \
-        --max-bytes "$bytes" --max-lines "$lines" \
-        --seconds "${WORKFLOW_REVIEW_COMPACT_SECONDS:-120}" \
-        -- "$cmd" "${flags[@]}" || status=$?
-    if declare -F perf_record > /dev/null; then
-        perf_record reviewer "${stage}-compact" "$((SECONDS-started))" "$status" \
-            "$log" "$cmd" "$model" "$effort"
-    fi
+    for (( attempt=1; attempt<=10#$max_attempts; attempt++ )); do
+        echo "Fitting $file to the document budget: attempt $attempt of $max_attempts." >&2
+        started="$SECONDS"
+        status=0
+        log="$LOG_DIR/${stage}.compact-$attempt.log"
+        python3 "$ROOT/scripts/lib/compact-review.py" --output "$file" --log "$log" \
+            --max-bytes "$bytes" --max-lines "$lines" \
+            --seconds "${WORKFLOW_REVIEW_COMPACT_SECONDS:-120}" \
+            -- "$cmd" "${flags[@]}" || status=$?
+        if declare -F perf_record > /dev/null; then
+            perf_record reviewer "${stage}-compact" "$((SECONDS-started))" "$status" \
+                "$log" "$cmd" "$model" "$effort"
+        fi
+        check_document_budget "$file" probe 2>/dev/null && return 0
+    done
+    echo "Document still exceeds the budget after $max_attempts attempts; continuing with the preserved original." >&2
+    # The size verdict decides what happens next, not the last compaction
+    # result: a candidate rejected for dropping a finding id or flipping a
+    # status leaves a good review in place, and killing the stage there threw
+    # the work away. Advisory by default, blocking only when enforced.
     check_document_budget "$file"
-    # The size verdict is advisory; the compaction result is not. This used to
-    # return the size check alone, so a candidate rejected for dropping a
-    # finding id or flipping a status was reported as a failure only because
-    # the document it refused to replace happened to still be too long. With
-    # length no longer fatal that coincidence disappears, and the rejection has
-    # to speak for itself.
-    return "$status"
 }
 
 # Cache only plan reviews; later execution/audit stages still gather fresh evidence.

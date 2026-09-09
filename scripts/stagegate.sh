@@ -936,7 +936,7 @@ format_claude_stream() {
                   else tostring end)
                | "  [tool ERROR] \(.[0:200])")
           elif $e.type == "result" then
-              "\n[done] \($e.subtype) — \($e.num_turns) turns, \($e.duration_ms / 1000 | floor)s"
+              "\n[done] \($e.subtype) — \($e.num_turns) turns, \($e.duration_ms / 1000 | floor)s\(if $e.error_detail then "\n  cause: \($e.error_detail)" else "" end)"
           else empty end
     '
 }

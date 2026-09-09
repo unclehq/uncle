@@ -13,7 +13,9 @@
 # cline streams its own NDJSON. This rewrites the final text of each assistant
 # block into the Claude stream-json schema the drivers' format_claude_stream
 # renders, and synthesizes the terminal `result` event the drivers use for
-# success/failure detection and cost accounting.
+# success/failure detection and cost accounting. A failed run also carries the
+# agent's own last failure line as `error_detail` so the operator sees the
+# cause, not just a subtype.
 set -euo pipefail
 
 CLINE_CMD="${WORKFLOW_CLINE_CMD:-cline}"
@@ -198,9 +200,17 @@ cline_failure_text="$(jq -R -r '
       elif $e.type == "agent_event" and $e.event.type == "done" then ($e.event.text // "")
       else empty end
 ' "$raw" 2>/dev/null || true)"
-if [[ "$(printf '%s' "$result" | jq -r '.is_error // "true"')" == "true" ]] \
-    && printf '%s' "$cline_failure_text" | grep -qiE 'context (length|window)|maximum context|out of (tokens|context)|token limit|too many tokens|context_length_exceeded'; then
-    result="$(printf '%s' "$result" | jq -c '.subtype = "context_length_exceeded"')"
+if [[ "$(printf '%s' "$result" | jq -r '.is_error // "true"')" == "true" ]]; then
+    if printf '%s' "$cline_failure_text" | grep -qiE 'context (length|window)|maximum context|out of (tokens|context)|token limit|too many tokens|context_length_exceeded'; then
+        result="$(printf '%s' "$result" | jq -c '.subtype = "context_length_exceeded"')"
+    fi
+    # Attach the last failure line so the driver can show the real cause --
+    # "session not found: ..." when cline's hub daemon dies mid-stage, say --
+    # instead of a bare subtype. One line, capped: a failure can run long.
+    error_detail="$(printf '%s' "$cline_failure_text" | grep -v '^[[:space:]]*$' | tail -n 1 | cut -c1-300 || true)"
+    if [[ -n "$error_detail" ]]; then
+        result="$(printf '%s' "$result" | jq -c --arg detail "$error_detail" '. + {error_detail: $detail}')"
+    fi
 fi
 
 printf '%s\n' "$result"

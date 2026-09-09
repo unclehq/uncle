@@ -715,7 +715,7 @@ format_claude_stream() {
                   else tostring end)
                | "  [tool ERROR] \(.[0:200])")
           elif $e.type == "result" then
-              "\n[done] \($e.subtype) — \($e.num_turns) turns, \($e.duration_ms / 1000 | floor)s, \(if $e.total_cost_usd == null then "cost unknown" else "$" + ($e.total_cost_usd | .*100 | round / 100 | tostring) end)"
+              "\n[done] \($e.subtype) — \($e.num_turns) turns, \($e.duration_ms / 1000 | floor)s, \(if $e.total_cost_usd == null then "cost unknown" else "$" + ($e.total_cost_usd | .*100 | round / 100 | tostring) end)\(if $e.error_detail then "\n  cause: \($e.error_detail)" else "" end)"
           else empty end
     '
 }
@@ -1236,6 +1236,11 @@ run_claude() {
         if [[ "$is_error" == "true" ]]; then
             echo
             echo "Stage $log_name reported failure: $subtype"
+            local error_detail
+            error_detail="$(printf '%s' "$result" | jq -r '.error_detail // empty')"
+            if [[ -n "$error_detail" ]]; then
+                echo "Cause: $error_detail"
+            fi
             if [[ "$subtype" == "context_length_exceeded" ]]; then
                 echo "The model ran out of context/tokens."
                 echo

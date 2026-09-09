@@ -49,6 +49,9 @@ fi
 if [[ "${EMIT_USAGE:-0}" == "1" ]]; then
     echo '{"type":"agent_event","event":{"type":"usage","inputTokens":10,"outputTokens":5,"cacheReadTokens":2,"cacheWriteTokens":1,"cost":0.01,"totalInputTokens":100,"totalOutputTokens":50,"totalCacheReadTokens":20,"totalCacheWriteTokens":10,"totalCost":0.5}}'
 fi
+if [[ "${EMIT_ERROR:-0}" == "1" ]]; then
+    echo '{"type":"error","message":"session not found: 1788929186353_jrdu6"}'
+fi
 if [[ "${EMIT_RESULT:-1}" == "1" ]]; then
     echo '{"type":"run_result","finishReason":"'"${FINISH_REASON:-completed}"'","iterations":3,"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":20,"cacheWriteTokens":10,"totalCost":0.5},"durationMs":1234,"text":"'"${RESULT_TEXT:-Final answer}"'","model":"test-model","models":{"catalogue":{"description":"'"${CATALOGUE_TEXT:-Frontier reasoning and coding with 1M context window}"'"}}}'
 fi
@@ -166,6 +169,32 @@ fi
 check_eq "no run_result: is_error" "true" "$(printf '%s' "$result" | jq -r '.is_error')"
 check_eq "no run_result: subtype"  "error_during_execution" \
     "$(printf '%s' "$result" | jq -r '.subtype')"
+
+# --- a failed result names its own cause --------------------------------------
+# When cline dies without a run_result (its hub daemon was killed mid-stage,
+# say), the only clue in the stream is a bare `error` event. It must reach the
+# result event, or the operator sees "error_during_execution -- 1 turns, 0s"
+# after a 15-minute stage with no hint why. Observed against cline 3.0.61.
+
+status=0
+EMIT_RESULT=0 EMIT_ERROR=1 FAKE_EXIT=1 run_shim -p --model vendor/some-model \
+    <<< "the prompt" > "$TMP/err.jsonl" || status=$?
+check_eq "error event: shim exit status" "1" "$status"
+result="$(driver_result "$TMP/err.jsonl")"
+check_eq "error event: error_detail" "session not found: 1788929186353_jrdu6" \
+    "$(printf '%s' "$result" | jq -r '.error_detail // empty')"
+
+# With a run_result but no error event, the detail is the result's own text.
+result="$(FINISH_REASON=error FAKE_EXIT=1 \
+    RESULT_TEXT="You have reached your weekly Clinepass limit. The limit resets in 5d 14h." \
+    run_shim -p <<< "prompt" | grep '"type":"result"' || true)"
+check_eq "failure text: error_detail" \
+    "You have reached your weekly Clinepass limit. The limit resets in 5d 14h." \
+    "$(printf '%s' "$result" | jq -r '.error_detail // empty')"
+
+# A success carries no error_detail.
+check_eq "success: no error_detail" "" \
+    "$(driver_result "$TMP/out.jsonl" | jq -r '.error_detail // empty')"
 
 # --- a non-zero cline exit propagates ---------------------------------------
 

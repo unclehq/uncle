@@ -32,6 +32,10 @@ Rules:
 10. Include all required automated acceptance checks in the approved command
     entry points. Cover delivered update tooling and browser behavior where
     applicable. Missing required dependencies and mandatory skips must fail.
+11. Kill processes by exact PID, one at a time. Never broadcast-kill by port,
+    listener scan, or name pattern (`kill $(lsof -t -iTCP ...)`, `pkill -f`,
+    `killall`): the agent runtime hosting this session is itself a local
+    process those patterns can match, and killing it loses the whole stage.
 
 Work efficiently. This stage is a long loop, and everything already in the
 conversation is re-sent on every turn, so avoid pulling in what you will not

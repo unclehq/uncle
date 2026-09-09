@@ -69,11 +69,27 @@ jobs:
           export PATH="$PWD/packaging/windows:$PATH"
           export UNCLE_WINDOWS_PYTHON="$(cygpath -w "$(command -v python)")"
           export UNCLE_WINDOWS_BASH="$(cygpath -w "$BASH")"
+          failures=0
+          run_suite() {
+            local name="$1"
+            shift
+            echo "::group::$name"
+            if "$@"; then
+              echo "PASS: $name"
+            else
+              local status=$?
+              echo "::error::$name failed (exit $status)"
+              failures=$((failures + 1))
+            fi
+            echo "::endgroup::"
+          }
           for test in verification-integrity checklist-groups parallel-checks review-compaction agent-kimi reviewer-claude document-budget provided-inputs windows-probes; do
-            bash "scripts/tests/$test-test.sh"
+            run_suite "$test" bash "scripts/tests/$test-test.sh"
           done
-          python3 -B scripts/tests/session-totals-test.py
-          python3 -B scripts/tests/audit-findings-test.py
+          run_suite session-totals python3 -B scripts/tests/session-totals-test.py
+          run_suite audit-findings python3 -B scripts/tests/audit-findings-test.py
+          echo "Regression suites failed: $failures"
+          test "$failures" -eq 0
       - name: Smoke test outside the checkout
         run: |
           Set-Location $env:RUNNER_TEMP

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+trap 'status=$?; printf "FAIL: %s:%s: %s (exit %s)\n" "${BASH_SOURCE[0]}" "$LINENO" "$BASH_COMMAND" "$status" >&2; exit "$status"' ERR
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -16,7 +17,7 @@ cmp actual expected
 # Unavailable process inspection must refuse installation, not report idle.
 . "$ROOT/scripts/lib/running-workflow.sh"
 ps() { return 2; }
-running_workflow_report 2> error
+OSTYPE=linux-gnu running_workflow_report 2> error
 grep -q 'Cannot determine' error
 unset -f ps
 # The Windows branch consumes native command lines and strips CRLF.

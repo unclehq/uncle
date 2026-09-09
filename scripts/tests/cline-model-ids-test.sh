@@ -69,3 +69,40 @@ if grep -qF -- "definitely-not-a-vendor/definitely-not-a-model" "$catalog"/*.js 
 fi
 
 echo "cline-model-ids-test.sh: all $count picker model ids exist in cline's catalogue"
+
+# Catalogue presence is necessary and not sufficient.
+#
+# `meituan/longcat-2.0` was an exact catalogue key, with a full entry and
+# pricing, and the gateway answered every call to it with 404 model_not_found
+# -- which surfaced as a stage dying in 0s after the operator had picked it,
+# exactly the failure the check above exists to prevent. The catalogue lists
+# models cline can describe, not models this account can call, and only a real
+# request can tell the two apart.
+#
+# Opt-in because it spends tokens and needs a logged-in cline: one trivial
+# request per id. Run it after editing the catalogue, not on every test run.
+[[ "${UNCLE_MODEL_PROBE:-0}" == 1 ]] || {
+    echo "cline-model-ids-test.sh: gateway probe skipped (set UNCLE_MODEL_PROBE=1 to run it)"
+    exit 0
+}
+
+unservable=0
+probed=0
+while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    probed=$((probed + 1))
+    out="$(cline --act --json --auto-approve true -m "$id" "reply with the single word ok" 2>&1 | head -c 900)"
+    case "$out" in
+        *model_not_found*)
+            echo "FAIL: $id is offered by the picker and the gateway returns 404" >&2
+            unservable=$((unservable + 1)) ;;
+        # An exhausted daily allowance proves the id resolves, which is what
+        # this probe is asking. Quota is the operator's problem, not the
+        # catalogue's.
+        *"limit reached"*) ;;
+        *) ;;
+    esac
+done <<< "$ids"
+
+[ "$unservable" -eq 0 ] || exit 1
+echo "cline-model-ids-test.sh: all $probed picker model ids are servable"

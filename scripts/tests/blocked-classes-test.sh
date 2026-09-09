@@ -156,10 +156,59 @@ preflight_acceptable BLOCKED-IMPOSSIBLE && fail "an impossible prerequisite must
 preflight_acceptable REPAIR        && fail "a failed prerequisite must stop implementation"
 preflight_acceptable UNKNOWN       && fail "an unreadable report must stop implementation"
 
+# --- a blocker settled at the gate does not send the run back --------------
+# PREFLIGHT_REPORT.md is the agent's document and is never edited, so a
+# prerequisite handed over at the gate leaves the report still saying
+# BLOCKED-SETUP. Asking the report alone would re-run a whole agent stage to
+# rediscover a file the operator just typed a path to, which is minutes and
+# tokens spent to learn nothing. preflight_settled reads the gate's records
+# alongside the report.
+eval "$(awk '/^preflight_settled\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+settle_work="$(mktemp -d)"
+trap 'rm -rf "$settle_work"' EXIT
+cd "$settle_work"
+STATE_DIR="$settle_work/.uncle/workflow"
+mkdir -p "$STATE_DIR"
+cat > PREFLIGHT_REPORT.md <<'MD'
+## Acceptance gate
+
+| ID | Required | Status | Evidence |
+|---|---|---|---|
+| P-1 | YES | PASS | python3 found |
+| P-2 | YES | BLOCKED-SETUP | tests/fixtures/oracle.json absent |
+| P-3 | YES | BLOCKED-SETUP | SOURCE_REVIEW_APPROVAL.md absent |
+MD
+
+preflight_settled PASS          || fail "a passing preflight must implement"
+preflight_settled BLOCKED-HUMAN || fail "a pending signature must not stop implementation"
+preflight_settled REPAIR        && fail "a failed prerequisite must stop implementation"
+preflight_settled UNKNOWN       && fail "an unreadable report must stop implementation"
+preflight_settled BLOCKED-SETUP && fail "unsettled setup blockers must stop implementation"
+
+# One of two settled is still not settled: a partial answer must not advance.
+mkdir -p "$STATE_DIR/provided"
+printf 'id: P-2\n' > "$STATE_DIR/provided/P-2"
+preflight_settled BLOCKED-SETUP && fail "one outstanding blocker must still stop implementation"
+
+# Provided and waived both count, and they are the only two things that do.
+mkdir -p "$STATE_DIR/waivers"
+printf 'id: P-3\n' > "$STATE_DIR/waivers/P-3"
+preflight_settled BLOCKED-SETUP || fail "provided and waived blockers must let the run continue"
+
+# A record for some unrelated id settles nothing.
+rm -f "$STATE_DIR/provided/P-2"
+printf 'id: P-9\n' > "$STATE_DIR/provided/P-9"
+preflight_settled BLOCKED-SETUP && fail "a record for another id must not settle P-2"
+cd "$ROOT"
+
 # The two gates that ask the question must ask it the same way.
-grep -q 'preflight_acceptable "$(acceptance_result PREFLIGHT_REPORT.md)"' \
+grep -q 'preflight_settled "$(acceptance_result PREFLIGHT_REPORT.md)"' \
     "$ROOT/scripts/stagegate.sh" \
     || fail "the IMPLEMENT re-check must use the same predicate as the PREFLIGHT gate"
+
+# And the gate must not answer a provided prerequisite by re-running the stage.
+grep -q 're-running preflight to probe them' "$ROOT/scripts/stagegate.sh" \
+    && fail "providing a prerequisite must not re-run the preflight agent"
 
 # --- the audit is told where the waivers are ---------------------------------
 # A waiver the auditor never reads is a waiver that buys nothing: the run

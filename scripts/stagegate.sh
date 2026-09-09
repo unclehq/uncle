@@ -203,6 +203,27 @@ fi
 # still says the check was not performed -- it only stops the driver treating
 # an impossible check as a reason to abandon the run.
 waive_file() { printf '%s/waivers/%s' "$STATE_DIR" "$1"; }
+provided_file() { printf '%s/provided/%s' "$STATE_DIR" "$1"; }
+
+# A prerequisite the operator handed over at the gate.
+#
+# The report is the agent's and is not edited, so the resolution is recorded
+# beside it the way a waiver is -- but it says the opposite thing. A waiver
+# says a required check was not performed; this says the input the check asked
+# for is now on disk, and names it by digest so a later stage and the audit can
+# see exactly what satisfied the row rather than taking the driver's word.
+record_provided() {
+    local report="$1" id="$2" target="$3" how="$4"
+    mkdir -p "$STATE_DIR/provided" || return 1
+    {
+        printf 'id: %s\n' "$id"
+        printf 'report: %s\n' "$report"
+        printf 'recorded: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf 'how: %s\n' "$how"
+        printf 'path: %s\n' "$target"
+        printf 'sha256: %s\n' "$(hash_file "$target")"
+    } > "$(provided_file "$id")" || return 1
+}
 
 # An unattended run is still accountable for what it skipped. Each gate it
 # passed without a person is appended here, dated, so the summary can say what
@@ -317,6 +338,64 @@ preflight_acceptable() {
         PASS|BLOCKED-HUMAN) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+# The same question, asked after the gate has done something about it.
+#
+# A blocker settled at the gate -- the file handed over, or the check waived --
+# does not change PREFLIGHT_REPORT.md, which is the agent's document and stays
+# as written. So the report still says BLOCKED-SETUP, and asking it alone would
+# send the run back to re-probe inputs that are already sitting on disk: a full
+# agent stage, minutes and tokens, to rediscover what the operator just typed
+# in. This reads the report and the gate's own records together.
+preflight_settled() {
+    local result="$1" ids id
+    case "$result" in
+        PASS|BLOCKED-HUMAN) return 0 ;;
+        BLOCKED-SETUP) ;;
+        *) return 1 ;;
+    esac
+    ids="$(acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-SETUP)"
+    [[ -n "$ids" ]] || return 1
+    while IFS= read -r id; do
+        [[ -n "$id" ]] || continue
+        [[ -s "$(provided_file "$id")" || -s "$(waive_file "$id")" ]] || return 1
+    done <<< "$ids"
+    return 0
+}
+
+# Turn what the gate collected into records, and say which blockers are still
+# outstanding. A target that was named but never landed is not provided: the
+# next stage would find nothing there, which is the failure this is meant to
+# prevent rather than cause.
+#
+# The driver checks that the file exists and is not empty. It does not check
+# that the contents are right -- only the preflight agent can judge that, and
+# not re-running it is the whole point. The digest in each record is what makes
+# that trade auditable afterwards.
+record_provided_inputs() {
+    local records="$1" report="$2" id action target payload
+    local -a pairs=()
+    [[ -s "$records" ]] || return 0
+    while IFS="$(printf '\t')" read -r id action target payload; do
+        [[ -n "$id" && -n "$target" ]] || continue
+        if [[ -s "$target" ]]; then
+            record_provided "$report" "$id" "$target" "$action" || continue
+            pairs+=("$id=$target")
+            echo "  $id: satisfied by $target"
+        else
+            echo "  $id: $target was not written; still outstanding" >&2
+        fi
+    done < "$records"
+    [[ "${#pairs[@]}" -gt 0 ]] || return 0
+    # Mark the rows in the report itself rather than leaving the driver's
+    # records as the only place the resolution exists. A row still reading
+    # BLOCKED after its input landed is what sent the run back to re-run the
+    # stage; the rewritten evidence says the operator supplied it, so nothing
+    # downstream mistakes it for something preflight went and checked.
+    if ! python3 "$ROOT/scripts/lib/mark-provided.py" "$report" "${pairs[@]}"; then
+        echo "  could not mark $report; the gate records still stand." >&2
+    fi
 }
 
 # The plan has to carry three machine-read blocks, and the driver used to look
@@ -1486,13 +1565,32 @@ while true; do
                                 || collected=$?
                         fi
                         if [[ "$collected" == 0 ]] && apply_human_inputs "$human_records"; then
-                            rm -f "$human_records"
-                            echo "Prerequisites provided; re-running preflight to probe them."
-                            continue
+                            record_provided_inputs "$human_records" PREFLIGHT_REPORT.md
                         fi
                         rm -f "$human_records"
-                        echo "Do them and rerun. Each is doable in this environment."
-                        exit 1
+                        # Whatever the operator did not hand over is still
+                        # outstanding, and there are only two honest endings
+                        # for it: a waiver that records why it was not
+                        # provided, or a stop. Re-running the stage is neither
+                        # -- it re-reads the same disk and reports the same
+                        # blockers, having spent a full agent run to do it.
+                        outstanding=""
+                        while IFS= read -r blocked_id; do
+                            [[ -n "$blocked_id" ]] || continue
+                            [[ -s "$(provided_file "$blocked_id")" ]] \
+                                || outstanding="$outstanding $blocked_id"
+                        done <<< "$blocked_ids"
+                        if [[ -n "$outstanding" ]]; then
+                            echo
+                            echo "Still outstanding:$outstanding"
+                            # shellcheck disable=SC2086
+                            if ! record_waiver PREFLIGHT_REPORT.md $outstanding; then
+                                echo "Not provided and not waived; stopping before implementation."
+                                exit 1
+                            fi
+                        fi
+                        human_input_reset "$STATE_DIR"
+                        echo "Prerequisites settled at the gate; continuing to implementation."
                     fi
                     ;;
                 *)
@@ -1517,7 +1615,7 @@ while true; do
                 UPDATED_PROJECT_PLAN
             if [[ ! -s "$STATE_DIR/preflight-plan.sha256" ]] \
                 || [[ "$(cat "$STATE_DIR/preflight-plan.sha256")" != "$(hash_file UPDATED_PROJECT_PLAN.md)" ]] \
-                || ! preflight_acceptable "$(acceptance_result PREFLIGHT_REPORT.md)"; then
+                || ! preflight_settled "$(acceptance_result PREFLIGHT_REPORT.md)"; then
                 set_state PREFLIGHT
                 continue
             fi

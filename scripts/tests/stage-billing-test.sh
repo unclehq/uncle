@@ -63,7 +63,7 @@ eq "a free model leaves the default alone" "$(uncle_stage_billing requirements)"
 printf 'requirements.runner cline\nrequirements.billing cline-usage\nrequirements.model poolside/laguna-s-2.1\n' > "$UNCLE_CONFIG"
 eq "a free model keeps usage billing" "$(uncle_stage_billing requirements)" cline-usage
 eq "and is still what runs" "$(uncle_stage_model requirements)" poolside/laguna-s-2.1
-printf 'requirements.runner cline\nrequirements.billing clinepass\nrequirements.model meituan/longcat-2.0\n' > "$UNCLE_CONFIG"
+printf 'requirements.runner cline\nrequirements.billing clinepass\nrequirements.model meituan/longcat-2.0-free\n' > "$UNCLE_CONFIG"
 eq "a free model keeps the subscription setting" "$(uncle_stage_billing requirements)" clinepass
 
 # Step variants inherit the parent stage's setting.

@@ -142,6 +142,12 @@ MODEL_CATALOG_CLINEPASS = [
 # checked against cline's installed catalogue rather than inferred -- see
 # cline-model-ids-test.sh, which fails if one of these stops existing.
 #
+# Being in the catalogue is necessary and not sufficient. `meituan/longcat-2.0`
+# is an exact catalogue key with a full entry, and the gateway answers it with
+# 404 model_not_found; the id that serves is `meituan/longcat-2.0-free`. The
+# catalogue is a list of models cline can describe, not of models this account
+# can call, so an id belongs here only once something has actually run on it.
+#
 # This list is shorter than cline's own Recommended group on purpose. cline
 # fetches that group from its server at runtime
 # (@cline/llms fetchClineRecommendedModelsPayload), so it carries models the
@@ -163,7 +169,7 @@ MODEL_CATALOG_FREE = [
     ("Free", [
         ("DeepSeek V4 Flash", "deepseek/deepseek-v4-flash"),
         ("GLM-5.3-Flash", "z-ai/glm-5.3-flash"),
-        ("LongCat 2.0", "meituan/longcat-2.0"),
+        ("LongCat 2.0", "meituan/longcat-2.0-free"),
         ("Laguna S 2.1", "poolside/laguna-s-2.1"),
     ]),
 ]

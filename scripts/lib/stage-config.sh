@@ -28,7 +28,7 @@ UNCLE_DEFAULT_CLINE_USAGE_MODEL="deepseek/deepseek-v4-flash"
 # Free models cost nothing under either billing, so they are offered in both
 # lists and say nothing about which purse a stage spends. Kept in step with
 # uncle_tui.py's MODEL_CATALOG_FREE by tui-config-test.sh.
-UNCLE_CLINE_FREE_MODELS="deepseek/deepseek-v4-flash z-ai/glm-5.3-flash meituan/longcat-2.0 poolside/laguna-s-2.1"
+UNCLE_CLINE_FREE_MODELS="deepseek/deepseek-v4-flash z-ai/glm-5.3-flash meituan/longcat-2.0-free poolside/laguna-s-2.1"
 
 uncle_config_file() {
     printf '%s' "${UNCLE_CONFIG:-${PROJECT_ROOT:-$PWD}/.uncle/config}"

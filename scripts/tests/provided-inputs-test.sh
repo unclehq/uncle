@@ -121,20 +121,42 @@ ok
 # A pipe in a path would split the row and corrupt the table for every later
 # reader, so it is stripped rather than written through.
 fresh
-if mkdir -p 'tests/fixtures/od|d' 2>/dev/null; then
-printf 'x\n' > 'tests/fixtures/od|d/oracle.json'
-python3 "$MARK" PREFLIGHT_REPORT.md 'P-2=tests/fixtures/od|d/oracle.json' \
-    || fail "a path containing a pipe should still mark"
+# Exercise evidence escaping on every platform without asking the filesystem
+# to represent a name that Win32 forbids. Only the digest I/O is substituted.
+python3 - "$MARK" <<'PYTEST'
+import importlib.util
+import sys
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location('mark_provided', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with patch.object(module, 'digest', return_value='a' * 64) as digest:
+    assert module.mark('PREFLIGHT_REPORT.md', {'P-2': 'tests/fixtures/od|d/oracle.json'}) == 0
+    digest.assert_called_once_with('tests/fixtures/od|d/oracle.json')
+PYTEST
 ok
 [[ "$(awk -F'|' '/^\| P-2 /{print NF}' PREFLIGHT_REPORT.md)" == 6 ]] \
     || fail "the marked row does not have six fields"
 ok
-[[ "$(acceptance_result PREFLIGHT_REPORT.md)" != UNKNOWN ]] \
+[[ "$(acceptance_result PREFLIGHT_REPORT.md)" == BLOCKED-SETUP ]] \
     || fail "the table stopped parsing after marking"
 ok
 
+# Also exercise real digest I/O where the native Python filesystem API can
+# use pipe names. MSYS mkdir can succeed on Windows via filename translation
+# even though native Python cannot open that same path.
+if python3 -c 'import os, sys; sys.exit(1 if os.name == "nt" else 0)'; then
+    fresh
+    mkdir -p 'tests/fixtures/od|d'
+    printf 'x\n' > 'tests/fixtures/od|d/oracle.json'
+    python3 "$MARK" PREFLIGHT_REPORT.md 'P-2=tests/fixtures/od|d/oracle.json' \
+        || fail "a path containing a pipe should still mark"
+    ok
+    [[ "$(awk -F'|' '/^\| P-2 /{print NF}' PREFLIGHT_REPORT.md)" == 6 ]] \
+        || fail "the real-file marked row does not have six fields"
+    ok
 else
-    echo "SKIP: filesystem cannot represent a pipe in a filename."
+    echo "SKIP: native Windows cannot open pipe filenames; evidence escaping tested separately."
 fi
 
 cd "$ROOT"

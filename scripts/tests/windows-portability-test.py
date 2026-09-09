@@ -81,7 +81,7 @@ class Portability(unittest.TestCase):
             self.assertNotIn(b'app\\test.sh', result.stdout)
 
     def test_windows_group_and_tree_kill(self):
-        child = Mock(pid=123)
+        child = Mock(pid=123, _uncle_job=None)
         child.poll.return_value = None
         with patch.object(process_tree, 'os', types.SimpleNamespace(name='nt')), \
              patch.object(process_tree.subprocess, 'CREATE_NEW_PROCESS_GROUP', 512, create=True), \
@@ -90,6 +90,81 @@ class Portability(unittest.TestCase):
             process_tree.kill_tree(child)
             self.assertEqual(run.call_args[0][0], ['taskkill.exe','/PID','123','/T','/F'])
             child.kill.assert_called_once()
+
+    def test_windows_job_assignment_precedes_command_release(self):
+        import windows_job
+        events = []
+        job = Mock()
+        job.assign.side_effect = lambda child: events.append('assign')
+        child = Mock()
+        child.stdin.write.side_effect = lambda data: events.append(('release', data))
+        with patch.object(windows_job, 'Job', return_value=job), \
+             patch.object(windows_job.subprocess, 'Popen', return_value=child):
+            self.assertIs(windows_job.start(['check']), child)
+        self.assertEqual(events, ['assign', ('release', b'G')])
+        process_tree.kill_tree(child)
+        job.terminate.assert_called_once()
+        child.kill.assert_not_called()
+        process_tree.finish_check(child)
+        job.close.assert_called_once()
+
+    def test_job_bootstrap_requires_release_and_preserves_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory)/'command ran'
+            command = [sys.executable, '-B', str(ROOT/'scripts/lib/windows_job.py'),
+                       sys.executable, '-c',
+                       'import pathlib,sys; pathlib.Path(sys.argv[1]).touch(); sys.exit(7)', str(marker)]
+            result = subprocess.run(command, input=b'', capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 125, result.stderr)
+            self.assertFalse(marker.exists())
+            result = subprocess.run(command, input=b'G', capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertTrue(marker.exists())
+
+    def test_windows_job_assignment_failure_never_releases_command(self):
+        import windows_job
+        job = Mock()
+        job.assign.side_effect = OSError('assignment rejected')
+        child = Mock()
+        with patch.object(windows_job, 'Job', return_value=job), \
+             patch.object(windows_job.subprocess, 'Popen', return_value=child):
+            with self.assertRaises(OSError):
+                windows_job.start(['check'])
+        child.stdin.write.assert_not_called()
+        child.kill.assert_called_once()
+        child.wait.assert_called_once()
+        job.close.assert_called_once()
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows job ownership')
+    def test_windows_job_cleans_descendant_after_parent_exits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            descendant = ('import time; f=open("held", "wb"); '
+                          'open("ready", "w").close(); time.sleep(30)')
+            parent = ('import subprocess,sys,time,pathlib; '
+                      f'subprocess.Popen([sys.executable,"-c",{descendant!r}]); '
+                      '\nwhile not pathlib.Path("ready").exists(): time.sleep(.01)')
+            child = process_tree.start_check([sys.executable, '-c', parent], cwd=root)
+            try:
+                self.assertEqual(child.wait(timeout=5), 0)
+                # The descendant survives its immediate parent and still owns
+                # the file. Job termination must find it without that parent.
+                with self.assertRaises(PermissionError):
+                    (root/'held').unlink()
+            finally:
+                process_tree.kill_tree(child)
+                child.wait(timeout=5)
+                process_tree.finish_check(child)
+            import time
+            deadline = time.monotonic() + 3
+            while True:
+                try:
+                    (root/'held').unlink()
+                    break
+                except PermissionError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(.05)
 
     def test_windows_shell_fixture_launch(self):
         with tempfile.TemporaryDirectory() as directory:

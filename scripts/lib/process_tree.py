@@ -57,7 +57,27 @@ def group_options():
     return {'start_new_session': True}
 
 
+def start_check(command, **kwargs):
+    if os.name == 'nt':
+        from windows_job import start
+        return start(command, **kwargs, **group_options())
+    return subprocess.Popen(command, stdin=subprocess.DEVNULL, **kwargs, **group_options())
+
+
+def finish_check(process):
+    job = getattr(process, '_uncle_job', None)
+    if job is not None:
+        try:
+            job.terminate()
+        finally:
+            job.close()
+
+
 def kill_tree(process):
+    job = getattr(process, '_uncle_job', None)
+    if job is not None:
+        job.terminate()
+        return
     if os.name == 'nt':
         # Native PID, not an MSYS PID. /T includes grandchildren holding pipes.
         try:

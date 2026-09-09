@@ -1,5 +1,5 @@
 """Run explicitly approved independent check groups; keep evidence ordered."""
-from process_tree import bash_executable, cleanup_directory, group_options, kill_tree
+from process_tree import bash_executable, cleanup_directory, finish_check, start_check, kill_tree
 
 import argparse
 import difflib
@@ -81,12 +81,12 @@ def run(args):
                 if halted.is_set():
                     output.write(b"NOT RUN: protected verification inputs changed.\n")
                     return 125, log
-                child = subprocess.Popen([bash_executable(), "-c", command], stdin=subprocess.DEVNULL,
-                                         stdout=output, stderr=subprocess.STDOUT,
-                                         **group_options())
+                child = start_check([bash_executable(), "-c", command],
+                                    stdout=output, stderr=subprocess.STDOUT)
                 children.add(child)
             status = child.wait()
             with lock:
+                finish_check(child)
                 children.discard(child)
             intact()  # Check each command, even if a peer later restores bytes.
         record(command, time.monotonic() - started, status, args.log)

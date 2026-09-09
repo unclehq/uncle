@@ -199,21 +199,23 @@ stage_documents() {
 
 # basename -> byte floor, ceiling, source multiplier, line floor, ceiling.
 # Only authoritative input sets defaults; generated plans never compound budgets.
-# One rule for every generated document: twice the brief it came from.
+# One rule for every generated document: three times the brief it came from.
 #
 # These used to be six different bands, and the per-document ceilings quietly
 # won -- a preflight report was capped at 8000 while twice its brief was 10956,
 # so the number the agent was given had little to do with the document it was
 # asked to write. Worse, the tight ones produced the failure they were meant to
 # prevent: an interpretation held to its brief's own length sent the agent into
-# rounds of self-trimming until the stage died with the work unsaved.
+# rounds of self-trimming until the stage died with the work unsaved. A brief
+# states what is wanted; the documents answering it carry behaviours,
+# invariants, verification and disposition tables, and need the room.
 #
 # So the size of the brief is the only input. A run whose REQUIREMENTS.md or
 # CHANGE_REQUEST.md is short gets short documents; one that arrives with a long
 # GitHub issue gets room to answer it. The floor keeps a one-line brief from
 # implying a one-line plan, and the ceiling is a backstop against a brief
 # pasted in from something enormous, not a per-document opinion.
-DOCUMENT_BUDGET_RULE='4000 40000 2 120 1000'
+DOCUMENT_BUDGET_RULE='4000 40000 3 120 1000'
 
 document_budget_defaults() {
     case "${1##*/}" in

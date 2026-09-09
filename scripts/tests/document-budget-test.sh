@@ -23,7 +23,7 @@ LOG_DIR="$tmp"
 printf 'stage instructions' > prompt.md
 WORKFLOW_DOC_MAX_BYTES=12345 gated_prompt prompt.md updated-plan > resolved
 rg -q '12345 UTF-8 bytes' "$(cat resolved)"
-# Every artifact gets twice its source brief. An interpretation squeezed to
+# Every artifact gets three times its source brief. An interpretation squeezed to
 # the brief's own length is what sent the requirements agent into repeated
 # self-trimming instead of finishing, so 2x is the rule for all of them.
 # Interpretation budgets follow source size, with a floor and ceiling, and
@@ -33,11 +33,11 @@ printf 'brief' > REQUIREMENTS.md
 python3 - <<'PY'
 from pathlib import Path
 Path('REQUIREMENTS.md').write_bytes(b'x' * 5478)
-Path('REQUIREMENTS_INTERPRETATION.md').write_bytes(b'x' * 10957)
+Path('REQUIREMENTS_INTERPRETATION.md').write_bytes(b'x' * 16435)
 PY
-[[ $(requirements_document_max_bytes) == 10956 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ $(requirements_document_max_bytes) == 16434 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 gated_prompt prompt.md requirements > resolved
-rg -q '10956 UTF-8 bytes' "$(cat resolved)"
+rg -q '16434 UTF-8 bytes' "$(cat resolved)"
 if rg -q 'Target 12,000' "$(cat resolved)"; then exit 1; fi
 if WORKFLOW_DOC_BUDGET_ENFORCE=1 check_document_budget REQUIREMENTS_INTERPRETATION.md 2>/dev/null; then exit 1; fi
 # By default the same overflow is a remark, not a stop: the number is a
@@ -47,7 +47,7 @@ check_document_budget REQUIREMENTS_INTERPRETATION.md 2>/dev/null \
     || { echo "FAIL $0:$LINENO advisory budget must not stop the run" >&2; exit 1; }
 [[ -s REQUIREMENTS_INTERPRETATION.md ]] \
     || { echo "FAIL $0:$LINENO the oversized document must be preserved" >&2; exit 1; }
-WORKFLOW_DOC_MAX_BYTES=10957 check_document_budget REQUIREMENTS_INTERPRETATION.md
+WORKFLOW_DOC_MAX_BYTES=16435 check_document_budget REQUIREMENTS_INTERPRETATION.md
 WORKFLOW_DOC_MAX_BYTES=6000 gated_prompt prompt.md requirements > resolved
 rg -q '6000 UTF-8 bytes' "$(cat resolved)"
 python3 - <<'PY'

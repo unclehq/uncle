@@ -3,7 +3,24 @@ import os
 import signal
 import shutil
 import subprocess
+import time
 from pathlib import Path
+
+
+def cleanup_directory(directory, timeout=3):
+    """Allow terminated Windows descendants to release inherited file handles."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            directory.cleanup()
+            return
+        except OSError as error:
+            # TerminateProcess is asynchronous; taskkill returning and the
+            # direct child exiting do not imply every descendant closed its
+            # handles. Retry only sharing/lock violations, never other errors.
+            if getattr(error, 'winerror', None) not in (32, 33) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
 
 
 def bash_executable():

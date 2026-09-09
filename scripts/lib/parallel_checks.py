@@ -1,5 +1,5 @@
 """Run explicitly approved independent check groups; keep evidence ordered."""
-from process_tree import bash_executable, group_options, kill_tree
+from process_tree import bash_executable, cleanup_directory, group_options, kill_tree
 
 import argparse
 import difflib
@@ -136,10 +136,12 @@ def run(args):
                 except ProcessLookupError:
                     pass
         pool.shutdown(wait=True)
-        temporary.cleanup()
-        if old_break is not None:
-            signal.signal(signal.SIGBREAK, old_break)
-        signal.signal(signal.SIGTERM, old_term)
+        try:
+            cleanup_directory(temporary)
+        finally:
+            if old_break is not None:
+                signal.signal(signal.SIGBREAK, old_break)
+            signal.signal(signal.SIGTERM, old_term)
 
 
 if __name__ == "__main__":

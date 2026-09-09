@@ -16,6 +16,58 @@ sys.path.insert(0, str(ROOT / 'scripts/lib'))
 import process_tree
 
 class Portability(unittest.TestCase):
+    def test_cleanup_retries_windows_handle_release(self):
+        for code in (32, 33):
+            with self.subTest(winerror=code), tempfile.TemporaryDirectory() as parent:
+                directory = tempfile.TemporaryDirectory(dir=parent)
+                path = Path(directory.name)
+                (path/'output').write_bytes(b'check output')
+                cleanup = directory.cleanup
+                error = PermissionError('inherited output handle still open')
+                error.winerror = code
+                with patch.object(directory, 'cleanup') as attempt, \
+                     patch.object(process_tree.time, 'sleep'):
+                    # The last attempt performs real deletion.
+                    def release():
+                        if attempt.call_count < 3:
+                            raise error
+                        cleanup()
+                    attempt.side_effect = release
+                    process_tree.cleanup_directory(directory)
+                    self.assertEqual(attempt.call_count, 3)
+                self.assertFalse(path.exists())
+
+    def test_cleanup_does_not_hide_persistent_or_other_errors(self):
+        for code in (32, 33, 5, None):
+            with self.subTest(winerror=code):
+                error = PermissionError('cannot delete')
+                error.winerror = code
+                directory = Mock()
+                directory.cleanup.side_effect = error
+                with self.assertRaises(PermissionError) as raised:
+                    process_tree.cleanup_directory(directory, timeout=0)
+                self.assertIs(raised.exception, error)
+                directory.cleanup.assert_called_once()
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows denies deletion of open files')
+    def test_cleanup_waits_for_native_child_file_handle(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name)
+        child = subprocess.Popen([sys.executable, '-c',
+                                  'import sys,time; f=open(sys.argv[1], "wb"); '
+                                  'print("ready", flush=True); time.sleep(.5); f.close()',
+                                  str(path/'output')], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), 'ready')
+            process_tree.cleanup_directory(directory)
+            self.assertFalse(path.exists())
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+            child.stdout.close()
+
     def test_manifest_is_utf8_lf_and_forward_slashes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

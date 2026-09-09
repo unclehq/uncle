@@ -28,6 +28,7 @@ check_eq() {
     COUNT=$((COUNT + 1))
     if [[ "$actual" != "$expected" ]]; then
         fail "$name — expected '$expected', got '$actual'"
+        printf '  expected bytes: %q\n  actual bytes:   %q\n' "$expected" "$actual"
     fi
 }
 
@@ -60,7 +61,7 @@ EOF
 cat > "$TMP/errored" <<'EOF'
 #!/usr/bin/env bash
 cat > /dev/null
-echo '{"type":"result","subtype":"error_max_turns","is_error":true,"result":""}'
+echo '{"type":"result","subtype":"error_max_turns","is_error":true,"result":"Partial review must not be accepted"}'
 EOF
 
 chmod +x "$TMP/fake-claude" "$TMP/no-result" "$TMP/errored"
@@ -182,6 +183,33 @@ for good in opus sonnet haiku claude-opus-5 sonnet-5; do
         *) fail "Claude tier '$good' was rewritten instead of passed through" ;;
     esac
 done
+
+# Model native jq's newline conversion on every host. Binary mode must be
+# requested for both the multiline artifact and the is_error scalar guard.
+mkdir "$TMP/native-jq"
+export REAL_JQ="$(command -v jq)"
+cat > "$TMP/native-jq/jq" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == --binary ]]; then
+    shift
+    exec "$REAL_JQ" "$@"
+fi
+"$REAL_JQ" "$@" | sed $'s/$/\r/'
+EOF
+chmod +x "$TMP/native-jq/jq"
+if [[ "${OSTYPE:-}" != msys* && "${OSTYPE:-}" != cygwin* && "${OSTYPE:-}" != win32* ]]; then
+    PATH="$TMP/native-jq:$PATH" OSTYPE=msys run_shim fake-claude exec \
+        --output-last-message "$TMP/native.md" "P" > /dev/null 2>&1
+    check_eq 'native jq artifact uses LF' "## AR-001: Finding
+
+NOT READY" "$(cat "$TMP/native.md")"
+    status=0
+    PATH="$TMP/native-jq:$PATH" OSTYPE=msys run_shim errored exec \
+        --output-last-message "$TMP/native-error.md" "P" > /dev/null 2>&1 || status=$?
+    check_eq 'native jq error scalar rejects partial review' '1' "$status"
+    check_absent 'native jq failed review has no artifact' "$TMP/native-error.md"
+fi
 
 if [[ "$FAILED" -ne 0 ]]; then
     echo "reviewer-claude-test.sh: $FAILED of $COUNT checks failed"

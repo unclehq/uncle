@@ -21,6 +21,13 @@
 # bash 3.2 compatible: no associative arrays, no ${var^^}.
 set -euo pipefail
 
+# Native jq otherwise translates LF to CRLF, including inside raw review
+# text and scalar values used by Bash comparisons. Keep POSIX jq compatible.
+jq_output_flags=()
+case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*) jq_output_flags=(--binary) ;;
+esac
+
 CLAUDE_CMD="${WORKFLOW_REVIEWER_CLAUDE_CMD:-claude}"
 DEFAULT_MODEL="${WORKFLOW_REVIEWER_CLAUDE_MODEL:-opus}"
 MAX_TURNS="${WORKFLOW_REVIEWER_CLAUDE_TURNS:-80}"
@@ -110,7 +117,7 @@ set +e
 printf '%s' "$prompt" \
     | "$CLAUDE_CMD" "${claude_flags[@]}" \
     | tee "$stream" \
-    | jq -R -r --unbuffered '
+    | jq ${jq_output_flags[@]+"${jq_output_flags[@]}"} -R -r --unbuffered '
         (fromjson? | select(type == "object")) as $e
         | if $e.type == "assistant" then
               ($e.message.content[]?
@@ -124,7 +131,7 @@ set -e
 
 status="${claude_pipe[1]}"
 
-result="$(jq -R -c 'fromjson? | select(type == "object") | select(.type == "result")' < "$stream" | tail -n 1)"
+result="$(jq ${jq_output_flags[@]+"${jq_output_flags[@]}"} -R -c 'fromjson? | select(type == "object") | select(.type == "result")' < "$stream" | tail -n 1)"
 # Preserve usage even if this review subsequently fails.
 [[ -z "$result" ]] || printf '%s\n' "$result"
 
@@ -140,12 +147,12 @@ if [[ -z "$result" ]]; then
     exit 1
 fi
 
-if [[ "$(printf '%s' "$result" | jq -r '.is_error // false')" == "true" ]]; then
-    echo "reviewer-claude.sh: review failed: $(printf '%s' "$result" | jq -r '.subtype // "unknown"')" >&2
+if [[ "$(printf '%s' "$result" | jq ${jq_output_flags[@]+"${jq_output_flags[@]}"} -r '.is_error // false')" == "true" ]]; then
+    echo "reviewer-claude.sh: review failed: $(printf '%s' "$result" | jq ${jq_output_flags[@]+"${jq_output_flags[@]}"} -r '.subtype // "unknown"')" >&2
     exit 1
 fi
 
-review="$(printf '%s' "$result" | jq -r '.result // empty')"
+review="$(printf '%s' "$result" | jq ${jq_output_flags[@]+"${jq_output_flags[@]}"} -r '.result // empty')"
 
 if [[ -z "$review" ]]; then
     echo "reviewer-claude.sh: the review produced no final message" >&2
@@ -162,7 +169,7 @@ fi
 # record_codex_cost reads the digits on the line after "tokens used".
 echo
 printf 'tokens used\n%s\n' \
-    "$(printf '%s' "$result" | jq -r '
+    "$(printf '%s' "$result" | jq ${jq_output_flags[@]+"${jq_output_flags[@]}"} -r '
         (.usage.input_tokens // 0)
         + (.usage.output_tokens // 0)
         + (.usage.cache_read_input_tokens // 0)

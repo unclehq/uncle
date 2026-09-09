@@ -57,6 +57,17 @@ Audit for:
 - acceptance gate rows that omit mandatory checks or mislabel them optional;
 - missing evidence that critical tests reject representative defects.
 
+Put all findings in exactly one `## Findings` section containing only a table.
+Use these exact columns, with one row per finding:
+
+| ID | Severity | Evidence | Affected requirement / invariant | Required correction | Blocks |
+|---|---|---|---|---|---|
+
+IDs must be plain identifiers such as FA-1. Blocks must be YES or NO.
+Do not put literal pipe characters inside cells. Do not put findings outside
+this table. With no findings, leave the table empty. The driver presents each
+YES row to the operator for an individual Ignore / Keep blocking decision.
+
 For each finding include:
 
 - ID

@@ -1854,6 +1854,34 @@ while true; do
             require_file "$VERDICT_FILE"
             audit_class="$(awk -F'\t' 'NR == 1 {print $1}' "$VERDICT_FILE")"
 
+            # Recover an interruption after saving READY but before COMPLETE.
+            if [[ "$audit_class" == READY ]]; then
+                [[ "$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")" == "$(hash_file FINAL_AUDIT.md)" ]] || exit 1
+                python3 "$ROOT/scripts/lib/audit-findings.py" FINAL_AUDIT.md "$STATE_DIR" --check || exit 1
+                set_state COMPLETE
+                continue
+            fi
+
+            if [[ "$audit_class" == NOT_READY ]]; then
+                audit_hash="$(hash_file FINAL_AUDIT.md)"
+                if [[ "$(classify_audit_verdict FINAL_AUDIT.md)" != NOT_READY ]] \
+                    || [[ "$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")" != "$audit_hash" ]]; then
+                    echo "The audit changed since its verdict was recorded; rerun FINAL_AUDIT."
+                    exit 1
+                fi
+                # Each finding needs an explicit decision, including in an
+                # unattended run. EOF leaves the saved review pending.
+                python3 "$ROOT/scripts/lib/audit-findings.py" FINAL_AUDIT.md "$STATE_DIR" || exit 1
+                [[ "$(hash_file FINAL_AUDIT.md)" == "$audit_hash" ]] || exit 1
+                cp "$VERDICT_FILE" "$STATE_DIR/audit-verdict.original"
+                printf '%s\t%s\n' "READY" "$audit_hash" > "$VERDICT_FILE"
+                if [[ -f "$AUDIT_OVERRIDE_FILE" ]]; then
+                    mv "$AUDIT_OVERRIDE_FILE" "$AUDIT_OVERRIDE_FILE.previous"
+                fi
+                set_state COMPLETE
+                continue
+            fi
+
             echo
             echo "=================================================="
             echo "FINAL AUDIT: $audit_class"
@@ -1892,6 +1920,9 @@ while true; do
         COMPLETE)
             echo
             echo "Workflow complete."
+            if [[ -s "$VERDICT_FILE" ]]; then
+                echo "Build verdict: $(awk -F'\t' 'NR == 1 {print $1}' "$VERDICT_FILE")"
+            fi
             echo
             echo "Artifacts:"
             echo "  REQUIREMENTS_INTERPRETATION.md"

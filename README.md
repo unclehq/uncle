@@ -467,3 +467,17 @@ with their blocked status intact. Failed checks still enter the repair workflow.
 If changed setup requires a fresh execution, explicitly set
 `.uncle/workflow/state` to `EXECUTE_CHECKLIST` before resuming; do not mark an
 unexecuted check as passed to clear validation.
+
+When a final audit is `NOT READY`, each blocking finding gets its own dialog:
+**Ignore** accepts that finding, and **Keep blocking** leaves it outstanding.
+The dialog shows evidence and the required correction; use the arrow keys to
+scroll or **v** to view the audit. In a plain terminal, answer Y or N.
+The build becomes `READY` when every blocking finding is explicitly ignored.
+Keeping any blocker leaves the workflow at `WAIT_AUDIT_OVERRIDE`; resuming asks
+only about remaining blockers and does not rerun the audit or checklist.
+
+Decisions are saved in `.uncle/workflow/audit-dispositions/`, bound to the audit's
+SHA-256. The original `FINAL_AUDIT.md` remains unchanged; `audit-verdict` records
+the effective build verdict. A revised audit requires new decisions. Missing
+input, including in unattended mode, never counts as Ignore. A malformed audit
+cannot become `READY` through this mechanism.

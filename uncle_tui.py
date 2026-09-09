@@ -1409,6 +1409,7 @@ class UncleTUI:
             self.prompt_kind = "input"
         self.prompt_text = plain
         self.prompt_buf = ""
+        self.prompt_scroll = 0
 
     @staticmethod
     def _strip_ansi(text):
@@ -1980,6 +1981,8 @@ class UncleTUI:
             footer = "[y] approve      [n] decline"
             if self.gate_file:
                 footer = "[y] approve      [n] decline      [v] view file"
+            if self.prompt_text.startswith("Audit finding "):
+                footer = "[y] Ignore  [n] Keep blocking  [v] audit  [↑↓] scroll"
         elif self.prompt_kind == "support":
             footer = "[s] open GitHub to star      [Enter/Esc] dismiss"
         elif self.prompt_kind == "enter":
@@ -1987,6 +1990,10 @@ class UncleTUI:
         else:
             footer = "type an answer, [Enter] send, [Esc] cancel"
         body = list(lines)
+        if self.prompt_text.startswith("Audit finding "):
+            visible = max(1, h - 10)
+            self.prompt_scroll = max(0, min(getattr(self, "prompt_scroll", 0), len(lines) - visible))
+            body = lines[self.prompt_scroll:self.prompt_scroll + visible]
         if self.prompt_kind == "input":
             body += ["", "> " + self.prompt_buf + "\u2588"]
         body += ["", footer]
@@ -1998,6 +2005,8 @@ class UncleTUI:
         left = max(0, (w - box_w) // 2)
         title = {"confirm": " approve ", "enter": " review ", "input": " input ", "support": " support Uncle "}.get(
             self.prompt_kind, " uncle ")
+        if self.prompt_text.startswith("Audit finding "):
+            title = " blocking audit finding "
 
         border = self.color["title"]
         try:
@@ -2125,7 +2134,9 @@ class UncleTUI:
 
         if self.state == "running":
             if self.prompt_kind == "confirm":
-                if k in (ord("y"), ord("Y")):
+                if self.prompt_text.startswith("Audit finding ") and k in (curses.KEY_UP, curses.KEY_DOWN):
+                    self.prompt_scroll = max(0, getattr(self, "prompt_scroll", 0) + (1 if k == curses.KEY_DOWN else -1))
+                elif k in (ord("y"), ord("Y")):
                     self.answer_prompt("y")
                 elif k in (ord("n"), ord("N")):
                     self.answer_prompt("n")

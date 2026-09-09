@@ -73,24 +73,40 @@ capabilities remain blockers rather than becoming optional checks.
 
 Approving this plan approves those commands.
 
-Optionally add `## Parallel verification groups` with a fenced block of
-one-based positions from the Verification commands block. Each line is a group
-of at least two consecutive command numbers, for example `2 3`. Groups must be
-ordered and disjoint. Only group checks proven independent: no shared ports,
-writable fixtures, outputs, or prerequisite ordering. Explain that independence
-in the testing strategy. The driver limits concurrency with WORKFLOW_VERIFY_JOBS
-(default 2, maximum 8), preserves per-command outcomes and integrity checks,
-and runs unlisted commands sequentially. Omit this section when none qualify.
+Optionally add `## Parallel verification groups` when checks are proven
+independent: no shared ports, writable fixtures, outputs, or prerequisite
+ordering. The section holds one fenced block and nothing else — bare rows of
+one-based positions from the Verification commands block, one group per line,
+each row at least two consecutive numbers, rows ordered and disjoint:
+
+```text
+2 3 4
+6 7
+```
+
+No bullets, labels, backticked numbers, or prose in or around the block;
+explain each group's independence in the testing strategy instead. The driver
+limits concurrency with WORKFLOW_VERIFY_JOBS (default 2, maximum 8), preserves
+per-command outcomes and integrity checks, and runs unlisted commands
+sequentially. Omit this section when none qualify.
 
 Include `## Protected verification paths` -- the heading is matched on the
 words "protected" and "paths", so a shortened one is read, but write it in
-full -- with one fenced block of literal
-repository-relative file or directory paths, one per line. List all tests,
+full -- with one fenced block and nothing else in it: literal
+repository-relative file or directory paths, one per line:
+
+```text
+tests
+fixtures/oracle.json
+```
+
+No commas, inline backticks, globs, symlinks, parent traversal, or
+workflow-state paths. List all tests,
 expected results and fixtures, test helpers, and configuration that determines
 which tests run. Prefer complete test directories so new tests cannot be
 silently added during verification. Include authoritative source inputs when
-they are test oracles. No globs, symlinks, parent traversal, or workflow-state
-paths. Paths must exist after implementation. Put generated test outputs in
+they are test oracles. Paths must exist after implementation. Put generated
+test outputs in
 temporary directories outside these scopes. Python bytecode caches are ignored.
 The driver hashes these inputs before running verification and rejects changed,
 added, or deleted inputs. Repairs may edit them, but require a fresh diff review

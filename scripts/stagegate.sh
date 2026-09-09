@@ -1214,6 +1214,7 @@ run_green_check() {
     verify_commands UPDATED_PROJECT_PLAN.md > "$GREEN_CMDS"
     if ! verify_parallel_groups UPDATED_PROJECT_PLAN.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups"; then
         echo 'Invalid Parallel verification groups. Amend the plan and renew approval.'
+        parallel_groups_format_hint
         exit 1
     fi
 
@@ -1474,6 +1475,15 @@ while true; do
                 echo
                 echo "UPDATED_PROJECT_PLAN.md has $plan_problem."
                 plan_headings UPDATED_PROJECT_PLAN.md
+                if [[ "$plan_problem" == 'invalid Parallel verification groups' ]]; then
+                    parallel_groups_format_hint
+                elif [[ "$plan_problem" == 'no Protected verification paths block' ]]; then
+                    echo 'Expected: a heading with the words "protected" and "paths", then'
+                    echo 'one fenced block of repository-relative paths, one per line.'
+                elif [[ "$plan_problem" == 'no Verification commands block' ]]; then
+                    echo 'Expected: ## Verification commands with one fenced block of'
+                    echo 'commands, one per line, and nothing else in it.'
+                fi
                 echo "The driver reads that block to run and protect verification,"
                 echo "so amend the plan before approving it; you are not being asked"
                 echo "to approve a plan that the next stage would reject."
@@ -1497,6 +1507,7 @@ while true; do
             fi
             if ! verify_parallel_groups UPDATED_PROJECT_PLAN.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups"; then
                 echo 'Invalid Parallel verification groups. Amend the plan and renew approval.'
+                parallel_groups_format_hint
                 exit 1
             fi
             if ! verification_paths UPDATED_PROJECT_PLAN.md > /dev/null; then

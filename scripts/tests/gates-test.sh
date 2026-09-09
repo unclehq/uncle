@@ -912,6 +912,8 @@ set_state IMPLEMENT
 run_stagegate
 expect_status 1
 expect_state PREFLIGHT
+expect_out 'Invalid Parallel verification groups'
+expect_out 'at least two consecutive numbers per line'
 expect_no_file .uncle/workflow/implemented
 
 

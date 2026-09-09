@@ -101,10 +101,19 @@ failed before the change, so it will not be blamed on the change; omitting it
 only hides it.
 
 Automated browsers and local test servers are permitted when required for
-acceptance. Optionally append `## Parallel verification groups` with one fenced
-block of consecutive, one-based command positions per line (for example `2 3`).
-Use ordered, disjoint groups only when commands have independent ports, outputs,
-fixtures, and state. Explain their independence in the test coverage section.
+acceptance. Optionally append `## Parallel verification groups` holding one
+fenced block and nothing else — bare rows of consecutive, one-based command
+positions, one group per line:
+
+```text
+2 3
+5 6
+```
+
+Rows must be ordered and disjoint; no bullets, labels, backticked numbers, or
+prose in the block. Group only commands with independent ports, outputs,
+fixtures, and state, and explain their independence in the test coverage
+section.
 The driver uses the approved groups for both baseline and post-change checks;
 do not regroup commands after approval.
 

@@ -43,6 +43,25 @@ verify_parallel_groups() {
     ' "$plan"
 }
 
+# Shown when a plan's groups cannot be parsed: the shape the parser accepts,
+# so whoever amends the plan does not have to read this file to find it.
+parallel_groups_format_hint() {
+    cat >&2 <<'HINT'
+Expected shape, immediately under the heading:
+
+## Parallel verification groups
+
+```text
+2 3 4
+6 7
+```
+
+Bare one-based positions from the Verification commands block: one group per
+line, at least two consecutive numbers per line, lines ordered and disjoint.
+No bullets, labels, or prose in the block.
+HINT
+}
+
 # verify_commands <file> — one command per line, from the first fenced block
 # under the document's verification-command heading.
 #

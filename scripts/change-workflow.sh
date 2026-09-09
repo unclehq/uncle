@@ -854,7 +854,11 @@ capture_green_baseline() {
     sed 's/^/  /' "$GREEN_CMDS"
     echo
 
-    verify_parallel_groups BASELINE_REPORT.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups" || exit 1
+    if ! verify_parallel_groups BASELINE_REPORT.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups"; then
+        echo 'Invalid Parallel verification groups in BASELINE_REPORT.md.'
+        parallel_groups_format_hint
+        exit 1
+    fi
     green_run "$GREEN_CMDS" "$GREEN_BASE" "$LOG_DIR/green-check-baseline.log" "" "$STATE_DIR/green-check.groups" || exit $?
     hash_file BASELINE_REPORT.md > "$GREEN_SOURCE"
 }
@@ -888,7 +892,11 @@ run_green_check() {
 
     echo
     echo "Re-running this project's checks from the driver:"
-    verify_parallel_groups BASELINE_REPORT.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups" || exit 1
+    if ! verify_parallel_groups BASELINE_REPORT.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups"; then
+        echo 'Invalid Parallel verification groups in BASELINE_REPORT.md.'
+        parallel_groups_format_hint
+        exit 1
+    fi
     green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" "" "$STATE_DIR/green-check.groups" || exit $?
     green_classify "$GREEN_BASE" "$GREEN_CUR" > "$GREEN_CLASS"
     green_report "$GREEN_CLASS" "$GREEN_MD" BASELINE_REPORT.md \

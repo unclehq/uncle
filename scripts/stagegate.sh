@@ -1172,8 +1172,6 @@ run_stage() {
         EXECUTE_CHECKLIST)
             rm -f VERIFICATION_REPORT.md
             run_claude prompts/execute-checklist.md execute-checklist
-            require_artifact VERIFICATION_REPORT.md
-            require_artifact DEFECTS.md
             ;;
         FINAL_AUDIT)
             run_codex_review \
@@ -1782,6 +1780,24 @@ while true; do
             ensure_checklist_runner execute-checklist || exit 1
             run_stage EXECUTE_CHECKLIST
             check_verification_inputs
+            # Execution and report validation are separate durable steps. A
+            # malformed table must not replay browser checks on every resume.
+            set_state VALIDATE_CHECKLIST
+            ;;
+
+        VALIDATE_CHECKLIST)
+            if [[ "$DIFF_GATE" == "1" ]]; then
+                verify_implementation_review
+            fi
+            require_file "$STATE_DIR/verification.manifest"
+            EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
+            check_verification_inputs
+            echo "Validating saved checklist reports; checks will not be rerun."
+            echo "Correct report errors in place, then resume this validation step."
+            require_file VERIFICATION_REPORT.md
+            require_file DEFECTS.md
+            check_document_budget VERIFICATION_REPORT.md || exit 1
+            check_document_budget DEFECTS.md || exit 1
             if [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then
                 printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
                 set_state REPAIR
@@ -1791,22 +1807,13 @@ while true; do
             ;;
 
         FINAL_AUDIT)
-            if [[ "$(acceptance_result TEST_REVIEW.md 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS')" == UNKNOWN ]]; then
-                echo "TEST_REVIEW.md's acceptance gate did not parse:"
-                acceptance_problem TEST_REVIEW.md | sed 's/^/  /'
-            fi
-            if [[ "$(acceptance_result TEST_REVIEW.md 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS')" != PASS ]]; then
-                set_state TEST_REVIEW
-                continue
-            fi
-            if [[ "$(acceptance_result VERIFICATION_REPORT.md)" == UNKNOWN ]]; then
-                echo "VERIFICATION_REPORT.md's acceptance gate did not parse:"
-                acceptance_problem VERIFICATION_REPORT.md | sed 's/^/  /'
-            fi
-            if [[ "$(acceptance_result VERIFICATION_REPORT.md)" != PASS ]]; then
-                set_state EXECUTE_CHECKLIST
-                continue
-            fi
+            # Use the same decisions as the preceding gates: human blockers
+            # and recorded waivers reach audit without becoming PASS. Testing
+            # only for PASS here sent those reports back around the pipeline.
+            acceptance_transition TEST_REVIEW.md FINAL_AUDIT 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+            [[ "$(get_state)" == FINAL_AUDIT ]] || continue
+            acceptance_transition VERIFICATION_REPORT.md FINAL_AUDIT
+            [[ "$(get_state)" == FINAL_AUDIT ]] || continue
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
             fi

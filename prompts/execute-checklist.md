@@ -93,7 +93,10 @@ checklist. Required is YES or NO; Status is PASS, FAIL, BLOCKED-SETUP,
 BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, NOT RUN, or N/A.
 Every row needs nonempty evidence or a reference to its detailed result; no
 literal pipe characters in cells. Required checks cannot become optional due
-to unavailable prerequisites. N/A is allowed only with a requirement-based
+to unavailable prerequisites. IDs must be plain identifiers using only letters,
+digits, underscores, dots, slashes, or hyphens (for example `REQ-71`). Put labels,
+parenthetical descriptions, and source-line references in Evidence, never ID.
+N/A is allowed only with a requirement-based
 explanation and Required NO. Include at least one required row. Reconcile
 summary totals with the rows. The driver sends FAIL to a separate repair stage
 and pauses on BLOCKED or NOT RUN instead of advancing to final audit.

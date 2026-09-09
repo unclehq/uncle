@@ -459,3 +459,11 @@ saves fresh command results and assertion logs in
 `.uncle/workspace/checklist-driver-checks/`. The verification agent uses that
 evidence for covered checks, avoiding duplicate local-server tests inside its
 sandbox. Manual checks and human acceptance still require separate evidence.
+
+The new-application driver saves `VALIDATE_CHECKLIST` after checklist execution.
+Resuming from that state validates the saved reports without rerunning checks.
+Fix malformed report rows in place; pending human checks continue to final audit
+with their blocked status intact. Failed checks still enter the repair workflow.
+If changed setup requires a fresh execution, explicitly set
+`.uncle/workflow/state` to `EXECUTE_CHECKLIST` before resuming; do not mark an
+unexecuted check as passed to clear validation.

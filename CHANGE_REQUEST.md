@@ -6,119 +6,118 @@ Feature
 
 ## Summary
 
-Show kimi stage costs in the live status bar and stage reports as labeled
-estimates, instead of "Unavailable". Extend the pricing table to the models
-actually in use (kimi-k3 included).
+Extend token-price cost estimation beyond Kimi models so stages running on
+`x-ai/grok-4.5` — and future non-Kimi models — get labeled cost estimates
+instead of "Unavailable".
 
 ## Motivation
 
-On a kimi-driven run every stage shows "Cost: Unavailable" while it works and
-"cost unknown" when it ends, even though uncle already recovers the token
-counts and already computes dollar estimates for the metrics record. The
-operator cannot see what a long stage is costing until the run is over, and
-even then only in the session-totals "projected" line. For kimi-k3 runs not
-even that exists: the model has no entry in the rate table, so estimates come
-back "unknown".
-
-Observed 2026-09-08 on a real run: a 15-minute implementation stage that
-failed reported "error_during_execution — 1 turns, 0s" with cost unknown,
-and the preflight stage (3,981,946 tokens) showed Cost Unavailable
-throughout.
+After the kimi-k3 change, a typical run shows estimates on the Kimi stages and
+"Unavailable" on the rest. In practice that is half the pipeline: the
+resume_viewer config (`.uncle/config`) runs adversarial-review,
+updated-change-plan, implementation, and manual-checklist on `x-ai/grok-4.5`
+via the cline driver — including implementation, the longest and most
+expensive stage. A cost panel that is blind to exactly the stages that cost
+the most still is not a cost picture.
 
 ## Observed Current Behavior
 
-- The kimi CLI reports no dollar figures anywhere. Its stream-json output has
-  no result/usage event, and its local session records
-  (`~/.kimi-code/sessions/*/agents/*/wire.jsonl`, `usage.record` events)
-  carry only token buckets (`inputOther`, `output`, `inputCacheRead`,
-  `inputCacheCreation`). Verified by inspection 2026-09-08.
-- `scripts/agent-kimi.sh` recovers tokens post-hoc by diffing local session
-  state (`scripts/lib/kimi-usage.py`) and synthesizes the stage `result`
-  with `total_cost_usd: null` (`scripts/agent-kimi.sh:198`). The TUI renders
-  a null cost as "Unavailable" (`uncle_tui.py:1605`).
-- Estimates exist but only after the fact: `scripts/lib/usage-cost.py`
-  `enrich()` attaches `estimated_cost_usd` with `cost_status: "estimated"`
-  to metrics rows. They surface in the session totals ("Reported +
-  projected") and in `uncle --performance` only when
-  `WORKFLOW_SHOW_COST_ESTIMATES=1` is set.
-- `RATES` in `usage-cost.py` covers only `moonshot-ai/kimi-k2.7-code` and
-  `moonshot-ai/kimi-k2.7-code-highspeed` (official page verified 2026-09-07).
-  kimi-k3, which current runs use, has no rates, so no estimate is produced.
-- The cline driver with bring-your-own kimi models (e.g. cline running
-  `moonshot-ai/kimi-k3`) also yields null cost from cline's `totalCost`, so
-  those stages show "Unavailable" too.
+- `RATES`/`SOURCES` in `scripts/lib/usage-cost.py` cover only
+  `moonshot-ai/*` models, sourced from the official Kimi pricing pages.
+  `enrich()` returns `cost_status: "unknown"` for everything else, so
+  grok-4.5 stages render "Unavailable" in the TUI, metrics, and
+  `--performance`.
+- The escape hatch exists (`WORKFLOW_PRICING_FILE`, README.md:410) but makes
+  every operator hand-maintain rates for models uncle could ship.
+- Public pricing is verifiable: the OpenRouter models API
+  (`https://openrouter.ai/api/v1/models`, fetched 2026-09-09) lists
+  `x-ai/grok-4.5` at $2/1M input, $6/1M output, $0.30/1M cache read —
+  **with a tier override: prompts ≥200k tokens bill at $4/1M input, $12/1M
+  output, $0.60/1M cache read.** The same API cross-checks kimi-k3 at
+  $3/$15/$0.30, matching the official Kimi page already in `RATES`.
+- Two complications the flat `RATES` schema does not currently handle:
+  1. **Tiered pricing.** grok-4.5 doubles above 200k prompt tokens. Workflow
+     stages routinely exceed that (a real preflight stage: ~4M tokens). Flat
+     base rates would underestimate long stages 2×; flat tier rates would
+     overestimate short ones 2×.
+  2. **Billing path is unconfirmed.** The config's model ids mix conventions
+     (`x-ai/grok-4.5` is OpenRouter spelling; `moonshot-ai/kimi-k3` is not).
+     Whether cline bills these via OpenRouter, xAI/Moonshot direct, or cline
+     credits determines which price list is the truthful estimate source, and
+     the markup differs.
+- `cline-pass/*` models (cline subscription) are per-plan, not per-token;
+  estimating them at API list prices would be fiction.
 
 ## Desired Behavior
 
-- During a kimi stage, the status bar shows a live, clearly labeled estimate
-  (e.g. `~$0.0123 est`), priced from the token buckets `publish_usage` in
-  `agent-kimi.sh` already pushes to the status file every 10 seconds.
-- Stage results and metrics rows carry `estimated_cost_usd` with
-  `cost_status: "estimated"` consistently, and every surface that prints
-  money (TUI status bar, stage report, `--performance`) distinguishes
-  estimates from reported dollars.
-- The rate table (or a shipped `WORKFLOW_PRICING_FILE` default) covers
-  kimi-k3, with rates re-verified against the official pricing page at
-  implementation time and `pricing_checked_at` updated.
-- Reported dollars stay authoritative: when a runner supplies
-  `total_cost_usd`, it displays exactly as today with no "est" marker.
+- `x-ai/grok-4.5` stages show labeled `est` costs in the TUI status bar,
+  metrics rows, and `--performance`, same labeling rules as the Kimi models.
+- The pricing schema can represent the ≥200k-token tier, or the
+  implementation documents why it does not and picks a defensible single rate
+  (e.g. always the base rate, with the underestimate called out on the
+  surface). A schema that silently misprices 4M-token stages is worse than no
+  new rates.
+- Before rates are baked in, the implementation confirms the actual billing
+  path for `x-ai/*` and `moonshot-ai/*` ids in cline (OpenRouter vs provider
+  direct vs cline credits) and sources rates from that path. If it cannot be
+  confirmed, ship a documented `WORKFLOW_PRICING_FILE` template for grok-4.5
+  instead of baked rates — an explicit operator-set rate beats a wrong one.
+- `SOURCES` generalizes to non-Kimi providers; each entry keeps its own
+  source URL and `pricing_checked_at`.
+- `cline-pass/*` and other subscription models remain unestimated by default;
+  `WORKFLOW_PRICING_FILE` remains the opt-in for those.
 
 ## Reproduction
 
-Not applicable (feature). To see the current gap: run any kimi-driven stage
-and watch the status bar — tokens accumulate while Cost reads "Unavailable".
+Not applicable (feature). To see the gap: run any stage on `x-ai/grok-4.5`
+and watch the cost cell stay "Unavailable" while a kimi-k3 stage estimates.
 
 ## Constraints
 
-- Never present an estimate as billed or reported cost
-  (`scripts/lib/usage-cost.py` docstring rule). Estimates must be visibly
-  labeled on every surface.
-- Rates must come from the official Kimi pricing page (or the operator's
-  `WORKFLOW_PRICING_FILE` override, which must keep working and keep winning
-  over built-in rates).
-- Live usage is session-diff based and arrives in 10-second batches; the
-  display must tolerate partial/absent data without erroring, and a stage
-  with no recoverable usage still shows "Unavailable".
-- No network calls in the status or render path; pricing is arithmetic over
-  already-collected numbers.
-- Do not relax the missing-`result`-event stage-failure semantics in the
-  drivers; the kimi shim's synthesized result stays mandatory.
+- Never present an estimate as billed or reported cost; the `est` label rules
+  from the kimi change apply unchanged.
+- Rates must carry a source URL and verification date, and must match the
+  billing path cline actually uses, not just any public price list.
+- Model ids in `RATES` must match what the runner reports in usage events
+  verbatim (`x-ai/grok-4.5`, not `x-ai/grok-4.5-turbo` or an OpenRouter
+  alias).
+- No network calls in the status, render, or metrics path.
+- Do not change the behavior of `FREE_MODEL_IDS` (reported $0 on a free model
+  is a fact, not an unknown).
 
 ## Known Relevant Files
 
-- `scripts/agent-kimi.sh` — `publish_usage` (line 97), result synthesis
-  (line 195)
-- `scripts/lib/kimi-usage.py` — token recovery from local sessions
-- `scripts/lib/usage-cost.py` — `RATES`, `enrich()`
-- `uncle_tui.py` (lines 1590–1690) — status bar rendering, "Unavailable"
-- `scripts/change-workflow.sh` — `record_cost`, session totals
-- `scripts/performance-report.sh` — estimates display gate
-- `scripts/backfill-kimi-costs.py` — historical-row repair
-- `scripts/agent-cline.sh` — only if the cline + BYO-model case is taken on
-- Tests: `scripts/tests/agent-kimi-test.sh`, `usage-cost-test.py`,
-  `kimi-cost-integration-test.sh`, `session-totals-test.py`,
-  `tui-session-panel-test.sh`
+- `scripts/lib/usage-cost.py` — `RATES`, `SOURCES`, `enrich()`; the tier
+  question lives here
+- `uncle_tui.py` — `_live_cost` (line ~1580), `FREE_MODEL_IDS` (line 177),
+  cost labeling (line ~1640)
+- `README.md` (line ~410) — `WORKFLOW_PRICING_FILE` documentation
+- `scripts/performance-report.sh` — Estimated USD column
+- `.uncle/config` in consuming projects — stage → model/billing mapping
+  (evidence for which models matter)
+- Tests: `scripts/tests/usage-cost-test.py`,
+  `scripts/tests/tui-session-panel-test.sh`,
+  `scripts/tests/performance-test.sh`,
+  `scripts/tests/kimi-cost-integration-test.sh`
 
 ## Out of Scope
 
-- Changing the kimi CLI itself, or reconciling against actual billing; no
-  invoice-grade cost exists to recover.
-- Reported-cost handling for claude/codex runners (already works).
-- Cline-driver cost estimation for bring-your-own models: same display rules
-  apply if `estimated_cost_usd` is present, but pricing cline-side usage is a
-  separate change unless folded in explicitly.
-- `reviewer-kimi.sh` beyond sharing the same library code paths.
+- Changing cline or OpenRouter; reconciling against actual invoices.
+- Kimi models (covered by the previous change).
+- `cline-pass/*` subscription pricing semantics.
+- Tier/threshold pricing for models other than grok-4.5 unless the schema
+  work makes it free.
 
 ## Success Criteria
 
-- A kimi stage displays a labeled live estimate in the status bar no later
-  than the first usage publish, and the estimate grows with token accrual.
-- At stage end, the stage report and session totals show the estimated cost
-  marked as estimated; `--performance` shows it without requiring the
-  opt-in env var, still labeled.
-- A kimi-k3 stage produces an estimate (rate table or override present).
-- A stage whose usage cannot be recovered still shows "Unavailable", not a
-  crash or a $0.0000.
-- Reported-cost runners render byte-identical output to before the change.
-- New/updated fixture tests cover the shim publish path, TUI rendering of
-  estimates, and the rate table; existing shim, cost, and TUI suites pass.
+- A stage running `x-ai/grok-4.5` shows a labeled live estimate in the status
+  bar and an `est` cost line in the stage panel; metrics rows carry
+  `estimated_cost_usd`, `cost_status: "estimated"`, a grok-appropriate
+  `pricing_source`, and a current `pricing_checked_at`.
+- A stage whose prompt exceeds 200k tokens is priced per the implementation's
+  documented tier decision, with a test pinning that decision.
+- Kimi model estimates are byte-identical to before the change.
+- `cline-pass/*` stages still show "Unavailable" unless a pricing file
+  provides rates.
+- New/updated tests cover the grok rates, the tier behavior, and the
+  id-verbatim requirement; existing cost/TUI suites pass.

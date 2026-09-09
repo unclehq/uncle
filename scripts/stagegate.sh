@@ -267,7 +267,7 @@ record_waiver() {
     # text prompt below still has to work: a run that cannot draw a window
     # must still be able to decline.
     local popup="$ROOT/scripts/lib/waiver-popup.py" out status=2
-    if [[ -f "$popup" ]] && command -v python3 > /dev/null 2>&1; then
+    if [[ -f "$popup" ]] && python3 -c pass > /dev/null 2>&1; then
         out="$(mktemp)" || out=""
         if [[ -n "$out" ]]; then
             status=0

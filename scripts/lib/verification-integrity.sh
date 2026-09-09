@@ -32,7 +32,7 @@ verification_paths() {
 verification_manifest() {
     case "${WORKFLOW_HASH_BACKEND:-auto}" in
         auto|python)
-            if command -v python3 > /dev/null 2>&1 && [[ -f "$VERIFICATION_LIB_DIR/verification_manifest.py" ]]; then
+            if python3 -c pass > /dev/null 2>&1 && [[ -f "$VERIFICATION_LIB_DIR/verification_manifest.py" ]]; then
                 python3 -B "$VERIFICATION_LIB_DIR/verification_manifest.py" "$1"
                 return $?
             elif [[ "${WORKFLOW_HASH_BACKEND:-auto}" == python ]]; then

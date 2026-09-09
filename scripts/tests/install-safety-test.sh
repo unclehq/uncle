@@ -39,17 +39,23 @@ printf '#!/bin/sh\nsleep 30\n' > "$work/stagegate.sh"
 chmod +x "$work/stagegate.sh"
 "$work/stagegate.sh" &
 fake=$!
+expected_fake="$fake"
+case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*)
+        expected_fake="$(ps -p "$fake" | awk 'NR > 1 {print $4}')"
+        ;;
+esac
 # Give the process table a moment to show it.
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-    case " $(running_workflow_pids) " in *" $fake "*) break ;; esac
+    case " $(running_workflow_pids) " in *" $expected_fake "*) break ;; esac
     sleep 0.2
 done
 case " $(running_workflow_pids) " in
-    *" $fake "*) ;;
+    *" $expected_fake "*) ;;
     *) kill "$fake" 2>/dev/null; fail "a running driver was not detected" ;;
 esac
 case "$baseline" in
-    *" $fake "*) kill "$fake" 2>/dev/null; fail "the fake pid was already in the baseline" ;;
+    *" $expected_fake "*) kill "$fake" 2>/dev/null; fail "the fake pid was already in the baseline" ;;
 esac
 running_workflow_report 2> "$work/report.txt" || { kill "$fake" 2>/dev/null; fail "it must report a running workflow"; }
 

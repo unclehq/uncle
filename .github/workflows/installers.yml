@@ -47,6 +47,10 @@ jobs:
       - name: PowerShell 7 installer tests
         shell: pwsh
         run: ./scripts/tests/install-windows-test.ps1
+      - name: Windows process detector tests
+        run: ./scripts/tests/windows-process-test.ps1
+      - name: Windows Python portability tests
+        run: python -B scripts/tests/windows-portability-test.py
       - name: Install Scoop on the disposable runner
         run: |
           Invoke-WebRequest -UseBasicParsing https://get.scoop.sh -OutFile "$env:RUNNER_TEMP/scoop-install.ps1"
@@ -56,6 +60,16 @@ jobs:
         run: |
           ./install.ps1 -SourceDir $PWD
           ./install.ps1 -SourceDir $PWD
+      - name: Git Bash workflow regression tests
+        shell: bash
+        run: |
+          export PATH="$PWD/packaging/windows:$PATH"
+          export UNCLE_WINDOWS_PYTHON="$(cygpath -w "$(command -v python)")"
+          for test in verification-integrity checklist-groups parallel-checks review-compaction agent-kimi reviewer-claude document-budget provided-inputs windows-probes; do
+            bash "scripts/tests/$test-test.sh"
+          done
+          python3 -B scripts/tests/session-totals-test.py
+          python3 -B scripts/tests/audit-findings-test.py
       - name: Smoke test outside the checkout
         run: |
           Set-Location $env:RUNNER_TEMP

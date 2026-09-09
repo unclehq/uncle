@@ -372,7 +372,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     try:
-        with open(args.checklist) as fh:
+        with open(args.checklist, encoding="utf-8") as fh:
             text = fh.read()
     except IOError:
         text = ""
@@ -397,7 +397,7 @@ def main(argv=None):
     if os.path.exists(groups_path):
         os.remove(groups_path)
     if groups:
-        with open(groups_path, "w") as fh:
+        with open(groups_path, "w", encoding="utf-8", newline="\n") as fh:
             for g in groups:
                 fh.write(" ".join(g) + "\n")
 
@@ -413,10 +413,10 @@ def main(argv=None):
         for c in checks:
             for token in sorted(c.needs):
                 needed.setdefault(token, []).append(c.id)
-        with open(resources_path, "w") as fh:
+        with open(resources_path, "w", encoding="utf-8", newline="\n") as fh:
             for token in sorted(needed):
                 fh.write("%s\t%s\n" % (token, ",".join(needed[token])))
-    with open(readme_path, "w") as fh:
+    with open(readme_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(render_readme(groups, checks, errors,
                                os.path.basename(args.checklist)))
 
@@ -428,4 +428,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    import sys
+    sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     sys.exit(main())

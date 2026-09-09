@@ -113,7 +113,7 @@ green_run() {
     local groups="${5:-}" started
 
     if [[ -n "$groups" && -s "$groups" ]] \
-        && command -v python3 > /dev/null 2>&1 \
+        && python3 -c pass > /dev/null 2>&1 \
         && [[ -f "$GREEN_LIB_DIR/parallel_checks.py" ]] \
         && [[ -z "$guard" || "$guard" == check_verification_inputs ]]; then
         local -a flags=(--commands "$cmds" --out "$out" --log "$log"

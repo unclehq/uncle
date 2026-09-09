@@ -52,4 +52,6 @@ def render(project: Path, state: Path) -> str:
 
 
 if __name__ == "__main__":
+    import sys
+    sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     print(render(Path(sys.argv[1]), Path(sys.argv[2])), end="")

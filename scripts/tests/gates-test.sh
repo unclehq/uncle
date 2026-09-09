@@ -169,6 +169,7 @@ EOF
     git -C "$REPO" init -q .
     git -C "$REPO" config user.email test@example.com
     git -C "$REPO" config user.name Test
+    git -C "$REPO" config commit.gpgsign false
     git -C "$REPO" add -A
     git -C "$REPO" commit -qm baseline
 
@@ -523,6 +524,7 @@ new_stagegate_case() {
     new_case "$1"
 
     mkdir -p "$REPO/prompts"
+    printf 'Change the greeting.\n' > "$REPO/REQUIREMENTS.md"
     printf 'STUB:implement\n' > "$REPO/prompts/implement.md"
     printf 'STUB:execute\n'   > "$REPO/prompts/execute-checklist.md"
     printf 'STUB:preflight\n' > "$REPO/prompts/preflight.md"
@@ -582,7 +584,11 @@ else
     else
         : > "$out"
     fi
-    printf 'MC-1 Check the greeting.\n\n%s\n' "${FAKE_AUDIT:-READY}" >> "$out"
+    if [[ "$out" == FINAL_AUDIT.md && "${FAKE_AUDIT:-READY}" == 'NOT READY' ]]; then
+        printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n| FA-1 | Missing review | Review greeting | YES |\n\nNOT READY\n' >> "$out"
+    else
+        printf 'MC-1 Check the greeting.\n\n%s\n' "${FAKE_AUDIT:-READY}" >> "$out"
+    fi
 fi
 REV
     chmod +x "$CASE/bin/fake-reviewer"
@@ -707,9 +713,9 @@ set_state IMPLEMENT
 run_stagegate_stdin "$(gate_input '' y)" \
     FAKE_AUDIT="NOT READY" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
-expect_status 0
+expect_status 1
 expect_out "Audit verdict: NOT_READY"
-expect_out "The independent auditor says this build is not ready."
+expect_out "No decision received; audit remains pending."
 expect_not_out "Workflow complete."
 expect_state "WAIT_AUDIT_OVERRIDE"
 
@@ -733,7 +739,7 @@ for result in BLOCKED 'NOT RUN'; do
     set_state IMPLEMENT
     run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION="$result"
     expect_status 1
-    expect_state EXECUTE_CHECKLIST
+    expect_state VALIDATE_CHECKLIST
     expect_no_file FINAL_AUDIT.md
     expect_no_file .uncle/workflow/repaired
 done
@@ -822,7 +828,7 @@ expect_state TEST_REVIEW
 expect_no_file FINAL_AUDIT.md
 
 # Legacy/manual resumes cannot take a pre-existing ready audit past missing
-# acceptance evidence. The pending review runs and rejects the malformed report.
+# acceptance evidence. Validation pauses without rerunning the reviewer.
 new_stagegate_case sg-old-final-audit-resume
 stagegate_agent
 printf 'READY\n' > "$REPO/FINAL_AUDIT.md"
@@ -831,7 +837,7 @@ printf '%s\tapp/test.sh\n' "$(hash_file "$REPO/app/test.sh")" > "$REPO/.uncle/wo
 set_state FINAL_AUDIT
 run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=MALFORMED
 expect_status 1
-expect_state TEST_REVIEW
+expect_state FINAL_AUDIT
 expect_not_out 'Workflow complete.'
 
 # Even a reported PASS is invalid when the verifier weakens a protected test.

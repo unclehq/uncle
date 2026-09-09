@@ -13,10 +13,17 @@ running_workflow_pids() {
     # count a grep or an editor that merely mentions stagegate.sh, and refuse
     # an install because someone had the file open.
     #
-    # Always succeeds. pgrep exits 1 when nothing matches, and a caller that
-    # assigns this under `set -o pipefail` would take that as an error -- as one
-    # did, failing only on a machine where no workflow happened to be running.
-    ps -Ao pid=,args= 2>/dev/null | awk '
+    local processes helper
+    case "${OSTYPE:-}" in
+        msys*|cygwin*|win32*)
+            helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/running-workflow.ps1"
+            if command -v cygpath >/dev/null 2>&1; then helper="$(cygpath -w "$helper")"; fi
+            powershell.exe -NoProfile -NonInteractive -File "$helper" | tr '\r\n' '  '
+            return "${PIPESTATUS[0]}"
+            ;;
+    esac
+    processes="$(ps -Ao pid=,args= 2>/dev/null)" || return 2
+    printf '%s\n' "$processes" | awk '
         {
             pid = $1
             first = $2
@@ -25,12 +32,16 @@ running_workflow_pids() {
             if (first ~ driver) { printf "%s ", pid; next }
             if (first ~ /(^|\/)(ba|z|da)?sh$/ && second ~ driver) printf "%s ", pid
         }
-    ' || true
+    '
 }
 
 running_workflow_report() {
     local pids
-    pids="$(running_workflow_pids)"
+    if ! pids="$(running_workflow_pids)"; then
+        echo "Cannot determine whether a workflow is running; refusing to replace the installation." >&2
+        echo "Restore process inspection or explicitly use --force-live." >&2
+        return 0
+    fi
     [[ -n "${pids// /}" ]] || return 1
     echo "A uncle workflow is running (pid ${pids% })." >&2
     echo "Installing now replaces the scripts it is executing, mid-run." >&2

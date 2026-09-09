@@ -174,7 +174,7 @@ def main(argv=None):
 
     try:
         tty_in = open("/dev/tty", "rb", buffering=0)
-        tty_out = open("/dev/tty", "w")
+        tty_out = open("/dev/tty", "w", encoding="utf-8", newline="\n")
     except Exception:
         return EXIT_NO_TERMINAL
 
@@ -195,7 +195,7 @@ def main(argv=None):
     if not reason:
         return EXIT_DECLINED
     try:
-        with open(out, "w") as fh:
+        with open(out, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(reason + "\n")
     except IOError:
         return EXIT_DECLINED

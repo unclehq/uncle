@@ -531,7 +531,7 @@ snapshot_checklist_groups() {
     local directory="$STATE_DIR/checklist-groups"
     mkdir -p "$directory"
     rm -f "$directory/groups.txt"
-    if ! command -v python3 > /dev/null 2>&1 \
+    if ! python3 -c pass > /dev/null 2>&1 \
         || [[ ! -f "$GATES_LIB_DIR/checklist_groups.py" ]]; then
         {
             echo '# Parallel execution groups for checklist execution'

@@ -1,4 +1,6 @@
 """Run explicitly approved independent check groups; keep evidence ordered."""
+from process_tree import group_options, kill_tree
+
 import argparse
 import difflib
 from concurrent.futures import ThreadPoolExecutor
@@ -15,10 +17,10 @@ from verification_manifest import manifest
 
 
 def run(args):
-    commands = Path(args.commands).read_text().splitlines()
+    commands = Path(args.commands).read_text(encoding="utf-8").splitlines()
     groups = {}
     previous = 0
-    for row in Path(args.groups).read_text().splitlines():
+    for row in Path(args.groups).read_text(encoding="utf-8").splitlines():
         indices = [int(i) for i in row.split()]
         if (len(indices) < 2 or indices[0] <= previous or indices[-1] > len(commands)
                 or indices != list(range(indices[0], indices[-1] + 1))):
@@ -27,7 +29,7 @@ def run(args):
         previous = indices[-1]
     if not 1 <= args.jobs <= 8:
         raise ValueError("WORKFLOW_VERIFY_JOBS must be from 1 to 8.")
-    expected = Path(args.expected).read_text() if args.expected else None
+    expected = Path(args.expected).read_text(encoding="utf-8") if args.expected else None
     scopes = args.paths
     halted = threading.Event()
     children = set()
@@ -58,7 +60,7 @@ def run(args):
         try:
             directory = Path(args.metrics)
             directory.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(mode="w", dir=directory, prefix=".pending.", delete=False) as out:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=directory, prefix=".pending.", delete=False) as out:
                 json.dump(dict(schema=1, kind="check", stage=command,
                                elapsed_seconds=round(elapsed, 6), process_exit=status,
                                ended_at=time.time(), speculative=False, log=log,
@@ -81,7 +83,7 @@ def run(args):
                     return 125, log
                 child = subprocess.Popen(["bash", "-c", command], stdin=subprocess.DEVNULL,
                                          stdout=output, stderr=subprocess.STDOUT,
-                                         start_new_session=True)
+                                         **group_options())
                 children.add(child)
             status = child.wait()
             with lock:
@@ -95,14 +97,15 @@ def run(args):
         raise KeyboardInterrupt
 
     old_term = signal.signal(signal.SIGTERM, interrupted)
+    old_break = signal.signal(signal.SIGBREAK, interrupted) if hasattr(signal, 'SIGBREAK') else None
+    temporary = tempfile.TemporaryDirectory(prefix="uncle-checks-")
     pool = ThreadPoolExecutor(max_workers=args.jobs)
     try:
-        with tempfile.TemporaryDirectory(prefix="uncle-checks-") as tmp, \
-                open(args.out, "w") as results, open(args.log, "wb") as combined:
+        with open(args.out, "w", encoding="utf-8", newline="\n") as results, open(args.log, "wb") as combined:
             index = 0
             while index < len(commands):
                 end = groups.get(index, index + 1)
-                futures = [pool.submit(check, i, Path(tmp)) for i in range(index, end)]
+                futures = [pool.submit(check, i, Path(temporary.name)) for i in range(index, end)]
                 for i, future in zip(range(index, end), futures):
                     status, log = future.result()
                     results.write(f"{status}\t{commands[i]}\n")
@@ -115,7 +118,7 @@ def run(args):
                     label = 'INVALID' if halted.is_set() else ('PASS' if status == 0 else f'FAIL({status})')
                     print(f"  {label}      {commands[i]}", flush=True)
                 if halted.is_set():
-                    Path(args.integrity_log).write_text("\n".join(violations) + "\n")
+                    Path(args.integrity_log).write_bytes(("\n".join(violations) + "\n").encode("utf-8"))
                     return 3
                 index = end
         return 0  # Individual test failures are classified by the driver.
@@ -124,14 +127,19 @@ def run(args):
         with lock:
             for child in children:
                 try:
-                    os.killpg(child.pid, signal.SIGKILL)
+                    kill_tree(child)
                 except ProcessLookupError:
                     pass
         pool.shutdown(wait=True)
+        temporary.cleanup()
+        if old_break is not None:
+            signal.signal(signal.SIGBREAK, old_break)
         signal.signal(signal.SIGTERM, old_term)
 
 
 if __name__ == "__main__":
+    import sys
+    sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("commands", "groups", "out", "log"):
         parser.add_argument("--" + name, required=True)

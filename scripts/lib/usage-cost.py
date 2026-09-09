@@ -58,4 +58,4 @@ def enrich(record):
 if __name__ == '__main__':
     path = Path(sys.argv[1])
     data = enrich(json.loads(path.read_text()))
-    path.write_text(json.dumps(data) + '\n')
+    path.write_bytes((json.dumps(data) + '\n').encode('utf-8'))

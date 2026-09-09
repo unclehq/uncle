@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if ! python3 -c 'import curses' >/dev/null 2>&1; then
+    echo "SKIP: curses is unavailable (install windows-curses on Windows)."
+    exit 0
+fi
 
 # Fixture tests for the Configure screen's per-stage config (uncle_tui.py).
 # Hermetic: a temp .uncle/config, no curses, no workflow ever started.
@@ -16,7 +20,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/proj/.uncle"
 
-if ! command -v python3 > /dev/null 2>&1; then
+if ! python3 -c pass > /dev/null 2>&1; then
     echo "tui-config-test.sh: skipped, python3 is not available"
     exit 0
 fi

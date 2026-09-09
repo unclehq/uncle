@@ -1401,7 +1401,9 @@ class UncleTUI:
             return
         plain = self._strip_ansi(text)
         upper = plain.upper()
-        if "[Y/N]" in upper:
+        if plain.startswith("Audit finding ") and "[s] Skip" in plain:
+            self.prompt_kind = "audit"
+        elif "[Y/N]" in upper:
             self.prompt_kind = "confirm"
         elif "PRESS ENTER" in upper:
             self.prompt_kind = "enter"
@@ -1983,6 +1985,8 @@ class UncleTUI:
                 footer = "[y] approve      [n] decline      [v] view file"
             if self.prompt_text.startswith("Audit finding "):
                 footer = "[y] Ignore  [n] Keep blocking  [v] audit  [↑↓] scroll"
+        elif self.prompt_kind == "audit":
+            footer = "[s] Skip  [r] Human reviewed — OK  [n] Keep blocking"
         elif self.prompt_kind == "support":
             footer = "[s] open GitHub to star      [Enter/Esc] dismiss"
         elif self.prompt_kind == "enter":
@@ -2098,7 +2102,7 @@ class UncleTUI:
                 self.config_sel = 0
                 return
             if self.state == "running" and self.prompt_kind:
-                if self.prompt_kind == "confirm":
+                if self.prompt_kind in ("confirm", "audit"):
                     self.answer_prompt("n")     # anything but y declines
                 elif self.prompt_kind == "input":
                     self.prompt_kind = ""       # leave the question standing
@@ -2133,6 +2137,14 @@ class UncleTUI:
             return
 
         if self.state == "running":
+            if self.prompt_kind == "audit":
+                if k in (ord("s"), ord("S"), ord("r"), ord("R"), ord("n"), ord("N")):
+                    self.answer_prompt(chr(k).lower())
+                elif k in (curses.KEY_UP, curses.KEY_DOWN):
+                    self.prompt_scroll = max(0, getattr(self, "prompt_scroll", 0) + (1 if k == curses.KEY_DOWN else -1))
+                elif k in (ord("v"), ord("V")) and self.gate_file:
+                    self._open_viewer(self.gate_file)
+                return
             if self.prompt_kind == "confirm":
                 if self.prompt_text.startswith("Audit finding ") and k in (curses.KEY_UP, curses.KEY_DOWN):
                     self.prompt_scroll = max(0, getattr(self, "prompt_scroll", 0) + (1 if k == curses.KEY_DOWN else -1))

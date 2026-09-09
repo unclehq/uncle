@@ -20,6 +20,13 @@ while [[ -L "$uncle_self" ]]; do
 done
 ROOT="$(cd "$(dirname "$uncle_self")" && pwd)"
 unset uncle_self uncle_link
+case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*)
+        if ! python3 -c pass >/dev/null 2>&1; then
+            export PATH="$ROOT/packaging/windows:$PATH"
+        fi
+        ;;
+esac
 cd "$ROOT"
 . "$ROOT/scripts/lib/stage-config.sh"
 
@@ -85,7 +92,7 @@ CONFIG_STAGES="requirements baseline change-spec project-plan change-plan advers
 
 # Full-screen terminal UI when both stdin and stdout are real terminals; the
 # line-based menu below remains for pipes and scripts.
-if [[ -t 0 && -t 1 ]] && command -v python3 >/dev/null 2>&1; then
+if [[ -t 0 && -t 1 ]] && python3 -c pass >/dev/null 2>&1; then
     if python3 "$ROOT/uncle_tui.py"; then
         exit 0
     fi

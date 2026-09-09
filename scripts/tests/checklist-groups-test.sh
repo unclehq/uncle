@@ -10,7 +10,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export UNCLE_TEST_ROOT="$ROOT"
 
-if ! command -v python3 > /dev/null 2>&1; then
+if ! python3 -c pass > /dev/null 2>&1; then
     echo "checklist-groups-test.sh: skipped, python3 is not available"
     exit 0
 fi

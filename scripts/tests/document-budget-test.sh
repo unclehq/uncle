@@ -22,7 +22,7 @@ if WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_BYTES=1 check_document_budget 
 LOG_DIR="$tmp"
 printf 'stage instructions' > prompt.md
 WORKFLOW_DOC_MAX_BYTES=12345 gated_prompt prompt.md updated-plan > resolved
-rg -q '12345 UTF-8 bytes' "$(cat resolved)"
+grep -q '12345 UTF-8 bytes' "$(cat resolved)"
 # Every artifact gets three times its source brief. An interpretation squeezed to
 # the brief's own length is what sent the requirements agent into repeated
 # self-trimming instead of finishing, so 2x is the rule for all of them.
@@ -37,8 +37,8 @@ Path('REQUIREMENTS_INTERPRETATION.md').write_bytes(b'x' * 16435)
 PY
 [[ $(requirements_document_max_bytes) == 16434 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 gated_prompt prompt.md requirements > resolved
-rg -q '16434 UTF-8 bytes' "$(cat resolved)"
-if rg -q 'Target 12,000' "$(cat resolved)"; then exit 1; fi
+grep -q '16434 UTF-8 bytes' "$(cat resolved)"
+if grep -q 'Target 12,000' "$(cat resolved)"; then exit 1; fi
 if WORKFLOW_DOC_BUDGET_ENFORCE=1 check_document_budget REQUIREMENTS_INTERPRETATION.md 2>/dev/null; then exit 1; fi
 # By default the same overflow is a remark, not a stop: the number is a
 # target the prompt gives the agent, and a document already written is
@@ -49,7 +49,7 @@ check_document_budget REQUIREMENTS_INTERPRETATION.md 2>/dev/null \
     || { echo "FAIL $0:$LINENO the oversized document must be preserved" >&2; exit 1; }
 WORKFLOW_DOC_MAX_BYTES=16435 check_document_budget REQUIREMENTS_INTERPRETATION.md
 WORKFLOW_DOC_MAX_BYTES=6000 gated_prompt prompt.md requirements > resolved
-rg -q '6000 UTF-8 bytes' "$(cat resolved)"
+grep -q '6000 UTF-8 bytes' "$(cat resolved)"
 python3 - <<'PY'
 from pathlib import Path
 Path('REQUIREMENTS.md').write_bytes(b'x' * 25000)
@@ -62,7 +62,7 @@ for stage in $DOC_STAGES implementation-step-2; do
     [[ -n $(stage_documents "$stage") ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     while IFS= read -r file; do
         read -r bytes lines <<< "$(document_budget "$file")"
-        rg -qF -- "$file: at most $bytes UTF-8 bytes and $lines lines." "$(cat resolved)"
+        grep -qF -- "$file: at most $bytes UTF-8 bytes and $lines lines." "$(cat resolved)"
         printf 'abc\ndef' > "$file"
         WORKFLOW_DOC_MAX_BYTES=7 WORKFLOW_DOC_MAX_LINES=2 check_document_budget "$file"
         if WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_BYTES=6 check_document_budget "$file" 2>/dev/null; then exit 1; fi
@@ -121,18 +121,18 @@ WORKFLOW_DOC_MAX_BYTES=1 WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=7 \
     check_document_budget FINAL_AUDIT.md
 WORKFLOW_DOC_MAX_BYTES=1 WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=7 \
     gated_prompt prompt.md final-audit reviewer > resolved
-rg -qF 'FINAL_AUDIT.md: at most 7 UTF-8 bytes' "$(cat resolved)"
-rg -q 'Reviewer output' "$(cat resolved)"
+grep -qF 'FINAL_AUDIT.md: at most 7 UTF-8 bytes' "$(cat resolved)"
+grep -q 'Reviewer output' "$(cat resolved)"
 if WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=invalid gated_prompt prompt.md final-audit 2>/dev/null; then exit 1; fi
 # Draft targets use the effective override, including leading-zero integers.
 WORKFLOW_DOC_MAX_BYTES=01000 gated_prompt prompt.md updated-plan > resolved
-rg -qF 'Draft toward 850 bytes' "$(cat resolved)"
-rg -qF 'supersede any fixed byte target' "$(cat resolved)"
+grep -qF 'Draft toward 850 bytes' "$(cat resolved)"
+grep -qF 'supersede any fixed byte target' "$(cat resolved)"
 # No installed/local output rules must not disable prompt budgets.
 ROOT_SAVED="$ROOT"
 ROOT=""
 UNCLE_OUTPUT_RULES= gated_prompt prompt.md final-audit > resolved
-rg -q 'Compact output budgets' "$(cat resolved)"
+grep -q 'Compact output budgets' "$(cat resolved)"
 ROOT="$ROOT_SAVED"
 # Code and raw logs are outside the document cap.
 printf 'uncapped evidence' > raw.log
@@ -187,8 +187,8 @@ chmod +x standalone/reviewer
         if WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_REVIEWER_CMD="$PWD/reviewer" \
             WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_BYTES=1 \
             bash "scripts/$script" > rejected 2>&1; then exit 1; fi
-        rg -q 'Document budget exceeded:' rejected
-        rg -q 'at most 1 UTF-8 bytes' reviewer-prompt.txt
+        grep -q 'Document budget exceeded:' rejected
+        grep -q 'at most 1 UTF-8 bytes' reviewer-prompt.txt
         WORKFLOW_REVIEWER_CMD="$PWD/reviewer" WORKFLOW_DOC_MAX_BYTES=100 \
             bash "scripts/$script" > /dev/null
     done

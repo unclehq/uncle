@@ -9,12 +9,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export UNCLE_POPUP="$ROOT/scripts/lib/waiver-popup.py"
 
-if ! command -v python3 > /dev/null 2>&1; then
+if ! python3 -c pass > /dev/null 2>&1; then
     echo "waiver-popup-test.sh: skipped, python3 is not available"
     exit 0
 fi
-python3 -c "import curses" 2>/dev/null || {
-    echo "waiver-popup-test.sh: skipped, this python has no curses"
+python3 -c "import curses, pty" 2>/dev/null || {
+    echo "waiver-popup-test.sh: skipped, this python has no curses or POSIX pseudo-terminal support"
     exit 0
 }
 

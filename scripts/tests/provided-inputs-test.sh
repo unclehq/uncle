@@ -120,7 +120,7 @@ ok
 # A pipe in a path would split the row and corrupt the table for every later
 # reader, so it is stripped rather than written through.
 fresh
-mkdir -p 'tests/fixtures/od|d'
+if mkdir -p 'tests/fixtures/od|d' 2>/dev/null; then
 printf 'x\n' > 'tests/fixtures/od|d/oracle.json'
 python3 "$MARK" PREFLIGHT_REPORT.md 'P-2=tests/fixtures/od|d/oracle.json' \
     || fail "a path containing a pipe should still mark"
@@ -131,6 +131,10 @@ ok
 [[ "$(acceptance_result PREFLIGHT_REPORT.md)" != UNKNOWN ]] \
     || fail "the table stopped parsing after marking"
 ok
+
+else
+    echo "SKIP: filesystem cannot represent a pipe in a filename."
+fi
 
 cd "$ROOT"
 echo "provided-inputs-test.sh: $PASS checks passed -- provided rows are marked with provenance, everything else is left alone, and a refusal changes nothing"

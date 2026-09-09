@@ -7,7 +7,7 @@ import sys
 
 def manifest(scopes_file):
     entries = set()
-    for scope in Path(scopes_file).read_text().splitlines():
+    for scope in Path(scopes_file).read_text(encoding="utf-8").splitlines():
         directory_only = scope.endswith("/")
         if directory_only:
             scope = scope[:-1]  # One optional directory suffix, not arbitrary cleanup.
@@ -39,7 +39,7 @@ def manifest(scopes_file):
                 for name in files:
                     child = Path(parent) / name
                     if child.is_file() and not name.endswith(".pyc") and "__pycache__" not in child.parts:
-                        entries.add(str(child))
+                        entries.add(child.as_posix())
         elif path.is_file() and not directory_only:
             entries.add(scope)
         else:
@@ -59,7 +59,7 @@ def manifest(scopes_file):
 
 if __name__ == "__main__":
     try:
-        sys.stdout.write(manifest(sys.argv[1]))
+        sys.stdout.buffer.write(manifest(sys.argv[1]).encode("utf-8"))
     except (OSError, ValueError) as error:
         print(error, file=sys.stderr)
         sys.exit(1)

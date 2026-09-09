@@ -18,9 +18,7 @@ TABLE = '''## Findings
 | FA-2 | blocking | Missing comparison | Compare HTML to PDF | YES |
 | FA-3 | low | Stale prose | Refresh docs | NO |
 
-## Conclusion
-
-**NOT READY**
+NOT READY
 '''
 
 class FindingsTests(unittest.TestCase):
@@ -29,7 +27,7 @@ class FindingsTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.work = Path(self.temp.name)
         self.report = self.work / 'FINAL_AUDIT.md'
-        self.report.write_text(TABLE)
+        self.report.write_bytes((TABLE).encode("utf-8"))
         self.state = self.work / 'workflow'
 
     def run_review(self, answers):
@@ -42,7 +40,7 @@ class FindingsTests(unittest.TestCase):
     def test_all_ignored_ready_preserves_audit(self):
         result = self.run_review('y\ny\n')
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(result.stdout.count('Ignore this blocking finding?'), 2)
+        self.assertEqual(result.stdout.count('Choose [s] Skip'), 2)
         self.assertEqual(self.record()['effective_verdict'], 'READY')
         self.assertEqual(self.report.read_text(), TABLE)
         self.assertNotIn('FA-3', self.record()['decisions'])
@@ -53,7 +51,7 @@ class FindingsTests(unittest.TestCase):
         self.assertEqual(self.record()['effective_verdict'], 'NOT_READY')
         result = self.run_review('y\n')
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(result.stdout.count('Ignore this blocking finding?'), 1)
+        self.assertEqual(result.stdout.count('Choose [s] Skip'), 1)
 
     def test_eof_preserves_partial_decisions(self):
         self.assertEqual(self.run_review('y\n').returncode, 1)
@@ -67,13 +65,60 @@ class FindingsTests(unittest.TestCase):
 
     def test_changed_audit_invalidates_ignores(self):
         self.run_review('y\ny\n')
-        self.report.write_text(TABLE.replace('Missing comparison', 'New missing comparison'))
+        self.report.write_bytes((TABLE.replace('Missing comparison', 'New missing comparison')).encode("utf-8"))
         self.assertEqual(self.run_review('').returncode, 1)
+
+    def test_skip_and_human_review_distinct_and_both_ready(self):
+        result = self.run_review('s\nr\n')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        record = self.record()
+        self.assertEqual(record['decisions']['FA-1']['decision'], 'skip')
+        self.assertEqual(record['decisions']['FA-2']['decision'], 'human-reviewed')
+        self.assertEqual(record['effective_verdict'], 'READY')
+        self.assertEqual(self.run_review('').returncode, 0)
+        result = subprocess.run(['python3', '-B', str(HELPER), str(self.report), str(self.state), '--check'])
+        self.assertEqual(result.returncode, 0)
+
+    def test_table_wrappers_conclusion_and_escaped_pipes(self):
+        for text in (
+            TABLE.replace('NOT READY', '## Conclusion\n\n**NOT READY**'),
+            TABLE.replace('| ID', '```markdown\n| ID').replace('\nNOT READY', '\n```\nNOT READY'),
+            TABLE.replace('Missing comparison', r'Missing A\|B comparison'),
+        ):
+            self.report.write_bytes((text).encode("utf-8"))
+            result = self.run_review('r\ns\n')
+            self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_row_after_verdict_cannot_be_hidden(self):
+        self.report.write_bytes((TABLE + '| FA-4 | blocking | Missing check | Run check | YES |\n').encode("utf-8"))
+        self.assertEqual(self.run_review('s\ns\n').returncode, 2)
+
+    def test_dialog_detection_and_choice_keys(self):
+        import sys
+        sys.path.insert(0, str(ROOT))
+        try:
+            import curses
+        except ImportError:
+            self.skipTest('curses is unavailable')
+        from uncle_tui import UncleTUI
+        ui = UncleTUI.__new__(UncleTUI)
+        ui.state = 'running'
+        ui.prompt_kind = ''
+        ui.partial = 'Audit finding FA-1. Choose [s] Skip, [r] Human reviewed — OK, [n] Keep blocking: '
+        ui.prompt_seen = 2
+        ui._detect_prompt()
+        self.assertEqual(ui.prompt_kind, 'audit')
+        answers = []
+        ui.answer_prompt = answers.append
+        for key in ('s', 'r', 'n'):
+            ui.handle_key(ord(key))
+        ui.handle_key(27)
+        self.assertEqual(answers, ['s', 'r', 'n', 'n'])
 
     def test_malformed_findings_never_ready(self):
         for bad in (TABLE.replace('FA-2', 'FA-1'), TABLE.replace('| YES |', '| MAYBE |'), TABLE.replace('| YES |', '| NO |'), TABLE.replace('## Findings', '## Other'), TABLE.replace('Missing comparison', 'Missing | comparison')):
             with self.subTest(bad=bad):
-                self.report.write_text(bad)
+                self.report.write_bytes((bad).encode("utf-8"))
                 self.assertEqual(self.run_review('y\ny\n').returncode, 2)
 
     def test_driver_gates_both_formats_and_resume(self):
@@ -106,45 +151,50 @@ done
 '''
                 self.state.mkdir(exist_ok=True)
                 sha = hashlib.sha256(self.report.read_bytes()).hexdigest()
-                (self.state / 'audit-verdict').write_text(prefix + 'NOT_READY\t' + sha + '\n')
-                (self.state / 'state').write_text('WAIT_AUDIT_OVERRIDE\n')
-                (self.work / 'harness.sh').write_text(harness)
-                result = subprocess.run(['bash', 'harness.sh'], cwd=self.work, input='y\nn\n', text=True, capture_output=True)
+                (self.state / 'audit-verdict').write_bytes((prefix + 'NOT_READY\t' + sha + '\n').encode("utf-8"))
+                (self.state / 'state').write_bytes(('WAIT_AUDIT_OVERRIDE\n').encode("utf-8"))
+                (self.work / 'harness.sh').write_bytes((harness).encode("utf-8"))
+                result = subprocess.run(['bash', 'harness.sh'], cwd=self.work, input='s\nn\n', text=True, capture_output=True)
                 self.assertEqual(result.returncode, 1, result.stderr + result.stdout)
                 self.assertEqual((self.state / 'state').read_text().strip(), 'WAIT_AUDIT_OVERRIDE')
-                result = subprocess.run(['bash', 'harness.sh'], cwd=self.work, input='y\n', text=True, capture_output=True)
+                result = subprocess.run(['bash', 'harness.sh'], cwd=self.work, input='r\n', text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                 self.assertEqual((self.state / 'state').read_text().strip(), 'COMPLETE')
                 self.assertEqual((self.state / 'audit-verdict').read_text().split('\t')[column], 'READY')
                 self.assertIn('NOT_READY', (self.state / 'audit-verdict.original').read_text())
                 self.assertEqual(self.report.read_text(), TABLE)
                 # Crash after verdict persistence: resume without another vote.
-                (self.state / 'state').write_text('WAIT_AUDIT_OVERRIDE\n')
+                (self.state / 'state').write_bytes(('WAIT_AUDIT_OVERRIDE\n').encode("utf-8"))
                 result = subprocess.run(['bash', 'harness.sh'], cwd=self.work, input='', text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                 # A revised audit must never inherit the effective READY.
-                self.report.write_text(TABLE + '\n')
-                (self.state / 'state').write_text('WAIT_AUDIT_OVERRIDE\n')
+                self.report.write_bytes((TABLE + '\n').encode("utf-8"))
+                (self.state / 'state').write_bytes(('WAIT_AUDIT_OVERRIDE\n').encode("utf-8"))
                 result = subprocess.run(['bash', 'harness.sh'], cwd=self.work, input='', text=True, capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
-                self.report.write_text(TABLE)
+                self.report.write_bytes((TABLE).encode("utf-8"))
 
     def test_modal_labels_and_long_finding_fit(self):
         import sys
         sys.path.insert(0, str(ROOT))
+        try:
+            import curses
+        except ImportError:
+            self.skipTest('curses is unavailable')
         from uncle_tui import UncleTUI
         class Screen:
             def __init__(self): self.writes = []
             def addnstr(self, y, x, text, n, *args): self.writes.append((y, text))
         ui = UncleTUI.__new__(UncleTUI)
-        ui.prompt_kind = 'confirm'
-        ui.prompt_text = 'Audit finding FA-1. ' + 'Evidence details. ' * 200 + '[Y/N]: '
+        ui.prompt_kind = 'audit'
+        ui.prompt_text = 'Audit finding FA-1. ' + 'Evidence details. ' * 200 + 'Choose [s] Skip, [r] Human reviewed — OK, [n] Keep blocking: '
         ui.gate_file = 'FINAL_AUDIT.md'
         ui.stdscr = Screen()
         ui.color = {'title': 0, 'sel': 0, 'accent': 0, 'text': 0}
         ui._draw_modal(30, 100)
         displayed = '\n'.join(text for _, text in ui.stdscr.writes)
-        self.assertIn('Ignore', displayed)
+        self.assertIn('Skip', displayed)
+        self.assertIn('Human reviewed', displayed)
         self.assertIn('Keep blocking', displayed)
         self.assertLess(max(y for y, _ in ui.stdscr.writes), 30)
 

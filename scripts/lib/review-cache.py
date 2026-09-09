@@ -81,7 +81,7 @@ def main():
             record = {'key': args.key, 'content': content, 'sha256': digest(content.encode())}
             args.cache_dir.mkdir(parents=True, exist_ok=True)
             fd, name = tempfile.mkstemp(dir=args.cache_dir)
-            with os.fdopen(fd, 'w') as out:
+            with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as out:
                 json.dump(record, out)
             os.replace(name, cache)
         else:
@@ -92,7 +92,7 @@ def main():
                 return 1
             if not args.output.exists():
                 fd, name = tempfile.mkstemp(dir=args.output.parent)
-                with os.fdopen(fd, 'w') as out:
+                with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as out:
                     out.write(record['content'])
                 os.replace(name, args.output)
         return 0
@@ -101,4 +101,6 @@ def main():
 
 
 if __name__ == '__main__':
+    import sys
+    sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     raise SystemExit(main())

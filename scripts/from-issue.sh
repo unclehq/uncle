@@ -307,7 +307,7 @@ if [[ -z "$ISSUE_JSON" ]]; then
 fi
 
 # Minimal extraction using Python because jq is optional and bash JSON parsing is brittle.
-if command -v python3 >/dev/null 2>&1; then
+if python3 -c pass >/dev/null 2>&1; then
     TITLE="$(printf '%s' "$ISSUE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title",""))')"
     BODY="$(printf '%s' "$ISSUE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("body",""))')"
     URL="$(printf '%s' "$ISSUE_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("html_url") or d.get("url") or sys.argv[1])' "https://github.com/$OWNER/$REPO/issues/$ISSUE_NUM")"

@@ -6,6 +6,7 @@ python3 -B - <<'PY'
 import os, pathlib, signal, subprocess, sys, tempfile, time, unittest
 sys.path.insert(0, os.environ['UNCLE_TEST_ROOT']+'/scripts/lib')
 from verification_manifest import manifest
+from process_tree import group_options
 
 class Checks(unittest.TestCase):
     def setUp(self):
@@ -43,7 +44,7 @@ class Checks(unittest.TestCase):
             self.assertEqual(r.returncode,2,r.stderr)
             self.assertFalse((self.root/'ran').exists())
     def test_restored_peer_cannot_hide_a_mutation(self):
-        (self.root/'fixture').write_text('original\n')
+        (self.root/'fixture').write_bytes(b'original\n')
         r=self.run_checks(["sleep .1; printf 'changed\\n' > fixture",
                            "sleep .5; printf 'original\\n' > fixture",'touch must-not-run'],
                           '1 2\n',protected=True)
@@ -55,21 +56,26 @@ class Checks(unittest.TestCase):
         (self.root/'groups').write_text('1 2\n')
         p=subprocess.Popen([sys.executable,'-B',os.environ['UNCLE_TEST_ROOT']+'/scripts/lib/parallel_checks.py',
                             '--commands','commands','--groups','groups','--out','results','--log','log'],
-                           cwd=self.root,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                           cwd=self.root,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True, **group_options())
         try:
             deadline=time.monotonic()+5
             while not all((self.root/name).exists() for name in ('pid1','pid2')) and time.monotonic()<deadline:
                 time.sleep(.02)
             self.assertTrue((self.root/'pid2').exists())
-            p.send_signal(signal.SIGTERM)
+            p.send_signal(signal.CTRL_BREAK_EVENT if os.name == 'nt' else signal.SIGTERM)
             _,errors=p.communicate(timeout=5)
             self.assertEqual(p.returncode,130,errors)
             for name in ('pid1','pid2'):
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(int((self.root/name).read_text()),0)
+                pid = int((self.root/name).read_text())
+                if os.name == 'nt':
+                    check = subprocess.run(['bash', '-c', f'kill -0 {pid}'], capture_output=True)
+                    self.assertNotEqual(check.returncode, 0)
+                else:
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(pid, 0)
         finally:
             if p.poll() is None:
-                p.send_signal(signal.SIGTERM)
+                p.send_signal(signal.CTRL_BREAK_EVENT if os.name == 'nt' else signal.SIGTERM)
                 p.communicate(timeout=5)
 
 unittest.main()

@@ -34,7 +34,7 @@ def digest(path):
 
 
 def mark(report, supplied):
-    lines = Path(report).read_text().splitlines(keepends=True)
+    lines = Path(report).read_text(encoding="utf-8").splitlines(keepends=True)
     when = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     active = False
     marked = set()
@@ -73,7 +73,7 @@ def mark(report, supplied):
         print(f'no blocked gate row to mark for: {", ".join(missing)}',
               file=sys.stderr)
         return 1
-    Path(report).write_text(''.join(out))
+    Path(report).write_bytes(''.join(out).encode('utf-8'))
     return 0
 
 

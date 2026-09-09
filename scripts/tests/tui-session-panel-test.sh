@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if ! python3 -c 'import curses' >/dev/null 2>&1; then
+    echo "SKIP: curses is unavailable (install windows-curses on Windows)."
+    exit 0
+fi
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 python3 -B - <<'PY'

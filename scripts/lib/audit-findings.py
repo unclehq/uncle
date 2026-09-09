@@ -16,10 +16,25 @@ def findings(text):
     if len(sections) != 2:
         raise ValueError('Expected exactly one ## Findings section')
     section = re.split(r'^##\s+', sections[1], maxsplit=1, flags=re.M)[0]
-    lines = [line.strip() for line in section.splitlines() if line.strip()]
+    # A bare final verdict belongs to the report, not the table. Reviewers
+    # also sometimes wrap the table in a Markdown fence. Neither changes rows.
+    lines = []
+    verdict_seen = False
+    for raw in section.splitlines():
+        line = raw.strip()
+        if not line or re.fullmatch(r"```(?:markdown|md)?|~~~(?:markdown|md)?", line):
+            continue
+        if re.fullmatch(r"(?:\*\*|__)?NOT READY(?:\*\*|__)?", line):
+            if verdict_seen or not lines:
+                raise ValueError('Unexpected audit verdict in findings table')
+            verdict_seen = True
+            continue
+        if verdict_seen:
+            raise ValueError('Unexpected content after the audit verdict')
+        lines.append(line)
     if len(lines) < 3 or any(not line.startswith('|') or not line.endswith('|') for line in lines):
         raise ValueError('Findings must be a table with ID and Blocks columns')
-    rows = [[cell.strip() for cell in line[1:-1].split('|')] for line in lines]
+    rows = [[cell.strip().replace(r'\|', '|') for cell in re.split(r'(?<!\\)\|', line[1:-1])] for line in lines]
     header = [cell.lower() for cell in rows[0]]
     if len(set(header)) != len(header) or 'id' not in header:
         raise ValueError('Missing or duplicate finding columns')
@@ -50,13 +65,20 @@ def save(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.decisions-')
     try:
-        with os.fdopen(fd, 'w') as stream:
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
             json.dump(data, stream, indent=2)
             stream.write('\n')
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+ACCEPTED_DECISIONS = {'ignore', 'skip', 'human-reviewed'}
+
+
+def accepted(record, identifier):
+    return record['decisions'].get(identifier, {}).get('decision') in ACCEPTED_DECISIONS
 
 
 def review(report, state_dir, check_only=False):
@@ -66,17 +88,17 @@ def review(report, state_dir, check_only=False):
     path = state_dir / 'audit-dispositions' / (sha + '.json')
     record = {'audit_sha256': sha, 'auditor_verdict': 'NOT_READY', 'effective_verdict': 'NOT_READY', 'decisions': {}}
     if path.exists():
-        record = json.loads(path.read_text())
+        record = json.loads(path.read_text(encoding="utf-8"))
         if record.get('audit_sha256') != sha or not isinstance(record.get('decisions'), dict):
             raise ValueError('Invalid saved audit decisions')
     if check_only:
-        return 0 if all(record['decisions'].get(item['id'], {}).get('decision') == 'ignore' for item in blockers) else 1
+        return 0 if all(accepted(record, item['id']) for item in blockers) else 1
     print('HUMAN REVIEW REQUIRED: ' + str(report), flush=True)
     for index, item in enumerate(blockers, 1):
         identifier = item['id']
         previous = record['decisions'].get(identifier, {})
-        if previous.get('decision') == 'ignore':
-            print(identifier + ': previously ignored for this audit.', flush=True)
+        if accepted(record, identifier):
+            print(identifier + ': already accepted (' + previous['decision'] + ') for this audit.', flush=True)
             continue
         # One unterminated line is the existing TUI modal protocol. Keep the
         # full evidence in scrollback and the complete correction in the modal.
@@ -84,20 +106,20 @@ def review(report, state_dir, check_only=False):
         prompt = (f'Audit finding {identifier} ({index}/{len(blockers)}). '
                   f'Evidence: {item["evidence"]} '
                   f'Required correction: {item["required correction"]} '
-                  'Ignore this blocking finding? [Y/N]: ')
+                  'Choose [s] Skip, [r] Human reviewed — OK, [n] Keep blocking: ')
         while True:
             try:
                 answer = input(prompt).strip().lower()
             except EOFError:
                 print('\nNo decision received; audit remains pending.', flush=True)
                 return 1
-            if answer in ('y', 'n', ''):
+            if answer in ('s', 'r', 'y', 'n', ''):
                 break
-            print('Choose Y to ignore or N to keep blocking.', flush=True)
+            print('Choose S to skip, R to confirm human review, or N to keep blocking.', flush=True)
         if report.read_bytes() != original:
             raise ValueError('Audit changed during review; review the updated report')
         record['decisions'][identifier] = {
-            'decision': 'ignore' if answer == 'y' else 'keep',
+            'decision': {'s': 'skip', 'r': 'human-reviewed', 'y': 'ignore'}.get(answer, 'keep'),
             'recorded_at': datetime.now(timezone.utc).isoformat(),
             'finding': item,
         }
@@ -105,13 +127,13 @@ def review(report, state_dir, check_only=False):
         save(path, record)
     if report.read_bytes() != original:
         raise ValueError('Audit changed during review; review the updated report')
-    ready = all(record['decisions'].get(item['id'], {}).get('decision') == 'ignore' for item in blockers)
+    ready = all(accepted(record, item['id']) for item in blockers)
     record['effective_verdict'] = 'READY' if ready else 'NOT_READY'
     save(path, record)
     if ready:
-        print(f'Build verdict: READY — all {len(blockers)} blocking audit findings explicitly ignored.')
+        print(f'Build verdict: READY — all {len(blockers)} blocking audit findings accepted by the human.')
     else:
-        remaining = [item['id'] for item in blockers if record['decisions'].get(item['id'], {}).get('decision') != 'ignore']
+        remaining = [item['id'] for item in blockers if not accepted(record, item['id'])]
         print('Build verdict: NOT READY — still blocking: ' + ', '.join(remaining))
     print('Audit decisions: ' + str(path))
     return 0 if ready else 1
@@ -131,4 +153,6 @@ def main():
 
 
 if __name__ == '__main__':
+    import sys
+    sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     raise SystemExit(main())

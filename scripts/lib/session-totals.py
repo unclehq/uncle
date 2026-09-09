@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Durable current-session metrics; historical attempt files stay untouched."""
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+    import msvcrt
 import hashlib
 import json
 import os
@@ -14,10 +18,19 @@ def update(workflow, source=None, origin=''):
     workflow = Path(workflow)
     workflow.mkdir(parents=True, exist_ok=True)
     path = workflow / 'session-totals.json'
-    with (workflow / '.session-totals.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with (workflow / '.session-totals.lock').open('a+b') as lock:
+        if fcntl is not None:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        else:
+            # Windows byte-range locks need a byte and a stable file offset.
+            lock.seek(0, os.SEEK_END)
+            if lock.tell() == 0:
+                lock.write(b'\0')
+                lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
         try:
-            saved = json.loads(path.read_text())
+            saved = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             saved = None
         identity = None
@@ -25,7 +38,7 @@ def update(workflow, source=None, origin=''):
             source = Path(source)
             if origin == '#':
                 try:
-                    origin = '#'.join((workflow / 'origin').read_text().splitlines()[0].split()[:2])
+                    origin = '#'.join((workflow / 'origin').read_text(encoding="utf-8").splitlines()[0].split()[:2])
                 except (OSError, IndexError):
                     origin = '#'
             identity = [source.name, hashlib.sha256(source.read_bytes()).hexdigest(), origin]
@@ -41,7 +54,7 @@ def update(workflow, source=None, origin=''):
             if name in baseline:
                 continue
             try:
-                row = json.loads((metrics / name).read_text())
+                row = json.loads((metrics / name).read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
             seen.append(name)
@@ -50,7 +63,7 @@ def update(workflow, source=None, origin=''):
         saved.update(records=records, seen=list(baseline) + seen)
         fd, temporary = tempfile.mkstemp(prefix='.session-totals-', dir=workflow)
         try:
-            with os.fdopen(fd, 'w') as out:
+            with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as out:
                 json.dump(saved, out)
                 out.write('\n')
             os.replace(temporary, path)

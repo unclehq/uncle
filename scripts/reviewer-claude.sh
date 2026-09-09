@@ -111,7 +111,7 @@ printf '%s' "$prompt" \
     | "$CLAUDE_CMD" "${claude_flags[@]}" \
     | tee "$stream" \
     | jq -R -r --unbuffered '
-        (fromjson? // empty) as $e
+        (fromjson? | select(type == "object")) as $e
         | if $e.type == "assistant" then
               ($e.message.content[]?
                | if .type == "text" then .text
@@ -124,7 +124,7 @@ set -e
 
 status="${claude_pipe[1]}"
 
-result="$(jq -R -c 'fromjson? | select(.type == "result")' < "$stream" | tail -n 1)"
+result="$(jq -R -c 'fromjson? | select(type == "object") | select(.type == "result")' < "$stream" | tail -n 1)"
 # Preserve usage even if this review subsequently fails.
 [[ -z "$result" ]] || printf '%s\n' "$result"
 

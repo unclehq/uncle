@@ -13,7 +13,7 @@ printf '\000\001binary\377\n' > 'tests/with space/résumé.dat'
 printf 'tests\n' > paths
 baseline="$(verification_manifest paths)"
 COUNT=0
-if command -v python3 > /dev/null; then
+if python3 -c pass > /dev/null; then
     COUNT=$((COUNT+1))
     [[ "$(WORKFLOW_HASH_BACKEND=python verification_manifest paths)" == "$(WORKFLOW_HASH_BACKEND=shell verification_manifest paths)" ]] \
         || { echo 'FAIL: manifest backends disagree'; exit 1; }

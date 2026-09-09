@@ -136,7 +136,7 @@ cannot locate `gh`, follow the [GitHub CLI Linux installation instructions](http
 Other Linux distributions can install equivalent packages with their package
 manager.
 
-### Windows — Scoop or WSL
+### Windows — Scoop, existing tools, or WSL
 
 For native Windows installation, install [Scoop](https://scoop.sh) in a normal
 user PowerShell session, then run `install.ps1` above. The generated package
@@ -148,6 +148,18 @@ Python with:
 ```powershell
 python -m pip install windows-curses
 ```
+
+For a checkout with Git for Windows, Python 3.9+, jq, and GitHub CLI already on
+PATH, Scoop is optional. Launch from PowerShell with:
+
+```powershell
+.\packaging\windows\uncle.ps1
+```
+
+The launcher probes Python rather than accepting a Microsoft Store alias.
+Disable Windows App Execution Aliases if they shadow your installed Python.
+For the full-screen UI, use a Windows console with `windows-curses`; if the
+terminal cannot provide curses, Uncle falls back to the line menu.
 
 Alternatively, use WSL to run the Linux package. In an administrator PowerShell:
 
@@ -469,15 +481,18 @@ If changed setup requires a fresh execution, explicitly set
 unexecuted check as passed to clear validation.
 
 When a final audit is `NOT READY`, each blocking finding gets its own dialog:
-**Ignore** accepts that finding, and **Keep blocking** leaves it outstanding.
+**Skip** accepts the finding without a review claim; **Human reviewed — OK**
+records your review and acceptance. **Keep blocking** leaves it outstanding.
 The dialog shows evidence and the required correction; use the arrow keys to
-scroll or **v** to view the audit. In a plain terminal, answer Y or N.
-The build becomes `READY` when every blocking finding is explicitly ignored.
+scroll or **v** to view the audit. In a plain terminal, answer S, R, or N.
+The build becomes `READY` when every blocker is skipped or human-reviewed.
+The findings table may be followed by a bare verdict or a Conclusion section;
+Markdown fences and escaped pipes are accepted without dropping findings.
 Keeping any blocker leaves the workflow at `WAIT_AUDIT_OVERRIDE`; resuming asks
 only about remaining blockers and does not rerun the audit or checklist.
 
 Decisions are saved in `.uncle/workflow/audit-dispositions/`, bound to the audit's
 SHA-256. The original `FINAL_AUDIT.md` remains unchanged; `audit-verdict` records
 the effective build verdict. A revised audit requires new decisions. Missing
-input, including in unattended mode, never counts as Ignore. A malformed audit
+input, including in unattended mode, never counts as acceptance. A malformed audit
 cannot become `READY` through this mechanism.

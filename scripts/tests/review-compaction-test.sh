@@ -45,14 +45,14 @@ python3 - <<'PY'
 from pathlib import Path
 p=Path('original.md')
 s=p.read_text().replace('## Acceptance gate', 'Repeated background. ' * 100 + '\n## Acceptance gate')
-p.write_text(s)
+p.write_bytes(s.encode("utf-8"))
 PY
 export WORKFLOW_DOC_MAX_BYTES=500 WORKFLOW_DOC_MAX_LINES=40
 cp original.md ADVERSARIAL_REVIEW.md
 finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" vendor/model high adversarial-review
 cmp candidate.md ADVERSARIAL_REVIEW.md
 [[ $(wc -l < "$CALLS") -eq 1 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
-rg -q -- '--sandbox read-only -m vendor/model -c model_reasoning_effort=high' "$CALLS.argv"
+grep -q -- '--sandbox read-only -m vendor/model -c model_reasoning_effort=high' "$CALLS.argv"
 [[ $(find "$tmp" -name original.md | wc -l) -ge 2 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Already-fitting reviews cost no extra invocation.
 finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review
@@ -72,7 +72,7 @@ for mode in fail timeout oversized lost-id changed-status; do
     MODE="$mode" WORKFLOW_REVIEW_COMPACT_SECONDS=1 \
         finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review > exhausted 2>&1 \
         || { echo "FAIL $0:$LINENO $mode: exhaustion must continue, not stop"; exit 1; }
-    rg -q 'still exceeds the budget after 3 attempts; continuing with the preserved original' exhausted \
+    grep -q 'still exceeds the budget after 3 attempts; continuing with the preserved original' exhausted \
         || { echo "FAIL $0:$LINENO $mode"; exit 1; }
     cmp original.md ADVERSARIAL_REVIEW.md
     [[ $(wc -l < "$CALLS") -eq $((before + 3)) ]] || { echo "FAIL $0:$LINENO $mode"; exit 1; }
@@ -94,7 +94,7 @@ before=$(wc -l < "$CALLS")
 MODE=fail WORKFLOW_REVIEW_COMPACT_ATTEMPTS=1 \
     finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review > once 2>&1 \
     || { echo "FAIL $0:$LINENO"; exit 1; }
-rg -q 'after 1 attempts' once || { echo "FAIL $0:$LINENO"; exit 1; }
+grep -q 'after 1 attempts' once || { echo "FAIL $0:$LINENO"; exit 1; }
 [[ $(wc -l < "$CALLS") -eq $((before + 1)) ]] || { echo "FAIL $0:$LINENO"; exit 1; }
 cmp original.md ADVERSARIAL_REVIEW.md
 # A bad attempt count is a configuration error, not a document problem: the
@@ -114,7 +114,7 @@ if MODE=fail WORKFLOW_DOC_BUDGET_ENFORCE=1 \
     finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review </dev/null > enforced 2>&1; then
     echo "FAIL $0:$LINENO enforced exhaustion must stop the stage"; exit 1
 fi
-rg -q 'still exceeds the budget after 3 attempts' enforced || { echo "FAIL $0:$LINENO"; exit 1; }
+grep -q 'still exceeds the budget after 3 attempts' enforced || { echo "FAIL $0:$LINENO"; exit 1; }
 [[ $(wc -l < "$CALLS") -eq $((before + 3)) ]] || { echo "FAIL $0:$LINENO"; exit 1; }
 cmp original.md ADVERSARIAL_REVIEW.md
 # Explicit opt-out does not call the reviewer. The document is left long, and

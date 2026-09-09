@@ -69,13 +69,15 @@ def collect(root, cwd, snapshot):
 
 
 if __name__ == '__main__':
+    import sys
+    sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     root = Path(os.environ.get('WORKFLOW_KIMI_SESSIONS_DIR', str(Path.home() / '.kimi-code/sessions')))
     mode, filename = sys.argv[1:3]
     try:
         if mode == 'snapshot':
             snapshot = {'existing': [str(s) for s in states(root, Path.cwd())],
                         'prompt_sha256': hashlib.sha256(sys.stdin.read().rstrip('\n').encode()).hexdigest()}
-            Path(filename).write_text(json.dumps(snapshot))
+            Path(filename).write_bytes(json.dumps(snapshot).encode("utf-8"))
         else:
             print(json.dumps(collect(root, Path.cwd(), json.loads(Path(filename).read_text()))))
     except (OSError, ValueError, KeyError, TypeError):

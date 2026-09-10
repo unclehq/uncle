@@ -233,12 +233,25 @@ class SelfHosted(unittest.TestCase):
                 self.assertIn('--no-show-model-warnings',command)
                 self.assertIn('--no-auto-commits',command)
                 self.assertIn('--no-dirty-commits',command)
+                self.assertIn('--no-git',command)
                 if side=='reviewer':
                     self.assertEqual(command[command.index('--chat-mode')+1],'ask')
                     self.assertIn('--dry-run',command)
                     self.assertIn('--no-suggest-shell-commands',command)
                 else:
                     self.assertEqual(command[command.index('--edit-format')+1],'diff')
+
+    def test_repository_detection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
+            nested = self.root/'nested'
+            nested.mkdir()
+            for root in (self.root, nested):
+                command, _ = aider_invocation('agent', self.values(), 'Test', root, directory)
+                self.assertNotIn('--no-git', command)
+            with patch('self_hosted.subprocess.run', side_effect=FileNotFoundError):
+                command, _ = aider_invocation('agent', self.values(), 'Test', self.root, directory)
+                self.assertIn('--no-git', command)
 
     def stub_environment(self):
         stub=self.root/'fake_aider.py'

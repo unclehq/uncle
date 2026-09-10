@@ -41,6 +41,8 @@ than the cost of waiting for a human to say yes.
 
 ## Install
 
+See [Prerequisites](PREREQUISITES.md) for required tools, AI clients, authentication, and self-hosted model setup.
+
 macOS or Debian/Ubuntu/WSL (Homebrew required on macOS):
 
 ```sh

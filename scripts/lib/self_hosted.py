@@ -200,6 +200,17 @@ def aider_invocation(side, values, prompt, root, directory):
         '--no-restore-chat-history', '--no-auto-commits', '--no-dirty-commits', '--no-gitignore',
         '--no-check-update', '--no-show-model-warnings', '--no-analytics', '--no-stream', '--no-pretty', '--yes-always',
         '--no-auto-lint', '--no-auto-test', '--no-detect-urls', '--encoding', 'utf-8', '--line-endings', 'lf']
+    # Aider otherwise offers to initialise a repository; --yes-always would
+    # accept that offer. Inspect the project, not Uncle's installation folder.
+    try:
+        repository = subprocess.run(
+            ['git', '-C', str(root), 'rev-parse', '--is-inside-work-tree'],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+        use_git = repository.returncode == 0 and repository.stdout.strip() == b'true'
+    except (OSError, subprocess.TimeoutExpired):
+        use_git = False
+    if not use_git:
+        command.append('--no-git')
     if side == 'reviewer':
         command += ['--chat-mode','ask','--dry-run','--no-suggest-shell-commands']
     else:

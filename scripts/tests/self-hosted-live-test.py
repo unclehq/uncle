@@ -45,11 +45,13 @@ socket.getaddrinfo=getaddrinfo
         answer,turns=run_aider('reviewer',values,'Return a Findings heading and READY.',workspace,usage=usage)
         assert usage==dict(input_tokens=10,output_tokens=5,total_tokens=15),usage
         assert answer=='## Findings\n\nREADY',repr(answer)
+        assert not (workspace/'.git').exists(), 'Aider created an unwanted repository'
         assert calls and all(path=='/v1/chat/completions' and model=='local-test' and auth for path,model,auth in calls),calls
         mode='agent'
         usage={}
         answer,turns=run_aider('agent',values,'Create UPDATED_PROJECT_PLAN.md containing exactly: # Created by the local fixture',workspace, stage='updated-plan',usage=usage)
         assert usage['total_tokens']==15,usage
+        assert not (workspace/'.git').exists(), 'Aider created an unwanted repository'
         assert (workspace/'UPDATED_PROJECT_PLAN.md').read_text().strip()=='# Created by the local fixture\n\n## Verification commands\n```bash\npython3 -m pytest\n```\n\n## Protected verification paths\n```text\ntests/\n```'
         assert all(path=='/v1/chat/completions' and model=='local-test' and auth for path,model,auth in calls),calls
         print('Aider local-only integration passed: endpoint, model, auth, reviewer Markdown and agent file editing verified.')

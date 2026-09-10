@@ -274,7 +274,7 @@ CONFIG_DESC = {
         "here is choosing which model list the row below offers, and a model "
         "from the other list is dropped rather than carried across."
     ),
-    "field:base_url": "The OpenAI-compatible API root Aider should use, for example http://localhost:8000/v1.",
+    "field:base_url": "The OpenAI-compatible API root OpenCode should use, for example http://localhost:8000/v1.",
     "field:api_key": "Endpoint credential, hidden while editing and stored separately in .uncle/self-hosted-keys.json. Use a placeholder for a server without authentication.",
     "field:model": (
         "The cline model this stage runs, as a `modelType/model` id (for "
@@ -302,7 +302,7 @@ CONFIG_DESC = {
     ),
     "runner": (
         "The CLI program that drives the agent and reviewer stages of every "
-        "workflow. Choose cline, claude, kimi, codex, or Self hosted (Aider). The runner "
+        "workflow. Choose cline, claude, kimi, codex, or Self hosted (OpenCode). The runner "
         "decides which agent and reviewer scripts the workflow invokes, so you "
         "can plug in a different coding agent without touching the rest of the "
         "pipeline. Press Enter on this row to cycle through the runners."
@@ -515,6 +515,8 @@ class UncleTUI:
         self.status_runner = ""
         self.gate_file = ""
         self.notice_lines = []
+        self.notice_destination = "config"
+        self.notice_title = "markdown reader"
         self.view_lines = []
         self.view_title = ""
         self.view_scroll = 0
@@ -636,7 +638,7 @@ class UncleTUI:
         section = getattr(self, "config_section", "")
         if not section:
             return self._config_items()[self.config_sel]
-        if section == "aider":
+        if section == "opencode":
             return "@connection"
         if section == "misc":
             return "!misc"
@@ -645,12 +647,12 @@ class UncleTUI:
         return self._profile_targets()[self.config_sel - len(CONFIG_STAGES)]
 
     def _profile_targets(self):
-        return ["@new"] + ["@" + name for name in sorted(self.stage_api_keys.get("__aider_models__", {}))]
+        return ["@new"] + ["@" + name for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
 
     # ---- effective values ----
     def stage_runner(self, stage):
         runner = self.stage_runners.get(stage, "")
-        if runner == "aider":
+        if runner in ("opencode", "aider"):
             return "self-hosted"
         if runner in runners_for(STAGE_SIDE.get(stage, AGENT)):
             return runner
@@ -720,7 +722,7 @@ class UncleTUI:
             name = stage[1:]
             if field == "name":
                 return name
-            return self.stage_api_keys.get("__aider_models__", {}).get(name, {}).get(field, "")
+            return self.stage_api_keys.get("__opencode_models__", {}).get(name, {}).get(field, "")
         if field == "base_url":
             return self.stage_base_urls.get(stage, "")
         if field == "api_key":
@@ -744,7 +746,7 @@ class UncleTUI:
         if field == "base_url" or (field == "model" and self.stage_runner(stage) == "self-hosted"):
             return stored or "not set"
         if field == "runner" and stored == "self-hosted":
-            return "Aider (Self hosted)"
+            return "OpenCode (Self hosted)"
         if stored:
             if field == "model":
                 label = MODEL_LABELS.get(stored, "")
@@ -774,7 +776,7 @@ class UncleTUI:
             connection = connection_settings(self.stage_api_keys)
             connection[field] = value
             if connection.get('base_url') and connection.get('api_key'):
-                self.notice = "Discovering supported Aider models…"
+                self.notice = "Discovering supported OpenCode models…"
                 try:
                     refresh_models(self.stage_api_keys, connection['base_url'], connection['api_key'])
                 except ValueError as exc:
@@ -782,13 +784,13 @@ class UncleTUI:
                     return
                 self.notice = ""
             else:
-                self.stage_api_keys['__aider_connection__'] = connection
+                self.stage_api_keys['__opencode_connection__'] = connection
             self.save_config()
             return
         if field == "runner" and value != self.stage_runner(stage):
             self.stage_models.pop(stage, None)
-        if field == "model" and self.stage_runner(stage) == "self-hosted" and value and value not in self.stage_api_keys.get("__aider_models__", {}):
-            self.notice = "Choose a model from Aider self-hosted models."
+        if field == "model" and self.stage_runner(stage) == "self-hosted" and value and value not in self.stage_api_keys.get("__opencode_models__", {}):
+            self.notice = "Choose a model from OpenCode self-hosted models."
             return
         store = {"runner": self.stage_runners,
                  "effort": self.stage_efforts,
@@ -804,8 +806,8 @@ class UncleTUI:
             store.pop(stage, None)
         self.save_config()
 
-    def _apply_aider_to_all_stages(self):
-        """Use the selected stage's Aider connection throughout the workflow."""
+    def _apply_opencode_to_all_stages(self):
+        """Use the selected stage's OpenCode connection throughout the workflow."""
         self.maybe_reload()
         source = self.stage_target
         if self.stage_runner(source) != "self-hosted":
@@ -821,14 +823,14 @@ class UncleTUI:
         for stage in CONFIG_STAGES:
             self.stage_runners[stage] = "self-hosted"
         self.save_config()
-        self.notice = "Aider and this LLM connection selected for all stages."
+        self.notice = "OpenCode and this LLM connection selected for all stages."
 
     def _config_items(self):
         section = getattr(self, "config_section", "")
         if not section:
-            return ["1. Configure stages", "2. Configure Aider / self hosting", "3. Miscellaneous"]
-        if section == "aider":
-            return ["Aider connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__aider_models__", {}))]
+            return ["1. Configure stages", "2. Configure OpenCode / self hosting", "3. Miscellaneous"]
+        if section == "opencode":
+            return ["OpenCode connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
         if section == "misc":
             return ["Auto mode: " + ("on" if getattr(self, "misc", {}).get("auto_mode") == "true" else "off"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set")]
@@ -836,7 +838,7 @@ class UncleTUI:
         width = max(len(s) for s in CONFIG_STAGES)
         rows = []
         for stage in CONFIG_STAGES:
-            parts = ["Self hosted (Aider)" if self.stage_runner(stage) == "self-hosted" else self.stage_runner(stage)]
+            parts = ["Self hosted (OpenCode)" if self.stage_runner(stage) == "self-hosted" else self.stage_runner(stage)]
             model = self.stage_model(stage)
             if model:
                 parts.append(MODEL_LABELS.get(model, model))
@@ -875,7 +877,7 @@ class UncleTUI:
             field = self._stage_field()
             desc = CONFIG_DESC.get("field:%s" % field, "")
             if field == "model" and self.stage_runner(self.stage_target) == "self-hosted":
-                return "Choose one of your configured Aider self-hosted models. Set the Base URL and API key to discover models in Configure → Configure Aider / self hosting."
+                return "Choose one of your configured OpenCode self-hosted models. Set the Base URL and API key to discover models in Configure → Configure OpenCode / self hosting."
             if field == "runner":
                 side = STAGE_SIDE.get(self.stage_target, AGENT)
                 desc += " This is a %s stage, so its choices are %s." % (
@@ -904,7 +906,7 @@ class UncleTUI:
             # meaning nothing to the flag it becomes.
             return [("option", v) for v in NETWORK_CHOICES]
         if self.picker_kind == "model" and self.stage_runner(self.picker_target) == "self-hosted":
-            return [("option", name) for name in sorted(self.stage_api_keys.get("__aider_models__", {}))]
+            return [("option", name) for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
         rows = []
         for group, entries in model_catalog(self.stage_billing(self.picker_target)):
             rows.append(("header", group))
@@ -948,8 +950,8 @@ class UncleTUI:
             self.input_buf = self._field_value(target, kind)
             self.state = "config_edit"
             return
-        if kind == "model" and self.stage_runner(target) == "self-hosted" and not self.stage_api_keys.get("__aider_models__"):
-            self.notice = "Set up your endpoint in Configure → Configure Aider / self hosting to discover models first."
+        if kind == "model" and self.stage_runner(target) == "self-hosted" and not self.stage_api_keys.get("__opencode_models__"):
+            self.notice = "Set up your endpoint in Configure → Configure OpenCode / self hosting to discover models first."
             return
         self.pick_filter = ""
         cur = (self._picker_current() or "").lower()
@@ -1078,12 +1080,17 @@ class UncleTUI:
         except Exception:
             pass
         self._seed_from_legacy(legacy)
+        # Preserve selections from the old prefixed model catalog.
+        profiles = self.stage_api_keys.get('__opencode_models__', {})
+        for stage, name in list(self.stage_models.items()):
+            if self.stage_runner(stage) == 'self-hosted' and name.startswith('openai/') and name not in profiles and name[7:] in profiles:
+                self.stage_models[stage] = name[7:]
         # Preserve existing per-stage connections as reusable named models.
         for stage in CONFIG_STAGES:
             name = self.stage_models.get(stage, "")
             if self.stage_runner(stage) != "self-hosted" or not name or not self.stage_base_urls.get(stage):
                 continue
-            profiles = self.stage_api_keys.setdefault("__aider_models__", {})
+            profiles = self.stage_api_keys.setdefault("__opencode_models__", {})
             profile = dict(base_url=self.stage_base_urls[stage], api_key=self.stage_api_keys.get(stage, ""))
             selected = name
             if selected in profiles and profiles[selected] != profile:
@@ -1161,7 +1168,7 @@ class UncleTUI:
             "# Format: <stage>.runner | <stage>.effort | <stage>.model |\n"
             "#         <stage>.network VALUE\n"
             "#   (VALUE = runner, effort, model, or true/false for network).\n"
-            "# Aider connections and credentials are stored separately.\n"
+            "# OpenCode connections and credentials are stored separately.\n"
             "# Edit from `uncle` ->\n"
             "#   Configure, or by hand.\n"
         )
@@ -1906,14 +1913,16 @@ class UncleTUI:
             if getattr(self, "notice", ""):
                 return self.notice
             if self.stage_target.startswith("@"):
-                return "Aider connection — Enter: edit, q back"
-            return "%s — Enter: change, a: use Aider for all stages, d: default, q back" % self.stage_target
+                return "OpenCode connection — Enter: edit, q back"
+            return "%s — Enter: change, a: use OpenCode for all stages, d: default, q back" % self.stage_target
         title = {
             "menu": "The man from uncle",
             "issue_mode": "Seed as",
             "issue": "Issue number or URL",
             "config": "Configure — Enter opens a section or setting, q back",
-            "notice": "Enter to continue to Configure",
+            "notice": "Enter to continue to " + (
+                "menu" if getattr(self, "notice_destination", "config") == "menu"
+                else "Configure"),
             "running": "q stops the run",
         }.get(self.state, "")
         if self.state == "config" and getattr(self, "notice", ""):
@@ -2017,7 +2026,7 @@ class UncleTUI:
                     text.lower() == (self._picker_current() or "").lower()
                 marker = "  <current>" if cur else ""
                 label = MODEL_LABELS.get(text, "") if kind == "model" else ""
-                display_text = "Aider (Self hosted)" if self.picker_kind == "runner" and text == "self-hosted" else text
+                display_text = "OpenCode (Self hosted)" if self.picker_kind == "runner" and text == "self-hosted" else text
                 disp = prefix + display_text + ("  %s" % label if label else "") + marker
             try:
                 self.stdscr.addnstr(top + i, cx, disp, w - 1 - cx, attr)
@@ -2103,7 +2112,7 @@ class UncleTUI:
                 pass
 
     def _draw_notice(self, h, w):
-        """A centered box with one OK, shown before the first Configure."""
+        """A centered dismissible notice with one OK."""
         body = list(self.notice_lines) + ["", "[ OK ]"]
         box_w = min(w - 4, max(len(l) for l in body) + 6)
         box_w = max(box_w, 34)
@@ -2115,9 +2124,10 @@ class UncleTUI:
         if self.prompt_text.startswith("Repair limit reached:"):
             title = " repair limit "
         border = self.color["title"]
+        title = " " + getattr(self, "notice_title", "markdown reader") + " "
         try:
             self.stdscr.addnstr(top, left,
-                                "\u250c" + " markdown reader ".center(box_w - 2, "\u2500") + "\u2510",
+                                "\u250c" + title.center(box_w - 2, "\u2500") + "\u2510",
                                 box_w, border)
             for i in range(box_h - 2):
                 self.stdscr.addnstr(top + 1 + i, left,
@@ -2260,7 +2270,9 @@ class UncleTUI:
             return
         if k == 27:  # Esc
             if self.state == "notice":
-                self.state = "config"
+                self.state = getattr(self, "notice_destination", "config")
+                self.notice_destination = "config"
+                self.notice_title = "markdown reader"
                 self.config_sel = 0
                 return
             if self.state == "running" and self.prompt_kind:
@@ -2275,7 +2287,9 @@ class UncleTUI:
 
         if self.state == "notice":
             # Any key is OK; that is what an OK box is.
-            self.state = "config"
+            self.state = getattr(self, "notice_destination", "config")
+            self.notice_destination = "config"
+            self.notice_title = "markdown reader"
             self.config_sel = 0
             return
 
@@ -2348,14 +2362,14 @@ class UncleTUI:
             elif k in (10, 13):
                 section = getattr(self, "config_section", "")
                 if not section:
-                    self.config_section = ("stages", "aider", "misc")[self.config_sel]
+                    self.config_section = ("stages", "opencode", "misc")[self.config_sel]
                     self.config_sel = self.config_scroll = 0
                 elif section == "misc":
                     if self.config_sel == 0:
                         self._set_field("!misc", "auto_mode", "false" if self.misc.get("auto_mode") == "true" else "true")
                     else:
                         self._open_picker("approval_name", "!misc")
-                elif section == "aider" and self.config_sel == 1:
+                elif section == "opencode" and self.config_sel == 1:
                     self._set_field("@connection", "base_url", connection_settings(self.stage_api_keys).get("base_url", ""))
                 else:
                     self._open_stage(self._config_row())
@@ -2373,7 +2387,7 @@ class UncleTUI:
             elif k in (10, 13):
                 self._open_picker(self._stage_field(), self.stage_target)
             elif k in (ord("a"), ord("A")):
-                self._apply_aider_to_all_stages()
+                self._apply_opencode_to_all_stages()
             elif k in (ord("d"), ord("D")) and not self.stage_target.startswith("@"):
                 self._set_field(self.stage_target, self._stage_field(), "")
                 self.stage_sel = min(self.stage_sel,
@@ -2457,6 +2471,22 @@ class UncleTUI:
                 self.sel = 0
                 self.input_buf = ""
             else:
+                filename = {0: "REQUIREMENTS.md", 2: "CHANGE_REQUEST.md"}[self.workflow_idx]
+                try:
+                    present = os.path.isfile(os.path.join(_project_root(), filename))
+                except OSError:
+                    present = False
+                if not present:
+                    self.notice_lines = [
+                        filename + " is needed",
+                        "Create it in the project root and try again.",
+                    ]
+                    self.notice_title = "Required input"
+                    self.notice_destination = "menu"
+                    self.workflow_idx = None
+                    self.sel = 0
+                    self.state = "notice"
+                    return
                 self._run()
         elif self.state == "issue_mode":
             self.issue_mode = ISSUE_MODES[self.sel][1]

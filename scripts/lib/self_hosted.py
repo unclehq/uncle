@@ -1,4 +1,4 @@
-"""Aider-backed self-hosted runner and private endpoint configuration."""
+"""OpenCode-backed self-hosted runner and private endpoint configuration."""
 import json
 import os
 from pathlib import Path
@@ -18,7 +18,19 @@ def key_file(config):
 
 def read_keys(config):
     path = key_file(config)
-    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    keys = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    # Read old credentials without rewriting them until the user saves config.
+    if '__opencode_models__' not in keys and '__aider_models__' in keys:
+        keys['__opencode_models__'] = {
+            name.removeprefix('openai/'): dict(profile, model=profile.get('model', name).removeprefix('openai/'))
+            for name, profile in keys.pop('__aider_models__').items()}
+    if '__opencode_connection__' not in keys and '__aider_connection__' in keys:
+        keys['__opencode_connection__'] = keys.pop('__aider_connection__')
+    if '__opencode_models__' in keys:
+        keys['__opencode_models__'] = {
+            name.removeprefix('openai/'): dict(profile, model=profile.get('model', name).removeprefix('openai/'))
+            for name, profile in keys['__opencode_models__'].items()}
+    return keys
 
 
 def save_keys(config, keys):
@@ -67,7 +79,7 @@ def discover_models(base_url, api_key):
                         and item['id'] and not any(c.isspace() for c in item['id']) and '#' not in item['id']})
         if not names:
             raise ValueError('The endpoint returned no usable models')
-        return sorted({name if name.startswith('openai/') else 'openai/' + name for name in names})
+        return sorted({name.removeprefix('openai/') for name in names if name.removeprefix('openai/')})
     except HTTPError as exc:
         raise ValueError(f'Model discovery failed (HTTP {exc.code}); check the Base URL and API key') from None
     except (URLError, OSError):
@@ -77,19 +89,21 @@ def discover_models(base_url, api_key):
 
 
 def connection_settings(keys):
-    return dict(keys.get('__aider_connection__') or next(iter(keys.get('__aider_models__', {}).values()), {}))
+    return dict(keys.get('__opencode_connection__') or next(iter(keys.get('__opencode_models__', {}).values()), {}))
 
 
 def refresh_models(keys, base_url, api_key):
     names = discover_models(base_url, api_key)
     connection = dict(base_url=base_url.rstrip('/'), api_key=api_key)
     # Commit only after a successful discovery; failures retain the old catalog.
-    keys['__aider_connection__'] = connection
-    keys['__aider_models__'] = {name: dict(connection) for name in names}
+    keys['__opencode_connection__'] = connection
+    keys['__opencode_models__'] = {name: dict(connection) for name in names}
     return names
 
 
 def settings(config, stage):
+    if stage in ('manual-checklist-base', 'manual-checklist-delta'):
+        stage = 'manual-checklist'
     if stage.startswith('implementation-step-'):
         stage = 'implementation'
     values = {}
@@ -102,17 +116,18 @@ def settings(config, stage):
     for field in ('base_url', 'model'):
         result[field] = os.environ.get('UNCLE_SELF_HOSTED_' + field.upper()) or values.get(stage + '.' + field) or values.get('self-hosted.' + field, '')
     result['api_key'] = os.environ.get('UNCLE_SELF_HOSTED_API_KEY') or read_keys(config).get(stage, '')
-    profiles = read_keys(config).get('__aider_models__', {})
+    profiles = read_keys(config).get('__opencode_models__', {})
     selected = values.get(stage + '.model', '')
-    if selected and selected not in profiles and 'openai/' + selected in profiles:
-        selected = 'openai/' + selected
+    if selected.startswith('openai/') and selected not in profiles:
+        selected = selected[len('openai/'):]
     if selected in profiles:
         profile = profiles[selected]
         result = dict(model=profile.get('model', selected), base_url=profile.get('base_url', ''), api_key=profile.get('api_key', ''))
     elif profiles and not values.get(stage + '.base_url'):
-        raise ValueError('Select a configured Aider self-hosted model for stage ' + stage)
+        raise ValueError('Select a configured OpenCode self-hosted model for stage ' + stage)
     for field in ('model', 'base_url', 'api_key'):
         result[field] = os.environ.get('UNCLE_SELF_HOSTED_' + field.upper()) or result[field]
+    result['model'] = result['model'].removeprefix('openai/')
     url = urlsplit(result['base_url'])
     if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
         raise ValueError('Self hosted requires an http(s) Base URL without credentials, query, or fragment')
@@ -153,111 +168,102 @@ def parse_arguments(side, args):
 
 
 
-def response_from_history(path):
-    """Aider prefixes each response line with ASSISTANT in its LLM journal."""
-    text = path.read_text(encoding='utf-8') if path.exists() else ''
-    blocks = re.split(r'(?m)^LLM RESPONSE \d{4}-\d\d-\d\dT[^\n]*\n', text)
-    if len(blocks) == 1:
-        raise ValueError('Aider returned no model response')
-    last = blocks[-1].split('\nTO LLM ', 1)[0]
-    lines = []
-    for line in last.splitlines():
-        if line.startswith('ASSISTANT '):
-            lines.append(line[len('ASSISTANT '):])
-        elif line == 'ASSISTANT':
-            lines.append('')
-    response = '\n'.join(lines).strip()
-    if not response:
-        raise ValueError('Aider returned an empty final response')
-    return response, len(blocks)-1
+def opencode_events(path):
+    if not path.exists():
+        return []
+    events = []
+    for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
 
 
-def aider_invocation(side, values, prompt, root, directory):
+def response_from_events(path):
+    events = opencode_events(path)
+    if any(event.get('type') == 'error' for event in events):
+        raise ValueError('OpenCode reported a model or session error')
+    texts = [event.get('part', {}).get('text', '') for event in events if event.get('type') == 'text']
+    finished = [event for event in events if event.get('type') == 'step_finish']
+    if not texts or not texts[-1].strip() or not finished:
+        raise ValueError('OpenCode returned no complete final response')
+    if finished[-1].get('part', {}).get('reason') not in ('stop', 'end_turn'):
+        raise ValueError('OpenCode stopped before completing the response')
+    return texts[-1].strip(), len(finished)
+
+
+def opencode_invocation(side, values, prompt, root, directory, allow_shell=True):
     work = Path(directory)
-    message = work/'prompt.txt'
-    message.write_bytes(prompt.encode('utf-8'))
-    config = work/'aider.yml'
-    config.write_bytes(b'{}\n')
-    env_file = work/'empty.env'
-    env_file.write_bytes(b'')
-    ignore = work/'ignore'
-    original_ignore = root/'.aiderignore'
-    text = original_ignore.read_text(encoding='utf-8') if original_ignore.exists() else ''
-    ignore.write_bytes((text + '\n.uncle/\n.git/\n').encode('utf-8'))
-    model = values['model']
-    if not model.startswith('openai/'):
-        model = 'openai/' + model
+    (work/'prompt.txt').write_text(prompt, encoding='utf-8', newline='\n')
+    model = values['model'].removeprefix('openai/')
     request_seconds = int(os.environ.get('WORKFLOW_SELF_HOSTED_REQUEST_SECONDS') or os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600'))
     if request_seconds < 1:
         raise ValueError('WORKFLOW_SELF_HOSTED_REQUEST_SECONDS must be positive')
-    command = [os.environ.get('WORKFLOW_AIDER_CMD', 'aider'),
-        '--model', model, '--weak-model', model, '--editor-model', model,
-        '--openai-api-base', values['base_url'].rstrip('/'), '--timeout', str(request_seconds),
-        '--config', str(config), '--env-file', str(env_file), '--aiderignore', str(ignore),
-        '--message-file', str(message), '--llm-history-file', str(work/'llm.log'),
-        '--analytics-log', str(work/'usage.jsonl'),
-        '--chat-history-file', str(work/'chat.md'), '--input-history-file', str(work/'input.history'),
-        '--no-restore-chat-history', '--no-auto-commits', '--no-dirty-commits', '--no-gitignore',
-        '--no-check-update', '--no-show-model-warnings', '--no-analytics', '--no-stream', '--no-pretty', '--yes-always',
-        '--no-auto-lint', '--no-auto-test', '--no-detect-urls', '--encoding', 'utf-8', '--line-endings', 'lf']
-    # Aider otherwise offers to initialise a repository; --yes-always would
-    # accept that offer. Inspect the project, not Uncle's installation folder.
-    try:
-        repository = subprocess.run(
-            ['git', '-C', str(root), 'rev-parse', '--is-inside-work-tree'],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
-        use_git = repository.returncode == 0 and repository.stdout.strip() == b'true'
-    except (OSError, subprocess.TimeoutExpired):
-        use_git = False
-    if not use_git:
-        command.append('--no-git')
-    if side == 'reviewer':
-        command += ['--chat-mode','ask','--dry-run','--no-suggest-shell-commands']
-    else:
-        command += ['--edit-format','diff','--no-dry-run','--suggest-shell-commands']
-    # Seed the chat with workflow documents; Aider's repo map and file mention
-    # handling provide the remaining code context. Never seed local secrets.
-    for path in sorted(root.glob('*.md')):
-        if path.is_file() and not path.is_symlink() and path.stat().st_size <= 250_000:
-            command += ['--read' if side == 'reviewer' else '--file', str(path)]
-    # Ignore inherited Aider options (including AIDER_LOAD and model defaults).
-    # Credentials stay in the child environment, never argv or the YAML file.
-    env = {k:v for k,v in os.environ.items() if not k.startswith('AIDER_')}
-    env.update(OPENAI_API_KEY=values['api_key'], OPENAI_API_BASE=values['base_url'].rstrip('/'),
-               OPENAI_BASE_URL=values['base_url'].rstrip('/'), AIDER_OPENAI_API_KEY=values['api_key'],
-               PYTHONIOENCODING='utf-8', PYTHONUTF8='1', LITELLM_LOCAL_MODEL_COST_MAP='True')
+    context = int(os.environ.get('WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS', '65536'))
+    output = int(os.environ.get('WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS', '8192'))
+    if not 0 < output < context:
+        raise ValueError('Model limits require 0 < output tokens < context tokens')
+    permission = {'*': 'deny', 'read': {'*': 'allow', '*.env': 'deny', '*.env.*': 'deny',
+                  '*self-hosted-keys.json': 'deny'}, 'glob': 'allow', 'grep': 'allow',
+                  'list': 'allow', 'edit': 'allow' if side == 'agent' else 'deny',
+                  'bash': 'allow' if side == 'agent' and allow_shell else 'deny',
+                  'external_directory': 'deny'}
+    config = {
+        '$schema': 'https://opencode.ai/config.json',
+        'enabled_providers': ['uncle'], 'model': 'uncle/' + model,
+        'small_model': 'uncle/' + model, 'share': 'disabled', 'autoupdate': False,
+        'snapshot': False, 'permission': permission,
+        'agent': {'uncle': {'mode': 'primary', 'description': 'Uncle workflow stage',
+                            'steps': values.get('max_turns', 80),
+                            'permission': permission}},
+        'provider': {'uncle': {'npm': '@ai-sdk/openai-compatible', 'name': 'Uncle self hosted',
+                     'options': {'baseURL': values['base_url'].rstrip('/'),
+                                 'apiKey': '{env:UNCLE_OPENCODE_API_KEY}', 'timeout': request_seconds * 1000},
+                     'models': {model: {'name': model, 'tool_call': True, 'limit': {
+                         'context': context, 'output': output}}}}},
+    }
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('OPENCODE_', 'AIDER_'))}
+    env.update(OPENCODE_CONFIG_CONTENT=json.dumps(config), UNCLE_OPENCODE_API_KEY=values['api_key'],
+               OPENCODE_DISABLE_PROJECT_CONFIG='true', OPENCODE_DISABLE_CLAUDE_CODE='true',
+               OPENCODE_DISABLE_DEFAULT_PLUGINS='true', OPENCODE_DISABLE_MODELS_FETCH='true',
+               PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
+    # Isolate session history and global providers/plugins from the user's CLI.
+    for key, leaf in (('XDG_CONFIG_HOME', 'config'), ('XDG_DATA_HOME', 'data'), ('XDG_STATE_HOME', 'state')):
+        folder = work/leaf
+        folder.mkdir()
+        env[key] = str(folder)
+    command = [os.environ.get('WORKFLOW_OPENCODE_CMD', 'opencode'), 'run', '--format', 'json',
+               '--dir', str(root), '--model', 'uncle/' + model, '--agent', 'uncle',
+               '--file', str(work/'prompt.txt'), '--', 'Follow the attached workflow instructions.']
     return command, env
 
 
-def aider_usage(path):
-    """Sum per-message usage events, never rounded console summaries."""
-    totals = {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
+def opencode_usage(path):
+    totals = dict(input_tokens=0, output_tokens=0, total_tokens=0)
     found = False
-    if not path.exists():
-        return {}
-    for line in path.read_text(encoding='utf-8').splitlines():
-        try:
-            event = json.loads(line)
-        except (ValueError, TypeError):
+    for event in opencode_events(path):
+        if event.get('type') != 'step_finish':
             continue
-        if event.get('event') != 'message_send':
-            continue
-        values = event.get('properties', {})
-        incoming, outgoing = values.get('prompt_tokens'), values.get('completion_tokens')
-        if any(type(n) not in (int, float) or n < 0 or int(n) != n for n in (incoming, outgoing)):
-            return {}  # A partial total would understate the stage usage.
-        totals['input_tokens'] += int(incoming)
-        totals['output_tokens'] += int(outgoing)
-        totals['total_tokens'] += int(incoming + outgoing)
+        tokens = event.get('part', {}).get('tokens', {})
+        inp, out = tokens.get('input'), tokens.get('output')
+        cache = tokens.get('cache') or {}
+        counts = (inp, out, cache.get('read', 0), cache.get('write', 0), tokens.get('reasoning', 0))
+        if any(type(n) not in (int, float) or n < 0 or int(n) != n for n in counts):
+            return {}  # Never publish a partial or invalid total.
+        # OpenCode reports cache and reasoning separately from input/output.
+        inp += cache.get('read', 0) + cache.get('write', 0)
+        out += tokens.get('reasoning', 0)
+        totals['input_tokens'] += inp
+        totals['output_tokens'] += out
+        totals['total_tokens'] += inp + out
         found = True
     return totals if found else {}
 
 
-PLAN_ARTIFACTS = {
-    'requirements': 'REQUIREMENTS_INTERPRETATION.md',
-    'project-plan': 'PROJECT_PLAN.md',
-    'updated-plan': 'UPDATED_PROJECT_PLAN.md',
-}
+PLAN_ARTIFACTS = {'requirements': 'REQUIREMENTS_INTERPRETATION.md', 'project-plan': 'PROJECT_PLAN.md', 'updated-plan': 'UPDATED_PROJECT_PLAN.md'}
 
 
 def validate_plan(text, protected=True):
@@ -316,19 +322,19 @@ def validate_requirements(text):
 
 
 
-def run_aider(side, values, prompt, root, stage=None, usage=None):
+def run_opencode(side, values, prompt, root, stage=None, usage=None):
     artifact = PLAN_ARTIFACTS.get(stage or os.environ.get('UNCLE_STATUS_STAGE', '')) if side == 'agent' else None
     if not artifact:
-        return _run_aider(side, values, prompt, root, usage=usage)
+        return _run_opencode(side, values, prompt, root, usage=usage)
     target = root / artifact
     if target.is_symlink():
         raise ValueError('Refusing to replace a symlinked plan')
     original = target.read_bytes() if target.exists() else None
-    # Aider never edits the live project during planning. Publish only the
+    # OpenCode never edits the live project during planning. Publish only the
     # required document after validation; incidental model edits stay isolated.
     with tempfile.TemporaryDirectory(prefix='uncle-plan-') as directory:
         staged = Path(directory) / 'project'
-        excluded = shutil.ignore_patterns('.git', '.uncle', '.aider*', 'node_modules', '.venv', 'venv', '__pycache__')
+        excluded = shutil.ignore_patterns('.git', '.uncle', '.opencode*', 'node_modules', '.venv', 'venv', '__pycache__')
         def ignore(directory, names):
             return set(excluded(directory, names)) | {name for name in names if (Path(directory)/name).is_symlink()}
         shutil.copytree(root, staged, ignore=ignore)
@@ -341,7 +347,7 @@ def run_aider(side, values, prompt, root, stage=None, usage=None):
             for attempt in range(2):
                 attempt_usage = {}
                 try:
-                    response, count = _run_aider('reviewer', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root)
+                    response, count = _run_opencode('reviewer', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root)
                     turns += count
                 finally:
                     if usage is not None:
@@ -369,7 +375,7 @@ def run_aider(side, values, prompt, root, stage=None, usage=None):
             for attempt in range(2):
                 attempt_usage = {}
                 try:
-                    response, count = _run_aider(side, values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root)
+                    response, count = _run_opencode(side, values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root)
                     turns += count
                 finally:
                     if usage is not None:
@@ -398,7 +404,7 @@ def run_aider(side, values, prompt, root, stage=None, usage=None):
                     continue
                 break
         if not candidate.is_file() or candidate.is_symlink():
-            raise ValueError('Aider did not produce a regular ' + artifact + '; original plan preserved')
+            raise ValueError('OpenCode did not produce a regular ' + artifact + '; original plan preserved')
         contents = candidate.read_bytes()
         if artifact != 'REQUIREMENTS_INTERPRETATION.md':
             validate_plan(contents.decode('utf-8'), protected=artifact == 'UPDATED_PROJECT_PLAN.md')
@@ -416,15 +422,13 @@ def run_aider(side, values, prompt, root, stage=None, usage=None):
         return response, turns
 
 
-def _run_aider(side, values, prompt, root, allow_shell=True, usage=None, diagnostic_root=None):
+def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diagnostic_root=None):
     from process_tree import start_check, launch_command, kill_tree, finish_check
     seconds = int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600'))
     if seconds < 1:
         raise ValueError('WORKFLOW_SELF_HOSTED_SECONDS must be positive')
-    with tempfile.TemporaryDirectory(prefix='uncle-aider-') as directory:
-        command, env = aider_invocation(side, values, prompt, root, directory)
-        if not allow_shell:
-            command = [arg for arg in command if arg != "--suggest-shell-commands"] + ["--no-suggest-shell-commands"]
+    with tempfile.TemporaryDirectory(prefix='uncle-opencode-') as directory:
+        command, env = opencode_invocation(side, values, prompt, root, directory, allow_shell=allow_shell)
         try:
             with (Path(directory)/'output.log').open('wb') as log:
                 child = start_check(launch_command(command), cwd=root, env=env,
@@ -437,7 +441,7 @@ def _run_aider(side, values, prompt, root, allow_shell=True, usage=None, diagnos
                             break
                         except subprocess.TimeoutExpired:
                             if time.monotonic() >= deadline:
-                                raise ValueError(f'Aider exceeded its {seconds}-second time limit')
+                                raise ValueError(f'OpenCode exceeded its {seconds}-second time limit')
                 finally:
                     try:
                         if child.poll() is None:
@@ -446,12 +450,12 @@ def _run_aider(side, values, prompt, root, allow_shell=True, usage=None, diagnos
                     finally:
                         finish_check(child)
                     if usage is not None:
-                        usage.update(aider_usage(Path(directory)/'usage.jsonl'))
+                        usage.update(opencode_usage(Path(directory)/'output.log'))
             if status:
                 # Do not expose CLI diagnostics that may contain inherited secrets.
-                raise ValueError(f'Aider exited with status {status}; check its installation and endpoint configuration')
+                raise ValueError(f'OpenCode exited with status {status}; check its installation and endpoint configuration')
             try:
-                response, turns = response_from_history(Path(directory)/'llm.log')
+                response, turns = response_from_events(Path(directory)/'output.log')
             except ValueError:
                 diagnostic = (Path(directory)/'output.log').read_text(encoding='utf-8', errors='replace')
                 if re.search(r'APITimeoutError|litellm\.Timeout|provider timed out', diagnostic, re.I):
@@ -468,9 +472,9 @@ def _run_aider(side, values, prompt, root, allow_shell=True, usage=None, diagnos
                 if key:
                     detail = detail.replace(key, '[REDACTED]')
                 detail = re.sub(r'(?i)(bearer\s+)[^\s"\']+', r'\1[REDACTED]', detail)
-                fd, saved = tempfile.mkstemp(prefix='aider-failure-', suffix='.log', dir=logs)
+                fd, saved = tempfile.mkstemp(prefix='opencode-failure-', suffix='.log', dir=logs)
                 with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
-                    stream.write(str(error) + '\n\n' + (detail or 'Aider produced no console output.\n'))
+                    stream.write(str(error) + '\n\n' + (detail or 'OpenCode produced no console output.\n'))
             except OSError:
                 raise error
             raise ValueError(str(error) + '; diagnostic log: ' + saved) from None
@@ -479,23 +483,23 @@ def _run_aider(side, values, prompt, root, allow_shell=True, usage=None, diagnos
 def profile_menu(config, choose=False):
     import getpass
     keys = read_keys(config)
-    profiles = keys.setdefault('__aider_models__', {})
+    profiles = keys.setdefault('__opencode_models__', {})
     if choose:
         for name in sorted(profiles):
             print('  ' + name, file=sys.stderr)
-        print('Aider model name: ', end='', file=sys.stderr, flush=True)
+        print('OpenCode model name: ', end='', file=sys.stderr, flush=True)
         name = input().strip()
         if name not in profiles:
-            raise ValueError('Choose a configured Aider model; add models in Configure → Aider self-hosted models')
+            raise ValueError('Choose a configured OpenCode model; add models in Configure → OpenCode self-hosted models')
         print(name)
         return 0
     old = connection_settings(keys)
     url = input('Base URL [' + old.get('base_url', '') + ']: ').strip() or old.get('base_url', '')
     key = getpass.getpass('API key (hidden; blank keeps existing): ').strip() or old.get('api_key', '')
-    print('Discovering Aider models…', flush=True)
+    print('Discovering OpenCode models…', flush=True)
     names = refresh_models(keys, url, key)
     save_keys(config, keys)
-    print(f'Loaded {len(names)} Aider models: ' + ', '.join(names))
+    print(f'Loaded {len(names)} OpenCode models: ' + ', '.join(names))
     return 0
 
 
@@ -520,6 +524,7 @@ def main(side, args):
         stage = Path(output).stem.lower().replace('_','-')
     config = os.environ.get('UNCLE_CONFIG', str(Path.cwd()/'.uncle/config'))
     values = settings(config, stage)
+    values['max_turns'] = _turns
     def interrupt(*_): raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, interrupt)
     if hasattr(signal, 'SIGBREAK'):
@@ -531,9 +536,9 @@ def main(side, args):
                                      'mode':'act' if side=='agent' else 'review'})+'\n')
     usage = {}
     try:
-        text, turns = run_aider(side, values, prompt, Path.cwd().resolve(), stage=stage, usage=usage)
+        text, turns = run_opencode(side, values, prompt, Path.cwd().resolve(), stage=stage, usage=usage)
     except (ValueError, OSError) as error:
-        error.aider_usage = usage
+        error.opencode_usage = usage
         raise
     if side == 'reviewer':
         if output:
@@ -542,13 +547,13 @@ def main(side, args):
         if usage:
             print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,
                               'model':values['model'], 'usage':usage, 'total_cost_usd':None,
-                              'usage_source':'aider local message_send events', 'usage_scope':'stage'}))
+                              'usage_source':'OpenCode step_finish events', 'usage_scope':'stage'}))
             print('tokens used\n' + str(usage['total_tokens']))
     else:
         print(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':text}]}}))
         print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':text,
                           'model':values['model'],'num_turns':turns,'duration_ms':int((time.monotonic()-started)*1000),'usage':usage,'total_cost_usd':None,
-                          'usage_source':'aider local message_send events','usage_scope':'stage'}))
+                          'usage_source':'OpenCode step_finish events','usage_scope':'stage'}))
     return 0
 
 
@@ -564,7 +569,7 @@ if __name__ == '__main__':
         print('Self hosted: ' + str(error), file=sys.stderr)
         if sys.argv[1:2] in (['agent'], ['reviewer']):
             print(json.dumps({'type':'result','subtype':'error','is_error':True,
-                              'usage':getattr(error, 'aider_usage', {}), 'total_cost_usd':None,
+                              'usage':getattr(error, 'opencode_usage', {}), 'total_cost_usd':None,
                               'error_detail':str(error), 'duration_ms':int((time.monotonic()-cli_started)*1000),
-                              'usage_source':'aider local message_send events','usage_scope':'stage'}))
+                              'usage_source':'OpenCode step_finish events','usage_scope':'stage'}))
         sys.exit(2)

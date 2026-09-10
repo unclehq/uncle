@@ -414,7 +414,7 @@ configure_stage() {
         printf '  effort  %s\n' "$(uncle_stage_effort "$stage")"
         if [[ "$(config_get "$stage.runner")" == "self-hosted" ]]; then
             printf '  model     %s\n' "$(config_get "$stage.model")"
-            printf 'Set [r]unner [m]odel, [a]pply Aider to all stages, [d]efaults, [q]back: '
+            printf 'Set [r]unner [m]odel, [a]pply OpenCode to all stages, [d]efaults, [q]back: '
         elif [[ "$(config_get "$stage.runner")" == "cline" || -z "$(config_get "$stage.runner")" ]]; then
             printf '  model   %s\n' "$(config_get "$stage.model")"
             printf '%s' "Set [${C_CYAN}r${C_RESET}]unner [${C_CYAN}e${C_RESET}]ffort [${C_CYAN}m${C_RESET}]odel, [${C_CYAN}d${C_RESET}]efaults, [${C_CYAN}q${C_RESET}]back: "
@@ -428,10 +428,10 @@ configure_stage() {
             r)
                 local choices="$AGENT_RUNNERS"
                 [[ "$side" == "reviewer" ]] && choices="$REVIEWER_RUNNERS"
-                printf 'Runner (%s; aider = Self hosted): ' "$choices"
+                printf 'Runner (%s; opencode = Self hosted): ' "$choices"
                 if ! read -r runner; then echo; return 0; fi
                 runner="$(printf '%s' "$runner" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-                [[ "$runner" != "selfhosted" && "$runner" != "aider" ]] || runner=self-hosted
+                [[ "$runner" != "selfhosted" && "$runner" != "opencode" ]] || runner=self-hosted
                 case " $choices " in
                     *" $runner "*)
                         config_set "$stage.runner" "$runner"
@@ -471,7 +471,7 @@ for stage in sys.argv[4:]:
         keys.pop(stage, None)
 save_keys(sys.argv[2], keys)
 PYKEYS
-                echo 'Aider and this LLM connection selected for all stages.'
+                echo 'OpenCode and this LLM connection selected for all stages.'
                 ;;
             e)
                 choose_effort
@@ -506,7 +506,7 @@ PYKEYS
 configure_menu() {
     local choice value
     while true; do
-        printf '\nConfigure\n  1) Configure stages\n  2) Configure Aider / self hosting\n  3) Miscellaneous\n  q) Back\nChoice: '
+        printf '\nConfigure\n  1) Configure stages\n  2) Configure OpenCode / self hosting\n  3) Miscellaneous\n  q) Back\nChoice: '
         read -r choice || return 0
         case "$choice" in
             1) configure_stages_menu ;;
@@ -613,10 +613,6 @@ run_change_workflow() {
     run_workflow "$ROOT/scripts/change-workflow.sh" ${UNCLE_ARGS[@]+"${UNCLE_ARGS[@]}"}
 }
 
-# Load the persisted runner/model/effort/stage config once so the menu shows
-# the effective values before any workflow runs.
-apply_config
-
 # First time in this project root (no .uncle/config yet): create the workflow directory
 # dir the scripts write state/logs into, then go straight to the configure menu
 # so this project gets set up before any workflow runs.
@@ -643,9 +639,21 @@ while true; do
     fi
     choice="$(printf '%s' "$choice" | tr -d '[:space:]')"
     case "$choice" in
-        1) run_new_application ;;
+        1)
+            if [[ ! -f "$PROJECT_ROOT/REQUIREMENTS.md" ]]; then
+                printf '%sREQUIREMENTS.md is needed in the project root.%s\n' "$C_YELLOW" "$C_RESET"
+                continue
+            fi
+            run_new_application
+            ;;
         2) run_from_issue ;;
-        3) run_change_workflow ;;
+        3)
+            if [[ ! -f "$PROJECT_ROOT/CHANGE_REQUEST.md" ]]; then
+                printf '%sCHANGE_REQUEST.md is needed in the project root.%s\n' "$C_YELLOW" "$C_RESET"
+                continue
+            fi
+            run_change_workflow
+            ;;
         4) configure_menu ;;
         q|Q|"") break ;;
         *) printf '%sUnrecognized choice: %s%s\n' "$C_YELLOW" "$choice" "$C_RESET" ;;

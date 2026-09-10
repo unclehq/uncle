@@ -119,6 +119,10 @@ check_eq "mixed set reports only the deviations" "app/config.py migrations/0004.
 # --- a plan with no table or sequence degrades quietly ---------------------
 
 echo '# Change Plan' > "$TMP/bare.md"
+# An assignment in the real driver runs under errexit and pipefail. Checking
+# only its text inside check_eq would hide a failing parser exit status.
+bash -e -o pipefail -c '. "$1"; files="$(plan_scope_files "$2")"; test -z "$files"' \
+    _ "$ROOT/scripts/lib/plan-scope.sh" "$TMP/bare.md"
 check_eq "no table: empty scope" "" "$(plan_scope_files "$TMP/bare.md")"
 check_eq "no sequence: no steps"  "" "$(plan_steps "$TMP/bare.md")"
 check_eq "no table: nothing is out of scope" "" \

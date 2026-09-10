@@ -24,8 +24,9 @@ def key(output, prompt, runner, model, effort):
     settings = {name: os.environ.get(name) for name in (
         'WORKFLOW_KIMI_CMD', 'WORKFLOW_KIMI_MODEL', 'WORKFLOW_CLINE_CMD',
         'UNCLE_CLINE_MODEL', 'UNCLE_CLINE_EFFORT', 'WORKFLOW_CLAUDE_CMD',
-        'WORKFLOW_CODEX_CMD', 'WORKFLOW_AIDER_CMD', 'UNCLE_SELF_HOSTED_BASE_URL',
-        'UNCLE_SELF_HOSTED_MODEL', 'UNCLE_SELF_HOSTED_API_KEY')}
+        'WORKFLOW_CODEX_CMD', 'WORKFLOW_OPENCODE_CMD', 'UNCLE_SELF_HOSTED_BASE_URL',
+        'UNCLE_SELF_HOSTED_MODEL', 'UNCLE_SELF_HOSTED_API_KEY',
+        'WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS', 'WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS')}
     result = hashlib.sha256(json.dumps([str(root), str(excluded), text, runner, model, effort, settings]).encode())
     executable = shutil.which(runner)
     if executable:

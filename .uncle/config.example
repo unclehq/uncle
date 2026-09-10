@@ -4,12 +4,14 @@
 # Format: <stage>.runner | <stage>.effort | <stage>.model | <stage>.network
 #         | <stage>.billing VALUE
 #
-#   .runner  cline | claude | kimi | codex  for an agent stage
-#            cline | codex | claude         for a reviewer stage
+#   .runner  cline | claude | kimi | codex | self-hosted for any stage
+#            self-hosted uses OpenCode (opencode is also accepted).
 #   .effort  high | medium | low
 #   .model   a cline model id in modelType/model form, and only for a cline
 #            stage: claude, kimi, and codex are given no model flag and use
 #            their own default.
+#            For self-hosted stages, select a discovered model in Configure ->
+#            Configure OpenCode / self hosting. API keys are stored separately.
 #   .billing clinepass | cline-usage (default clinepass) -- which cline
 #            catalogue and purse a cline stage uses. Not a flag: cline reads
 #            it from the model id, so `cline-pass/kimi-k3` spends the

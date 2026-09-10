@@ -54,9 +54,20 @@ uncle_config_get() {
     return 0
 }
 
+# Base and delta are executions of the configured checklist stage.
+uncle_config_stage() {
+    case "$1" in
+        manual-checklist-base|manual-checklist-delta) printf 'manual-checklist' ;;
+        implementation-step-*) printf 'implementation' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 uncle_stage_side() {
+    local stage
+    stage="$(uncle_config_stage "$1")"
     case "$UNCLE_REVIEWER_STAGES" in
-        *" $1 "*) printf 'reviewer' ;;
+        *" $stage "*) printf 'reviewer' ;;
         *)        printf 'agent' ;;
     esac
 }
@@ -68,7 +79,7 @@ uncle_runner_cmd() {
     local runner="$1" side="$2" root="${ROOT:-.}"
     if [[ "$side" == "reviewer" ]]; then
         case "$runner" in
-        aider|self-hosted) printf '%s' "$root/scripts/$side-self-hosted.sh" ;;
+        aider|opencode|self-hosted) printf '%s' "$root/scripts/$side-self-hosted.sh" ;;
             kimi)   printf '%s' "$root/scripts/reviewer-kimi.sh" ;;
             codex)  printf 'codex' ;;
             claude) printf '%s' "$root/scripts/reviewer-claude.sh" ;;
@@ -77,7 +88,7 @@ uncle_runner_cmd() {
         return 0
     fi
     case "$runner" in
-        aider|self-hosted) printf '%s' "$root/scripts/$side-self-hosted.sh" ;;
+        aider|opencode|self-hosted) printf '%s' "$root/scripts/$side-self-hosted.sh" ;;
         claude) printf 'claude' ;;
         kimi)   printf '%s' "$root/scripts/agent-kimi.sh" ;;
         codex)  printf '%s' "$root/scripts/agent-codex.sh" ;;
@@ -86,15 +97,17 @@ uncle_runner_cmd() {
 }
 
 uncle_stage_runner() {
-    local stage="$1" v
+    local stage v
+    stage="$(uncle_config_stage "$1")"
     v="$(uncle_config_get "$stage.runner")"
     [[ -n "$v" ]] || v="$(uncle_config_get runner)"
-    [[ "$v" != "aider" ]] || v=self-hosted
+    [[ "$v" != "opencode" && "$v" != "aider" ]] || v=self-hosted
     printf '%s' "${v:-$UNCLE_DEFAULT_RUNNER}"
 }
 
 uncle_stage_effort() {
-    local stage="$1" v
+    local stage v
+    stage="$(uncle_config_stage "$1")"
     case "$stage" in implementation-step-*) stage=implementation ;; esac
     v="$(uncle_config_get "$stage.effort")"
     [[ -n "$v" ]] || v="$(uncle_config_get effort)"
@@ -104,7 +117,8 @@ uncle_stage_effort() {
 # Cline and self-hosted stages use explicit models; other runners have their own default,
 # and a model uncle picked for them would be wrong more often than right.
 uncle_stage_model() {
-    local stage="$1" v
+    local stage v
+    stage="$(uncle_config_stage "$1")"
     case "$stage" in implementation-step-*) stage=implementation ;; esac
     if [[ "$(uncle_stage_runner "$stage")" == "self-hosted" ]]; then
         v="${UNCLE_SELF_HOSTED_MODEL:-$(uncle_config_get "$stage.model")}"
@@ -139,7 +153,8 @@ uncle_stage_model() {
 # and it wins over the setting -- the id is what cline actually receives, and a
 # setting that disagreed with it would describe a run that never happened.
 uncle_stage_billing() {
-    local stage="$1" v model
+    local stage v model
+    stage="$(uncle_config_stage "$1")"
     case "$stage" in implementation-step-*) stage=implementation ;; esac
     model="$(uncle_config_get "$stage.model")"
     [[ -n "$model" ]] || model="$(uncle_config_get "$stage")"
@@ -201,7 +216,8 @@ uncle_effective_stage_effort() {
 # writes code and can also open a socket is a different proposition from one
 # that cannot, and that trade belongs to the operator, not to a default.
 uncle_stage_network() {
-    local stage="$1" v
+    local stage v
+    stage="$(uncle_config_stage "$1")"
     case "$stage" in implementation-step-*) stage=implementation ;; esac
     v="$(uncle_config_get "$stage.network")"
     [[ -n "$v" ]] || v="$(uncle_config_get network)"

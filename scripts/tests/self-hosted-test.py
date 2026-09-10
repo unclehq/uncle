@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'scripts/lib'))
-from self_hosted import read_keys, save_keys, settings, aider_invocation, run_aider, response_from_history, discover_models, refresh_models
+from self_hosted import read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models
 from process_tree import bash_executable
 
 
@@ -50,12 +50,12 @@ class SelfHosted(unittest.TestCase):
     def test_named_connections_and_cli_selection(self):
         self.config.write_text('implementation.runner self-hosted\nimplementation.model qwen\nfinal-audit.runner self-hosted\nfinal-audit.model qwen\n', encoding='utf-8')
         profiles = {'qwen': {'base_url': 'http://localhost:9100/v1', 'api_key': 'named-secret'}}
-        save_keys(self.config, {'__aider_models__': profiles})
+        save_keys(self.config, {'__opencode_models__': profiles})
         with patch.dict(os.environ, {}, clear=True):
             for stage in ('implementation-step-2', 'final-audit'):
                 self.assertEqual(settings(self.config, stage), dict(model='qwen', **profiles['qwen']))
             profiles['qwen']['base_url'] = 'http://localhost:9200/v1'
-            save_keys(self.config, {'__aider_models__': profiles})
+            save_keys(self.config, {'__opencode_models__': profiles})
             self.assertEqual(settings(self.config, 'final-audit')['base_url'], 'http://localhost:9200/v1')
             with self.assertRaises(ValueError):
                 settings(self.config, 'requirements')
@@ -76,12 +76,12 @@ class SelfHosted(unittest.TestCase):
         response = io.BytesIO(b'{"data":[{"id":"model-b"},{"id":"model-a"},{"id":"model-b"},{"id":"openai/model-a"}]}')
         opener.open.return_value = response
         with patch('urllib.request.build_opener', return_value=opener):
-            self.assertEqual(discover_models('http://localhost:1234/v1/', 'dummy-key'), ['openai/model-a','openai/model-b'])
+            self.assertEqual(discover_models('http://localhost:1234/v1/', 'dummy-key'), ['model-a','model-b'])
         request = opener.open.call_args.args[0]
         self.assertEqual(request.full_url, 'http://localhost:1234/v1/models')
         self.assertEqual(request.get_header('Authorization'), 'Bearer dummy-key')
         self.assertEqual(opener.open.call_args.kwargs['timeout'], 10)
-        keys = {'__aider_models__': {'old-model': self.values()}}
+        keys = {'__opencode_models__': {'old-model': self.values()}}
         before = json.dumps(keys)
         with patch('urllib.request.build_opener', return_value=opener):
             opener.open.side_effect = HTTPError('http://localhost', 401, 'private details', {}, None)
@@ -90,7 +90,7 @@ class SelfHosted(unittest.TestCase):
         self.assertEqual(json.dumps(keys), before)
         with patch('self_hosted.discover_models', return_value=['new-model']):
             refresh_models(keys, 'http://localhost:1234/v1', 'dummy-key')
-        self.assertEqual(list(keys['__aider_models__']), ['new-model'])
+        self.assertEqual(list(keys['__opencode_models__']), ['new-model'])
 
     def test_discovery_rejects_empty_malformed_and_redirects(self):
         import io
@@ -136,13 +136,13 @@ class SelfHosted(unittest.TestCase):
                 (staged/'UPDATED_PROJECT_PLAN.md').write_text(content)
                 (staged/'unwanted.py').write_text('incidental edit')
                 return 'response', 1
-            with patch.object(self_hosted, '_run_aider', side_effect=generate):
+            with patch.object(self_hosted, '_run_opencode', side_effect=generate):
                 if content != valid:
                     with self.assertRaises(ValueError):
-                        run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+                        run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-plan')
                     self.assertEqual(plan.read_text(encoding='utf-8'), 'Original approved content\n')
                 else:
-                    run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+                    run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-plan')
                     self.assertEqual(plan.read_text(encoding='utf-8'), valid)
             self.assertFalse((self.root/'unwanted.py').exists())
 
@@ -155,8 +155,8 @@ class SelfHosted(unittest.TestCase):
             kwargs['usage'].update(input_tokens=10, output_tokens=5, total_tokens=15)
             return responses.pop(0), 1
         usage = {}
-        with patch.object(self_hosted, '_run_aider', side_effect=generate) as run:
-            _, turns = run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan', usage=usage)
+        with patch.object(self_hosted, '_run_opencode', side_effect=generate) as run:
+            _, turns = run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-plan', usage=usage)
         self.assertEqual(run.call_count, 2)
         self.assertEqual(turns, 2)
         self.assertEqual(usage['total_tokens'], 30)
@@ -169,47 +169,50 @@ class SelfHosted(unittest.TestCase):
         import self_hosted
         plan = self.root/'UPDATED_PROJECT_PLAN.md'
         plan.write_text('Original\n')
-        with patch.object(self_hosted, '_run_aider', side_effect=ValueError('failed')):
+        with patch.object(self_hosted, '_run_opencode', side_effect=ValueError('failed')):
             with self.assertRaises(ValueError):
-                run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan')
-        with patch.object(self_hosted, '_run_aider', return_value=('no edits', 1)):
+                run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+        with patch.object(self_hosted, '_run_opencode', return_value=('no edits', 1)):
             with self.assertRaises(ValueError):
-                run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+                run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-plan')
         self.assertEqual(plan.read_text(encoding='utf-8'), 'Original\n')
 
     def test_exact_usage_sums_messages_without_console_rounding(self):
-        from self_hosted import aider_usage
+        from self_hosted import opencode_usage
         path = self.root/'usage.jsonl'
-        self.assertEqual(aider_usage(path), {})
+        self.assertEqual(opencode_usage(path), {})
         events = [dict(event='startup', properties={}),
-                  dict(event='message_send', properties=dict(prompt_tokens=1234,completion_tokens=57)),
-                  dict(event='message_send', properties=dict(prompt_tokens=2200,completion_tokens=91))]
+                  dict(type='step_finish', part=dict(tokens=dict(input=1234,output=57))),
+                  dict(type='step_finish', part=dict(tokens=dict(input=2200,output=91)))]
         path.write_text('\n'.join(json.dumps(event) for event in events))
-        self.assertEqual(aider_usage(path), dict(input_tokens=3434,output_tokens=148,total_tokens=3582))
-        events.append(dict(event='message_send',properties={}))
+        self.assertEqual(opencode_usage(path), dict(input_tokens=3434,output_tokens=148,total_tokens=3582))
+        events[1]['part']['tokens'].update(cache={'read': 10, 'write': 2}, reasoning=5)
         path.write_text('\n'.join(json.dumps(event) for event in events))
-        self.assertEqual(aider_usage(path), {})
+        self.assertEqual(opencode_usage(path), dict(input_tokens=3446,output_tokens=153,total_tokens=3599))
+        events.append(dict(type='step_finish',part={}))
+        path.write_text('\n'.join(json.dumps(event) for event in events))
+        self.assertEqual(opencode_usage(path), {})
 
-    def test_previously_selected_model_resolves_after_prefixed_refresh(self):
+    def test_legacy_catalog_migration(self):
         save_keys(self.config, {'__aider_models__': {'openai/local-model:Q4': {k: v for k, v in self.values().items() if k != 'model'}}})
         with patch.dict(os.environ, {}, clear=True):
             values = settings(self.config, 'implementation')
-        self.assertEqual(values['model'], 'openai/local-model:Q4')
+        self.assertEqual(values['model'], 'local-model:Q4')
         with tempfile.TemporaryDirectory() as directory:
-            command, _ = aider_invocation('agent', values, 'test', self.root, directory)
-        self.assertEqual(command[command.index('--model')+1], 'openai/local-model:Q4')
+            command, _ = opencode_invocation('agent', values, 'test', self.root, directory)
+        self.assertEqual(command[command.index('--model')+1], 'uncle/local-model:Q4')
 
     def test_requirements_chat_response_is_saved_before_success(self):
         import self_hosted
         text = '# REQUIREMENTS_INTERPRETATION.md\n\n## 10. Definition of done\nPrint Hello World.\n'
         response = 'REQUIREMENTS_INTERPRETATION.md\n```markdown\n' + text + '```'
-        with patch.object(self_hosted, '_run_aider', return_value=(response, 1)) as run:
-            run_aider('agent', self.values(), 'Interpret', self.root, stage='requirements')
+        with patch.object(self_hosted, '_run_opencode', return_value=(response, 1)) as run:
+            run_opencode('agent', self.values(), 'Interpret', self.root, stage='requirements')
         self.assertEqual(run.call_args.args[0], 'reviewer')
         self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
-        with patch.object(self_hosted, '_run_aider', return_value=('Done!', 1)):
+        with patch.object(self_hosted, '_run_opencode', return_value=('Done!', 1)):
             with self.assertRaises(ValueError):
-                run_aider('agent', self.values(), 'Interpret', self.root, stage='requirements')
+                run_opencode('agent', self.values(), 'Interpret', self.root, stage='requirements')
         self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
 
     def test_document_preamble_and_format_retry(self):
@@ -222,8 +225,8 @@ class SelfHosted(unittest.TestCase):
             return responses.pop(0), 1
         responses = ['Done!', wrapped]
         usage = {}
-        with patch.object(self_hosted, '_run_aider', side_effect=generate) as run:
-            run_aider('agent', self.values(), 'Interpret', self.root, stage='requirements', usage=usage)
+        with patch.object(self_hosted, '_run_opencode', side_effect=generate) as run:
+            run_opencode('agent', self.values(), 'Interpret', self.root, stage='requirements', usage=usage)
         self.assertEqual(run.call_count, 2)
         self.assertEqual(usage['total_tokens'], 240)
         self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
@@ -234,68 +237,47 @@ class SelfHosted(unittest.TestCase):
     def values(self):
         return {'api_key':'test-secret','model':'local-model:Q4','base_url':'http://localhost:8123/v1'}
 
-    def test_aider_config_and_modes(self):
-        for side in ('agent','reviewer'):
-            with self.subTest(side=side), tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
-                'OPENAI_API_KEY':'unrelated-key','OPENAI_API_BASE':'https://unrelated.test', 'AIDER_LOAD':'unwanted'}):
-                command,env=aider_invocation(side,self.values(),'Test prompt',self.root,directory)
-                for flag in ('--model','--weak-model','--editor-model'):
-                    self.assertEqual(command[command.index(flag)+1],'openai/local-model:Q4')
-                self.assertEqual(command[command.index('--openai-api-base')+1],self.values()['base_url'])
-                self.assertEqual(env['OPENAI_API_KEY'],'test-secret')
-                self.assertEqual(env['AIDER_OPENAI_API_KEY'],'test-secret')
-                self.assertNotIn('AIDER_LOAD',env)
-                self.assertNotIn('test-secret',str(command))
-                self.assertNotIn('test-secret',Path(directory,'aider.yml').read_text(encoding='utf-8'))
-                self.assertIn('--timeout', command)
-                self.assertGreater(int(command[command.index('--timeout')+1]), 0)
-                self.assertIn('--no-show-model-warnings',command)
-                self.assertIn('--no-auto-commits',command)
-                self.assertIn('--no-dirty-commits',command)
-                self.assertIn('--no-git',command)
-                if side=='reviewer':
-                    self.assertEqual(command[command.index('--chat-mode')+1],'ask')
-                    self.assertIn('--dry-run',command)
-                    self.assertIn('--no-suggest-shell-commands',command)
-                else:
-                    self.assertEqual(command[command.index('--edit-format')+1],'diff')
-
-    def test_repository_detection(self):
-        with tempfile.TemporaryDirectory() as directory:
-            subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
-            nested = self.root/'nested'
-            nested.mkdir()
-            for root in (self.root, nested):
-                command, _ = aider_invocation('agent', self.values(), 'Test', root, directory)
-                self.assertNotIn('--no-git', command)
-            with patch('self_hosted.subprocess.run', side_effect=FileNotFoundError):
-                command, _ = aider_invocation('agent', self.values(), 'Test', self.root, directory)
-                self.assertIn('--no-git', command)
+    def test_opencode_config_and_modes(self):
+        for side in ('agent', 'reviewer'):
+            with self.subTest(side=side), tempfile.TemporaryDirectory() as directory:
+                command, env = opencode_invocation(side, self.values(), 'Test prompt', self.root, directory)
+                self.assertEqual(command[1:4], ['run', '--format', 'json'])
+                self.assertEqual(command[command.index('--model')+1], 'uncle/local-model:Q4')
+                self.assertEqual(command[command.index('--dir')+1], str(self.root))
+                config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+                self.assertEqual(config['provider']['uncle']['options']['baseURL'], self.values()['base_url'])
+                self.assertEqual(env['UNCLE_OPENCODE_API_KEY'], 'test-secret')
+                self.assertNotIn('test-secret', str(command) + env['OPENCODE_CONFIG_CONTENT'])
+                self.assertEqual(config['permission']['edit'], 'allow' if side == 'agent' else 'deny')
+                self.assertEqual(config['permission']['bash'], 'allow' if side == 'agent' else 'deny')
+                self.assertEqual(config['permission']['task'] if 'task' in config['permission'] else config['permission']['*'], 'deny')
+                self.assertFalse(config['snapshot'])
+                self.assertFalse((self.root/'.git').exists())
 
     def stub_environment(self):
-        stub=self.root/'fake_aider.py'
+        stub=self.root/'fake_opencode.py'
         stub.write_text("""import json,os,pathlib,sys,time
 args=sys.argv[1:]
-assert os.environ['OPENAI_API_KEY']=='secret-with-#-characters'
-assert args[args.index('--openai-api-base')+1]=='http://localhost:8123/v1'
-assert args[args.index('--model')+1]=='openai/local-model:Q4'
+assert os.environ['UNCLE_OPENCODE_API_KEY']=='secret-with-#-characters'
+config=json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])
+assert config['provider']['uncle']['options']['baseURL']=='http://localhost:8123/v1'
+assert args[args.index('--model')+1]=='uncle/local-model:Q4'
 assert 'secret-with-#-characters' not in str(args)
-prompt=pathlib.Path(args[args.index('--message-file')+1])
-assert prompt.read_text(encoding='utf-8')=='Test prompt'
-pathlib.Path(os.environ['RECORD']).write_text(str(prompt.parent),encoding='utf-8')
-pathlib.Path(args[args.index('--analytics-log')+1]).write_text(json.dumps(dict(event='message_send', properties=dict(prompt_tokens=1234,completion_tokens=57)))+'\\n',encoding='utf-8')
-mode=os.environ.get('FAKE_AIDER_MODE','ok')
+assert pathlib.Path(args[args.index('--file')+1]).read_text(encoding='utf-8')=='Test prompt'
+pathlib.Path(os.environ['RECORD']).write_text(str(pathlib.Path(os.environ['XDG_CONFIG_HOME']).parent),encoding='utf-8')
+print(json.dumps(dict(type='step_finish', part=dict(reason='stop',tokens=dict(input=1234,output=57)))),flush=True)
+mode=os.environ.get('FAKE_OPENCODE_MODE','ok')
 if mode=='timeout': time.sleep(30)
-if mode=='api-timeout': print('litellm.Timeout: APITimeoutError - Request timed out.')
+if mode=='api-timeout': print('provider timed out')
 if mode not in ('empty','api-timeout'):
-    pathlib.Path(args[args.index('--llm-history-file')+1]).write_bytes(b'TO LLM 2026-09-09T12:00:00\\nUSER Test prompt\\nLLM RESPONSE 2026-09-09T12:00:01\\nASSISTANT ## Findings\\nASSISTANT \\nASSISTANT NOT READY\\n')
-print('Aider banner and costs should not become the report')
+    print(json.dumps(dict(type='text',part=dict(text='## Findings\\n\\nNOT READY'))))
+print('OpenCode banner and costs should not become the report')
 sys.exit(7 if mode=='fail' else 0)
 """,encoding='utf-8')
-        wrapper=self.root/'fake-aider'
+        wrapper=self.root/'fake-opencode'
         wrapper.write_bytes(b'#!/usr/bin/env bash\nexec "$TEST_PYTHON" "$TEST_STUB" "$@"\n')
         wrapper.chmod(0o755)
-        return dict(os.environ, WORKFLOW_AIDER_CMD=str(wrapper), TEST_PYTHON=sys.executable, TEST_STUB=str(stub),
+        return dict(os.environ, WORKFLOW_OPENCODE_CMD=str(wrapper), TEST_PYTHON=sys.executable, TEST_STUB=str(stub),
                     UNCLE_CONFIG=str(self.config),UNCLE_STATUS_STAGE='implementation',RECORD=str(self.root/'record'))
 
     def test_both_adapters_preserve_response_and_cleanup(self):
@@ -308,7 +290,7 @@ sys.exit(7 if mode=='fail' else 0)
                 result=subprocess.run(command,input='Test prompt' if side=='agent' else '',text=True,encoding='utf-8',
                                       env=env,cwd=self.root,capture_output=True,timeout=10)
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-                self.assertNotIn('Aider banner',result.stdout)
+                self.assertNotIn('OpenCode banner',result.stdout)
                 self.assertNotIn('secret-with-#-characters',result.stdout+result.stderr)
                 self.assertFalse(Path((self.root/'record').read_text(encoding='utf-8')).exists())
                 if side=='reviewer':
@@ -328,7 +310,7 @@ sys.exit(7 if mode=='fail' else 0)
         for mode in ('fail','empty','timeout','api-timeout'):
             with self.subTest(mode=mode):
                 out=self.root/(mode+'.md')
-                env.update(FAKE_AIDER_MODE=mode,WORKFLOW_SELF_HOSTED_SECONDS='1')
+                env.update(FAKE_OPENCODE_MODE=mode,WORKFLOW_SELF_HOSTED_SECONDS='1')
                 result=subprocess.run([bash_executable(),(ROOT/'scripts/reviewer-self-hosted.sh').as_posix(),
                     'exec','--output-last-message',str(out),'Test prompt'],env=env,cwd=self.root,
                     text=True,encoding='utf-8',capture_output=True,timeout=10)
@@ -340,19 +322,25 @@ sys.exit(7 if mode=='fail' else 0)
                 self.assertIsInstance(failure['duration_ms'], int)
                 if mode != 'empty':
                     self.assertIn('diagnostic log:', failure['error_detail'])
-                diagnostics = list((self.root/'.uncle/workflow/logs').glob('aider-failure-*.log'))
+                diagnostics = list((self.root/'.uncle/workflow/logs').glob('opencode-failure-*.log'))
                 self.assertTrue(diagnostics)
                 for log in diagnostics:
                     self.assertNotIn('secret-with-#-characters', log.read_text(encoding='utf-8'))
                 self.assertFalse(out.exists())
                 self.assertFalse(Path((self.root/'record').read_text(encoding='utf-8')).exists())
 
-    def test_history_uses_last_response_preserving_markdown(self):
-        path=self.root/'llm.log'
-        path.write_bytes(b'LLM RESPONSE 2026-09-09T12:00:00\r\nASSISTANT old\r\nTO LLM 2026-09-09T12:01:00\r\nUSER question\r\nLLM RESPONSE 2026-09-09T12:01:01\r\nASSISTANT ## Final\r\nASSISTANT | A | B |\r\n')
-        self.assertEqual(response_from_history(path),('## Final\n| A | B |',2))
-        path.write_bytes(b'LLM RESPONSE 2026-09-09T12:00:00\n')
-        with self.assertRaises(ValueError): response_from_history(path)
+    def test_json_events_preserve_final_response(self):
+        path = self.root/'output.log'
+        events = [dict(type='text', part=dict(text='old')),
+                  dict(type='step_finish', part=dict(reason='tool-calls')),
+                  dict(type='text', part=dict(text='## Final\n| A | B |')),
+                  dict(type='step_finish', part=dict(reason='stop'))]
+        path.write_text('\n'.join(json.dumps(e) for e in events), encoding='utf-8')
+        self.assertEqual(response_from_events(path), ('## Final\n| A | B |', 2))
+        events.append(dict(type='error', error={'message': 'failed'}))
+        path.write_text('\n'.join(json.dumps(e) for e in events), encoding='utf-8')
+        with self.assertRaises(ValueError):
+            response_from_events(path)
 
     def test_stage_dispatch(self):
         for side, stage in (('agent','implementation'),('reviewer','final-audit')):
@@ -372,7 +360,7 @@ sys.exit(7 if mode=='fail' else 0)
         with patch.object(module,'CONFIG_PATH',str(self.config)):
             ui=module.UncleTUI.__new__(module.UncleTUI)
             ui.load_config()
-            self.assertEqual(ui._config_items(), ['1. Configure stages', '2. Configure Aider / self hosting', '3. Miscellaneous'])
+            self.assertEqual(ui._config_items(), ['1. Configure stages', '2. Configure OpenCode / self hosting', '3. Miscellaneous'])
             ui.config_section = 'misc'
             with patch.object(ui, 'maybe_reload'):
                 ui._set_field('!misc', 'auto_mode', 'true')
@@ -391,15 +379,15 @@ sys.exit(7 if mode=='fail' else 0)
             ui.stdscr.addnstr.assert_any_call(len(module.LOGO), (module.LOGO_W-5)//2, 'uncle', 5, 1)
             ui.config_section = 'stages'
             self.assertEqual(len(ui._config_items()), len(module.CONFIG_STAGES))
-            ui.config_section = 'aider'
+            ui.config_section = 'opencode'
             self.assertIn('1 loaded', ui._config_items()[1])
             self.assertEqual(ui.stage_fields('implementation'),['runner','model'])
             self.assertEqual(ui._field_display('@local-model:Q4','api_key'),'********')
             ui.save_config()
             ui.load_config()
             self.assertEqual(ui.stage_model('implementation'),'local-model:Q4')
-            self.assertEqual(ui.stage_api_keys['__aider_models__']['local-model:Q4']['base_url'],'http://localhost:8123/v1')
-            self.assertEqual(read_keys(self.config)['__aider_models__']['local-model:Q4']['api_key'],'secret-with-#-characters')
+            self.assertEqual(ui.stage_api_keys['__opencode_models__']['local-model:Q4']['base_url'],'http://localhost:8123/v1')
+            self.assertEqual(read_keys(self.config)['__opencode_models__']['local-model:Q4']['api_key'],'secret-with-#-characters')
             ui._open_picker('model','implementation')
             self.assertEqual(ui.state,'picker')
             self.assertEqual(ui._picker_rows(), [('option', 'local-model:Q4')])
@@ -413,7 +401,7 @@ sys.exit(7 if mode=='fail' else 0)
             self.assertNotIn('second-secret', self.config.read_text(encoding='utf-8'))
             ui.stage_target = 'implementation'
             with patch.object(ui, 'maybe_reload'):
-                ui._apply_aider_to_all_stages()
+                ui._apply_opencode_to_all_stages()
             ui.load_config()
             for stage in module.CONFIG_STAGES:
                 self.assertEqual(ui.stage_runner(stage), 'self-hosted')

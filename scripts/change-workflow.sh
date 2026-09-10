@@ -1437,6 +1437,7 @@ start_codex_bg() {
     echo "Log: $LOG_DIR/${log_name}.log"
 
     (
+        cd "$PROJECT_ROOT"
         local started="$SECONDS" status=0 child=""
         trap 'if [[ -n "$child" ]]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi; exit 130' INT TERM
         "$cmd" "${flags[@]}" "$(cat "$prompt_file")" \

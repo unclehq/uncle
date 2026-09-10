@@ -1,226 +1,101 @@
-# Manual Verification Checklist
+# Manual Checklist
+Base checks: 8; resolved: 3; added: 5; removed: 0
 
-Base checks: 15; resolved: 1; added: 3; removed: 0
+## Summary
 
-Check ID: MC-001
-Priority: P0
-Behavior classification: MODIFY, ADD, PRESERVE
-Related behavior: B-1, B-5
-Related invariant: I-2, I-6, I-8
-Preconditions: Hermetic scratch repository; `change-workflow.sh` can be driven to each real gate: small-track `WAIT_ANALYSIS_APPROVAL` (`ACKNOWLEDGE`, four files), full-track `WAIT_ANALYSIS_APPROVAL` (`APPROVE`, two files), `WAIT_PLAN_APPROVAL` (`ACKNOWLEDGE`, two files), and `WAIT_UPDATED_PLAN_APPROVAL` (`APPROVE`, one file); gated files have distinct known contents.
-Exact action: At each gate, submit the preliminary ENTER followed by `y`; repeat with `Y`; inspect the prompt, exit status, workflow state, and every approval record.
-Expected result: Exactly one Y/N question names every gated filename, uses the lowercased actual action rather than inferring it from file count, and ends `[Y/N]`; `y` and `Y` accept, advance normally, and write each captured pre-prompt SHA-256 digest to the correctly mapped `.workflow/approvals/<name>.sha256` file.
-Evidence to capture: Complete stdout bytes; exit status; before/after state; independent `shasum -a 256` results; approval paths and contents; file-to-approval-name mapping.
-Actual result:
-Status: NOT RUN
+Planned verification of `CHANGE_PLAN.md:AC1–AC3`; no checks executed.
 
-Check ID: MC-002
-Priority: P0
-Behavior classification: MODIFY, REMOVE, PRESERVE
-Related behavior: B-1, B-7, B-8
-Related invariant: I-5, I-6
-Preconditions: Hermetic scratch repository positioned at representative single-file and multi-file `change-workflow.sh` gates; no approval records exist.
-Exact action: In separate clean runs submit `n`, `N`, `foo`, an empty line, `APPROVE`, `ACKNOWLEDGE`, ` y`, EOF at the Y/N read, and immediate closed stdin at the preliminary read.
-Expected result: Every input declines with exit 0, leaves workflow state paused, creates no approval record, and does not advance downstream work; legacy words additionally emit explicit guidance that `y` is now required; old exact-word prompt text is absent; immediate EOF follows the normal decline path.
-Evidence to capture: Input fixture, stdout/stderr, exit status, state before/after, approval-directory listing, and proof no downstream command ran.
-Actual result:
-Status: NOT RUN
+## Findings
 
-Check ID: MC-003
-Priority: P0
-Behavior classification: MODIFY, ADD, PRESERVE
-Related behavior: B-2, B-5
-Related invariant: I-2, I-6, I-8
-Preconditions: Hermetic scratch application; `stagegate.sh` can be driven independently to `WAIT_REQUIREMENTS_APPROVAL`, `WAIT_PLAN_APPROVAL`, `WAIT_REVIEW_ACKNOWLEDGEMENT`, and `WAIT_UPDATED_PLAN_APPROVAL`; each gated file has known contents.
-Exact action: At every gate submit the preliminary ENTER followed by `y`; repeat the matrix with `Y`; inspect the displayed verb and filename, state transition, and approval record.
-Expected result: The Y/N question uses the lowercased configured wording, names the actual file, ends `[Y/N]`, and accepts both `y` and `Y`; normal processing continues and the approval file contains exactly the captured digest for the displayed file.
-Evidence to capture: Complete stdout bytes; exit status; before/after state; independent file digest; approval path and content.
-Actual result:
-Status: NOT RUN
+All behavior and invariant IDs below refer to `CHANGE_SPEC.md` unless prefixed with `PLAN` or `BASELINE`.
 
-Check ID: MC-004
-Priority: P0
-Behavior classification: MODIFY, REMOVE, PRESERVE
-Related behavior: B-2, B-7, B-8
-Related invariant: I-3, I-5, I-6
-Preconditions: Hermetic scratch application positioned at a representative `stagegate.sh` approval gate; no approval record exists.
-Exact action: In separate clean runs submit `n`, `N`, `foo`, an empty line, `APPROVE`, `ACKNOWLEDGE`, ` y`, EOF at the Y/N read, and immediate closed stdin at the preliminary read.
-Expected result: Every input declines with exit 0, leaves the workflow paused, creates no approval record, and does not advance downstream work; legacy words emit the explicit `y` migration guidance; old exact-word prompt text is absent; immediate EOF does not escape through `set -e` with exit 1.
-Evidence to capture: Inputs, stdout/stderr, exit statuses, before/after state, approval-directory listing, and downstream-command trace.
-Actual result:
-Status: NOT RUN
+| Check ID | Priority | Behavior classification | Related behavior | Related invariant | Preconditions | Excl | Deps | Exact action | Expected result | Evidence to capture | Actual result | Status |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| MC-001 | P0 | MODIFY, ADD | B-1/2; AR-4; PLAN P6/P8/M1 | I-3/4 | Writable disposable project; interactive 80×24 terminal and operator | terminal:manual, fixture:manual | none | Select each missing-input mode in TUI; dismiss separately with Esc, Enter and another key; create required file and reselect; repeat after restarting TUI | “Required input” popup names required filename as needed; footer returns to menu; no partial launch; selection/workflow cleared; retry launches once; restart rechecks disk | Terminal recording/dimensions; launch log; filesystem before/after | | BLOCKED-SETUP |
+| MC-002 | P0 | MODIFY, ADD | B-1/2/3; PLAN T1/T2/Q1 | I-3/4 | Writable isolated fixtures; `scripts/tests/menu-input-test.py:20,124` fixtures; restricted identity able to run copied launcher but denied project-directory search permission; stat/open tracing | fixture:matrix, identity:restricted | none | For TUI indices 0/2 call `select()` with `start_workflow` mocked; for shell choices 1/3 use `shell_fixture()` and input choice plus newline then EOF. For each required filename test missing, directory, broken link, denied stat, empty/nonempty regular file, internal/external regular-file symlink, required file alone and both files. Patch TUI `os.stat` with PermissionError; for shell remove project-directory search permission after entering it as the restricted identity, run copied launcher, restore permission and retry. Trace document stat/open calls before mocked/stub launch | First four block; remaining cases launch; no content validation or document creation; stat error does not crash | Fixture matrix; warnings; stat/content-read and launch traces | | BLOCKED-SETUP |
+| MC-003 | P0 | PRESERVE, MODIFY | B-6; AR-5/6; PLAN T5/T6/P10 | I-1/2/4 | Writable spaced-path project; `scripts/tests/menu-input-test.py:124` copied installation/stubs; decoy documents in installation cwd; isolated config | fixture:routing | none | Launch copied `uncle` from project cwd: launcher changes to installation cwd (`uncle:6,31`). Run TUI with `UNCLE_PROJECT_ROOT` set to project from decoy cwd; spy on real `cmd_for()` and mocked Popen (`uncle_tui.py:1015,1270`). Exercise indices 0/2 and issue index 1→123→each issue mode; shell input `1\n3\n2\n123\nc\nq\n`, repeating issue mode n/empty. Repeat ordinary, `misc.auto_mode true`, and launcher `--unattended`; compare args with PC1. With files missing send `1\n3\n1\n` then EOF; separately create required file before the next selection in the same process. Record pre-stub cwd and post-`cd` cwd (`scripts/tests/menu-input-test.py:135`), resolving macOS path aliases | Root document controls gate; launch cwd is project root; issue selection precedes launch without premature gating; args unchanged; missing input warns without extra read; shell can retry and handles EOF without looping | Input transcript; exact invocations; ordered calls, args/cwd; exit codes | | BLOCKED-SETUP |
+| MC-004 | P1 | PRESERVE | B-4; PLAN P7/M3 | — | Writable fixture; no reader configured; interactive operator | terminal:manual, fixture:manual | none | Dismiss original notice; trigger and dismiss required-input warning; trigger original notice again | Original notice opens Configure each time; required-input warning returns to menu; title/footer/destination metadata does not leak | Terminal recording and destinations | | BLOCKED-SETUP |
+| MC-005 | P0 | PRESERVE | B-5; PLAN P11/T7; ADVERSARIAL_REVIEW.md:AR-001 | I-3 selection-time | Writable disposable projects; actual drivers with isolated stub agents; `scripts/tests/menu-input-test.py:205` fixture; external networking disabled | fixture:race | none | Run `python3 -B scripts/tests/menu-input-test.py MenuInputTests.test_selection_race_actual_drivers -v`: TUI launch callback unlinks input; shell BASH_ENV DEBUG trap unlinks before run_new_application/run_change_workflow; both WORKFLOW agent/reviewer commands point to the exit-73 stub. Reuse fresh `shell_fixture(race=True)` projects with initially absent then empty CHANGE_REQUEST.md and run copied `scripts/change-workflow.sh` directly with UNCLE_PROJECT_ROOT and both stub overrides. Capture driver exits separately from shell-menu exit 0 and printed statuses (`scripts/tests/menu-input-test.py:243–250`) | New-app reaches stub agent with absent REQUIREMENTS.md; change ANALYZE exits 1 before agent; initial missing/empty change inputs exit 1; no live agent/network call | Hook timeline; driver exits; stub calls; network-isolation evidence | | BLOCKED-SETUP |
+| MC-006 | P0 | REGRESSION | PLAN AC1/AC2/R1 | I-1/2/3/4 | Writable test environment; planned test file available | fixture:regression, host:verification | none | Run `python3 -B scripts/tests/menu-input-test.py -v`; execute BASELINE_REPORT.md §8 commands 1–3 and 6 verbatim | T1–T7 pass; no new baseline failures; BASELINE F1 failures identified separately, not counted as new | Exact commands/full output/exits; test-to-T1–T7 mapping, including race isolation | | BLOCKED-SETUP |
+| MC-007 | P0 | PRESERVE, ROLLBACK | AR-5; PLAN AC3/P3/NC1/RB1 | I-1/2 | Implementation complete; PC1 snapshot and review access; writable rollback copy | fixture:rollback, host:verification | none | Compare final delta with PC1; verify only FC1–FC3 changed and P3 helpers preserved; in disposable copy revert C1–C4, rerun PLAN §17, compare inputs/state/prior edits | Protected paths and prior edits preserved; no persistence migration; rollback restores baseline behavior without losing inputs/state | Scoped diff; PC1 comparison; rollback commands/results and state comparison | | BLOCKED-SETUP |
+| MC-008 | P0 | COMPATIBILITY | PLAN Q2/PC2/M1–M3 | I-1/2/3/4 | Native Windows environment and operator | terminal:windows, fixture:windows | none | On native Windows execute MC-001, MC-003 and MC-004 scenarios | Same specified menu, launch and legacy-notice behavior | Windows version; terminal; commands/recording; calls/args/cwd | | BLOCKED-IMPOSSIBLE |
+| MC-009 | P0 | REGRESSION, MODIFY | PLAN NC1; IMPLEMENTATION_NOTES.md:IN-13/14 | — | Writable isolated checkout/config; PC1 snapshot | fixture:prior-edits, host:verification | none | Run `bash scripts/tests/plan-scope-test.sh` and `bash scripts/tests/shell-menu-startup-test.sh`; run `bash scripts/tests/checklist-runner-config-test.sh`. Source `scripts/lib/stage-config.sh` with isolated UNCLE_CONFIG; compare side/cmd/runner/model/effort/billing/network for manual-checklist-base/delta against manual-checklist and implementation-step-1 against implementation, using stage overrides, global fallbacks, absent config, aider alias, and conflicting alias-specific keys. Compare changed-file inventory including reports/untracked tests against PC1 status/diff/hashes and IN-5/6/13 | Empty scope assignment exits 0 under errexit/pipefail (`scripts/lib/plan-scope.sh:53`); startup preserves config without undefined-command failure (`uncle:616`); aliases use canonical settings and side (`scripts/lib/stage-config.sh:58`); every file outside FC1–FC3 accounted for as prior edit or declared artifact, unexplained deltas flagged | Commands/exits; config matrix; file dispositions and PC1 comparisons | | BLOCKED-SETUP |
+| MC-010 | P0 | REGRESSION, MODIFY | PLAN NC1; CHANGE_TEST_REPORT.md:CT-18 | I-1 | Writable isolated checkout; stub reviewer; absolute temporary paths | fixture:background, host:verification | none | Adapt disposable `scripts/tests/background-performance-test.sh` harness to set PROJECT_ROOT to a spaced project path; invoke extracted actual start_codex_bg from another cwd; stub records cwd/args then sleeps. Run cancellation assertions; repeat with nonexistent PROJECT_ROOT, capturing background wait status and stub calls (`scripts/change-workflow.sh:1400,1440`) | Valid-root reviewer runs in project with existing args; cancellation exits 130 without orphan; invalid-root launch fails before reviewer; unset-root baseline failure remains separately identified | Harness; cwd/args; wait statuses; child-process evidence | | BLOCKED-SETUP |
+| MC-011 | P1 | REGRESSION | CHANGE_TEST_REPORT.md:CT-10 | — | ShellCheck installed; PC1 comparison checkout | fixture:lint | none | Run `shellcheck uncle scripts/change-workflow.sh scripts/lib/plan-scope.sh scripts/lib/stage-config.sh scripts/tests/plan-scope-test.sh scripts/tests/checklist-runner-config-test.sh scripts/tests/shell-menu-startup-test.sh` on final and PC1 copies | No unexplained new diagnostics; existing diagnostics identified separately | Version; command; diagnostics/exits and comparison | | BLOCKED-SETUP |
+| MC-012 | P0 | REGRESSION, COMPATIBILITY | CHANGE_TEST_REPORT.md:CT-19 | — | Writable isolated checkout; Python, Bash, jq, curses, Aider; loopback binding; native Windows for platform-only cases | fixture:python, host:verification, loopback:127.0.0.1:dynamic, fixture:windows | none | Run `bash -c 'for t in scripts/tests/*test.py; do python3 -B "$t"; rc=$?; printf "%s: exit %s\n" "$t" "$rc"; done'`; repeat windows-portability-test.py on native Windows; inventory every skip and provision its prerequisite before rerun. Retain self-hosted-live-test.py's local-only guard and record allocated port (`scripts/tests/self-hosted-live-test.py:16`) | Every standalone Python suite has an assessed result; platform-only tests execute natively; local Aider assertions hold without external calls; skips remain unresolved until executed | Per-file output/exits; skip dispositions; Windows evidence; endpoint/guard evidence | | BLOCKED-SETUP |
+| MC-013 | P0 | REGRESSION | PLAN AC2; CHANGE_TEST_REPORT.md:CT-7/14/18 | — | Writable final and PC1 checkouts; `/private/tmp/uncle-implementation-start` logs; functioning Git identity/signing and shell file descriptors | fixture:full-suite, host:verification | none | In each checkout run `bash -c 'for t in scripts/tests/*-test.sh; do bash "$t"; rc=$?; printf "%s: exit %s\n" "$t" "$rc"; done'`; compare individual assertions and exits with full-results.json and rollback-results.json; rerun environment-blocked suites after correcting prerequisites | No new failures; all 11 reported failing suites individually attributed; matching exit codes alone do not establish matching failures; unresolved assertions remain acceptance gaps | Commands/environment; per-suite logs; assertion-level final/PC1 dispositions | | BLOCKED-SETUP |
 
-Check ID: MC-005
-Priority: P0
-Behavior classification: MODIFY, ADD, PRESERVE
-Related behavior: B-3, B-5
-Related invariant: I-2, I-6, I-8
-Preconditions: Scratch checkout containing the expected file for each `workflow.sh` subcommand: `approve-plan`, `approve-review`, and `approve-updated-plan`; files have distinct known contents.
-Exact action: Invoke each subcommand with `y`; repeat with `Y`; inspect its prompt, exit status, and approval record.
-Expected result: Each command prints a Y/N question naming its actual file and ending `[Y/N]`; `y` and `Y` exit 0 and write the captured pre-prompt SHA-256 digest to the unchanged approval path with the correct name mapping.
-Evidence to capture: Command lines, stdout bytes, exit statuses, independent digests, and approval paths and contents.
-Actual result:
-Status: NOT RUN
+## Assumptions
 
-Check ID: MC-006
-Priority: P0
-Behavior classification: MODIFY, REMOVE, PRESERVE
-Related behavior: B-3, B-7, B-8
-Related invariant: I-4, I-6
-Preconditions: Scratch checkout with a valid file for each `workflow.sh approve-*` subcommand and no corresponding approval record.
-Exact action: For every subcommand, run separate cases using `n`, `N`, `foo`, an empty line, `APPROVE`, `ACKNOWLEDGE`, ` y`, and EOF.
-Expected result: Every case prints `Approval cancelled.`, exits 1, and creates no approval record; legacy words also print explicit guidance to use `y`; exact-word approval prompts are absent and no non-`y`/`Y` value is accepted.
-Evidence to capture: Input fixtures, stdout/stderr, exit statuses, and approval-directory listings.
-Actual result:
-Status: NOT RUN
+| ID | Unverified prerequisite | Settled by |
+|---|---|---|
+| A-1 | Current filesystem profile is read-only; fixture creation and test writes unavailable | Supply a writable disposable execution workspace for MC-001–007 and MC-009–013 |
+| A-2 | BASELINE §8 establishes Bash/Python execution, not interactive terminal access or an operator | Provision interactive terminal; if waiting on an operator afterward, classify MC-001/004 BLOCKED-HUMAN |
+| A-3 | Resolved fixture instructions remain unexecuted; restricted identity, tracing and network isolation are unverified | Provision MC-002/003/005 prerequisites and execute their actions |
+| A-4 | Windows is unavailable in this macOS environment | Supply native Windows executor for MC-008/012 |
+| A-5 | ShellCheck, Aider and loopback execution prerequisites are unverified | Provision and record versions/capabilities for MC-011/012 |
 
-Check ID: MC-007
-Priority: P0
-Behavior classification: ADD, PRESERVE
-Related behavior: B-5, B-6
-Related invariant: I-2, I-3
-Preconditions: Synchronizable scratch runs for all three affected gate implementations; each reviewed file begins with a recorded known digest.
-Exact action: For `workflow.sh`, feed its response through a FIFO, wait until `Ready to approve` appears, mutate the gated file, then write `y` to the FIFO; for `change-workflow.sh`, run the verbatim extracted `human_gate` with the test suite’s `MUTATE_AFTER_HASH_CALL=1` `shasum`-delegating wrapper; for `stagegate.sh`, run the verbatim extracted `review_and_approve` once with `MUTATE_AFTER_HASH_CALL=1` and responses ENTER/`y`/ENTER/`y`, then once with `MUTATE_AFTER_HASH_CALL=2` and ENTER/`y`, as implemented at `scripts/tests/gate-prompt-test.sh:158-175,236-244,310-327,431-440,533-556`.
-Expected result: `change-workflow.sh` and `workflow.sh` decline without an approval record; `stagegate.sh` reopens or declines and cancels stale speculation; no approval record ever validates bytes the operator did not review, and any retained record contains the captured reviewed digest only.
-Evidence to capture: FIFO and fault-wrapper command transcript; event timestamps/order; wrapper call count; pre- and post-mutation digests; stdout/stderr; exit status; state; `cancel_speculation` invocation trace; approval paths and contents.
-Actual result:
-Status: NOT RUN
+## Open questions
 
-Check ID: MC-008
-Priority: P1
-Behavior classification: ADD, PRESERVE
-Related behavior: B-1, B-2, B-3, B-5, B-7
-Related invariant: I-2, I-7, I-8
-Preconditions: One affected gate runnable under a real PTY with normal `TERM`, under a PTY with `TERM=dumb`, and with piped/non-TTY stdout.
-Exact action: Capture the prompt byte-for-byte in all three environments while declining safely.
-Expected result: Normal PTY output contains `ESC[1m` immediately before the complete Y/N prompt and `ESC[0m` immediately after it; `TERM=dumb` and non-TTY output remain readable and contain no ANSI escape bytes; styling causes no fatal error and no escape bytes enter approval, state, or project log files.
-Evidence to capture: Hex or escaped-byte captures for each environment; terminal settings; stdout/stderr; exit statuses; scans of approval, state, and `.workflow/logs` content.
-Actual result:
-Status: NOT RUN
+| ID | Gate decision |
+|---|---|
+| O-1 | PLAN PC2 requires native Windows M1–M3 before acceptance; MC-008 cannot verify that here. Human must change the environment or approve a revised verification strategy/criterion. |
+| O-2 | Mandatory execution fields and coverage exceed the 4,000-byte budget; retained without dropping obligations. |
 
-Check ID: MC-009
-Priority: P1
-Behavior classification: PRESERVE
-Related behavior: B-4
-Related invariant: I-1a
-Preconditions: Hermetic `from-issue.sh --change` setup equivalent to the established close-flow scenarios.
-Exact action: Submit `RUN`, then in separate runs submit `y`, `Y`, `APPROVE`, an empty line, and EOF; run `bash scripts/tests/close-flow-test.sh` without modifying that suite.
-Expected result: Only exact `RUN` starts the change workflow; all other inputs decline under the existing contract; the prompt remains `Type RUN exactly to start the change workflow:`; the unchanged suite reports exactly 181 checks passed.
-Evidence to capture: Inputs, stdout/stderr, exit statuses, launch/no-launch trace, test command, test output, and proof the test file was unchanged.
-Actual result:
-Status: NOT RUN
+## acceptance-criteria traceability
 
-Check ID: MC-010
-Priority: P1
-Behavior classification: MODIFY, REMOVE
-Related behavior: B-9
-Related invariant: I-8
-Preconditions: Release candidate documentation is available.
-Exact action: Review all gate instructions in `README.md`, `QUICK_START.md`, and `scripts/README.md`; search repository documentation for `APPROVE`, `ACKNOWLEDGE`, `exact word`, and `requested word`.
-Expected result: User-facing instructions for affected gates describe `y`/`Y` acceptance and non-yes decline, with no stale instruction to type `APPROVE`, `ACKNOWLEDGE`, an exact word, or a requested word; any `RUN` instruction is clearly limited to the preserved `from-issue.sh` gate.
-Evidence to capture: Search command and complete hits; relevant documentation excerpts; list of every reviewed gate instruction.
-Actual result:
-Status: NOT RUN
+| Criterion | Checks |
+|---|---|
+| AR-1/2 | MC-001/002/003/006 |
+| AR-3 | MC-001/002/006 |
+| AR-4 | MC-001/003 |
+| AR-5 | MC-003/004/005/007/009 |
+| AR-6 | MC-002/003 |
+| PLAN AC1 | MC-001–006/008 |
+| PLAN AC2 | MC-006/011/012/013 |
+| PLAN AC3 | MC-007/009 |
 
-Check ID: MC-011
-Priority: P1
-Behavior classification: PRESERVE, REGRESSION
-Related behavior: B-4, B-5, B-6, B-8
-Related invariant: I-1a, I-2, I-3, I-4, I-5
-Preconditions: Release candidate checkout with dependencies required by the repository’s hermetic test suites.
-Exact action: Run `bash scripts/tests/gate-prompt-test.sh`, `bash scripts/tests/close-flow-test.sh`, `bash scripts/tests/audit-verdict-test.sh`, `bash scripts/tests/agent-kimi-test.sh`, `bash -n scripts/*.sh scripts/lib/*.sh scripts/tests/*.sh`, and `shellcheck scripts/*.sh scripts/lib/*.sh scripts/tests/*.sh`.
-Expected result: The gate suite completes successfully; existing suites remain at 181, 26, and 23 checks respectively; syntax validation succeeds; shellcheck introduces no finding beyond the baseline list; unrelated agent behavior remains unchanged.
-Evidence to capture: Exact commands, tool versions, complete outputs, exit statuses, check totals, and shellcheck finding comparison with the baseline.
-Actual result:
-Status: NOT RUN
+## preserved-behavior coverage
 
-Check ID: MC-012
-Priority: P1
-Behavior classification: PRESERVE, RECOVERY
-Related behavior: B-5, B-8
-Related invariant: I-2, I-4, I-5, I-6
-Preconditions: Each affected workflow is positioned at an approval gate with recorded pre-run state and no approval record.
-Exact action: Decline once, terminate the process, restart the same command from persisted state, verify the same gate is presented, then answer `y`; restart once more after acceptance.
-Expected result: Decline leaves the workflow resumable at the same gate without a partial approval; the subsequent `y` records the exact reviewed digest and advances once; restarting after acceptance does not repeat or bypass the completed gate, and existing state/origin/audit-verdict/lock formats remain unchanged.
-Evidence to capture: State and approval snapshots before and after each run; prompts; exit statuses; digest comparison; resumed stage; state-file format comparison.
-Actual result:
-Status: NOT RUN
+| Behavior | Checks |
+|---|---|
+| B-3/4/5/6 | MC-002; MC-004; MC-005; MC-003 respectively |
+| PLAN UB2 | MC-005 |
+| Prior edits and fixture deviations, IMPLEMENTATION_NOTES.md:IN-12–14 | MC-003/005/007/009/010 |
 
-Check ID: MC-013
-Priority: P1
-Behavior classification: PRESERVE, SECURITY
-Related behavior: B-5, B-8
-Related invariant: I-2, I-6
-Preconditions: Representative affected gates with distinct files and clean approval/state/log storage.
-Exact action: Submit values containing leading or trailing spaces, tabs, multiple characters, mixed case (`yes`, `YES`, `y `, ` y`, tab-prefixed `y`), ANSI/control bytes, and shell metacharacters.
-Expected result: Only the exact single-character values `y` and `Y` accept; all supplied variants decline under the component’s preserved exit-code contract; input is neither executed nor persisted, no unexpected files are created, and approval/state/log content remains uncorrupted.
-Evidence to capture: Byte-precise inputs, stdout/stderr, exit statuses, state changes, filesystem diff, and scans of approval/state/log files.
-Actual result:
-Status: NOT RUN
+## changed-behavior coverage
 
-Check ID: MC-014
-Priority: P2
-Behavior classification: PRESERVE, OBSERVABILITY
-Related behavior: B-5, B-8
-Related invariant: I-2
-Preconditions: Comparable baseline and release-candidate scratch runs at one accepted and one declined gate for each affected script.
-Exact action: Compare externally visible records other than the intentionally changed prompt and legacy-word guidance, including approval path/format, workflow state, origin, audit verdict, lock handling, spend output, cost ledger, and project logs.
-Expected result: No schema, path, logging, spend, cost, lock, origin, or verdict change is present; declined responses produce no approval or state advancement; accepted responses differ only in the specified input/prompt contract and strengthened captured-digest integrity.
-Evidence to capture: Before/after file inventories and normalized diffs; log excerpts; approval record format; state-contract comparison.
-Actual result:
-Status: NOT RUN
+| Behavior | Checks |
+|---|---|
+| MODIFY B-1/2 | MC-001/002/003 |
+| ADD B-3 | MC-002 |
+| PLAN BD1/P6/P7/P8/P9/P10 | MC-001/003/004 |
+| Diff beyond FC1–FC3: plan parser, stage aliases, background cwd | MC-007/009/010 |
 
-Check ID: MC-015
-Priority: P2
-Behavior classification: ROLLBACK, PRESERVE
-Related behavior: B-1, B-2, B-3, B-5, B-9
-Related invariant: I-1, I-1a, I-2
-Preconditions: Disposable checkout containing the release change as an isolated revertible unit and at least one approval record created before rollback.
-Exact action: Revert only the three affected scripts, documentation changes, and new gate test; do not revert unrelated work; invoke representative affected gates and validate the pre-existing approval record.
-Expected result: Exact-word `APPROVE`/`ACKNOWLEDGE` prompts and acceptance are restored; the `RUN` gate remains unchanged; existing SHA-256 approval records remain valid without state or data migration; unrelated files and work are untouched.
-Evidence to capture: Revert target list, before/after diff, gate transcripts, approval validation result, state snapshot, and unrelated-file status.
-Actual result:
-Status: NOT RUN
+## invariant coverage
 
-Check ID: MC-016
-Priority: P1
-Behavior classification: ADD, COMPATIBILITY
-Related behavior: B-1, B-2, B-3, B-8
-Related invariant: I-4, I-5, I-6
-Preconditions: Representative live gate in each affected script; no approval record exists; an exit-status-only wrapper and an output-aware wrapper are available.
-Exact action: Through each wrapper submit `APPROVE`, `approve`, `ACKNOWLEDGE`, and `acknowledge`; inspect output, exit status, state, approval records, and whether the wrapper attempts downstream work.
-Expected result: Every case declines and prints explicit guidance to use `y`, including the case-insensitive variants introduced by IMPLEMENTATION_NOTES.md:36; `workflow.sh` exits 1; both drivers exit 0 but remain paused with no approval, and the output-aware wrapper detects the decline instead of treating exit 0 as advancement.
-Evidence to capture: Wrapper source; exact inputs; stdout/stderr; exit statuses; before/after state; approval-directory listing; downstream-command trace.
-Actual result:
-Status: NOT RUN
+| Invariant | Checks |
+|---|---|
+| I-1/2 | MC-003/010 |
+| I-3 | MC-001/002/005 |
+| I-4 | MC-002/003; outside-root symlink exception per PLAN Q1 |
 
-Check ID: MC-017
-Priority: P1
-Behavior classification: ADD, INTEGRATION, PRESERVE
-Related behavior: B-1, B-2, B-5, B-6, B-8
-Related invariant: I-2, I-3, I-5
-Preconditions: Hermetic end-to-end installations of `change-workflow.sh` and `stagegate.sh` with real gate-driving dependencies or behavior-faithful agent CLI stubs; speculation is active before the `stagegate.sh` edit-race case.
-Exact action: Drive each complete driver from startup through one real approval gate, decline and resume once, then accept; at the `stagegate.sh` gate repeat after editing the reviewed file before `y` and inspect the real caller-side `cancel_speculation` effects.
-Expected result: Driver preflight, lock/origin handling, state dispatch, prompt, approval recording, and resumption operate together under the preserved contracts; the edited `stagegate.sh` review reopens, invokes the real cancellation path, removes or invalidates stale speculative work as designed, and records no stale approval.
-Evidence to capture: Commands and dependency versions; full driver transcripts; state/lock/origin snapshots; gated-file digests; approval records; speculation artifacts before and after cancellation; restart results.
-Actual result:
-Status: NOT RUN
+## regression coverage
 
-Check ID: MC-018
-Priority: P2
-Behavior classification: ADD, SCOPE, REGRESSION
-Related behavior: B-4, B-9
-Related invariant: I-1a
-Preconditions: Release-candidate diff, UPDATED_CHANGE_PLAN.md §23–24 file lists, IMPLEMENTATION_NOTES.md, and the pre-implementation worktree inventory are available.
-Exact action: Compare every path in `.workflow/change.diff` and `git status --short` with UPDATED_CHANGE_PLAN.md:298-316; inspect unplanned changes in `ADVERSARIAL_REVIEW.md`, `CHANGE_PLAN.md`, `CHANGE_TEST_REPORT.md`, `IMPLEMENTATION_NOTES.md`, `UPDATED_CHANGE_PLAN.md`, `CLAUDE.md`, `GOOD_FIRST_ISSUES.md`, and `prompts/change/*`; independently diff every §24 must-not-change runtime file and contract.
-Expected result: The six implementation paths are exactly those authorized by UPDATED_CHANGE_PLAN.md §23; report/plan artifacts contain only workflow evidence or pre-existing work and introduce no runtime behavior; pre-existing unrelated edits are identified without attribution to this implementation; `scripts/from-issue.sh`, protected tests, agent code, libraries, prompt files attributable to the release, and `.workflow` contracts have no release-caused change.
-Evidence to capture: Complete path inventories; per-file diff classification as planned implementation, workflow artifact, or pre-existing unrelated work; before/after hashes for §24 files; discrepancies with IMPLEMENTATION_NOTES.md:16-26 and CHANGE_TEST_REPORT.md:53.
-Actual result:
-Status: NOT RUN
+| Area | Checks |
+|---|---|
+| Notice navigation, retry, restart | MC-001/004 |
+| CLI, root, issue ordering, shell EOF | MC-003 |
+| Driver guards and accepted deletion race | MC-005 |
+| Timing/performance and existing suites | MC-006; BASELINE §8 command 2 includes timing suite |
+| Protected scope, rollback, prior edits | MC-007/009/010 |
+| Native Windows and terminal rendering beyond automated assertions | MC-008/012; MC-001/004 |
+| CT-10 NOT RUN linting | MC-011 |
+| CT-19 NOT RUN shell stat denial and standalone Python suites | MC-002/012 |
+| CT-7/14/18 unresolved full-suite failures | MC-010/013 |
 
-Acceptance-criteria traceability: Criterion 1 → MC-001, MC-003, MC-005, MC-008; Criterion 2 → MC-001, MC-003, MC-005, MC-007; Criterion 3 → MC-002, MC-004, MC-006, MC-013, MC-016; Criterion 4 → MC-007, MC-017; Criterion 5 → MC-009, MC-011, MC-018; Criterion 6 → MC-010; approval-integrity hardening → MC-007; live-driver and cancellation gaps → MC-017; rollback NOT RUN → MC-015.
-Preserved-behavior coverage: B-4 → MC-009, MC-011, MC-018; B-5 → MC-001, MC-003, MC-005, MC-007, MC-012, MC-014, MC-017; B-6 → MC-007, MC-011, MC-017; B-8 → MC-002, MC-004, MC-006, MC-012, MC-013, MC-014, MC-016, MC-017.
-Changed-behavior coverage: B-1 → MC-001, MC-002, MC-008, MC-016, MC-017; B-2 → MC-003, MC-004, MC-008, MC-016, MC-017; B-3 → MC-005, MC-006, MC-008, MC-016; B-7 → MC-002, MC-004, MC-006, MC-008; B-9 → MC-010, MC-018.
-Invariant coverage: I-1 removal → MC-002, MC-004, MC-006, MC-015; I-1a → MC-009, MC-011, MC-015, MC-018; I-2 → MC-001, MC-003, MC-005, MC-007, MC-008, MC-012, MC-013, MC-014, MC-017; I-3 → MC-004, MC-007, MC-011, MC-017; I-4 → MC-006, MC-012, MC-016; I-5 → MC-002, MC-004, MC-012, MC-016, MC-017; I-6 → MC-001 through MC-007, MC-012, MC-013, MC-016; I-7 → MC-008; I-8 → MC-001, MC-003, MC-005, MC-008, MC-010.
-Regression coverage: Gate safety and exact digests → MC-001–MC-007, MC-013; unchanged `RUN` flow → MC-009; documentation migration → MC-010; full automated/syntax/static regression → MC-011; restart and recovery → MC-012; state, logs, and compatibility contracts → MC-014, MC-016; rollback compatibility → MC-015; full-driver and speculation integration → MC-017; release-scope and protected-file integrity → MC-018.
-Removed checks: None.
+## removed checks
+
+| Check ID | Reason |
+|---|---|
+| None | No base check is provably inapplicable. |

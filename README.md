@@ -61,7 +61,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 
 Create a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue, then run `uncle` in your project.
 
-Choose runners per stage: Cline, Claude, Codex, Kimi, or Aider. Install your chosen clients separately. For self-hosted Aider, enter a Base URL and API key; Uncle discovers models automatically. GitHub workflows use `gh auth login`.
+Choose runners per stage: Cline, Claude, Codex, Kimi, or OpenCode. Install your chosen clients separately. For self-hosted OpenCode, enter a Base URL and API key; Uncle discovers models automatically. GitHub workflows use `gh auth login`.
 
 **Configure → Miscellaneous** sets auto mode and your approval name.
 

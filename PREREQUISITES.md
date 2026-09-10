@@ -44,22 +44,26 @@ Install and configure every client selected in **Configure → Configure stages*
 | Claude | `claude` | Authenticate the Claude Code client. |
 | Codex | `codex` | Authenticate the Codex client. |
 | Kimi | `kimi` | Authenticate the Kimi client. |
-| Aider / self hosted | `aider` | Configure an OpenAI-compatible model endpoint in Uncle, as described below. |
+| OpenCode / self hosted | `opencode` | Configure an OpenAI-compatible model endpoint in Uncle, as described below. |
 
 Before starting a workflow, confirm each selected client can run from your terminal and access its model. Hosted providers may require a subscription or funded API account. Uncle does not provide model access.
 
-### Aider / self hosted
+### OpenCode / self hosted
 
-You need a running model server, enough server resources for the chosen model, and network access from Uncle to that server. Aider is the client; it does not host the model.
+You need a running model server, enough server resources for the chosen model, and network access from Uncle to that server. OpenCode is the client; it does not host the model.
 
-In **Configure → Configure Aider / self hosting**, enter:
+In **Configure → Configure OpenCode / self hosting**, enter:
 
 - **Base URL:** the OpenAI-compatible API root, such as `http://localhost:8000/v1`.
 - **API key:** the endpoint's credential. For an unauthenticated server, use a placeholder such as `local`.
 
-The endpoint must support authenticated `GET <Base URL>/models` discovery and chat completions. Uncle lists discovered models with the `openai/` prefix. Select one for each Aider stage, or apply it to all stages.
+The endpoint must support authenticated `GET <Base URL>/models` discovery and chat completions. Uncle lists the model IDs returned by the server and maps them to its OpenCode provider. Select one for each OpenCode stage, or apply it to all stages.
 
-The server must support the requested context size and return responses within the configured timeouts. Successful model discovery alone does not prove that inference works. Aider 0.86.2 has been integration-tested with Uncle.
+The server must support the requested context size and return responses within the configured timeouts. Successful model discovery alone does not prove that inference works. Install the OpenCode CLI separately; see the [OpenCode documentation](https://opencode.ai/docs/).
+
+The model must support tool calls for implementation and file inspection. Uncle uses a custom OpenCode provider for your endpoint and starts a fresh session per stage. Existing self-hosted credentials and model selections migrate automatically; the old `openai/` catalog prefix is removed during migration.
+
+The default model limits are 65,536 context tokens and 8,192 output tokens. Match your server with `WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS` and `WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS`. Set `WORKFLOW_SELF_HOSTED_SECONDS` for the stage timeout (default 3,600 seconds), or `WORKFLOW_SELF_HOSTED_REQUEST_SECONDS` for a separate API timeout. `WORKFLOW_OPENCODE_CMD` selects an alternate CLI executable.
 
 ## GitHub access
 
@@ -74,7 +78,7 @@ Your account needs read access to the source issue and permission to close it if
 
 ## Project setup
 
-Run `uncle` from a writable project directory. Start with `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or a GitHub issue. A Git repository is optional: you do not need to run `git init`. Uncle automatically disables Aider's Git integration outside a repository.
+Run `uncle` from a writable project directory. Start with `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or a GitHub issue. A Git repository is optional: you do not need to run `git init`. OpenCode runs from the project directory without requiring a repository.
 
 Without a repository, review the project files directly; Uncle cannot produce Git change diffs. In a repository, keep unrelated work committed or stashed so review diffs are clear. The Git command-line tool remains an installer dependency.
 

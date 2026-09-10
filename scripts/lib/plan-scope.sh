@@ -50,7 +50,7 @@ plan_scope_files() {
                 if (tok ~ /\//  || tok ~ /\.[A-Za-z0-9]+$/) print tok
             }
         }
-    ' "$plan" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' | sort -u
+    ' "$plan" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d' | sort -u
 }
 
 # plan_steps <plan> — the implementation sequence, one step per line, in order,

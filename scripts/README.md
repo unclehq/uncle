@@ -525,7 +525,7 @@ otherwise it falls back to a line menu. The config is `STAGE VALUE` lines:
 
 | Key | Meaning |
 |---|---|
-| `runner` | `cline` (default), `claude`, `kimi`, or `codex` — picks the agent/reviewer commands |
+| `runner` | `cline` (default), `claude`, `kimi`, `codex`, or `self-hosted` (OpenCode) — picks the agent/reviewer commands |
 | `model` | cline model id for agent stages (`UNCLE_CLINE_MODEL`); empty = cline default |
 | `effort` | reasoning effort (`high`/`medium`/`low`) |
 | `reviewer` | cline model id for reviewer stages (`UNCLE_CLINE_REVIEWER_MODEL`) |

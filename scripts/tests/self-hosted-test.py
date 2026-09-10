@@ -146,6 +146,25 @@ class SelfHosted(unittest.TestCase):
                     self.assertEqual(plan.read_text(encoding='utf-8'), valid)
             self.assertFalse((self.root/'unwanted.py').exists())
 
+    def test_plan_format_retry_preserves_evidence_and_usage(self):
+        import self_hosted
+        invalid = '````markdown\n# Plan\nIncomplete'
+        valid = '# Plan\n## Verification commands\n```bash\npytest\n```\n## Protected verification paths\n```text\ntests/\n```\n'
+        responses = [invalid, valid]
+        def generate(*args, **kwargs):
+            kwargs['usage'].update(input_tokens=10, output_tokens=5, total_tokens=15)
+            return responses.pop(0), 1
+        usage = {}
+        with patch.object(self_hosted, '_run_aider', side_effect=generate) as run:
+            _, turns = run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan', usage=usage)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(turns, 2)
+        self.assertEqual(usage['total_tokens'], 30)
+        self.assertEqual((self.root/'UPDATED_PROJECT_PLAN.md').read_text(encoding='utf-8'), valid)
+        rejected = list((self.root/'.uncle/workflow/logs').glob('updated_project_plan-rejected-*.md'))
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0].read_text(encoding='utf-8'), invalid)
+
     def test_plan_crash_and_missing_output_preserve_original(self):
         import self_hosted
         plan = self.root/'UPDATED_PROJECT_PLAN.md'

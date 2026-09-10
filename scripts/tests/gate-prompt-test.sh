@@ -358,6 +358,7 @@ for s in 0 1 2 3; do
     expect_status 0
     expect_out "GATE_ACCEPTED"
     expect_out "Ready to $verb "
+    expect_out "Press ENTER after reviewing"
     expect_out "? [Y/N]"
     for i in "${!site_files[@]}"; do
         expect_out "${site_files[$i]}"

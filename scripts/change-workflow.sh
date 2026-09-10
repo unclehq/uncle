@@ -644,7 +644,10 @@ human_gate() {
     if [[ "${#files[@]}" -gt 1 ]]; then
         prompt="Press ENTER after reviewing all documents above..."
     fi
-    if ! read -r -p "$prompt"; then
+    # read -p hides the prompt on the TUI's piped stdin. Emit it explicitly
+    # so the TUI can open its review dialog before the approval question.
+    printf '%s' "$prompt"
+    if ! read -r; then
         if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 1; fi
         echo
         echo "Gate not accepted. Workflow remains paused."

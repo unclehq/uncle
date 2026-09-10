@@ -2,7 +2,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+# Keep installed code separate from the project selected by the launcher.
+PROJECT_ROOT="${UNCLE_PROJECT_ROOT:-$ROOT}"
+if [[ ! -d "$PROJECT_ROOT" ]]; then
+    echo "Project root does not exist: $PROJECT_ROOT" >&2
+    exit 1
+fi
+cd "$PROJECT_ROOT"
+export UNCLE_PROJECT_ROOT="$PWD"
 
 # ---------------------------------------------------------------------------
 # Change-workflow chaining

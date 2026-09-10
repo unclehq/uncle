@@ -364,10 +364,39 @@ def run_aider(side, values, prompt, root, stage=None, usage=None):
                 candidate.write_text(document, encoding='utf-8', newline='\n')
                 break
         else:
-            response, turns = _run_aider(side, values, prompt + '\nWrite the complete ' + artifact +
-                ', including Verification commands and Protected verification paths fenced blocks.', staged, allow_shell=False, usage=usage, diagnostic_root=root)
-            if not candidate.exists():
-                candidate.write_text(document_response(response, artifact), encoding='utf-8', newline='\n')
+            request = prompt + '\nWrite the complete ' + artifact + ', including Verification commands and Protected verification paths fenced blocks.'
+            turns = 0
+            for attempt in range(2):
+                attempt_usage = {}
+                try:
+                    response, count = _run_aider(side, values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root)
+                    turns += count
+                finally:
+                    if usage is not None:
+                        for key, value in attempt_usage.items():
+                            usage[key] = usage.get(key, 0) + value
+                if candidate.is_symlink():
+                    raise ValueError('Refusing a symlinked plan; original preserved')
+                try:
+                    if not candidate.exists():
+                        candidate.write_text(document_response(response, artifact), encoding='utf-8', newline='\n')
+                    validate_plan(candidate.read_text(encoding='utf-8'), protected=artifact == 'UPDATED_PROJECT_PLAN.md')
+                except ValueError as error:
+                    logs = root/'.uncle/workflow/logs'
+                    logs.mkdir(parents=True, exist_ok=True)
+                    fd, rejected = tempfile.mkstemp(prefix=artifact.removesuffix('.md').lower() + '-rejected-', suffix='.md', dir=logs)
+                    with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+                        stream.write(response)
+                        if candidate.is_file():
+                            stream.write('\n\n--- Candidate file ---\n' + candidate.read_text(encoding='utf-8'))
+                    if attempt:
+                        raise ValueError(str(error) + '; rejected response saved to ' + rejected) from None
+                    if candidate.exists():
+                        candidate.unlink()
+                    print('Plan response format rejected; retrying once. Response saved to ' + rejected, file=sys.stderr)
+                    request += '\nThe previous response was rejected: ' + str(error) + '\nWrite the complete document again. Close every Markdown fence, including any outer document wrapper. Include all required sections.'
+                    continue
+                break
         if not candidate.is_file() or candidate.is_symlink():
             raise ValueError('Aider did not produce a regular ' + artifact + '; original plan preserved')
         contents = candidate.read_bytes()

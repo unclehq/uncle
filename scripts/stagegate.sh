@@ -395,8 +395,12 @@ preflight_blocked_gate() {
         echo "Outstanding:"
         # shellcheck disable=SC2086
         printf '  %s\n' $outstanding_ids
-        preflight_blocked_menu
-        menu_choice=$?
+        # Menu return codes are choices, not failures under set -e.
+        if preflight_blocked_menu; then
+            menu_choice=0
+        else
+            menu_choice=$?
+        fi
         case "$menu_choice" in
             10)
                 # shellcheck disable=SC2086

@@ -519,7 +519,8 @@ dry-run and shell suggestions disabled. Automatic Git commits are disabled.
 Each stage is a single Aider message with its own temporary config and histories;
 the final assistant response, rather than console banners, becomes the workflow
 result. Aider controls its internal edit/reflection loop. Uncle enforces a
-15-minute process limit, configurable through `WORKFLOW_SELF_HOSTED_SECONDS`.
+60-minute process limit, configurable through `WORKFLOW_SELF_HOSTED_SECONDS`.
+Failed runs retain a sanitized Aider console log under `.uncle/workflow/logs/aider-failure-*.log` for diagnosis.
 Per-stage input and output token counts come from Aider’s local usage events, including repeated model calls. External analytics remain disabled. Missing usage and unknown model pricing remain unavailable rather than being guessed.
 `WORKFLOW_AIDER_CMD` can select a different Aider executable.
 

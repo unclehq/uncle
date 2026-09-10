@@ -275,6 +275,18 @@ run_gate PREFLIGHT_REPORT.md BLOCKED-SETUP P-2 < /dev/null \
     && fail "no answer must not pass for a decision"
 grep -q "remains pending" <<< "$OUT" || fail "a closed stdin must leave the run pending"
 
+# A fresh shell keeps errexit active inside the production gate. Calling a
+# function on the left of || in this test shell would disable it transitively.
+{
+    printf 'set -euo pipefail\nSTATE_DIR="$PWD/strict-state"\n'
+    declare -f preflight_blocked_menu preflight_blocked_gate write_waivers waive_file record_gate_decision human_input_reset
+    printf 'gate_prompt() { printf "%%s" "$1"; }\n'
+    printf 'preflight_blocked_gate PREFLIGHT_REPORT.md BLOCKED-SETUP P-2\n'
+    printf 'test -s "$STATE_DIR/waivers/P-2"\necho STRICT_GATE_CONTINUED\n'
+} > strict-gate.sh
+bash strict-gate.sh <<< 's' > strict-output.txt 2>&1 || fail "skip exited under strict shell error handling"
+grep -q STRICT_GATE_CONTINUED strict-output.txt || fail "strict gate did not continue after skip"
+
 # Skip records one decision covering the outstanding ids -- no per-id popup.
 run_gate PREFLIGHT_REPORT.md BLOCKED-SETUP P-2 <<< 's' \
     || fail "skip must let the run continue"

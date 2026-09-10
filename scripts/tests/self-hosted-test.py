@@ -298,7 +298,15 @@ sys.exit(7 if mode=='fail' else 0)
                     'exec','--output-last-message',str(out),'Test prompt'],env=env,cwd=self.root,
                     text=True,encoding='utf-8',capture_output=True,timeout=10)
                 self.assertNotEqual(result.returncode,0,result.stdout)
-                self.assertTrue(json.loads(result.stdout.splitlines()[-1])['error_detail'])
+                failure = json.loads(result.stdout.splitlines()[-1])
+                self.assertTrue(failure['error_detail'])
+                self.assertIsInstance(failure['duration_ms'], int)
+                if mode != 'empty':
+                    self.assertIn('diagnostic log:', failure['error_detail'])
+                diagnostics = list((self.root/'.uncle/workflow/logs').glob('aider-failure-*.log'))
+                self.assertTrue(diagnostics)
+                for log in diagnostics:
+                    self.assertNotIn('secret-with-#-characters', log.read_text(encoding='utf-8'))
                 self.assertFalse(out.exists())
                 self.assertFalse(Path((self.root/'record').read_text(encoding='utf-8')).exists())
 

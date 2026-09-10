@@ -327,7 +327,7 @@ def run_aider(side, values, prompt, root, stage=None, usage=None):
             for attempt in range(2):
                 attempt_usage = {}
                 try:
-                    response, count = _run_aider('reviewer', values, request, staged, allow_shell=False, usage=attempt_usage)
+                    response, count = _run_aider('reviewer', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root)
                     turns += count
                 finally:
                     if usage is not None:
@@ -351,7 +351,7 @@ def run_aider(side, values, prompt, root, stage=None, usage=None):
                 break
         else:
             response, turns = _run_aider(side, values, prompt + '\nWrite the complete ' + artifact +
-                ', including Verification commands and Protected verification paths fenced blocks.', staged, allow_shell=False, usage=usage)
+                ', including Verification commands and Protected verification paths fenced blocks.', staged, allow_shell=False, usage=usage, diagnostic_root=root)
             if not candidate.exists():
                 candidate.write_text(document_response(response, artifact), encoding='utf-8', newline='\n')
         if not candidate.is_file() or candidate.is_symlink():
@@ -373,41 +373,58 @@ def run_aider(side, values, prompt, root, stage=None, usage=None):
         return response, turns
 
 
-def _run_aider(side, values, prompt, root, allow_shell=True, usage=None):
+def _run_aider(side, values, prompt, root, allow_shell=True, usage=None, diagnostic_root=None):
     from process_tree import start_check, launch_command, kill_tree, finish_check
-    seconds = int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '900'))
+    seconds = int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600'))
     if seconds < 1:
         raise ValueError('WORKFLOW_SELF_HOSTED_SECONDS must be positive')
     with tempfile.TemporaryDirectory(prefix='uncle-aider-') as directory:
         command, env = aider_invocation(side, values, prompt, root, directory)
         if not allow_shell:
             command = [arg for arg in command if arg != "--suggest-shell-commands"] + ["--no-suggest-shell-commands"]
-        with (Path(directory)/'output.log').open('wb') as log:
-            child = start_check(launch_command(command), cwd=root, env=env,
-                                stdout=log, stderr=subprocess.STDOUT)
-            deadline = time.monotonic() + seconds
-            try:
-                while True:
-                    try:
-                        status = child.wait(timeout=.1)
-                        break
-                    except subprocess.TimeoutExpired:
-                        if time.monotonic() >= deadline:
-                            raise ValueError(f'Aider exceeded its {seconds}-second time limit')
-            finally:
+        try:
+            with (Path(directory)/'output.log').open('wb') as log:
+                child = start_check(launch_command(command), cwd=root, env=env,
+                                    stdout=log, stderr=subprocess.STDOUT)
+                deadline = time.monotonic() + seconds
                 try:
-                    if child.poll() is None:
-                        kill_tree(child)
-                        child.wait()
+                    while True:
+                        try:
+                            status = child.wait(timeout=.1)
+                            break
+                        except subprocess.TimeoutExpired:
+                            if time.monotonic() >= deadline:
+                                raise ValueError(f'Aider exceeded its {seconds}-second time limit')
                 finally:
-                    finish_check(child)
-                if usage is not None:
-                    usage.update(aider_usage(Path(directory)/'usage.jsonl'))
-        if status:
-            # Do not expose CLI diagnostics that may contain inherited secrets.
-            raise ValueError(f'Aider exited with status {status}; check its installation and endpoint configuration')
-        response, turns = response_from_history(Path(directory)/'llm.log')
-        return response, turns
+                    try:
+                        if child.poll() is None:
+                            kill_tree(child)
+                            child.wait()
+                    finally:
+                        finish_check(child)
+                    if usage is not None:
+                        usage.update(aider_usage(Path(directory)/'usage.jsonl'))
+            if status:
+                # Do not expose CLI diagnostics that may contain inherited secrets.
+                raise ValueError(f'Aider exited with status {status}; check its installation and endpoint configuration')
+            response, turns = response_from_history(Path(directory)/'llm.log')
+            return response, turns
+        except (ValueError, OSError) as error:
+            try:
+                logs = (diagnostic_root or root)/'.uncle/workflow/logs'
+                logs.mkdir(parents=True, exist_ok=True)
+                output = Path(directory)/'output.log'
+                detail = output.read_text(encoding='utf-8', errors='replace')[-262144:] if output.exists() else ''
+                key = values.get('api_key', '')
+                if key:
+                    detail = detail.replace(key, '[REDACTED]')
+                detail = re.sub(r'(?i)(bearer\s+)[^\s"\']+', r'\1[REDACTED]', detail)
+                fd, saved = tempfile.mkstemp(prefix='aider-failure-', suffix='.log', dir=logs)
+                with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+                    stream.write(str(error) + '\n\n' + (detail or 'Aider produced no console output.\n'))
+            except OSError:
+                raise error
+            raise ValueError(str(error) + '; diagnostic log: ' + saved) from None
 
 
 def profile_menu(config, choose=False):
@@ -489,6 +506,7 @@ def main(side, args):
 if __name__ == '__main__':
     sys.stdout.reconfigure(encoding='utf-8', newline='\n')
     sys.stderr.reconfigure(encoding='utf-8', newline='\n')
+    cli_started = time.monotonic()
     try:
         sys.exit(main(sys.argv[1], sys.argv[2:]))
     except KeyboardInterrupt:
@@ -498,6 +516,6 @@ if __name__ == '__main__':
         if sys.argv[1:2] in (['agent'], ['reviewer']):
             print(json.dumps({'type':'result','subtype':'error','is_error':True,
                               'usage':getattr(error, 'aider_usage', {}), 'total_cost_usd':None,
-                              'error_detail':str(error),
+                              'error_detail':str(error), 'duration_ms':int((time.monotonic()-cli_started)*1000),
                               'usage_source':'aider local message_send events','usage_scope':'stage'}))
         sys.exit(2)

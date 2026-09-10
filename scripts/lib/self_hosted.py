@@ -421,6 +421,7 @@ def main(side, args):
 
 if __name__ == '__main__':
     sys.stdout.reconfigure(encoding='utf-8', newline='\n')
+    sys.stderr.reconfigure(encoding='utf-8', newline='\n')
     try:
         sys.exit(main(sys.argv[1], sys.argv[2:]))
     except KeyboardInterrupt:

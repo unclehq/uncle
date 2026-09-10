@@ -70,6 +70,7 @@ jobs:
           export UNCLE_WINDOWS_PYTHON="$(cygpath -w "$(command -v python)")"
           export UNCLE_WINDOWS_BASH="$(cygpath -w "$BASH")"
           failures=0
+          failed_suites=""
           run_suite() {
             local name="$1"
             shift
@@ -80,6 +81,7 @@ jobs:
               local status=$?
               echo "::error::$name failed (exit $status)"
               failures=$((failures + 1))
+              failed_suites="${failed_suites}${failed_suites:+, }$name"
             fi
             echo "::endgroup::"
           }
@@ -90,6 +92,10 @@ jobs:
           run_suite session-totals python3 -B scripts/tests/session-totals-test.py
           run_suite audit-findings python3 -B scripts/tests/audit-findings-test.py
           echo "Regression suites failed: $failures"
+          if [[ "$failures" -gt 0 ]]; then
+            echo "Failed suites: $failed_suites"
+            printf 'Regression suites failed: %s\n' "$failed_suites" >> "$GITHUB_STEP_SUMMARY"
+          fi
           test "$failures" -eq 0
       - name: Smoke test outside the checkout
         run: |

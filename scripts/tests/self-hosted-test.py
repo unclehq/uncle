@@ -31,8 +31,8 @@ class SelfHosted(unittest.TestCase):
             values = settings(self.config, 'implementation-step-3')
         self.assertEqual(values['model'], 'local-model:Q4')
         self.assertEqual(values['api_key'], 'secret-with-#-characters')
-        self.assertNotIn(values['api_key'], self.config.read_text())
-        self.assertIn('/self-hosted-keys.json', (self.config.parent/'.gitignore').read_text())
+        self.assertNotIn(values['api_key'], self.config.read_text(encoding='utf-8'))
+        self.assertIn('/self-hosted-keys.json', (self.config.parent/'.gitignore').read_text(encoding='utf-8'))
         if os.name != 'nt':
             self.assertEqual((self.config.parent/'self-hosted-keys.json').stat().st_mode & 0o777, 0o600)
         self.assertEqual(values['base_url'], 'http://localhost:8123/v1')
@@ -62,7 +62,7 @@ class SelfHosted(unittest.TestCase):
         for selection, success in (('qwen', True), ('cline-only-model', False)):
             result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/lib/self_hosted.py'),
                                      'choose-model', str(self.config)], input=selection+'\n',
-                                    text=True, capture_output=True)
+                                    text=True,encoding='utf-8', capture_output=True)
             self.assertEqual(result.returncode == 0, success)
             self.assertNotIn('named-secret', result.stdout + result.stderr)
             if success:
@@ -108,20 +108,22 @@ class SelfHosted(unittest.TestCase):
         handler = build.call_args.args[0]
         self.assertIsNone(handler.redirect_request(None, None, 302, '', {}, 'https://elsewhere.test'))
 
-    def test_workflow_formatters_allow_missing_timing(self):
+    @patch("locale.getencoding", return_value="cp1252")
+    def test_workflow_formatters_allow_missing_timing(self, _windows_encoding):
         import re
         import shutil
         if not shutil.which('jq'):
             self.skipTest('jq unavailable')
         for driver in ('stagegate.sh', 'change-workflow.sh'):
-            source = (ROOT/'scripts'/driver).read_text()
+            source = (ROOT/'scripts'/driver).read_text(encoding='utf-8')
             formatter = re.search(r"format_claude_stream\(\) \{.*?\n\}", source, re.S).group()
             for duration in (None, 1500, 'invalid'):
                 event = dict(type='result', subtype='success', num_turns=1, duration_ms=duration)
                 result = subprocess.run([bash_executable(), '-c', formatter+'\nformat_claude_stream'],
-                                        input=json.dumps(event)+'\n', capture_output=True, text=True)
+                                        input=json.dumps(event)+'\n', capture_output=True, text=True,encoding='utf-8')
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('1s' if duration == 1500 else 'time unknown', result.stdout)
+                self.assertIn('—', result.stdout)
 
     def test_planning_edits_are_validated_before_publication(self):
         import self_hosted
@@ -138,10 +140,10 @@ class SelfHosted(unittest.TestCase):
                 if content != valid:
                     with self.assertRaises(ValueError):
                         run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan')
-                    self.assertEqual(plan.read_text(), 'Original approved content\n')
+                    self.assertEqual(plan.read_text(encoding='utf-8'), 'Original approved content\n')
                 else:
                     run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan')
-                    self.assertEqual(plan.read_text(), valid)
+                    self.assertEqual(plan.read_text(encoding='utf-8'), valid)
             self.assertFalse((self.root/'unwanted.py').exists())
 
     def test_plan_crash_and_missing_output_preserve_original(self):
@@ -154,7 +156,7 @@ class SelfHosted(unittest.TestCase):
         with patch.object(self_hosted, '_run_aider', return_value=('no edits', 1)):
             with self.assertRaises(ValueError):
                 run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan')
-        self.assertEqual(plan.read_text(), 'Original\n')
+        self.assertEqual(plan.read_text(encoding='utf-8'), 'Original\n')
 
     def test_exact_usage_sums_messages_without_console_rounding(self):
         from self_hosted import aider_usage
@@ -184,7 +186,7 @@ class SelfHosted(unittest.TestCase):
                 self.assertEqual(env['AIDER_OPENAI_API_KEY'],'test-secret')
                 self.assertNotIn('AIDER_LOAD',env)
                 self.assertNotIn('test-secret',str(command))
-                self.assertNotIn('test-secret',Path(directory,'aider.yml').read_text())
+                self.assertNotIn('test-secret',Path(directory,'aider.yml').read_text(encoding='utf-8'))
                 self.assertIn('--no-show-model-warnings',command)
                 self.assertIn('--no-auto-commits',command)
                 self.assertIn('--no-dirty-commits',command)
@@ -227,12 +229,12 @@ sys.exit(7 if mode=='fail' else 0)
                 out=self.root/'report.md'
                 command=[bash_executable(),(ROOT/f'scripts/{side}-self-hosted.sh').as_posix()]
                 command+=['-p','--model','opus'] if side=='agent' else ['exec','--output-last-message',str(out),'Test prompt']
-                result=subprocess.run(command,input='Test prompt' if side=='agent' else '',text=True,
+                result=subprocess.run(command,input='Test prompt' if side=='agent' else '',text=True,encoding='utf-8',
                                       env=env,cwd=self.root,capture_output=True,timeout=10)
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
                 self.assertNotIn('Aider banner',result.stdout)
                 self.assertNotIn('secret-with-#-characters',result.stdout+result.stderr)
-                self.assertFalse(Path((self.root/'record').read_text()).exists())
+                self.assertFalse(Path((self.root/'record').read_text(encoding='utf-8')).exists())
                 if side=='reviewer':
                     self.assertIn('tokens used\n1291', result.stdout)
                     self.assertEqual(out.read_bytes(),b'## Findings\n\nNOT READY\n')
@@ -253,10 +255,10 @@ sys.exit(7 if mode=='fail' else 0)
                 env.update(FAKE_AIDER_MODE=mode,WORKFLOW_SELF_HOSTED_SECONDS='1')
                 result=subprocess.run([bash_executable(),(ROOT/'scripts/reviewer-self-hosted.sh').as_posix(),
                     'exec','--output-last-message',str(out),'Test prompt'],env=env,cwd=self.root,
-                    text=True,capture_output=True,timeout=10)
+                    text=True,encoding='utf-8',capture_output=True,timeout=10)
                 self.assertNotEqual(result.returncode,0,result.stdout)
                 self.assertFalse(out.exists())
-                self.assertFalse(Path((self.root/'record').read_text()).exists())
+                self.assertFalse(Path((self.root/'record').read_text(encoding='utf-8')).exists())
 
     def test_history_uses_last_response_preserving_markdown(self):
         path=self.root/'llm.log'
@@ -269,7 +271,7 @@ sys.exit(7 if mode=='fail' else 0)
         for side, stage in (('agent','implementation'),('reviewer','final-audit')):
             result = subprocess.run([bash_executable(), '-c',
                 '. "$1/scripts/lib/stage-config.sh"; ROOT="$1"; uncle_runner_cmd self-hosted "$2"',
-                '_',ROOT.as_posix(),side],capture_output=True,text=True,check=True)
+                '_',ROOT.as_posix(),side],capture_output=True,text=True,encoding='utf-8',check=True)
             self.assertTrue(result.stdout.endswith(f'{side}-self-hosted.sh'))
 
     def test_tui_roundtrip_and_masking(self):
@@ -321,7 +323,7 @@ sys.exit(7 if mode=='fail' else 0)
             ui._open_picker('model', 'implementation')
             self.assertEqual(ui._picker_rows(), [('option', 'local-model:Q4'), ('option', 'second-model')])
             self.assertNotIn('second-secret', str(ui._config_items()))
-            self.assertNotIn('second-secret', self.config.read_text())
+            self.assertNotIn('second-secret', self.config.read_text(encoding='utf-8'))
             ui.stage_target = 'implementation'
             with patch.object(ui, 'maybe_reload'):
                 ui._apply_aider_to_all_stages()

@@ -1663,7 +1663,7 @@ while true; do
 
             check_scope_deviations
 
-            git diff --check
+            python3 "$ROOT/scripts/lib/fix-report-whitespace.py"
             git diff --stat > "$STATE_DIR/change-stat.txt"
 
             # Independent of the agent that just claimed its checks passed.

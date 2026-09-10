@@ -236,6 +236,11 @@ remote and a direct user-owned fork. Unsupported selectors and submodules stop
 the handoff. `WORKFLOW_CLOSE_ISSUE=0` and unattended runs suppress PR prompts.
 The workflow lock stays held throughout the handoff.
 
+If commit signing fails, a dialog asks you to stage and commit the audited
+changes with `git commit -S` in another terminal. Press OK/Enter to resume.
+Uncle verifies the signature, parent, and audited file contents before
+publishing. The pending signing step is retained across restarts.
+
 `.uncle/workflow/pr/journal.json` binds a generated owner token, origin, audit
 hash, reviewed/commit trees, original/intended HEAD, repository identities,
 branches and outcome. EOF, declined consent, authentication or publication

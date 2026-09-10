@@ -2170,6 +2170,8 @@ class UncleTUI:
             footer = "[s] open GitHub to star      [Enter/Esc] dismiss"
         elif self.prompt_kind == "enter":
             footer = "[Enter] continue      [Esc] decline"
+            if self.prompt_text.startswith("Commit signing needs your help."):
+                footer = "[ OK / Enter ] resume      [Esc] cancel"
         else:
             footer = "type an answer, [Enter] send, [Esc] cancel"
         body = list(lines)
@@ -2188,6 +2190,8 @@ class UncleTUI:
         left = max(0, (w - box_w) // 2)
         title = {"confirm": " approve ", "enter": " review ", "input": " input ", "support": " support Uncle "}.get(
             self.prompt_kind, " uncle ")
+        if self.prompt_text.startswith("Commit signing needs your help."):
+            title = " signed commit required "
         if self.prompt_text.startswith("Audit finding "):
             title = " blocking audit finding "
 

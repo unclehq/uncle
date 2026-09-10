@@ -59,6 +59,7 @@ class PromptTests(unittest.TestCase):
     def test_generic_prompts_unchanged(self):
         for text, kind in [('Work summary: ', 'input'), ('Proceed? [y/n]: ', 'confirm'),
                            ('Press ENTER after reviewing...', 'enter'),
+                           ('Commit signing needs your help. Commit in another terminal and press ENTER (OK) when finished: ', 'enter'),
                            ('Audit finding F-1 [s] Skip: ', 'audit')]:
             with self.subTest(text=text):
                 ui = self.ui(text)

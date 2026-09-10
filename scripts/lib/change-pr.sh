@@ -174,6 +174,31 @@ def validate(j, ready=True):
         raise ValueError('Published HEAD changed; rerun FINAL_AUDIT.')
 
 
+def manual_signed_commit(j):
+    import shlex
+    command = 'git commit -S -m ' + shlex.quote(j['title'])
+    ask('Commit signing needs your help. In another terminal, open this project, '
+        'review and stage the audited changes, then run: ' + command + '. '
+        'Return here and press ENTER (OK) when finished: ')
+    candidate = head()
+    if candidate == j['original_head']:
+        raise ValueError('No new commit found; PR remains pending. Finish the signed commit and rerun.')
+    if git('rev-parse', candidate + '^{tree}') != j['commit_tree']:
+        raise ValueError('Manual commit differs from the audited files; rerun FINAL_AUDIT.')
+    if git('rev-list', '--parents', '-n', '1', candidate).split() != [candidate, j['original_head']]:
+        raise ValueError('Manual commit must have the audited HEAD as its only parent.')
+    git('verify-commit', candidate)
+    previous = j['intended_head']
+    j['intended_head'] = candidate
+    try:
+        validate(j)
+    except Exception:
+        j['intended_head'] = previous
+        raise
+    j.pop('manual_signing', None)
+    save(j)
+
+
 def ask(prompt, default=None):
     try:
         if sys.stdin.isatty() and default is not None:
@@ -299,6 +324,8 @@ def record_pr(j, row):
 
 
 def handoff(j):
+    if j.get('manual_signing'):
+        manual_signed_commit(j)
     validate(j)
     gh('auth', 'status')
     if not j['base_repo']:
@@ -348,8 +375,16 @@ def handoff(j):
     if j['phase'] == 'prepared':
         validate(j)
         if not j['intended_head']:
-            j['intended_head'] = git('commit-tree', j['commit_tree'], '-p', j['original_head'],
-                                     data=(j['title'] + '\n').encode())
+            try:
+                j['intended_head'] = git('commit-tree', j['commit_tree'], '-p', j['original_head'],
+                                         data=(j['title'] + '\n').encode())
+            except ValueError as error:
+                if not re.search(r'gpg|signing|failed to sign|no agent running|pinentry', str(error), re.I):
+                    raise
+                print(str(error), flush=True)
+                j['manual_signing'] = True
+                save(j)
+                manual_signed_commit(j)
             save(j)
         current_branch = branch()
         if current_branch != j['head_branch']:
@@ -444,7 +479,10 @@ def main():
                  verdict_run=read(STATE / 'audit-verdict').split('\t')[0], phase='bound')
         save(j)
     elif action == 'validate':
-        validate(load())
+        j = load()
+        if j.get('manual_signing'):
+            manual_signed_commit(j)
+        validate(j)
     elif action == 'handoff':
         handoff(load())
     else:

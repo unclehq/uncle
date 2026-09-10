@@ -112,7 +112,7 @@ new_case() {
     mkdir -p "$REPO/scripts/lib" "$REPO/.uncle/workflow" "$CASE/bin" "$CASE/emptybin"
     cp "$ROOT/scripts/from-issue.sh" "$REPO/scripts/from-issue.sh"
     cp "$ROOT"/scripts/lib/*.sh "$REPO/scripts/lib/"
-    cp "$ROOT/scripts/lib/audit-findings.py" "$REPO/scripts/lib/"
+    cp "$ROOT"/scripts/lib/*.py "$REPO/scripts/lib/"
     : > "$GH_LOG"
     : > "$OUT"
 

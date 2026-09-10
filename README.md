@@ -12,7 +12,7 @@
 
 </div>
 
-uncle is a human-gated, adversarially-audited CI pipeline for AI-generated
+Uncle is a human-gated, adversarially-audited CI pipeline for AI-generated
 code. A primary agent plans, implements, and verifies; an independent reviewer
 audits it adversarially; you approve at every gate. By default `cline` runs
 every stage, on both sides.

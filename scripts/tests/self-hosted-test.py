@@ -73,10 +73,10 @@ class SelfHosted(unittest.TestCase):
         from urllib.error import HTTPError
         from unittest.mock import Mock
         opener = Mock()
-        response = io.BytesIO(b'{"data":[{"id":"model-b"},{"id":"model-a"},{"id":"model-b"}]}')
+        response = io.BytesIO(b'{"data":[{"id":"model-b"},{"id":"model-a"},{"id":"model-b"},{"id":"openai/model-a"}]}')
         opener.open.return_value = response
         with patch('urllib.request.build_opener', return_value=opener):
-            self.assertEqual(discover_models('http://localhost:1234/v1/', 'dummy-key'), ['model-a','model-b'])
+            self.assertEqual(discover_models('http://localhost:1234/v1/', 'dummy-key'), ['openai/model-a','openai/model-b'])
         request = opener.open.call_args.args[0]
         self.assertEqual(request.full_url, 'http://localhost:1234/v1/models')
         self.assertEqual(request.get_header('Authorization'), 'Bearer dummy-key')
@@ -171,6 +171,47 @@ class SelfHosted(unittest.TestCase):
         path.write_text('\n'.join(json.dumps(event) for event in events))
         self.assertEqual(aider_usage(path), {})
 
+    def test_previously_selected_model_resolves_after_prefixed_refresh(self):
+        save_keys(self.config, {'__aider_models__': {'openai/local-model:Q4': {k: v for k, v in self.values().items() if k != 'model'}}})
+        with patch.dict(os.environ, {}, clear=True):
+            values = settings(self.config, 'implementation')
+        self.assertEqual(values['model'], 'openai/local-model:Q4')
+        with tempfile.TemporaryDirectory() as directory:
+            command, _ = aider_invocation('agent', values, 'test', self.root, directory)
+        self.assertEqual(command[command.index('--model')+1], 'openai/local-model:Q4')
+
+    def test_requirements_chat_response_is_saved_before_success(self):
+        import self_hosted
+        text = '# REQUIREMENTS_INTERPRETATION.md\n\n## 10. Definition of done\nPrint Hello World.\n'
+        response = 'REQUIREMENTS_INTERPRETATION.md\n```markdown\n' + text + '```'
+        with patch.object(self_hosted, '_run_aider', return_value=(response, 1)) as run:
+            run_aider('agent', self.values(), 'Interpret', self.root, stage='requirements')
+        self.assertEqual(run.call_args.args[0], 'reviewer')
+        self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
+        with patch.object(self_hosted, '_run_aider', return_value=('Done!', 1)):
+            with self.assertRaises(ValueError):
+                run_aider('agent', self.values(), 'Interpret', self.root, stage='requirements')
+        self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
+
+    def test_document_preamble_and_format_retry(self):
+        import self_hosted
+        text = '# REQUIREMENTS_INTERPRETATION.md\n\n## 10. Definition of done\nPrint Hello World.\n'
+        wrapped = 'Here is the requested document:\n\n```markdown\n' + text + '```\nThat completes it.'
+        self.assertEqual(self_hosted.document_response(wrapped, 'REQUIREMENTS_INTERPRETATION.md'), text)
+        def generate(*args, **kwargs):
+            kwargs['usage'].update(input_tokens=100, output_tokens=20, total_tokens=120)
+            return responses.pop(0), 1
+        responses = ['Done!', wrapped]
+        usage = {}
+        with patch.object(self_hosted, '_run_aider', side_effect=generate) as run:
+            run_aider('agent', self.values(), 'Interpret', self.root, stage='requirements', usage=usage)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(usage['total_tokens'], 240)
+        self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
+        rejected = list((self.root/'.uncle/workflow/logs').glob('requirements-rejected-*.md'))
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0].read_text(encoding='utf-8'), 'Done!')
+
     def values(self):
         return {'api_key':'test-secret','model':'local-model:Q4','base_url':'http://localhost:8123/v1'}
 
@@ -257,6 +298,7 @@ sys.exit(7 if mode=='fail' else 0)
                     'exec','--output-last-message',str(out),'Test prompt'],env=env,cwd=self.root,
                     text=True,encoding='utf-8',capture_output=True,timeout=10)
                 self.assertNotEqual(result.returncode,0,result.stdout)
+                self.assertTrue(json.loads(result.stdout.splitlines()[-1])['error_detail'])
                 self.assertFalse(out.exists())
                 self.assertFalse(Path((self.root/'record').read_text(encoding='utf-8')).exists())
 

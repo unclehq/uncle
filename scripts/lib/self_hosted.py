@@ -67,7 +67,7 @@ def discover_models(base_url, api_key):
                         and item['id'] and not any(c.isspace() for c in item['id']) and '#' not in item['id']})
         if not names:
             raise ValueError('The endpoint returned no usable models')
-        return names
+        return sorted({name if name.startswith('openai/') else 'openai/' + name for name in names})
     except HTTPError as exc:
         raise ValueError(f'Model discovery failed (HTTP {exc.code}); check the Base URL and API key') from None
     except (URLError, OSError):
@@ -104,6 +104,8 @@ def settings(config, stage):
     result['api_key'] = os.environ.get('UNCLE_SELF_HOSTED_API_KEY') or read_keys(config).get(stage, '')
     profiles = read_keys(config).get('__aider_models__', {})
     selected = values.get(stage + '.model', '')
+    if selected and selected not in profiles and 'openai/' + selected in profiles:
+        selected = 'openai/' + selected
     if selected in profiles:
         profile = profiles[selected]
         result = dict(model=profile.get('model', selected), base_url=profile.get('base_url', ''), api_key=profile.get('api_key', ''))
@@ -238,6 +240,7 @@ def aider_usage(path):
 
 
 PLAN_ARTIFACTS = {
+    'requirements': 'REQUIREMENTS_INTERPRETATION.md',
     'project-plan': 'PROJECT_PLAN.md',
     'updated-plan': 'UPDATED_PROJECT_PLAN.md',
 }
@@ -269,6 +272,36 @@ def validate_plan(text, protected=True):
             raise ValueError('Plan requires one complete, nonempty fenced block under ' + required)
 
 
+def document_response(response, artifact):
+    text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    if any(marker in text for marker in ('<<<<<<< SEARCH', '>>>>>>> REPLACE')):
+        raise ValueError('Expected Markdown, received edit instructions; original preserved')
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if re.match(r'^#{1,6}\s+\S', line)), None)
+    if start is None:
+        raise ValueError('Expected a complete Markdown document; original preserved')
+    # Models may precede the document with a filename or a short explanation.
+    wrappers = [re.match(r'^(`{3,}|~{3,})(?:markdown|md)?\s*$', line) for line in lines[:start]]
+    wrappers = [match[1] for match in wrappers if match]
+    end = len(lines)
+    if wrappers:
+        fence = wrappers[-1]
+        closing = [i for i in range(start, len(lines)) if lines[i].strip() == fence]
+        if not closing:
+            raise ValueError('Incomplete document response; original preserved')
+        end = closing[-1]
+    text = '\n'.join(lines[start:end]).strip()
+    if not text.startswith('# '):
+        text = '# ' + artifact + '\n\n' + text
+    return text + '\n'
+
+
+def validate_requirements(text):
+    if not re.search(r'^##\s+(?:10[.)]\s*)?(?:\*\*)?Definition of done(?:\*\*)?\s*#*\s*$', text, re.M | re.I):
+        raise ValueError('Requirements interpretation lacks Definition of done; original preserved')
+
+
+
 def run_aider(side, values, prompt, root, stage=None, usage=None):
     artifact = PLAN_ARTIFACTS.get(stage or os.environ.get('UNCLE_STATUS_STAGE', '')) if side == 'agent' else None
     if not artifact:
@@ -288,12 +321,46 @@ def run_aider(side, values, prompt, root, stage=None, usage=None):
         candidate = staged / artifact
         if candidate.exists():
             candidate.unlink()
-        response, turns = _run_aider(side, values, prompt + '\nWrite the complete ' + artifact +
-                                     ', including Verification commands and Protected verification paths fenced blocks.', staged, allow_shell=False, usage=usage)
+        if artifact == 'REQUIREMENTS_INTERPRETATION.md':
+            request = prompt + '\nReturn the complete REQUIREMENTS_INTERPRETATION.md as Markdown, starting with its # heading and including ## 10. Definition of done. Uncle will save it. Do not emit SEARCH/REPLACE edits.'
+            turns = 0
+            for attempt in range(2):
+                attempt_usage = {}
+                try:
+                    response, count = _run_aider('reviewer', values, request, staged, allow_shell=False, usage=attempt_usage)
+                    turns += count
+                finally:
+                    if usage is not None:
+                        for key, value in attempt_usage.items():
+                            usage[key] = usage.get(key, 0) + value
+                try:
+                    document = document_response(response, artifact)
+                    validate_requirements(document)
+                except ValueError as error:
+                    logs = root/'.uncle/workflow/logs'
+                    logs.mkdir(parents=True, exist_ok=True)
+                    fd, rejected = tempfile.mkstemp(prefix='requirements-rejected-', suffix='.md', dir=logs)
+                    with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+                        stream.write(response)
+                    if attempt:
+                        raise ValueError(str(error) + '; rejected response saved to ' + rejected) from None
+                    print('Requirements response format rejected; retrying once. Response saved to ' + rejected, file=sys.stderr)
+                    request += '\nThe previous response was rejected: ' + str(error) + '\nReturn only the full document, with no introductory text or edit instructions.'
+                    continue
+                candidate.write_text(document, encoding='utf-8', newline='\n')
+                break
+        else:
+            response, turns = _run_aider(side, values, prompt + '\nWrite the complete ' + artifact +
+                ', including Verification commands and Protected verification paths fenced blocks.', staged, allow_shell=False, usage=usage)
+            if not candidate.exists():
+                candidate.write_text(document_response(response, artifact), encoding='utf-8', newline='\n')
         if not candidate.is_file() or candidate.is_symlink():
             raise ValueError('Aider did not produce a regular ' + artifact + '; original plan preserved')
         contents = candidate.read_bytes()
-        validate_plan(contents.decode('utf-8'), protected=artifact == 'UPDATED_PROJECT_PLAN.md')
+        if artifact != 'REQUIREMENTS_INTERPRETATION.md':
+            validate_plan(contents.decode('utf-8'), protected=artifact == 'UPDATED_PROJECT_PLAN.md')
+        else:
+            validate_requirements(contents.decode('utf-8'))
         if target.is_symlink() or (target.read_bytes() if target.exists() else None) != original:
             raise ValueError('Plan changed during generation; refusing to overwrite it')
         fd, pending = tempfile.mkstemp(prefix='.' + artifact + '.', dir=root)
@@ -431,5 +498,6 @@ if __name__ == '__main__':
         if sys.argv[1:2] in (['agent'], ['reviewer']):
             print(json.dumps({'type':'result','subtype':'error','is_error':True,
                               'usage':getattr(error, 'aider_usage', {}), 'total_cost_usd':None,
+                              'error_detail':str(error),
                               'usage_source':'aider local message_send events','usage_scope':'stage'}))
         sys.exit(2)

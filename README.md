@@ -63,4 +63,10 @@ Choose runners per stage: Cline, Claude, Codex, Kimi, or OpenCode. Install your 
 
 **Configure → Miscellaneous** sets auto mode and your approval name.
 
+## GitHub integration
+
+Start from a GitHub issue, review the changes, then approve a commit, push, and pull request. Uncle links eligible issues to the PR so GitHub closes them when merged.
+
+See [GitHub integration](GITHUB_INTEGRATION.md) for setup, approvals, signing, and recovery.
+
 [Workflow documentation](scripts/README.md) · [Packaging](packaging/README.md)

@@ -5,7 +5,6 @@
 
 **Build apps and ship changes with the AI agents you choose.**
 
-<<<<<<< HEAD
 > Governed CI for coding agents.
 
 > Everyone else is building agents that run unsupervised. This is the approval
@@ -37,11 +36,8 @@ than the cost of waiting for a human to say yes.
 ## Usage
 
 1. Install Uncle.
-2. Create a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue.
-3. Run `uncle`.
-=======
-Uncle coordinates planning, implementation, testing, and review in a resumable workflow with human approval gates.
->>>>>>> 35ad489 (rebase)
+1. Create a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue.
+1. `uncle`
 
 ## Install
 

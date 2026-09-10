@@ -228,6 +228,8 @@ class SelfHosted(unittest.TestCase):
                 self.assertNotIn('AIDER_LOAD',env)
                 self.assertNotIn('test-secret',str(command))
                 self.assertNotIn('test-secret',Path(directory,'aider.yml').read_text(encoding='utf-8'))
+                self.assertIn('--timeout', command)
+                self.assertGreater(int(command[command.index('--timeout')+1]), 0)
                 self.assertIn('--no-show-model-warnings',command)
                 self.assertIn('--no-auto-commits',command)
                 self.assertIn('--no-dirty-commits',command)
@@ -252,7 +254,8 @@ pathlib.Path(os.environ['RECORD']).write_text(str(prompt.parent),encoding='utf-8
 pathlib.Path(args[args.index('--analytics-log')+1]).write_text(json.dumps(dict(event='message_send', properties=dict(prompt_tokens=1234,completion_tokens=57)))+'\\n',encoding='utf-8')
 mode=os.environ.get('FAKE_AIDER_MODE','ok')
 if mode=='timeout': time.sleep(30)
-if mode!='empty':
+if mode=='api-timeout': print('litellm.Timeout: APITimeoutError - Request timed out.')
+if mode not in ('empty','api-timeout'):
     pathlib.Path(args[args.index('--llm-history-file')+1]).write_bytes(b'TO LLM 2026-09-09T12:00:00\\nUSER Test prompt\\nLLM RESPONSE 2026-09-09T12:00:01\\nASSISTANT ## Findings\\nASSISTANT \\nASSISTANT NOT READY\\n')
 print('Aider banner and costs should not become the report')
 sys.exit(7 if mode=='fail' else 0)
@@ -290,7 +293,7 @@ sys.exit(7 if mode=='fail' else 0)
 
     def test_failures_never_write_a_review(self):
         env=self.stub_environment()
-        for mode in ('fail','empty','timeout'):
+        for mode in ('fail','empty','timeout','api-timeout'):
             with self.subTest(mode=mode):
                 out=self.root/(mode+'.md')
                 env.update(FAKE_AIDER_MODE=mode,WORKFLOW_SELF_HOSTED_SECONDS='1')
@@ -300,6 +303,8 @@ sys.exit(7 if mode=='fail' else 0)
                 self.assertNotEqual(result.returncode,0,result.stdout)
                 failure = json.loads(result.stdout.splitlines()[-1])
                 self.assertTrue(failure['error_detail'])
+                if mode == 'api-timeout':
+                    self.assertIn('Model API requests timed out', failure['error_detail'])
                 self.assertIsInstance(failure['duration_ms'], int)
                 if mode != 'empty':
                     self.assertIn('diagnostic log:', failure['error_detail'])

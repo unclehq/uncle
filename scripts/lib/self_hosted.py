@@ -187,9 +187,12 @@ def aider_invocation(side, values, prompt, root, directory):
     model = values['model']
     if not model.startswith('openai/'):
         model = 'openai/' + model
+    request_seconds = int(os.environ.get('WORKFLOW_SELF_HOSTED_REQUEST_SECONDS') or os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600'))
+    if request_seconds < 1:
+        raise ValueError('WORKFLOW_SELF_HOSTED_REQUEST_SECONDS must be positive')
     command = [os.environ.get('WORKFLOW_AIDER_CMD', 'aider'),
         '--model', model, '--weak-model', model, '--editor-model', model,
-        '--openai-api-base', values['base_url'].rstrip('/'),
+        '--openai-api-base', values['base_url'].rstrip('/'), '--timeout', str(request_seconds),
         '--config', str(config), '--env-file', str(env_file), '--aiderignore', str(ignore),
         '--message-file', str(message), '--llm-history-file', str(work/'llm.log'),
         '--analytics-log', str(work/'usage.jsonl'),
@@ -407,7 +410,13 @@ def _run_aider(side, values, prompt, root, allow_shell=True, usage=None, diagnos
             if status:
                 # Do not expose CLI diagnostics that may contain inherited secrets.
                 raise ValueError(f'Aider exited with status {status}; check its installation and endpoint configuration')
-            response, turns = response_from_history(Path(directory)/'llm.log')
+            try:
+                response, turns = response_from_history(Path(directory)/'llm.log')
+            except ValueError:
+                diagnostic = (Path(directory)/'output.log').read_text(encoding='utf-8', errors='replace')
+                if re.search(r'APITimeoutError|litellm\.Timeout|provider timed out', diagnostic, re.I):
+                    raise ValueError('Model API requests timed out without a response; check model-server logs, capacity, and proxy timeouts') from None
+                raise
             return response, turns
         except (ValueError, OSError) as error:
             try:

@@ -6,6 +6,7 @@ import subprocess
 import signal
 import sys
 import tempfile
+import shutil
 from urllib.parse import urlsplit
 import re
 import time
@@ -196,7 +197,7 @@ def aider_invocation(side, values, prompt, root, directory):
     if side == 'reviewer':
         command += ['--chat-mode','ask','--dry-run','--no-suggest-shell-commands']
     else:
-        command += ['--edit-format','whole','--no-dry-run','--suggest-shell-commands']
+        command += ['--edit-format','diff','--no-dry-run','--suggest-shell-commands']
     # Seed the chat with workflow documents; Aider's repo map and file mention
     # handling provide the remaining code context. Never seed local secrets.
     for path in sorted(root.glob('*.md')):
@@ -211,13 +212,84 @@ def aider_invocation(side, values, prompt, root, directory):
     return command, env
 
 
-def run_aider(side, values, prompt, root):
+PLAN_ARTIFACTS = {
+    'project-plan': 'PROJECT_PLAN.md',
+    'updated-plan': 'UPDATED_PROJECT_PLAN.md',
+}
+
+
+def validate_plan(text, protected=True):
+    """Reject incomplete machine-readable plans before publishing them."""
+    blocks = {}
+    heading, fence, body = '', None, []
+    for line in text.splitlines():
+        match = re.match(r'^\s*(`{3,}|~{3,})(.*)$', line)
+        if fence:
+            if match and match[1][0] == fence[0] and len(match[1]) >= len(fence) and not match[2].strip():
+                if fence.startswith('```'):
+                    blocks.setdefault(heading, []).append(body)
+                fence, body = None, []
+            else:
+                body.append(line)
+        elif match:
+            fence, body = match[1], []
+        elif re.match(r'^#{1,6}\s+', line):
+            heading = re.sub(r'^#{1,6}\s+(?:\d+[.)]\s*)?', '', line).strip().lower()
+    if fence:
+        raise ValueError('Plan has an unclosed Markdown code fence')
+    required_blocks = ['verification commands'] + (['protected verification paths'] if protected else [])
+    for required in required_blocks:
+        candidates = blocks.get(required, [])
+        if len(candidates) != 1 or not any(line.strip() and not line.lstrip().startswith('#') for line in candidates[0]):
+            raise ValueError('Plan requires one complete, nonempty fenced block under ' + required)
+
+
+def run_aider(side, values, prompt, root, stage=None):
+    artifact = PLAN_ARTIFACTS.get(stage or os.environ.get('UNCLE_STATUS_STAGE', '')) if side == 'agent' else None
+    if not artifact:
+        return _run_aider(side, values, prompt, root)
+    target = root / artifact
+    if target.is_symlink():
+        raise ValueError('Refusing to replace a symlinked plan')
+    original = target.read_bytes() if target.exists() else None
+    # Aider never edits the live project during planning. Publish only the
+    # required document after validation; incidental model edits stay isolated.
+    with tempfile.TemporaryDirectory(prefix='uncle-plan-') as directory:
+        staged = Path(directory) / 'project'
+        excluded = shutil.ignore_patterns('.git', '.uncle', '.aider*', 'node_modules', '.venv', 'venv', '__pycache__')
+        def ignore(directory, names):
+            return set(excluded(directory, names)) | {name for name in names if (Path(directory)/name).is_symlink()}
+        shutil.copytree(root, staged, ignore=ignore)
+        candidate = staged / artifact
+        if candidate.exists():
+            candidate.unlink()
+        response, turns = _run_aider(side, values, prompt + '\nWrite the complete ' + artifact +
+                                     ', including Verification commands and Protected verification paths fenced blocks.', staged, allow_shell=False)
+        if not candidate.is_file() or candidate.is_symlink():
+            raise ValueError('Aider did not produce a regular ' + artifact + '; original plan preserved')
+        contents = candidate.read_bytes()
+        validate_plan(contents.decode('utf-8'), protected=artifact == 'UPDATED_PROJECT_PLAN.md')
+        if target.is_symlink() or (target.read_bytes() if target.exists() else None) != original:
+            raise ValueError('Plan changed during generation; refusing to overwrite it')
+        fd, pending = tempfile.mkstemp(prefix='.' + artifact + '.', dir=root)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(contents)
+            os.replace(pending, target)
+        finally:
+            if os.path.exists(pending): os.unlink(pending)
+        return response, turns
+
+
+def _run_aider(side, values, prompt, root, allow_shell=True):
     from process_tree import start_check, launch_command, kill_tree, finish_check
     seconds = int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '900'))
     if seconds < 1:
         raise ValueError('WORKFLOW_SELF_HOSTED_SECONDS must be positive')
     with tempfile.TemporaryDirectory(prefix='uncle-aider-') as directory:
         command, env = aider_invocation(side, values, prompt, root, directory)
+        if not allow_shell:
+            command = [arg for arg in command if arg != "--suggest-shell-commands"] + ["--no-suggest-shell-commands"]
         with (Path(directory)/'output.log').open('wb') as log:
             child = start_check(launch_command(command), cwd=root, env=env,
                                 stdout=log, stderr=subprocess.STDOUT)
@@ -297,7 +369,7 @@ def main(side, args):
         with open(status_file,'a',encoding='utf-8',newline='\n') as stream:
             stream.write(json.dumps({'event':'start','stage':stage,'model':values['model'],
                                      'mode':'act' if side=='agent' else 'review'})+'\n')
-    text, turns = run_aider(side, values, prompt, Path.cwd().resolve())
+    text, turns = run_aider(side, values, prompt, Path.cwd().resolve(), stage=stage)
     if side == 'reviewer':
         if output:
             Path(output).write_bytes((text.rstrip()+'\n').encode('utf-8'))

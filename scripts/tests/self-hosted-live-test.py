@@ -10,7 +10,7 @@ class Server(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         calls.append((self.path,body['model'],self.headers.get('Authorization')=='Bearer dummy-local-key'))
-        payload={'id':'test','object':'chat.completion','model':'local-test','choices':[{'index':0,'message':{'role':'assistant','content':('## Findings\n\nREADY' if mode=='reviewer' else 'GENERATED.md\n```\n# Created by the local fixture\n```')},'finish_reason':'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':5,'total_tokens':15}}
+        payload={'id':'test','object':'chat.completion','model':'local-test','choices':[{'index':0,'message':{'role':'assistant','content':('## Findings\n\nREADY' if mode=='reviewer' else 'UPDATED_PROJECT_PLAN.md\n```markdown\n<<<<<<< SEARCH\n=======\n# Created by the local fixture\n\n## Verification commands\n```bash\npython3 -m pytest\n```\n\n## Protected verification paths\n```text\ntests/\n```\n>>>>>>> REPLACE\n```')},'finish_reason':'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':5,'total_tokens':15}}
         data=json.dumps(payload).encode()
         self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
 server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Server)
@@ -45,8 +45,8 @@ socket.getaddrinfo=getaddrinfo
         assert answer=='## Findings\n\nREADY',repr(answer)
         assert calls and all(path=='/v1/chat/completions' and model=='local-test' and auth for path,model,auth in calls),calls
         mode='agent'
-        answer,turns=run_aider('agent',values,'Create GENERATED.md containing exactly: # Created by the local fixture',workspace)
-        assert (workspace/'GENERATED.md').read_text().strip()=='# Created by the local fixture'
+        answer,turns=run_aider('agent',values,'Create UPDATED_PROJECT_PLAN.md containing exactly: # Created by the local fixture',workspace, stage='updated-plan')
+        assert (workspace/'UPDATED_PROJECT_PLAN.md').read_text().strip()=='# Created by the local fixture\n\n## Verification commands\n```bash\npython3 -m pytest\n```\n\n## Protected verification paths\n```text\ntests/\n```'
         assert all(path=='/v1/chat/completions' and model=='local-test' and auth for path,model,auth in calls),calls
         print('Aider local-only integration passed: endpoint, model, auth, reviewer Markdown and agent file editing verified.')
     finally:

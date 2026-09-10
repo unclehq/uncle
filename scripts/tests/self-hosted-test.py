@@ -123,6 +123,39 @@ class SelfHosted(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('1s' if duration == 1500 else 'time unknown', result.stdout)
 
+    def test_planning_edits_are_validated_before_publication(self):
+        import self_hosted
+        plan = self.root/'UPDATED_PROJECT_PLAN.md'
+        plan.write_text('Original approved content\n')
+        valid = '## Verification commands\n```bash\npython3 -m pytest\n```\n## Protected verification paths\n```text\ntests/\n```\n'
+        for content in ('## Verification commands\n', '## Verification commands\n```bash\npytest', valid):
+            def generate(side, values, prompt, staged, **kwargs):
+                self.assertNotEqual(staged, self.root)
+                (staged/'UPDATED_PROJECT_PLAN.md').write_text(content)
+                (staged/'unwanted.py').write_text('incidental edit')
+                return 'response', 1
+            with patch.object(self_hosted, '_run_aider', side_effect=generate):
+                if content != valid:
+                    with self.assertRaises(ValueError):
+                        run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+                    self.assertEqual(plan.read_text(), 'Original approved content\n')
+                else:
+                    run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+                    self.assertEqual(plan.read_text(), valid)
+            self.assertFalse((self.root/'unwanted.py').exists())
+
+    def test_plan_crash_and_missing_output_preserve_original(self):
+        import self_hosted
+        plan = self.root/'UPDATED_PROJECT_PLAN.md'
+        plan.write_text('Original\n')
+        with patch.object(self_hosted, '_run_aider', side_effect=ValueError('failed')):
+            with self.assertRaises(ValueError):
+                run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+        with patch.object(self_hosted, '_run_aider', return_value=('no edits', 1)):
+            with self.assertRaises(ValueError):
+                run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+        self.assertEqual(plan.read_text(), 'Original\n')
+
     def values(self):
         return {'api_key':'test-secret','model':'local-model:Q4','base_url':'http://localhost:8123/v1'}
 
@@ -147,7 +180,7 @@ class SelfHosted(unittest.TestCase):
                     self.assertIn('--dry-run',command)
                     self.assertIn('--no-suggest-shell-commands',command)
                 else:
-                    self.assertEqual(command[command.index('--edit-format')+1],'whole')
+                    self.assertEqual(command[command.index('--edit-format')+1],'diff')
 
     def stub_environment(self):
         stub=self.root/'fake_aider.py'

@@ -514,7 +514,7 @@ prefix unless it is already present. The main, weak, and editor models all use
 that same endpoint and model. For servers without authentication, enter a
 placeholder API key such as `local`.
 
-Agent stages use Aider's whole-file editing mode; reviewers use ask mode with
+Agent stages use Aider's SEARCH/REPLACE diff editing mode (which preserves nested Markdown fences); reviewers use ask mode with
 dry-run and shell suggestions disabled. Automatic Git commits are disabled.
 Each stage is a single Aider message with its own temporary config and histories;
 the final assistant response, rather than console banners, becomes the workflow
@@ -536,3 +536,5 @@ not loaded for these workflow invocations.
 To use Aider for **every workflow stage**, select an Aider model for one stage, then press **a** in that stage’s configuration. This applies the same named model to all authoring and review stages, including implementation steps, checklist execution, and final audit. Later changes can still be made per stage.
 
 Configure has three sections: **Configure stages**, **Configure Aider / self hosting**, and **Miscellaneous**. Miscellaneous saves auto mode (off by default) and your name for approvals. Auto mode uses `--unattended`: human gates are recorded as waived, while failing verification checks still stop the run. Manual approval records include the configured name; unattended records are not attributed as human approvals. The lowercase `uncle` label is centered beneath the logo.
+
+Aider project-plan and updated-plan stages run in a temporary project copy. Uncle publishes only the expected plan, after validating closed Markdown fences and a nonempty Verification commands block; updated plans also require Protected verification paths. Failure preserves the live plan. Incidental edits from these planning stages are discarded, and concurrent changes to the live plan prevent replacement.

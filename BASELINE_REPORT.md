@@ -2,88 +2,86 @@
 Omitted sections: none
 
 ## 1. Change-request summary
-See CHANGE_REQUEST.md, Motivation; PR handoff already exists.
+CHANGE_REQUEST.md, Motivation: document-budget fails Windows CI.
 
 ## 2. Repository architecture
-scripts/README.md: Bash drivers, CLI adapters, curses UI, `.uncle/workflow` state.
-`packaging/debian/control:7` requires Bash ≥3.2, Python ≥3.9, Git, jq, curl, certificates, and gh.
-Packaging: `scripts/install/build-package.py:15`.
+scripts/README.md: Bash drivers, Python helpers and project-local state.
+Dependencies: Formula/uncle.rb, packaging/debian/control, packaging/windows/scoop.json.
 
 ## 3. Relevant code paths
-PR = `scripts/lib/change-pr.sh`; CF = `scripts/tests/close-flow-test.sh`.
-
-| ID | Path | Role |
-|---|---|---|
-| P-1 | scripts/change-workflow.sh:1786,1939 | Freeze/bind audit; COMPLETE dispatch |
-| P-2 | PR:301 | Prompt, commit, push, create/reconcile PR |
-| P-3 | scripts/from-issue.sh:172,388 | Git fallback guard; seeded summary |
-| P-4 | uncle_tui.py:1546 | Prompt detection and editable default |
+| ID | Path / role |
+|---|---|
+| P-1 | .github/workflows/installers.yml:66: Windows regression runner |
+| P-2 | scripts/lib/gates.sh:255: calculation; :338: guard; :398: reviewer handling |
+| P-3 | scripts/tests/document-budget-test.sh:163: standalone reviewer fixture |
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B-1 | Git completion | PR with closing reference | CF:1128 | Yes |
-| B-2 | Title prompt | 72-character summary or fallback | PR:193; CF:1309 | Yes |
-| B-3 | Publication prompt | Requests summary/manual steps/consent | PR:338 | UNRESOLVED: §15 |
-| B-4 | Decline/EOF/auth failure | PR remains pending | CF:1174 | Yes |
-| B-5 | No `.git` | Legacy immediate-close gate remains | scripts/change-workflow.sh:1939; CF:822 | Yes: no PR |
-| B-6 | Disabled/unattended | No PR prompt | PR:4 | Yes |
-| B-7 | Resume created PR | No duplicate create | CF:1150 | Yes |
+| B-1 | Budget suite | Exit 1 at diagnostic assertion | §8 commands 2, 6; test:191 | No |
+| B-2 | Advisory overflow | Preserves output; continues | Prompt suite; gates.sh:362 | Yes |
+| B-3 | Enforced overflow | Decline/EOF blocks; approval saves increase | Prompt suite; gates.sh:366 | Yes |
+| B-4 | Windows suite fails | Counts failures; fails CI | installers.yml:73–100, inspected | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I-1 | Content matches audit | PR:153 validate | CF:1183 | High |
-| I-2 | Unknown outcome blocks recreate | PR:321 | CF:1249 | High |
-| I-3 | PR leaves issue open | PR:301 handoff | CF:1150 | High |
-| I-4 | Legacy close requires owned READY/hash/origin | scripts/lib/issue-close.sh:issue_close_eligible | CF:892,919 | High |
+| I-1 | Positive limits; artifact override precedence | gates.sh:255 | document-budget-test.sh:12,123 | High; trace passed |
+| I-2 | UTF-8 bytes; final unterminated line counted | gates.sh:344 | document-budget-test.sh:9,16 | High; trace passed |
+| I-3 | Saved increases scoped to source fingerprint | gates.sh:244 | document-budget-prompt-test.sh:25 | High; passed |
 
 ## 6. Current API, schema, and interface contracts
-| ID | Contract | Evidence |
-|---|---|---|
-| C-1 | Version-1 `.uncle/workflow/pr/journal.json`; seven phases | PR:138 |
-| C-2 | Origin TSV: repo/issue/method; legacy=curl | scripts/lib/issue-close.sh:origin_fetch_method |
-| C-3 | Prompt terminates `]:`; chunked Unicode supported | scripts/tests/pr-prompt-test.py |
-| C-4 | `WORKFLOW_CLOSE_ISSUE=0` suppresses handoff | PR:4 |
+gates.sh:218 defaults: 4000–40000 bytes, 3× source size, 120–1000 lines.
+gates.sh:255: global and artifact-specific environment overrides.
+gates.sh:338: missing documents fail; overflow follows B-2/B-3.
 
 ## 7. Existing automated-test coverage
-CF isolates Git/gh fixtures; covers drift, forks, retries, worktrees and closure.
+Commands 2–5 isolate temporary fixtures; no shared ports.
+Coverage: budgets, approvals, portability, packaging (install-test.py:22).
+UNRESOLVED: other suites unrun; native checks require Windows CI.
 
 ## 8. Exact build and test commands executed
 ```sh
-bash -o pipefail -c 'bash scripts/tests/close-flow-test.sh 2>&1 | tail -12'
-PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/pr-prompt-test.py -q
-bash -n scripts/change-workflow.sh scripts/from-issue.sh scripts/lib/change-pr.sh scripts/lib/issue-close.sh
-bash -o pipefail -c 'bash scripts/tests/tui-session-panel-test.sh 2>&1 | tail -8'
+bash -n install.sh scripts/install/homebrew.sh scripts/lib/gates.sh scripts/tests/document-budget-test.sh packaging/windows/python3
+bash scripts/tests/document-budget-test.sh
+bash scripts/tests/document-budget-prompt-test.sh
+python3 -B scripts/tests/windows-portability-test.py -q
+python3 -B scripts/tests/install-test.py -q
+python3 -B -c 'import subprocess,sys; p=subprocess.run(["bash","-x","scripts/tests/document-budget-test.sh"],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True); print("\n".join(p.stdout.splitlines()[-14:])); sys.exit(p.returncode)'
 ```
 
 ## 9. Baseline test results
-| ID | Command position | Result |
+| ID | Command | Result |
 |---|---|---|
-| T-1 | 1 | PASS: 231 checks, 28 Python tests |
-| T-2 | 2 | PASS: 5 tests |
-| T-3 | 3 | PASS: syntax |
-| T-4 | 4 | PASS: 14 tests |
+| T-1 | 1 | PASS, exit 0 |
+| T-2 | 2, 6 | FAIL, exit 1; document-budget-test.sh:191 |
+| T-3 | 3 | PASS, exit 0 |
+| T-4 | 4 | PASS; 18 run, 2 Windows-only skips |
+| T-5 | 5 | PASS; 10 tests including Debian build |
 
 ## 10. Existing failures, warnings, and flaky behavior
-All checks exit 0; no warnings. Flakiness unverified: single run.
+T-2 repeats; T-3 warnings expected; flakiness unestablished.
 
 ## 11. Reproduction result for the reported bug, if applicable
-No bug steps in CHANGE_REQUEST.md; feature exercised by CF.
+Darwin/Bash 3.2 reproduces suite failure; Windows equivalence UNRESOLVED pending CI.
 
 ## 12. Likely change surface
-Inferred: P-1–P-4, CF.
+P-3 fixture; P-2 dependencies.
 
 ## 13. Regression-sensitive components
-I-1–I-4; remote identity resolution (PR:231), shared prompt parsing (P-4).
+P-2 serves both stagegate.sh:942 and change-workflow.sh:1547.
 
 ## 14. Areas explicitly outside the change
-ASSUMPTION: new-app driver/installers/adapters; request gives no exclusions.
+ASSUMPTION: UI, agents, budget policy excluded; request gives no exclusions.
 
 ## 15. Unknowns and assumptions
-UNRESOLVED: 25 staged paths include PR code (`git status --short`); pre-feature behavior requires historical checkout.
-UNRESOLVED: live merge closure, Windows/TTY, builds and wider suites require platform/full-suite checks.
-UNRESOLVED: B-3 versus automatic description; needs request clarification.
+ASSUMPTION: T-2 reflects omitted repair-acceptance.py (test:164; gates.sh:402). Confirm via hidden rejected output.
+Preexisting edits: BASELINE_REPORT.md, CHANGE_REQUEST.md, CHANGE_SPEC.md, README.md (git status; unchanged after tests).
 
 ## 16. Initial risk assessment
-High impact: I-1/I-2 regressions permit unaudited publication/duplicate PRs.
+Moderate: shared guard; Windows and causality unverified.
+
+## Parallel verification groups
+```text
+2 3 4 5
+```

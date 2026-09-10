@@ -1,6 +1,6 @@
 # Change Request
 
-Seeded from [unclehq/uncle#6](https://github.com/unclehq/uncle/issues/6).
+Seeded from [unclehq/uncle#7](https://github.com/unclehq/uncle/issues/7).
 
 ## Change Type
 
@@ -8,16 +8,28 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-When completing a change request make a PR with a comment that closes the change request
+Fix windows build
 
 ## Motivation
 
-Make a pull request when a change request is completed.
+Fix this windows installer script issue on the github workflow
 
-1. Show a dialog that asks the user to name the PR and prefill it with a shortened version of the issue name if there is one or if there is a good name in the CHANGE_REQUEST if a change request is how the process started
-2. Fill the PR description with a very brief description of the work done and how to manually verify it
-3. Have a comment that closes the issue when merged 
-4. If there is no .git directory do not do this process
+Run export PATH="$PWD/packaging/windows:$PATH"
+verification-integrity
+checklist-groups
+parallel-checks
+review-compaction
+agent-kimi
+reviewer-claude
+document-budget
+provided-inputs
+windows-probes
+self-hosted
+session-totals
+audit-findings
+Regression suites failed: 1
+Failed suites: document-budget
+Error: Process completed with exit code 1.
 
 ## Observed Current Behavior
 

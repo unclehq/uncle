@@ -161,7 +161,7 @@ rm -f advanced
 [[ -e advanced ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Standalone reviewer entry points also advertise and enforce the same cap.
 mkdir -p standalone/scripts/lib standalone/.uncle/workflow/approvals
-cp "$ROOT/scripts/lib/gates.sh" "$ROOT/scripts/lib/compact-review.py" standalone/scripts/lib/
+cp "$ROOT/scripts/lib/gates.sh" "$ROOT/scripts/lib/compact-review.py" "$ROOT/scripts/lib/repair-acceptance.py" standalone/scripts/lib/
 cp "$ROOT/scripts/codex-review-plan.sh" "$ROOT/scripts/codex-create-checklist.sh" standalone/scripts/
 cat > standalone/reviewer <<'STUB'
 #!/usr/bin/env bash

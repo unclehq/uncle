@@ -1,99 +1,84 @@
 ## baseline result
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-1 | `bash -o pipefail -c 'bash scripts/tests/close-flow-test.sh 2>&1 &#124; tail -12'` — PASS, exit 0; 231 checks, 28 Python tests, 6 output lines. |
-| CT-2 | `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/pr-prompt-test.py -q` — PASS, exit 0; 5 tests, 4 output lines. |
-| CT-3 | `bash -n scripts/change-workflow.sh scripts/from-issue.sh scripts/lib/change-pr.sh scripts/lib/issue-close.sh` — PASS, exit 0; 0 output lines. |
-| CT-4 | `bash -o pipefail -c 'bash scripts/tests/tui-session-panel-test.sh 2>&1 &#124; tail -8'` — PASS, exit 0; 14 tests, 5 output lines. |
+| BL-1 | `bash scripts/tests/document-budget-test.sh` — exit 1 before C-1; 28 output lines; matches BASELINE_REPORT.md T-2. |
 
 ## targeted tests
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-5 | NOT RUN (post-change T-1/T-2; `CHANGE_PLAN.md` STOP-1 prevents implementation; baseline runs CT-1/2). |
+| T-1 | `bash scripts/tests/document-budget-test.sh` — PASS, exit 0; 29 output lines. |
+| T-2 | `bash scripts/tests/document-budget-prompt-test.sh` — PASS, exit 0; 24 output lines. |
 
 ## regression tests
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-6 | NOT RUN (new P-19 and framing regressions; S-1 blocked by R-2). |
+| R-1 | `python3 -B -c 'import subprocess,sys; p=subprocess.run(["bash","-x","scripts/tests/document-budget-test.sh"],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True); print("\n".join(p.stdout.splitlines()[-14:])); sys.exit(p.returncode)'` — before: exit 1 at `+ grep -q 'Document budget exceeded:' rejected`; after: PASS, exit 0, 14 output lines. |
+| R-2 | `python3 -B scripts/tests/windows-portability-test.py -q` — PASS, exit 0; 4 output lines. |
 
 ## full test suite
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-7 | NOT RUN (S-3 blocked by STOP-1; only BASELINE_REPORT.md §8 commands executed). |
+| FT-1 | NOT RUN (repository-wide suites exceed CHANGE_PLAN.md §16 scope; all BASELINE_REPORT.md §8 commands ran). |
 
 ## formatting
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-8 | `git diff --check` — PASS, exit 0; 0 output lines. |
+| F-1 | `git diff --check -- scripts/tests/document-budget-test.sh` — PASS, exit 0; 0 output lines. |
+| F-2 | `git diff --check` — FAIL: `README.md:10: trailing whitespace.`; existing user edit preserved. |
 
 ## compiler or type checker
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-9 | NOT RUN (broader compiler/type checks; no implementation; baseline shell syntax covered by CT-3). |
+| C-1 | `bash -n scripts/tests/document-budget-test.sh` — PASS, exit 0; 0 output lines. |
+| C-2 | `bash -n install.sh scripts/install/homebrew.sh scripts/lib/gates.sh scripts/tests/document-budget-test.sh packaging/windows/python3` — PASS, exit 0; 0 output lines. |
 
 ## linting
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-10 | NOT RUN (S-3 blocked; no source edits). |
+| L-1 | NOT RUN (no lint command specified in BASELINE_REPORT.md §8 or CHANGE_PLAN.md §16). |
 
 ## integration tests
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-11 | NOT RUN (live M-2 comment/closure evidence requires R-2 resolution and a disposable GitHub PR). |
+| IT-1 | `python3 -B scripts/tests/install-test.py -q` — PASS, exit 0; 5 output lines. |
+| IT-2 | NOT RUN (AC-4/M-1 candidate Windows CI unavailable; settle with Windows Git Bash log). |
 
 ## frontend build
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-12 | N/A (Bash/Python TUI; BASELINE_REPORT.md §2). |
+| FB-1 | N/A (fixture-only Bash change). |
 
 ## migration tests
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-13 | N/A (CHANGE_PLAN.md P-16 specifies no migration). |
+| MT-1 | N/A (no schema or persistence change). |
 
 ## rollback test
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-14 | N/A (STOP-1 prevented source changes or publication to roll back). |
+| RB-1 | `bash scripts/tests/document-budget-test.sh` — temporarily removed C-1: expected exit 1, 28 output lines; restored C-1: PASS, exit 0, 29 output lines. |
 
 ## performance checks
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-15 | NOT RUN (S-3 blocked; no changed runtime behavior). |
+| PC-1 | N/A (no production execution change). |
 
 ## security checks
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-16 | NOT RUN (new P-19 source-binding regressions blocked at S-1). |
+| SC-1 | N/A (only copies an existing helper into a temporary test fixture). |
 
 ## newly introduced warnings
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-17 | N/A (no implementation; no warnings in CT-1–4 output). |
+| W-1 | NOT RUN (warning-by-warning comparison; passing command output was summarized by line count). |
 
 ## pre-existing failures
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-18 | N/A (CT-1–4 passed; no pre-existing failures observed in these commands). |
+| PF-1 | BL-1 reproduced and resolved; F-2 remains in unchanged README.md. |
 
 ## untested areas
-
-| ID | Command and result |
+| ID | Command / result |
 |---|---|
-| CT-19 | NOT RUN (PRE-2 and M-1–3; resolve R-2 then execute CHANGE_PLAN.md S-1–3 to settle assumptions and acceptance). |
-| CT-20 | `git diff --binary -- . ':!IMPLEMENTATION_NOTES.md' ':!CHANGE_TEST_REPORT.md' &#124; shasum -a 256` — PASS, exit 0; 1 output line; matches starting digest in IMPLEMENTATION_NOTES.md U-6. |
+| U-1 | NOT RUN (native Windows acceptance, repository-wide suites and warning comparison; settle IT-2, FT-1 and W-1 before claiming that coverage). |

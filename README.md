@@ -7,9 +7,7 @@
 
 > Governed CI for coding agents.
 
-> Everyone else is building agents that run unsupervised. This is the approval
-> layer that makes them acceptable in production.
-
+> The integrity layer for AI-generated software changes. Uncle makes agent-generated changes verifiable, reviewable, and safe to approve for production. 
 </div>
 
 Uncle is a human-gated, adversarially-audited CI pipeline for AI-generated

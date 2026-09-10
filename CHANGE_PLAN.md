@@ -1,168 +1,140 @@
 # CHANGE_PLAN.md
+
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-001 | Accepted | External link content is not audit-bound. | Data-flow changes; Automated-test strategy |
-| AR-002 | Accepted | A reference supplies no steps. | Data-flow changes; Automated-test strategy |
-| AR-003 | Accepted | Comment contract remains blocking. | Risks and unresolved questions; Manual-verification strategy; Conditions that require stopping implementation |
-| AR-004 | Accepted | Embedded terminators truncate defaults. | Interface and API changes; Automated-test strategy |
-| AR-005 | Accepted | Producer permits purpose prose. | Data-flow changes; Automated-test strategy |
+| AR-1: Overall assessment | Accepted | ADVERSARIAL_REVIEW.md reports no findings; acceptance awaits execution. | Exact acceptance criteria; Post-implementation checks |
 Omitted sections: none
 
-## Selected technical approach
-P-1: Plan defaults in C-1:handoff.
-P-2: Preserve title_default() (BASELINE_REPORT.md B-2/P-3).
+## 1. Selected technical approach
+P-1: Plan: copy the real repair helper into the standalone fixture.
 
-## Alternative approaches considered
-| ID | Approach | Disposition |
+## 2. Alternative approaches considered
+| ID | Alternative | Rejection reason |
 |---|---|---|
-| A-1 | Refetch title | Reject: network |
-| A-2 | Agent | Reject: dependency |
-| A-3 | Auto-publish | Reject: consent |
+| A-1 | Stub repair | Hides dependency |
+| A-2 | Skip repair | Violates CHANGE_SPEC.md §15 |
+| A-3 | Copy all helpers | Obscures dependencies |
 
-## Why the selected approach is preferred
-P-3: Reuse C-1:ask()/journal.
+## 3. Why the selected approach is preferred
+P-2: Inspected `scripts/lib/gates.sh:402` calls repair before checking budgets; `scripts/lib/repair-acceptance.py:main` uses only standard-library imports.
 
-## Exact components to modify
-Planned path aliases.
+## 4. Exact components to modify
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| C-1 `scripts/lib/change-pr.sh` | Defaults | B-3 | Content | T-1 |
-| C-2 `uncle_tui.py:_detect_prompt` | Default prefixes | AR-2/3 | Parsing | T-2 |
-| C-3 `scripts/tests/close-flow-test.sh` | Fixtures | AR-1/3 | Drift | T-1 |
-| C-4 `scripts/tests/pr-prompt-test.py` | Cases | AR-2 | Prompts | T-2 |
+| C-1: scripts/tests/document-budget-test.sh:164 | Add quoted "$ROOT/scripts/lib/repair-acceptance.py" to cp sources | I-4 | Further fixture failures | T-1 |
 
-## Components explicitly not to modify
-P-4: Protect BASELINE_REPORT.md P-1/P-3, `scripts/lib/issue-close.sh`, README files and spec §15 exclusions.
-P-5: Preserve C-1 audit/identity checks; unrelated edits.
+## 5. Components explicitly not to modify
+P-3: Preserve `scripts/lib/{gates.sh,repair-acceptance.py,compact-review.py}`, `scripts/codex-{review-plan,create-checklist}.sh`, `.github/workflows/installers.yml`, packaging, other tests, README.md and approved inputs.
 
-## Data-flow changes
-P-6: Plan: read notes/checklist only from regular blobs (100644/100755) in C-1 journal commit_tree; absent/symlink sources are unusable. Extract three Purpose cells from IMPLEMENTATION_NOTES.md or three nonempty entries under “purpose of each change”.
-P-7: Plan: semicolon-join; normalize controls/whitespace; cap summary at 480 characters. Without completed-work content require typed summary; retain title_default() for title only.
-P-8: Plan: extract up to three complete action/expected-result pairs from MANUAL_CHECKLIST.md tables or labeled check blocks; normalize as P-7. Without usable pairs require typed steps; headings/references alone are unusable.
-P-9: Preview before consent; retain closing reference/--body-file; no text execution.
+## 6. Data-flow changes
+P-4: Plan: helper reaches `standalone/scripts/lib/`; output reaches repair then budget checking (`scripts/lib/gates.sh:402-406`).
 
-## State-transition changes
-P-10: Defaults in bound only; retain saved title/body.
+## 7. State-transition changes
+P-5: Plan: replace helper failure with overflow rejection at `scripts/tests/document-budget-test.sh:188-191`; retain success at :193.
 
-## Interface and API changes
-P-11: Plan: frame title, summary and manual defaults as `<label> [default chars=N: <text>]: ` in C-1/C-2; N counts Unicode code points. Wait for N characters plus terminator; extract by length, ignoring embedded `]:`/`[y/n]`. Preserve CLI editing.
+## 8. Interface and API changes
+None; preserve CHANGE_SPEC.md §8.
 
-## Schema or persistence changes
-P-12: Preserve BASELINE_REPORT.md C-1/2.
+## 9. Schema or persistence changes
+None; retain cleanup (`scripts/tests/document-budget-test.sh:7`).
 
-## Compatibility strategy
-P-13: Preserve spec §8 and `.git` file/directory routing.
+## 10. Compatibility strategy
+P-6: Verify Darwin/Bash 3.2 and Windows Git Bash via T-1/M-1.
 
-## Concurrency implications
-P-14: Retain C-1 post-prompt checks; no new writers.
+## 11. Concurrency implications
+None; retain mktemp in `scripts/tests/document-budget-test.sh:6`.
 
-## Error and recovery behavior
-P-15: Malformed sources: P-7/8; retain spec §9/nonempty answers.
+## 12. Error and recovery behavior
+P-7: Retain overflow status and diagnostic assertions; suppress no helper errors.
 
-## Migration plan
-P-16: None; P-10.
+## 13. Migration plan
+None; fixture only.
 
-## Rollback plan
-P-17: Revert C-1–4 changes only; retain journals/branches/PRs.
+## 14. Rollback plan
+RB-1: Revert only C-1; run T-1 and expect the baseline failure.
 
-## Feature-flag or containment strategy
-P-18: Retain flag/unattended guards (C-1:4).
+## 15. Feature-flag or containment strategy
+P-8: Keep C-1 inside the temporary fixture with its stub reviewer; no flag.
 
-## Automated-test strategy
-| ID | Planned command/check |
-|---|---|
-| T-1 | `bash scripts/tests/close-flow-test.sh`: defaults, edits, bad/missing sources, controls, title; P-19 |
-| T-2 | `python3 -B scripts/tests/pr-prompt-test.py -q`: prefixes, Unicode, all chunks, `[y/n]`, edits; hold chunks after embedded `]:`, assert no early dialog and full buffer |
+## 16. Automated-test strategy
+Run from repository root.
 
-P-19: Plan C-3:test_description_defaults: blanks accept action/outcome fixtures; headings-only checks require input; section-only notes describe completed work; unusable notes require input. Mutate external symlink targets after binding for both sources; assert contents absent from preview/body. Fail before/pass after.
+| ID | Command | Required result |
+|---|---|---|
+| T-0 | `bash -n scripts/tests/document-budget-test.sh` | Exit 0 |
+| T-1 | `bash scripts/tests/document-budget-test.sh` | Before: exit 1 at :191 (BASELINE_REPORT.md T-2); after: exit 0 |
+| T-2 | `bash scripts/tests/document-budget-prompt-test.sh` | Exit 0 |
 
-## Regression-test strategy
-P-20: Run BASELINE_REPORT.md §8; no new failures.
-
-## Manual-verification strategy
-| ID | Planned check |
-|---|---|
-| M-1 | CLI/TUI fixture: defaults, edits, body, decline/resume, prompt-time drift |
-| M-2 | Disposable GitHub PR: merge to default branch; record closure and post-merge comment URL/body/author/time separately; closure alone fails spec AR-4 |
-| M-3 | No `.git`: no dialog; worktree: dialog |
-
-## Observability changes
-P-21: Preview; retain pending/URL output.
-
-## Implementation sequence
-| ID | Planned step |
-|---|---|
-| S-1 | Resolve R-2; add C-3/4 tests |
-| S-2 | Implement P-6–11 in C-1/C-2 |
-| S-3 | Run T-1/T-2 and P-20; execute M-1–3 |
-
-## Scope cuts under time pressure
-P-22: No acceptance cuts.
-
-## Risks and unresolved questions
-| ID | Disposition |
-|---|---|
-| R-1 | ASSUMPTION: spec §16 Summary naming; settle T-1. |
-| R-2 | UNRESOLVED: retain spec AR-4 comment requirement; C-1:handoff supplies only a closing reference. Before S-1, obtain human contract clarification or approved comment lifecycle: owner, merge trigger, permissions, deduplication, retries, tests, rollback. C-1–4 authorize no merge integration. |
-| R-3 | Retain consent. |
-| R-4 | UNRESOLVED: TTY; M-1/2. |
+Traceability references CHANGE_SPEC.md.
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| AR-1 | B-2 | I-5 | C-1 | T-1 | M-1 |
-| AR-2 | B-2 | I-5 | C-2 | T-2 | M-1 |
-| AR-3 | B-3 | I-6 | C-1/2 | T-1/2 | M-1 |
-| AR-4 | B-1 | I-3 | C-1 | T-1 reference only; R-2 | M-2 |
-| AR-5 | B-5 | I-4 | P-4 | P-20 | M-3 |
-| AR-6 | B-1 | I-1 | C-1 | P-20 | M-1 |
-| AR-7 | B-4/7 | I-2 | C-1 | P-20 | M-1 |
+| R-1: §5 local pass | B-1, B-3 | I-4 | C-1 | T-1: both reviewers; 1-byte rejection, 100-byte success | M-2 |
+| R-2: §5 Windows pass | B-4 | I-4 | C-1 | CI runs T-1 | M-1 |
+| R-3: §5 preservation | B-2, B-3 | I-1, I-2, I-3 | C-1 | T-1, T-2 | M-2 |
+
+## 17. Regression-test strategy
+P-9: Retain T-1 assertions as the fail-before/pass-after regression.
+P-10: Run T-2 for approval, decline, EOF and fingerprint scoping.
+
+## 18. Manual-verification strategy
+| ID | Planned check |
+|---|---|
+| M-1 | Read Windows installers CI Git Bash log; require `PASS: document-budget`; investigate remaining failures |
+| M-2 | Inspect `git diff -- scripts/tests/document-budget-test.sh`; require only C-1 |
+
+## 19. Observability changes
+None; use T-1/M-1 output.
+
+## 20. Implementation sequence
+| ID | Planned action |
+|---|---|
+| S-1 | Run T-1; confirm baseline failure |
+| S-2 | Apply C-1 |
+| S-3 | Run T-0, T-1, T-2; require exit 0 |
+| S-4 | Perform M-2 and M-1 on candidate |
+
+## 21. Scope cuts under time pressure
+P-11: Retain T-1 and M-1; defer refactoring.
+
+## 22. Risks and unresolved questions
+| ID | Status / settlement |
+|---|---|
+| Q-1 | ASSUMPTION: C-1 suffices; settle with T-1 after editing |
+| Q-2 | UNRESOLVED: Windows equivalence (BASELINE_REPORT.md §11); settle with M-1 |
 
 ## Frozen change scope
-| ID | Planned boundary |
-|---|---|
-| F-1 | After R-2 resolution: C-1–4, P-6–11; retain consent and spec I-1–6. |
+FS-1: Plan: implement only C-1; retain CHANGE_SPEC.md §15 non-goals.
+
 ## Files expected to change
-| ID | Planned paths |
-|---|---|
-| F-2 | C-1–4 paths in Exact components to modify. |
+FC-1: Plan: change only `scripts/tests/document-budget-test.sh` per C-1.
+
 ## Files that must not change
-| ID | Protected paths |
-|---|---|
-| F-3 | All paths outside C-1–4, including P-4 exclusions and preexisting unrelated edits. |
+FP-1: Plan: preserve every other implementation file, including §5 paths, and approved inputs.
+
 ## Expected behavioral differences
-| ID | Planned observable |
-|---|---|
-| D-1 | T-1/T-2/P-19: audited, editable completed-work and action/outcome defaults. |
+BD-1: Plan: deliver CHANGE_SPEC.md B-1 through P-4/P-5; verify with T-1.
+
 ## Expected unchanged behavior
-| ID | Planned preservation |
-|---|---|
-| U-1 | CHANGE_SPEC.md B-1/B-4–7, I-1–4; title_default(), consent, journal v1, P-13. R-2 blocks AR-4 acceptance. |
+BU-1: Plan: preserve CHANGE_SPEC.md B-2–B-4 and I-1–I-3; verify through §16 traceability.
+
 ## Exact acceptance criteria
-| ID | Required result |
+| ID | Required evidence |
 |---|---|
-| AC-1 | Spec AR-1: T-1 preserves issue/change-request title defaults. |
-| AC-2 | Spec AR-2: T-2 passes editable buffers at every split, including embedded terminators. |
-| AC-3 | Spec AR-3/I-6: T-1/P-19 prove completed work and actions/outcomes; unusable sources require input. |
-| AC-4 | Spec AR-4: UNRESOLVED R-2; M-2 must record comment and closure. |
-| AC-5 | Spec AR-5: M-3 proves no dialog without .git and dialog in worktrees. |
-| AC-6 | Spec AR-6/I-1: P-19 excludes external link contents; M-1 rejects prompt-time drift. |
-| AC-7 | Spec AR-7/I-2: P-20 verifies pending recovery and no duplicate/uncertain recreation. |
+| AC-1 | T-0 exits 0. |
+| AC-2 | T-1 exits 0, including §16 reviewer rejection/success assertions. |
+| AC-3 | T-2 exits 0. |
+| AC-4 | M-1 records candidate Windows Git Bash `PASS: document-budget` with zero failures for this suite. |
+| AC-5 | M-2 confirms only C-1; preserve §5 and CHANGE_SPEC.md §8 contracts. |
+
 ## Pre-implementation checks
-| ID | Planned check |
-|---|---|
-| PRE-1 | Resolve R-2 before S-1; record `git status --short` and starting diff; run T-1/T-2 before edits. |
-| PRE-2 | Inspect bound notes/checklist formats against P-6/P-8; settle R-1 with T-1 fixtures. |
+PC-1: Plan: execute S-1 before C-1; stop if T-1 fails for a different reason.
+
 ## Post-implementation checks
-| ID | Planned check |
-|---|---|
-| POST-1 | Run S-3 and AC-1–7; record results and M-2 evidence; check diff against F-2/F-3. |
+PO-1: Plan: execute S-3/S-4 and record AC-1–AC-5 evidence; keep Q-2 UNRESOLVED until candidate CI settles M-1.
+
 ## First features to cut if time expires
-| ID | Planned cut |
-|---|---|
-| CUT-1 | None: P-22; stop incomplete work rather than waive acceptance. |
+CT-1: Plan: cut no acceptance checks; C-1 is indivisible and refactoring remains excluded by P-11.
+
 ## Conditions that require stopping implementation
-| ID | Stop condition |
-|---|---|
-| STOP-1 | R-2 unresolved; scope expansion requires revised approval before implementation. |
-| STOP-2 | Audit binding, framing, protected paths or AC-1–7 cannot be preserved; report blocker. |
-| STOP-3 | M-1/M-2 unavailable: R-4 remains unverified; do not claim acceptance. |
+ST-1: Plan: stop if C-1 requires edits outside FC-1 or contract changes; report failed checks and unavailable Windows evidence without claiming acceptance.

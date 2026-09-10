@@ -1,37 +1,33 @@
 ## files changed
-
-| ID | File | Purpose | Approved-plan step | Behavior or invariant affected |
+| ID | File | Purpose | Approved-plan step | Behavior or invariant |
 |---|---|---|---|---|
-| N-1 | `IMPLEMENTATION_NOTES.md` | Replace prior-stage notes with this blocked-stage record | PRE-1 / STOP-1 | No source or test edits |
-| N-2 | `CHANGE_TEST_REPORT.md` | Replace prior-stage results with executed checks and gaps | PRE-1 | Baseline evidence only |
+| F-1 | scripts/tests/document-budget-test.sh:164 | Copy repair-acceptance.py into standalone/scripts/lib/ | S-2, C-1 | I-4; T-1 passes after failing before the edit |
+| F-2 | IMPLEMENTATION_NOTES.md | Record scope and remaining acceptance evidence | User-required artifact | No runtime behavior |
+| F-3 | CHANGE_TEST_REPORT.md | Record executed checks and coverage gaps | S-1, S-3, S-4, RB-1 | AC-1–AC-5 evidence |
 
 ## purpose of each change
-
-N-1–2 describe the two requested artifacts; implementation stopped under `CHANGE_PLAN.md` STOP-1.
+See F-1–F-3.
 
 ## approved-plan step
-
-`CHANGE_PLAN.md` F-1 and PRE-1 condition S-1 on R-2 resolution; approval retains that condition.
+| ID | Evidence |
+|---|---|
+| P-1 | S-1 reproduced exit 1 at the diagnostic grep; S-3 commands passed; see CHANGE_TEST_REPORT.md. |
+| P-2 | S-4/M-2: git diff -- scripts/tests/document-budget-test.sh showed only C-1; M-1 remains unresolved. |
 
 ## behavior or invariant affected
-
-`scripts/lib/change-pr.sh:handoff` still prompts for summary/manual input and appends a closing reference at line 345, matching `CHANGE_PLAN.md` R-2.
-`BASELINE_REPORT.md` §4 B-1–7 remain preservation obligations; no source changes were made in this stage.
+| ID | Evidence |
+|---|---|
+| B-1 | CHANGE_SPEC.md B-1 and I-4 verified by bash scripts/tests/document-budget-test.sh, exit 0. |
+| B-2 | Preserved-behavior coverage: BASELINE_REPORT.md §4 B-2/B-3 exercised by both budget suites; B-4 requires Windows CI. |
 
 ## deviations
-
 | ID | Disposition |
 |---|---|
-| D-1 | None to implementation scope: STOP-1 prevents S-1–3; implementation and acceptance remain incomplete. |
-| D-2 | Only required output artifacts were replaced outside C-1–4, as explicitly requested by this stage. |
+| D-1 | No implementation deviation: git diff -- scripts/tests/document-budget-test.sh contains only C-1. |
+| D-2 | git status --short before editing recorded existing changes in ADVERSARIAL_REVIEW.md, BASELINE_REPORT.md, CHANGE_PLAN.md, CHANGE_REQUEST.md, CHANGE_SPEC.md and README.md; SHA-256 comparison after checks confirmed all six unchanged. |
 
 ## unresolved concerns
-
-| ID | Evidence / resolution |
+| ID | Status / settlement |
 |---|---|
-| U-1 | BLOCKED: `CHANGE_PLAN.md` R-2 / AC-4 requires human contract clarification or an approved lifecycle covering owner, merge trigger, permissions, deduplication, retries, tests and rollback before S-1; obtain that resolution before implementation. |
-| U-2 | ASSUMPTION remains unverified: `CHANGE_PLAN.md` R-1 title interpretation; settle with T-1 fixtures after U-1 resolution. |
-| U-3 | NOT RUN: PRE-2 source-format checks and M-1–3; execute after U-1 resolution to settle format, TTY and live merge acceptance. |
-| U-4 | Initial `git status --short` showed seven unstaged modified files, no staged files: `ADVERSARIAL_REVIEW.md`, `CHANGE_PLAN.md`, `scripts/agent-codex.sh`, `scripts/lib/green-check.sh`, `scripts/lib/parallel_checks.py`, `scripts/tests/agent-codex-test.sh`, `scripts/tests/green-check-test.sh`. |
-| U-5 | Starting `git diff --numstat` recorded additions/deletions for U-4 in order: 34/29, 128/184, 3/0, 1/1, 6/1, 3/0, 6/0; no edits to those paths. |
-| U-6 | Starting `git diff --binary` SHA-256: `f9bc3b1621b3ba9e0a1ffadb002270f61ac1dfd6d7f29663f348e36ee6f6881b`; final digest verification is recorded in `CHANGE_TEST_REPORT.md`. |
+| Q-1 | CHANGE_PLAN.md Q-1 settled locally: T-1 passes on Darwin/Bash 3.2.57; observed with uname -s and bash --version. |
+| Q-2 | UNRESOLVED: AC-4/M-1 requires candidate Windows Git Bash CI output showing PASS: document-budget and zero suite failures; this session has no candidate Windows run. |

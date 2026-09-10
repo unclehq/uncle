@@ -156,6 +156,19 @@ class SelfHosted(unittest.TestCase):
                 run_aider('agent', self.values(), 'Plan', self.root, stage='updated-plan')
         self.assertEqual(plan.read_text(), 'Original\n')
 
+    def test_exact_usage_sums_messages_without_console_rounding(self):
+        from self_hosted import aider_usage
+        path = self.root/'usage.jsonl'
+        self.assertEqual(aider_usage(path), {})
+        events = [dict(event='startup', properties={}),
+                  dict(event='message_send', properties=dict(prompt_tokens=1234,completion_tokens=57)),
+                  dict(event='message_send', properties=dict(prompt_tokens=2200,completion_tokens=91))]
+        path.write_text('\n'.join(json.dumps(event) for event in events))
+        self.assertEqual(aider_usage(path), dict(input_tokens=3434,output_tokens=148,total_tokens=3582))
+        events.append(dict(event='message_send',properties={}))
+        path.write_text('\n'.join(json.dumps(event) for event in events))
+        self.assertEqual(aider_usage(path), {})
+
     def values(self):
         return {'api_key':'test-secret','model':'local-model:Q4','base_url':'http://localhost:8123/v1'}
 
@@ -193,6 +206,7 @@ assert 'secret-with-#-characters' not in str(args)
 prompt=pathlib.Path(args[args.index('--message-file')+1])
 assert prompt.read_text(encoding='utf-8')=='Test prompt'
 pathlib.Path(os.environ['RECORD']).write_text(str(prompt.parent),encoding='utf-8')
+pathlib.Path(args[args.index('--analytics-log')+1]).write_text(json.dumps(dict(event='message_send', properties=dict(prompt_tokens=1234,completion_tokens=57)))+'\\n',encoding='utf-8')
 mode=os.environ.get('FAKE_AIDER_MODE','ok')
 if mode=='timeout': time.sleep(30)
 if mode!='empty':
@@ -220,9 +234,11 @@ sys.exit(7 if mode=='fail' else 0)
                 self.assertNotIn('secret-with-#-characters',result.stdout+result.stderr)
                 self.assertFalse(Path((self.root/'record').read_text()).exists())
                 if side=='reviewer':
+                    self.assertIn('tokens used\n1291', result.stdout)
                     self.assertEqual(out.read_bytes(),b'## Findings\n\nNOT READY\n')
                 else:
                     final=json.loads(result.stdout.splitlines()[-1])
+                    self.assertEqual(final['usage'], dict(input_tokens=1234,output_tokens=57,total_tokens=1291))
                     self.assertFalse(final['is_error'])
                     self.assertIsInstance(final['duration_ms'], int)
                     self.assertGreaterEqual(final['duration_ms'], 0)

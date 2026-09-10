@@ -520,7 +520,7 @@ Each stage is a single Aider message with its own temporary config and histories
 the final assistant response, rather than console banners, becomes the workflow
 result. Aider controls its internal edit/reflection loop. Uncle enforces a
 15-minute process limit, configurable through `WORKFLOW_SELF_HOSTED_SECONDS`.
-Token counts and costs are left unknown rather than estimated from console text.
+Per-stage input and output token counts come from Aider’s local usage events, including repeated model calls. External analytics remain disabled. Missing usage and unknown model pricing remain unavailable rather than being guessed.
 `WORKFLOW_AIDER_CMD` can select a different Aider executable.
 
 Named model connections and their masked API keys are saved separately in

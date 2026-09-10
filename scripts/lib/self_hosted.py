@@ -190,6 +190,7 @@ def aider_invocation(side, values, prompt, root, directory):
         '--openai-api-base', values['base_url'].rstrip('/'),
         '--config', str(config), '--env-file', str(env_file), '--aiderignore', str(ignore),
         '--message-file', str(message), '--llm-history-file', str(work/'llm.log'),
+        '--analytics-log', str(work/'usage.jsonl'),
         '--chat-history-file', str(work/'chat.md'), '--input-history-file', str(work/'input.history'),
         '--no-restore-chat-history', '--no-auto-commits', '--no-dirty-commits', '--no-gitignore',
         '--no-check-update', '--no-show-model-warnings', '--no-analytics', '--no-stream', '--no-pretty', '--yes-always',
@@ -210,6 +211,30 @@ def aider_invocation(side, values, prompt, root, directory):
                OPENAI_BASE_URL=values['base_url'].rstrip('/'), AIDER_OPENAI_API_KEY=values['api_key'],
                PYTHONIOENCODING='utf-8', PYTHONUTF8='1', LITELLM_LOCAL_MODEL_COST_MAP='True')
     return command, env
+
+
+def aider_usage(path):
+    """Sum per-message usage events, never rounded console summaries."""
+    totals = {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
+    found = False
+    if not path.exists():
+        return {}
+    for line in path.read_text(encoding='utf-8').splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if event.get('event') != 'message_send':
+            continue
+        values = event.get('properties', {})
+        incoming, outgoing = values.get('prompt_tokens'), values.get('completion_tokens')
+        if any(type(n) not in (int, float) or n < 0 or int(n) != n for n in (incoming, outgoing)):
+            return {}  # A partial total would understate the stage usage.
+        totals['input_tokens'] += int(incoming)
+        totals['output_tokens'] += int(outgoing)
+        totals['total_tokens'] += int(incoming + outgoing)
+        found = True
+    return totals if found else {}
 
 
 PLAN_ARTIFACTS = {
@@ -244,10 +269,10 @@ def validate_plan(text, protected=True):
             raise ValueError('Plan requires one complete, nonempty fenced block under ' + required)
 
 
-def run_aider(side, values, prompt, root, stage=None):
+def run_aider(side, values, prompt, root, stage=None, usage=None):
     artifact = PLAN_ARTIFACTS.get(stage or os.environ.get('UNCLE_STATUS_STAGE', '')) if side == 'agent' else None
     if not artifact:
-        return _run_aider(side, values, prompt, root)
+        return _run_aider(side, values, prompt, root, usage=usage)
     target = root / artifact
     if target.is_symlink():
         raise ValueError('Refusing to replace a symlinked plan')
@@ -264,7 +289,7 @@ def run_aider(side, values, prompt, root, stage=None):
         if candidate.exists():
             candidate.unlink()
         response, turns = _run_aider(side, values, prompt + '\nWrite the complete ' + artifact +
-                                     ', including Verification commands and Protected verification paths fenced blocks.', staged, allow_shell=False)
+                                     ', including Verification commands and Protected verification paths fenced blocks.', staged, allow_shell=False, usage=usage)
         if not candidate.is_file() or candidate.is_symlink():
             raise ValueError('Aider did not produce a regular ' + artifact + '; original plan preserved')
         contents = candidate.read_bytes()
@@ -281,7 +306,7 @@ def run_aider(side, values, prompt, root, stage=None):
         return response, turns
 
 
-def _run_aider(side, values, prompt, root, allow_shell=True):
+def _run_aider(side, values, prompt, root, allow_shell=True, usage=None):
     from process_tree import start_check, launch_command, kill_tree, finish_check
     seconds = int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '900'))
     if seconds < 1:
@@ -309,6 +334,8 @@ def _run_aider(side, values, prompt, root, allow_shell=True):
                         child.wait()
                 finally:
                     finish_check(child)
+                if usage is not None:
+                    usage.update(aider_usage(Path(directory)/'usage.jsonl'))
         if status:
             # Do not expose CLI diagnostics that may contain inherited secrets.
             raise ValueError(f'Aider exited with status {status}; check its installation and endpoint configuration')
@@ -369,15 +396,26 @@ def main(side, args):
         with open(status_file,'a',encoding='utf-8',newline='\n') as stream:
             stream.write(json.dumps({'event':'start','stage':stage,'model':values['model'],
                                      'mode':'act' if side=='agent' else 'review'})+'\n')
-    text, turns = run_aider(side, values, prompt, Path.cwd().resolve(), stage=stage)
+    usage = {}
+    try:
+        text, turns = run_aider(side, values, prompt, Path.cwd().resolve(), stage=stage, usage=usage)
+    except (ValueError, OSError) as error:
+        error.aider_usage = usage
+        raise
     if side == 'reviewer':
         if output:
             Path(output).write_bytes((text.rstrip()+'\n').encode('utf-8'))
         print(text)
+        if usage:
+            print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,
+                              'model':values['model'], 'usage':usage, 'total_cost_usd':None,
+                              'usage_source':'aider local message_send events', 'usage_scope':'stage'}))
+            print('tokens used\n' + str(usage['total_tokens']))
     else:
         print(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':text}]}}))
         print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':text,
-                          'model':values['model'],'num_turns':turns,'duration_ms':int((time.monotonic()-started)*1000),'usage':{},'total_cost_usd':None}))
+                          'model':values['model'],'num_turns':turns,'duration_ms':int((time.monotonic()-started)*1000),'usage':usage,'total_cost_usd':None,
+                          'usage_source':'aider local message_send events','usage_scope':'stage'}))
     return 0
 
 
@@ -389,6 +427,8 @@ if __name__ == '__main__':
         sys.exit(130)
     except (ValueError, OSError, KeyError, TypeError, StopIteration) as error:
         print('Self hosted: ' + str(error), file=sys.stderr)
-        if sys.argv[1:2] == ['agent']:
-            print(json.dumps({'type':'result','subtype':'error','is_error':True}))
+        if sys.argv[1:2] in (['agent'], ['reviewer']):
+            print(json.dumps({'type':'result','subtype':'error','is_error':True,
+                              'usage':getattr(error, 'aider_usage', {}), 'total_cost_usd':None,
+                              'usage_source':'aider local message_send events','usage_scope':'stage'}))
         sys.exit(2)

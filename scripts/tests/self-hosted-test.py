@@ -66,7 +66,7 @@ class SelfHosted(unittest.TestCase):
             self.assertEqual(result.returncode == 0, success)
             self.assertNotIn('named-secret', result.stdout + result.stderr)
             if success:
-                self.assertEqual(result.stdout.strip(), 'qwen')
+                self.assertEqual(result.stdout.strip(), 'local/qwen')
 
     def test_discovery_and_failed_refresh_preserves_catalog(self):
         import io
@@ -76,7 +76,7 @@ class SelfHosted(unittest.TestCase):
         response = io.BytesIO(b'{"data":[{"id":"model-b"},{"id":"model-a"},{"id":"model-b"},{"id":"openai/model-a"}]}')
         opener.open.return_value = response
         with patch('urllib.request.build_opener', return_value=opener):
-            self.assertEqual(discover_models('http://localhost:1234/v1/', 'dummy-key'), ['model-a','model-b'])
+            self.assertEqual(discover_models('http://localhost:1234/v1/', 'dummy-key'), ['local/model-a','local/model-b'])
         request = opener.open.call_args.args[0]
         self.assertEqual(request.full_url, 'http://localhost:1234/v1/models')
         self.assertEqual(request.get_header('Authorization'), 'Bearer dummy-key')
@@ -200,7 +200,7 @@ class SelfHosted(unittest.TestCase):
         self.assertEqual(values['model'], 'local-model:Q4')
         with tempfile.TemporaryDirectory() as directory:
             command, _ = opencode_invocation('agent', values, 'test', self.root, directory)
-        self.assertEqual(command[command.index('--model')+1], 'uncle/local-model:Q4')
+        self.assertEqual(command[command.index('--model')+1], 'local/local-model:Q4')
 
     def test_requirements_chat_response_is_saved_before_success(self):
         import self_hosted
@@ -208,12 +208,27 @@ class SelfHosted(unittest.TestCase):
         response = 'REQUIREMENTS_INTERPRETATION.md\n```markdown\n' + text + '```'
         with patch.object(self_hosted, '_run_opencode', return_value=(response, 1)) as run:
             run_opencode('agent', self.values(), 'Interpret', self.root, stage='requirements')
-        self.assertEqual(run.call_args.args[0], 'reviewer')
+        self.assertEqual(run.call_args.args[0], 'agent')
         self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
         with patch.object(self_hosted, '_run_opencode', return_value=('Done!', 1)):
             with self.assertRaises(ValueError):
                 run_opencode('agent', self.values(), 'Interpret', self.root, stage='requirements')
         self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
+
+    def test_requirements_file_tools_publish_only_valid_document(self):
+        import self_hosted
+        document = '# Requirements\n\n## 10. Definition of done\nPrint Hello World.\n'
+        def generate(side, values, prompt, staged, **kwargs):
+            self.assertEqual(side, 'agent')
+            self.assertFalse(kwargs['allow_shell'])
+            self.assertNotEqual(staged, self.root)
+            (staged/'REQUIREMENTS_INTERPRETATION.md').write_text(document, encoding='utf-8')
+            (staged/'unwanted.txt').write_text('incidental')
+            return 'REQUIREMENTS_INTERPRETATION.md', 1
+        with patch.object(self_hosted, '_run_opencode', side_effect=generate):
+            run_opencode('agent', self.values(), 'Interpret', self.root, stage='requirements')
+        self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(), document)
+        self.assertFalse((self.root/'unwanted.txt').exists())
 
     def test_document_preamble_and_format_retry(self):
         import self_hosted
@@ -242,10 +257,10 @@ class SelfHosted(unittest.TestCase):
             with self.subTest(side=side), tempfile.TemporaryDirectory() as directory:
                 command, env = opencode_invocation(side, self.values(), 'Test prompt', self.root, directory)
                 self.assertEqual(command[1:4], ['run', '--format', 'json'])
-                self.assertEqual(command[command.index('--model')+1], 'uncle/local-model:Q4')
+                self.assertEqual(command[command.index('--model')+1], 'local/local-model:Q4')
                 self.assertEqual(command[command.index('--dir')+1], str(self.root))
                 config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
-                self.assertEqual(config['provider']['uncle']['options']['baseURL'], self.values()['base_url'])
+                self.assertEqual(config['provider']['local']['options']['baseURL'], self.values()['base_url'])
                 self.assertEqual(env['UNCLE_OPENCODE_API_KEY'], 'test-secret')
                 self.assertNotIn('test-secret', str(command) + env['OPENCODE_CONFIG_CONTENT'])
                 self.assertEqual(config['permission']['edit'], 'allow' if side == 'agent' else 'deny')
@@ -260,8 +275,8 @@ class SelfHosted(unittest.TestCase):
 args=sys.argv[1:]
 assert os.environ['UNCLE_OPENCODE_API_KEY']=='secret-with-#-characters'
 config=json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])
-assert config['provider']['uncle']['options']['baseURL']=='http://localhost:8123/v1'
-assert args[args.index('--model')+1]=='uncle/local-model:Q4'
+assert config['provider']['local']['options']['baseURL']=='http://localhost:8123/v1'
+assert args[args.index('--model')+1]=='local/local-model:Q4'
 assert 'secret-with-#-characters' not in str(args)
 assert pathlib.Path(args[args.index('--file')+1]).read_text(encoding='utf-8')=='Test prompt'
 pathlib.Path(os.environ['RECORD']).write_text(str(pathlib.Path(os.environ['XDG_CONFIG_HOME']).parent),encoding='utf-8')
@@ -382,21 +397,21 @@ sys.exit(7 if mode=='fail' else 0)
             ui.config_section = 'opencode'
             self.assertIn('1 loaded', ui._config_items()[1])
             self.assertEqual(ui.stage_fields('implementation'),['runner','model'])
-            self.assertEqual(ui._field_display('@local-model:Q4','api_key'),'********')
+            self.assertEqual(ui._field_display('@local/local-model:Q4','api_key'),'********')
             ui.save_config()
             ui.load_config()
-            self.assertEqual(ui.stage_model('implementation'),'local-model:Q4')
-            self.assertEqual(ui.stage_api_keys['__opencode_models__']['local-model:Q4']['base_url'],'http://localhost:8123/v1')
-            self.assertEqual(read_keys(self.config)['__opencode_models__']['local-model:Q4']['api_key'],'secret-with-#-characters')
+            self.assertEqual(ui.stage_model('implementation'),'local/local-model:Q4')
+            self.assertEqual(ui.stage_api_keys['__opencode_models__']['local/local-model:Q4']['base_url'],'http://localhost:8123/v1')
+            self.assertEqual(read_keys(self.config)['__opencode_models__']['local/local-model:Q4']['api_key'],'secret-with-#-characters')
             ui._open_picker('model','implementation')
             self.assertEqual(ui.state,'picker')
-            self.assertEqual(ui._picker_rows(), [('option', 'local-model:Q4')])
+            self.assertEqual(ui._picker_rows(), [('option', 'local/local-model:Q4')])
             ui._open_stage('@connection')
             self.assertEqual(ui.stage_fields('@connection'), ['base_url', 'api_key'])
-            with patch.object(ui, 'maybe_reload'), patch('self_hosted.discover_models', return_value=['local-model:Q4', 'second-model']):
+            with patch.object(ui, 'maybe_reload'), patch('self_hosted.discover_models', return_value=['local/local-model:Q4', 'local/second-model']):
                 ui._set_field('@connection', 'api_key', 'secret-with-#-characters')
             ui._open_picker('model', 'implementation')
-            self.assertEqual(ui._picker_rows(), [('option', 'local-model:Q4'), ('option', 'second-model')])
+            self.assertEqual(ui._picker_rows(), [('option', 'local/local-model:Q4'), ('option', 'local/second-model')])
             self.assertNotIn('second-secret', str(ui._config_items()))
             self.assertNotIn('second-secret', self.config.read_text(encoding='utf-8'))
             ui.stage_target = 'implementation'

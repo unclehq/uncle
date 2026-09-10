@@ -115,7 +115,7 @@ if [[ -n "$status_file" ]]; then
 fi
 
 set +e
-"$CLINE_CMD" "${args[@]}" "$prompt" > "$raw" 2>&1
+env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$CLINE_CMD" "${args[@]}" "$prompt" > "$raw" 2>&1
 status=$?
 set -e
 

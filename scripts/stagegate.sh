@@ -1106,6 +1106,10 @@ run_claude() {
     effort="$(stage_effort "$log_name")"
     turns="$(stage_turns "$log_name")"
     cmd="$(stage_agent_cmd "$log_name")"
+    local -a client_cmd=("$cmd")
+    case "${cmd##*/}" in
+        claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
+    esac
 
     require_file "$prompt_file"
     status_stage_context "$log_name" "${model:-}" act
@@ -1133,7 +1137,7 @@ run_claude() {
         local -a model_args=()
         [[ -n "$model" ]] && model_args=(--model "$model")
         local started="$SECONDS"
-        "$cmd" -p \
+        "${client_cmd[@]}" -p \
             "${model_args[@]+"${model_args[@]}"}" \
             --effort "$effort" \
             --strict-mcp-config \
@@ -1180,6 +1184,10 @@ run_codex_review() {
 
     local cmd
     cmd="$(stage_reviewer_cmd "$log_name")"
+    local -a client_cmd=("$cmd")
+    case "${cmd##*/}" in
+        claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
+    esac
 
     # Keep the reviewer read-only. The shell writes the reviewer's final
     # message into the designated review artifact.
@@ -1223,7 +1231,7 @@ run_codex_review() {
         # stdin is the operator's gate-answer channel, not stage input: codex
         # appends a non-TTY stdin to the prompt and would block on it forever.
         # Project dirs need not be git repos; the read-only sandbox is the boundary.
-        "$cmd" exec \
+        "${client_cmd[@]}" exec \
             --ephemeral \
             --skip-git-repo-check \
             --sandbox read-only \

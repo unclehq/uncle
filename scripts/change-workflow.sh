@@ -328,6 +328,7 @@ legacy_word_notice() {
 . "$ROOT/scripts/lib/plan-scope.sh"
 . "$ROOT/scripts/lib/progress.sh"
 . "$ROOT/scripts/lib/issue-close.sh"
+. "$ROOT/scripts/lib/change-pr.sh"
 
 # The independent verification run, and the generated document the
 # post-implementation gate shows.
@@ -1137,6 +1138,10 @@ run_claude() {
     local cmd
 
     cmd="$(stage_agent_cmd "$log_name")"
+    local -a client_cmd=("$cmd")
+    case "${cmd##*/}" in
+        claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
+    esac
     # A stage configured in `uncle` overrides what the call site asked for.
     model="$(stage_model_for "$log_name" "$model")"
     effort="$(stage_effort_for "$log_name")"
@@ -1192,7 +1197,7 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
-        "$cmd" "${flags[@]}" \
+        "${client_cmd[@]}" "${flags[@]}" \
             < "$effective_prompt" \
             2>&1 \
             | tee "$LOG_DIR/${log_name}.jsonl" \
@@ -1315,6 +1320,10 @@ run_codex() {
     local effort="${4:-}"
     local cmd
     cmd="$(stage_reviewer_cmd "$log_name")"
+    local -a client_cmd=("$cmd")
+    case "${cmd##*/}" in
+        claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
+    esac
     effort="$(stage_effort_for "$log_name")"
     local -a model_args=()
     local model
@@ -1356,7 +1365,7 @@ run_codex() {
     local status=0
     # stdin is the operator's gate-answer channel, not stage input: codex
     # appends a non-TTY stdin to the prompt and would block on it forever.
-    "$cmd" "${flags[@]}" "$(cat "$prompt_file")" \
+    "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
         < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
 
     record_codex_cost "$log_name" "$((SECONDS - start))"
@@ -1405,6 +1414,10 @@ start_codex_bg() {
     local effort="${4:-}"
     local cmd
     cmd="$(stage_reviewer_cmd "$log_name")"
+    local -a client_cmd=("$cmd")
+    case "${cmd##*/}" in
+        claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
+    esac
     effort="$(stage_effort_for "$log_name")"
     local -a model_args=()
     local model
@@ -1440,7 +1453,7 @@ start_codex_bg() {
         cd "$PROJECT_ROOT"
         local started="$SECONDS" status=0 child=""
         trap 'if [[ -n "$child" ]]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi; exit 130' INT TERM
-        "$cmd" "${flags[@]}" "$(cat "$prompt_file")" \
+        "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
             < /dev/null > "$LOG_DIR/${log_name}.log" 2>&1 &
         child=$!
         wait "$child" || status=$?
@@ -1770,6 +1783,7 @@ while true; do
             # Remove any prior audit first: run_codex's require_file then treats
             # the file's existence as proof this invocation produced it, so a
             # reviewer call that exits 0 without writing cannot be read as fresh.
+            if [[ -e .git ]]; then change_pr_engine freeze || exit 1; fi
             rm -f FINAL_AUDIT.md
             run_codex \
                 prompts/change/final-audit.md \
@@ -1783,6 +1797,7 @@ while true; do
                 "$audit_class" \
                 "$(hash_file FINAL_AUDIT.md)" \
                 > "$VERDICT_FILE"
+            if [[ -e .git ]]; then change_pr_engine bind || exit 1; fi
             echo "Audit verdict: $audit_class"
             VERDICT_WRITTEN_THIS_RUN=1
 
@@ -1921,7 +1936,11 @@ while true; do
                 echo "Waived checks were not performed. They are not passes, and this"
                 echo "summary is the only place that says so out loud."
             fi
-            close_origin_issue_if_ready
+            if [[ -e .git ]]; then
+                change_pr_complete
+            else
+                close_origin_issue_if_ready
+            fi
             exit 0
             ;;
 

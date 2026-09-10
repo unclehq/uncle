@@ -1,6 +1,6 @@
 # Change Request
 
-Seeded from [unclehq/uncle#5](https://github.com/unclehq/uncle/issues/5).
+Seeded from [unclehq/uncle#6](https://github.com/unclehq/uncle/issues/6).
 
 ## Change Type
 
@@ -8,14 +8,16 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Startup check for README, CANGE_REQUEST, or github issue
+When completing a change request make a PR with a comment that closes the change request
 
 ## Motivation
 
-When someone choes New application or Change request from the main menu check if there is a REQUIREMENTS.md if New application is chosen and check if there is a CHANGE_REQUEST is Change Request is chosen. If the file doesn't exist then show a warning popup dialog box saying that 
+Make a pull request when a change request is completed.
 
-For a New application: That a REQUIREMENTS.md is needed
-For a Change request that a CHANGE_REQUEST.md is needed
+1. Show a dialog that asks the user to name the PR and prefill it with a shortened version of the issue name if there is one or if there is a good name in the CHANGE_REQUEST if a change request is how the process started
+2. Fill the PR description with a very brief description of the work done and how to manually verify it
+3. Have a comment that closes the issue when merged 
+4. If there is no .git directory do not do this process
 
 ## Observed Current Behavior
 

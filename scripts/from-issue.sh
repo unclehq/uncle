@@ -169,6 +169,10 @@ confirm_and_run_workflow() {
 # INV-3 through one piece of code; this wrapper adds only the marker check that
 # suppresses a second close and the USED_GH guard for this invocation's fetch.
 close_issue_if_ready() {
+    if [[ -e .git ]]; then
+        echo "Git checkout: PR handoff belongs to change-workflow.sh; issue remains open until merge."
+        return 0
+    fi
     local run_id="$1"
     local marker_run marker_repo marker_issue fetch status
 

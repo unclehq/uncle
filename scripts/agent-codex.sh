@@ -134,7 +134,7 @@ translate() {
 
 set +e
 if [[ -n "$status_file" ]]; then
-    printf '%s' "$prompt" | "$CODEX_CMD" "${args[@]}" \
+    printf '%s' "$prompt" | env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$CODEX_CMD" "${args[@]}" \
         | tee "$raw" \
         | tee >(jq -R -r --unbuffered --arg model "${model:-codex default}" --arg stage "$stage" '
             (fromjson? // empty) as $e
@@ -149,7 +149,7 @@ if [[ -n "$status_file" ]]; then
         | translate
     codex_status="${PIPESTATUS[1]}"
 else
-    printf '%s' "$prompt" | "$CODEX_CMD" "${args[@]}" \
+    printf '%s' "$prompt" | env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$CODEX_CMD" "${args[@]}" \
         | tee "$raw" \
         | translate
     codex_status="${PIPESTATUS[1]}"

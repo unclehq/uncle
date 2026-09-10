@@ -124,7 +124,7 @@ fi
 # mirrors cline's cumulative `usage` events into it for live token accounting.
 set +e
 if [[ -n "$status_file" ]]; then
-    "$CLINE_CMD" "${args[@]}" "$prompt" \
+    env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$CLINE_CMD" "${args[@]}" "$prompt" \
         | tee "$raw" \
         | tee >(jq -R -r --unbuffered --arg model "$model" --arg stage "$stage" '
             (fromjson? // empty) as $e
@@ -146,7 +146,7 @@ if [[ -n "$status_file" ]]; then
           '
     cline_status="${PIPESTATUS[0]}"
 else
-    "$CLINE_CMD" "${args[@]}" "$prompt" \
+    env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$CLINE_CMD" "${args[@]}" "$prompt" \
         | tee "$raw" \
         | jq -R -r --unbuffered '
             (fromjson? // empty) as $e

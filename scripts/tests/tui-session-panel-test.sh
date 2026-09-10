@@ -20,6 +20,13 @@ class Screen:
     def addnstr(self,y,x,text,n,*args): self.writes.append((y,x,text,n))
 
 class Panel(unittest.TestCase):
+    def setUp(self):
+        self.project = tempfile.TemporaryDirectory()
+        self.addCleanup(self.project.cleanup)
+        project_root = patch('uncle_tui._project_root', return_value=self.project.name)
+        project_root.start()
+        self.addCleanup(project_root.stop)
+
     def ui(self):
         ui=UncleTUI.__new__(UncleTUI)
         ui.stdscr=Screen();ui.state='running';ui.status_stage='implementation';ui.proc_done=False
@@ -182,6 +189,17 @@ class Panel(unittest.TestCase):
             self.assertFalse(ui.poll_status());self.assertEqual(ui.status_pos,0)
             with p.open('a') as f:f.write('"total_tokens":42}\n')
             self.assertTrue(ui.poll_status());self.assertEqual(ui.session_stats['live']['implementation']['total_tokens'],42)
+
+    def test_background_usage_keeps_foreground_identity(self):
+        ui = self.ui()
+        ui.status_model = 'foreground-model'
+        ui.status_mode = 'act'
+        ui._apply_status(json.dumps(dict(event='usage', stage='manual-checklist-base',
+                                        model='review-model', mode='review', total_tokens=99)))
+        self.assertEqual(ui.status_stage, 'implementation')
+        self.assertEqual(ui.status_model, 'foreground-model')
+        self.assertEqual(ui.status_mode, 'act')
+        self.assertEqual(ui.session_stats['live']['manual-checklist-base']['total_tokens'], 99)
 
 unittest.main()
 PY

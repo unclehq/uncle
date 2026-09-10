@@ -12,6 +12,27 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Exercise timeout coverage even on hosts without coreutils.
+if ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1; then
+    mkdir "$TMP/timeout-bin"
+    cat > "$TMP/timeout-bin/timeout" <<'TIMEOUT'
+#!/usr/bin/env python3
+import os
+import signal
+import subprocess
+import sys
+p = subprocess.Popen(sys.argv[2:], start_new_session=True)
+try:
+    raise SystemExit(p.wait(timeout=float(sys.argv[1])))
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL)
+    p.wait()
+    raise SystemExit(124)
+TIMEOUT
+    chmod +x "$TMP/timeout-bin/timeout"
+    export PATH="$TMP/timeout-bin:$PATH"
+fi
+
 FAILED=0
 COUNT=0
 CASE_NAME=""
@@ -91,6 +112,7 @@ new_case() {
     mkdir -p "$REPO/scripts/lib" "$REPO/.uncle/workflow" "$CASE/bin" "$CASE/emptybin"
     cp "$ROOT/scripts/from-issue.sh" "$REPO/scripts/from-issue.sh"
     cp "$ROOT"/scripts/lib/*.sh "$REPO/scripts/lib/"
+    cp "$ROOT/scripts/lib/audit-findings.py" "$REPO/scripts/lib/"
     : > "$GH_LOG"
     : > "$OUT"
 
@@ -225,7 +247,7 @@ while [[ \$# -gt 0 ]]; do
     if [[ "\$1" == "--output-last-message" ]]; then out="\$2"; shift; fi
     shift
 done
-printf 'Audit body.\n\n%s\n' "$1" > "\$out"
+printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n| F-1 | Fixture blocker | Review fixture | YES |\n\n%s\n' "$1" > "\$out"
 REV
     chmod +x "$CASE/bin/fake-reviewer"
 }
@@ -647,6 +669,41 @@ expect_state "99:IMPLEMENT"
 # Driver-side close (BEH-D)
 # ---------------------------------------------------------------------------
 
+# T-1: a Git checkout must never close the issue at COMPLETE.
+new_case git-completion-defers-close
+setup_audit_stage READY
+git -C "$REPO" init -q
+git -C "$REPO" -c commit.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --allow-empty -qm initial
+printf '42:FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
+run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1
+expect_status 0
+expect_state "42:COMPLETE"
+expect_not_closed
+expect_no_marker
+
+for setting in WORKFLOW_CLOSE_ISSUE=0 UNATTENDED=1; do
+    new_case "git-disabled-$setting"
+    setup_audit_stage READY
+    git -C "$REPO" init -q
+    git -C "$REPO" -c commit.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --allow-empty -qm initial
+    printf '42:FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
+    printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
+    run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" "$setting"
+    expect_status 0
+    expect_state "42:COMPLETE"
+    expect_not_out "PR title [default:"
+    expect_not_closed
+    expect_no_marker
+done
+
+new_case git-wrapper-never-closes
+mkdir "$REPO/.git"
+run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT=READY
+expect_status 0
+expect_not_closed
+expect_no_marker
+
 new_case direct-run-closes
 setup_audit_stage READY
 printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
@@ -666,10 +723,10 @@ printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
 printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
-expect_status 0
+expect_status 1
 expect_out "Audit verdict: NOT_READY"
-expect_out "FINAL AUDIT: NOT_READY"
-expect_out "Gate not accepted."
+expect_out "AUDIT REVIEW REQUIRED:"
+expect_out "No decision received; audit remains pending."
 expect_not_out "Change workflow complete."
 expect_state "42:WAIT_AUDIT_OVERRIDE"
 expect_not_closed
@@ -689,26 +746,32 @@ expect_out "An unreadable verdict is not a pass."
 expect_state "42:WAIT_AUDIT_OVERRIDE"
 expect_not_closed
 
-# Overriding finishes the run, records the decision, and still does not close
-# the issue: an override is a human accepting a failure, not a passing audit.
-new_case direct-run-not-ready-override-completes
+# Per-finding acceptance produces effective READY; retained blockers deny close.
+new_case direct-run-not-ready-accepted-completes
 setup_audit_stage "NOT READY"
 printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
 printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
-run_driver_stdin "$(gate_input '' y)" \
+run_driver_stdin "$(gate_input r)" \
     WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
 expect_out "Change workflow complete."
-expect_out "Completed over a failing final audit, by human override:"
-expect_out "The originating issue was not closed."
+expect_out "Build verdict: READY"
 expect_state "42:COMPLETE"
+expect_closed
+expect_marker
+
+new_case direct-run-not-ready-retained-blocker
+setup_audit_stage "NOT READY"
+printf '42:FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
+printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
+run_driver_stdin "$(gate_input n)" \
+    WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1
+expect_status 1
+expect_out "still blocking: F-1"
+expect_state "42:WAIT_AUDIT_OVERRIDE"
 expect_not_closed
 expect_no_marker
-COUNT=$((COUNT + 1))
-if ! grep -q "NOT_READY" "$REPO/.uncle/workflow/audit-override"; then
-    fail "the override record must name the verdict it overrode"
-fi
 
 # The kill switch restores the old behavior, and says so.
 new_case direct-run-audit-gate-disabled
@@ -927,6 +990,399 @@ while IFS= read -r line; do
     esac
 done < "$SOTMP/out"
 COUNT=$((COUNT + 6))
+
+# T-5–8: local Git publication with a persistent fake GitHub server.
+# The Git shim changes only identity discovery; commits/pushes use real bare repos.
+CASE_NAME=pr-handoff
+python3 /dev/fd/3 "$ROOT" 3<<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(sys.argv.pop())
+LIB = ROOT / 'scripts/lib/change-pr.sh'
+REAL_GIT = shutil.which('git')
+
+
+class HandoffTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.repo = self.root / 'repo'
+        self.repo.mkdir()
+        self.bin = self.root / 'bin'
+        self.bin.mkdir()
+        self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'],
+                        REAL_GIT=REAL_GIT, SERVER=str(self.root / 'server.json'),
+                        GH_CALLS=str(self.root / 'gh.jsonl'), GIT_CONFIG_GLOBAL='/dev/null',
+                        GIT_CONFIG_NOSYSTEM='1')
+        for key in ('STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE', 'UNCLE_PROJECT_ROOT'):
+            self.env.pop(key, None)
+        self.exe('git', '''#!/usr/bin/env python3
+import os, subprocess, sys
+args = sys.argv[1:]
+if args[:2] == ['remote', 'get-url']:
+    print('https://github.com/' + ('forker/repo.git' if os.environ.get('FORK') and args[-1] == 'origin' else 'owner/repo.git'))
+    sys.exit(0)
+if os.environ.get('CRASH_GIT') == args[0]:
+    subprocess.run([os.environ['REAL_GIT']] + args)
+    sys.exit(70)
+os.execv(os.environ['REAL_GIT'], ['git'] + args)
+''')
+        self.exe('gh', '''#!/usr/bin/env python3
+import json, os, pathlib, subprocess, sys
+args = sys.argv[1:]
+with open(os.environ['GH_CALLS'], 'a') as f: f.write(json.dumps(args) + '\\n')
+server = pathlib.Path(os.environ['SERVER'])
+if args[:2] == ['auth', 'status']: sys.exit(int(os.environ.get('AUTH_RC', '0')))
+if args[:2] == ['repo', 'view']:
+    print(json.dumps({'nameWithOwner': args[2], 'defaultBranchRef': {'name': 'main'}}))
+elif args[0] == 'api':
+    print(json.dumps({'fork': True, 'parent': {'full_name': 'owner/repo'}, 'owner': {'type': 'User'}}))
+elif args[:2] == ['pr', 'list']:
+    if os.environ.get('LOOKUP_FAIL'): sys.exit(1)
+    rows = json.loads(server.read_text()) if server.exists() else []
+    if os.environ.get('DUPLICATE'): rows = rows * 2
+    print(json.dumps(rows))
+elif args[:2] == ['pr', 'view']:
+    row = json.loads(server.read_text())[0]
+    if os.environ.get('WRONG_PR_SHA'): row['headRefOid'] = '0' * 40
+    print(json.dumps(row))
+elif args[:2] == ['pr', 'create']:
+    if os.environ.get('CREATE_FAIL'): sys.exit(1)
+    identity = 'forker' if os.environ.get('FORK') else 'owner'
+    branch = subprocess.check_output(['git', 'branch', '--show-current']).decode().strip()
+    sha = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip()
+    body = pathlib.Path(args[args.index('--body-file') + 1]).read_text()
+    server.with_suffix('.body').write_text(body)
+    server.with_suffix('.bodypath').write_text(args[args.index('--body-file') + 1])
+    server.write_text(json.dumps([dict(number=7, url='https://github.com/owner/repo/pull/7',
+        headRefName=branch, headRefOid=sha, headRepository={'name': 'repo'},
+        headRepositoryOwner={'login': identity}, baseRefName='main')]))
+    print('https://github.com/owner/repo/pull/7')
+    if os.environ.get('CREATE_TIMEOUT'): sys.exit(124)
+''')
+        self.git('init', '-q', '-b', 'main')
+        self.git('config', 'user.name', 'Fixture')
+        self.git('config', 'user.email', 'fixture@example.test')
+        self.git('config', 'commit.gpgsign', 'false')
+        (self.repo / '.gitignore').write_text('.uncle/workflow/\n')
+        (self.repo / 'source.txt').write_text('before\n')
+        (self.repo / 'CHANGE_REQUEST.md').write_text('## Summary\n\nFix café 日本語\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'initial')
+        self.original = self.git('rev-parse', 'HEAD')
+        self.bare = self.root / 'remote.git'
+        subprocess.run([REAL_GIT, 'init', '--bare', '-q', str(self.bare)], check=True, env=self.env)
+        self.git('remote', 'add', 'origin', str(self.bare))
+        self.git('push', '-q', 'origin', 'main')
+        self.state = self.repo / '.uncle/workflow'
+        self.state.mkdir(parents=True)
+        (self.state / 'origin').write_text('owner/repo\t42\tgh\n')
+        (self.repo / 'source.txt').write_text('audited\n')
+        self.freeze()
+
+    def exe(self, name, text):
+        path = self.bin / name
+        path.write_text(text)
+        path.chmod(0o755)
+
+    def git(self, *args):
+        return subprocess.check_output([REAL_GIT, *args], cwd=self.repo, env=self.env, stderr=subprocess.PIPE).decode().strip()
+
+    def engine(self, action, text='', **env):
+        return subprocess.run(['bash', '-c', '. "$1"; change_pr_engine "$2"', 'test', str(LIB), action],
+                              cwd=self.repo, env=dict(self.env, **env), input=text, text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    def ok(self, result):
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def freeze(self):
+        self.ok(self.engine('freeze'))
+        (self.repo / 'FINAL_AUDIT.md').write_text('READY\n')
+        sha = hashlib.sha256((self.repo / 'FINAL_AUDIT.md').read_bytes()).hexdigest()
+        (self.state / 'audit-verdict').write_text('-\tREADY\t' + sha + '\n')
+        self.ok(self.engine('bind'))
+
+    def journal(self):
+        return json.loads((self.state / 'pr/journal.json').read_text())
+
+    def calls(self):
+        path = self.root / 'gh.jsonl'
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def creates(self):
+        return [a for a in self.calls() if a[:2] == ['pr', 'create']]
+
+    def publish(self, **env):
+        return self.engine('handoff', '\nImplemented audited fix\nRun smoke test\ny\n', **env)
+
+    def test_driver_audit_to_pr_and_rerun(self):
+        self.exe('reviewer', """#!/usr/bin/env python3
+from pathlib import Path
+import sys
+Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('READY\\n')
+""")
+        (self.state / 'state').write_text('42:FINAL_AUDIT\n')
+        env = dict(self.env, UNCLE_PROJECT_ROOT=str(self.repo),
+                   WORKFLOW_REVIEWER_CMD=str(self.bin / 'reviewer'), WORKFLOW_CLOSE_ISSUE='1', UNATTENDED='0')
+        command = ['bash', str(ROOT / 'scripts/change-workflow.sh')]
+        result = subprocess.run(command, cwd=self.repo, env=env, input='\nSummary\nManual\ny\n',
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+        self.ok(result)
+        self.assertEqual((self.state / 'state').read_text().strip(), '42:COMPLETE')
+        self.assertEqual(len(self.creates()), 1, result.stdout)
+        self.assertFalse((self.state / 'issue-closed').exists())
+        result = subprocess.run(command, cwd=self.repo, env=env, input='', text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+        self.ok(result)
+        self.assertIn('https://github.com/owner/repo/pull/7', result.stdout)
+        self.assertEqual(len(self.creates()), 1)
+
+    def test_publish_and_resume_without_run_id(self):
+        self.ok(self.publish())
+        j = self.journal()
+        self.assertEqual(j['phase'], 'created')
+        self.assertEqual(j['verdict_run'], '-')
+        self.assertTrue(j['head_branch'].startswith('uncle/change-'))
+        self.assertEqual(self.git('show', 'HEAD:source.txt'), 'audited')
+        self.assertEqual(self.git('show', 'HEAD:FINAL_AUDIT.md'), 'READY')
+        self.assertEqual(self.git('rev-parse', 'HEAD^{tree}'), j['commit_tree'])
+        self.assertEqual(self.git('ls-remote', 'origin', 'refs/heads/' + j['head_branch']).split()[0], j['intended_head'])
+        body = (self.root / 'server.body').read_text()
+        self.assertIn('Implemented audited fix', body)
+        self.assertIn('Run smoke test', body)
+        self.assertIn('Closes owner/repo#42', body)
+        self.assertFalse(Path((self.root / 'server.bodypath').read_text()).exists())
+        create = self.creates()[0]
+        self.assertEqual(create[create.index('--title') + 1], 'Fix café 日本語')
+        self.assertEqual(create[create.index('--repo') + 1], 'owner/repo')
+        self.assertEqual(create[create.index('--head') + 1], 'owner:' + j['head_branch'])
+        self.assertEqual(create[create.index('--base') + 1], 'main')
+        self.ok(self.engine('handoff'))
+        self.assertEqual(len(self.creates()), 1)
+        self.assertFalse((self.state / 'issue-closed').exists())
+
+    def test_decline_eof_auth_and_resume(self):
+        for text in ('', '\nSummary\nManual\nn\n'):
+            self.assertNotEqual(self.engine('handoff', text).returncode, 0)
+            self.assertEqual(self.git('rev-parse', 'HEAD'), self.original)
+            self.assertEqual(len(self.creates()), 0)
+        self.assertNotEqual(self.publish(AUTH_RC='1').returncode, 0)
+        self.ok(self.publish())
+        self.assertEqual(len(self.creates()), 1)
+
+    def test_source_drift(self):
+        (self.repo / 'source.txt').write_text('changed after audit\n')
+        self.assertIn('Reviewed files changed', self.publish().stdout)
+        self.assertEqual(len(self.creates()), 0)
+
+    def test_mode_drift(self):
+        (self.repo / 'source.txt').chmod(0o755)
+        self.assertIn('Reviewed files changed', self.publish().stdout)
+
+    def test_branch_drift(self):
+        self.git('checkout', '-qb', 'other')
+        self.assertIn('HEAD or branch changed', self.publish().stdout)
+
+    def test_head_drift(self):
+        self.git('commit', '--allow-empty', '-qm', 'after audit')
+        self.assertIn('HEAD or branch changed', self.publish().stdout)
+
+    def test_origin_and_verdict_drift(self):
+        (self.state / 'origin').write_text('other/repo\t42\tgh\n')
+        self.assertIn('Origin or audit changed', self.publish().stdout)
+        (self.state / 'origin').write_text('owner/repo\t42\tgh\n')
+        verdict = self.state / 'audit-verdict'
+        verdict.write_text(verdict.read_text().replace('READY', 'UNKNOWN'))
+        self.assertIn('owned READY', self.publish().stdout)
+
+    def test_source_drift_during_audit(self):
+        self.ok(self.engine('freeze'))
+        (self.repo / 'source.txt').write_text('during audit\n')
+        self.assertIn('changed during audit', self.engine('bind').stdout)
+
+    def test_source_drift_during_prompt(self):
+        process = subprocess.Popen(['bash', '-c', '. "$1"; change_pr_engine handoff', 'test', str(LIB)],
+            cwd=self.repo, env=self.env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True)
+        output = ''
+        while not output.endswith(']: '):
+            ch = process.stdout.read(1)
+            self.assertTrue(ch, output)
+            output += ch
+        (self.repo / 'source.txt').write_text('during prompt\n')
+        remainder, _ = process.communicate('\nSummary\nManual\ny\n', timeout=15)
+        self.assertIn('Reviewed files changed', remainder)
+        self.assertEqual(len(self.creates()), 0)
+
+    def test_commit_and_push_crash_recovery(self):
+        self.assertNotEqual(self.publish(CRASH_GIT='commit-tree').returncode, 0)
+        self.assertEqual(self.journal()['phase'], 'prepared')
+        self.assertNotEqual(self.engine('handoff', CRASH_GIT='push').returncode, 0)
+        sha = self.journal()['intended_head']
+        self.assertEqual(self.journal()['phase'], 'prepared')
+        self.ok(self.engine('handoff'))
+        self.assertEqual(self.journal()['intended_head'], sha)
+        self.assertEqual(len(self.creates()), 1)
+
+    def test_published_lookup_failure_retries_safely(self):
+        self.assertNotEqual(self.publish(LOOKUP_FAIL='1').returncode, 0)
+        self.assertEqual(self.journal()['phase'], 'published')
+        self.ok(self.engine('handoff'))
+        self.assertEqual(len(self.creates()), 1)
+
+    def test_server_success_timeout_reconciles(self):
+        self.assertNotEqual(self.publish(CREATE_TIMEOUT='1').returncode, 0)
+        self.assertEqual(self.journal()['phase'], 'unknown')
+        self.ok(self.engine('handoff'))
+        self.assertEqual(len(self.creates()), 1)
+
+    def test_unknown_empty_or_failed_lookup_never_recreates(self):
+        self.assertNotEqual(self.publish(CREATE_FAIL='1').returncode, 0)
+        self.assertEqual(self.journal()['phase'], 'unknown')
+        self.assertNotEqual(self.engine('handoff', LOOKUP_FAIL='1').returncode, 0)
+        self.assertIn('unknown', self.engine('handoff').stdout)
+        self.assertIn('Unresolved PR outcome', self.engine('freeze').stdout)
+        self.assertEqual(len(self.creates()), 1)
+
+    def test_creating_crash_reconciles_and_duplicate_stops(self):
+        self.ok(self.publish())
+        path = self.state / 'pr/journal.json'
+        j = self.journal()
+        j['phase'] = 'creating'
+        path.write_text(json.dumps(j))
+        self.assertIn('Multiple matching PRs', self.engine('handoff', DUPLICATE='1').stdout)
+        self.ok(self.engine('handoff'))
+        self.assertEqual(len(self.creates()), 1)
+
+    def test_fork_identity(self):
+        self.git('remote', 'add', 'upstream', str(self.bare))
+        self.ok(self.publish(FORK='1'))
+        create = self.creates()[0]
+        self.assertEqual(create[create.index('--head') + 1], 'forker:' + self.journal()['head_branch'])
+        self.assertEqual(create[create.index('--repo') + 1], 'owner/repo')
+
+    def test_ambiguous_remote(self):
+        self.git('remote', 'add', 'duplicate', str(self.bare))
+        self.assertIn('Ambiguous head remote', self.publish().stdout)
+        self.assertEqual(len(self.creates()), 0)
+
+    def test_originless_requires_repository_answer(self):
+        (self.state / 'origin').unlink()
+        self.freeze()
+        self.ok(self.engine('handoff', 'owner/repo\nCustom title\nSummary\nManual\ny\n'))
+        self.assertNotIn('Closes ', (self.root / 'server.body').read_text())
+        self.assertEqual(self.creates()[0][self.creates()[0].index('--title') + 1], 'Custom title')
+
+    def test_missing_or_corrupt_binding_denies(self):
+        path = self.state / 'pr/journal.json'
+        path.write_text('{}')
+        self.assertIn('Missing/corrupt', self.publish().stdout)
+        path.unlink()
+        self.assertNotEqual(self.publish().returncode, 0)
+        self.assertEqual(len(self.creates()), 0)
+
+    def test_returned_pr_sha_mismatch_is_pending(self):
+        self.assertIn('Returned PR SHA differs', self.publish(WRONG_PR_SHA='1').stdout)
+        self.assertEqual(self.journal()['phase'], 'unknown')
+        self.assertEqual(len(self.creates()), 1)
+        self.ok(self.engine('handoff'))
+        self.assertEqual(len(self.creates()), 1)
+
+    def test_existing_pr_head_drift_is_diagnosed(self):
+        self.ok(self.publish())
+        j = self.journal()
+        subprocess.run([REAL_GIT, '--git-dir', str(self.bare), 'update-ref',
+                        'refs/heads/' + j['head_branch'], self.original], check=True)
+        self.assertIn('drifted after creation', self.engine('handoff').stdout)
+        self.assertEqual(len(self.creates()), 1)
+
+    def test_title_shortening_and_fallback(self):
+        (self.repo / 'CHANGE_REQUEST.md').write_text('## Summary\n\n' + 'é' * 90 + '\n')
+        self.freeze()
+        result = self.engine('handoff')
+        self.assertIn('PR title [default: ' + 'é' * 72 + ']: ', result.stdout)
+        (self.repo / 'CHANGE_REQUEST.md').write_text('No Summary section\n')
+        self.freeze()
+        self.assertIn('PR title [default: Completed change]: ', self.engine('handoff').stdout)
+
+    def test_raw_bytes_ignore_clean_filters(self):
+        (self.repo / '.gitattributes').write_text('source.txt text eol=lf\n')
+        (self.repo / 'source.txt').write_bytes(b'audited\r\n')
+        self.freeze()
+        self.ok(self.publish())
+        raw = subprocess.check_output([REAL_GIT, 'show', 'HEAD:source.txt'], cwd=self.repo)
+        self.assertEqual(raw, b'audited\r\n')
+        (self.repo / 'source.txt').write_bytes(b'audited\n')
+        self.assertIn('Reviewed files changed', self.engine('handoff').stdout)
+
+    def test_symlink_and_untracked_bytes_are_published(self):
+        (self.repo / 'extra.txt').write_text('new file\n')
+        (self.repo / 'link').symlink_to('source.txt')
+        self.freeze()
+        self.ok(self.publish())
+        self.assertEqual(self.git('show', 'HEAD:extra.txt'), 'new file')
+        self.assertIn('120000', self.git('ls-tree', 'HEAD', 'link'))
+
+    def test_remote_drift_during_prompt(self):
+        process = subprocess.Popen(['bash', '-c', '. "$1"; change_pr_engine handoff', 'test', str(LIB)],
+            cwd=self.repo, env=self.env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True)
+        output = ''
+        while not output.endswith(']: '):
+            ch = process.stdout.read(1)
+            self.assertTrue(ch, output)
+            output += ch
+        target = self.journal()['head_branch']
+        subprocess.run([REAL_GIT, '--git-dir', str(self.bare), 'update-ref',
+                        'refs/heads/' + target, self.original], check=True)
+        remainder, _ = process.communicate('\nSummary\nManual\ny\n', timeout=15)
+        self.assertIn('Remote changed during prompts', remainder)
+        self.assertEqual(len(self.creates()), 0)
+
+    def test_fork_same_branch_wrong_sha_denies(self):
+        self.git('checkout', '-qb', 'feature')
+        self.freeze()
+        self.git('remote', 'add', 'upstream', str(self.bare))
+        other = self.git('commit-tree', self.git('rev-parse', 'HEAD^{tree}'), '-p', self.original, '-m', 'remote edit')
+        self.git('push', '-q', 'origin', other + ':refs/heads/feature')
+        self.assertIn('Remote head differs', self.publish(FORK='1').stdout)
+        self.assertEqual(len(self.creates()), 0)
+
+    def test_symlink_audit_denies_binding(self):
+        self.ok(self.engine('freeze'))
+        (self.repo / 'FINAL_AUDIT.md').unlink()
+        (self.repo / 'FINAL_AUDIT.md').symlink_to('source.txt')
+        self.assertIn('regular file', self.engine('bind').stdout)
+
+    def test_worktree_git_file(self):
+        worktree = self.root / 'worktree'
+        self.git('worktree', 'add', '-qb', 'feature', str(worktree))
+        self.repo = worktree
+        self.state = self.repo / '.uncle/workflow'
+        self.state.mkdir(parents=True)
+        (self.state / 'origin').write_text('owner/repo\t42\tgh\n')
+        (self.repo / 'source.txt').write_text('worktree edit\n')
+        self.assertTrue((self.repo / '.git').is_file())
+        self.freeze()
+        self.ok(self.publish())
+        self.assertEqual(self.git('show', 'HEAD:source.txt'), 'worktree edit')
+
+
+unittest.main()
+PY
+pr_rc=$?
+COUNT=$((COUNT + 1))
+if [[ "$pr_rc" != 0 ]]; then fail "PR handoff integration tests failed ($pr_rc)"; fi
 
 if [[ "$FAILED" -ne 0 ]]; then
     echo "close-flow-test.sh: $FAILED of $COUNT checks failed"

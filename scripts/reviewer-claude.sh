@@ -115,7 +115,7 @@ fi
 # stage log — while keeping the raw events for the extraction below.
 set +e
 printf '%s' "$prompt" \
-    | "$CLAUDE_CMD" "${claude_flags[@]}" \
+    | env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$CLAUDE_CMD" "${claude_flags[@]}" \
     | tee "$stream" \
     | jq ${jq_output_flags[@]+"${jq_output_flags[@]}"} -R -r --unbuffered '
         (fromjson? | select(type == "object")) as $e

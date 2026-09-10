@@ -103,9 +103,10 @@ state_origin_agree() {
 #                     record (in-process, or a retry on the same concrete run id)
 #   fetch_method      gh | curl, from the origin file's third field
 #
-# Returns 0 closed, 1 skipped with a printed reason, 2 the close itself failed.
-# Writes the marker file only after gh reports a successful close.
-issue_close_if_ready() {
+# Eligibility returns 0 allowed, 1 skipped with a printed reason.
+# issue_close_if_ready below additionally returns 2 when the close fails, and
+# writes the marker only after gh reports a successful close.
+issue_close_eligible() {
     local run_id="$1" repo="$2" issue="$3"
     local verdict_file="$4" origin_file="$5" audit_file="$6" marker_file="$7"
     local allow_close="$8" origin_bound="$9" run_owns_verdict="${10}"
@@ -205,6 +206,15 @@ issue_close_if_ready() {
         return 1
     fi
 
+    return 0
+}
+
+# The PR handoff shares eligibility, but never invokes this close mutation.
+issue_close_if_ready() {
+    issue_close_eligible "$@" || return $?
+    local run_id="$1" repo="$2" issue="$3" marker_file="$7"
+    local verdict comment tmo rc
+    verdict="$(awk -F'\t' 'NR == 1 {print $2}' "$4")"
     comment="Closed by stagegate: change workflow completed with FINAL_AUDIT.md verdict \`$verdict\`. See FINAL_AUDIT.md and .uncle/workflow/change.diff in the working tree."
 
     tmo="$(issue_close_timeout_cmd)"

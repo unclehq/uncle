@@ -16,19 +16,24 @@ def key_file(config):
     return Path(config).parent / 'self-hosted-keys.json'
 
 
+def local_model(name):
+    name = name.removeprefix('openai/')
+    return name if name.startswith('local/') else 'local/' + name
+
+
 def read_keys(config):
     path = key_file(config)
     keys = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
     # Read old credentials without rewriting them until the user saves config.
     if '__opencode_models__' not in keys and '__aider_models__' in keys:
         keys['__opencode_models__'] = {
-            name.removeprefix('openai/'): dict(profile, model=profile.get('model', name).removeprefix('openai/'))
+            local_model(name): dict(profile, model=profile.get('model', name).removeprefix('openai/').removeprefix('local/'))
             for name, profile in keys.pop('__aider_models__').items()}
     if '__opencode_connection__' not in keys and '__aider_connection__' in keys:
         keys['__opencode_connection__'] = keys.pop('__aider_connection__')
     if '__opencode_models__' in keys:
         keys['__opencode_models__'] = {
-            name.removeprefix('openai/'): dict(profile, model=profile.get('model', name).removeprefix('openai/'))
+            local_model(name): dict(profile, model=profile.get('model', name).removeprefix('openai/').removeprefix('local/'))
             for name, profile in keys['__opencode_models__'].items()}
     return keys
 
@@ -79,7 +84,7 @@ def discover_models(base_url, api_key):
                         and item['id'] and not any(c.isspace() for c in item['id']) and '#' not in item['id']})
         if not names:
             raise ValueError('The endpoint returned no usable models')
-        return sorted({name.removeprefix('openai/') for name in names if name.removeprefix('openai/')})
+        return sorted({local_model(name) for name in names if name.removeprefix('openai/')})
     except HTTPError as exc:
         raise ValueError(f'Model discovery failed (HTTP {exc.code}); check the Base URL and API key') from None
     except (URLError, OSError):
@@ -97,7 +102,7 @@ def refresh_models(keys, base_url, api_key):
     connection = dict(base_url=base_url.rstrip('/'), api_key=api_key)
     # Commit only after a successful discovery; failures retain the old catalog.
     keys['__opencode_connection__'] = connection
-    keys['__opencode_models__'] = {name: dict(connection) for name in names}
+    keys['__opencode_models__'] = {name: dict(connection, model=name.removeprefix('local/')) for name in names}
     return names
 
 
@@ -118,8 +123,8 @@ def settings(config, stage):
     result['api_key'] = os.environ.get('UNCLE_SELF_HOSTED_API_KEY') or read_keys(config).get(stage, '')
     profiles = read_keys(config).get('__opencode_models__', {})
     selected = values.get(stage + '.model', '')
-    if selected.startswith('openai/') and selected not in profiles:
-        selected = selected[len('openai/'):]
+    if selected and selected not in profiles:
+        selected = local_model(selected)
     if selected in profiles:
         profile = profiles[selected]
         result = dict(model=profile.get('model', selected), base_url=profile.get('base_url', ''), api_key=profile.get('api_key', ''))
@@ -127,7 +132,7 @@ def settings(config, stage):
         raise ValueError('Select a configured OpenCode self-hosted model for stage ' + stage)
     for field in ('model', 'base_url', 'api_key'):
         result[field] = os.environ.get('UNCLE_SELF_HOSTED_' + field.upper()) or result[field]
-    result['model'] = result['model'].removeprefix('openai/')
+    result['model'] = result['model'].removeprefix('openai/').removeprefix('local/')
     url = urlsplit(result['base_url'])
     if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
         raise ValueError('Self hosted requires an http(s) Base URL without credentials, query, or fragment')
@@ -198,7 +203,7 @@ def response_from_events(path):
 def opencode_invocation(side, values, prompt, root, directory, allow_shell=True):
     work = Path(directory)
     (work/'prompt.txt').write_text(prompt, encoding='utf-8', newline='\n')
-    model = values['model'].removeprefix('openai/')
+    model = values['model'].removeprefix('openai/').removeprefix('local/')
     request_seconds = int(os.environ.get('WORKFLOW_SELF_HOSTED_REQUEST_SECONDS') or os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600'))
     if request_seconds < 1:
         raise ValueError('WORKFLOW_SELF_HOSTED_REQUEST_SECONDS must be positive')
@@ -213,19 +218,25 @@ def opencode_invocation(side, values, prompt, root, directory, allow_shell=True)
                   'external_directory': 'deny'}
     config = {
         '$schema': 'https://opencode.ai/config.json',
-        'enabled_providers': ['uncle'], 'model': 'uncle/' + model,
-        'small_model': 'uncle/' + model, 'share': 'disabled', 'autoupdate': False,
+        'enabled_providers': ['local'], 'model': 'local/' + model,
+        'small_model': 'local/' + model, 'share': 'disabled', 'autoupdate': False,
         'snapshot': False, 'permission': permission,
         'agent': {'uncle': {'mode': 'primary', 'description': 'Uncle workflow stage',
                             'steps': values.get('max_turns', 80),
                             'permission': permission}},
-        'provider': {'uncle': {'npm': '@ai-sdk/openai-compatible', 'name': 'Uncle self hosted',
+        'provider': {'local': {'npm': '@ai-sdk/openai-compatible', 'name': 'Uncle self hosted',
                      'options': {'baseURL': values['base_url'].rstrip('/'),
                                  'apiKey': '{env:UNCLE_OPENCODE_API_KEY}', 'timeout': request_seconds * 1000},
                      'models': {model: {'name': model, 'tool_call': True, 'limit': {
                          'context': context, 'output': output}}}}},
     }
     env = {k: v for k, v in os.environ.items() if not k.startswith(('OPENCODE_', 'AIDER_'))}
+    # The adapter owns the live channel; tools/tests launched by the client
+    # must not inherit the outer workflow's project or issue identity.
+    for key in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG',
+                'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE',
+                'DOCUMENT_BUDGET_SOURCE'):
+        env.pop(key, None)
     env.update(OPENCODE_CONFIG_CONTENT=json.dumps(config), UNCLE_OPENCODE_API_KEY=values['api_key'],
                OPENCODE_DISABLE_PROJECT_CONFIG='true', OPENCODE_DISABLE_CLAUDE_CODE='true',
                OPENCODE_DISABLE_DEFAULT_PLUGINS='true', OPENCODE_DISABLE_MODELS_FETCH='true',
@@ -236,7 +247,7 @@ def opencode_invocation(side, values, prompt, root, directory, allow_shell=True)
         folder.mkdir()
         env[key] = str(folder)
     command = [os.environ.get('WORKFLOW_OPENCODE_CMD', 'opencode'), 'run', '--format', 'json',
-               '--dir', str(root), '--model', 'uncle/' + model, '--agent', 'uncle',
+               '--dir', str(root), '--model', 'local/' + model, '--agent', 'uncle',
                '--file', str(work/'prompt.txt'), '--', 'Follow the attached workflow instructions.']
     return command, env
 
@@ -342,19 +353,21 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         if candidate.exists():
             candidate.unlink()
         if artifact == 'REQUIREMENTS_INTERPRETATION.md':
-            request = prompt + '\nReturn the complete REQUIREMENTS_INTERPRETATION.md as Markdown, starting with its # heading and including ## 10. Definition of done. Uncle will save it. Do not emit SEARCH/REPLACE edits.'
+            request = prompt + '\nWrite the complete REQUIREMENTS_INTERPRETATION.md using your file tools, starting with its # heading and including ## 10. Definition of done. If returning the document instead, return complete Markdown, not tool-call markup.'
             turns = 0
             for attempt in range(2):
                 attempt_usage = {}
                 try:
-                    response, count = _run_opencode('reviewer', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root)
+                    response, count = _run_opencode('agent', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root)
                     turns += count
                 finally:
                     if usage is not None:
                         for key, value in attempt_usage.items():
                             usage[key] = usage.get(key, 0) + value
                 try:
-                    document = document_response(response, artifact)
+                    if candidate.is_symlink():
+                        raise ValueError('Refusing a symlinked requirements document')
+                    document = candidate.read_text(encoding='utf-8') if candidate.is_file() else document_response(response, artifact)
                     validate_requirements(document)
                 except ValueError as error:
                     logs = root/'.uncle/workflow/logs'
@@ -362,6 +375,10 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                     fd, rejected = tempfile.mkstemp(prefix='requirements-rejected-', suffix='.md', dir=logs)
                     with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
                         stream.write(response)
+                        if candidate.is_file() and not candidate.is_symlink():
+                            stream.write('\n\n--- Candidate file ---\n' + candidate.read_text(encoding='utf-8'))
+                    if candidate.exists() or candidate.is_symlink():
+                        candidate.unlink()
                     if attempt:
                         raise ValueError(str(error) + '; rejected response saved to ' + rejected) from None
                     print('Requirements response format rejected; retrying once. Response saved to ' + rejected, file=sys.stderr)
@@ -488,7 +505,7 @@ def profile_menu(config, choose=False):
         for name in sorted(profiles):
             print('  ' + name, file=sys.stderr)
         print('OpenCode model name: ', end='', file=sys.stderr, flush=True)
-        name = input().strip()
+        name = local_model(input().strip())
         if name not in profiles:
             raise ValueError('Choose a configured OpenCode model; add models in Configure → OpenCode self-hosted models')
         print(name)
@@ -532,7 +549,7 @@ def main(side, args):
     status_file = os.environ.get('UNCLE_STATUS_FILE')
     if status_file:
         with open(status_file,'a',encoding='utf-8',newline='\n') as stream:
-            stream.write(json.dumps({'event':'start','stage':stage,'model':values['model'],
+            stream.write(json.dumps({'event':'start','stage':stage,'model':local_model(values['model']),
                                      'mode':'act' if side=='agent' else 'review'})+'\n')
     usage = {}
     try:
@@ -546,13 +563,13 @@ def main(side, args):
         print(text)
         if usage:
             print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,
-                              'model':values['model'], 'usage':usage, 'total_cost_usd':None,
+                              'model':local_model(values['model']), 'usage':usage, 'total_cost_usd':None,
                               'usage_source':'OpenCode step_finish events', 'usage_scope':'stage'}))
             print('tokens used\n' + str(usage['total_tokens']))
     else:
         print(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':text}]}}))
         print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':text,
-                          'model':values['model'],'num_turns':turns,'duration_ms':int((time.monotonic()-started)*1000),'usage':usage,'total_cost_usd':None,
+                          'model':local_model(values['model']),'num_turns':turns,'duration_ms':int((time.monotonic()-started)*1000),'usage':usage,'total_cost_usd':None,
                           'usage_source':'OpenCode step_finish events','usage_scope':'stage'}))
     return 0
 

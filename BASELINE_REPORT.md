@@ -1,86 +1,89 @@
-# Baseline Report
+# Baseline report
 Omitted sections: none
 
 ## 1. Change-request summary
-See `CHANGE_REQUEST.md:13-18`.
+See CHANGE_REQUEST.md, Motivation; PR handoff already exists.
 
 ## 2. Repository architecture
-Bash/Python; no build (`CONTRIBUTING.md`).
-Dependencies: `Formula/uncle.rb:7-11`.
+scripts/README.md: Bash drivers, CLI adapters, curses UI, `.uncle/workflow` state.
+`packaging/debian/control:7` requires Bash ≥3.2, Python ≥3.9, Git, jq, curl, certificates, and gh.
+Packaging: `scripts/install/build-package.py:15`.
 
 ## 3. Relevant code paths
-| ID | Path |
-|---|---|
-| P1 | `uncle_tui.py:2444` selection → `2491` launch → `1268` subprocess |
-| P3 | `scripts/change-workflow.sh:1523` input guard |
+PR = `scripts/lib/change-pr.sh`; CF = `scripts/tests/close-flow-test.sh`.
+
+| ID | Path | Role |
+|---|---|---|
+| P-1 | scripts/change-workflow.sh:1786,1939 | Freeze/bind audit; COMPLETE dispatch |
+| P-2 | PR:301 | Prompt, commit, push, create/reconcile PR |
+| P-3 | scripts/from-issue.sh:172,388 | Git fallback guard; seeded summary |
+| P-4 | uncle_tui.py:1546 | Prompt detection and editable default |
 
 ## 4. Current observable behavior
 | ID | Trigger | Current result | Evidence | Must preserve? |
 |---|---|---|---|---|
-| B1 | Missing inputs; choose new/change | Launch requested | §8 command 4: mocked launcher | No |
-| B2 | Change ANALYZE; missing/empty input | Exit 1 | P3; `require_file:341` | Yes |
-| B3 | Dismiss notice | Configure opens | `uncle_tui.py:2276` inspection | Existing notice: yes |
+| B-1 | Git completion | PR with closing reference | CF:1128 | Yes |
+| B-2 | Title prompt | 72-character summary or fallback | PR:193; CF:1309 | Yes |
+| B-3 | Publication prompt | Requests summary/manual steps/consent | PR:338 | UNRESOLVED: §15 |
+| B-4 | Decline/EOF/auth failure | PR remains pending | CF:1174 | Yes |
+| B-5 | No `.git` | Legacy immediate-close gate remains | scripts/change-workflow.sh:1939; CF:822 | Yes: no PR |
+| B-6 | Disabled/unattended | No PR prompt | PR:4 | Yes |
+| B-7 | Resume created PR | No duplicate create | CF:1150 | Yes |
 
 ## 5. Existing invariants
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
-| I1 | Launch in project root | `uncle_tui.py:1303`, `_project_root:53` | issue-project-root-test.sh (seeder only) | High: code |
-| I2 | Issue selection precedes launch | `uncle_tui.py:2454` | Unverified | High: code |
+| I-1 | Content matches audit | PR:153 validate | CF:1183 | High |
+| I-2 | Unknown outcome blocks recreate | PR:321 | CF:1249 | High |
+| I-3 | PR leaves issue open | PR:301 handoff | CF:1150 | High |
+| I-4 | Legacy close requires owned READY/hash/origin | scripts/lib/issue-close.sh:issue_close_eligible | CF:892,919 | High |
 
 ## 6. Current API, schema, and interface contracts
-| ID | Contract |
-|---|---|
-| C1 | `uncle_tui.py:1013`: issue/mode arguments; optional --unattended |
+| ID | Contract | Evidence |
+|---|---|---|
+| C-1 | Version-1 `.uncle/workflow/pr/journal.json`; seven phases | PR:138 |
+| C-2 | Origin TSV: repo/issue/method; legacy=curl | scripts/lib/issue-close.sh:origin_fetch_method |
+| C-3 | Prompt terminates `]:`; chunked Unicode supported | scripts/tests/pr-prompt-test.py |
+| C-4 | `WORKFLOW_CLOSE_ISSUE=0` suppresses handoff | PR:4 |
 
 ## 7. Existing automated-test coverage
-Inspected TUI tests lack input-file checks.
-Driver/packaging/Windows suites unexecuted.
+CF isolates Git/gh fixtures; covers drift, forks, retries, worktrees and closure.
 
 ## 8. Exact build and test commands executed
 ```sh
-bash -c 'for f in uncle install.sh scripts/*.sh scripts/lib/*.sh scripts/tests/*.sh; do bash -n "$f" || exit; done'
-bash -o pipefail -c 'export PYTHONDONTWRITEBYTECODE=1; failed=0; for t in scripts/tests/tui-config-test.sh scripts/tests/tui-performance-test.sh scripts/tests/tui-session-panel-test.sh scripts/tests/issue-project-root-test.sh; do bash "$t" 2>&1 | tail -8; rc=$?; printf "%s: exit %s\n" "$t" "$rc"; [ "$rc" -eq 0 ] || failed=1; done; exit "$failed"'
-python3 -B scripts/tests/tui-support-test.py -q
-python3 -B -c 'import tempfile; from unittest.mock import Mock, patch; from uncle_tui import UncleTUI; tmp=tempfile.TemporaryDirectory(); ui=UncleTUI.__new__(UncleTUI); ui.maybe_reload=Mock(); ui.start_workflow=Mock(); ctx=patch("uncle_tui._project_root", return_value=tmp.name); ctx.start(); [(setattr(ui,"state","menu"),setattr(ui,"sel",i),ui._confirm(),print(i,ui.state,ui.start_workflow.call_count)) for i in (0,2)]; ctx.stop(); tmp.cleanup()'
-bash -o pipefail -c 'PYTHONDONTWRITEBYTECODE=1 bash scripts/tests/tui-session-panel-test.sh 2>&1 | tail -25'
-python3 -B scripts/tests/early-prerequisites-test.py -q
+bash -o pipefail -c 'bash scripts/tests/close-flow-test.sh 2>&1 | tail -12'
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/pr-prompt-test.py -q
+bash -n scripts/change-workflow.sh scripts/from-issue.sh scripts/lib/change-pr.sh scripts/lib/issue-close.sh
+bash -o pipefail -c 'bash scripts/tests/tui-session-panel-test.sh 2>&1 | tail -8'
 ```
 
 ## 9. Baseline test results
-| ID | Command | Result |
+| ID | Command position | Result |
 |---|---|---|
-| T1 | 1 | PASS |
-| T2 | 2 | FAIL: config 80 checks, timing 4 tests, issue-root pass; panel 2/13 fail |
-| T3 | 3 | PASS: 4 tests |
-| T4 | 4 | Outputs: 0 running 1; 2 running 2 |
-| T5 | 5 | Same two failures |
-| T6 | 6 | PASS: 5 tests |
+| T-1 | 1 | PASS: 231 checks, 28 Python tests |
+| T-2 | 2 | PASS: 5 tests |
+| T-3 | 3 | PASS: syntax |
+| T-4 | 4 | PASS: 14 tests |
 
 ## 10. Existing failures, warnings, and flaky behavior
-| ID | Finding |
-|---|---|
-| F1 | Panel failures: test_live_k3_estimate_and_completed_estimate_are_labeled; test_live_tokens_and_projected_cost. Cause unresolved. |
-| F2 | Initial git status: modified CHANGE_REQUEST.md, scripts/from-issue.sh; untracked scripts/tests/issue-project-root-test.sh. |
+All checks exit 0; no warnings. Flakiness unverified: single run.
 
 ## 11. Reproduction result for the reported bug, if applicable
-T4: empty project, mocked launch.
-UNRESOLVED: rendering/driver execution; settle via isolated terminal run.
+No bug steps in CHANGE_REQUEST.md; feature exercised by CF.
 
 ## 12. Likely change surface
-P1, `uncle:572,612`, menu tests.
+Inferred: P-1–P-4, CF.
 
 ## 13. Regression-sensitive components
-B3, I1/I2 and C1.
+I-1–I-4; remote identity resolution (PR:231), shared prompt parsing (P-4).
 
 ## 14. Areas explicitly outside the change
-UNRESOLVED: request scope placeholder.
+ASSUMPTION: new-app driver/installers/adapters; request gives no exclusions.
 
 ## 15. Unknowns and assumptions
-| ID | Unknown; resolution |
-|---|---|
-| U1 | README/GitHub, empty files, resume: clarify scope. |
-| U2 | ASSUMPTION: motivation controls filenames; confirm scope. |
-| U3 | F1/platforms unverified; isolate metrics, run native checks. |
+UNRESOLVED: 25 staged paths include PR code (`git status --short`); pre-feature behavior requires historical checkout.
+UNRESOLVED: live merge closure, Windows/TTY, builds and wider suites require platform/full-suite checks.
+UNRESOLVED: B-3 versus automatic description; needs request clarification.
 
 ## 16. Initial risk assessment
-Medium: shared launch/notice paths (P1, B3).
+High impact: I-1/I-2 regressions permit unaudited publication/duplicate PRs.

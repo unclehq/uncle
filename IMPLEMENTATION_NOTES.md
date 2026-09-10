@@ -1,38 +1,42 @@
 ## files changed
-| ID | File | Purpose | Approved-plan step | Behavior or invariant affected |
+
+| ID | File / symbol | Purpose | Approved-plan step | Behavior / invariant |
 |---|---|---|---|---|
-| IN-1 | uncle_tui.py:__init__,_confirm,handle_key,_title,_draw_notice | Stat selected input; clear blocked selection; reset notice title/destination on dismissal | S2/C1/C2 | B-1/B-2, I-3/I-4, AR-4; legacy Configure destination |
-| IN-3 | uncle:menu case dispatch | Gate choices 1/3 with project-root -f; warn and continue | S2/C3 | P2/P9/P10 |
-| IN-4 | scripts/tests/menu-input-test.py:MenuInputTests | Extend existing regression scaffold with file types, auto mode, actual-driver races | S1/S3/C4 | T1–T7; eight passing tests |
-| IN-5 | IMPLEMENTATION_NOTES.md | Replace prior blocker report with implementation evidence | S3 | Scope accounting |
-| IN-6 | CHANGE_TEST_REPORT.md | Replace prior report with executed checks and remaining acceptance gaps | S3 | AC1/AC2 |
+| N-1 | `scripts/change-workflow.sh`: FINAL_AUDIT, COMPLETE | Freeze/bind audit; route Git completion to PR handoff under existing lock | S-2 / P-1 | B-1; AC-7–10 |
+| N-2 | `scripts/from-issue.sh`: close_issue_if_ready | Suppress Git fallback closing | S-2 / P-2 | I-6; no-Git close retained |
+| N-3 | `scripts/lib/issue-close.sh`: issue_close_eligible | Share eligibility without invoking close mutation | S-2 / P-3 | I-1–3; B-6,8 |
+| N-4 | `scripts/lib/change-pr.sh`: change_pr_engine | Raw-byte temporary index; atomic journal; consented commit-tree/push; exact repository/SHA PR reconciliation | S-2 / P-5 | AC-1,4,7–10; commit-tree does not run commit hooks |
+| N-5 | `uncle_tui.py`: _detect_prompt | Prefill editable title; wait for complete prompt chunks | S-3 / P-4 | AC-3; existing user edits retained |
+| N-6 | `scripts/tests/close-flow-test.sh`: new_case, setup_audit_stage, HandoffTests | Repair finding fixtures; cover close gates, Git routing, publication, drift and recovery; supply test-only timeout | S-1,4 / P-6 | T-1–3,5–9 |
+| N-7 | `scripts/tests/pr-prompt-test.py`: PromptTests | Unicode/default editing, chunk boundaries, generic prompts | S-3,4 / P-7 | T-4 |
+| N-8 | `scripts/README.md`: issue completion contract | Document routing, consent, identity restrictions, recovery and rollback | S-3 / P-8 | B-1–8 |
+| N-9 | `IMPLEMENTATION_NOTES.md` | Record scope, preservation and limitations | S-4 | Review evidence |
+| N-10 | `CHANGE_TEST_REPORT.md` | Record executed checks and gaps | S-4 | Test evidence |
 
 ## purpose of each change
-See IN-1, IN-3–IN-6; CHANGE_PLAN.md remains authoritative.
+
+See N-1–10, Purpose column.
 
 ## approved-plan step
-| ID | Evidence |
-|---|---|
-| IN-7 | S1: `python3 -B scripts/tests/menu-input-test.py -q` confirmed 11 failures before production edits. |
-| IN-8 | S2: C1–C3 implemented; S3 automated menu checks pass; manual/native acceptance incomplete. |
+
+See N-1–10, Step column; `CHANGE_PLAN.md` §20.
 
 ## behavior or invariant affected
-| ID | Evidence |
-|---|---|
-| IN-9 | `MenuInputTests.test_selection_race_actual_drivers` executes copied actual drivers for both menus: new-app stub exits 73; change ANALYZE exits 1 before agent invocation. |
-| IN-10 | PC1 snapshot `/private/tmp/uncle-implementation-start/{status,diff,hashes.json}` records prior work; hash comparison confirms protected files unchanged. |
-| IN-11 | Python symbol comparison against HEAD confirms uncle run helpers and uncle_tui.py:_project_root,cmd_for,start_workflow unchanged. |
+
+See N-1–8; observed results are in `CHANGE_TEST_REPORT.md`.
 
 ## deviations
+
 | ID | Disposition |
 |---|---|
-| IN-12 | C4 stub now changes to UNCLE_PROJECT_ROOT like actual drivers; paths resolved for macOS /var alias. Shell race asserts the driver's printed exit status because uncle:launch returns to its menu. No expected production behavior changed. |
-| IN-13 | PC1 existing edits preserved: ADVERSARIAL_REVIEW.md, CHANGE_PLAN.md, scripts/change-workflow.sh, scripts/lib/{plan-scope,stage-config}.sh, scripts/tests/plan-scope-test.sh, uncle; existing untracked checklist-runner-config-test.sh and shell-menu-startup-test.sh preserved. C4 and both requested reports were already uncommitted. |
-| IN-14 | Prior removal of uncle's undefined apply_config call is preserved; the S1 shell fixture now reaches dispatch. |
+| D-1 | S-4 live M-1/M-2 remain unrun; local Git/fake-GitHub tests substitute only for automated coverage, not merge/UI acceptance. |
+| D-2 | Broader test failures were investigated against a temporary pre-change copy; protected tests and implementation paths were not repaired. |
 
 ## unresolved concerns
-| ID | Concern | Settled by |
-|---|---|---|
-| IN-15 | Q2 and manual M1–M3 unverified; automated 80×24 rendering uses mocked curses | Native Windows and interactive terminal checks before AC1 acceptance |
-| IN-16 | Shell permission-denial behavior unverified; TUI PermissionError covered | Run shell fixture under a restricted identity |
-| IN-17 | Full-suite failures and rollback comparison recorded in CHANGE_TEST_REPORT.md | Resolve environment/test failures outside FS1 |
+
+| ID | Evidence / resolution |
+|---|---|
+| U-1 | ASSUMPTION: GitHub merge closes the qualified source issue (`CHANGE_PLAN.md` R-1); unverified against GitHub. Settle with M-1 in a disposable upstream/fork and live CLI/TUI. |
+| U-2 | Initial `git status --short`: nine pre-existing modified paths—`ADVERSARIAL_REVIEW.md`, `BASELINE_REPORT.md`, `CHANGE_PLAN.md`, `CHANGE_REQUEST.md`, `CHANGE_SPEC.md`, `PREREQUISITES.md`, `scripts/lib/self_hosted.py`, `scripts/tests/self-hosted-test.py`, `uncle_tui.py`; retained. |
+| U-3 | Later `git status --short` showed staging changes with unchanged HEAD; writer unverified. Staging retained; `git diff HEAD` includes both staged and unstaged work. Settle attribution with the concurrent workflow operator. |
+| U-4 | `change_pr_engine`: corrupt journals and unresolved create outcomes fail closed; independently resolve prior PR outcome before repairing/removing a corrupt journal and obtaining a fresh audit. |

@@ -218,19 +218,41 @@ the value recorded when it was classified. Any mismatch leaves the issue open
 and prints the reason. A driver exit code other than 0 is propagated and no
 close is attempted.
 
-`change-workflow.sh` now performs that same close itself on reaching `COMPLETE`,
-so a run started or resumed directly — without going back through
-`from-issue.sh` — still closes its issue. The decision lives in one place,
-`scripts/lib/issue-close.sh`, and both entry points call it. The driver's close
-additionally requires that the run can prove which issue it owns: either
-`.uncle/workflow/state` already carried an issue prefix when the run started, or
-`STAGEGATE_ORIGIN_REPO`/`STAGEGATE_ORIGIN_ISSUE` were set for that invocation.
-A leftover `.uncle/workflow/origin` found on disk by an otherwise fresh run is not
-enough. `WORKFLOW_CLOSE_ISSUE=0` disables the driver-side close entirely. After
-a successful close the driver writes `.uncle/workflow/issue-closed`, and
-`from-issue.sh`'s own post-run check — now a defensive fallback rather than the
-only path — sees that marker and does not close a second time. A close that
-fails leaves no marker, so a later rerun of the same run id may retry it.
+In a Git checkout (`.git` directory or worktree file), `change-workflow.sh`
+freezes the source tree before `FINAL_AUDIT`, binds the verdict to that tree,
+and enters a PR handoff at `COMPLETE`. It shows the audited diff and target,
+then requests an editable title, work summary, manual verification steps and
+commit/publication consent. Blank title input accepts the shortened Summary
+from `CHANGE_REQUEST.md`. Publication commits that exact tree plus the audit,
+creates a feature branch when starting on the default branch, and pushes without
+force. The PR targets the base repository's default branch and includes
+`Closes owner/repo#issue` for an eligible gh origin. Creating the PR never closes
+the issue or writes `issue-closed`; GitHub closes the linked issue on merge into
+the default branch. Originless runs must confirm the base repository.
+
+The handoff rejects source, branch, audit, origin or remote drift and ambiguous
+remotes. It supports one GitHub head remote, optionally with a base upstream
+remote and a direct user-owned fork. Unsupported selectors and submodules stop
+the handoff. `WORKFLOW_CLOSE_ISSUE=0` and unattended runs suppress PR prompts.
+The workflow lock stays held throughout the handoff.
+
+`.uncle/workflow/pr/journal.json` binds a generated owner token, origin, audit
+hash, reviewed/commit trees, original/intended HEAD, repository identities,
+branches and outcome. EOF, declined consent, authentication or publication
+failure leaves `COMPLETE` pending; rerun the driver to resume. Recovery works
+without `STAGEGATE_RUN_ID`. A `creating` or `unknown` outcome reconciles across
+open, closed and merged PRs; an empty or failed lookup never authorizes another
+create. Independently resolve an unknown server outcome before changing its
+journal. Missing/corrupt bindings require a fresh `FINAL_AUDIT`; remote or PR
+head drift requires re-audit, with the existing PR retained.
+
+Without `.git`, the driver and wrapper retain the immediate-close gate in
+`scripts/lib/issue-close.sh`: run/origin/hash/READY and ownership must agree.
+Driver close failure remains successful and retryable; wrapper close failure
+exits 1. The close marker prevents duplicate closes, and the unset run-ID
+sentinel does not authorize close recovery. Git wrappers skip this fallback.
+To roll back, revert the PR handoff changes and retain PRs/journals; inspect
+existing PRs before resuming old `COMPLETE` states that close immediately.
 
 State files this contract depends on, all under the gitignored `.uncle/workflow/`:
 

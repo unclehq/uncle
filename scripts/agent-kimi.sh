@@ -29,7 +29,7 @@ done
 # Anything that is not a kimi tier stays on claude, flags and stdin intact.
 case "$model" in
     kimi|kimi:*) ;;
-    *) exec "$CLAUDE_CMD" "$@" ;;
+    *) exec env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$CLAUDE_CMD" "$@" ;;
 esac
 
 # `kimi:<alias>` names a model from config.toml explicitly; bare `kimi` takes
@@ -99,7 +99,7 @@ set +e
 # A regular-file stream works with both native Windows children and POSIX.
 python3 "$(dirname "$usage_helper")/idle_run.py" --seconds "$IDLE_TIMEOUT" \
     --usage-before "$work/usage-before.json" -- \
-    "$KIMI_CMD" -p "$prompt" -m "$resolved" --output-format stream-json \
+    env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$KIMI_CMD" -p "$prompt" -m "$resolved" --output-format stream-json \
     ${kimi_args[@]+"${kimi_args[@]}"} | jq -R -r --unbuffered '
         . as $line
         | (fromjson? // null) as $e

@@ -31,7 +31,7 @@ except ImportError:  # Windows has no curses in the stdlib
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
-from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models
+from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
 
 CLINE_CONFIG = os.environ.get("CLINE_CONFIG", os.path.expanduser("~/.cline/data/settings/providers.json"))
 
@@ -1083,15 +1083,15 @@ class UncleTUI:
         # Preserve selections from the old prefixed model catalog.
         profiles = self.stage_api_keys.get('__opencode_models__', {})
         for stage, name in list(self.stage_models.items()):
-            if self.stage_runner(stage) == 'self-hosted' and name.startswith('openai/') and name not in profiles and name[7:] in profiles:
-                self.stage_models[stage] = name[7:]
+            if self.stage_runner(stage) == 'self-hosted':
+                self.stage_models[stage] = local_model(name)
         # Preserve existing per-stage connections as reusable named models.
         for stage in CONFIG_STAGES:
             name = self.stage_models.get(stage, "")
             if self.stage_runner(stage) != "self-hosted" or not name or not self.stage_base_urls.get(stage):
                 continue
             profiles = self.stage_api_keys.setdefault("__opencode_models__", {})
-            profile = dict(base_url=self.stage_base_urls[stage], api_key=self.stage_api_keys.get(stage, ""))
+            profile = dict(base_url=self.stage_base_urls[stage], api_key=self.stage_api_keys.get(stage, ""), model=name.removeprefix("local/"))
             selected = name
             if selected in profiles and profiles[selected] != profile:
                 selected = name + "-" + stage
@@ -1267,7 +1267,7 @@ class UncleTUI:
             self.status_stage = ev.get("stage", "")
             self.status_stage_index = int(ev.get("stage_index", 0) or 0)
             self.status_stage_total = int(ev.get("stage_total", 0) or 0)
-        elif ev.get("event") == "usage":
+        elif ev.get("event") == "usage" and stage == self.status_stage:
             self.status_model = ev.get("model", self.status_model)
             self.status_mode = ev.get("mode", self.status_mode)
 
@@ -1559,8 +1559,13 @@ class UncleTUI:
         if self.prompt_seen < 3:
             return
         plain = self._strip_ansi(text)
+        if ("PR title [default: ".startswith(plain)
+                or plain.startswith("PR title [default:") and not plain.endswith("]:")):
+            return
         upper = plain.upper()
-        if plain.startswith("Audit finding ") and "[s] Skip" in plain:
+        if plain.startswith("PR title [default: "):
+            self.prompt_kind = "input"
+        elif plain.startswith("Audit finding ") and "[s] Skip" in plain:
             self.prompt_kind = "audit"
         elif "[Y/N]" in upper:
             self.prompt_kind = "confirm"
@@ -1570,6 +1575,8 @@ class UncleTUI:
             self.prompt_kind = "input"
         self.prompt_text = plain
         self.prompt_buf = ""
+        if plain.startswith("PR title [default: ") and plain.endswith("]:"):
+            self.prompt_buf = plain[len("PR title [default: "):-2]
         self.prompt_scroll = 0
 
     @staticmethod
@@ -2566,4 +2573,3 @@ def main(stdscr):
 
 if __name__ == "__main__":
     curses.wrapper(main)
-

@@ -58,6 +58,10 @@ check_absent() {
 # translation stays verifiable; the event stream is controlled by env vars.
 cat > "$TMP/fake-codex" <<'EOF'
 #!/usr/bin/env bash
+# The adapter retains its channel, but the CLI and its child tests must not.
+for name in UNCLE_STATUS_FILE UNCLE_PROJECT_ROOT UNCLE_CONFIG STAGEGATE_RUN_ID STAGEGATE_ORIGIN_REPO STAGEGATE_ORIGIN_ISSUE; do
+    [[ -z "${!name:-}" ]] || { echo "Leaked workflow setting: $name" >&2; exit 88; }
+done
 if [[ -n "${ARGV_FILE:-}" ]]; then
     printf '%s\n' "$*" > "$ARGV_FILE"
 fi
@@ -222,6 +226,7 @@ check_eq "missing prompt: exit 2" "2" "$status"
 # --- the status channel, when the TUI asked for one -----------------------
 
 : > "$TMP/status.jsonl"
+UNCLE_PROJECT_ROOT="$TMP/live-project" UNCLE_CONFIG="$TMP/live-config" STAGEGATE_RUN_ID=outer STAGEGATE_ORIGIN_REPO=real/project STAGEGATE_ORIGIN_ISSUE=6 \
 UNCLE_STATUS_FILE="$TMP/status.jsonl" UNCLE_STATUS_STAGE=implementation \
     run_shim -p --model o3 <<< "the prompt" > /dev/null
 check_eq "status: a start event names the stage" "implementation" \

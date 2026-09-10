@@ -57,7 +57,7 @@ In **Configure → Configure OpenCode / self hosting**, enter:
 - **Base URL:** the OpenAI-compatible API root, such as `http://localhost:8000/v1`.
 - **API key:** the endpoint's credential. For an unauthenticated server, use a placeholder such as `local`.
 
-The endpoint must support authenticated `GET <Base URL>/models` discovery and chat completions. Uncle lists the model IDs returned by the server and maps them to its OpenCode provider. Select one for each OpenCode stage, or apply it to all stages.
+The endpoint must support authenticated `GET <Base URL>/models` discovery and chat completions. Uncle prefixes model names with `local/` for OpenCode, while sending the underlying model ID to the server. Select one for each OpenCode stage, or apply it to all stages.
 
 The server must support the requested context size and return responses within the configured timeouts. Successful model discovery alone does not prove that inference works. Install the OpenCode CLI separately; see the [OpenCode documentation](https://opencode.ai/docs/).
 

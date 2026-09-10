@@ -1,224 +1,168 @@
-# Change Plan
-
+# CHANGE_PLAN.md
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-|AR-001|Accepted|Completion must publish audited edits; supersedes CHANGE_SPEC.md §15 branch/push exclusion.|§4,7,12,16,21; Frozen change scope; Exact acceptance criteria|
-|AR-002|Accepted|Audit hash alone does not bind code.|§7,9,11,16; Exact acceptance criteria|
-|AR-003|Accepted|Recovery requires identity; supersedes CHANGE_SPEC.md §13 persistence and §15 reuse exclusions.|§2,3,7,9,12–14,16,21–22; Exact acceptance criteria|
-|AR-004|Accepted|Repository and fork head must be explicit.|§8,16,18; Exact acceptance criteria|
-|AR-005|Accepted|Fixtures must model current per-finding acceptance.|§4,16–17,20,22; Pre-implementation checks; Post-implementation checks|
-
+| AR-001 | Accepted | External link content is not audit-bound. | Data-flow changes; Automated-test strategy |
+| AR-002 | Accepted | A reference supplies no steps. | Data-flow changes; Automated-test strategy |
+| AR-003 | Accepted | Comment contract remains blocking. | Risks and unresolved questions; Manual-verification strategy; Conditions that require stopping implementation |
+| AR-004 | Accepted | Embedded terminators truncate defaults. | Interface and API changes; Automated-test strategy |
+| AR-005 | Accepted | Producer permits purpose prose. | Data-flow changes; Automated-test strategy |
 Omitted sections: none
 
-## 1. Selected technical approach
-All actions are planned. COMPLETE creates PRs when `.git` exists (file/directory); otherwise retain closing.
+## Selected technical approach
+P-1: Plan defaults in C-1:handoff.
+P-2: Preserve title_default() (BASELINE_REPORT.md B-2/P-3).
 
-## 2. Alternative approaches considered
-
-|ID|Alternative|Rejection|
+## Alternative approaches considered
+| ID | Approach | Disposition |
 |---|---|---|
-|A-1|Wrapper PR|Misses direct runs|
-|A-2|Terminal PR failure|AR-003 requires journal/reconciliation|
+| A-1 | Refetch title | Reject: network |
+| A-2 | Agent | Reject: dependency |
+| A-3 | Auto-publish | Reject: consent |
 
-## 3. Why the selected approach is preferred
-Single creator/reconciler in P-5; no wrapper retry.
+## Why the selected approach is preferred
+P-3: Reuse C-1:ask()/journal.
 
-## 4. Exact components to modify
-P-1: scripts/change-workflow.sh; P-2: scripts/from-issue.sh; P-3: scripts/lib/issue-close.sh; P-4: uncle_tui.py.
-
-|Component|Planned change|Reason|Regression risk|Test coverage|
+## Exact components to modify
+Planned path aliases.
+| Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-|P-1|Audit snapshot; COMPLETE handoff/recovery|B-1; AR-001–003|Eligibility|T-1,3,5–7|
-|P-2|Skip Git fallback; message|I-6|Early close|T-1,2|
-|P-3|Extract eligibility gate|I-1|Gate drift|T-2|
-|P-4|Parse title default|B-3|Other prompts|T-4|
-|P-5: scripts/lib/change-pr.sh (new)|Commit/publish; bind/reconcile/create PR|B-4; AR-001–004|Wrong tree/repo|T-1,3,5–8|
-|P-6: scripts/tests/close-flow-test.sh|Repair audit fixtures; PR/recovery cases|AC-1–6; AR-005|Leakage|T-1–3,5–9|
-|P-7: scripts/tests/pr-prompt-test.py (new)|Prompt tests|AC-3|Low|T-4|
-|P-8: scripts/README.md:210–247|Routing/recovery|Compatibility|Low|M-1|
+| C-1 `scripts/lib/change-pr.sh` | Defaults | B-3 | Content | T-1 |
+| C-2 `uncle_tui.py:_detect_prompt` | Default prefixes | AR-2/3 | Parsing | T-2 |
+| C-3 `scripts/tests/close-flow-test.sh` | Fixtures | AR-1/3 | Drift | T-1 |
+| C-4 `scripts/tests/pr-prompt-test.py` | Cases | AR-2 | Prompts | T-2 |
 
-## 5. Components explicitly not to modify
-Preserve scripts/stagegate.sh, audit classification, project roots and approved inputs.
+## Components explicitly not to modify
+P-4: Protect BASELINE_REPORT.md P-1/P-3, `scripts/lib/issue-close.sh`, README files and spec §15 exclusions.
+P-5: Preserve C-1 audit/identity checks; unrelated edits.
 
-## 6. Data-flow changes
-P-5: normalize CHANGE_REQUEST.md Summary whitespace/controls; cap at 72 chars; fallback “Completed change”.
-P-5: prompt for nonempty summary/manual-check lines; body includes both and `Closes owner/repo#issue` for gated origins.
+## Data-flow changes
+P-6: Plan: read notes/checklist only from regular blobs (100644/100755) in C-1 journal commit_tree; absent/symlink sources are unusable. Extract three Purpose cells from IMPLEMENTATION_NOTES.md or three nonempty entries under “purpose of each change”.
+P-7: Plan: semicolon-join; normalize controls/whitespace; cap summary at 480 characters. Without completed-work content require typed summary; retain title_default() for title only.
+P-8: Plan: extract up to three complete action/expected-result pairs from MANUAL_CHECKLIST.md tables or labeled check blocks; normalize as P-7. Without usable pairs require typed steps; headings/references alone are unusable.
+P-9: Preview before consent; retain closing reference/--body-file; no text execution.
 
-## 7. State-transition changes
-PR attempts preserve COMPLETE/issue-closed. Originless PRs require owned READY/hash; issue PRs reuse P-3 gate.
-P-1/P-5: before FINAL_AUDIT, freeze HEAD, branch, and tracked/nonignored untracked contents/modes via a temporary Git index; exclude only .uncle/workflow/ and FINAL_AUDIT.md.
-Bind the resulting tree to the verdict hash, origin and PR owner; include FINAL_AUDIT.md by its recorded hash in the expected commit tree.
-Reject source/HEAD changes during audit; after acceptance allow only the recorded handoff commit/branch transition.
-Retain effective READY from per-finding acceptance (P-1:WAIT_AUDIT_OVERRIDE); never promote UNKNOWN or retained blockers.
+## State-transition changes
+P-10: Defaults in bound only; retain saved title/body.
 
-## 8. Interface and API changes
-Emit unterminated `PR title [default: <title>]: `; prefill TUI/Python readline; blank accepts default.
-P-5: resolve base repository from gh origin, or confirm it for originless runs; query its default branch and validate head remote ownership/branch.
-Call `gh pr create --repo <base-owner/repo> --head <head-owner:branch> --base <default-branch> --title <title> --body-file <temp>` quoted; delete temp on exit.
-Reject ambiguous remotes, unsupported fork selectors or remote SHA mismatch; never infer head from branch name alone.
+## Interface and API changes
+P-11: Plan: frame title, summary and manual defaults as `<label> [default chars=N: <text>]: ` in C-1/C-2; N counts Unicode code points. Wait for N characters plus terminator; extract by length, ignoring embedded `]:`/`[y/n]`. Preserve CLI editing.
 
-## 9. Schema or persistence changes
-P-5: atomically journal version, PR owner token, origin, audit hash, reviewed/commit tree IDs, original/intended HEAD, base/head repositories, branches, phase and PR URL/number under .uncle/workflow/pr/.
-Generate PR ownership before audit even without STAGEGATE_RUN_ID; resume only matching journal/verdict/origin/tree; preserve existing close ownership/sentinel semantics.
-Persist intent before commit/push/create; phases prepared/published/creating/created/unknown support crash reconciliation; missing/corrupt binding requires fresh audit.
+## Schema or persistence changes
+P-12: Preserve BASELINE_REPORT.md C-1/2.
 
-## 10. Compatibility strategy
-Retain Bash 3.2/prompts/B-6/B-8; exclude curl/legacy PRs.
+## Compatibility strategy
+P-13: Preserve spec §8 and `.git` file/directory routing.
 
-## 11. Concurrency implications
-Hold P-1 acquire_lock through PR; worktrees independent.
-P-5: after prompts, recheck origin/verdict/tree, local HEAD/branch and remote SHA immediately before creation; reject drift.
-Recheck returned PR head SHA; diagnose later drift and require re-audit, without closing/deleting the PR.
+## Concurrency implications
+P-14: Retain C-1 post-prompt checks; no new writers.
 
-## 12. Error and recovery behavior
-Auth/EOF/gh failure: diagnose, preserve issue/COMPLETE, return success with pending PR outcome; resume P-5 on rerun.
-P-5: show exact audited file list/diff and target; obtain commit/publish consent; from default branch create a unique feature branch, commit exactly the expected tree, push without force.
-Never include unrelated preexisting edits without that review; reject tree drift and rerun audit; never reset/stash user changes.
-On resume reconcile local commit and remote SHA before repeating mutations.
-Before every create/retry query PRs across open/closed/merged states by exact base/head identity and SHA: one match records URL; multiple matches stop.
-After create timeout record unknown; reconcile only, never recreate on an empty/failed lookup until the prior outcome is independently resolved.
-Reuse P-3 gh timeout/fallback.
+## Error and recovery behavior
+P-15: Malformed sources: P-7/8; retain spec §9/nonempty answers.
 
-## 13. Migration plan
-New PR journal only; legacy COMPLETE without binding requires fresh audit before PR recovery.
+## Migration plan
+P-16: None; P-10.
 
-## 14. Rollback plan
-Revert P-1–P-8; inspect PRs before old COMPLETE closes immediately; retain PRs/state and ignore the PR journal.
+## Rollback plan
+P-17: Revert C-1–4 changes only; retain journals/branches/PRs.
 
-## 15. Feature-flag or containment strategy
-Disable PRs/prompts for WORKFLOW_CLOSE_ISSUE=0 or unattended.
+## Feature-flag or containment strategy
+P-18: Retain flag/unattended guards (C-1:4).
 
-## 16. Automated-test strategy
-CHANGE_SPEC.md IDs; T-1–3,5–9: P-6; T-4: P-7.
+## Automated-test strategy
+| ID | Planned command/check |
+|---|---|
+| T-1 | `bash scripts/tests/close-flow-test.sh`: defaults, edits, bad/missing sources, controls, title; P-19 |
+| T-2 | `python3 -B scripts/tests/pr-prompt-test.py -q`: prefixes, Unicode, all chunks, `[y/n]`, edits; hold chunks after embedded `]:`, assert no early dialog and full buffer |
 
-|Requirement|Behavior|Invariant|Component|Automated test|Manual check|
+P-19: Plan C-3:test_description_defaults: blanks accept action/outcome fixtures; headings-only checks require input; section-only notes describe completed work; unusable notes require input. Mutate external symlink targets after binding for both sources; assert contents absent from preview/body. Fail before/pass after.
+
+## Regression-test strategy
+P-20: Run BASELINE_REPORT.md §8; no new failures.
+
+## Manual-verification strategy
+| ID | Planned check |
+|---|---|
+| M-1 | CLI/TUI fixture: defaults, edits, body, decline/resume, prompt-time drift |
+| M-2 | Disposable GitHub PR: merge to default branch; record closure and post-merge comment URL/body/author/time separately; closure alone fails spec AR-4 |
+| M-3 | No `.git`: no dialog; worktree: dialog |
+
+## Observability changes
+P-21: Preview; retain pending/URL output.
+
+## Implementation sequence
+| ID | Planned step |
+|---|---|
+| S-1 | Resolve R-2; add C-3/4 tests |
+| S-2 | Implement P-6–11 in C-1/C-2 |
+| S-3 | Run T-1/T-2 and P-20; execute M-1–3 |
+
+## Scope cuts under time pressure
+P-22: No acceptance cuts.
+
+## Risks and unresolved questions
+| ID | Disposition |
+|---|---|
+| R-1 | ASSUMPTION: spec §16 Summary naming; settle T-1. |
+| R-2 | UNRESOLVED: retain spec AR-4 comment requirement; C-1:handoff supplies only a closing reference. Before S-1, obtain human contract clarification or approved comment lifecycle: owner, merge trigger, permissions, deduplication, retries, tests, rollback. C-1–4 authorize no merge integration. |
+| R-3 | Retain consent. |
+| R-4 | UNRESOLVED: TTY; M-1/2. |
+
+| Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-|AC-1,4|B-1,4,5|I-6,7|P-1,2,5|T-1: one PR/body; zero closes/markers|M-1|
-|AC-2,5,6|B-2,6,8|I-1–3,5|P-1–3|T-2: corrected close suite|M-2|
-|AC-3|B-3|I-5|P-4,5|T-4: prefill/edit/Unicode/chunks; generic prompts|M-1|
-|§7,8|B-7|I-4,5|P-1,5|T-3: originless/worktree/disabled/unattended/EOF/auth/error/lock|M-2|
-|AR-001|B-1|I-6|P-1,5|T-5: default-branch edit/audit→consented commit/push/PR; declined handoff resumes|M-1|
-|AR-002|B-1|I-1,6|P-1,5|T-6: change branch/code/remote after audit and during prompt; unchanged audit hash still rejects|M-1|
-|AR-003|B-1|I-3,6|P-1,5|T-7: no-run-ID failure/recovery; crash at each phase; server success/timeout; successful rerun gives one PR|M-1|
-|AR-004|B-1,5|I-6|P-5|T-8: upstream/fork same branch name, different SHA; assert --repo/head/base and PR SHA|M-1|
-|AR-005|B-2|I-1–3|P-1,3,6|T-9: EOF/retained blockers deny; accepted findings yield READY and gated close/PR; UNKNOWN denies|M-2|
-
-## 17. Regression-test strategy
-T-1: fail before, pass after.
-Run `env -u UNCLE_PROJECT_ROOT bash scripts/tests/close-flow-test.sh`; `python3 scripts/tests/pr-prompt-test.py`.
-Run `python3 scripts/tests/audit-findings-test.py`; `bash scripts/tests/audit-verdict-test.sh`; `bash scripts/tests/issue-project-root-test.sh`; `bash scripts/tests/unattended-test.sh`; `python3 scripts/tests/tui-support-test.py`.
-Keep gate/retry assertions; supply timeout/gtimeout.
-
-## 18. Manual-verification strategy
-
-|ID|Planned check|
-|---|---|
-|M-1|Disposable upstream/fork: T-5–8; CLI/TUI title/body; default-branch merge closes issue|
-|M-2|No-git/worktree: routing, failures, project roots|
-
-## 19. Observability changes
-Print PR URL or skip/failure reason.
-
-## 20. Implementation sequence
-
-|ID|Planned step|
-|---|---|
-|S-1|Repair P-6: copy scripts/lib/audit-findings.py, emit blocking finding tables, replace obsolete override assertions with T-9; pass baseline before extraction; add PR tests failing T-1|
-|S-2|Extract P-3 gate; add P-5, audit binding, handoff/recovery and routing|
-|S-3|Update P-4/P-8|
-|S-4|Run §17/M-1/M-2|
-
-## 21. Scope cuts under time pressure
-Defer cancellation/PR editing; keep handoff, recovery and AC tests.
-
-## 22. Risks and unresolved questions
-
-|ID|Disposition|
-|---|---|
-|R-1|ASSUMPTION: merge closes linked issue; settle via M-1|
-|R-2|Unknown remote outcome blocks recreation pending reconciliation (§12)|
-|R-3|AR-005: scripts/tests/close-flow-test.sh:new_case omits audit-findings.py; setup_audit_stage omits blockers; repair via S-1/T-9|
-|R-4|Budget exception: preserved sections plus mandatory dispositions, acceptance rows and execution contract exceed 4092 bytes/123 lines; retained per output-budget rule.|
+| AR-1 | B-2 | I-5 | C-1 | T-1 | M-1 |
+| AR-2 | B-2 | I-5 | C-2 | T-2 | M-1 |
+| AR-3 | B-3 | I-6 | C-1/2 | T-1/2 | M-1 |
+| AR-4 | B-1 | I-3 | C-1 | T-1 reference only; R-2 | M-2 |
+| AR-5 | B-5 | I-4 | P-4 | P-20 | M-3 |
+| AR-6 | B-1 | I-1 | C-1 | P-20 | M-1 |
+| AR-7 | B-4/7 | I-2 | C-1 | P-20 | M-1 |
 
 ## Frozen change scope
-
-|ID|Planned boundary|
+| ID | Planned boundary |
 |---|---|
-|FS-1|Implement P-1–8 and T-1–9; AR-001/003 narrowly supersede CHANGE_SPEC.md §13/15 for audited publication and recovery.|
-|FS-2|No automatic merge, force-push, cancellation, unrelated PR editing or close-gate relaxation.|
-
+| F-1 | After R-2 resolution: C-1–4, P-6–11; retain consent and spec I-1–6. |
 ## Files expected to change
-
-|ID|Allowed implementation files|
+| ID | Planned paths |
 |---|---|
-|FC-1|scripts/change-workflow.sh|
-|FC-2|scripts/from-issue.sh|
-|FC-3|scripts/lib/issue-close.sh|
-|FC-4|scripts/lib/change-pr.sh (new)|
-|FC-5|uncle_tui.py|
-|FC-6|scripts/tests/close-flow-test.sh|
-|FC-7|scripts/tests/pr-prompt-test.py (new)|
-|FC-8|scripts/README.md|
-
+| F-2 | C-1–4 paths in Exact components to modify. |
 ## Files that must not change
-
-|ID|Protected paths|
+| ID | Protected paths |
 |---|---|
-|NC-1|Source paths outside FC-1–8, including scripts/stagegate.sh, scripts/lib/audit-findings.py, scripts/lib/self_hosted.py and scripts/tests/self-hosted-test.py.|
-|NC-2|Approved inputs, including CHANGE_SPEC.md and ADVERSARIAL_REVIEW.md; preserve existing user edits in uncle_tui.py.|
-
+| F-3 | All paths outside C-1–4, including P-4 exclusions and preexisting unrelated edits. |
 ## Expected behavioral differences
-
-|ID|Planned difference|
+| ID | Planned observable |
 |---|---|
-|BD-1|Git COMPLETE enters reviewed commit/publish/PR handoff with resumable outcomes (§7–12).|
-|BD-2|PR creation requires exact audited tree and repository/head binding (T-6,8).|
-
+| D-1 | T-1/T-2/P-19: audited, editable completed-work and action/outcome defaults. |
 ## Expected unchanged behavior
-
-|ID|Required preservation|
+| ID | Planned preservation |
 |---|---|
-|UB-1|CHANGE_SPEC.md B-2,6–8 and I-1–6; close ownership remains unchanged.|
-|UB-2|P-1:WAIT_AUDIT_OVERRIDE retains per-finding effective READY semantics; T-9 verifies them.|
-
+| U-1 | CHANGE_SPEC.md B-1/B-4–7, I-1–4; title_default(), consent, journal v1, P-13. R-2 blocks AR-4 acceptance. |
 ## Exact acceptance criteria
-
-|ID|Required result|
+| ID | Required result |
 |---|---|
-|AC-1|T-1,5: one PR containing audited source/audit edits and summary/manual steps.|
-|AC-2|T-2: no Git means no PR/prompt and existing immediate-close behavior.|
-|AC-3|T-4: shortened editable default; blank accepts; Unicode/chunked input and generic prompts pass.|
-|AC-4|T-1/M-1: qualified closing keyword; creation never closes/marks; default-branch merge closes source issue.|
-|AC-5|T-2,9: existing run/origin/hash/READY, fetch and duplicate-close gates pass.|
-|AC-6|T-2: driver close failure remains successful/retryable; wrapper failure exits 1.|
-|AC-7|T-6: all drift cases deny creation despite unchanged audit hash.|
-|AC-8|T-7: recovery without injected run ID and timeout/rerun sequences yield one discoverable PR; unresolved outcome never recreates.|
-|AC-9|T-8: base repository and fork head SHA match selected identities.|
-|AC-10|T-3: originless/worktree/kill-switch/unattended/EOF/auth/error/lock cases preserve state and issue.|
-
+| AC-1 | Spec AR-1: T-1 preserves issue/change-request title defaults. |
+| AC-2 | Spec AR-2: T-2 passes editable buffers at every split, including embedded terminators. |
+| AC-3 | Spec AR-3/I-6: T-1/P-19 prove completed work and actions/outcomes; unusable sources require input. |
+| AC-4 | Spec AR-4: UNRESOLVED R-2; M-2 must record comment and closure. |
+| AC-5 | Spec AR-5: M-3 proves no dialog without .git and dialog in worktrees. |
+| AC-6 | Spec AR-6/I-1: P-19 excludes external link contents; M-1 rejects prompt-time drift. |
+| AC-7 | Spec AR-7/I-2: P-20 verifies pending recovery and no duplicate/uncertain recreation. |
 ## Pre-implementation checks
-
-|ID|Planned check|
+| ID | Planned check |
 |---|---|
-|PRE-1|Record `git status --short`; preserve preexisting edits; read P-1–4 and scripts/lib/audit-findings.py.|
-|PRE-2|Run existing §17 tests before edits; repair only explained audit fixtures via S-1; require corrected close baseline green before gate extraction.|
-
+| PRE-1 | Resolve R-2 before S-1; record `git status --short` and starting diff; run T-1/T-2 before edits. |
+| PRE-2 | Inspect bound notes/checklist formats against P-6/P-8; settle R-1 with T-1 fixtures. |
 ## Post-implementation checks
-
-|ID|Planned check|
+| ID | Planned check |
 |---|---|
-|POST-1|Run §17/T-1–9 and M-1–2; report command statuses and PR identities; unrun manual checks remain unverified.|
-|POST-2|Run `git diff --check`; inspect `git diff --name-only` against FC/NC and preexisting edits.|
-
+| POST-1 | Run S-3 and AC-1–7; record results and M-2 evidence; check diff against F-2/F-3. |
 ## First features to cut if time expires
-
-|ID|Cut|
+| ID | Planned cut |
 |---|---|
-|CUT-1|Optional prompt polish beyond AC-3; never cut AC-1–10 or identity/recovery checks.|
-
+| CUT-1 | None: P-22; stop incomplete work rather than waive acceptance. |
 ## Conditions that require stopping implementation
-
-|ID|Stop condition|
+| ID | Stop condition |
 |---|---|
-|STOP-1|Unexplained baseline failure, required protected-file edit, or inability to bind reviewed files to published SHA.|
-|STOP-2|Recovery needs close-gate relaxation, destructive Git actions or duplicate-risk retries.|
+| STOP-1 | R-2 unresolved; scope expansion requires revised approval before implementation. |
+| STOP-2 | Audit binding, framing, protected paths or AC-1–7 cannot be preserved; report blocker. |
+| STOP-3 | M-1/M-2 unavailable: R-4 remains unverified; do not claim acceptance. |

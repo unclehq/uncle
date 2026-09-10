@@ -1,98 +1,34 @@
-# Defects
+## Summary
 
-Found during independent manual verification (VERIFICATION_REPORT.md). Each
-defect below was reproduced live against the actual committed
-`scripts/change-workflow.sh` / `scripts/lib/issue-close.sh` in a scratch
-checkout, with a stubbed `gh`. Not fixed here per the completion rule
-("do not silently fix failures during checklist execution").
+See VERIFICATION_REPORT.md for all 12 dispositions.
+E = /tmp/uncle-primary-verify-2103; verification made no product-source edits.
 
-## D-1 (P0, security, INV-1/INV-3): a `COMPLETE`-state run with explicit
-`STAGEGATE_ORIGIN_*` can close whatever issue `.workflow/origin` names on
-disk, even when that disagrees with the explicit binding
+## Findings
 
-**Where:** `scripts/change-workflow.sh:207-240` (`origin_preflight`),
-`scripts/change-workflow.sh:272-302` (`close_origin_issue_if_ready`),
-`scripts/lib/issue-close.sh:130-135` (the "origin binding no longer names
-$repo#$issue" check).
+| ID | Classification | Evidence and disposition |
+|---|---|---|
+| F-1 | Critical acceptance failure; MC-001/002/007 | scripts/lib/change-pr.sh:338–339 requests empty summary/manual input. E/MC-001-*.log rejects 12 usable-source defaults with "must be nonempty"; 20 edits succeed. E/MC-002.log rejects four regular-blob defaults without leaking external contents. Implement P-6–9 after STOP-1 resolution. |
+| F-2 | Important acceptance failure; MC-005/007 | uncle_tui.py:_detect_prompt lacks P-11 framing. E/MC-005.log, exit 1: 342 framing failures; embedded terminator yields buffer "café " before completion. CLI editing passes (E/MC-005-cli.log, exit 0). Implement length framing and full-buffer assertions. |
+| F-3 | Critical checklist/contract mismatch; MC-004 | E/MC-004*.log shows UNATTENDED=1 still prompts in directory/worktree fixtures; --unattended suppresses both. scripts/change-workflow.sh:62 resets the variable and :67 parses the option; E/MC-004-contract.log finds the same contract in HEAD. Correct the invocation or approve environment-variable support. |
+| F-4 | Important suite failure; MC-012 | bash scripts/tests/document-budget-test.sh exits 1. E/MC-012-budget-diagnostic.log: "can't open file" standalone/scripts/lib/repair-acceptance.py. scripts/lib/gates.sh:399 now invokes that helper; scripts/tests/document-budget-test.sh:164 omits it from its copied fixture. Repair the fixture after E-3. |
+| F-5 | Important fixture failure; MC-012 | bash scripts/tests/background-performance-test.sh exits 1. E/MC-012-background-performance.log: "PROJECT_ROOT: unbound variable", then test line 32 fails before cancellation is exercised. Supply the fixture prerequisite; cancellation remains unverified. |
+| E-1 | BLOCKED-SETUP; MC-010 | Adapter suite exits 1: "tee: /dev/fd/63: Operation not permitted"; usage assertion receives empty output. Run bash scripts/tests/agent-codex-test.sh through the unrestricted driver. 32-case matrix/jq validation pass; driver evidence does not cover this suite. |
+| E-2 | BLOCKED-SETUP; MC-011/012 | Provide a Git Bash runner for the required Windows executions. Bash 3.2.57/Python 3.14.7 and 3.9.6 isolation pass (E/MC-011-*.log, MC-012-min-env.log); Windows remains untested. |
+| E-3 | BLOCKED-SETUP; MC-008/009 | Freeze and reconcile the candidate, then rerun affected verification. E/MC-009-final.log records new gates.sh, stagegate.sh, review-compaction-test.sh edits and untracked repair-acceptance.py beyond the supplied diff. Excluding these tracked edits plus MANUAL_CHECKLIST.md restores IMPLEMENTATION_NOTES.md U-6 digest; C-1–4 diff remains empty. Attribution is unknown. |
+| H-1 | BLOCKED-HUMAN; MC-006/012 | Brian must resolve CHANGE_PLAN.md R-2 and supply a disposable GitHub account/repository, merge permission and acceptance. No live issue, merge, separate comment or sign-off evidence exists. |
+| H-2 | BLOCKED-HUMAN; MC-005/012 | Brian must exercise and inspect full TUI keyboard editing. Parser/CLI checks do not establish TUI interaction. |
+| H-3 | BLOCKED-HUMAN; MC-012 | Brian must approve applicable lint/type commands and performance thresholds (MANUAL_CHECKLIST.md AS-4). Syntax/AST and performance instrumentation tests pass; no approved latency threshold was tested. |
 
-**Root cause:** `origin_preflight` only compares `.workflow/origin` against
-`STAGEGATE_ORIGIN_REPO`/`ISSUE` when the state is non-empty and not
-`COMPLETE` (`change-workflow.sh:222-224` returns early otherwise). Separately,
-`ORIGIN_BOUND` is set to `1` whenever `STAGEGATE_ORIGIN_REPO`/`ISSUE` are
-explicitly set for this invocation (`change-workflow.sh:687-689`), regardless
-of what `.workflow/origin` actually contains. `close_origin_issue_if_ready`
-then reads the repo/issue to close **from the origin file itself**
-(`origin_field "$ORIGIN_FILE" 1/2`, `change-workflow.sh:297-298`), not from
-`STAGEGATE_ORIGIN_REPO`/`ISSUE`. `issue_close_if_ready`'s own "origin binding
-no longer names $repo#$issue" guard (`issue-close.sh:130-135`) compares the
-origin file's fields against `$repo`/`$issue` — which were derived from that
-same file — so the comparison is tautological and can never fail. Nothing in
-the gate ever cross-checks the origin file against the operator's actual
-`STAGEGATE_ORIGIN_REPO`/`ISSUE` for this invocation.
+## Assumptions
 
-**Reproduction (evidence in VERIFICATION_REPORT.md, scenario
-`mc009-originmismatch3`):**
+| ID | Unverified item | Settled by |
+|---|---|---|
+| A-1 | No attribution or historical runtime classification for F-4/5 and E-3 | Fixed-snapshot comparison and owner disposition |
 
-```
-state:  COMPLETE                      (bare, no issue prefix)
-origin: other/repo<TAB>99<TAB>gh      (leftover from an unrelated run)
-audit-verdict: run-1  READY  <hash of FINAL_AUDIT.md>
-invocation: STAGEGATE_RUN_ID=run-1 STAGEGATE_ORIGIN_REPO=owner/repo \
-            STAGEGATE_ORIGIN_ISSUE=42 change-workflow.sh
-```
+## Open questions
 
-Expected (per CHANGE_SPEC BEH-D / AR-001's stated intent): either the run
-refuses to close anything (origin cannot be proven to belong to owner/repo#42
-for this invocation), or it closes owner/repo#42 (the operator's stated
-target). Actual: it closes **other/repo#99** — an issue the operator never
-named — and writes a marker recording that close as legitimate
-(`run-1<TAB>other/repo<TAB>99`), exit 0, no warning of any kind.
-
-**Why this is reachable, not just theoretical:** this exact state shape
-(bare/prefixed `COMPLETE`, no fresh `ANALYZE` pass to self-heal the origin
-file via `write_origin`) is precisely the state the AR-002 retry-on-rerun
-feature (this same delivery) is designed to act on — a rerun landing on
-`COMPLETE` with the marker absent. If `.workflow/origin` is stale or has been
-superseded (e.g. this checkout was later reseeded for a different issue, or
-hand-edited) between the original run and the retry, the retry silently
-targets the wrong issue instead of refusing.
-
-**Why the automated suite and MC-011 as literally worded miss it:** the
-committed case `direct-run-explicit-origin-env-closes`
-(`close-flow-test.sh:722-730`) and `MANUAL_CHECKLIST.md`'s MC-011 both set
-`.workflow/origin` to the *same* repo/issue as the explicit
-`STAGEGATE_ORIGIN_*` env — the divergent case (explicit env names one issue,
-on-disk origin names another, state itself carries no prefix to trip AR-004)
-is untested by both the automated suite and the checklist as written.
-
-**Suggested direction (not applied):** `close_origin_issue_if_ready` should
-pass `STAGEGATE_ORIGIN_REPO`/`STAGEGATE_ORIGIN_ISSUE` (when set) as the
-`repo`/`issue` to close, and `issue_close_if_ready`'s existing "origin binding
-no longer names $repo#$issue" check would then do real work instead of being
-tautological. Alternatively, `origin_preflight` could refuse (not silently
-pass) whenever explicit `STAGEGATE_ORIGIN_*` disagrees with an existing
-`.workflow/origin`, regardless of `state`.
-
-## D-2 (P1, documentation): `STAGEGATE_CLOSE_TIMEOUT` and the AR-004
-corruption-refusal / manual-clear guidance text are not documented
-
-**Where:** `README.md`, `scripts/README.md`.
-
-`STAGEGATE_CLOSE_TIMEOUT` (`scripts/lib/issue-close.sh:23`) controls the
-`gh issue close` deadline (MC-033) but appears nowhere in either README.
-Likewise the state/origin corruption refusal message and its `rm -f
-.workflow/state .workflow/origin` guidance (`scripts/lib/issue-close.sh:74-78`,
-exercised by MC-004/MC-005) are not documented. `UPDATED_CHANGE_PLAN.md`'s
-compatibility requirements (§8) call for README updates alongside BEH-B/BEH-D;
-this is a gap against that requirement, not a functional defect. MC-026's
-"kill switch, retry, skip guards" content is otherwise present and accurate.
-
-## Gate-prompt verification (2026-08-29)
-
-Independent manual verification of the `APPROVE`/`ACKNOWLEDGE` → bold `Y/N`
-gate-prompt change (`CHANGE_SPEC.md`, `MANUAL_CHECKLIST.md` MC-001 through
-MC-018) found no new defects. All P0/P1 checks passed; automated regression
-suites remained green; the implementation was confined to the six authorized
-paths in `UPDATED_CHANGE_PLAN.md` §23. The existing D-1/D-2 entries above
-concern origin-binding behavior and are outside the scope of this gate-prompt
-verification.
+| ID | Required disposition |
+|---|---|
+| Q-1 | CT-5/6 map to MC-001/002/005/007 failures; CT-11 to H-1; CT-16 to MC-002; CT-19 to MC-001–006. |
+| Q-2 | CT-7 native commands and CT-9 syntax/AST are in E/MC-012-results.tsv; CT-10 and CT-15 threshold acceptance await H-3. |
+| Q-3 | MC-011 sequential/parallel elapsed seconds: 0.050/0.095 with sentinels, 0.047/0.094 unset; no speed criterion was approved. |

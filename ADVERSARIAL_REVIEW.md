@@ -1,64 +1,69 @@
-## AR-001: Normal completion cannot reach PR creation
+## AR-001: Description sources are not necessarily audit-bound
 
 | Field | Value |
 |---|---|
 | Severity | High |
-| References | CHANGE_REQUEST.md:Motivation.1; CHANGE_SPEC.md:AC-1; CHANGE_PLAN.md:§12,P-1,P-5,T-3; scripts/change-workflow.sh:1653,1770 |
-| Failure | The planned clean-tree/published-HEAD prerequisite rejects completion with uncommitted implementation and audit files; T-3 accepts that rejection without proving an ordinary workflow can produce the required PR. |
-| Fix | Add a resumable commit/publish handoff before PR creation, including feature-branch preparation when starting on the default branch. |
-| Verify | Start with a clean default-branch checkout, complete a source edit and audit, and require a PR containing that edit after the handoff. |
+| References | CHANGE_SPEC.md:I-1,§11; CHANGE_PLAN.md:P-6,P-14; scripts/lib/change-pr.sh:78,99–111,161 |
+| Failure | A symlinked notes file can supply external content changed after audit because snapshots bind the link target path, not its contents; existing drift tests cannot reject publication of that content through the proposed default. |
+| Fix | Extract defaults from regular-file blobs in the bound tree; reject symlink or absent sources. |
+| Verify | Change an external symlink target after binding; assert its contents never enter the preview or PR body. |
 
-## AR-002: Audit eligibility does not bind the PR contents
-
-| Field | Value |
-|---|---|
-| Severity | High |
-| References | CHANGE_REQUEST.md:Motivation.2–3; CHANGE_SPEC.md:I-1,I-6; CHANGE_PLAN.md:§7,§11,P-3,P-5,T-1; scripts/lib/issue-close.sh:155; scripts/change-workflow.sh:380 |
-| Failure | A clean, published branch can change after audit or during title entry while FINAL_AUDIT.md retains its hash; the planned gate and checkout lock still permit a PR containing unreviewed code, and T-1 checks only creation/body. |
-| Fix | Bind eligibility to the reviewed tree and intended remote head, then revalidate after prompts and before creation. |
-| Verify | Replace or advance the branch after audit and during the prompt; require rejection despite an unchanged audit hash and clean tree. |
-
-## AR-003: Completion has no recoverable PR outcome
+## AR-002: Checklist reference does not provide verification steps
 
 | Field | Value |
 |---|---|
 | Severity | High |
-| References | CHANGE_SPEC.md:AC-1; CHANGE_PLAN.md:A-2,§7,§12,R-2,T-3; scripts/change-workflow.sh:504,1782; scripts/from-issue.sh:113 |
-| Failure | A failed direct run without STAGEGATE_RUN_ID cannot reclaim its sentinel verdict on retry, while a timeout after server success leaves no distinguishable PR outcome; T-3 lacks recovery sequences for either case. |
-| Fix | Persist recoverable ownership and PR identity; reconcile remote outcomes before retrying instead of treating every failure as terminal or every rerun as creation. |
-| Verify | Test failure then recovery without injected run IDs, server success followed by timeout, and reruns after success; require one discoverable PR. |
+| References | CHANGE_REQUEST.md:Motivation.2; CHANGE_SPEC.md:AR-3,I-6; CHANGE_PLAN.md:P-8,P-19,T-1; scripts/lib/change-pr.sh:335–342 |
+| Failure | Any nonempty checklist allows blank input to publish only “Follow MANUAL_CHECKLIST.md,” leaving the description without actions or expected results; the planned blank-acceptance test can pass despite violating AR-3. |
+| Fix | Prefill concise actions and expected results from the checklist; require typed steps when usable checks are absent. |
+| Verify | Assert the submitted body contains fixture-specific actions and outcomes; a headings-only checklist must require input. |
 
-## AR-004: PR repository and fork head are unspecified
+## AR-003: Required comment has no implementation decision
 
 | Field | Value |
 |---|---|
 | Severity | High |
-| References | CHANGE_REQUEST.md:Motivation.1,3; CHANGE_PLAN.md:§8,P-5,T-1,M-1; scripts/from-issue.sh:262; [gh_pr_create:--head,--repo](https://cli.github.com/manual/gh_pr_create) |
-| Failure | The planned command supplies neither a target repository nor a fork-qualified head, so an upstream issue with work published only to a fork can fail or select the wrong branch; T-1 does not assert repository identity. |
-| Fix | Resolve and validate base repository, default branch, head repository, and branch explicitly; pass the corresponding repository and head selectors. |
-| Verify | Use upstream and fork branches with identical names but different commits; require the intended base repository and exact fork head. |
+| References | CHANGE_REQUEST.md:Motivation.3; CHANGE_SPEC.md:AR-4; CHANGE_PLAN.md:P-9,R-2,S-1,M-2; scripts/lib/change-pr.sh:342–345,398–414 |
+| Failure | Under AR-4’s post-merge-comment requirement, the planned body reference supplies no comment-producing operation; T-1 checks only reference text, and R-2 leaves the required implementation scope undecided. |
+| Fix | Resolve whether the requirement accepts a closing body reference before approval; otherwise specify the comment lifecycle, ownership, retries, and rollback. |
+| Verify | Make M-2’s required observable explicit and record it; issue closure alone must not satisfy a retained comment requirement. |
 
-## AR-005: Preserved audit tests encode obsolete behavior
+## AR-004: Embedded terminators truncate editable defaults
 
 | Field | Value |
 |---|---|
 | Severity | Medium |
-| References | CHANGE_SPEC.md:AC-5; BASELINE_REPORT.md:F-1; CHANGE_PLAN.md:P-6,T-2,§17,R-3; scripts/tests/close-flow-test.sh:93,218,694; scripts/change-workflow.sh:1820; scripts/lib/audit-findings.py:121 |
-| Failure | Inspection widened to audit-findings.py because F-1 reaches an omitted Python dependency: fixtures omit that helper and blocking findings, while assertions expect the old override path, allowing fixture failures to obscure changed close eligibility. |
-| Fix | Repair fixtures and baseline expectations before extraction; explicitly classify the existing per-finding acceptance path that converts NOT_READY to effective READY. |
-| Verify | Require isolated tests for EOF, retained blockers, accepted findings, and resulting close/PR eligibility; reject unexplained failures or blanket expectation updates. |
+| References | CHANGE_SPEC.md:AR-2; CHANGE_PLAN.md:P-7,P-11,T-2; uncle_tui.py:1562–1580; scripts/tests/pr-prompt-test.py:test_every_chunk_boundary |
+| Failure | A default containing `]:` opens the dialog prematurely when a chunk ends there; direct Python invocation of `_detect_prompt()` reproduced a truncated buffer that stayed truncated after completion, while all five existing prompt tests passed. |
+| Fix | Make prompt framing distinguish embedded delimiters from completion before extending it to summary defaults. |
+| Verify | Split each new prompt immediately after an embedded `]:`; assert no dialog opens until completion and the editable buffer preserves the entire default. |
+
+## AR-005: Summary extraction assumes an unenforced producer format
+
+| Field | Value |
+|---|---|
+| Severity | Medium |
+| References | CHANGE_REQUEST.md:Motivation.2; CHANGE_PLAN.md:P-6,P-7,P-15,T-1; prompts/change/implement-change.md:45–54; scripts/lib/change-pr.sh:193–198 |
+| Failure | Widening to the notes producer revealed that it requires sections, not Purpose-column cells; valid notes with purpose prose therefore fall back to the requested-change title, and table-only fixtures miss a description that never summarizes completed work. |
+| Fix | Define a supported producer-consumer format or extract the existing purpose section; require an entered summary when neither yields completed-work content. |
+| Verify | Supply valid section-based notes without a Purpose table; assert the body describes completed work rather than merely repeating the request title. |
 
 ## Blocking findings
-AR-001–AR-005: resolve.
+
+AR-001, AR-002, AR-003: resolve before approval.
 
 ## Regression risks
-AR-002–AR-005: gate approval.
+
+AR-004, AR-005.
 
 ## Recommended simplifications
-AR-003: reconcile through one recovery path.
+
+AR-003: settle contract first.
 
 ## Required test additions
+
 AR-001–AR-005: required.
 
 ## Overall assessment
+
 Reject pending corrections.

@@ -170,6 +170,9 @@ result="$(jq -R -s -c --argjson exit "$codex_status" --arg model "$model" '
      is_error: (if $ok then "false" else "true" end),
      num_turns: (if $turns > 0 then $turns else 1 end),
      duration_ms: 0,
+     error_detail: (if $ok then null else
+         ([$events[] | select(.type == "error" or .type == "turn.failed") |
+           (.error.message // .message // empty)] | last // "Codex exited without a completed turn") end),
      total_cost_usd: null,
      input_includes_cache: true,
      usage: {input_tokens: ($t.usage.input_tokens // 0),

@@ -217,6 +217,9 @@ check_contains "model: a real id is forwarded" "-m o3" "$(cat "$TMP/argv-real")"
 UNCLE_CODEX_MODEL=gpt-5.1 ARGV_FILE="$TMP/argv-env" run_shim -p --model o3 <<< "p" > /dev/null
 check_contains "model: UNCLE_CODEX_MODEL wins" "-m gpt-5.1" "$(cat "$TMP/argv-env")"
 
+failure=$(EMIT_COMPLETED=0 EMIT_TEXT='{"type":"turn.failed","error":{"message":"Model unavailable"}}' run_shim -p <<< "p" || true)
+check_contains "model error is retained" 'Model unavailable' "$failure"
+
 # --- missing prompt fails fast --------------------------------------------
 
 status=0

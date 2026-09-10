@@ -609,6 +609,7 @@ acceptance_after_waiver() {
 
 acceptance_transition() {
     local report="$1" next="$2" result ids
+    python3 "$ROOT/scripts/lib/repair-acceptance.py" "$report" || return 1
     result="$(acceptance_result "$report" "${3:-}")"
     case "$result" in
         PASS) set_state "$next" ;;

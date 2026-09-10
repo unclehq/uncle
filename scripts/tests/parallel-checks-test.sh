@@ -41,6 +41,8 @@ class Checks(unittest.TestCase):
         r=self.run_checks(['exit 7','echo still-runs'], '1 2\n')
         self.assertEqual(r.returncode,0,r.stderr)
         self.assertTrue((self.root/'results').read_text().startswith('7\t'), self.diagnostics())
+        self.assertIn('Verification summary: 1 passed, 1 failed;', r.stdout)
+        self.assertIn('Full output: log', r.stdout)
     def test_invalid_groups_execute_nothing(self):
         for groups in ['0 1\n','2 1\n','1 3\n','1 2\n1 2\n']:
             r=self.run_checks(['touch ran','touch ran'],groups)

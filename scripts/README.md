@@ -133,7 +133,7 @@ between groups remain sequential. Use this only for checks with independent
 ports, outputs, fixtures, and state. New applications read groups from
 `UPDATED_PROJECT_PLAN.md`; changes read them from approved `BASELINE_REPORT.md`,
 using the same grouping before and after the change. `WORKFLOW_VERIFY_JOBS`
-limits concurrency to 1–8 (default 2). Without Python or a compatible guard,
+limits concurrency to 1–8 (default 4). Without Python or a compatible guard,
 execution falls back to sequential checks. Missing dependencies in a check
 still fail that check. Output is collected per command and combined in approved
 order; failures remain visible. Interrupting the executor stops its children.

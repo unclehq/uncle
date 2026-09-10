@@ -189,6 +189,12 @@ green_classify "$TMP/base.tsv" "$TMP/fixed.tsv" > "$TMP/clean.tsv"
 green_report "$TMP/clean.tsv" "$TMP/clean.md" BASELINE_REPORT.md log
 check_contains "a clean run says so" "No regressions" "$TMP/clean.md"
 
+# Driver-run tests must not inherit the live project or UI channel.
+printf '%s\n' 'test -z "${UNCLE_PROJECT_ROOT:-}${UNCLE_STATUS_FILE:-}${UNCLE_CONFIG:-}${STAGEGATE_ORIGIN_ISSUE:-}"' > "$TMP/isolated.commands"
+UNCLE_PROJECT_ROOT="$TMP/live" UNCLE_STATUS_FILE="$TMP/status" UNCLE_CONFIG="$TMP/config" STAGEGATE_ORIGIN_ISSUE=6 \
+    green_run "$TMP/isolated.commands" "$TMP/isolated.tsv" "$TMP/isolated.log" > "$TMP/isolated.out"
+check_contains "child checks receive no live workflow settings" "PASS" "$TMP/isolated.out"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "green-check-test.sh: $FAILED of $COUNT checks failed"
     exit 1

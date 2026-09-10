@@ -17,6 +17,8 @@ from verification_manifest import manifest
 
 
 def run(args):
+    run_started = time.monotonic()
+    passed = failed = 0
     commands = Path(args.commands).read_text(encoding="utf-8").splitlines()
     groups = {}
     previous = 0
@@ -81,7 +83,12 @@ def run(args):
                 if halted.is_set():
                     output.write(b"NOT RUN: protected verification inputs changed.\n")
                     return 125, log
-                child = start_check([bash_executable(), "-c", command],
+                check_env = dict(os.environ)
+                for key in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG',
+                            'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE',
+                            'DOCUMENT_BUDGET_SOURCE'):
+                    check_env.pop(key, None)
+                child = start_check([bash_executable(), "-c", command], env=check_env,
                                     stdout=output, stderr=subprocess.STDOUT)
                 children.add(child)
             status = child.wait()
@@ -113,6 +120,10 @@ def run(args):
                     while not future.done():
                         wait([future], timeout=0.1)
                     status, log = future.result()
+                    if status == 0:
+                        passed += 1
+                    else:
+                        failed += 1
                     results.write(f"{status}\t{commands[i]}\n")
                     results.flush()
                     combined.write(f"\n$ {commands[i]}\n".encode())
@@ -126,6 +137,9 @@ def run(args):
                     Path(args.integrity_log).write_bytes(("\n".join(violations) + "\n").encode("utf-8"))
                     return 3
                 index = end
+        print(f"Verification summary: {passed} passed, {failed} failed; "
+              f"{time.monotonic() - run_started:.1f}s elapsed; up to {args.jobs} workers. "
+              f"Full output: {args.log}", flush=True)
         return 0  # Individual test failures are classified by the driver.
     finally:
         halted.set()
@@ -150,7 +164,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("commands", "groups", "out", "log"):
         parser.add_argument("--" + name, required=True)
-    parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument("--jobs", type=int, default=4)
     for name in ("paths", "expected", "integrity-log", "metrics"):
         parser.add_argument("--" + name, default="")
     try:

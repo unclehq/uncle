@@ -1,101 +1,100 @@
-# Manual Checklist
-Base checks: 8; resolved: 3; added: 5; removed: 0
+# MANUAL_CHECKLIST.md
+Base checks: 8; resolved: 6; added: 4; removed: 0
 
 ## Summary
 
-Planned verification of `CHANGE_PLAN.md:AC1–AC3`; no checks executed.
+Planned verification against CHANGE_SPEC.md and CHANGE_PLAN.md; no checks executed.
+Release completeness remains unverified: IMPLEMENTATION_NOTES.md:25 records STOP-1; `scripts/lib/change-pr.sh:332` lacks description defaults; `uncle_tui.py:1562` lacks length framing.
+The supplied diff changes five paths outside C-1–4; reconcile their provenance through MC-009.
 
 ## Findings
 
-All behavior and invariant IDs below refer to `CHANGE_SPEC.md` unless prefixed with `PLAN` or `BASELINE`.
-
-| Check ID | Priority | Behavior classification | Related behavior | Related invariant | Preconditions | Excl | Deps | Exact action | Expected result | Evidence to capture | Actual result | Status |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| MC-001 | P0 | MODIFY, ADD | B-1/2; AR-4; PLAN P6/P8/M1 | I-3/4 | Writable disposable project; interactive 80×24 terminal and operator | terminal:manual, fixture:manual | none | Select each missing-input mode in TUI; dismiss separately with Esc, Enter and another key; create required file and reselect; repeat after restarting TUI | “Required input” popup names required filename as needed; footer returns to menu; no partial launch; selection/workflow cleared; retry launches once; restart rechecks disk | Terminal recording/dimensions; launch log; filesystem before/after | | BLOCKED-SETUP |
-| MC-002 | P0 | MODIFY, ADD | B-1/2/3; PLAN T1/T2/Q1 | I-3/4 | Writable isolated fixtures; `scripts/tests/menu-input-test.py:20,124` fixtures; restricted identity able to run copied launcher but denied project-directory search permission; stat/open tracing | fixture:matrix, identity:restricted | none | For TUI indices 0/2 call `select()` with `start_workflow` mocked; for shell choices 1/3 use `shell_fixture()` and input choice plus newline then EOF. For each required filename test missing, directory, broken link, denied stat, empty/nonempty regular file, internal/external regular-file symlink, required file alone and both files. Patch TUI `os.stat` with PermissionError; for shell remove project-directory search permission after entering it as the restricted identity, run copied launcher, restore permission and retry. Trace document stat/open calls before mocked/stub launch | First four block; remaining cases launch; no content validation or document creation; stat error does not crash | Fixture matrix; warnings; stat/content-read and launch traces | | BLOCKED-SETUP |
-| MC-003 | P0 | PRESERVE, MODIFY | B-6; AR-5/6; PLAN T5/T6/P10 | I-1/2/4 | Writable spaced-path project; `scripts/tests/menu-input-test.py:124` copied installation/stubs; decoy documents in installation cwd; isolated config | fixture:routing | none | Launch copied `uncle` from project cwd: launcher changes to installation cwd (`uncle:6,31`). Run TUI with `UNCLE_PROJECT_ROOT` set to project from decoy cwd; spy on real `cmd_for()` and mocked Popen (`uncle_tui.py:1015,1270`). Exercise indices 0/2 and issue index 1→123→each issue mode; shell input `1\n3\n2\n123\nc\nq\n`, repeating issue mode n/empty. Repeat ordinary, `misc.auto_mode true`, and launcher `--unattended`; compare args with PC1. With files missing send `1\n3\n1\n` then EOF; separately create required file before the next selection in the same process. Record pre-stub cwd and post-`cd` cwd (`scripts/tests/menu-input-test.py:135`), resolving macOS path aliases | Root document controls gate; launch cwd is project root; issue selection precedes launch without premature gating; args unchanged; missing input warns without extra read; shell can retry and handles EOF without looping | Input transcript; exact invocations; ordered calls, args/cwd; exit codes | | BLOCKED-SETUP |
-| MC-004 | P1 | PRESERVE | B-4; PLAN P7/M3 | — | Writable fixture; no reader configured; interactive operator | terminal:manual, fixture:manual | none | Dismiss original notice; trigger and dismiss required-input warning; trigger original notice again | Original notice opens Configure each time; required-input warning returns to menu; title/footer/destination metadata does not leak | Terminal recording and destinations | | BLOCKED-SETUP |
-| MC-005 | P0 | PRESERVE | B-5; PLAN P11/T7; ADVERSARIAL_REVIEW.md:AR-001 | I-3 selection-time | Writable disposable projects; actual drivers with isolated stub agents; `scripts/tests/menu-input-test.py:205` fixture; external networking disabled | fixture:race | none | Run `python3 -B scripts/tests/menu-input-test.py MenuInputTests.test_selection_race_actual_drivers -v`: TUI launch callback unlinks input; shell BASH_ENV DEBUG trap unlinks before run_new_application/run_change_workflow; both WORKFLOW agent/reviewer commands point to the exit-73 stub. Reuse fresh `shell_fixture(race=True)` projects with initially absent then empty CHANGE_REQUEST.md and run copied `scripts/change-workflow.sh` directly with UNCLE_PROJECT_ROOT and both stub overrides. Capture driver exits separately from shell-menu exit 0 and printed statuses (`scripts/tests/menu-input-test.py:243–250`) | New-app reaches stub agent with absent REQUIREMENTS.md; change ANALYZE exits 1 before agent; initial missing/empty change inputs exit 1; no live agent/network call | Hook timeline; driver exits; stub calls; network-isolation evidence | | BLOCKED-SETUP |
-| MC-006 | P0 | REGRESSION | PLAN AC1/AC2/R1 | I-1/2/3/4 | Writable test environment; planned test file available | fixture:regression, host:verification | none | Run `python3 -B scripts/tests/menu-input-test.py -v`; execute BASELINE_REPORT.md §8 commands 1–3 and 6 verbatim | T1–T7 pass; no new baseline failures; BASELINE F1 failures identified separately, not counted as new | Exact commands/full output/exits; test-to-T1–T7 mapping, including race isolation | | BLOCKED-SETUP |
-| MC-007 | P0 | PRESERVE, ROLLBACK | AR-5; PLAN AC3/P3/NC1/RB1 | I-1/2 | Implementation complete; PC1 snapshot and review access; writable rollback copy | fixture:rollback, host:verification | none | Compare final delta with PC1; verify only FC1–FC3 changed and P3 helpers preserved; in disposable copy revert C1–C4, rerun PLAN §17, compare inputs/state/prior edits | Protected paths and prior edits preserved; no persistence migration; rollback restores baseline behavior without losing inputs/state | Scoped diff; PC1 comparison; rollback commands/results and state comparison | | BLOCKED-SETUP |
-| MC-008 | P0 | COMPATIBILITY | PLAN Q2/PC2/M1–M3 | I-1/2/3/4 | Native Windows environment and operator | terminal:windows, fixture:windows | none | On native Windows execute MC-001, MC-003 and MC-004 scenarios | Same specified menu, launch and legacy-notice behavior | Windows version; terminal; commands/recording; calls/args/cwd | | BLOCKED-IMPOSSIBLE |
-| MC-009 | P0 | REGRESSION, MODIFY | PLAN NC1; IMPLEMENTATION_NOTES.md:IN-13/14 | — | Writable isolated checkout/config; PC1 snapshot | fixture:prior-edits, host:verification | none | Run `bash scripts/tests/plan-scope-test.sh` and `bash scripts/tests/shell-menu-startup-test.sh`; run `bash scripts/tests/checklist-runner-config-test.sh`. Source `scripts/lib/stage-config.sh` with isolated UNCLE_CONFIG; compare side/cmd/runner/model/effort/billing/network for manual-checklist-base/delta against manual-checklist and implementation-step-1 against implementation, using stage overrides, global fallbacks, absent config, aider alias, and conflicting alias-specific keys. Compare changed-file inventory including reports/untracked tests against PC1 status/diff/hashes and IN-5/6/13 | Empty scope assignment exits 0 under errexit/pipefail (`scripts/lib/plan-scope.sh:53`); startup preserves config without undefined-command failure (`uncle:616`); aliases use canonical settings and side (`scripts/lib/stage-config.sh:58`); every file outside FC1–FC3 accounted for as prior edit or declared artifact, unexplained deltas flagged | Commands/exits; config matrix; file dispositions and PC1 comparisons | | BLOCKED-SETUP |
-| MC-010 | P0 | REGRESSION, MODIFY | PLAN NC1; CHANGE_TEST_REPORT.md:CT-18 | I-1 | Writable isolated checkout; stub reviewer; absolute temporary paths | fixture:background, host:verification | none | Adapt disposable `scripts/tests/background-performance-test.sh` harness to set PROJECT_ROOT to a spaced project path; invoke extracted actual start_codex_bg from another cwd; stub records cwd/args then sleeps. Run cancellation assertions; repeat with nonexistent PROJECT_ROOT, capturing background wait status and stub calls (`scripts/change-workflow.sh:1400,1440`) | Valid-root reviewer runs in project with existing args; cancellation exits 130 without orphan; invalid-root launch fails before reviewer; unset-root baseline failure remains separately identified | Harness; cwd/args; wait statuses; child-process evidence | | BLOCKED-SETUP |
-| MC-011 | P1 | REGRESSION | CHANGE_TEST_REPORT.md:CT-10 | — | ShellCheck installed; PC1 comparison checkout | fixture:lint | none | Run `shellcheck uncle scripts/change-workflow.sh scripts/lib/plan-scope.sh scripts/lib/stage-config.sh scripts/tests/plan-scope-test.sh scripts/tests/checklist-runner-config-test.sh scripts/tests/shell-menu-startup-test.sh` on final and PC1 copies | No unexplained new diagnostics; existing diagnostics identified separately | Version; command; diagnostics/exits and comparison | | BLOCKED-SETUP |
-| MC-012 | P0 | REGRESSION, COMPATIBILITY | CHANGE_TEST_REPORT.md:CT-19 | — | Writable isolated checkout; Python, Bash, jq, curses, Aider; loopback binding; native Windows for platform-only cases | fixture:python, host:verification, loopback:127.0.0.1:dynamic, fixture:windows | none | Run `bash -c 'for t in scripts/tests/*test.py; do python3 -B "$t"; rc=$?; printf "%s: exit %s\n" "$t" "$rc"; done'`; repeat windows-portability-test.py on native Windows; inventory every skip and provision its prerequisite before rerun. Retain self-hosted-live-test.py's local-only guard and record allocated port (`scripts/tests/self-hosted-live-test.py:16`) | Every standalone Python suite has an assessed result; platform-only tests execute natively; local Aider assertions hold without external calls; skips remain unresolved until executed | Per-file output/exits; skip dispositions; Windows evidence; endpoint/guard evidence | | BLOCKED-SETUP |
-| MC-013 | P0 | REGRESSION | PLAN AC2; CHANGE_TEST_REPORT.md:CT-7/14/18 | — | Writable final and PC1 checkouts; `/private/tmp/uncle-implementation-start` logs; functioning Git identity/signing and shell file descriptors | fixture:full-suite, host:verification | none | In each checkout run `bash -c 'for t in scripts/tests/*-test.sh; do bash "$t"; rc=$?; printf "%s: exit %s\n" "$t" "$rc"; done'`; compare individual assertions and exits with full-results.json and rollback-results.json; rerun environment-blocked suites after correcting prerequisites | No new failures; all 11 reported failing suites individually attributed; matching exit codes alone do not establish matching failures; unresolved assertions remain acceptance gaps | Commands/environment; per-suite logs; assertion-level final/PC1 dispositions | | BLOCKED-SETUP |
+| Check ID | Priority | Behavior classification | Related behavior | Related invariant | Preconditions | Exclusive resources | Depends on | Exact action | Expected result | Evidence to capture | Actual result | Status |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| MC-001 | P0 | MODIFY, ADD | B-2/3; P-6–9; AC-1/3 | I-5/6 | Writable isolated checkout; use AS-3 HandoffTests fixture; write source variants before `h.freeze()` | fixture:handoff | none | Complete issue-origin and Summary-origin fixtures; accept defaults, then repeat with edits. Exercise both supported notes/checklist formats, four entries, controls, whitespace, and summaries of 479/480/481 characters. Repeat with missing, malformed, empty and headings/reference-only sources; try blank then typed answers. Invoke `h.engine("handoff", "\n\n\ny\n")`, then repeat with explicit title/summary/manual answers; inspect returned stdout, `h.calls()` and `h.root / "server.body"`. Use `h.state / "origin"` containing `owner/repo\t42\tgh\n` for issue origin and remove it for Summary origin; set `CHANGE_REQUEST.md` Summary in both. Construct table and section/block variants from CHANGE_PLAN.md:39–41; record absent defaults as unmet requirements, not inapplicability. | Title preserves 72-character shortening/fallback; first three completed-work entries are semicolon-joined; normalized summary ≤480 characters; up to three complete action/outcome pairs; unusable sources require nonempty input; edited values appear in preview and submitted body; consent retained. | Inputs, bound tree ID, prompt/preview transcript, captured PR title/body and calls | | BLOCKED-IMPOSSIBLE |
+| MC-002 | P0 | PRESERVE, ADD, SECURITY | B-1/3; P-6/14/19; AC-6 | I-1/6 | Writable audited fixtures with stub publication; AS-3 fixture, `h.freeze()` and `h.engine("handoff", text)` | fixture:handoff | none | Compare 100644/100755 sources with symlinks for each description source; mutate external targets after binding. Separately change audited content while prompt waits, then consent. Include literal shell substitutions and embedded delimiters in source text. Create notes/checklist through `Path.write_text`, `chmod(0o644/0o755)` or `symlink_to` before `h.freeze()`; inspect `h.git("ls-tree", h.journal()["commit_tree"])`. Use the subprocess and prompt pause in `scripts/tests/close-flow-test.sh:1214`; apply external-target mutations after binding and source mutations after the title prompt. Repeat its remote-drift variant at line 1337. | Regular bound blobs supply defaults; external contents never reach preview/body; prompt-time drift prevents publication; text never executes; audit and remote-identity guards remain enforced. | Blob modes/IDs, mutations, preview/body, rejection output, publication-call log, execution sentinel | | BLOCKED-IMPOSSIBLE |
+| MC-003 | P0 | PRESERVE, RECOVERY | B-4/7; P-10/12/15; AC-7 | I-2/3 | Writable stubbed fixtures; AS-3 fixture; saved phases produced with `CRASH_GIT`, `LOOKUP_FAIL`, `CREATE_TIMEOUT`, `CREATE_FAIL` in `scripts/tests/close-flow-test.sh:1228–1255` | fixture:handoff | none | Separately decline, send EOF and fail authentication; restart each after correcting the cause. Resume an already-created PR and an uncertain create outcome; change default sources before resuming saved title/body. Invoke `h.engine("handoff", "")`, `h.engine("handoff", "\nSummary\nManual\nn\n")`, and `h.publish(AUTH_RC="1")` separately; retry with `h.publish()`. Use `h.publish(CRASH_GIT="commit-tree")`, `h.publish(CREATE_TIMEOUT="1")`, or `h.publish(CREATE_FAIL="1")` on fresh fixtures, then `h.engine("handoff")`. Save journal title/body before source mutation; record audit rejection and retained saved content before restoring the exact bound bytes and resuming. | Failures stay pending; pending/URL output reflects state; saved title/body retained; created PR is reused; uncertain outcome never triggers blind recreation; issue stays open before merge; journal remains v1. | Prompt/output transcript, before/after journal, PR identifiers and create/close-call counts | | BLOCKED-IMPOSSIBLE |
+| MC-004 | P0 | PRESERVE, BOUNDARY | B-5/6; P-13/18; AC-5 | I-4 | Writable no-Git, Git-directory and worktree fixtures; legacy-close cases; `scripts/tests/close-flow-test.sh:new_case`, `setup_audit_stage`, `run_driver_stdin`; AS-3 Git fixture | fixture:handoff | none | Complete each routing fixture; repeat Git completion with WORKFLOW_CLOSE_ISSUE=0 and unattended mode. Exercise legacy close with valid ownership/READY/hash/origin, then invalidate each condition separately. Run `bash -x scripts/tests/close-flow-test.sh` for existing routing/eligibility cases. For Git flag variants, repeat `HandoffTests.test_driver_audit_to_pr_and_rerun` with `WORKFLOW_CLOSE_ISSUE="0"`, then `UNATTENDED="1"` in its driver environment; repeat using the worktree setup in `test_worktree_git_file`. Inspect routing at `scripts/change-workflow.sh:1939` and eligibility at `scripts/lib/issue-close.sh:109`. | No `.git` produces no PR process/dialog; directory and worktree-file Git routes prompt when enabled; disabled/unattended routes do not; legacy close requires every eligibility condition. | Route setup, flags, prompt transcript, PR/close-call logs and eligibility evidence | | BLOCKED-IMPOSSIBLE |
+| MC-005 | P1 | MODIFY, REGRESSION | B-2/3; P-11; AC-2 | I-5/6 | Interactive terminal/TUI session; AS-3 fixture; prompt harness `scripts/tests/pr-prompt-test.py:12` | terminal:verification, fixture:prompt | none | In CLI and TUI accept and edit title, summary and manual defaults. Feed Unicode, embedded `]:` and `[y/n]`; split each framed prompt at every boundary, pausing immediately after embedded `]:`. For CLI run `bash -c '. "$1"; change_pr_engine handoff' test "$LIB"` with cwd `h.repo`, environment `h.env` and inherited terminal stdin/stdout. For TUI use `PromptTests.ui`/`detect`, assigning each prefix to `ui.partial` and calling detection three times before the next chunk; exercise both captured prompts and P-11 frames with N=`len(default)`. Exercise keyboard edits in `python3 uncle_tui.py` against the disposable driver fixture. Record missing summary/manual defaults and framing as unmet requirements. | No early dialog; N counts Unicode code points; complete default remains editable; CLI editing and existing prompt handling preserved. | Terminal/platform versions, chunk sequence, dialog timing, full buffers and submitted edits | | BLOCKED-SETUP |
+| MC-006 | P0 | PRESERVE, ACCEPTANCE | B-1; AC-4; R-2 | I-3 | Human resolution of R-2; authorized disposable GitHub repository/account and merge permissions | account:github-verification, repo:github-verification | none | After approved contract resolution, create an issue-origin PR, record open issue state, then merge to the default branch and inspect issue events/comments. | Closing reference exists; issue stays open before merge; merge closes issue and produces required post-merge comment. Closure alone does not satisfy retained AR-4. | PR/issue URLs, merge time, closure event, separate comment URL/body/author/time, approved R-2 decision | | BLOCKED-HUMAN |
+| MC-007 | P1 | REGRESSION | U-1; P-20; AC-1–3/6/7 | I-1–6 | Writable isolated checkout; Bash/Python execution recorded in BASELINE_REPORT.md §8 | checkout:regression | none | Run `bash scripts/tests/close-flow-test.sh`; `python3 -B scripts/tests/pr-prompt-test.py -q`; `bash -n scripts/change-workflow.sh scripts/from-issue.sh scripts/lib/change-pr.sh scripts/lib/issue-close.sh`; `bash scripts/tests/tui-session-panel-test.sh`. | All exit 0 with no new failures; results cover P-19 and adversarial AR-001/002/004/005, including full-buffer assertions after embedded terminators; baseline fork/identity/drift/worktree/closure guards remain covered. | Full logs, exit codes, test counts and assertion-to-requirement mapping; identify uncovered assertions | | BLOCKED-IMPOSSIBLE |
+| MC-008 | P1 | COMPATIBILITY, ROLLBACK | P-10/12/13/16/17; F-2/3 | I-1–4 | Writable isolated prior/current revisions and saved v1 journals; reference HEAD `57312a8a555b2fcfeeef37d3517eeb6e1c5660aa`; candidate is that HEAD plus `.uncle/workflow/change.diff`; provision Bash 3.2/Python 3.9 and record `bash --version`, `python3 --version`, `git rev-parse HEAD`, and diff digest | checkout:rollback | none | Run handoff/recovery on minimum runtimes; resume existing v1 phases. Revert only C-1–4 changes and resume journals again. Compare changed-path inventory against recorded starting changes and F-2/F-3. Use AS-3 and MC-003 with Bash 3.2/Python 3.9 first on candidate, then reference; put those runtimes first on fixture PATH. Establish C-1–4 identity with `git diff HEAD -- scripts/lib/change-pr.sh uncle_tui.py scripts/tests/close-flow-test.sh scripts/tests/pr-prompt-test.py`; if empty, record the requested revert as a no-op, retain compatibility/resume checks, and do not revert unrelated changes. | No migration; saved state remains readable; rollback retains journals/branches/PRs and avoids duplicates; origin TSV/legacy curl and close flag remain compatible; protected paths and unrelated edits unchanged. | Runtime versions, revision IDs, before/after state and remote inventory, transcripts, path inventory | | BLOCKED-IMPOSSIBLE |
+| MC-009 | P0 | REGRESSION, BOUNDARY | F-1–3; STOP-1; IMPLEMENTATION_NOTES.md D-1/2, U-4–6 | I-5/6 | Read access to supplied artifacts and candidate; starting diff needed to settle provenance | none | none | Compare `git diff --name-only` and `.uncle/workflow/change.diff:1–76` with CHANGE_PLAN.md:29–32 and IMPLEMENTATION_NOTES.md:35–37; compare the excluded-artifact binary diff digest using CHANGE_TEST_REPORT.md:99's command. Inspect `scripts/lib/change-pr.sh:332–345` and `uncle_tui.py:1562–1579` against P-6–11; account separately for notes/report replacements at IMPLEMENTATION_NOTES.md:5–6. | Every unplanned path has recorded provenance/disposition; preexisting edits remain intact; missing defaults/framing and unresolved STOP-1 block feature acceptance despite baseline test results. | Path/digest comparison, source references, discrepancy disposition and R-2 decision | | BLOCKED-SETUP |
+| MC-010 | P1 | MODIFY, REGRESSION | Unplanned error detail; `.uncle/workflow/change.diff:1–14,46–59` | none | Writable disposable adapter fixture from `scripts/tests/agent-codex-test.sh:64–98`; jq | fixture:adapter | none | Run `bash scripts/tests/agent-codex-test.sh`. Using its fake-codex and `run_shim -p` with stdin `p`, vary EMIT_TEXT between error.message, top-level message, multiple error/turn.failed events, missing/null messages, quotes/newlines, and malformed JSON; vary EMIT_COMPLETED=0/1 and FAKE_EXIT=0/7, including a context-length error. Parse the final result with jq and capture process exit. | `scripts/agent-codex.sh:165–199`: failed results retain the last available message or exact fallback `Codex exited without a completed turn`; successful results have null error_detail; one final result, valid JSON, usage, context subtype and exit semantics remain intact. | Input JSONL, final parsed result, exit codes and suite log | | BLOCKED-IMPOSSIBLE |
+| MC-011 | P0 | MODIFY, SECURITY, REGRESSION | Unplanned environment isolation; `.uncle/workflow/change.diff:15–45,60–76` | none | Writable scratch directory; source `scripts/lib/green-check.sh`; seven keys from `scripts/lib/parallel_checks.py:85–88` exported with disposable sentinel values; export `VERIFY_KEEP=kept` | fixture:environment | none | Create a command file with two identical Python child commands asserting all seven keys absent from `os.environ` and VERIFY_KEEP retained; create groups file containing `1 2`. Call `green_run "$commands" "$out" "$log"` and then `green_run "$commands" "$out" "$log" "" "$groups"`. Check parent values and sentinel files; repeat with all seven keys initially unset, on minimum runtimes and Git Bash. Run `bash scripts/tests/green-check-test.sh`, `bash scripts/tests/parallel-checks-test.sh` and `bash scripts/tests/verification-integrity-test.sh`. | Both routes remove every listed variable without altering parent/unrelated environment or sentinel files; no env invocation failure; statuses, ordered logs, metrics, protected-input rejection and child cancellation retain their contracts (`green-check.sh:110–162`, `parallel_checks.py:18–157`, `process_tree.py:60–64`). | Child/parent environment assertions, sentinel hashes, platform versions, TSV/logs, metrics and exits | | BLOCKED-IMPOSSIBLE |
+| MC-012 | P1 | REGRESSION | CHANGE_TEST_REPORT.md CT-5–7/9–11/15/16/19 | I-1–6 | Writable isolated checkout; platform prerequisites; unresolved lint/type/performance commands and thresholds require recorded disposition under AS-4 | checkout:regression | MC-001, MC-002, MC-003, MC-004, MC-005, MC-006, MC-007, MC-010, MC-011 | Map CT-5 to MC-001/005/007, CT-6 to MC-001/002/005/007, CT-11 to MC-006, CT-16 to MC-002, CT-19 to MC-001–006. For CT-7 execute CHANGE_PLAN.md S-3 using those checks and the platform regression commands in `.github/workflows/installers.yml:67–93`. For CT-9 run `bash -n scripts/agent-codex.sh scripts/lib/green-check.sh scripts/tests/agent-codex-test.sh scripts/tests/green-check-test.sh` and `python3 -B -c 'import ast,pathlib; ast.parse(pathlib.Path("scripts/lib/parallel_checks.py").read_text())'`. For CT-15 run `bash scripts/tests/performance-test.sh`, `bash scripts/tests/background-performance-test.sh`, and `bash scripts/tests/tui-performance-test.sh`; record sequential/parallel elapsed times from MC-011. Resolve AS-4 before claiming CT-9/10/15 coverage complete. | Every NOT RUN item has execution evidence or an explicit remaining blocker; baseline success cannot substitute for missing P-19/framing assertions; syntax checks do not substitute for type checking or linting; performance evidence is evaluated against an approved threshold. | CT-to-check mapping, commands/exits, assertion gaps, timing evidence and unresolved-tool/threshold disposition | | BLOCKED-SETUP |
 
 ## Assumptions
 
 | ID | Unverified prerequisite | Settled by |
 |---|---|---|
-| A-1 | Current filesystem profile is read-only; fixture creation and test writes unavailable | Supply a writable disposable execution workspace for MC-001–007 and MC-009–013 |
-| A-2 | BASELINE §8 establishes Bash/Python execution, not interactive terminal access or an operator | Provision interactive terminal; if waiting on an operator afterward, classify MC-001/004 BLOCKED-HUMAN |
-| A-3 | Resolved fixture instructions remain unexecuted; restricted identity, tracing and network isolation are unverified | Provision MC-002/003/005 prerequisites and execute their actions |
-| A-4 | Windows is unavailable in this macOS environment | Supply native Windows executor for MC-008/012 |
-| A-5 | ShellCheck, Aider and loopback execution prerequisites are unverified | Provision and record versions/capabilities for MC-011/012 |
+| AS-1 | Current environment is read-only; fixture creation, suite writes and rollback cannot run here. | Move MC-001–004/007/008 to a writable verification environment. |
+| AS-2 | Baseline establishes shell/Python test execution, not interactive terminal access or minimum runtime versions. | Provision an interactive verification session for MC-005; record runtime versions for MC-008. |
+| AS-3 | Fixture adaptations remain unexecuted; no description-default fixture exists in `scripts/tests/close-flow-test.sh:997–1382`. | In a writable checkout run `python3 -i -c 'from pathlib import Path; import sys; p=Path("scripts/tests/close-flow-test.sh"); s=p.read_text().split("CASE_NAME=pr-handoff\n",1)[1]; s=s[s.index("import hashlib\n"):].split("\nPY\npr_rc=",1)[0]; sys.argv=[str(Path.cwd())]; exec(s.rsplit("unittest.main()",1)[0]); h=HandoffTests(); h.setUp()'`; use a fresh `h` for each case and call `h.doCleanups()` afterward; retain transcripts before cleanup. |
+| AS-4 | Broader lint/type commands and a performance acceptance threshold are not supplied in CHANGE_TEST_REPORT.md:38/44/74. | Obtain the repository's applicable commands and approved threshold, execute them under MC-012, or retain those gaps explicitly. |
 
 ## Open questions
 
 | ID | Gate decision |
 |---|---|
-| O-1 | PLAN PC2 requires native Windows M1–M3 before acceptance; MC-008 cannot verify that here. Human must change the environment or approve a revised verification strategy/criterion. |
-| O-2 | Mandatory execution fields and coverage exceed the 4,000-byte budget; retained without dropping obligations. |
+| OQ-1 | CHANGE_PLAN.md R-2/STOP-1 remains unresolved; obtain approved comment lifecycle or revised criterion before accepting AC-4. |
+| OQ-2 | AC-1/3/5/6/7 cannot be established through their fixture checks in this read-only environment; change the verification environment. |
+| OQ-3 | Required execution fields and coverage exceed the byte budget; mandatory content retained. |
+| OQ-4 | Resolve the completion claim against IMPLEMENTATION_NOTES.md:25 and MC-009; missing implementation does not authorize removal of acceptance checks. |
 
 ## acceptance-criteria traceability
 
 | Criterion | Checks |
 |---|---|
-| AR-1/2 | MC-001/002/003/006 |
-| AR-3 | MC-001/002/006 |
-| AR-4 | MC-001/003 |
-| AR-5 | MC-003/004/005/007/009 |
-| AR-6 | MC-002/003 |
-| PLAN AC1 | MC-001–006/008 |
-| PLAN AC2 | MC-006/011/012/013 |
-| PLAN AC3 | MC-007/009 |
+| AC-1 / AR-1 | MC-001, MC-007 |
+| AC-2 / AR-2 | MC-005, MC-007 |
+| AC-3 / AR-3 | MC-001, MC-007 |
+| AC-4 / AR-4 | MC-006; OQ-1 |
+| AC-5 / AR-5 | MC-004 |
+| AC-6 / AR-6 | MC-002, MC-007 |
+| AC-7 / AR-7 | MC-003, MC-007 |
 
 ## preserved-behavior coverage
 
 | Behavior | Checks |
 |---|---|
-| B-3/4/5/6 | MC-002; MC-004; MC-005; MC-003 respectively |
-| PLAN UB2 | MC-005 |
-| Prior edits and fixture deviations, IMPLEMENTATION_NOTES.md:IN-12–14 | MC-003/005/007/009/010 |
+| B-1 | MC-002, MC-006 |
+| B-4/7 | MC-003 |
+| B-5/6 | MC-004 |
+| U-1 compatibility/consent | MC-001, MC-008 |
+| Adapter result/exit; verification execution | MC-010, MC-011 |
 
 ## changed-behavior coverage
 
 | Behavior | Checks |
 |---|---|
-| MODIFY B-1/2 | MC-001/002/003 |
-| ADD B-3 | MC-002 |
-| PLAN BD1/P6/P7/P8/P9/P10 | MC-001/003/004 |
-| Diff beyond FC1–FC3: plan parser, stage aliases, background cwd | MC-007/009/010 |
+| MODIFY B-2/3; added defaults/framing P-6–11 | MC-001, MC-002, MC-005 |
+| REMOVE | None specified |
+| Unplanned error detail/environment filtering | MC-009–011 |
 
 ## invariant coverage
 
 | Invariant | Checks |
 |---|---|
-| I-1/2 | MC-003/010 |
-| I-3 | MC-001/002/005 |
-| I-4 | MC-002/003; outside-root symlink exception per PLAN Q1 |
+| I-1 | MC-002 |
+| I-2 | MC-003, MC-008 |
+| I-3 | MC-003, MC-006 |
+| I-4 | MC-004 |
+| I-5/6 | MC-001, MC-002, MC-005 |
 
 ## regression coverage
 
-| Area | Checks |
+| Risk | Checks |
 |---|---|
-| Notice navigation, retry, restart | MC-001/004 |
-| CLI, root, issue ordering, shell EOF | MC-003 |
-| Driver guards and accepted deletion race | MC-005 |
-| Timing/performance and existing suites | MC-006; BASELINE §8 command 2 includes timing suite |
-| Protected scope, rollback, prior edits | MC-007/009/010 |
-| Native Windows and terminal rendering beyond automated assertions | MC-008/012; MC-001/004 |
-| CT-10 NOT RUN linting | MC-011 |
-| CT-19 NOT RUN shell stat denial and standalone Python suites | MC-002/012 |
-| CT-7/14/18 unresolved full-suite failures | MC-010/013 |
+| Adversarial AR-001/002/005 | MC-001, MC-002, MC-007 |
+| Adversarial AR-003/004 | MC-005, MC-006, MC-007 |
+| Baseline §13; restart and rollback | MC-002–004, MC-007, MC-008 |
+| Manual evidence beyond automated coverage | MC-005 terminal interaction; MC-006 live comment/closure; MC-008 rollback/minimum runtimes |
+| Scope/provenance; adapter errors; environment isolation | MC-009–011 |
+| Every reported NOT RUN; missing assertions/tooling/thresholds | MC-012; AS-4 |
 
-## removed checks
+## Removed checks
 
 | Check ID | Reason |
 |---|---|
-| None | No base check is provably inapplicable. |
+| None | No entire base check is provably inapplicable; MC-008 retains compatibility coverage despite the absent C-1–4 rollback delta. |

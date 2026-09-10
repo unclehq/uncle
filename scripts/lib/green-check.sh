@@ -117,7 +117,7 @@ green_run() {
         && [[ -f "$GREEN_LIB_DIR/parallel_checks.py" ]] \
         && [[ -z "$guard" || "$guard" == check_verification_inputs ]]; then
         local -a flags=(--commands "$cmds" --out "$out" --log "$log"
-                       --groups "$groups" --jobs "${WORKFLOW_VERIFY_JOBS:-2}")
+                       --groups "$groups" --jobs "${WORKFLOW_VERIFY_JOBS:-4}")
         if [[ -n "$guard" ]]; then
             flags+=(--paths "$STATE_DIR/verification.paths"
                     --expected "$STATE_DIR/verification.manifest"
@@ -143,7 +143,7 @@ green_run() {
 
         status=0
         started="$SECONDS"
-        bash -c "$cmd" < /dev/null >> "$log" 2>&1 || status=$?
+        env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE bash -c "$cmd" < /dev/null >> "$log" 2>&1 || status=$?
         perf_record check "$cmd" "$((SECONDS-started))" "$status"
 
         printf '%s\t%s\n' "$status" "$cmd" >> "$out"

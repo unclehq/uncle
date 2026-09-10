@@ -73,8 +73,8 @@ capabilities remain blockers rather than becoming optional checks.
 
 Approving this plan approves those commands.
 
-Optionally add `## Parallel verification groups` when checks are proven
-independent: no shared ports, writable fixtures, outputs, or prerequisite
+Run independent test suites in parallel. Add `## Parallel verification groups`
+for all checks proven independent: no shared ports, writable fixtures, outputs, or prerequisite
 ordering. The section holds one fenced block and nothing else — bare rows of
 one-based positions from the Verification commands block, one group per line,
 each row at least two consecutive numbers, rows ordered and disjoint:
@@ -86,7 +86,7 @@ each row at least two consecutive numbers, rows ordered and disjoint:
 
 No bullets, labels, backticked numbers, or prose in or around the block;
 explain each group's independence in the testing strategy instead. The driver
-limits concurrency with WORKFLOW_VERIFY_JOBS (default 2, maximum 8), preserves
+limits concurrency with WORKFLOW_VERIFY_JOBS (default 4, maximum 8), preserves
 per-command outcomes and integrity checks, and runs unlisted commands
 sequentially. Omit this section when none qualify.
 

@@ -101,7 +101,8 @@ failed before the change, so it will not be blamed on the change; omitting it
 only hides it.
 
 Automated browsers and local test servers are permitted when required for
-acceptance. Optionally append `## Parallel verification groups` holding one
+acceptance. Run independent test suites in parallel by default. Append
+`## Parallel verification groups` for independent suites, holding one
 fenced block and nothing else — bare rows of consecutive, one-based command
 positions, one group per line:
 

@@ -396,6 +396,7 @@ finish_review_budget() {
     local -a flags=(exec --ephemeral --skip-git-repo-check --sandbox read-only)
     limits="$(document_budget "$file")" || return 1
     [[ -s "$file" ]] || { check_document_budget "$file"; return 1; }
+    python3 "$ROOT/scripts/lib/repair-acceptance.py" "$file" || return 1
     check_document_budget "$file" probe 2>/dev/null && return 0
     if [[ "${WORKFLOW_REVIEW_COMPACT:-1}" == 0 ]]; then
         check_document_budget "$file"

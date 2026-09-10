@@ -155,4 +155,28 @@ for candidate in [original.replace('320', '321'), original.replace('Severity: Hi
     except ValueError: pass
     else: raise AssertionError('changed contract accepted')
 PY
+# Repair evidence before compaction, so rejected candidates leave a usable
+# original even when it exceeds the advisory budget. FAIL stays FAIL.
+. "$ROOT/scripts/lib/acceptance.sh"
+python3 - "$ROOT" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+spec = importlib.util.spec_from_file_location('repair', Path(sys.argv[1])/'scripts/lib/repair-acceptance.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+original = Path('original.md').read_text().replace('| AR-001 |', '| `echo hello | grep hello` |')
+fixed = m.repair(original)
+assert '`echo hello &#124; grep hello`' in fixed
+assert '| R-1 | YES | FAIL |' in fixed
+assert m.repair(fixed) == fixed
+assert m.repair(original.replace('## Acceptance gate', '## Other')) == original.replace('## Acceptance gate', '## Other')
+Path('ADVERSARIAL_REVIEW.md').write_bytes(original.encode())
+Path('expected.md').write_bytes(fixed.encode())
+PY
+MODE=fail WORKFLOW_REVIEW_COMPACT_ATTEMPTS=1 \
+    finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review > repaired 2>&1
+cmp expected.md ADVERSARIAL_REVIEW.md
+[[ "$(acceptance_result ADVERSARIAL_REVIEW.md R-1)" == REPAIR ]] \
+    || { echo 'FAIL: repaired failing report must route to repair'; exit 1; }
+[[ -n "$(find .uncle/workflow/logs -name '*before-table-repair-*.md')" ]]
 echo 'review-compaction-test: passed'

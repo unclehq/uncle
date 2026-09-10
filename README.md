@@ -105,7 +105,7 @@ Use Homebrew on macOS, apt on Debian/Ubuntu, or [Scoop](https://scoop.sh) on Win
 | Python 3 (`python3`) | The terminal UI, verification, and workflow helpers | Installed by each package; Homebrew uses `python@3.13`. |
 | jq (`jq`) | Agent event streams and JSON processing | Installed by each package. |
 | curl (`curl`) | Installer download, HTTP requests, and public GitHub issue fallback | Included with macOS and Git Bash; use `sudo apt install curl` if missing on Linux. |
-| An agent CLI: `cline`, `claude`, `kimi`, or `codex` | Planning, implementation, and independent review | Install and authenticate every runner selected in Configure. The default configuration uses `cline`; these CLIs are installed separately from Uncle. |
+| An agent CLI: `cline`, `claude`, `kimi`, `codex`, or `aider` | Planning, implementation, and independent review | Install and authenticate every runner selected in Configure. The default configuration uses `cline`; these CLIs are installed separately from Uncle. |
 | GitHub CLI (`gh`) | Authenticated GitHub issue and pull-request workflows | Installed by each package. Run `gh auth login` before using authenticated GitHub features. |
 
 Package managers install tools, but they do not authenticate GitHub or agent

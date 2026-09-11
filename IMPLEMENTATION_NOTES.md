@@ -1,4 +1,5 @@
 ## files changed
+<<<<<<< HEAD
 | ID | File / symbol | Purpose of each change | Approved-plan step | Behavior or invariant affected |
 |---|---|---|---|---|
 | F-1 | `scripts/from-issue.sh:write_new_project_brief` | Create absent requirements with subshell noclobber; print success after writing. | S-2, P-1/P-8 | AC-1, I-1/I-4/I-5; T-6 barriers pass. |
@@ -32,3 +33,36 @@ F-1–F-6: recorded in the behavior column above; commands and outcomes are in C
 | U-1 | CHANGE_PLAN.md R-1 settled: F-2 compares every `##` heading from repository `REQUIREMENTS.md` with generated output; command passes. Driver execution remains untested because new mode only seeds. |
 | U-2 | BASELINE_REPORT.md U-1 remains unverified: original reporter UI steps were unavailable; settle with the reporter fixture. |
 | U-3 | CHANGE_PLAN.md P-9 leaves existing-marker concurrency unchanged; F-1 only adds the absent-target branch, as inspected with `git diff -- scripts/from-issue.sh`. |
+=======
+| ID | File | Purpose | Approved-plan step | Behavior or invariant affected |
+|---|---|---|---|---|
+| F-1 | IMPLEMENTATION_NOTES.md | Record stopped implementation and existing work | S-1; STOP-1 | README.md B-1/B-2 remain unchanged |
+| F-2 | CHANGE_TEST_REPORT.md | Record executed checks and blocked checks | S-1; STOP-1 | T-1 remains red; T-2/T-3 baseline passes |
+
+## purpose of each change
+F-3: F-1/F-2 are the reporting artifacts required by the implementation-stage instruction.
+
+## approved-plan step
+S-1: Completed repository inspection, README snapshot, baseline checks, and T-1 red; see CHANGE_TEST_REPORT.md.
+S-2: Not started: required M-1 browser preview probe exited 134; CHANGE_PLAN.md STOP-1 applies.
+
+## behavior or invariant affected
+| ID | Observation | Evidence |
+|---|---|---|
+| B-1 | README.md:4,28 match P-1 preconditions; both token-count assertions passed | CHANGE_PLAN.md T-1 failed only at final equality assertion |
+| B-2 | README.md is unchanged; specification B-3–B-6 and I-1/I-2 retain baseline behavior | Snapshot comparison; baseline T-2/T-3; CHANGE_TEST_REPORT.md |
+| B-3 | Existing uncommitted modifications: ADVERSARIAL_REVIEW.md, BASELINE_REPORT.md, CHANGE_PLAN.md, CHANGE_REQUEST.md, CHANGE_SPEC.md | Initial `git status --short`; no initial untracked files |
+| B-4 | Existing modifications were preserved | SHA-256 comparison before/after; final `git status --short` |
+
+## deviations
+| ID | Disposition | Reason |
+|---|---|---|
+| D-1 | S-2/S-3 implementation and acceptance incomplete | STOP-1: Chrome headless preview probe exited 134 without diagnostic output |
+| D-2 | Updated only F-1/F-2 despite F-3 protecting other tracked paths | Implementation-stage instruction explicitly requires these reports |
+
+## unresolved concerns
+| ID | Unverified item | Settled by |
+|---|---|---|
+| U-1 | M-1 rendered README capitalization/markup and remote assets are unverified | Restore browser preview capability and complete M-1 |
+| U-2 | AC-1/AC-2 remain unsatisfied; README.md:4,28 still use lowercase display tokens | Resume S-1–S-3 after resolving U-1; rerun T-1–T-3 |
+>>>>>>> b449b41 (changes uncle to Uncle)

@@ -1,4 +1,5 @@
 # Manual checklist
+<<<<<<< HEAD
 Base checks: 8; resolved: 4; added: 6; removed: 0
 
 | Check ID | Priority | Behavior classification | Related behavior | Related invariant | Preconditions | Exclusive resources | Depends on | Exact action | Expected result | Evidence to capture | Actual result | Status |
@@ -30,38 +31,118 @@ Base checks: 8; resolved: 4; added: 6; removed: 0
 | ENV-1 | All checks | This review is read-only; execute in writable isolated verification environments; no check result is established here. |
 | ASSUMPTION-1 | MC-007/012 | Brief-only output satisfies I-5 remains unverified here; template comparison and explicit driver consumption settle it. |
 | BUDGET-1 | Complete checklist | Preserving mandatory base wording and executable additions exceeds 4000 bytes; mandatory content retained under the output-budget exception. |
+=======
+Base checks: 7; resolved: 3; added: 2; removed: 1
+
+## Summary
+
+Planned verification of `CHANGE_PLAN.md` AC-1–AC-5; behavior and invariant IDs below refer to `CHANGE_SPEC.md`.
+Inspection found lowercase display tokens at `README.md:4,28`; `IMPLEMENTATION_NOTES.md:12` records implementation stopped.
+No check has been executed.
+
+## Findings
+
+| Check ID | Priority | Behavior classification | Related behavior | Related invariant | Preconditions | Excl | Deps | Exact action | Expected result | Evidence to capture | Actual result | Status |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| MC-001 | P0 | MODIFY; PRESERVE | B-1–B-5; plan PRE-1/P-10 | I-1/I-3 | BLOCKED-SETUP: authenticated pre-edit snapshot and raw S-1/red evidence unavailable in supplied artifacts; bind `$before` to recovered snapshot; candidate frozen | none | MC-008 | Validate PRE-1 evidence: both token-count assertions passed and final equality failed before editing. Execute `CHANGE_PLAN.md` §16 T-1 verbatim with `$before` pointing to that snapshot. Read README heading, callout, prose and CLI examples. | T-1 passes after editing; only one `uncle` token on each original line 4/28 becomes `Uncle`; all other bytes, including line endings, remain identical. Missing snapshot or unexpected edits block acceptance under STOP-1. | Snapshot identity/hash; red and green outputs/exits; candidate hash; inspected lines | | BLOCKED-SETUP |
+| MC-002 | P0 | PRESERVE; containment | B-3–B-6; plan F-2/F-3 | I-1/I-2 | BLOCKED-SETUP: recover S-1 inventory and hashes for the five paths in IMPLEMENTATION_NOTES.md:19; candidate frozen | none | MC-008 | Run `git diff -- README.md` and `git status --short`; compare tracked-file changes with S-1 inventory, including staged changes. | Only P-1 is introduced; every other README byte and tracked file is preserved; pre-existing `CHANGE_REQUEST.md` work remains intact. Unexpected protected-file changes block acceptance. | README diff; status; staged/unstaged change inventory comparison | | BLOCKED-SETUP |
+| MC-003 | P0 | PRESERVE; error; isolation | B-6; specification §9 | I-1/I-2 | Baseline C-3 records Python/package tooling success, including Debian; writable temporary fixtures required | fixtures:install-test | none | Run `PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/tests/install-test.py -q`. | Exit 0; 10 tests pass, no skips, including Debian with `dpkg-deb`; suite retains command/help, invalid-input/error, extraction, hash, state-exclusion and symlink-rejection coverage described by baseline T-1. Failure blocks acceptance; diagnose before retry. | Command; complete output/exit; test/skip counts; temporary-directory failures if any | | NOT RUN |
+| MC-004 | P1 | PRESERVE; compatibility | B-4/B-6; specification §8 | I-1 | Baseline C-4 records Bash availability; candidate frozen | none | none | Run `for file in install.sh scripts/install/homebrew.sh uncle; do bash -n "$file" || exit; done`. | Exit 0 for all three files. | Command and exit/output | | NOT RUN |
+| MC-005 | P0 | MODIFY; PRESERVE; rendering | B-1–B-5; plan M-1/U-2 | I-3 | BLOCKED-SETUP: supply a rendered candidate README preview accessible in the system browser; baseline U-2 records no rendering evidence | browser:system | none | On this macOS platform run `open "$preview_url"`; inspect heading, callout, existing prose, code blocks and image; follow displayed install links without executing downloads. | Heading/callout display `Uncle`; markup, image and CLI examples remain intact; references retain their original targets. Record unavailable remote targets separately from rendering defects; unresolved U-2 blocks closure. | Preview URL and candidate hash; actual browser/version; screenshots; link targets and load outcomes | | BLOCKED-SETUP |
+| MC-006 | P1 | MODIFY; PRESERVE; packaging | B-1/B-2/B-6; plan P-5/D-1 | I-2/I-3 | Frozen candidate; writable external temporary directory; Python, tar and dpkg-deb; builder CLI at scripts/install/build-package.py:120 | fixtures:package-readme | none | Run in Bash: `set -e; pkgcheck=$(mktemp -d); python3 -B scripts/install/build-package.py archive --source "$PWD" --output "$pkgcheck"; python3 -B scripts/install/build-package.py deb --source "$PWD" --output "$pkgcheck" --version 0.1.0; tar -xzf "$pkgcheck/uncle.tar.gz" -C "$pkgcheck"; dpkg-deb --extract "$pkgcheck/uncle_0.1.0_all.deb" "$pkgcheck/deb"; cmp README.md "$pkgcheck/uncle/README.md"; cmp README.md "$pkgcheck/deb/usr/lib/uncle/README.md"`. Inspect both extracted README lines 4/28. | Both packaged README files equal the candidate, including the two capitalization changes. | Commands/exits; artifact identities; extracted README hashes and comparison results | | NOT RUN |
+| MC-008 | P0 | deviation; evidence; containment | Plan F-2/F-3/STOP-1; notes D-1/D-2 | I-1/I-2/I-3 | Frozen candidate; access to retained S-1 evidence and implementation-stage reporting instruction | none | none | Run `git status --short`, `git diff HEAD --name-status`, `git diff`, `git diff --cached`, `wc -c .uncle/workflow/change.diff`, and `git diff --check`; reconcile each path against IMPLEMENTATION_NOTES.md:4,19,25 and authenticated S-1 hashes. Inspect README.md:4,28 and CHANGE_TEST_REPORT.md:79,80. | Empty recorded diff must not establish completion; missing P-1 blocks AC-1/AC-2. Account for all seven modified documents: five pre-existing paths plus two reporting artifacts. Require documented authorization for the report exception; preserve MC-002's source containment requirement. Missing historical evidence blocks preservation claims. Formatting diagnostics must introduce nothing beyond the two recorded pre-existing locations. | Candidate hash; complete diffs/status/exits; S-1 hashes; report authorization; disposition of every mismatch and diagnostic | | NOT RUN |
+| MC-009 | P1 | PRESERVE; regression | B-6; report FT-1 | I-1/I-2 | Disposable candidate copy on Unix and native Windows runners; Bash, Python, Ruby, jq, curses, Cline, OpenCode and suite prerequisites; Windows Git Bash setup per .github/workflows/installers.yml:66; writable fixtures and loopback permission | runner:regression; loopback:127.0.0.1:ephemeral | none | In Bash on each runner run `export PYTHONDONTWRITEBYTECODE=1; for testfile in scripts/tests/*-test.sh; do bash "$testfile"; result=$?; printf '%s exit=%s\n' "$testfile" "$result"; done; for testfile in scripts/tests/*-test.py; do case "$testfile" in */install-test.py) continue;; esac; python3 -B "$testfile"; result=$?; printf '%s exit=%s\n' "$testfile" "$result"; done; ruby -c Formula/uncle.rb`. On Windows also run `powershell -NoProfile -File scripts/tests/install-windows-test.ps1`, `pwsh -NoProfile -File scripts/tests/install-windows-test.ps1`, and `powershell -NoProfile -File scripts/tests/windows-process-test.ps1`. | Each suite exits 0; inspect individual exits rather than the loop's exit. Record every skip and settle missing coverage on a capable runner. Capture warnings and failures individually; FT-1 remains open for any unexecuted suite. The live fixture binds an assigned loopback port at scripts/tests/self-hosted-live-test.py:59. | Runner/candidate identities; expanded suite inventory; per-suite output/exits/counts/skips; warnings; assigned port; prerequisite failures | | NOT RUN |
+
+## Assumptions
+
+| ID | Unverified prerequisite | Settled by |
+|---|---|---|
+| A-1 | Historical snapshot, inventory and hashes are recoverable; implementation.jsonl contains tool names without raw results. | Recover authenticated S-1 evidence for MC-001/002/008; do not substitute HEAD as historical proof. |
+| A-2 | Execution stage retains tooling and writable temporary storage. | MC-003/006/009 startup; classify missing setup before execution. |
+| A-3 | Usable browser and candidate preview remain unavailable; report PE-1 records exit 134. | Supply a static file or hosted preview and establish browser access for MC-005; human-only access requires BLOCKED-HUMAN. |
+| A-4 | Regression runners satisfy platform and live-client prerequisites. | MC-009 inventory and startup; record missing capabilities as BLOCKED-SETUP. |
+
+## Open questions
+
+| ID | Required resolution |
+|---|---|
+| O-1 | Completion contradicts inspected README.md:4,28 and IMPLEMENTATION_NOTES.md:12; implementation owner must resolve STOP-1 and deliver P-1 before acceptance can close. |
+| O-2 | MC-008 must reconcile the zero-byte workflow diff with `git status --short`; no snapshot identity or historical hashes were supplied. |
+| O-3 | Mandatory preserved base rows and executable additions exceed 4000 bytes; retained under the mandatory-content exception. |
+
+## acceptance-criteria traceability
+
+| ID | Checks |
+|---|---|
+| AC-1 | MC-001/005 |
+| AC-2 | MC-001/005 |
+| AC-3 | MC-001/002 |
+| AC-4 | MC-003 |
+| AC-5 | MC-002/004/005/008 |
+| TT-1; RT-3 | MC-003/004; MC-001 |
+| FT-1 | MC-009 |
+| UA-1; UA-2 | MC-005; MC-001–006/008 |
+| FM-1; PE-1/PE-2 | MC-008; MC-005/008 |
+>>>>>>> b449b41 (changes uncle to Uncle)
 
 ## preserved-behavior coverage
 
 | ID | Checks |
 |---|---|
+<<<<<<< HEAD
 | SPEC B-2–B-5; error contract | MC-002/003/005/006/010/014 |
+=======
+| B-3–B-5 | MC-001/002/005 |
+| B-6 | MC-003/006/009 |
+>>>>>>> b449b41 (changes uncle to Uncle)
 
 ## changed-behavior coverage
 
 | ID | Checks |
 |---|---|
+<<<<<<< HEAD
 | SPEC B-1; PLAN P-8/P-9 | MC-001/004/006/007/012/013 |
 | Unplanned `.gitignore:21`; notes D-1/D-2 | MC-009 |
+=======
+| B-1/B-2 | MC-001/005/006 |
+| D-1/D-2: IMPLEMENTATION_NOTES.md:25 | MC-008 |
+>>>>>>> b449b41 (changes uncle to Uncle)
 
 ## invariant coverage
 
 | ID | Checks |
 |---|---|
+<<<<<<< HEAD
 | SPEC I-1/I-4/I-5 | MC-001/002/003/004/007/012/014 |
 | SPEC I-2/I-3; BASELINE I-1/I-2/I-3 | MC-001/005/010 |
+=======
+| I-1 | MC-001/002/003 |
+| I-2 | MC-002/003 |
+| I-3 | MC-001/005/006 |
+>>>>>>> b449b41 (changes uncle to Uncle)
 
 ## regression coverage
 
 | ID | Checks |
 |---|---|
+<<<<<<< HEAD
 | PLAN P-3/P-8/P-10/P-12/P-15/M-1 | MC-002/003/005/006/007/008/009/014 |
 | REPORT FS-1/L-1/U-1 | MC-010/011/006/012 |
 | NOTES D-3/D-4/D-5/U-2/U-3 | MC-006/014/008/013 |
 | Partial-write retry; two absent writers | MC-003/004 |
+=======
+| RG-1: overreplacement/markup | MC-001/002/005 |
+| RG-2: package/error/isolation | MC-003/006 |
+| RG-3: compatibility/scope | MC-002/004/008 |
+| RG-4: workflow/TUI | MC-009 |
+>>>>>>> b449b41 (changes uncle to Uncle)
 
 ## Removed checks
 
-| Check ID | Reason |
+| ID | Reason |
 |---|---|
+<<<<<<< HEAD
 | None | No base check is provably inapplicable. |
+=======
+| MC-007 | No display edits exist to reverse: inspected `git diff -- README.md` and staged diff are empty; README.md:4,28 remain lowercase, consistent with CHANGE_TEST_REPORT.md:59. Reinstate rollback verification if a later candidate implements P-1. |
+>>>>>>> b449b41 (changes uncle to Uncle)

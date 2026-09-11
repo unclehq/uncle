@@ -1,4 +1,5 @@
 ## Summary
+<<<<<<< HEAD
 Verification found contract and scope failures; no source fixes were made.
 Evidence root E: `/tmp/uncle-verification/`; fresh driver evidence remains `.uncle/workflow/checklist-driver-checks/`.
 
@@ -31,3 +32,27 @@ Environmental and human prerequisites are separate from defects.
 | O-1 | Owner must dispose D-1–D-4 and D-2 scope deviation before acceptance. |
 | O-2 | Notes F-5/F-6 describe required reporting artifacts; D-1 attributes other workflow-document edits to prior work. Frozen implementation diff contains only C-1–C-4 plus `.gitignore`. Current `git diff --check` exits 0; older whitespace findings are historical. |
 | O-3 | `/tmp/uncle-seed-check.py` exists and was inspected; its earlier success claims are not fresh evidence. This run used independent retained harnesses and driver assertions. |
+=======
+
+Three defects found: the primary change is unimplemented; two regression-suite failures occurred on the partial Unix run.
+
+## Defects
+
+| ID | Severity | Description | Affected checks | Evidence | Cause | Fix |
+|---|---|---|---|---|---|---|
+| D-001 | P0 | README.md display capitalization not implemented | MC-001/002/005/006/008 | README.md:4 `<h1 align="center">uncle</h1>`; README.md:28 `> **Just testing uncle?**`; IMPLEMENTATION_NOTES.md D-1; CHANGE_TEST_REPORT.md UA-2 | Implementation stopped under CHANGE_PLAN.md STOP-1 after browser preview probe exit 134 | Resume S-2/S-3; apply P-1 to README.md:4,28; rerun T-1–T-3 and M-1/M-2 |
+| D-002 | P1 | background-performance-test.sh fails on macOS runner | MC-009 | `scripts/tests/background-performance-test.sh:32`: `PROJECT_ROOT: unbound variable`; partial MC-009 log | Test expects PROJECT_ROOT environment variable not set in this shell | Set PROJECT_ROOT or run in CI environment |
+| D-003 | P1 | implementation-review-test.sh fails on macOS runner | MC-009 | GPG signing timeout in partial MC-009 log: `gpg: signing failed: Timeout` | Interactive GPG pinentry required; no agent configured | Configure non-interactive GPG signing or run in CI with proper GPG agent |
+
+## Environmental blockers
+
+| ID | Check | Blocker | Action needed |
+|---|---|---|---|
+| E-001 | MC-001/002/008 | Authenticated S-1 snapshot/inventory/hashes unavailable | Recover original S-1 evidence or treat current README.md as pre-edit baseline after implementation |
+| E-002 | MC-005 | Rendered candidate README preview and working browser unavailable | Provide static preview file or working headless browser for M-1 |
+| E-003 | MC-009 | Native Windows runners and live loopback fixture unavailable | Run MC-009 on CI with Windows Git Bash and ephemeral loopback port |
+
+## Recommendation
+
+Resolve D-001 before any acceptance. Investigate D-002/D-003 on the intended CI runner; they appear environmental but require confirmation. Clear E-001–E-003 before final closure.
+>>>>>>> b449b41 (changes uncle to Uncle)

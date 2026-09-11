@@ -1,5 +1,6 @@
 # Change Request
 
+<<<<<<< HEAD
 Seeded from [unclehq/uncle#13](https://github.com/unclehq/uncle/issues/13).
 
 ## Change Type
@@ -43,3 +44,6 @@ List behavior or components that must not be changed.
 ## Success Criteria
 
 Describe the observable evidence that proves the change works.
+=======
+Change uncle to Uncle in README.md
+>>>>>>> b449b41 (changes uncle to Uncle)

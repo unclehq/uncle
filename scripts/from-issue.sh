@@ -475,9 +475,6 @@ EOF
         echo "REQUIREMENTS.md does not contain a '# Project brief' section; cannot seed new-app workflow."
         exit 1
     fi
-    local head
-    head="$(awk '/^# Project brief$/{exit} {print}' REQUIREMENTS.md)"
-    printf '%s\n%s\n' "$head" "$brief" > REQUIREMENTS.md
     echo "Updated REQUIREMENTS.md project brief from issue $OWNER/$REPO#$ISSUE_NUM"
     echo "Run: ./scripts/stagegate.sh"
 }

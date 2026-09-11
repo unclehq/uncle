@@ -96,6 +96,7 @@ COUNT=$((COUNT + 1))
 implementation_has_changes || fail "new product file was not detected"
 rm feature.txt
 
+
 # The shapes an implementation stage produces: an edit, a new source file, a
 # deletion, and the workflow's own reports.
 printf 'def add(a, b):\n    return a - b\n' > app/calc.py

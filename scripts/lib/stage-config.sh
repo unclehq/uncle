@@ -21,7 +21,6 @@
 # keeps working until it is next saved.
 
 UNCLE_REVIEWER_STAGES=" adversarial-review test-review manual-checklist final-audit "
-UNCLE_DEFAULT_RUNNER="cline"
 UNCLE_DEFAULT_EFFORT="medium"
 UNCLE_DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
 UNCLE_DEFAULT_CLINE_USAGE_MODEL="deepseek/deepseek-v4-flash"
@@ -96,13 +95,66 @@ uncle_runner_cmd() {
     esac
 }
 
+# Only executable regular PATH files count; never execute a discovery probe.
+uncle_installed_runners() {
+    local binary runner rest dir found
+    for binary in claude codex kimi cline opencode; do
+        rest="${PATH-}:"
+        found=false
+        while [[ "$rest" == *:* ]]; do
+            dir="${rest%%:*}"; rest="${rest#*:}"
+            dir="${dir:-.}"
+            if [[ -d "$dir" && ( ! -r "$dir" || ! -x "$dir" ) ]]; then
+                printf 'uncle: cannot search PATH directory: %s\n' "$dir" >&2
+                continue
+            fi
+            if [[ -f "$dir/$binary" ]]; then
+                if [[ -x "$dir/$binary" ]]; then found=true; break; fi
+                printf 'uncle: not executable: %s\n' "$dir/$binary" >&2
+            fi
+        done
+        if [[ "$found" == true ]]; then
+            runner="$binary"
+            [[ "$binary" != opencode ]] || runner=self-hosted
+            printf '%s\n' "$runner"
+        fi
+    done
+}
+
+uncle_no_runner() {
+    echo 'uncle: no agents installed. Install claude, codex, kimi, cline, or opencode and add its executable to PATH.' >&2
+    return 1
+}
+
+# Dynamically scoped in each driver invocation, so command/model share a runner.
+# Explicit commands bypass discovery, including when no binaries are installed.
+uncle_resolve_stage_runner() {
+    local stage="$1" side="$2" var global
+    var="WORKFLOW_${side}_CMD_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
+    global="WORKFLOW_${side}_CMD"
+    UNCLE_RESOLVED_RUNNER=""
+    if [[ -n "${!var:-}" || -n "${!global:-}" ]]; then
+        stage="$(uncle_config_stage "$stage")"
+        UNCLE_RESOLVED_RUNNER="$(uncle_config_get "$stage.runner")"
+        [[ -n "$UNCLE_RESOLVED_RUNNER" ]] || UNCLE_RESOLVED_RUNNER="$(uncle_config_get runner)"
+        case "$UNCLE_RESOLVED_RUNNER" in opencode|aider) UNCLE_RESOLVED_RUNNER=self-hosted ;; esac
+        return 0
+    fi
+    UNCLE_RESOLVED_RUNNER="$(uncle_stage_runner "$stage")"
+    [[ -n "$UNCLE_RESOLVED_RUNNER" ]] || uncle_no_runner
+}
+
 uncle_stage_runner() {
     local stage v
     stage="$(uncle_config_stage "$1")"
     v="$(uncle_config_get "$stage.runner")"
     [[ -n "$v" ]] || v="$(uncle_config_get runner)"
     [[ "$v" != "opencode" && "$v" != "aider" ]] || v=self-hosted
-    printf '%s' "${v:-$UNCLE_DEFAULT_RUNNER}"
+    if [[ -z "$v" ]]; then
+        v="$(uncle_installed_runners)"
+        v="${v%%$'\n'*}"
+    fi
+    printf '%s' "$v"
 }
 
 uncle_stage_effort() {
@@ -117,16 +169,16 @@ uncle_stage_effort() {
 # Cline and self-hosted stages use explicit models; other runners have their own default,
 # and a model uncle picked for them would be wrong more often than right.
 uncle_stage_model() {
-    local stage v
+    local stage v runner
     stage="$(uncle_config_stage "$1")"
-    case "$stage" in implementation-step-*) stage=implementation ;; esac
-    if [[ "$(uncle_stage_runner "$stage")" == "self-hosted" ]]; then
+    runner="${2-$(uncle_stage_runner "$stage")}"
+    if [[ "$runner" == "self-hosted" ]]; then
         v="${UNCLE_SELF_HOSTED_MODEL:-$(uncle_config_get "$stage.model")}"
         [[ -n "$v" ]] || v="$(uncle_config_get self-hosted.model)"
         printf '%s' "$v"
         return 0
     fi
-    [[ "$(uncle_stage_runner "$stage")" == "cline" ]] || return 0
+    [[ "$runner" == "cline" ]] || return 0
     v="$(uncle_config_get "$stage.model")"
     [[ -n "$v" ]] || v="$(uncle_config_get "$stage")"
     if [[ -z "$v" && "$(uncle_stage_side "$stage")" == "reviewer" ]]; then
@@ -180,13 +232,15 @@ uncle_stage_billing() {
 }
 
 uncle_stage_cmd() {
-    local stage="$1" side
+    local stage="$1" side runner
     side="$(uncle_stage_side "$stage")"
-    uncle_runner_cmd "$(uncle_stage_runner "$stage")" "$side"
+    runner="${2-$(uncle_stage_runner "$stage")}"
+    [[ -n "$runner" ]] || { uncle_no_runner; return 1; }
+    uncle_runner_cmd "$runner" "$side"
 }
 
 # True when the project has a config file at all. Without one there is nothing
-# to re-read, and the drivers keep their own built-in defaults.
+# to re-read; runner selection still uses PATH discovery.
 uncle_has_config() {
     [[ -s "$(uncle_config_file)" ]]
 }

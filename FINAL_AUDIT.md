@@ -11,4 +11,5 @@
 | FA-7 | Medium | DEFECTS.md D-6; /tmp/uncle-verification/MC-013-retry.tsv records gates, manual-signing, menu-input and waiver-popup exits 1; VERIFICATION_REPORT.md regression summary leaves attribution unverified. | Regression failures remain unresolved. | AC-5; preserved workflow behavior | Reproduce against the matching baseline and final snapshot; repair regressions or record an accepted disposition for baseline/environment failures. | YES |
 | FA-8 | Medium | uncle_tui.py:1193–1226 truncates config before writing and swallows exceptions; VERIFICATION_REPORT.md MC-015 and DEFECTS.md D-4 reproduce partial-write selection loss on current and baseline versions. | Failed saves can silently lose retained model/billing selections. | C8 persistence and rollback expectations | Use atomic replacement and report save failures; retain failure/recovery coverage. This defect predates the diff. | NO |
 
+
 NOT READY

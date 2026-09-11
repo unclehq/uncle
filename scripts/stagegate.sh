@@ -805,8 +805,8 @@ stage_model() {
     case "$1" in
         requirements|execute-checklist) fallback="kimi" ;;
     esac
-    if uncle_has_config; then
-        fallback="$(uncle_stage_model "$1")"
+    if uncle_has_config || [[ -n "${UNCLE_RESOLVED_RUNNER:-}" ]]; then
+        fallback="$(uncle_stage_model "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}")"
     fi
     stage_setting_opt MODEL "$1" "$fallback"
 }
@@ -815,27 +815,27 @@ stage_model() {
 # file — a driver invoked with WORKFLOW_AGENT_CMD set means it — and the
 # built-in default applies only when the project has no config at all.
 stage_agent_cmd() {
-    local fallback
-    if [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
-        fallback="$WORKFLOW_AGENT_CMD"
-    elif uncle_has_config; then
-        fallback="$(uncle_stage_cmd "$1")"
+    local var
+    var="WORKFLOW_AGENT_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
+    if [[ -n "${!var:-}" ]]; then
+        printf '%s' "${!var}"
+    elif [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
+        printf '%s' "$WORKFLOW_AGENT_CMD"
     else
-        fallback="$AGENT_CMD"
+        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
     fi
-    stage_setting AGENT_CMD "$1" "$fallback"
 }
 
 stage_reviewer_cmd() {
-    local fallback
-    if [[ -n "${WORKFLOW_REVIEWER_CMD:-}" ]]; then
-        fallback="$WORKFLOW_REVIEWER_CMD"
-    elif uncle_has_config; then
-        fallback="$(uncle_stage_cmd "$1")"
+    local var
+    var="WORKFLOW_REVIEWER_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
+    if [[ -n "${!var:-}" ]]; then
+        printf '%s' "${!var}"
+    elif [[ -n "${WORKFLOW_REVIEWER_CMD:-}" ]]; then
+        printf '%s' "$WORKFLOW_REVIEWER_CMD"
     else
-        fallback="$REVIEWER_CMD"
+        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
     fi
-    stage_setting REVIEWER_CMD "$1" "$fallback"
 }
 
 stage_effort() {
@@ -1102,11 +1102,13 @@ run_claude() {
     local effort
     local turns
     local cmd
+    local UNCLE_RESOLVED_RUNNER
+    uncle_resolve_stage_runner "$log_name" AGENT || return 1
 
+    cmd="$(stage_agent_cmd "$log_name")" || return 1
     model="$(stage_model "$log_name")"
     effort="$(stage_effort "$log_name")"
     turns="$(stage_turns "$log_name")"
-    cmd="$(stage_agent_cmd "$log_name")"
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
@@ -1184,7 +1186,9 @@ run_codex_review() {
     require_file "$prompt_file"
 
     local cmd
-    cmd="$(stage_reviewer_cmd "$log_name")"
+    local UNCLE_RESOLVED_RUNNER
+    uncle_resolve_stage_runner "$log_name" REVIEWER || return 1
+    cmd="$(stage_reviewer_cmd "$log_name")" || return 1
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
@@ -1194,7 +1198,8 @@ run_codex_review() {
     # message into the designated review artifact.
     local model_args=()
     local model effort fallback="${CODEX_MODEL:-}"
-    if uncle_has_config; then fallback="$(uncle_stage_model "$log_name")"; fi
+    if uncle_has_config || [[ -n "${UNCLE_RESOLVED_RUNNER:-}" ]]; then fallback="$(uncle_stage_model "$log_name" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$log_name")}")"; fi
+    if ! uncle_has_config; then fallback="${CODEX_MODEL-$fallback}"; fi
     model="$(stage_setting_opt MODEL "$log_name" "$fallback")"
     effort="$(stage_effort "$log_name")"
     [[ -z "$effort" ]] || model_args+=(-c "model_reasoning_effort=$effort")

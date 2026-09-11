@@ -1173,7 +1173,7 @@ run_claude() {
 
         # The final result event, if the run produced one.
         local result
-        result="$(jq -R -c 'fromjson? | select(.type == "result")' < "$log" | tail -n 1)"
+        result="$(jq -R -c 'fromjson? | select(type == "object") | select(.type == "result")' < "$log" | tail -n 1)"
 
         if [[ -n "$result" ]]; then
             record_cost "agent:$log_name" "$elapsed" \
@@ -1261,7 +1261,7 @@ record_codex_cost() {
     fi
 
     local result
-    result="$(jq -R -c 'fromjson? | select(.type == "result")' "$log" | tail -n 1)"
+    result="$(jq -R -c 'fromjson? | select(type == "object") | select(.type == "result")' "$log" | tail -n 1)"
     if [[ -n "$result" ]]; then
         record_cost "reviewer:$log_name" "$elapsed" \
             "$(printf '%s' "$result" | jq -r '.total_cost_usd // "-"')" \

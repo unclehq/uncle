@@ -344,6 +344,8 @@ write_change_request() {
     cat > CHANGE_REQUEST.md <<EOF
 # Change Request
 
+Issue $ISSUE_NUM
+
 Seeded from [$OWNER/$REPO#$ISSUE_NUM]($URL).
 
 ## Change Type
@@ -395,6 +397,8 @@ write_new_project_brief() {
     local brief
     brief="$(cat <<EOF
 # Project brief
+
+Issue $ISSUE_NUM
 
 > Seeded from [$OWNER/$REPO#$ISSUE_NUM]($URL).
 > Replace the placeholder guidance below with specifics before running the driver.

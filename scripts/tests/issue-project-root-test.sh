@@ -61,6 +61,7 @@ def no_effects(p, result):
 def refused(p, result):
     assert result.returncode != 0, result.stdout
     assert not any(x in result.stdout for x in ('Created REQUIREMENTS', 'Updated REQUIREMENTS', 'Run:'))
+    assert not os.path.lexists(p / 'CHANGE_REQUEST.md'), (result.stdout, result.stderr)
     no_effects(p, result)
 
 

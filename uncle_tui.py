@@ -57,6 +57,19 @@ def _project_root():
     return os.getcwd()
 
 
+def _direct_origin_issue():
+    try:
+        with open(os.path.join(_project_root(), ".uncle", "workflow", "origin"),
+                  encoding="utf-8") as origin:
+            fields = origin.readline().rstrip("\n").split("\t")
+    except (OSError, UnicodeError):
+        return ""
+    if (len(fields) >= 2 and fields[0] and fields[1]
+            and all("0" <= char <= "9" for char in fields[1])):
+        return fields[1]
+    return ""
+
+
 def _default_config_path():
     return os.path.join(_project_root(), ".uncle", "config")
 
@@ -2249,6 +2262,23 @@ class UncleTUI:
         if stage:
             parts += "  %s" % stage
         text = parts
+        issue = ""
+        if self.state == "running":
+            if self.workflow_idx == 1:
+                issue = self.issue
+            elif self.workflow_idx == 2:
+                issue = getattr(self, "direct_issue", "")
+        if issue:
+            import re
+            issue_match = re.match(
+                r"^https?://github\.com/[^/]+/[^/]+/issues/([0-9]+)", issue)
+            if issue_match is None:
+                issue_match = re.fullmatch(r"([0-9]+)", issue)
+            if issue_match:
+                label = "change request %s" % issue_match.group(1)
+                padding = w - 1 - len(parts) - len(label)
+                if padding >= 1:
+                    text += " " * padding + label
         try:
             self.stdscr.attrset(bar_attr | curses.A_REVERSE)
             self.stdscr.addnstr(h - 1, 0, text.ljust(w)[: w - 1], w - 1)
@@ -2533,6 +2563,9 @@ class UncleTUI:
         # The run reads the file, so make sure we are not about to launch on
         # top of an edit we have not seen.
         self.maybe_reload()
+        self.direct_issue = ""
+        if self.workflow_idx == 2:
+            self.direct_issue = _direct_origin_issue()
         self.state = "running"
         self.start_workflow()
 

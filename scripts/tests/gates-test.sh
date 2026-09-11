@@ -924,7 +924,7 @@ expect_no_file .uncle/workflow/implemented
 
 
 # Newly capped outputs are reported and preserved, and both drivers keep
-# building: the budget is advisory. FINAL_AUDIT additionally burns its three
+# building: the budget is advisory. FINAL_AUDIT additionally uses its two
 # compaction attempts and continues with the preserved review. The blocking
 # form is covered by the enforced review-cache cases below and the budget
 # unit tests.
@@ -939,6 +939,11 @@ for artifact in IMPLEMENTATION_NOTES AUTOMATED_TEST_REPORT VERIFICATION_REPORT D
     expect_file "$artifact.md"
     expect_out "Workflow complete."
     expect_state COMPLETE
+    if [[ "$artifact" == FINAL_AUDIT ]]; then
+        expect_no_file '.uncle/workflow/logs/final-audit.compact-3.log'
+        COUNT=$((COUNT + 1))
+        [[ $(grep -c '/candidate.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'expected exactly two final audit compaction calls'
+    fi
 done
 
 for artifact in IMPLEMENTATION_NOTES CHANGE_TEST_REPORT VERIFICATION_REPORT; do
@@ -958,11 +963,17 @@ new_case change-budget-background-checklist
 green_baseline 0 'bash app/test.sh'
 printf 'write a base checklist\n' > "$REPO/prompts/change/manual-checklist-base.md"
 set_state IMPLEMENT
-run_driver WORKFLOW_PARALLEL_CHECKLIST=1 WORKFLOW_DOC_MAX_BYTES_MANUAL_CHECKLIST_BASE=1
+run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" WORKFLOW_PARALLEL_CHECKLIST=1 WORKFLOW_DOC_MAX_BYTES_MANUAL_CHECKLIST_BASE=1
 expect_status 0
-expect_out 'still exceeds the budget after 3 attempts; continuing with the preserved original'
+expect_out 'still exceeds the budget after 2 attempts; continuing with the preserved original'
 expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
 expect_state WAIT_IMPLEMENT_APPROVAL
+expect_no_file '.uncle/workflow/logs/manual-checklist-base.compact-3.log'
+COUNT=$((COUNT + 1))
+[[ $(grep -c '/candidate.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'expected exactly two background compaction calls'
+printf 'MC-1 Check the greeting.\n\nREADY\n' > "$CASE/expected.md"
+COUNT=$((COUNT + 1))
+cmp -s "$CASE/expected.md" "$REPO/.uncle/workflow/MANUAL_CHECKLIST.base.md" || fail 'background exhaustion changed original bytes'
 
 new_case change-budget-step-handoff
 green_baseline 0 'bash app/test.sh'
@@ -992,7 +1003,7 @@ new_case change-compact-background-checklist
 green_baseline 0 'bash app/test.sh'
 printf 'write a base checklist\n' > "$REPO/prompts/change/manual-checklist-base.md"
 set_state IMPLEMENT
-run_driver WORKFLOW_PARALLEL_CHECKLIST=1 FAKE_COMPACT_REVIEW=1 WORKFLOW_DOC_MAX_BYTES_MANUAL_CHECKLIST_BASE=50
+run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" WORKFLOW_PARALLEL_CHECKLIST=1 FAKE_COMPACT_REVIEW=1 WORKFLOW_DOC_MAX_BYTES_MANUAL_CHECKLIST_BASE=50
 expect_status 0
 expect_out 'Compaction accepted:'
 expect_state WAIT_IMPLEMENT_APPROVAL

@@ -11,6 +11,8 @@ import shutil
 import json
 import os
 import queue
+import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1285,6 +1287,53 @@ class UncleTUI:
             self.status_mode = ev.get("mode", self.status_mode)
 
     # ---- running ----
+    def _title_issue(self, env):
+        if self.workflow_idx == 1:
+            match = re.match(r"^https?://github\.com/[^/]+/[^/]+/issues/([0-9]+)", self.issue)
+            issue = match.group(1) if match else self.issue
+        elif self.workflow_idx == 2:
+            try:
+                with open(os.path.join(_project_root(), ".uncle", "workflow", "origin"),
+                          encoding="utf-8") as origin:
+                    fields = origin.readline().rstrip("\n").split("\t")
+            except (OSError, UnicodeError):
+                fields = []
+            repo = env.get("STAGEGATE_ORIGIN_REPO") or (fields[0] if fields else "")
+            issue = env.get("STAGEGATE_ORIGIN_ISSUE") or (fields[1] if len(fields) > 1 else "")
+            if not repo:
+                return ""
+        else:
+            return ""
+        return issue if re.fullmatch(r"[0-9]+", issue) else ""
+
+    def _write_title(self, title):
+        try:
+            if (sys.stdout.isatty() and sys.stderr.isatty()
+                    and os.environ.get("TERM") not in (None, "", "dumb")):
+                sys.stdout.write("\033]2;" + title + "\007")
+                sys.stdout.flush()
+                return True
+        except (OSError, ValueError):
+            pass
+        return False
+
+    def _begin_title(self, env):
+        self._end_title()
+        issue = self._title_issue(env)
+        if issue and not env.get("UNCLE_TITLE_OWNER"):
+            self.title_active = self._write_title("uncle issue #" + issue)
+            if self.title_active:
+                env["UNCLE_TITLE_OWNER"] = str(os.getpid())
+
+    def _end_title(self):
+        if getattr(self, "title_active", False):
+            self.title_active = False
+            self._write_title("uncle")
+
+    def _poll_workflow(self):
+        if self.proc and self.proc.poll() is not None:
+            self._end_title()
+
     def start_workflow(self):
         fd, self.status_path = tempfile.mkstemp(prefix="uncle-status-", suffix=".jsonl")
         os.close(fd)
@@ -1315,10 +1364,15 @@ class UncleTUI:
         # gates, plus the odd retry or confirmation. Under curses the driver
         # cannot have the terminal, so the answers are typed into this screen
         # and written down the pipe.
-        self.proc = subprocess.Popen(self.cmd_for(), cwd=_project_root(), env=env,
-                                     stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     bufsize=0)
+        self._begin_title(env)
+        try:
+            self.proc = subprocess.Popen(self.cmd_for(), cwd=_project_root(), env=env,
+                                         stdin=subprocess.PIPE,
+                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                         bufsize=0)
+        except BaseException:
+            self._end_title()
+            raise
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self):
@@ -1341,6 +1395,7 @@ class UncleTUI:
             self.out_q.put(None)
 
     def drain_output(self):
+        self._poll_workflow()
         got = False
         before = (self.proc_done, self.prompt_kind)
         try:
@@ -1516,7 +1571,11 @@ class UncleTUI:
         except curses.error:
             pass
         try:
-            subprocess.call(cmd, shell=True)
+            viewer = subprocess.Popen(cmd, shell=True)
+            while viewer.poll() is None:
+                self._poll_workflow()
+                time.sleep(.1)
+            self._poll_workflow()
         except Exception:
             pass
         try:
@@ -1636,11 +1695,10 @@ class UncleTUI:
 
     def stop_workflow(self):
         if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
+            subprocess.run(["bash", os.path.join(ROOT, "scripts", "lib", "terminal-title.sh"),
+                            "--stop-tree", str(self.proc.pid), "include-root"], check=True)
+            self.proc.wait()
+        self._end_title()
         self.proc = None
         self.status_model = ""
         self.status_effort = ""
@@ -2574,6 +2632,19 @@ class UncleTUI:
 
     # ---- main loop ----
     def run(self):
+        previous_term = signal.getsignal(signal.SIGTERM)
+        def terminate(signum, frame):
+            raise SystemExit(128 + signum)
+        signal.signal(signal.SIGTERM, terminate)
+        try:
+            self._run_loop()
+        finally:
+            try:
+                self.stop_workflow()
+            finally:
+                signal.signal(signal.SIGTERM, previous_term)
+
+    def _run_loop(self):
         curses.curs_set(0)
         self.stdscr.keypad(True)
         self.stdscr.timeout(80)
@@ -2581,6 +2652,7 @@ class UncleTUI:
         dirty = True
         size = None
         while self.state != "quit":
+            self._poll_workflow()
             dirty = self.poll_status() or dirty
             dirty = self.poll_session_stats() or dirty
             if self.state == "running":
@@ -2601,7 +2673,6 @@ class UncleTUI:
                 self.draw()
                 dirty = False
                 size = current_size
-        self.stop_workflow()
 
 
 def main(stdscr):

@@ -356,6 +356,14 @@ current_issue() {
     fi
 }
 
+. "$ROOT/scripts/lib/terminal-title.sh"
+trap 'uncle_title_end' EXIT
+trap 'uncle_cancel 130' INT
+trap 'uncle_cancel 143' TERM
+if [[ -n "${STAGEGATE_ORIGIN_REPO:-$(origin_field "$ORIGIN_FILE" 1)}" ]]; then
+    uncle_title_begin "$(current_issue)"
+fi
+
 set_state() {
     state_write "$STATE_FILE" "$1" "$(current_issue)"
 }
@@ -384,7 +392,7 @@ acquire_lock() {
         if mkdir "$LOCK_DIR" 2>/dev/null; then
             printf '%s\n' "$$" > "$LOCK_DIR/pid"
             LOCK_HELD=1
-            trap 'cleanup_bg; release_lock' EXIT
+            trap 'progress_end; cleanup_bg; release_lock; uncle_title_end' EXIT
             return 0
         fi
 
@@ -1150,12 +1158,13 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
-        "${client_cmd[@]}" "${flags[@]}" \
+        ( "${client_cmd[@]}" "${flags[@]}" \
             < "$effective_prompt" \
             2>&1 \
             | tee "$LOG_DIR/${log_name}.jsonl" \
             | progress_tap "${PROGRESS_TOTAL:-0}" "${PROGRESS_LABEL:-stage}" \
-            | format_claude_stream || status=$?
+            | format_claude_stream ) &
+        wait "$!" || status=$?
         progress_end
 
         local elapsed="$((SECONDS - start))"
@@ -1318,8 +1327,9 @@ run_codex() {
     local status=0
     # stdin is the operator's gate-answer channel, not stage input: codex
     # appends a non-TTY stdin to the prompt and would block on it forever.
-    "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
-        < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
+    ( "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
+        < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" ) &
+    wait "$!" || status=$?
 
     record_codex_cost "$log_name" "$((SECONDS - start))"
     perf_record reviewer "$log_name" "$((SECONDS-start))" "$status" \
@@ -1353,11 +1363,11 @@ BG_EFFORT=""
 cleanup_bg() {
     if [[ -n "$BG_PID" ]] && kill -0 "$BG_PID" 2>/dev/null; then
         echo "Stopping background stage: $BG_LABEL"
-        kill "$BG_PID" 2>/dev/null || true
+        bash "$ROOT/scripts/lib/terminal-title.sh" --stop-tree "$BG_PID" include-root
         wait "$BG_PID" 2>/dev/null || true
     fi
 }
-trap 'progress_end; cleanup_bg' EXIT
+trap 'progress_end; cleanup_bg; uncle_title_end' EXIT
 
 start_codex_bg() {
     local prompt_file

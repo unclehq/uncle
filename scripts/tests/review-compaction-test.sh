@@ -6,6 +6,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cd "$tmp"
 LOG_DIR="$tmp"
+unset WORKFLOW_REVIEW_COMPACT_ATTEMPTS
 export CALLS="$tmp/calls" CANDIDATE="$tmp/candidate.md" FLAKY="$tmp/flaky-marker"
 cat > reviewer <<'STUB'
 #!/usr/bin/env bash
@@ -19,6 +20,8 @@ done
 case "${MODE:-ok}" in
     fail) exit 7 ;;
     timeout) sleep 30 & printf '%s\n' "$!" >> "$CALLS.children"; wait ;;
+    oversized-then-fit)
+        if [[ -e "$FLAKY" ]]; then cp "$CANDIDATE" "$out"; else touch "$FLAKY"; cp original.md "$out"; fi ;;
     flaky)
         if [[ -e "$FLAKY" ]]; then cp "$CANDIDATE" "$out"; else touch "$FLAKY"; exit 7; fi ;;
     *) cp "$CANDIDATE" "$out" ;;
@@ -57,7 +60,7 @@ grep -q -- '--sandbox read-only -m vendor/model -c model_reasoning_effort=high' 
 # Already-fitting reviews cost no extra invocation.
 finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review
 [[ $(wc -l < "$CALLS") -eq 1 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
-# A failed fit is retried three times, then the run keeps building with the
+# A failed fit is attempted twice, then the run keeps building with the
 # preserved original: the budget is advisory, so exhaustion is a remark, not
 # a stop.
 for mode in fail timeout oversized lost-id changed-status; do
@@ -68,13 +71,15 @@ for mode in fail timeout oversized lost-id changed-status; do
         lost-id) sed 's/AR-001/AR-002/g' good.md > candidate.md ;;
         changed-status) sed 's/YES | FAIL/YES | PASS/' good.md > candidate.md ;;
     esac
+    rm -f "$tmp"/adversarial-review.compact-*.log
     before=$(wc -l < "$CALLS")
     MODE="$mode" WORKFLOW_REVIEW_COMPACT_SECONDS=1 \
         finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review > exhausted 2>&1 \
         || { echo "FAIL $0:$LINENO $mode: exhaustion must continue, not stop"; exit 1; }
-    grep -q 'still exceeds the budget after 3 attempts; continuing with the preserved original' exhausted \
+    grep -q 'still exceeds the budget after 2 attempts; continuing with the preserved original' exhausted \
         || { echo "FAIL $0:$LINENO $mode"; exit 1; }
     cmp original.md ADVERSARIAL_REVIEW.md
+    [[ ! -e "$tmp/adversarial-review.compact-3.log" ]] || { echo "FAIL $0:$LINENO third attempt log"; exit 1; }
     if [[ "$mode" == timeout ]]; then
         while read -r child_pid; do
             if kill -0 "$child_pid" 2>/dev/null; then
@@ -83,36 +88,43 @@ for mode in fail timeout oversized lost-id changed-status; do
         done < "$CALLS.children"
         rm "$tmp"/adversarial-review.compact-*.log
     fi
-    [[ $(wc -l < "$CALLS") -eq $((before + 3)) ]] || { echo "FAIL $0:$LINENO $mode"; exit 1; }
+    [[ $(wc -l < "$CALLS") -eq $((before + 2)) ]] || { echo "FAIL $0:$LINENO $mode"; exit 1; }
     mv good.md candidate.md
 done
 # A fit on a later attempt stops the loop early with the candidate in place.
-cp original.md ADVERSARIAL_REVIEW.md
-rm -f "$FLAKY"
-before=$(wc -l < "$CALLS")
-MODE=flaky finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review > flaky 2>&1 \
-    || { echo "FAIL $0:$LINENO"; exit 1; }
-cmp candidate.md ADVERSARIAL_REVIEW.md
-[[ $(wc -l < "$CALLS") -eq $((before + 2)) ]] || { echo "FAIL $0:$LINENO"; exit 1; }
-[[ -e "$tmp/adversarial-review.compact-1.log" && -e "$tmp/adversarial-review.compact-2.log" ]] \
-    || { echo "FAIL $0:$LINENO per-attempt logs missing"; exit 1; }
+for mode in flaky oversized-then-fit; do
+    cp original.md ADVERSARIAL_REVIEW.md
+    rm -f "$FLAKY"
+    before=$(wc -l < "$CALLS")
+    MODE="$mode" finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review > flaky 2>&1 \
+        || { echo "FAIL $0:$LINENO"; exit 1; }
+    cmp candidate.md ADVERSARIAL_REVIEW.md
+    [[ $(wc -l < "$CALLS") -eq $((before + 2)) ]] || { echo "FAIL $0:$LINENO"; exit 1; }
+    [[ -e "$tmp/adversarial-review.compact-1.log" && -e "$tmp/adversarial-review.compact-2.log" ]] \
+        || { echo "FAIL $0:$LINENO per-attempt logs missing"; exit 1; }
+done
 # The attempt count is configurable; one attempt still continues on failure.
-cp original.md ADVERSARIAL_REVIEW.md
-before=$(wc -l < "$CALLS")
-MODE=fail WORKFLOW_REVIEW_COMPACT_ATTEMPTS=1 \
-    finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review > once 2>&1 \
-    || { echo "FAIL $0:$LINENO"; exit 1; }
-grep -q 'after 1 attempts' once || { echo "FAIL $0:$LINENO"; exit 1; }
-[[ $(wc -l < "$CALLS") -eq $((before + 1)) ]] || { echo "FAIL $0:$LINENO"; exit 1; }
-cmp original.md ADVERSARIAL_REVIEW.md
+for value in 1 2 3 999999999999999999999999999999999999999999999999999999999999999999 ''; do
+    expected=2
+    [[ "$value" != 1 ]] || expected=1
+    cp original.md ADVERSARIAL_REVIEW.md
+    before=$(wc -l < "$CALLS")
+    MODE=fail WORKFLOW_REVIEW_COMPACT_ATTEMPTS="$value" \
+        finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review > override 2>&1 \
+        || { echo "FAIL $0:$LINENO attempts=$value"; exit 1; }
+    grep -q "after $expected attempts" override || { echo "FAIL $0:$LINENO"; exit 1; }
+    [[ $(wc -l < "$CALLS") -eq $((before + expected)) ]] || { echo "FAIL $0:$LINENO"; exit 1; }
+    cmp original.md ADVERSARIAL_REVIEW.md
+done
 # A bad attempt count is a configuration error, not a document problem: the
 # reviewer is never invoked.
-for value in 0 invalid -1 2.5; do
+for value in 0 01 invalid -1 2.5; do
     before=$(wc -l < "$CALLS")
     if WORKFLOW_REVIEW_COMPACT_ATTEMPTS="$value" \
-        finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review 2>/dev/null; then
+        finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review > invalid 2>&1; then
         echo "FAIL $0:$LINENO attempts=$value must be rejected"; exit 1
     fi
+    grep -q "WORKFLOW_REVIEW_COMPACT_ATTEMPTS must be a positive integer: $value" invalid || { echo "FAIL $0:$LINENO"; exit 1; }
     [[ $(wc -l < "$CALLS") -eq "$before" ]] || { echo "FAIL $0:$LINENO"; exit 1; }
 done
 # Enforced budgets keep the blocking behavior after the attempts run out.
@@ -122,8 +134,8 @@ if MODE=fail WORKFLOW_DOC_BUDGET_ENFORCE=1 \
     finish_review_budget ADVERSARIAL_REVIEW.md "$tmp/reviewer" '' '' adversarial-review </dev/null > enforced 2>&1; then
     echo "FAIL $0:$LINENO enforced exhaustion must stop the stage"; exit 1
 fi
-grep -q 'still exceeds the budget after 3 attempts' enforced || { echo "FAIL $0:$LINENO"; exit 1; }
-[[ $(wc -l < "$CALLS") -eq $((before + 3)) ]] || { echo "FAIL $0:$LINENO"; exit 1; }
+grep -q 'still exceeds the budget after 2 attempts' enforced || { echo "FAIL $0:$LINENO"; exit 1; }
+[[ $(wc -l < "$CALLS") -eq $((before + 2)) ]] || { echo "FAIL $0:$LINENO"; exit 1; }
 cmp original.md ADVERSARIAL_REVIEW.md
 # Explicit opt-out does not call the reviewer. The document is left long, and
 # with the budget advisory that is a remark rather than a stop -- so what is
@@ -179,4 +191,6 @@ cmp expected.md ADVERSARIAL_REVIEW.md
 [[ "$(acceptance_result ADVERSARIAL_REVIEW.md R-1)" == REPAIR ]] \
     || { echo 'FAIL: repaired failing report must route to repair'; exit 1; }
 [[ -n "$(find .uncle/workflow/logs -name '*before-table-repair-*.md')" ]]
+document_budget_prompt adversarial-review > budget-prompt
+grep -q 'up to two compaction passes for reviewer output' budget-prompt
 echo 'review-compaction-test: passed'

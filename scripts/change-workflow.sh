@@ -366,6 +366,14 @@ current_issue() {
     fi
 }
 
+. "$ROOT/scripts/lib/terminal-title.sh"
+trap 'uncle_title_end' EXIT
+trap 'uncle_cancel 130' INT
+trap 'uncle_cancel 143' TERM
+if [[ -n "${STAGEGATE_ORIGIN_REPO:-$(origin_field "$ORIGIN_FILE" 1)}" ]]; then
+    uncle_title_begin "$(current_issue)"
+fi
+
 set_state() {
     state_write "$STATE_FILE" "$1" "$(current_issue)"
 }
@@ -394,7 +402,7 @@ acquire_lock() {
         if mkdir "$LOCK_DIR" 2>/dev/null; then
             printf '%s\n' "$$" > "$LOCK_DIR/pid"
             LOCK_HELD=1
-            trap 'cleanup_bg; release_lock' EXIT
+            trap 'progress_end; cleanup_bg; release_lock; uncle_title_end' EXIT
             return 0
         fi
 
@@ -1162,12 +1170,13 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
-        "${client_cmd[@]}" "${flags[@]}" \
+        ( "${client_cmd[@]}" "${flags[@]}" \
             < "$effective_prompt" \
             2>&1 \
             | tee "$LOG_DIR/${log_name}.jsonl" \
             | progress_tap "${PROGRESS_TOTAL:-0}" "${PROGRESS_LABEL:-stage}" \
-            | format_claude_stream || status=$?
+            | format_claude_stream ) &
+        wait "$!" || status=$?
         progress_end
 
         local elapsed="$((SECONDS - start))"
@@ -1176,7 +1185,7 @@ run_claude() {
 
         # The final result event, if the run produced one.
         local result
-        result="$(jq -R -c 'fromjson? | select(.type == "result")' < "$log" | tail -n 1)"
+        result="$(jq -R -c 'fromjson? | select(type == "object") | select(.type == "result")' < "$log" | tail -n 1)"
 
         if [[ -n "$result" ]]; then
             record_cost "agent:$log_name" "$elapsed" \
@@ -1264,7 +1273,7 @@ record_codex_cost() {
     fi
 
     local result
-    result="$(jq -R -c 'fromjson? | select(.type == "result")' "$log" | tail -n 1)"
+    result="$(jq -R -c 'fromjson? | select(type == "object") | select(.type == "result")' "$log" | tail -n 1)"
     if [[ -n "$result" ]]; then
         record_cost "reviewer:$log_name" "$elapsed" \
             "$(printf '%s' "$result" | jq -r '.total_cost_usd // "-"')" \
@@ -1332,8 +1341,9 @@ run_codex() {
     local status=0
     # stdin is the operator's gate-answer channel, not stage input: codex
     # appends a non-TTY stdin to the prompt and would block on it forever.
-    "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
-        < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
+    ( "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
+        < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" ) &
+    wait "$!" || status=$?
 
     record_codex_cost "$log_name" "$((SECONDS - start))"
     perf_record reviewer "$log_name" "$((SECONDS-start))" "$status" \
@@ -1367,11 +1377,11 @@ BG_EFFORT=""
 cleanup_bg() {
     if [[ -n "$BG_PID" ]] && kill -0 "$BG_PID" 2>/dev/null; then
         echo "Stopping background stage: $BG_LABEL"
-        kill "$BG_PID" 2>/dev/null || true
+        bash "$ROOT/scripts/lib/terminal-title.sh" --stop-tree "$BG_PID" include-root
         wait "$BG_PID" 2>/dev/null || true
     fi
 }
-trap 'progress_end; cleanup_bg' EXIT
+trap 'progress_end; cleanup_bg; uncle_title_end' EXIT
 
 start_codex_bg() {
     local prompt_file
@@ -1629,6 +1639,33 @@ while true; do
             require_file CHANGE_TEST_REPORT.md
             check_document_budget IMPLEMENTATION_NOTES.md || exit 1
             check_document_budget CHANGE_TEST_REPORT.md || exit 1
+
+            if ! implementation_has_changes; then
+                echo "Implementation produced no code, test, or product-document changes. Attempting repair once."
+                compose_implementation_prompt prompts/change/implement-change.md "$STATE_DIR/implementation-repair.md"
+                cat >> "$STATE_DIR/implementation-repair.md" <<'REPAIR'
+
+The previous implementation returned reports but delivered no reviewable change.
+Read IMPLEMENTATION_NOTES.md and resolve routine implementation choices within
+the approved scope, then implement the requested behavior and its tests.
+Do not treat writing reports or rerunning baseline tests as implementation.
+Do not bypass a genuine unresolved approval requirement: explain the precise
+decision needed if you cannot proceed. The driver will keep IMPLEMENT pending
+if no change is delivered. Update the implementation notes and test report.
+REPAIR
+                run_claude "$STATE_DIR/implementation-repair.md" implementation \
+                    "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
+                if ! implementation_has_changes; then
+                    echo "Implementation remains incomplete: no reviewable change was delivered."
+                    echo "Resolve the blockers in IMPLEMENTATION_NOTES.md and CHANGE_PLAN.md, then resume."
+                    echo "The workflow remains at IMPLEMENT; it cannot advance to final audit."
+                    exit 1
+                fi
+                require_file IMPLEMENTATION_NOTES.md
+                require_file CHANGE_TEST_REPORT.md
+                check_document_budget IMPLEMENTATION_NOTES.md || exit 1
+                check_document_budget CHANGE_TEST_REPORT.md || exit 1
+            fi
 
             check_scope_deviations
 

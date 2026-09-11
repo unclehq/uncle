@@ -94,7 +94,7 @@ none.
   and evidence by file and section; avoid copying transcripts and repeated rationale.
   Do not create a second summary artifact or move obligations out of the contract.
 - If mandatory content alone exceeds the driver budget, retain it. The driver
-  retries the fit (up to three compaction passes for reviewer output), then
+  retries the fit (up to two compaction passes for reviewer output), then
   preserves the artifact and continues; an operator can explicitly increase the
   budget, or set `WORKFLOW_DOC_BUDGET_ENFORCE=1` to keep overruns blocking.
 - No sentence that survives having its adjectives removed unchanged in

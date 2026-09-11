@@ -180,8 +180,7 @@ def validate(j, ready=True):
 
 def manual_signed_commit(j):
     import shlex
-    command = ('git add -A && git rm -r --cached --ignore-unmatch -- .uncle/workflow '
-               '&& git add -f -- FINAL_AUDIT.md && git commit -S -m ' + shlex.quote(j['title']))
+    command = ('git commit -a -S -m ' + shlex.quote(j['title']))
     if os.environ.get('UNCLE_SIGNING_JSON') == '1':
         block = json.dumps(command) + ' '
     else:

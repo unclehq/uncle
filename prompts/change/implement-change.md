@@ -18,7 +18,34 @@ From BASELINE_REPORT.md you need the build and test commands and the
 preserved-behavior table. From CHANGE_PLAN.md you need the frozen
 scope and the file list. Go straight to the files that list names.
 
-Implement the approved change.
+Implement the approved change in this invocation. The deliverable is working
+behavior in the repository, with tests that demonstrate it. Reports describe
+that delivery; writing reports or rerunning unchanged baseline tests does not
+complete implementation.
+
+Before working through the file list, map each required acceptance criterion
+to the behavior to change and the check that will prove it. Complete every
+required item before handing off. Begin the first code change after the focused
+baseline inspection; do not spend the stage repeatedly reviewing settled plans.
+
+Resolve routine implementation choices using the approved scope and existing
+repository conventions. A question marked ASSUMPTION or UNRESOLVED is not by
+itself a reason to stop: determine whether it actually requires new authority
+or changes an acceptance criterion. Do not request approval again for work
+already authorized. Do not bypass an explicit unresolved approval requirement;
+identify the exact decision and complete independent authorized work while it
+is pending. Never describe a stopped or partial implementation as complete.
+
+Before writing the final reports:
+
+- Inspect the actual diff and confirm the requested behavior was implemented.
+  Unrelated edits and workflow reports do not satisfy a feature request.
+- Run a targeted check that distinguishes the requested behavior from the
+  original behavior. Existing baseline tests alone are insufficient evidence.
+- Map each required acceptance criterion to the changed code and observed
+  verification result. Implement missing items before ending the stage.
+- If a genuine blocker remains, record the missing behavior and exact blocker
+  as incomplete. Do not claim delivery merely because commands exited zero.
 
 Before editing:
 

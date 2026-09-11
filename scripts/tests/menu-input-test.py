@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Selection-time input gates; all launches are mocked or isolated stubs."""
+import json
 import os
+import queue
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -127,6 +131,116 @@ class MenuInputTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(Path(env['CALLS']).read_text().splitlines(),
                          [f'from-issue.sh|{self.project}|123 --new'])
+
+    def test_issue_new_seeds_requirements(self):
+        install, env = self.shell_fixture()
+        shutil.copy2(ROOT / 'scripts/from-issue.sh', install / 'scripts/from-issue.sh')
+        url = 'https://github.com/example/project/issues/42'
+        body = 'Exact issue body\n\n## Details\nKeep this text.'
+        metadata = json.dumps(dict(title='Selected issue', body=body, url=url))
+        bin_dir = self.base / 'bin'
+        bin_dir.mkdir()
+        (bin_dir / 'gh').write_text(
+            '#!/bin/bash\n'
+            '[[ "$*" == "issue view 42 --repo example/project --json title,body,url,state,labels" ]] '
+            '|| { echo unexpected-gh-call >> "$CALLS"; exit 1; }\n'
+            "printf '%s\\n' '" + metadata + "'\n")
+        (bin_dir / 'curl').write_text(
+            '#!/bin/bash\necho unexpected-curl-call >> "$CALLS"\nexit 1\n')
+        for stub in bin_dir.iterdir():
+            stub.chmod(0o755)
+        env.update(PATH=str(bin_dir) + os.pathsep + env['PATH'],
+                   UNCLE_PROJECT_ROOT=str(self.project), GIT_CONFIG_NOSYSTEM='1',
+                   TMPDIR=str(self.base))
+        subprocess.run(['git', 'init', '-q', str(self.project)], env=env, check=True)
+        (self.project / 'app.py').write_text('# Existing application\n')
+        subprocess.run(['git', '-C', str(self.project), 'add', 'app.py'],
+                       env=env, check=True)
+        sentinels = {name: (name + ' install sentinel\n').encode() for name in INPUTS.values()}
+        for name, content in sentinels.items():
+            (install / name).write_bytes(content)
+        workflows = [(label, [str(install / 'scripts' / Path(cmd[0]).name)])
+                     for label, cmd in tui.WORKFLOWS]
+        del self.ui.start_workflow
+        self.ui.stage_env = Mock(return_value={})
+        self.ui.proc = None
+        self.ui.status_path = ''
+        real_thread = threading.Thread
+        for menu in ('tui', 'shell'):
+            for existing in (False, True):
+                with self.subTest(menu=menu, existing=existing):
+                    brief = self.project / 'REQUIREMENTS.md'
+                    brief.unlink(missing_ok=True)
+                    request = self.project / 'CHANGE_REQUEST.md'
+                    request.unlink(missing_ok=True)
+                    sentinel = b'User change request\n\x00Keep exact bytes\n'
+                    if existing:
+                        request.write_bytes(sentinel)
+                    output = ''
+                    if menu == 'tui':
+                        threads = []
+                        self.ui.out_q = queue.Queue()
+
+                        def reader_thread(*args, **kwargs):
+                            thread = real_thread(*args, **kwargs)
+                            threads.append(thread)
+                            return thread
+
+                        deadline = time.monotonic() + 20
+                        try:
+                            with patch.dict(os.environ, env, clear=True), \
+                                    patch.object(tui, 'WORKFLOWS', workflows), \
+                                    patch.object(tui.threading, 'Thread', side_effect=reader_thread):
+                                self.select(1)
+                                self.ui.input_buf = url
+                                self.ui._confirm_text()
+                                self.ui.sel = 2
+                                self.ui._confirm()
+                            self.ui.proc.stdin.close()  # Never confirm RUN.
+                            code = self.ui.proc.wait(timeout=max(0.01, deadline - time.monotonic()))
+                            self.assertEqual(len(threads), 1)
+                            threads[0].join(timeout=max(0.01, deadline - time.monotonic()))
+                            self.assertFalse(threads[0].is_alive(), 'reader did not reach EOF')
+                            chunks = []
+                            while not self.ui.out_q.empty():
+                                chunks.append(self.ui.out_q.get_nowait())
+                            output = ''.join(chunk for chunk in chunks if chunk is not None)
+                            self.assertTrue(chunks and chunks[-1] is None, output)
+                            self.assertEqual(code, 0, output)
+                        finally:
+                            if self.ui.proc is not None:
+                                if self.ui.proc.poll() is None:
+                                    self.ui.proc.kill()
+                                self.ui.proc.wait(timeout=20)
+                            for thread in threads:
+                                thread.join(timeout=20)
+                            if self.ui.proc is not None:
+                                self.ui.proc.stdin.close()
+                                self.ui.proc.stdout.close()
+                            if self.ui.status_path:
+                                Path(self.ui.status_path).unlink(missing_ok=True)
+                            for thread in threads:
+                                self.assertFalse(thread.is_alive(), 'reader survived cleanup')
+                    else:
+                        result = subprocess.run(['bash', str(install / 'uncle')],
+                            cwd=self.project, env=env, input='2\n' + url + '\nn\n',
+                            text=True, capture_output=True, timeout=20)
+                        output = result.stdout + result.stderr
+                        self.assertEqual(result.returncode, 0, output)
+                    self.assertTrue(brief.is_file(), output)
+                    seed = brief.read_text()
+                    for expected in ('# Project brief\n', 'Selected issue', body, url):
+                        self.assertIn(expected, seed, output)
+                    if existing:
+                        self.assertEqual(request.read_bytes(), sentinel, output)
+                    else:
+                        self.assertFalse(os.path.lexists(request), output)
+                    for name, content in sentinels.items():
+                        self.assertEqual((install / name).read_bytes(), content, output)
+                    self.assertFalse((install / '.uncle').exists(), output)
+                    self.assertEqual(list((self.project / '.uncle').iterdir()),
+                                     [Path(env['UNCLE_CONFIG'])], output)
+                    self.assertFalse(Path(env['CALLS']).exists(), output)
 
     def test_launch_cwd(self):
         self.ui.stage_env = Mock(return_value={})

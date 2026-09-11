@@ -32,6 +32,7 @@ agent to make before it can start. Apply these rules before finalizing:
 
 Read:
 
+- CHANGE_REQUEST.md
 - CHANGE_PLAN.md
 - ADVERSARIAL_REVIEW.md
 - CHANGE_SPEC.md
@@ -40,9 +41,25 @@ Both CHANGE_PLAN.md and ADVERSARIAL_REVIEW.md have just passed a human gate and
 may have been edited during that review. Read both from disk in full.
 
 CHANGE_SPEC.md is for traceability only; consult its behavior and invariant IDs
-as needed. You do not need CHANGE_REQUEST.md or BASELINE_REPORT.md: the plan and
-the spec already encode them. Open one only if a specific finding turns on
-something neither document records.
+as needed. Read CHANGE_REQUEST.md for source issue identity. You do not need
+BASELINE_REPORT.md unless a specific finding requires evidence absent from
+the plan and spec.
+
+Carry issue identity from CHANGE_REQUEST.md into CHANGE_PLAN.md:
+
+- Inspect only metadata before the first `##` in CHANGE_REQUEST.md. Use the
+  first top-level `Seeded from` link (optionally prefixed with `> `); extract
+  the issue number from its GitHub issue URL. Preserve that source seed URL
+  verbatim in the plan.
+- If that URL supplies no issue number, use the first standalone `Issue N`
+  line in the same metadata, where N is a decimal issue number. The URL number wins
+  if it conflicts with the standalone line; this also supports legacy requests
+  containing only the seed link.
+- Write exactly one standalone `Issue <number>` line after title metadata
+  (including any omission or review-disposition metadata), before the first `##`.
+  Ignore issue identities in body sections, examples, and other documents.
+- If neither source supplies an issue number, omit the identity line without
+  failing. Preserve any available source seed URL verbatim; never invent a URL.
 
 Revise CHANGE_PLAN.md in place. Do not create a second plan document.
 

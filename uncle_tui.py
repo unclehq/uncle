@@ -1288,10 +1288,11 @@ class UncleTUI:
 
     # ---- running ----
     def _title_issue(self, env):
-        if self.workflow_idx == 1:
+        workflow_idx = getattr(self, "workflow_idx", None)
+        if workflow_idx == 1:
             match = re.match(r"^https?://github\.com/[^/]+/[^/]+/issues/([0-9]+)", self.issue)
             issue = match.group(1) if match else self.issue
-        elif self.workflow_idx == 2:
+        elif workflow_idx == 2:
             try:
                 with open(os.path.join(_project_root(), ".uncle", "workflow", "origin"),
                           encoding="utf-8") as origin:
@@ -1331,7 +1332,7 @@ class UncleTUI:
             self._write_title("uncle")
 
     def _poll_workflow(self):
-        if self.proc and self.proc.poll() is not None:
+        if getattr(self, "proc", None) and self.proc.poll() is not None:
             self._end_title()
 
     def start_workflow(self):

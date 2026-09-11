@@ -2,6 +2,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
+PROJECT_ROOT="$TMP"
 BG_PID=""
 trap 'if [[ -n "$BG_PID" ]]; then kill "$BG_PID" 2>/dev/null || true; wait "$BG_PID" 2>/dev/null || true; fi; rm -rf "$TMP"' EXIT
 LOG_DIR="$TMP/logs"

@@ -1047,7 +1047,7 @@ class UncleTUI:
     #                   its workspace-write sandbox may reach the network,
     #                   which includes binding a loopback port
     #
-    # Older files carried global `runner` / `model` / `effort` lines, a bare
+    # Older files carried global `runner` / `model` / `effort` / `billing` lines, a bare
     # `<stage> <model>` line, and a `reviewer <model>` line. Those are still
     # read — as the seed for stages the file does not configure explicitly —
     # and are never written back, so the first save migrates the file.
@@ -1070,7 +1070,7 @@ class UncleTUI:
             self._config_stamp = None
             return self.first_run
         self.first_run = False
-        legacy = {"runner": "", "model": "", "effort": "", "reviewer": ""}
+        legacy = {"runner": "", "model": "", "effort": "", "billing": "", "reviewer": ""}
         try:
             with open(CONFIG_PATH) as fh:
                 for line in fh:
@@ -1170,6 +1170,8 @@ class UncleTUI:
                 self.stage_runners[stage] = legacy["runner"]
             if legacy["effort"] and stage not in self.stage_efforts:
                 self.stage_efforts[stage] = legacy["effort"]
+            if legacy["billing"] and stage not in self.stage_billings:
+                self.stage_billings[stage] = legacy["billing"]
             model = legacy["model"]
             if STAGE_SIDE.get(stage) == REVIEWER and legacy["reviewer"]:
                 model = legacy["reviewer"]
@@ -1199,9 +1201,9 @@ class UncleTUI:
                         lines.append("%s.runner %s\n" % (stage, runner))
                     if self.stage_efforts.get(stage):
                         lines.append("%s.effort %s\n" % (stage, self.stage_efforts[stage]))
-                    # A model belongs to a cline stage only; keeping one on a
-                    # claude/kimi/codex stage would be a value nothing reads.
-                    if self.stage_models.get(stage) and self.stage_runner(stage) in ("cline", "self-hosted"):
+                    # Keep dormant selections for a later runner switch;
+                    # stage_model controls whether the current runner reads it.
+                    if self.stage_models.get(stage):
                         lines.append("%s.model %s\n" % (stage, self.stage_models[stage]))
                     # Likewise network, which only a codex stage sandboxes. It
                     # is written whenever it is set so that a hand-edited line
@@ -1210,7 +1212,7 @@ class UncleTUI:
                         lines.append("%s.network %s\n" % (stage, self.stage_networks[stage]))
                     # Billing, like model, is a cline-only setting; written
                     # whenever set so a hand-edited line survives the rewrite.
-                    if self.stage_billings.get(stage) and self.stage_runner(stage) == "cline":
+                    if self.stage_billings.get(stage):
                         lines.append("%s.billing %s\n" % (stage, self.stage_billings[stage]))
                     if self.stage_base_urls.get(stage):
                         lines.append("%s.base_url %s\n" % (stage, self.stage_base_urls[stage]))
@@ -1288,10 +1290,11 @@ class UncleTUI:
 
     # ---- running ----
     def _title_issue(self, env):
-        if self.workflow_idx == 1:
+        workflow_idx = getattr(self, "workflow_idx", None)
+        if workflow_idx == 1:
             match = re.match(r"^https?://github\.com/[^/]+/[^/]+/issues/([0-9]+)", self.issue)
             issue = match.group(1) if match else self.issue
-        elif self.workflow_idx == 2:
+        elif workflow_idx == 2:
             try:
                 with open(os.path.join(_project_root(), ".uncle", "workflow", "origin"),
                           encoding="utf-8") as origin:
@@ -1331,7 +1334,7 @@ class UncleTUI:
             self._write_title("uncle")
 
     def _poll_workflow(self):
-        if self.proc and self.proc.poll() is not None:
+        if getattr(self, "proc", None) and self.proc.poll() is not None:
             self._end_title()
 
     def start_workflow(self):
@@ -1340,6 +1343,7 @@ class UncleTUI:
         env = dict(os.environ)
         env.update(self.stage_env())
         env["UNCLE_STATUS_FILE"] = self.status_path
+        env["UNCLE_SIGNING_JSON"] = "1"
         self.status_pos = 0
         self.panel_scroll = None
         self.proc_done = False
@@ -1634,6 +1638,27 @@ class UncleTUI:
         if ("PR title [default: ".startswith(plain)
                 or plain.startswith("PR title [default:") and not plain.endswith("]:")):
             return
+        signing_prefix = "Commit signing needs your help. "
+        signing_suffix = " Return here and press ENTER (OK) when finished:"
+        if signing_prefix.startswith(plain) or plain.startswith(signing_prefix):
+            if not plain.endswith("press ENTER (OK) when finished:"):
+                return
+            self.signing_command = ""
+            payload = plain[len(signing_prefix):]
+            if payload.startswith('"'):
+                try:
+                    command, end = json.JSONDecoder().raw_decode(payload)
+                except ValueError:
+                    return
+                if not isinstance(command, str) or payload[end:] != signing_suffix:
+                    return
+                self.signing_command = command
+                self.signing_copy_status = ""
+                self.prompt_kind = "enter"
+                self.prompt_text = signing_prefix + "Run in another terminal:\n" + command
+                self.prompt_buf = ""
+                self.prompt_scroll = 0
+                return
         upper = plain.upper()
         if plain.startswith("PR title [default: "):
             self.prompt_kind = "input"
@@ -1650,6 +1675,27 @@ class UncleTUI:
         if plain.startswith("PR title [default: ") and plain.endswith("]:"):
             self.prompt_buf = plain[len("PR title [default: "):-2]
         self.prompt_scroll = 0
+
+    def _copy_signing_command(self):
+        if sys.platform == "darwin":
+            candidates = [["pbcopy"]]
+        elif os.environ.get("WAYLAND_DISPLAY"):
+            candidates = [["wl-copy"]]
+        elif os.environ.get("DISPLAY"):
+            candidates = [["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]]
+        else:
+            candidates = []
+        try:
+            for argv in candidates:
+                executable = shutil.which(argv[0])
+                if executable:
+                    subprocess.run([executable] + argv[1:], input=self.signing_command.encode("utf-8"),
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=2, check=True)
+                    self.signing_copy_status = "Copied command"
+                    return
+            raise OSError("no clipboard helper available")
+        except (OSError, subprocess.SubprocessError) as error:
+            self.signing_copy_status = "Copy failed: " + str(error)
 
     @staticmethod
     def _strip_ansi(text):
@@ -2242,7 +2288,7 @@ class UncleTUI:
         elif self.prompt_kind == "enter":
             footer = "[Enter] continue      [Esc] decline"
             if self.prompt_text.startswith("Commit signing needs your help."):
-                footer = "[ OK / Enter ] resume      [Esc] cancel"
+                footer = "[c] Copy command  [Enter] resume  [Esc] cancel"
         else:
             footer = "type an answer, [Enter] send, [Esc] cancel"
         body = list(lines)
@@ -2252,10 +2298,22 @@ class UncleTUI:
             body = lines[self.prompt_scroll:self.prompt_scroll + visible]
         if self.prompt_kind == "input":
             body += ["", "> " + self.prompt_buf + "\u2588"]
-        body += ["", footer]
+        if self.prompt_text.startswith("Commit signing needs your help."):
+            width = max(1, w - 10)
+            import textwrap
+            lines = [line for paragraph in self.prompt_text.splitlines()
+                     for line in (textwrap.wrap(paragraph, width=width) or [""])]
+            footer_lines = self._wrap(footer, width)
+            status = self._wrap(getattr(self, "signing_copy_status", ""), width)
+            visible = max(1, h - 6 - len(footer_lines) - len(status))
+            self.prompt_scroll = max(0, min(getattr(self, "prompt_scroll", 0), max(0, len(lines) - visible)))
+            body = lines[self.prompt_scroll:self.prompt_scroll + visible] + status + [""] + footer_lines
+        else:
+            body += ["", footer]
 
         box_w = min(w - 4, max(len(l) for l in body + [footer]) + 6)
-        box_w = max(box_w, 30)
+        box_w = (min(w - 2, max(box_w, min(30, w - 2)))
+                 if self.prompt_text.startswith("Commit signing needs your help.") else max(box_w, 30))
         box_h = len(body) + 4
         top = max(0, (h - box_h) // 2)
         left = max(0, (w - box_w) // 2)
@@ -2346,6 +2404,19 @@ class UncleTUI:
 
     # ---- input ----
     def handle_key(self, k):
+        if (self.state == "running" and getattr(self, "prompt_kind", "") == "enter"
+                and self.prompt_text.startswith("Commit signing needs your help.")):
+            if k in (ord("c"), ord("C")) and getattr(self, "signing_command", ""):
+                self._copy_signing_command()
+                return
+            if k == 27:
+                self.stop_workflow()
+                self.state = "menu"
+                self.sel = 0
+                return
+            if k in (curses.KEY_UP, curses.KEY_DOWN):
+                self.prompt_scroll = max(0, self.prompt_scroll + (1 if k == curses.KEY_DOWN else -1))
+                return
         if self.state == "running" and getattr(self, "prompt_kind", "") == "support":
             if k in (ord("s"), ord("S")):
                 self.prompt_kind = ""

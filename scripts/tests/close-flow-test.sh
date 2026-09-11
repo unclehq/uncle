@@ -1097,6 +1097,99 @@ elif args[:2] == ['pr', 'create']:
     def publish(self, **env):
         return self.engine('handoff', '\nImplemented audited fix\nRun smoke test\ny\n', **env)
 
+    def signed_pending(self):
+        key = self.root / 'signing-key'
+        subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(key)], check=True)
+        allowed = self.root / 'allowed-signers'
+        allowed.write_text('fixture@example.test ' + key.with_suffix('.pub').read_text())
+        self.git('config', 'gpg.format', 'ssh')
+        self.git('config', 'user.signingkey', str(key))
+        self.git('config', 'gpg.ssh.allowedSignersFile', str(allowed))
+        self.git('config', 'commit.gpgsign', 'true')
+        (self.repo / '.gitignore').write_text('FINAL_AUDIT.md\n')
+        (self.state / 'tracked').write_text('tracked state\n')
+        self.git('add', '-f', '.uncle/workflow/tracked')
+        self.git('commit', '--no-gpg-sign', '-qm', 'tracked workflow state')
+        self.original = self.git('rev-parse', 'HEAD')
+        self.freeze()
+        result = self.publish()
+        self.assertIn('No answer received', result.stdout)
+        self.assertTrue(self.journal()['manual_signing'])
+        command = result.stdout.split('Commit signing needs your help.', 1)[1].split('\n', 1)[1].split('\nReturn here', 1)[0]
+        self.ok(subprocess.run(['sh', '-c', command], cwd=self.repo, env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT))
+        self.assertEqual(self.git('rev-parse', 'HEAD^{tree}'), self.journal()['commit_tree'])
+        self.assertNotIn('.uncle/workflow/', self.git('ls-tree', '-r', '--name-only', 'HEAD'))
+
+    def complete(self, close='0', unattended='0', file=False, **extra):
+        (self.state / 'state').write_text('42:COMPLETE\n')
+        unattended_path = self.state / 'unattended-gates'
+        if file:
+            unattended_path.write_text('1\n')
+        elif unattended_path.exists():
+            unattended_path.unlink()
+        return subprocess.run(['bash', str(ROOT / 'scripts/change-workflow.sh')], cwd=self.repo,
+            env=dict(self.env, UNCLE_PROJECT_ROOT=str(self.repo), WORKFLOW_CLOSE_ISSUE=close, UNATTENDED=unattended, **extra),
+            input='\n', text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+
+    def test_signed_complete_skip_inputs_and_markerless_phases(self):
+        self.signed_pending()
+        pending = self.journal()
+        for close, unattended, file in [('0', '0', False), ('1', '1', False), ('1', '0', True), ('0', '1', True)]:
+            (self.state / 'pr/journal.json').write_text(json.dumps(pending))
+            result = self.complete(close, unattended, file)
+            self.ok(result)
+            self.assertEqual(self.journal()['phase'], 'created', result.stdout)
+            self.assertEqual(self.journal()['manual_signed_head'], self.git('rev-parse', 'HEAD'))
+            self.assertEqual(len(self.creates()), 1)
+        created = self.journal()
+        for phase in ('prepared', 'published', 'creating', 'unknown'):
+            for marker in (True, False):
+                j = dict(created, phase=phase)
+                if not marker: j.pop('manual_signed_head')
+                (self.state / 'pr/journal.json').write_text(json.dumps(j))
+                result = self.complete()
+                self.ok(result)
+                self.assertEqual(self.journal()['phase'], 'created', result.stdout)
+                self.assertEqual(len(self.creates()), 1)
+        self.assertFalse((self.state / 'issue-closed').exists())
+
+    def test_signed_unknown_never_recreates_and_invalid_skips(self):
+        self.signed_pending()
+        self.ok(self.complete(CREATE_FAIL='1'))
+        self.assertEqual(self.journal()['phase'], 'unknown')
+        for lookup in ('', '1'):
+            self.ok(self.complete(LOOKUP_FAIL=lookup))
+            self.assertEqual(len(self.creates()), 1)
+        j = self.journal()
+        j['manual_signed_head'] = '0' * 40
+        (self.state / 'pr/journal.json').write_text(json.dumps(j))
+        result = self.complete()
+        self.assertIn('handoff disabled', result.stdout)
+        self.assertEqual(len(self.creates()), 1)
+
+    def test_signed_published_retry_and_unsigned_intended_skip(self):
+        self.signed_pending()
+        self.ok(self.complete(LOOKUP_FAIL='1'))
+        self.assertEqual(self.journal()['phase'], 'published')
+        self.assertEqual(len(self.creates()), 0)
+        self.ok(self.complete())
+        self.assertEqual(self.journal()['phase'], 'created')
+        self.assertEqual(len(self.creates()), 1)
+        j = self.journal()
+        unsigned = self.git('-c', 'commit.gpgsign=false', 'commit-tree', j['commit_tree'], '-p', j['original_head'], '-m', 'unsigned')
+        self.git('update-ref', 'HEAD', unsigned)
+        j.update(phase='prepared', intended_head=unsigned)
+        j.pop('manual_signed_head')
+        (self.state / 'pr/journal.json').write_text(json.dumps(j))
+        result = self.complete()
+        self.assertIn('handoff disabled', result.stdout)
+        self.assertEqual(len(self.creates()), 1)
+
+    def test_unsigned_complete_still_skips(self):
+        result = self.complete()
+        self.assertIn('handoff disabled', result.stdout)
+        self.assertEqual(len(self.creates()), 0)
+
     def test_driver_audit_to_pr_and_rerun(self):
         self.exe('reviewer', """#!/usr/bin/env python3
 from pathlib import Path

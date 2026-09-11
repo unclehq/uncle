@@ -30,6 +30,7 @@ CONFIRM_WORD="RUN"
 # .uncle/workflow/state grammar, and the shared INV-3 close gate the driver also uses.
 . "$ROOT/scripts/lib/state.sh"
 . "$ROOT/scripts/lib/issue-close.sh"
+. "$ROOT/scripts/lib/terminal-title.sh"
 
 workflow_state() {
     state_read "$STATE_FILE"
@@ -153,7 +154,7 @@ confirm_and_run_workflow() {
     STAGEGATE_RUN_ID="$run_id" \
     STAGEGATE_ORIGIN_REPO="$OWNER/$REPO" \
     STAGEGATE_ORIGIN_ISSUE="$ISSUE_NUM" \
-        "$ROOT/scripts/change-workflow.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"} || status=$?
+        uncle_run "$ROOT/scripts/change-workflow.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"} || status=$?
 
     if [[ "$status" -ne 0 ]]; then
         echo
@@ -162,6 +163,7 @@ confirm_and_run_workflow() {
     fi
 
     echo "Change workflow finished. Issues remain open until their PR is merged."
+    echo "Making PR, please wait..."
 }
 
 
@@ -249,6 +251,11 @@ else
     usage
     exit 1
 fi
+
+trap 'uncle_title_end' EXIT
+trap 'uncle_cancel 130' INT
+trap 'uncle_cancel 143' TERM
+uncle_title_begin "$ISSUE_NUM"
 
 # ---------------------------------------------------------------------------
 # Fetch issue metadata.
@@ -493,6 +500,6 @@ case "$MODE" in
     new)
         write_new_project_brief
         echo "Starting the new-application workflow in $PROJECT_ROOT"
-        bash "$ROOT/scripts/stagegate.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"}
+        uncle_run bash "$ROOT/scripts/stagegate.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"}
         ;;
 esac

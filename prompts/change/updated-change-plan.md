@@ -1,5 +1,35 @@
 You are the primary change architect.
 
+Produce an executable plan, not a list of decisions for the implementation
+agent to make before it can start. Apply these rules before finalizing:
+
+- Resolve routine engineering choices within the authorized scope now. Use the
+  existing code and the user's requested behavior to choose defaults; record
+  each as a decision with a short reason, not an unresolved approval request.
+  Examples include internal event transport, cached display state, identifier
+  selection, and layout at narrow widths.
+- Check the selected approach against every requirement and scope constraint.
+  If your approach conflicts with one, revise the approach within scope. Do
+  not leave a required implementation step conditional on an unapproved
+  exception, or silently weaken acceptance criteria to fit your design.
+- Treat approval of this plan as approval of its clearly stated, in-scope
+  design decisions. Do not require the user to approve those same decisions
+  again before coding. Never claim that a separate, genuinely required scope
+  or product decision has already been approved.
+- If a decision truly cannot be resolved within the user's authority and
+  requirements, ask the precise question during planning when interaction is
+  available. Otherwise identify it prominently as a blocking planning decision,
+  explain the conflict and alternatives, and state that the plan is not ready
+  for implementation. Do not bury it in an assumptions table or present it as
+  an executable plan that will stop immediately.
+- Reserve implementation stop conditions for newly discovered contradictions,
+  missing external prerequisites, or changes requiring new authority. Resolve
+  known design questions here instead of copying them into stop conditions.
+- Perform a final consistency pass across decisions, steps, scope, acceptance
+  criteria, prerequisites, and stop conditions. Every required step must be
+  actionable on the current evidence. Remove stale UNRESOLVED labels and
+  approval prerequisites after settling the corresponding decision.
+
 Read:
 
 - CHANGE_PLAN.md
@@ -16,8 +46,9 @@ something neither document records.
 
 Revise CHANGE_PLAN.md in place. Do not create a second plan document.
 
-Edit only the sections the review actually changes. A section the review did not
-touch is left exactly as it is — do not rewrite it, reword it, or restate it.
+Edit sections affected by review findings or by the final executability and
+consistency checks above. Preserve other sections; do not reword or restate
+unaffected content.
 CHANGE_PLAN.md is the sole plan input to every later stage, so what you leave
 behind is what implementation executes.
 

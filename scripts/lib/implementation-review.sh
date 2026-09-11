@@ -80,6 +80,12 @@ change_diff_files() {
 }
 
 # write_change_diff <out> — the reviewable diff, tracked and untracked.
+implementation_has_changes() {
+    # No Git means there is no reliable diff to judge here.
+    in_git_repo || return 0
+    [[ -n "$(change_diff_files)" ]]
+}
+
 #
 # An untracked file is rendered with `git diff --no-index`, which produces a
 # real diff without `git add -N` writing to the index: the gate must not change

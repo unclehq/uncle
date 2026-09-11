@@ -329,7 +329,7 @@ complete executable contract. Reports cite existing raw logs instead of copying
 transcripts; never drop checks or evidence needed to assess their results.
 Do not create summary sidecars or move obligations out to evade these limits.
 If mandatory content alone cannot fit, preserve it: the driver retries the fit
-(up to three compaction passes for reviewer output) and then continues with the
+(up to two compaction passes for reviewer output) and then continues with the
 preserved artifact. Never truncate required content.
 BUDGET
 }
@@ -402,12 +402,14 @@ finish_review_budget() {
         check_document_budget "$file"
         return $?
     fi
-    max_attempts="${WORKFLOW_REVIEW_COMPACT_ATTEMPTS:-3}"
+    max_attempts="${WORKFLOW_REVIEW_COMPACT_ATTEMPTS:-2}"
     case "$max_attempts" in
         *[!0-9]*|""|0*)
             echo "WORKFLOW_REVIEW_COMPACT_ATTEMPTS must be a positive integer: $max_attempts" >&2
             return 1 ;;
     esac
+    # Cap validated decimal strings before arithmetic, including oversized integers.
+    [[ "$max_attempts" == 1 ]] || max_attempts=2
     read -r bytes lines <<< "$limits"
     [[ -z "$model" ]] || flags+=(-m "$model")
     [[ -z "$effort" ]] || flags+=(-c "model_reasoning_effort=$effort")

@@ -176,7 +176,7 @@ def validate(j, ready=True):
 
 def manual_signed_commit(j):
     import shlex
-    command = 'git commit -S -m ' + shlex.quote(j['title'])
+    command = 'git commit -a -S -m ' + shlex.quote(j['title'])
     ask('Commit signing needs your help. In another terminal, open this project, '
         'review and stage the audited changes, then run: ' + command + '. '
         'Return here and press ENTER (OK) when finished: ')

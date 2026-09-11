@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">uncle</h1>
 
-**Build apps and ship changes with the AI agents you choose.**
+**Build changes from issue to PR with the AI agents you choose.**
 
 > Governed CI for coding agents.
 

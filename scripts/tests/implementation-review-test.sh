@@ -85,7 +85,16 @@ mkdir -p app
 printf 'def add(a, b):\n    return a + b\n' > app/calc.py
 printf 'unchanged\n' > app/other.py
 git add -A
-git commit -qm baseline
+git -c commit.gpgsign=false commit -qm baseline
+
+# Workflow paperwork alone must not count as delivered implementation.
+printf '# stopped before implementation\n' > IMPLEMENTATION_NOTES.md
+COUNT=$((COUNT + 1))
+if implementation_has_changes; then fail "reports alone counted as implementation"; fi
+printf 'new behavior\n' > feature.txt
+COUNT=$((COUNT + 1))
+implementation_has_changes || fail "new product file was not detected"
+rm feature.txt
 
 # The shapes an implementation stage produces: an edit, a new source file, a
 # deletion, and the workflow's own reports.

@@ -1614,6 +1614,33 @@ while true; do
             check_document_budget IMPLEMENTATION_NOTES.md || exit 1
             check_document_budget CHANGE_TEST_REPORT.md || exit 1
 
+            if ! implementation_has_changes; then
+                echo "Implementation produced no code, test, or product-document changes. Attempting repair once."
+                compose_implementation_prompt prompts/change/implement-change.md "$STATE_DIR/implementation-repair.md"
+                cat >> "$STATE_DIR/implementation-repair.md" <<'REPAIR'
+
+The previous implementation returned reports but delivered no reviewable change.
+Read IMPLEMENTATION_NOTES.md and resolve routine implementation choices within
+the approved scope, then implement the requested behavior and its tests.
+Do not treat writing reports or rerunning baseline tests as implementation.
+Do not bypass a genuine unresolved approval requirement: explain the precise
+decision needed if you cannot proceed. The driver will keep IMPLEMENT pending
+if no change is delivered. Update the implementation notes and test report.
+REPAIR
+                run_claude "$STATE_DIR/implementation-repair.md" implementation \
+                    "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
+                if ! implementation_has_changes; then
+                    echo "Implementation remains incomplete: no reviewable change was delivered."
+                    echo "Resolve the blockers in IMPLEMENTATION_NOTES.md and CHANGE_PLAN.md, then resume."
+                    echo "The workflow remains at IMPLEMENT; it cannot advance to final audit."
+                    exit 1
+                fi
+                require_file IMPLEMENTATION_NOTES.md
+                require_file CHANGE_TEST_REPORT.md
+                check_document_budget IMPLEMENTATION_NOTES.md || exit 1
+                check_document_budget CHANGE_TEST_REPORT.md || exit 1
+            fi
+
             check_scope_deviations
 
             python3 "$ROOT/scripts/lib/fix-report-whitespace.py"

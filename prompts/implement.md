@@ -13,7 +13,24 @@ ADVERSARIAL_REVIEW.md, so do not read either one. If the updated plan turns out
 to be missing something you need, read the superseded document, and record in
 IMPLEMENTATION_NOTES.md that you had to.
 
-Implement the approved updated plan.
+Implement the approved updated plan in this invocation. Deliver working
+application code and feature-specific verification, not only plans or reports.
+Map every required acceptance criterion to an implementation task and a check,
+then build the first working slice after the focused repository inspection.
+Continue until all required behavior is implemented and verified.
+
+Resolve routine implementation choices within the approved scope using
+repository conventions. Do not stop merely because the plan labels a detail
+ASSUMPTION or UNRESOLVED; determine whether a new decision is actually required.
+Do not seek approval again for already authorized work. Respect explicit
+unresolved approval requirements and complete independent authorized work
+while they are pending. Report genuine blockers precisely as incomplete work.
+
+Before handing off, inspect the resulting code and exercise the requested
+behavior. For each required acceptance criterion, record the implementing code
+and observed verification result. Passing baseline checks or creating reports
+does not prove a feature was built. Implement missing items before ending;
+never describe partial or blocked work as a completed application.
 
 Rules:
 

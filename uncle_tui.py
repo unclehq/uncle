@@ -101,7 +101,7 @@ AGENT_RUNNERS = ["cline", "claude", "kimi", "codex", "self-hosted"]
 REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi", "self-hosted"]
 
 # Applied to any stage the operator has not configured.
-DEFAULT_RUNNER = "cline"
+DEFAULT_RUNNER = ""
 DEFAULT_EFFORT = "medium"
 DEFAULT_CLINE_MODEL = "cline-pass/deepseek-v4-pro"
 
@@ -449,7 +449,25 @@ def runner_command(runner, side):
 
 
 def runners_for(side):
-    return REVIEWER_RUNNERS if side == REVIEWER else AGENT_RUNNERS
+    installed = []
+    for binary in ("claude", "codex", "kimi", "cline", "opencode"):
+        for directory in os.environ.get("PATH", "").split(os.pathsep):
+            directory = directory or "."
+            path = os.path.join(directory, binary)
+            try:
+                if os.path.isdir(directory) and not os.access(directory, os.R_OK | os.X_OK):
+                    raise PermissionError(directory)
+                if not os.path.isfile(path):
+                    continue
+                if not os.access(path, os.X_OK):
+                    sys.stderr.write("uncle: not executable: %s\n" % path)
+                    continue
+            except PermissionError:
+                sys.stderr.write("uncle: cannot search PATH directory: %s\n" % directory)
+                continue
+            installed.append("self-hosted" if binary == "opencode" else binary)
+            break
+    return installed
 
 
 def stage_runner_var(stage):
@@ -654,9 +672,10 @@ class UncleTUI:
         runner = self.stage_runners.get(stage, "")
         if runner in ("opencode", "aider"):
             return "self-hosted"
-        if runner in runners_for(STAGE_SIDE.get(stage, AGENT)):
+        if runner:
             return runner
-        return runner or DEFAULT_RUNNER
+        installed = runners_for(STAGE_SIDE.get(stage, AGENT))
+        return installed[0] if installed else ""
 
     def stage_effort(self, stage):
         return self.stage_efforts.get(stage, "") or DEFAULT_EFFORT
@@ -753,7 +772,7 @@ class UncleTUI:
                 return "%s  %s" % (stored, label) if label else stored
             return stored
         if field == "runner":
-            return "%s  (default)" % DEFAULT_RUNNER
+            return "%s  (default)" % (self.stage_runner(stage) or "No agents installed")
         if field == "effort":
             return "%s  (default)" % DEFAULT_EFFORT
         if field == "network":
@@ -946,6 +965,9 @@ class UncleTUI:
         self.notice = ""
         self.picker_kind = kind
         self.picker_target = target
+        if kind == "runner" and not runners_for(STAGE_SIDE.get(target, AGENT)):
+            self.notice = "No agents installed. Install claude, codex, kimi, cline, or opencode and add its executable to PATH."
+            return
         if kind in ("name", "base_url", "api_key", "approval_name"):
             self.input_buf = self._field_value(target, kind)
             self.state = "config_edit"
@@ -1186,7 +1208,7 @@ class UncleTUI:
                         lines.append("%s.effort %s\n" % (stage, self.stage_efforts[stage]))
                     # A model belongs to a cline stage only; keeping one on a
                     # claude/kimi/codex stage would be a value nothing reads.
-                    if self.stage_models.get(stage) and self.stage_runner(stage) in ("cline", "self-hosted"):
+                    if self.stage_models.get(stage) and (not runner or self.stage_runner(stage) in ("cline", "self-hosted")):
                         lines.append("%s.model %s\n" % (stage, self.stage_models[stage]))
                     # Likewise network, which only a codex stage sandboxes. It
                     # is written whenever it is set so that a hand-edited line
@@ -1195,7 +1217,7 @@ class UncleTUI:
                         lines.append("%s.network %s\n" % (stage, self.stage_networks[stage]))
                     # Billing, like model, is a cline-only setting; written
                     # whenever set so a hand-edited line survives the rewrite.
-                    if self.stage_billings.get(stage) and self.stage_runner(stage) == "cline":
+                    if self.stage_billings.get(stage) and (not runner or self.stage_runner(stage) == "cline"):
                         lines.append("%s.billing %s\n" % (stage, self.stage_billings[stage]))
                     if self.stage_base_urls.get(stage):
                         lines.append("%s.base_url %s\n" % (stage, self.stage_base_urls[stage]))

@@ -85,7 +85,7 @@ mkdir -p app
 printf 'def add(a, b):\n    return a + b\n' > app/calc.py
 printf 'unchanged\n' > app/other.py
 git add -A
-git commit -qm baseline
+git -c commit.gpgsign=false commit -qm baseline
 
 # The shapes an implementation stage produces: an edit, a new source file, a
 # deletion, and the workflow's own reports.

@@ -37,6 +37,66 @@ class MenuInputTests(unittest.TestCase):
         self.root_patch.start()
         self.addCleanup(self.root_patch.stop)
 
+    def test_empty_runner_picker_and_denied_path(self):
+        self.ui.stage_runners = {}
+        self.ui.state = "config"
+        with patch.dict(os.environ, PATH=str(self.base)):
+            self.assertEqual(tui.runners_for(tui.AGENT), [])
+            self.assertEqual(self.ui.stage_runner("requirements"), "")
+            self.ui._open_picker("runner", "requirements")
+            self.assertEqual(self.ui.state, "config")
+            self.assertIn("PATH", self.ui.notice)
+            self.ui.start_workflow.assert_not_called()
+            binary = self.base / "claude"
+            binary.write_text("#!/bin/sh\nexit 97\n")
+            binary.chmod(0o644)
+            self.assertEqual(tui.runners_for(tui.AGENT), [])
+            binary.chmod(0o755)
+            self.assertEqual(tui.runners_for(tui.AGENT), ["claude"])
+            self.base.chmod(0o000)
+            try:
+                self.assertEqual(tui.runners_for(tui.AGENT), [])
+                result = subprocess.run(["/bin/bash", "-c",
+                    '. "$1/scripts/lib/stage-config.sh"; uncle_stage_cmd requirements',
+                    "test", str(ROOT)], capture_output=True, text=True,
+                    env=dict(os.environ, UNCLE_CONFIG="/nonexistent"))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("PATH", result.stderr)
+                self.assertIn("cannot search", result.stderr)
+            finally:
+                self.base.chmod(0o755)
+
+    def test_inferred_opencode_shell_model(self):
+        bindir = self.base / "bin"
+        bindir.mkdir()
+        for tool in ("python3", "tr", "mkdir", "dirname", "cat", "mv", "chmod", "mktemp", "rm"):
+            (bindir / tool).symlink_to(shutil.which(tool))
+        (bindir / "opencode").write_text("#!/bin/sh\nexit 97\n")
+        (bindir / "opencode").chmod(0o755)
+        # Exercise the real configure function; stub only the external model picker.
+        source = (ROOT / "uncle").read_text()
+        functions = source[source.index("config_get()"):source.index("configure_menu()")]
+        prefix = source[source.index("CONFIG_STAGE_SIDE_reviewer="):source.index("stage_side()")]
+        script = (
+            'set -e; . "$ROOT/scripts/lib/stage-config.sh"; '
+            'C_CYAN= C_BOLD= C_RESET= C_DIM= C_YELLOW=; '
+            + prefix + "stage_side() { uncle_stage_side \"$1\"; }\n" + functions +
+            '\npython3() { printf "vendor/model\\n"; }\n'
+            "configure_stage requirements <<< $'m\\nq'; "
+            'printf "RELOADED:%s:%s" "$(uncle_stage_runner requirements)" '
+            '"$(uncle_config_get requirements.model)"'
+        )
+        config = self.project / ".uncle" / "config"
+        config.parent.mkdir()
+        config.write_text("# inherited\n")
+        result = subprocess.run(["/bin/bash", "-c", script], text=True,
+            capture_output=True, env=dict(os.environ, PATH=str(bindir),
+                ROOT=str(ROOT), UNCLE_CONFIG=str(config), CONFIG_STAGES="requirements"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[a]pply OpenCode", result.stdout)
+        self.assertIn("RELOADED:self-hosted:vendor/model", result.stdout)
+        self.assertNotIn("requirements.runner", config.read_text())
+
     def select(self, index):
         self.ui.state, self.ui.sel = 'menu', index
         self.ui._confirm()

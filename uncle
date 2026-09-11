@@ -107,11 +107,8 @@ fi
 # a cline stage only — a model. The other runners are given no model flag and
 # use their own default, so `uncle` never invents one for them.
 CONFIG_STAGE_SIDE_reviewer=" adversarial-review test-review manual-checklist final-audit "
-DEFAULT_RUNNER="cline"
 DEFAULT_EFFORT="medium"
 DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
-AGENT_RUNNERS="cline claude kimi codex self-hosted"
-REVIEWER_RUNNERS="cline codex claude kimi self-hosted"
 
 stage_side() {
     case "$CONFIG_STAGE_SIDE_reviewer" in
@@ -405,17 +402,18 @@ config_clear() {
 # when the runner is cline — its model. This is the fallback for a terminal the
 # full-screen TUI cannot drive; both write the same file.
 configure_stage() {
-    local stage="$1" side sel runner model
+    local stage="$1" side sel runner model effective
     side="$(stage_side "$stage")"
     while true; do
+        effective="$(uncle_stage_runner "$stage")"
         echo
         printf '%s%s%s  (%s stage)\n' "$C_CYAN$C_BOLD" "$stage" "$C_RESET" "$side"
-        printf '  runner  %s\n' "$(config_get "$stage.runner")${C_DIM}${C_RESET}"
+        printf '  runner  %s\n' "${effective}${C_DIM}${C_RESET}"
         printf '  effort  %s\n' "$(uncle_stage_effort "$stage")"
-        if [[ "$(config_get "$stage.runner")" == "self-hosted" ]]; then
+        if [[ "${effective}" == "self-hosted" ]]; then
             printf '  model     %s\n' "$(config_get "$stage.model")"
             printf 'Set [r]unner [m]odel, [a]pply OpenCode to all stages, [d]efaults, [q]back: '
-        elif [[ "$(config_get "$stage.runner")" == "cline" || -z "$(config_get "$stage.runner")" ]]; then
+        elif [[ "${effective}" == "cline" ]]; then
             printf '  model   %s\n' "$(config_get "$stage.model")"
             printf '%s' "Set [${C_CYAN}r${C_RESET}]unner [${C_CYAN}e${C_RESET}]ffort [${C_CYAN}m${C_RESET}]odel, [${C_CYAN}d${C_RESET}]efaults, [${C_CYAN}q${C_RESET}]back: "
         else
@@ -426,8 +424,10 @@ configure_stage() {
         sel="$(printf '%s' "$sel" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
         case "$sel" in
             r)
-                local choices="$AGENT_RUNNERS"
-                [[ "$side" == "reviewer" ]] && choices="$REVIEWER_RUNNERS"
+                local choices
+                choices="$(uncle_installed_runners)"
+                choices="${choices//$'\n'/ }"
+                if [[ -z "$choices" ]]; then uncle_no_runner || true; continue; fi
                 printf 'Runner (%s; opencode = Self hosted): ' "$choices"
                 if ! read -r runner; then echo; return 0; fi
                 runner="$(printf '%s' "$runner" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
@@ -442,7 +442,7 @@ configure_stage() {
                 esac
                 ;;
             a)
-                if [[ "$(config_get "$stage.runner")" != "self-hosted" ]]; then
+                if [[ "${effective}" != "self-hosted" ]]; then
                     echo 'Select Self hosted and configure its connection first.'
                     continue
                 fi
@@ -478,11 +478,12 @@ PYKEYS
                 config_set "$stage.effort" "$CL_EFFORT"
                 ;;
             m)
-                if [[ "$(config_get "$stage.runner")" == "self-hosted" ]]; then
+                if [[ "${effective}" == "self-hosted" ]]; then
                     if ! model="$(python3 "$ROOT/scripts/lib/self_hosted.py" choose-model "$UNCLE_CONFIG")"; then continue; fi
                     config_set "$stage.model" "$model"
                     continue
                 fi
+                [[ "$effective" == cline ]] || continue
                 choose_model
                 if [[ -n "$CL_MODEL" ]]; then
                     config_set "$stage.model" "$CL_MODEL"
@@ -532,8 +533,7 @@ configure_stages_menu() {
         n=0
         for stage in $CONFIG_STAGES; do
             n=$((n+1))
-            runner="$(config_get "$stage.runner")"
-            [[ -n "$runner" ]] || runner="$DEFAULT_RUNNER"
+            runner="$(uncle_stage_runner "$stage")"
             effort="$(uncle_stage_effort "$stage")"
             [[ -n "$effort" ]] || effort="$DEFAULT_EFFORT"
             if [[ "$runner" == "cline" ]]; then
@@ -621,12 +621,10 @@ if [[ ! -s "$UNCLE_CONFIG" ]]; then
     configure_menu
     # Configure may quit without saving anything; write a minimal default so
     # this is still recognized as configured on the next run.
-    # Configure may quit without saving; write the defaults explicitly for the
-    # first stage so the project still counts as configured next run.
+    # Persist effort only; the runner remains inherited from PATH.
     [[ -s "$UNCLE_CONFIG" ]] || {
         config_write_header > "$UNCLE_CONFIG"
-        printf 'requirements.runner %s\nrequirements.effort %s\n' \
-            "$DEFAULT_RUNNER" "$DEFAULT_EFFORT" >> "$UNCLE_CONFIG"
+        printf 'requirements.effort %s\n' "$DEFAULT_EFFORT" >> "$UNCLE_CONFIG"
     }
 fi
 

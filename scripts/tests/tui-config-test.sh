@@ -39,6 +39,74 @@ run_case() {
 
 status=0
 
+# Discovery uses isolated PATH files, never client execution.
+run_case <<'PYDISC'
+import os, sys, tempfile, subprocess
+from pathlib import Path
+sys.path.insert(0, str(Path(os.environ["UNCLE_TUI"]).parent))
+import uncle_tui as m
+bash = "/bin/bash"
+root = Path(m.ROOT)
+original = os.environ["PATH"]
+with tempfile.TemporaryDirectory() as tmp:
+    bindir = Path(tmp)
+    names = ["claude", "codex", "kimi", "cline", "opencode"]
+    for mask in range(32):
+        for i, name in enumerate(names):
+            path = bindir / name
+            if path.exists():
+                path.unlink()
+            if mask & (1 << i):
+                path.write_text("#!/bin/sh\nexit 97\n")
+                path.chmod(0o755)
+        os.environ["PATH"] = tmp
+        expected = [("self-hosted" if n == "opencode" else n)
+                    for i, n in enumerate(names) if mask & (1 << i)]
+        for side in (m.AGENT, m.REVIEWER):
+            assert m.runners_for(side) == expected, (mask, side, m.runners_for(side))
+        t = m.UncleTUI.__new__(m.UncleTUI)
+        t.stage_runners = {}
+        default = expected[0] if expected else ""
+        assert t.stage_runner("requirements") == default
+        result = subprocess.run([bash, "-c",
+            '. "$1/scripts/lib/stage-config.sh"; uncle_stage_runner requirements',
+            "test", str(root)], env=dict(os.environ, UNCLE_CONFIG="/nonexistent"),
+            capture_output=True, text=True)
+        assert result.stdout == default, (mask, result.stdout)
+    # AR-001: inferred Claude must not erase saved Cline model/billing.
+    os.environ["PATH"] = original
+    m.CONFIG_PATH = str(bindir / "config")
+    for name in names:
+        (bindir / name).unlink()
+    for name in ("cline", "claude"):
+        (bindir / name).write_text("")
+        (bindir / name).chmod(0o755)
+    os.environ["PATH"] = tmp
+    Path(m.CONFIG_PATH).write_text("requirements.model deepseek/deepseek-v4-flash\nrequirements.billing cline-usage\n")
+    t.load_config()
+    t.stage_efforts["requirements"] = "high"
+    t.save_config()
+    (bindir / "claude").unlink()
+    t.load_config()
+    assert t.stage_runner("requirements") == "cline"
+    assert t.stage_models["requirements"] == "deepseek/deepseek-v4-flash"
+    assert t.stage_billings["requirements"] == "cline-usage"
+    assert not t.stage_runners
+os.environ["PATH"] = original
+print("  discovery: 32 subsets, both sides, shell parity; inferred save passed")
+PYDISC
+
+# Existing Cline-specific fixtures require an installed Cline.
+mkdir -p "$TMP/bin"
+printf '#!/bin/sh\nexit 97\n' > "$TMP/bin/cline"
+chmod +x "$TMP/bin/cline"
+# Keep utilities available while excluding any installed agents.
+for tool in python3 bash tr rm diff head; do
+    ln -s "$(command -v "$tool")" "$TMP/bin/$tool"
+done
+TEST_ORIGINAL_PATH="$PATH"
+export PATH="$TMP/bin"
+
 # --- fields, defaults, and the env contract --------------------------------
 
 run_case <<'PY' || status=1
@@ -68,7 +136,7 @@ check("reviewer stages are configurable", True,
           for s in ("adversarial-review", "manual-checklist", "final-audit")))
 
 # An unconfigured stage runs on the defaults.
-check("default runner", m.DEFAULT_RUNNER, t.stage_runner("requirements"))
+check("default runner with Cline installed", "cline", t.stage_runner("requirements"))
 check("default effort", m.DEFAULT_EFFORT, t.stage_effort("requirements"))
 check("default cline model", m.DEFAULT_CLINE_MODEL, t.stage_model("requirements"))
 
@@ -191,8 +259,8 @@ check("a cline stage does not claim a network", False,
 t.stage_networks.clear()
 
 # Runner choices are side-appropriate: codex has no agent shim.
-check("agent runners", ["cline", "claude", "kimi", "codex", "self-hosted"], m.runners_for(m.AGENT))
-check("reviewer runners", ["cline", "codex", "claude", "kimi", "self-hosted"], m.runners_for(m.REVIEWER))
+check("installed agent runners", ["cline"], m.runners_for(m.AGENT))
+check("installed reviewer runners", ["cline"], m.runners_for(m.REVIEWER))
 check("kimi reviewer resolves to its own shim", True,
       m.runner_command("kimi", m.REVIEWER).endswith("reviewer-kimi.sh"))
 check("an agent stage runs an agent shim", True,

@@ -48,6 +48,66 @@ check_absent() {
     esac
 }
 
+# Resolve the real driver command/model pair while removing its first binary.
+ROOT="$ROOT" python3 -B - <<'PYSNAPSHOT'
+import os, re, shutil, subprocess, tempfile
+from pathlib import Path
+root = Path(os.environ["ROOT"])
+with tempfile.TemporaryDirectory() as tmp:
+    bindir = Path(tmp)
+    (bindir / "tr").symlink_to(shutil.which("tr"))
+    for driver in ("stagegate.sh", "change-workflow.sh"):
+        source = (root / "scripts" / driver).read_text()
+        names = ("upper", "stage_var", "stage_setting", "stage_setting_opt",
+                 "stage_agent_cmd", "stage_model", "stage_model_for",
+                 "stage_effort", "stage_effort_for", "stage_tools", "stage_turns", "run_claude")
+        functions = "\n".join(match.group(0) for name in names
+            for match in re.finditer(r"^" + name + r"\(\) \{.*?^}", source, re.M | re.S))
+        for config in ("", "implementation.effort high\n"):
+            for binary in ("claude", "cline"):
+                (bindir / binary).write_text("")
+                (bindir / binary).chmod(0o755)
+            (bindir / "config").write_text(config)
+            script = (
+                '. "$ROOT/scripts/lib/stage-config.sh"; ' + functions +
+                '\nresolve_prompt() { printf "%s" "$1"; }\n'
+                'require_file() { printf "%s|%s" "$cmd" "$model"; exit 0; }\n'
+                # Rename the real resolver, then remove Claude after command selection.
+                'eval "$(declare -f stage_agent_cmd | /usr/bin/sed "1s/stage_agent_cmd/original_cmd/")"\n'
+                'stage_agent_cmd() { original_cmd "$@"; /bin/rm -f "$BIN/claude"; }\n'
+                'AGENT_CMD=legacy; DEFAULT_MODEL=opus; '
+                'run_claude dummy implementation opus'
+            )
+            env = dict(os.environ, ROOT=str(root), PATH=tmp, BIN=tmp,
+                       UNCLE_CONFIG=str(bindir / "config"))
+            result = subprocess.run(["/bin/bash", "-c", script], env=env,
+                                    capture_output=True, text=True)
+            assert result.returncode == 0, (driver, result.stderr)
+            assert result.stdout == "claude|", (driver, config, result.stdout)
+        (bindir / "cline").unlink()
+        (bindir / "config").write_text("")
+        result = subprocess.run(["/bin/bash", "-c", script], env=env,
+                                capture_output=True, text=True)
+        assert result.returncode != 0 and not result.stdout, (driver, result)
+        assert "Install claude" in result.stderr and "PATH" in result.stderr
+        for saved, expected in (
+            ("implementation.runner cline\n", str(root / "scripts/agent-cline.sh") + "|cline-pass/deepseek-v4-pro"),
+            ("runner opencode\nself-hosted.model vendor/model\n", str(root / "scripts/agent-self-hosted.sh") + "|vendor/model"),
+            ("runner aider\nself-hosted.model vendor/model\n", str(root / "scripts/agent-self-hosted.sh") + "|vendor/model"),
+        ):
+            (bindir / "config").write_text(saved)
+            result = subprocess.run(["/bin/bash", "-c", script], env=env,
+                                    capture_output=True, text=True)
+            assert result.returncode == 0 and result.stdout == expected, (driver, result)
+        (bindir / "config").write_text("")
+        result = subprocess.run(["/bin/bash", "-c", script],
+            env=dict(env, WORKFLOW_AGENT_CMD="global", WORKFLOW_AGENT_CMD_IMPLEMENTATION="stage",
+                     WORKFLOW_MODEL_IMPLEMENTATION=""),
+            capture_output=True, text=True)
+        assert result.returncode == 0 and result.stdout == "stage|", (driver, result)
+print("stage snapshots: both drivers, absent/partial config passed")
+PYSNAPSHOT
+
 # --- stubs ------------------------------------------------------------------
 
 make_agent_stub() {
@@ -113,6 +173,7 @@ if command -v git > /dev/null 2>&1; then
         git init -q .
         git config user.email t@e.st
         git config user.name t
+        git config commit.gpgsign false
         echo hi > app.txt
         git add -A
         git commit -qm init

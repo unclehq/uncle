@@ -244,29 +244,27 @@ stage_var() {
 # An explicit variable always wins over the config file; the built-in default
 # applies only when the project has no config at all.
 stage_agent_cmd() {
-    local var fallback
-    if [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
-        fallback="$WORKFLOW_AGENT_CMD"
-    elif uncle_has_config; then
-        fallback="$(uncle_stage_cmd "$1")"
+    local var
+    var="WORKFLOW_AGENT_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
+    if [[ -n "${!var:-}" ]]; then
+        printf '%s' "${!var}"
+    elif [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
+        printf '%s' "$WORKFLOW_AGENT_CMD"
     else
-        fallback="$AGENT_CMD"
+        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
     fi
-    var="$(stage_var AGENT_CMD "$1")"
-    eval "printf '%s' \"\${$var:-$fallback}\""
 }
 
 stage_reviewer_cmd() {
-    local var fallback
-    if [[ -n "${WORKFLOW_REVIEWER_CMD:-}" ]]; then
-        fallback="$WORKFLOW_REVIEWER_CMD"
-    elif uncle_has_config; then
-        fallback="$(uncle_stage_cmd "$1")"
+    local var
+    var="WORKFLOW_REVIEWER_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
+    if [[ -n "${!var:-}" ]]; then
+        printf '%s' "${!var}"
+    elif [[ -n "${WORKFLOW_REVIEWER_CMD:-}" ]]; then
+        printf '%s' "$WORKFLOW_REVIEWER_CMD"
     else
-        fallback="$REVIEWER_CMD"
+        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
     fi
-    var="$(stage_var REVIEWER_CMD "$1")"
-    eval "printf '%s' \"\${$var:-$fallback}\""
 }
 
 stage_effort_for() {
@@ -275,7 +273,19 @@ stage_effort_for() {
 
 stage_model_for() {
     local var fallback="$2"
-    uncle_has_config && fallback="$(uncle_stage_model "$1")"
+    if uncle_has_config || [[ -n "${UNCLE_RESOLVED_RUNNER:-}" ]]; then
+        fallback="$(uncle_stage_model "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}")"
+    fi
+    if ! uncle_has_config; then
+        case "$1" in
+            updated-change-plan) fallback="${WORKFLOW_MODEL_UPDATED_PLAN-$fallback}" ;;
+            implementation) fallback="${WORKFLOW_MODEL_IMPLEMENT-$fallback}" ;;
+            execute-checklist) fallback="${WORKFLOW_MODEL_EXECUTE-$fallback}" ;;
+        esac
+        if [[ "$(uncle_stage_side "$1")" == reviewer ]]; then
+            fallback="${CODEX_MODEL-$fallback}"
+        fi
+    fi
     var="$(stage_var MODEL "$1")"
     eval "printf '%s' \"\${$var-$fallback}\""
 }
@@ -1089,8 +1099,10 @@ run_claude() {
     local max_turns="${5:-80}"
     local budget="${6:-}"
     local cmd
+    local UNCLE_RESOLVED_RUNNER
+    uncle_resolve_stage_runner "$log_name" AGENT || return 1
 
-    cmd="$(stage_agent_cmd "$log_name")"
+    cmd="$(stage_agent_cmd "$log_name")" || return 1
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
@@ -1272,7 +1284,9 @@ run_codex() {
     local log_name="$3"
     local effort="${4:-}"
     local cmd
-    cmd="$(stage_reviewer_cmd "$log_name")"
+    local UNCLE_RESOLVED_RUNNER
+    uncle_resolve_stage_runner "$log_name" REVIEWER || return 1
+    cmd="$(stage_reviewer_cmd "$log_name")" || return 1
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
@@ -1366,7 +1380,9 @@ start_codex_bg() {
     local log_name="$3"
     local effort="${4:-}"
     local cmd
-    cmd="$(stage_reviewer_cmd "$log_name")"
+    local UNCLE_RESOLVED_RUNNER
+    uncle_resolve_stage_runner "$log_name" REVIEWER || return 1
+    cmd="$(stage_reviewer_cmd "$log_name")" || return 1
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;

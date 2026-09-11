@@ -1,67 +1,78 @@
-# CHANGE_SPEC.md
+# Change Specification
 
-Omitted sections: Performance requirements (no change); Security requirements (no change); Migration requirements (none); Prototype-isolation requirements (not a prototype).
+Omitted sections: Performance requirements (no claims); Security requirements (no new surface); Migration requirements (no migration); Prototype-isolation requirements (not a prototype).
 
-## 1. Change type
+## Change type
 
-Bug Fix
+Bug Fix / Feature.
 
-## 2. Problem statement
+## Problem statement
 
-`scripts/tests/document-budget-test.sh` fails because its standalone reviewer fixture omits `repair-acceptance.py`, a runtime dependency of `finish_review_budget` (`scripts/lib/gates.sh:399`). This fails the Windows CI regression runner (`.github/workflows/installers.yml:66`) and reproduces on Darwin/Bash 3.2 (BASELINE_REPORT.md §11).
+`scripts/from-issue.sh --new` exits 1 when `REQUIREMENTS.md` is absent, although the user asked to seed a new application. BASELINE_REPORT.md §4 B-1, §9 T-8.
 
-## 3. Current behavior
+## Current behavior
 
-`document-budget-test.sh:163` copies `gates.sh`, `compact-review.py`, and the reviewer scripts into a standalone directory, but not `repair-acceptance.py`. The reviewer scripts exit before the budget check, so `grep` for `Document budget exceeded:` at `document-budget-test.sh:191` fails.
+- `--new` requires `REQUIREMENTS.md` with a `# Project brief` marker; absent marker exits 1 with no file written.
+- `--new` with the marker preserves the prefix and replaces the brief section.
+- `--change` writes `CHANGE_REQUEST.md` and prompts for `RUN`; auto-mode defaults to `--change` when `CHANGE_REQUEST.md` exists or the repo is non-empty.
 
-## 4. Desired behavior
+## Desired behavior
 
-The standalone fixture includes every dependency `finish_review_budget` needs to reach the budget check when `WORKFLOW_REVIEW_COMPACT=0`. The `document-budget` suite passes and Windows CI reports zero failures for it.
+- `--new` creates `REQUIREMENTS.md` when absent, seeded from the issue.
+- `--new` with an existing `# Project brief` marker preserves the prefix and replaces the brief section.
+- `--change` and auto-mode selection are unchanged.
 
-## 5. Acceptance criteria
+## Acceptance criteria
 
-- `bash scripts/tests/document-budget-test.sh` exits 0 (BASELINE_REPORT.md §9 T-2).
-- Windows Git Bash runner (`installers.yml:88`) reports `PASS: document-budget`.
-- No budget policy, overflow handling, or reviewer contract changes.
+| ID | Criterion | Verification |
+|---|---|---|
+| AC-1 | `--new` with absent `REQUIREMENTS.md` exits 0 and creates it seeded with title/body. | Mocked fetch test |
+| AC-2 | `--new` with existing `# Project brief` preserves prefix and replaces brief. | Existing test |
+| AC-3 | `--change` behavior unchanged. | Existing tests |
 
-## 6. Observable behavior table
+## Observable behavior table
 
 | ID | Class | Trigger | Current behavior | Expected behavior | Verification |
 |---|---|---|---|---|---|
-| B-1 | MODIFY | `bash scripts/tests/document-budget-test.sh` | FAIL at `document-budget-test.sh:191` | PASS | BASELINE_REPORT.md §9 T-2 |
-| B-2 | PRESERVE | Advisory overflow | Continues with remark; preserves document | Same | `document-budget-test.sh:47-58` |
-| B-3 | PRESERVE | Enforced overflow | Blocks with `Document budget exceeded:` | Same | `document-budget-test.sh:188-191` |
-| B-4 | PRESERVE | Windows regression runner executes `document-budget` | Counts failures; currently fails CI | Zero failures for this suite | `installers.yml:73-99` |
+| B-1 | MODIFY | `--new`, `REQUIREMENTS.md` absent | Exit 1; no file | Create `REQUIREMENTS.md` seeded from issue | Mocked fetch test |
+| B-2 | PRESERVE | `--new`, `# Project brief` exists | Keep prefix; replace brief through EOF | Keep prefix; replace brief through EOF | Existing test |
+| B-3 | PRESERVE | `--change`, `CHANGE_REQUEST.md` absent | Write `CHANGE_REQUEST.md`; prompt `RUN` | Write `CHANGE_REQUEST.md`; prompt `RUN` | Existing tests |
+| B-4 | PRESERVE | Auto mode | Select `--change` for existing request/code | Select `--change` for existing request/code | Existing tests |
+| B-5 | PRESERVE | `--change`, EOF at prompt | Seed only; no run | Seed only; no run | Existing test |
 
-## 7. Invariant table
+## Invariant table
 
 | ID | Status | Invariant | Scope | Enforcement point | Verification |
 |---|---|---|---|---|---|
-| I-1 | EXISTING | Artifact-specific override precedes global override, then defaults | All document-budget consumers | `scripts/lib/gates.sh:255`, `:274-275` | `document-budget-test.sh:33-71` |
-| I-2 | EXISTING | Saved budget increases scoped to source fingerprint | `.uncle/workflow/document-budgets` | `scripts/lib/gates.sh:244-251` | `document-budget-test.sh:113-116` |
-| I-3 | EXISTING | UTF-8 byte count; final unterminated line counted | `check_document_budget` | `scripts/lib/gates.sh:344-345` | `document-budget-test.sh:9-13` |
-| I-4 | NEW | Standalone reviewer fixture includes all dependencies reachable by `finish_review_budget` | `document-budget-test.sh` standalone directory | Test setup | `document-budget-test.sh:188-191` |
+| I-1 | EXISTING | `--new` writes `REQUIREMENTS.md` | `from-issue.sh` new path | `write_new_project_brief` | B-1, B-2 |
+| I-2 | EXISTING | `--change` refuses to overwrite foreign in-flight run | `from-issue.sh` change path | `check_origin_or_refuse` | Existing tests |
+| I-3 | EXISTING | Close requires matching run/origin/audit | Change workflow | `scripts/lib/issue-close.sh` | Existing tests |
+| I-4 | **RELAXED** | New seed no longer requires existing `# Project brief` marker | `from-issue.sh` new path | `write_new_project_brief` | B-1 |
+| I-5 | NEW | `--new` creates full `REQUIREMENTS.md` when absent | `from-issue.sh` new path | `write_new_project_brief` | B-1 |
 
-## 8. Compatibility requirements
+## Compatibility requirements
 
-No user-visible interface, schema, or policy changes. Existing `WORKFLOW_DOC_*` overrides remain effective.
+- Preserve `--change` behavior (AC-3, B-3, B-5).
+- Preserve `--new` behavior with existing marker (B-2).
+- Absent-file `--new` path is additive.
 
-## 9. Error and failure behavior
+## Error and failure behavior
 
-If the fixture remains incomplete, `document-budget-test.sh` fails at line 191 and Windows CI reports the suite as failed. No new failure modes are introduced.
+- Fetch failure, invalid issue argument, or missing `python3`/`jq` exits non-zero.
+- Write failure propagates via `set -e`.
+- `--new` does not auto-run or close the issue.
 
-## 13. Rollback expectations
+## Rollback expectations
 
-Revert the fixture change. The suite returns to the current failing state.
+Revert `scripts/from-issue.sh`.
 
-## 15. Explicit non-goals
+## Explicit non-goals
 
-- Change `scripts/lib/gates.sh` budget logic or limits.
-- Change reviewer contracts in `codex-review-plan.sh` or `codex-create-checklist.sh`.
-- Add new regression suites or features.
-- Modify `.github/workflows/installers.yml` runner structure.
+- Change `--change` flow, auto-mode selection, or issue-close logic.
+- Add prompt or auto-run to `--new`.
+- Alter `REQUIREMENTS.md` template beyond issue title/body seeding.
 
-## 16. Assumptions and unresolved questions
+## Assumptions and unresolved questions
 
-- ASSUMPTION: The fix is confined to the test fixture; `scripts/lib/gates.sh` dependencies are unchanged.
-- UNRESOLVED: Whether the failure reproduces identically on native Windows Git Bash; BASELINE_REPORT.md §11 marks Windows equivalence pending CI.
+- ASSUMPTION: Absent-file `REQUIREMENTS.md` uses the project-brief template shape consumed by `./scripts/stagegate.sh` (BASELINE_REPORT.md §3 K-2).
+- UNRESOLVED: Source template from project-root `REQUIREMENTS.md` or maintain it inside `scripts/from-issue.sh` (implementation decision).

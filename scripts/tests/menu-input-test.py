@@ -112,6 +112,22 @@ class MenuInputTests(unittest.TestCase):
         self.ui._confirm()
         self.ui.start_workflow.assert_called_once()
 
+    def test_issue_new_forwarding(self):
+        self.select(1)
+        self.ui.input_buf = '123'
+        self.ui._confirm_text()
+        self.ui.sel = 2
+        self.ui._confirm()
+        self.ui.start_workflow.assert_called_once()
+        self.assertEqual(self.ui.cmd_for()[-2:], ['123', '--new'])
+        install, env = self.shell_fixture()
+        result = subprocess.run(['bash', str(install / 'uncle')], cwd=self.project,
+                                env=env, input='2\n123\nn\nq\n', text=True,
+                                capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(Path(env['CALLS']).read_text().splitlines(),
+                         [f'from-issue.sh|{self.project}|123 --new'])
+
     def test_launch_cwd(self):
         self.ui.stage_env = Mock(return_value={})
         self.ui._restore_session_totals = Mock()

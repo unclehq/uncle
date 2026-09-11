@@ -18,3 +18,4 @@ __pycache__/
 # Self-hosted model credentials
 .uncle/self-hosted-keys.json
 .aider*
+*.md

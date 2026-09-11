@@ -1,140 +1,124 @@
-# CHANGE_PLAN.md
-
+# Change plan
 | Finding | Disposition | Reason | Exact plan change |
 |---|---|---|---|
-| AR-1: Overall assessment | Accepted | ADVERSARIAL_REVIEW.md reports no findings; acceptance awaits execution. | Exact acceptance criteria; Post-implementation checks |
+| AR-001 | Accepted | Absence checks permit concurrent overwrite. | Selected technical approach; Exact components to modify; Compatibility strategy; Concurrency implications; Automated-test strategy; Scope cuts under time pressure; appended scope, acceptance and checks |
 Omitted sections: none
 
-## 1. Selected technical approach
-P-1: Plan: copy the real repair helper into the standalone fixture.
+## Selected technical approach
+P-1: Plan: exclusively create absent requirements in C-1 with existing `brief` plus newline; retain existing-file handling.
 
-## 2. Alternative approaches considered
-| ID | Alternative | Rejection reason |
+## Alternative approaches considered
+| ID | Approach | Disposition |
 |---|---|---|
-| A-1 | Stub repair | Hides dependency |
-| A-2 | Skip repair | Violates CHANGE_SPEC.md §15 |
-| A-3 | Copy all helpers | Obscures dependencies |
+| A-1 | Copy template | Reject: deployment dependency |
+| A-2 | Change routing | Reject: launchers already forward --new |
 
-## 3. Why the selected approach is preferred
-P-2: Inspected `scripts/lib/gates.sh:402` calls repair before checking budgets; `scripts/lib/repair-acceptance.py:main` uses only standard-library imports.
+## Why the selected approach is preferred
+P-2: Plan: reuse C-1 heredoc; no template dependency.
 
-## 4. Exact components to modify
+## Exact components to modify
+Entries are planned.
+
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|
-| C-1: scripts/tests/document-budget-test.sh:164 | Add quoted "$ROOT/scripts/lib/repair-acceptance.py" to cp sources | I-4 | Further fixture failures | T-1 |
+| C-1 `scripts/from-issue.sh:write_new_project_brief` | Add exclusive absent-target creation | AC-1/AR-001 | Existing-file overwrite | T-1–T-4/T-6 |
+| C-2 `scripts/tests/issue-project-root-test.sh` | Extend fixtures and collision barriers | B-1/B-2/AR-001 | Leakage | T-1–T-4/T-6 |
+| C-3 `scripts/tests/menu-input-test.py` | Assert --new forwarding | Entry path | Stubs | T-5 |
+| C-4 `scripts/README.md` from-issue section | Document creation/refusal | B-1 | Staleness | M-1 |
 
-## 5. Components explicitly not to modify
-P-3: Preserve `scripts/lib/{gates.sh,repair-acceptance.py,compact-review.py}`, `scripts/codex-{review-plan,create-checklist}.sh`, `.github/workflows/installers.yml`, packaging, other tests, README.md and approved inputs.
+## Components explicitly not to modify
+P-3: Protect `uncle`, `uncle_tui.py`, drivers, `scripts/lib/`, packaging, repository `REQUIREMENTS.md`, and C-1 fetch/change/mode logic.
 
-## 6. Data-flow changes
-P-4: Plan: helper reaches `standalone/scripts/lib/`; output reaches repair then budget checking (`scripts/lib/gates.sh:402-406`).
+## Data-flow changes
+P-4: Plan: parsed issue → C-1 brief → selected project's requirements.
 
-## 7. State-transition changes
-P-5: Plan: replace helper failure with overflow rejection at `scripts/tests/document-budget-test.sh:188-191`; retain success at :193.
+## State-transition changes
+P-5: Plan: absent → seeded → exit 0; no state/run/close, even unattended.
 
-## 8. Interface and API changes
-None; preserve CHANGE_SPEC.md §8.
+## Interface and API changes
+P-6: Plan: creation message; flags/hint unchanged.
 
-## 9. Schema or persistence changes
-None; retain cleanup (`scripts/tests/document-budget-test.sh:7`).
+## Schema or persistence changes
+P-7: Markdown only.
 
-## 10. Compatibility strategy
-P-6: Verify Darwin/Bash 3.2 and Windows Git Bash via T-1/M-1.
+## Compatibility strategy
+P-8: Plan: preserve markerless refusal/prefix handling; absence requires `! -e` and `! -L`. Create with O_EXCL semantics; refuse collisions nonzero without truncation, symlink traversal, success output, or fallback to replacement.
 
-## 11. Concurrency implications
-None; retain mktemp in `scripts/tests/document-budget-test.sh:6`.
+## Concurrency implications
+P-9: Plan: exclusive creation selects one absent-target writer; losers follow P-8. No workflow-wide lock; existing-marker concurrency unchanged.
 
-## 12. Error and recovery behavior
-P-7: Retain overflow status and diagnostic assertions; suppress no helper errors.
+## Error and recovery behavior
+P-10: Plan: retain CHANGE_SPEC.md error contract; success only after write. Inspect partial files before retry; no auto-delete.
 
-## 13. Migration plan
-None; fixture only.
+## Migration plan
+P-11: None; no bulk rewrite.
 
-## 14. Rollback plan
-RB-1: Revert only C-1; run T-1 and expect the baseline failure.
+## Rollback plan
+P-12: Revert C-1–C-4 changes; keep generated requirements; rerun T-4/T-5. B-1 reverts to failure.
 
-## 15. Feature-flag or containment strategy
-P-8: Keep C-1 inside the temporary fixture with its stub reviewer; no flag.
+## Feature-flag or containment strategy
+P-13: New-mode absent target only; no flag.
 
-## 16. Automated-test strategy
-Run from repository root.
-
-| ID | Command | Required result |
-|---|---|---|
-| T-0 | `bash -n scripts/tests/document-budget-test.sh` | Exit 0 |
-| T-1 | `bash scripts/tests/document-budget-test.sh` | Before: exit 1 at :191 (BASELINE_REPORT.md T-2); after: exit 0 |
-| T-2 | `bash scripts/tests/document-budget-prompt-test.sh` | Exit 0 |
-
-Traceability references CHANGE_SPEC.md.
+## Automated-test strategy
+IDs reference CHANGE_SPEC.md.
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
-| R-1: §5 local pass | B-1, B-3 | I-4 | C-1 | T-1: both reviewers; 1-byte rejection, 100-byte success | M-2 |
-| R-2: §5 Windows pass | B-4 | I-4 | C-1 | CI runs T-1 | M-1 |
-| R-3: §5 preservation | B-2, B-3 | I-1, I-2, I-3 | C-1 | T-1, T-2 | M-2 |
+| AC-1 | B-1 | I-1/I-4/I-5 | C-1/C-2 | T-1: absent, exit 0, title/body/URL/headings; install/change sentinels preserved; P-5 | M-1 |
+| AC-2 | B-2 | I-1 | C-1/C-2 | T-2: prefix/tail/reseed; markerless/directory/dangling link refused unchanged | M-1 |
+| Error contract | Failure | I-1 | C-2 | T-3: fetch/parse/write errors nonzero; no success | M-1 |
+| AC-3 | B-3/B-4/B-5 | I-2/I-3 | C-2 | T-4: change+EOF; auto request/code/fresh; close-flow | M-1 |
+| AC-1 | B-1 | I-1 | C-3 | T-5: shell n/TUI new forward --new | M-1 |
+| AR-001 | B-1 | I-4 | C-1/C-2 | T-6: barrier after absence check, before creation; insert markerless file, symlink to sentinel, or dangling symlink; resume; require nonzero, unchanged bytes/link, dangling referent absent, no success/run/close | M-1 |
 
-## 17. Regression-test strategy
-P-9: Retain T-1 assertions as the fail-before/pass-after regression.
-P-10: Run T-2 for approval, decline, EOF and fingerprint scoping.
+P-14: T-1 fails before fix, passes afterward; mock gh/curl; record driver/close calls.
 
-## 18. Manual-verification strategy
-| ID | Planned check |
+## Regression-test strategy
+P-15: Plan: run `bash -n uncle scripts/from-issue.sh`, `bash scripts/tests/issue-project-root-test.sh`, `PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/menu-input-test.py -q`, and `PYTHONDONTWRITEBYTECODE=1 bash scripts/tests/close-flow-test.sh`; require exit 0.
+
+## Manual-verification strategy
+M-1: Plan: scratch project, mocked fetch, shell/TUI issue → new; inspect output/files; repeat with marker/markerless files.
+
+## Observability changes
+P-16: P-6 only.
+
+## Implementation sequence
+| ID | Planned step |
 |---|---|
-| M-1 | Read Windows installers CI Git Bash log; require `PASS: document-budget`; investigate remaining failures |
-| M-2 | Inspect `git diff -- scripts/tests/document-budget-test.sh`; require only C-1 |
+| S-1 | Add C-2/C-3 tests; record T-1 baseline failure |
+| S-2 | Implement P-1/P-8 in C-1; update C-4 |
+| S-3 | Run P-15 and M-1; inspect diff against P-3 |
 
-## 19. Observability changes
-None; use T-1/M-1 output.
+## Scope cuts under time pressure
+P-17: Retain exclusive creation and all checks; defer workflow-wide locking.
 
-## 20. Implementation sequence
-| ID | Planned action |
-|---|---|
-| S-1 | Run T-1; confirm baseline failure |
-| S-2 | Apply C-1 |
-| S-3 | Run T-0, T-1, T-2; require exit 0 |
-| S-4 | Perform M-2 and M-1 on candidate |
-
-## 21. Scope cuts under time pressure
-P-11: Retain T-1 and M-1; defer refactoring.
-
-## 22. Risks and unresolved questions
-| ID | Status / settlement |
-|---|---|
-| Q-1 | ASSUMPTION: C-1 suffices; settle with T-1 after editing |
-| Q-2 | UNRESOLVED: Windows equivalence (BASELINE_REPORT.md §11); settle with M-1 |
+## Risks and unresolved questions
+R-1: ASSUMPTION: C-1 brief alone meets I-5; driver validation unrun. Settle by reviewing T-1 output against `REQUIREMENTS.md` guidance.
+R-2: BASELINE_REPORT.md U-1 needs reporter steps.
 
 ## Frozen change scope
-FS-1: Plan: implement only C-1; retain CHANGE_SPEC.md §15 non-goals.
-
+FS-1: Plan: C-1–C-4 only, implementing AC-1–AC-3 and AR-001; P-3/P-13 bound behavior.
 ## Files expected to change
-FC-1: Plan: change only `scripts/tests/document-budget-test.sh` per C-1.
-
+FE-1: Plan: only the four paths in C-1–C-4.
 ## Files that must not change
-FP-1: Plan: preserve every other implementation file, including §5 paths, and approved inputs.
-
+FN-1: Plan: protect all other paths, including P-3 and workflow documents.
 ## Expected behavioral differences
-BD-1: Plan: deliver CHANGE_SPEC.md B-1 through P-4/P-5; verify with T-1.
-
+BD-1: Plan: B-1 in CHANGE_SPEC.md plus P-8 collision refusal.
 ## Expected unchanged behavior
-BU-1: Plan: preserve CHANGE_SPEC.md B-2–B-4 and I-1–I-3; verify through §16 traceability.
-
+BU-1: Plan: CHANGE_SPEC.md B-2–B-5, I-2/I-3 and error contract; P-5/P-6/P-8.
 ## Exact acceptance criteria
-| ID | Required evidence |
+| ID | Planned pass condition |
 |---|---|
-| AC-1 | T-0 exits 0. |
-| AC-2 | T-1 exits 0, including §16 reviewer rejection/success assertions. |
-| AC-3 | T-2 exits 0. |
-| AC-4 | M-1 records candidate Windows Git Bash `PASS: document-budget` with zero failures for this suite. |
-| AC-5 | M-2 confirms only C-1; preserve §5 and CHANGE_SPEC.md §8 contracts. |
-
+| AC-1 | T-1/T-5 pass; R-1 settled against generated headings. |
+| AC-2 | T-2 passes. |
+| AC-3 | T-4 passes. |
+| AR-001 | Every T-6 collision passes; losing writer never replaces the inserted entry. |
+| AC-4 | T-3, P-15 and M-1 pass; diff limited to FE-1. |
 ## Pre-implementation checks
-PC-1: Plan: execute S-1 before C-1; stop if T-1 fails for a different reason.
-
+PC-1: Plan: inspect C-1 creation primitive for O_EXCL semantics; implement T-6 barriers in test-only copies without sleeps or production hooks; verify collision injection before releasing writer.
 ## Post-implementation checks
-PO-1: Plan: execute S-3/S-4 and record AC-1–AC-5 evidence; keep Q-2 UNRESOLVED until candidate CI settles M-1.
-
+PC-2: Plan: run P-15/M-1; record T-6 barrier and exit evidence; inspect diff against FN-1.
 ## First features to cut if time expires
-CT-1: Plan: cut no acceptance checks; C-1 is indivisible and refactoring remains excluded by P-11.
-
+FC-1: Plan: P-17 only; no acceptance criterion is optional.
 ## Conditions that require stopping implementation
-ST-1: Plan: stop if C-1 requires edits outside FC-1 or contract changes; report failed checks and unavailable Windows evidence without claiming acceptance.
+ST-1: Plan: stop if R-1 remains unsettled, exclusive creation cannot be guaranteed, any acceptance check fails, or implementation requires paths outside FE-1.

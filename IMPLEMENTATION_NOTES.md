@@ -1,33 +1,34 @@
 ## files changed
-| ID | File | Purpose | Approved-plan step | Behavior or invariant |
+| ID | File / symbol | Purpose of each change | Approved-plan step | Behavior or invariant affected |
 |---|---|---|---|---|
-| F-1 | scripts/tests/document-budget-test.sh:164 | Copy repair-acceptance.py into standalone/scripts/lib/ | S-2, C-1 | I-4; T-1 passes after failing before the edit |
-| F-2 | IMPLEMENTATION_NOTES.md | Record scope and remaining acceptance evidence | User-required artifact | No runtime behavior |
-| F-3 | CHANGE_TEST_REPORT.md | Record executed checks and coverage gaps | S-1, S-3, S-4, RB-1 | AC-1–AC-5 evidence |
+| F-1 | `scripts/from-issue.sh:write_new_project_brief` | Create absent requirements with subshell noclobber; print success after writing. | S-2, P-1/P-8 | AC-1, I-1/I-4/I-5; T-6 barriers pass. |
+| F-2 | `scripts/tests/issue-project-root-test.sh` | Add seed, reseed, refusal, fetch/parse/write error, auto-routing, sentinel and pipe-barrier assertions. | S-1/S-3 | T-1–T-4/T-6; regression failed before F-1 and passes afterward. |
+| F-3 | `scripts/tests/menu-input-test.py:test_issue_new_forwarding` | Assert shell n and TUI new selection forward `--new`. | S-1/S-3 | T-5; nine tests pass. |
+| F-4 | `scripts/README.md:from-issue.sh` | Document creation, refusal, partial-write recovery and seed-only behavior. | S-2 | P-5/P-6/P-8/P-10. |
+| F-5 | `IMPLEMENTATION_NOTES.md` | Record implementation scope and limitations. | User-required artifact | Traceability to CHANGE_PLAN.md. |
+| F-6 | `CHANGE_TEST_REPORT.md` | Record executed checks and gaps. | User-required artifact, S-3 | P-15/M-1 evidence. |
 
 ## purpose of each change
-See F-1–F-3.
+F-1–F-6: recorded in the purpose column above.
 
 ## approved-plan step
-| ID | Evidence |
-|---|---|
-| P-1 | S-1 reproduced exit 1 at the diagnostic grep; S-3 commands passed; see CHANGE_TEST_REPORT.md. |
-| P-2 | S-4/M-2: git diff -- scripts/tests/document-budget-test.sh showed only C-1; M-1 remains unresolved. |
+F-1–F-6: recorded in the step column above.
 
 ## behavior or invariant affected
-| ID | Evidence |
-|---|---|
-| B-1 | CHANGE_SPEC.md B-1 and I-4 verified by bash scripts/tests/document-budget-test.sh, exit 0. |
-| B-2 | Preserved-behavior coverage: BASELINE_REPORT.md §4 B-2/B-3 exercised by both budget suites; B-4 requires Windows CI. |
+F-1–F-6: recorded in the behavior column above; commands and outcomes are in CHANGE_TEST_REPORT.md.
 
 ## deviations
-| ID | Disposition |
+| ID | Disposition / evidence |
 |---|---|
-| D-1 | No implementation deviation: git diff -- scripts/tests/document-budget-test.sh contains only C-1. |
-| D-2 | git status --short before editing recorded existing changes in ADVERSARIAL_REVIEW.md, BASELINE_REPORT.md, CHANGE_PLAN.md, CHANGE_REQUEST.md, CHANGE_SPEC.md and README.md; SHA-256 comparison after checks confirmed all six unchanged. |
+| D-1 | Initial `git status --short` recorded existing modifications to `.gitignore`, `ADVERSARIAL_REVIEW.md`, `BASELINE_REPORT.md`, `CHANGE_PLAN.md`, `CHANGE_REQUEST.md`, `CHANGE_SPEC.md`; left untouched. |
+| D-2 | F-5/F-6 are explicitly required by this implementation request despite CHANGE_PLAN.md FN-1 excluding workflow-document edits. |
+| D-3 | M-1 used six scratch shell/TUI launch checks; the TUI screen was not rendered. Settle visual interaction by running the terminal UI interactively. |
+| D-4 | The initial baseline batch reached BASELINE_REPORT.md §8 command 6 after F-1 was applied; the separate S-1 regression established the pre-fix failure. |
+| D-5 | Rollback fixture initially omitted `prompts/`; corrected the temporary fixture and reran successfully. No repository change was needed. |
 
 ## unresolved concerns
-| ID | Status / settlement |
+| ID | Concern / evidence / settlement |
 |---|---|
-| Q-1 | CHANGE_PLAN.md Q-1 settled locally: T-1 passes on Darwin/Bash 3.2.57; observed with uname -s and bash --version. |
-| Q-2 | UNRESOLVED: AC-4/M-1 requires candidate Windows Git Bash CI output showing PASS: document-budget and zero suite failures; this session has no candidate Windows run. |
+| U-1 | CHANGE_PLAN.md R-1 settled: F-2 compares every `##` heading from repository `REQUIREMENTS.md` with generated output; command passes. Driver execution remains untested because new mode only seeds. |
+| U-2 | BASELINE_REPORT.md U-1 remains unverified: original reporter UI steps were unavailable; settle with the reporter fixture. |
+| U-3 | CHANGE_PLAN.md P-9 leaves existing-marker concurrency unchanged; F-1 only adds the absent-target branch, as inspected with `git diff -- scripts/from-issue.sh`. |

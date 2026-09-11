@@ -1,34 +1,33 @@
 ## Summary
-
-See VERIFICATION_REPORT.md for all 12 dispositions.
-E = /tmp/uncle-primary-verify-2103; verification made no product-source edits.
+Verification found contract and scope failures; no source fixes were made.
+Evidence root E: `/tmp/uncle-verification/`; fresh driver evidence remains `.uncle/workflow/checklist-driver-checks/`.
 
 ## Findings
+| ID | Checks | Finding and evidence | Disposition |
+|---|---|---|---|
+| D-1 | MC-002/006/014 | `scripts/from-issue.sh:529` command substitution strips prefix newlines; E/MC-014.json records `Prefix\n\n` → `Prefix\n` on baseline and candidate, exits 0. `scripts/tests/issue-project-root-test.sh:84` accepts the shortened prefix. | Existing defect contradicts AC-2 byte-preservation expectation; resolve contract or repair separately. |
+| D-2 | MC-007/009 | Frozen `change.diff` adds `.gitignore:21` `*.md` outside PLAN C-1–C-4. E/MC-009.json records `git check-ignore -v release-probe.md` exit 0; status omits probe. | Release-impacting deviation: new Markdown hidden. Notes D-1 attributes it to prior work; no scope approval established. |
+| D-3 | MC-010 | `bash scripts/tests/background-performance-test.sh` exits 1 on both revisions: extracted function line 45 reports `PROJECT_ROOT: unbound variable`; assertion at test line 32 fails. E/background-performance-test.sh.log and baseline counterpart. | Existing suite failure; repair fixture or implementation after diagnosis. |
+| D-4 | MC-010 | `bash scripts/tests/waiver-popup-test.sh` exits 1 on both revisions: embedded Python `drive`, line 35, raises `OSError: [Errno 5] Input/output error`. E/waiver-popup-test.sh.log and baseline counterpart. | Existing reproducible failure; environment versus product cause unresolved. |
 
-| ID | Classification | Evidence and disposition |
-|---|---|---|
-| F-1 | Critical acceptance failure; MC-001/002/007 | scripts/lib/change-pr.sh:338–339 requests empty summary/manual input. E/MC-001-*.log rejects 12 usable-source defaults with "must be nonempty"; 20 edits succeed. E/MC-002.log rejects four regular-blob defaults without leaking external contents. Implement P-6–9 after STOP-1 resolution. |
-| F-2 | Important acceptance failure; MC-005/007 | uncle_tui.py:_detect_prompt lacks P-11 framing. E/MC-005.log, exit 1: 342 framing failures; embedded terminator yields buffer "café " before completion. CLI editing passes (E/MC-005-cli.log, exit 0). Implement length framing and full-buffer assertions. |
-| F-3 | Critical checklist/contract mismatch; MC-004 | E/MC-004*.log shows UNATTENDED=1 still prompts in directory/worktree fixtures; --unattended suppresses both. scripts/change-workflow.sh:62 resets the variable and :67 parses the option; E/MC-004-contract.log finds the same contract in HEAD. Correct the invocation or approve environment-variable support. |
-| F-4 | Important suite failure; MC-012 | bash scripts/tests/document-budget-test.sh exits 1. E/MC-012-budget-diagnostic.log: "can't open file" standalone/scripts/lib/repair-acceptance.py. scripts/lib/gates.sh:399 now invokes that helper; scripts/tests/document-budget-test.sh:164 omits it from its copied fixture. Repair the fixture after E-3. |
-| F-5 | Important fixture failure; MC-012 | bash scripts/tests/background-performance-test.sh exits 1. E/MC-012-background-performance.log: "PROJECT_ROOT: unbound variable", then test line 32 fails before cancellation is exercised. Supply the fixture prerequisite; cancellation remains unverified. |
-| E-1 | BLOCKED-SETUP; MC-010 | Adapter suite exits 1: "tee: /dev/fd/63: Operation not permitted"; usage assertion receives empty output. Run bash scripts/tests/agent-codex-test.sh through the unrestricted driver. 32-case matrix/jq validation pass; driver evidence does not cover this suite. |
-| E-2 | BLOCKED-SETUP; MC-011/012 | Provide a Git Bash runner for the required Windows executions. Bash 3.2.57/Python 3.14.7 and 3.9.6 isolation pass (E/MC-011-*.log, MC-012-min-env.log); Windows remains untested. |
-| E-3 | BLOCKED-SETUP; MC-008/009 | Freeze and reconcile the candidate, then rerun affected verification. E/MC-009-final.log records new gates.sh, stagegate.sh, review-compaction-test.sh edits and untracked repair-acceptance.py beyond the supplied diff. Excluding these tracked edits plus MANUAL_CHECKLIST.md restores IMPLEMENTATION_NOTES.md U-6 digest; C-1–4 diff remains empty. Attribution is unknown. |
-| H-1 | BLOCKED-HUMAN; MC-006/012 | Brian must resolve CHANGE_PLAN.md R-2 and supply a disposable GitHub account/repository, merge permission and acceptance. No live issue, merge, separate comment or sign-off evidence exists. |
-| H-2 | BLOCKED-HUMAN; MC-005/012 | Brian must exercise and inspect full TUI keyboard editing. Parser/CLI checks do not establish TUI interaction. |
-| H-3 | BLOCKED-HUMAN; MC-012 | Brian must approve applicable lint/type commands and performance thresholds (MANUAL_CHECKLIST.md AS-4). Syntax/AST and performance instrumentation tests pass; no approved latency threshold was tested. |
+Environmental and human prerequisites are separate from defects.
+
+| ID | Checks | Status | Evidence and settlement |
+|---|---|---|---|
+| E-1 | MC-010 | BLOCKED-IMPOSSIBLE | E/MC-010.results captures all 65 suite commands/exits. Sandbox denies `/dev/fd/63` in agent-codex (exit 1), process enumeration in install-safety (exit 2), and loopback bind in self-hosted-live (exit 1; no port allocated). First two also reproduce on baseline. Windows host/PowerShell unavailable; both ps1 suites unexecuted, portability reports two skips. Run these on unrestricted disposable Linux/Windows hosts; installer workflow Windows cases remain unexecuted. |
+| E-2 | MC-007 | BLOCKED-IMPOSSIBLE | E/MC-007.json: `strace -f -e trace=open,openat ...` exits 127. macOS host cannot establish required Linux syscall flags here; run trace on Linux. Barrier success does not replace syscall evidence. |
+| E-3 | MC-011 | BLOCKED-SETUP | E/MC-011.json: `shellcheck -x scripts/from-issue.sh scripts/tests/issue-project-root-test.sh` exits 127 on both copies. Install ShellCheck, then compare diagnostics. |
+| E-4 | MC-012 | BLOCKED-HUMAN | E/MC-012.json: no ISSUE_URL; `gh auth status` exits 1 with invalid-token report. Brian must provide target issue, working authentication and configured driver access. Live gh/curl seeds and explicit interpretation remain unverified; MC-007 also incomplete. |
+| E-5 | MC-013 | BLOCKED-HUMAN | BASELINE_REPORT.md U-1 / IMPLEMENTATION_NOTES.md U-2 lack reporter fixture. Reporter must provide original sequence, files and environment. |
 
 ## Assumptions
-
-| ID | Unverified item | Settled by |
+| ID | Unverified claim | Settlement |
 |---|---|---|
-| A-1 | No attribution or historical runtime classification for F-4/5 and E-3 | Fixed-snapshot comparison and owner disposition |
+| A-1 | MC-007 heading/table comparison establishes template shape only; completed-input driver consumption remains unknown. | Execute MC-012. |
 
 ## Open questions
-
-| ID | Required disposition |
+| ID | Question / next action |
 |---|---|
-| Q-1 | CT-5/6 map to MC-001/002/005/007 failures; CT-11 to H-1; CT-16 to MC-002; CT-19 to MC-001–006. |
-| Q-2 | CT-7 native commands and CT-9 syntax/AST are in E/MC-012-results.tsv; CT-10 and CT-15 threshold acceptance await H-3. |
-| Q-3 | MC-011 sequential/parallel elapsed seconds: 0.050/0.095 with sentinels, 0.047/0.094 unset; no speed criterion was approved. |
+| O-1 | Owner must dispose D-1–D-4 and D-2 scope deviation before acceptance. |
+| O-2 | Notes F-5/F-6 describe required reporting artifacts; D-1 attributes other workflow-document edits to prior work. Frozen implementation diff contains only C-1–C-4 plus `.gitignore`. Current `git diff --check` exits 0; older whitespace findings are historical. |
+| O-3 | `/tmp/uncle-seed-check.py` exists and was inspected; its earlier success claims are not fresh evidence. This run used independent retained harnesses and driver assertions. |

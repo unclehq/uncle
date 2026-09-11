@@ -1,6 +1,6 @@
 # Change Request
 
-Seeded from [unclehq/uncle#7](https://github.com/unclehq/uncle/issues/7).
+Seeded from [unclehq/uncle#13](https://github.com/unclehq/uncle/issues/13).
 
 ## Change Type
 
@@ -8,28 +8,11 @@ Feature | Bug Fix | Prototype | Refactor | Performance | Security | Upgrade
 
 ## Summary
 
-Fix windows build
+if it is a github issue but the user selects new application
 
 ## Motivation
 
-Fix this windows installer script issue on the github workflow
-
-Run export PATH="$PWD/packaging/windows:$PATH"
-verification-integrity
-checklist-groups
-parallel-checks
-review-compaction
-agent-kimi
-reviewer-claude
-document-budget
-provided-inputs
-windows-probes
-self-hosted
-session-totals
-audit-findings
-Regression suites failed: 1
-Failed suites: document-budget
-Error: Process completed with exit code 1.
+if it is a github issue but the user selects new application make a REQUIREMENTS.md instead of CHANGE_REQUEST.md
 
 ## Observed Current Behavior
 

@@ -203,8 +203,13 @@ section of `REQUIREMENTS.md` from it.
   process. Anything other than `RUN`, including EOF, is a decline: the file
   stays, nothing runs, exit 0. The prompt is printed and blocks even when stdin
   is not a terminal.
-- `--new` replaces the project-brief section of `REQUIREMENTS.md` for
-  `./scripts/stagegate.sh`. Unchanged: no prompt, no auto-run, no close.
+- `--new` creates an absent `REQUIREMENTS.md` from the issue, or preserves the
+  prefix and replaces its existing `# Project brief` section through EOF.
+  Existing files without that marker and dangling symlinks are refused.
+  Creation is exclusive: a concurrent file or symlink causes failure without
+  replacement. A failed write may leave a partial file; inspect it before retrying.
+  Fill in the brief's guidance before running `./scripts/stagegate.sh`.
+  No prompt, no auto-run (including `--unattended`), no close.
 
 Requires either the `gh` CLI (authenticated) or `curl` (public repos only).
 Closing the issue additionally requires `gh`: if the issue was fetched over the

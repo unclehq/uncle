@@ -462,6 +462,14 @@ Anything genuinely undecided.
 EOF
 )"
 
+    if [[ ! -e REQUIREMENTS.md && ! -L REQUIREMENTS.md ]]; then
+        # Noclobber uses exclusive creation; a concurrent file or link must win.
+        (set -o noclobber; printf '%s\n' "$brief" > REQUIREMENTS.md)
+        echo "Created REQUIREMENTS.md project brief from issue $OWNER/$REPO#$ISSUE_NUM"
+        echo "Run: ./scripts/stagegate.sh"
+        return
+    fi
+
     # Replace the project-brief section (from '# Project brief' to EOF) in REQUIREMENTS.md.
     if ! grep -q '^# Project brief$' REQUIREMENTS.md; then
         echo "REQUIREMENTS.md does not contain a '# Project brief' section; cannot seed new-app workflow."

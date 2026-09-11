@@ -466,7 +466,6 @@ EOF
         # Noclobber uses exclusive creation; a concurrent file or link must win.
         (set -o noclobber; printf '%s\n' "$brief" > REQUIREMENTS.md)
         echo "Created REQUIREMENTS.md project brief from issue $OWNER/$REPO#$ISSUE_NUM"
-        echo "Run: ./scripts/stagegate.sh"
         return
     fi
 
@@ -479,7 +478,6 @@ EOF
     head="$(awk '/^# Project brief$/{exit} {print}' REQUIREMENTS.md)"
     printf '%s\n%s\n' "$head" "$brief" > REQUIREMENTS.md
     echo "Updated REQUIREMENTS.md project brief from issue $OWNER/$REPO#$ISSUE_NUM"
-    echo "Run: ./scripts/stagegate.sh"
 }
 
 case "$MODE" in
@@ -492,5 +490,9 @@ case "$MODE" in
         fi
         confirm_and_run_workflow
         ;;
-    new) write_new_project_brief ;;
+    new)
+        write_new_project_brief
+        echo "Starting the new-application workflow in $PROJECT_ROOT"
+        bash "$ROOT/scripts/stagegate.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"}
+        ;;
 esac

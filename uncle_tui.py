@@ -1047,7 +1047,7 @@ class UncleTUI:
     #                   its workspace-write sandbox may reach the network,
     #                   which includes binding a loopback port
     #
-    # Older files carried global `runner` / `model` / `effort` lines, a bare
+    # Older files carried global `runner` / `model` / `effort` / `billing` lines, a bare
     # `<stage> <model>` line, and a `reviewer <model>` line. Those are still
     # read — as the seed for stages the file does not configure explicitly —
     # and are never written back, so the first save migrates the file.
@@ -1070,7 +1070,7 @@ class UncleTUI:
             self._config_stamp = None
             return self.first_run
         self.first_run = False
-        legacy = {"runner": "", "model": "", "effort": "", "reviewer": ""}
+        legacy = {"runner": "", "model": "", "effort": "", "billing": "", "reviewer": ""}
         try:
             with open(CONFIG_PATH) as fh:
                 for line in fh:
@@ -1170,6 +1170,8 @@ class UncleTUI:
                 self.stage_runners[stage] = legacy["runner"]
             if legacy["effort"] and stage not in self.stage_efforts:
                 self.stage_efforts[stage] = legacy["effort"]
+            if legacy["billing"] and stage not in self.stage_billings:
+                self.stage_billings[stage] = legacy["billing"]
             model = legacy["model"]
             if STAGE_SIDE.get(stage) == REVIEWER and legacy["reviewer"]:
                 model = legacy["reviewer"]
@@ -1199,9 +1201,9 @@ class UncleTUI:
                         lines.append("%s.runner %s\n" % (stage, runner))
                     if self.stage_efforts.get(stage):
                         lines.append("%s.effort %s\n" % (stage, self.stage_efforts[stage]))
-                    # A model belongs to a cline stage only; keeping one on a
-                    # claude/kimi/codex stage would be a value nothing reads.
-                    if self.stage_models.get(stage) and self.stage_runner(stage) in ("cline", "self-hosted"):
+                    # Keep dormant selections for a later runner switch;
+                    # stage_model controls whether the current runner reads it.
+                    if self.stage_models.get(stage):
                         lines.append("%s.model %s\n" % (stage, self.stage_models[stage]))
                     # Likewise network, which only a codex stage sandboxes. It
                     # is written whenever it is set so that a hand-edited line
@@ -1210,7 +1212,7 @@ class UncleTUI:
                         lines.append("%s.network %s\n" % (stage, self.stage_networks[stage]))
                     # Billing, like model, is a cline-only setting; written
                     # whenever set so a hand-edited line survives the rewrite.
-                    if self.stage_billings.get(stage) and self.stage_runner(stage) == "cline":
+                    if self.stage_billings.get(stage):
                         lines.append("%s.billing %s\n" % (stage, self.stage_billings[stage]))
                     if self.stage_base_urls.get(stage):
                         lines.append("%s.base_url %s\n" % (stage, self.stage_base_urls[stage]))

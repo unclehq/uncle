@@ -317,12 +317,13 @@ again._set_field("execute-checklist", "network", "")
 text = open(os.environ["UNCLE_CONFIG"]).read()
 check("cleared network is not written", False, "execute-checklist.network" in text)
 
-# A model on a non-cline stage is not written: nothing would read it.
+# Hand-edited dormant models survive a save for a later runner rollback.
 t = fresh()
-t._set_field("requirements", "model", "cline-pass/glm-5.3")
-t._set_field("requirements", "runner", "kimi")
+t.stage_models["requirements"] = "cline-pass/glm-5.3"
+t.stage_runners["requirements"] = "kimi"
+t.save_config()
 text = open(os.environ["UNCLE_CONFIG"]).read()
-check("no model line for a non-cline stage", False, "requirements.model" in text)
+check("dormant model line survives", True, "requirements.model cline-pass/glm-5.3" in text)
 
 # The old global format seeds the stages instead of being dropped.
 with open(os.environ["UNCLE_CONFIG"], "w") as fh:
@@ -360,6 +361,83 @@ if failed:
         print("FAIL: " + f)
     raise SystemExit(1)
 print("  round-trip/migration: %d checks passed" % 27)
+PY
+
+# A6: runnerless legacy selections survive Claude saves and a Cline rollback.
+run_case <<'PY' || status=1
+import importlib.util, os, sys
+
+spec = importlib.util.spec_from_file_location("tui", os.environ["UNCLE_TUI"])
+m = importlib.util.module_from_spec(spec)
+sys.modules["tui"] = m
+spec.loader.exec_module(m)
+
+def load():
+    t = m.UncleTUI.__new__(m.UncleTUI)
+    t.load_config()
+    return t
+
+fixtures = {
+    "global": "model poolside/laguna-s-2.1\nbilling cline-usage\n",
+    "bare": "requirements poolside/laguna-s-2.1\nbilling cline-usage\n",
+    "stage": "requirements.model poolside/laguna-s-2.1\nrequirements.billing cline-usage\n",
+    "precedence": (
+        "model poolside/laguna-s-2.1\nbilling cline-usage\n"
+        "reviewer cline-pass/glm-5.3\n"
+        "requirements cline-pass/kimi-k3\n"
+        "requirements.model poolside/laguna-s-2.1\n"
+        "requirements.billing clinepass\n"
+    ),
+}
+checks = 0
+for name, config in fixtures.items():
+    with open(os.environ["UNCLE_CONFIG"], "w") as fh:
+        fh.write(config)
+    m.DEFAULT_RUNNER = "claude"
+    t = load()
+    expected_models = dict(t.stage_models)
+    expected_billings = {stage: "cline-usage" for stage in m.CONFIG_STAGES}
+    if name == "stage":
+        expected_billings = {"requirements": "cline-usage"}
+    elif name == "precedence":
+        expected_billings["requirements"] = "clinepass"
+        assert t.stage_models["requirements"] == "poolside/laguna-s-2.1"
+        assert t.stage_models["final-audit"] == "cline-pass/glm-5.3"
+        checks += 2
+    assert t.stage_billings == expected_billings, (name, "legacy billing load")
+    checks += 1
+    for cycle in range(2):
+        assert not t.stage_runners, (name, "runner keys materialized")
+        assert all(t.stage_runner(s) == "claude" and t.stage_model(s) == ""
+                   for s in m.CONFIG_STAGES), (name, "dormant model emitted")
+        t.save_config()
+        t = load()
+        assert t.stage_models == expected_models, (name, "model loss")
+        assert t.stage_billings == expected_billings, (name, "billing loss")
+        checks += 4
+    m.DEFAULT_RUNNER = "cline"
+    t = load()
+    assert not t.stage_runners, (name, "rollback runner pinned")
+    for stage, model in expected_models.items():
+        assert t.stage_runner(stage) == "cline" and t.stage_model(stage) == model
+        checks += 1
+    for stage, billing in expected_billings.items():
+        assert t.stage_billing(stage) == billing, (name, stage, "rollback billing")
+        checks += 1
+    checks += 1
+for runner in ("cline", "claude", "kimi", "codex", "self-hosted"):
+    with open(os.environ["UNCLE_CONFIG"], "w") as fh:
+        fh.write("requirements.runner %s\nrequirements.model poolside/laguna-s-2.1\n"
+                 "requirements.billing cline-usage\n" % runner)
+    t = load()
+    expected_models = dict(t.stage_models)
+    t.save_config()
+    t = load()
+    assert t.stage_runner("requirements") == runner
+    assert t.stage_models == expected_models, (runner, "dormant model loss")
+    assert t.stage_billings == {"requirements": "cline-usage"}, (runner, "billing loss")
+    checks += 3
+print("  dormant selections/rollback: %d checks passed" % checks)
 PY
 
 # --- the screen and the drivers must read the same file the same way -------

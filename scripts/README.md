@@ -584,11 +584,13 @@ Set `WORKFLOW_KIMI_CMD` to the Kimi executable and `WORKFLOW_KIMI_MODEL` to its
 configured model alias when needed. No model override now correctly selects Kimi.
 
 Oversized reviewer artifacts (including background checklists) receive up to
-three bounded compaction passes, using the same runner/model/effort and
+two bounded compaction passes, using the same runner/model/effort and
 read-only sandbox. No new review is requested. Original text and candidates
 stay in the stage log directory; failed compaction never replaces the original.
 `WORKFLOW_REVIEW_COMPACT=0` opts out; `WORKFLOW_REVIEW_COMPACT_ATTEMPTS`
-defaults to 3; `WORKFLOW_REVIEW_COMPACT_SECONDS` defaults to 120 (range 1–600).
+defaults to 2 (unset or empty); 1 selects a single pass, and positive decimal
+values above 2 are capped at 2. Non-digits and leading zeros are rejected.
+`WORKFLOW_REVIEW_COMPACT_SECONDS` defaults to 120 (range 1–600).
 When no pass fits, the run continues with the preserved original: the budget is
 advisory unless `WORKFLOW_DOC_BUDGET_ENFORCE=1` makes it blocking. The checks
 preserve structural anchors; the human still judges whether meaning is retained.

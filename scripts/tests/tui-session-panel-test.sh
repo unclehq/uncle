@@ -7,7 +7,7 @@ fi
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 python3 -B - <<'PY'
-import json, tempfile, time, unittest
+import curses, json, os, tempfile, time, unittest
 from pathlib import Path
 from unittest.mock import patch
 from uncle_tui import UncleTUI
@@ -200,6 +200,177 @@ class Panel(unittest.TestCase):
         self.assertEqual(ui.status_model, 'foreground-model')
         self.assertEqual(ui.status_mode, 'act')
         self.assertEqual(ui.session_stats['live']['manual-checklist-base']['total_tokens'], 99)
+
+class Footer(unittest.TestCase):
+    def ui(self, **fields):
+        ui = UncleTUI.__new__(UncleTUI)
+        ui.__dict__.update(state='running', workflow_idx=1, issue_mode='--change',
+            issue='123', status_runner='codex', status_model='model',
+            status_effort='high', status_mode='act', status_stage='implementation',
+            status_stage_index=2, status_stage_total=4, prompt_kind='',
+            color=dict(sel=11, good=12, accent=13), misc={})
+        ui.__dict__.update(fields)
+        return ui
+
+    def draw(self, ui, width=160, fail=False):
+        ui.stdscr = Screen(width)
+        ui.stdscr.attrs = []
+        ui.stdscr.attrset = ui.stdscr.attrs.append
+        if fail:
+            def addnstr(*args):
+                raise curses.error('test write failure')
+            ui.stdscr.addnstr = addnstr
+        ui._draw_status(30, width)
+        return ui.stdscr
+
+    def old_parts(self, mode='Act'):
+        return (' runner: codex   model: model   effort: high   mode: %s '
+                '  stage: implementation (2/4)' % mode)
+
+    def test_issue_identity_and_launch_are_preserved(self):
+        inputs = ['123'] + [
+            scheme + '://github.com/owner/repo/issues/123' + suffix
+            for scheme in ('http', 'https')
+            for suffix in ('', '/', '?q=1', '#comment', 'suffix')]
+        for issue, issue_mode in ((i, m) for i in inputs for m in ('', '--change', '--new')):
+            with self.subTest(issue=issue, issue_mode=issue_mode):
+                ui = self.ui(issue=issue, issue_mode=issue_mode)
+                command = ui.cmd_for()
+                screen = self.draw(ui)
+                self.assertEqual(len(screen.writes), 1)
+                y, x, text, n = screen.writes[0]
+                self.assertEqual((y, x, n), (29, 0, 159))
+                self.assertTrue(text.startswith(self.old_parts() + ' '))
+                self.assertTrue(text.endswith('change request 123'))
+                self.assertEqual(ui.issue, issue)
+                self.assertEqual(ui.cmd_for(), command)
+
+    def test_ineligible_and_invalid_inputs_keep_old_footer(self):
+        cases = [dict(workflow_idx=0), dict(workflow_idx=2),
+                 dict(issue='')]
+        cases += [dict(issue=value) for value in
+                  ('abc', '#123', '123x', '123\n', '１２３',
+                   'https://example.com/o/r/issues/123',
+                   'https://github.com/o/r/issues/nope')]
+        for fields in cases:
+            with self.subTest(fields=fields):
+                text = self.draw(self.ui(**fields)).writes[0][2]
+                self.assertEqual(text, self.old_parts().ljust(160)[:159])
+        ui = self.ui(state='menu')
+        text = self.draw(ui).writes[0][2]
+        self.assertEqual(text, (' runner: codex   model: —   effort: — '
+                                '  mode: — ').ljust(160)[:159])
+
+    def launch(self, ui):
+        with patch.object(ui, 'maybe_reload'), patch.object(ui, 'start_workflow') as start:
+            ui._run()
+            start.assert_called_once_with()
+
+    def test_direct_cancellation_restart_and_relaunch(self):
+        with tempfile.TemporaryDirectory() as project, tempfile.TemporaryDirectory() as install:
+            origin = Path(project, '.uncle/workflow/origin')
+            origin.parent.mkdir(parents=True)
+            Path(project, 'CHANGE_REQUEST.md').touch()
+            Path(project, '.uncle/workflow/state').write_text('888:ANALYZE\n')
+            sentinel = Path(install, '.uncle/workflow/origin')
+            sentinel.parent.mkdir(parents=True)
+            sentinel.write_text('other/repo\t777\n')
+            with patch.dict(os.environ, UNCLE_PROJECT_ROOT=project,
+                            STAGEGATE_ORIGIN_ISSUE='666'), patch('uncle_tui.ROOT', install), \
+                    patch('uncle_tui.os.getcwd', return_value=install):
+                ui = self.ui(state='issue', input_buf='999')
+                ui._confirm_text()
+                self.assertEqual(ui.state, 'issue_mode')
+                ui._go_back()
+                ui._go_back()
+                self.assertEqual(ui.state, 'menu')
+                ui.sel = 2
+                with patch.object(ui, 'maybe_reload'), patch.object(ui, 'start_workflow') as start:
+                    ui._confirm()
+                    start.assert_called_once_with()
+                self.assertEqual(ui.issue, '999')
+                self.assertNotIn('change request', self.draw(ui).writes[0][2])
+                for retained in ('', '999'):
+                    origin.write_text('owner/repo\t123\tgh\nignored\t456\n')
+                    ui = self.ui(workflow_idx=2, issue=retained)
+                    command = ui.cmd_for()
+                    self.launch(ui)
+                    self.assertTrue(self.draw(ui).writes[0][2].endswith('change request 123'))
+                    origin.write_text('owner/repo\t456\n')
+                    with patch('builtins.open', side_effect=AssertionError('redraw I/O')):
+                        self.assertTrue(self.draw(ui).writes[0][2].endswith('change request 123'))
+                    self.launch(ui)
+                    self.assertTrue(self.draw(ui).writes[0][2].endswith('change request 456'))
+                    origin.unlink()
+                    self.launch(ui)
+                    self.assertNotIn('change request', self.draw(ui).writes[0][2])
+                    self.assertEqual(ui.cmd_for(), command)
+                    self.assertEqual(ui.issue, retained)
+                self.assertEqual(sentinel.read_text(), 'other/repo\t777\n')
+
+    def test_direct_invalid_and_unavailable_origin(self):
+        with tempfile.TemporaryDirectory() as project, patch('uncle_tui._project_root') as root:
+            root.return_value = project
+            origin = Path(project, '.uncle/workflow/origin')
+            origin.parent.mkdir(parents=True)
+            ui = self.ui(workflow_idx=2, issue='999')
+            for data in (b'', b'owner/repo', b'\t123\n', b'owner/repo\t\n',
+                         b'owner/repo\t123x\n', b'owner/repo\t 123\n',
+                         'owner/repo\t１２３\n'.encode(), b'owner/repo\t\xff\n'):
+                with self.subTest(data=data):
+                    origin.write_bytes(data)
+                    self.launch(ui)
+                    self.assertNotIn('change request', self.draw(ui).writes[0][2])
+            for error in (PermissionError, OSError, UnicodeError):
+                with patch('builtins.open', side_effect=error):
+                    self.launch(ui)
+                self.assertNotIn('change request', self.draw(ui).writes[0][2])
+            origin.write_text('owner/repo\t123\n')
+            self.launch(ui)
+            ui.workflow_idx = 0
+            self.launch(ui)
+            ui.workflow_idx = 2
+            self.assertNotIn('change request', self.draw(ui).writes[0][2])
+
+    def identities(self):
+        for mode in ('', '--change', '--new'):
+            yield dict(issue_mode=mode)
+        yield dict(workflow_idx=2, direct_issue='123', issue='999')
+
+    def test_fit_colors_and_resize(self):
+        for identity in self.identities():
+            self.check_fit_colors_and_resize(identity)
+
+    def check_fit_colors_and_resize(self, identity):
+        for status_mode, prompt, mode, attr in (
+                ('act', '', 'Act', 12), ('plan', '', 'Plan', 13),
+                ('review', '', 'Review', 13), ('', '', '—', 0),
+                ('act', 'approval', 'Waiting for you', 11)):
+            ui = self.ui(status_mode=status_mode, prompt_kind=prompt, **identity)
+            parts = self.old_parts(mode)
+            label = 'change request 123'
+            fit = len(parts) + len(label) + 2
+            for width in (fit - 1, fit, fit + 1, 40, 160):
+                with self.subTest(mode=mode, width=width):
+                    screen = self.draw(ui, width)
+                    text = screen.writes[0][2]
+                    if width >= fit:
+                        self.assertEqual(text, parts + ' ' * (width - 1 - len(parts) - len(label)) + label)
+                    else:
+                        self.assertEqual(text, parts.ljust(width)[:width - 1])
+                    self.assertEqual(len(text), width - 1)
+                    self.assertEqual(screen.attrs, [attr | curses.A_REVERSE, 0])
+
+    def test_viewer_and_curses_error(self):
+        for identity in self.identities():
+            ui = self.ui(state='viewer', **identity)
+            screen = self.draw(ui)
+            self.assertEqual(screen.writes, [])
+            self.assertEqual(screen.attrs, [])
+            ui.state = 'running'
+            self.assertTrue(self.draw(ui).writes[0][2].endswith('change request 123'))
+            screen = self.draw(ui, fail=True)
+            self.assertEqual(screen.attrs, [12 | curses.A_REVERSE, 0])
 
 unittest.main()
 PY

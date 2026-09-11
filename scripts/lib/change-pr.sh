@@ -3,8 +3,10 @@
 # No close marker is written by this library.
 change_pr_complete() {
     if [[ "$CLOSE_ISSUE" != 1 || "${UNATTENDED:-0}" == 1 || -s "$UNATTENDED_FILE" ]]; then
-        echo "PR handoff disabled or unattended; leaving the issue open."
-        return 0
+        if ! change_pr_engine signing-resume >/dev/null 2>&1; then
+            echo "PR handoff disabled or unattended; leaving the issue open."
+            return 0
+        fi
     fi
     if [[ -s "$ORIGIN_FILE" ]]; then
         # Journal validation proves PR ownership separately from close ownership.
@@ -151,6 +153,8 @@ def load():
 
 
 def validate(j, ready=True):
+    if 'manual_signed_head' in j and j['manual_signed_head'] != j['intended_head']:
+        raise ValueError('Signed handoff marker differs from intended HEAD.')
     if j['origin'] != read(STATE / 'origin') or j['audit_hash'] != audit_hash():
         raise ValueError('Origin or audit changed; rerun FINAL_AUDIT.')
     verdict = read(STATE / 'audit-verdict').strip().split('\t')
@@ -176,9 +180,12 @@ def validate(j, ready=True):
 
 def manual_signed_commit(j):
     import shlex
-    command = 'git commit -a -S -m ' + shlex.quote(j['title'])
-    ask('Commit signing needs your help. In another terminal, open this project, '
-        'review and stage the audited changes, then run: ' + command + '. '
+    command = ('git commit -a -S -m ' + shlex.quote(j['title']))
+    if os.environ.get('UNCLE_SIGNING_JSON') == '1':
+        block = json.dumps(command) + ' '
+    else:
+        block = 'In another terminal, open this project, review the audited changes, then run:\n' + command + '\n'
+    ask('Commit signing needs your help. ' + block +
         'Return here and press ENTER (OK) when finished: ')
     candidate = head()
     if candidate == j['original_head']:
@@ -195,9 +202,34 @@ def manual_signed_commit(j):
     except Exception:
         j['intended_head'] = previous
         raise
+    j['manual_signed_head'] = candidate
     j.pop('manual_signing', None)
     save(j)
 
+
+
+def signing_resume(j):
+    # Probe only: preserve the journal and ask/validate again during handoff.
+    if j['phase'] not in ('prepared', 'published', 'creating', 'unknown', 'created'):
+        raise ValueError('No prepared signing handoff.')
+    marker = j.get('manual_signed_head')
+    if marker is not None and marker != j['intended_head']:
+        raise ValueError('Signed handoff marker differs from intended HEAD.')
+    candidate = head()
+    if j.get('manual_signing'):
+        if j['phase'] != 'prepared':
+            raise ValueError('Invalid pending signing phase.')
+        if candidate == j['original_head']:
+            validate(j)
+            return
+    elif not j['intended_head'] or candidate != j['intended_head']:
+        raise ValueError('No current signed handoff commit.')
+    if git('rev-parse', candidate + '^{tree}') != j['commit_tree']:
+        raise ValueError('Signed handoff tree differs from audit.')
+    if git('rev-list', '--parents', '-n', '1', candidate).split() != [candidate, j['original_head']]:
+        raise ValueError('Signed handoff must have the audited HEAD as its only parent.')
+    git('verify-commit', candidate)
+    validate(dict(j, intended_head=candidate))
 
 
 def prepare_commit(j):
@@ -497,6 +529,8 @@ def main():
         if j.get('manual_signing'):
             manual_signed_commit(j)
         validate(j)
+    elif action == 'signing-resume':
+        signing_resume(load())
     elif action == 'handoff':
         handoff(load())
     else:

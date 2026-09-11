@@ -199,6 +199,30 @@ def manual_signed_commit(j):
     save(j)
 
 
+
+def prepare_commit(j):
+    setting = subprocess.run(['git', 'config', '--bool', '--get', 'commit.gpgsign'],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if setting.returncode not in (0, 1):
+        raise ValueError('Cannot read commit signing configuration: ' + setting.stderr.strip())
+    if setting.stdout.strip() == 'true':
+        j['manual_signing'] = True
+        save(j)
+        manual_signed_commit(j)
+        return
+    try:
+        j['intended_head'] = git('commit-tree', j['commit_tree'], '-p', j['original_head'],
+                                 data=(j['title'] + '\n').encode())
+    except ValueError as error:
+        if not re.search(r'gpg|signing|failed to sign|no agent running|pinentry', str(error), re.I):
+            raise
+        print(str(error), flush=True)
+        j['manual_signing'] = True
+        save(j)
+        manual_signed_commit(j)
+    save(j)
+
+
 def ask(prompt, default=None):
     try:
         if sys.stdin.isatty() and default is not None:
@@ -375,17 +399,7 @@ def handoff(j):
     if j['phase'] == 'prepared':
         validate(j)
         if not j['intended_head']:
-            try:
-                j['intended_head'] = git('commit-tree', j['commit_tree'], '-p', j['original_head'],
-                                         data=(j['title'] + '\n').encode())
-            except ValueError as error:
-                if not re.search(r'gpg|signing|failed to sign|no agent running|pinentry', str(error), re.I):
-                    raise
-                print(str(error), flush=True)
-                j['manual_signing'] = True
-                save(j)
-                manual_signed_commit(j)
-            save(j)
+            prepare_commit(j)
         current_branch = branch()
         if current_branch != j['head_branch']:
             # Branch creation precedes switching; a crash resumes the same ref.

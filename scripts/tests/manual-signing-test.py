@@ -35,6 +35,26 @@ class Checks(unittest.TestCase):
         command = prompt.split('then run: ', 1)[1].split('. Return here', 1)[0]
         self.assertEqual(shlex.split(command), ['git', 'commit', '-S', '-m', j['title']])
 
+    def test_signing_configuration_prompts_before_commit(self):
+        import subprocess
+        function = next(node for node in TREE.body if isinstance(node, ast.FunctionDef) and node.name == 'prepare_commit')
+        for enabled in (True, False):
+            api = Mock()
+            api.PIPE = subprocess.PIPE
+            api.run.return_value = subprocess.CompletedProcess([], 0, 'true\n' if enabled else 'false\n', '')
+            ns = dict(subprocess=api, save=Mock(), manual_signed_commit=Mock(), git=Mock(return_value='new'))
+            exec(compile(ast.Module(body=[function], type_ignores=[]), '<helper>', 'exec'), ns)
+            j = dict(title='Fix signing', commit_tree='tree', original_head='old', intended_head='')
+            ns['prepare_commit'](j)
+            if enabled:
+                ns['git'].assert_not_called()
+                ns['manual_signed_commit'].assert_called_once_with(j)
+                self.assertTrue(j['manual_signing'])
+                ns['save'].assert_called_once_with(j)
+            else:
+                ns['manual_signed_commit'].assert_not_called()
+                self.assertEqual(j['intended_head'], 'new')
+
     def test_wrong_tree_or_signature_stays_pending(self):
         for kwargs in [dict(tree='different'), dict(signature=False)]:
             ns, j = self.run_case(**kwargs)

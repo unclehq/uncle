@@ -28,7 +28,7 @@ Auto/unattended mode and `WORKFLOW_CLOSE_ISSUE=0` disable this handoff. New-appl
 
 ## Signing and recovery
 
-If signing fails, a dialog shows the commit command and message. Stage the audited changes and run that `git commit -S -m '…'` command in another terminal. Return and press **OK / Enter**. Uncle verifies the signature and contents before continuing.
+When Git commit signing is enabled, Uncle shows the commit command and message before attempting a commit. Stage the audited changes and run that `git commit -S -m '…'` command in another terminal. Return and press **OK / Enter**. Uncle verifies the signature and contents before continuing.
 
 Restart Uncle in the same project to resume a pending handoff. Keep `.uncle/workflow/pr/journal.json`; it records progress and helps prevent duplicate PRs. Changes to audited files or repository state may require another audit.
 

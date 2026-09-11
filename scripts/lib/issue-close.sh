@@ -1,16 +1,8 @@
 #!/usr/bin/env bash
-# The single enforcement point for INV-3: a GitHub issue is closed only when the
-# verdict record's run id, the origin binding, and the FINAL_AUDIT.md hash all
-# agree with the run asking to close it.
-#
-# Both entry points call the same gate — change-workflow.sh at COMPLETE, and
-# from-issue.sh's post-run check — so neither can drift into a second, looser
-# check (CHANGE_SPEC §11).
-#
-# .uncle/workflow/origin grammar:  <owner/repo> TAB <issue> [TAB <gh|curl>]
-# The third field records how the binding was fetched. It is written going
-# forward; a pre-existing two-field file reads as `curl` and therefore cannot
-# authorize a close until the next write refreshes it (fail closed).
+# Shared origin and audit checks for PR handoff. The historical filename and
+# function names remain for compatibility; this library never closes issues.
+# Origin grammar: owner/repo TAB issue [TAB gh|curl]. Fetch provenance is
+# recorded for diagnostics; publication uses current gh authentication.
 #
 # bash 3.2 compatible.
 
@@ -20,9 +12,7 @@
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/state.sh"
 
-# Deadline for the gh issue close call itself, so a hung network call cannot
-# hold change-workflow.sh's lock indefinitely. Degrades to whatever timeout gh
-# enforces on a host with neither timeout nor gtimeout.
+# Legacy timeout setting retained for older callers.
 ISSUE_CLOSE_TIMEOUT_SECS="${STAGEGATE_CLOSE_TIMEOUT:-30}"
 
 # origin_field <file> <n> — field n of .uncle/workflow/origin, empty when absent.
@@ -104,8 +94,7 @@ state_origin_agree() {
 #   fetch_method      gh | curl, from the origin file's third field
 #
 # Eligibility returns 0 allowed, 1 skipped with a printed reason.
-# issue_close_if_ready below additionally returns 2 when the close fails, and
-# writes the marker only after gh reports a successful close.
+# Direct closing is disabled; eligibility is used only by PR handoff.
 issue_close_eligible() {
     local run_id="$1" repo="$2" issue="$3"
     local verdict_file="$4" origin_file="$5" audit_file="$6" marker_file="$7"
@@ -186,56 +175,23 @@ issue_close_eligible() {
         return 1
     fi
 
-    # Authentication now says nothing about how the binding was originally
-    # fetched; only a gh-fetched origin may authorize a write.
-    if [[ "$fetch_method" != "gh" ]]; then
-        echo "Issue was fetched over the unauthenticated curl fallback, which cannot"
-        echo "close issues. Close $repo#$issue by hand (verdict: $verdict)."
-        return 1
-    fi
-
     if ! command -v gh >/dev/null 2>&1; then
-        echo "gh is no longer on PATH; skipping the close."
-        echo "Close $repo#$issue by hand (verdict: $verdict)."
+        echo "gh is no longer on PATH; PR handoff remains pending."
+        echo "Authenticate gh and resume the PR handoff."
         return 1
     fi
 
     if ! gh auth status >/dev/null 2>&1; then
-        echo "gh is not authenticated; skipping the close."
-        echo "Close $repo#$issue by hand (verdict: $verdict)."
+        echo "gh is not authenticated; PR handoff remains pending."
+        echo "Authenticate gh and resume the PR handoff."
         return 1
     fi
 
     return 0
 }
 
-# The PR handoff shares eligibility, but never invokes this close mutation.
+# Compatibility entry point for older callers. Direct issue closing was removed.
 issue_close_if_ready() {
-    issue_close_eligible "$@" || return $?
-    local run_id="$1" repo="$2" issue="$3" marker_file="$7"
-    local verdict comment tmo rc
-    verdict="$(awk -F'\t' 'NR == 1 {print $2}' "$4")"
-    comment="Closed by stagegate: change workflow completed with FINAL_AUDIT.md verdict \`$verdict\`. See FINAL_AUDIT.md and .uncle/workflow/change.diff in the working tree."
-
-    tmo="$(issue_close_timeout_cmd)"
-    rc=0
-    if [[ -n "$tmo" ]]; then
-        "$tmo" "$ISSUE_CLOSE_TIMEOUT_SECS" \
-            gh issue close "$issue" --repo "$repo" --comment "$comment" || rc=$?
-    else
-        gh issue close "$issue" --repo "$repo" --comment "$comment" || rc=$?
-    fi
-
-    if [[ "$rc" -ne 0 ]]; then
-        if [[ -n "$tmo" && "$rc" -eq 124 ]]; then
-            echo "gh issue close exceeded the ${ISSUE_CLOSE_TIMEOUT_SECS}s deadline."
-        fi
-        echo "gh issue close failed for $repo#$issue."
-        echo "The change workflow itself completed; only the close failed."
-        return 2
-    fi
-
-    printf '%s\t%s\t%s\n' "$run_id" "$repo" "$issue" > "$marker_file"
-    echo "Closed $repo#$issue (verdict: $verdict)."
+    echo "Direct issue closing is disabled; issues remain open until PR merge."
     return 0
 }

@@ -317,7 +317,7 @@ run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY"
 expect_status 0
 expect_out "Type RUN exactly to start the change workflow:"
 expect_driver_ran
-expect_closed
+expect_not_closed
 
 # ---------------------------------------------------------------------------
 # Verdict-gated close (B-04, B-05, I-08)
@@ -326,57 +326,48 @@ expect_closed
 new_case ready-closes
 run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY"
 expect_status 0
-expect_out "Closed owner/repo#42 (verdict: READY)."
-expect_closed
+expect_not_closed
 
 new_case ready-with-non-blocking-closes
 run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY WITH NON-BLOCKING ISSUES"
 expect_status 0
-expect_out "verdict: READY_WITH_NON_BLOCKING_ISSUES"
-expect_closed
+expect_not_closed
 
 new_case not-ready-stays-open
 run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="NOT READY"
 expect_status 0
-expect_out "Final audit verdict: NOT_READY — leaving owner/repo#42 open."
 expect_not_closed
 
 new_case unknown-verdict-stays-open
 run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="Rerun until READY"
 expect_status 0
-expect_out "Final audit verdict: UNKNOWN"
 expect_not_closed
 
 new_case missing-verdict-file
 run_runner confirm "RUN\n"
 expect_status 0
-expect_out "No audit verdict was recorded"
 expect_not_closed
 
 new_case malformed-verdict-file
 printf 'garbage\n' > "$REPO/.uncle/workflow/audit-verdict"
 run_runner confirm "RUN\n"
 expect_status 0
-expect_out "malformed"
 expect_not_closed
 
 new_case run-id-mismatch
 run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_RUN_ID="some-other-run"
 expect_status 0
-expect_out "Audit verdict belongs to run 'some-other-run'"
 expect_not_closed
 
 new_case origin-mismatch-at-close
 run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" \
     FAKE_DRIVER_ORIGIN="other/repo	99"
 expect_status 0
-expect_out "Origin binding no longer names owner/repo#42"
 expect_not_closed
 
 new_case audit-hash-mismatch
 run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_TAMPER=1
 expect_status 0
-expect_out "FINAL_AUDIT.md changed after it was classified"
 expect_not_closed
 
 # ---------------------------------------------------------------------------
@@ -387,7 +378,7 @@ for rc in 1 7 130; do
     new_case "driver-exit-$rc"
     run_runner confirm "RUN\n" FAKE_DRIVER_EXIT="$rc" FAKE_DRIVER_VERDICT_TEXT="READY"
     expect_status "$rc"
-    expect_out "change-workflow.sh exited $rc; owner/repo#42 was not closed."
+    expect_out "change-workflow.sh exited $rc; owner/repo#42 remains open."
     expect_not_closed
 done
 
@@ -398,13 +389,11 @@ done
 new_case curl-fallback-skips-close
 run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" T_USED_GH=0
 expect_status 0
-expect_out "unauthenticated curl fallback"
 expect_not_closed
 
 new_case gh-unauthenticated-skips-close
 run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_AUTH_RC=1
 expect_status 0
-expect_out "gh is not authenticated; skipping the close."
 expect_not_closed
 
 new_case gh-missing-skips-close
@@ -416,16 +405,13 @@ else
         bash "$REPO/runner.sh" confirm > "$OUT" 2>&1
     RC=$?
     expect_status 0
-    expect_out "gh is no longer on PATH; skipping the close."
     expect_not_closed
 fi
 
 new_case gh-close-fails
 run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_CLOSE_RC=1
-expect_status 1
-expect_out "gh issue close failed for owner/repo#42."
-expect_out "only the close failed"
-expect_closed
+expect_status 0
+expect_not_closed
 
 # ---------------------------------------------------------------------------
 # Seed gate in from-issue.sh (AR-001, AR-004)
@@ -711,9 +697,8 @@ printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
-expect_out "Closed owner/repo#42 (verdict: READY)."
-expect_closed
-expect_marker
+expect_not_closed
+expect_no_marker
 
 # A NOT READY audit no longer completes the run. It stops at the override
 # gate, and declining there leaves the state — and the issue — where they are.
@@ -758,8 +743,8 @@ expect_status 0
 expect_out "Change workflow complete."
 expect_out "Build verdict: READY"
 expect_state "42:COMPLETE"
-expect_closed
-expect_marker
+expect_not_closed
+expect_no_marker
 
 new_case direct-run-not-ready-retained-blocker
 setup_audit_stage "NOT READY"
@@ -783,7 +768,6 @@ run_driver WORKFLOW_AUDIT_GATE=0 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
 expect_out "Audit gate disabled (WORKFLOW_AUDIT_GATE=0); completing on a NOT_READY verdict."
-expect_out "Final audit verdict: NOT_READY — leaving owner/repo#42 open."
 expect_state "42:COMPLETE"
 expect_not_closed
 expect_no_marker
@@ -804,7 +788,6 @@ printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42 FAKE_GH_AUTH_RC=1
 expect_status 0
-expect_out "gh is not authenticated; skipping the close."
 expect_not_closed
 expect_no_marker
 
@@ -815,7 +798,6 @@ printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42 WORKFLOW_CLOSE_ISSUE=0
 expect_status 0
-expect_out "Issue closing is disabled (WORKFLOW_CLOSE_ISSUE=0);"
 expect_not_closed
 expect_no_marker
 
@@ -826,7 +808,6 @@ printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42 FAKE_GH_CLOSE_RC=1
 expect_status 0
-expect_out "gh issue close failed for owner/repo#42."
 expect_no_marker
 
 # ---------------------------------------------------------------------------
@@ -836,15 +817,13 @@ expect_no_marker
 new_case no-double-close-after-driver
 run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_CLOSED_MARKER=1
 expect_status 0
-expect_out "was already closed by change-workflow.sh."
 expect_not_closed
 
 new_case stale-marker-ignored
 run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" \
     FAKE_DRIVER_MARKER_TEXT="other-run	other/repo	99"
 expect_status 0
-expect_out "Closed owner/repo#42 (verdict: READY)."
-expect_closed
+expect_not_closed
 
 # ---------------------------------------------------------------------------
 # Origin freshness (AR-001)
@@ -856,7 +835,6 @@ printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
 printf 'other/repo\t99\tgh\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1
 expect_status 0
-expect_out "cannot prove it owns .uncle/workflow/origin"
 expect_not_closed
 expect_no_marker
 
@@ -867,8 +845,7 @@ printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
-expect_out "Closed owner/repo#42 (verdict: READY)."
-expect_closed
+expect_not_closed
 
 # ---------------------------------------------------------------------------
 # Close retry on a later run (AR-002)
@@ -885,9 +862,8 @@ expect_no_marker
 run_driver STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
-expect_out "Closed owner/repo#42 (verdict: READY)."
-expect_marker
-expect_close_count 2
+expect_no_marker
+expect_close_count 0
 
 new_case direct-run-stale-sentinel-run-id-no-retry
 printf 'READY\n' > "$REPO/FINAL_AUDIT.md"
@@ -912,7 +888,6 @@ printf 'owner/repo\t42\tcurl\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
-expect_out "unauthenticated curl fallback"
 expect_not_closed
 expect_no_marker
 
@@ -923,7 +898,6 @@ printf 'owner/repo\t42\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
-expect_out "unauthenticated curl fallback"
 expect_not_closed
 expect_no_marker
 
@@ -942,8 +916,6 @@ else
         STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42 \
         STAGEGATE_CLOSE_TIMEOUT=1 FAKE_GH_CLOSE_SLEEP=5
     expect_status 0
-    expect_out "gh issue close exceeded the 1s deadline."
-    expect_out "gh issue close failed for owner/repo#42."
     expect_no_marker
     COUNT=$((COUNT + 1))
     if [[ -d "$REPO/.uncle/workflow/lock" ]]; then

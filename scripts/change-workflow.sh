@@ -496,53 +496,6 @@ write_origin() {
     fi
 }
 
-# --- Driver-side issue close (BEH-D) ----------------------------------------
-# Fires when this process produced the verdict record, or — on a rerun that
-# lands on COMPLETE with no close marker — when the record names this same
-# concrete run id. A recorded '-' is the unset-run-id sentinel: it must never
-# be read as matching an unset STAGEGATE_RUN_ID, so it never enables the retry.
-
-close_origin_issue_if_ready() {
-    local recorded owns=0
-
-    if [[ ! -s "$ORIGIN_FILE" || -e "$MARKER_FILE" ]]; then
-        return 0
-    fi
-
-    # Closing the issue tells everyone watching it that a person accepted this
-    # change. On an unattended run nobody did, and the claim would be visible
-    # outside the repository where it cannot be taken back quietly. Leave it
-    # open; the marker is not written, so a later attended run still closes it.
-    if [[ -s "$UNATTENDED_FILE" ]]; then
-        echo "Unattended run: leaving the originating issue open for a human to close."
-        return 0
-    fi
-
-    if [[ "$VERDICT_WRITTEN_THIS_RUN" == "1" ]]; then
-        owns=1
-    elif [[ -s "$VERDICT_FILE" ]]; then
-        recorded="$(head -n 1 "$VERDICT_FILE" | awk -F'\t' '{printf "%s", $1}')"
-        if [[ -n "$recorded" && "$recorded" != "-" \
-            && "$recorded" == "${STAGEGATE_RUN_ID:-}" ]]; then
-            owns=1
-        fi
-    fi
-
-    if [[ "$owns" != "1" ]]; then
-        return 0
-    fi
-
-    # A failed close never fails the run: the change itself completed, and the
-    # missing marker leaves a later rerun eligible to retry.
-    issue_close_if_ready \
-        "${STAGEGATE_RUN_ID:--}" \
-        "$(origin_field "$ORIGIN_FILE" 1)" \
-        "$(origin_field "$ORIGIN_FILE" 2)" \
-        "$VERDICT_FILE" "$ORIGIN_FILE" FINAL_AUDIT.md "$MARKER_FILE" \
-        "$CLOSE_ISSUE" "$ORIGIN_BOUND" "$owns" \
-        "$(origin_fetch_method "$ORIGIN_FILE")" || true
-}
-
 # stage, seconds, usd, input, output, cache_read, cache_write
 record_cost() {
     if [[ ! -s "$LEDGER_FILE" ]]; then
@@ -1939,7 +1892,7 @@ while true; do
             if [[ -e .git ]]; then
                 change_pr_complete
             else
-                close_origin_issue_if_ready
+                echo "No Git checkout: PR creation is unavailable; the issue remains open."
             fi
             exit 0
             ;;

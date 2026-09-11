@@ -15,8 +15,8 @@ export UNCLE_PROJECT_ROOT="$PWD"
 # Change-workflow chaining
 #
 # These functions run after CHANGE_REQUEST.md is seeded on the --change path:
-# they confirm with the human, run the driver, and close the originating issue
-# only when that run's own audit says the change is ready. They read the
+# they confirm with the human and run the driver, which owns PR handoff.
+# Issues stay open until PR merge. These functions read the
 # globals resolved further down (OWNER, REPO, ISSUE_NUM, USED_GH) at call time.
 # ---------------------------------------------------------------------------
 
@@ -157,56 +157,14 @@ confirm_and_run_workflow() {
 
     if [[ "$status" -ne 0 ]]; then
         echo
-        echo "change-workflow.sh exited $status; $OWNER/$REPO#$ISSUE_NUM was not closed."
+        echo "change-workflow.sh exited $status; $OWNER/$REPO#$ISSUE_NUM remains open."
         exit "$status"
     fi
 
-    close_issue_if_ready "$run_id"
+    echo "Change workflow finished. Issues remain open until their PR is merged."
 }
 
-# Defensive fallback for the case change-workflow.sh could not close the issue
-# itself. The decision lives in lib/issue-close.sh so both entry points enforce
-# INV-3 through one piece of code; this wrapper adds only the marker check that
-# suppresses a second close and the USED_GH guard for this invocation's fetch.
-close_issue_if_ready() {
-    if [[ -e .git ]]; then
-        echo "Git checkout: PR handoff belongs to change-workflow.sh; issue remains open until merge."
-        return 0
-    fi
-    local run_id="$1"
-    local marker_run marker_repo marker_issue fetch status
 
-    if [[ -s "$MARKER_FILE" ]]; then
-        marker_run="$(awk -F'\t' 'NR==1{printf "%s", $1}' "$MARKER_FILE")"
-        marker_repo="$(awk -F'\t' 'NR==1{printf "%s", $2}' "$MARKER_FILE")"
-        marker_issue="$(awk -F'\t' 'NR==1{printf "%s", $3}' "$MARKER_FILE")"
-        if [[ "$marker_run" == "$run_id" && "$marker_repo" == "$OWNER/$REPO" \
-            && "$marker_issue" == "$ISSUE_NUM" ]]; then
-            echo "$OWNER/$REPO#$ISSUE_NUM was already closed by change-workflow.sh."
-            return 0
-        fi
-    fi
-
-    # An unauthenticated curl fetch in *this* invocation cannot close anything,
-    # whatever provenance the origin file on disk records.
-    fetch="$(origin_fetch_method "$ORIGIN_FILE")"
-    if [[ "${USED_GH:-0}" != "1" ]]; then
-        fetch="curl"
-    fi
-
-    status=0
-    issue_close_if_ready \
-        "$run_id" "$OWNER/$REPO" "$ISSUE_NUM" \
-        "$VERDICT_FILE" "$ORIGIN_FILE" FINAL_AUDIT.md "$MARKER_FILE" \
-        1 1 1 "$fetch" || status=$?
-
-    # Skips are informational; only a close that was attempted and failed is a
-    # hard failure on this path.
-    if [[ "$status" == "2" ]]; then
-        exit 1
-    fi
-    return 0
-}
 
 # Test hook: sourcing this script with STAGEGATE_FROM_ISSUE_SOURCE_ONLY=1 yields
 # the functions above without running the CLI, so scripts/tests/close-flow-test.sh

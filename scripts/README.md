@@ -211,12 +211,8 @@ Closing the issue additionally requires `gh`: if the issue was fetched over the
 `curl` fallback, or `gh` is missing or unauthenticated at close time, the close
 is skipped with a message and the run is still a success.
 
-The issue is closed only if all of these hold: `.uncle/workflow/audit-verdict` records
-this run's id, its verdict class is `READY` or `READY_WITH_NON_BLOCKING_ISSUES`,
-`.uncle/workflow/origin` still names this issue, and `FINAL_AUDIT.md` still hashes to
-the value recorded when it was classified. Any mismatch leaves the issue open
-and prints the reason. A driver exit code other than 0 is propagated and no
-close is attempted.
+Uncle leaves issues open until their linked PR is merged. It never calls
+`gh issue close`. PR publication requires a matching READY audit and approval.
 
 In a Git checkout (`.git` directory or worktree file), `change-workflow.sh`
 freezes the source tree before `FINAL_AUDIT`, binds the verdict to that tree,
@@ -226,7 +222,7 @@ commit/publication consent. Blank title input accepts the shortened Summary
 from `CHANGE_REQUEST.md`. Publication commits that exact tree plus the audit,
 creates a feature branch when starting on the default branch, and pushes without
 force. The PR targets the base repository's default branch and includes
-`Closes owner/repo#issue` for an eligible gh origin. Creating the PR never closes
+`Closes owner/repo#issue` for an eligible bound origin. Creating the PR never closes
 the issue or writes `issue-closed`; GitHub closes the linked issue on merge into
 the default branch. Originless runs must confirm the base repository.
 
@@ -251,13 +247,8 @@ create. Independently resolve an unknown server outcome before changing its
 journal. Missing/corrupt bindings require a fresh `FINAL_AUDIT`; remote or PR
 head drift requires re-audit, with the existing PR retained.
 
-Without `.git`, the driver and wrapper retain the immediate-close gate in
-`scripts/lib/issue-close.sh`: run/origin/hash/READY and ownership must agree.
-Driver close failure remains successful and retryable; wrapper close failure
-exits 1. The close marker prevents duplicate closes, and the unset run-ID
-sentinel does not authorize close recovery. Git wrappers skip this fallback.
-To roll back, revert the PR handoff changes and retain PRs/journals; inspect
-existing PRs before resuming old `COMPLETE` states that close immediately.
+Without `.git`, PR creation is unavailable. Uncle never closes issues directly;
+issues remain open until their linked PR is merged.
 
 State files this contract depends on, all under the gitignored `.uncle/workflow/`:
 

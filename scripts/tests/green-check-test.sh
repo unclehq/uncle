@@ -195,6 +195,32 @@ UNCLE_PROJECT_ROOT="$TMP/live" UNCLE_STATUS_FILE="$TMP/status" UNCLE_CONFIG="$TM
     green_run "$TMP/isolated.commands" "$TMP/isolated.tsv" "$TMP/isolated.log" > "$TMP/isolated.out"
 check_contains "child checks receive no live workflow settings" "PASS" "$TMP/isolated.out"
 
+# Invalid model-generated scheduling falls back before approval; commands stay exact.
+cat > "$TMP/plan.md" <<'PLAN'
+## Parallel verification groups
+
+```text
+2 4 5
+```
+
+## Verification commands
+
+```sh
+printf one
+printf two
+printf three
+```
+PLAN
+verify_commands "$TMP/plan.md" > "$TMP/commands.before"
+(cd "$TMP" && repair_parallel_groups plan.md commands.before) > "$TMP/repair.out" 2>&1
+verify_commands "$TMP/plan.md" > "$TMP/commands.after"
+COUNT=$((COUNT + 1))
+cmp "$TMP/commands.before" "$TMP/commands.after" || fail "repair changed commands"
+COUNT=$((COUNT + 1))
+verify_parallel_groups "$TMP/plan.md" "$TMP/commands.after" > "$TMP/groups" || fail "serial fallback invalid"
+check_eq "fallback has no parallel groups" "" "$(cat "$TMP/groups")"
+check_contains "fallback is explained" "commands will run serially" "$TMP/repair.out"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "green-check-test.sh: $FAILED of $COUNT checks failed"
     exit 1

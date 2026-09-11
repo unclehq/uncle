@@ -62,6 +62,45 @@ No bullets, labels, or prose in the block.
 HINT
 }
 
+# Only call before approval. Invalid optional scheduling must not invalidate
+# the executable commands or invent independence between them.
+repair_parallel_groups() {
+    local plan="$1" commands="$2"
+    verify_parallel_groups "$plan" "$commands" >/dev/null && return 0
+    python3 - "$plan" <<'PY'
+import os
+from pathlib import Path
+import re
+import sys
+import tempfile
+path = Path(sys.argv[1])
+if path.is_symlink():
+    raise SystemExit('Refusing to rewrite a symlinked plan')
+original = path.read_bytes()
+lines = original.decode('utf-8').splitlines(keepends=True)
+output = []
+skip = False
+for line in lines:
+    if re.fullmatch(r'## Parallel verification groups[ \t\r\n]*', line):
+        skip = True
+        continue
+    if skip and re.match(r'^#{1,2}\s', line):
+        skip = False
+    if not skip:
+        output.append(line)
+logs = Path('.uncle/workflow/logs')
+logs.mkdir(parents=True, exist_ok=True)
+fd, backup = tempfile.mkstemp(prefix='invalid-parallel-groups-', suffix='.md', dir=logs)
+with os.fdopen(fd, 'wb') as stream:
+    stream.write(original)
+if path.read_bytes() != original:
+    raise SystemExit('Plan changed during scheduling repair')
+path.write_bytes(''.join(output).encode('utf-8'))
+print(f'Removed invalid parallel groups from {path}; commands will run serially. Original: {backup}', file=sys.stderr)
+PY
+    verify_parallel_groups "$plan" "$commands" >/dev/null
+}
+
 # verify_commands <file> — one command per line, from the first fenced block
 # under the document's verification-command heading.
 #

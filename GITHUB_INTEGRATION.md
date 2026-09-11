@@ -12,7 +12,7 @@ See [Prerequisites](PREREQUISITES.md) for other requirements.
 
 Choose **From GitHub issue**, enter its URL or number, and select **change request** or **new application**. Uncle creates `CHANGE_REQUEST.md` or `REQUIREMENTS.md` from the issue title and body.
 
-Import uses your current project; it does not clone a repository. Public issues can use a read-only `curl` fallback, which does not authorize automatic issue closure.
+Import uses your current project; it does not clone a repository. Public issues can use a read-only `curl` fallback.
 
 ## Create a PR
 
@@ -32,4 +32,4 @@ If signing fails, a dialog shows the commit command and message. Stage the audit
 
 Restart Uncle in the same project to resume a pending handoff. Keep `.uncle/workflow/pr/journal.json`; it records progress and helps prevent duplicate PRs. Changes to audited files or repository state may require another audit.
 
-Without Git, Uncle cannot create a PR. An eligible issue-backed change can instead close its issue directly after a matching READY audit.
+Without Git, Uncle cannot create a PR. The issue remains open; Uncle never closes issues directly.

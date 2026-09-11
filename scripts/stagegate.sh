@@ -553,7 +553,7 @@ plan_structure_problem() {
         printf 'no Verification commands block'
         return 0
     fi
-    if ! verify_parallel_groups "$plan" "$commands" > /dev/null; then
+    if ! repair_parallel_groups "$plan" "$commands"; then
         rm -f "$commands"
         printf 'invalid Parallel verification groups'
         return 0

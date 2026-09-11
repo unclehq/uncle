@@ -185,8 +185,8 @@ done
 
 # Closing the originating issue announces outside the repository that this
 # change was accepted. Unattended, nobody accepted it.
-if grep -q 'leaving the originating issue open' "$ROOT/scripts/change-workflow.sh"; then ok
-else bad "cw-issue-open" "close_origin_issue_if_ready has no unattended guard"; fi
+if grep -q 'the issue remains open' "$ROOT/scripts/change-workflow.sh"; then ok
+else bad "cw-issue-open" "completion must leave the issue open"; fi
 
 echo
 if [[ "$FAIL" -gt 0 ]]; then

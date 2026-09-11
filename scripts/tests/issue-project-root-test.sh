@@ -48,6 +48,7 @@ def project(name):
 
 
 def run(p, *args, target=script, extra=None):
+    (tmp / 'calls').unlink(missing_ok=True)
     return subprocess.run(['bash', str(target), url, *args],
                           env=dict(env, UNCLE_PROJECT_ROOT=str(p), **(extra or {})),
                           input='', capture_output=True, text=True, timeout=15)
@@ -79,7 +80,8 @@ for heading in (root / 'REQUIREMENTS.md').read_text().splitlines():
         assert heading in seed, heading
 assert (p / 'CHANGE_REQUEST.md').read_text() == 'Change sentinel\n'
 assert (script.parents[1] / 'REQUIREMENTS.md').read_text() == 'Install requirements sentinel\n'
-no_effects(p, r)
+assert (tmp / 'calls').read_text() == 'driver\n'
+(tmp / 'calls').unlink()
 
 p = project('existing')
 f = p / 'REQUIREMENTS.md'
@@ -118,7 +120,11 @@ for kind in ('request', 'code', 'fresh'):
     r = run(p)
     assert r.returncode == 0, r.stderr
     assert (p / ('REQUIREMENTS.md' if kind == 'fresh' else 'CHANGE_REQUEST.md')).exists()
-    no_effects(p, r)
+    if kind == 'fresh':
+        assert (tmp / 'calls').read_text() == 'driver\n'
+        (tmp / 'calls').unlink()
+    else:
+        no_effects(p, r)
 
 original_gh = (tmp / 'bin/gh').read_text()
 for kind, body in [('fetch', 'exit 1'), ('parse', "echo '{broken'"), ('empty', "echo '{}' ")]:

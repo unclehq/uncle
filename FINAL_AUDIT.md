@@ -2,6 +2,8 @@
 
 | ID | Severity | Evidence | Affected behavior | Affected invariant | Required correction | Blocks completion |
 |---|---|---|---|---|---|---|
-
+| FA-1 | High | `.uncle/workflow/change.diff` contains only four pre-existing planning-prompt edits; IMPLEMENTATION_NOTES.md §deviations confirms S-1–S-3 were not performed; DEFECTS.md D-1 remains open. | Planned baseline invocation and installed-runner context are absent. | CHANGE_PLAN.md FS-1 delivery scope; CHANGE_SPEC.md OB-2. | Deliver C-1/C-3 within the approved scope, preserving the pre-existing prompt edits. | YES |
+| FA-2 | High | CHANGE_TEST_REPORT.md TT-1 records missing AT-1–4; scripts/tests/gates-test.sh:491 tests PLAN capture, while :873 tests new-application verification; scripts/tests/parallel-checks-test.sh:22 invokes the shared runner directly. | Baseline ordering, resume, execution-context parity, bounded scheduling and caller cancellation lack required integration coverage. | CHANGE_SPEC.md I-1–6; CHANGE_PLAN.md AC-1–3. | Implement and execute AT-1–4 against the actual baseline invocation, including native Windows cancellation; retain execution evidence. | YES |
+| FA-3 | High | CHANGE_TEST_REPORT.md P-1 records no measurements; `.uncle/workflow/checklist-agent-checks/MC-005.log` confirms no paired runs or historical timing provenance. | The required baseline and total ANALYZE performance improvement remains unverified. | CHANGE_SPEC.md PR-1; CHANGE_PLAN.md AC-2 and MC-1. | Execute the prescribed old measurements and alternating pairs with authenticated analyst access; demonstrate both timing thresholds and unchanged outcomes. | YES |
 
 NOT READY

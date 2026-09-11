@@ -163,6 +163,7 @@ confirm_and_run_workflow() {
     fi
 
     echo "Change workflow finished. Issues remain open until their PR is merged."
+    echo "Making PR, please wait..."
 }
 
 

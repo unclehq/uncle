@@ -59,7 +59,29 @@ class References:
         finally:
             os.close(parent)
 
+    def _parent_reference(self, name):
+        """Resolve paths explicitly supplied by the chat user."""
+        if not getattr(self, 'allow_parent', False):
+            return self, name
+        if name.startswith('~/') or name == '~':
+            return References(Path.home()), name[2:] if name.startswith('~/') else ''
+        if name.startswith('/'):
+            path = Path(name)
+            if name.endswith('/'):
+                return References(path.resolve()), ''
+            return References(path.parent.resolve()), path.name
+        if not name.startswith('../'):
+            return self, name
+        root = self.root.absolute()
+        while name.startswith('../'):
+            root = root.parent
+            name = name[3:]
+        return References(root), name
+
     def read(self, name):
+        target, relative = self._parent_reference(name)
+        if target is not self:
+            return target.read(relative)
         try:
             with os.fdopen(self.open(name), 'rb') as stream:
                 info = os.fstat(stream.fileno())
@@ -73,6 +95,38 @@ class References:
             return raw.decode('utf-8')
         except (OSError, UnicodeError):
             raise ValueError('File not found or unsafe reference') from None
+
+    def browse(self, prefix):
+        """List every directory; apply attachment restrictions only to files."""
+        if prefix == '~' and getattr(self, 'allow_parent', False):
+            prefix = '~/'
+        target, relative = self._parent_reference(prefix)
+        if target is not self:
+            leading = prefix[:len(prefix) - len(relative)] if relative else prefix
+            return [leading + name for name in target.browse(relative)]
+        directory, _, leaf = prefix.rpartition('/')
+        parent = directory + '/' if '/' in prefix else ''
+        folder = self.root
+        if directory:
+            if any(part in ('.', '..') for part in PurePosixPath(directory).parts):
+                raise ValueError('Use leading ../ segments to browse parent directories')
+            folder = folder / directory
+        elif parent:
+            raise ValueError('Reference must be inside the project')
+        result = []
+        for child in sorted(folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            name = parent + child.name
+            if not child.name.startswith(leaf):
+                continue
+            if child.is_dir():
+                result.append(name + '/')
+            elif not child.is_symlink() and self._allowed(name):
+                try:
+                    self.read(name)
+                    result.append(name)
+                except ValueError:
+                    continue
+        return result
 
     def suggestions(self, prefix):
         result = []

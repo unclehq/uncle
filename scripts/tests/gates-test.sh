@@ -1148,6 +1148,63 @@ for resumed in WAIT_IMPLEMENT_APPROVAL CHECKLIST EXECUTE_CHECKLIST FINAL_AUDIT; 
     expect_no_file FINAL_AUDIT.md
 done
 
+# A recorded waiver must survive errexit, skip further repairs, and survive
+# every later state check without turning the rejected row into IMPLEMENTED.
+for exhausted in 0 1; do
+    new_case "waiver-continues-$exhausted"
+    green_baseline 0 'bash app/test.sh'
+    set_state IMPLEMENT
+    if [[ "$exhausted" == 1 ]]; then
+        hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/implementation-completion-repair"
+    fi
+    run_driver_stdin "$(gate_input waive 'Deferred to follow-up issue')" FAKE_IMPL="$partial_impl"
+    expect_status 0
+    expect_state WAIT_IMPLEMENT_APPROVAL
+    expect_file .uncle/workflow/waivers/AC-1
+    expect_in_file IMPLEMENTATION_NOTES.md INCOMPLETE
+    expect_in_file .uncle/workflow/implementation-completion.txt AC-1
+    COUNT=$((COUNT + 1))
+    [[ $(wc -l < "$REPO/.uncle/workflow/attempts") -eq $((2 - exhausted)) ]] || fail 'waiver repeated implementation'
+
+    # Resume the post-waiver crash state without invoking another agent.
+    set_state IMPLEMENT
+    run_driver FAKE_IMPL='echo unexpected >> .uncle/workflow/attempts'
+    expect_status 0
+    expect_state WAIT_IMPLEMENT_APPROVAL
+    expect_out 'Existing implementation delivery accepted'
+    COUNT=$((COUNT + 1))
+    [[ $(wc -l < "$REPO/.uncle/workflow/attempts") -eq $((2 - exhausted)) ]] || fail 'resume reran waived implementation'
+
+    # The waiver must not bypass the human diff approval; approve normally.
+    run_driver_stdin "$(gate_input '' y)"
+    expect_status 0
+    expect_state COMPLETE
+    expect_file FINAL_AUDIT.md
+    expect_in_file IMPLEMENTATION_NOTES.md INCOMPLETE
+
+done
+
+for invalid in foreign missing structural; do
+    new_case "waiver-rejects-$invalid"
+    green_baseline 0 'bash app/test.sh'
+    set_state IMPLEMENT
+    run_driver_stdin "$(gate_input waive reason)" FAKE_IMPL="$partial_impl"
+    expect_state WAIT_IMPLEMENT_APPROVAL
+    case "$invalid" in
+        foreign) sed -i.bak 's@report: .*@report: unrelated.md@' "$REPO/.uncle/workflow/waivers/AC-1" ;;
+        missing) rm "$REPO/.uncle/workflow/waivers/AC-1" ;;
+        structural) printf 'Malformed report\n' > "$REPO/IMPLEMENTATION_NOTES.md" ;;
+    esac
+    if [[ "$invalid" == structural ]]; then
+        run_driver FAKE_IMPL="printf 'Malformed report\n' > IMPLEMENTATION_NOTES.md"
+    else
+        run_driver FAKE_IMPL="$partial_impl"
+    fi
+    expect_status 1
+    expect_state IMPLEMENT
+    expect_out 'Incomplete acceptance delivery; returning to IMPLEMENT'
+done
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "gates-test.sh: $FAILED of $COUNT checks failed"
     exit 1

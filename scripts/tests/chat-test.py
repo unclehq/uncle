@@ -178,11 +178,192 @@ class ChatInteractionTests(unittest.TestCase):
         self.ui.prompt_text = ''
         self.ui.prompt_buf = ''
         self.ui.answer_prompt = Mock()
-        self.ui._confirm()
+        self.ui.open_chat()
+        self.ui.send_home_chat = self.ui.chat.send
 
     def type(self, text):
         for char in text:
             self.ui.handle_key(ord(char))
+
+    def test_homepage_shows_chat_without_open_action(self):
+        del self.ui.chat
+        self.ui.chat_open = False
+        self.ui.state = 'menu'
+        self.ui.sel = 0
+        self.ui.color = dict(title=0, sel=0, accent=0)
+        self.ui._draw_status = Mock()
+        for h, w in ((30, 120), (24, 80), (12, 40)):
+            screen = Mock()
+            screen.getmaxyx.return_value = (h, w)
+            self.ui.stdscr = screen
+            self.ui.draw()
+            lines = [call.args[2] for call in screen.addnstr.call_args_list]
+            self.assertTrue(any('Describe' in line for line in lines))
+            self.assertTrue(any('What can' in line for line in lines))
+            self.assertTrue(any('Ctrl-P' in line for line in lines))
+            for index, item in enumerate(self.ui.menu_items(), 1):
+                self.assertTrue(any(item in call.args[2]
+                                    for call in screen.addnstr.call_args_list))
+            self.ui._draw_status.assert_not_called()
+            for call in screen.addnstr.call_args_list:
+                y, x, text, width = call.args[:4]
+                self.assertTrue(0 <= y < h and 0 <= x < w)
+                self.assertLessEqual(x + width, w)
+            self.assertEqual(self.ui.state, 'menu')
+        self.assertNotIn('Chat', self.ui.menu_items())
+
+    def test_slash_commands_in_chat_and_running_panel(self):
+        for state in ('chat', 'running'):
+            self.ui.state = state
+            self.ui.chat_focus = 'chat'
+            self.ui.chat_composer = '/'
+            screen = Mock()
+            screen.getmaxyx.return_value = (24, 80)
+            self.ui.stdscr = screen
+            self.ui._draw_file_picker(15, 0, 78)
+            rows = [call.args[2] for call in screen.addnstr.call_args_list]
+            self.assertTrue(any('Commands' in row for row in rows))
+            self.assertTrue(any('/configure' in row for row in rows))
+            self.ui.chat_composer = '/file'
+            self.ui.handle_key(10)
+            self.assertTrue(self.ui.chat_picker)
+            self.assertEqual(self.ui.state, state)
+            self.ui.handle_key(27)
+            self.ui.chat_composer = '/settings'
+            self.ui.handle_key(10)
+            self.assertEqual(self.ui.state, 'config')
+        self.ui.state = 'running'
+        self.ui._run = Mock()
+        self.ui.chat_composer = '/issue 123'
+        self.ui.handle_key(10)
+        self.ui._run.assert_not_called()
+        self.assertIn('already active', self.ui.chat_error)
+        self.ui.state = 'chat'
+        self.ui.chat_composer = '/issue 123'
+        self.ui.handle_key(10)
+        self.ui._run.assert_called_once_with()
+        self.ui.state = 'chat'
+        self.ui.chat_composer = '/sett'
+        self.ui.handle_key(10)
+        self.assertEqual(self.ui.state, 'config')
+        self.ui.state = 'chat'
+        self.ui.chat_composer = '/quit'
+        self.ui.handle_key(10)
+        self.assertEqual(self.ui.state, 'quit')
+        self.assertFalse(self.ui.chat.messages)
+
+    def test_requested_slash_commands(self):
+        for command in ('/configure', '/settings'):
+            self.ui.state = 'menu'
+            self.ui.chat_composer = command
+            self.ui.handle_key(10)
+            self.assertEqual(self.ui.state, 'config')
+        self.ui.state = 'menu'
+        self.ui.chat_composer = '/file'
+        self.ui.handle_key(10)
+        self.assertTrue(self.ui.chat_picker)
+        self.ui.handle_key(27)
+        self.ui._run = Mock()
+        for command, index, filename in (('/requirements', 0, 'REQUIREMENTS.md'),
+                                         ('/change', 2, 'CHANGE_REQUEST.md')):
+            self.ui.state = 'menu'
+            self.ui.chat_composer = command
+            self.ui.handle_key(10)
+            self.assertEqual(self.ui.state, 'notice')
+            self.assertIn(filename, self.ui.notice_lines[0])
+            self.ui._run.assert_not_called()
+            (self.root / filename).write_text('Build input')
+            self.ui.state = 'menu'
+            self.ui.chat_composer = command
+            self.ui.handle_key(10)
+            self.assertEqual(self.ui.workflow_idx, index)
+            self.ui._run.assert_called_once_with()
+            self.ui._run.reset_mock()
+        for argument in ('123', '#456'):
+            self.ui.state = 'menu'
+            self.ui.chat_composer = '/issue ' + argument
+            self.ui.handle_key(10)
+            self.assertEqual(self.ui.issue, argument.lstrip('#'))
+            self.assertEqual(self.ui.issue_mode, '')
+            self.assertEqual(self.ui.workflow_idx, 1)
+            self.ui._run.assert_called_once_with()
+            self.ui._run.reset_mock()
+        for command in ('/issue nope', '/issue 0', '/issue 1 extra', '/requirements extra'):
+            self.ui.state = 'menu'
+            self.ui.chat_composer = command
+            self.ui.handle_key(10)
+            self.ui._run.assert_not_called()
+            self.assertEqual(self.ui.chat_composer, command)
+            self.assertTrue(self.ui.chat_error)
+        self.ui.chat_composer = '/quit'
+        self.ui.handle_key(10)
+        self.assertEqual(self.ui.state, 'quit')
+
+    def test_response_preserves_homepage_menu_position(self):
+        self.ui.state = 'menu'
+        for h, w in ((40, 140), (30, 120), (24, 80), (12, 40)):
+            screen = Mock()
+            screen.getmaxyx.return_value = (h, w)
+            self.ui.stdscr = screen
+            positions = []
+            for history in ([], [('user', 'Hello'), ('assistant', 'A response ' * 100)]):
+                self.ui.home_history = history
+                screen.reset_mock()
+                self.ui.draw()
+                positions.append([(call.args[0], call.args[1])
+                                  for call in screen.addnstr.call_args_list
+                                  if call.args[2].lstrip('› ') in self.ui.menu_items()])
+            self.assertEqual(positions[0], positions[1])
+            self.assertEqual(len(positions[0]), len(self.ui.menu_items()))
+
+    def test_homepage_command_menu_and_slash_commands(self):
+        self.ui.state = 'menu'
+        self.ui.sel = 0
+        self.ui.handle_key(16)
+        self.assertTrue(self.ui.home_menu_open)
+        self.ui.handle_key(tui.curses.KEY_DOWN)
+        self.assertEqual(self.ui.sel, 1)
+        self.ui.handle_key(27)
+        self.assertFalse(self.ui.home_menu_open)
+        self.assertEqual(self.ui.chat_focus, 'chat')
+        self.type('/configure')
+        self.ui.handle_key(10)
+        self.assertEqual(self.ui.state, 'config')
+        self.ui.state = 'menu'
+        (self.root / 'notes.txt').write_text('notes')
+        self.type('/files')
+        self.ui.handle_key(10)
+        self.assertTrue(self.ui.chat_picker)
+        self.assertIn('notes.txt', self.ui.chat_choices)
+
+    def test_running_preserves_dialog_and_statistics_renderer(self):
+        self.ui.state = 'running'
+        self.ui.color = dict(title=0, sel=0, accent=0)
+        self.ui.stdscr = Mock()
+        self.ui.stdscr.getmaxyx.return_value = (30, 120)
+        self.ui._draw_running = Mock()
+        self.ui._draw_session_stats = Mock()
+        self.ui._draw_status = Mock()
+        self.ui.draw()
+        self.ui._draw_running.assert_called_once_with(22, 86)
+        self.ui._draw_session_stats.assert_called_once_with(30, 120, 34)
+        self.ui._draw_status.assert_called_once_with(30, 120)
+
+    def test_homepage_focus_and_configuration_preserve_draft(self):
+        self.ui.state = 'menu'
+        self.ui.chat_focus = 'menu'
+        self.ui.sel = 0
+        self.ui.handle_key(9)
+        self.type('Build a homepage')
+        self.assertEqual(self.ui.chat_composer, 'Build a homepage')
+        self.ui.handle_key(9)
+        self.ui.sel = len(tui.WORKFLOWS)
+        self.ui.handle_key(10)
+        self.assertEqual(self.ui.state, 'config')
+        self.ui.state = 'menu'
+        self.assertEqual(self.ui.chat_composer, 'Build a homepage')
+        self.ui.handle_key(10)
+        self.assertEqual(self.ui.chat.messages, ['Build a homepage'])
 
     def test_menu_and_text_isolation(self):
         self.assertEqual(self.ui.menu_items()[:5],
@@ -192,6 +373,104 @@ class ChatInteractionTests(unittest.TestCase):
         self.ui.handle_key(10)
         self.assertEqual(self.ui.chat.messages, ['Design a task list'])
         self.ui.answer_prompt.assert_not_called()
+
+    def test_picker_shows_and_enters_all_directories(self):
+        for name in ('.git', '.ssh', '.uncle', 'visible'):
+            (self.root / name / 'nested').mkdir(parents=True)
+        (self.root / 'linked').symlink_to(self.root / 'visible', target_is_directory=True)
+        for index in range(205):
+            (self.root / ('dir%03d' % index)).mkdir()
+        choices = self.ui.chat.refs.browse('')
+        for name in ('.git/', '.ssh/', '.uncle/', 'visible/', 'linked/', 'dir204/'):
+            self.assertIn(name, choices)
+        self.assertEqual(self.ui.chat.refs.browse('.ssh/'), ['.ssh/nested/'])
+        self.assertEqual(self.ui.chat.refs.browse('linked/'), ['linked/nested/'])
+
+    def test_home_and_absolute_paths_are_explicit_chat_attachments(self):
+        outside = self.root / 'home'
+        outside.mkdir()
+        (outside / 'notes.txt').write_text('selected context')
+        (outside / '.env').write_text('secret')
+        with patch('chat.Path.home', return_value=outside):
+            for prefix in ('~', '~/', str(outside) + '/'):
+                self.ui.chat_composer = ''
+                self.ui.chat_picker = False
+                self.type('@' + prefix)
+                expected = ('~/' if prefix.startswith('~') else prefix) + 'notes.txt'
+                self.assertIn(expected, self.ui.chat_choices)
+                self.assertFalse(any(name.endswith('.env') for name in self.ui.chat_choices))
+                self.ui.chat_pick = self.ui.chat_choices.index(expected)
+                self.ui.handle_key(9)
+                self.assertEqual(self.ui.chat_composer, '@' + expected + ' ')
+                self.assertIn('selected context', self.ui.chat.refs.expand(self.ui.chat_composer))
+
+    def test_parent_directory_completion_and_attachment(self):
+        project = self.root / 'parent' / 'project'
+        project.mkdir(parents=True)
+        (project.parent / 'near.txt').write_text('parent context')
+        (self.root / 'far.txt').write_text('grandparent context')
+        (self.root / '.env').write_text('secret')
+        self.ui.chat.refs.root = project
+        for prefix, filename, contents in (('../', 'near.txt', 'parent context'),
+                                            ('../../', 'far.txt', 'grandparent context')):
+            self.ui.chat_composer = ''
+            self.ui.chat_picker = False
+            self.type('@' + prefix)
+            self.assertIn(prefix + filename, self.ui.chat_choices)
+            self.assertNotIn(prefix + '.env', self.ui.chat_choices)
+            self.type(filename[:3])
+            self.ui.handle_key(9)
+            self.assertEqual(self.ui.chat_composer, '@' + prefix + filename + ' ')
+            self.assertIn(contents, self.ui.chat.refs.expand(self.ui.chat_composer))
+            self.assertEqual(self.ui.chat_focus, 'chat')
+
+    def test_tab_completes_directories_and_files_without_changing_focus(self):
+        folder = self.root / 'pack aging'
+        folder.mkdir()
+        (folder / 'README.md').write_text('context')
+        for state in ('menu', 'chat', 'running'):
+            self.ui.state = state
+            self.ui.chat_composer = ''
+            self.ui.chat_picker = False
+            self.ui.chat_focus = 'chat'
+            self.type('foo @pack')
+            self.assertEqual(self.ui.chat_choices, ['pack aging/'])
+            self.ui.handle_key(9)
+            self.assertEqual(self.ui.chat_composer, 'foo @"pack aging/')
+            self.assertEqual(self.ui.chat_choices, ['pack aging/README.md'])
+            self.type('READ')
+            self.ui.handle_key(9)
+            self.assertEqual(self.ui.chat_composer, 'foo @"pack aging/README.md" ')
+            self.assertFalse(self.ui.chat_picker)
+            self.assertEqual(self.ui.chat_focus, 'chat')
+            self.assertFalse(self.ui.chat.messages)
+
+    def test_at_picker_visible_filters_scrolls_and_closes(self):
+        for i in range(12):
+            (self.root / ('file%02d.txt' % i)).write_text('context')
+        self.type('@')
+        self.assertTrue(self.ui.chat_picker)
+        self.assertEqual(len(self.ui.chat_choices), 12)
+        screen = Mock()
+        screen.getmaxyx.return_value = (24, 80)
+        self.ui.stdscr = screen
+        for _ in range(10):
+            self.ui.handle_key(tui.curses.KEY_DOWN)
+        self.ui._draw_file_picker(15, 2, 70)
+        rows = [call.args[2] for call in screen.addnstr.call_args_list]
+        self.assertTrue(any('Files' in row for row in rows))
+        self.assertTrue(any('› file10.txt' in row for row in rows))
+        self.type('file11')
+        self.assertEqual(self.ui.chat_choices, ['file11.txt'])
+        self.ui.handle_key(10)
+        self.assertEqual(self.ui.chat_composer, '@file11.txt ')
+        self.assertFalse(self.ui.chat.messages)
+        self.assertFalse(self.ui.chat_picker)
+        self.type('@absent')
+        self.ui.handle_key(10)
+        self.assertIn('No matching files', self.ui.chat_error)
+        self.ui.handle_key(27)
+        self.assertFalse(self.ui.chat_picker)
 
     def test_suggestions_and_picker_insert_quoted_reference(self):
         (self.root / 'a file.txt').write_text('context')
@@ -361,6 +640,7 @@ class ChatInteractionTests(unittest.TestCase):
         self.ui.handle_key(10)
         self.assertEqual(self.ui.chat_composer, '@missing')
         self.assertFalse(self.ui.chat.messages)
+        self.ui.handle_key(27)  # Dismiss the empty file picker.
         self.ui.chat_composer = 'Build a task list'
         self.ui.handle_key(10)
         self.ui.handle_key(tui.curses.KEY_F3)
@@ -412,6 +692,7 @@ class ChatInteractionTests(unittest.TestCase):
             os.close(master)
 
     def test_loaded_layouts_keep_composer_response_and_gate(self):
+        renderer_state(self.ui)
         self.ui.state = 'running'
         self.ui.output = ['stage output %d' % i for i in range(10000)]
         self.ui.prompt_kind = 'confirm'
@@ -434,10 +715,23 @@ class ChatInteractionTests(unittest.TestCase):
                 self.assertLessEqual(x + width, w)
 
 
+def renderer_state(ui):
+    ui.partial = ''
+    ui.gate_file = ''
+    ui.color = dict(title=0, sel=0, accent=0, good=0, bad=0, cursor=0)
+    for name in ('status_runner', 'status_model', 'status_mode', 'status_stage',
+                 'status_effort', 'direct_issue'):
+        setattr(ui, name, '')
+    ui.status_stage_index = ui.status_stage_total = 0
+    ui.workflow_idx = 0
+
+
 def terminal_case(screen):
     ui = tui.UncleTUI.__new__(tui.UncleTUI)
+    renderer_state(ui)
     ui.proc = None
     ui.open_chat()
+    ui.send_home_chat = ui.chat.send
     ui.stdscr = screen
     ui.state = 'running'
     ui.prompt_kind = 'confirm'
@@ -454,8 +748,9 @@ def terminal_case(screen):
         rows = [screen.instr(y, 0, w - 1).decode() for y in range(h)]
         assert any('response stays visible' in row for row in rows), rows
         assert 'Message>' in rows[h - 3], rows
-        assert 'Approve brief?' in rows[h - 2], rows
-        assert 'Tab chat/gate' in rows[h - 1], rows
+        assert any('Approve brief?' in row for row in rows), rows
+        assert any('Tab approvals/chat' in row for row in rows), rows
+        assert 'runner:' in rows[h - 1], rows
         before = len(answers)
         tui.curses.ungetch(ord('x'))
         ui.handle_key(screen.getch())

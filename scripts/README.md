@@ -627,3 +627,10 @@ force fresh analysis. Caching is disabled for later evidence/audit stages,
 symlink inputs, and snapshots over 100 MB. Existing reviews without a snapshot
 are not retroactively trusted. Tests: `scripts/tests/review-cache-test.sh` and
 the cache/retry cases in `scripts/tests/gates-test.sh`.
+
+Implementation waivers are honored at review/checklist/audit boundaries and on
+resuming `IMPLEMENT`, so a saved waiver does not trigger another agent attempt.
+They apply only to the recorded acceptance IDs for the implementation-completion
+report; missing or malformed report structure still blocks advancement. Rejected
+rows remain in that report and in the implementation notes. Waiving does not
+skip diff approval, driver verification, or the independent final audit.

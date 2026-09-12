@@ -366,7 +366,10 @@ implementation_incomplete_choice() {
     if [[ -s "$completion" ]]; then
         echo "Rejected rows:"
         sed 's/^/  /' "$completion"
-        ids="$(awk -F: '/^[A-Za-z0-9][A-Za-z0-9_.\/-]*:/ { printf "%s ", $1 }' "$completion")"
+        # Format errors cannot be waived as acceptance rows.
+        if ! grep -qvE '^AC-[0-9]+: requires IMPLEMENTED,' "$completion"; then
+            ids="$(awk -F: '{ printf "%s ", $1 }' "$completion")"
+        fi
     fi
     echo
     while true; do
@@ -1567,9 +1570,25 @@ VERDICT_WRITTEN_THIS_RUN=0
 implementation_complete() {
     verify_approval CHANGE_SPEC.md CHANGE_SPEC
     verify_approval CHANGE_PLAN.md CHANGE_PLAN
-    python3 "$ROOT/scripts/lib/implementation-completion.py" \
-        CHANGE_SPEC.md IMPLEMENTATION_NOTES.md \
-        > "$STATE_DIR/implementation-completion.txt"
+    local completion="$STATE_DIR/implementation-completion.txt" line id waiver
+    if python3 "$ROOT/scripts/lib/implementation-completion.py" \
+        CHANGE_SPEC.md IMPLEMENTATION_NOTES.md > "$completion"; then
+        return 0
+    fi
+    # Keep rejection evidence intact. Only explicitly waived delivery rows may
+    # advance; structural errors, missing IDs, and unrelated waivers still fail.
+    [[ -s "$completion" ]] || return 1
+    while IFS= read -r line; do
+        [[ "$line" =~ ^(AC-[0-9]+):\ requires\ IMPLEMENTED, ]] || return 1
+        id="${BASH_REMATCH[1]}"
+        waiver="$(waive_file "$id")"
+        [[ -s "$waiver" ]] || return 1
+        grep -qxF "id: $id" "$waiver" || return 1
+        grep -qxF "report: $completion" "$waiver" || return 1
+        grep -q '^reason: .*[^[:space:]]' "$waiver" || return 1
+    done < "$completion"
+    echo "Continuing with recorded implementation waivers; rejected rows remain on record."
+    return 0
 }
 
 while true; do
@@ -1730,7 +1749,9 @@ while true; do
                     "$CODEX_EFFORT_CHECKLIST"
             fi
 
-            if [[ "$STEPWISE_IMPLEMENT" == "1" ]]; then
+            if [[ -s IMPLEMENTATION_NOTES.md ]] && implementation_has_changes && implementation_complete; then
+                echo "Existing implementation delivery accepted; continuing to verification."
+            elif [[ "$STEPWISE_IMPLEMENT" == "1" ]]; then
                 run_stepwise_implementation prompts/change/implement-change.md
             else
                 compose_implementation_prompt \
@@ -1750,17 +1771,18 @@ while true; do
                 if [[ "$(cat "$STATE_DIR/implementation-completion-repair" 2>/dev/null || true)" == "$repair_digest" ]]; then
                     echo "Implementation remains incomplete; automatic repair already attempted for this plan."
                     echo "See IMPLEMENTATION_NOTES.md and $STATE_DIR/implementation-completion.txt; resume after resolving the blockers."
-                    implementation_incomplete_choice
-                    case "$?" in
+                    choice_status=0
+                    implementation_incomplete_choice || choice_status=$?
+                    case "$choice_status" in
                         0) continue ;;
                         2) ;;
                         *) exit 1 ;;
                     esac
-                fi
-                echo "Implementation is incomplete. Attempting repair once."
-                printf '%s\n' "$repair_digest" > "$STATE_DIR/implementation-completion-repair"
-                compose_implementation_prompt prompts/change/implement-change.md "$STATE_DIR/implementation-repair.md"
-                cat >> "$STATE_DIR/implementation-repair.md" <<'REPAIR'
+                else
+                    echo "Implementation is incomplete. Attempting repair once."
+                    printf '%s\n' "$repair_digest" > "$STATE_DIR/implementation-completion-repair"
+                    compose_implementation_prompt prompts/change/implement-change.md "$STATE_DIR/implementation-repair.md"
+                    cat >> "$STATE_DIR/implementation-repair.md" <<'REPAIR'
 
 The previous implementation did not deliver all required acceptance criteria.
 Read IMPLEMENTATION_NOTES.md and resolve routine implementation choices within
@@ -1776,23 +1798,25 @@ and mocked tests. Complete those first; report any remaining live check as
 BLOCKED without claiming acceptance. Do not change approved scope or protected
 tests without the required approval.
 REPAIR
-                run_claude "$STATE_DIR/implementation-repair.md" implementation \
-                    "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
-                if ! implementation_has_changes || ! implementation_complete; then
-                    echo "Implementation remains incomplete: required delivery is missing."
-                    echo "Resolve the blockers in IMPLEMENTATION_NOTES.md and CHANGE_PLAN.md, then resume."
-                    echo "The workflow remains at IMPLEMENT; it cannot advance to final audit."
-                    implementation_incomplete_choice
-                    case "$?" in
-                        0) continue ;;
-                        2) ;;
-                        *) exit 1 ;;
-                    esac
+                    run_claude "$STATE_DIR/implementation-repair.md" implementation \
+                        "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
+                    if ! implementation_has_changes || ! implementation_complete; then
+                        echo "Implementation remains incomplete: required delivery is missing."
+                        echo "Resolve the blockers in IMPLEMENTATION_NOTES.md and CHANGE_PLAN.md, then resume."
+                        echo "The workflow remains at IMPLEMENT; it cannot advance to final audit."
+                        choice_status=0
+                        implementation_incomplete_choice || choice_status=$?
+                        case "$choice_status" in
+                            0) continue ;;
+                            2) ;;
+                            *) exit 1 ;;
+                        esac
+                    fi
+                    require_file IMPLEMENTATION_NOTES.md
+                    require_file CHANGE_TEST_REPORT.md
+                    check_document_budget IMPLEMENTATION_NOTES.md || exit 1
+                    check_document_budget CHANGE_TEST_REPORT.md || exit 1
                 fi
-                require_file IMPLEMENTATION_NOTES.md
-                require_file CHANGE_TEST_REPORT.md
-                check_document_budget IMPLEMENTATION_NOTES.md || exit 1
-                check_document_budget CHANGE_TEST_REPORT.md || exit 1
             fi
 
             check_scope_deviations

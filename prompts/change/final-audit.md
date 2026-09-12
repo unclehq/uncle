@@ -13,6 +13,12 @@ Read:
 - MANUAL_CHECKLIST.md
 - VERIFICATION_REPORT.md
 - DEFECTS.md, if present
+- .uncle/workflow/implementation-completion.txt, if present
+- matching records under .uncle/workflow/waivers/, if present
+
+Waivers permit review of partial delivery; they do not implement missing behavior
+or make a check pass. Identify waived acceptance rows and the operator's reasons
+in the audit, and assess the remaining delivery honestly.
 
 Do not modify code.
 

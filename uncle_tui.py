@@ -20,6 +20,7 @@ import threading
 import time
 import importlib.util
 import webbrowser
+import textwrap
 
 try:
     import curses
@@ -33,6 +34,7 @@ except ImportError:  # Windows has no curses in the stdlib
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
+from chat import Conversation, sanitize
 from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
 
 CLINE_CONFIG = os.environ.get("CLINE_CONFIG", os.path.expanduser("~/.cline/data/settings/providers.json"))
@@ -660,7 +662,7 @@ class UncleTUI:
 
     # ---- item lists ----
     def menu_items(self):
-        return [w[0] for w in WORKFLOWS] + ["Configure", "Quit"]
+        return [w[0] for w in WORKFLOWS] + ["Configure", "Quit", "Chat"]
 
     def items(self):
         if self.state == "menu":
@@ -1792,8 +1794,194 @@ class UncleTUI:
         self.status_stage_index = 0
         self.status_stage_total = 0
 
+    def open_chat(self):
+        if not hasattr(self, 'chat'):
+            self.chat = Conversation(_project_root())
+            self.chat_composer = ''
+            self.chat_error = ''
+            self.chat_choices = []
+            self.chat_pick = 0
+            self.chat_picker = False
+            self.chat_edit = False
+        self.chat_open = True
+        self.chat_focus = 'chat'
+        self.state = 'running' if self.proc and self.proc.poll() is None else 'chat'
+
+    def start_chat_workflow(self):
+        if self.state == 'running' or (self.proc and self.proc.poll() is None):
+            self.chat_error = 'A workflow is already active'
+            return
+        try:
+            self.chat.commit()
+            self.workflow_idx = 0 if self.chat.kind == 'app' else 2
+            self._run()
+            self.chat_error = ''
+        except (OSError, ValueError) as exc:
+            self.state = 'chat'
+            self.chat_error = sanitize(str(exc))
+            # start_workflow allocated this channel before a failed Popen.
+            path = getattr(self, 'status_path', None)
+            if path:
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+                self.status_path = None
+
+    def _chat_suggestions(self):
+        match = re.search(r'@([^@\s"]*)$', self.chat_composer)
+        self.chat_ref_start = match.start() if match else len(self.chat_composer)
+        self.chat_choices = self.chat.refs.suggestions(match.group(1)) if match else []
+        self.chat_pick = 0
+
+    def _chat_key(self, k):
+        if k == 3:
+            self._quit()
+            return True
+        if k == 9:
+            self.chat_focus = 'gate' if self.chat_focus == 'chat' else 'chat'
+            return True
+        if self.chat_focus == 'gate' and self.state == 'running':
+            if k in (curses.KEY_UP, curses.KEY_DOWN):
+                self.prompt_scroll = max(0, getattr(self, 'prompt_scroll', 0) +
+                                         (1 if k == curses.KEY_DOWN else -1))
+                return True
+            return False  # Existing gate keys are the sole driver-stdin writer.
+        try:
+            if k == 27:
+                if self.chat_picker or self.chat_choices:
+                    self.chat_picker = False
+                    self.chat_choices = []
+                elif self.chat_edit:
+                    self.chat.preview = sanitize(self.chat_composer)
+                    self.chat_composer = ''
+                    self.chat_edit = False
+                elif self.state == 'chat':
+                    self.state = 'menu'
+                    self.sel = 0
+                return True
+            if k == 16 and not self.chat_edit:  # Ctrl-P
+                self.chat_picker = True
+                self.chat_ref_start = len(self.chat_composer)
+                self.chat_choices = self.chat.refs.suggestions('')
+                self.chat_pick = 0
+                return True
+            if self.chat_choices and k in (curses.KEY_UP, curses.KEY_DOWN):
+                self.chat_pick = (self.chat_pick + (1 if k == curses.KEY_DOWN else -1)) % len(self.chat_choices)
+                return True
+            if k in (10, 13):
+                if self.chat_choices:
+                    name = self.chat_choices[self.chat_pick]
+                    reference = self.chat.refs.reference(name)  # Recheck picker races.
+                    self.chat_composer = self.chat_composer[:self.chat_ref_start] + reference + ' '
+                    self.chat_choices = []
+                    self.chat_picker = False
+                elif self.chat_edit:
+                    self.chat_composer += '\n'
+                else:
+                    self.chat.send(self.chat_composer)
+                    self.chat_composer = ''
+                    self.chat_error = ''
+                return True
+            if k == curses.KEY_F2:
+                if self.chat.seed is not None:
+                    raise ValueError('The committed seed fixes the workflow type')
+                self.chat.kind = 'change' if self.chat.kind == 'app' else 'app'
+                return True
+            if k == curses.KEY_F3:
+                self.chat.payload()
+                raise ValueError('Generate brief unavailable: native tool isolation is not verified; Configure/retry')
+            if k == curses.KEY_F4:
+                if self.chat.seed is not None:
+                    raise ValueError('Committed seed cannot be edited here')
+                self.chat_edit = True
+                self.chat_composer = self.chat.preview
+                return True
+            if k == curses.KEY_F5:
+                if self.chat_edit:
+                    self.chat.preview = sanitize(self.chat_composer)
+                    self.chat_edit = False
+                    self.chat_composer = ''
+                self.start_chat_workflow()
+                return True
+            if k in (curses.KEY_F6, curses.KEY_F7):
+                raise ValueError('No resolved active model; Query/Fork unavailable')
+            if k == curses.KEY_F8 and self.state == 'chat':
+                self.state = 'config'
+                self.config_sel = 0
+                return True
+            if k in (curses.KEY_BACKSPACE, 127, 8):
+                self.chat_composer = self.chat_composer[:-1]
+            elif 32 <= k <= 0x10ffff and k < curses.KEY_MIN:
+                if len(self.chat_composer.encode('utf-8')) >= 1024 * 1024:
+                    raise ValueError('Transcript exceeds 1 MiB limit')
+                self.chat_composer += chr(k)
+            if not self.chat_edit and not self.chat_picker:
+                self._chat_suggestions()
+        except (OSError, ValueError) as exc:
+            self.chat_error = sanitize(str(exc))
+        return True
+
+    def _draw_chat(self):
+        h, w = self.stdscr.getmaxyx()
+        self.stdscr.erase()
+
+        def put(y, x, value, width):
+            if 0 <= y < h and 0 <= x < w and width > 0:
+                try:
+                    self.stdscr.addnstr(y, x, value, min(width, w - x - 1))
+                except curses.error:
+                    pass
+
+        put(0, 0, 'Chat | %s | focus: %s' % (self.chat.kind, self.chat_focus), w)
+        put(1, 0, 'F2 Type F3 Brief F4 Edit F5 Start', w)
+        put(2, 0, 'F6 Query F7 Fork F8 Config ^P Files', w)
+        bottom = h - 4
+        left = w // 2 if w >= 100 and self.state == 'running' else 0
+        top = 3
+        if self.state == 'running':
+            rows = max(1, bottom - top) if left else max(1, (bottom - top) // 2)
+            tail = self.output[-rows:]
+            if getattr(self, 'partial', '').strip():
+                tail = (tail + [self.partial.rstrip()])[-rows:]
+            for i, line in enumerate(tail):
+                put(top + i, 0, line, left or w)
+            if not left:
+                top += rows
+        content = list(self.chat.messages)
+        if self.chat.preview:
+            content += ['Preview:', self.chat.preview]
+        if self.chat_choices:
+            content += ['Files: ' + self.chat_choices[self.chat_pick]]
+        wrapped = []
+        # Bound viewport wrapping; Conversation retains the complete transcript.
+        visible = '\n'.join(content)[-max(1, h * w * 2):]
+        for line in visible.splitlines():
+            wrapped.extend(textwrap.wrap(line, max(1, w - left - 2)) or [''])
+        rows = max(0, bottom - top)
+        for i, line in enumerate(wrapped[-rows:] if rows else []):
+            put(top + i, left, line, w - left)
+        put(h - 4, 0, self.chat_error, w)
+        composer = sanitize(self.chat_composer).replace('\n', ' / ')
+        put(h - 3, 0, ('Edit> ' if self.chat_edit else 'Message> ') + composer[-max(1, w - 12):], w)
+        gate_lines = []
+        for line in self.prompt_text.splitlines():
+            gate_lines.extend(textwrap.wrap(line, max(1, w - 1)) or [''])
+        offset = min(getattr(self, 'prompt_scroll', 0), max(0, len(gate_lines) - 1))
+        gate = gate_lines[offset] if self.prompt_kind and gate_lines else 'No gate pending'
+        if self.chat_focus == 'gate' and self.prompt_kind == 'input':
+            gate = 'Answer> ' + sanitize(self.prompt_buf)[-max(1, w - 10):]
+        put(h - 2, 0, gate, w)
+        controls = {'confirm': 'y/n/v', 'audit': 's/r/n/v', 'enter': 'Enter',
+                    'input': 'type, Enter', 'support': 's/Enter'}
+        put(h - 1, 0, 'Tab chat/gate | ' + controls.get(self.prompt_kind, 'Enter send | Esc back'), w)
+        self.stdscr.refresh()
+
     # ---- drawing ----
     def draw(self):
+        if getattr(self, 'chat_open', False) and self.state in ('chat', 'running'):
+            self._draw_chat()
+            return
         h, w = self.stdscr.getmaxyx()
         self.stdscr.erase()
         if self.state in ("running", "viewer"):
@@ -2443,6 +2631,9 @@ class UncleTUI:
 
     # ---- input ----
     def handle_key(self, k):
+        if getattr(self, 'chat_open', False) and self.state in ('chat', 'running'):
+            if self._chat_key(k):
+                return
         if (self.state == "running" and getattr(self, "prompt_kind", "") == "enter"
                 and self.prompt_text.startswith("Commit signing needs your help.")):
             if k in (ord("c"), ord("C")) and getattr(self, "signing_command", ""):
@@ -2666,6 +2857,10 @@ class UncleTUI:
 
     def _confirm(self):
         if self.state == "menu":
+            if self.sel == len(WORKFLOWS) + 2:
+                self.open_chat()
+                return
+            self.chat_open = False
             if self.sel == len(WORKFLOWS) + 1:
                 self._quit()
                 return

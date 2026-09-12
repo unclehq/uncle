@@ -539,7 +539,5 @@ case "$MODE" in
         ;;
     new)
         write_new_project_brief
-        echo "Starting the new-application workflow in $PROJECT_ROOT"
-        uncle_run bash "$ROOT/scripts/stagegate.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"}
         ;;
 esac

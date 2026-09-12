@@ -39,7 +39,7 @@ A primary agent plans, implements, and verifies; an independent reviewer audits 
 Use it when the cost of an agent silently shipping the wrong thing is higher than the cost of waiting for a human to say yes.
 
 > **Just testing uncle?** Use Cline with open-weight models and configure your plan.
-> Expect slower runs, but dramatically lower costs than premium models billed
+> Expect slower runs, but dramatically lower costs than premium models.
 > Usage billed is good tradeoff while trying out the workflow.
 
 ---

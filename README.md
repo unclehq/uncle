@@ -5,15 +5,29 @@
 
 **The integrity layer for AI-generated software changes.**
 
-> Governed CI for coding agents.
+Uncle is a local-first, terminal-native workflow that turns requirements or GitHub issues into independently reviewed, human-approved pull requests using the coding agents you choose.
 
->Uncle turns GitHub issues into independently reviewed, human-approved, auditable pull requests. 
-</div>
+```text
+Issue / Requirements
+        ↓
+      Plan
+        ↓
+  Human approval
+        ↓
+ Implementation
+        ↓
+Independent review
+        ↓
+  Verification
+        ↓
+  Human approval
+        ↓
+    GitHub PR
+```
 
-Uncle is a human-gated, adversarially-audited CI pipeline for AI-generated
-code. A primary agent plans, implements, and verifies; an independent reviewer
-audits it adversarially; you approve at every gate. By default `cline` runs
-every stage, on both sides.
+**The integrity layer for AI-generated software changes.**
+
+Uncle is a human-gated, adversarially-audited CI pipeline for AI-generated code. A primary agent plans, implements, and verifies; an independent reviewer audits it adversarially; you approve at every gate. By default `cline` runs every stage, on both sides.
 
 - **Human approval gates** at every planning and review stage.
 - **Adversarial review** by a second model that did not write the code.
@@ -22,8 +36,7 @@ every stage, on both sides.
 - **A green check and a diff gate** after implementation, run by the driver
   rather than by the agent that wrote the code.
 
-Use it when the cost of an agent silently shipping the wrong thing is higher
-than the cost of waiting for a human to say yes.
+Use it when the cost of an agent silently shipping the wrong thing is higher than the cost of waiting for a human to say yes.
 
 > **Just testing uncle?** Use Cline with open-weight models and configure your plan.
 > Expect slower runs, but dramatically lower costs than premium models billed

@@ -358,7 +358,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
             for attempt in range(2):
                 attempt_usage = {}
                 try:
-                    response, count = _run_opencode('agent', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root)
+                    response, count = _run_opencode('agent', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage)
                     turns += count
                 finally:
                     if usage is not None:
@@ -392,7 +392,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
             for attempt in range(2):
                 attempt_usage = {}
                 try:
-                    response, count = _run_opencode(side, values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root)
+                    response, count = _run_opencode(side, values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage)
                     turns += count
                 finally:
                     if usage is not None:
@@ -439,11 +439,37 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         return response, turns
 
 
-def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diagnostic_root=None):
+def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diagnostic_root=None, usage_baseline=None):
     from process_tree import start_check, launch_command, kill_tree, finish_check
     seconds = int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600'))
     if seconds < 1:
         raise ValueError('WORKFLOW_SELF_HOSTED_SECONDS must be positive')
+    if os.environ.get('UNCLE_STEERING') == '1':
+        from native_stage import Stage
+        from native_opencode import run as native_run
+        adapter = Stage('self-hosted', side, os.environ.get('UNCLE_STATUS_STAGE', ''), [], prompt=prompt)
+        adapter.model = values['model']
+        adapter.usage_baseline = dict(usage_baseline or {})
+        with tempfile.TemporaryDirectory(prefix='uncle-opencode-live-') as directory:
+            try:
+                native_run(adapter, directory, values=values, root=root, allow_shell=allow_shell)
+                if not adapter.answer.strip():
+                    raise ValueError('OpenCode returned no response')
+                return adapter.final_answer or adapter.answer, 1
+            finally:
+                if adapter.channel:
+                    adapter.status('steering_closed', channel=str(adapter.channel))
+                if usage is not None:
+                    usage['input_tokens'] = adapter.usage['input_tokens'] + adapter.usage['cache_read_input_tokens'] + adapter.usage['cache_creation_input_tokens']
+                    usage['output_tokens'] = adapter.usage['output_tokens']
+                    if adapter.cost is not None:
+                        usage['_total_cost_usd'] = adapter.cost
+                    usage['total_tokens'] = usage['input_tokens'] + usage['output_tokens']
+                if adapter.child is not None:
+                    if adapter.child.poll() is None:
+                        kill_tree(adapter.child)
+                        adapter.child.wait()
+                    finish_check(adapter.child)
     with tempfile.TemporaryDirectory(prefix='uncle-opencode-') as directory:
         command, env = opencode_invocation(side, values, prompt, root, directory, allow_shell=allow_shell)
         try:
@@ -563,13 +589,13 @@ def main(side, args):
         print(text)
         if usage:
             print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,
-                              'model':local_model(values['model']), 'usage':usage, 'total_cost_usd':None,
+                              'model':local_model(values['model']), 'usage':usage, 'total_cost_usd':usage.get('_total_cost_usd'),
                               'usage_source':'OpenCode step_finish events', 'usage_scope':'stage'}))
             print('tokens used\n' + str(usage['total_tokens']))
     else:
         print(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':text}]}}))
         print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':text,
-                          'model':local_model(values['model']),'num_turns':turns,'duration_ms':int((time.monotonic()-started)*1000),'usage':usage,'total_cost_usd':None,
+                          'model':local_model(values['model']),'num_turns':turns,'duration_ms':int((time.monotonic()-started)*1000),'usage':usage,'total_cost_usd':usage.get('_total_cost_usd'),
                           'usage_source':'OpenCode step_finish events','usage_scope':'stage'}))
     return 0
 
@@ -586,7 +612,7 @@ if __name__ == '__main__':
         print('Self hosted: ' + str(error), file=sys.stderr)
         if sys.argv[1:2] in (['agent'], ['reviewer']):
             print(json.dumps({'type':'result','subtype':'error','is_error':True,
-                              'usage':getattr(error, 'opencode_usage', {}), 'total_cost_usd':None,
+                              'usage':getattr(error, 'opencode_usage', {}), 'total_cost_usd':getattr(error, 'opencode_usage', {}).get('_total_cost_usd'),
                               'error_detail':str(error), 'duration_ms':int((time.monotonic()-cli_started)*1000),
                               'usage_source':'OpenCode step_finish events','usage_scope':'stage'}))
         sys.exit(2)

@@ -210,7 +210,7 @@ class ChatInteractionTests(unittest.TestCase):
                 self.assertTrue(0 <= y < h and 0 <= x < w)
                 self.assertLessEqual(x + width, w)
             self.assertEqual(self.ui.state, 'menu')
-        self.assertNotIn('Chat', self.ui.menu_items())
+        self.assertTrue(self.ui.chat_open)
 
     def test_slash_commands_in_chat_and_running_panel(self):
         for state in ('chat', 'running'):
@@ -335,6 +335,26 @@ class ChatInteractionTests(unittest.TestCase):
         self.ui.handle_key(10)
         self.assertTrue(self.ui.chat_picker)
         self.assertIn('notes.txt', self.ui.chat_choices)
+
+    def test_running_chat_is_always_bottom_centered(self):
+        self.ui.state = 'running'
+        self.ui.color = dict(title=0, sel=0, accent=0)
+        self.ui._draw_running = Mock()
+        self.ui._draw_session_stats = Mock()
+        self.ui._draw_status = Mock()
+        self.ui._draw_chat_panel = Mock()
+        for h, w in ((40, 160), (30, 120), (24, 80), (12, 40)):
+            for stage in ('requirements', 'implementation', 'final-audit'):
+                self.ui.status_stage = stage
+                self.ui.chat_open = False
+                self.ui.stdscr = Mock()
+                self.ui.stdscr.getmaxyx.return_value = (h, w)
+                self.ui.draw()
+                panel = min(34, w // 3) if w >= 60 else 0
+                width = min(76, w - panel)
+                self.ui._draw_chat_panel.assert_called_with(
+                    h - min(8, h // 3) - 1, h - 1, (w - panel - width) // 2, width)
+                self.assertTrue(self.ui.chat_open)
 
     def test_running_preserves_dialog_and_statistics_renderer(self):
         self.ui.state = 'running'

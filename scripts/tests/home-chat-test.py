@@ -1,4 +1,4 @@
-import os, sys, tempfile, unittest, queue
+import os, sys, tempfile, unittest, queue, json
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -34,6 +34,48 @@ class HomeTests(unittest.TestCase):
                 self.assertIn('Assistant: Hello from the configured model', ui.chat_display())
                 self.assertEqual(ui.state, 'menu')
 
+    def test_running_chat_delivers_only_to_active_stage(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as d:
+            ui = tui.UncleTUI.__new__(tui.UncleTUI)
+            ui.state = 'running'
+            ui.status_stage = 'implementation'
+            ui.steering_channels = {'implementation': d}
+            ui.proc = Mock()
+            ui.proc.poll.return_value = None
+            ui.chat = Mock()
+            ui.chat.refs.expand.side_effect = lambda text: text
+            ui.home_history = []
+            with patch.object(tui, 'HomeRequest') as request:
+                ui.send_home_chat('Use the blue theme')
+                request.assert_not_called()
+            ui.proc.stdin.write.assert_not_called()
+            files = list(Path(d).glob('*.json'))
+            self.assertEqual(len(files), 1)
+            self.assertEqual(json.loads(files[0].read_text())['text'], 'Use the blue theme')
+            ui.status_stage = 'final-audit'
+            with self.assertRaisesRegex(ValueError, 'draft has been kept'):
+                ui.send_home_chat('Do not lose this message')
+            self.assertEqual(len(list(Path(d).glob('*.json'))), 1)
+
+    def test_running_chat_tracks_live_stage_model(self):
+        ui = tui.UncleTUI.__new__(tui.UncleTUI)
+        ui.state = 'running'
+        ui.stage_runner = lambda stage: 'cline'
+        ui.stage_model = lambda stage: 'configured/' + stage
+        ui.stage_effort = lambda stage: 'medium'
+        ui.status_stage = 'implementation-step-2'
+        ui.status_runner = 'codex'
+        ui.status_model = 'live-model'
+        ui.status_effort = 'high'
+        self.assertEqual(ui.chat_model(), ('implementation', 'codex', 'live-model', 'high'))
+        ui.status_stage = 'final-audit'
+        ui.status_runner = 'cline'
+        ui.status_model = 'audit-model'
+        self.assertEqual(ui.chat_model(), ('final-audit', 'cline', 'audit-model', 'high'))
+        ui.status_stage = ''
+        self.assertEqual(ui.chat_model(), ('', '', '', ''))
+
     def test_background_reply_and_failure(self):
         with tempfile.TemporaryDirectory() as d:
             script=Path(d)/'fake.py'
@@ -56,6 +98,7 @@ class HomeTests(unittest.TestCase):
             Path(d,'notes.txt').write_text('Attached notes')
             ui=tui.UncleTUI.__new__(tui.UncleTUI)
             ui._ensure_chat()
+            ui.state = 'menu'
             ui.stage_runner=lambda stage:'cline'
             ui.stage_model=lambda stage:'chosen-model'
             ui.stage_effort=lambda stage:'high'

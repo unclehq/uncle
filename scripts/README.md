@@ -634,3 +634,17 @@ They apply only to the recorded acceptance IDs for the implementation-completion
 report; missing or malformed report structure still blocks advancement. Rejected
 rows remain in that report and in the implementation notes. Waiving does not
 skip diff approval, driver verification, or the independent final audit.
+
+### Chat during workflow stages
+
+The TUI keeps chat below the running stage. Messages sent there steer that stage's
+active native session using its configured model. They do not restart the stage
+or launch a separate homepage conversation. Delivery acknowledgment appears in
+chat; a draft is retained when no active session is ready. Stage transitions do
+not forward messages to a different stage automatically.
+
+Native transports are Codex app-server, Claude stream-json, Cline SDK steering,
+Kimi server (or legacy Wire), and OpenCode server. The locally installed runner
+must provide that interface. Token and reported cost updates continue in the
+stage sidebar, including follow-up turns; unavailable provider costs remain
+unavailable. Command-line workflows without the TUI keep their existing transport.

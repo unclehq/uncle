@@ -21,6 +21,7 @@ import time
 import importlib.util
 import webbrowser
 import textwrap
+import uuid
 
 try:
     import curses
@@ -1317,6 +1318,30 @@ class UncleTUI:
             ev = json.loads(line)
         except Exception:
             return
+        kind = ev.get('event', '')
+        if kind.startswith('steering_') or kind == 'chat_output':
+            self._ensure_chat()
+            channels = getattr(self, 'steering_channels', {})
+            self.steering_channels = channels
+            stage = ev.get('stage', '')
+            if kind == 'steering_ready':
+                channels[stage] = ev.get('channel', '')
+            elif kind == 'steering_closed':
+                if channels.get(stage) == ev.get('channel'):
+                    channels.pop(stage, None)
+            elif kind == 'chat_output':
+                text = sanitize(ev.get('text', ''))
+                role = 'assistant (' + stage + ')'
+                if self.home_history and self.home_history[-1][0] == role:
+                    self.home_history[-1] = (role, (self.home_history[-1][1] + text)[-1024*1024:])
+                else:
+                    self.home_history.append((role, text))
+            elif kind in ('steering_accepted', 'steering_rejected'):
+                text = ('Steering accepted by ' + stage if kind == 'steering_accepted' else
+                        'Steering was not delivered: ' + sanitize(ev.get('detail', 'Stage ended')))
+                self.home_history.append(('system', text))
+                if kind == 'steering_rejected': self.chat_error = text
+            return
         self._restore_session_totals()
         stats = getattr(self, "session_stats", None)
         stage = ev.get("stage") or self.status_stage
@@ -1326,6 +1351,7 @@ class UncleTUI:
             elif ev.get("event") == "usage":
                 stats["live"][stage] = ev
         if ev.get("event") == "start":
+            self.status_runner = ev.get("runner", getattr(self, "status_runner", ""))
             self.status_model = ev.get("model", "")
             self.status_effort = ev.get("effort", "")
             self.status_mode = ev.get("mode", "")
@@ -1391,6 +1417,8 @@ class UncleTUI:
         env = dict(os.environ)
         env.update(self.stage_env())
         env["UNCLE_STATUS_FILE"] = self.status_path
+        env["UNCLE_STEERING"] = "1"
+        self.steering_channels = {}
         env["UNCLE_SIGNING_JSON"] = "1"
         self.status_pos = 0
         self.panel_scroll = None
@@ -1829,12 +1857,60 @@ class UncleTUI:
         stage = CONFIG_STAGES[0]
         return stage, self.stage_runner(stage), self.stage_model(stage), self.stage_effort(stage)
 
+    def chat_model(self):
+        """Follow the live stage for workflow chat; use the first stage at home."""
+        if self.state != 'running':
+            return self.homepage_model()
+        stage = getattr(self, 'status_stage', '')
+        if not stage:
+            return '', '', '', ''
+        if stage.startswith('implementation-step-'):
+            stage = 'implementation'
+        elif stage in ('manual-checklist-base', 'manual-checklist-delta'):
+            stage = 'manual-checklist'
+        runner = getattr(self, 'status_runner', '') or self.stage_runner(stage)
+        if runner in ('opencode', 'aider'):
+            runner = 'self-hosted'
+        model = getattr(self, 'status_model', '') or self.stage_model(stage)
+        effort = getattr(self, 'status_effort', '') or self.stage_effort(stage)
+        return stage, runner, model, effort
+
+    def steer_stage(self, message):
+        stage = getattr(self, 'status_stage', '')
+        channel = getattr(self, 'steering_channels', {}).get(stage)
+        if not channel or not self.proc or self.proc.poll() is not None:
+            raise ValueError('The active stage is not accepting steering yet. Your draft has been kept.')
+        if not message.strip():
+            return
+        payload = self.chat.refs.expand(sanitize(message))
+        if len(payload.encode('utf-8')) > 60000:
+            raise ValueError('Steering context exceeds 60 KB; use smaller attachments.')
+        id = str(uuid.uuid4())
+        fd, temporary = tempfile.mkstemp(prefix='.pending-', dir=channel)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+                json.dump({'id':id, 'text':payload}, stream)
+            self.chat.send(message)
+            try:
+                os.replace(temporary, os.path.join(channel, str(time.time_ns()) + '-' + id + '.json'))
+            except OSError:
+                self.chat.messages.pop()
+                raise
+        finally:
+            if os.path.exists(temporary): os.unlink(temporary)
+        self.home_history.append(('user', sanitize(message)))
+        self.home_history.append(('system', 'Steering queued for ' + stage))
+
     def send_home_chat(self, message):
+        if self.state == 'running':
+            return self.steer_stage(message)
         if self.home_request is not None:
             raise ValueError('A reply is still running. Wait or use /clear to cancel.')
         if not message.strip():
             return
-        stage, runner, model, effort = self.homepage_model()
+        stage, runner, model, effort = self.chat_model()
+        if self.state == 'running' and not stage:
+            raise ValueError('Waiting for the current stage model. Retry when the stage starts.')
         if not runner:
             raise ValueError('Choose a runner in Configure first')
         user_text = self.chat.refs.expand(sanitize(message))
@@ -1851,13 +1927,15 @@ class UncleTUI:
         if model:
             command += ['--model', model]
         env = os.environ.copy()
-        for name in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'STAGEGATE_RUN_ID',
+        for name in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_STEERING', 'STAGEGATE_RUN_ID',
                      'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE'):
             env.pop(name, None)
         env['UNCLE_CONFIG'] = str(CONFIG_PATH)
         env['UNCLE_STATUS_STAGE'] = stage
         if runner == 'self-hosted':
             values = home_settings(CONFIG_PATH, stage)
+            if self.state == 'running' and getattr(self, 'status_model', ''):
+                values['model'] = model.removeprefix('openai/').removeprefix('local/')
             for field in ('model', 'base_url', 'api_key'):
                 env['UNCLE_SELF_HOSTED_' + field.upper()] = values[field]
         if runner == 'cline':
@@ -2127,6 +2205,8 @@ class UncleTUI:
 
     # ---- drawing ----
     def draw(self):
+        if self.state == 'running':
+            self._ensure_chat()
         if self.state == 'menu':
             self._ensure_chat()
             h, w = self.stdscr.getmaxyx()
@@ -2144,7 +2224,9 @@ class UncleTUI:
             chat_height = min(8, max(0, h // 3)) if self.state == 'running' and getattr(self, 'chat_open', False) else 0
             self._draw_running(h - chat_height, w - panel)
             if chat_height:
-                self._draw_chat_panel(h - chat_height - 1, h - 1, 0, w - panel)
+                chat_width = min(76, w - panel)
+                chat_left = max(0, (w - panel - chat_width) // 2)
+                self._draw_chat_panel(h - chat_height - 1, h - 1, chat_left, chat_width)
             if panel:
                 self._draw_session_stats(h, w, panel)
         elif self.state == "notice":
@@ -2366,7 +2448,7 @@ class UncleTUI:
         focused = self.chat_focus == 'chat'
         label = 'typing' if focused else 'Tab to type'
         if hasattr(self, 'stage_runners'):
-            _, runner, model, _ = self.homepage_model()
+            _, runner, model, _ = self.chat_model()
             label = (runner or 'Configure a runner') + (' / ' + model if model else '')
         put(top, 'Chat  /  ' + label, color.get('title', 0))
         footer = bottom - 1
@@ -3267,7 +3349,6 @@ class UncleTUI:
             if self.sel == len(WORKFLOWS) + 2:
                 self.open_chat()
                 return
-            self.chat_open = False
             if self.sel == len(WORKFLOWS) + 1:
                 self._quit()
                 return
@@ -3330,6 +3411,7 @@ class UncleTUI:
             self.state = "stage"
 
     def _run(self):
+        self._ensure_chat()
         # The run reads the file, so make sure we are not about to launch on
         # top of an edit we have not seen.
         self.maybe_reload()

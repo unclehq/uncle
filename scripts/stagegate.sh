@@ -1032,6 +1032,9 @@ run_claude() {
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
+    if [[ "${UNCLE_STEERING:-}" == 1 && -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]]; then
+        client_cmd=(python3 "$ROOT/scripts/lib/native_stage.py" --runner "$UNCLE_RESOLVED_RUNNER" --side agent --stage "$log_name" --)
+    fi
 
     require_file "$prompt_file"
     status_stage_context "$log_name" "${model:-}" act
@@ -1112,6 +1115,9 @@ run_codex_review() {
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
+    if [[ "${UNCLE_STEERING:-}" == 1 && -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]]; then
+        client_cmd=(python3 "$ROOT/scripts/lib/native_stage.py" --runner "$UNCLE_RESOLVED_RUNNER" --side reviewer --stage "$log_name" --)
+    fi
 
     # Keep the reviewer read-only. The shell writes the reviewer's final
     # message into the designated review artifact.

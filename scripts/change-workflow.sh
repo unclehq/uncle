@@ -1174,6 +1174,9 @@ run_claude() {
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
+    if [[ "${UNCLE_STEERING:-}" == 1 && -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]]; then
+        client_cmd=(python3 "$ROOT/scripts/lib/native_stage.py" --runner "$UNCLE_RESOLVED_RUNNER" --side agent --stage "$log_name" --)
+    fi
     # A stage configured in `uncle` overrides what the call site asked for.
     model="$(stage_model_for "$log_name" "$model")"
     effort="$(stage_effort_for "$log_name")"
@@ -1359,6 +1362,9 @@ run_codex() {
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
+    if [[ "${UNCLE_STEERING:-}" == 1 && -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]]; then
+        client_cmd=(python3 "$ROOT/scripts/lib/native_stage.py" --runner "$UNCLE_RESOLVED_RUNNER" --side reviewer --stage "$log_name" --)
+    fi
     effort="$(stage_effort_for "$log_name")"
     local -a model_args=()
     local model
@@ -1456,6 +1462,9 @@ start_codex_bg() {
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
+    if [[ "${UNCLE_STEERING:-}" == 1 && -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]]; then
+        client_cmd=(python3 "$ROOT/scripts/lib/native_stage.py" --runner "$UNCLE_RESOLVED_RUNNER" --side reviewer --stage "$log_name" --)
+    fi
     effort="$(stage_effort_for "$log_name")"
     local -a model_args=()
     local model

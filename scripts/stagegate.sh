@@ -863,7 +863,7 @@ stage_turns() {
 stage_tools() {
     local fallback="Read,Glob,Grep,Write"
     case "$1" in
-        updated-plan)
+        updated-plan|derive-brief)
             fallback="Read,Glob,Grep,Write,Edit" ;;
         implementation|execute-checklist|preflight)
             fallback="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
@@ -1277,6 +1277,21 @@ run_stage() {
         DERIVE_BRIEF)
             run_claude prompts/derive-brief.md derive-brief
             require_artifact "$DOCUMENT_BUDGET_SOURCE"
+            # The brief already existed, so require_artifact cannot tell a
+            # derivation that filled it from one that wrote nothing. Say which
+            # happened: a gate on an unchanged document looks like a document
+            # someone reviewed.
+            if ! python3 "$ROOT/scripts/lib/early-prerequisites.py" \
+                    "$DOCUMENT_BUDGET_SOURCE" >/dev/null 2>&1; then
+                echo
+                echo "Derivation left $DOCUMENT_BUDGET_SOURCE unfilled:"
+                python3 "$ROOT/scripts/lib/early-prerequisites.py" \
+                    "$DOCUMENT_BUDGET_SOURCE" 2>&1 | sed 's/^/  /' || true
+                echo "Read its Open questions section: either the issue settles"
+                echo "too little to derive from, or the stage could not do its job."
+                echo "Approving now carries an unfilled brief into planning, which"
+                echo "the prerequisite check will stop."
+            fi
             ;;
         REQUIREMENTS)
             run_claude prompts/requirements.md requirements

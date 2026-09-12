@@ -154,12 +154,17 @@ def freeze(body, root):
         else:
             name = 'attachment-%d%s' % (index, suffix)
         directory.mkdir(parents=True, exist_ok=True)
-        while (directory / name).exists() and seen.get(url) != 'reference/' + name:
+        digest = hashlib.sha256(data).hexdigest()
+        # A rerun re-fetches the same bytes. Renaming around a file that already
+        # holds them leaves two copies of one attachment and a brief that cites
+        # whichever it happened to write second.
+        while (directory / name).exists() and \
+                hashlib.sha256((directory / name).read_bytes()).hexdigest() != digest:
             name = 'attachment-%d-%s' % (index, name)
         (directory / name).write_bytes(data)
         size = geometry(data)
         records.append({'file': 'reference/' + name, 'sourceUrl': url,
-                        'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data),
+                        'sha256': digest, 'bytes': len(data),
                         'geometry': {'width': size[0], 'height': size[1]} if size else None})
         seen[url] = 'reference/' + name
         print('  froze %s -> reference/%s (%d bytes%s)'

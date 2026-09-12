@@ -16,10 +16,14 @@ sections, and to say plainly what the issue does not settle.
 - Every image under `reference/`. These were fetched from the issue and frozen
   with a checksum. Open them and look at them.
 - `reference/provenance.json` when it exists: source URL, sha256, byte size and
-  pixel geometry of each frozen image.
+  pixel geometry of every frozen attachment. These were recorded at fetch time
+  and are the evidence you cite; you do not need a shell to checksum or measure
+  anything, and this stage has no shell to do it with.
 - The repository, for an existing project.
 
-Issue the reads you need as parallel tool calls in a single message.
+Issue the reads you need as parallel tool calls in a single message. Your
+tools are Read, Glob, Grep, Write and Edit. Fill the sections with Edit so
+the verbatim issue text is preserved rather than rewritten.
 
 ## What to write
 

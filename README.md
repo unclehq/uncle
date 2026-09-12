@@ -27,7 +27,7 @@ Independent review
 
 **The integrity layer for AI-generated software changes.**
 
-Uncle is a human-gated, adversarially-audited CI pipeline for AI-generated code. A primary agent plans, implements, and verifies; an independent reviewer audits it adversarially; you approve at every gate. By default `cline` runs every stage, on both sides.
+A primary agent plans, implements, and verifies; an independent reviewer audits it adversarially; you approve at every gate. 
 
 - **Human approval gates** at every planning and review stage.
 - **Adversarial review** by a second model that did not write the code.
@@ -40,7 +40,7 @@ Use it when the cost of an agent silently shipping the wrong thing is higher tha
 
 > **Just testing uncle?** Use Cline with open-weight models and configure your plan.
 > Expect slower runs, but dramatically lower costs than premium models billed
-> per token—a good tradeoff while trying out the workflow.
+> Usage billed is good tradeoff while trying out the workflow.
 
 ---
 

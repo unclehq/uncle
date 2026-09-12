@@ -18,6 +18,11 @@ Do not modify existing artifacts.
 
 Challenge the plan for:
 
+Explicitly check whether a planned behavior change contradicts a protected
+test and whether live-test prerequisites are incorrectly used to block coding.
+Report these as blocking plan defects with a concrete correction; do not
+resolve them by dropping acceptance criteria or weakening protected assertions.
+
 1. Incorrect understanding of current behavior
 2. Weak or unreproducible baseline evidence
 3. Misclassified PRESERVE, MODIFY, ADD, REMOVE, or EXPERIMENTAL behavior

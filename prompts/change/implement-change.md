@@ -36,6 +36,24 @@ already authorized. Do not bypass an explicit unresolved approval requirement;
 identify the exact decision and complete independent authorized work while it
 is pending. Never describe a stopped or partial implementation as complete.
 
+Missing credentials or unavailable external services block the dependent live
+check, not independent implementation and mocked tests. Complete authorized
+work first, then report the exact missing verification. Do not weaken protected
+tests or silently amend approved artifacts to resolve a plan contradiction.
+
+Include exactly one `## Acceptance delivery` section in IMPLEMENTATION_NOTES.md:
+
+| ID | Status | Changed code | Observed targeted verification |
+|---|---|---|---|
+| AC-1 | IMPLEMENTED | path and behavior | command and observed result |
+
+Include every acceptance ID from CHANGE_SPEC.md exactly once, with no extra
+IDs. Status is IMPLEMENTED only when the behavior exists and its targeted check
+passes; otherwise use INCOMPLETE or BLOCKED with the missing work and exact
+blocker in the evidence columns. Baseline passes alone do not prove new behavior.
+The driver rejects missing/malformed tables and any status other than IMPLEMENTED,
+then attempts bounded repair. This table supplements the required report sections.
+
 Before writing the final reports:
 
 - Inspect the actual diff and confirm the requested behavior was implemented.

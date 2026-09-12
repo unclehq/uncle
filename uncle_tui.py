@@ -246,6 +246,10 @@ def valid_model_id(value):
 # Full description for each Configure item. Only the description of the row
 # currently under the cursor is shown, in a panel to the right of the options.
 CONFIG_DESC = {
+    "derive-brief": (
+        "Takes the input document and makes an AI ready REQUIREMENTS.md"
+        " CHANGE_REQUEST.md."
+    ),
     "preflight": (
         "Checks required tools, browser access, input data, and reviewer "
         "arrangements before a new application is implemented. Missing "

@@ -11,6 +11,11 @@ something you need, say so rather than rediscovering it here.
 
 Create CHANGE_SPEC.md.
 
+Use a `## Acceptance criteria` section with a table headed
+`| ID | Criterion | Verification |`. Give every required criterion a unique
+stable AC-number ID (AC-1, AC-2, ...). Include all required behavior; these IDs
+are the driver's implementation handoff contract, not optional examples.
+
 Include:
 
 1. Change type

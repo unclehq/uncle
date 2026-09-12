@@ -136,7 +136,7 @@ bash app/test.sh
 Passing.
 EOF
 
-    printf '# Change Spec\n\nChange the greeting.\n' > "$REPO/CHANGE_SPEC.md"
+    printf '# Change Spec\n\n## Acceptance criteria\n\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Change the greeting | app/test.sh |\n' > "$REPO/CHANGE_SPEC.md"
 
     cat > "$REPO/CHANGE_PLAN.md" <<'EOF'
 # Change Plan
@@ -182,6 +182,13 @@ case "$prompt" in
     *STUB:implement*)
         printf '# Implementation Notes\n\nChanged app/main.sh.\n' \
             > IMPLEMENTATION_NOTES.md
+        cat >> IMPLEMENTATION_NOTES.md <<'DELIVERY'
+
+## Acceptance delivery
+| ID | Status | Changed code | Observed targeted verification |
+|---|---|---|---|
+| AC-1 | IMPLEMENTED | app/main.sh | app/test.sh PASS |
+DELIVERY
         printf '# Change Test Report\n\nEverything passed. Trust me.\n' \
             > CHANGE_TEST_REPORT.md
         if [[ -n "${FAKE_IMPL:-}" ]]; then
@@ -263,6 +270,8 @@ run_driver_stdin() {
 # The diff gate
 # ---------------------------------------------------------------------------
 
+if [[ "${UNCLE_TEST_COMPLETION_ONLY:-0}" != 1 ]]; then
+
 # Implementation no longer runs straight into verification.
 new_case implement-stops-for-review
 green_baseline 0 'bash app/test.sh'
@@ -323,6 +332,12 @@ expect_no_file ".uncle/workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
 # instead of carrying a stale approval into verification.
 new_case tree-moved-after-approval
 green_baseline 0 'bash app/test.sh'
+cat > "$REPO/IMPLEMENTATION_NOTES.md" <<'DELIVERY'
+## Acceptance delivery
+| ID | Status | Changed code | Observed targeted verification |
+|---|---|---|---|
+| AC-1 | IMPLEMENTED | app/main.sh | app/test.sh PASS |
+DELIVERY
 printf 'not-the-digest-of-anything\n' \
     > "$REPO/.uncle/workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
 printf '#!/bin/sh\necho edited\n' > "$REPO/app/main.sh"
@@ -1081,6 +1096,57 @@ expect_status 42
 expect_state PLAN
 expect_out 'missing or empty source file: data.csv'
 expect_not_out 'Launching agent'
+
+fi
+
+# A partial source edit is not acceptance delivery, even with a successful CLI.
+new_case partial-delivery
+green_baseline 0 'bash app/test.sh'
+set_state IMPLEMENT
+partial_impl="printf '#!/bin/sh\necho goodbye\n' > app/main.sh; sed -i.bak 's/IMPLEMENTED/INCOMPLETE/' IMPLEMENTATION_NOTES.md; rm IMPLEMENTATION_NOTES.md.bak; echo attempt >> .uncle/workflow/attempts"
+run_driver WORKFLOW_DIFF_GATE=0 FAKE_IMPL="$partial_impl"
+expect_status 1
+expect_state IMPLEMENT
+expect_no_file MANUAL_CHECKLIST.md
+expect_no_file FINAL_AUDIT.md
+expect_out 'Implementation remains incomplete'
+COUNT=$((COUNT + 1))
+[[ $(wc -l < "$REPO/.uncle/workflow/attempts") -eq 2 ]] || fail 'expected implementation plus one repair'
+run_driver WORKFLOW_DIFF_GATE=0 FAKE_IMPL="$partial_impl"
+expect_status 1
+expect_out 'automatic repair already attempted'
+COUNT=$((COUNT + 1))
+[[ $(wc -l < "$REPO/.uncle/workflow/attempts") -eq 3 ]] || fail 'resume repeated automatic repair'
+
+new_case repair-completes-delivery
+green_baseline 0 'bash app/test.sh'
+set_state IMPLEMENT
+run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh; if [[ ! -e .uncle/workflow/first-attempt ]]; then touch .uncle/workflow/first-attempt; sed -i.bak 's/IMPLEMENTED/INCOMPLETE/' IMPLEMENTATION_NOTES.md; rm IMPLEMENTATION_NOTES.md.bak; fi"
+expect_status 0
+expect_state WAIT_IMPLEMENT_APPROVAL
+expect_out 'Attempting repair once'
+
+new_case resume-preserves-new-files
+green_baseline 0 'bash app/test.sh'
+printf 'scripts/change-workflow.sh\n' > "$REPO/.uncle/workflow/untracked-before.txt"
+printf 'new implementation\n' > "$REPO/app/added.sh"
+set_state IMPLEMENT
+run_driver
+expect_status 0
+expect_state WAIT_IMPLEMENT_APPROVAL
+expect_in_file '.uncle/workflow/change.diff' 'new implementation'
+
+for resumed in WAIT_IMPLEMENT_APPROVAL CHECKLIST EXECUTE_CHECKLIST FINAL_AUDIT; do
+    new_case "partial-resume-$resumed"
+    green_baseline 0 'bash app/test.sh'
+    printf 'Old partial report\n' > "$REPO/IMPLEMENTATION_NOTES.md"
+    set_state "$resumed"
+    run_driver FAKE_IMPL="$partial_impl"
+    expect_status 1
+    expect_state IMPLEMENT
+    expect_out 'Incomplete acceptance delivery; returning to IMPLEMENT'
+    expect_no_file FINAL_AUDIT.md
+done
 
 if [[ "$FAILED" -ne 0 ]]; then
     echo "gates-test.sh: $FAILED of $COUNT checks failed"

@@ -239,6 +239,22 @@ gate_input() {
 # reviewer stub that writes <verdict text> into FINAL_AUDIT.md.
 setup_audit_stage() {
     mkdir -p "$REPO/prompts/change"
+    mkdir -p "$REPO/.uncle/workflow/approvals"
+    printf 'Approved fixture plan\n' > "$REPO/CHANGE_PLAN.md"
+    cat > "$REPO/CHANGE_SPEC.md" <<'SPEC'
+## Acceptance criteria
+| ID | Criterion | Verification |
+|---|---|---|
+| AC-1 | Fixture behavior | Fixture check |
+SPEC
+    cat > "$REPO/IMPLEMENTATION_NOTES.md" <<'NOTES'
+## Acceptance delivery
+| ID | Status | Changed code | Observed targeted verification |
+|---|---|---|---|
+| AC-1 | IMPLEMENTED | Fixture code | Fixture check PASS |
+NOTES
+    hash_file "$REPO/CHANGE_SPEC.md" > "$REPO/.uncle/workflow/approvals/CHANGE_SPEC.sha256"
+    hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
     cp "$ROOT/prompts/change/final-audit.md" "$REPO/prompts/change/final-audit.md"
     cat > "$CASE/bin/fake-reviewer" <<REV
 #!/usr/bin/env bash
@@ -524,6 +540,7 @@ expect_out "Change workflow complete."
 # A reviewer invocation that exits 0 without writing must not leave a stale
 # audit readable as this run's verdict.
 new_case stale-audit-rejected
+setup_audit_stage READY
 mkdir -p "$REPO/prompts/change"
 cp "$ROOT/prompts/change/final-audit.md" "$REPO/prompts/change/final-audit.md"
 printf 'READY\n' > "$REPO/FINAL_AUDIT.md"
@@ -541,6 +558,7 @@ if [[ "$(cat "$REPO/.uncle/workflow/state")" != "FINAL_AUDIT" ]]; then
 fi
 
 new_case verdict-record-written
+setup_audit_stage READY
 mkdir -p "$REPO/prompts/change" "$CASE/bin"
 cp "$ROOT/prompts/change/final-audit.md" "$REPO/prompts/change/final-audit.md"
 cat > "$CASE/bin/fake-reviewer" <<'REV'
@@ -1191,6 +1209,14 @@ elif args[:2] == ['pr', 'create']:
         self.assertEqual(len(self.creates()), 0)
 
     def test_driver_audit_to_pr_and_rerun(self):
+        (self.repo / 'CHANGE_SPEC.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Fixture behavior | Fixture check |\n')
+        (self.repo / 'CHANGE_PLAN.md').write_text('Approved fixture plan\n')
+        (self.repo / 'IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | IMPLEMENTED | source.txt | Fixture check PASS |\n')
+        approvals = self.state / 'approvals'
+        approvals.mkdir(exist_ok=True)
+        for artifact in ('CHANGE_SPEC', 'CHANGE_PLAN'):
+            digest = hashlib.sha256((self.repo / (artifact + '.md')).read_bytes()).hexdigest()
+            (approvals / (artifact + '.sha256')).write_text(digest + '\n')
         self.exe('reviewer', """#!/usr/bin/env python3
 from pathlib import Path
 import sys

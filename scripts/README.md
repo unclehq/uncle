@@ -463,6 +463,28 @@ Covered by `scripts/tests/plan-scope-test.sh`.
 
 ### The gates around implementation
 
+The change driver requires an `Acceptance criteria` table in `CHANGE_SPEC.md`
+with stable `AC-1`, `AC-2`, … IDs, and an `Acceptance delivery` table in
+`IMPLEMENTATION_NOTES.md` with `ID`, `Status`, `Changed code`, and
+`Observed targeted verification` columns. Every specified ID must appear once.
+Only `IMPLEMENTED` rows with code and verification evidence permit advancement;
+`INCOMPLETE`, `BLOCKED`, missing rows or legacy reports keep implementation pending.
+These declarations do not replace driver checks or independent review.
+
+Partial delivery triggers one automatic implementation repair per approved plan
+digest, recorded in `.uncle/workflow/implementation-completion-repair` across
+restarts. A failed repair leaves the state at `IMPLEMENT` with diagnostics in
+`implementation-completion.txt`. Resuming runs implementation again but does not
+grant another automatic repair for the same plan. Changed approved plans receive
+a new repair allowance. Resumed approval, checklist and final-audit stages return
+to implementation when acceptance evidence is incomplete. Old specifications
+without AC-numbered tables need amendment through the existing approval process;
+the driver does not invent criteria or approve scope/test changes automatically.
+
+Missing live-runner authentication should block only dependent verification.
+The implementation prompt requires completing independent coding and mocked
+checks first, while preserving the outstanding blocker honestly.
+
 `scripts/lib/green-check.sh` and `scripts/lib/implementation-review.sh` carry
 the two checks that sit between the implementation stage and everything that
 reads its output.

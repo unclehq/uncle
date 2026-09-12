@@ -1508,11 +1508,32 @@ python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" CHANGE_REQUEST.md \
 
 VERDICT_WRITTEN_THIS_RUN=0
 
+implementation_complete() {
+    verify_approval CHANGE_SPEC.md CHANGE_SPEC
+    verify_approval CHANGE_PLAN.md CHANGE_PLAN
+    python3 "$ROOT/scripts/lib/implementation-completion.py" \
+        CHANGE_SPEC.md IMPLEMENTATION_NOTES.md \
+        > "$STATE_DIR/implementation-completion.txt"
+}
+
 while true; do
     state="$(get_state)"
 
     echo
     echo "Current state: $state"
+
+    # Older drivers could advance despite an explicitly partial delivery.
+    case "$state" in
+        WAIT_IMPLEMENT_APPROVAL|CHECKLIST|EXECUTE_CHECKLIST|FINAL_AUDIT)
+            if ! implementation_complete; then
+                echo "Incomplete acceptance delivery; returning to IMPLEMENT."
+                cat "$STATE_DIR/implementation-completion.txt"
+                rm -f "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.sha256"
+                set_state IMPLEMENT
+                continue
+            fi
+            ;;
+    esac
 
     case "$state" in
         DERIVE_BRIEF)
@@ -1628,11 +1649,16 @@ while true; do
 
         IMPLEMENT)
             verify_approval CHANGE_PLAN.md CHANGE_PLAN
+            verify_approval CHANGE_SPEC.md CHANGE_SPEC
 
             # Taken before the agent runs, so an untracked file that was
             # already sitting in the operator's checkout is not read as
             # something this change created.
-            snapshot_untracked "$UNTRACKED_BASELINE"
+            # Preserve the original baseline across incomplete-delivery resumes;
+            # files the first attempt created must remain part of the review.
+            if [[ ! -e "$UNTRACKED_BASELINE" ]]; then
+                snapshot_untracked "$UNTRACKED_BASELINE"
+            fi
 
             # The verification checklist is derived from the frozen, approved
             # artifacts, so it can be written while the implementation runs
@@ -1663,23 +1689,36 @@ while true; do
             check_document_budget IMPLEMENTATION_NOTES.md || exit 1
             check_document_budget CHANGE_TEST_REPORT.md || exit 1
 
-            if ! implementation_has_changes; then
-                echo "Implementation produced no code, test, or product-document changes. Attempting repair once."
+            if ! implementation_has_changes || ! implementation_complete; then
+                repair_digest="$(hash_file CHANGE_PLAN.md)"
+                if [[ "$(cat "$STATE_DIR/implementation-completion-repair" 2>/dev/null || true)" == "$repair_digest" ]]; then
+                    echo "Implementation remains incomplete; automatic repair already attempted for this plan."
+                    echo "See IMPLEMENTATION_NOTES.md and $STATE_DIR/implementation-completion.txt; resume after resolving the blockers."
+                    exit 1
+                fi
+                echo "Implementation is incomplete. Attempting repair once."
+                printf '%s\n' "$repair_digest" > "$STATE_DIR/implementation-completion-repair"
                 compose_implementation_prompt prompts/change/implement-change.md "$STATE_DIR/implementation-repair.md"
                 cat >> "$STATE_DIR/implementation-repair.md" <<'REPAIR'
 
-The previous implementation returned reports but delivered no reviewable change.
+The previous implementation did not deliver all required acceptance criteria.
 Read IMPLEMENTATION_NOTES.md and resolve routine implementation choices within
 the approved scope, then implement the requested behavior and its tests.
 Do not treat writing reports or rerunning baseline tests as implementation.
 Do not bypass a genuine unresolved approval requirement: explain the precise
 decision needed if you cannot proceed. The driver will keep IMPLEMENT pending
 if no change is delivered. Update the implementation notes and test report.
+Read .uncle/workflow/implementation-completion.txt when present for rejected
+acceptance rows. Deliver the missing behavior, not merely a changed status.
+Missing credentials for live verification do not prevent independent coding
+and mocked tests. Complete those first; report any remaining live check as
+BLOCKED without claiming acceptance. Do not change approved scope or protected
+tests without the required approval.
 REPAIR
                 run_claude "$STATE_DIR/implementation-repair.md" implementation \
                     "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
-                if ! implementation_has_changes; then
-                    echo "Implementation remains incomplete: no reviewable change was delivered."
+                if ! implementation_has_changes || ! implementation_complete; then
+                    echo "Implementation remains incomplete: required delivery is missing."
                     echo "Resolve the blockers in IMPLEMENTATION_NOTES.md and CHANGE_PLAN.md, then resume."
                     echo "The workflow remains at IMPLEMENT; it cannot advance to final audit."
                     exit 1

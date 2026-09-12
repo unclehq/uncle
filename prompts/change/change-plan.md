@@ -29,6 +29,11 @@ agent to make before it can start. Apply these rules before finalizing:
   criteria, prerequisites, and stop conditions. Every required step must be
   actionable on the current evidence. Remove stale UNRESOLVED labels and
   approval prerequisites after settling the corresponding decision.
+- Check proposed behavior changes against existing tests, including protected
+  verification paths. Resolve conflicting expectations within scope before
+  approval; explicitly identify any test change requiring renewed authority.
+  Separate prerequisites for coding from prerequisites for live verification.
+  Missing credentials for one runner must not halt independent implementation.
 
 Read:
 

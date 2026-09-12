@@ -1224,10 +1224,6 @@ class UncleTUI:
                     if self.stage_efforts.get(stage):
                         lines.append("%s.effort %s\n" % (stage, self.stage_efforts[stage]))
                         
-                    # A model belongs to a cline stage only; keeping one on a
-                    # claude/kimi/codex stage would be a value nothing reads.
-                    if self.stage_models.get(stage) and (not runner or self.stage_runner(stage) in ("cline", "self-hosted")):
-
                     # Keep dormant selections for a later runner switch;
                     # stage_model controls whether the current runner reads it.
                     if self.stage_models.get(stage):
@@ -1239,8 +1235,6 @@ class UncleTUI:
                         lines.append("%s.network %s\n" % (stage, self.stage_networks[stage]))
                     # Billing, like model, is a cline-only setting; written
                     # whenever set so a hand-edited line survives the rewrite.
-                    if self.stage_billings.get(stage) and (not runner or self.stage_runner(stage) == "cline"):
-
                     if self.stage_billings.get(stage):
                         lines.append("%s.billing %s\n" % (stage, self.stage_billings[stage]))
                     if self.stage_base_urls.get(stage):

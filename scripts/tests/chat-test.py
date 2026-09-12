@@ -353,7 +353,7 @@ class ChatInteractionTests(unittest.TestCase):
                 panel = min(34, w // 3) if w >= 60 else 0
                 width = min(76, w - panel)
                 self.ui._draw_chat_panel.assert_called_with(
-                    h - min(8, h // 3) - 1, h - 1, (w - panel - width) // 2, width)
+                    h - min(8, max(0, h - 3)) - 1, h - 1, (w - panel - width) // 2, width)
                 self.assertTrue(self.ui.chat_open)
 
     def test_running_preserves_dialog_and_statistics_renderer(self):
@@ -711,6 +711,132 @@ class ChatInteractionTests(unittest.TestCase):
                 process.wait()
             os.close(master)
 
+    def test_new_build_dialog_takes_focus_and_preserves_chat_draft(self):
+        self.ui.state = 'running'
+        for prompt in ('Approve brief? [y/n]', 'Press ENTER to continue:',
+                       'Retry, waive, or stop:', 'PR title [default: Example]:'):
+            with self.subTest(prompt=prompt):
+                self.ui.chat_focus = 'chat'
+                self.ui.chat_composer = 'Unsent direction'
+                self.ui.prompt_kind = ''
+                self.ui.partial = prompt
+                self.ui.prompt_seen = 2
+                self.ui._detect_prompt()
+                self.assertEqual(self.ui.chat_focus, 'gate')
+                self.assertEqual(self.ui.chat_composer, 'Unsent direction')
+                self.ui.chat_focus = 'chat'
+                self.ui._detect_prompt()
+                self.assertEqual(self.ui.chat_focus, 'chat')
+
+    def test_closing_build_dialog_returns_focus_to_chat(self):
+        self.ui.state = 'running'
+        self.ui.chat_composer = 'Draft direction'
+        self.ui.partial = 'Approve? '
+        self.ui.output = []
+        for exited in (False, True):
+            self.ui.proc = Mock()
+            self.ui.proc.poll.return_value = 0 if exited else None
+            self.ui.prompt_kind = 'confirm'
+            self.ui.chat_focus = 'gate'
+            tui.UncleTUI.answer_prompt(self.ui, 'y')
+            self.assertEqual(self.ui.prompt_kind, '')
+            self.assertEqual(self.ui.chat_focus, 'chat')
+            self.assertEqual(self.ui.chat_composer, 'Draft direction')
+        self.ui.prompt_kind = 'support'
+        self.ui.chat_focus = 'gate'
+        self.ui.handle_key(10)
+        self.assertEqual(self.ui.chat_focus, 'chat')
+        self.ui.prompt_kind = 'input'
+        self.ui.chat_focus = 'gate'
+        self.ui.handle_key(27)
+        self.assertEqual(self.ui.chat_focus, 'chat')
+
+    def test_native_fragments_are_not_repeated_in_build_output(self):
+        import json
+        self.ui.state = 'running'
+        self.ui.output = []
+        self.ui.home_history = [('assistant (baseline)', 'I will run the baseline checks.')]
+        for text in ('I', ' will', ' run', ' the baseline checks.'):
+            self.ui._absorb_line(json.dumps({'type': 'assistant', 'uncle_chat_output': True,
+                                            'message': {'content': [{'type': 'text', 'text': text}]}}))
+        self.assertEqual(self.ui.output, [])
+        self.assertEqual(self.ui._build_messages(),
+                         ['Assistant (baseline): I will run the baseline checks.'])
+
+    def test_composer_text_starts_after_prompt_without_padding(self):
+        renderer_state(self.ui)
+        self.ui.state = 'running'
+        self.ui.chat_focus = 'chat'
+        self.ui.chat_composer = ' ' * 70 + '\twhat day is it'
+        self.ui.stdscr = Mock()
+        self.ui.stdscr.getmaxyx.return_value = (40, 160)
+        self.ui._draw_chat_composer(25, 39, 160, 25, 76)
+        calls = self.ui.stdscr.addnstr.call_args_list
+        entry = next(call for call in calls if call.args[2].startswith('› '))
+        self.assertEqual(entry.args[1], 25)
+        self.assertEqual(entry.args[2], '› what day is it')
+        cursor = next(call for call in calls if call.args[0] == 28 and call.args[2] == ' ')
+        self.assertEqual(cursor.args[1], 27 + len('what day is it'))
+
+    def test_response_uses_full_width_before_sidebar(self):
+        renderer_state(self.ui)
+        self.ui.state = 'running'
+        self.ui.output = []
+        self.ui.prompt_kind = ''
+        self.ui.home_history = [('assistant', 'x' * 240)]
+        self.ui.stdscr = Mock()
+        self.ui.stdscr.getmaxyx.return_value = (40, 160)
+        self.ui._draw_running(29, 126)
+        calls = self.ui.stdscr.addnstr.call_args_list
+        self.assertEqual(len(calls[0].args[2]), 126)
+        self.assertEqual(calls[0].args[1], 0)
+        self.assertTrue(all(call.args[3] == 126 for call in calls))
+
+    def test_exited_workflow_is_reported_once_and_escape_returns_home(self):
+        self.ui.state = 'running'
+        self.ui.proc = Mock()
+        self.ui.proc.poll.return_value = 1
+        self.ui.proc.returncode = 1
+        self.ui._end_title = Mock()
+        self.ui.home_history = []
+        self.ui._poll_workflow()
+        self.ui._poll_workflow()
+        self.assertEqual(len(self.ui.home_history), 1)
+        self.assertIn('exit code 1', self.ui.chat_error)
+        self.assertFalse(self.ui.steering_channels)
+        self.ui.handle_key(27)
+        self.assertEqual(self.ui.state, 'menu')
+
+    def test_issue_input_rejects_transcript_before_launch(self):
+        self.ui.state = 'issue'
+        self.ui.input_buf = 'Assistant (baseline): I will inspect the repository'
+        self.ui._confirm_text()
+        self.assertEqual(self.ui.state, 'issue')
+        self.assertIn('issue number', self.ui.notice)
+        for value in ('123', '#123', 'https://github.com/unclehq/uncle/issues/123'):
+            self.ui.state = 'issue'
+            self.ui.input_buf = value
+            self.ui._confirm_text()
+            self.assertEqual(self.ui.state, 'issue_mode')
+        self.ui.workflow_idx = 1
+        self.ui.issue = 'Assistant (baseline): invalid input'
+        self.ui.start_workflow = Mock()
+        self.ui._run()
+        self.ui.start_workflow.assert_not_called()
+        with self.assertRaises(ValueError):
+            self.ui.cmd_for()
+
+    def test_build_and_chat_share_message_order(self):
+        self.ui.output = ['Build started']
+        self.ui.home_history = []
+        self.assertEqual(self.ui._build_messages(), ['Build started'])
+        self.ui.home_history.append(('assistant', 'Working on your change'))
+        self.assertEqual(self.ui._build_messages()[-1], 'Assistant: Working on your change')
+        self.ui.output.append('Verification passed')
+        self.assertEqual(self.ui._build_messages()[-2:],
+                         ['Assistant: Working on your change', 'Verification passed'])
+        self.assertEqual(len(self.ui._build_messages()), 3)
+
     def test_loaded_layouts_keep_composer_response_and_gate(self):
         renderer_state(self.ui)
         self.ui.state = 'running'
@@ -726,7 +852,7 @@ class ChatInteractionTests(unittest.TestCase):
             self.ui.draw()
             lines = [call.args[2] for call in screen.addnstr.call_args_list]
             self.assertTrue(any('Keep the task list' in line for line in lines))
-            self.assertTrue(any('Message>' in line for line in lines))
+            self.assertTrue(any('› ' in line for line in lines))
             self.assertTrue(any('Approve brief?' in line for line in lines))
             self.assertTrue(any('Tab' in line for line in lines))
             for call in screen.addnstr.call_args_list:
@@ -766,10 +892,10 @@ def terminal_case(screen):
             ui.output = ['stage output %d' % i for i in range(10000 + frame)]
             ui.draw()
         rows = [screen.instr(y, 0, w - 1).decode() for y in range(h)]
-        assert any('response stays visible' in row for row in rows), rows
-        assert 'Message>' in rows[h - 3], rows
+        assert any('response stays visible' in row for row in ui._build_messages()), rows
+        assert any('› ' in row for row in rows), rows
         assert any('Approve brief?' in row for row in rows), rows
-        assert any('Tab approvals/chat' in row for row in rows), rows
+        assert any('Tab' in row for row in rows), rows
         assert 'runner:' in rows[h - 1], rows
         before = len(answers)
         tui.curses.ungetch(ord('x'))

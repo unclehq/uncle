@@ -981,7 +981,8 @@ review_and_approve() {
 format_claude_stream() {
     jq -R -r --unbuffered '
         (fromjson? // empty) as $e
-        | if $e.type == "assistant" then
+        | if $e.uncle_chat_output == true then empty
+          elif $e.type == "assistant" then
               ($e.message.content[]?
                | if .type == "text" then .text
                  elif .type == "tool_use" then "  [tool] \(.name)"

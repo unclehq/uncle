@@ -70,7 +70,7 @@ class Stage:
         if not text:
             return
         self.answer += text
-        print(json.dumps({'type':'assistant', 'message':{'content':[{'type':'text','text':text}]}}), flush=True)
+        print(json.dumps({'type':'assistant', 'uncle_chat_output':bool(os.environ.get('UNCLE_STATUS_FILE')), 'message':{'content':[{'type':'text','text':text}]}}), flush=True)
         self.status('chat_output', text=text)
 
     def spawn(self, command, env=None):

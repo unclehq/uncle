@@ -554,6 +554,8 @@ class UncleTUI:
         self.issue_mode = ""
         self.input_buf = ""
         self.output = []
+        self._message_snapshot = ([], [])
+        self._message_stream = []
         self.proc = None
         self.out_q = queue.Queue()
         self.partial = ""
@@ -1075,9 +1077,15 @@ class UncleTUI:
                              len(self.stage_fields(self.picker_target)) - 1)
         self.state = "stage"
 
+    @staticmethod
+    def _valid_issue(value):
+        return bool(re.fullmatch(r'[1-9][0-9]*|https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?', value))
+
     def cmd_for(self):
         auto = ["--unattended"] if getattr(self, "misc", {}).get("auto_mode") == "true" else []
         if self.workflow_idx == 1:
+            if not self._valid_issue(self.issue):
+                raise ValueError('Enter a GitHub issue number or https://github.com/owner/repo/issues/123')
             cmd = list(WORKFLOWS[1][1]) + [self.issue]
             if self.issue_mode:
                 cmd.append(self.issue_mode)
@@ -1410,6 +1418,17 @@ class UncleTUI:
     def _poll_workflow(self):
         if getattr(self, "proc", None) and self.proc.poll() is not None:
             self._end_title()
+            if not getattr(self, 'workflow_exit_reported', False):
+                self.workflow_exit_reported = True
+                self.workflow_exit_code = self.proc.returncode
+                self.steering_channels = {}
+                self.prompt_kind = ''
+                self.chat_focus = 'chat'
+                self._ensure_chat()
+                message = ('Workflow stopped (exit code %s). No model is running. '
+                           'Press Esc to return to the menu.' % self.workflow_exit_code)
+                self.home_history.append(('system', message))
+                self.chat_error = message
 
     def start_workflow(self):
         fd, self.status_path = tempfile.mkstemp(prefix="uncle-status-", suffix=".jsonl")
@@ -1424,12 +1443,15 @@ class UncleTUI:
         self.panel_scroll = None
         self.proc_done = False
         self.workflow_completed = False
+        self.workflow_exit_reported = False
         self.support_checked = False
         metrics = os.path.join(_project_root(), ".uncle", "workflow", "metrics")
         self.session_stats = {"active": {}, "live": {}, "records": [], "tick": -1,
                               "seen": set(os.listdir(metrics)) if os.path.isdir(metrics) else set()}
         self._restore_session_totals()
         self.output = []
+        self._message_snapshot = ([], [])
+        self._message_stream = []
         self.partial = ""
         self.prompt_kind = ""
         self.prompt_text = ""
@@ -1523,12 +1545,23 @@ class UncleTUI:
             # Never interrupt completion or show a prompt we cannot remember.
             return
         self.prompt_kind = "support"
+        self.chat_focus = "gate"
         self.prompt_text = (
             "Your workflow is complete! Support Uncle by adding a star on GitHub: "
             "https://github.com/unclehq/uncle. "
             "This popup won't bother you again.")
 
     def _absorb_line(self, line):
+        # Native chat text is assembled through status events; retain its raw
+        # JSON in driver logs without displaying a second copy here.
+        try:
+            event = json.loads(line)
+            if isinstance(event, dict) and event.get('uncle_chat_output') is True:
+                return
+        except ValueError:
+            pass
+        if self.state == 'running':
+            self._build_messages()
         self.output.append(line)
         if len(self.output) > 4000:
             del self.output[:500]
@@ -1733,6 +1766,7 @@ class UncleTUI:
                 self.signing_command = command
                 self.signing_copy_status = ""
                 self.prompt_kind = "enter"
+                self.chat_focus = "gate"
                 self.prompt_text = signing_prefix + "Run in another terminal:\n" + command
                 self.prompt_buf = ""
                 self.prompt_scroll = 0
@@ -1748,6 +1782,7 @@ class UncleTUI:
             self.prompt_kind = "enter"
         else:
             self.prompt_kind = "input"
+        self.chat_focus = "gate"
         self.prompt_text = plain
         self.prompt_buf = ""
         if plain.startswith("PR title [default: ") and plain.endswith("]:"):
@@ -1801,6 +1836,7 @@ class UncleTUI:
 
     def answer_prompt(self, answer):
         """Send one line down the driver's stdin and close the modal."""
+        self.chat_focus = "chat"
         if not self.proc or self.proc.poll() is not None:
             self.prompt_kind = ""
             return
@@ -1876,6 +1912,8 @@ class UncleTUI:
         return stage, runner, model, effort
 
     def steer_stage(self, message):
+        if getattr(self, 'workflow_exit_reported', False):
+            raise ValueError('The workflow has stopped. Press Esc to return to chat; your draft is kept.')
         stage = getattr(self, 'status_stage', '')
         channel = getattr(self, 'steering_channels', {}).get(stage)
         if not channel or not self.proc or self.proc.poll() is not None:
@@ -2013,6 +2051,11 @@ class UncleTUI:
         self.chat_error = ''
 
     def _chat_key(self, k):
+        if k == 27 and self.state == 'running' and getattr(self, 'workflow_exit_reported', False):
+            self.state = 'menu'
+            self.chat_focus = 'chat'
+            self.chat_error = ''
+            return True
         if self.state == 'running' and self.chat_focus == 'menu':
             self.chat_focus = 'gate'
         if k == 3:
@@ -2221,7 +2264,7 @@ class UncleTUI:
         self.stdscr.erase()
         if self.state in ("running", "viewer"):
             panel = min(34, w // 3) if w >= 60 else 0
-            chat_height = min(8, max(0, h // 3)) if self.state == 'running' and getattr(self, 'chat_open', False) else 0
+            chat_height = min(8, max(0, h - 3)) if self.state == 'running' and getattr(self, 'chat_open', False) else 0
             self._draw_running(h - chat_height, w - panel)
             if chat_height:
                 chat_width = min(76, w - panel)
@@ -2295,8 +2338,8 @@ class UncleTUI:
                 self.chat_error = command + ' does not take arguments'
                 return True
             if command == '/issue' and argument:
-                if not re.fullmatch(r'#?[1-9][0-9]*', argument):
-                    self.chat_error = 'Usage: /issue 123 (or /issue #123)'
+                if not self._valid_issue(argument.removeprefix('#')):
+                    self.chat_error = 'Usage: /issue 123, #123, or https://github.com/owner/repo/issues/123'
                     return True
                 self.issue = argument.lstrip('#')
                 self.issue_mode = ''  # Existing automatic issue classification.
@@ -2380,16 +2423,46 @@ class UncleTUI:
             for i, line in enumerate(lines[-room:] if room else []):
                 put(top + len(items) + 1 + i, line, color.get('accent', 0))
         row = top + body_rows
+        self._draw_chat_composer(row, h, w, left, width, compact)
+        # The menu stays visible; Ctrl-P/Tab only change keyboard focus.
+        focused = self.chat_focus == 'menu'
+        for i, label in enumerate(items, 1):
+            selected = focused and i > 0 and i - 1 == self.sel
+            text = label if i == 0 else ('› ' if selected else '  ') + label
+            if menu_top + i < h and menu_left < w - 1:
+                try:
+                    self.stdscr.addnstr(menu_top + i, menu_left, text, min(menu_width, w - menu_left - 1),
+                        color.get('sel', curses.A_REVERSE) if selected else color.get('title' if i == 0 else 'accent', 0))
+                except curses.error:
+                    pass
+
+
+    def _draw_chat_composer(self, row, h, w, left, width, compact=True):
+        """Shared homepage and build chat appearance."""
+        first_row = row
+        if compact and h - row < 8:
+            row -= 1  # Hide the greeting first on short terminals.
+        color = getattr(self, 'color', {})
+        def put(y, text, attr=0, centered=False):
+            if not first_row <= y < h:
+                return
+            text = text[:width]
+            x = left + max(0, (width - len(text)) // 2) if centered else left
+            try:
+                self.stdscr.addnstr(y, x, text, min(width, max(0, w - x - 1)), attr)
+            except curses.error:
+                pass
         put(row + (0 if compact else 1), 'What can uncle do for you?', color.get('title', 0) | curses.A_BOLD, True)
-        put(row + (1 if compact else 3), ('/ commands   @ file mentions   Ctrl-P menu  Tab to chat' if width >= 52 else '/ cmds  @ files  Ctrl-P menu' if width >= 28 else 'Ctrl-P menu'), color.get('muted', curses.A_DIM), True)
+        put(row + (1 if compact else 3), ('/ commands   @ file mentions   Ctrl-P menu  Tab to chat' if width >= 52 else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 34 else '@ files  Ctrl-P menu Tab chat' if width >= 28 else 'Ctrl-P menu'), color.get('muted', curses.A_DIM), True)
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
-        text = sanitize(self.chat_composer).replace('\n', ' / ')
+        text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+        visible_text = text[-max(1, width - 3):]
         placeholder = 'Describe an app or a change…'
-        put(row + (3 if compact else 6), '› ' + (text[-max(1, width-3):] if text else placeholder),
+        put(row + (3 if compact else 6), '› ' + (visible_text if text else placeholder),
             color.get('accent', 0) if text else color.get('muted', curses.A_DIM))
         put(row + (3 if compact else 6), '›', color.get('warning', curses.A_BOLD))
-        if self.chat_focus == 'chat' and not getattr(self, 'home_menu_open', False):
-            cursor_x = left + 2 + (min(len(text), max(1, width - 3)) if text else 0)
+        if self.chat_focus == 'chat' and (self.state != 'menu' or not getattr(self, 'home_menu_open', False)):
+            cursor_x = left + 2 + (len(visible_text) if text else 0)
             if row + (3 if compact else 6) < h and cursor_x < w - 1:
                 try:
                     self.stdscr.addnstr(row + (3 if compact else 6), cursor_x, ' ' if text else placeholder[0], 1,
@@ -2399,9 +2472,9 @@ class UncleTUI:
         put(row + (4 if compact else 7), '─' * width, color.get('muted', curses.A_DIM))
         model_label = 'Configure a model'
         if hasattr(self, 'stage_runners'):
-            _, runner, model, effort = self.homepage_model()
+            _, runner, model, effort = self.chat_model()
             model_label = (model or runner or model_label) + ' (' + effort + ')'
-        put(row + (5 if compact else 9), model_label + ('  ·  Thinking…' if self.home_request else '  ·  Chat ready'), color.get('muted', curses.A_DIM))
+        put(row + (5 if compact else 9), model_label + ('  ·  Workflow stopped' if self.state == 'running' and getattr(self, 'workflow_exit_reported', False) else '  ·  Thinking…' if getattr(self, 'home_request', None) else '  ·  Chat ready'), color.get('muted', curses.A_DIM))
         project = os.path.basename(_project_root()) or _project_root()
         try:
             with open(os.path.join(_project_root(), '.git', 'HEAD')) as source:
@@ -2420,69 +2493,56 @@ class UncleTUI:
             put(row + (7 if compact else 11), '/configure /settings /file /quit /issue # /requirements /change /clear', color.get('muted', curses.A_DIM))
 
         self._draw_file_picker(row + (3 if compact else 6), left, width)
-        # The menu stays visible; Ctrl-P/Tab only change keyboard focus.
-        focused = self.chat_focus == 'menu'
-        for i, label in enumerate(items, 1):
-            selected = focused and i > 0 and i - 1 == self.sel
-            text = label if i == 0 else ('› ' if selected else '  ') + label
-            if menu_top + i < h and menu_left < w - 1:
-                try:
-                    self.stdscr.addnstr(menu_top + i, menu_left, text, min(menu_width, w - menu_left - 1),
-                        color.get('sel', curses.A_REVERSE) if selected else color.get('title' if i == 0 else 'accent', 0))
-                except curses.error:
-                    pass
-
-
     def _draw_chat_panel(self, top, bottom, left, width):
-        """Add chat without replacing the logo, menu, dialogs or statistics."""
+        """Keep the homepage composer centered below the build output."""
         if bottom - top < 2 or width < 4:
             return
-        color = getattr(self, 'color', {})
-        def put(row, text, attr=0):
-            if top <= row < bottom:
-                try:
-                    self.stdscr.addnstr(row, left, text, max(1, width - 1), attr)
-                except curses.error:
-                    pass
-        target = 'menu' if self.state == 'menu' else 'approvals'
-        focused = self.chat_focus == 'chat'
-        label = 'typing' if focused else 'Tab to type'
-        if hasattr(self, 'stage_runners'):
-            _, runner, model, _ = self.chat_model()
-            label = (runner or 'Configure a runner') + (' / ' + model if model else '')
-        put(top, 'Chat  /  ' + label, color.get('title', 0))
-        footer = bottom - 1
-        composer_row = bottom - 2
-        content = self.chat_display()
-        if self.chat.preview:
-            content += ['Preview: ' + self.chat.preview]
-        if self.chat_choices:
-            content += ['Files: ' + self.chat_choices[self.chat_pick]]
-        lines = []
-        for line in '\n'.join(content)[-max(1, (bottom-top)*width*2):].splitlines():
-            lines.extend(textwrap.wrap(line, max(1, width - 2)) or [''])
-        room = max(0, composer_row - top - 1)
-        if self.chat_error and room:
-            lines += [self.chat_error]
-        for offset, line in enumerate(lines[-room:] if room else []):
-            put(top + 1 + offset, line)
-        text = sanitize(self.chat_composer).replace('\n', ' / ')
-        put(composer_row, ('Edit> ' if self.chat_edit else 'Message> ') + text[-max(1, width-12):],
-            color.get('sel', 0) if focused else color.get('accent', 0))
-        put(footer, 'Tab ' + target + '/chat | Ctrl-P files | F4 edit | F5 start', color.get('accent', 0))
+        _, screen_width = self.stdscr.getmaxyx()
+        self._draw_chat_composer(top, bottom, screen_width, left, width)
 
-        self._draw_file_picker(composer_row, left, width, top + 1)
+    def _build_messages(self):
+        """Collect build output and chat in one chronological viewport."""
+        output = list(self.output)
+        chat = self.chat_display()
+        previous_output, previous_chat = getattr(self, '_message_snapshot', ([], []))
+        messages = getattr(self, '_message_stream', [])
+        for kind, current, previous in (('build', output, previous_output), ('chat', chat, previous_chat)):
+            common = 0
+            for old, new in zip(previous, current):
+                if old != new:
+                    break
+                common += 1
+            if kind == 'chat' and common < len(previous):
+                messages = [item for item in messages if not (item[0] == 'chat' and item[1] >= common)]
+            if kind == 'build' and common < min(len(previous), len(current)):
+                # The bounded output buffer drops its oldest lines periodically.
+                overlap = min(len(previous), len(current))
+                while overlap and previous[-overlap:] != current[:overlap]:
+                    overlap -= 1
+                common = overlap
+            messages.extend((kind, i, line) for i, line in enumerate(current[common:], common))
+        self._message_snapshot = (output, chat)
+        self._message_stream = messages[-4000:]
+        return [item[2] for item in self._message_stream]
 
     def _draw_running(self, h, w):
         if self.state == "viewer":
             self._draw_viewer(h, w)
             return
-        tail = list(self.output)
+        tail = self._build_messages()
         if self.partial.strip() and not self.prompt_kind:
             tail.append(self.partial.rstrip())
-        for i, line in enumerate(tail[-(h - 1):]):
+        # The transcript uses every column before the sidebar, independently
+        # of the centered composer's narrower width.
+        screen_width = self.stdscr.getmaxyx()[1]
+        message_width = max(1, min(w, screen_width - 1))
+        wrapped = []
+        for message in tail[-max(1, h * 2):]:
+            for line in message.splitlines() or ['']:
+                wrapped.extend(textwrap.wrap(line, message_width) or [''])
+        for i, line in enumerate(wrapped[-max(0, h - 1):] if h > 1 else []):
             try:
-                self.stdscr.addnstr(i, 0, line, w - 1)
+                self.stdscr.addnstr(i, 0, line, message_width)
             except curses.error:
                 pass
         if self.prompt_kind:
@@ -3052,7 +3112,10 @@ class UncleTUI:
             return
         if self.state == "running":
             model = self.status_model or "—"
-            if self.prompt_kind:
+            if getattr(self, "workflow_exit_reported", False):
+                mode = "Stopped (exit %s)" % self.workflow_exit_code
+                bar_attr = self.color.get("warning", 0)
+            elif self.prompt_kind:
                 mode = "Waiting for you"
                 bar_attr = self.color["sel"]
             elif self.status_mode == "act":
@@ -3139,11 +3202,13 @@ class UncleTUI:
         if self.state == "running" and getattr(self, "prompt_kind", "") == "support":
             if k in (ord("s"), ord("S")):
                 self.prompt_kind = ""
+                self.chat_focus = "chat"
                 threading.Thread(target=webbrowser.open,
                                  args=("https://github.com/unclehq/uncle",),
                                  daemon=True).start()
             elif k in (10, 13, 27, ord("q"), ord("Q")):
                 self.prompt_kind = ""
+                self.chat_focus = "chat"
             elif k == 3:
                 self._quit()
             return
@@ -3169,6 +3234,7 @@ class UncleTUI:
                     self.answer_prompt("n")     # anything but y declines
                 elif self.prompt_kind == "input":
                     self.prompt_kind = ""       # leave the question standing
+                    self.chat_focus = "chat"
                     self.prompt_seen = 0
                 return
             self._go_back()
@@ -3386,9 +3452,12 @@ class UncleTUI:
 
     def _confirm_text(self):
         if self.state == "issue":
-            self.issue = self.input_buf.strip()
-            if not self.issue:
+            issue = self.input_buf.strip().removeprefix('#')
+            if not self._valid_issue(issue):
+                self.notice = 'Enter an issue number or https://github.com/owner/repo/issues/123'
                 return
+            self.issue = issue
+            self.notice = ""
             self.input_buf = ""
             self.state = "issue_mode"
             self.sel = 0
@@ -3412,6 +3481,11 @@ class UncleTUI:
 
     def _run(self):
         self._ensure_chat()
+        if self.workflow_idx == 1 and not self._valid_issue(self.issue):
+            self.state = 'issue'
+            self.input_buf = self.issue
+            self.notice = 'Enter an issue number or https://github.com/owner/repo/issues/123'
+            return
         # The run reads the file, so make sure we are not about to launch on
         # top of an edit we have not seen.
         self.maybe_reload()

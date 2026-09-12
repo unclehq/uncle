@@ -6,6 +6,7 @@ import re
 import socket
 import subprocess
 import time
+import tomllib
 import urllib.request
 from process_tree import launch_command, group_options
 
@@ -38,10 +39,32 @@ def run(stage, directory):
     config={'thinking':stage.effort,'permission_mode':'auto','plan_mode':stage.side=='reviewer'}
     model=stage.model
     if model.startswith('kimi:'): model=model[5:]
-    elif model=='kimi': model=os.environ.get('WORKFLOW_KIMI_MODEL','moonshot-ai/kimi-k2.7-code-highspeed')
-    if model:config['model']=model
+    if model in ('', 'kimi'):
+        model = os.environ.get('WORKFLOW_KIMI_MODEL', '')
+        if not model:
+            config_path = Path.home()/'.kimi-code/config.toml'
+            if config_path.is_file():
+                with config_path.open('rb') as source:
+                    model = tomllib.load(source).get('default_model', '')
+    if not model:
+        raise ValueError('Kimi has no default model. Configure a model in Kimi or set the stage model in Uncle.')
+    config['model']=model
     if stage.side=='reviewer': config.update(tools=['Read','Glob','Grep'],mcp_servers=[])
-    request(path+'/profile',{'agent_config':config})
+    try:
+        request(path+'/profile',{'agent_config':config})
+    except ValueError as error:
+        # Kimi models expose different effort levels from Uncle's common scale.
+        match = re.search(r'Supported efforts: ([a-z, ]+)\.', str(error))
+        if not match or 'Thinking effort' not in str(error):
+            raise
+        supported = match[1].split(', ')
+        aliases = {'none': 'off', 'medium': 'high', 'xhigh': 'max'}
+        effort = aliases.get(stage.effort)
+        if effort not in supported:
+            raise
+        config['thinking'] = effort
+        stage.effort = effort
+        request(path+'/profile',{'agent_config':config})
     def send(text,id=None):
         body={'content':[{'type':'text','text':text}]}
         if id:body['prompt_id']=id

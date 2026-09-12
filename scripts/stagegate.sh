@@ -2011,7 +2011,10 @@ while true; do
             require_file DEFECTS.md
             check_document_budget VERIFICATION_REPORT.md || exit 1
             check_document_budget DEFECTS.md || exit 1
-            if [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then
+            green_ids="$(green_failed_ids "$GREEN_CLASS" "$GREEN_CMDS")"
+            if [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] \
+                && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
+                && ! { [[ -n "${green_ids// /}" ]] && waived_ids $green_ids; }; then
                 printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
                 set_state REPAIR
             else

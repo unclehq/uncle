@@ -17,7 +17,8 @@ GREEN_CHECK=1
 GREEN_CLASS=workflow/green.tsv
 GREEN_MD=workflow/green.md
 UNATTENDED=0
-for fn in get_state set_state require_file waive_file waived_ids record_waiver write_waivers acceptance_setup_pause acceptance_human_continue acceptance_after_waiver acceptance_transition; do
+. "$ROOT/scripts/lib/waivers.sh"
+for fn in get_state set_state require_file     acceptance_setup_pause acceptance_human_continue acceptance_after_waiver acceptance_transition; do
     eval "$(awk -v start="^${fn}\\(\\)" '$0 ~ start {active=1} active {print} active && /^}$/ {exit}' "$ROOT/scripts/stagegate.sh")"
 done
 verify_implementation_review() { echo approval >> calls; }

@@ -345,9 +345,65 @@ legacy_word_notice() {
 . "$ROOT/scripts/lib/green-check.sh"
 . "$ROOT/scripts/lib/implementation-review.sh"
 . "$ROOT/scripts/lib/gates.sh"
+. "$ROOT/scripts/lib/waivers.sh"
 . "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/performance.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
+
+# The implementation stage can end with acceptance rows the agent could not
+# deliver. Exiting there is right when someone is about to go fix it, and wrong
+# when nobody is: the run stops, the issue stays open, and the operator is left
+# to work out which files to edit and how to resume. Offer the decision instead.
+#
+# Retry and stop are the honest answers. Waive is the third, for a row no
+# further attempt can deliver -- and it never becomes a pass: the rejected rows
+# stay in implementation-completion.txt, the waiver records who accepted what,
+# and the final audit reads both.
+implementation_incomplete_choice() {
+    local completion="$STATE_DIR/implementation-completion.txt" ids="" answer
+    echo
+    echo "The implementation did not deliver every acceptance row."
+    if [[ -s "$completion" ]]; then
+        echo "Rejected rows:"
+        sed 's/^/  /' "$completion"
+        ids="$(awk -F: '/^[A-Za-z0-9][A-Za-z0-9_.\/-]*:/ { printf "%s ", $1 }' "$completion")"
+    fi
+    echo
+    while true; do
+        gate_prompt "Retry the implementation, waive the rows above, or stop? [retry/waive/stop]: "
+        if ! IFS= read -r answer; then
+            echo
+            echo "No answer; the run remains pending at IMPLEMENT."
+            return 1
+        fi
+        case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+            r|retry)
+                # Clearing the digest is what lets the repair path run again for
+                # this plan; without it the next pass repeats the same refusal.
+                rm -f "$STATE_DIR/implementation-completion-repair"
+                echo "Retrying implementation."
+                return 0
+                ;;
+            w|waive)
+                if [[ -z "${ids// /}" ]]; then
+                    echo "No row ids to waive; edit the plan or retry instead."
+                    continue
+                fi
+                # shellcheck disable=SC2086
+                if record_waiver "$completion" $ids; then
+                    echo "Waived. The rows stay rejected on the record; the audit still reads them."
+                    return 2
+                fi
+                ;;
+            s|stop|'')
+                echo "Run remains pending at IMPLEMENT."
+                return 1
+                ;;
+            *) echo "Answer retry, waive, or stop." ;;
+        esac
+    done
+}
+
 
 require_file() {
     if [[ ! -s "$1" ]]; then
@@ -1694,7 +1750,12 @@ while true; do
                 if [[ "$(cat "$STATE_DIR/implementation-completion-repair" 2>/dev/null || true)" == "$repair_digest" ]]; then
                     echo "Implementation remains incomplete; automatic repair already attempted for this plan."
                     echo "See IMPLEMENTATION_NOTES.md and $STATE_DIR/implementation-completion.txt; resume after resolving the blockers."
-                    exit 1
+                    implementation_incomplete_choice
+                    case "$?" in
+                        0) continue ;;
+                        2) ;;
+                        *) exit 1 ;;
+                    esac
                 fi
                 echo "Implementation is incomplete. Attempting repair once."
                 printf '%s\n' "$repair_digest" > "$STATE_DIR/implementation-completion-repair"
@@ -1721,7 +1782,12 @@ REPAIR
                     echo "Implementation remains incomplete: required delivery is missing."
                     echo "Resolve the blockers in IMPLEMENTATION_NOTES.md and CHANGE_PLAN.md, then resume."
                     echo "The workflow remains at IMPLEMENT; it cannot advance to final audit."
-                    exit 1
+                    implementation_incomplete_choice
+                    case "$?" in
+                        0) continue ;;
+                        2) ;;
+                        *) exit 1 ;;
+                    esac
                 fi
                 require_file IMPLEMENTATION_NOTES.md
                 require_file CHANGE_TEST_REPORT.md

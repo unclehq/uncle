@@ -81,4 +81,10 @@ NOT RUN, or N/A. Every row needs nonempty evidence
 or a finding reference; no literal pipes within cells. No mandatory row may be
 marked optional or inapplicable to allow the run to proceed.
 
+IDs must be plain identifiers: letters, digits, `-`, `_`, `.` and `/` only, and
+no spaces. The six mandatory rows use the names above, exactly. Any further row
+you add needs an identifier of the same shape, such as `TR-1`, with its subject
+in Evidence rather than in the ID cell. A row whose ID contains spaces is not
+parsed, and the driver records no acceptance pass for the stage.
+
 Return the complete review as your final message.

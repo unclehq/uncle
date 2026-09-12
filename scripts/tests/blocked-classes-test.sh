@@ -21,10 +21,9 @@ mkdir -p "$STATE_DIR"
 STATE=""
 set_state() { STATE="$1"; }
 gate_prompt() { printf '%s' "$1"; }
-eval "$(awk '/^waive_file\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
-eval "$(awk '/^waived_ids\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
-eval "$(awk '/^record_waiver\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
-eval "$(awk '/^write_waivers\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+. "$ROOT/scripts/lib/waivers.sh"
+eval "$(grep '^provided_file()' "$ROOT/scripts/stagegate.sh")"
+eval "$(awk '/^record_provided\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
 ROOT="$ROOT"   # record_waiver looks for the popup helper under it
 eval "$(awk '/^acceptance_setup_pause\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
 eval "$(awk '/^acceptance_human_continue\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"

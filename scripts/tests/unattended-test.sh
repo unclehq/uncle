@@ -112,7 +112,12 @@ else ok; fi
 wv="$WORK/wv"
 mkdir -p "$wv/.uncle/workflow"
 extract_fns "$ROOT/scripts/stagegate.sh" "$wv/fns.sh" \
-    gate_prompt record_unattended_gate write_waivers record_waiver
+    gate_prompt record_unattended_gate
+# The waiver writers moved to a shared lib so both drivers use one copy.
+# extract_fns truncates its output, so collect the lib half separately.
+extract_fns "$ROOT/scripts/lib/waivers.sh" "$wv/fns-waivers.sh" \
+    write_waivers record_waiver
+cat "$wv/fns-waivers.sh" >> "$wv/fns.sh"
 cat > "$wv/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail

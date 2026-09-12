@@ -338,11 +338,18 @@ CONFIG_DESC = {
         "changes, and low for quick iterations. You can type your own value in "
         "the edit screen or cycle it from this row."
     ),
+    "derive-brief": (
+        "Fills in a brief seeded from a GitHub issue, reading the issue text and "
+        "any files frozen into reference/. What the issue does not settle becomes "
+        "a TODO rather than an invented requirement. Skipped for a hand-written "
+        "brief."
+    ),
     "requirements": (
         "The stage that interprets the brief and turns it into a concrete, "
-        "testable set of requirements. It runs first in the New application "
-        "and From GitHub issue workflows. Give it a model ID to use a dedicated "
-        "model for this stage, or leave it at (default) to use the global model."
+        "testable set of requirements. It runs after derive-brief in the New "
+        "application and From GitHub issue workflows. Give it a model ID to use a "
+        "dedicated model for this stage, or leave it at (default) to use the "
+        "global model."
     ),
     "project-plan": (
         "Writes the project plan that translates the requirements into an "

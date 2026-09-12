@@ -51,10 +51,27 @@ printf 'Installer: %s; source: %s (%s)\n' "$platform" "$repo" "${source_dir:-$re
 # table, which makes the installer's behavior depend on what else is on the
 # machine -- fine for an operator, wrong for a test of argument dispatch. The
 # guard itself is covered by install-safety-test.sh.
-if [[ "$force_live" == 0 && "${UNCLE_ALLOW_LIVE_INSTALL:-0}" == 0 \
-      && -n "$source_dir" && -f "$source_dir/scripts/lib/running-workflow.sh" ]]; then
-    . "$source_dir/scripts/lib/running-workflow.sh"
-    if running_workflow_report; then exit 1; fi
+#
+# The guard used to require --source-dir, so the GitHub path -- the common one --
+# skipped it entirely and happily replaced the keg under a live run. The check
+# does not depend on where the new code comes from, so find the detector
+# wherever it already exists: this checkout, or the current installation.
+if [[ "$force_live" == 0 && "${UNCLE_ALLOW_LIVE_INSTALL:-0}" == 0 ]]; then
+    guard=""
+    for candidate in \
+        "${source_dir:+$source_dir/scripts/lib/running-workflow.sh}" \
+        "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/scripts/lib/running-workflow.sh" \
+        "$(brew --prefix 2>/dev/null)/opt/uncle/libexec/scripts/lib/running-workflow.sh" \
+        /usr/lib/uncle/scripts/lib/running-workflow.sh
+    do
+        [[ -n "$candidate" && -f "$candidate" ]] || continue
+        guard="$candidate"
+        break
+    done
+    if [[ -n "$guard" ]]; then
+        . "$guard"
+        if running_workflow_report; then exit 1; fi
+    fi
 fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT

@@ -28,9 +28,19 @@ running_workflow_pids() {
             pid = $1
             first = $2
             second = (NF >= 3 ? $3 : "")
-            driver = "(stagegate|change-workflow)\\.sh$"
-            if (first ~ driver) { printf "%s ", pid; next }
-            if (first ~ /(^|\/)(ba|z|da)?sh$/ && second ~ driver) printf "%s ", pid
+            driver = "(stagegate|change-workflow|from-issue)\\.sh$"
+            # The launcher counts too. It owns the run a driver is executing,
+            # and replacing the keg under it breaks the driver it spawns next
+            # -- which is how an upgrade mid-run loses hours of work.
+            launcher = "(^|/)uncle$"
+            tui = "(^|/)uncle_tui\\.py$"
+            if (first ~ driver || first ~ launcher) { printf "%s ", pid; next }
+            if (first ~ /(^|\/)(ba|z|da)?sh$/ && (second ~ driver || second ~ launcher)) {
+                printf "%s ", pid; next
+            }
+            # Only when a Python interpreter is running it: "vim uncle_tui.py"
+            # is someone reading the file, not a live session.
+            if (first ~ /(^|\/)[Pp]ython[0-9.]*$/ && second ~ tui) printf "%s ", pid
         }
     '
 }

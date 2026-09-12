@@ -3,11 +3,11 @@
 </p>
 <h1 align="center">uncle</h1>
 
-**Build changes from issue to PR with the AI agents you choose.**
+**The integrity layer for AI-generated software changes.**
 
 > Governed CI for coding agents.
 
-> The integrity layer for AI-generated software changes. Uncle makes agent-generated changes verifiable, reviewable, and safe to approve for production. 
+>Uncle turns GitHub issues into independently reviewed, human-approved, auditable pull requests. 
 </div>
 
 Uncle is a human-gated, adversarially-audited CI pipeline for AI-generated

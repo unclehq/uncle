@@ -874,7 +874,7 @@ stage_tools() {
 
 # New application pipeline stage order, used to report "stage N/M" to the TUI.
 # Matches run_stage's case arms.
-STATUS_STAGE_SEQ="requirements project-plan adversarial-review updated-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
+STATUS_STAGE_SEQ="derive-brief requirements project-plan adversarial-review updated-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
 
 # Report the current stage to the TUI status channel. The exports feed the
 # agent shims' own status writes; the start event written here covers every
@@ -916,7 +916,7 @@ get_state() {
     if [[ -s "$STATE_FILE" ]]; then
         cat "$STATE_FILE"
     else
-        echo "REQUIREMENTS"
+        echo "DERIVE_BRIEF"
     fi
 }
 
@@ -1274,6 +1274,10 @@ run_codex_review() {
 # so a stage can be run either in the foreground or speculatively.
 run_stage() {
     case "$1" in
+        DERIVE_BRIEF)
+            run_claude prompts/derive-brief.md derive-brief
+            require_artifact "$DOCUMENT_BUDGET_SOURCE"
+            ;;
         REQUIREMENTS)
             run_claude prompts/requirements.md requirements
             require_artifact REQUIREMENTS_INTERPRETATION.md
@@ -1559,6 +1563,28 @@ while true; do
     echo "Current workflow state: $state"
 
     case "$state" in
+        DERIVE_BRIEF)
+            # A brief a human wrote is not ours to rewrite. Derivation runs
+            # only when the prerequisite check says rows are still unfilled,
+            # which is exactly the seeded-from-an-issue case.
+            if python3 "$ROOT/scripts/lib/early-prerequisites.py" \
+                    "$DOCUMENT_BUDGET_SOURCE" >/dev/null 2>&1; then
+                echo "$DOCUMENT_BUDGET_SOURCE is already stated; skipping derivation."
+                set_state REQUIREMENTS
+                continue
+            fi
+            run_stage DERIVE_BRIEF
+            set_state WAIT_DERIVE_APPROVAL
+            ;;
+
+        WAIT_DERIVE_APPROVAL)
+            review_and_approve \
+                "$DOCUMENT_BUDGET_SOURCE" \
+                DERIVED_BRIEF \
+                approve
+            set_state REQUIREMENTS
+            ;;
+
         REQUIREMENTS)
             run_stage REQUIREMENTS
             set_state WAIT_REQUIREMENTS_APPROVAL

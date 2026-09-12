@@ -18,6 +18,19 @@ def check(source, root):
             for name in re.findall(r'`([^`]+)`', line):
                 if re.fullmatch(r'[\w ./-]+\.[\w]+', name):
                     required_files.add(name)
+    # A brief seeded from a GitHub issue carries an empty row per table so the
+    # owner has a form to fill. Downstream stages cannot tell an empty row from
+    # a stated one: the plan reserves it as an owner decision, preflight blocks
+    # on it, and implementation refuses to code -- after the planning spend.
+    # An item whose first content cell is blank is not a statement of anything.
+    unfilled = []
+    for line in text.splitlines():
+        if not line.startswith('|'):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
+        if len(cells) >= 2 and re.fullmatch(r'[A-Z]+-\d+', cells[0]) and not cells[1]:
+            unfilled.append(cells[0])
+
     manifest = root / '.uncle/prerequisites.json'
     if manifest.exists():
         data = json.loads(manifest.read_text())
@@ -42,6 +55,9 @@ def check(source, root):
             raise ValueError(f'command must be an executable name, without arguments: {command}')
         if shutil.which(command) is None:
             missing.append(f'missing executable on PATH: {command}')
+    if unfilled:
+        missing.append('%s has unfilled rows (%s); state each one or delete the row'
+                       % (source, ', '.join(unfilled)))
     return missing
 
 

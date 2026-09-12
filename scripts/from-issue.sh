@@ -262,7 +262,7 @@ uncle_title_begin "$ISSUE_NUM"
 # ---------------------------------------------------------------------------
 
 fetch_with_gh() {
-    gh issue view "$ISSUE_NUM" --repo "$OWNER/$REPO" --json title,body,url,state,labels 2>/dev/null
+    gh issue view "$ISSUE_NUM" --repo "$OWNER/$REPO" --json title,body,url,state,labels,comments 2>/dev/null
 }
 
 fetch_with_curl() {
@@ -292,7 +292,21 @@ fi
 # Minimal extraction using Python because jq is optional and bash JSON parsing is brittle.
 if python3 -c pass >/dev/null 2>&1; then
     TITLE="$(printf '%s' "$ISSUE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title",""))')"
-    BODY="$(printf '%s' "$ISSUE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("body",""))')"
+    BODY="$(printf '%s' "$ISSUE_JSON" | python3 -c '
+import json, sys
+issue = json.load(sys.stdin)
+parts = [issue.get("body") or ""]
+# A clarification written in the thread is part of the request. Dropping it
+# silently is how a brief ends up contradicting what the issue actually asked.
+for comment in issue.get("comments") or []:
+    text = (comment.get("body") or "").strip()
+    if not text:
+        continue
+    who = ((comment.get("author") or {}).get("login")
+           or (comment.get("user") or {}).get("login") or "comment")
+    parts.append("\n### Comment from %s\n\n%s" % (who, text))
+print("\n".join(parts))
+')"
     URL="$(printf '%s' "$ISSUE_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("html_url") or d.get("url") or sys.argv[1])' "https://github.com/$OWNER/$REPO/issues/$ISSUE_NUM")"
 elif command -v jq >/dev/null 2>&1; then
     TITLE="$(printf '%s' "$ISSUE_JSON" | jq -r '.title // empty')"
@@ -307,6 +321,28 @@ fi
 if [[ -z "$TITLE" ]]; then
     echo "Issue title was empty; response may have been rate-limited or unauthorized."
     exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Freeze attached files.
+#
+# Seed time is the only point where the fetch can succeed: `gh` is
+# authenticated here, and stage network access is off by default. A failure is
+# reported and the remote URL is left in place -- a brief that names an
+# unreachable attachment is worth more than no brief.
+# ---------------------------------------------------------------------------
+
+if [[ -n "$BODY" ]] && python3 -c pass >/dev/null 2>&1; then
+    FREEZER="$ROOT/scripts/lib/freeze-issue-files.py"
+    if [[ -f "$FREEZER" ]]; then
+        echo "Freezing files attached to $OWNER/$REPO#$ISSUE_NUM"
+        if FROZEN="$(printf '%s' "$BODY" | UNCLE_PROJECT_ROOT="$PROJECT_ROOT" \
+                python3 "$FREEZER")"; then
+            BODY="$FROZEN"
+        else
+            echo "  attachment freeze failed; leaving remote URLs in place."
+        fi
+    fi
 fi
 
 # ---------------------------------------------------------------------------

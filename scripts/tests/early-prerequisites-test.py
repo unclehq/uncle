@@ -36,6 +36,33 @@ class PrerequisitesTests(unittest.TestCase):
         self.write('REQUIREMENTS.md', 'Create `index.html`.\nFor example use `example.pdf`.\nDo not create `missing.md`.\nDo not use `old.pdf` as the authoritative source.')
         self.assertEqual(self.check(), [])
 
+    def test_seeded_brief_blocks_until_rows_are_stated(self):
+        # A brief seeded from a GitHub issue has one empty row per table. The
+        # planning agent cannot tell that from a stated requirement, so the run
+        # only fails much later, at preflight or implementation.
+        self.write('REQUIREMENTS.md',
+                   '## Functional requirements\n\n'
+                   '| ID | Requirement | Priority |\n|---|---|---|\n'
+                   '| R-001 | | Must |\n\n'
+                   '## User-visible behavior\n\n'
+                   '| ID | Trigger | Expected result | On failure |\n|---|---|---|---|\n'
+                   '| B-001 | | | |\n')
+        self.assertEqual(self.check(), ['REQUIREMENTS.md has unfilled rows (R-001, B-001);'
+                                        ' state each one or delete the row'])
+        self.write('REQUIREMENTS.md',
+                   '## Functional requirements\n\n'
+                   '| ID | Requirement | Priority |\n|---|---|---|\n'
+                   '| R-001 | Reproduce the reference page | Must |\n')
+        self.assertEqual(self.check(), [])
+
+    def test_populated_tables_are_not_flagged(self):
+        # Separator rows, prose pipes and non-ID rows must not read as unfilled.
+        self.write('REQUIREMENTS.md',
+                   '| ID | Requirement | Priority |\n|---|---|---|\n'
+                   '| R-001 | Stated | Must |\n'
+                   '| not-an-id | | |\n')
+        self.assertEqual(self.check(), [])
+
     def test_change_source_is_separate(self):
         self.write('REQUIREMENTS.md', 'Use `old.pdf` as the authoritative source.')
         self.write('CHANGE_REQUEST.md', 'Update the existing page.')

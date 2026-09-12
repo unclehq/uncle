@@ -379,7 +379,7 @@ set_state() {
 }
 
 get_state() {
-    state_read "$STATE_FILE" ANALYZE
+    state_read "$STATE_FILE" DERIVE_BRIEF
 }
 
 # --- Single-writer lock -----------------------------------------------------
@@ -1515,6 +1515,29 @@ while true; do
     echo "Current state: $state"
 
     case "$state" in
+        DERIVE_BRIEF)
+            require_file CHANGE_REQUEST.md
+            # A request a human wrote is not ours to rewrite. Derivation runs
+            # only when the prerequisite check says rows are still unfilled,
+            # which is exactly the seeded-from-an-issue case.
+            if python3 "$ROOT/scripts/lib/early-prerequisites.py" \
+                    "$DOCUMENT_BUDGET_SOURCE" >/dev/null 2>&1; then
+                echo "$DOCUMENT_BUDGET_SOURCE is already stated; skipping derivation."
+                set_state ANALYZE
+                continue
+            fi
+            run_claude prompts/derive-brief.md derive-brief \
+                "$MODEL_BASELINE" "" 60 "$BUDGET_CHANGE_SPEC"
+            require_file CHANGE_REQUEST.md
+            set_state WAIT_DERIVE_APPROVAL
+            ;;
+
+        WAIT_DERIVE_APPROVAL)
+            human_gate APPROVE \
+                CHANGE_REQUEST.md DERIVED_BRIEF
+            set_state ANALYZE
+            ;;
+
         ANALYZE)
             require_file CHANGE_REQUEST.md
             # A fresh run legitimately claims this checkout for its issue.

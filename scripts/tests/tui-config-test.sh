@@ -559,7 +559,7 @@ PY
 actual="$(
     UNCLE_CONFIG="$TMP/proj/.uncle/config" ROOT="$ROOT" bash -c '
         . "$ROOT/scripts/lib/stage-config.sh"
-        for stage in requirements baseline change-spec project-plan change-plan \
+        for stage in derive-brief requirements baseline change-spec project-plan change-plan \
                      adversarial-review updated-plan updated-change-plan preflight \
                      implementation test-review manual-checklist execute-checklist \
                      final-audit; do

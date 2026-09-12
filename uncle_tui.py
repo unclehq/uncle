@@ -88,6 +88,7 @@ AGENT, REVIEWER = "agent", "reviewer"
 # Merge both workflow sequences, keeping branch-specific stages beside their
 # counterparts and shared review/execution stages in execution order.
 STAGES = [
+    ("derive-brief", AGENT),
     ("requirements", AGENT),
     ("baseline", AGENT),
     ("change-spec", AGENT),

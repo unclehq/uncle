@@ -26,6 +26,10 @@ End with exactly one `## Acceptance gate` section containing only this table:
 | ID | Required | Status | Evidence |
 |---|---|---|---|
 
+IDs must be plain identifiers such as G-1, with the label in Evidence, not
+in the ID cell. Required must be YES or NO. Do not put literal pipe
+characters inside cells.
+
 ## Probe the capability, not its installation (binding)
 
 A prerequisite is PASS only when you exercised the capability the acceptance

@@ -202,7 +202,7 @@ class MenuInputTests(unittest.TestCase):
         bin_dir.mkdir()
         (bin_dir / 'gh').write_text(
             '#!/bin/bash\n'
-            '[[ "$*" == "issue view 42 --repo example/project --json title,body,url,state,labels" ]] '
+            '[[ "$*" == "issue view 42 --repo example/project --json title,body,url,state,labels,comments" ]] '
             '|| { echo unexpected-gh-call >> "$CALLS"; exit 1; }\n'
             "printf '%s\\n' '" + metadata + "'\n")
         (bin_dir / 'curl').write_text(

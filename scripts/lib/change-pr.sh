@@ -180,7 +180,14 @@ def validate(j, ready=True):
 
 def manual_signed_commit(j):
     import shlex
-    command = ('git commit -a -S -m ' + shlex.quote(j['title']))
+    # `git commit -a` cannot stage untracked files, but the audited tree
+    # includes them, so any change that added a file produced a tree
+    # mismatch. Stage everything, drop the driver's own state, then force
+    # FINAL_AUDIT.md back in: that reproduces commit_tree exactly.
+    command = ('git add -A'
+               ' && git rm -r --cached --ignore-unmatch -- .uncle/workflow'
+               ' && git add -f -- FINAL_AUDIT.md'
+               ' && git commit -S -m ' + shlex.quote(j['title']))
     if os.environ.get('UNCLE_SIGNING_JSON') == '1':
         block = json.dumps(command) + ' '
     else:

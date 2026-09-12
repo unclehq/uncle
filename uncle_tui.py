@@ -689,6 +689,10 @@ class UncleTUI:
             return "self-hosted"
         if runner:
             return runner
+        # An explicit default wins over discovery; it is "" in normal use,
+        # so the installed-agent scan below is what actually decides.
+        if DEFAULT_RUNNER:
+            return DEFAULT_RUNNER
         installed = runners_for(STAGE_SIDE.get(stage, AGENT))
         return installed[0] if installed else ""
 

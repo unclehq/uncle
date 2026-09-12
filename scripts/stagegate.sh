@@ -243,6 +243,19 @@ waived_ids() {
     return 0
 }
 
+# A failing verification command, named by its 1-based position in the approved
+# command list, so a waiver has a stable id that is also a safe filename. The
+# command text itself is not usable: it contains slashes and spaces, and it is
+# the thing most likely to be reworded between runs.
+green_failed_ids() {
+    local class="$1" commands="$2"
+    [[ -s "$class" && -s "$commands" ]] || return 0
+    awk -F'\t' '
+        NR == FNR { position[$0] = FNR; next }
+        $1 == "REGRESSION" && ($2 in position) { printf "green-%s ", position[$2] }
+    ' "$commands" "$class"
+}
+
 record_waiver() {
     local report="$1" reason
     shift
@@ -1888,6 +1901,42 @@ while true; do
             fi
             if [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
                 && [[ "$(acceptance_result TEST_REVIEW.md 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS')" == PASS ]]; then
+                # Repair is the right answer for a check the code can satisfy.
+                # It is the wrong answer for one the code cannot: the stage runs,
+                # changes nothing that helps, and the run comes straight back
+                # here. The operator is the only one who can tell those apart, so
+                # ask before looping. A waiver never turns the command into a
+                # pass -- green-check.md still records the failure, and the audit
+                # still reads it -- it only stops the driver insisting that more
+                # repair passes will help.
+                green_ids="$(green_failed_ids "$GREEN_CLASS" "$GREEN_CMDS")"
+                # shellcheck disable=SC2086
+                if [[ -n "${green_ids// /}" ]] && waived_ids $green_ids; then
+                    echo
+                    echo "Verification failure waived earlier; continuing."
+                    echo "$GREEN_MD still records the failure."
+                    acceptance_transition TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+                    continue
+                fi
+                # The first failure goes to repair unasked: most are real and
+                # the stage fixes them. Offer the choice only once repair has had
+                # a turn and the same command is still failing, which is the
+                # shape of a check the code cannot satisfy.
+                if [[ "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" -ge 1 \
+                      && -n "${green_ids// /}" ]]; then
+                    echo
+                    echo "This verification failure survived a repair pass:"
+                    awk -F'\t' '$1 == "REGRESSION" { printf "  %s\n", $2 }' "$GREEN_CLASS"
+                    echo
+                    echo "Repair it again, or waive it and continue. A waiver does not"
+                    echo "make it pass: $GREEN_MD keeps the failure and the final audit"
+                    echo "still reads it."
+                    # shellcheck disable=SC2086
+                    if record_waiver "$GREEN_MD" $green_ids; then
+                        acceptance_transition TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+                        continue
+                    fi
+                fi
                 printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
                 set_state REPAIR
             else

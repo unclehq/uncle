@@ -38,6 +38,9 @@ sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
 from chat import Conversation, sanitize
 from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
+from triage_chat import (TriageRequest, parse_reply as parse_triage_reply, compose_prompt as triage_prompt,
+                         runner_flags as triage_runner_flags, scrub_env as triage_scrub_env,
+                         DIAGNOSIS_TOOLS, EXECUTE_TOOLS)
 from self_hosted import settings as home_settings
 from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
 
@@ -108,7 +111,13 @@ STAGES = [
     ("manual-checklist", REVIEWER),
     ("execute-checklist", AGENT),
     ("final-audit", REVIEWER),
+    # The triage master: opened by the TUI after a stage failure or on
+    # request at a stop. An agent-side runner, because an executed proposal
+    # writes into a sandbox; unset means the runner's own defaults.
+    ("triage", AGENT),
 ]
+# Exit statuses that are not failures: a declined gate, a cancel, a kill.
+TRIAGE_CLEAN_EXITS = (0, 130, 143, 137, -9)
 STAGE_SIDE = dict(STAGES)
 CONFIG_STAGES = [name for name, _ in STAGES]
 
@@ -1431,6 +1440,7 @@ class UncleTUI:
                 message = reason + '. Stage chat disconnected. Press Esc to return to the menu.'
                 self.home_history.append(('system', message))
                 self.chat_error = message
+                self._maybe_auto_triage()
 
     def start_workflow(self):
         fd, self.status_path = tempfile.mkstemp(prefix="uncle-status-", suffix=".jsonl")
@@ -1464,6 +1474,7 @@ class UncleTUI:
         self.status_runner = ""
         self.status_stage = ""
         self.gate_file = ""
+        self.workflow_launch_time = time.time()
         # stdin is a pipe because the workflow asks questions: four human
         # gates, plus the odd retry or confirmation. Under curses the driver
         # cannot have the terminal, so the answers are typed into this screen
@@ -1826,9 +1837,16 @@ class UncleTUI:
             i += 1
         return "".join(out)
 
+    def _triage_blocks_stdin(self):
+        """A gate answer during a triage turn would race the guard's apply."""
+        if getattr(self, 'triage_request', None) is None:
+            return False
+        self.chat_error = 'A triage turn is running. Finish it or press Esc in triage before answering the gate.'
+        return True
+
     def _send_raw(self, answer):
         """Write one line to the driver's stdin without touching modal state."""
-        if not self.proc or self.proc.poll() is not None:
+        if not self.proc or self.proc.poll() is not None or self._triage_blocks_stdin():
             return
         try:
             self.proc.stdin.write((answer + "\n").encode())
@@ -1838,6 +1856,8 @@ class UncleTUI:
 
     def answer_prompt(self, answer):
         """Send one line down the driver's stdin and close the modal."""
+        if self._triage_blocks_stdin():
+            return
         self.chat_focus = "chat"
         if not self.proc or self.proc.poll() is not None:
             self.prompt_kind = ""
@@ -2054,6 +2074,333 @@ class UncleTUI:
                 self._run()
                 self.home_history.append(('system', 'Started the ' + kind + ' workflow using ' + filename + '.'))
         self.chat_error = ''
+
+    # ---- triage ----
+    #
+    # A stage failure writes .uncle/workflow/TRIAGE.md (the driver's EXIT hook)
+    # and the TUI opens a chat with the triage master seeded with it. At any
+    # other stop the same chat opens on request. The master runs in a sandbox
+    # mirror of the project; the guard around each turn is what decides what
+    # reaches the live tree, and only a proposal the operator selected with
+    # /do N can reach it at all. Resume is the ordinary driver launch.
+    def _triage_init(self):
+        if not hasattr(self, 'triage_history'):
+            self.triage_history = []
+            self.triage_request = None
+            self.triage_pending = None
+            self.triage_turn = 0
+            self.triage_tainted = ''
+            self.triage_proposals = []
+            self.triage_classification = ''
+            self.triage_offer_resume = False
+            self.triage_composer = ''
+            self.triage_error = ''
+            self.triage_return = 'chat'
+            self.triage_scroll = 0
+
+    def _workflow_dir(self):
+        return os.path.join(_project_root(), '.uncle', 'workflow')
+
+    def _maybe_auto_triage(self):
+        """Open triage on a failure exit; never on a decline, cancel, or human stop."""
+        code = getattr(self, 'workflow_exit_code', 0)
+        if code in TRIAGE_CLEAN_EXITS or getattr(self, 'state', '') == 'quit':
+            return
+        wf = self._workflow_dir()
+        try:
+            with open(os.path.join(wf, 'stop-reason'), encoding='utf-8') as fh:
+                if fh.readline().strip() == 'human':
+                    return
+        except OSError:
+            pass
+        try:
+            written = os.path.getmtime(os.path.join(wf, 'TRIAGE.md'))
+        except OSError:
+            return
+        if written < int(getattr(self, 'workflow_launch_time', 0)):
+            return
+        self.open_triage(auto=True)
+
+    def open_triage(self, auto=False):
+        self._triage_init()
+        if self.state != 'triage':
+            self.triage_return = self.state if self.state in ('running', 'chat', 'menu') else 'chat'
+        self.state = 'triage'
+        self.triage_error = ''
+        # The first open, and every failure exit after a resume, gets one
+        # diagnosis turn on the bundle the driver just wrote. An open on
+        # request with a transcript already there shows the transcript.
+        if self.triage_request is None and (auto or not self.triage_history):
+            try:
+                self._triage_turn('diagnosis')
+            except (OSError, ValueError) as exc:
+                self.triage_error = sanitize(str(exc))
+
+    def _triage_runner(self):
+        return self.stage_runner('triage'), self.stage_model('triage'), self.stage_effort('triage')
+
+    def _triage_guard(self, *args):
+        result = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'lib', 'triage_guard.py')] + list(args),
+                                cwd=_project_root(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode:
+            raise ValueError('Triage guard failed: ' + sanitize(result.stderr.strip()[-400:] or 'status %d' % result.returncode))
+        try:
+            return json.loads(result.stdout)
+        except ValueError:
+            raise ValueError('Triage guard returned no summary.')
+
+    def _triage_turn(self, mode, proposal=None, followup=''):
+        self._triage_init()
+        if self.triage_request is not None:
+            raise ValueError('A triage turn is still running. Wait for it or use /clear to cancel.')
+        if self.triage_tainted:
+            raise ValueError(self.triage_tainted)
+        runner, model, effort = self._triage_runner()
+        if not runner:
+            raise ValueError('Choose a runner in Configure first')
+        root = _project_root()
+        wf = self._workflow_dir()
+        bundle_path = os.path.join(wf, 'TRIAGE.md')
+        if not self.triage_history:
+            # The first turn rebuilds the bundle from the tree: on request at a
+            # gate there may be none yet, and a stale one describes another stop.
+            env = dict(os.environ, UNCLE_STATUS_STAGE=getattr(self, 'status_stage', '') or '')
+            subprocess.run(['bash', os.path.join(ROOT, 'scripts', 'lib', 'triage.sh'), '--write', '--state-dir', wf],
+                           cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            with open(bundle_path, encoding='utf-8', errors='replace') as fh:
+                bundle = fh.read()
+        except OSError:
+            bundle = 'MISSING: ' + bundle_path
+        template_path = os.path.join(root, 'prompts', 'triage.md')
+        if not os.path.isfile(template_path):
+            template_path = os.path.join(ROOT, 'prompts', 'triage.md')
+        with open(template_path, encoding='utf-8') as fh:
+            template = fh.read()
+        turn = self.triage_turn + 1
+        info = self._triage_guard('begin', '--state-dir', wf, '--project', root, '--root', ROOT,
+                                  '--turn', str(turn), '--mode', mode)
+        tail = '\n'.join(list(getattr(self, 'output', []))[-80:] + ([self.prompt_text] if self.prompt_kind else []))
+        prompt = triage_prompt(template, bundle, self.triage_history, mode, proposal, followup, tail[-16384:])
+        tools = EXECUTE_TOOLS if mode == 'execute' else DIAGNOSIS_TOOLS
+        command = [runner_command(runner, AGENT)] + triage_runner_flags(effort, model, tools)
+        env = triage_scrub_env(os.environ)
+        env['UNCLE_CONFIG'] = str(CONFIG_PATH)
+        if runner == 'self-hosted':
+            values = home_settings(CONFIG_PATH, 'triage')
+            for field in ('model', 'base_url', 'api_key'):
+                env['UNCLE_SELF_HOSTED_' + field.upper()] = values[field]
+        if runner == 'cline':
+            env['UNCLE_CLINE_EFFORT'] = effort
+            if model:
+                env['UNCLE_CLINE_MODEL'] = model
+        if followup:
+            self.triage_history.append(('operator', sanitize(followup)))
+        elif mode == 'execute':
+            self.triage_history.append(('operator', '/do %d — %s' % (proposal[0], sanitize(proposal[1]))))
+        self.triage_turn = turn
+        self.triage_proposals = []
+        self.triage_pending = {'mode': mode, 'proposal': proposal, 'digest': info['digest'], 'turn': turn}
+        self.triage_request = TriageRequest(command, prompt, env, info['sandbox'],
+                                            os.path.join(wf, 'logs', 'triage-%d.jsonl' % turn))
+
+    def _triage_do(self, number):
+        try:
+            number = int(str(number).strip())
+        except ValueError:
+            raise ValueError('Usage: /do N, where N is a proposal number.')
+        chosen = [p for p in self.triage_proposals if p[0] == number]
+        if not chosen:
+            raise ValueError('No proposal %d is selectable. Open triage and read the current reply.' % number)
+        self._triage_turn('execute', proposal=chosen[0])
+
+    def poll_triage(self):
+        request = getattr(self, 'triage_request', None)
+        if request is None:
+            return False
+        try:
+            kind, value = request.events.get_nowait()
+        except queue.Empty:
+            return False
+        self.triage_request = None
+        pending = self.triage_pending or {}
+        self.triage_pending = None
+        # The guard runs whatever the turn's outcome: a runner that crashed
+        # may still have written into the sandbox or reached the live tree.
+        try:
+            summary = self._triage_guard('end', '--state-dir', self._workflow_dir(), '--project', _project_root(),
+                                         '--root', ROOT, '--turn', str(pending.get('turn', self.triage_turn)),
+                                         '--mode', pending.get('mode', 'diagnosis'), '--digest', pending.get('digest', ''),
+                                         '--proposal', ('Proposal %d: %s' % pending['proposal']) if pending.get('proposal') else '')
+        except (OSError, ValueError) as exc:
+            summary = {'applied': [], 'refused': [], 'failed': [], 'no_edit': False, 'tainted': True,
+                       'messages': [str(exc)]}
+        if kind == 'reply':
+            text = sanitize(value)
+            self.triage_history.append(('master', text))
+            self.triage_error = ''
+            if pending.get('mode') == 'execute':
+                self.triage_offer_resume = True
+            else:
+                parsed = parse_triage_reply(text)
+                if parsed is None:
+                    self.triage_proposals = []
+                    self.triage_history.append(('system', 'The reply does not follow the triage contract '
+                                                          '(Classification: and Proposal N: lines); nothing is selectable.'))
+                else:
+                    self.triage_classification = parsed['classification']
+                    self.triage_proposals = parsed['proposals']
+                    self.triage_offer_resume = parsed['offer_resume']
+        else:
+            self.triage_proposals = []
+            self.triage_error = sanitize(str(value))
+            self.triage_history.append(('system', self.triage_error))
+        notes = []
+        if summary.get('applied'):
+            notes.append('Applied: ' + ', '.join(summary['applied']))
+        if summary.get('refused'):
+            notes.append('Refused and reverted: ' + ', '.join(summary['refused']))
+        if summary.get('failed'):
+            notes.append('Not applied: ' + ', '.join(summary['failed']))
+        if summary.get('no_edit') and pending.get('mode') == 'execute':
+            notes.append('No files changed.')
+        notes.extend(summary.get('messages', []))
+        if summary.get('tainted'):
+            self.triage_tainted = 'Resume refused: ' + ' '.join(summary.get('messages') or ['the guard could not verify the tree.'])
+        if notes:
+            self.triage_history.append(('system', sanitize(' '.join(notes))))
+        return True
+
+    def triage_resume(self):
+        """Relaunch the driver from its recorded state: the ordinary start, no shortcut."""
+        self._triage_init()
+        if self.triage_request is not None:
+            raise ValueError('A triage turn is still running. Wait for it before resuming.')
+        if self.proc and self.proc.poll() is None:
+            raise ValueError('The workflow is still running; answer its prompt.')
+        if self.triage_tainted:
+            raise ValueError(self.triage_tainted)
+        if getattr(self, 'workflow_idx', None) is None:
+            raise ValueError('No workflow has run in this session; start one from the menu.')
+        self.triage_history.append(('system', 'Resuming the workflow from its recorded state.'))
+        self._run()
+        if self.state != 'running':
+            raise ValueError(self.chat_error or 'The workflow did not start.')
+
+    def _triage_command(self, text):
+        if not text:
+            return
+        try:
+            if text.startswith('/'):
+                parts = text.split(maxsplit=1)
+                command = parts[0].lower()
+                argument = parts[1].strip() if len(parts) > 1 else ''
+                if command == '/do':
+                    self._triage_do(argument)
+                elif command in ('/resume', '/r'):
+                    self.triage_resume()
+                elif command == '/clear':
+                    if self.triage_request is not None:
+                        self.triage_request.cancel()
+                    self.triage_error = ''
+                elif command == '/quit':
+                    self._quit()
+                elif command == '/triage':
+                    pass
+                else:
+                    raise ValueError('Commands: /do N  /resume  /clear  /quit')
+            else:
+                self._triage_turn('diagnosis', followup=text)
+            if self.state == 'triage':
+                self.triage_error = ''
+        except (OSError, ValueError) as exc:
+            self.triage_error = sanitize(str(exc))
+
+    def _triage_key(self, k):
+        self._triage_init()
+        if k == 3:
+            self._quit()
+            return
+        if k == 27:
+            if self.triage_composer:
+                self.triage_composer = ''
+                return
+            # Esc leaves the turn running if one is; the gate stays blocked
+            # until it ends. The pending prompt is untouched either way.
+            self.state = self.triage_return
+            if self.state == 'running' and not self.proc:
+                self.state = 'chat'
+            if self.state == 'running':
+                self.chat_focus = 'gate' if self.prompt_kind else 'chat'
+            elif self.state in ('chat', 'menu'):
+                self._ensure_chat()
+                self.chat_focus = 'chat' if self.state == 'chat' else 'menu'
+            return
+        if k in (curses.KEY_UP, curses.KEY_DOWN):
+            self.triage_scroll = max(0, self.triage_scroll + (1 if k == curses.KEY_UP else -1))
+            return
+        # Bare keys select only what is on offer; otherwise they are text, so
+        # a follow-up question can start with "r" or a digit. /do N and
+        # /resume always work from the composer.
+        if not self.triage_composer:
+            if k in (ord('1'), ord('2'), ord('3')) and any(n == k - ord('0') for n, _ in self.triage_proposals):
+                self._triage_command('/do %d' % (k - ord('0')))
+                return
+            if k in (ord('r'), ord('R')) and self.triage_offer_resume:
+                self._triage_command('/resume')
+                return
+        if k in (10, 13):
+            text = self.triage_composer.strip()
+            self.triage_composer = ''
+            self._triage_command(text)
+            return
+        if k in (curses.KEY_BACKSPACE, 127, 8):
+            self.triage_composer = self.triage_composer[:-1]
+        elif 32 <= k <= 0x10ffff and k < curses.KEY_MIN:
+            if len(self.triage_composer.encode('utf-8')) < 60000:
+                self.triage_composer += chr(k)
+
+    def _draw_triage(self):
+        self._triage_init()
+        h, w = self.stdscr.getmaxyx()
+        self.stdscr.erase()
+
+        def put(y, x, value, width, attr=curses.A_NORMAL):
+            if 0 <= y < h and 0 <= x < w and width > 0:
+                try:
+                    self.stdscr.addnstr(y, x, value, min(width, w - x - 1), attr)
+                except curses.error:
+                    pass
+
+        runner, _, _ = self._triage_runner()
+        status = 'triage | %s | turn %d' % (runner or 'no runner', self.triage_turn)
+        if self.triage_request is not None:
+            status += ' | running…'
+        if self.triage_tainted:
+            status += ' | TAINTED'
+        put(0, 0, 'Triage | ' + status, w, curses.A_BOLD)
+        put(1, 0, 'Classification: ' + (self.triage_classification or '—'), w)
+        lines = []
+        for role, text in self.triage_history:
+            for i, line in enumerate(str(text).splitlines() or ['']):
+                lines.extend(textwrap.wrap(('%s: ' % role if i == 0 else '') + line, max(1, w - 2)) or [''])
+            lines.append('')
+        bottom = h - 5
+        rows = max(0, bottom - 3)
+        end = max(0, len(lines) - self.triage_scroll)
+        for i, line in enumerate(lines[max(0, end - rows):end]):
+            put(3 + i, 0, line, w)
+        if self.triage_proposals:
+            offer = 'Select: ' + '  '.join('[%d] %s' % (n, body[:max(1, w // 3)]) for n, body in self.triage_proposals)
+        else:
+            offer = 'No proposal is selectable.'
+        if self.triage_offer_resume:
+            offer += '  [r] resume'
+        put(h - 4, 0, offer, w)
+        put(h - 3, 0, self.triage_error, w)
+        put(h - 2, 0, 'Triage> ' + self.triage_composer[-max(1, w - 10):], w)
+        put(h - 1, 0, '1-3 select proposal | r resume | Esc back | /do N /resume /clear | text = follow-up question', w)
+        self.stdscr.refresh()
 
     def chat_display(self):
         history = getattr(self, 'home_history', [])
@@ -2303,6 +2650,9 @@ class UncleTUI:
 
     # ---- drawing ----
     def draw(self):
+        if self.state == 'triage':
+            self._draw_triage()
+            return
         if self.state == 'running':
             self._ensure_chat()
         if self.state == 'menu':
@@ -2364,7 +2714,7 @@ class UncleTUI:
         return False
 
     def _slash_choices(self):
-        commands = ['/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear']
+        commands = ['/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/triage', '/do', '/resume']
         text = self.chat_composer.lower()
         return [command for command in commands if command.startswith(text)] if text.startswith('/') and ' ' not in text else []
 
@@ -2390,8 +2740,24 @@ class UncleTUI:
                     self.state == 'running' or (self.proc and self.proc.poll() is None)):
                 self.chat_error = 'A workflow is already active. Finish or stop it before starting another.'
                 return True
-            if argument and command != '/issue':
+            if argument and command not in ('/issue', '/do'):
                 self.chat_error = command + ' does not take arguments'
+                return True
+            if command in ('/triage', '/do', '/resume'):
+                self.chat_composer = ''
+                self.chat_picker = False
+                self.chat_choices = []
+                self.chat_error = ''
+                try:
+                    if command == '/triage':
+                        self.open_triage()
+                    elif command == '/resume':
+                        self.triage_resume()
+                    else:
+                        self._triage_init()
+                        self._triage_do(argument)
+                except (OSError, ValueError) as exc:
+                    self.chat_error = sanitize(str(exc))
                 return True
             if command == '/issue' and argument:
                 if not self._valid_issue(argument.removeprefix('#')):
@@ -2444,7 +2810,7 @@ class UncleTUI:
                 self.chat_error = ''
                 self.chat_choices = []
             else:
-                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear'
+                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /triage /do N /resume'
             return True
         return False
 
@@ -3279,6 +3645,9 @@ class UncleTUI:
 
     # ---- input ----
     def handle_key(self, k):
+        if self.state == 'triage':
+            self._triage_key(k)
+            return
         if (k == 9 and getattr(self, 'chat_open', False) and
                 self.state in ('menu', 'chat', 'running') and
                 self.chat_focus == 'chat' and self.chat_picker):
@@ -3376,6 +3745,11 @@ class UncleTUI:
             return
 
         if self.state == "running":
+            # `t` is unbound at these prompts; `input` prompts take text, so
+            # they reach triage through /triage in the composer instead.
+            if self.prompt_kind in ("confirm", "enter", "audit") and k in (ord("t"), ord("T")):
+                self.open_triage()
+                return
             if self.prompt_kind == "audit":
                 if k in (ord("s"), ord("S"), ord("r"), ord("R"), ord("n"), ord("N")):
                     self.answer_prompt(chr(k).lower())
@@ -3622,6 +3996,9 @@ class UncleTUI:
                 if getattr(self, "home_request", None):
                     self.home_request.cancel()
                     self.home_request.thread.join(timeout=5)
+                if getattr(self, "triage_request", None):
+                    self.triage_request.cancel()
+                    self.triage_request.thread.join(timeout=5)
                 self.stop_workflow()
             finally:
                 signal.signal(signal.SIGTERM, previous_term)
@@ -3635,10 +4012,13 @@ class UncleTUI:
         size = None
         while self.state != "quit":
             dirty = self.poll_home_chat() or dirty
+            dirty = self.poll_triage() or dirty
             self._poll_workflow()
             dirty = self.poll_status() or dirty
             dirty = self.poll_session_stats() or dirty
-            if self.state == "running":
+            if self.state in ("running", "triage") and getattr(self, "proc", None):
+                # Drained in triage too: a driver still streaming a stage must
+                # not block on a full pipe while the operator reads a reply.
                 dirty = self.drain_output() or dirty
             else:
                 # ~1s: often enough that an edit in another window shows up

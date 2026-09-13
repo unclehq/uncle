@@ -360,6 +360,7 @@ legacy_word_notice() {
 . "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/performance.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
+. "$ROOT/scripts/lib/triage.sh"
 
 # The implementation stage can end with acceptance rows the agent could not
 # deliver. Exiting there is right when someone is about to go fix it, and wrong
@@ -438,7 +439,21 @@ current_issue() {
 }
 
 . "$ROOT/scripts/lib/terminal-title.sh"
-trap 'uncle_title_end' EXIT
+
+# One EXIT hook for the whole run. The cleanup list used to be re-declared at
+# each trap site and one of them dropped the lock release; every site now
+# names this function. The exit status is read first and handed to the triage
+# hook, which writes the failure bundle for anything that is not a decline,
+# a cancel, or a stop a person chose.
+on_exit() {
+    local rc=$?
+    if declare -f progress_end > /dev/null; then progress_end; fi
+    if declare -f cleanup_bg > /dev/null; then cleanup_bg; fi
+    if declare -f release_lock > /dev/null; then release_lock; fi
+    uncle_title_end
+    triage_on_exit "$rc"
+}
+trap on_exit EXIT
 trap 'uncle_cancel 130' INT
 trap 'uncle_cancel 143' TERM
 if [[ -n "${STAGEGATE_ORIGIN_REPO:-$(origin_field "$ORIGIN_FILE" 1)}" ]]; then
@@ -473,7 +488,7 @@ acquire_lock() {
         if mkdir "$LOCK_DIR" 2>/dev/null; then
             printf '%s\n' "$$" > "$LOCK_DIR/pid"
             LOCK_HELD=1
-            trap 'progress_end; cleanup_bg; release_lock; uncle_title_end' EXIT
+            trap on_exit EXIT
             return 0
         fi
 
@@ -622,8 +637,32 @@ verify_approval() {
     if [[ "$expected" != "$actual" ]]; then
         echo "$file changed after approval."
         echo "Review and approve the new contents."
+        triage_reopen_gate "$approval_name"
         exit 1
     fi
+}
+
+# An approved document that changed -- by hand, or by a triage action the
+# operator selected -- sends the run back to the gate that approved it, so
+# the new bytes are read and approved by a keystroke. Nothing is written
+# under approvals/ here; the stale digest stays until the operator answers.
+# A document with no gate of its own keeps the plain exit 1 above.
+triage_reopen_gate() {
+    local gate=""
+    case "$1" in
+        CHANGE_PLAN)
+            gate=WAIT_PLAN_APPROVAL
+            case "$(cat "$STATE_DIR/approval-route" 2>/dev/null || true)" in
+                WAIT_UPDATED_PLAN_APPROVAL) gate=WAIT_UPDATED_PLAN_APPROVAL ;;
+            esac
+            ;;
+        ADVERSARIAL_REVIEW) gate=WAIT_PLAN_APPROVAL ;;
+        CHANGE_SPEC|BASELINE_REPORT) gate=WAIT_ANALYSIS_APPROVAL ;;
+    esac
+    [[ -n "$gate" ]] || return 0
+    set_state "$gate"
+    echo "Reopening $gate: re-run the driver to review and approve what is there now."
+    exit 0
 }
 
 # One gate can cover several documents. Each document is still hashed and
@@ -1303,6 +1342,7 @@ run_claude() {
                     continue
                 fi
                 echo
+                triage_stop_reason "$STATE_DIR" human
             fi
             if [[ "$subtype" == *budget* ]]; then
                 echo "The \$$budget cap for this stage was reached."
@@ -1455,7 +1495,7 @@ cleanup_bg() {
         wait "$BG_PID" 2>/dev/null || true
     fi
 }
-trap 'progress_end; cleanup_bg; uncle_title_end' EXIT
+trap on_exit EXIT
 
 start_codex_bg() {
     local prompt_file
@@ -1569,6 +1609,10 @@ wait_codex_bg() {
 
 # The shared supervisor owns the permanent lock.
 origin_preflight
+
+# A stop reason belongs to the run that recorded it. Left in place, a
+# previous "human" stop would silence the triage bundle on this run's failure.
+rm -f "$STATE_DIR/stop-reason"
 
 # Whether this invocation can prove it owns .uncle/workflow/origin, rather than having
 # found a leftover one on disk. Computed once here, before this run performs any
@@ -1734,6 +1778,7 @@ while true; do
             ;;
 
         WAIT_PLAN_APPROVAL)
+            printf '%s\n' WAIT_PLAN_APPROVAL > "$STATE_DIR/approval-route"
             human_gate ACKNOWLEDGE \
                 CHANGE_PLAN.md CHANGE_PLAN \
                 ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
@@ -1770,6 +1815,7 @@ while true; do
             # Re-approving CHANGE_PLAN overwrites the ACKNOWLEDGE hash taken
             # before the revision, so the recorded approval always names the
             # text implementation will run against.
+            printf '%s\n' WAIT_UPDATED_PLAN_APPROVAL > "$STATE_DIR/approval-route"
             human_gate APPROVE \
                 CHANGE_PLAN.md CHANGE_PLAN
             set_state IMPLEMENT
@@ -1841,7 +1887,7 @@ while true; do
                     case "$choice_status" in
                         0) continue ;;
                         2) ;;
-                        *) exit 1 ;;
+                        *) triage_stop_reason "$STATE_DIR" human; exit 1 ;;
                     esac
                 else
                     echo "Implementation is incomplete. Attempting repair once."
@@ -1880,7 +1926,7 @@ REPAIR
                         case "$choice_status" in
                             0) continue ;;
                             2) ;;
-                            *) exit 1 ;;
+                            *) triage_stop_reason "$STATE_DIR" human; exit 1 ;;
                         esac
                     fi
                     require_file IMPLEMENTATION_NOTES.md
@@ -2171,6 +2217,7 @@ REPAIR
                 echo "Waived checks were not performed. They are not passes, and this"
                 echo "summary is the only place that says so out loud."
             fi
+            triage_print_actions "$STATE_DIR"
             if [[ -e .git ]]; then
                 change_pr_complete
             else

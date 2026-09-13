@@ -189,6 +189,19 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/performance.sh"
 
 . "$ROOT/scripts/lib/sha256.sh"
+. "$ROOT/scripts/lib/triage.sh"
+
+# One EXIT hook for the whole run: cancel speculation, then hand the exit
+# status to the triage hook, which writes the failure bundle for anything
+# that is not a decline, a cancel, or a stop a person chose. Installed here
+# so a failure before any stage starts (lock, origin, prerequisites) is
+# bundled too; cancel_speculation is defined further down.
+on_exit() {
+    local rc=$?
+    if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
+    triage_on_exit "$rc"
+}
+trap on_exit EXIT
 
 # A repair always comes back through the independent checks and human diff
 # gate. Bound retries across restarts so an unfixable defect cannot spin.
@@ -583,6 +596,7 @@ acceptance_transition() {
             # shellcheck disable=SC2086
             elif ! record_waiver "$report" $ids; then
                 echo "The current stage remains pending; no acceptance pass was recorded."
+                triage_stop_reason "$STATE_DIR" human
                 exit 1
             fi
             acceptance_after_waiver "$report" "$next"
@@ -886,8 +900,28 @@ verify_approval() {
     if [[ "$expected" != "$actual" ]]; then
         echo "$file changed after approval."
         echo "Review and approve it again."
+        triage_reopen_gate "$name"
         exit 1
     fi
+}
+
+# An approved document that changed -- by hand, or by a triage action the
+# operator selected -- sends the run back to the gate that approved it, so
+# the new bytes are read and approved by a keystroke. Nothing is written
+# under approvals/ here; the stale digest stays until the operator answers.
+# A document with no gate of its own keeps the plain exit 1 above.
+triage_reopen_gate() {
+    local gate=""
+    case "$1" in
+        REQUIREMENTS_INTERPRETATION) gate=WAIT_REQUIREMENTS_APPROVAL ;;
+        PROJECT_PLAN) gate=WAIT_PLAN_APPROVAL ;;
+        ADVERSARIAL_REVIEW) gate=WAIT_REVIEW_ACKNOWLEDGEMENT ;;
+        UPDATED_PROJECT_PLAN) gate=WAIT_UPDATED_PLAN_APPROVAL ;;
+    esac
+    [[ -n "$gate" ]] || return 0
+    set_state "$gate"
+    echo "Reopening $gate: re-run the driver to review and approve what is there now."
+    exit 0
 }
 
 review_and_approve() {
@@ -1098,6 +1132,7 @@ run_claude() {
                     continue
                 fi
                 echo
+                triage_stop_reason "$STATE_DIR" human
             fi
             echo "Agent ($cmd) exited with status $status."
             echo "Raw event log: $log"
@@ -1428,7 +1463,7 @@ cancel_speculation() {
     spec_stage=""
 }
 
-trap cancel_speculation EXIT
+trap on_exit EXIT
 
 speculate() {
     local stage="$1"
@@ -1507,6 +1542,10 @@ run_gated_stage() {
 
 python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" REQUIREMENTS.md \
     "${STAGEGATE_ORIGIN_REPO:-}#${STAGEGATE_ORIGIN_ISSUE:-}" || true
+
+# A stop reason belongs to the run that recorded it. Left in place, a
+# previous "human" stop would silence the triage bundle on this run's failure.
+rm -f "$STATE_DIR/stop-reason"
 
 while true; do
     state="$(get_state)"
@@ -1900,7 +1939,7 @@ while true; do
                 case "$plan_status" in 22) ;; 10) continue ;; *) exit 1 ;; esac
             fi
             if [[ "$plan_status" != 22 ]]; then
-                ensure_repair_capacity "$repair_count" || exit 1
+                ensure_repair_capacity "$repair_count" || { triage_stop_reason "$STATE_DIR" human; exit 1; }
                 repair_count=$((repair_count + 1))
                 plan_before_write "repair-$repair_count" || plan_status=$?
                 case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac
@@ -2140,6 +2179,7 @@ while true; do
                 echo "Waived checks were not performed. They are not passes, and this"
                 echo "summary is the only place that says so out loud."
             fi
+            triage_print_actions "$STATE_DIR"
 
             exit 0
             ;;

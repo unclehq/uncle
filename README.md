@@ -108,6 +108,33 @@ gh auth login
 
 See [GitHub integration](GITHUB_INTEGRATION.md) for setup, signing, approvals, and recovery.
 
+## When a run stops
+
+A stage failure writes `.uncle/workflow/TRIAGE.md` -- the state, the failing
+stage's log tail and reports, `IMPLEMENTATION_NOTES.md`, the repair count and
+source, the green check, and the plan rows those reports cite -- and the
+screen opens a triage chat seeded with it. A declined gate, a cancel, or a
+stop you chose does not.
+
+At any other stop (an approval, a repair-limit or waiver prompt, any
+`[Y/N]`/`ENTER` prompt) press `t`, or type `/triage` in the composer, to open
+the same chat beside the pending prompt. Esc returns; the prompt is still
+waiting and only your own keystroke answers it.
+
+The triage model replies with what failed, a classification (`code defect`,
+`requirement gap`, `needs owner decision`, `tool bug`), and one to three
+numbered proposals. Nothing runs until you press the number or type `/do N`.
+It works in a sandbox copy of the project; when a selected proposal ends, its
+edits to source, tests, and reports are copied into the tree and recorded in
+`.uncle/workflow/triage-actions.tsv`. Writes to `approvals/`, reviewer
+artifacts, `waivers/`, driver state, and the installed uncle tree are refused
+and reverted. `r` or `/resume` relaunches the driver from its recorded state,
+so an edited plan reopens its gate and an edited test trips the integrity
+check, as they would for any other edit. The ledger is printed at COMPLETE.
+
+Configure the model under the `triage` row (`triage.runner`, `triage.effort`,
+`triage.model`); unset, it uses the runner's defaults.
+
 ## Ideas and feedback
 
 Have an idea for Uncle or want to discuss how it should work? Start a [GitHub Discussion](../../discussions).

@@ -14,7 +14,7 @@ import threading
 import time
 
 from verification_manifest import manifest
-from shell_syntax import syntax_command, shell_command
+from shell_syntax import syntax_command
 
 
 def run(args):
@@ -94,7 +94,7 @@ def run(args):
                             'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE',
                             'DOCUMENT_BUDGET_SOURCE'):
                     check_env.pop(key, None)
-                argv = syntax_command(command, args.jobs) or shell_command(command)
+                argv = syntax_command(command, args.jobs) or [bash_executable(), '-c', command]
                 child = start_check(argv, env=check_env,
                                     stdout=output, stderr=subprocess.STDOUT)
                 children.add(child)

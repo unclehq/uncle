@@ -13,6 +13,12 @@ class Checks(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root=pathlib.Path(self.tmp.name)
+    def native_literal_cr(self):
+        # Git Bash's MSYS parser discards literal CRs, even inside quotes:
+        # git-for-windows/MSYS2-packages/bash/0005-bash-4.3-msys2-fix-lineendings.patch
+        # Execution must match the host shell; file bytes must stay unchanged.
+        return subprocess.run([bash_executable(), '-c', "printf 'A\rB'"],
+                              capture_output=True, check=True).stdout
     def diagnostics(self):
         return '\n'.join(f'{name}:\n{(self.root/name).read_text(errors="replace")}'
                          for name in ('results','log','integrity') if (self.root/name).exists())
@@ -63,9 +69,15 @@ class Checks(unittest.TestCase):
                                 cwd=self.root, capture_output=True, text=True, timeout=15,
                                 env=dict(os.environ, WORKFLOW_METRICS='0'))
         self.assertEqual(result.returncode, 0, result.stderr + self.diagnostics())
-        self.assertEqual((self.root/'embedded').read_bytes(), b'A\rB')
+        self.assertEqual((self.root/'embedded').read_bytes(), self.native_literal_cr())
         self.assertEqual((self.root/'last').read_bytes(), b'last')
         self.assertEqual((self.root/'commands').read_bytes(), commands)
+
+    def test_escaped_cr_output_is_preserved_in_serial_and_parallel(self):
+        for groups in ('', '1 2\n'):
+            r=self.run_checks(["printf 'A\\rB' > escaped", 'true'], groups)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual((self.root/'escaped').read_bytes(), b'A\rB')
 
     def test_overlap_and_barrier(self):
         commands=[]
@@ -80,7 +92,7 @@ class Checks(unittest.TestCase):
     def test_parallel_commands_preserve_embedded_cr(self):
         r=self.run_checks(["printf 'A\rB' > embedded", 'printf last > last'], '1 2\n')
         self.assertEqual(r.returncode,0,r.stderr)
-        self.assertEqual((self.root/'embedded').read_bytes(), b'A\rB')
+        self.assertEqual((self.root/'embedded').read_bytes(), self.native_literal_cr())
         self.assertEqual((self.root/'last').read_bytes(), b'last')
     def test_test_failure_is_recorded(self):
         r=self.run_checks(['exit 7','echo still-runs'], '1 2\n')

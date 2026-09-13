@@ -11,17 +11,6 @@ import shell_syntax as syntax
 LOOP = 'for f in scripts/*.sh scripts/lib/*.sh scripts/tests/*.sh; do bash -n "$f"; done'
 
 class Tests(unittest.TestCase):
-    def test_windows_transport_reconstructs_command_in_bash(self):
-        command = "printf '%s' 'A\rB'; printf '%s' \"\\\\tail\"; exit 7"
-        bash = syntax.bash_executable()
-        with patch.object(syntax.os, 'name', 'nt'), \
-             patch.object(syntax, 'bash_executable', return_value=bash):
-            argv = syntax.shell_command(command)
-        self.assertNotIn('\r', argv[-1])
-        result = subprocess.run(argv, capture_output=True)
-        self.assertEqual(result.stdout, b'A\rB\\tail')
-        self.assertEqual(result.returncode, 7)
-
     def test_command_file_preserves_control_characters_and_line_positions(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -31,8 +20,27 @@ class Tests(unittest.TestCase):
                 result = subprocess.run([sys.executable, syntax.__file__, '--command-file',
                                          str(commands), str(line), '2'], cwd=root, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((root / 'embedded').read_bytes(), b'A\rB')
+            # Git Bash deliberately strips literal CRs in its parser.
+            expected = subprocess.run([syntax.bash_executable(), '-c', "printf 'A\rB'"],
+                                      capture_output=True, check=True).stdout
+            self.assertEqual((root / 'embedded').read_bytes(), expected)
             self.assertEqual((root / 'last').read_bytes(), b'last')
+
+    def test_command_file_passes_embedded_cr_unchanged_to_shell(self):
+        with tempfile.TemporaryDirectory() as directory:
+            commands = Path(directory) / 'commands'
+            commands.write_bytes(b"\r\nprintf 'A\rB'\r\n")
+            with patch.object(syntax.sys, 'argv', ['helper', '--command-file', str(commands), '2', '2']), \
+                 patch.object(syntax.os, 'execv') as execute, \
+                 patch.object(syntax.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                if syntax.os.name == 'nt':
+                    syntax.main()
+                    self.assertEqual(run.call_args.args[0][-1], "printf 'A\rB'")
+                else:
+                    execute.side_effect = SystemExit(0)
+                    with self.assertRaises(SystemExit):
+                        syntax.main()
+                    self.assertEqual(execute.call_args.args[1][-1], "printf 'A\rB'")
 
     def test_windows_dispatch_preserves_arguments_and_failure(self):
         command = "printf 'A\rB' > 'file with spaces'; exit 7"
@@ -44,8 +52,7 @@ class Tests(unittest.TestCase):
              patch.object(syntax.os, 'execv') as execv, \
              patch.object(syntax.subprocess, 'run', return_value=subprocess.CompletedProcess([], 7)) as run:
             self.assertEqual(syntax.main(), 7)
-            run.assert_called_once_with(syntax.shell_command(command))
-            self.assertNotIn('\r', run.call_args.args[0][-1])
+            run.assert_called_once_with([bash, '-c', command])
             execv.assert_not_called()
 
     def test_only_known_read_only_loop_is_parallelized(self):

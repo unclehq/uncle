@@ -10,15 +10,6 @@ import sys
 from process_tree import bash_executable
 
 
-def shell_command(command):
-    if os.name == 'nt' and '\r' in command:
-        # MSYS strips literal CRs while importing a native command line.
-        # Reconstruct the command inside Bash, after that boundary.
-        escaped = command.replace('\\', '\\\\').replace("'", "\\'").replace('\r', '\\r').replace('\n', '\\n')
-        command = "eval $'" + escaped + "'"
-    return [bash_executable(), '-c', command]
-
-
 def syntax_command(command, jobs):
     # This standard suite loop uses the bounded parallel suite runner.
     test_loop = (r'\s*for t in scripts/tests/\*-test\.sh;\s*'
@@ -53,7 +44,7 @@ def main():
             command, jobs = raw.removesuffix(b'\r').decode('utf-8'), int(sys.argv[4])
         else:
             command, jobs = sys.argv[2], int(sys.argv[3])
-        argv = syntax_command(command, jobs) or shell_command(command)
+        argv = syntax_command(command, jobs) or [bash_executable(), '-c', command]
         if os.name == 'nt':
             # Windows execv uses CRT argument joining, which loses quoting for
             # paths such as C:\Program Files\Git and shell command strings.

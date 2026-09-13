@@ -55,6 +55,7 @@ jobs:
           export UNCLE_WINDOWS_BASH="$(cygpath -w "$BASH")"
           python -B scripts/tests/windows-portability-test.py
           python -B scripts/tests/windows-driver-test.py
+          python -B scripts/tests/shell-syntax-test.py
       - name: Install Scoop on the disposable runner
         run: |
           Invoke-WebRequest -UseBasicParsing https://get.scoop.sh -OutFile "$env:RUNNER_TEMP/scoop-install.ps1"

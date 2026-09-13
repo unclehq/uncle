@@ -93,10 +93,14 @@ none.
 - Keep the execution contract complete in the named artifact. Cite existing logs
   and evidence by file and section; avoid copying transcripts and repeated rationale.
   Do not create a second summary artifact or move obligations out of the contract.
-- If mandatory content alone exceeds the driver budget, retain it. The driver
-  retries the fit (up to two compaction passes for reviewer output), then
-  preserves the artifact and continues; an operator can explicitly increase the
-  budget, or set `WORKFLOW_DOC_BUDGET_ENFORCE=1` to keep overruns blocking.
+- Compact within the producing stage, using its model and context, at most
+  twice total across its output documents. The initial draft is not a pass;
+  every later size-driven rewrite or trim counts, including a "final trim".
+  Chat questions and steering do not reset the count. After the second pass,
+  stop size-only edits, preserve the complete artifact, report final byte/line
+  counts and any overage, and finish. Do not restart just to shrink it further.
+  The driver preserves oversized artifacts and continues by default; an operator
+  can increase the budget or set `WORKFLOW_DOC_BUDGET_ENFORCE=1` to block overruns.
 - No sentence that survives having its adjectives removed unchanged in
   meaning. Cut it instead.
 

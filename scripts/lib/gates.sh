@@ -362,6 +362,15 @@ files you write, measure their bytes and lines and revise them before finishing.
 For reviewer output, compact your draft before returning the final document.
 Do not launch another model, compaction stage, or summary sidecar. Compaction
 is part of this stage; its tokens and cost belong to this stage.
+Compaction limit: at most TWO passes total during this stage, across all its
+output documents. The initial draft is not a pass. Each subsequent size-driven
+rewrite or trim counts as a pass, including a "final trim" or a few-byte edit.
+Keep the count across chat questions and steering; those do not reset it.
+After pass 2, stop size-only edits even if the document is still over budget.
+Preserve the complete document, report its final byte/line counts and remaining
+overage, and finish the stage. Do not attempt a third pass, restart the stage,
+or request another model just to fit the budget. This two-pass limit takes
+precedence over instructions to keep shrinking until a byte or word limit fits.
 If mandatory content alone cannot fit, preserve it. The driver retains the
 artifact and reports the overage; enforced budgets still require resolution.
 Never truncate required content.

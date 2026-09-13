@@ -59,6 +59,11 @@ PY
 # Every document stage (including step handoffs and background checklists)
 # advertises exactly the limits enforced for each named artifact.
 for stage in $DOC_STAGES implementation-step-2; do
+    budget_prompt="$(document_budget_prompt "$stage")"
+    for rule in 'at most TWO passes total' 'including a "final trim"' \
+                'those do not reset it' 'After pass 2, stop size-only edits'; do
+        [[ "$budget_prompt" == *"$rule"* ]] || { echo "Missing compaction limit for $stage: $rule" >&2; exit 1; }
+    done
     gated_prompt prompt.md "$stage" > resolved
     [[ -n $(stage_documents "$stage") ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     while IFS= read -r file; do

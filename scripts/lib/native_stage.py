@@ -97,6 +97,21 @@ class Stage:
             return self.assessment_answer
         return self.final_answer or self.answer
 
+    def watch_parent(self):
+        # Windows supervisors own descendants through a Job Object. On POSIX,
+        # cancel the native session if its owning workflow shell disappears.
+        if os.name == 'nt':
+            return
+
+        def watch():
+            while not self.parent_watch_stop.wait(.1):
+                if self.parent_pid == 1 or os.getppid() != self.parent_pid:
+                    self.parent_lost = True
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    return
+
+        threading.Thread(target=watch, daemon=True).start()
+
     def spawn(self, command, env=None):
         self.child = subprocess.Popen(launch_command(command), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=sys.stderr, text=True, encoding='utf-8', bufsize=1,

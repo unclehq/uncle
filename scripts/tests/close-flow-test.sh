@@ -1354,6 +1354,11 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('READY\\n
         self.assertIn('Implemented audited fix', body)
         self.assertIn('Run smoke test', body)
         self.assertIn('Closes owner/repo#42', body)
+        # The attestation is driver-generated; no operator input produced it.
+        self.assertIn('UNCLE CHANGE ATTESTATION', body)
+        self.assertIn('Audited tree', body)
+        self.assertIn(self.journal()['commit_tree'][:12], body)
+        self.assertLess(body.index('UNCLE CHANGE ATTESTATION'), body.index('Closes owner/repo#42'))
         self.assertFalse(Path((self.root / 'server.bodypath').read_text()).exists())
         create = self.creates()[0]
         self.assertEqual(create[create.index('--title') + 1], 'Fix café 日本語')

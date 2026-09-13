@@ -20,6 +20,7 @@ def findings(text):
     # also sometimes wrap the table in a Markdown fence. Neither changes rows.
     lines = []
     verdict_seen = False
+    checked_summary = None
     for raw in section.splitlines():
         line = raw.strip()
         if not line or re.fullmatch(r"```(?:markdown|md)?|~~~(?:markdown|md)?", line):
@@ -31,6 +32,13 @@ def findings(text):
             continue
         if verdict_seen:
             raise ValueError('Unexpected content after the audit verdict')
+        if line.startswith('Checked:') and lines and checked_summary is None:
+            if not line.removeprefix('Checked:').strip():
+                raise ValueError('Empty audit evidence summary')
+            checked_summary = line
+            continue
+        if checked_summary is not None:
+            raise ValueError('Unexpected content after the audit evidence summary')
         lines.append(line)
     if len(lines) < 3 or any(not line.startswith('|') or not line.endswith('|') for line in lines):
         raise ValueError('Findings must be a table with ID and Blocks columns')
@@ -55,6 +63,8 @@ def findings(text):
             raise ValueError('Missing finding evidence, correction, or YES/NO blocking status')
         seen.add(identifier)
         if blocks == 'YES':
+            if checked_summary is not None:
+                item['evidence'] += ' — ' + checked_summary
             result.append(item)
     if not result:
         raise ValueError('NOT READY audit has no explicit blocking findings')

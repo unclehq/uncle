@@ -1034,6 +1034,15 @@ server = pathlib.Path(os.environ['SERVER'])
 if args[:2] == ['auth', 'status']: sys.exit(int(os.environ.get('AUTH_RC', '0')))
 if args[:2] == ['repo', 'view']:
     print(json.dumps({'nameWithOwner': args[2], 'defaultBranchRef': {'name': 'main'}}))
+elif args[:2] == ['issue', 'view']:
+    if os.environ.get('LABELS_HANG'):
+        import time
+        time.sleep(5)
+    if os.environ.get('LABELS_FAIL'): sys.exit(1)
+    if os.environ.get('LABELS_BAD'):
+        print('{broken')
+    else:
+        print(json.dumps({'labels': [{'name': name} for name in os.environ.get('ISSUE_LABELS', '').split(',') if name]}))
 elif args[0] == 'api':
     print(json.dumps({'fork': True, 'parent': {'full_name': 'owner/repo'}, 'owner': {'type': 'User'}}))
 elif args[:2] == ['pr', 'list']:
@@ -1238,7 +1247,100 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('READY\\n
         self.assertIn('https://github.com/owner/repo/pull/7', result.stdout)
         self.assertEqual(len(self.creates()), 1)
 
+    def assert_named(self, prefix, slug='fix-cafe'):
+        j = self.journal()
+        self.assertEqual(j['head_branch'], prefix + '/' + slug + '-' + j['owner'][:12])
+        self.assertEqual(self.git('check-ref-format', '--branch', j['head_branch']), j['head_branch'])
+        self.assertEqual(j['phase'], 'created')
+        create = self.creates()[0]
+        self.assertEqual(create[create.index('--head') + 1], 'owner:' + j['head_branch'])
+
+    def test_naming_labels(self):
+        # Rebind between cases so every case exercises fresh resolution.
+        for labels, prefix in [('enhancement', 'feat'), ('bug', 'bug'),
+                               ('documentation', 'doc'), ('', 'uncle'),
+                               ('question', 'uncle'), ('BuG', 'bug'),
+                               ('documentation,bug,enhancement', 'feat'),
+                               ('enhancement,bug,documentation', 'feat'),
+                               ('documentation,bug', 'bug')]:
+            with self.subTest(labels=labels):
+                self.setUp()
+                self.ok(self.publish(ISSUE_LABELS=labels))
+                self.assert_named(prefix)
+                queries = [a for a in self.calls() if a[:2] == ['issue', 'view']]
+                self.assertEqual(queries, [['issue', 'view', '42', '--repo', 'owner/repo', '--json', 'labels']])
+
+    def test_naming_failures(self):
+        for flag in ('LABELS_FAIL', 'LABELS_BAD', 'LABELS_HANG'):
+            with self.subTest(flag=flag):
+                self.setUp()
+                result = self.publish(**{flag: '1', 'STAGEGATE_CLOSE_TIMEOUT': '1'})
+                self.ok(result)
+                self.assertEqual(result.stdout.count('Label lookup failed; using uncle/ prefix'), 1)
+                self.assert_named('uncle')
+
+    def test_naming_lookup_deadline(self):
+        import ast
+        import time
+        source = LIB.read_text().split("<<'PY'", 1)[1].split('\n', 1)[1].split('\nPY\n', 1)[0]
+        tree = ast.parse(source)
+        parts = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
+                 or isinstance(node, ast.FunctionDef) and node.name == 'label_prefix']
+        code = ast.unparse(ast.Module(body=parts, type_ignores=[]))
+        code += "\nprint(label_prefix('owner/repo\\t42\\tgh'))"
+        # Execute the real helper with a hard outer bound, independent of timeout(1).
+        self.exe('timeout', '#!/bin/sh\nexit 99\n')
+        self.exe('gtimeout', '#!/bin/sh\nexit 99\n')
+        start = time.monotonic()
+        result = subprocess.run([sys.executable, '-c', code], cwd=self.repo,
+                                env=dict(self.env, LABELS_HANG='1', STAGEGATE_CLOSE_TIMEOUT='1'),
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=3)
+        self.ok(result)
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertEqual(result.stdout, 'Label lookup failed; using uncle/ prefix\nuncle/\n')
+
+    def test_naming_slug_sources(self):
+        for filename, content, slug, title in [
+            ('CHANGE_REQUEST.md', '## Summary\n\nFix café 日本語\n', 'fix-cafe', 'Fix café 日本語'),
+            ('CHANGE_REQUEST.md', '## Summary\n\n', 'change', 'Completed change'),
+            ('CHANGE_REQUEST.md', '# Header fallback\n', 'header-fallback', 'Completed change'),
+            ('REQUIREMENTS.md', '## Summary\nRequirements only\n', 'requirements-only', 'Completed change'),
+            ('REQUIREMENTS.md', '# Build widgets\n', 'build-widgets', 'Completed change'),
+            ('CHANGE_REQUEST.md', '## Summary\n' + 'A' * 39 + ' ! tail', 'a' * 39, 'A' * 39 + ' ! tail'),
+            ('CHANGE_REQUEST.md', '## Summary\n日本語 !!!\n', 'change', '日本語 !!!'),
+        ]:
+            with self.subTest(content=content):
+                self.setUp()
+                (self.repo / 'CHANGE_REQUEST.md').unlink()
+                (self.repo / filename).write_text(content)
+                self.freeze()
+                self.ok(self.publish())
+                self.assert_named('uncle', slug)
+                create = self.creates()[0]
+                self.assertEqual(create[create.index('--title') + 1], title)
+
+    def test_naming_nondefault(self):
+        self.git('checkout', '-qb', 'existing-feature')
+        self.freeze()
+        self.ok(self.publish(ISSUE_LABELS='bug'))
+        self.assertEqual(self.journal()['head_branch'], 'existing-feature')
+        self.assertFalse([a for a in self.calls() if a[:2] == ['issue', 'view']])
+
+    def test_naming_curl_rejected(self):
+        (self.state / 'origin').write_text('owner/repo\t42\tcurl\n')
+        self.freeze()
+        result = self.publish()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Only a gh-fetched origin', result.stdout)
+        self.assertFalse([a for a in self.calls() if a[:2] == ['issue', 'view']])
+        self.assertEqual(len(self.creates()), 0)
+
     def test_publish_and_resume_without_run_id(self):
+        # A persisted legacy identity must bypass naming on resume.
+        self.assertNotEqual(self.engine('handoff').returncode, 0)
+        legacy = self.journal()
+        legacy['head_branch'] = 'uncle/change-' + legacy['owner'][:12]
+        (self.state / 'pr/journal.json').write_text(json.dumps(legacy))
         self.ok(self.publish())
         j = self.journal()
         self.assertEqual(j['phase'], 'created')
@@ -1446,6 +1548,8 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         (self.state / 'origin').unlink()
         self.freeze()
         self.ok(self.engine('handoff', 'owner/repo\nCustom title\nSummary\nManual\ny\n'))
+        self.assert_named('uncle')
+        self.assertFalse([a for a in self.calls() if a[:2] == ['issue', 'view']])
         self.assertNotIn('Closes ', (self.root / 'server.body').read_text())
         self.assertEqual(self.creates()[0][self.creates()[0].index('--title') + 1], 'Custom title')
 

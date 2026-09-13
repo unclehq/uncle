@@ -1280,7 +1280,7 @@ run_claude() {
         ( "${client_cmd[@]}" "${flags[@]}" \
             < "$effective_prompt" \
             2>&1 \
-            | tee "$LOG_DIR/${log_name}.jsonl" \
+            | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.jsonl" \
             | progress_tap "${PROGRESS_TOTAL:-0}" "${PROGRESS_LABEL:-stage}" \
             | format_claude_stream ) &
         wait "$!" || status=$?
@@ -1455,7 +1455,7 @@ run_codex() {
     # stdin is the operator's gate-answer channel, not stage input: codex
     # appends a non-TTY stdin to the prompt and would block on it forever.
     ( "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
-        < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" ) &
+        < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" ) &
     wait "$!" || status=$?
 
     record_codex_cost "$log_name" "$((SECONDS - start))"
@@ -1685,6 +1685,7 @@ implementation_complete() {
 
 while true; do
     state="$(get_state)"
+    if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi
 
     echo
     echo "Current state: $state"

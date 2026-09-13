@@ -57,14 +57,43 @@ def group_options():
     return {'start_new_session': True}
 
 
+def track_process(process, command, started, tick):
+    from build_timing import event
+    import uuid
+    name = Path(str(command[0])).name
+    if len(command) > 1 and (name.startswith('python') or name in ('bash', 'sh')):
+        script = Path(str(command[1]))
+        if script.suffix in ('.py', '.sh'):
+            name += ' ' + script.name
+    identity = uuid.uuid4().hex
+    process._uncle_timing = (name, started, tick, identity)
+    event('process_start', name, started, 0, child_pid=process.pid,
+          span_id=identity, workflow_state=os.environ.get('UNCLE_TIMING_STAGE', ''))
+    return process
+
+
+def timed_popen(command, **kwargs):
+    started, tick = time.time(), time.monotonic()
+    return track_process(subprocess.Popen(command, **kwargs), command, started, tick)
+
+
 def start_check(command, **kwargs):
+    started, tick = time.time(), time.monotonic()
     if os.name == 'nt':
         from windows_job import start
-        return start(command, **kwargs, **group_options())
-    return subprocess.Popen(command, stdin=subprocess.DEVNULL, **kwargs, **group_options())
+        return track_process(start(command, **kwargs, **group_options()), command, started, tick)
+    return timed_popen(command, stdin=subprocess.DEVNULL, **kwargs, **group_options())
 
 
 def finish_check(process):
+    timing = getattr(process, '_uncle_timing', None)
+    if timing is not None:
+        process._uncle_timing = None
+        from build_timing import event
+        name, started, tick, identity = timing
+        event('process', name, started, time.monotonic() - tick,
+              process.returncode, child_pid=process.pid, span_id=identity,
+              workflow_state=os.environ.get('UNCLE_TIMING_STAGE', ''))
     job = getattr(process, '_uncle_job', None)
     if job is not None:
         try:

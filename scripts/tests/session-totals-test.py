@@ -41,6 +41,18 @@ class Sessions(unittest.TestCase):
             self.assertEqual(module.update(workflow, change, 'owner/repo#1')['id'], issue['id'])
             self.assertNotEqual(module.update(workflow, change, 'owner/repo#2')['id'], issue['id'])
 
+    def test_missing_source_preserves_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'CHANGE_REQUEST.md'
+            source.write_text('Change')
+            first = module.update(root / 'workflow', source)
+            source.unlink()
+            resumed = module.update(root / 'workflow', source)
+            self.assertEqual(resumed['id'], first['id'])
+            self.assertEqual(resumed['identity'], first['identity'])
+            self.assertIsNone(module.update(root / 'fresh', source)['identity'])
+
     def test_existing_history_and_partial_files(self):
         with tempfile.TemporaryDirectory() as directory:
             workflow = Path(directory)

@@ -90,6 +90,22 @@ class SupportTests(unittest.TestCase):
             ui._paint_support_link()
             write.assert_not_called()
 
+    def test_exit_poll_preserves_new_completion_dialog(self):
+        ui = self.ui()
+        ui.proc.returncode = 0
+        ui._end_title = Mock()
+        ui._ensure_chat = Mock()
+        ui.home_history = []
+        ui._offer_support()
+        self.assertEqual(ui.prompt_kind, 'support')
+        ui._poll_workflow()
+        self.assertEqual(ui.prompt_kind, 'support')
+        self.assertEqual(ui.chat_focus, 'gate')
+        self.assertTrue(ui.workflow_exit_reported)
+        self.assertEqual(len(ui.home_history), 1)
+        ui._poll_workflow()
+        self.assertEqual(len(ui.home_history), 1)
+
     def test_unwritable_state_does_not_break_completion(self):
         ui = self.ui()
         with patch("uncle_tui.os.makedirs", side_effect=PermissionError):

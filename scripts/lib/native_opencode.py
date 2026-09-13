@@ -8,6 +8,7 @@ import threading
 import time
 import urllib.request
 from self_hosted import settings, opencode_invocation
+from process_tree import timed_popen
 from process_tree import launch_command, group_options
 
 
@@ -22,7 +23,7 @@ def run(stage, directory, values=None, root=None, allow_shell=True):
     env['OPENCODE_SERVER_PASSWORD']=password
     with socket.socket() as sock:
         sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-    stage.child=subprocess.Popen(launch_command([os.environ.get('WORKFLOW_OPENCODE_CMD','opencode'),
+    stage.child=timed_popen(launch_command([os.environ.get('WORKFLOW_OPENCODE_CMD','opencode'),
         'serve','--hostname','127.0.0.1','--port',str(port)]),env=env,stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,cwd=root,**group_options())
     base=f'http://127.0.0.1:{port}'
@@ -52,6 +53,7 @@ def run(stage, directory, values=None, root=None, allow_shell=True):
         stage.status('steering_accepted',message_id=id)
     # Read canonical stored messages so repeated polls never double-count usage or text.
     seen_text={}
+    timing_seen={}
     started=False
     deadline=time.monotonic()+int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS','3600'))
     while time.monotonic()<deadline:
@@ -63,6 +65,10 @@ def run(stage, directory, values=None, root=None, allow_shell=True):
         users=[msg.get('info',{}).get('id') for msg in messages if msg.get('info',{}).get('role')=='user']
         for msg in messages:
             info=msg.get('info',{})
+            fingerprint=json.dumps(msg,sort_keys=True)
+            if timing_seen.get(info.get('id')) != fingerprint:
+                stage.timing.observe({'method':'http/message','params':msg})
+                timing_seen[info.get('id')]=fingerprint
             if info.get('role')!='assistant': continue
             started=True;last=info
             if info.get('error'): raise ValueError(str(info['error']))

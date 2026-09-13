@@ -553,5 +553,10 @@ case "$MODE" in
         ;;
     new)
         write_new_project_brief
+        # Launch only after the seed succeeds; the driver owns approvals and
+        # durable workflow state in the selected project, not the install dir.
+        STAGEGATE_ORIGIN_REPO="$OWNER/$REPO" \
+        STAGEGATE_ORIGIN_ISSUE="$ISSUE_NUM" \
+            uncle_run bash "$ROOT/scripts/stagegate.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"}
         ;;
 esac

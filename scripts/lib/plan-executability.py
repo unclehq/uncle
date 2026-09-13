@@ -204,6 +204,14 @@ def alive(pid):
 
 
 def lock_run(command):
+    from build_timing import BuildTiming
+    with BuildTiming(STATE) as timing:
+        result = _lock_run(command)
+        timing.status = result
+        return result
+
+
+def _lock_run(command):
     """Permanent inode, supervised process group, orphan detection across driver families."""
     if os.name == 'nt':
         from windows_driver import lock_run as windows_lock_run
@@ -224,7 +232,13 @@ def lock_run(command):
                 require(not alive(-owner['pgid']), 'previous workflow process group still alive')
         legacy = STATE / 'lock/pid'
         if legacy.exists():
-            require(not alive(int(legacy.read_text().strip())), 'live legacy workflow lock owner')
+            holder = int(legacy.read_text().strip())
+            if alive(holder):
+                print(f'Refusing to start: another change-workflow.sh run (pid {holder}) holds this checkout.', file=sys.stderr)
+                return 1
+            print(f'Clearing stale lock {legacy.parent} (pid {holder} is not running).', flush=True)
+            legacy.unlink()
+            legacy.parent.rmdir()
         # The child waits until its identity is durably recorded before executing Bash.
         rfd, wfd = os.pipe()
         env = dict(os.environ, UNCLE_DRIVER_SUPERVISED='1')

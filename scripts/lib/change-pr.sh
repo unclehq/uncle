@@ -269,9 +269,11 @@ def manual_signed_commit(j):
         block = json.dumps(command) + ' '
     else:
         block = 'In another terminal, open this project, review the audited changes, then run:\n' + command + '\n'
-    ask('Commit signing needs your help. ' + block +
-        'Return here and press ENTER (OK) when finished: ')
     candidate = head()
+    if candidate == j['original_head']:
+        ask('Commit signing needs your help. ' + block +
+            'Return here and press ENTER (OK) when finished: ')
+        candidate = head()
     if candidate == j['original_head']:
         raise ValueError('No new commit found; PR remains pending. Finish the signed commit and rerun.')
     if git('rev-parse', candidate + '^{tree}') != j['commit_tree']:
@@ -326,17 +328,12 @@ def prepare_commit(j):
         save(j)
         manual_signed_commit(j)
         return
-    try:
-        j['intended_head'] = git('commit-tree', j['commit_tree'], '-p', j['original_head'],
-                                 data=(j['title'] + '\n').encode())
-    except ValueError as error:
-        if not re.search(r'gpg|signing|failed to sign|no agent running|pinentry', str(error), re.I):
-            raise
-        print(str(error), flush=True)
-        j['manual_signing'] = True
-        save(j)
-        manual_signed_commit(j)
+    # Signing is explicitly disabled here. An unrelated Git failure must not
+    # be misclassified because its echoed command contains --no-gpg-sign.
+    j['intended_head'] = git('commit-tree', '--no-gpg-sign', j['commit_tree'], '-p', j['original_head'],
+                             data=(j['title'] + '\n').encode())
     save(j)
+
 
 
 def ask(prompt, default=None):
@@ -348,8 +345,23 @@ def ask(prompt, default=None):
                 answer = input(prompt)
             finally:
                 readline.set_startup_hook(None)
-        else:
+        elif sys.stdin.isatty():
             answer = input(prompt)
+        else:
+            # Read exactly one answer. TextIO buffering can consume answers
+            # intended for the next engine process (override then handoff).
+            print(prompt, end='', flush=True)
+            data = bytearray()
+            while True:
+                char = os.read(sys.stdin.fileno(), 1)
+                if not char:
+                    if not data:
+                        raise EOFError
+                    break
+                if char == b'\n':
+                    break
+                data.extend(char)
+            answer = data.decode('utf-8')
     except EOFError:
         raise ValueError('No answer received; PR remains pending. Rerun to resume.')
     return answer.strip() or default or ''

@@ -1115,7 +1115,7 @@ run_claude() {
             --allowedTools "$tools" \
             < "$effective_prompt" \
             2>&1 \
-            | tee "$LOG_DIR/${log_name}.jsonl" \
+            | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.jsonl" \
             | format_claude_stream || status=$?
         perf_record agent "$log_name" "$((SECONDS-started))" "$status" \
             "$LOG_DIR/${log_name}.jsonl" "$cmd" "$model" "$effort"
@@ -1215,7 +1215,7 @@ run_codex_review() {
             "${model_args[@]+"${model_args[@]}"}" \
             --output-last-message "$output_file" \
             "$(cat "$prompt_file")" \
-            < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
+            < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" || status=$?
         perf_record reviewer "$log_name" "$((SECONDS-started))" "$status" \
             "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
 
@@ -1549,6 +1549,7 @@ rm -f "$STATE_DIR/stop-reason"
 
 while true; do
     state="$(get_state)"
+    if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi
 
     echo
     echo "Current workflow state: $state"

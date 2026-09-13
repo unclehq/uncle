@@ -41,6 +41,7 @@ from home_actions import prompt as home_action_prompt, parse_reply as parse_home
 from triage_chat import (TriageRequest, parse_reply as parse_triage_reply, compose_prompt as triage_prompt,
                          runner_flags as triage_runner_flags, scrub_env as triage_scrub_env,
                          DIAGNOSIS_TOOLS, EXECUTE_TOOLS)
+from github_issues import IssuePicker, references as issue_references, issue_context
 from self_hosted import settings as home_settings
 from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
 
@@ -1433,8 +1434,11 @@ class UncleTUI:
                 self.workflow_exit_reported = True
                 self.workflow_exit_code = self.proc.returncode
                 self.steering_channels = {}
-                self.prompt_kind = ''
-                self.chat_focus = 'chat'
+                # EOF handling can open the completion dialog just before
+                # this poll observes process exit. Keep that dialog focused.
+                if getattr(self, 'prompt_kind', '') != 'support':
+                    self.prompt_kind = ''
+                    self.chat_focus = 'chat'
                 self._ensure_chat()
                 reason = 'Workflow was killed (SIGKILL, exit code 137)' if self.workflow_exit_code in (137, -9) else 'Workflow stopped (exit code %s)' % self.workflow_exit_code
                 message = reason + '. Stage chat disconnected. Press Esc to return to the menu.'
@@ -1898,11 +1902,13 @@ class UncleTUI:
             self.chat_choices = []
             self.chat_pick = 0
             self.chat_picker = False
+            self.chat_picker_kind = 'file'
             self.chat_edit = False
             self.chat_focus = 'chat'
             self.home_menu_open = False
             self.home_request = None
             self.home_history = []
+            self.home_issue_context = ''
         self.chat_open = True
 
     def open_chat(self):
@@ -1975,7 +1981,12 @@ class UncleTUI:
             raise ValueError('Choose a runner in Configure first')
         user_text = self.chat.refs.expand(sanitize(message))
         history = self.home_history + [('user', user_text)]
-        prompt = home_action_prompt(history, _project_root())
+        prompt = ('You are Uncle, a helpful conversational assistant. Answer the user directly. '
+                  'Use the supplied conversation and explicitly attached file contents as context. '
+                  'Do not start a workflow or modify files. Conversation follows as JSON:\n' +
+                  json.dumps(history, ensure_ascii=False))
+        if not issue_references(message):
+            prompt += getattr(self, 'home_issue_context', '')
         if len(prompt.encode('utf-8')) > 100000:
             raise ValueError('Chat context is too large for this runner. Use /clear or smaller attachments.')
         command = [runner_command(runner, REVIEWER), 'exec', '--ephemeral',
@@ -2001,7 +2012,12 @@ class UncleTUI:
                 env['UNCLE_CLINE_MODEL'] = env['UNCLE_CLINE_REVIEWER_MODEL'] = model
         self.chat.send(message)
         self.home_history = history
-        self.home_request = HomeRequest(command, prompt, env)
+        if issue_references(message):
+            root = _project_root()
+            self.home_request = HomeRequest(command, prompt, env,
+                                            issue_lookup=lambda: issue_context(root, message))
+        else:
+            self.home_request = HomeRequest(command, prompt, env)
 
     def poll_home_chat(self):
         request = getattr(self, 'home_request', None)
@@ -2025,6 +2041,10 @@ class UncleTUI:
                 self.home_history.append(('system', self.chat_error))
         elif kind == 'issue_seeded':
             self.home_history.append(('system', sanitize(value)))
+            context = getattr(request, 'issue_context', '')
+            if isinstance(context, str) and context:
+                self.home_issue_context = context
+            self.home_history.append(('assistant', sanitize(value)))
             self.chat_error = ''
         else:
             self.chat_error = sanitize(value)
@@ -2427,14 +2447,49 @@ class UncleTUI:
                     pass
                 self.status_path = None
 
+    def _issue_suggestions(self, query):
+        self.issue_matches = self.issue_picker.matches(query)
+        self.chat_choices = [f"#{item['number']} {item['title']}" for item in self.issue_matches]
+        self.chat_pick = 0
+
+    def poll_issue_picker(self):
+        picker = getattr(self, 'issue_picker', None)
+        if picker is None or not picker.poll():
+            return False
+        if self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'issue':
+            self._issue_suggestions(self.chat_composer[self.chat_ref_start + 1:])
+        return True
+
     def _chat_suggestions(self):
         match = re.search(r'@(?:"([^"]*)|([^@\s"]*))$', self.chat_composer)
+        issue = re.search(r'(?<!\S)#([^\s#]*)$', self.chat_composer) if match is None else None
+        if issue:
+            refresh = not self.chat_picker or getattr(self, 'chat_picker_kind', 'file') != 'issue'
+            self.chat_picker = True
+            self.chat_picker_kind = 'issue'
+            self.chat_ref_start = issue.start()
+            if not hasattr(self, 'issue_picker'):
+                self.issue_picker = IssuePicker(_project_root())
+            self.issue_picker.load(refresh=refresh)
+            self._issue_suggestions(issue[1])
+            return
+        self.chat_picker_kind = 'file'
         self.chat_picker = bool(match)
         self.chat_ref_start = match.start() if match else len(self.chat_composer)
         self.chat_choices = self.chat.refs.browse(match.group(1) if match.group(1) is not None else match.group(2)) if match else []
         self.chat_pick = 0
 
     def _complete_chat_file(self):
+        if getattr(self, 'chat_picker_kind', 'file') == 'issue':
+            if not self.chat_choices:
+                self.chat_error = self.issue_picker.message or 'No matching open issues.'
+                return
+            item = self.issue_matches[self.chat_pick]
+            self.chat_composer = self.chat_composer[:self.chat_ref_start] + '#' + str(item['number']) + ' '
+            self.chat_choices = []
+            self.chat_picker = False
+            self.chat_error = ''
+            return
         if not self.chat_choices:
             self.chat_error = 'No matching files. Keep typing or press Esc to close.'
             return
@@ -2476,6 +2531,8 @@ class UncleTUI:
                 return True
             return False  # Gate keys use the same approval handler as /approve.
         if not self.chat_edit and self._chat_command(k):
+            return False  # Existing gate keys are the sole driver-stdin writer.
+        if not self.chat_edit and not (self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'issue') and self._chat_command(k):
             return True
         try:
             if k == 27:
@@ -2494,6 +2551,7 @@ class UncleTUI:
             if k == 16 and not self.chat_edit:  # Ctrl-P
                 self.chat_picker = True
                 self.chat_ref_start = len(self.chat_composer)
+                self.chat_picker_kind = 'file'
                 self.chat_choices = self.chat.refs.browse('')
                 self.chat_pick = 0
                 return True
@@ -2504,7 +2562,7 @@ class UncleTUI:
                 if self.chat_choices:
                     self._complete_chat_file()
                 elif self.chat_picker:
-                    self.chat_error = 'No matching files. Keep typing or press Esc to close.'
+                    self.chat_error = (self.issue_picker.message or 'No matching open issues.') if getattr(self, 'chat_picker_kind', 'file') == 'issue' else 'No matching files. Keep typing or press Esc to close.'
                 elif self.chat_edit:
                     self.chat_composer += '\n'
                 else:
@@ -2546,7 +2604,7 @@ class UncleTUI:
                     raise ValueError('Transcript exceeds 1 MiB limit')
                 self.chat_composer += chr(k)
             if not self.chat_edit:
-                if self.chat_picker and not self.chat_composer[self.chat_ref_start:].startswith('@'):
+                if self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'file' and not self.chat_composer[self.chat_ref_start:].startswith('@'):
                     self.chat_choices = self.chat.refs.browse(self.chat_composer[self.chat_ref_start:])
                     self.chat_pick = 0
                 else:
@@ -2570,9 +2628,10 @@ class UncleTUI:
         slots = room - 1
         start = max(0, pick - slots + 1)
         entries = choices[start:start + slots]
-        rows = ['Commands  ↑↓ select · Enter run' if slash else 'Files  ↑↓ select · Tab complete · Enter attach · Esc close']
+        is_issue = getattr(self, 'chat_picker_kind', 'file') == 'issue'
+        rows = ['Commands  ↑↓ select · Enter run' if slash else 'Open issues  ↑↓ select · Tab/Enter insert · Esc close' if is_issue else 'Files  ↑↓ select · Tab complete · Enter attach · Esc close']
         rows += [('› ' if start + i == pick else '  ') + name
-                 for i, name in enumerate(entries)] if entries else ['No matching files']
+                 for i, name in enumerate(entries)] if entries else [(self.issue_picker.message or 'No matching open issues.') if is_issue else 'No matching files']
         y = composer_row - len(rows)
         for i, line in enumerate(rows):
             attr = curses.A_REVERSE if i > 0 and entries and start + i - 1 == pick else curses.A_NORMAL
@@ -2797,6 +2856,7 @@ class UncleTUI:
                 self.chat_composer = ''
                 self.chat_picker = True
                 self.chat_ref_start = 0
+                self.chat_picker_kind = 'file'
                 self.chat_choices = self.chat.refs.browse('')
                 self.chat_pick = 0
             elif command == '/clear':
@@ -2805,6 +2865,7 @@ class UncleTUI:
                     self.home_request = None
                 self.chat_picker = False
                 self.home_history.clear()
+                self.home_issue_context = ''
                 self.chat.messages.clear()
                 self.chat_composer = ''
                 self.chat_error = ''
@@ -2889,7 +2950,7 @@ class UncleTUI:
             except curses.error:
                 pass
         put(row + (0 if compact else 1), 'What can uncle do for you?', color.get('title', 0) | curses.A_BOLD, True)
-        put(row + (1 if compact else 3), ('/ commands   @ file mentions   Ctrl-P menu  Tab to chat' if width >= 52 else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 34 else '@ files  Ctrl-P menu Tab chat' if width >= 28 else 'Ctrl-P menu'), color.get('muted', curses.A_DIM), True)
+        put(row + (1 if compact else 3), ('/ commands   @ files   # issues   Ctrl-P menu  Tab to chat' if width >= 60 else '/ cmds  @ files  # issues  Ctrl-P menu  Tab chat' if width >= 52 else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 34 else '@ files  Ctrl-P menu Tab chat' if width >= 28 else 'Ctrl-P menu'), color.get('muted', curses.A_DIM), True)
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
         text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
         visible_text = text[-max(1, width - 3):]
@@ -4013,6 +4074,7 @@ class UncleTUI:
         while self.state != "quit":
             dirty = self.poll_home_chat() or dirty
             dirty = self.poll_triage() or dirty
+            dirty = self.poll_issue_picker() or dirty
             self._poll_workflow()
             dirty = self.poll_status() or dirty
             dirty = self.poll_session_stats() or dirty

@@ -37,6 +37,21 @@ class InstallerTest(unittest.TestCase):
         return subprocess.run(["bash", str(ROOT / "install.sh"), *args], env=self.env,
                               capture_output=True, text=True)
 
+    def test_pytest_xdist_dependencies_and_runtime_selection(self):
+        import json
+        formula = (ROOT / 'Formula/uncle.rb').read_text()
+        self.assertIn('resource "pytest-xdist"', formula)
+        self.assertIn('resource "pytest"', formula)
+        self.assertIn('PATH: "#{opt_libexec}/venv/bin:$PATH"', formula)
+        self.assertIn('python3-pytest-xdist', (ROOT / 'packaging/debian/control').read_text())
+        scoop = json.loads((ROOT / 'packaging/windows/scoop.json').read_text())
+        hook = '\n'.join(scoop['post_install'])
+        self.assertIn('pytest-xdist==3.8.0', hook)
+        self.assertIn('import pytest, xdist', hook)
+        self.assertIn('Failed to install', hook)
+        self.assertIn("Join-Path $root 'venv\\Scripts\\python.exe'",
+                      (ROOT / 'packaging/windows/uncle.ps1').read_text())
+
     def test_os_detection_and_dry_run_do_not_install(self):
         self.stub("apt-get", 'echo MUTATION >> "$CALLS"\n')
         self.stub("brew", 'echo MUTATION >> "$CALLS"\n')

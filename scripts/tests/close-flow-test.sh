@@ -1019,17 +1019,7 @@ class HandoffTests(unittest.TestCase):
                         GIT_CONFIG_NOSYSTEM='1')
         for key in ('STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE', 'UNCLE_PROJECT_ROOT'):
             self.env.pop(key, None)
-        self.exe('git', '''#!/usr/bin/env python3
-import os, subprocess, sys
-args = sys.argv[1:]
-if args[:2] == ['remote', 'get-url']:
-    print('https://github.com/' + ('forker/repo.git' if os.environ.get('FORK') and args[-1] == 'origin' else 'owner/repo.git'))
-    sys.exit(0)
-if os.environ.get('CRASH_GIT') == args[0]:
-    subprocess.run([os.environ['REAL_GIT']] + args)
-    sys.exit(70)
-os.execv(os.environ['REAL_GIT'], ['git'] + args)
-''')
+        self.exe('git', '#!/usr/bin/env bash\nif [[ "$1" == remote && "${2:-}" == get-url ]]; then\n    if [[ -n "${FORK:-}" && "${@: -1}" == origin ]]; then\n        echo \'https://github.com/forker/repo.git\'\n    else\n        echo \'https://github.com/owner/repo.git\'\n    fi\n    exit 0\nfi\nif [[ "${CRASH_GIT:-}" == "$1" ]]; then\n    "$REAL_GIT" "$@"\n    exit 70\nfi\nexec "$REAL_GIT" "$@"\n')
         self.exe('gh', '''#!/usr/bin/env python3
 import json, os, pathlib, subprocess, sys
 args = sys.argv[1:]
@@ -1080,7 +1070,7 @@ elif args[:2] == ['pr', 'create']:
         (self.repo / 'source.txt').write_text('before\n')
         (self.repo / 'CHANGE_REQUEST.md').write_text('## Summary\n\nFix café 日本語\n')
         self.git('add', '.')
-        self.git('commit', '-qm', 'initial')
+        self.git('commit', '--no-gpg-sign', '-qm', 'initial')
         self.original = self.git('rev-parse', 'HEAD')
         self.bare = self.root / 'remote.git'
         subprocess.run([REAL_GIT, 'init', '--bare', '-q', str(self.bare)], check=True, env=self.env)
@@ -1657,7 +1647,33 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         self.assertEqual(self.git('show', 'HEAD:source.txt'), 'worktree edit')
 
 
-unittest.main()
+# Cases own independent repositories, keys, and fake GitHub servers.
+import io
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+workers = int(os.environ.get('WORKFLOW_TEST_JOBS', '4'))
+if not 1 <= workers <= 8:
+    raise SystemExit('WORKFLOW_TEST_JOBS must be from 1 to 8')
+def run_case(name):
+    output = io.StringIO()
+    started = time.monotonic()
+    result = unittest.TextTestRunner(stream=output).run(HandoffTests(name))
+    return name, time.monotonic() - started, result, output.getvalue()
+started = time.monotonic()
+failures = 0
+names = unittest.defaultTestLoader.getTestCaseNames(HandoffTests)
+print(f'PR handoff: {len(names)} cases, up to {workers} workers', flush=True)
+with ThreadPoolExecutor(max_workers=workers) as pool:
+    for future in as_completed([pool.submit(run_case, name) for name in names]):
+        name, elapsed, result, output = future.result()
+        status = 'PASS' if result.wasSuccessful() else 'FAIL'
+        print(f'{status} {name} ({elapsed:.2f}s)', flush=True)
+        if not result.wasSuccessful():
+            print(output, flush=True)
+            failures += 1
+print(f'PR handoff: {len(names) - failures} passed, {failures} failed '
+      f'in {time.monotonic() - started:.2f}s', flush=True)
+raise SystemExit(bool(failures))
 PY
 pr_rc=$?
 COUNT=$((COUNT + 1))

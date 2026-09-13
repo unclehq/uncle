@@ -228,10 +228,8 @@ class Footer(unittest.TestCase):
                 '  stage: implementation (2/4)' % mode)
 
     def test_issue_identity_and_launch_are_preserved(self):
-        inputs = ['123'] + [
-            scheme + '://github.com/owner/repo/issues/123' + suffix
-            for scheme in ('http', 'https')
-            for suffix in ('', '/', '?q=1', '#comment', 'suffix')]
+        inputs = ['123', 'https://github.com/owner/repo/issues/123',
+                  'https://github.com/owner/repo/issues/123/']
         for issue, issue_mode in ((i, m) for i in inputs for m in ('', '--change', '--new')):
             with self.subTest(issue=issue, issue_mode=issue_mode):
                 ui = self.ui(issue=issue, issue_mode=issue_mode)
@@ -244,6 +242,20 @@ class Footer(unittest.TestCase):
                 self.assertTrue(text.endswith('change request 123'))
                 self.assertEqual(ui.issue, issue)
                 self.assertEqual(ui.cmd_for(), command)
+
+    def test_invalid_issue_arguments_never_launch(self):
+        inputs = ['0', '-1', '123suffix', '123\n',
+                  'http://github.com/owner/repo/issues/123',
+                  'https://example.com/owner/repo/issues/123']
+        inputs += ['https://github.com/owner/repo/issues/123' + suffix
+                   for suffix in ('?q=1', '#comment', 'suffix')]
+        for issue in inputs:
+            for mode in ('', '--change', '--new'):
+                with self.subTest(issue=issue, issue_mode=mode):
+                    ui = self.ui(issue=issue, issue_mode=mode)
+                    with self.assertRaisesRegex(ValueError, 'Enter a GitHub issue number'):
+                        ui.cmd_for()
+                    self.assertEqual(ui.issue, issue)
 
     def test_ineligible_and_invalid_inputs_keep_old_footer(self):
         cases = [dict(workflow_idx=0), dict(workflow_idx=2),

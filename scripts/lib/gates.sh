@@ -155,6 +155,24 @@ gated_prompt() {
     local combined="$LOG_DIR/${log_name}.gated-prompt.md"
     {
         cat "$prompt_file"
+        if [[ "$log_name" == execute-checklist && -n "${UNCLE_TIMING_DIR:-}" && "${WORKFLOW_METRICS:-1}" == 1 ]]; then
+            cat <<'TIMING'
+
+## Checklist timing (observational only)
+
+Immediately before executing each MC-ID, start its timer using the shell tool:
+`check_token=$(python3 "$UNCLE_TIMING_HELPER" check-start MC-001)`
+Replace MC-001 with the exact ID. Retain the returned token if later tool calls
+use a different shell. After the check finishes, run:
+`python3 "$UNCLE_TIMING_HELPER" check-end "$check_token" finished`
+Use `blocked` or `failed` instead of `finished` when appropriate. Each concurrent
+check needs its own token. On retries, start a fresh timer. Timers may enclose
+multiple tool calls belonging to that check, but not unrelated work.
+If a timer cannot run, continue the check and note that timing is unavailable.
+Timing never proves a PASS, replaces verification evidence, or requires a retry.
+Do not rerun completed checks just to add timings.
+TIMING
+        fi
         if [[ -n "$rules" ]]; then
             printf '\n\n---\n\n# Output rules (binding)\n\nThe document you write must satisfy every rule below. They govern its shape;\nthis stage'"'"'s instructions above govern its content. Where they disagree about\nshape, these rules win.\n\n'
             cat "$rules"

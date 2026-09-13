@@ -12,6 +12,8 @@ import tempfile
 import threading
 import time
 import uuid
+from runner_timing import RunnerTiming
+from process_tree import timed_popen
 from process_tree import launch_command, group_options, kill_tree, finish_check
 
 KEYS = ('input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')
@@ -39,6 +41,7 @@ class Stage:
         self.final_answer = ''
         self.assessment_answer = ''
         self.started = time.monotonic()
+        self.timing = RunnerTiming(stage)
         self.channel = None
         self.pending = {}
         self.turn = self.session = None
@@ -73,8 +76,9 @@ class Stage:
     def text(self, text):
         if not text:
             return
+        self.timing.response()
         self.answer += text
-        print(json.dumps({'type':'assistant', 'uncle_chat_output':bool(os.environ.get('UNCLE_STATUS_FILE')), 'message':{'content':[{'type':'text','text':text}]}}), flush=True)
+        print(json.dumps({'type':'assistant', 'uncle_timing_native':True, 'uncle_chat_output':bool(os.environ.get('UNCLE_STATUS_FILE')), 'message':{'content':[{'type':'text','text':text}]}}), flush=True)
         self.status('chat_output', text=text)
 
     def completed_answer(self, text):
@@ -113,14 +117,16 @@ class Stage:
         threading.Thread(target=watch, daemon=True).start()
 
     def spawn(self, command, env=None):
-        self.child = subprocess.Popen(launch_command(command), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        self.child = timed_popen(launch_command(command), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=sys.stderr, text=True, encoding='utf-8', bufsize=1,
                                       env=env or self.env, **group_options())
         def read():
             try:
                 for line in self.child.stdout:
                     try:
-                        self.events.put(json.loads(line))
+                        value = json.loads(line)
+                        self.timing.observe(value)
+                        self.events.put(value)
                     except ValueError:
                         continue
             finally:
@@ -387,6 +393,7 @@ class Stage:
             except (OSError,ValueError,KeyError,TypeError,queue.Empty,KeyboardInterrupt) as exc:
                 error='Workflow parent exited; native stage cancelled' if self.parent_lost else str(exc) or 'Stage interrupted'
             finally:
+                self.timing.finish()
                 self.parent_watch_stop.set()
                 if self.channel:
                     self.status('steering_closed',channel=str(self.channel))
@@ -398,7 +405,7 @@ class Stage:
                     if self.child.poll() is None:
                         kill_tree(self.child);self.child.wait()
                     finish_check(self.child)
-        result=dict(type='result',subtype='success' if success else 'error_during_execution',is_error=not success,
+        result=dict(type='result',uncle_timing_native=True,subtype='success' if success else 'error_during_execution',is_error=not success,
             error_detail=error,usage=self.usage,total_cost_usd=self.cost,input_includes_cache=self.inclusive,
             num_turns=1,duration_ms=int((time.monotonic()-self.started)*1000))
         print(json.dumps(result),flush=True)

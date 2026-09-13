@@ -61,7 +61,9 @@ PY
 for stage in $DOC_STAGES implementation-step-2; do
     budget_prompt="$(document_budget_prompt "$stage")"
     for rule in 'at most TWO passes total' 'including a "final trim"' \
-                'those do not reset it' 'After pass 2, stop size-only edits'; do
+                'those do not reset it' 'After pass 2, stop size-only edits' \
+                'finish without any size-only' 'measure all authored artifacts in one tool call' \
+                'Missing an advisory drafting target does not require compaction.'; do
         [[ "$budget_prompt" == *"$rule"* ]] || { echo "Missing compaction limit for $stage: $rule" >&2; exit 1; }
     done
     gated_prompt prompt.md "$stage" > resolved
@@ -132,7 +134,7 @@ grep -q 'Reviewer output' "$(cat resolved)"
 if WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=invalid gated_prompt prompt.md final-audit 2>/dev/null; then exit 1; fi
 # Draft targets use the effective override, including leading-zero integers.
 WORKFLOW_DOC_MAX_BYTES=01000 gated_prompt prompt.md updated-plan > resolved
-grep -qF 'Draft toward 850 bytes' "$(cat resolved)"
+grep -qF 'Draft toward 750 bytes' "$(cat resolved)"
 grep -qF 'supersede any fixed byte target' "$(cat resolved)"
 # No installed/local output rules must not disable prompt budgets.
 ROOT_SAVED="$ROOT"

@@ -77,6 +77,8 @@ if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/pla
     [[ "$UNATTENDED" != 1 ]] || driver_args+=(--unattended)
     exec python3 "$ROOT/scripts/lib/plan-executability.py" lock-run "${driver_args[@]}"
 fi
+. "$ROOT/scripts/lib/project-git.sh"
+uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
 
 STATE_DIR=".uncle/workflow"

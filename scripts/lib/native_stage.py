@@ -13,10 +13,24 @@ import threading
 import time
 import uuid
 from runner_timing import RunnerTiming
+from read_cache import ReadCache
 from process_tree import timed_popen
 from process_tree import launch_command, group_options, kill_tree, finish_check
 
 KEYS = ('input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')
+
+STEERING_INSTRUCTIONS = """Live stage chat:
+User messages may arrive while you work. Apply relevant steering to the current
+stage. Answer status or general questions briefly, then continue unfinished stage
+work without waiting for another message. A question does not cancel the task.
+Honor explicit requests to stop or change direction. Keep the stage's permissions,
+approval gates, and required deliverables; do not approve gates on the user's behalf.
+Before completing, produce the required stage output in its required format, even
+if you also answered chat questions. Finish normally when the stage is complete;
+the workflow driver owns advancement to the next stage.
+
+Stage task:
+"""
 
 class Stage:
     def __init__(self, runner, side, stage, args, prompt=None):
@@ -31,6 +45,14 @@ class Stage:
                 self.effort = args[i+1].split('=', 1)[1]
         self.output = self.option('--output-last-message', '-o')
         self.prompt = prompt if prompt is not None else (sys.stdin.read() if side == 'agent' else args[-1])
+        self.read_cache = ReadCache(os.getcwd())
+        self.prompt += self.read_cache.context(self.prompt)
+        self.prompt = STEERING_INSTRUCTIONS + self.prompt
+        execution_rules = Path(__file__).resolve().parents[2] / 'lib/gates/EXECUTION_RULES.md'
+        if execution_rules.is_file():
+            policy = execution_rules.read_text(encoding='utf-8')
+            if policy not in self.prompt:
+                self.prompt = policy + '\n\n' + self.prompt
         self.events = queue.Queue()
         self.child = None
         self.usage = dict.fromkeys(KEYS, 0)
@@ -126,6 +148,7 @@ class Stage:
                 for line in self.child.stdout:
                     try:
                         value = json.loads(line)
+                        self.read_cache.observe(value)
                         self.timing.observe(value)
                         self.events.put(value)
                     except ValueError:
@@ -301,17 +324,13 @@ class Stage:
             self.send({'type':'user','uuid':id,'session_id':self.session or '',
                        'message':{'role':'user','content':text}})
         message(self.prompt,uuid.uuid4().hex)
-        outstanding = 1
         completed_usage = dict.fromkeys(KEYS, 0)
         live_usage = {}
         self.ready(directory)
         def steer(text,id):
-            nonlocal outstanding
-            outstanding += 1
             self.pending[id]=True
             message(text,id)
         def handle(e):
-            nonlocal outstanding
             if e.get('type')=='system': self.session=e.get('session_id',self.session)
             if e.get('type')=='user' and e.get('uuid') in self.pending:
                 self.ack({'id':e['uuid'],'result':{}})
@@ -331,8 +350,10 @@ class Stage:
                 live_usage.clear()
                 self.tokens(completed_usage,e.get('total_cost_usd'),inclusive=False)
                 if e.get('is_error'): raise ValueError(str(e.get('errors') or e.get('subtype')))
-                outstanding -= 1
-                return outstanding == 0 and not self.pending
+                # Claude can fold acknowledged steering into the current turn.
+                # A result completes that turn, not exactly one input message.
+                # Only unacknowledged inputs require another completion.
+                return not self.pending
         self.loop(handle,steer)
 
     def cline(self, directory):

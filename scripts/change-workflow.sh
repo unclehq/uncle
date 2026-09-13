@@ -79,6 +79,8 @@ if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/pla
     [[ "$UNATTENDED" != 1 ]] || driver_args+=(--unattended)
     exec python3 "$ROOT/scripts/lib/plan-executability.py" lock-run "${driver_args[@]}"
 fi
+. "$ROOT/scripts/lib/project-git.sh"
+uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
 
 STATE_DIR=".uncle/workflow"
@@ -2061,7 +2063,7 @@ REPAIR
             # Remove any prior audit first: run_codex's require_file then treats
             # the file's existence as proof this invocation produced it, so a
             # reviewer call that exits 0 without writing cannot be read as fresh.
-            if [[ -e .git ]]; then change_pr_engine freeze || exit 1; fi
+            if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine freeze || exit 1; fi
             rm -f FINAL_AUDIT.md
             run_codex \
                 prompts/change/final-audit.md \
@@ -2075,7 +2077,7 @@ REPAIR
                 "$audit_class" \
                 "$(hash_file FINAL_AUDIT.md)" \
                 > "$VERDICT_FILE"
-            if [[ -e .git ]]; then change_pr_engine bind || exit 1; fi
+            if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine bind || exit 1; fi
             echo "Audit verdict: $audit_class"
             VERDICT_WRITTEN_THIS_RUN=1
 
@@ -2219,10 +2221,10 @@ REPAIR
                 echo "summary is the only place that says so out loud."
             fi
             triage_print_actions "$STATE_DIR"
-            if [[ -e .git ]]; then
+            if git rev-parse --verify HEAD >/dev/null 2>&1; then
                 change_pr_complete
             else
-                echo "No Git checkout: PR creation is unavailable; the issue remains open."
+                echo "Build complete without a commit. PR publication requires an existing base commit; the issue remains open."
             fi
             exit 0
             ;;

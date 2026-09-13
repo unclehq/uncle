@@ -1,10 +1,16 @@
 # Test fixture signing
 
+Every project must be able to build, test, and complete without project commits.
+Do not introduce commit or clean-working-tree prerequisites in generated plans
+or reviews. Use file snapshots that include untracked files. Publishing is an
+optional, separately approved action after completion.
+
 All new or modified test fixtures must explicitly disable Git commit signing.
 Never inherit the user's signing configuration or invoke their GPG agent,
 pinentry, or private signing key from an automated test.
 
 - Pass `--no-gpg-sign` to fixture `git commit` and `git commit-tree` commands.
+- Disable tag signing with `tag.gpgsign=false` and `--no-sign` on fixture tags.
 - For shared fixture helpers, also set `commit.gpgsign=false` in the temporary
   repository. Keep the explicit command flag so environment overrides cannot
   accidentally enable signing.

@@ -1091,9 +1091,21 @@ elif args[:2] == ['pr', 'create']:
         return subprocess.check_output([REAL_GIT, *args], cwd=self.repo, env=self.env, stderr=subprocess.PIPE).decode().strip()
 
     def engine(self, action, text='', **env):
-        return subprocess.run(['bash', '-c', '. "$1"; change_pr_engine "$2"', 'test', str(LIB), action],
+        pending = env.pop('FIXTURE_LEAVE_COMMIT_PENDING', False)
+        result = subprocess.run(['bash', '-c', '. "$1"; change_pr_engine "$2"', 'test', str(LIB), action],
                               cwd=self.repo, env=dict(self.env, **env), input=text, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        # Simulate the operator in this disposable fixture. Production never
+        # executes this command; it waits for the user to commit and confirm.
+        if not pending and 'Commit needs your help.' in result.stdout and 'No answer received' in result.stdout:
+            command = result.stdout.split('then run:\n', 1)[1].split('\nReturn here', 1)[0]
+            self.assertIn('git commit --no-gpg-sign', command)
+            self.ok(subprocess.run(['sh', '-c', command], cwd=self.repo, env=self.env,
+                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT))
+            resumed = self.engine(action, **env)
+            resumed.stdout = result.stdout + resumed.stdout
+            return resumed
+        return result
 
     def ok(self, result):
         self.assertEqual(result.returncode, 0, result.stdout)
@@ -1233,6 +1245,8 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('READY\\n
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
         self.ok(result)
         self.assertEqual((self.state / 'state').read_text().strip(), '42:COMPLETE')
+        self.assertIn('Commit needs your help.', result.stdout)
+        self.ok(self.engine('handoff'))  # Simulated user commit, then resume COMPLETE.
         self.assertEqual(len(self.creates()), 1, result.stdout)
         self.assertFalse((self.state / 'issue-closed').exists())
         result = subprocess.run(command, cwd=self.repo, env=env, input='', text=True,
@@ -1468,6 +1482,8 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
         self.ok(approved)
         self.assertIn('Override recorded', approved.stdout)
+        self.assertIn('Commit needs your help.', approved.stdout)
+        self.ok(self.engine('handoff'))
         self.assertEqual(len(self.creates()), 1, approved.stdout)
         self.assertEqual((self.state / 'state').read_text().strip(), '42:COMPLETE')
         self.assertFalse((self.state / 'issue-closed').exists())
@@ -1492,7 +1508,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         self.assertEqual(len(self.creates()), 0)
 
     def test_commit_and_push_crash_recovery(self):
-        self.assertNotEqual(self.publish(CRASH_GIT='commit-tree').returncode, 0)
+        self.assertNotEqual(self.publish(FIXTURE_LEAVE_COMMIT_PENDING=True).returncode, 0)
         self.assertEqual(self.journal()['phase'], 'prepared')
         self.assertNotEqual(self.engine('handoff', CRASH_GIT='push').returncode, 0)
         sha = self.journal()['intended_head']

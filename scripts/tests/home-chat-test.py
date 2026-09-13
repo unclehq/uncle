@@ -67,6 +67,38 @@ class HomeTests(unittest.TestCase):
                 ui.send_home_chat('Do not lose this message')
             self.assertEqual(len(list(Path(d).glob('*.json'))), 1)
 
+    def test_pending_gate_questions_preserve_approval_and_use_stage_model(self):
+        from unittest.mock import Mock
+        ui = tui.UncleTUI.__new__(tui.UncleTUI)
+        ui.state = 'running'
+        ui.prompt_kind = 'confirm'
+        ui.prompt_text = 'Ready to approve CHANGE_PLAN.md?'
+        ui.gate_file = 'CHANGE_PLAN.md'
+        ui.status_stage = 'change-plan'
+        ui.steering_channels = {}
+        ui.proc = Mock()
+        ui.proc.poll.return_value = None
+        ui.home_request = None
+        ui.home_history = []
+        ui.chat = Mock()
+        ui.chat.refs.expand.side_effect = lambda value: value
+        ui.chat_model = lambda: ('change-plan', 'codex', 'stage-model', 'low')
+        with tempfile.TemporaryDirectory() as d, patch.object(tui, '_project_root', return_value=d), patch.object(tui, 'HomeRequest') as request:
+            Path(d, 'CHANGE_PLAN.md').write_text('Plan evidence')
+            ui.send_home_chat('Why is this change necessary?')
+            command, prompt, env = request.call_args.args
+            self.assertIn('stage-model', command)
+            self.assertIn('Plan evidence', prompt)
+            self.assertIn('Only the user can answer', prompt)
+            self.assertEqual(ui.prompt_kind, 'confirm')
+            ui.proc.stdin.write.assert_not_called()
+            ui.home_request.events = queue.Queue()
+            ui.home_request.events.put(('reply', '{"uncle_action":"run_change"}'))
+            with patch.object(ui, '_home_action') as action:
+                ui.poll_home_chat()
+                action.assert_not_called()
+            self.assertEqual(ui.prompt_kind, 'confirm')
+
     def test_running_chat_tracks_live_stage_model(self):
         ui = tui.UncleTUI.__new__(tui.UncleTUI)
         ui.state = 'running'

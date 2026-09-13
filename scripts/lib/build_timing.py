@@ -249,7 +249,7 @@ def render(directory):
              'Runner event gaps include any work or wait between received events; they do not prove API latency or model reasoning time. The 20 largest gaps per attempt are retained.',
              'Unfinished processes have no completion event; their displayed span ends at report time or run termination, not a confirmed process exit.',
              'Stage durations include waiting for people and tools. Model, approval, and check rows below include only this invocation.', '']
-    for kind in ('workflow_stage', 'agent', 'reviewer', 'model_usage', 'approval', 'check', 'integrity', 'checklist_item', 'checklist_unfinished', 'tool_call', 'tool_unpaired', 'tool_unfinished', 'runner_first_event', 'runner_first_response', 'runner_event_gap', 'runner_tail_gap', 'runner_observation', 'process', 'unfinished_process', 'sampled_process'):
+    for kind in ('workflow_stage', 'agent', 'reviewer', 'model_usage', 'approval', 'check', 'integrity', 'checklist_item', 'checklist_unfinished', 'tool_call', 'tool_unpaired', 'tool_unfinished', 'runner_first_event', 'runner_first_response', 'runner_event_gap', 'runner_tail_gap', 'runner_observation', 'read_cache', 'process', 'unfinished_process', 'sampled_process'):
         totals = {}
         usage_rows = {}
         for row in spans:
@@ -272,6 +272,13 @@ def render(directory):
                          + ' | '.join(cell(key) for key in ('input_tokens','output_tokens','cache_read_tokens','cache_write_tokens','total_tokens'))
                          + f" | {usage['total_tokens_coverage']} | {cell('reported_cost_usd', True)} | {cell('estimated_cost_usd', True)} | {usage['estimated_cost_usd_coverage']} |")
         lines.append('')
+    caches = [row for row in records if row['kind'] == 'read_cache']
+    if caches:
+        lines += ['## Read cache', '',
+                  'Entries offered are validated context, not proof that the model skipped a tool call.', '',
+                  '| Entries offered | Entries invalidated | Context bytes | Validation seconds |',
+                  '|---:|---:|---:|---:|',
+                  f"| {sum(r.get('offered_entries', 0) for r in caches)} | {sum(r.get('invalidated_entries', 0) for r in caches)} | {sum(r.get('context_bytes', 0) for r in caches)} | {sum(r['elapsed_seconds'] for r in caches):.3f} |", '']
     observations = [row for row in records if row['kind'] == 'runner_observation']
     if observations:
         lines += ['## Runner timing coverage', '',

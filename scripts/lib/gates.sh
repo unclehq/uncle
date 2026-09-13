@@ -147,7 +147,7 @@ gated_prompt() {
     [[ "$is_plan" == "1" ]] && gates="$(gates_file)"
     [[ "$is_doc" == "1" ]] && rules="$(output_rules_file)"
 
-    if [[ "$is_doc" == "0" && -z "$gates" && -z "$rules" ]]; then
+    if [[ "$is_doc" == "0" && -z "$gates" && -z "$rules" && ! -f "$GATES_LIB_DIR/../../lib/gates/EXECUTION_RULES.md" ]]; then
         printf '%s\n' "$prompt_file"
         return 0
     fi
@@ -155,6 +155,43 @@ gated_prompt() {
     local combined="$LOG_DIR/${log_name}.gated-prompt.md"
     {
         cat "$prompt_file"
+        if [[ -f "$GATES_LIB_DIR/../../lib/gates/EXECUTION_RULES.md" ]]; then
+            printf '\n\n'
+            cat "$GATES_LIB_DIR/../../lib/gates/EXECUTION_RULES.md"
+        fi
+        if [[ "$log_name" == execute-checklist ]]; then
+            printf '\nReusable checklist runner: python3 "%s/checklist_batch.py" .uncle/workflow/check-commands.json\n' "$GATES_LIB_DIR"
+            cat <<'CHECK_BATCH'
+
+## Reusable check execution
+
+Read the checklist, approved groups, and fresh driver evidence in one batch.
+Reuse existing project test scripts for the exact assertions they cover. For
+remaining automatable checks, write reusable wrappers once under
+`.uncle/workflow/check-scripts/`, outside protected source/tests/fixtures paths.
+Each wrapper must return nonzero when its assertion fails, preserve evidence,
+and restore deliberate negative mutations on disposable copies. Use Bash
+`set -euo pipefail` or explicit exit handling; do not mask failures with echo.
+Do not replace reviewer assertions or turn a missing prerequisite into success.
+
+Create `.uncle/workflow/check-commands.json` with this shape:
+{"checklist_sha256":"SHA256 of the current MANUAL_CHECKLIST.md bytes","commands":{"MC-001":["bash",".uncle/workflow/check-scripts/MC-001.sh"]}}
+Use real checklist IDs and argument arrays, never shell strings. Reuse these
+scripts on repairs after confirming they still implement the current checklist.
+Refresh the mapping when the checklist changes. Reuse code, not prior results.
+Leave human checks and checks fully covered by fresh driver evidence unmapped;
+account for these separately in the report. Unmapped prerequisites conservatively
+block dependent commands; run those separately only after verifying prerequisite
+evidence. Do not add dummy successful commands to bypass dependencies.
+
+Invoke the runner above once for all mapped checks, then read results.json and
+relevant logs in one batch. It enforces group barriers, separate logs, timeouts,
+and per-check timing. An EXIT_0 is command evidence, not an automatic acceptance
+PASS; verify each expected result. Preserve NOT_RUN and failed-check evidence.
+Avoid per-check tool round trips and repeated command generation. Do not nest
+independent batch runners or exceed the worker limit with inner parallelism.
+CHECK_BATCH
+        fi
         if [[ "$log_name" == execute-checklist && -n "${UNCLE_TIMING_DIR:-}" && "${WORKFLOW_METRICS:-1}" == 1 ]]; then
             cat <<'TIMING'
 
@@ -344,13 +381,13 @@ requirements_document_max_bytes() {
 }
 
 document_budget_prompt() {
-    local stage="$1" file limits bytes lines target
+    local stage="$1" file limits bytes lines target target_lines
     printf '\n\n# Compact output budgets (binding)\n\n'
     while IFS= read -r file; do
         limits="$(document_budget "$file")" || return 1
         read -r bytes lines <<< "$limits"
-        target=$(awk -v b="$bytes" 'BEGIN {printf "%.0f", int(b * 0.85)}')
-        printf -- '- %s: at most %s UTF-8 bytes and %s lines. Draft toward %s bytes to leave revision room.\n' "$file" "$bytes" "$lines" "$target"
+        read -r target target_lines <<< "$(awk -v b="$bytes" -v l="$lines" 'BEGIN {b=int(b*.75); l=int(l*.75); printf "%.0f %.0f", (b<1?1:b), (l<1?1:l)}')"
+        printf -- '- %s: at most %s UTF-8 bytes and %s lines. Draft toward %s bytes and %s lines to leave revision room.\n' "$file" "$bytes" "$lines" "$target" "$target_lines"
     done < <(stage_documents "$stage")
     cat <<'BUDGET'
 
@@ -373,13 +410,30 @@ behavior, exact command, and protected path. Execution plans must retain their
 complete executable contract. Reports cite existing raw logs instead of copying
 transcripts; never drop checks or evidence needed to assess their results.
 Do not create summary sidecars or move obligations out to evade these limits.
-Before completing this stage, perform the editorial compaction pass yourself,
-using your current context and the same model. Review your draft against the
-budgets above, remove repeated prose and retain all mandatory content. For
-files you write, measure their bytes and lines and revise them before finishing.
-For reviewer output, compact your draft before returning the final document.
-Do not launch another model, compaction stage, or summary sidecar. Compaction
-is part of this stage; its tokens and cost belong to this stage.
+Budget-first drafting: before writing, allocate room for the required headings,
+tables, mandatory rows, exact commands, and evidence references. Use the advisory
+byte AND line targets above for the first draft; do not first produce an expanded
+report to shrink later. If mandatory content needs more room, preserve it.
+
+Batch independent context reads into one tool round trip where supported. During
+verification, run independent checks together only within the approved execution
+groups; preserve dependency barriers, isolation, and separate evidence per check.
+Collect results and update the required report once, rather than repeatedly
+rewriting it between checks. Batch independent artifact writes where supported,
+then measure all authored artifacts in one tool call (UTF-8 bytes and lines).
+Do not run separate size-check calls for each file. Do not rerun an unchanged
+successful check just to compose its report; reuse the current stage's recorded
+evidence. Required repeatability runs and checks invalidated by edits still run.
+
+If every document fits its byte and line ceilings, finish without any size-only
+rewrite. Missing an advisory drafting target does not require compaction.
+For reviewer output, draft directly in the final required format and budget;
+the driver measures the returned artifact. Do not request write permissions or
+extra tool calls solely to measure a read-only reviewer's final response.
+Only if an actual ceiling is exceeded, compact the affected document using the
+same model and context. Address byte and line overages together in each pass;
+leave already-compliant documents unchanged. Do not launch another model,
+compaction stage, or summary sidecar. Its tokens and cost belong to this stage.
 Compaction limit: at most TWO passes total during this stage, across all its
 output documents. The initial draft is not a pass. Each subsequent size-driven
 rewrite or trim counts as a pass, including a "final trim" or a few-byte edit.

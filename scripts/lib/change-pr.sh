@@ -257,30 +257,30 @@ def validate(j, ready=True):
 
 def manual_signed_commit(j):
     import shlex
-    # `git commit -a` cannot stage untracked files, but the audited tree
-    # includes them, so any change that added a file produced a tree
-    # mismatch. Stage everything, drop the driver's own state, then force
-    # FINAL_AUDIT.md back in: that reproduces commit_tree exactly.
-    command = ('git add -A'
-               ' && git rm -r --cached --ignore-unmatch -- .uncle/workflow'
-               ' && git add -f -- FINAL_AUDIT.md'
-               ' && git commit -S -m ' + shlex.quote(j['title']))
+    # Stage the exact reviewed tree, including untracked files, without
+    # reapplying clean filters or changing working files. Only the user runs it.
+    command = ('git read-tree ' + shlex.quote(j['commit_tree'])
+               + ' && git commit ' + ('-S ' if j.get('requires_signature', True) else '--no-gpg-sign ')
+               + '-m ' + shlex.quote(j['title']))
     if os.environ.get('UNCLE_SIGNING_JSON') == '1':
         block = json.dumps(command) + ' '
     else:
         block = 'In another terminal, open this project, review the audited changes, then run:\n' + command + '\n'
     candidate = head()
-    if candidate == j['original_head']:
-        ask('Commit signing needs your help. ' + block +
+    while candidate == j['original_head']:
+        prefix = 'Commit signing needs your help. ' if j.get('requires_signature', True) else 'Commit needs your help. '
+        ask(prefix + block +
             'Return here and press ENTER (OK) when finished: ')
         candidate = head()
-    if candidate == j['original_head']:
-        raise ValueError('No new commit found; PR remains pending. Finish the signed commit and rerun.')
+        if candidate == j['original_head']:
+            if ask('No new commit found. Keep the commit dialog open? [y/n]: ').lower() != 'y':
+                raise ValueError('No new commit found; PR remains pending. Finish the commit and resume.')
     if git('rev-parse', candidate + '^{tree}') != j['commit_tree']:
         raise ValueError('Manual commit differs from the audited files; rerun FINAL_AUDIT.')
     if git('rev-list', '--parents', '-n', '1', candidate).split() != [candidate, j['original_head']]:
         raise ValueError('Manual commit must have the audited HEAD as its only parent.')
-    git('verify-commit', candidate)
+    if j.get('requires_signature', True):
+        git('verify-commit', candidate)
     previous = j['intended_head']
     j['intended_head'] = candidate
     try:
@@ -314,7 +314,8 @@ def signing_resume(j):
         raise ValueError('Signed handoff tree differs from audit.')
     if git('rev-list', '--parents', '-n', '1', candidate).split() != [candidate, j['original_head']]:
         raise ValueError('Signed handoff must have the audited HEAD as its only parent.')
-    git('verify-commit', candidate)
+    if j.get('requires_signature', True):
+        git('verify-commit', candidate)
     validate(dict(j, intended_head=candidate))
 
 
@@ -323,16 +324,10 @@ def prepare_commit(j):
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if setting.returncode not in (0, 1):
         raise ValueError('Cannot read commit signing configuration: ' + setting.stderr.strip())
-    if setting.stdout.strip() == 'true':
-        j['manual_signing'] = True
-        save(j)
-        manual_signed_commit(j)
-        return
-    # Signing is explicitly disabled here. An unrelated Git failure must not
-    # be misclassified because its echoed command contains --no-gpg-sign.
-    j['intended_head'] = git('commit-tree', '--no-gpg-sign', j['commit_tree'], '-p', j['original_head'],
-                             data=(j['title'] + '\n').encode())
-    save(j)
+    j['requires_signature'] = setting.stdout.strip() == 'true'
+    j['manual_signing'] = True
+    save(j)  # Record the pending user action before displaying it.
+    manual_signed_commit(j)
 
 
 
@@ -447,6 +442,17 @@ def remote_sha(j):
 def resolve(j):
     origin = j['origin'].strip().split('\t')
     remotes = git('remote').splitlines()
+    if not remotes:
+        url = ask('No Git remote is configured. GitHub remote URL for this PR (blank to cancel): ')
+        if not url:
+            raise ValueError('PR destination not configured; resume publication after adding a remote.')
+        identity = remote_repo(url)
+        if origin != [''] and identity.lower() != origin[0].lower():
+            fork = json.loads(gh('api', 'repos/' + identity))
+            if not fork.get('fork') or fork.get('parent', {}).get('full_name', '').lower() != origin[0].lower():
+                raise ValueError('Destination must match the issue repository or its direct fork; no remote was added.')
+        git('remote', 'add', 'origin', url)
+        remotes = ['origin']
     identities = {r: remote_identity(r) for r in remotes}
     if origin != ['']:
         if len(origin) != 3 or origin[2] != 'gh' or not origin[1].isdigit():

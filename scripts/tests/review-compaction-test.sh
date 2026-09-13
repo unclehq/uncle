@@ -105,7 +105,8 @@ cmp expected.md ADVERSARIAL_REVIEW.md
 [[ -n "$(find .uncle/workflow/logs -name '*before-table-repair-*.md')" ]]
 document_budget_prompt adversarial-review > budget-prompt
 grep -q 'at most TWO passes total during this stage' budget-prompt
-grep -q 'using your current context and the same model' budget-prompt
+grep -q 'same model and context' budget-prompt
+grep -q 'finish without any size-only' budget-prompt
 grep -q 'After pass 2, stop size-only edits' budget-prompt
 [[ ! -e "$CALLS" ]]
 echo 'review-compaction-test: passed'

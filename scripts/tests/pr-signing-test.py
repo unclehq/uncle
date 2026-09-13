@@ -29,8 +29,8 @@ class SigningTests(unittest.TestCase):
         self.ns['head'] = lambda: 'old'
         with self.assertRaisesRegex(ValueError, 'No new commit'):
             self.ns['manual_signed_commit'](self.j)
-        self.ask.assert_called_once()
-        self.assertIn('git commit -S', self.ask.call_args.args[0])
+        self.assertEqual(self.ask.call_count, 2)
+        self.assertIn('git commit -S', self.ask.call_args_list[0].args[0])
         self.git.assert_not_called()
 
     def test_user_commit_after_prompt_is_verified(self):
@@ -46,23 +46,31 @@ class SigningTests(unittest.TestCase):
         self.ask.assert_not_called()
         self.assertTrue(self.j['manual_signing'])
 
-    def test_unsigned_automatic_commit_explicitly_disables_signing(self):
-        self.ns['subprocess'] = Mock()
-        self.ns['subprocess'].run.return_value = Mock(returncode=0, stdout='false\n')
-        self.git.side_effect = None
-        self.git.return_value = 'unsigned'
-        self.ns['prepare_commit'](self.j)
-        self.assertEqual(self.git.call_args.args[:2], ('commit-tree', '--no-gpg-sign'))
-        self.ask.assert_not_called()
+    def test_missing_remote_requests_destination_instead_of_silent_exit(self):
+        self.j.update(origin='owner/repo\t34\tgh\n', original_branch='main')
+        self.git.side_effect = lambda *a, **k: ''
+        self.ask.return_value = ''
+        with self.assertRaisesRegex(ValueError, 'destination not configured'):
+            self.ns['resolve'](self.j)
+        self.assertIn('No Git remote', self.ask.call_args.args[0])
+        self.assertFalse(any(call.args[:2] == ('remote', 'add') for call in self.git.call_args_list))
 
-    def test_unsigned_failure_never_requests_signing(self):
+    def test_unsigned_commit_is_also_a_user_action(self):
         self.ns['subprocess'] = Mock()
         self.ns['subprocess'].run.return_value = Mock(returncode=0, stdout='false\n')
-        self.git.side_effect = ValueError('Command failed: git commit-tree --no-gpg-sign')
-        with self.assertRaisesRegex(ValueError, 'Command failed'):
-            self.ns['prepare_commit'](self.j)
-        self.ask.assert_not_called()
-        self.ns['save'].assert_not_called()
+        self.ns['head'] = Mock(side_effect=['old', 'new'])
+        self.ns['prepare_commit'](self.j)
+        self.assertIn('git commit --no-gpg-sign', self.ask.call_args.args[0])
+        self.assertFalse(self.j['requires_signature'])
+        self.assertEqual(self.j['intended_head'], 'new')
+        self.assertFalse(any(call.args[0] in ('commit', 'commit-tree', 'verify-commit') for call in self.git.call_args_list))
+
+    def test_confirmation_without_commit_can_retry_in_same_handoff(self):
+        self.ns['head'] = Mock(side_effect=['old', 'old', 'new'])
+        self.ask.side_effect = ['', 'y', '']
+        self.ns['manual_signed_commit'](self.j)
+        self.assertEqual(self.j['intended_head'], 'new')
+        self.assertEqual(self.ask.call_count, 3)
 
     def test_signing_configuration_prompts_without_automatic_commit(self):
         self.ns['subprocess'] = Mock()
@@ -71,7 +79,7 @@ class SigningTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'No new commit'):
             self.ns['prepare_commit'](self.j)
         self.git.assert_not_called()
-        self.ask.assert_called_once()
+        self.assertEqual(self.ask.call_count, 2)
 
 
 if __name__ == '__main__':

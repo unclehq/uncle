@@ -1,5 +1,29 @@
 # Build performance profiling
 
+## Reusing file reads
+
+Native stages offer validated results of earlier successful text-file reads as
+context. Claude-compatible `Read`/`tool_result` events populate this cache; all
+native stage runners can consume it. Runners still own their tools, so this is
+context reuse, not a transparent tool-execution interceptor. The prompt asks the
+model to reuse the supplied result, but does not guarantee it skips a later read.
+
+Entries live under `.uncle/workflow/read-cache`. Before offering an entry, Uncle
+recomputes the file's SHA-256 content hash. Changed, deleted, inaccessible, or
+symlinked files are not reused. Changes during the original read also prevent
+caching. Different read ranges have separate entries and retain their arguments.
+Cache-format and project identity changes invalidate stored entries. No remote
+data, shell command, write, image, hidden file, failed call, or verification result
+is cached. A model must reread a file if it changes during its stage.
+
+Only files explicitly named in the stage prompt are offered. Context is capped
+at 24 KiB and storage at 64 entries. `WORKFLOW_READ_CACHE=0` disables capture and
+reuse. The performance report records entries offered, invalidations, context
+bytes, and validation time. It does not report these as guaranteed tool calls or
+tokens saved; supplied context itself consumes input tokens.
+
+## Timing records
+
 Profiling is enabled by default for new-application and change builds, including
 runs started through the TUI. New builds use the instrumentation; an already
 running driver must be restarted to load the changes. Every invocation/resume

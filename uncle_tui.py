@@ -10,6 +10,7 @@ import shlex
 import shutil
 import json
 import os
+from pathlib import Path
 import queue
 import re
 import signal
@@ -35,6 +36,7 @@ except ImportError:  # Windows has no curses in the stdlib
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
+from completion_preview import CompletionPreview, STAR_URL
 from chat import Conversation, sanitize
 from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
@@ -134,7 +136,15 @@ REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi", "self-hosted"]
 
 # Applied to any stage the operator has not configured.
 DEFAULT_RUNNER = ""
-DEFAULT_EFFORT = "medium"
+DEFAULT_EFFORT = "low"
+
+def default_stage_effort(stage):
+    if stage.startswith("implementation-step-"):
+        stage = "implementation"
+    if stage == "plan-executability":
+        stage = "adversarial-review"
+    return "medium" if stage in ("adversarial-review", "project-plan", "implementation") else DEFAULT_EFFORT
+
 DEFAULT_CLINE_MODEL = "cline-pass/deepseek-v4-pro"
 
 STAGE_FIELDS = ("runner", "effort", "model", "network", "billing", "base_url", "api_key")
@@ -706,7 +716,7 @@ class UncleTUI:
         return installed[0] if installed else ""
 
     def stage_effort(self, stage):
-        return self.stage_efforts.get(stage, "") or DEFAULT_EFFORT
+        return self.stage_efforts.get(stage, "") or default_stage_effort(stage)
 
     def stage_network(self, stage):
         """Whether this stage's sandbox may reach the network. Default off."""
@@ -802,7 +812,7 @@ class UncleTUI:
         if field == "runner":
             return "%s  (default)" % (self.stage_runner(stage) or "No agents installed")
         if field == "effort":
-            return "%s  (default)" % DEFAULT_EFFORT
+            return "%s  (default)" % default_stage_effort(stage)
         if field == "network":
             return "false  (default)"
         if field == "billing":
@@ -1412,7 +1422,7 @@ class UncleTUI:
                 self.steering_channels = {}
                 # EOF handling can open the completion dialog just before
                 # this poll observes process exit. Keep that dialog focused.
-                if getattr(self, 'prompt_kind', '') != 'support':
+                if getattr(self, 'prompt_kind', '') not in ('support', 'finished'):
                     self.prompt_kind = ''
                     self.chat_focus = 'chat'
                 self._ensure_chat()
@@ -1437,6 +1447,7 @@ class UncleTUI:
         self.workflow_completed = False
         self.workflow_exit_reported = False
         self.support_checked = False
+        self.completion_preview = None
         metrics = os.path.join(_project_root(), ".uncle", "workflow", "metrics")
         self.session_stats = {"active": {}, "live": {}, "records": [], "tick": -1,
                               "seen": set(os.listdir(metrics)) if os.path.isdir(metrics) else set()}
@@ -1512,7 +1523,8 @@ class UncleTUI:
             self._offer_support()
         else:
             self._detect_prompt()
-        return got or before != (self.proc_done, self.prompt_kind)
+        preview_changed = self._poll_completion_preview()
+        return got or preview_changed or before != (self.proc_done, self.prompt_kind)
 
     def _offer_support(self):
         """Offer once per local user, only after this workflow finishes."""
@@ -1525,24 +1537,44 @@ class UncleTUI:
         self.prompt_kind = ""
         if code != 0 or not getattr(self, "workflow_completed", False):
             return
-        base = os.environ.get("XDG_STATE_HOME")
-        if not base or not os.path.isabs(base):
-            base = os.path.join(os.path.expanduser("~"), ".local", "state")
-        marker = os.path.join(base, "uncle", "star-prompt-shown")
+        self.completion_preview = CompletionPreview(_project_root())
+        self.chat_focus = "chat"
+
+    def _poll_completion_preview(self):
+        preview = getattr(self, 'completion_preview', None)
+        if preview is None:
+            return False
+        changed = False
         try:
-            os.makedirs(os.path.dirname(marker), exist_ok=True)
-            # Exclusive creation also prevents simultaneous runs from asking twice.
-            with open(marker, "x") as fh:
-                fh.write("shown\n")
-        except OSError:
-            # Never interrupt completion or show a prompt we cannot remember.
-            return
-        self.prompt_kind = "support"
-        self.chat_focus = "gate"
-        self.prompt_text = (
-            "Your workflow is complete! Support Uncle by adding a star on GitHub: "
-            "https://github.com/unclehq/uncle/issues/new "
-            "This popup won't bother you again.")
+            while True:
+                kind, value = preview.events.get_nowait()
+                changed = True
+                if kind == 'output':
+                    self._ensure_chat()
+                    self.home_history.append(('application', sanitize(value)))
+                elif kind == 'done':
+                    self._completion_dialog(value)
+        except queue.Empty:
+            pass
+        return changed
+
+    def _completion_dialog(self, starred):
+        base = os.environ.get('XDG_STATE_HOME')
+        if not base or not os.path.isabs(base):
+            base = os.path.join(os.path.expanduser('~'), '.local', 'state')
+        marker = os.path.join(base, 'uncle', 'star-prompt-shown')
+        offer = not starred
+        if offer:
+            try:
+                os.makedirs(os.path.dirname(marker), exist_ok=True)
+                with open(marker, 'x') as stream:
+                    stream.write('shown\n')
+            except OSError:
+                offer = False
+        self.prompt_kind = 'support' if offer else 'finished'
+        self.chat_focus = 'gate'
+        self.prompt_text = ('Finished. Support Uncle by adding a star on GitHub: '
+                            + STAR_URL + " This popup won't bother you again.") if offer else 'Finished'
 
     def _absorb_line(self, line):
         # Native chat text is assembled through status events; retain its raw
@@ -1742,7 +1774,9 @@ class UncleTUI:
         if ("PR title [default: ".startswith(plain)
                 or plain.startswith("PR title [default:") and not plain.endswith("]:")):
             return
-        signing_prefix = "Commit signing needs your help. "
+        signing_prefix = next((prefix for prefix in ("Commit signing needs your help. ", "Commit needs your help. ")
+                               if prefix.startswith(plain) or plain.startswith(prefix)),
+                              "Commit signing needs your help. ")
         signing_suffix = " Return here and press ENTER (OK) when finished:"
         if signing_prefix.startswith(plain) or plain.startswith(signing_prefix):
             if not plain.endswith("press ENTER (OK) when finished:"):
@@ -1856,6 +1890,9 @@ class UncleTUI:
         self.prompt_seen = 0
 
     def stop_workflow(self):
+        if getattr(self, "completion_preview", None):
+            self.completion_preview.close()
+            self.completion_preview = None
         if self.proc and self.proc.poll() is None:
             subprocess.run(["bash", os.path.join(ROOT, "scripts", "lib", "terminal-title.sh"),
                             "--stop-tree", str(self.proc.pid), "include-root"], check=True)
@@ -1946,10 +1983,17 @@ class UncleTUI:
         self.home_history.append(('system', 'Steering queued for ' + stage))
 
     def send_home_chat(self, message):
+        preview = getattr(self, 'completion_preview', None)
+        if preview and preview.kind == 'command' and preview.process and preview.process.poll() is None:
+            preview.send(message)
+            return
         if getattr(self, 'recovery_active', False):
             self._triage_turn('diagnosis', followup=message)
             return
-        if self.state == 'running':
+        gate_question = (self.state == 'running' and bool(getattr(self, 'prompt_kind', ''))
+                         and self.proc is not None and self.proc.poll() is None)
+        stage_channel = getattr(self, 'steering_channels', {}).get(getattr(self, 'status_stage', ''))
+        if self.state == 'running' and (stage_channel or not gate_question):
             return self.steer_stage(message)
         if self.home_request is not None:
             raise ValueError('A reply is still running. Wait or use /clear to cancel.')
@@ -1960,7 +2004,7 @@ class UncleTUI:
             r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+)'
             r'(?P<issue>https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?|#?[1-9][0-9]*)[.!]?',
             message.strip(), re.IGNORECASE)
-        if issue_request:
+        if issue_request and not gate_question:
             self.home_history.append(('user', sanitize(message)))
             self._home_action({'uncle_action': 'github_issue',
                                'issue': issue_request['issue'].removeprefix('#'),
@@ -1973,7 +2017,35 @@ class UncleTUI:
             raise ValueError('Choose a runner in Configure first')
         user_text = self.chat.refs.expand(sanitize(message))
         history = self.home_history + [('user', user_text)]
-        prompt = home_action_prompt(history, _project_root())
+        if gate_question:
+            prompt = ('Answer questions about the pending stage decision. The workflow is paused. '
+                      'Do not approve, reject, run commands, edit files, or emit homepage actions. '
+                      'Only the user can answer the pending dialog. Explain proposed changes; '
+                      'do not claim to have applied them. This is a separate question session '
+                      'using the stage model, not a continuation of the completed runner.\n'
+                      + 'Stage: ' + stage + '\nPending dialog: ' + self.prompt_text + '\n')
+            root = Path(_project_root())
+            candidates = [getattr(self, 'gate_file', ''), 'MANUAL_CHECKLIST.md',
+                          'IMPLEMENTATION_NOTES.md', 'VERIFICATION_REPORT.md', 'FINAL_AUDIT.md',
+                          'CHANGE_PLAN.md', 'UPDATED_PROJECT_PLAN.md']
+            remaining = 55000
+            seen = set()
+            for name in candidates:
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                path = (root / name).resolve()
+                if not path.is_relative_to(root.resolve()) or not path.is_file():
+                    continue
+                with path.open('rb') as source:
+                    content = source.read(min(12000, remaining))
+                remaining -= len(content)
+                prompt += '\nDocument excerpt (' + name + '):\n' + content.decode('utf-8', 'replace') + '\n'
+                if remaining <= 0:
+                    break
+            prompt += '\nConversation:\n' + '\n'.join(role + ': ' + text for role, text in history[-12:])
+        else:
+            prompt = home_action_prompt(history, _project_root())
         if not issue_references(message):
             prompt += getattr(self, 'home_issue_context', '')
         if len(prompt.encode('utf-8')) > 100000:
@@ -2001,12 +2073,13 @@ class UncleTUI:
                 env['UNCLE_CLINE_MODEL'] = env['UNCLE_CLINE_REVIEWER_MODEL'] = model
         self.chat.send(message)
         self.home_history = history
-        if issue_references(message):
+        if issue_references(message) and not gate_question:
             root = _project_root()
             self.home_request = HomeRequest(command, prompt, env,
                                             issue_lookup=lambda: issue_context(root, message))
         else:
             self.home_request = HomeRequest(command, prompt, env)
+        self.home_request.gate_question = gate_question
 
     def poll_home_chat(self):
         request = getattr(self, 'home_request', None)
@@ -2022,7 +2095,7 @@ class UncleTUI:
             if isinstance(context, str) and context:
                 self.home_issue_context = context
             try:
-                action = parse_home_action(value)
+                action = None if getattr(request, 'gate_question', False) is True else parse_home_action(value)
                 if action is None:
                     self.home_history.append(('assistant', sanitize(value)))
                     self.chat_error = ''
@@ -2968,6 +3041,8 @@ class UncleTUI:
         text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
         visible_text = text[-max(1, width - 3):]
         placeholder = 'Ask about the failure · /do N · /resume' if getattr(self, 'recovery_active', False) else 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
+        if self.state == 'running' and self.prompt_kind and self.chat_focus == 'chat':
+            placeholder = 'Ask a question · Tab returns to the pending dialog'
         put(row + (3 if compact else 6), '› ' + (visible_text if text else placeholder),
             color.get('accent', 0) if text else color.get('muted', curses.A_DIM))
         put(row + (3 if compact else 6), '›', color.get('warning', curses.A_BOLD))
@@ -3062,8 +3137,14 @@ class UncleTUI:
                 self.stdscr.addnstr(i, 0, line, message_width)
             except curses.error:
                 pass
-        if self.prompt_kind:
+        if self.prompt_kind and getattr(self, 'chat_focus', 'gate') != 'chat':
             self._draw_modal(h, w)
+        elif self.prompt_kind:
+            try:
+                pending = 'Pending: ' + ' '.join(sanitize(self.prompt_text).split()) + ' · Tab returns to dialog'
+                self.stdscr.addnstr(0, 0, pending, max(1, message_width))
+            except curses.error:
+                pass
 
     def _restore_session_totals(self):
         stats = getattr(self, "session_stats", None)
@@ -3577,14 +3658,17 @@ class UncleTUI:
                 footer = "[y] Ignore  [n] Keep blocking  [v] audit  [↑↓] scroll"
         elif self.prompt_kind == "audit":
             footer = "[s] Skip  [r] Human reviewed — OK  [n] Keep blocking"
+        elif self.prompt_kind == "finished":
+            footer = "[Enter/Esc] dismiss"
         elif self.prompt_kind == "support":
             footer = "[s] open GitHub to star      [Enter/Esc] dismiss"
         elif self.prompt_kind == "enter":
             footer = "[Enter] continue      [Esc] decline"
-            if self.prompt_text.startswith("Commit signing needs your help."):
+            if self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help.")):
                 footer = "[c] Copy command  [Enter] resume  [Esc] cancel"
         else:
             footer = "type an answer, [Enter] send, [Esc] cancel"
+        footer += '   [Tab] chat / dialog'
         body = list(lines)
         if self.prompt_text.startswith("Audit finding "):
             visible = max(1, h - 10)
@@ -3592,7 +3676,7 @@ class UncleTUI:
             body = lines[self.prompt_scroll:self.prompt_scroll + visible]
         if self.prompt_kind == "input":
             body += ["", "> " + self.prompt_buf + "\u2588"]
-        if self.prompt_text.startswith("Commit signing needs your help."):
+        if self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help.")):
             width = max(1, w - 10)
             import textwrap
             lines = [line for paragraph in self.prompt_text.splitlines()
@@ -3607,16 +3691,16 @@ class UncleTUI:
 
         box_w = min(w - 4, max(len(l) for l in body + [footer]) + 6)
         box_w = (min(w - 2, max(box_w, min(30, w - 2)))
-                 if self.prompt_text.startswith("Commit signing needs your help.") else max(box_w, 30))
+                 if self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help.")) else max(box_w, 30))
         if support_url:
             # 43 visible URL characters need a 48-wide box at 1-column padding.
             box_w = min(w - 2, max(box_w, len(support_url) + 5))
         box_h = len(body) + 4
         top = max(0, (h - box_h) // 2)
         left = max(0, (w - box_w) // 2)
-        title = {"confirm": " approve ", "enter": " review ", "input": " input ", "support": " support Uncle "}.get(
+        title = {"confirm": " approve ", "enter": " review ", "input": " input ", "support": " support Uncle ", "finished": " Finished "}.get(
             self.prompt_kind, " uncle ")
-        if self.prompt_text.startswith("Commit signing needs your help."):
+        if self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help.")):
             title = " signed commit required "
         if self.prompt_text.startswith("Audit finding "):
             title = " blocking audit finding "
@@ -3697,7 +3781,7 @@ class UncleTUI:
         effort = "—"
         if self.state == "running" and self.status_stage:
             effort = (getattr(self, "status_effort", "") or
-                      getattr(self, "stage_efforts", {}).get(self.status_stage) or DEFAULT_EFFORT)
+                      getattr(self, "stage_efforts", {}).get(self.status_stage) or default_stage_effort(self.status_stage))
         parts = " runner: %s   model: %s   effort: %s   mode: %s " % (runner, model, effort, mode)
         if stage:
             parts += "  %s" % stage
@@ -3728,6 +3812,13 @@ class UncleTUI:
 
     # ---- input ----
     def handle_key(self, k):
+        preview = getattr(self, 'completion_preview', None)
+        if (k == 27 and self.state == 'running' and preview
+                and not getattr(self, 'prompt_kind', '')
+                and not getattr(self, 'chat_picker', False)
+                and preview.process and preview.process.poll() is None):
+            preview.close()
+            return
         if self.state == 'triage':
             self._triage_key(k)
             return
@@ -3747,7 +3838,7 @@ class UncleTUI:
             if self._chat_key(k):
                 return
         if (self.state == "running" and getattr(self, "prompt_kind", "") == "enter"
-                and self.prompt_text.startswith("Commit signing needs your help.")):
+                and self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help."))):
             if k in (ord("c"), ord("C")) and getattr(self, "signing_command", ""):
                 self._copy_signing_command()
                 return
@@ -3759,12 +3850,12 @@ class UncleTUI:
             if k in (curses.KEY_UP, curses.KEY_DOWN):
                 self.prompt_scroll = max(0, self.prompt_scroll + (1 if k == curses.KEY_DOWN else -1))
                 return
-        if self.state == "running" and getattr(self, "prompt_kind", "") == "support":
-            if k in (ord("s"), ord("S")):
+        if self.state == "running" and getattr(self, "prompt_kind", "") in ("support", "finished"):
+            if self.prompt_kind == "support" and k in (ord("s"), ord("S")):
                 self.prompt_kind = ""
                 self.chat_focus = "chat"
                 threading.Thread(target=webbrowser.open,
-                                 args=("https://github.com/unclehq/uncle/issues/new",),
+                                 args=(STAR_URL,),
                                  daemon=True).start()
             elif k in (10, 13, 27, ord("q"), ord("Q")):
                 self.prompt_kind = ""
@@ -4068,6 +4159,8 @@ class UncleTUI:
         self.start_workflow()
 
     def _quit(self):
+        if getattr(self, "completion_preview", None):
+            self.completion_preview.close()
         self.state = "quit"
 
     # ---- main loop ----

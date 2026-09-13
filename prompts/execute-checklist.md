@@ -14,8 +14,9 @@ driver derives an ordered set of groups there from the `Exclusive resources` and
 one line have no declared conflict and may overlap. Finish every check in a
 group before starting the next one.
 
-Overlapping is permission, not obligation: run fewer at a time if the machine
-cannot take it. Never merge two lines, and never overlap checks the grouping
+Run independent checks in each approved group concurrently by default, using
+up to WORKFLOW_VERIFY_JOBS workers (default 4, maximum 8). Reduce concurrency
+only for observed resource limits and record why. Never merge two lines, and never overlap checks the grouping
 separates. That grouping is the reviewer's judgment about ports, fixtures, and
 shared accounts, and your results are the thing that changes when it is wrong —
 two checks sharing a port produce a FAIL that reads like a product defect.

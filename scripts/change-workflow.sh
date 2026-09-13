@@ -37,6 +37,9 @@ resolve_prompt() {
 }
 
 STAGEGATE_VERSION="0.1.0"
+# The PR attestation reads these rather than guessing from the cwd.
+export UNCLE_VERSION="$STAGEGATE_VERSION"
+export UNCLE_LIB_DIR="$ROOT/scripts/lib"
 
 usage() {
     cat <<'EOF'

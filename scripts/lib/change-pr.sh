@@ -73,6 +73,38 @@ class NotReadyError(ValueError):
     pass
 
 
+ATTESTATION = None
+
+
+def attestation():
+    # Imported only when sealing or rendering, so a bare load of this engine
+    # (pr-reconcile-test.py) needs no library path.
+    global ATTESTATION
+    if ATTESTATION is None:
+        lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        import attestation as module
+        ATTESTATION = module
+    return ATTESTATION
+
+
+def seal_attestation(j):
+    # Sealed from driver state only, at bind: after the last agent stage.
+    return attestation().seal(j, STATE, root='.', version=os.environ.get('UNCLE_VERSION', ''),
+                              lib=os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib')
+
+
+def sealed_attestation(j):
+    # The bind seal, plus the rows the driver itself writes after bind. A
+    # journal bound before attestation existed is sealed now; validate() has
+    # just proved it still names this audited change.
+    sealed = j.get('attestation')
+    if not isinstance(sealed, dict):
+        sealed = seal_attestation(j)
+    return attestation().amend(sealed, j, STATE)
+
+
 def run(*args, env=None, data=None):
     result = subprocess.run(args, input=data, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, env=env)
@@ -500,6 +532,12 @@ def handoff(j):
             # An overridden verdict is not a READY verdict; the PR says so.
             body = ('> Created by operator override over a **' + record[1]
                     + '** audit verdict.\n\n') + body
+        # The consent just given is the publication gate; only a person at the
+        # terminal reaches this line, so it is the one field stamped here.
+        sealed = sealed_attestation(j)
+        sealed['gate_publication'] = 'APPROVED (human)'
+        j['attestation'] = sealed
+        body = attestation().attach_body(body, sealed)
         if j['origin']:
             origin = j['origin'].strip().split('\t')
             body += '\nCloses ' + origin[0] + '#' + origin[1] + '\n'
@@ -547,6 +585,12 @@ def handoff(j):
         raise ValueError('Base repository changed during prompts; rerun FINAL_AUDIT.')
     if remote_sha(j) != j['intended_head']:
         raise ValueError('Remote changed during lookup; rerun FINAL_AUDIT.')
+    if attestation().MARKER not in j['body']:
+        # A journal prepared before attestation existed; validate() just
+        # passed, so the seal describes this audited change. Once only.
+        j['attestation'] = sealed_attestation(j)
+        j['body'] = attestation().attach_body(j['body'], j['attestation'])
+        save(j)
     j['phase'] = 'creating'
     save(j)
     fd, body = tempfile.mkstemp(prefix='uncle-pr-body-')
@@ -600,6 +644,8 @@ def main():
             raise ValueError('Files, origin, HEAD or branch changed during audit; rerun FINAL_AUDIT.')
         j.update(audit_hash=audit_hash(), commit_tree=snapshot(True),
                  verdict_run=read(STATE / 'audit-verdict').split('\t')[0], phase='bound')
+        # Sealed here, after the last agent stage and before any handoff.
+        j['attestation'] = seal_attestation(j)
         save(j)
     elif action == 'validate':
         j = load()
@@ -635,8 +681,15 @@ except NotReadyError as error:
     print('PR pending: ' + str(error), flush=True)
     sys.exit(3)
 except (OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError) as error:
+    if ATTESTATION is not None and isinstance(error, ATTESTATION.AttestationError):
+        # Recoverable like NotReady (exit 3) but not overridable: the
+        # audited state is unusable, so no PR is created.
+        print('PR pending: Attestation blocked: ' + str(error), flush=True)
+        sys.exit(3)
     print('PR pending: ' + str(error), flush=True)
     sys.exit(1)
 PY
-    python3 -c "$pr_code" "$@"
+    # The attestation module lives beside this file; the driver may override.
+    UNCLE_LIB_DIR="${UNCLE_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}" \
+        python3 -c "$pr_code" "$@"
 }

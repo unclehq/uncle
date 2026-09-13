@@ -227,11 +227,15 @@ AGENT
     cat > "$CASE/bin/fake-reviewer" <<'REV'
 #!/usr/bin/env bash
 out=""
+review_prompt="${!#}"
 while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
     shift
 done
 if [[ "$out" == *assessment.json ]]; then
+    # A read-only reviewer returns JSON; the runner persists its final response.
+    [[ "$review_prompt" == *"Return the assessment JSON as your final response."* ]] || exit 90
+    [[ "$review_prompt" == *"do not write that file yourself."* ]] || exit 91
     python3 -B scripts/tests/plan-executability-test.py --review "$PWD"
     exit $?
 fi
@@ -332,6 +336,9 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 if [[ "$out" == *assessment.json ]]; then
+    # A read-only reviewer returns JSON; the runner persists its final response.
+    [[ "$review_prompt" == *"Return the assessment JSON as your final response."* ]] || exit 90
+    [[ "$review_prompt" == *"do not write that file yourself."* ]] || exit 91
     python3 -B scripts/tests/plan-executability-test.py --review "$PWD"
     exit $?
 fi

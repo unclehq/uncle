@@ -43,6 +43,23 @@ verify_parallel_groups() {
     ' "$plan"
 }
 
+# Resolve optional scheduling for an already-approved baseline without changing
+# the document (or its approval hash). Discard all rows on validation failure.
+resolve_baseline_parallel_groups() {
+    local plan="$1" commands="$2" output="$3" groups
+    [[ -r "$plan" && -r "$commands" ]] || return 1
+    if groups="$(verify_parallel_groups "$plan" "$commands")"; then
+        if [[ -n "$groups" ]]; then
+            printf '%s\n' "$groups" > "$output"
+        else
+            : > "$output"
+        fi
+    else
+        : > "$output" || return 1
+        echo "Invalid optional parallel groups in $plan; running the approved commands sequentially." >&2
+    fi
+}
+
 # Shown when a plan's groups cannot be parsed: the shape the parser accepts,
 # so whoever amends the plan does not have to read this file to find it.
 parallel_groups_format_hint() {

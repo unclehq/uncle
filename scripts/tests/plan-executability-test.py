@@ -88,6 +88,20 @@ class ContractTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.addCleanup(os.chdir, self.old)
 
+    def test_invalid_assessment_explains_final_response_contract(self):
+        mod.atomic(mod.ASSESS / 'manifest.json', self.m)
+        for content in ('Cannot write assessment: read-only session.', '', '[]'):
+            (mod.ASSESS / 'assessment.json').write_text(content)
+            result = subprocess.run([sys.executable, str(ROOT / 'scripts/lib/plan-executability.py'),
+                                     'render'], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 12)
+            self.assertIn('assessment.json', result.stderr)
+            self.assertNotIn('Traceback', result.stderr)
+            self.assertFalse((mod.ASSESS / 'validated.json').exists())
+            if content != '[]':
+                self.assertIn('final response', result.stderr)
+                self.assertIn('Resume', result.stderr)
+
     def test_supported(self):
         self.assertEqual(mod.validate(self.a, self.m)['eligible_steps'], ['S-1'])
 

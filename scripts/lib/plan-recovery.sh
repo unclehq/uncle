@@ -84,7 +84,7 @@ plan_assess() {
     if [[ "$status" == 12 ]]; then
         rm -f "$APPROVAL_DIR/PLAN_EXECUTABILITY.sha256"
         cat "$(resolve_prompt prompts/plan-executability.md)" > "$PLAN_ASSESS_DIR/prompt.md"
-        printf '\nRead %s/manifest.json; output JSON only to %s/assessment.json.\n' "$PLAN_ASSESS_DIR" "$PLAN_ASSESS_DIR" >> "$PLAN_ASSESS_DIR/prompt.md"
+        printf '\nRead %s/manifest.json. Return the assessment JSON as your final response. The driver saves it to %s/assessment.json; do not write that file yourself.\n' "$PLAN_ASSESS_DIR" "$PLAN_ASSESS_DIR" >> "$PLAN_ASSESS_DIR/prompt.md"
         rm -f "$PLAN_ASSESS_DIR/assessment.json"
         plan_review "$PLAN_ASSESS_DIR/prompt.md" "$PLAN_ASSESS_DIR/assessment.json" || return 1
     fi

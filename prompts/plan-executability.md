@@ -5,7 +5,10 @@ Use adapter source, version-matched documentation or recorded non-destructive pr
 proposed commands and adapter comments alone do not prove upstream support.
 Never broaden permissions, mutate production, or include credentials in evidence.
 
-Return one JSON object, without markdown fences, using this version 1 contract.
+Return one JSON object as your final response, without markdown fences or commentary,
+using this version 1 contract. The workflow driver saves that response to assessment.json.
+Your review session is read-only: do not create or write the assessment file yourself.
+Read-only access does not prevent returning the required JSON assessment.
 input_digest is the manifest digest. requirement_ids contains every acceptance ID.
 restrictions inventories ALL proposed and carried-forward restrictions, including
 legacy prose, with id, source_kind (USER/REPOSITORY/PLATFORM/DESIGN), source_location,

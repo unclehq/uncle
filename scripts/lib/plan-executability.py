@@ -438,7 +438,14 @@ def main():
         atomic(ASSESS / 'manifest.json', manifest(*args))
         return 0
     if ns.action in ('validate', 'render'):
-        m = read(ASSESS / 'manifest.json'); a = read(ASSESS / 'assessment.json')
+        m = read(ASSESS / 'manifest.json')
+        try:
+            a = read(ASSESS / 'assessment.json')
+        except json.JSONDecodeError as exc:
+            raise ValueError('assessment.json is not valid JSON. The reviewer must return '
+                             'the assessment as its final response; the driver saves it. '
+                             'Resume to request a fresh assessment.') from exc
+        require(isinstance(a, dict), 'assessment.json must contain one JSON object')
         result = validate(a, m)
         if ns.action == 'render':
             text = '# Plan executability\n\nInput digest: ' + m['digest'] + '\n\n'

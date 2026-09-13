@@ -27,6 +27,31 @@ class Checks(unittest.TestCase):
             (self.root/'expected').write_text(hashlib.sha256(b'original\n').hexdigest()+'\tfixture\n')
             argv+=['--paths','scopes','--expected','expected','--integrity-log','integrity']
         return subprocess.run(argv, cwd=self.root, capture_output=True, text=True, timeout=15)
+    def test_approved_baseline_schedule_fallback(self):
+        commands = "echo 1 >> order\ntest -f order && echo 2 >> order; exit 7\necho 3 >> order\n"
+        (self.root/'commands').write_text(commands)
+        for declaration, expected in [('1 3', ''), ('1 2\n2 3', ''),
+                                      ('1 2', '1 2\n'), ('', '')]:
+            report = '## Parallel verification groups\n\n```text\n' + declaration + '\n```\n' if declaration else '# Baseline\n'
+            (self.root/'report').write_text(report)
+            (self.root/'groups').write_text('stale schedule\n')
+            script = '. "$1/scripts/lib/green-check.sh"; resolve_baseline_parallel_groups report commands groups'
+            if not expected:
+                script += '; green_run commands results log "" groups'
+            result = subprocess.run([bash_executable(), '-euc', script, 'test',
+                                     os.environ['UNCLE_TEST_ROOT']], cwd=self.root,
+                                    capture_output=True, text=True, timeout=15,
+                                    env=dict(os.environ, WORKFLOW_METRICS='0'))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((self.root/'groups').read_text(), expected)
+            self.assertEqual((self.root/'report').read_text(), report)
+            self.assertEqual((self.root/'commands').read_text(), commands)
+            if not expected:
+                self.assertEqual((self.root/'order').read_text(), '1\n2\n3\n')
+                self.assertEqual([row.split('\t')[0] for row in
+                                  (self.root/'results').read_text().splitlines()], ['0', '7', '0'])
+                (self.root/'order').unlink()
+
     def test_overlap_and_barrier(self):
         commands=[]
         for i,other in [(1,2),(2,1)]:

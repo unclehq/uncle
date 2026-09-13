@@ -105,6 +105,38 @@ export const getClineDefaultSystemPrompt=()=>'';
 '''
 
 class NativeTests(unittest.TestCase):
+ def test_readonly_reviewer_final_json_is_saved_by_adapter(self):
+  fake_code = """#!/usr/bin/env python3
+import json, sys
+def send(value): print(json.dumps(value), flush=True)
+for line in sys.stdin:
+ event = json.loads(line)
+ method = event.get('method')
+ if method == 'initialize': send({'id':event['id'], 'result':{}})
+ elif method == 'thread/start':
+  assert event['params']['sandbox'] == 'read-only'
+  assert event['params']['approvalPolicy'] == 'never'
+  send({'id':event['id'], 'result':{'thread':{'id':'review'}}})
+ elif method == 'turn/start':
+  send({'id':event['id'], 'result':{'turn':{'id':'assessment'}}})
+  send({'method':'item/agentMessage/delta', 'params':{'delta':'Reading inputs.'}})
+  send({'method':'item/completed', 'params':{'item':{'type':'agentMessage', 'text':'{"version":1,"verdict":"REVISE"}'}}})
+  send({'method':'turn/completed', 'params':{'turn':{'id':'assessment', 'status':'completed'}}})
+"""
+  with tempfile.TemporaryDirectory() as d:
+   root = Path(d)
+   fake = root/'runner'
+   fake.write_text(fake_code)
+   fake.chmod(0o755)
+   output = root/'assessment.json'
+   result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/lib/native_stage.py'),
+                            '--runner', 'codex', '--side', 'reviewer', '--stage', 'plan-executability',
+                            '--', 'exec', '--output-last-message', str(output), 'Return assessment JSON.'],
+                           cwd=root, env=dict(os.environ, WORKFLOW_CODEX_CMD=str(fake)),
+                           capture_output=True, text=True, timeout=15)
+   self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+   self.assertEqual(json.loads(output.read_text()), {'version':1, 'verdict':'REVISE'})
+
  def test_native_same_session_and_metrics(self):
   for runner in ('codex','kimi','claude'):
    with self.subTest(runner=runner),tempfile.TemporaryDirectory() as d:

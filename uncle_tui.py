@@ -2074,7 +2074,7 @@ class UncleTUI:
                 self.prompt_scroll = max(0, getattr(self, 'prompt_scroll', 0) +
                                          (1 if k == curses.KEY_DOWN else -1))
                 return True
-            return False  # Existing gate keys are the sole driver-stdin writer.
+            return False  # Gate keys use the same approval handler as /approve.
         if not self.chat_edit and self._chat_command(k):
             return True
         try:
@@ -2310,7 +2310,7 @@ class UncleTUI:
         return False
 
     def _slash_choices(self):
-        commands = ['/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/clear']
+        commands = ['/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear']
         text = self.chat_composer.lower()
         return [command for command in commands if command.startswith(text)] if text.startswith('/') and ' ' not in text else []
 
@@ -2351,6 +2351,20 @@ class UncleTUI:
                 self.chat_picker = False
                 self.chat_choices = []
                 self._run()
+            elif command == '/approve':
+                pending = (self.state == 'running'
+                           and getattr(self, 'prompt_kind', '') == 'confirm'
+                           and getattr(self, 'prompt_text', '').strip().lower().startswith(
+                               ('ready to approve ', 'ready to acknowledge '))
+                           and self.proc is not None and self.proc.poll() is None)
+                if not pending:
+                    self.chat_error = 'No stage approval is waiting. /approve works when an approval gate is ready.'
+                    return True
+                self.answer_prompt('y')
+                self.chat_composer = ''
+                self.chat_error = ''
+                self.chat_picker = False
+                self.chat_choices = []
             elif command in commands:
                 self.chat_error = ''
                 self.chat_picker = False
@@ -2376,7 +2390,7 @@ class UncleTUI:
                 self.chat_error = ''
                 self.chat_choices = []
             else:
-                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /clear'
+                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear'
             return True
         return False
 
@@ -2459,7 +2473,7 @@ class UncleTUI:
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
         text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
         visible_text = text[-max(1, width - 3):]
-        placeholder = 'Describe an app or a change…'
+        placeholder = 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
         put(row + (3 if compact else 6), '› ' + (visible_text if text else placeholder),
             color.get('accent', 0) if text else color.get('muted', curses.A_DIM))
         put(row + (3 if compact else 6), '›', color.get('warning', curses.A_BOLD))
@@ -2492,7 +2506,7 @@ class UncleTUI:
         elif self.chat_choices:
             put(row + (7 if compact else 11), 'File: ' + self.chat_choices[self.chat_pick], color.get('accent', 0))
         elif self.chat_composer.startswith('/'):
-            put(row + (7 if compact else 11), '/configure /settings /file /quit /issue # /requirements /change /clear', color.get('muted', curses.A_DIM))
+            put(row + (7 if compact else 11), '/configure /settings /file /quit /issue # /requirements /change /approve /clear', color.get('muted', curses.A_DIM))
 
         self._draw_file_picker(row + (3 if compact else 6), left, width)
     def _draw_chat_panel(self, top, bottom, left, width):

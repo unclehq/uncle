@@ -62,3 +62,8 @@ A short review of genuine defects is worth more than a long one padded out.
 Return only the review.
 
 Use concise field values and concrete failure examples. Use the compact format above; avoid a paragraph for each field. Do not repeat plan content or summarize findings again in the closing sections.
+
+For every restriction finding, distinguish the concrete failure and required property
+from a suggested mechanism. Record provenance and selected-runner feasibility evidence.
+Do not promote blanket denial or another generated mitigation into external authority.
+Accept evidenced in-scope alternatives preserving the property; retain every finding ID.

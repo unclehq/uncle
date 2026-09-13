@@ -71,6 +71,14 @@ while [[ $# -gt 0 ]]; do
 done
 export UNCLE_UNATTENDED="$UNATTENDED"
 
+# Serialize both workflow families before mutable initialization.
+if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
+    driver_args=(bash "${BASH_SOURCE[0]}")
+    [[ "$UNATTENDED" != 1 ]] || driver_args+=(--unattended)
+    exec python3 "$ROOT/scripts/lib/plan-executability.py" lock-run "${driver_args[@]}"
+fi
+. "$ROOT/scripts/lib/plan-recovery.sh"
+
 STATE_DIR=".uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
 LOG_DIR="$STATE_DIR/logs"
@@ -1136,7 +1144,9 @@ run_codex_review() {
 
     # The reviewer writes a document a human reads, so it gets the output
     # rules the same way an agent stage does.
-    prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+    if [[ "$log_name" != plan-executability ]]; then
+        prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+    fi
     if [[ "$log_name" == test-review ]]; then
         local evidence_prompt="$LOG_DIR/test-review.evidence-prompt.md"
         cat "$prompt_file" > "$evidence_prompt"
@@ -1186,6 +1196,7 @@ run_codex_review() {
         case "$retry_answer" in y|Y) status=0 ;; *) return "$status" ;; esac
     done
     require_file "$output_file"
+    [[ "$log_name" != plan-executability ]] || return 0
     # Do not reuse results if inputs changed while the reviewer was reading them.
     if [[ -n "$review_key" && "$review_key" == "$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")" ]]; then
         save_plan_review "$output_file" "$review_key"
@@ -1608,6 +1619,10 @@ while true; do
             }
             # No speculation here: IMPLEMENT writes source code, and it may not
             # start before this approval exists.
+            plan_status=0
+            plan_assess || plan_status=$?
+            if [[ "$plan_status" == 10 ]]; then continue; fi
+            if [[ "$plan_status" != 0 ]]; then exit 1; fi
             review_and_approve \
                 UPDATED_PROJECT_PLAN.md \
                 UPDATED_PROJECT_PLAN \
@@ -1636,6 +1651,9 @@ while true; do
                 exit 1
             fi
             run_stage PREFLIGHT
+            if [[ -s "$STATE_DIR/plan-executability/assessment.json" ]]; then
+                plan_tool preflight-check || exit 1
+            fi
             preflight_result="$(acceptance_result PREFLIGHT_REPORT.md)"
             case "$preflight_result" in
                 PASS) human_input_reset "$STATE_DIR" ;;
@@ -1724,7 +1742,13 @@ while true; do
                 snapshot_untracked "$UNTRACKED_BASELINE"
             fi
 
-            run_stage IMPLEMENT
+            plan_status=0
+            plan_before_write || plan_status=$?
+            case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac
+            [[ "$plan_status" == 22 ]] || run_stage IMPLEMENT
+            plan_status=0
+            plan_after_write || plan_status=$?
+            case "$plan_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
             verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
             PREVIOUS_VERIFICATION_SNAPSHOT=""
             capture_verification_inputs
@@ -1734,6 +1758,7 @@ while true; do
             # failure is for the operator to weigh against the diff, and
             # killing the run here would throw away the stage that produced it.
             run_green_check || true
+            plan_delivery_summary
             check_verification_inputs
 
             set_state WAIT_IMPLEMENT_APPROVAL
@@ -1869,14 +1894,29 @@ while true; do
                 exit 1
             fi
             repair_count=$((10#$repair_count))
-            ensure_repair_capacity "$repair_count" || exit 1
-            repair_count=$((repair_count + 1))
-            printf '%s\n' "$repair_count" > "$STATE_DIR/repair-count"
+            plan_status=0
+            if [[ -s "$STATE_DIR/plan-recovery.json" ]] && grep -qE '"phase": "(WAIT_LIVE|VERIFYING|DESIGN|AUTHORITY)"' "$STATE_DIR/plan-recovery.json"; then
+                plan_before_write repair-resume || plan_status=$?
+                case "$plan_status" in 22) ;; 10) continue ;; *) exit 1 ;; esac
+            fi
+            if [[ "$plan_status" != 22 ]]; then
+                ensure_repair_capacity "$repair_count" || exit 1
+                repair_count=$((repair_count + 1))
+                plan_before_write "repair-$repair_count" || plan_status=$?
+                case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac
+            fi
             PREVIOUS_VERIFICATION_SNAPSHOT="$(cat "$STATE_DIR/verification-snapshot" 2>/dev/null || true)"
-            run_stage REPAIR
+            if [[ "$plan_status" != 22 ]]; then
+                printf '%s\n' "$repair_count" > "$STATE_DIR/repair-count"
+                run_stage REPAIR
+            fi
+            plan_status=0
+            plan_after_write || plan_status=$?
+            case "$plan_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
             verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
             capture_verification_inputs
             run_green_check || true
+            plan_delivery_summary
             check_verification_inputs
             set_state WAIT_IMPLEMENT_APPROVAL
             ;;
@@ -1900,6 +1940,7 @@ while true; do
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
             run_green_check || true
+            plan_delivery_summary
             check_verification_inputs
             snapshot_checklist_checks
             snapshot_checklist_groups
@@ -2048,7 +2089,11 @@ while true; do
 
         COMPLETE)
             echo
-            echo "Workflow complete."
+            if [[ -s "$STATE_DIR/delivery-summary.tsv" ]] && grep -q $'\tWAIVED\t' "$STATE_DIR/delivery-summary.tsv"; then
+                echo "Workflow complete with waived acceptance."
+            else
+                echo "Workflow complete."
+            fi
             if [[ -s "$VERDICT_FILE" ]]; then
                 echo "Build verdict: $(awk -F'\t' 'NR == 1 {print $1}' "$VERDICT_FILE")"
             fi

@@ -94,3 +94,9 @@ VERIFICATION_REPORT.md and CHANGE_TEST_REPORT.md that you could not tie to
 executed evidence is reported individually, however many there are.
 
 Return only the audit.
+
+Read .uncle/workflow/plan-executability/assessment.md, plan-recovery.json and
+ delivery-summary.tsv under .uncle/workflow when present. Compare archived evidence
+and live verification results against delivery claims. A WAIVED row permits only
+explicitly scoped workflow advancement, never implemented-and-verified delivery.
+Report completion with waivers as "workflow complete with waived acceptance".

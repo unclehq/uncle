@@ -82,3 +82,8 @@ Closing sections contain finding IDs and decisions only, never finding summaries
 Reserve at most 400 bytes for these closing sections.
 
 Return only the review.
+
+For every restriction finding, distinguish the concrete failure and required property
+from a suggested mechanism. Record provenance and selected-runner feasibility evidence.
+Do not promote blanket denial or another generated mitigation into external authority.
+Accept evidenced in-scope alternatives preserving the property; retain every finding ID.

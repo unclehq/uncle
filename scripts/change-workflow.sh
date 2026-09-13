@@ -70,6 +70,14 @@ while [[ $# -gt 0 ]]; do
 done
 export UNCLE_UNATTENDED="$UNATTENDED"
 
+# Serialize both workflow families before mutable initialization.
+if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
+    driver_args=(bash "${BASH_SOURCE[0]}")
+    [[ "$UNATTENDED" != 1 ]] || driver_args+=(--unattended)
+    exec python3 "$ROOT/scripts/lib/plan-executability.py" lock-run "${driver_args[@]}"
+fi
+. "$ROOT/scripts/lib/plan-recovery.sh"
+
 STATE_DIR=".uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
 # Every gate an unattended run passed without a person, dated. The whole cost
@@ -384,6 +392,7 @@ implementation_incomplete_choice() {
                 # Clearing the digest is what lets the repair path run again for
                 # this plan; without it the next pass repeats the same refusal.
                 rm -f "$STATE_DIR/implementation-completion-repair"
+                plan_tool retry
                 echo "Retrying implementation."
                 return 0
                 ;;
@@ -1062,6 +1071,7 @@ run_stepwise_implementation() {
 
         echo
         echo "Implementation step $i/$total: ${step:0:70}"
+        plan_assess || return $?
         run_claude "$prompt" "implementation-step-$i" \
             "$MODEL_IMPLEMENT" "" "$turns" "$BUDGET_IMPLEMENT"
 
@@ -1375,7 +1385,9 @@ run_codex() {
     require_file "$prompt_file"
     # The reviewer writes a document a human reads, so it gets the output
     # rules the same way an agent stage does.
-    prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+    if [[ "$log_name" != plan-executability ]]; then
+        prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+    fi
 
     local review_key
     review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"
@@ -1423,6 +1435,7 @@ run_codex() {
 
     [[ "$status" == 0 ]] || return "$status"
     require_file "$output_file"
+    [[ "$log_name" != plan-executability ]] || return 0
     # Do not reuse results if inputs changed while the reviewer was reading them.
     if [[ -n "$review_key" && "$review_key" == "$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")" ]]; then
         save_plan_review "$output_file" "$review_key"
@@ -1475,7 +1488,9 @@ start_codex_bg() {
     require_file "$prompt_file"
     # The reviewer writes a document a human reads, so it gets the output
     # rules the same way an agent stage does.
-    prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+    if [[ "$log_name" != plan-executability ]]; then
+        prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+    fi
     rm -f "$output_file"
     status_stage_context "$log_name" 0 "${model:-}" review
 
@@ -1557,7 +1572,7 @@ wait_codex_bg() {
 # State machine
 # ---------------------------------------------------------------------------
 
-acquire_lock
+# The shared supervisor owns the permanent lock.
 origin_preflight
 
 # Whether this invocation can prove it owns .uncle/workflow/origin, rather than having
@@ -1724,6 +1739,9 @@ while true; do
             ;;
 
         WAIT_UPDATED_PLAN_APPROVAL)
+            plan_status=0
+            plan_assess || plan_status=$?
+            case "$plan_status" in 0) ;; 10) continue ;; *) exit 1 ;; esac
             # Re-approving CHANGE_PLAN overwrites the ACKNOWLEDGE hash taken
             # before the revision, so the recorded approval always names the
             # text implementation will run against.
@@ -1735,6 +1753,9 @@ while true; do
         IMPLEMENT)
             verify_approval CHANGE_PLAN.md CHANGE_PLAN
             verify_approval CHANGE_SPEC.md CHANGE_SPEC
+            plan_status=0
+            plan_before_write || plan_status=$?
+            case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac
 
             # Taken before the agent runs, so an untracked file that was
             # already sitting in the operator's checkout is not read as
@@ -1761,8 +1782,14 @@ while true; do
 
             if [[ -s IMPLEMENTATION_NOTES.md ]] && implementation_has_changes && implementation_complete; then
                 echo "Existing implementation delivery accepted; continuing to verification."
-            elif [[ "$STEPWISE_IMPLEMENT" == "1" ]]; then
-                run_stepwise_implementation prompts/change/implement-change.md
+            elif [[ "$plan_status" == 22 ]]; then
+                echo 'Verification-only resume finished; checking delivery.'
+            elif [[ "$(cat "$STATE_DIR/implementation-completion-repair" 2>/dev/null || true)" == "$(hash_file CHANGE_PLAN.md)" ]]; then
+                echo 'Implementation remains incomplete; automatic repair already attempted for this plan.'
+            elif [[ "$STEPWISE_IMPLEMENT" == "1" ]] && ! grep -q '"verdict": "DECISION"' "$PLAN_ASSESS_DIR/assessment.json"; then
+                step_status=0
+                run_stepwise_implementation prompts/change/implement-change.md || step_status=$?
+                case "$step_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
             else
                 compose_implementation_prompt \
                     prompts/change/implement-change.md \
@@ -1771,6 +1798,9 @@ while true; do
                 run_claude "$STATE_DIR/implement-change.resolved.md" implementation \
                     "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
             fi
+            plan_status=0
+            plan_after_write || plan_status=$?
+            case "$plan_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
             require_file IMPLEMENTATION_NOTES.md
             require_file CHANGE_TEST_REPORT.md
             check_document_budget IMPLEMENTATION_NOTES.md || exit 1
@@ -1808,8 +1838,14 @@ and mocked tests. Complete those first; report any remaining live check as
 BLOCKED without claiming acceptance. Do not change approved scope or protected
 tests without the required approval.
 REPAIR
+                    plan_status=0
+                    plan_before_write repair || plan_status=$?
+                    case "$plan_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
                     run_claude "$STATE_DIR/implementation-repair.md" implementation \
                         "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
+                    plan_status=0
+                    plan_after_write || plan_status=$?
+                    case "$plan_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
                     if ! implementation_has_changes || ! implementation_complete; then
                         echo "Implementation remains incomplete: required delivery is missing."
                         echo "Resolve the blockers in IMPLEMENTATION_NOTES.md and CHANGE_PLAN.md, then resume."
@@ -1839,6 +1875,7 @@ REPAIR
             # regression is for the operator to weigh against the diff, and
             # killing the run here would throw away the stage that produced it.
             run_green_check || true
+            plan_delivery_summary
 
             # Waited for before the gate, not after: declining the gate exits
             # the driver, and cleanup_bg would kill a checklist run that is
@@ -1930,6 +1967,7 @@ REPAIR
 
         EXECUTE_CHECKLIST)
             run_green_check || true
+            plan_delivery_summary
             snapshot_checklist_groups
             snapshot_checklist_checks
             ensure_checklist_runner execute-checklist || exit 1
@@ -2059,7 +2097,11 @@ REPAIR
 
         COMPLETE)
             echo
-            echo "Change workflow complete."
+            if [[ -s "$STATE_DIR/delivery-summary.tsv" ]] && grep -q $'\tWAIVED\t' "$STATE_DIR/delivery-summary.tsv"; then
+                echo "Change workflow complete with waived acceptance."
+            else
+                echo "Change workflow complete."
+            fi
             if [[ -s "$VERDICT_FILE" ]]; then
                 echo "Build verdict: $(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")"
             fi

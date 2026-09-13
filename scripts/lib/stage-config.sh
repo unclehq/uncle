@@ -56,6 +56,8 @@ uncle_config_get() {
 # Base and delta are executions of the configured checklist stage.
 uncle_config_stage() {
     case "$1" in
+        plan-executability) printf 'adversarial-review' ;;
+        plan-recovery) printf 'updated-plan' ;;
         manual-checklist-base|manual-checklist-delta) printf 'manual-checklist' ;;
         implementation-step-*) printf 'implementation' ;;
         *) printf '%s' "$1" ;;

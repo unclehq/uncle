@@ -190,6 +190,10 @@ write_implementation_review() {
             echo "NOT RUN."
         fi
 
+        local evidence
+        for evidence in .uncle/workflow/plan-executability/assessment.md .uncle/workflow/plan-recovery.json .uncle/workflow/delivery-summary.tsv; do
+            [[ ! -s "$evidence" ]] || embed_document "$evidence"
+        done
         local doc
         for doc in "$@"; do
             embed_document "$doc"

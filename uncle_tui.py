@@ -1328,6 +1328,8 @@ class UncleTUI:
             return
         kind = ev.get('event', '')
         if kind.startswith('steering_') or kind == 'chat_output':
+            if getattr(self, 'workflow_exit_reported', False):
+                return  # Late buffered events cannot reconnect a stopped build.
             self._ensure_chat()
             channels = getattr(self, 'steering_channels', {})
             self.steering_channels = channels
@@ -1425,8 +1427,8 @@ class UncleTUI:
                 self.prompt_kind = ''
                 self.chat_focus = 'chat'
                 self._ensure_chat()
-                message = ('Workflow stopped (exit code %s). No model is running. '
-                           'Press Esc to return to the menu.' % self.workflow_exit_code)
+                reason = 'Workflow was killed (SIGKILL, exit code 137)' if self.workflow_exit_code in (137, -9) else 'Workflow stopped (exit code %s)' % self.workflow_exit_code
+                message = reason + '. Stage chat disconnected. Press Esc to return to the menu.'
                 self.home_history.append(('system', message))
                 self.chat_error = message
 

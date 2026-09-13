@@ -177,6 +177,40 @@ class NativeTests(unittest.TestCase):
     finally:
      if child.poll() is None:child.kill();child.wait()
 
+ @unittest.skipUnless(os.name == 'posix', 'POSIX parent death; Windows uses Job Objects')
+ def test_sigkill_of_workflow_parent_cancels_native_runner(self):
+  import signal
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d);fake=root/'runner'
+   fake.write_text(FAKE.replace('import sys,json,os', 'import sys,json,os\nopen(os.environ["FAKE_PID"],"w").write(str(os.getpid()))'))
+   fake.chmod(0o755)
+   status=root/'events';status.touch()
+   env=dict(os.environ,UNCLE_STATUS_FILE=str(status),WORKFLOW_CODEX_CMD=str(fake),FAKE_PID=str(root/'runner.pid'),PYTHONDONTWRITEBYTECODE='1')
+   args=[sys.executable,'-B',str(ROOT/'scripts/lib/native_stage.py'),'--runner','codex','--side','reviewer','--stage','baseline','--','exec','Initial task']
+   wrapper='import subprocess,sys,time; from pathlib import Path; child=subprocess.Popen(sys.argv[1:]); Path("stage.pid").write_text(str(child.pid)); child.wait()'
+   with (root/'output').open('w') as log:
+    parent=subprocess.Popen([sys.executable,'-c',wrapper,*args],cwd=d,env=env,stdout=log,stderr=log)
+    try:
+     deadline=time.monotonic()+10
+     while 'steering_ready' not in status.read_text() and time.monotonic()<deadline:
+      time.sleep(.03)
+     self.assertIn('steering_ready',status.read_text())
+     parent.kill();parent.wait()
+     deadline=time.monotonic()+10
+     while 'Workflow parent exited' not in (root/'output').read_text() and time.monotonic()<deadline:
+      time.sleep(.03)
+     self.assertIn('Workflow parent exited; native stage cancelled',(root/'output').read_text())
+     self.assertIn('steering_closed',status.read_text())
+     runner_pid=int((root/'runner.pid').read_text())
+     state=subprocess.run(['ps','-p',str(runner_pid),'-o','stat='],capture_output=True,text=True).stdout.strip()
+     self.assertTrue(not state or state.startswith('Z'),state)
+    finally:
+     if parent.poll() is None:parent.kill();parent.wait()
+     for name in ('stage.pid','runner.pid'):
+      if (root/name).exists():
+       try:os.kill(int((root/name).read_text()),signal.SIGTERM)
+       except ProcessLookupError:pass
+
  def test_cumulative_usage_replaces_previous_snapshot(self):
   with tempfile.TemporaryDirectory() as d,patch.dict(os.environ,{'UNCLE_STATUS_FILE':str(Path(d)/'events')}):
    stage=Stage('cline','agent','implementation',[],prompt='task')

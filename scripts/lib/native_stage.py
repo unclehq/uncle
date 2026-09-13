@@ -18,6 +18,9 @@ KEYS = ('input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creat
 
 class Stage:
     def __init__(self, runner, side, stage, args, prompt=None):
+        self.parent_pid = os.getppid()
+        self.parent_lost = False
+        self.parent_watch_stop = threading.Event()
         self.runner, self.side, self.stage, self.args = runner, side, stage, args
         self.model = self.option('--model', '-m') or ''
         self.effort = self.option('--effort') or os.environ.get('UNCLE_CLINE_EFFORT', 'medium')
@@ -72,6 +75,20 @@ class Stage:
         self.answer += text
         print(json.dumps({'type':'assistant', 'uncle_chat_output':bool(os.environ.get('UNCLE_STATUS_FILE')), 'message':{'content':[{'type':'text','text':text}]}}), flush=True)
         self.status('chat_output', text=text)
+
+    def watch_parent(self):
+        # Native Windows workflows are contained by the supervisor's Job Object.
+        # POSIX runners use separate process groups, so explicitly cancel when
+        # their owning shell dies, including an uncatchable SIGKILL.
+        if os.name == 'nt':
+            return
+        def watch():
+            while not self.parent_watch_stop.wait(.1):
+                if self.parent_pid == 1 or os.getppid() != self.parent_pid:
+                    self.parent_lost = True
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    return
+        threading.Thread(target=watch, daemon=True).start()
 
     def spawn(self, command, env=None):
         self.child = subprocess.Popen(launch_command(command), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -332,6 +349,7 @@ class Stage:
         if hasattr(signal,'SIGBREAK'): signal.signal(signal.SIGBREAK,interrupted)
         self.status('start', stage_index=int(os.environ.get('UNCLE_STATUS_STAGE_INDEX','0')),
                     stage_total=int(os.environ.get('UNCLE_STATUS_STAGE_TOTAL','0')))
+        self.watch_parent()
         success=False
         error=''
         with tempfile.TemporaryDirectory(prefix='uncle-native-') as directory:
@@ -345,8 +363,9 @@ class Stage:
                 if self.output:
                     Path(self.output).write_text(self.final_answer or self.answer,encoding='utf-8')
             except (OSError,ValueError,KeyError,TypeError,queue.Empty,KeyboardInterrupt) as exc:
-                error=str(exc) or 'Stage interrupted'
+                error='Workflow parent exited; native stage cancelled' if self.parent_lost else str(exc) or 'Stage interrupted'
             finally:
+                self.parent_watch_stop.set()
                 if self.channel:
                     self.status('steering_closed',channel=str(self.channel))
                     for path in self.channel.glob('*.json'):

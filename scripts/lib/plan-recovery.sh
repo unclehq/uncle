@@ -118,6 +118,17 @@ plan_before_write() {
     [[ "$status" == 0 ]] || return "$status"
     status=0
     plan_tool dispatch "${1:-implementation}" || status=$?
+    if [[ "$status" == 25 ]]; then
+        local retry_answer
+        gate_prompt 'The previous implementation was interrupted. Retry from the current files? [Y/N]: '
+        IFS= read -r retry_answer || return 25
+        case "$retry_answer" in
+            y|Y) plan_tool retry || return 1
+                 status=0
+                 plan_tool dispatch "${1:-implementation}" || status=$? ;;
+            *) return 25 ;;
+        esac
+    fi
     if [[ "$status" == 10 ]]; then
         plan_revise || return 1
         return 10
@@ -164,7 +175,18 @@ VERIFY
 
 plan_after_write() {
     plan_tool source-check || return 1
-    plan_tool classify || return $?
+    local status=0
+    plan_tool classify || status=$?
+    if [[ "$status" == 24 ]]; then
+        local retry_answer
+        gate_prompt 'Implementation delivery is incomplete. Retry the approved implementation? [Y/N]: '
+        IFS= read -r retry_answer || return 24
+        case "$retry_answer" in
+            y|Y) plan_tool retry || return 1; return 27 ;;
+            *) echo 'Implementation remains incomplete; resume to choose retry.'; return 24 ;;
+        esac
+    fi
+    return "$status"
 }
 
 plan_delivery_summary() {

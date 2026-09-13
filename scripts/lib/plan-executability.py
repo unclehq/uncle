@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Evidence-bound plan assessment and durable recovery records (no probe execution)."""
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -51,7 +50,7 @@ def manifest(root, plan):
              'CHANGE_SPEC.md' if change else 'REQUIREMENTS_INTERPRETATION.md',
              os.environ.get('UNCLE_CONFIG', '.uncle/config'), str(STATE / 'authority-answer.json')]
     adapters = [str(x.relative_to(root)) for x in Path(root).glob('scripts/agent-*.sh')] + ['scripts/lib/native_stage.py',
-                'scripts/lib/stage-config.sh', 'scripts/lib/plan-executability.py']
+                'scripts/lib/stage-config.sh', 'scripts/lib/plan-executability.py', 'scripts/lib/windows_driver.py']
     result = {'version': 1, 'root': str(Path(root).resolve()), 'plan': plan, 'files': {p: file_hash(p) for p in files},
               'adapters': {str(Path(root).resolve() / p): file_hash(Path(root) / p) for p in adapters},
               'settings': {k: v for k, v in os.environ.items()
@@ -206,6 +205,10 @@ def alive(pid):
 
 def lock_run(command):
     """Permanent inode, supervised process group, orphan detection across driver families."""
+    if os.name == 'nt':
+        from windows_driver import lock_run as windows_lock_run
+        return windows_lock_run(command, STATE)
+    import fcntl
     STATE.mkdir(parents=True, exist_ok=True)
     with (STATE / 'driver.lock').open('a+') as lock:
         try:
@@ -285,6 +288,10 @@ def runtime(action, args=()):
         atomic(JOURNAL, j)
         return 0
     if action == 'retry':
+        active = j.get('active_launch')
+        if active and j['launches'].get(active, {}).get('status') == 'STARTED':
+            j['launches'][active] = {'status': 'FINISHED', 'interrupted': True, 'notes': file_hash('IMPLEMENTATION_NOTES.md')}
+        j.pop('active_launch', None)
         j['retry'] = j.get('retry', 0) + 1
         atomic(JOURNAL, j)
         return 0
@@ -335,10 +342,16 @@ def runtime(action, args=()):
         if a['verdict'] == 'DECISION' and j.get('completed_subset') == digest([m['digest'], v['eligible_steps']]):
             print('Independent subset already executed; authority decision remains pending.')
             return 20
+        active = j.get('active_launch')
+        if active and j['launches'].get(active, {}).get('status') == 'STARTED':
+            print('Previous source-writing attempt was interrupted; explicit retry required.')
+            return 25
         key = digest([m['digest'], list(args), j.get('retry', 0)])
         previous = j['launches'].get(key)
         if previous:
-            require(previous['status'] == 'FINISHED', 'interrupted source launch; explicit reconciliation required')
+            if previous['status'] != 'FINISHED':
+                print('Previous source-writing attempt was interrupted; explicit retry required.')
+                return 25
             require(previous.get('notes') == file_hash('IMPLEMENTATION_NOTES.md'), 'launch result/report changed; explicit reconciliation required')
             return 22
         j['active_launch'] = key
@@ -374,7 +387,8 @@ def runtime(action, args=()):
                 print(check.stdout.strip())
                 if j.get('phase') == 'VERIFYING':
                     j['phase'] = 'WAIT_LIVE'; atomic(JOURNAL, j)
-                return 20
+                    return 20
+                return 24
         if j.get('phase') == 'VERIFYING':
             j['phase'] = 'VERIFIED'; atomic(JOURNAL, j)
         return 0
@@ -412,6 +426,10 @@ def main():
         return lock_run(args)
     if ns.action == 'lock-child':
         owner = read(STATE / 'driver.lock')
+        if os.name == 'nt':
+            from windows_driver import child_valid
+            require(child_valid(owner), 'driver is not the supervised lock owner')
+            return 0
         require(owner.get('pid') == int(args[0]) and owner.get('supervisor') == int(args[1])
                 and alive(int(args[1])) and owner.get('pgid') == os.getpgid(int(args[0])),
                 'driver is not the supervised lock owner')

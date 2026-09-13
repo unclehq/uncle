@@ -452,11 +452,13 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
         adapter.usage_baseline = dict(usage_baseline or {})
         with tempfile.TemporaryDirectory(prefix='uncle-opencode-live-') as directory:
             try:
+                adapter.watch_parent()
                 native_run(adapter, directory, values=values, root=root, allow_shell=allow_shell)
                 if not adapter.answer.strip():
                     raise ValueError('OpenCode returned no response')
                 return adapter.final_answer or adapter.answer, 1
             finally:
+                adapter.parent_watch_stop.set()
                 if adapter.channel:
                     adapter.status('steering_closed', channel=str(adapter.channel))
                 if usage is not None:

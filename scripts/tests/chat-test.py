@@ -826,6 +826,16 @@ class ChatInteractionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.ui.cmd_for()
 
+    def test_stopped_workflow_ignores_late_chat_and_ready_events(self):
+        import json
+        self.ui.workflow_exit_reported = True
+        self.ui.home_history = [('system', 'Workflow stopped')]
+        self.ui.steering_channels = {}
+        self.ui._apply_status(json.dumps({'event': 'chat_output', 'stage': 'baseline', 'text': 'Still writing'}))
+        self.ui._apply_status(json.dumps({'event': 'steering_ready', 'stage': 'baseline', 'channel': '/stale'}))
+        self.assertEqual(self.ui.home_history, [('system', 'Workflow stopped')])
+        self.assertEqual(self.ui.steering_channels, {})
+
     def test_build_and_chat_share_message_order(self):
         self.ui.output = ['Build started']
         self.ui.home_history = []

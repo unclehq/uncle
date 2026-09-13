@@ -1748,7 +1748,7 @@ while true; do
             [[ "$plan_status" == 22 ]] || run_stage IMPLEMENT
             plan_status=0
             plan_after_write || plan_status=$?
-            case "$plan_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
+            case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
             verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
             PREVIOUS_VERIFICATION_SNAPSHOT=""
             capture_verification_inputs
@@ -1912,7 +1912,7 @@ while true; do
             fi
             plan_status=0
             plan_after_write || plan_status=$?
-            case "$plan_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
+            case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
             verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
             capture_verification_inputs
             run_green_check || true

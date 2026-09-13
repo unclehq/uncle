@@ -204,6 +204,47 @@ expect_status 1
 expect_state REPAIR
 expect_in_file .uncle/workflow/repair-count 2
 
+new_stagegate_case incomplete-resume-retry
+stagegate_agent
+cat > "$REPO/REQUIREMENTS_INTERPRETATION.md" <<'SPEC'
+## Acceptance criteria
+| ID | Criterion | Verification |
+|---|---|---|
+| AC-1 | Greeting works | bash app/test.sh |
+SPEC
+set_state IMPLEMENT
+incomplete_impl=$(cat <<'IMPL'
+echo attempt >> .uncle/workflow/attempts
+cat > IMPLEMENTATION_NOTES.md <<'NOTES'
+## Acceptance delivery
+| ID | Status | Changed code | Observed targeted verification |
+|---|---|---|---|
+| AC-1 | INCOMPLETE | app/main.sh | missing check |
+NOTES
+IMPL
+)
+run_stagegate FAKE_IMPL="$incomplete_impl"
+expect_status 1
+expect_state IMPLEMENT
+expect_out 'Implementation delivery is incomplete'
+complete_impl=$(cat <<'IMPL'
+echo attempt >> .uncle/workflow/attempts
+echo fixed > app/main.sh
+cat > IMPLEMENTATION_NOTES.md <<'NOTES'
+## Acceptance delivery
+| ID | Status | Changed code | Observed targeted verification |
+|---|---|---|---|
+| AC-1 | IMPLEMENTED | app/main.sh | bash app/test.sh PASS |
+NOTES
+IMPL
+)
+run_stagegate_stdin "$(gate_input y)" FAKE_IMPL="$complete_impl"
+expect_status 0
+expect_state WAIT_IMPLEMENT_APPROVAL
+expect_in_file app/main.sh fixed
+COUNT=$((COUNT+1))
+[[ $(wc -l < "$REPO/.uncle/workflow/attempts") -eq 2 ]] || fail 'explicit resume retry did not run exactly once'
+
 new_case references-and-approval-routing
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT

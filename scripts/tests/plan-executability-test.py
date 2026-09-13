@@ -146,8 +146,9 @@ class ContractTests(unittest.TestCase):
     def test_launch_intent_blocks_replay(self):
         self.prepare_runtime()
         self.assertEqual(mod.runtime('dispatch'), 0)
-        with self.assertRaisesRegex(ValueError, 'interrupted source launch'):
-            mod.runtime('dispatch')
+        self.assertEqual(mod.runtime('dispatch'), 25)
+        self.assertEqual(mod.runtime('retry'), 0)
+        self.assertEqual(mod.runtime('dispatch'), 0)
         Path('IMPLEMENTATION_NOTES.md').write_text('delivered')
         self.assertEqual(mod.runtime('classify'), 0)
         self.assertEqual(mod.runtime('dispatch'), 22)
@@ -218,6 +219,21 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(mod.runtime('classify'), 20)
         self.assertEqual(mod.journal()['phase'], 'WAIT_LIVE')
 
+    def test_incomplete_delivery_can_retry_after_resume(self):
+        Path('UPDATED_PROJECT_PLAN.md').write_text('R-1')
+        Path('REQUIREMENTS_INTERPRETATION.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | coding | test |\n')
+        self.m = mod.manifest(ROOT, 'UPDATED_PROJECT_PLAN.md')
+        self.a = assessment(self.m)
+        self.prepare_runtime()
+        self.assertEqual(mod.runtime('dispatch'), 0)
+        Path('IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | INCOMPLETE | helper.py | missing test |\n')
+        self.assertEqual(mod.runtime('classify'), 24)
+        self.assertEqual(mod.runtime('dispatch'), 22)
+        self.assertEqual(mod.runtime('classify'), 24)
+        self.assertEqual(mod.runtime('retry'), 0)
+        self.assertEqual(mod.runtime('dispatch'), 0)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX orphan process groups; Windows has Job Object tests')
     def test_lock_exclusion_and_orphan_group(self):
         tool = ROOT / 'scripts/lib/plan-executability.py'
         command = [sys.executable, str(tool), 'lock-run', sys.executable, '-c',

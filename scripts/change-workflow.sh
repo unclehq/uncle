@@ -1800,7 +1800,7 @@ while true; do
             fi
             plan_status=0
             plan_after_write || plan_status=$?
-            case "$plan_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
+            case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
             require_file IMPLEMENTATION_NOTES.md
             require_file CHANGE_TEST_REPORT.md
             check_document_budget IMPLEMENTATION_NOTES.md || exit 1
@@ -1840,12 +1840,12 @@ tests without the required approval.
 REPAIR
                     plan_status=0
                     plan_before_write repair || plan_status=$?
-                    case "$plan_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
+                    case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
                     run_claude "$STATE_DIR/implementation-repair.md" implementation \
                         "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
                     plan_status=0
                     plan_after_write || plan_status=$?
-                    case "$plan_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
+                    case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
                     if ! implementation_has_changes || ! implementation_complete; then
                         echo "Implementation remains incomplete: required delivery is missing."
                         echo "Resolve the blockers in IMPLEMENTATION_NOTES.md and CHANGE_PLAN.md, then resume."

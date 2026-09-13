@@ -118,4 +118,4 @@ Found a bug or have a concrete feature request? Open an [issue](../../issues).
 
 ---
 
-[Workflow documentation](scripts/README.md) · [Packaging](packaging/README.md)
+[Workflow documentation](scripts/README.md) · [Packaging](packaging/README.md) · [License](LICENSE)

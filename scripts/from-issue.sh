@@ -184,6 +184,7 @@ Fetch a GitHub issue and seed a workflow from it.
 
   --change   Write CHANGE_REQUEST.md for ./scripts/change-workflow.sh (default
              if CHANGE_REQUEST.md already exists or the repo is not empty).
+  --seed-only  With --change, create the request without starting a workflow.
   --new      Replace the project-brief section of REQUIREMENTS.md for
              ./scripts/stagegate.sh.
 
@@ -202,18 +203,25 @@ fi
 
 ISSUE_ARG="$1"
 MODE=""
+SEED_ONLY=0
 ISSUE_WORKFLOW_ARGS=()
 shift || true
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --change) MODE="change" ;;
+        --seed-only) SEED_ONLY=1 ;;
         --new) MODE="new" ;;
         --unattended) ISSUE_WORKFLOW_ARGS+=(--unattended) ;;
         *) echo "Unknown option: $1"; usage; exit 1 ;;
     esac
     shift
 done
+
+if [[ "$SEED_ONLY" == 1 && "$MODE" != change ]]; then
+    echo '--seed-only requires --change.' >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Resolve owner/repo and issue number.
@@ -530,6 +538,12 @@ EOF
 case "$MODE" in
     change)
         check_origin_or_refuse
+        if [[ "$SEED_ONLY" == 1 ]]; then
+            # Exclusive creation prevents chat imports from replacing a user's brief.
+            (set -o noclobber; write_change_request)
+            write_origin
+            exit 0
+        fi
         if seed_is_current; then
             echo "Resuming the existing run for $OWNER/$REPO#$ISSUE_NUM; CHANGE_REQUEST.md left as it is."
         else

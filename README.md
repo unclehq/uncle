@@ -5,7 +5,7 @@
 
 **The integrity layer for AI-generated software changes.**
 
-Uncle is a local-first, terminal-native workflow that turns requirements or GitHub issues into independently reviewed, human-approved pull requests using the coding agents you choose.
+Uncle is a local-first, terminal-native tool that turns requirements or GitHub issues into independently reviewed, human-approved pull requests using the coding agents you choose.
 
 ```text
 Issue / Requirements
@@ -73,7 +73,7 @@ Choose runners per stage: Cline, Claude, Codex, Kimi, or OpenCode. Install your 
 
 > **Just testing uncle?** Use Cline with open-weight models and configure your plan.
 > Expect slower runs, but dramatically lower costs than premium models.
-> Usage billed is good tradeoff while trying out the workflow.
+> Usage billed is good tradeoff while trying out the tool.
 
 ## GitHub integration
 
@@ -81,4 +81,4 @@ Start from a GitHub issue, review the changes, then approve a commit, push, and 
 
 See [GitHub integration](GITHUB_INTEGRATION.md) for setup, approvals, signing, and recovery.
 
-[Workflow documentation](scripts/README.md) · [Packaging](packaging/README.md)
+[Documentation](scripts/README.md) · [Packaging](packaging/README.md)

@@ -25,9 +25,9 @@ Independent review
     GitHub PR
 ```
 
-**The integrity layer for AI-generated software changes.**
+## Why Uncle?
 
-A primary agent plans, implements, and verifies; an independent reviewer audits it adversarially; you approve at every gate. 
+Coding agents can write and review code, but agents that produced a change should not be trusted to approve their own work.
 
 - **Human approval gates** at every planning and review stage.
 - **Adversarial review** by a second model that did not write the code.
@@ -35,12 +35,6 @@ A primary agent plans, implements, and verifies; an independent reviewer audits 
 - **Immutable reviewer-owned files** the implementing agent cannot edit.
 - **A green check and a diff gate** after implementation, run by the driver
   rather than by the agent that wrote the code.
-
-Use it when the cost of an agent silently shipping the wrong thing is higher than the cost of waiting for a human to say yes.
-
-> **Just testing uncle?** Use Cline with open-weight models and configure your plan.
-> Expect slower runs, but dramatically lower costs than premium models.
-> Usage billed is good tradeoff while trying out the workflow.
 
 ---
 
@@ -75,6 +69,11 @@ Create a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue, then run `uncl
 Choose runners per stage: Cline, Claude, Codex, Kimi, or OpenCode. Install your chosen clients separately. For self-hosted OpenCode, enter a Base URL and API key; Uncle discovers models automatically. GitHub workflows use `gh auth login`.
 
 **Configure → Miscellaneous** sets auto mode and your approval name.
+
+
+> **Just testing uncle?** Use Cline with open-weight models and configure your plan.
+> Expect slower runs, but dramatically lower costs than premium models.
+> Usage billed is good tradeoff while trying out the workflow.
 
 ## GitHub integration
 

@@ -37,6 +37,7 @@ class Stage:
         self.inclusive = True
         self.answer = ''
         self.final_answer = ''
+        self.assessment_answer = ''
         self.started = time.monotonic()
         self.channel = None
         self.pending = {}
@@ -76,18 +77,39 @@ class Stage:
         print(json.dumps({'type':'assistant', 'uncle_chat_output':bool(os.environ.get('UNCLE_STATUS_FILE')), 'message':{'content':[{'type':'text','text':text}]}}), flush=True)
         self.status('chat_output', text=text)
 
+    def completed_answer(self, text):
+        self.final_answer = text
+        if self.side != 'reviewer' or self.stage != 'plan-executability':
+            return
+        # A later steering reply must not overwrite a completed assessment.
+        # Only accept a whole message, never JSON fragments from streamed prose.
+        try:
+            value = json.loads(text)
+        except (ValueError, TypeError):
+            return
+        if isinstance(value, dict) and all(key in value for key in
+                                           ('version', 'input_digest', 'verdict')):
+            self.assessment_answer = text
+
+    def output_answer(self):
+        if self.side == 'reviewer' and self.stage == 'plan-executability' and self.assessment_answer:
+            # The workflow still validates the full schema, digest and evidence.
+            return self.assessment_answer
+        return self.final_answer or self.answer
+
     def watch_parent(self):
-        # Native Windows workflows are contained by the supervisor's Job Object.
-        # POSIX runners use separate process groups, so explicitly cancel when
-        # their owning shell dies, including an uncatchable SIGKILL.
+        # Windows supervisors own descendants through a Job Object. On POSIX,
+        # cancel the native session if its owning workflow shell disappears.
         if os.name == 'nt':
             return
+
         def watch():
             while not self.parent_watch_stop.wait(.1):
                 if self.parent_pid == 1 or os.getppid() != self.parent_pid:
                     self.parent_lost = True
                     os.kill(os.getpid(), signal.SIGTERM)
                     return
+
         threading.Thread(target=watch, daemon=True).start()
 
     def spawn(self, command, env=None):
@@ -204,7 +226,7 @@ class Stage:
             method,p=event.get('method'),event.get('params',{})
             if method=='item/agentMessage/delta': self.text(p.get('delta',''))
             if method=='item/completed' and p.get('item',{}).get('type')=='agentMessage':
-                self.final_answer=p['item'].get('text','')
+                self.completed_answer(p['item'].get('text',''))
             if method=='thread/tokenUsage/updated':
                 u=p.get('tokenUsage',{}).get('total',{})
                 self.tokens(dict(input_tokens=u.get('inputTokens'),output_tokens=u.get('outputTokens'),
@@ -361,7 +383,7 @@ class Stage:
                     getattr(self,self.runner)(directory)
                 success=True
                 if self.output:
-                    Path(self.output).write_text(self.final_answer or self.answer,encoding='utf-8')
+                    Path(self.output).write_text(self.output_answer(),encoding='utf-8')
             except (OSError,ValueError,KeyError,TypeError,queue.Empty,KeyboardInterrupt) as exc:
                 error='Workflow parent exited; native stage cancelled' if self.parent_lost else str(exc) or 'Stage interrupted'
             finally:

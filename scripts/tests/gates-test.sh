@@ -118,6 +118,7 @@ new_case() {
     printf 'STUB:implement\n' > "$REPO/prompts/change/implement-change.md"
     printf 'STUB:execute\n'   > "$REPO/prompts/change/execute-change-checklist.md"
     printf 'review the plan\n'   > "$REPO/prompts/change/adversarial-review.md"
+    printf '# Adversarial review\n\nNo unresolved findings in this fixture.\n' > "$REPO/ADVERSARIAL_REVIEW.md"
     printf 'write a checklist\n' > "$REPO/prompts/change/manual-checklist.md"
     printf 'audit it\n'          > "$REPO/prompts/change/final-audit.md"
 
@@ -227,11 +228,15 @@ AGENT
     cat > "$CASE/bin/fake-reviewer" <<'REV'
 #!/usr/bin/env bash
 out=""
+review_prompt="${!#}"
 while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
     shift
 done
 if [[ "$out" == *assessment.json ]]; then
+    # A read-only reviewer returns JSON; the runner persists its final response.
+    [[ "$review_prompt" == *"Return the assessment JSON as your final response."* ]] || exit 90
+    [[ "$review_prompt" == *"do not write that file yourself."* ]] || exit 91
     python3 -B scripts/tests/plan-executability-test.py --review "$PWD"
     exit $?
 fi
@@ -332,6 +337,9 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 if [[ "$out" == *assessment.json ]]; then
+    # A read-only reviewer returns JSON; the runner persists its final response.
+    [[ "$review_prompt" == *"Return the assessment JSON as your final response."* ]] || exit 90
+    [[ "$review_prompt" == *"do not write that file yourself."* ]] || exit 91
     python3 -B scripts/tests/plan-executability-test.py --review "$PWD"
     exit $?
 fi
@@ -976,8 +984,8 @@ expect_no_file .uncle/workflow/implemented
 
 
 # Newly capped outputs are reported and preserved, and both drivers keep
-# building: the budget is advisory. FINAL_AUDIT additionally uses its two
-# compaction attempts and continues with the preserved review. The blocking
+# building: the budget is advisory. No extra compaction sessions are launched;
+# the original review is preserved. The blocking
 # form is covered by the enforced review-cache cases below and the budget
 # unit tests.
 for artifact in IMPLEMENTATION_NOTES AUTOMATED_TEST_REPORT VERIFICATION_REPORT DEFECTS FINAL_AUDIT; do
@@ -994,7 +1002,7 @@ for artifact in IMPLEMENTATION_NOTES AUTOMATED_TEST_REPORT VERIFICATION_REPORT D
     if [[ "$artifact" == FINAL_AUDIT ]]; then
         expect_no_file '.uncle/workflow/logs/final-audit.compact-3.log'
         COUNT=$((COUNT + 1))
-        [[ $(grep -c '/candidate.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'expected exactly two final audit compaction calls'
+        [[ $(grep -c '/candidate.md$' "$REPO/.uncle/workflow/reviewer-calls") == 0 ]] || fail 'unexpected separate final audit compaction call'
     fi
 done
 
@@ -1002,7 +1010,7 @@ for artifact in IMPLEMENTATION_NOTES CHANGE_TEST_REPORT VERIFICATION_REPORT; do
     new_case "change-budget-$artifact"
     green_baseline 0 'bash app/test.sh'
     set_state IMPLEMENT
-    run_driver WORKFLOW_DIFF_GATE=0 "WORKFLOW_DOC_MAX_BYTES_$artifact=1"
+    run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" WORKFLOW_DIFF_GATE=0 "WORKFLOW_DOC_MAX_BYTES_$artifact=1"
     expect_status 0
     expect_out "Document budget exceeded: $artifact.md"
     expect_out 'budget is advisory'
@@ -1017,12 +1025,12 @@ printf 'write a base checklist\n' > "$REPO/prompts/change/manual-checklist-base.
 set_state IMPLEMENT
 run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" WORKFLOW_PARALLEL_CHECKLIST=1 WORKFLOW_DOC_MAX_BYTES_MANUAL_CHECKLIST_BASE=1
 expect_status 0
-expect_out 'still exceeds the budget after 2 attempts; continuing with the preserved original'
+expect_out 'Continuing: the budget is advisory'
 expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
 expect_state WAIT_IMPLEMENT_APPROVAL
 expect_no_file '.uncle/workflow/logs/manual-checklist-base.compact-3.log'
 COUNT=$((COUNT + 1))
-[[ $(grep -c '/candidate.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'expected exactly two background compaction calls'
+[[ $(grep -c '/candidate.md$' "$REPO/.uncle/workflow/reviewer-calls") == 0 ]] || fail 'unexpected separate background compaction call'
 printf 'MC-1 Check the greeting.\n\nREADY\n' > "$CASE/expected.md"
 COUNT=$((COUNT + 1))
 cmp -s "$CASE/expected.md" "$REPO/.uncle/workflow/MANUAL_CHECKLIST.base.md" || fail 'background exhaustion changed original bytes'
@@ -1032,24 +1040,24 @@ green_baseline 0 'bash app/test.sh'
 printf '\n## 20. Implementation sequence\n\n1. First step.\n2. Second step.\n' >> "$REPO/CHANGE_PLAN.md"
 hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
 set_state IMPLEMENT
-run_driver WORKFLOW_STEPWISE_IMPLEMENT=1 WORKFLOW_DOC_MAX_BYTES_IMPLEMENTATION_NOTES=1
+run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" WORKFLOW_STEPWISE_IMPLEMENT=1 WORKFLOW_DOC_MAX_BYTES_IMPLEMENTATION_NOTES=1
 expect_status 0
 expect_out 'Document budget exceeded: IMPLEMENTATION_NOTES.md'
 expect_state WAIT_IMPLEMENT_APPROVAL
 expect_no_file '.uncle/workflow/implement-step-done'
 expect_in_file '.uncle/workflow/logs/implementation-step-1.gated-prompt.md' 'Compact output budgets'
 
-# A successful compaction reuses the generated review and permits advancement.
+# Overages preserve the producing stage output without a separate model call.
 new_stagegate_case sg-compact-final-audit
 stagegate_agent
 set_state IMPLEMENT
 run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_COMPACT_REVIEW=1 WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=50
 expect_status 0
-expect_out 'Compaction accepted:'
+expect_out 'budget is advisory'
 expect_state COMPLETE
 expect_file FINAL_AUDIT.md
 COUNT=$((COUNT + 1))
-[[ -e "$REPO/.uncle/workflow/logs/final-audit.compact-1.log" ]] || fail 'compaction log missing'
+[[ ! -e "$REPO/.uncle/workflow/logs/final-audit.compact-1.log" ]] || fail 'unexpected separate compaction session'
 
 new_case change-compact-background-checklist
 green_baseline 0 'bash app/test.sh'
@@ -1057,7 +1065,7 @@ printf 'write a base checklist\n' > "$REPO/prompts/change/manual-checklist-base.
 set_state IMPLEMENT
 run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" WORKFLOW_PARALLEL_CHECKLIST=1 FAKE_COMPACT_REVIEW=1 WORKFLOW_DOC_MAX_BYTES_MANUAL_CHECKLIST_BASE=50
 expect_status 0
-expect_out 'Compaction accepted:'
+expect_out 'budget is advisory'
 expect_state WAIT_IMPLEMENT_APPROVAL
 expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
 

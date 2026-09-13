@@ -36,7 +36,8 @@ except ImportError:  # Windows has no curses in the stdlib
 ROOT = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
 from chat import Conversation, sanitize
-from home_chat import HomeRequest
+from home_chat import HomeRequest, IssueSeedRequest
+from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
 from self_hosted import settings as home_settings
 from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
 
@@ -96,7 +97,6 @@ STAGES = [
     ("derive-brief", AGENT),
     ("requirements", AGENT),
     ("baseline", AGENT),
-    ("change-spec", AGENT),
     ("project-plan", AGENT),
     ("change-plan", AGENT),
     ("adversarial-review", REVIEWER),
@@ -397,8 +397,8 @@ CONFIG_DESC = {
         "(default) to use the global model."
     ),
     "change-plan": (
-        "Writes the change plan, turning the change specification into an "
-        "ordered implementation plan. Good for routing to a planning model. "
+        "Drafts the change specification and ordered implementation plan in "
+        "one session, using this model for both documents. "
         "Leave it at (default) to use the global model."
     ),
     "updated-change-plan": (
@@ -1955,10 +1955,7 @@ class UncleTUI:
             raise ValueError('Choose a runner in Configure first')
         user_text = self.chat.refs.expand(sanitize(message))
         history = self.home_history + [('user', user_text)]
-        prompt = ('You are Uncle, a helpful conversational assistant. Answer the user directly. '
-                  'Use the supplied conversation and explicitly attached file contents as context. '
-                  'Do not start a workflow or modify files. Conversation follows as JSON:\n' +
-                  json.dumps(history, ensure_ascii=False))
+        prompt = home_action_prompt(history, _project_root())
         if len(prompt.encode('utf-8')) > 100000:
             raise ValueError('Chat context is too large for this runner. Use /clear or smaller attachments.')
         command = [runner_command(runner, REVIEWER), 'exec', '--ephemeral',
@@ -1996,11 +1993,67 @@ class UncleTUI:
             return False
         self.home_request = None
         if kind == 'reply':
-            self.home_history.append(('assistant', sanitize(value)))
+            try:
+                action = parse_home_action(value)
+                if action is None:
+                    self.home_history.append(('assistant', sanitize(value)))
+                    self.chat_error = ''
+                else:
+                    self._home_action(action)
+            except (OSError, ValueError) as exc:
+                self.chat_error = sanitize(str(exc))
+                self.home_history.append(('system', self.chat_error))
+        elif kind == 'issue_seeded':
+            self.home_history.append(('system', sanitize(value)))
             self.chat_error = ''
         else:
             self.chat_error = sanitize(value)
         return True
+
+    def _home_action(self, action):
+        if self.state == 'running' or (getattr(self, 'proc', None) and self.proc.poll() is None):
+            raise ValueError('A workflow is already active; the homepage action was not executed.')
+        root = _project_root()
+        name = action['uncle_action']
+        if name == 'github_issue':
+            if os.path.lexists(os.path.join(root, 'CHANGE_REQUEST.md')):
+                raise ValueError('CHANGE_REQUEST.md already exists. Run it or choose a new project; it was not overwritten.')
+            if action['start']:
+                self.issue = action['issue']
+                self.issue_mode = '--change'
+                self.workflow_idx = 1
+                self._run()
+                self.home_history.append(('system', 'Opened the GitHub issue change workflow.'))
+            else:
+                env = os.environ.copy()
+                env['UNCLE_PROJECT_ROOT'] = root
+                self.home_request = IssueSeedRequest(
+                    ['bash', os.path.join(ROOT, 'scripts', 'from-issue.sh'), action['issue'], '--change', '--seed-only'],
+                    root, env)
+                self.home_history.append(('system', 'Importing the GitHub issue into CHANGE_REQUEST.md…'))
+        else:
+            kind = 'app' if name.endswith('_app') else 'change'
+            filename = 'REQUIREMENTS.md' if kind == 'app' else 'CHANGE_REQUEST.md'
+            if name.startswith('create_'):
+                if os.path.lexists(os.path.join(root, filename)):
+                    raise ValueError(filename + ' already exists. Run it or choose a new project; it was not overwritten.')
+                draft = Conversation(root)
+                draft.kind = kind
+                draft.preview = sanitize(action['document'])
+                draft.commit()
+                self.chat.kind, self.chat.preview, self.chat.seed = kind, draft.preview, draft.seed
+                self.home_history.append(('system', 'Created ' + filename + ' from this conversation.'))
+                start = action['start']
+            else:
+                # Use the same restricted regular-file reader as explicit attachments.
+                if not self.chat.refs.read(filename).strip():
+                    raise ValueError(filename + ' is empty.')
+                start = True
+            if start:
+                self.workflow_idx = 0 if kind == 'app' else 2
+                self._run()
+                self.home_history.append(('system', 'Started the ' + kind + ' workflow using ' + filename + '.'))
+        self.chat_error = ''
 
     def chat_display(self):
         history = getattr(self, 'home_history', [])
@@ -2074,7 +2127,7 @@ class UncleTUI:
                 self.prompt_scroll = max(0, getattr(self, 'prompt_scroll', 0) +
                                          (1 if k == curses.KEY_DOWN else -1))
                 return True
-            return False  # Existing gate keys are the sole driver-stdin writer.
+            return False  # Gate keys use the same approval handler as /approve.
         if not self.chat_edit and self._chat_command(k):
             return True
         try:
@@ -2311,7 +2364,7 @@ class UncleTUI:
         return False
 
     def _slash_choices(self):
-        commands = ['/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/clear']
+        commands = ['/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear']
         text = self.chat_composer.lower()
         return [command for command in commands if command.startswith(text)] if text.startswith('/') and ' ' not in text else []
 
@@ -2352,6 +2405,20 @@ class UncleTUI:
                 self.chat_picker = False
                 self.chat_choices = []
                 self._run()
+            elif command == '/approve':
+                pending = (self.state == 'running'
+                           and getattr(self, 'prompt_kind', '') == 'confirm'
+                           and getattr(self, 'prompt_text', '').strip().lower().startswith(
+                               ('ready to approve ', 'ready to acknowledge '))
+                           and self.proc is not None and self.proc.poll() is None)
+                if not pending:
+                    self.chat_error = 'No stage approval is waiting. /approve works when an approval gate is ready.'
+                    return True
+                self.answer_prompt('y')
+                self.chat_composer = ''
+                self.chat_error = ''
+                self.chat_picker = False
+                self.chat_choices = []
             elif command in commands:
                 self.chat_error = ''
                 self.chat_picker = False
@@ -2377,7 +2444,7 @@ class UncleTUI:
                 self.chat_error = ''
                 self.chat_choices = []
             else:
-                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /clear'
+                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear'
             return True
         return False
 
@@ -2460,7 +2527,7 @@ class UncleTUI:
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
         text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
         visible_text = text[-max(1, width - 3):]
-        placeholder = 'Describe an app or a change…'
+        placeholder = 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
         put(row + (3 if compact else 6), '› ' + (visible_text if text else placeholder),
             color.get('accent', 0) if text else color.get('muted', curses.A_DIM))
         put(row + (3 if compact else 6), '›', color.get('warning', curses.A_BOLD))
@@ -2493,7 +2560,7 @@ class UncleTUI:
         elif self.chat_choices:
             put(row + (7 if compact else 11), 'File: ' + self.chat_choices[self.chat_pick], color.get('accent', 0))
         elif self.chat_composer.startswith('/'):
-            put(row + (7 if compact else 11), '/configure /settings /file /quit /issue # /requirements /change /clear', color.get('muted', curses.A_DIM))
+            put(row + (7 if compact else 11), '/configure /settings /file /quit /issue # /requirements /change /approve /clear', color.get('muted', curses.A_DIM))
 
         self._draw_file_picker(row + (3 if compact else 6), left, width)
     def _draw_chat_panel(self, top, bottom, left, width):
@@ -3522,6 +3589,9 @@ class UncleTUI:
 
     def _run(self):
         self._ensure_chat()
+        if self.home_request is not None:
+            self.chat_error = 'Wait for the current chat request or cancel it with /clear before starting a workflow.'
+            return
         if self.workflow_idx == 1 and not self._valid_issue(self.issue):
             self.state = 'issue'
             self.input_buf = self.issue

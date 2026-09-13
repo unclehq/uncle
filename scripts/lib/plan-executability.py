@@ -275,10 +275,34 @@ def source_state():
     return {p: file_hash(p) for p in sorted(set(paths)) if p and not p.startswith('.uncle/') and p not in reports}
 
 
+def delivery_summary(j):
+    notes = Path('IMPLEMENTATION_NOTES.md')
+    rows = []
+    for line in notes.read_text().splitlines() if notes.exists() else []:
+        cells = [x.strip() for x in line.strip().strip('|').split('|')]
+        if len(cells) == 4 and re.fullmatch(r'AC-\d+', cells[0]):
+            status = 'INCOMPLETE'
+            # Waivers are validated by the unchanged completion/waiver gate.
+            waiver = STATE / 'waivers' / cells[0]
+            if waiver.exists() and cells[1] != 'IMPLEMENTED':
+                status = 'WAIVED'
+            elif cells[1] == 'IMPLEMENTED' and j.get('phase') not in ('WAIT_LIVE', 'VERIFYING'):
+                green = STATE / 'green-check.current.tsv'
+                if green.exists() and green.read_text().strip() and all(x.startswith('0\t') for x in green.read_text().splitlines()):
+                    status = 'VERIFIED'
+            rows.append('\t'.join([cells[0], status, 'IMPLEMENTATION_NOTES.md']))
+    (STATE / 'delivery-summary.tsv').write_text('ID\tStatus\tEvidence\n' + '\n'.join(rows) + '\n')
+    if any('\tWAIVED\t' in row for row in rows):
+        print('Acceptance includes waivers; waived rows are not verified delivery.')
+    return 0
+
+
 def runtime(action, args=()):
+    if action == 'summary':
+        # Reporting delivery and waivers does not require an executability review.
+        recovery = journal() if os.environ.get('WORKFLOW_EXECUTABILITY_REVIEW') == '1' else {}
+        return delivery_summary(recovery)
     j = journal()
-    if action == 'summary' and not (ASSESS / 'manifest.json').exists():
-        return 0
     m = read(ASSESS / 'manifest.json')
     a = read(ASSESS / 'assessment.json')
     v = validate(a, m)
@@ -392,26 +416,6 @@ def runtime(action, args=()):
         if j.get('phase') == 'VERIFYING':
             j['phase'] = 'VERIFIED'; atomic(JOURNAL, j)
         return 0
-    if action == 'summary':
-        notes = Path('IMPLEMENTATION_NOTES.md')
-        rows = []
-        for line in notes.read_text().splitlines() if notes.exists() else []:
-            cells = [x.strip() for x in line.strip().strip('|').split('|')]
-            if len(cells) == 4 and re.fullmatch(r'AC-\d+', cells[0]):
-                status = 'INCOMPLETE'
-                # Waivers are validated by the unchanged completion/waiver gate.
-                waiver = STATE / 'waivers' / cells[0]
-                if waiver.exists() and cells[1] != 'IMPLEMENTED':
-                    status = 'WAIVED'
-                elif cells[1] == 'IMPLEMENTED' and j.get('phase') not in ('WAIT_LIVE', 'VERIFYING'):
-                    green = STATE / 'green-check.current.tsv'
-                    if green.exists() and green.read_text().strip() and all(x.startswith('0\t') for x in green.read_text().splitlines()):
-                        status = 'VERIFIED'
-                rows.append('\t'.join([cells[0], status, 'IMPLEMENTATION_NOTES.md']))
-        (STATE / 'delivery-summary.tsv').write_text('ID\tStatus\tEvidence\n' + '\n'.join(rows) + '\n')
-        if any('\tWAIVED\t' in row for row in rows):
-            print('Acceptance includes waivers; waived rows are not verified delivery.')
-        return 0
 
 
 def main():
@@ -438,7 +442,13 @@ def main():
         atomic(ASSESS / 'manifest.json', manifest(*args))
         return 0
     if ns.action in ('validate', 'render'):
-        m = read(ASSESS / 'manifest.json'); a = read(ASSESS / 'assessment.json')
+        m = read(ASSESS / 'manifest.json')
+        try:
+            a = read(ASSESS / 'assessment.json')
+        except json.JSONDecodeError as exc:
+            raise ValueError('assessment.json is not valid JSON. The reviewer must return '
+                             'the complete assessment as its final response; the driver saves it.') from exc
+        require(isinstance(a, dict), 'assessment.json must contain one JSON object')
         result = validate(a, m)
         if ns.action == 'render':
             text = '# Plan executability\n\nInput digest: ' + m['digest'] + '\n\n'

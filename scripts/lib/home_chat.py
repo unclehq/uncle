@@ -54,3 +54,35 @@ class HomeRequest:
                         finish_check(process)
         except (OSError, ValueError) as exc:
             self.events.put(('error', str(exc)))
+
+
+class IssueSeedRequest(HomeRequest):
+    """Import an issue in the background without starting or approving a build."""
+    def _run(self, command, root, env):
+        process = None
+        try:
+            with tempfile.TemporaryFile() as log:
+                process = start_check(launch_command(command), cwd=root, env=env,
+                                      stdout=log, stderr=log)
+                try:
+                    for _ in range(1500):
+                        if self.cancelled.is_set():
+                            raise ValueError('Issue import cancelled')
+                        try:
+                            code = process.wait(timeout=0.2)
+                            break
+                        except subprocess.TimeoutExpired:
+                            continue
+                    else:
+                        raise ValueError('Issue import timed out. Check GitHub access and retry.')
+                    if code:
+                        log.seek(0, 2)
+                        log.seek(max(0, log.tell() - 4000))
+                        raise ValueError('Issue import failed: ' + log.read().decode('utf-8', errors='replace'))
+                    self.events.put(('issue_seeded', 'Created CHANGE_REQUEST.md from the GitHub issue.'))
+                finally:
+                    kill_tree(process)
+                    process.wait()
+                    finish_check(process)
+        except (OSError, ValueError) as exc:
+            self.events.put(('error', str(exc)))

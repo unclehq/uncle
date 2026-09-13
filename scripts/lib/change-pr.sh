@@ -73,6 +73,38 @@ class NotReadyError(ValueError):
     pass
 
 
+ATTESTATION = None
+
+
+def attestation():
+    # Imported only when sealing or rendering, so a bare load of this engine
+    # (pr-reconcile-test.py) needs no library path.
+    global ATTESTATION
+    if ATTESTATION is None:
+        lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        import attestation as module
+        ATTESTATION = module
+    return ATTESTATION
+
+
+def seal_attestation(j):
+    # Sealed from driver state only, at bind: after the last agent stage.
+    return attestation().seal(j, STATE, root='.', version=os.environ.get('UNCLE_VERSION', ''),
+                              lib=os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib')
+
+
+def sealed_attestation(j):
+    # The bind seal, plus the rows the driver itself writes after bind. A
+    # journal bound before attestation existed is sealed now; validate() has
+    # just proved it still names this audited change.
+    sealed = j.get('attestation')
+    if not isinstance(sealed, dict):
+        sealed = seal_attestation(j)
+    return attestation().amend(sealed, j, STATE)
+
+
 def run(*args, env=None, data=None):
     result = subprocess.run(args, input=data, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, env=env)
@@ -331,6 +363,45 @@ def title_default():
     return ' '.join(title.split())[:72].strip() or 'Completed change'
 
 
+def slug_text():
+    path = Path('CHANGE_REQUEST.md')
+    text = read(path if path.exists() else Path('REQUIREMENTS.md'))
+    match = re.search(r'^##\s+(?:\d+\.\s+)?Summary\s*\n(.*?)(?=^##\s|\Z)', text, re.M | re.S | re.I)
+    if match:
+        return match.group(1)
+    match = re.search(r'^# ([^\n]*)', text, re.M)
+    return match.group(1) if match else ''
+
+
+def slug(text):
+    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode().lower()
+    return re.sub(r'[^a-z0-9]+', '-', text).strip('-')[:40].strip('-') or 'change'
+
+
+def label_prefix(origin):
+    fields = origin.strip().split('\t')
+    if len(fields) != 3 or fields[2] != 'gh':
+        return 'uncle/'
+    try:
+        result = subprocess.run(['gh', 'issue', 'view', fields[1], '--repo', fields[0],
+                                 '--json', 'labels'], capture_output=True, text=True,
+                                timeout=int(os.environ.get('STAGEGATE_CLOSE_TIMEOUT', '30')))
+        if result.returncode:
+            raise ValueError('Label lookup failed')
+        labels = {label['name'].casefold() for label in json.loads(result.stdout)['labels']}
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError, AttributeError):
+        print('Label lookup failed; using uncle/ prefix', flush=True)
+        return 'uncle/'
+    for label, prefix in [('enhancement', 'feat/'), ('bug', 'bug/'), ('documentation', 'doc/')]:
+        if label in labels:
+            return prefix
+    return 'uncle/'
+
+
+def branch_name(j):
+    return label_prefix(j['origin']) + slug(slug_text()) + '-' + j['owner'][:12]
+
+
 def repo_name(value):
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', value):
         raise ValueError('Unsupported repository identity: ' + value)
@@ -396,7 +467,7 @@ def resolve(j):
             raise ValueError('Unsupported fork owner for gh --head.')
     target = j['original_branch']
     if target == base_branch:
-        target = 'uncle/change-' + j['owner'][:12]
+        target = branch_name(j)
     git('check-ref-format', '--branch', target)
     j.update(base_repo=base, base_branch=base_branch, head_repo=head_repo,
              head_branch=target, remote=remote)
@@ -500,6 +571,12 @@ def handoff(j):
             # An overridden verdict is not a READY verdict; the PR says so.
             body = ('> Created by operator override over a **' + record[1]
                     + '** audit verdict.\n\n') + body
+        # The consent just given is the publication gate; only a person at the
+        # terminal reaches this line, so it is the one field stamped here.
+        sealed = sealed_attestation(j)
+        sealed['gate_publication'] = 'APPROVED (human)'
+        j['attestation'] = sealed
+        body = attestation().attach_body(body, sealed)
         if j['origin']:
             origin = j['origin'].strip().split('\t')
             body += '\nCloses ' + origin[0] + '#' + origin[1] + '\n'
@@ -547,6 +624,12 @@ def handoff(j):
         raise ValueError('Base repository changed during prompts; rerun FINAL_AUDIT.')
     if remote_sha(j) != j['intended_head']:
         raise ValueError('Remote changed during lookup; rerun FINAL_AUDIT.')
+    if attestation().MARKER not in j['body']:
+        # A journal prepared before attestation existed; validate() just
+        # passed, so the seal describes this audited change. Once only.
+        j['attestation'] = sealed_attestation(j)
+        j['body'] = attestation().attach_body(j['body'], j['attestation'])
+        save(j)
     j['phase'] = 'creating'
     save(j)
     fd, body = tempfile.mkstemp(prefix='uncle-pr-body-')
@@ -600,6 +683,8 @@ def main():
             raise ValueError('Files, origin, HEAD or branch changed during audit; rerun FINAL_AUDIT.')
         j.update(audit_hash=audit_hash(), commit_tree=snapshot(True),
                  verdict_run=read(STATE / 'audit-verdict').split('\t')[0], phase='bound')
+        # Sealed here, after the last agent stage and before any handoff.
+        j['attestation'] = seal_attestation(j)
         save(j)
     elif action == 'validate':
         j = load()
@@ -635,8 +720,15 @@ except NotReadyError as error:
     print('PR pending: ' + str(error), flush=True)
     sys.exit(3)
 except (OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError) as error:
+    if ATTESTATION is not None and isinstance(error, ATTESTATION.AttestationError):
+        # Recoverable like NotReady (exit 3) but not overridable: the
+        # audited state is unusable, so no PR is created.
+        print('PR pending: Attestation blocked: ' + str(error), flush=True)
+        sys.exit(3)
     print('PR pending: ' + str(error), flush=True)
     sys.exit(1)
 PY
-    python3 -c "$pr_code" "$@"
+    # The attestation module lives beside this file; the driver may override.
+    UNCLE_LIB_DIR="${UNCLE_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}" \
+        python3 -c "$pr_code" "$@"
 }

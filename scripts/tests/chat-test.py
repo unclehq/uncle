@@ -778,6 +778,50 @@ class ChatInteractionTests(unittest.TestCase):
         cursor = next(call for call in calls if call.args[0] == 28 and call.args[2] == ' ')
         self.assertEqual(cursor.args[1], 27 + len('what day is it'))
 
+    def test_chat_approve_answers_pending_gate_once(self):
+        import io
+        ui = self.ui
+        del ui.answer_prompt  # Exercise the real driver-stdin approval handler.
+        ui.state = 'running'
+        ui.proc = Mock()
+        ui.proc.poll.return_value = None
+        ui.proc.stdin = io.BytesIO()
+        ui.prompt_kind = 'confirm'
+        ui.prompt_text = 'Ready to approve BASELINE_REPORT.md? [Y/N]'
+        ui.partial = ui.prompt_text
+        ui._absorb_line = Mock()
+        ui.chat_composer = '/approve'
+        self.assertIn('/approve', ui._slash_choices())
+        self.assertTrue(ui._chat_command(10))
+        self.assertEqual(ui.proc.stdin.getvalue(), b'y\n')
+        self.assertEqual(ui.prompt_kind, '')
+        self.assertEqual(ui.chat_focus, 'chat')
+        self.assertEqual(ui.chat_composer, '')
+        ui.chat_composer = '/approve'
+        ui._chat_command(10)
+        self.assertEqual(ui.proc.stdin.getvalue(), b'y\n')
+        self.assertIn('No stage approval', ui.chat_error)
+
+    def test_chat_approve_rejects_nonapproval_prompts_and_stopped_runs(self):
+        ui = self.ui
+        ui.answer_prompt = Mock()
+        for state, kind, prompt, exit_code, command in [
+                ('running', '', '', None, '/approve'),
+                ('running', 'input', 'Issue number:', None, '/approve'),
+                ('running', 'confirm', 'Retry implementation? [Y/N]', None, '/approve'),
+                ('menu', 'confirm', 'Ready to approve plan? [Y/N]', None, '/approve'),
+                ('running', 'confirm', 'Ready to approve plan? [Y/N]', 0, '/approve'),
+                ('running', 'confirm', 'Ready to approve plan? [Y/N]', None, '/approve all')]:
+            with self.subTest(state=state, kind=kind, prompt=prompt, command=command):
+                ui.state, ui.prompt_kind, ui.prompt_text = state, kind, prompt
+                ui.proc = Mock()
+                ui.proc.poll.return_value = exit_code
+                ui.chat_composer = command
+                ui._chat_command(10)
+                ui.answer_prompt.assert_not_called()
+                self.assertEqual(ui.chat_composer, command)
+                self.assertTrue(ui.chat_error)
+
     def test_response_uses_full_width_before_sidebar(self):
         renderer_state(self.ui)
         self.ui.state = 'running'

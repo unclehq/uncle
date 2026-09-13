@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
+# This suite exercises the explicitly requested standalone assessment mode.
+export WORKFLOW_EXECUTABILITY_REVIEW=1
 UNCLE_TEST_FIXTURES_ONLY=1 source "$(dirname "$0")/gates-test.sh"
 
 new_case unsupported-denial

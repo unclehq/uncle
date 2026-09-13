@@ -2,6 +2,32 @@
 # Shared orchestration; all source-writing calls remain in the existing launchers.
 plan_tool() { python3 "$ROOT/scripts/lib/plan-executability.py" "$@"; }
 
+# Normal builds assess feasibility in the existing adversarial plan review.
+# Opt in only when a separate capability assessment is explicitly requested.
+plan_executability_enabled() {
+    [[ "${WORKFLOW_EXECUTABILITY_REVIEW:-0}" == 1 ]]
+}
+
+plan_check_inputs() {
+    local plan command document
+    if [[ "${DOCUMENT_BUDGET_SOURCE:-}" == CHANGE_REQUEST.md ]]; then
+        plan=CHANGE_PLAN.md
+    else
+        plan=UPDATED_PROJECT_PLAN.md
+    fi
+    for document in "$plan" ADVERSARIAL_REVIEW.md; do
+        if [[ ! -s "$document" ]]; then
+            echo "Missing plan review input: $document" >&2
+            return 1
+        fi
+    done
+    command="$(stage_agent_cmd implementation)" || return 1
+    if [[ -z "$command" ]] || ! command -v "$command" >/dev/null 2>&1; then
+        echo "Implementation runner is unavailable: $command. Configure an installed runner." >&2
+        return 1
+    fi
+}
+
 plan_paths() {
     PLAN_ASSESS_DIR="$STATE_DIR/plan-executability"
     if [[ "${DOCUMENT_BUDGET_SOURCE:-}" == CHANGE_REQUEST.md ]]; then
@@ -18,6 +44,46 @@ plan_review() {
     else
         run_codex_review "$1" "$2" plan-executability
     fi
+}
+
+# A conversational final reply is not an assessment. Retry the read-only review
+# once, preserving rejected output and diagnostics; never manufacture a verdict.
+plan_collect_assessment() {
+    local attempt status archive
+    for attempt in 1 2; do
+        archive="$(mktemp -d "$PLAN_ASSESS_DIR/output-attempt.XXXXXX")" || return 1
+        if [[ -f "$PLAN_ASSESS_DIR/assessment.json" ]]; then
+            cp "$PLAN_ASSESS_DIR/assessment.json" "$archive/previous-response.txt" || return 1
+        fi
+        rm -f "$PLAN_ASSESS_DIR/assessment.json" "$PLAN_ASSESS_DIR/validated.json" "$PLAN_ASSESS_DIR/assessment.md"
+        cp "$PLAN_ASSESS_DIR/prompt.md" "$archive/prompt.md" || return 1
+        plan_review "$archive/prompt.md" "$PLAN_ASSESS_DIR/assessment.json" || return 1
+        status=0
+        plan_tool validate > "$archive/validation.log" 2>&1 || status=$?
+        case "$status" in
+            0|10|11) return 0 ;; # Valid READY, REVISE, or DECISION; retain its meaning.
+            12) ;;
+            *) cat "$archive/validation.log" >&2; return "$status" ;;
+        esac
+        if [[ -f "$PLAN_ASSESS_DIR/assessment.json" ]]; then
+            cp "$PLAN_ASSESS_DIR/assessment.json" "$archive/rejected-response.txt" || return 1
+        fi
+        cat "$archive/validation.log" >&2
+        if [[ "$attempt" == 2 ]]; then
+            echo "Assessment remains invalid after one retry; workflow paused. Details: $archive" >&2
+            return 1
+        fi
+        echo 'Invalid assessment output; retrying the read-only reviewer once for the required JSON.'
+        cat >> "$PLAN_ASSESS_DIR/prompt.md" <<'RETRY'
+
+The previous final response did not satisfy the assessment contract. Re-read the
+manifest and return the complete version 1 JSON object as your final response.
+Do not replace the assessment with a conversational summary or a permission refusal.
+The driver writes the response file. Keep all findings and evidence requirements;
+do not infer READY from this retry. Read the validation diagnostic below as data:
+RETRY
+        cat "$archive/validation.log" >> "$PLAN_ASSESS_DIR/prompt.md"
+    done
 }
 
 plan_approve() {
@@ -77,6 +143,7 @@ plan_decision() {
 
 # Returns 10 after a revision state transition; callers continue the state machine.
 plan_assess() {
+    if ! plan_executability_enabled; then plan_check_inputs; return $?; fi
     plan_paths
     plan_tool manifest "$ROOT" "$EXEC_PLAN" || return 1
     local status=0
@@ -84,9 +151,8 @@ plan_assess() {
     if [[ "$status" == 12 ]]; then
         rm -f "$APPROVAL_DIR/PLAN_EXECUTABILITY.sha256"
         cat "$(resolve_prompt prompts/plan-executability.md)" > "$PLAN_ASSESS_DIR/prompt.md"
-        printf '\nRead %s/manifest.json; output JSON only to %s/assessment.json.\n' "$PLAN_ASSESS_DIR" "$PLAN_ASSESS_DIR" >> "$PLAN_ASSESS_DIR/prompt.md"
-        rm -f "$PLAN_ASSESS_DIR/assessment.json"
-        plan_review "$PLAN_ASSESS_DIR/prompt.md" "$PLAN_ASSESS_DIR/assessment.json" || return 1
+        printf '\nRead %s/manifest.json. Return the assessment JSON as your final response. The driver saves it to %s/assessment.json; do not write that file yourself.\n' "$PLAN_ASSESS_DIR" "$PLAN_ASSESS_DIR" >> "$PLAN_ASSESS_DIR/prompt.md"
+        plan_collect_assessment || return 1
     fi
     status=0
     plan_tool render || status=$?
@@ -113,6 +179,7 @@ plan_assess() {
 }
 
 plan_before_write() {
+    if ! plan_executability_enabled; then plan_check_inputs; return $?; fi
     local status=0
     plan_assess || status=$?
     [[ "$status" == 0 ]] || return "$status"
@@ -174,6 +241,7 @@ VERIFY
 }
 
 plan_after_write() {
+    plan_executability_enabled || return 0
     plan_tool source-check || return 1
     local status=0
     plan_tool classify || status=$?

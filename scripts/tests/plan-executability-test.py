@@ -88,6 +88,79 @@ class ContractTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.addCleanup(os.chdir, self.old)
 
+    def collect_assessment(self, mode, verdict='READY'):
+        response = copy.deepcopy(self.a)
+        response['verdict'] = verdict
+        if verdict == 'REVISE':
+            response['capabilities'][0]['status'] = 'UNSUPPORTED'
+        mod.atomic(mod.ASSESS / 'manifest.json', self.m)
+        mod.atomic('valid-response.json', response)
+        (mod.ASSESS / 'assessment.json').write_text('Old conversational response')
+        (mod.ASSESS / 'validated.json').write_text('stale validation')
+        (mod.ASSESS / 'assessment.md').write_text('stale rendered assessment')
+        (mod.ASSESS / 'prompt.md').write_text((ROOT/'prompts/plan-executability.md').read_text())
+        script = r"""
+set -euo pipefail
+ROOT="$1"
+PLAN_ASSESS_DIR=.uncle/workflow/plan-executability
+source "$ROOT/scripts/lib/plan-recovery.sh"
+calls=0
+plan_review() {
+    calls=$((calls+1))
+    printf '%s' "$calls" > calls
+    if [[ "$TEST_MODE" == transport ]]; then return 7; fi
+    if [[ "$TEST_MODE" == valid || ( "$TEST_MODE" == retry && "$calls" == 2 ) ]]; then
+        cp valid-response.json "$2"
+    else
+        printf 'Yes—three coding blockers remain.' > "$2"
+    fi
+}
+plan_collect_assessment
+"""
+        return subprocess.run(['bash', '-c', script, 'test', str(ROOT)],
+                              env=dict(os.environ, TEST_MODE=mode),
+                              capture_output=True, text=True, timeout=15)
+
+    def test_conversational_assessment_retried_without_weakening_verdict(self):
+        result = self.collect_assessment('retry', 'REVISE')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(Path('calls').read_text(), '2')
+        self.assertEqual(mod.read(mod.ASSESS/'assessment.json')['verdict'], 'REVISE')
+        rejected = list(mod.ASSESS.glob('output-attempt.*/rejected-response.txt'))
+        self.assertEqual(len(rejected), 1)
+        self.assertIn('three coding blockers', rejected[0].read_text())
+        self.assertFalse((mod.ASSESS/'validated.json').exists())
+        self.assertFalse((mod.ASSESS/'assessment.md').exists())
+        self.assertEqual(Path('CHANGE_PLAN.md').read_text(), 'R-1')
+
+    def test_repeated_invalid_assessment_stops_after_two_attempts(self):
+        result = self.collect_assessment('invalid')
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(Path('calls').read_text(), '2')
+        self.assertIn('after one retry', result.stderr)
+        self.assertEqual(len(list(mod.ASSESS.glob('output-attempt.*/rejected-response.txt'))), 2)
+        self.assertFalse((mod.ASSESS/'validated.json').exists())
+
+    def test_valid_assessment_does_not_retry(self):
+        result = self.collect_assessment('valid')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(Path('calls').read_text(), '1')
+
+    def test_transport_failure_is_not_retried_as_bad_json(self):
+        result = self.collect_assessment('transport')
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(Path('calls').read_text(), '1')
+
+    def test_nonobject_assessment_has_clear_error(self):
+        mod.atomic(mod.ASSESS/'manifest.json', self.m)
+        for response in ('[]', '', 'Yes, three blockers remain.'):
+            (mod.ASSESS/'assessment.json').write_text(response)
+            result = subprocess.run([sys.executable, str(ROOT/'scripts/lib/plan-executability.py'),
+                                     'validate'], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 12)
+            self.assertIn('assessment.json', result.stderr)
+            self.assertNotIn('Traceback', result.stderr)
+
     def test_supported(self):
         self.assertEqual(mod.validate(self.a, self.m)['eligible_steps'], ['S-1'])
 

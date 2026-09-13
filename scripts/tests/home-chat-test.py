@@ -6,6 +6,17 @@ import uncle_tui as tui
 from home_chat import HomeRequest
 
 class HomeTests(unittest.TestCase):
+    def test_first_launch_opens_home_without_configuration_or_viewer(self):
+        with tempfile.TemporaryDirectory() as d:
+            with patch.object(tui, '_project_root', return_value=d), patch.object(tui, 'CONFIG_PATH', str(Path(d) / '.uncle/config')), patch.object(tui, 'list_models', return_value=[]), patch.object(tui, 'default_model', return_value=''), patch.object(tui, 'read_keys', return_value={}), patch.object(tui.UncleTUI, '_viewer_command', return_value=''):
+                ui = tui.UncleTUI(None)
+                self.assertTrue(ui.first_run)
+                self.assertEqual(ui.state, 'menu')
+                self.assertTrue(ui.chat_open)
+                self.assertEqual(ui.chat_focus, 'chat')
+                self.assertEqual(ui.sel, 0)
+                self.assertFalse(ui.home_menu_open)
+
     def test_startup_homepage_sends_and_displays_reply(self):
         with tempfile.TemporaryDirectory() as d:
             config = Path(d) / 'config'
@@ -15,11 +26,9 @@ class HomeTests(unittest.TestCase):
                 ui = tui.UncleTUI(None)
                 self.assertEqual(ui.state, 'menu')
                 self.assertTrue(ui.chat_open)
-                self.assertEqual(ui.chat_focus, 'menu')
-                self.assertEqual(ui.sel, 0)
-                self.assertTrue(ui.home_menu_open)
-                ui.handle_key(9)
                 self.assertEqual(ui.chat_focus, 'chat')
+                self.assertEqual(ui.sel, 0)
+                self.assertFalse(ui.home_menu_open)
                 request.assert_not_called()
                 for char in 'Hello':
                     ui.handle_key(ord(char))

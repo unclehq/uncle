@@ -66,7 +66,7 @@ class HomeRequest:
 
 class IssueSeedRequest(HomeRequest):
     """Import an issue in the background without starting or approving a build."""
-    def _run(self, command, root, env):
+    def _run(self, command, root, env, issue_lookup=None):
         process = None
         try:
             with tempfile.TemporaryFile() as log:

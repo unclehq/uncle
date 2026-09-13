@@ -121,6 +121,7 @@ STAGES = [
 TRIAGE_CLEAN_EXITS = (0, 130, 143, 137, -9)
 STAGE_SIDE = dict(STAGES)
 CONFIG_STAGES = [name for name, _ in STAGES]
+BUILD_CONFIG_STAGES = [name for name in CONFIG_STAGES if name != "triage"]
 
 # Runners are offered per side, because the two sides are not interchangeable:
 # an agent stage writes code and needs an agent CLI running with write access,
@@ -616,37 +617,9 @@ class UncleTUI:
         self.load_config()
         # Bind the homepage composer before the first frame or key event.
         self._ensure_chat()
-        self.chat_focus = 'menu'
-        self.home_menu_open = True
+        self.chat_focus = 'chat'
+        self.home_menu_open = False
         self.sel = 0
-        if self.state == "menu" and self.first_run:
-            # First time in this project root: open the Configure screen so
-            # this project gets set up before anything runs, and create the
-            # workflow dir the scripts will write their state/logs into.
-            self.state = "config"
-            self.config_sel = 0
-            try:
-                os.makedirs(os.path.join(_project_root(), ".uncle", "workflow"),
-                            exist_ok=True)
-            except Exception:
-                pass
-            # Every gate asks you to approve a markdown document. Without a
-            # reader installed, the [v] key falls back to raw text — worth
-            # saying once, on the way to Configure, rather than at the gate.
-            if not self._viewer_command("x"):
-                self.state = "notice"
-                self.notice_lines = [
-                    "Gates ask you to approve a markdown document.",
-                    "uncle can show it to you in this window, with:",
-                    "",
-                    "    brew install glow      (preferred)",
-                    "    brew install bat",
-                    "",
-                    "Neither is installed, so [v] at a gate will show",
-                    "the raw text instead. Install either one and it is",
-                    "picked up on the next run.",
-                ]
-
     # ---- colors (cline's CLI palette) ----
     def _setup_colors(self):
         self.color = {"title": 0, "accent": 0, "good": 0, "sel": 0, "cursor": 0, "warning": curses.A_BOLD, "bad": curses.A_BOLD, "muted": curses.A_DIM}
@@ -709,9 +682,11 @@ class UncleTUI:
             return "@connection"
         if section == "misc":
             return "!misc"
-        if 0 <= self.config_sel < len(CONFIG_STAGES):
-            return CONFIG_STAGES[self.config_sel]
-        return self._profile_targets()[self.config_sel - len(CONFIG_STAGES)]
+        if section == "recovery":
+            return "triage"
+        if 0 <= self.config_sel < len(BUILD_CONFIG_STAGES):
+            return BUILD_CONFIG_STAGES[self.config_sel]
+        return self._profile_targets()[self.config_sel - len(BUILD_CONFIG_STAGES)]
 
     def _profile_targets(self):
         return ["@new"] + ["@" + name for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
@@ -900,16 +875,18 @@ class UncleTUI:
     def _config_items(self):
         section = getattr(self, "config_section", "")
         if not section:
-            return ["1. Configure stages", "2. Configure OpenCode / self hosting", "3. Miscellaneous"]
+            return ["1. Configure stages", "2. Configure OpenCode / self hosting", "3. Miscellaneous", "4. Recovery"]
+        if section == "recovery":
+            return ["Recovery model — diagnose failures and propose repairs"]
         if section == "opencode":
             return ["OpenCode connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
         if section == "misc":
             return ["Auto mode: " + ("on" if getattr(self, "misc", {}).get("auto_mode") == "true" else "off"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set")]
         """One row per stage: the stage, its runner, and what that runner uses."""
-        width = max(len(s) for s in CONFIG_STAGES)
+        width = max(len(s) for s in BUILD_CONFIG_STAGES)
         rows = []
-        for stage in CONFIG_STAGES:
+        for stage in BUILD_CONFIG_STAGES:
             parts = ["Self hosted (OpenCode)" if self.stage_runner(stage) == "self-hosted" else self.stage_runner(stage)]
             model = self.stage_model(stage)
             if model:
@@ -1130,8 +1107,7 @@ class UncleTUI:
         self.stage_base_urls = {}
         self.stage_api_keys = read_keys(CONFIG_PATH)
         if not exists:
-            # First time in this project root: no config file yet. Mark it so
-            # the TUI can drop straight into the Configure screen.
+            # Track missing configuration without redirecting away from home.
             self.first_run = True
             self._config_stamp = None
             return self.first_run
@@ -1923,6 +1899,8 @@ class UncleTUI:
 
     def chat_model(self):
         """Follow the live stage for workflow chat; use the first stage at home."""
+        if getattr(self, 'recovery_active', False):
+            return ('triage',) + self._triage_runner()
         if self.state != 'running':
             return self.homepage_model()
         stage = getattr(self, 'status_stage', '')
@@ -1968,11 +1946,25 @@ class UncleTUI:
         self.home_history.append(('system', 'Steering queued for ' + stage))
 
     def send_home_chat(self, message):
+        if getattr(self, 'recovery_active', False):
+            self._triage_turn('diagnosis', followup=message)
+            return
         if self.state == 'running':
             return self.steer_stage(message)
         if self.home_request is not None:
             raise ValueError('A reply is still running. Wait or use /clear to cancel.')
         if not message.strip():
+            return
+        issue_request = re.fullmatch(
+            r'(?:please\s+)?(?:build|implement|start|run|work on)\s+'
+            r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+)'
+            r'(?P<issue>https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?|#?[1-9][0-9]*)[.!]?',
+            message.strip(), re.IGNORECASE)
+        if issue_request:
+            self.home_history.append(('user', sanitize(message)))
+            self._home_action({'uncle_action': 'github_issue',
+                               'issue': issue_request['issue'].removeprefix('#'),
+                               'start': True})
             return
         stage, runner, model, effort = self.chat_model()
         if self.state == 'running' and not stage:
@@ -1981,10 +1973,7 @@ class UncleTUI:
             raise ValueError('Choose a runner in Configure first')
         user_text = self.chat.refs.expand(sanitize(message))
         history = self.home_history + [('user', user_text)]
-        prompt = ('You are Uncle, a helpful conversational assistant. Answer the user directly. '
-                  'Use the supplied conversation and explicitly attached file contents as context. '
-                  'Do not start a workflow or modify files. Conversation follows as JSON:\n' +
-                  json.dumps(history, ensure_ascii=False))
+        prompt = home_action_prompt(history, _project_root())
         if not issue_references(message):
             prompt += getattr(self, 'home_issue_context', '')
         if len(prompt.encode('utf-8')) > 100000:
@@ -2029,6 +2018,9 @@ class UncleTUI:
             return False
         self.home_request = None
         if kind == 'reply':
+            context = getattr(request, 'issue_context', '')
+            if isinstance(context, str) and context:
+                self.home_issue_context = context
             try:
                 action = parse_home_action(value)
                 if action is None:
@@ -2041,10 +2033,6 @@ class UncleTUI:
                 self.home_history.append(('system', self.chat_error))
         elif kind == 'issue_seeded':
             self.home_history.append(('system', sanitize(value)))
-            context = getattr(request, 'issue_context', '')
-            if isinstance(context, str) and context:
-                self.home_issue_context = context
-            self.home_history.append(('assistant', sanitize(value)))
             self.chat_error = ''
         else:
             self.chat_error = sanitize(value)
@@ -2056,15 +2044,18 @@ class UncleTUI:
         root = _project_root()
         name = action['uncle_action']
         if name == 'github_issue':
-            if os.path.lexists(os.path.join(root, 'CHANGE_REQUEST.md')):
-                raise ValueError('CHANGE_REQUEST.md already exists. Run it or choose a new project; it was not overwritten.')
             if action['start']:
-                self.issue = action['issue']
-                self.issue_mode = '--change'
                 self.workflow_idx = 1
+                self.issue_mode = ''
+                self.state = 'issue'
+                self.input_buf = action['issue']
+                self.issue = action['issue']
+                self.sel = 0
+                self.notice = ''
                 self._run()
-                self.home_history.append(('system', 'Opened the GitHub issue change workflow.'))
             else:
+                if os.path.lexists(os.path.join(root, 'CHANGE_REQUEST.md')):
+                    raise ValueError('CHANGE_REQUEST.md already exists. Run it or choose a new project; it was not overwritten.')
                 env = os.environ.copy()
                 env['UNCLE_PROJECT_ROOT'] = root
                 self.home_request = IssueSeedRequest(
@@ -2145,7 +2136,11 @@ class UncleTUI:
         self._triage_init()
         if self.state != 'triage':
             self.triage_return = self.state if self.state in ('running', 'chat', 'menu') else 'chat'
-        self.state = 'triage'
+        self._ensure_chat()
+        self.recovery_active = True
+        self.chat_focus = 'chat'
+        self.home_menu_open = False
+        self.home_history.append(('system', 'Recovery: ask about the failure, /do N to apply a proposal, or /resume to continue.'))
         self.triage_error = ''
         # The first open, and every failure exit after a resume, gets one
         # diagnosis turn on the bundle the driver just wrote. An open on
@@ -2155,6 +2150,7 @@ class UncleTUI:
                 self._triage_turn('diagnosis')
             except (OSError, ValueError) as exc:
                 self.triage_error = sanitize(str(exc))
+                self.chat_error = self.triage_error
 
     def _triage_runner(self):
         return self.stage_runner('triage'), self.stage_model('triage'), self.stage_effort('triage')
@@ -2289,6 +2285,8 @@ class UncleTUI:
             self.triage_tainted = 'Resume refused: ' + ' '.join(summary.get('messages') or ['the guard could not verify the tree.'])
         if notes:
             self.triage_history.append(('system', sanitize(' '.join(notes))))
+        if getattr(self, 'recovery_active', False):
+            self.chat_error = self.triage_error
         return True
 
     def triage_resume(self):
@@ -2423,6 +2421,11 @@ class UncleTUI:
         self.stdscr.refresh()
 
     def chat_display(self):
+        recovery = getattr(self, 'triage_history', [])
+        seen = getattr(self, '_recovery_displayed', 0)
+        for role, text in recovery[seen:]:
+            self.home_history.append(('Recovery' if role == 'master' else 'User' if role == 'operator' else 'System', text))
+        self._recovery_displayed = len(recovery)
         history = getattr(self, 'home_history', [])
         return [str(role).capitalize() + ': ' + text for role, text in history] if history else list(self.chat.messages)
 
@@ -2508,8 +2511,14 @@ class UncleTUI:
         self.chat_error = ''
 
     def _chat_key(self, k):
+        if k == 27 and getattr(self, 'recovery_active', False):
+            self.recovery_active = False
+            self.chat_focus = 'gate' if self.state == 'running' and self.prompt_kind else 'chat'
+            self.chat_error = ''
+            return True
         if k == 27 and self.state == 'running' and getattr(self, 'workflow_exit_reported', False):
             self.state = 'menu'
+            self.recovery_active = False
             self.chat_focus = 'chat'
             self.chat_error = ''
             return True
@@ -2530,8 +2539,6 @@ class UncleTUI:
                                          (1 if k == curses.KEY_DOWN else -1))
                 return True
             return False  # Gate keys use the same approval handler as /approve.
-        if not self.chat_edit and self._chat_command(k):
-            return False  # Existing gate keys are the sole driver-stdin writer.
         if not self.chat_edit and not (self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'issue') and self._chat_command(k):
             return True
         try:
@@ -2728,8 +2735,9 @@ class UncleTUI:
         self.stdscr.erase()
         if self.state in ("running", "viewer"):
             panel = min(34, w // 3) if w >= 60 else 0
-            chat_height = min(8, max(0, h - 3)) if self.state == 'running' and getattr(self, 'chat_open', False) else 0
-            self._draw_running(h - chat_height, w - panel)
+            chat_height = min(7, max(0, h - 3)) if self.state == 'running' and getattr(self, 'chat_open', False) else 0
+            # Reserve a blank row above the fixed-position build composer.
+            self._draw_running(h - chat_height - (1 if chat_height else 0), w - panel)
             if chat_height:
                 chat_width = min(76, w - panel)
                 chat_left = max(0, (w - panel - chat_width) // 2)
@@ -2860,6 +2868,10 @@ class UncleTUI:
                 self.chat_choices = self.chat.refs.browse('')
                 self.chat_pick = 0
             elif command == '/clear':
+                if getattr(self, 'triage_request', None):
+                    self.triage_request.cancel()
+                self.recovery_active = False
+                self._recovery_displayed = len(getattr(self, 'triage_history', []))
                 if self.home_request:
                     self.home_request.cancel()
                     self.home_request = None
@@ -2937,14 +2949,15 @@ class UncleTUI:
     def _draw_chat_composer(self, row, h, w, left, width, compact=True):
         """Shared homepage and build chat appearance."""
         first_row = row
-        if compact and h - row < 8:
+        build = self.state == 'running'
+        if compact and h - row < (7 if build else 8):
             row -= 1  # Hide the greeting first on short terminals.
         color = getattr(self, 'color', {})
-        def put(y, text, attr=0, centered=False):
+        def put(y, text, attr=0, centered=False, right=False):
             if not first_row <= y < h:
                 return
             text = text[:width]
-            x = left + max(0, (width - len(text)) // 2) if centered else left
+            x = left + max(0, width - len(text)) if right else left + max(0, (width - len(text)) // 2) if centered else left
             try:
                 self.stdscr.addnstr(y, x, text, min(width, max(0, w - x - 1)), attr)
             except curses.error:
@@ -2954,7 +2967,7 @@ class UncleTUI:
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
         text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
         visible_text = text[-max(1, width - 3):]
-        placeholder = 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
+        placeholder = 'Ask about the failure · /do N · /resume' if getattr(self, 'recovery_active', False) else 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
         put(row + (3 if compact else 6), '› ' + (visible_text if text else placeholder),
             color.get('accent', 0) if text else color.get('muted', curses.A_DIM))
         put(row + (3 if compact else 6), '›', color.get('warning', curses.A_BOLD))
@@ -2971,7 +2984,7 @@ class UncleTUI:
         if hasattr(self, 'stage_runners'):
             _, runner, model, effort = self.chat_model()
             model_label = (model or runner or model_label) + ' (' + effort + ')'
-        put(row + (5 if compact else 9), model_label + ('  ·  Workflow stopped' if self.state == 'running' and getattr(self, 'workflow_exit_reported', False) else '  ·  Thinking…' if getattr(self, 'home_request', None) else '  ·  Chat ready'), color.get('muted', curses.A_DIM))
+        model_status = model_label + ('  ·  Recovering…' if getattr(self, 'triage_request', None) else '  ·  Recovery ready' if getattr(self, 'recovery_active', False) else '  ·  Workflow stopped' if self.state == 'running' and getattr(self, 'workflow_exit_reported', False) else '  ·  Thinking…' if getattr(self, 'home_request', None) else '  ·  Chat ready')
         project = os.path.basename(_project_root()) or _project_root()
         try:
             with open(os.path.join(_project_root(), '.git', 'HEAD')) as source:
@@ -2980,14 +2993,21 @@ class UncleTUI:
         except OSError:
             pass
         auto = getattr(self, 'misc', {}).get('auto_mode') == 'true'
-        put(row + (6 if compact else 10), project + '  ·  ' + ('Auto mode on' if auto else 'Manual approvals'),
-            color.get('good', 0) if auto else color.get('accent', 0))
+        project_status = project + '  ·  ' + ('Auto mode on' if auto else 'Manual approvals')
+        if build:
+            right_width = min(len(project_status), max(1, width - 18))
+            put(row + 5, model_status[:max(0, width - right_width - 2)], color.get('muted', curses.A_DIM))
+            put(row + 5, project_status[:right_width], color.get('good', 0) if auto else color.get('accent', 0), right=True)
+        else:
+            put(row + (5 if compact else 9), model_status, color.get('muted', curses.A_DIM))
+            put(row + (6 if compact else 10), project_status, color.get('good', 0) if auto else color.get('accent', 0))
+        feedback_row = row + (6 if build else 7 if compact else 11)
         if self.chat_error:
-            put(row + (7 if compact else 11), self.chat_error, color.get('warning', curses.A_BOLD))
+            put(feedback_row, self.chat_error, color.get('warning', curses.A_BOLD))
         elif self.chat_choices:
-            put(row + (7 if compact else 11), 'File: ' + self.chat_choices[self.chat_pick], color.get('accent', 0))
+            put(feedback_row, 'File: ' + self.chat_choices[self.chat_pick], color.get('accent', 0))
         elif self.chat_composer.startswith('/'):
-            put(row + (7 if compact else 11), '/configure /settings /file /quit /issue # /requirements /change /approve /clear', color.get('muted', curses.A_DIM))
+            put(feedback_row, '/configure /settings /file /quit /issue # /requirements /change /approve /clear', color.get('muted', curses.A_DIM))
 
         self._draw_file_picker(row + (3 if compact else 6), left, width)
     def _draw_chat_panel(self, top, bottom, left, width):
@@ -3297,6 +3317,8 @@ class UncleTUI:
         if self.state == "stage":
             if getattr(self, "notice", ""):
                 return self.notice
+            if self.stage_target == "triage":
+                return "Recovery model — Enter: change, d: default, q back"
             if self.stage_target.startswith("@"):
                 return "OpenCode connection — Enter: edit, q back"
             return "%s — Enter: change, a: use OpenCode for all stages, d: default, q back" % self.stage_target
@@ -3481,7 +3503,7 @@ class UncleTUI:
                     except curses.error:
                         pass
                     row += 1
-            if self.state in ("config", "stage"):
+            if self.state == "config" and getattr(self, "config_section", "") == "stages":
                 self._draw_config_desc(top, row, h, w, cx)
         elif self.state == "picker":
             self._draw_picker(h, w, cx, row)
@@ -3860,7 +3882,7 @@ class UncleTUI:
             elif k in (10, 13):
                 section = getattr(self, "config_section", "")
                 if not section:
-                    self.config_section = ("stages", "opencode", "misc")[self.config_sel]
+                    self.config_section = ("stages", "opencode", "misc", "recovery")[self.config_sel]
                     self.config_sel = self.config_scroll = 0
                 elif section == "misc":
                     if self.config_sel == 0:
@@ -4024,6 +4046,9 @@ class UncleTUI:
 
     def _run(self):
         self._ensure_chat()
+        if getattr(self, 'triage_request', None) is not None:
+            self.chat_error = 'Wait for recovery to finish or use /clear to cancel before starting a workflow.'
+            return
         if self.home_request is not None:
             self.chat_error = 'Wait for the current chat request or cancel it with /clear before starting a workflow.'
             return
@@ -4038,6 +4063,7 @@ class UncleTUI:
         self.direct_issue = ""
         if self.workflow_idx == 2:
             self.direct_issue = _direct_origin_issue()
+        self.recovery_active = False
         self.state = "running"
         self.start_workflow()
 

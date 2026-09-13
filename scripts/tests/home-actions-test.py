@@ -62,7 +62,25 @@ class Actions(unittest.TestCase):
     def test_issue_build(self):
         self.reply(uncle_action='github_issue', issue='42', start=True)
         self.ui._run.assert_called_once()
-        self.assertEqual((self.ui.workflow_idx, self.ui.issue, self.ui.issue_mode), (1, '42', '--change'))
+        self.assertEqual((self.ui.workflow_idx, self.ui.input_buf, self.ui.state), (1, '42', 'issue'))
+        self.assertEqual(self.ui.issue_mode, '')
+
+    def test_explicit_issue_build_starts_auto_without_model(self):
+        (self.root / 'CHANGE_REQUEST.md').write_text('Keep this request')
+        for reference in ('https://github.com/unclehq/uncle/issues/34', '#34', '34'):
+            with self.subTest(reference=reference), patch.object(tui, 'HomeRequest') as request:
+                self.ui.state = 'menu'
+                self.ui._run.reset_mock()
+                self.ui.send_home_chat('build from issue ' + reference)
+                self.assertEqual(self.ui.state, 'issue')
+                self.assertEqual(self.ui.input_buf, reference.removeprefix('#'))
+                self.assertEqual(self.ui.issue, reference.removeprefix('#'))
+                self.assertEqual(self.ui.workflow_idx, 1)
+                self.assertEqual(self.ui.sel, 0)
+                request.assert_not_called()
+                self.ui._run.assert_called_once()
+                self.assertEqual(self.ui.issue_mode, '')
+        self.assertEqual((self.root / 'CHANGE_REQUEST.md').read_text(), 'Keep this request')
 
     def test_issue_import_without_build(self):
         with patch.object(tui, 'IssueSeedRequest') as worker:
@@ -71,6 +89,18 @@ class Actions(unittest.TestCase):
             self.assertEqual(command[-3:], ['42', '--change', '--seed-only'])
             self.assertEqual(env['UNCLE_PROJECT_ROOT'], root)
             self.ui._run.assert_not_called()
+
+    def test_auto_selection_advances_prefilled_issue_to_build(self):
+        # Exercise the actual transition, stubbing only reload and launch.
+        del self.ui._run
+        self.ui.maybe_reload = Mock()
+        self.ui.start_workflow = Mock()
+        self.ui.send_home_chat('build from issue https://github.com/unclehq/uncle/issues/34')
+        self.assertEqual(self.ui.state, 'running')
+        self.assertEqual(self.ui.issue, 'https://github.com/unclehq/uncle/issues/34')
+        self.assertEqual(self.ui.issue_mode, '')
+        self.assertEqual(self.ui.workflow_idx, 1)
+        self.ui.start_workflow.assert_called_once()
 
     def test_existing_document_is_preserved(self):
         target = self.root/'REQUIREMENTS.md'

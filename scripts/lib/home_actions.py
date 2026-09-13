@@ -26,7 +26,8 @@ Actions:
 - run_change: run the existing CHANGE_REQUEST.md; no document/start fields.
 - github_issue: include "issue" (positive issue number or full https://github.com/
   owner/repo/issues/number URL), and "start". The existing issue importer fetches
-  the issue and creates CHANGE_REQUEST.md. A bare issue reference means import
+  the issue. When start is true, use Auto issue classification and immediately
+  start the From GitHub issue workflow. A bare issue reference means import
   only; start only when the user requests implementation. Never invent its contents.
 
 Use the user's conversation to include all stated requirements, corrections,

@@ -353,7 +353,9 @@ class ChatInteractionTests(unittest.TestCase):
                 panel = min(34, w // 3) if w >= 60 else 0
                 width = min(76, w - panel)
                 self.ui._draw_chat_panel.assert_called_with(
-                    h - min(8, max(0, h - 3)) - 1, h - 1, (w - panel - width) // 2, width)
+                    h - min(7, max(0, h - 3)) - 1, h - 1, (w - panel - width) // 2, width)
+                self.ui._draw_running.assert_called_with(
+                    h - min(7, max(0, h - 3)) - 1, w - panel)
                 self.assertTrue(self.ui.chat_open)
 
     def test_running_preserves_dialog_and_statistics_renderer(self):

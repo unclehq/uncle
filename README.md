@@ -1,84 +1,121 @@
 <p align="center">
   <img src="uncle.png" alt="Uncle logo" width="240">
 </p>
+
 <h1 align="center">uncle</h1>
 
-**The integrity layer for AI-generated software changes.**
+**Give Uncle an issue. Talk to it while it works. Get a reviewed pull request.**
 
-Uncle is a local-first, terminal-native tool that turns requirements or GitHub issues into independently reviewed, human-approved pull requests using the coding agents you choose.
+Uncle is a terminal-native agentic software engineer that works inside your repository. Give it requirements or a GitHub issue, collaborate with it while it works, and approve the result when it's ready.
+
+Underneath, Uncle acts as an integrity layer for AI-generated software changes. Planning, implementation, independent review, verification, and publication are separated by enforced trust boundaries and human approval gates.
+
+**Delegate the work, not the responsibility.**
 
 ```text
-Issue / Requirements
-        ↓
-      Plan
-        ↓
-  Human approval
-        ↓
- Implementation
-        ↓
-Independent review
-        ↓
-  Verification
-        ↓
-  Human approval
-        ↓
-    GitHub PR
+GitHub Issue / Requirements
+            ↓
+          Uncle
+            ↕
+          You
+            ↓
+          Plan
+            ↓
+      Human approval
+            ↓
+     Implementation
+            ↓
+    Independent review
+            ↓
+       Verification
+            ↓
+      Human approval
+            ↓
+        GitHub PR
 ```
 
 ## Why Uncle?
 
-Coding agents can write and review code, but agents that produced a change should not be trusted to approve their own work.
+Coding agents can write code. They shouldn't be trusted to approve their own work.
 
-- **Human approval gates** at every planning and review stage.
-- **Adversarial review** by a second model that did not write the code.
-- **SHA-256 pinned specs** so approved artifacts cannot be silently modified.
-- **Immutable reviewer-owned files** the implementing agent cannot edit.
-- **A green check and a diff gate** after implementation, run by the driver
-  rather than by the agent that wrote the code.
+Uncle enforces the integrity of a change from request to pull request:
 
----
+* **Work with Uncle while it works.** Ask questions, provide context, or redirect it without leaving the terminal.
+* **Human approval gates** before consequential changes advance.
+* **Independent adversarial review** by an agent that did not write the code.
+* **SHA-256 pinned specs** so approved artifacts cannot silently change.
+* **Immutable reviewer-owned files** the implementing agent cannot edit.
+* **Driver-run verification and diff gates** independent of the coding agent.
+* **Audited GitHub handoff** from issue to pull request.
 
-## Usage
+Uncle works with the coding agents you already use, including Cline, Claude, Codex, Kimi, and OpenCode.
 
-1. Install Uncle.
-1. Create a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue.
-1. `uncle`
+It doesn't replace your IDE, agents, GitHub, or CI. It coordinates the work and establishes the integrity of the change flowing between them.
+
+## Uncle builds Uncle
+
+Uncle is developed using Uncle.
+
+Changes to Uncle itself go through the same issue → plan → implementation → independent review → human approval → pull request workflow Uncle provides to other repositories.
+
+The process isn't just documented here. It's used here.
+
+## Quick start
+
+Install Uncle, open a repository, and give it a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue.
+
+```sh
+uncle
+```
+
+Then work with Uncle while it works.
 
 ## Install
 
 See [Prerequisites](PREREQUISITES.md) for required tools, AI clients, authentication, and self-hosted model setup.
 
-macOS or Debian/Ubuntu/WSL (Homebrew required on macOS):
+### macOS or Debian/Ubuntu/WSL
+
+Homebrew is required on macOS.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/unclehq/uncle/main/install.sh -o install.sh
 bash install.sh
 ```
 
-Windows PowerShell (Scoop required):
+### Windows PowerShell
+
+Scoop is required.
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/unclehq/uncle/main/install.ps1 -OutFile install.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-## Use
+## GitHub
 
-Create a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue, then run `uncle` in your project.
+Uncle can start with a GitHub issue and carry the change through planning, implementation, independent review, verification, and human approval.
 
-Choose runners per stage: Cline, Claude, Codex, Kimi, or OpenCode. Install your chosen clients separately. For self-hosted OpenCode, enter a Base URL and API key; Uncle discovers models automatically. GitHub workflows use `gh auth login`.
+When the change is ready, Uncle shows you the audited diff and asks for approval before creating the commit, feature branch, push, and pull request.
 
-**Configure → Miscellaneous** sets auto mode and your approval name.
+**Uncle stops at the pull request.** Your existing GitHub review, CI, and merge controls remain the final authority.
 
+GitHub workflows use your existing `gh` authentication:
 
-> **Just testing uncle?** Use Cline with open-weight models and configure your plan.
-> Expect slower runs, but dramatically lower costs than premium models.
-> Usage billed is good tradeoff while trying out the tool.
+```sh
+gh auth login
+```
 
-## GitHub integration
+See [GitHub integration](GITHUB_INTEGRATION.md) for setup, signing, approvals, and recovery.
 
-Start from a GitHub issue, review the changes, then approve a commit, push, and pull request. Uncle links eligible issues to the PR so GitHub closes them when merged.
+## Ideas and feedback
 
-See [GitHub integration](GITHUB_INTEGRATION.md) for setup, approvals, signing, and recovery.
+Have an idea for Uncle or want to discuss how it should work? Start a [GitHub Discussion](../../discussions).
 
-[Documentation](scripts/README.md) · [Packaging](packaging/README.md)
+Found a bug or have a concrete feature request? Open an [issue](../../issues).
+
+**Ideas start in Discussions. Work starts in Issues. Uncle takes it from there.**
+
+---
+
+[Workflow documentation](scripts/README.md) · [Packaging](packaging/README.md)

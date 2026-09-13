@@ -21,14 +21,6 @@ jobs:
           python3 scripts/tests/install-test.py
       - name: Install local checkout through the native package manager
         run: bash install.sh --source-dir "$PWD"
-      - name: Upload Windows regression logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-regression-logs
-          path: .uncle/workflow/regression-logs/*.log
-          include-hidden-files: true
-          if-no-files-found: ignore
       - name: Smoke test outside the checkout
         run: |
           cd "$RUNNER_TEMP"
@@ -79,6 +71,14 @@ jobs:
           export UNCLE_WINDOWS_PYTHON="$(cygpath -w "$(command -v python)")"
           export UNCLE_WINDOWS_BASH="$(cygpath -w "$BASH")"
           python3 -B scripts/tests/windows-regressions.py
+      - name: Upload Windows regression logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-regression-logs
+          path: .uncle/workflow/regression-logs/*.log
+          include-hidden-files: true
+          if-no-files-found: ignore
       - name: Smoke test outside the checkout
         run: |
           Set-Location $env:RUNNER_TEMP

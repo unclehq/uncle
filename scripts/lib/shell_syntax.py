@@ -39,6 +39,12 @@ def main():
     if sys.argv[1] == "--command":
         command, jobs = sys.argv[2], int(sys.argv[3])
         argv = syntax_command(command, jobs) or [bash_executable(), "-c", command]
+        if os.name == 'nt':
+            # Windows execv uses CRT argument joining, which loses quoting for
+            # paths such as C:\Program Files\Git and shell command strings.
+            # Popen quotes the argument list for CreateProcess and wait returns
+            # the real child exit code rather than an apparent launch success.
+            return subprocess.run(argv).returncode
         os.execv(argv[0], argv)
     jobs = int(sys.argv[1])
     if not 1 <= jobs <= 8:

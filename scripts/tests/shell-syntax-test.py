@@ -11,6 +11,19 @@ import shell_syntax as syntax
 LOOP = 'for f in scripts/*.sh scripts/lib/*.sh scripts/tests/*.sh; do bash -n "$f"; done'
 
 class Tests(unittest.TestCase):
+    def test_windows_dispatch_preserves_arguments_and_failure(self):
+        command = "printf 'A\rB' > 'file with spaces'; exit 7"
+        bash = r'C:\Program Files\Git\usr\bin\bash.exe'
+        with patch.object(syntax.sys, 'argv', ['helper', '--command', command, '2']), \
+             patch.object(syntax.os, 'name', 'nt'), \
+             patch.object(syntax, 'syntax_command', return_value=None), \
+             patch.object(syntax, 'bash_executable', return_value=bash), \
+             patch.object(syntax.os, 'execv') as execv, \
+             patch.object(syntax.subprocess, 'run', return_value=subprocess.CompletedProcess([], 7)) as run:
+            self.assertEqual(syntax.main(), 7)
+            run.assert_called_once_with([bash, '-c', command])
+            execv.assert_not_called()
+
     def test_only_known_read_only_loop_is_parallelized(self):
         self.assertIsNotNone(syntax.syntax_command(LOOP, 4))
         self.assertIsNotNone(syntax.syntax_command(LOOP.replace('; done', ' || exit 1; done'), 4))

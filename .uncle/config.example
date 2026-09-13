@@ -100,6 +100,15 @@ manual-checklist.effort medium
 final-audit.runner codex
 final-audit.effort high
 
+# --- triage ------------------------------------------------------------------
+
+# The model the screen opens after a stage failure (or on `t` / `/triage` at
+# any stop) to explain the failure and propose fixes. An agent-side runner: a
+# proposal you select runs in a sandbox copy of the project and only its
+# allowed edits are copied back. Unset, the runner's own defaults apply.
+triage.runner claude
+triage.effort medium
+
 # Self-hosted Aider runner using an OpenAI-compatible endpoint.
 # Configure → Configure Aider / self hosting: enter Base URL and masked API key.
 # Supported model IDs are discovered from the endpoint automatically.

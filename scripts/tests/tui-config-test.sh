@@ -562,7 +562,7 @@ actual="$(
         for stage in derive-brief requirements baseline project-plan change-plan \
                      adversarial-review updated-plan updated-change-plan preflight \
                      implementation test-review manual-checklist execute-checklist \
-                     final-audit; do
+                     final-audit triage; do
             effort="$(uncle_stage_effort "$stage")"
             printf "%s\t%s\t%s\t%s\t%s\n" "$stage" "$(uncle_stage_runner "$stage")" \
                 "$(uncle_stage_model "$stage")" "$effort" \

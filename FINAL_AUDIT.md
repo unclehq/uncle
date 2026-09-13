@@ -1,3 +1,4 @@
+One quick evidence check, then the audit is done — finishing now.
 ## Findings
 
 | ID | Severity | Evidence | Affected behavior | Affected invariant | Required correction | Blocks completion |

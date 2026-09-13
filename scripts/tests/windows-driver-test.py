@@ -20,7 +20,28 @@ else:
         spec.loader.exec_module(driver)
 
 
+def membership_child_code():
+    probe = ('import json; from pathlib import Path; from windows_driver import child_valid; '
+             'assert child_valid(json.loads(Path(".uncle/workflow/driver.lock").read_text()))')
+    return ('import subprocess,sys,time; from pathlib import Path; '
+            f'subprocess.run([sys.executable, "-c", {probe!r}], check=True); '
+            'Path("started").touch(); time.sleep(20)')
+
+
 class DriverTests(unittest.TestCase):
+    def test_membership_child_program_is_executable(self):
+        # Exercise both generated Python programs even on non-Windows hosts.
+        calls = []
+        def run_probe(command, **kwargs):
+            self.assertTrue(kwargs['check'])
+            compile(command[2], '<membership probe>', 'exec')
+            calls.append(command)
+        with patch('subprocess.run', side_effect=run_probe), \
+             patch('pathlib.Path.touch') as started, patch('time.sleep'):
+            exec(compile(membership_child_code(), '<membership child>', 'exec'), {})
+        self.assertEqual(len(calls), 1)
+        started.assert_called_once()
+
     def test_no_posix_import_required_for_plan_helper(self):
         source = (ROOT/'scripts/lib/plan-executability.py').read_text()
         original = __import__
@@ -70,9 +91,7 @@ class DriverTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'requires native Windows Job Objects')
     def test_native_windows_lock_and_child_membership(self):
         with tempfile.TemporaryDirectory() as d:
-            code = ('import subprocess,sys,time; from pathlib import Path; '
-                    'subprocess.run([sys.executable, "-c", "import json; from pathlib import Path; from windows_driver import child_valid; assert child_valid(json.loads(Path(\".uncle/workflow/driver.lock\").read_text()))"], check=True); '
-                    'Path("started").touch(); time.sleep(20)')
+            code = membership_child_code()
             command = [sys.executable, str(ROOT/'scripts/lib/plan-executability.py'), 'lock-run', sys.executable, '-c', code]
             env = dict(os.environ, PYTHONPATH=str(ROOT/'scripts/lib'))
             owner = subprocess.Popen(command, cwd=d, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -80,7 +99,11 @@ class DriverTests(unittest.TestCase):
                 deadline = time.monotonic() + 10
                 while not (Path(d)/'started').exists() and owner.poll() is None and time.monotonic() < deadline:
                     time.sleep(.05)
-                self.assertTrue((Path(d)/'started').exists())
+                if not (Path(d)/'started').exists():
+                    owner.kill()
+                    _, stderr = owner.communicate(timeout=10)
+                    self.fail(f'Windows child did not start (exit {owner.returncode}):\n'
+                              + stderr.decode(errors='replace'))
                 contender = subprocess.run(command, cwd=d, env=env, capture_output=True, timeout=10)
                 self.assertNotEqual(contender.returncode, 0)
                 self.assertIn(b'another workflow', contender.stderr)

@@ -99,6 +99,30 @@ class FindingsTests(unittest.TestCase):
             result = self.run_review('r\ns\n')
             self.assertEqual(result.returncode, 0, result.stdout)
 
+    def test_checked_summary_is_preserved_in_review_and_record(self):
+        summary = 'Checked: diff (5 paths); regression suite (34 OK); no waivers.'
+        report = TABLE.replace('NOT READY', summary + '\n\nNOT READY')
+        self.report.write_text(report, encoding='utf-8')
+        result = self.run_review('s\nr\n')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(result.stdout.count('Choose [s] Skip'), 2)
+        self.assertIn(summary, result.stdout)
+        for item in self.record()['decisions'].values():
+            self.assertIn(summary, item['finding']['evidence'])
+        self.assertEqual(self.report.read_text(), report)
+
+    def test_summary_cannot_hide_rows_or_unrecognized_content(self):
+        for suffix in (
+            'Checked: tests passed.\n| FA-4 | high | Missing check | Run it | YES |',
+            'Checked: tests passed.\nUnstructured blocking finding.',
+            'Checked: tests passed.\nChecked: another summary.',
+            'Checked:',
+        ):
+            with self.subTest(suffix=suffix):
+                self.report.write_text(TABLE.replace('NOT READY', suffix + '\nNOT READY'))
+                self.assertEqual(self.run_review('s\nr\n').returncode, 2)
+                self.assertFalse((self.state / 'audit-dispositions').exists())
+
     def test_row_after_verdict_cannot_be_hidden(self):
         self.report.write_bytes((TABLE + '| FA-4 | blocking | Missing check | Run check | YES |\n').encode("utf-8"))
         self.assertEqual(self.run_review('s\ns\n').returncode, 2)

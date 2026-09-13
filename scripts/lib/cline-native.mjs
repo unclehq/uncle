@@ -9,6 +9,41 @@ host.subscribe(e => {
   if (e.type === 'agent_event' && (!session || e.payload.sessionId === session))
     out({method:'agent_event',params:e.payload.event});
 });
+const transientTransportError = text =>
+  /ERR_HTTP2_STREAM_ERROR|NGHTTP2_INTERNAL_ERROR|ERR_HTTP2_GOAWAY_SESSION|ECONNRESET|UND_ERR_SOCKET/i.test(text);
+
+async function sendStage(prompt) {
+  let result;
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    try {
+      result = await host.send({sessionId:session, prompt});
+    } catch (error) {
+      result = {finishReason:'error', text:String(error.message || error)};
+    }
+    if (!result || result.finishReason === 'completed') break;
+    const detail = String(result.text || result.error?.message || result.error || '');
+    if (attempt === 2 || result.finishReason !== 'error' || !transientTransportError(detail)) break;
+    out({method:'agent_event',params:{type:'content_end',contentType:'text',
+      text:`Cline transport disconnected. Continuing the same session (retry ${attempt + 1}/2).`}});
+    // The session keeps the conversation, tool results, model and filesystem.
+    // Never replay the original request as a new stage or reset its approvals.
+    prompt = 'The previous response stream disconnected. Continue the current stage ' +
+      'from its existing conversation and current files, honoring all user steering. ' +
+      'Check completed work and tool results before proceeding; do not repeat completed ' +
+      'side effects. Keep the same task, permissions, approval requirements, and output ' +
+      'contract. Resume unfinished work and return the required final response.';
+  }
+  if (result && host.getAccumulatedUsage) {
+    try {
+      const totals = await host.getAccumulatedUsage(session);
+      if (totals?.aggregateUsage || totals?.usage) result.usage = totals.aggregateUsage || totals.usage;
+    } catch (error) {
+      out({method:'agent_event',params:{type:'error',message:'Cline usage totals unavailable: ' + String(error.message || error)}});
+    }
+  }
+  return result || {finishReason:'completed'};
+}
+
 const input = createInterface({input:process.stdin});
 input.on('line', async line => {
   let request;
@@ -23,12 +58,8 @@ input.on('line', async line => {
       const started=await host.start({config,interactive:true});
       session=started.sessionId;
       out({method:'ready',params:{sessionId:session}});
-      const result=await host.send({sessionId:session,prompt:p.prompt});
-      if (result && host.getAccumulatedUsage) {
-        const totals=await host.getAccumulatedUsage(session);
-        if (totals?.aggregateUsage || totals?.usage) result.usage=totals.aggregateUsage || totals.usage;
-      }
-      out({id:request.id,result:result || {finishReason:'completed'}});
+      const result=await sendStage(p.prompt);
+      out({id:request.id,result});
     } else if (request.method === 'steer') {
       if (!session) throw new Error('No active session');
       await host.send({sessionId:session,prompt:p.text,delivery:'steer'});

@@ -87,13 +87,18 @@ def start_check(command, **kwargs):
 
 def finish_check(process):
     timing = getattr(process, '_uncle_timing', None)
-    if timing is not None:
+    # Only track_process's explicit record is timing data. Mock/proxy objects
+    # can synthesize attributes even when no record was ever attached.
+    if isinstance(timing, tuple) and len(timing) == 4:
         process._uncle_timing = None
-        from build_timing import event
-        name, started, tick, identity = timing
-        event('process', name, started, time.monotonic() - tick,
-              process.returncode, child_pid=process.pid, span_id=identity,
-              workflow_state=os.environ.get('UNCLE_TIMING_STAGE', ''))
+        try:
+            from build_timing import event
+            name, started, tick, identity = timing
+            event('process', name, started, time.monotonic() - tick,
+                  process.returncode, child_pid=process.pid, span_id=identity,
+                  workflow_state=os.environ.get('UNCLE_TIMING_STAGE', ''))
+        except Exception:
+            pass  # Observability must never prevent Job Object cleanup.
     job = getattr(process, '_uncle_job', None)
     if job is not None:
         try:

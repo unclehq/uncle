@@ -1561,7 +1561,7 @@ class UncleTUI:
         self.chat_focus = "gate"
         self.prompt_text = (
             "Your workflow is complete! Support Uncle by adding a star on GitHub: "
-            "https://github.com/unclehq/uncle. "
+            "https://github.com/unclehq/uncle/issues/new "
             "This popup won't bother you again.")
 
     def _absorb_line(self, line):
@@ -2688,6 +2688,7 @@ class UncleTUI:
                 self._draw_chat_panel(top, h - 1, left, w - left)
         self._draw_status(h, w)
         self.stdscr.refresh()
+        self._paint_support_link()
 
     def _homepage_key(self, k):
         if k == 16:  # Ctrl-P: the homepage command menu.
@@ -3474,6 +3475,17 @@ class UncleTUI:
         gets the middle of the screen rather than one more line of scrollback.
         """
         lines = self._wrap(self.prompt_text, max(20, min(72, w - 12)))
+        support_url = ""
+        if self.prompt_kind == "support":
+            # The URL gets its own line so one OSC 8 span covers all of it and
+            # the narrow-terminal padding below can keep every character visible.
+            words = self.prompt_text.split()
+            support_url = next((t for t in words if t.startswith("https://")), "")
+            if support_url:
+                at = words.index(support_url)
+                width = max(20, min(72, w - 12))
+                lines = (self._wrap(" ".join(words[:at]), width) + [support_url]
+                         + self._wrap(" ".join(words[at + 1:]), width))
         if self.prompt_kind == "confirm":
             footer = "[y] approve      [n] decline"
             if self.gate_file:
@@ -3513,6 +3525,9 @@ class UncleTUI:
         box_w = min(w - 4, max(len(l) for l in body + [footer]) + 6)
         box_w = (min(w - 2, max(box_w, min(30, w - 2)))
                  if self.prompt_text.startswith("Commit signing needs your help.") else max(box_w, 30))
+        if support_url:
+            # 43 visible URL characters need a 48-wide box at 1-column padding.
+            box_w = min(w - 2, max(box_w, len(support_url) + 5))
         box_h = len(body) + 4
         top = max(0, (h - box_h) // 2)
         left = max(0, (w - box_w) // 2)
@@ -3531,16 +3546,40 @@ class UncleTUI:
             self.stdscr.addnstr(top + box_h - 1, left, "\u2514" + "\u2500" * (box_w - 2) + "\u2518", box_w, border)
         except curses.error:
             pass
+        self.support_link = None
         for i, line in enumerate(body):
             attr = self.color["accent"]
+            col, width = left + 3, box_w - 6
             if line is body[-1]:
                 attr = self.color["sel"]
             elif self.prompt_kind == "input" and line.startswith("> "):
                 attr = self.color["cursor"]
+            elif support_url and line == support_url:
+                col, width = left + 2, box_w - 4
+                self.support_link = (top + 2 + i, col, support_url)
             try:
-                self.stdscr.addnstr(top + 2 + i, left + 3, line, box_w - 6, attr)
+                self.stdscr.addnstr(top + 2 + i, col, line, width, attr)
             except curses.error:
                 pass
+
+    def _paint_support_link(self):
+        """Wrap the support URL already on screen in an OSC 8 hyperlink.
+
+        curses has no hyperlink attribute, so after it refreshes we rewrite
+        the same cells raw with the link open/close sequences around them,
+        then restore the cursor so curses' idea of it stays true.
+        """
+        link = getattr(self, "support_link", None)
+        if not link or self.prompt_kind != "support":
+            return
+        y, x, url = link
+        # DECSC/DECRC bracket the write so cursor and SGR state return intact.
+        seq = ("\x1b7\x1b[%d;%dH\x1b[4m\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\\x1b8"
+               % (y + 1, x + 1, url, url)).encode()
+        try:
+            os.write(sys.stdout.fileno(), seq)
+        except (OSError, ValueError):
+            pass
 
     def _draw_status(self, h, w):
         if self.state == "viewer":
@@ -3642,7 +3681,7 @@ class UncleTUI:
                 self.prompt_kind = ""
                 self.chat_focus = "chat"
                 threading.Thread(target=webbrowser.open,
-                                 args=("https://github.com/unclehq/uncle",),
+                                 args=("https://github.com/unclehq/uncle/issues/new",),
                                  daemon=True).start()
             elif k in (10, 13, 27, ord("q"), ord("Q")):
                 self.prompt_kind = ""

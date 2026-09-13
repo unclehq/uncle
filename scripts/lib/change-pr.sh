@@ -363,6 +363,45 @@ def title_default():
     return ' '.join(title.split())[:72].strip() or 'Completed change'
 
 
+def slug_text():
+    path = Path('CHANGE_REQUEST.md')
+    text = read(path if path.exists() else Path('REQUIREMENTS.md'))
+    match = re.search(r'^##\s+(?:\d+\.\s+)?Summary\s*\n(.*?)(?=^##\s|\Z)', text, re.M | re.S | re.I)
+    if match:
+        return match.group(1)
+    match = re.search(r'^# ([^\n]*)', text, re.M)
+    return match.group(1) if match else ''
+
+
+def slug(text):
+    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode().lower()
+    return re.sub(r'[^a-z0-9]+', '-', text).strip('-')[:40].strip('-') or 'change'
+
+
+def label_prefix(origin):
+    fields = origin.strip().split('\t')
+    if len(fields) != 3 or fields[2] != 'gh':
+        return 'uncle/'
+    try:
+        result = subprocess.run(['gh', 'issue', 'view', fields[1], '--repo', fields[0],
+                                 '--json', 'labels'], capture_output=True, text=True,
+                                timeout=int(os.environ.get('STAGEGATE_CLOSE_TIMEOUT', '30')))
+        if result.returncode:
+            raise ValueError('Label lookup failed')
+        labels = {label['name'].casefold() for label in json.loads(result.stdout)['labels']}
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError, AttributeError):
+        print('Label lookup failed; using uncle/ prefix', flush=True)
+        return 'uncle/'
+    for label, prefix in [('enhancement', 'feat/'), ('bug', 'bug/'), ('documentation', 'doc/')]:
+        if label in labels:
+            return prefix
+    return 'uncle/'
+
+
+def branch_name(j):
+    return label_prefix(j['origin']) + slug(slug_text()) + '-' + j['owner'][:12]
+
+
 def repo_name(value):
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', value):
         raise ValueError('Unsupported repository identity: ' + value)
@@ -428,7 +467,7 @@ def resolve(j):
             raise ValueError('Unsupported fork owner for gh --head.')
     target = j['original_branch']
     if target == base_branch:
-        target = 'uncle/change-' + j['owner'][:12]
+        target = branch_name(j)
     git('check-ref-format', '--branch', target)
     j.update(base_repo=base, base_branch=base_branch, head_repo=head_repo,
              head_branch=target, remote=remote)

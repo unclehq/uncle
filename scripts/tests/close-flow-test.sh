@@ -532,6 +532,10 @@ printf 'other/repo\t99\n' > "$REPO/.uncle/workflow/origin"
 run_driver STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
 expect_out "Change workflow complete."
+# The support prompt belongs to the TUI only; a non-TUI completion must never
+# print it (B-7).
+expect_not_out "github.com/unclehq/uncle"
+expect_not_out "support Uncle"
 
 # ---------------------------------------------------------------------------
 # FINAL_AUDIT freshness and verdict record (AR-002)

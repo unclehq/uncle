@@ -11,6 +11,17 @@ import shell_syntax as syntax
 LOOP = 'for f in scripts/*.sh scripts/lib/*.sh scripts/tests/*.sh; do bash -n "$f"; done'
 
 class Tests(unittest.TestCase):
+    def test_windows_transport_reconstructs_command_in_bash(self):
+        command = "printf '%s' 'A\rB'; printf '%s' \"\\\\tail\"; exit 7"
+        bash = syntax.bash_executable()
+        with patch.object(syntax.os, 'name', 'nt'), \
+             patch.object(syntax, 'bash_executable', return_value=bash):
+            argv = syntax.shell_command(command)
+        self.assertNotIn('\r', argv[-1])
+        result = subprocess.run(argv, capture_output=True)
+        self.assertEqual(result.stdout, b'A\rB\\tail')
+        self.assertEqual(result.returncode, 7)
+
     def test_command_file_preserves_control_characters_and_line_positions(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -33,7 +44,8 @@ class Tests(unittest.TestCase):
              patch.object(syntax.os, 'execv') as execv, \
              patch.object(syntax.subprocess, 'run', return_value=subprocess.CompletedProcess([], 7)) as run:
             self.assertEqual(syntax.main(), 7)
-            run.assert_called_once_with([bash, '-c', command])
+            run.assert_called_once_with(syntax.shell_command(command))
+            self.assertNotIn('\r', run.call_args.args[0][-1])
             execv.assert_not_called()
 
     def test_only_known_read_only_loop_is_parallelized(self):

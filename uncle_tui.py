@@ -1996,8 +1996,9 @@ class UncleTUI:
             return
         gate_question = (self.state == 'running' and bool(getattr(self, 'prompt_kind', ''))
                          and self.proc is not None and self.proc.poll() is None)
-        stage_channel = getattr(self, 'steering_channels', {}).get(getattr(self, 'status_stage', ''))
-        if self.state == 'running' and (stage_channel or not gate_question):
+        # A channel can outlive its runner while the driver waits for approval.
+        # Gate questions must get a reply, not enter that unconsumed queue.
+        if self.state == 'running' and not gate_question:
             return self.steer_stage(message)
         if self.home_request is not None:
             raise ValueError('A reply is still running. Wait or use /clear to cancel.')
@@ -3142,14 +3143,8 @@ class UncleTUI:
                 self.stdscr.addnstr(i, 0, line, message_width)
             except curses.error:
                 pass
-        if self.prompt_kind and getattr(self, 'chat_focus', 'gate') != 'chat':
+        if self.prompt_kind:
             self._draw_modal(h, w)
-        elif self.prompt_kind:
-            try:
-                pending = 'Pending: ' + ' '.join(sanitize(self.prompt_text).split()) + ' · Tab returns to dialog'
-                self.stdscr.addnstr(0, 0, pending, max(1, message_width))
-            except curses.error:
-                pass
 
     def _restore_session_totals(self):
         stats = getattr(self, "session_stats", None)
@@ -3673,7 +3668,9 @@ class UncleTUI:
                 footer = "[c] Copy command  [Enter] resume  [Esc] cancel"
         else:
             footer = "type an answer, [Enter] send, [Esc] cancel"
-        footer += '   [Tab] chat / dialog'
+        footer += ('   Chat focused · [Tab] return to dialog'
+                   if getattr(self, 'chat_focus', 'gate') == 'chat'
+                   else '   [Tab] ask in chat')
         body = list(lines)
         if self.prompt_text.startswith("Audit finding "):
             visible = max(1, h - 10)

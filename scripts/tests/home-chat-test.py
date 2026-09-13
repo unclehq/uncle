@@ -67,6 +67,22 @@ class HomeTests(unittest.TestCase):
                 ui.send_home_chat('Do not lose this message')
             self.assertEqual(len(list(Path(d).glob('*.json'))), 1)
 
+    def test_pending_dialog_stays_visible_with_chat_focus(self):
+        from unittest.mock import Mock
+        ui = tui.UncleTUI.__new__(tui.UncleTUI)
+        ui.state = 'running'
+        ui.prompt_kind = 'confirm'
+        ui.chat_focus = 'chat'
+        ui.partial = ''
+        ui._build_messages = Mock(return_value=['Latest build output'])
+        ui._draw_modal = Mock()
+        ui.stdscr = Mock()
+        ui.stdscr.getmaxyx.return_value = (40, 120)
+        ui._draw_running(25, 90)
+        ui._draw_modal.assert_called_once_with(25, 90)
+        self.assertEqual(ui.chat_focus, 'chat')
+        self.assertEqual(ui.prompt_kind, 'confirm')
+
     def test_pending_gate_questions_preserve_approval_and_use_stage_model(self):
         from unittest.mock import Mock
         ui = tui.UncleTUI.__new__(tui.UncleTUI)
@@ -75,7 +91,7 @@ class HomeTests(unittest.TestCase):
         ui.prompt_text = 'Ready to approve CHANGE_PLAN.md?'
         ui.gate_file = 'CHANGE_PLAN.md'
         ui.status_stage = 'change-plan'
-        ui.steering_channels = {}
+        ui.steering_channels = {'change-plan': '/stale-channel-from-completed-stage'}
         ui.proc = Mock()
         ui.proc.poll.return_value = None
         ui.home_request = None

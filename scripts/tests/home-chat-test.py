@@ -144,6 +144,20 @@ class HomeTests(unittest.TestCase):
             request=HomeRequest([sys.executable,'-c','raise SystemExit(2)'],'hello',os.environ.copy())
             self.assertEqual(request.events.get(timeout=5)[0],'error')
             request.thread.join(5)
+    def test_background_chat_reads_launch_directory_and_keeps_reply_temporary(self):
+        with tempfile.TemporaryDirectory(prefix='chat project ') as d:
+            root = Path(d)
+            (root/'local.txt').write_text('project file contents')
+            script = root/'fake.py'
+            script.write_text("import sys; from pathlib import Path; "
+                              "reply=Path(sys.argv[sys.argv.index('--output-last-message')+1]); "
+                              "assert reply.parent != Path.cwd(); "
+                              "reply.write_text(Path('local.txt').read_text())")
+            request = HomeRequest([sys.executable, str(script)], 'Read local.txt', os.environ.copy(), cwd=d)
+            self.assertEqual(request.events.get(timeout=5), ('reply', 'project file contents'))
+            request.thread.join(5)
+            self.assertFalse((root/'reply.txt').exists())
+            self.assertFalse(request.thread.is_alive())
     def test_cancel(self):
         request=HomeRequest([sys.executable,'-c','import time; time.sleep(30)'],'hello',os.environ.copy())
         request.cancel()

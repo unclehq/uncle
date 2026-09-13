@@ -2081,9 +2081,9 @@ class UncleTUI:
         if issue_references(message) and not gate_question:
             root = _project_root()
             self.home_request = HomeRequest(command, prompt, env,
-                                            issue_lookup=lambda: issue_context(root, message))
+                                            issue_lookup=lambda: issue_context(root, message), cwd=root)
         else:
-            self.home_request = HomeRequest(command, prompt, env)
+            self.home_request = HomeRequest(command, prompt, env, cwd=_project_root())
         self.home_request.gate_question = gate_question
 
     def poll_home_chat(self):

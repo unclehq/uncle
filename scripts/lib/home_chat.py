@@ -7,10 +7,11 @@ from pathlib import Path
 from process_tree import start_check, launch_command, kill_tree, finish_check
 
 class HomeRequest:
-    def __init__(self, command, prompt, env, issue_lookup=None):
+    def __init__(self, command, prompt, env, issue_lookup=None, cwd=None):
         self.events = queue.Queue()
         self.cancelled = threading.Event()
         self.issue_context = ''
+        self.cwd = str(Path(cwd or Path.cwd()).resolve())
         self.thread = threading.Thread(target=self._run, args=(command, prompt, env, issue_lookup), daemon=True)
         self.thread.start()
 
@@ -31,7 +32,7 @@ class HomeRequest:
                 reply = Path(directory) / 'reply.txt'
                 try:
                     process = start_check(launch_command(command + ['--output-last-message', str(reply), prompt]),
-                                          cwd=directory, env=env, stdout=subprocess.DEVNULL,
+                                          cwd=self.cwd, env=env, stdout=subprocess.DEVNULL,
                                           stderr=subprocess.DEVNULL)
                     for _ in range(1500):
                         if self.cancelled.is_set():

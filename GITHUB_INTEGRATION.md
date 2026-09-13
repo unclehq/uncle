@@ -18,6 +18,8 @@ Import uses your current project; it does not clone a repository. Public issues 
 
 The change workflow offers PR publication after a READY audit. This also works with a local `CHANGE_REQUEST.md`.
 
+When the verdict is not READY, publication first asks whether to create the PR anyway, showing the recorded verdict. Approving records the override in `.uncle/workflow/pr/verdict-override` and notes it at the top of the PR body; the linked issue stays open. Unattended runs are never asked.
+
 1. Review the audited diff and target.
 2. Enter a title, summary, and manual verification steps.
 3. Approve the commit, push, and PR creation.

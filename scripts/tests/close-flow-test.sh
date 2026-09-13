@@ -1296,6 +1296,81 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('READY\\n
         verdict.write_text(verdict.read_text().replace('READY', 'UNKNOWN'))
         self.assertIn('owned READY', self.publish().stdout)
 
+    def not_ready_verdict(self):
+        verdict = self.state / 'audit-verdict'
+        run, _, sha = verdict.read_text().strip().split('\t')
+        verdict.write_text('\t'.join([run, 'NOT_READY', sha]) + '\n')
+
+    def test_not_ready_verdict_dialog(self):
+        self.not_ready_verdict()
+        result = self.engine('validate')
+        self.assertEqual(result.returncode, 3, result.stdout)
+        self.assertIn('owned READY', result.stdout)
+        for text in ('n\n', 'yes please\n', ''):
+            self.assertNotEqual(self.engine('verdict-override', text).returncode, 0, repr(text))
+            self.assertFalse((self.state / 'pr/verdict-override').exists())
+        unattended = self.engine('verdict-override', 'y\n', UNCLE_UNATTENDED='1')
+        self.assertNotEqual(unattended.returncode, 0)
+        self.assertIn('owned READY', unattended.stdout)
+        self.assertFalse((self.state / 'pr/verdict-override').exists())
+        self.assertEqual(self.engine('validate').returncode, 3)
+
+    def test_verdict_override_creates_pr(self):
+        self.not_ready_verdict()
+        result = self.engine('verdict-override', 'y\n')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        verdict = (self.state / 'audit-verdict').read_text().strip().split('\t')
+        record = (self.state / 'pr/verdict-override').read_text().strip().split('\t')
+        self.assertEqual(record[:3], verdict)
+        self.assertRegex(record[3], r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
+        self.ok(self.publish())
+        j = self.journal()
+        self.assertEqual(j['phase'], 'created')
+        self.assertEqual(len(self.creates()), 1)
+        body = (self.root / 'server.body').read_text()
+        self.assertIn('operator override', body)
+        self.assertIn('NOT_READY', body)
+        self.ok(self.engine('handoff'))
+        self.assertEqual(len(self.creates()), 1)
+        # A record bound to a different audit authorizes nothing.
+        record[2] = '0' * 64
+        (self.state / 'pr/verdict-override').write_text('\t'.join(record) + '\n')
+        self.assertEqual(self.engine('validate').returncode, 3)
+
+    def test_complete_driver_verdict_override(self):
+        (self.repo / 'CHANGE_SPEC.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Fixture behavior | Fixture check |\n')
+        (self.repo / 'CHANGE_PLAN.md').write_text('Approved fixture plan\n')
+        (self.repo / 'IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | IMPLEMENTED | source.txt | Fixture check PASS |\n')
+        approvals = self.state / 'approvals'
+        approvals.mkdir(exist_ok=True)
+        for artifact in ('CHANGE_SPEC', 'CHANGE_PLAN'):
+            digest = hashlib.sha256((self.repo / (artifact + '.md')).read_bytes()).hexdigest()
+            (approvals / (artifact + '.sha256')).write_text(digest + '\n')
+        self.exe('reviewer', """#!/usr/bin/env python3
+from pathlib import Path
+import sys
+Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READY\\n')
+""")
+        (self.state / 'state').write_text('42:FINAL_AUDIT\n')
+        env = dict(self.env, UNCLE_PROJECT_ROOT=str(self.repo), WORKFLOW_AUDIT_GATE='0',
+                   WORKFLOW_REVIEWER_CMD=str(self.bin / 'reviewer'), WORKFLOW_CLOSE_ISSUE='1', UNATTENDED='0')
+        command = ['bash', str(ROOT / 'scripts/change-workflow.sh')]
+        declined = subprocess.run(command, cwd=self.repo, env=env, input='n\n',
+                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+        self.ok(declined)
+        self.assertIn('The audit verdict is NOT_READY, not READY.', declined.stdout)
+        self.assertIn('PR pending', declined.stdout)
+        self.assertEqual(len(self.creates()), 0)
+        self.assertFalse((self.state / 'pr/verdict-override').exists())
+        (self.state / 'state').write_text('42:FINAL_AUDIT\n')
+        approved = subprocess.run(command, cwd=self.repo, env=env, input='y\n\nSummary\nManual\ny\n',
+                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+        self.ok(approved)
+        self.assertIn('Override recorded', approved.stdout)
+        self.assertEqual(len(self.creates()), 1, approved.stdout)
+        self.assertEqual((self.state / 'state').read_text().strip(), '42:COMPLETE')
+        self.assertFalse((self.state / 'issue-closed').exists())
+
     def test_source_drift_during_audit(self):
         self.ok(self.engine('freeze'))
         (self.repo / 'source.txt').write_text('during audit\n')

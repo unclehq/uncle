@@ -8,16 +8,40 @@ change_pr_complete() {
             return 0
         fi
     fi
+    # Journal validation proves PR ownership separately from close ownership.
+    # The close sentinel retains its existing meaning on the no-Git path.
+    # Exit 3 is the one recoverable failure: the recorded verdict is not
+    # READY, so the operator gets one explicit override decision, showing the
+    # actual verdict. Unattended runs are never asked.
+    local status=0
+    change_pr_engine validate || status=$?
+    if [[ "$status" == 3 ]]; then
+        if [[ "${UNATTENDED:-0}" != 1 && ! -s "$UNATTENDED_FILE" ]] \
+            && change_pr_engine verdict-override; then
+            change_pr_engine validate || return 0
+        else
+            return 0
+        fi
+    elif [[ "$status" != 0 ]]; then
+        return 0
+    fi
     if [[ -s "$ORIGIN_FILE" ]]; then
-        # Journal validation proves PR ownership separately from close ownership.
-        # The close sentinel retains its existing meaning on the no-Git path.
-        change_pr_engine validate || return 0
-        local recorded
+        local recorded verdict_class
         recorded="$(awk -F'\t' 'NR == 1 {print $1}' "$VERDICT_FILE")"
-        issue_close_eligible "$recorded" \
-            "$(origin_field "$ORIGIN_FILE" 1)" "$(origin_field "$ORIGIN_FILE" 2)" \
-            "$VERDICT_FILE" "$ORIGIN_FILE" FINAL_AUDIT.md "$MARKER_FILE" \
-            1 "$ORIGIN_BOUND" 1 "$(origin_fetch_method "$ORIGIN_FILE")" || return 0
+        verdict_class="$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")"
+        case "$verdict_class" in
+            READY|READY_WITH_NON_BLOCKING_ISSUES)
+                issue_close_eligible "$recorded" \
+                    "$(origin_field "$ORIGIN_FILE" 1)" "$(origin_field "$ORIGIN_FILE" 2)" \
+                    "$VERDICT_FILE" "$ORIGIN_FILE" FINAL_AUDIT.md "$MARKER_FILE" \
+                    1 "$ORIGIN_BOUND" 1 "$(origin_fetch_method "$ORIGIN_FILE")" || return 0
+                ;;
+            *)
+                # Validation passed, so an operator override exists. An
+                # override creates the PR; it never closes the issue.
+                echo "Final audit verdict: $verdict_class — leaving the issue open."
+                ;;
+        esac
     fi
     change_pr_engine handoff || true
 }
@@ -33,12 +57,20 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
 import uuid
 
 STATE = Path('.uncle/workflow')
 JOURNAL = STATE / 'pr' / 'journal.json'
+OVERRIDE = STATE / 'pr' / 'verdict-override'
 AUDIT = Path('FINAL_AUDIT.md')
+
+
+# Distinct from every other failure so the driver can tell the one case an
+# operator may overrule (exit 3) from corruption that only a rerun fixes.
+class NotReadyError(ValueError):
+    pass
 
 
 def run(*args, env=None, data=None):
@@ -152,6 +184,18 @@ def load():
     return j
 
 
+def override_record():
+    return read(OVERRIDE).strip().split('\t')
+
+
+# An override authorizes exactly one audited verdict: any rerun of the audit
+# or a different verdict class brings the dialog back.
+def override_allows(j, verdict):
+    record = override_record()
+    return (len(record) == 4 and record[0] == j['verdict_run']
+            and record[1] == verdict and record[2] == j['audit_hash'])
+
+
 def validate(j, ready=True):
     if 'manual_signed_head' in j and j['manual_signed_head'] != j['intended_head']:
         raise ValueError('Signed handoff marker differs from intended HEAD.')
@@ -161,7 +205,8 @@ def validate(j, ready=True):
     if len(verdict) != 3 or verdict[0] != j['verdict_run'] or verdict[2] != j['audit_hash']:
         raise ValueError('Verdict binding changed; rerun FINAL_AUDIT.')
     if ready and verdict[1] not in ('READY', 'READY_WITH_NON_BLOCKING_ISSUES'):
-        raise ValueError('PR requires an owned READY verdict.')
+        if not override_allows(j, verdict[1]):
+            raise NotReadyError('PR requires an owned READY verdict.')
     if snapshot() != j['reviewed_tree'] or snapshot(True) != j['commit_tree']:
         raise ValueError('Reviewed files changed; rerun FINAL_AUDIT.')
     current = head()
@@ -430,6 +475,11 @@ def handoff(j):
         if remote_sha(j) != j['remote_before']:
             raise ValueError('Remote changed during prompts; rerun FINAL_AUDIT.')
         body = '## Work summary\n\n' + summary + '\n\n## Manual verification\n\n' + manual + '\n'
+        record = override_record()
+        if len(record) == 4 and record[0] == j['verdict_run'] and record[2] == j['audit_hash']:
+            # An overridden verdict is not a READY verdict; the PR says so.
+            body = ('> Created by operator override over a **' + record[1]
+                    + '** audit verdict.\n\n') + body
         if j['origin']:
             origin = j['origin'].strip().split('\t')
             body += '\nCloses ' + origin[0] + '#' + origin[1] + '\n'
@@ -536,6 +586,22 @@ def main():
         if j.get('manual_signing'):
             manual_signed_commit(j)
         validate(j)
+    elif action == 'verdict-override':
+        j = load()
+        verdict = read(STATE / 'audit-verdict').strip().split('\t')
+        if len(verdict) != 3 or verdict[0] != j['verdict_run'] or verdict[2] != j['audit_hash']:
+            raise ValueError('Verdict binding changed; rerun FINAL_AUDIT.')
+        if verdict[1] in ('READY', 'READY_WITH_NON_BLOCKING_ISSUES'):
+            return
+        if os.environ.get('UNCLE_UNATTENDED') == '1':
+            raise NotReadyError('PR requires an owned READY verdict.')
+        answer = ask('The audit verdict is ' + verdict[1] +
+                     ', not READY. Create the PR anyway? [y/N]: ')
+        if answer.lower() not in ('y', 'yes'):
+            raise ValueError('Publication declined; PR remains pending.')
+        OVERRIDE.write_text('\t'.join([j['verdict_run'], verdict[1], j['audit_hash'],
+                                       time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())]) + '\n')
+        print('Override recorded; creating the PR over a ' + verdict[1] + ' verdict.', flush=True)
     elif action == 'signing-resume':
         signing_resume(load())
     elif action == 'handoff':
@@ -545,6 +611,9 @@ def main():
 
 try:
     main()
+except NotReadyError as error:
+    print('PR pending: ' + str(error), flush=True)
+    sys.exit(3)
 except (OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError) as error:
     print('PR pending: ' + str(error), flush=True)
     sys.exit(1)

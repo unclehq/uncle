@@ -425,6 +425,26 @@ def lookup(j):
     return matches[0] if matches else None
 
 
+def reconcile_absent(j):
+    """Independently confirm no PR exists before retrying approved creation."""
+    from urllib.parse import urlencode
+    if j.get('url'):
+        raise ValueError('A prior create returned a PR URL; resolve that PR before retrying.')
+    query = urlencode(dict(state='all', head=j['head_repo'].split('/')[0] + ':' + j['head_branch'],
+                           base=j['base_branch'], per_page=100))
+    rows = json.loads(gh('api', 'repos/' + j['base_repo'] + '/pulls?' + query))
+    if not isinstance(rows, list):
+        raise ValueError('PR outcome remains unknown: independent reconciliation returned an invalid response.')
+    if rows:
+        raise ValueError('A PR exists for this branch; reconcile its identity before retrying creation.')
+    validate(j)
+    if remote_sha(j) != j['intended_head']:
+        raise ValueError('Remote changed during PR reconciliation; rerun FINAL_AUDIT.')
+    j['phase'] = 'published'
+    save(j)
+    print('No existing PR found by independent lookup; resuming approved creation.', flush=True)
+
+
 def record_pr(j, row):
     j.update(phase='created', url=row['url'], number=row['number'])
     save(j)
@@ -458,7 +478,7 @@ def handoff(j):
                 raise ValueError('Remote drift after uncertain creation; existing PR retained; rerun FINAL_AUDIT.')
             record_pr(j, row)
             return
-        raise ValueError('Prior PR outcome is unknown; independent resolution required before any new create.')
+        reconcile_absent(j)
     if j['phase'] == 'bound':
         print('Audited files to commit and publish:', flush=True)
         print(git('diff', '--name-status', j['original_head'], j['commit_tree']), flush=True)

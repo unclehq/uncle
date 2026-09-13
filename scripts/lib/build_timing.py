@@ -249,6 +249,20 @@ def render(directory):
              'Runner event gaps include any work or wait between received events; they do not prove API latency or model reasoning time. The 20 largest gaps per attempt are retained.',
              'Unfinished processes have no completion event; their displayed span ends at report time or run termination, not a confirmed process exit.',
              'Stage durations include waiting for people and tools. Model, approval, and check rows below include only this invocation.', '']
+    lines += ['## Stage context size', '',
+              'Context is input tokens in an individual model request, including cached input; it is not cumulative stage usage or the model context-window limit. Peak and latest are observed values; unavailable means the runner supplied no request-level context measurement.', '',
+              '| Stage | Latest context tokens | Peak context tokens |', '|---|---:|---:|']
+    stages = sorted({r.get('workflow_state') or r['name'] for r in spans
+                     if r['kind'] in ('agent', 'reviewer', 'runner_observation', 'model_context')})
+    for stage_name in stages:
+        contexts = sorted((r for r in spans if r['kind'] == 'model_context'
+                           and (r.get('workflow_state') or r['name']) == stage_name
+                           and number(r.get('context_tokens'))), key=lambda r: r['started_at'])
+        latest = str(contexts[-1]['context_tokens']) if contexts else 'Unavailable'
+        peak = str(max(r['context_tokens'] for r in contexts)) if contexts else 'Unavailable'
+        label = stage_name.replace('|', '&#124;').replace('\n', ' ')
+        lines.append(f'| {label} | {latest} | {peak} |')
+    lines.append('')
     for kind in ('workflow_stage', 'agent', 'reviewer', 'model_usage', 'approval', 'check', 'integrity', 'checklist_item', 'checklist_unfinished', 'tool_call', 'tool_unpaired', 'tool_unfinished', 'runner_first_event', 'runner_first_response', 'runner_event_gap', 'runner_tail_gap', 'runner_observation', 'read_cache', 'process', 'unfinished_process', 'sampled_process'):
         totals = {}
         usage_rows = {}

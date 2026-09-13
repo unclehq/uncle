@@ -183,12 +183,13 @@ def make_sandbox(project, sandbox):
     """A mirror of the working tree: git worktree plus the dirty overlay, or a copy."""
     project = Path(project)
     sandbox = Path(sandbox)
-    if sandbox.exists():
-        drop_sandbox(project, sandbox)
+    drop_sandbox(project, sandbox)
     sandbox.parent.mkdir(parents=True, exist_ok=True)
     if git_ok(project):
-        subprocess.run(['git', 'worktree', 'add', '--detach', str(sandbox), 'HEAD'], cwd=project,
-                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = subprocess.run(['git', 'worktree', 'add', '--detach', str(sandbox), 'HEAD'], cwd=project,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode:
+            raise ValueError('Cannot create recovery worktree: ' + result.stderr.strip())
         status = subprocess.run(['git', 'status', '--porcelain', '-z', '--untracked-files=all'],
                                 cwd=project, check=True, stdout=subprocess.PIPE).stdout.decode('utf-8', 'replace')
         entries = status.split('\0')
@@ -228,14 +229,12 @@ def make_sandbox(project, sandbox):
 
 def drop_sandbox(project, sandbox):
     sandbox = Path(sandbox)
-    if not sandbox.exists():
-        return
+    # Git retains registration after a sandbox directory is deleted externally.
+    # Remove only this worktree, including its stale registration.
     subprocess.run(['git', 'worktree', 'remove', '--force', str(sandbox)], cwd=project,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if sandbox.exists():
         shutil.rmtree(sandbox, ignore_errors=True)
-    subprocess.run(['git', 'worktree', 'prune'], cwd=project,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def snapshot_paths(state_dir, turn):
@@ -444,4 +443,8 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)

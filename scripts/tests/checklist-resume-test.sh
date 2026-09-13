@@ -10,6 +10,7 @@ export ROOT
 cat > harness.sh <<'SH'
 set -euo pipefail
 . "$ROOT/scripts/lib/acceptance.sh"
+. "$ROOT/scripts/lib/state.sh"
 STATE_DIR=workflow
 STATE_FILE=workflow/state
 DIFF_GATE=1
@@ -75,10 +76,10 @@ count EXECUTE_CHECKLIST 1
 count FINAL_AUDIT 1
 count green 1
 
-# The actual incident: a description in ID pauses report validation. Multiple
+# Unsupported ID syntax pauses report validation. Multiple
 # resumes and an in-place formatting correction must not rerun any checks.
 reset
-report '| REQ-71 (`:71` mutation validity) | YES | PASS | mutant assertions passed |' candidate.md
+report '| REQ-71 `:71` mutation validity | YES | PASS | mutant assertions passed |' candidate.md
 if run; then echo 'Malformed report advanced' >&2; exit 1; fi
 [[ "$(cat workflow/state)" == VALIDATE_CHECKLIST ]]
 grep -q 'not a plain identifier' output

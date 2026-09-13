@@ -14,6 +14,17 @@ from build_timing import BuildTiming
 
 
 class RunnerTimingTests(unittest.TestCase):
+    def test_context_is_per_request_not_cumulative_usage(self):
+        with patch.dict(os.environ, UNCLE_TIMING_DIR='/unused'), patch.object(timing, 'event') as emit:
+            timer = timing.RunnerTiming('implementation')
+            timer.observe({'method':'thread/tokenUsage/updated', 'params':{'tokenUsage':{
+                'total':{'inputTokens':900000}, 'last':{'inputTokens':12000}}}})
+            timer.observe({'type':'assistant', 'message':{'usage':{
+                'input_tokens':100, 'cache_read_input_tokens':5000, 'cache_creation_input_tokens':200}}})
+            timer.observe({'type':'result', 'usage':{'input_tokens':900000, 'output_tokens':1000}})
+            rows = [c.kwargs['context_tokens'] for c in emit.call_args_list if c.args[0] == 'model_context']
+            self.assertEqual(rows, [12000, 5300])
+
     def test_concurrent_tool_ids_gaps_and_first_response(self):
         clock = [10.]
         with patch.dict(os.environ, UNCLE_TIMING_DIR='/unused'), patch.object(timing, 'event') as emit, \

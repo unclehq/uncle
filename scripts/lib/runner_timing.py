@@ -63,6 +63,12 @@ class RunnerTiming:
             self.responded = True
             self.emit('runner_first_response', self.name, self.tick, time.monotonic())
 
+    def context(self, tokens, source):
+        if self.enabled and isinstance(tokens, (int, float)) and not isinstance(tokens, bool) and tokens >= 0:
+            now = time.monotonic()
+            self.emit('model_context', self.name, now, now, context_tokens=tokens,
+                      context_source=source)
+
     def tool(self, identity, name, action, status=None):
         if not identity:
             return  # Never invent a pairing from a tool name alone.
@@ -104,6 +110,23 @@ class RunnerTiming:
         self.last = now
         self.count += 1
         method, p = e.get('method'), e.get('params') or {}
+        if method == 'thread/tokenUsage/updated':
+            self.context((p.get('tokenUsage', {}).get('last') or {}).get('inputTokens'),
+                         'Codex last request input (includes cached tokens)')
+        if method == 'event' and p.get('type') == 'StatusUpdate':
+            u = (p.get('payload') or {}).get('token_usage') or {}
+            if isinstance(u.get('input_other'), (int, float)):
+                self.context(u['input_other'] + (u.get('input_cache_read') or 0)
+                             + (u.get('input_cache_creation') or 0), 'Kimi step input plus cache')
+        message = e.get('message') or {}
+        if e.get('type') == 'stream_event':
+            message = (e.get('event') or {}).get('message') or {}
+        if isinstance(message.get('usage'), dict):
+            u = message['usage']
+            if isinstance(u.get('input_tokens'), (int, float)):
+                self.context(u['input_tokens'] + (u.get('cache_read_input_tokens') or 0)
+                             + (u.get('cache_creation_input_tokens') or 0),
+                             'Claude request input plus cache read/write')
         if e.get('type') == 'result' and isinstance(e.get('usage'), dict):
             self.usage(e['usage'], e.get('total_cost_usd'), e.get('input_includes_cache', False),
                        e.get('model') or os.environ.get('UNCLE_TIMING_MODEL', ''))
@@ -142,6 +165,11 @@ class RunnerTiming:
                     self.response()
         # OpenCode canonical tool parts are polled; observations are deduplicated.
         if method == 'http/message':
+            u = (p.get('info') or {}).get('tokens') or {}
+            if isinstance(u.get('input'), (int, float)):
+                cache = u.get('cache') or {}
+                self.context(u['input'] + (cache.get('read') or 0) + (cache.get('write') or 0),
+                             'OpenCode message input plus cache')
             for part in p.get('parts', []):
                 if part.get('type') == 'tool':
                     state = part.get('state') or {}; status = state.get('status')

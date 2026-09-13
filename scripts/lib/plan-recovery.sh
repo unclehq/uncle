@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# Shared orchestration; all source-writing calls remain in the existing launchers.
+plan_tool() { python3 "$ROOT/scripts/lib/plan-executability.py" "$@"; }
+
+plan_paths() {
+    PLAN_ASSESS_DIR="$STATE_DIR/plan-executability"
+    if [[ "${DOCUMENT_BUDGET_SOURCE:-}" == CHANGE_REQUEST.md ]]; then
+        EXEC_PLAN=CHANGE_PLAN.md
+    else
+        EXEC_PLAN=UPDATED_PROJECT_PLAN.md
+    fi
+    mkdir -p "$PLAN_ASSESS_DIR"
+}
+
+plan_review() {
+    if declare -f run_codex >/dev/null; then
+        run_codex "$1" "$2" plan-executability "${CODEX_EFFORT_REVIEW:-high}"
+    else
+        run_codex_review "$1" "$2" plan-executability
+    fi
+}
+
+plan_approve() {
+    if declare -f human_gate >/dev/null; then
+        human_gate APPROVE "$PLAN_ASSESS_DIR/assessment.md" PLAN_EXECUTABILITY
+    else
+        review_and_approve "$PLAN_ASSESS_DIR/assessment.md" PLAN_EXECUTABILITY approve
+    fi
+}
+
+plan_revise() {
+    plan_tool recover || return 1
+    if declare -f cleanup_bg >/dev/null; then cleanup_bg; fi
+    if declare -f cancel_speculation >/dev/null; then cancel_speculation; fi
+    local archive="$PLAN_ASSESS_DIR/archive-$(date +%s)-$$"
+    mkdir -p "$archive"
+    [[ ! -d "$LOG_DIR" ]] || cp -R "$LOG_DIR" "$archive/logs"
+    local f
+    for f in "$EXEC_PLAN" ADVERSARIAL_REVIEW.md IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md AUTOMATED_TEST_REPORT.md; do
+        [[ ! -e "$f" ]] || cp "$f" "$archive/"
+    done
+    cp "$PLAN_ASSESS_DIR/assessment.json" "$PLAN_ASSESS_DIR/manifest.json" "$archive/"
+    rm -f "$APPROVAL_DIR/PLAN_EXECUTABILITY.sha256" "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.sha256" "$STATE_DIR/preflight-plan.sha256"
+    rm -f "$STATE_DIR/implement-step-done" "$STATE_DIR/implement-steps.txt" "$STATE_DIR/MANUAL_CHECKLIST.base.md"
+    # Keep verification baselines, origin, ordinary repair counters, and source intact.
+    cat "$(resolve_prompt prompts/plan-recovery.md)" > "$PLAN_ASSESS_DIR/recovery.md"
+    printf '\nRevise %s in place. Read %s/assessment.md.\n' "$EXEC_PLAN" "$PLAN_ASSESS_DIR" >> "$PLAN_ASSESS_DIR/recovery.md"
+    if [[ "$EXEC_PLAN" == CHANGE_PLAN.md ]]; then
+        run_claude "$PLAN_ASSESS_DIR/recovery.md" updated-change-plan "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN"
+        # Reuse the existing review/acknowledgement/reconciliation states.
+        run_codex prompts/change/adversarial-review.md ADVERSARIAL_REVIEW.md adversarial-review "$CODEX_EFFORT_REVIEW"
+        set_state WAIT_PLAN_APPROVAL
+    else
+        run_claude "$PLAN_ASSESS_DIR/recovery.md" updated-plan
+        cp UPDATED_PROJECT_PLAN.md PROJECT_PLAN.md
+        set_state WAIT_PLAN_APPROVAL
+    fi
+    return 0
+}
+
+
+plan_decision() {
+    local answer
+    echo 'Authority decision remains pending; see the exact question and tradeoffs in the assessment.'
+    if declare -f gate_prompt >/dev/null; then
+        gate_prompt 'Record an authority answer, or leave empty to keep pending: '
+    else
+        printf 'Record an authority answer, or leave empty to keep pending: '
+    fi
+    IFS= read -r answer || return 1
+    [[ -n "$answer" ]] || return 1
+    printf '%s' "$answer" | python3 -c 'import json,sys,os; p=".uncle/workflow/authority-answer.json"; t=p+".tmp"; json.dump({"source":"workflow gate input", "answer":sys.stdin.read()},open(t,"w")); os.replace(t,p)'
+    rm -f "$APPROVAL_DIR/PLAN_EXECUTABILITY.sha256"
+    set_state WAIT_UPDATED_PLAN_APPROVAL
+    return 10
+}
+
+# Returns 10 after a revision state transition; callers continue the state machine.
+plan_assess() {
+    plan_paths
+    plan_tool manifest "$ROOT" "$EXEC_PLAN" || return 1
+    local status=0
+    plan_tool validate >/dev/null 2>&1 || status=$?
+    if [[ "$status" == 12 ]]; then
+        rm -f "$APPROVAL_DIR/PLAN_EXECUTABILITY.sha256"
+        cat "$(resolve_prompt prompts/plan-executability.md)" > "$PLAN_ASSESS_DIR/prompt.md"
+        printf '\nRead %s/manifest.json; output JSON only to %s/assessment.json.\n' "$PLAN_ASSESS_DIR" "$PLAN_ASSESS_DIR" >> "$PLAN_ASSESS_DIR/prompt.md"
+        rm -f "$PLAN_ASSESS_DIR/assessment.json"
+        plan_review "$PLAN_ASSESS_DIR/prompt.md" "$PLAN_ASSESS_DIR/assessment.json" || return 1
+    fi
+    status=0
+    plan_tool render || status=$?
+    case "$status" in
+        0) ;;
+        10) plan_revise || return 1; return 10 ;;
+        11) cat "$PLAN_ASSESS_DIR/assessment.md" ;;
+        *) return 1 ;;
+    esac
+    if [[ ! -s "$APPROVAL_DIR/PLAN_EXECUTABILITY.sha256" ]] || [[ "$(cat "$APPROVAL_DIR/PLAN_EXECUTABILITY.sha256")" != "$(hash_file "$PLAN_ASSESS_DIR/assessment.md")" ]]; then
+        plan_approve || return 1
+    fi
+    verify_approval "$PLAN_ASSESS_DIR/assessment.md" PLAN_EXECUTABILITY
+    local freshness=0
+    plan_tool validate >/dev/null || freshness=$?
+    [[ "$freshness" == 0 || "$freshness" == 11 ]] || return 1
+    if [[ "$status" == 11 ]]; then
+        # Only independently executable steps can proceed while a decision is pending.
+        if [[ "$(python3 -c 'import json; print(len(json.load(open(".uncle/workflow/plan-executability/validated.json"))["eligible_steps"]))')" == 0 ]]; then
+            echo 'No independent executable steps; authority decision remains pending.'
+            plan_decision; return $?
+        fi
+    fi
+}
+
+plan_before_write() {
+    local status=0
+    plan_assess || status=$?
+    [[ "$status" == 0 ]] || return "$status"
+    status=0
+    plan_tool dispatch "${1:-implementation}" || status=$?
+    if [[ "$status" == 10 ]]; then
+        plan_revise || return 1
+        return 10
+    fi
+    if [[ "$status" == 20 ]] && grep -q '"phase": "WAIT_LIVE"' "$STATE_DIR/plan-recovery.json"; then
+        local retry_answer
+        gate_prompt 'Live prerequisites are unchanged. Explicitly retry approved verification? [Y/N]: '
+        IFS= read -r retry_answer || return 20
+        case "$retry_answer" in
+            y|Y) plan_tool live-retry || return 1
+                 status=0
+                 plan_tool dispatch "${1:-implementation}" || status=$? ;;
+            *) return 20 ;;
+        esac
+    fi
+    if [[ "$status" == 23 ]]; then
+        plan_decision; return $?
+    fi
+    if [[ "$status" == 21 ]]; then
+        plan_tool snapshot || return 1
+        cat "$(resolve_prompt prompts/plan-recovery.md)" > "$PLAN_ASSESS_DIR/verify.md"
+        cat >> "$PLAN_ASSESS_DIR/verify.md" <<'VERIFY'
+Verification-only resume. Do not revise the plan or edit any source.
+Read .uncle/workflow/plan-executability/assessment.json and IMPLEMENTATION_NOTES.md.
+Probe only recorded LIVE_VERIFICATION prerequisites, then execute only their approved
+check IDs and commands. Update delivery rows only for observed passing checks.
+Preserve all other rows. Keep plan-blockers for every unavailable or failing check.
+Only IMPLEMENTATION_NOTES.md and the existing test report may change.
+VERIFY
+        if [[ "$EXEC_PLAN" == CHANGE_PLAN.md ]]; then
+            run_claude "$PLAN_ASSESS_DIR/verify.md" implementation "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT" || return 1
+        else
+            run_claude "$PLAN_ASSESS_DIR/verify.md" implementation || return 1
+        fi
+        plan_after_write || return $?
+        return 22
+    fi
+    if [[ "$status" == 20 ]] && grep -q '"verdict": "DECISION"' "$PLAN_ASSESS_DIR/assessment.json"; then
+        plan_decision; return $?
+    fi
+    [[ "$status" == 0 ]] || return "$status"
+    plan_tool snapshot
+}
+
+plan_after_write() {
+    plan_tool source-check || return 1
+    plan_tool classify || return $?
+}
+
+plan_delivery_summary() {
+    plan_tool summary
+}

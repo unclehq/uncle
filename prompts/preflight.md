@@ -174,3 +174,8 @@ invent inputs:
 
 List every file you derived in Summary, with its hash, so the next stage and
 the audit can see that this stage made it and what from.
+
+Match prerequisite IDs/phases against .uncle/workflow/plan-executability/assessment.json.
+LIVE_VERIFICATION-only auth belongs in Findings and leaves dependent checks pending;
+it is not a CODING blocker in the Acceptance gate. Preserve every required acceptance ID.
+Do not relax BLOCKED-SETUP or the existing acceptance predicate for coding prerequisites.

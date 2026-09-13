@@ -88,3 +88,9 @@ End with one conclusion:
 - NOT READY
 
 Return only the audit.
+
+Read .uncle/workflow/plan-executability/assessment.md, plan-recovery.json and
+ delivery-summary.tsv under .uncle/workflow when present. Compare archived evidence
+and live verification results against delivery claims. A WAIVED row permits only
+explicitly scoped workflow advancement, never implemented-and-verified delivery.
+Report completion with waivers as "workflow complete with waived acceptance".

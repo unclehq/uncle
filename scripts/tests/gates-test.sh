@@ -106,6 +106,11 @@ new_case() {
 
     cp "$ROOT"/scripts/lib/*.sh "$REPO/scripts/lib/"
     cp "$ROOT"/scripts/lib/*.py "$REPO/scripts/lib/"
+    mkdir -p "$REPO/scripts/tests"
+    cp "$ROOT/scripts/tests/plan-executability-test.py" "$REPO/scripts/tests/"
+    cp "$ROOT/prompts/plan-executability.md" "$ROOT/prompts/plan-recovery.md" "$REPO/prompts/"
+    printf 'STUB:revise\n' > "$REPO/prompts/change/updated-change-plan.md"
+    printf 'STUB:revise\n' > "$REPO/prompts/updated-plan.md"
 
     # Prompt files the driver reads and pipes to the stub CLIs. Each carries a
     # token the stub agent switches on.
@@ -179,6 +184,13 @@ EOF
 #!/usr/bin/env bash
 prompt="$(cat)"
 case "$prompt" in
+    *'Verification-only resume'*)
+        if [[ -n "${FAKE_VERIFY_LIVE:-}" ]]; then bash -c "$FAKE_VERIFY_LIVE"; fi
+        ;;
+    *'Revise the failed design'*)
+        printf '\nisolated-context revision\n' >> CHANGE_PLAN.md
+        ;;
+    *STUB:revise*) : ;;
     *STUB:implement*)
         printf '# Implementation Notes\n\nChanged app/main.sh.\n' \
             > IMPLEMENTATION_NOTES.md
@@ -201,6 +213,9 @@ DELIVERY
     *STUB:plan*)
         printf '# Change Plan\n\n## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n' \
             > CHANGE_PLAN.md
+        if [[ "${FAKE_PLAN_DENIAL:-0}" == 1 ]]; then
+            printf '\nR-1: DESIGN blanket denial, required property mediated access.\n' >> CHANGE_PLAN.md
+        fi
         ;;
 esac
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"session_id":"stub"}'
@@ -216,11 +231,18 @@ while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
     shift
 done
+if [[ "$out" == *assessment.json ]]; then
+    python3 -B scripts/tests/plan-executability-test.py --review "$PWD"
+    exit $?
+fi
 printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
 if [[ "${FAKE_COMPACT_REVIEW:-0}" == 1 && "$out" == *MANUAL_CHECKLIST.base.md ]]; then
     printf 'Repeated background that adds no findings. Repeated background that adds no findings.\n' > "$out"
 else
     : > "$out"
+fi
+if [[ "$out" == ADVERSARIAL_REVIEW.md ]] && grep -q 'R-1' CHANGE_PLAN.md; then
+    printf 'AR-001: preserve mediated access; validate isolated context.\n' >> "$out"
 fi
 printf 'MC-1 Check the greeting.\n\nREADY\n' >> "$out"
 REV
@@ -261,10 +283,163 @@ run_driver_stdin() {
         WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
         WORKFLOW_PARALLEL_CHECKLIST=0 \
         "$@" \
-        bash "$REPO/scripts/change-workflow.sh" \
+        bash -c 'cd "$1"; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/change-workflow.sh' _ "$REPO" \
         < "$stdin_file" > "$OUT" 2>&1
     RC=$?
 }
+
+new_stagegate_case() {
+    new_case "$1"
+
+    mkdir -p "$REPO/prompts"
+    printf 'Change the greeting.\n' > "$REPO/REQUIREMENTS.md"
+    printf 'STUB:implement\n' > "$REPO/prompts/implement.md"
+    printf 'STUB:execute\n'   > "$REPO/prompts/execute-checklist.md"
+    printf 'STUB:preflight\n' > "$REPO/prompts/preflight.md"
+    printf 'STUB:repair\n' > "$REPO/prompts/repair.md"
+    printf 'review tests\n' > "$REPO/prompts/test-review.md"
+    printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
+    printf 'write a checklist\n' > "$REPO/prompts/manual-checklist.md"
+    printf 'audit it\n'          > "$REPO/prompts/final-audit.md"
+
+    cat > "$REPO/UPDATED_PROJECT_PLAN.md" <<'EOF'
+# Updated Project Plan
+
+## Verification commands
+
+```
+bash app/test.sh
+```
+
+## Non-goals
+
+## Protected verification paths
+
+```
+app/test.sh
+```
+EOF
+    hash_file "$REPO/UPDATED_PROJECT_PLAN.md" \
+        > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
+    # New-app reviewer with a real acceptance table, configurable failures,
+    # and an invocation log so tests can prove stages were not reached.
+    cat > "$CASE/bin/fake-reviewer" <<'REV'
+#!/usr/bin/env bash
+out=""
+review_prompt="${!#}"
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
+    shift
+done
+if [[ "$out" == *assessment.json ]]; then
+    python3 -B scripts/tests/plan-executability-test.py --review "$PWD"
+    exit $?
+fi
+printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
+if [[ "$out" == TEST_REVIEW.md ]]; then
+    printf '%s\n' "$review_prompt" > .uncle/workflow/received-test-review-prompt.md
+    status="${FAKE_TEST_REVIEW:-PASS}"
+    if [[ "$status" == FAIL_ONCE ]]; then
+        status=PASS
+        [[ -e .uncle/workflow/repaired ]] || status=FAIL
+    fi
+    if [[ "$status" == MALFORMED ]]; then
+        printf 'PASS\n' > "$out"
+        exit 0
+    fi
+    printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n' > "$out"
+    for id in COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS; do
+        printf '| %s | YES | %s | stub evidence |\n' "$id" "$status" >> "$out"
+    done
+else
+    if [[ "${FAKE_COMPACT_REVIEW:-0}" == 1 && "$out" == FINAL_AUDIT.md ]]; then
+        printf 'Repeated background that adds no findings. Repeated background that adds no findings.\n' > "$out"
+    else
+        : > "$out"
+    fi
+    if [[ "$out" == FINAL_AUDIT.md && "${FAKE_AUDIT:-READY}" == 'NOT READY' ]]; then
+        printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n| FA-1 | Missing review | Review greeting | YES |\n\nNOT READY\n' >> "$out"
+    else
+        printf 'MC-1 Check the greeting.\n\n%s\n' "${FAKE_AUDIT:-READY}" >> "$out"
+    fi
+fi
+REV
+    chmod +x "$CASE/bin/fake-reviewer"
+}
+
+run_stagegate() {
+    run_stagegate_stdin /dev/null "$@"
+}
+
+run_stagegate_stdin() {
+    local stdin_file="$1"
+    shift
+
+    cp "$ROOT/scripts/stagegate.sh" "$REPO/scripts/stagegate.sh"
+    env PATH="$CASE/bin:$PATH" \
+        WORKFLOW_AGENT_CMD="$CASE/bin/fake-agent" \
+        WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
+        WORKFLOW_SPECULATE=0 FAKE_WORKFLOW=stagegate \
+        "$@" \
+        bash -c 'cd "$1"; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/stagegate.sh' _ "$REPO" \
+        < "$stdin_file" > "$OUT" 2>&1
+    RC=$?
+}
+
+# The agent stub writes the change pipeline's report name; the new-application
+# pipeline reads a different one.
+stagegate_agent() {
+    cat > "$CASE/bin/fake-agent" <<'AGENT'
+#!/usr/bin/env bash
+prompt="$(cat)"
+gate_report() {
+    printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n| MC-1 | YES | %s | stub observation |\n' "$2" > "$1"
+}
+case "$prompt" in
+    *'Verification-only resume'*)
+        if [[ -n "${FAKE_VERIFY_LIVE:-}" ]]; then bash -c "$FAKE_VERIFY_LIVE"; fi
+        ;;
+    *'Revise the failed design'*)
+        printf '\nisolated-context revision\n' >> UPDATED_PROJECT_PLAN.md
+        ;;
+    *STUB:revise*) cp PROJECT_PLAN.md UPDATED_PROJECT_PLAN.md ;;
+    *STUB:preflight*)
+        gate_report PREFLIGHT_REPORT.md "${FAKE_PREFLIGHT:-PASS}"
+        ;;
+    *STUB:repair*)
+        printf 'repaired\n' > .uncle/workflow/repaired
+        printf '\nRepair disposition.\n' >> IMPLEMENTATION_NOTES.md
+        printf '\nRetested.\n' >> AUTOMATED_TEST_REPORT.md
+        if [[ -n "${FAKE_REPAIR:-}" ]]; then bash -c "$FAKE_REPAIR"; fi
+        ;;
+    *STUB:implement*)
+        printf 'implemented\n' > .uncle/workflow/implemented
+        printf '# Implementation Notes\n\nBuilt app/main.sh.\n' \
+            > IMPLEMENTATION_NOTES.md
+        printf '# Automated Test Report\n\nAll green. Trust me.\n' \
+            > AUTOMATED_TEST_REPORT.md
+        if [[ -n "${FAKE_IMPL:-}" ]]; then
+            bash -c "$FAKE_IMPL"
+        fi
+        ;;
+    *STUB:execute*)
+        status="${FAKE_VERIFICATION:-PASS}"
+        if [[ "$status" == FAIL_ONCE ]]; then
+            status=PASS
+            [[ -e .uncle/workflow/repaired ]] || status=FAIL
+        fi
+        gate_report VERIFICATION_REPORT.md "$status"
+        printf '# Defects\n\nNo unresolved defects in fixture.\n' > DEFECTS.md
+        if [[ -n "${FAKE_VERIFY_EDIT:-}" ]]; then bash -c "$FAKE_VERIFY_EDIT"; fi
+        ;;
+esac
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1},"session_id":"stub"}'
+AGENT
+    chmod +x "$CASE/bin/fake-agent"
+}
+
+
+if [[ "${UNCLE_TEST_FIXTURES_ONLY:-0}" == 1 ]]; then return 0; fi
 
 # ---------------------------------------------------------------------------
 # The diff gate
@@ -534,144 +709,6 @@ expect_no_file ".uncle/workflow/green-check.baseline.tsv"
 # artifacts: the plan supplies the verification commands, there is no baseline
 # to compare against, and the audit verdict was previously not classified at
 # all.
-
-new_stagegate_case() {
-    new_case "$1"
-
-    mkdir -p "$REPO/prompts"
-    printf 'Change the greeting.\n' > "$REPO/REQUIREMENTS.md"
-    printf 'STUB:implement\n' > "$REPO/prompts/implement.md"
-    printf 'STUB:execute\n'   > "$REPO/prompts/execute-checklist.md"
-    printf 'STUB:preflight\n' > "$REPO/prompts/preflight.md"
-    printf 'STUB:repair\n' > "$REPO/prompts/repair.md"
-    printf 'review tests\n' > "$REPO/prompts/test-review.md"
-    printf 'write a checklist\n' > "$REPO/prompts/manual-checklist.md"
-    printf 'audit it\n'          > "$REPO/prompts/final-audit.md"
-
-    cat > "$REPO/UPDATED_PROJECT_PLAN.md" <<'EOF'
-# Updated Project Plan
-
-## Verification commands
-
-```
-bash app/test.sh
-```
-
-## Non-goals
-
-## Protected verification paths
-
-```
-app/test.sh
-```
-EOF
-    hash_file "$REPO/UPDATED_PROJECT_PLAN.md" \
-        > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
-    # New-app reviewer with a real acceptance table, configurable failures,
-    # and an invocation log so tests can prove stages were not reached.
-    cat > "$CASE/bin/fake-reviewer" <<'REV'
-#!/usr/bin/env bash
-out=""
-review_prompt="${!#}"
-while [[ $# -gt 0 ]]; do
-    if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
-    shift
-done
-printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
-if [[ "$out" == TEST_REVIEW.md ]]; then
-    printf '%s\n' "$review_prompt" > .uncle/workflow/received-test-review-prompt.md
-    status="${FAKE_TEST_REVIEW:-PASS}"
-    if [[ "$status" == FAIL_ONCE ]]; then
-        status=PASS
-        [[ -e .uncle/workflow/repaired ]] || status=FAIL
-    fi
-    if [[ "$status" == MALFORMED ]]; then
-        printf 'PASS\n' > "$out"
-        exit 0
-    fi
-    printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n' > "$out"
-    for id in COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS; do
-        printf '| %s | YES | %s | stub evidence |\n' "$id" "$status" >> "$out"
-    done
-else
-    if [[ "${FAKE_COMPACT_REVIEW:-0}" == 1 && "$out" == FINAL_AUDIT.md ]]; then
-        printf 'Repeated background that adds no findings. Repeated background that adds no findings.\n' > "$out"
-    else
-        : > "$out"
-    fi
-    if [[ "$out" == FINAL_AUDIT.md && "${FAKE_AUDIT:-READY}" == 'NOT READY' ]]; then
-        printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n| FA-1 | Missing review | Review greeting | YES |\n\nNOT READY\n' >> "$out"
-    else
-        printf 'MC-1 Check the greeting.\n\n%s\n' "${FAKE_AUDIT:-READY}" >> "$out"
-    fi
-fi
-REV
-    chmod +x "$CASE/bin/fake-reviewer"
-}
-
-run_stagegate() {
-    run_stagegate_stdin /dev/null "$@"
-}
-
-run_stagegate_stdin() {
-    local stdin_file="$1"
-    shift
-
-    cp "$ROOT/scripts/stagegate.sh" "$REPO/scripts/stagegate.sh"
-    env PATH="$CASE/bin:$PATH" \
-        WORKFLOW_AGENT_CMD="$CASE/bin/fake-agent" \
-        WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
-        WORKFLOW_SPECULATE=0 \
-        "$@" \
-        bash "$REPO/scripts/stagegate.sh" \
-        < "$stdin_file" > "$OUT" 2>&1
-    RC=$?
-}
-
-# The agent stub writes the change pipeline's report name; the new-application
-# pipeline reads a different one.
-stagegate_agent() {
-    cat > "$CASE/bin/fake-agent" <<'AGENT'
-#!/usr/bin/env bash
-prompt="$(cat)"
-gate_report() {
-    printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n| MC-1 | YES | %s | stub observation |\n' "$2" > "$1"
-}
-case "$prompt" in
-    *STUB:preflight*)
-        gate_report PREFLIGHT_REPORT.md "${FAKE_PREFLIGHT:-PASS}"
-        ;;
-    *STUB:repair*)
-        printf 'repaired\n' > .uncle/workflow/repaired
-        printf '\nRepair disposition.\n' >> IMPLEMENTATION_NOTES.md
-        printf '\nRetested.\n' >> AUTOMATED_TEST_REPORT.md
-        if [[ -n "${FAKE_REPAIR:-}" ]]; then bash -c "$FAKE_REPAIR"; fi
-        ;;
-    *STUB:implement*)
-        printf 'implemented\n' > .uncle/workflow/implemented
-        printf '# Implementation Notes\n\nBuilt app/main.sh.\n' \
-            > IMPLEMENTATION_NOTES.md
-        printf '# Automated Test Report\n\nAll green. Trust me.\n' \
-            > AUTOMATED_TEST_REPORT.md
-        if [[ -n "${FAKE_IMPL:-}" ]]; then
-            bash -c "$FAKE_IMPL"
-        fi
-        ;;
-    *STUB:execute*)
-        status="${FAKE_VERIFICATION:-PASS}"
-        if [[ "$status" == FAIL_ONCE ]]; then
-            status=PASS
-            [[ -e .uncle/workflow/repaired ]] || status=FAIL
-        fi
-        gate_report VERIFICATION_REPORT.md "$status"
-        printf '# Defects\n\nNo unresolved defects in fixture.\n' > DEFECTS.md
-        if [[ -n "${FAKE_VERIFY_EDIT:-}" ]]; then bash -c "$FAKE_VERIFY_EDIT"; fi
-        ;;
-esac
-printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1},"session_id":"stub"}'
-AGENT
-    chmod +x "$CASE/bin/fake-agent"
-}
 
 new_stagegate_case sg-implement-stops-for-review
 stagegate_agent
@@ -1116,7 +1153,7 @@ run_driver WORKFLOW_DIFF_GATE=0 FAKE_IMPL="$partial_impl"
 expect_status 1
 expect_out 'automatic repair already attempted'
 COUNT=$((COUNT + 1))
-[[ $(wc -l < "$REPO/.uncle/workflow/attempts") -eq 3 ]] || fail 'resume repeated automatic repair'
+[[ $(wc -l < "$REPO/.uncle/workflow/attempts") -eq 2 ]] || fail 'resume repeated automatic repair'
 
 new_case repair-completes-delivery
 green_baseline 0 'bash app/test.sh'
@@ -1156,6 +1193,10 @@ for exhausted in 0 1; do
     set_state IMPLEMENT
     if [[ "$exhausted" == 1 ]]; then
         hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/implementation-completion-repair"
+        printf '#!/bin/sh\necho goodbye\n' > "$REPO/app/main.sh"
+        printf '## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | INCOMPLETE | app/main.sh | blocked stub check |\n' > "$REPO/IMPLEMENTATION_NOTES.md"
+        printf 'prior test evidence\n' > "$REPO/CHANGE_TEST_REPORT.md"
+        : > "$REPO/.uncle/workflow/attempts"
     fi
     run_driver_stdin "$(gate_input waive 'Deferred to follow-up issue')" FAKE_IMPL="$partial_impl"
     expect_status 0
@@ -1164,7 +1205,7 @@ for exhausted in 0 1; do
     expect_in_file IMPLEMENTATION_NOTES.md INCOMPLETE
     expect_in_file .uncle/workflow/implementation-completion.txt AC-1
     COUNT=$((COUNT + 1))
-    [[ $(wc -l < "$REPO/.uncle/workflow/attempts") -eq $((2 - exhausted)) ]] || fail 'waiver repeated implementation'
+    [[ $(wc -l < "$REPO/.uncle/workflow/attempts") -eq $((2 * (1 - exhausted))) ]] || fail 'waiver repeated implementation'
 
     # Resume the post-waiver crash state without invoking another agent.
     set_state IMPLEMENT
@@ -1173,7 +1214,7 @@ for exhausted in 0 1; do
     expect_state WAIT_IMPLEMENT_APPROVAL
     expect_out 'Existing implementation delivery accepted'
     COUNT=$((COUNT + 1))
-    [[ $(wc -l < "$REPO/.uncle/workflow/attempts") -eq $((2 - exhausted)) ]] || fail 'resume reran waived implementation'
+    [[ $(wc -l < "$REPO/.uncle/workflow/attempts") -eq $((2 * (1 - exhausted))) ]] || fail 'resume reran waived implementation'
 
     # The waiver must not bypass the human diff approval; approve normally.
     run_driver_stdin "$(gate_input '' y)"
@@ -1181,6 +1222,8 @@ for exhausted in 0 1; do
     expect_state COMPLETE
     expect_file FINAL_AUDIT.md
     expect_in_file IMPLEMENTATION_NOTES.md INCOMPLETE
+    expect_in_file .uncle/workflow/delivery-summary.tsv $'AC-1\tWAIVED'
+    expect_out 'Change workflow complete with waived acceptance.'
 
 done
 
@@ -1204,6 +1247,11 @@ for invalid in foreign missing structural; do
     expect_state IMPLEMENT
     expect_out 'Incomplete acceptance delivery; returning to IMPLEMENT'
 done
+
+if [[ "${UNCLE_TEST_COMPLETION_ONLY:-0}" != 1 ]]; then
+    python3 -B "$ROOT/scripts/tests/plan-executability-test.py" -q || fail 'plan executability contracts'
+    bash "$ROOT/scripts/tests/plan-recovery-test.sh" || fail 'plan recovery workflows'
+fi
 
 if [[ "$FAILED" -ne 0 ]]; then
     echo "gates-test.sh: $FAILED of $COUNT checks failed"

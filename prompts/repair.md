@@ -62,3 +62,15 @@ approval, and repeat independent test review and acceptance execution.
 Keep the handoff to finding IDs, changed files, decisive evidence, context
 expansion reasons, and unresolved blockers. Write source/test fixes and the
 two implementation reports only.
+
+Read .uncle/workflow/plan-executability/assessment.md when present. If verdict is
+DECISION, implement only the listed executable step IDs and paths; retain all acceptance
+rows and leave dependent/transitive steps pending. Do not ask again for settled authority.
+Complete independent code and mocked tests before reporting a live-verification blocker.
+Report contradictions in exactly one fenced `plan-blockers` JSON array in
+IMPLEMENTATION_NOTES.md. Each row has id, class (DESIGN/AUTHORITY/LIVE_VERIFICATION/CODING),
+requirement_ids, restriction_ids, evidence, independent_work. AUTHORITY also requires
+question and alternatives. DESIGN means an unsupported generated mechanism, not an
+ordinary coding defect. LIVE_VERIFICATION means only dependent approved live checks
+remain unavailable or failing; preserve INCOMPLETE/BLOCKED delivery rows until they pass.
+Never remove acceptance IDs, weaken protected tests, suppress findings, or auto-waive.

@@ -137,3 +137,14 @@ The change-impact table, the traceability table, the implementation sequence,
 and the rollback plan are never omitted.
 
 Write CHANGE_PLAN.md and stop.
+
+Every restriction, including carried-forward review mitigations, needs an R- ID,
+source_kind USER/REPOSITORY/PLATFORM/DESIGN, source location, requirement IDs,
+required property, selected mechanism, rationale and CAP- capability IDs.
+Record selected runner/config binding, observed feasibility evidence (path/hash,
+probe command or inspected symbol/lines and result), and CODING versus LIVE_VERIFICATION
+phase. A generated mechanism remains a revisable DESIGN choice after plan approval.
+Preserve genuine constraints and required properties while selecting feasible alternatives.
+Inventory steps with IDs, paths, requirements, dependencies, capability IDs and decision IDs.
+Separate unavailable live authentication from coding prerequisites; include approved live
+check IDs/commands and non-secret prerequisite evidence paths for verification resume.

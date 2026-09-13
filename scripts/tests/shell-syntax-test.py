@@ -1,5 +1,5 @@
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import subprocess
 import tempfile
 import threading
@@ -7,10 +7,28 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
 import shell_syntax as syntax
+import shell_suites as suites
 
 LOOP = 'for f in scripts/*.sh scripts/lib/*.sh scripts/tests/*.sh; do bash -n "$f"; done'
 
 class Tests(unittest.TestCase):
+    def test_windows_discovery_uses_forward_slashes_for_suite_paths(self):
+        with patch.object(suites.glob, 'glob', return_value=[r'scripts/tests\sample-test.sh']), \
+             patch.object(suites, 'Path', PureWindowsPath), \
+             patch.object(suites, 'bash_executable', return_value='bash'), \
+             patch.object(suites, 'run_commands', return_value=0) as run:
+            self.assertEqual(suites.run(2), 0)
+            run.assert_called_once_with(2, {'scripts/tests/sample-test.sh': ['bash', 'scripts/tests/sample-test.sh']})
+
+    def test_windows_discovery_uses_forward_slashes_for_syntax_paths(self):
+        with patch.object(syntax.sys, 'argv', ['helper', '2']), \
+             patch.object(syntax.glob, 'glob', side_effect=[[r'scripts\a.sh'], [r'scripts/lib\b.sh'], [r'scripts/tests\c.sh']]), \
+             patch.object(syntax, 'Path', PureWindowsPath), \
+             patch.object(syntax, 'bash_executable', return_value='bash'), \
+             patch.object(syntax, 'check_files', return_value=[]) as check:
+            self.assertEqual(syntax.main(), 0)
+            check.assert_called_once_with(['scripts/a.sh', 'scripts/lib/b.sh', 'scripts/tests/c.sh'], 2, 'bash')
+
     def test_command_file_preserves_control_characters_and_line_positions(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -20,6 +20,7 @@ def run(jobs, suites=()):
         raise ValueError('Invalid shell suite name')
     files = ([f'scripts/tests/{name}-test.sh' for name in suites] if suites
              else sorted(glob.glob('scripts/tests/*-test.sh')))
+    files = [Path(path).as_posix() for path in files]
     if not files:
         print('FAIL: no shell test suites found', file=sys.stderr)
         return 1

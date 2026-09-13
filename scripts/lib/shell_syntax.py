@@ -58,7 +58,7 @@ def main():
     files = []
     for pattern in ('scripts/*.sh', 'scripts/lib/*.sh', 'scripts/tests/*.sh'):
         # Preserve Bash's failure on an unmatched glob.
-        files.extend(sorted(glob.glob(pattern)) or [pattern])
+        files.extend(Path(path).as_posix() for path in (sorted(glob.glob(pattern)) or [pattern]))
     results = check_files(files, jobs, bash_executable())
     for path, status, output in results:
         print(('FAIL' if status else 'PASS') + ' bash -n ' + path, flush=True)

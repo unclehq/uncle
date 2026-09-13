@@ -23,11 +23,40 @@ class RunnerTiming:
         self.paired = 0
         self.unpaired = 0
         self.gaps = []
+        self.usage_previous = {}
+        self.cost_previous = 0.
+        self.usage_tick = self.tick
         self.enabled = bool(os.environ.get('UNCLE_TIMING_DIR')) and os.environ.get('WORKFLOW_METRICS', '1') == '1'
 
     def emit(self, kind, name, start, end, **fields):
         event(kind, str(name)[:120], self.started + start - self.tick, max(0., end - start),
               workflow_state=self.name, attempt_id=self.attempt, **fields)
+
+    def usage(self, usage, cost=None, inclusive=True, model=''):
+        if not self.enabled:
+            return
+        try:
+            from timing_usage import number, priced
+            mapped = dict(input_tokens=usage.get('input_tokens'), output_tokens=usage.get('output_tokens'),
+                          cache_read_tokens=usage.get('cache_read_input_tokens'),
+                          cache_write_tokens=usage.get('cache_creation_input_tokens'))
+            mapped = {k: v if number(v) else None for k, v in mapped.items()}
+            now = time.monotonic()
+            reset = any(number(v) and v < self.usage_previous.get(k, 0) for k, v in mapped.items())
+            delta = {k: v - (0 if reset else self.usage_previous.get(k, 0)) if number(v) else None for k, v in mapped.items()}
+            cost_delta = None
+            if number(cost):
+                cost_delta = cost - self.cost_previous if cost >= self.cost_previous and not reset else cost
+                self.cost_previous = cost
+            self.usage_previous.update({k: v for k, v in mapped.items() if number(v)})
+            if any(delta.values()) or cost_delta:
+                fields = priced(dict(delta, model=model, input_includes_cache=inclusive,
+                                     reported_cost_usd=cost_delta))
+                self.emit('model_usage', self.name, self.usage_tick, now, observed_at=time.time(),
+                          counter_reset=reset, **fields)
+                self.usage_tick = now
+        except Exception:
+            pass
 
     def response(self):
         if self.enabled and not self.responded:
@@ -75,6 +104,10 @@ class RunnerTiming:
         self.last = now
         self.count += 1
         method, p = e.get('method'), e.get('params') or {}
+        if e.get('type') == 'result' and isinstance(e.get('usage'), dict):
+            self.usage(e['usage'], e.get('total_cost_usd'), e.get('input_includes_cache', False),
+                       e.get('model') or os.environ.get('UNCLE_TIMING_MODEL', ''))
+
         if method in ('item/started', 'item/completed'):
             item = p.get('item') or {}
             kind = item.get('type')

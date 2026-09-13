@@ -70,6 +70,7 @@ class Stage:
         self.inclusive = inclusive
         reported = {key: self.usage[key] + self.usage_baseline.get(key, 0) for key in KEYS}
         reported_cost = None if self.cost is None else self.cost + self.usage_baseline.get('_total_cost_usd', 0)
+        self.timing.usage(reported, reported_cost if cost is not None else None, inclusive, self.model)
         self.status('usage', usage=reported, total_cost_usd=reported_cost, input_includes_cache=inclusive,
                     total_tokens=sum(reported.values()) - (sum(reported[k] for k in KEYS[2:]) if inclusive else 0))
 

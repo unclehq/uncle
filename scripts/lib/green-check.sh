@@ -191,7 +191,10 @@ green_run() {
     : > "$out"
     : > "$log"
 
-    while IFS= read -r cmd; do
+    while IFS= read -r cmd || [[ -n "$cmd" ]]; do
+        # Match Python splitlines(): CRLF is a line ending, not command text.
+        # Preserve the approved file and embedded carriage returns verbatim.
+        cmd="${cmd%$'\r'}"
         [[ -n "$cmd" ]] || continue
         if [[ -n "$guard" ]]; then "$guard" || return 1; fi
 

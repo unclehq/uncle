@@ -235,29 +235,42 @@ def render(directory):
         records.append(dict(kind='workflow_stage', name=row['name'], started_at=row['started_at'],
                             elapsed_seconds=max(0., following['monotonic'] - row['monotonic'] if following else metadata.get('ended_monotonic', time.monotonic()) - row['monotonic'])))
     spans = [r for r in records if 'elapsed_seconds' in r and r['kind'] != 'process_start']
+    from timing_usage import attribute, combine, number
+    spans = attribute(spans)
+    write_json(directory / 'parts.json', spans)
     lines = ['# Build timing', '', f"Run: `{directory.name}`", '',
              f"Elapsed wall time: {metadata.get('elapsed_seconds', end - metadata['started_at']):.3f}s", '',
              f"Process sampling interval: {metadata['sample_interval_seconds']}s; sampling errors: {metadata.get('sampling_errors', 0)}.", '',
+             'Token and cost coverage shows known records/records in each row; partial sums are not complete totals. Unknown prices or usage remain unavailable.',
+             'Interval token attribution is shared usage reported while the interval was active; it is not an exclusive charge for a tool/check and is never prorated from duration.',
              'Times overlap across stages, subprocesses, and parallel work; do not add categories together.',
              'Sampled process spans are approximate observed lifetimes. Short processes may be missed; CPU is unavailable on Windows.',
              'Checklist times require explicit timer commands; missing timers mean unavailable, not zero or passed. Tool times are observed event intervals, not isolated CPU time.',
              'Runner event gaps include any work or wait between received events; they do not prove API latency or model reasoning time. The 20 largest gaps per attempt are retained.',
              'Unfinished processes have no completion event; their displayed span ends at report time or run termination, not a confirmed process exit.',
              'Stage durations include waiting for people and tools. Model, approval, and check rows below include only this invocation.', '']
-    for kind in ('workflow_stage', 'agent', 'reviewer', 'approval', 'check', 'integrity', 'checklist_item', 'checklist_unfinished', 'tool_call', 'tool_unpaired', 'tool_unfinished', 'runner_first_event', 'runner_first_response', 'runner_event_gap', 'runner_tail_gap', 'runner_observation', 'process', 'unfinished_process', 'sampled_process'):
+    for kind in ('workflow_stage', 'agent', 'reviewer', 'model_usage', 'approval', 'check', 'integrity', 'checklist_item', 'checklist_unfinished', 'tool_call', 'tool_unpaired', 'tool_unfinished', 'runner_first_event', 'runner_first_response', 'runner_event_gap', 'runner_tail_gap', 'runner_observation', 'process', 'unfinished_process', 'sampled_process'):
         totals = {}
+        usage_rows = {}
         for row in spans:
             if row['kind'] != kind:
                 continue
             key = (row['name'], row.get('workflow_state', ''))
+            usage_rows.setdefault(key, []).append(row)
             total = totals.setdefault(key, [0, 0., 0., 0])
             total[0] += 1; total[1] += row['elapsed_seconds']
             if row.get('cpu_seconds') is not None:
                 total[2] += row['cpu_seconds']; total[3] += 1
-        lines += [f'## {kind.replace("_", " ").title()}', '', '| Name | State | Spans | Seconds | CPU seconds |', '|---|---|---:|---:|---:|']
+        lines += [f'## {kind.replace("_", " ").title()}', '', '| Name | State | Spans | Seconds | CPU seconds | Input | Output | Cache read | Cache write | Total tokens | Token coverage | Reported USD | Estimated USD | Cost coverage |', '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|']
         for (name, state), (count, elapsed, cpu, known) in sorted(totals.items(), key=lambda item: item[1][1], reverse=True):
+            usage = combine(usage_rows[(name, state)])
             name = name.replace('|', '&#124;').replace('\n', ' ')
-            lines.append(f'| {name} | {state} | {count} | {elapsed:.3f} | {f"{cpu:.3f}" if known else "Unavailable"} |')
+            def cell(key, cost=False):
+                value = usage.get(key)
+                return (f'{value:.6f}' if cost else f'{value:g}') if number(value) else 'Unavailable'
+            lines.append(f'| {name} | {state} | {count} | {elapsed:.3f} | {f"{cpu:.3f}" if known else "Unavailable"} | '
+                         + ' | '.join(cell(key) for key in ('input_tokens','output_tokens','cache_read_tokens','cache_write_tokens','total_tokens'))
+                         + f" | {usage['total_tokens_coverage']} | {cell('reported_cost_usd', True)} | {cell('estimated_cost_usd', True)} | {usage['estimated_cost_usd_coverage']} |")
         lines.append('')
     observations = [row for row in records if row['kind'] == 'runner_observation']
     if observations:

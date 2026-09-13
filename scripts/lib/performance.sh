@@ -54,7 +54,7 @@ perf_stage() {
 # Transparent raw-stream observation; native adapters retain their own events.
 perf_stream() {
     if [[ -n "${UNCLE_TIMING_DIR:-}" && "${WORKFLOW_METRICS:-1}" == 1 ]]; then
-        python3 -B "$(dirname "${BASH_SOURCE[0]}")/runner_timing.py" stream "$1"
+        UNCLE_TIMING_MODEL="${model:-}" python3 -B "$(dirname "${BASH_SOURCE[0]}")/runner_timing.py" stream "$1"
     else
         cat
     fi

@@ -98,3 +98,33 @@ status, prove a pass, or require a check to be rerun. An agent that omits these
 commands leaves that item's time unavailable. Existing runs do not acquire the
 new prompt until the stage is launched again; do not rerun completed checks
 solely for profiling.
+
+## Tokens and cost by part
+
+Each timing table now includes input/output tokens, cache-read/cache-write
+counts, total tokens, reported USD, estimated USD, and coverage. `parts.json`
+contains the individual spans with the same fields and attribution labels;
+`timeline.json` includes them in each event's details. Model usage updates are
+stored alongside the other timing events.
+
+Cumulative runner counters are converted to increments, so repeated polling
+updates do not bill the same tokens twice. Cache-inclusive input totals include
+cached tokens once. A separate model-usage table identifies those increments.
+Native runners provide live updates; legacy streams may expose only the final
+attempt total. Partial usage remains partial, and unknown usage/prices are not
+shown as zero.
+
+Checklist, tool, and timing-gap rows can show **shared usage reported during
+that interval**. That means a usage update arrived while the interval was
+active; it does not prove the tokens were generated exclusively for that check
+or tool. Parallel intervals can share the same update. Never sum these rows
+with each other or with their parent stage to calculate a bill. Raw subprocess
+rows do not inherit token charges merely because they were running. No token
+counts are estimated from elapsed time.
+
+Estimates use the existing model pricing table or an absolute
+`WORKFLOW_PRICING_FILE` path. The JSON maps exact model IDs to `input`, `output`,
+`cache_read`, and `cache_write` rates, all in USD per million tokens. Unknown
+rates produce `Unavailable`; known provider-reported costs remain visible in
+the separate reported column. Pricing sources/rates are retained in the
+individual records. Estimates are not invoices.

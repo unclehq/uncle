@@ -29,7 +29,9 @@ class Checks(unittest.TestCase):
         return subprocess.run(argv, cwd=self.root, capture_output=True, text=True, timeout=15)
     def test_approved_baseline_schedule_fallback(self):
         commands = "echo 1 >> order\ntest -f order && echo 2 >> order; exit 7\necho 3 >> order\n"
-        (self.root/'commands').write_text(commands)
+        # Exercise native Windows line endings on every host.
+        raw_commands = commands.replace('\n', '\r\n').encode()
+        (self.root/'commands').write_bytes(raw_commands)
         for declaration, expected in [('1 3', ''), ('1 2\n2 3', ''),
                                       ('1 2', '1 2\n'), ('', '')]:
             report = '## Parallel verification groups\n\n```text\n' + declaration + '\n```\n' if declaration else '# Baseline\n'
@@ -45,12 +47,25 @@ class Checks(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((self.root/'groups').read_text(), expected)
             self.assertEqual((self.root/'report').read_text(), report)
-            self.assertEqual((self.root/'commands').read_text(), commands)
+            self.assertEqual((self.root/'commands').read_bytes(), raw_commands)
             if not expected:
+                self.assertTrue((self.root/'order').exists(), self.diagnostics())
                 self.assertEqual((self.root/'order').read_text(), '1\n2\n3\n')
                 self.assertEqual([row.split('\t')[0] for row in
                                   (self.root/'results').read_text().splitlines()], ['0', '7', '0'])
                 (self.root/'order').unlink()
+
+    def test_serial_crlf_preserves_embedded_cr_and_final_unterminated_line(self):
+        commands = b"printf 'A\rB' > embedded\r\nprintf last > last"
+        (self.root/'commands').write_bytes(commands)
+        script = '. "$1/scripts/lib/green-check.sh"; green_run commands results log'
+        result = subprocess.run([bash_executable(), '-euc', script, 'test', os.environ['UNCLE_TEST_ROOT']],
+                                cwd=self.root, capture_output=True, text=True, timeout=15,
+                                env=dict(os.environ, WORKFLOW_METRICS='0'))
+        self.assertEqual(result.returncode, 0, result.stderr + self.diagnostics())
+        self.assertEqual((self.root/'embedded').read_bytes(), b'A\rB')
+        self.assertEqual((self.root/'last').read_bytes(), b'last')
+        self.assertEqual((self.root/'commands').read_bytes(), commands)
 
     def test_overlap_and_barrier(self):
         commands=[]

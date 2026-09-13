@@ -2006,14 +2006,16 @@ class UncleTUI:
             return
         issue_request = re.fullmatch(
             r'(?:please\s+)?(?:build|implement|start|run|work on)\s+'
-            r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+)'
+            r'(?:(?P<change>change\s+request)\s+)?'
+            r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+|this\s+)'
             r'(?P<issue>https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?|#?[1-9][0-9]*)[.!]?',
             message.strip(), re.IGNORECASE)
         if issue_request and not gate_question:
             self.home_history.append(('user', sanitize(message)))
             self._home_action({'uncle_action': 'github_issue',
                                'issue': issue_request['issue'].removeprefix('#'),
-                               'start': True})
+                               'start': True,
+                               'issue_mode': '--change' if issue_request['change'] else ''})
             return
         stage, runner, model, effort = self.chat_model()
         if self.state == 'running' and not stage:
@@ -2124,7 +2126,7 @@ class UncleTUI:
         if name == 'github_issue':
             if action['start']:
                 self.workflow_idx = 1
-                self.issue_mode = ''
+                self.issue_mode = action.get('issue_mode', '')
                 self.state = 'issue'
                 self.input_buf = action['issue']
                 self.issue = action['issue']

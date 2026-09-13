@@ -90,6 +90,20 @@ class Actions(unittest.TestCase):
             self.assertEqual(env['UNCLE_PROJECT_ROOT'], root)
             self.ui._run.assert_not_called()
 
+    def test_natural_issue_launch_phrases(self):
+        url = 'https://github.com/unclehq/uncle/issues/44'
+        for phrase, mode in [('build from github issue ', ''),
+                             ('start change request from github issue ', '--change'),
+                             ('build this ', '')]:
+            with self.subTest(phrase=phrase), patch.object(tui, 'HomeRequest') as request:
+                self.ui.state = 'menu'
+                self.ui._run.reset_mock()
+                self.ui.send_home_chat(phrase + url)
+                self.ui._run.assert_called_once()
+                self.assertEqual(self.ui.issue, url)
+                self.assertEqual(self.ui.issue_mode, mode)
+                request.assert_not_called()
+
     def test_auto_selection_advances_prefilled_issue_to_build(self):
         # Exercise the actual transition, stubbing only reload and launch.
         del self.ui._run

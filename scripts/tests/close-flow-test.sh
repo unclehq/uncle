@@ -181,7 +181,7 @@ REPO="${T_REPO:-repo}"
 ISSUE_NUM="${T_ISSUE:-42}"
 USED_GH="${T_USED_GH:-1}"
 case "$1" in
-    confirm) confirm_and_run_workflow ;;
+    confirm) run_issue_workflow ;;
     seed_gate)
         check_origin_or_refuse
         if seed_is_current; then echo "SEED_SKIPPED"; else echo "SEED_WRITE"; fi
@@ -302,36 +302,12 @@ expect_close_count() {
 }
 
 # ---------------------------------------------------------------------------
-# Confirmation gate (B-01, B-02, B-03; §1.5 no TTY precondition)
+# Issue launch starts directly, including with closed stdin.
 # ---------------------------------------------------------------------------
-
-new_case decline-wrong-word
-run_runner confirm "nope\n"
+new_case direct-launch-eof
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY"
 expect_status 0
-expect_out "Type RUN exactly to start the change workflow:"
-expect_out "Not confirmed."
-expect_out "Run: ./scripts/change-workflow.sh"
-expect_driver_not_run
-expect_not_closed
-
-new_case decline-empty-enter
-run_runner confirm "\n"
-expect_status 0
-expect_out "Not confirmed."
-expect_driver_not_run
-
-new_case decline-eof
-run_runner confirm ""
-expect_status 0
-expect_out "Not confirmed."
-expect_driver_not_run
-
-# The prompt is reached over a pipe, with no TTY anywhere: the approved
-# compatibility break (CHANGE_SPEC §8) rather than an early decline.
-new_case piped-stdin-proceeds
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY"
-expect_status 0
-expect_out "Type RUN exactly to start the change workflow:"
+expect_out "Starting the change workflow from this issue."
 expect_driver_ran
 expect_not_closed
 
@@ -340,49 +316,49 @@ expect_not_closed
 # ---------------------------------------------------------------------------
 
 new_case ready-closes
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY"
 expect_status 0
 expect_not_closed
 
 new_case ready-with-non-blocking-closes
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY WITH NON-BLOCKING ISSUES"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY WITH NON-BLOCKING ISSUES"
 expect_status 0
 expect_not_closed
 
 new_case not-ready-stays-open
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="NOT READY"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="NOT READY"
 expect_status 0
 expect_not_closed
 
 new_case unknown-verdict-stays-open
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="Rerun until READY"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="Rerun until READY"
 expect_status 0
 expect_not_closed
 
 new_case missing-verdict-file
-run_runner confirm "RUN\n"
+run_runner confirm ""
 expect_status 0
 expect_not_closed
 
 new_case malformed-verdict-file
 printf 'garbage\n' > "$REPO/.uncle/workflow/audit-verdict"
-run_runner confirm "RUN\n"
+run_runner confirm ""
 expect_status 0
 expect_not_closed
 
 new_case run-id-mismatch
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_RUN_ID="some-other-run"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_RUN_ID="some-other-run"
 expect_status 0
 expect_not_closed
 
 new_case origin-mismatch-at-close
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" \
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" \
     FAKE_DRIVER_ORIGIN="other/repo	99"
 expect_status 0
 expect_not_closed
 
 new_case audit-hash-mismatch
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_TAMPER=1
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_TAMPER=1
 expect_status 0
 expect_not_closed
 
@@ -392,7 +368,7 @@ expect_not_closed
 
 for rc in 1 7 130; do
     new_case "driver-exit-$rc"
-    run_runner confirm "RUN\n" FAKE_DRIVER_EXIT="$rc" FAKE_DRIVER_VERDICT_TEXT="READY"
+    run_runner confirm "" FAKE_DRIVER_EXIT="$rc" FAKE_DRIVER_VERDICT_TEXT="READY"
     expect_status "$rc"
     expect_out "change-workflow.sh exited $rc; owner/repo#42 remains open."
     expect_not_closed
@@ -403,12 +379,12 @@ done
 # ---------------------------------------------------------------------------
 
 new_case curl-fallback-skips-close
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" T_USED_GH=0
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" T_USED_GH=0
 expect_status 0
 expect_not_closed
 
 new_case gh-unauthenticated-skips-close
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_AUTH_RC=1
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_AUTH_RC=1
 expect_status 0
 expect_not_closed
 
@@ -425,7 +401,7 @@ else
 fi
 
 new_case gh-close-fails
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_CLOSE_RC=1
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_CLOSE_RC=1
 expect_status 0
 expect_not_closed
 
@@ -707,7 +683,7 @@ done
 
 new_case git-wrapper-never-closes
 mkdir "$REPO/.git"
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT=READY
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT=READY
 expect_status 0
 expect_not_closed
 expect_no_marker
@@ -837,12 +813,12 @@ expect_no_marker
 # ---------------------------------------------------------------------------
 
 new_case no-double-close-after-driver
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_CLOSED_MARKER=1
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_CLOSED_MARKER=1
 expect_status 0
 expect_not_closed
 
 new_case stale-marker-ignored
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" \
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" \
     FAKE_DRIVER_MARKER_TEXT="other-run	other/repo	99"
 expect_status 0
 expect_not_closed

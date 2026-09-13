@@ -120,7 +120,8 @@ for line in sys.stdin:
  elif method == 'turn/start':
   send({'id':event['id'], 'result':{'turn':{'id':'assessment'}}})
   send({'method':'item/agentMessage/delta', 'params':{'delta':'Reading inputs.'}})
-  send({'method':'item/completed', 'params':{'item':{'type':'agentMessage', 'text':'{"version":1,"verdict":"REVISE"}'}}})
+  send({'method':'item/completed', 'params':{'item':{'type':'agentMessage', 'text':'{"version":1,"input_digest":"fixture","verdict":"REVISE"}'}}})
+  send({'method':'item/completed', 'params':{'item':{'type':'agentMessage', 'text':'Yes—three coding blockers remain.'}}})
   send({'method':'turn/completed', 'params':{'turn':{'id':'assessment', 'status':'completed'}}})
 """
   with tempfile.TemporaryDirectory() as d:
@@ -135,7 +136,22 @@ for line in sys.stdin:
                            cwd=root, env=dict(os.environ, WORKFLOW_CODEX_CMD=str(fake)),
                            capture_output=True, text=True, timeout=15)
    self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-   self.assertEqual(json.loads(output.read_text()), {'version':1, 'verdict':'REVISE'})
+   self.assertEqual(json.loads(output.read_text()), {'version':1, 'input_digest':'fixture', 'verdict':'REVISE'})
+
+ def test_assessment_capture_is_scoped_and_uses_latest_complete_object(self):
+  stage = Stage('codex', 'reviewer', 'plan-executability', [], prompt='Review')
+  first = json.dumps({'version':1, 'input_digest':'first', 'verdict':'READY'})
+  latest = json.dumps({'version':1, 'input_digest':'second', 'verdict':'REVISE'})
+  stage.completed_answer(first)
+  stage.completed_answer(latest)
+  stage.completed_answer('Three blockers remain.')
+  self.assertEqual(stage.output_answer(), latest)
+  stage.stage = 'adversarial-review'
+  self.assertEqual(stage.output_answer(), 'Three blockers remain.')
+  stage.stage = 'plan-executability'
+  stage.assessment_answer = ''
+  stage.completed_answer('Summary: ' + first)
+  self.assertEqual(stage.output_answer(), 'Summary: ' + first)
 
  def test_native_same_session_and_metrics(self):
   for runner in ('codex','kimi','claude'):

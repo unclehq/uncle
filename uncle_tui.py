@@ -96,7 +96,6 @@ STAGES = [
     ("derive-brief", AGENT),
     ("requirements", AGENT),
     ("baseline", AGENT),
-    ("change-spec", AGENT),
     ("project-plan", AGENT),
     ("change-plan", AGENT),
     ("adversarial-review", REVIEWER),
@@ -397,8 +396,8 @@ CONFIG_DESC = {
         "(default) to use the global model."
     ),
     "change-plan": (
-        "Writes the change plan, turning the change specification into an "
-        "ordered implementation plan. Good for routing to a planning model. "
+        "Drafts the change specification and ordered implementation plan in "
+        "one session, using this model for both documents. "
         "Leave it at (default) to use the global model."
     ),
     "updated-change-plan": (

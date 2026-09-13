@@ -392,7 +392,7 @@ implementation_incomplete_choice() {
                 # Clearing the digest is what lets the repair path run again for
                 # this plan; without it the next pass repeats the same refusal.
                 rm -f "$STATE_DIR/implementation-completion-repair"
-                plan_tool retry
+                if plan_executability_enabled; then plan_tool retry; fi
                 echo "Retrying implementation."
                 return 0
                 ;;
@@ -1584,6 +1584,34 @@ python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" CHANGE_REQUEST.md \
 
 VERDICT_WRITTEN_THIS_RUN=0
 
+# Bind the draft plan to exactly the specification and baseline shown at the
+# existing analysis gate. Editing any of them requires a fresh plan afterward.
+change_plan_draft_key() {
+    local file
+    for file in CHANGE_REQUEST.md BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md; do
+        [[ -s "$file" ]] || return 1
+        hash_file "$file" || return 1
+    done
+}
+
+run_combined_change_plan() {
+    local prompt="$LOG_DIR/change-planning.prompt.md"
+    {
+        printf '# Combined change specification and planning\n\n'
+        printf 'In this single stage, first write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+        cat "$(resolve_prompt prompts/change/change-spec.md)"
+        printf '\n\n# Then plan the specified change\n\n'
+        cat "$(resolve_prompt prompts/change/change-plan.md)"
+    } > "$prompt"
+    UNCLE_COMBINED_CHANGE_PLAN=1 run_claude "$prompt" change-plan \
+        "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN" || return $?
+    require_file CHANGE_SPEC.md
+    require_file CHANGE_PLAN.md
+    check_document_budget CHANGE_SPEC.md || return 1
+    check_document_budget CHANGE_PLAN.md || return 1
+    change_plan_draft_key > "$STATE_DIR/change-plan.draft-key"
+}
+
 implementation_complete() {
     verify_approval CHANGE_SPEC.md CHANGE_SPEC
     verify_approval CHANGE_PLAN.md CHANGE_PLAN
@@ -1661,11 +1689,7 @@ while true; do
             require_file BASELINE_REPORT.md
             check_document_budget BASELINE_REPORT.md || exit 1
 
-            run_claude prompts/change/change-spec.md change-spec \
-                "$MODEL_CHANGE_SPEC" "$EFFORT_CHANGE_SPEC" 60 \
-                "$BUDGET_CHANGE_SPEC"
-            require_file CHANGE_SPEC.md
-            check_document_budget CHANGE_SPEC.md || exit 1
+            run_combined_change_plan || exit 1
 
             set_state WAIT_ANALYSIS_APPROVAL
             ;;
@@ -1686,10 +1710,16 @@ while true; do
             # window in which a baseline means anything.
             capture_green_baseline
 
-            run_claude prompts/change/change-plan.md change-plan \
-                "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"
-            require_file CHANGE_PLAN.md
-            check_document_budget CHANGE_PLAN.md || exit 1
+            if [[ -s "$STATE_DIR/change-plan.draft-key" ]] && \
+                    [[ "$(cat "$STATE_DIR/change-plan.draft-key")" == "$(change_plan_draft_key)" ]]; then
+                echo 'Using the plan drafted with the approved change specification.'
+            else
+                # Legacy resume, or edits made while approving the specification.
+                run_claude prompts/change/change-plan.md change-plan \
+                    "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"
+                require_file CHANGE_PLAN.md
+                check_document_budget CHANGE_PLAN.md || exit 1
+            fi
 
             run_codex \
                 prompts/change/adversarial-review.md \
@@ -1778,7 +1808,7 @@ while true; do
                 echo 'Verification-only resume finished; checking delivery.'
             elif [[ "$(cat "$STATE_DIR/implementation-completion-repair" 2>/dev/null || true)" == "$(hash_file CHANGE_PLAN.md)" ]]; then
                 echo 'Implementation remains incomplete; automatic repair already attempted for this plan.'
-            elif [[ "$STEPWISE_IMPLEMENT" == "1" ]] && ! grep -q '"verdict": "DECISION"' "$PLAN_ASSESS_DIR/assessment.json"; then
+            elif [[ "$STEPWISE_IMPLEMENT" == "1" ]] && { ! plan_executability_enabled || ! grep -q '"verdict": "DECISION"' "$PLAN_ASSESS_DIR/assessment.json"; }; then
                 step_status=0
                 run_stepwise_implementation prompts/change/implement-change.md || step_status=$?
                 case "$step_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac

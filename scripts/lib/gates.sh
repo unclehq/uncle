@@ -166,6 +166,29 @@ gated_prompt() {
         if [[ "$is_doc" == "1" ]]; then
             document_budget_prompt "$log_name" || return 1
         fi
+        case "$log_name" in
+            adversarial-review|updated-plan|updated-change-plan)
+                cat <<'FEASIBILITY'
+
+## Plan feasibility (part of this review, not a separate stage)
+Check the selected implementation runner, adapter, model/session behavior and
+permissions against the plan. Inspect current configuration and adapter code;
+use version-matched documentation or non-destructive probes where necessary.
+Do not treat an adapter comment or proposed command as evidence of support.
+Identify restrictions that make acceptance criteria impossible and distinguish
+user/platform constraints from design choices that can be revised in scope.
+Preserve every acceptance criterion and adversarial finding, including baseline
+and protected-test requirements. Identify concrete corrections for coding blockers.
+Separate missing live-verification prerequisites from blockers to writing code.
+Put genuine unresolved scope or authority choices in this review for the existing
+human plan gate. Never broaden permissions or silently waive a requirement.
+Reviewers: include these findings in ADVERSARIAL_REVIEW.md's existing finding
+format. Plan revisers: address them in the revised plan and identify anything
+still unresolved for approval. Do not produce a separate assessment.json or
+request a separate executability approval.
+FEASIBILITY
+                ;;
+        esac
         if [[ "$role" == "reviewer" ]]; then
             printf '\n\n---\n\n# Reviewer output (binding)\n\nYou run read-only: you cannot write files, so Rule 0 above cannot apply to\nyou. The document the stage asked for is your final assistant message:\nreturn it in full as that message — not a path, not a summary, not a note\nabout a file you could not write.\n'
         fi
@@ -184,7 +207,11 @@ stage_documents() {
         updated-plan) echo UPDATED_PROJECT_PLAN.md ;;
         baseline) echo BASELINE_REPORT.md ;;
         change-spec) echo CHANGE_SPEC.md ;;
-        change-plan|updated-change-plan) echo CHANGE_PLAN.md ;;
+        change-plan)
+            echo CHANGE_PLAN.md
+            [[ "${UNCLE_COMBINED_CHANGE_PLAN:-0}" != 1 ]] || echo CHANGE_SPEC.md
+            ;;
+        updated-change-plan) echo CHANGE_PLAN.md ;;
         adversarial-review) echo ADVERSARIAL_REVIEW.md ;;
         preflight) echo PREFLIGHT_REPORT.md ;;
         implementation|implementation-step-*)
@@ -328,9 +355,16 @@ behavior, exact command, and protected path. Execution plans must retain their
 complete executable contract. Reports cite existing raw logs instead of copying
 transcripts; never drop checks or evidence needed to assess their results.
 Do not create summary sidecars or move obligations out to evade these limits.
-If mandatory content alone cannot fit, preserve it: the driver retries the fit
-(up to two compaction passes for reviewer output) and then continues with the
-preserved artifact. Never truncate required content.
+Before completing this stage, perform the editorial compaction pass yourself,
+using your current context and the same model. Review your draft against the
+budgets above, remove repeated prose and retain all mandatory content. For
+files you write, measure their bytes and lines and revise them before finishing.
+For reviewer output, compact your draft before returning the final document.
+Do not launch another model, compaction stage, or summary sidecar. Compaction
+is part of this stage; its tokens and cost belong to this stage.
+If mandatory content alone cannot fit, preserve it. The driver retains the
+artifact and reports the overage; enforced budgets still require resolution.
+Never truncate required content.
 BUDGET
 }
 
@@ -385,54 +419,12 @@ check_document_budget() {
     fi
 }
 
-# Reviewers return documents rather than editing files. Give an oversized result
-# a few bounded editorial passes, using the same reviewer and its read-only
-# contract, then keep building with the preserved original: the budget is
-# advisory (check_document_budget), so a review that will not shrink is a
-# remark, not a stop -- unless WORKFLOW_DOC_BUDGET_ENFORCE=1 says otherwise.
+# The producing stage compacts its own draft before returning it. Keep the
+# deterministic postcondition, without spawning a new session or another model.
 finish_review_budget() {
-    local file="$1" cmd="$2" model="$3" effort="$4" stage="$5"
-    local limits bytes lines status=0 started log attempt max_attempts
-    local -a flags=(exec --ephemeral --skip-git-repo-check --sandbox read-only)
-    limits="$(document_budget "$file")" || return 1
+    local file="$1"
     [[ -s "$file" ]] || { check_document_budget "$file"; return 1; }
     python3 "$ROOT/scripts/lib/repair-acceptance.py" "$file" || return 1
-    check_document_budget "$file" probe 2>/dev/null && return 0
-    if [[ "${WORKFLOW_REVIEW_COMPACT:-1}" == 0 ]]; then
-        check_document_budget "$file"
-        return $?
-    fi
-    max_attempts="${WORKFLOW_REVIEW_COMPACT_ATTEMPTS:-2}"
-    case "$max_attempts" in
-        *[!0-9]*|""|0*)
-            echo "WORKFLOW_REVIEW_COMPACT_ATTEMPTS must be a positive integer: $max_attempts" >&2
-            return 1 ;;
-    esac
-    # Cap validated decimal strings before arithmetic, including oversized integers.
-    [[ "$max_attempts" == 1 ]] || max_attempts=2
-    read -r bytes lines <<< "$limits"
-    [[ -z "$model" ]] || flags+=(-m "$model")
-    [[ -z "$effort" ]] || flags+=(-c "model_reasoning_effort=$effort")
-    for (( attempt=1; attempt<=10#$max_attempts; attempt++ )); do
-        echo "Fitting $file to the document budget: attempt $attempt of $max_attempts." >&2
-        started="$SECONDS"
-        status=0
-        log="$LOG_DIR/${stage}.compact-$attempt.log"
-        UNCLE_STATUS_STAGE="$stage" python3 "$ROOT/scripts/lib/compact-review.py" --output "$file" --log "$log" \
-            --max-bytes "$bytes" --max-lines "$lines" \
-            --seconds "${WORKFLOW_REVIEW_COMPACT_SECONDS:-120}" \
-            -- "$cmd" "${flags[@]}" || status=$?
-        if declare -F perf_record > /dev/null; then
-            perf_record reviewer "${stage}-compact" "$((SECONDS-started))" "$status" \
-                "$log" "$cmd" "$model" "$effort"
-        fi
-        check_document_budget "$file" probe 2>/dev/null && return 0
-    done
-    echo "Document still exceeds the budget after $max_attempts attempts; continuing with the preserved original." >&2
-    # The size verdict decides what happens next, not the last compaction
-    # result: a candidate rejected for dropping a finding id or flipping a
-    # status leaves a good review in place, and killing the stage there threw
-    # the work away. Advisory by default, blocking only when enforced.
     check_document_budget "$file"
 }
 

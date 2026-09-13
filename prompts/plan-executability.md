@@ -8,7 +8,8 @@ Never broaden permissions, mutate production, or include credentials in evidence
 Return one JSON object as your final response, without markdown fences or commentary,
 using this version 1 contract. The workflow driver saves that response to assessment.json.
 Your review session is read-only: do not create or write the assessment file yourself.
-Read-only access does not prevent returning the required JSON assessment.
+If the user asks a question during review, answer in commentary, then complete the
+assessment. Your final response must still be the complete assessment JSON object.
 input_digest is the manifest digest. requirement_ids contains every acceptance ID.
 restrictions inventories ALL proposed and carried-forward restrictions, including
 legacy prose, with id, source_kind (USER/REPOSITORY/PLATFORM/DESIGN), source_location,

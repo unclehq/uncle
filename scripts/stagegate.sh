@@ -1651,7 +1651,7 @@ while true; do
                 exit 1
             fi
             run_stage PREFLIGHT
-            if [[ -s "$STATE_DIR/plan-executability/assessment.json" ]]; then
+            if plan_executability_enabled && [[ -s "$STATE_DIR/plan-executability/assessment.json" ]]; then
                 plan_tool preflight-check || exit 1
             fi
             preflight_result="$(acceptance_result PREFLIGHT_REPORT.md)"
@@ -1895,7 +1895,7 @@ while true; do
             fi
             repair_count=$((10#$repair_count))
             plan_status=0
-            if [[ -s "$STATE_DIR/plan-recovery.json" ]] && grep -qE '"phase": "(WAIT_LIVE|VERIFYING|DESIGN|AUTHORITY)"' "$STATE_DIR/plan-recovery.json"; then
+            if plan_executability_enabled && [[ -s "$STATE_DIR/plan-recovery.json" ]] && grep -qE '"phase": "(WAIT_LIVE|VERIFYING|DESIGN|AUTHORITY)"' "$STATE_DIR/plan-recovery.json"; then
                 plan_before_write repair-resume || plan_status=$?
                 case "$plan_status" in 22) ;; 10) continue ;; *) exit 1 ;; esac
             fi

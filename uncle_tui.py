@@ -1437,6 +1437,9 @@ class UncleTUI:
         os.close(fd)
         env = dict(os.environ)
         env.update(self.stage_env())
+        env.pop("UNCLE_NEW_WORKFLOW", None)
+        if getattr(self, "new_workflow_pending", False):
+            env["UNCLE_NEW_WORKFLOW"] = "1"
         env["UNCLE_STATUS_FILE"] = self.status_path
         env["UNCLE_STEERING"] = "1"
         self.steering_channels = {}
@@ -1479,6 +1482,7 @@ class UncleTUI:
         except BaseException:
             self._end_title()
             raise
+        self.new_workflow_pending = False
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self):
@@ -2145,6 +2149,7 @@ class UncleTUI:
                 draft.kind = kind
                 draft.preview = sanitize(action['document'])
                 draft.commit()
+                self.new_workflow_pending = True
                 self.chat.kind, self.chat.preview, self.chat.seed = kind, draft.preview, draft.seed
                 self.home_history.append(('system', 'Created ' + filename + ' from this conversation.'))
                 start = action['start']

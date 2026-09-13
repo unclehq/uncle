@@ -20,7 +20,10 @@ from shell_syntax import syntax_command
 def run(args):
     run_started = time.monotonic()
     passed = failed = 0
-    commands = Path(args.commands).read_text(encoding="utf-8").splitlines()
+    commands = [row.removesuffix(b'\r').decode('utf-8')
+                for row in Path(args.commands).read_bytes().split(b'\n')]
+    if commands and commands[-1] == '':
+        commands.pop()
     groups = {}
     previous = 0
     for row in Path(args.groups).read_text(encoding="utf-8").splitlines():

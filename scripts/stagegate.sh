@@ -77,9 +77,12 @@ if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/pla
     [[ "$UNATTENDED" != 1 ]] || driver_args+=(--unattended)
     exec python3 "$ROOT/scripts/lib/plan-executability.py" lock-run "${driver_args[@]}"
 fi
+python3 "$ROOT/scripts/lib/workflow_family.py" app
+unset UNCLE_NEW_WORKFLOW
 . "$ROOT/scripts/lib/project-git.sh"
 uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
+. "$ROOT/scripts/lib/state.sh"
 
 STATE_DIR=".uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
@@ -856,11 +859,7 @@ set_state() {
 }
 
 get_state() {
-    if [[ -s "$STATE_FILE" ]]; then
-        cat "$STATE_FILE"
-    else
-        echo "DERIVE_BRIEF"
-    fi
+    state_read "$STATE_FILE" DERIVE_BRIEF
 }
 
 require_file() {

@@ -191,8 +191,10 @@ green_run() {
     : > "$out"
     : > "$log"
 
+    local command_line=0
     while IFS= read -r cmd || [[ -n "$cmd" ]]; do
-        # Match Python splitlines(): CRLF is a line ending, not command text.
+        command_line=$((command_line + 1))
+        # CRLF is a line ending, not command text.
         # Preserve the approved file and embedded carriage returns verbatim.
         cmd="${cmd%$'\r'}"
         [[ -n "$cmd" ]] || continue
@@ -204,7 +206,7 @@ green_run() {
         started="$SECONDS"
         local -a check_command=(bash -c "$cmd")
         if [[ -f "$GREEN_LIB_DIR/shell_syntax.py" ]] && command -v python3 >/dev/null 2>&1; then
-            check_command=(python3 -B "$GREEN_LIB_DIR/shell_syntax.py" --command "$cmd" "${WORKFLOW_VERIFY_JOBS:-4}")
+            check_command=(python3 -B "$GREEN_LIB_DIR/shell_syntax.py" --command-file "$cmds" "$command_line" "${WORKFLOW_VERIFY_JOBS:-4}")
         fi
         env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "${check_command[@]}" < /dev/null >> "$log" 2>&1 || status=$?
         perf_record check "$cmd" "$((SECONDS-started))" "$status"

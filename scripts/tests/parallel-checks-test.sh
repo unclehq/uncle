@@ -77,6 +77,11 @@ class Checks(unittest.TestCase):
         self.assertEqual([s.split('\t')[0] for s in (self.root/'results').read_text().splitlines()], ['0']*3, self.diagnostics())
         log=(self.root/'log').read_text()
         self.assertLess(log.index('\ncheck1\n'),log.index('\ncheck2\n'))
+    def test_parallel_commands_preserve_embedded_cr(self):
+        r=self.run_checks(["printf 'A\rB' > embedded", 'printf last > last'], '1 2\n')
+        self.assertEqual(r.returncode,0,r.stderr)
+        self.assertEqual((self.root/'embedded').read_bytes(), b'A\rB')
+        self.assertEqual((self.root/'last').read_bytes(), b'last')
     def test_test_failure_is_recorded(self):
         r=self.run_checks(['exit 7','echo still-runs'], '1 2\n')
         self.assertEqual(r.returncode,0,r.stderr)

@@ -11,6 +11,18 @@ import shell_syntax as syntax
 LOOP = 'for f in scripts/*.sh scripts/lib/*.sh scripts/tests/*.sh; do bash -n "$f"; done'
 
 class Tests(unittest.TestCase):
+    def test_command_file_preserves_control_characters_and_line_positions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            commands = root / 'commands'
+            commands.write_bytes(b"\r\nprintf 'A\rB' > embedded\r\nprintf last > last")
+            for line in (2, 3):
+                result = subprocess.run([sys.executable, syntax.__file__, '--command-file',
+                                         str(commands), str(line), '2'], cwd=root, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / 'embedded').read_bytes(), b'A\rB')
+            self.assertEqual((root / 'last').read_bytes(), b'last')
+
     def test_windows_dispatch_preserves_arguments_and_failure(self):
         command = "printf 'A\rB' > 'file with spaces'; exit 7"
         bash = r'C:\Program Files\Git\usr\bin\bash.exe'

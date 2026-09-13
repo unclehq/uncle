@@ -36,8 +36,14 @@ def check_files(files, jobs, bash):
 
 
 def main():
-    if sys.argv[1] == "--command":
-        command, jobs = sys.argv[2], int(sys.argv[3])
+    if sys.argv[1] in ("--command", "--command-file"):
+        if sys.argv[1] == "--command-file":
+            # Load original bytes in Python, avoiding MSYS argument conversion
+            # of control characters between Bash and native Windows Python.
+            raw = Path(sys.argv[2]).read_bytes().split(b'\n')[int(sys.argv[3]) - 1]
+            command, jobs = raw.removesuffix(b'\r').decode('utf-8'), int(sys.argv[4])
+        else:
+            command, jobs = sys.argv[2], int(sys.argv[3])
         argv = syntax_command(command, jobs) or [bash_executable(), "-c", command]
         if os.name == 'nt':
             # Windows execv uses CRT argument joining, which loses quoting for

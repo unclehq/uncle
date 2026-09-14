@@ -149,6 +149,10 @@ def parse_arguments(side, args):
     output, prompt = '', ''
     effort = ''
     turns = int(os.environ.get('UNCLE_STATUS_STAGE_TURNS') or 80)
+    # Reviewer status uses zero to mean no explicit stage turn limit.
+    # Explicit --max-turns values below still require a positive number.
+    if turns == 0:
+        turns = 80
     iterator = iter(args)
     valued = {'--model','-m','--sandbox','--allowedTools','--output-format',
               '--max-budget-usd','--resume','--mcp-config'}

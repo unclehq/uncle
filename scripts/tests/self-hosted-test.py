@@ -286,6 +286,16 @@ class SelfHosted(unittest.TestCase):
             with self.subTest(args=args), patch('sys.stdin', io.StringIO('prompt from stdin')):
                 self.assertEqual(parse_arguments(side, args)[3], expected)
 
+    def test_reviewer_zero_status_limit_uses_default(self):
+        with patch.dict(os.environ, UNCLE_STATUS_STAGE_TURNS='0'):
+            self.assertEqual(parse_arguments('reviewer', ['exec', 'Review the checklist'])[2], 80)
+            self.assertEqual(parse_arguments('reviewer', ['exec', '--max-turns', '12', 'Review'])[2], 12)
+            for limit in ('0', '-1'):
+                with self.assertRaisesRegex(ValueError, 'positive turn limit'):
+                    parse_arguments('reviewer', ['exec', '--max-turns', limit, 'Review'])
+        with patch.dict(os.environ, UNCLE_STATUS_STAGE_TURNS='15'):
+            self.assertEqual(parse_arguments('reviewer', ['exec', 'Review'])[2], 15)
+
     def stub_environment(self):
         stub=self.root/'fake_opencode.py'
         stub.write_text("""import json,os,pathlib,sys,time

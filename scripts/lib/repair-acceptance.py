@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repair literal pipes in acceptance evidence without changing decisions."""
+"""Repair acceptance table formatting without changing decisions."""
 import os
 from pathlib import Path
 import re
@@ -10,6 +10,7 @@ import tempfile
 def repair(text):
     active = False
     lines = []
+    seen = set()
     for line in text.splitlines(keepends=True):
         if re.match(r'^## Acceptance gate\s*$', line):
             active = True
@@ -17,6 +18,22 @@ def repair(text):
             active = False
         if active and line.strip().startswith('|') and line.strip().endswith('|'):
             cells = line.strip()[1:-1].split('|')
+            if len(cells) >= 4 and cells[1].strip() in ('YES', 'NO'):
+                original_id = cells[0].strip()
+                identifier = original_id
+                if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]*', identifier):
+                    # Keep explicit IDs; move parenthetical aliases to evidence.
+                    match = re.fullmatch(r'([A-Za-z0-9][A-Za-z0-9_./-]*)\s+\([^|()]+\)', identifier)
+                    identifier = match[1] if match else re.sub(r'\s+', '-', identifier)
+                    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]*', identifier):
+                        return text
+                    cells[0] = ' ' + identifier + ' '
+                    cells[3] = ' Original label: ' + original_id + '. ' + cells[3].lstrip()
+                if identifier in seen:
+                    return text  # Never merge distinct rows or hide a collision.
+                seen.add(identifier)
+                ending = '\r\n' if line.endswith('\r\n') else '\n' if line.endswith('\n') else ''
+                line = '|' + '|'.join(cells) + '|' + ending
             if (len(cells) > 4 and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]*', cells[0].strip())
                     and cells[1].strip() in ('YES', 'NO')
                     and cells[2].strip() in ('PASS', 'FAIL', 'BLOCKED', 'BLOCKED-SETUP',
@@ -52,7 +69,7 @@ def main(filename):
     finally:
         if os.path.exists(pending):
             os.unlink(pending)
-    print('Repaired acceptance evidence pipes in '+str(path)+'; original retained at '+backup, file=sys.stderr)
+    print('Repaired acceptance table formatting in '+str(path)+'; original retained at '+backup, file=sys.stderr)
 
 
 if __name__ == '__main__':

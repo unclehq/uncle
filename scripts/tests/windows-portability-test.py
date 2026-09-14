@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -135,6 +136,25 @@ class Portability(unittest.TestCase):
         job.terminate.assert_called_once()
         child.kill.assert_not_called()
         process_tree.finish_check(child)
+        job.close.assert_called_once()
+
+    def test_finish_without_timing_does_not_emit_and_still_closes_job(self):
+        job = Mock()
+        child = Mock(pid=123, _uncle_job=job)
+        with patch('build_timing.event') as record:
+            process_tree.finish_check(child)
+        record.assert_not_called()
+        job.terminate.assert_called_once()
+        job.close.assert_called_once()
+
+    def test_timing_failure_does_not_prevent_job_cleanup(self):
+        job = Mock()
+        child = Mock(pid=123, returncode=0, _uncle_job=job,
+                     _uncle_timing=('test', time.time(), time.monotonic(), 'attempt'))
+        with patch('build_timing.event', side_effect=RuntimeError('record failed')):
+            process_tree.finish_check(child)
+        self.assertIsNone(child._uncle_timing)
+        job.terminate.assert_called_once()
         job.close.assert_called_once()
 
     def test_job_bootstrap_requires_release_and_preserves_exit(self):

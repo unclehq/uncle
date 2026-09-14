@@ -7,8 +7,7 @@ esac
 dir="${1:-.}/.uncle/workflow/metrics"
 if [[ ! -d "$dir" ]]; then
     echo 'No performance records yet. Run a workflow with WORKFLOW_METRICS=1.'
-    exit 0
-fi
+else
 # find includes atomic .pending.*.json records, but never incomplete files.
 find "$dir" -name '*.json' -type f -exec cat {} + | jq -s -r '
     def known: map(select(type == "number")) | if length == 0 then "Unavailable" else (add|tostring) end;
@@ -33,3 +32,7 @@ find "$dir" -name '*.json' -type f -exec cat {} + | jq -s -r '
     "Reported USD excludes estimates. Unavailable cost does not mean free. Estimated USD prices recovered tokens at API list rates; it is not an invoice.",
     "Work seconds overlap for concurrent stages; do not sum them as end-to-end latency. Counts cover completed attempts; killed attempts may be absent."
 '
+fi
+
+# The per-run timeline separates wall time from overlapping subprocess spans.
+python3 -B "$(dirname "${BASH_SOURCE[0]}")/lib/build_timing.py" report "${1:-.}"

@@ -93,8 +93,16 @@ none.
 - Keep the execution contract complete in the named artifact. Cite existing logs
   and evidence by file and section; avoid copying transcripts and repeated rationale.
   Do not create a second summary artifact or move obligations out of the contract.
-- Compact within the producing stage, using its model and context, at most
-  twice total across its output documents. The initial draft is not a pass;
+- Draft to the appended byte and line targets from the start. Reserve room for
+  mandatory headings, rows, commands, and evidence before writing. Collect results
+  before composing the report; batch independent reads and size measurements.
+- If the document fits both ceilings, finish without a size-only rewrite. An
+  advisory target is not a reason to compact. Reviewers return a concise final
+  artifact directly; the driver measures it. Do not request filesystem writes
+  solely to measure a read-only reviewer's response.
+- Only compact an oversized document, within the producing stage and using its
+  model and context, at most twice total across its output documents. Leave
+  compliant documents unchanged. The initial draft is not a pass;
   every later size-driven rewrite or trim counts, including a "final trim".
   Chat questions and steering do not reset the count. After the second pass,
   stop size-only edits, preserve the complete artifact, report final byte/line

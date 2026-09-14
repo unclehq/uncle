@@ -63,8 +63,35 @@ Syntax-check every script, then run the suites in `scripts/tests/`:
 
 ```sh
 for f in scripts/*.sh scripts/lib/*.sh scripts/tests/*.sh; do bash -n "$f"; done
-for t in scripts/tests/*-test.sh; do bash "$t" || exit 1; done
+bash scripts/run-shell-tests.sh
 ```
+
+A shell suite that cannot run because an optional dependency is absent should
+print the reason and exit **77**. The runner reports this as SKIP, excludes it
+from the pass count, and continues. A skipped optional sub-check does not make
+an otherwise executed suite a whole-suite skip.
+
+The shell runner uses four workers, keeps each suite's output together, and
+returns a nonzero status if any suite fails. Set `WORKFLOW_VERIFY_JOBS` from 1
+to 8 to adjust concurrency, for example:
+
+```sh
+WORKFLOW_VERIFY_JOBS=8 bash scripts/run-shell-tests.sh
+```
+
+For a selected set of suites, use the same runner:
+
+```sh
+bash scripts/run-shell-tests.sh --jobs 2 -- acceptance audit-verdict
+```
+
+The gate and close-flow suites also run independent groups internally. Set
+`WORKFLOW_TEST_JOBS` from 1 to 8 (default 4) to control those workers; use 1
+when diagnosing a failure serially. Resume steps within each group remain serial.
+
+The workflow driver and Windows regression job use this entry point too.
+Do not replace this command with a sequential shell loop. Python tests are
+separate; this command runs the shell suites only.
 
 Every suite is hermetic: no network, no model calls, and no writes outside its
 own `mktemp -d`. The ones that exercise a driver run it in a scratch git
@@ -97,3 +124,5 @@ change is needed and *what* it does.
 
 Open a GitHub issue or discussion. For private concerns, email
 <me@brian.biz>.
+
+Build timing and profiling controls are documented in [PERFORMANCE.md](PERFORMANCE.md).

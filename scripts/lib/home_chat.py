@@ -7,23 +7,32 @@ from pathlib import Path
 from process_tree import start_check, launch_command, kill_tree, finish_check
 
 class HomeRequest:
-    def __init__(self, command, prompt, env):
+    def __init__(self, command, prompt, env, issue_lookup=None, cwd=None):
         self.events = queue.Queue()
         self.cancelled = threading.Event()
-        self.thread = threading.Thread(target=self._run, args=(command, prompt, env), daemon=True)
+        self.issue_context = ''
+        self.cwd = str(Path(cwd or Path.cwd()).resolve())
+        self.thread = threading.Thread(target=self._run, args=(command, prompt, env, issue_lookup), daemon=True)
         self.thread.start()
 
     def cancel(self):
         self.cancelled.set()
 
-    def _run(self, command, prompt, env):
+    def _run(self, command, prompt, env, issue_lookup=None):
         process = None
         try:
+            if issue_lookup is not None:
+                self.issue_context = issue_lookup()
+                prompt += self.issue_context
+            if self.cancelled.is_set():
+                raise ValueError('Chat request cancelled')
+            if len(prompt.encode('utf-8')) > 180000:
+                raise ValueError('Chat and issue context is too large. Use fewer references or /clear.')
             with tempfile.TemporaryDirectory(prefix='uncle-chat-') as directory:
                 reply = Path(directory) / 'reply.txt'
                 try:
                     process = start_check(launch_command(command + ['--output-last-message', str(reply), prompt]),
-                                          cwd=directory, env=env, stdout=subprocess.DEVNULL,
+                                          cwd=self.cwd, env=env, stdout=subprocess.DEVNULL,
                                           stderr=subprocess.DEVNULL)
                     for _ in range(1500):
                         if self.cancelled.is_set():
@@ -58,7 +67,7 @@ class HomeRequest:
 
 class IssueSeedRequest(HomeRequest):
     """Import an issue in the background without starting or approving a build."""
-    def _run(self, command, root, env):
+    def _run(self, command, root, env, issue_lookup=None):
         process = None
         try:
             with tempfile.TemporaryFile() as log:

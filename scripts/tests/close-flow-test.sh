@@ -181,7 +181,7 @@ REPO="${T_REPO:-repo}"
 ISSUE_NUM="${T_ISSUE:-42}"
 USED_GH="${T_USED_GH:-1}"
 case "$1" in
-    confirm) confirm_and_run_workflow ;;
+    confirm) run_issue_workflow ;;
     seed_gate)
         check_origin_or_refuse
         if seed_is_current; then echo "SEED_SKIPPED"; else echo "SEED_WRITE"; fi
@@ -302,36 +302,12 @@ expect_close_count() {
 }
 
 # ---------------------------------------------------------------------------
-# Confirmation gate (B-01, B-02, B-03; §1.5 no TTY precondition)
+# Issue launch starts directly, including with closed stdin.
 # ---------------------------------------------------------------------------
-
-new_case decline-wrong-word
-run_runner confirm "nope\n"
+new_case direct-launch-eof
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY"
 expect_status 0
-expect_out "Type RUN exactly to start the change workflow:"
-expect_out "Not confirmed."
-expect_out "Run: ./scripts/change-workflow.sh"
-expect_driver_not_run
-expect_not_closed
-
-new_case decline-empty-enter
-run_runner confirm "\n"
-expect_status 0
-expect_out "Not confirmed."
-expect_driver_not_run
-
-new_case decline-eof
-run_runner confirm ""
-expect_status 0
-expect_out "Not confirmed."
-expect_driver_not_run
-
-# The prompt is reached over a pipe, with no TTY anywhere: the approved
-# compatibility break (CHANGE_SPEC §8) rather than an early decline.
-new_case piped-stdin-proceeds
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY"
-expect_status 0
-expect_out "Type RUN exactly to start the change workflow:"
+expect_out "Starting the change workflow from this issue."
 expect_driver_ran
 expect_not_closed
 
@@ -340,49 +316,49 @@ expect_not_closed
 # ---------------------------------------------------------------------------
 
 new_case ready-closes
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY"
 expect_status 0
 expect_not_closed
 
 new_case ready-with-non-blocking-closes
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY WITH NON-BLOCKING ISSUES"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY WITH NON-BLOCKING ISSUES"
 expect_status 0
 expect_not_closed
 
 new_case not-ready-stays-open
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="NOT READY"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="NOT READY"
 expect_status 0
 expect_not_closed
 
 new_case unknown-verdict-stays-open
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="Rerun until READY"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="Rerun until READY"
 expect_status 0
 expect_not_closed
 
 new_case missing-verdict-file
-run_runner confirm "RUN\n"
+run_runner confirm ""
 expect_status 0
 expect_not_closed
 
 new_case malformed-verdict-file
 printf 'garbage\n' > "$REPO/.uncle/workflow/audit-verdict"
-run_runner confirm "RUN\n"
+run_runner confirm ""
 expect_status 0
 expect_not_closed
 
 new_case run-id-mismatch
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_RUN_ID="some-other-run"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_RUN_ID="some-other-run"
 expect_status 0
 expect_not_closed
 
 new_case origin-mismatch-at-close
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" \
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" \
     FAKE_DRIVER_ORIGIN="other/repo	99"
 expect_status 0
 expect_not_closed
 
 new_case audit-hash-mismatch
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_TAMPER=1
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_TAMPER=1
 expect_status 0
 expect_not_closed
 
@@ -392,7 +368,7 @@ expect_not_closed
 
 for rc in 1 7 130; do
     new_case "driver-exit-$rc"
-    run_runner confirm "RUN\n" FAKE_DRIVER_EXIT="$rc" FAKE_DRIVER_VERDICT_TEXT="READY"
+    run_runner confirm "" FAKE_DRIVER_EXIT="$rc" FAKE_DRIVER_VERDICT_TEXT="READY"
     expect_status "$rc"
     expect_out "change-workflow.sh exited $rc; owner/repo#42 remains open."
     expect_not_closed
@@ -403,12 +379,12 @@ done
 # ---------------------------------------------------------------------------
 
 new_case curl-fallback-skips-close
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" T_USED_GH=0
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" T_USED_GH=0
 expect_status 0
 expect_not_closed
 
 new_case gh-unauthenticated-skips-close
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_AUTH_RC=1
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_AUTH_RC=1
 expect_status 0
 expect_not_closed
 
@@ -425,7 +401,7 @@ else
 fi
 
 new_case gh-close-fails
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_CLOSE_RC=1
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_CLOSE_RC=1
 expect_status 0
 expect_not_closed
 
@@ -532,6 +508,10 @@ printf 'other/repo\t99\n' > "$REPO/.uncle/workflow/origin"
 run_driver STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
 expect_out "Change workflow complete."
+# The support prompt belongs to the TUI only; a non-TUI completion must never
+# print it (B-7).
+expect_not_out "github.com/unclehq/uncle"
+expect_not_out "support Uncle"
 
 # ---------------------------------------------------------------------------
 # FINAL_AUDIT freshness and verdict record (AR-002)
@@ -703,7 +683,7 @@ done
 
 new_case git-wrapper-never-closes
 mkdir "$REPO/.git"
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT=READY
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT=READY
 expect_status 0
 expect_not_closed
 expect_no_marker
@@ -833,12 +813,12 @@ expect_no_marker
 # ---------------------------------------------------------------------------
 
 new_case no-double-close-after-driver
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_CLOSED_MARKER=1
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_CLOSED_MARKER=1
 expect_status 0
 expect_not_closed
 
 new_case stale-marker-ignored
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" \
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" \
     FAKE_DRIVER_MARKER_TEXT="other-run	other/repo	99"
 expect_status 0
 expect_not_closed
@@ -1015,17 +995,7 @@ class HandoffTests(unittest.TestCase):
                         GIT_CONFIG_NOSYSTEM='1')
         for key in ('STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE', 'UNCLE_PROJECT_ROOT'):
             self.env.pop(key, None)
-        self.exe('git', '''#!/usr/bin/env python3
-import os, subprocess, sys
-args = sys.argv[1:]
-if args[:2] == ['remote', 'get-url']:
-    print('https://github.com/' + ('forker/repo.git' if os.environ.get('FORK') and args[-1] == 'origin' else 'owner/repo.git'))
-    sys.exit(0)
-if os.environ.get('CRASH_GIT') == args[0]:
-    subprocess.run([os.environ['REAL_GIT']] + args)
-    sys.exit(70)
-os.execv(os.environ['REAL_GIT'], ['git'] + args)
-''')
+        self.exe('git', '#!/usr/bin/env bash\nif [[ "$1" == remote && "${2:-}" == get-url ]]; then\n    if [[ -n "${FORK:-}" && "${@: -1}" == origin ]]; then\n        echo \'https://github.com/forker/repo.git\'\n    else\n        echo \'https://github.com/owner/repo.git\'\n    fi\n    exit 0\nfi\nif [[ "${CRASH_GIT:-}" == "$1" ]]; then\n    "$REAL_GIT" "$@"\n    exit 70\nfi\nexec "$REAL_GIT" "$@"\n')
         self.exe('gh', '''#!/usr/bin/env python3
 import json, os, pathlib, subprocess, sys
 args = sys.argv[1:]
@@ -1034,6 +1004,15 @@ server = pathlib.Path(os.environ['SERVER'])
 if args[:2] == ['auth', 'status']: sys.exit(int(os.environ.get('AUTH_RC', '0')))
 if args[:2] == ['repo', 'view']:
     print(json.dumps({'nameWithOwner': args[2], 'defaultBranchRef': {'name': 'main'}}))
+elif args[:2] == ['issue', 'view']:
+    if os.environ.get('LABELS_HANG'):
+        import time
+        time.sleep(5)
+    if os.environ.get('LABELS_FAIL'): sys.exit(1)
+    if os.environ.get('LABELS_BAD'):
+        print('{broken')
+    else:
+        print(json.dumps({'labels': [{'name': name} for name in os.environ.get('ISSUE_LABELS', '').split(',') if name]}))
 elif args[0] == 'api':
     print(json.dumps({'fork': True, 'parent': {'full_name': 'owner/repo'}, 'owner': {'type': 'User'}}))
 elif args[:2] == ['pr', 'list']:
@@ -1089,9 +1068,21 @@ elif args[:2] == ['pr', 'create']:
         return subprocess.check_output([REAL_GIT, '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', *args], cwd=self.repo, env=self.env, stderr=subprocess.PIPE).decode().strip()
 
     def engine(self, action, text='', **env):
-        return subprocess.run(['bash', '-c', '. "$1"; change_pr_engine "$2"', 'test', str(LIB), action],
+        pending = env.pop('FIXTURE_LEAVE_COMMIT_PENDING', False)
+        result = subprocess.run(['bash', '-c', '. "$1"; change_pr_engine "$2"', 'test', str(LIB), action],
                               cwd=self.repo, env=dict(self.env, **env), input=text, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        # Simulate the operator in this disposable fixture. Production never
+        # executes this command; it waits for the user to commit and confirm.
+        if not pending and 'Commit needs your help.' in result.stdout and 'No answer received' in result.stdout:
+            command = result.stdout.split('then run:\n', 1)[1].split('\nReturn here', 1)[0]
+            self.assertIn('git commit --no-gpg-sign', command)
+            self.ok(subprocess.run(['sh', '-c', command], cwd=self.repo, env=self.env,
+                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT))
+            resumed = self.engine(action, **env)
+            resumed.stdout = result.stdout + resumed.stdout
+            return resumed
+        return result
 
     def ok(self, result):
         self.assertEqual(result.returncode, 0, result.stdout)
@@ -1231,6 +1222,8 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('READY\\n
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
         self.ok(result)
         self.assertEqual((self.state / 'state').read_text().strip(), '42:COMPLETE')
+        self.assertIn('Commit needs your help.', result.stdout)
+        self.ok(self.engine('handoff'))  # Simulated user commit, then resume COMPLETE.
         self.assertEqual(len(self.creates()), 1, result.stdout)
         self.assertFalse((self.state / 'issue-closed').exists())
         result = subprocess.run(command, cwd=self.repo, env=env, input='', text=True,
@@ -1239,7 +1232,100 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('READY\\n
         self.assertIn('https://github.com/owner/repo/pull/7', result.stdout)
         self.assertEqual(len(self.creates()), 1)
 
+    def assert_named(self, prefix, slug='fix-cafe'):
+        j = self.journal()
+        self.assertEqual(j['head_branch'], prefix + '/' + slug + '-' + j['owner'][:12])
+        self.assertEqual(self.git('check-ref-format', '--branch', j['head_branch']), j['head_branch'])
+        self.assertEqual(j['phase'], 'created')
+        create = self.creates()[0]
+        self.assertEqual(create[create.index('--head') + 1], 'owner:' + j['head_branch'])
+
+    def test_naming_labels(self):
+        # Rebind between cases so every case exercises fresh resolution.
+        for labels, prefix in [('enhancement', 'feat'), ('bug', 'bug'),
+                               ('documentation', 'doc'), ('', 'uncle'),
+                               ('question', 'uncle'), ('BuG', 'bug'),
+                               ('documentation,bug,enhancement', 'feat'),
+                               ('enhancement,bug,documentation', 'feat'),
+                               ('documentation,bug', 'bug')]:
+            with self.subTest(labels=labels):
+                self.setUp()
+                self.ok(self.publish(ISSUE_LABELS=labels))
+                self.assert_named(prefix)
+                queries = [a for a in self.calls() if a[:2] == ['issue', 'view']]
+                self.assertEqual(queries, [['issue', 'view', '42', '--repo', 'owner/repo', '--json', 'labels']])
+
+    def test_naming_failures(self):
+        for flag in ('LABELS_FAIL', 'LABELS_BAD', 'LABELS_HANG'):
+            with self.subTest(flag=flag):
+                self.setUp()
+                result = self.publish(**{flag: '1', 'STAGEGATE_CLOSE_TIMEOUT': '1'})
+                self.ok(result)
+                self.assertEqual(result.stdout.count('Label lookup failed; using uncle/ prefix'), 1)
+                self.assert_named('uncle')
+
+    def test_naming_lookup_deadline(self):
+        import ast
+        import time
+        source = LIB.read_text().split("<<'PY'", 1)[1].split('\n', 1)[1].split('\nPY\n', 1)[0]
+        tree = ast.parse(source)
+        parts = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
+                 or isinstance(node, ast.FunctionDef) and node.name == 'label_prefix']
+        code = ast.unparse(ast.Module(body=parts, type_ignores=[]))
+        code += "\nprint(label_prefix('owner/repo\\t42\\tgh'))"
+        # Execute the real helper with a hard outer bound, independent of timeout(1).
+        self.exe('timeout', '#!/bin/sh\nexit 99\n')
+        self.exe('gtimeout', '#!/bin/sh\nexit 99\n')
+        start = time.monotonic()
+        result = subprocess.run([sys.executable, '-c', code], cwd=self.repo,
+                                env=dict(self.env, LABELS_HANG='1', STAGEGATE_CLOSE_TIMEOUT='1'),
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=3)
+        self.ok(result)
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertEqual(result.stdout, 'Label lookup failed; using uncle/ prefix\nuncle/\n')
+
+    def test_naming_slug_sources(self):
+        for filename, content, slug, title in [
+            ('CHANGE_REQUEST.md', '## Summary\n\nFix café 日本語\n', 'fix-cafe', 'Fix café 日本語'),
+            ('CHANGE_REQUEST.md', '## Summary\n\n', 'change', 'Completed change'),
+            ('CHANGE_REQUEST.md', '# Header fallback\n', 'header-fallback', 'Completed change'),
+            ('REQUIREMENTS.md', '## Summary\nRequirements only\n', 'requirements-only', 'Completed change'),
+            ('REQUIREMENTS.md', '# Build widgets\n', 'build-widgets', 'Completed change'),
+            ('CHANGE_REQUEST.md', '## Summary\n' + 'A' * 39 + ' ! tail', 'a' * 39, 'A' * 39 + ' ! tail'),
+            ('CHANGE_REQUEST.md', '## Summary\n日本語 !!!\n', 'change', '日本語 !!!'),
+        ]:
+            with self.subTest(content=content):
+                self.setUp()
+                (self.repo / 'CHANGE_REQUEST.md').unlink()
+                (self.repo / filename).write_text(content)
+                self.freeze()
+                self.ok(self.publish())
+                self.assert_named('uncle', slug)
+                create = self.creates()[0]
+                self.assertEqual(create[create.index('--title') + 1], title)
+
+    def test_naming_nondefault(self):
+        self.git('checkout', '-qb', 'existing-feature')
+        self.freeze()
+        self.ok(self.publish(ISSUE_LABELS='bug'))
+        self.assertEqual(self.journal()['head_branch'], 'existing-feature')
+        self.assertFalse([a for a in self.calls() if a[:2] == ['issue', 'view']])
+
+    def test_naming_curl_rejected(self):
+        (self.state / 'origin').write_text('owner/repo\t42\tcurl\n')
+        self.freeze()
+        result = self.publish()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Only a gh-fetched origin', result.stdout)
+        self.assertFalse([a for a in self.calls() if a[:2] == ['issue', 'view']])
+        self.assertEqual(len(self.creates()), 0)
+
     def test_publish_and_resume_without_run_id(self):
+        # A persisted legacy identity must bypass naming on resume.
+        self.assertNotEqual(self.engine('handoff').returncode, 0)
+        legacy = self.journal()
+        legacy['head_branch'] = 'uncle/change-' + legacy['owner'][:12]
+        (self.state / 'pr/journal.json').write_text(json.dumps(legacy))
         self.ok(self.publish())
         j = self.journal()
         self.assertEqual(j['phase'], 'created')
@@ -1373,6 +1459,8 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
         self.ok(approved)
         self.assertIn('Override recorded', approved.stdout)
+        self.assertIn('Commit needs your help.', approved.stdout)
+        self.ok(self.engine('handoff'))
         self.assertEqual(len(self.creates()), 1, approved.stdout)
         self.assertEqual((self.state / 'state').read_text().strip(), '42:COMPLETE')
         self.assertFalse((self.state / 'issue-closed').exists())
@@ -1397,7 +1485,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         self.assertEqual(len(self.creates()), 0)
 
     def test_commit_and_push_crash_recovery(self):
-        self.assertNotEqual(self.publish(CRASH_GIT='commit-tree').returncode, 0)
+        self.assertNotEqual(self.publish(FIXTURE_LEAVE_COMMIT_PENDING=True).returncode, 0)
         self.assertEqual(self.journal()['phase'], 'prepared')
         self.assertNotEqual(self.engine('handoff', CRASH_GIT='push').returncode, 0)
         sha = self.journal()['intended_head']
@@ -1452,6 +1540,8 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         (self.state / 'origin').unlink()
         self.freeze()
         self.ok(self.engine('handoff', 'owner/repo\nCustom title\nSummary\nManual\ny\n'))
+        self.assert_named('uncle')
+        self.assertFalse([a for a in self.calls() if a[:2] == ['issue', 'view']])
         self.assertNotIn('Closes ', (self.root / 'server.body').read_text())
         self.assertEqual(self.creates()[0][self.creates()[0].index('--title') + 1], 'Custom title')
 
@@ -1550,7 +1640,33 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         self.assertEqual(self.git('show', 'HEAD:source.txt'), 'worktree edit')
 
 
-unittest.main()
+# Cases own independent repositories, keys, and fake GitHub servers.
+import io
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+workers = int(os.environ.get('WORKFLOW_TEST_JOBS', '4'))
+if not 1 <= workers <= 8:
+    raise SystemExit('WORKFLOW_TEST_JOBS must be from 1 to 8')
+def run_case(name):
+    output = io.StringIO()
+    started = time.monotonic()
+    result = unittest.TextTestRunner(stream=output).run(HandoffTests(name))
+    return name, time.monotonic() - started, result, output.getvalue()
+started = time.monotonic()
+failures = 0
+names = unittest.defaultTestLoader.getTestCaseNames(HandoffTests)
+print(f'PR handoff: {len(names)} cases, up to {workers} workers', flush=True)
+with ThreadPoolExecutor(max_workers=workers) as pool:
+    for future in as_completed([pool.submit(run_case, name) for name in names]):
+        name, elapsed, result, output = future.result()
+        status = 'PASS' if result.wasSuccessful() else 'FAIL'
+        print(f'{status} {name} ({elapsed:.2f}s)', flush=True)
+        if not result.wasSuccessful():
+            print(output, flush=True)
+            failures += 1
+print(f'PR handoff: {len(names) - failures} passed, {failures} failed '
+      f'in {time.monotonic() - started:.2f}s', flush=True)
+raise SystemExit(bool(failures))
 PY
 pr_rc=$?
 COUNT=$((COUNT + 1))

@@ -10,6 +10,7 @@ import shlex
 import shutil
 import json
 import os
+from pathlib import Path
 import queue
 import re
 import signal
@@ -35,12 +36,14 @@ except ImportError:  # Windows has no curses in the stdlib
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
+from completion_preview import CompletionPreview, STAR_URL
 from chat import Conversation, sanitize
 from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
 from triage_chat import (TriageRequest, parse_reply as parse_triage_reply, compose_prompt as triage_prompt,
                          runner_flags as triage_runner_flags, scrub_env as triage_scrub_env,
                          DIAGNOSIS_TOOLS, EXECUTE_TOOLS)
+from github_issues import IssuePicker, references as issue_references, issue_context
 from self_hosted import settings as home_settings
 from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
 import supervisor as supervision_lib
@@ -122,6 +125,7 @@ STAGES = [
 TRIAGE_CLEAN_EXITS = (0, 130, 143, 137, -9)
 STAGE_SIDE = dict(STAGES)
 CONFIG_STAGES = [name for name, _ in STAGES]
+BUILD_CONFIG_STAGES = [name for name in CONFIG_STAGES if name != "triage"]
 
 # Runners are offered per side, because the two sides are not interchangeable:
 # an agent stage writes code and needs an agent CLI running with write access,
@@ -134,7 +138,15 @@ REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi", "self-hosted"]
 
 # Applied to any stage the operator has not configured.
 DEFAULT_RUNNER = ""
-DEFAULT_EFFORT = "medium"
+DEFAULT_EFFORT = "low"
+
+def default_stage_effort(stage):
+    if stage.startswith("implementation-step-"):
+        stage = "implementation"
+    if stage == "plan-executability":
+        stage = "adversarial-review"
+    return "medium" if stage in ("adversarial-review", "project-plan", "implementation") else DEFAULT_EFFORT
+
 DEFAULT_CLINE_MODEL = "cline-pass/deepseek-v4-pro"
 
 STAGE_FIELDS = ("runner", "effort", "model", "network", "billing", "base_url", "api_key")
@@ -717,37 +729,9 @@ class UncleTUI:
         self.load_config()
         # Bind the homepage composer before the first frame or key event.
         self._ensure_chat()
-        self.chat_focus = 'menu'
-        self.home_menu_open = True
+        self.chat_focus = 'chat'
+        self.home_menu_open = False
         self.sel = 0
-        if self.state == "menu" and self.first_run:
-            # First time in this project root: open the Configure screen so
-            # this project gets set up before anything runs, and create the
-            # workflow dir the scripts will write their state/logs into.
-            self.state = "config"
-            self.config_sel = 0
-            try:
-                os.makedirs(os.path.join(_project_root(), ".uncle", "workflow"),
-                            exist_ok=True)
-            except Exception:
-                pass
-            # Every gate asks you to approve a markdown document. Without a
-            # reader installed, the [v] key falls back to raw text — worth
-            # saying once, on the way to Configure, rather than at the gate.
-            if not self._viewer_command("x"):
-                self.state = "notice"
-                self.notice_lines = [
-                    "Gates ask you to approve a markdown document.",
-                    "uncle can show it to you in this window, with:",
-                    "",
-                    "    brew install glow      (preferred)",
-                    "    brew install bat",
-                    "",
-                    "Neither is installed, so [v] at a gate will show",
-                    "the raw text instead. Install either one and it is",
-                    "picked up on the next run.",
-                ]
-
     # ---- colors (cline's CLI palette) ----
     def _setup_colors(self):
         self.color = {"title": 0, "accent": 0, "good": 0, "sel": 0, "cursor": 0, "warning": curses.A_BOLD, "bad": curses.A_BOLD, "muted": curses.A_DIM}
@@ -783,7 +767,7 @@ class UncleTUI:
 
     # ---- item lists ----
     def menu_items(self):
-        return [w[0] for w in WORKFLOWS] + ["Configure", "Quit", "Chat"]
+        return [w[0] for w in WORKFLOWS] + ["Configure", "Quit"]
 
     def items(self):
         if self.state == "menu":
@@ -834,7 +818,7 @@ class UncleTUI:
         return installed[0] if installed else ""
 
     def stage_effort(self, stage):
-        return self.stage_efforts.get(stage, "") or DEFAULT_EFFORT
+        return self.stage_efforts.get(stage, "") or default_stage_effort(stage)
 
     def stage_network(self, stage):
         """Whether this stage's sandbox may reach the network. Default off."""
@@ -870,16 +854,18 @@ class UncleTUI:
     def stage_fields(self, stage):
         """The fields this stage's popup shows.
 
-        A model and its billing belong to cline alone -- it is the only runner
-        uncle passes a model to. Network belongs to codex alone: it is the only
-        runner that sandboxes a stage, and so the only one where the setting
-        changes anything.
+        Billing belongs to cline alone -- it is the only runner whose model
+        list is bought two ways. Network belongs to codex alone: it is the
+        only runner that sandboxes a stage, and so the only one where the
+        setting changes anything. Every runner takes an effort: claude, kimi,
+        cline, and codex as a reasoning level, self-hosted as the OpenCode
+        model's reasoningEffort option.
         """
         if stage.startswith("@"):
             return ["base_url", "api_key"]
         runner = self.stage_runner(stage)
         if runner == "self-hosted":
-            return ["runner", "model"]
+            return ["runner", "effort", "model"]
         if runner == "cline":
             # Billing sits above model because it decides which models exist.
             return ["runner", "effort", "billing", "model"]
@@ -932,7 +918,7 @@ class UncleTUI:
         if field == "runner":
             return "%s  (default)" % (self.stage_runner(stage) or "No agents installed")
         if field == "effort":
-            return "%s  (default)" % DEFAULT_EFFORT
+            return "%s  (default)" % default_stage_effort(stage)
         if field == "network":
             return "false  (default)"
         if field == "billing":
@@ -978,9 +964,6 @@ class UncleTUI:
             return
         if field == "runner" and value != self.stage_runner(stage):
             self.stage_models.pop(stage, None)
-        if field == "model" and self.stage_runner(stage) == "self-hosted" and value and value not in self.stage_api_keys.get("__opencode_models__", {}):
-            self.notice = "Choose a model from OpenCode self-hosted models."
-            return
         store = {"runner": self.stage_runners,
                  "effort": self.stage_efforts,
                  "model": self.stage_models,
@@ -1026,9 +1009,9 @@ class UncleTUI:
             return ["Auto mode: " + ("on" if getattr(self, "misc", {}).get("auto_mode") == "true" else "off"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set")]
         """One row per stage: the stage, its runner, and what that runner uses."""
-        width = max(len(s) for s in CONFIG_STAGES)
+        width = max(len(s) for s in BUILD_CONFIG_STAGES)
         rows = []
-        for stage in CONFIG_STAGES:
+        for stage in BUILD_CONFIG_STAGES:
             parts = ["Self hosted (OpenCode)" if self.stage_runner(stage) == "self-hosted" else self.stage_runner(stage)]
             model = self.stage_model(stage)
             if model:
@@ -1099,7 +1082,8 @@ class UncleTUI:
             # meaning nothing to the flag it becomes.
             return [("option", v) for v in NETWORK_CHOICES]
         if self.picker_kind == "model" and self.stage_runner(self.picker_target) == "self-hosted":
-            return [("option", name) for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
+            return ([("option", name) for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
+                    + [("custom", "Custom… (type a model id)")])
         rows = []
         for group, entries in model_catalog(self.stage_billing(self.picker_target)):
             rows.append(("header", group))
@@ -1252,8 +1236,7 @@ class UncleTUI:
         self.stage_base_urls = {}
         self.stage_api_keys = read_keys(CONFIG_PATH)
         if not exists:
-            # First time in this project root: no config file yet. Mark it so
-            # the TUI can drop straight into the Configure screen.
+            # Track missing configuration without redirecting away from home.
             self.first_run = True
             self._config_stamp = None
             return self.first_run
@@ -1570,8 +1553,11 @@ class UncleTUI:
                 self.workflow_exit_reported = True
                 self.workflow_exit_code = self.proc.returncode
                 self.steering_channels = {}
-                self.prompt_kind = ''
-                self.chat_focus = 'chat'
+                # EOF handling can open the completion dialog just before
+                # this poll observes process exit. Keep that dialog focused.
+                if getattr(self, 'prompt_kind', '') not in ('support', 'finished'):
+                    self.prompt_kind = ''
+                    self.chat_focus = 'chat'
                 self._ensure_chat()
                 reason = 'Workflow was killed (SIGKILL, exit code 137)' if self.workflow_exit_code in (137, -9) else 'Workflow stopped (exit code %s)' % self.workflow_exit_code
                 message = reason + '. Stage chat disconnected. Press Esc to return to the menu.'
@@ -1590,6 +1576,9 @@ class UncleTUI:
         os.close(fd)
         env = dict(os.environ)
         env.update(self.stage_env())
+        env.pop("UNCLE_NEW_WORKFLOW", None)
+        if getattr(self, "new_workflow_pending", False):
+            env["UNCLE_NEW_WORKFLOW"] = "1"
         env["UNCLE_STATUS_FILE"] = self.status_path
         env["UNCLE_STEERING"] = "1"
         self.steering_channels = {}
@@ -1601,6 +1590,7 @@ class UncleTUI:
         self.workflow_completed = False
         self.workflow_exit_reported = False
         self.support_checked = False
+        self.completion_preview = None
         metrics = os.path.join(_project_root(), ".uncle", "workflow", "metrics")
         self.session_stats = {"active": {}, "live": {}, "records": [], "tick": -1,
                               "seen": set(os.listdir(metrics)) if os.path.isdir(metrics) else set()}
@@ -1632,6 +1622,7 @@ class UncleTUI:
         except BaseException:
             self._end_title()
             raise
+        self.new_workflow_pending = False
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self):
@@ -1676,7 +1667,8 @@ class UncleTUI:
             self._offer_support()
         else:
             self._detect_prompt()
-        return got or before != (self.proc_done, self.prompt_kind)
+        preview_changed = self._poll_completion_preview()
+        return got or preview_changed or before != (self.proc_done, self.prompt_kind)
 
     def _offer_support(self):
         """Offer once per local user, only after this workflow finishes."""
@@ -1689,24 +1681,49 @@ class UncleTUI:
         self.prompt_kind = ""
         if code != 0 or not getattr(self, "workflow_completed", False):
             return
-        base = os.environ.get("XDG_STATE_HOME")
-        if not base or not os.path.isabs(base):
-            base = os.path.join(os.path.expanduser("~"), ".local", "state")
-        marker = os.path.join(base, "uncle", "star-prompt-shown")
+        self.completion_preview = CompletionPreview(_project_root())
+        self.chat_focus = "chat"
+
+    def _poll_completion_preview(self):
+        preview = getattr(self, 'completion_preview', None)
+        if preview is None:
+            return False
+        changed = False
         try:
-            os.makedirs(os.path.dirname(marker), exist_ok=True)
-            # Exclusive creation also prevents simultaneous runs from asking twice.
-            with open(marker, "x") as fh:
-                fh.write("shown\n")
-        except OSError:
-            # Never interrupt completion or show a prompt we cannot remember.
-            return
-        self.prompt_kind = "support"
-        self.chat_focus = "gate"
-        self.prompt_text = (
-            "Your workflow is complete! Support Uncle by adding a star on GitHub: "
-            "https://github.com/unclehq/uncle. "
-            "This popup won't bother you again.")
+            while True:
+                kind, value = preview.events.get_nowait()
+                changed = True
+                if kind == 'output':
+                    self._ensure_chat()
+                    self.home_history.append(('application', sanitize(value)))
+                elif kind == 'done':
+                    self._completion_dialog(value)
+                elif kind == 'terminal':
+                    try:
+                        self._run_in_terminal(value, cwd=preview.root)
+                    finally:
+                        preview.terminal_done.set()
+        except queue.Empty:
+            pass
+        return changed
+
+    def _completion_dialog(self, starred):
+        base = os.environ.get('XDG_STATE_HOME')
+        if not base or not os.path.isabs(base):
+            base = os.path.join(os.path.expanduser('~'), '.local', 'state')
+        marker = os.path.join(base, 'uncle', 'star-prompt-shown')
+        offer = not starred
+        if offer:
+            try:
+                os.makedirs(os.path.dirname(marker), exist_ok=True)
+                with open(marker, 'x') as stream:
+                    stream.write('shown\n')
+            except OSError:
+                offer = False
+        self.prompt_kind = 'support' if offer else 'finished'
+        self.chat_focus = 'gate'
+        self.prompt_text = ('Finished. Support Uncle by adding a star on GitHub: '
+                            + STAR_URL + " This popup won't bother you again.") if offer else 'Finished'
 
     def _absorb_line(self, line):
         # Native chat text is assembled through status events; retain its raw
@@ -1828,7 +1845,7 @@ class UncleTUI:
         self.view_scroll = 0
         self.state = "viewer"
 
-    def _run_in_terminal(self, cmd):
+    def _run_in_terminal(self, cmd, cwd=None):
         """Hand the terminal to an external reader, then take it back.
 
         def_prog_mode saves the curses screen state; endwin restores the
@@ -1841,7 +1858,7 @@ class UncleTUI:
         except curses.error:
             pass
         try:
-            viewer = subprocess.Popen(cmd, shell=True)
+            viewer = subprocess.Popen(cmd, shell=isinstance(cmd, str), cwd=cwd)
             while viewer.poll() is None:
                 self.poll_home_chat()
                 self._poll_workflow()
@@ -1906,7 +1923,9 @@ class UncleTUI:
         if ("PR title [default: ".startswith(plain)
                 or plain.startswith("PR title [default:") and not plain.endswith("]:")):
             return
-        signing_prefix = "Commit signing needs your help. "
+        signing_prefix = next((prefix for prefix in ("Commit signing needs your help. ", "Commit needs your help. ")
+                               if prefix.startswith(plain) or plain.startswith(prefix)),
+                              "Commit signing needs your help. ")
         signing_suffix = " Return here and press ENTER (OK) when finished:"
         if signing_prefix.startswith(plain) or plain.startswith(signing_prefix):
             if not plain.endswith("press ENTER (OK) when finished:"):
@@ -2020,6 +2039,9 @@ class UncleTUI:
         self.prompt_seen = 0
 
     def stop_workflow(self):
+        if getattr(self, "completion_preview", None):
+            self.completion_preview.close()
+            self.completion_preview = None
         if self.proc and self.proc.poll() is None:
             subprocess.run(["bash", os.path.join(ROOT, "scripts", "lib", "terminal-title.sh"),
                             "--stop-tree", str(self.proc.pid), "include-root"], check=True)
@@ -2042,11 +2064,13 @@ class UncleTUI:
             self.chat_choices = []
             self.chat_pick = 0
             self.chat_picker = False
+            self.chat_picker_kind = 'file'
             self.chat_edit = False
             self.chat_focus = 'chat'
             self.home_menu_open = False
             self.home_request = None
             self.home_history = []
+            self.home_issue_context = ''
         self.chat_open = True
 
     def open_chat(self):
@@ -2061,6 +2085,8 @@ class UncleTUI:
 
     def chat_model(self):
         """Follow the live stage for workflow chat; use the first stage at home."""
+        if getattr(self, 'recovery_active', False):
+            return ('triage',) + self._triage_runner()
         if self.state != 'running':
             return self.homepage_model()
         stage = getattr(self, 'status_stage', '')
@@ -2109,11 +2135,38 @@ class UncleTUI:
             host.controller.steering_queued(stage, id, payload)
 
     def send_home_chat(self, message):
-        if self.state == 'running':
+        preview = getattr(self, 'completion_preview', None)
+        if preview and preview.kind == 'command' and preview.process and preview.process.poll() is None:
+            preview.send(message)
+            return
+        if getattr(self, 'recovery_active', False):
+            self._triage_turn('diagnosis', followup=message)
+            return
+        gate_question = (self.state == 'running' and bool(getattr(self, 'prompt_kind', ''))
+                         and self.proc is not None and self.proc.poll() is None)
+        # A channel can outlive its runner while the driver waits for approval.
+        # Gate questions must get a reply, not enter that unconsumed queue.
+        if self.state == 'running' and not gate_question:
             return self.steer_stage(message)
         if self.home_request is not None:
             raise ValueError('A reply is still running. Wait or use /clear to cancel.')
         if not message.strip():
+            return
+        issue_request = re.fullmatch(
+            r'(?:please\s+)?(?:build|implement|start|run|work on)\s+'
+            r'(?:(?P<change>change\s+request)\s+)?'
+            r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+|this\s+)'
+            r'(?P<issue>https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?|#?[1-9][0-9]*)[.!]?',
+            message.strip(), re.IGNORECASE)
+        if issue_request and not gate_question:
+            self.home_history.append(('user', sanitize(message)))
+            # Asked to implement an issue now: select auto mode so the run
+            # answers its own gates and the build page goes straight to work.
+            self._set_field("!misc", "auto_mode", "true")
+            self._home_action({'uncle_action': 'github_issue',
+                               'issue': issue_request['issue'].removeprefix('#'),
+                               'start': True,
+                               'issue_mode': '--change' if issue_request['change'] else ''})
             return
         stage, runner, model, effort = self.chat_model()
         if self.state == 'running' and not stage:
@@ -2122,7 +2175,37 @@ class UncleTUI:
             raise ValueError('Choose a runner in Configure first')
         user_text = self.chat.refs.expand(sanitize(message))
         history = self.home_history + [('user', user_text)]
-        prompt = home_action_prompt(history, _project_root())
+        if gate_question:
+            prompt = ('Answer questions about the pending stage decision. The workflow is paused. '
+                      'Do not approve, reject, run commands, edit files, or emit homepage actions. '
+                      'Only the user can answer the pending dialog. Explain proposed changes; '
+                      'do not claim to have applied them. This is a separate question session '
+                      'using the stage model, not a continuation of the completed runner.\n'
+                      + 'Stage: ' + stage + '\nPending dialog: ' + self.prompt_text + '\n')
+            root = Path(_project_root())
+            candidates = [getattr(self, 'gate_file', ''), 'MANUAL_CHECKLIST.md',
+                          'IMPLEMENTATION_NOTES.md', 'VERIFICATION_REPORT.md', 'FINAL_AUDIT.md',
+                          'CHANGE_PLAN.md', 'UPDATED_PROJECT_PLAN.md']
+            remaining = 55000
+            seen = set()
+            for name in candidates:
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                path = (root / name).resolve()
+                if not path.is_relative_to(root.resolve()) or not path.is_file():
+                    continue
+                with path.open('rb') as source:
+                    content = source.read(min(12000, remaining))
+                remaining -= len(content)
+                prompt += '\nDocument excerpt (' + name + '):\n' + content.decode('utf-8', 'replace') + '\n'
+                if remaining <= 0:
+                    break
+            prompt += '\nConversation:\n' + '\n'.join(role + ': ' + text for role, text in history[-12:])
+        else:
+            prompt = home_action_prompt(history, _project_root())
+        if not issue_references(message):
+            prompt += getattr(self, 'home_issue_context', '')
         if len(prompt.encode('utf-8')) > 100000:
             raise ValueError('Chat context is too large for this runner. Use /clear or smaller attachments.')
         command = [runner_command(runner, REVIEWER), 'exec', '--ephemeral',
@@ -2148,7 +2231,13 @@ class UncleTUI:
                 env['UNCLE_CLINE_MODEL'] = env['UNCLE_CLINE_REVIEWER_MODEL'] = model
         self.chat.send(message)
         self.home_history = history
-        self.home_request = HomeRequest(command, prompt, env)
+        if issue_references(message) and not gate_question:
+            root = _project_root()
+            self.home_request = HomeRequest(command, prompt, env,
+                                            issue_lookup=lambda: issue_context(root, message), cwd=root)
+        else:
+            self.home_request = HomeRequest(command, prompt, env, cwd=_project_root())
+        self.home_request.gate_question = gate_question
 
     def poll_home_chat(self):
         request = getattr(self, 'home_request', None)
@@ -2160,8 +2249,11 @@ class UncleTUI:
             return False
         self.home_request = None
         if kind == 'reply':
+            context = getattr(request, 'issue_context', '')
+            if isinstance(context, str) and context:
+                self.home_issue_context = context
             try:
-                action = parse_home_action(value)
+                action = None if getattr(request, 'gate_question', False) is True else parse_home_action(value)
                 if action is None:
                     self.home_history.append(('assistant', sanitize(value)))
                     self.chat_error = ''
@@ -2183,15 +2275,18 @@ class UncleTUI:
         root = _project_root()
         name = action['uncle_action']
         if name == 'github_issue':
-            if os.path.lexists(os.path.join(root, 'CHANGE_REQUEST.md')):
-                raise ValueError('CHANGE_REQUEST.md already exists. Run it or choose a new project; it was not overwritten.')
             if action['start']:
-                self.issue = action['issue']
-                self.issue_mode = '--change'
                 self.workflow_idx = 1
+                self.issue_mode = action.get('issue_mode', '')
+                self.state = 'issue'
+                self.input_buf = action['issue']
+                self.issue = action['issue']
+                self.sel = 0
+                self.notice = ''
                 self._run()
-                self.home_history.append(('system', 'Opened the GitHub issue change workflow.'))
             else:
+                if os.path.lexists(os.path.join(root, 'CHANGE_REQUEST.md')):
+                    raise ValueError('CHANGE_REQUEST.md already exists. Run it or choose a new project; it was not overwritten.')
                 env = os.environ.copy()
                 env['UNCLE_PROJECT_ROOT'] = root
                 self.home_request = IssueSeedRequest(
@@ -2208,6 +2303,7 @@ class UncleTUI:
                 draft.kind = kind
                 draft.preview = sanitize(action['document'])
                 draft.commit()
+                self.new_workflow_pending = True
                 self.chat.kind, self.chat.preview, self.chat.seed = kind, draft.preview, draft.seed
                 self.home_history.append(('system', 'Created ' + filename + ' from this conversation.'))
                 start = action['start']
@@ -2346,7 +2442,11 @@ class UncleTUI:
         self._triage_init()
         if self.state != 'triage':
             self.triage_return = self.state if self.state in ('running', 'chat', 'menu') else 'chat'
-        self.state = 'triage'
+        self._ensure_chat()
+        self.recovery_active = True
+        self.chat_focus = 'chat'
+        self.home_menu_open = False
+        self.home_history.append(('system', 'Recovery: ask about the failure, /do N to apply a proposal, or /resume to continue.'))
         self.triage_error = ''
         # The first open, and every failure exit after a resume, gets one
         # diagnosis turn on the bundle the driver just wrote. An open on
@@ -2356,6 +2456,7 @@ class UncleTUI:
                 self._triage_turn('diagnosis')
             except (OSError, ValueError) as exc:
                 self.triage_error = sanitize(str(exc))
+                self.chat_error = self.triage_error
 
     def _triage_runner(self):
         return self.stage_runner('triage'), self.stage_model('triage'), self.stage_effort('triage')
@@ -2490,6 +2591,8 @@ class UncleTUI:
             self.triage_tainted = 'Resume refused: ' + ' '.join(summary.get('messages') or ['the guard could not verify the tree.'])
         if notes:
             self.triage_history.append(('system', sanitize(' '.join(notes))))
+        if getattr(self, 'recovery_active', False):
+            self.chat_error = self.triage_error
         return True
 
     def triage_resume(self):
@@ -2624,6 +2727,11 @@ class UncleTUI:
         self.stdscr.refresh()
 
     def chat_display(self):
+        recovery = getattr(self, 'triage_history', [])
+        seen = getattr(self, '_recovery_displayed', 0)
+        for role, text in recovery[seen:]:
+            self.home_history.append(('Recovery' if role == 'master' else 'User' if role == 'operator' else 'System', text))
+        self._recovery_displayed = len(recovery)
         history = getattr(self, 'home_history', [])
         return [str(role).capitalize() + ': ' + text for role, text in history] if history else list(self.chat.messages)
 
@@ -2648,14 +2756,49 @@ class UncleTUI:
                     pass
                 self.status_path = None
 
+    def _issue_suggestions(self, query):
+        self.issue_matches = self.issue_picker.matches(query)
+        self.chat_choices = [f"#{item['number']} {item['title']}" for item in self.issue_matches]
+        self.chat_pick = 0
+
+    def poll_issue_picker(self):
+        picker = getattr(self, 'issue_picker', None)
+        if picker is None or not picker.poll():
+            return False
+        if self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'issue':
+            self._issue_suggestions(self.chat_composer[self.chat_ref_start + 1:])
+        return True
+
     def _chat_suggestions(self):
         match = re.search(r'@(?:"([^"]*)|([^@\s"]*))$', self.chat_composer)
+        issue = re.search(r'(?<!\S)#([^\s#]*)$', self.chat_composer) if match is None else None
+        if issue:
+            refresh = not self.chat_picker or getattr(self, 'chat_picker_kind', 'file') != 'issue'
+            self.chat_picker = True
+            self.chat_picker_kind = 'issue'
+            self.chat_ref_start = issue.start()
+            if not hasattr(self, 'issue_picker'):
+                self.issue_picker = IssuePicker(_project_root())
+            self.issue_picker.load(refresh=refresh)
+            self._issue_suggestions(issue[1])
+            return
+        self.chat_picker_kind = 'file'
         self.chat_picker = bool(match)
         self.chat_ref_start = match.start() if match else len(self.chat_composer)
         self.chat_choices = self.chat.refs.browse(match.group(1) if match.group(1) is not None else match.group(2)) if match else []
         self.chat_pick = 0
 
     def _complete_chat_file(self):
+        if getattr(self, 'chat_picker_kind', 'file') == 'issue':
+            if not self.chat_choices:
+                self.chat_error = self.issue_picker.message or 'No matching open issues.'
+                return
+            item = self.issue_matches[self.chat_pick]
+            self.chat_composer = self.chat_composer[:self.chat_ref_start] + '#' + str(item['number']) + ' '
+            self.chat_choices = []
+            self.chat_picker = False
+            self.chat_error = ''
+            return
         if not self.chat_choices:
             self.chat_error = 'No matching files. Keep typing or press Esc to close.'
             return
@@ -2674,8 +2817,14 @@ class UncleTUI:
         self.chat_error = ''
 
     def _chat_key(self, k):
+        if k == 27 and getattr(self, 'recovery_active', False):
+            self.recovery_active = False
+            self.chat_focus = 'gate' if self.state == 'running' and self.prompt_kind else 'chat'
+            self.chat_error = ''
+            return True
         if k == 27 and self.state == 'running' and getattr(self, 'workflow_exit_reported', False):
             self.state = 'menu'
+            self.recovery_active = False
             self.chat_focus = 'chat'
             self.chat_error = ''
             return True
@@ -2696,7 +2845,7 @@ class UncleTUI:
                                          (1 if k == curses.KEY_DOWN else -1))
                 return True
             return False  # Gate keys use the same approval handler as /approve.
-        if not self.chat_edit and self._chat_command(k):
+        if not self.chat_edit and not (self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'issue') and self._chat_command(k):
             return True
         try:
             if k == 27:
@@ -2715,6 +2864,7 @@ class UncleTUI:
             if k == 16 and not self.chat_edit:  # Ctrl-P
                 self.chat_picker = True
                 self.chat_ref_start = len(self.chat_composer)
+                self.chat_picker_kind = 'file'
                 self.chat_choices = self.chat.refs.browse('')
                 self.chat_pick = 0
                 return True
@@ -2725,7 +2875,7 @@ class UncleTUI:
                 if self.chat_choices:
                     self._complete_chat_file()
                 elif self.chat_picker:
-                    self.chat_error = 'No matching files. Keep typing or press Esc to close.'
+                    self.chat_error = (self.issue_picker.message or 'No matching open issues.') if getattr(self, 'chat_picker_kind', 'file') == 'issue' else 'No matching files. Keep typing or press Esc to close.'
                 elif self.chat_edit:
                     self.chat_composer += '\n'
                 else:
@@ -2767,7 +2917,7 @@ class UncleTUI:
                     raise ValueError('Transcript exceeds 1 MiB limit')
                 self.chat_composer += chr(k)
             if not self.chat_edit:
-                if self.chat_picker and not self.chat_composer[self.chat_ref_start:].startswith('@'):
+                if self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'file' and not self.chat_composer[self.chat_ref_start:].startswith('@'):
                     self.chat_choices = self.chat.refs.browse(self.chat_composer[self.chat_ref_start:])
                     self.chat_pick = 0
                 else:
@@ -2791,9 +2941,10 @@ class UncleTUI:
         slots = room - 1
         start = max(0, pick - slots + 1)
         entries = choices[start:start + slots]
-        rows = ['Commands  ↑↓ select · Enter run' if slash else 'Files  ↑↓ select · Tab complete · Enter attach · Esc close']
+        is_issue = getattr(self, 'chat_picker_kind', 'file') == 'issue'
+        rows = ['Commands  ↑↓ select · Enter run' if slash else 'Open issues  ↑↓ select · Tab/Enter insert · Esc close' if is_issue else 'Files  ↑↓ select · Tab complete · Enter attach · Esc close']
         rows += [('› ' if start + i == pick else '  ') + name
-                 for i, name in enumerate(entries)] if entries else ['No matching files']
+                 for i, name in enumerate(entries)] if entries else [(self.issue_picker.message or 'No matching open issues.') if is_issue else 'No matching files']
         y = composer_row - len(rows)
         for i, line in enumerate(rows):
             attr = curses.A_REVERSE if i > 0 and entries and start + i - 1 == pick else curses.A_NORMAL
@@ -2890,12 +3041,20 @@ class UncleTUI:
         self.stdscr.erase()
         if self.state in ("running", "viewer"):
             panel = min(34, w // 3) if w >= 60 else 0
-            chat_height = min(8, max(0, h - 3)) if self.state == 'running' and getattr(self, 'chat_open', False) else 0
+            chat_height = 0
+            chat_width = 0
+            if self.state == 'running' and getattr(self, 'chat_open', False):
+                # Left-justified, as wide as the output, and a row taller per
+                # wrap — every row it takes comes from the build output.
+                chat_width = w - panel
+                text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+                extra = min(len(self._wrap_input(text, max(8, chat_width - 2))), 6) - 1 if text else 0
+                chat_height = min(6 + extra, max(0, h - 3))
+            # The chat panel sits at the very bottom, in the row the old
+            # status bar used; the output takes everything above it.
             self._draw_running(h - chat_height, w - panel)
             if chat_height:
-                chat_width = min(76, w - panel)
-                chat_left = max(0, (w - panel - chat_width) // 2)
-                self._draw_chat_panel(h - chat_height - 1, h - 1, chat_left, chat_width)
+                self._draw_chat_panel(h - chat_height, h, 0, chat_width)
             if panel:
                 self._draw_session_stats(h, w, panel)
         elif self.state == "notice":
@@ -2907,8 +3066,8 @@ class UncleTUI:
                 left = LOGO_W + 2 if logo_fits else 0
                 top = len(self.menu_items()) + (1 if logo_fits else 3)
                 self._draw_chat_panel(top, h - 1, left, w - left)
-        self._draw_status(h, w)
         self.stdscr.refresh()
+        self._paint_support_link()
 
     def _homepage_key(self, k):
         if k == 16:  # Ctrl-P: the homepage command menu.
@@ -3017,14 +3176,20 @@ class UncleTUI:
                 self.chat_composer = ''
                 self.chat_picker = True
                 self.chat_ref_start = 0
+                self.chat_picker_kind = 'file'
                 self.chat_choices = self.chat.refs.browse('')
                 self.chat_pick = 0
             elif command == '/clear':
+                if getattr(self, 'triage_request', None):
+                    self.triage_request.cancel()
+                self.recovery_active = False
+                self._recovery_displayed = len(getattr(self, 'triage_history', []))
                 if self.home_request:
                     self.home_request.cancel()
                     self.home_request = None
                 self.chat_picker = False
                 self.home_history.clear()
+                self.home_issue_context = ''
                 self.chat.messages.clear()
                 self.chat_composer = ''
                 self.chat_error = ''
@@ -3041,20 +3206,34 @@ class UncleTUI:
         history = self.chat_display()
         if self.chat.preview:
             history += ['Preview: ', self.chat.preview]
-        menu_width = min(24, max(1, w - 2))
         width = max(1, min(76, w - 4))
         left = max(0, (w - width) // 2)
         compact = h < len(LOGO) + 12
         footer_rows = 8 if compact else 12
-        logo_fits = w >= LOGO_W + 4 and h >= len(LOGO) + footer_rows
+        # The menu is a bar along the very top; Ctrl-P/Tab only change focus.
+        focused = self.chat_focus == 'menu'
+        bar = []
+        x = 0
+        bar_y = 0
+        for i, label in enumerate(items):
+            selected = focused and i == self.sel
+            text = ('› ' if selected else '') + label
+            if x:
+                if x + 3 + len(text) > w - 1:
+                    bar_y += 1
+                    x = 0
+                else:
+                    text = '   ' + text
+            bar.append((bar_y, x, text, selected))
+            x += len(text)
+        # The decorative logo yields its rows to the bar before the prompt does.
+        logo_fits = w >= LOGO_W + 4 and h >= len(LOGO) + footer_rows + bar_y + 1
         logo = LOGO if logo_fits and not history else []
-        body_rows = max(len(LOGO) if logo_fits else 0, len(items))
+        body_rows = len(LOGO) if logo_fits else 0
         if h < 18:
             body_rows = 0
-        top = max(0, (h - body_rows - footer_rows) // 2)
+        top = max(bar_y + 1, (h - body_rows - footer_rows) // 2)
         logo_left = left + max(0, (width - LOGO_W) // 2)
-        menu_left = logo_left + LOGO_W + 2 if logo_fits else max(0, (w - menu_width) // 2)
-        menu_top = top
         if logo:
             for i, line in enumerate(logo):
                 try:
@@ -3072,65 +3251,104 @@ class UncleTUI:
                 pass
         if history:
             lines = []
-            history_width = max(1, min(width, menu_left - left - 2)) if logo_fits else width
             for line in '\n'.join(history)[-max(1, width * body_rows * 2):].splitlines():
-                lines.extend(textwrap.wrap(line, history_width) or [''])
-            room = max(0, body_rows - len(items) - 1)
+                lines.extend(textwrap.wrap(line, width) or [''])
+            room = max(0, body_rows - 1)
             for i, line in enumerate(lines[-room:] if room else []):
-                put(top + len(items) + 1 + i, line, color.get('accent', 0))
+                put(top + 1 + i, line, color.get('accent', 0))
         row = top + body_rows
         self._draw_chat_composer(row, h, w, left, width, compact)
-        # The menu stays visible; Ctrl-P/Tab only change keyboard focus.
-        focused = self.chat_focus == 'menu'
-        for i, label in enumerate(items, 1):
-            selected = focused and i > 0 and i - 1 == self.sel
-            text = label if i == 0 else ('› ' if selected else '  ') + label
-            if menu_top + i < h and menu_left < w - 1:
-                try:
-                    self.stdscr.addnstr(menu_top + i, menu_left, text, min(menu_width, w - menu_left - 1),
-                        color.get('sel', curses.A_REVERSE) if selected else color.get('title' if i == 0 else 'accent', 0))
-                except curses.error:
-                    pass
+        for y, x, text, selected in bar:
+            try:
+                self.stdscr.addnstr(y, x, text, min(len(text), max(0, w - x - 1)),
+                                    color.get('sel', curses.A_REVERSE) if selected else color.get('accent', 0))
+            except curses.error:
+                pass
 
+
+    @staticmethod
+    def _wrap_input(text, width):
+        # Wrap on words but keep every typed space: the cursor position is
+        # derived from the wrapped text, so dropping whitespace stalls it.
+        chunks, current = [], ''
+        for word in text.split(' '):
+            candidate = word if not current else current + ' ' + word
+            while len(candidate) > width:
+                if current:
+                    chunks.append(current)
+                    current, candidate = '', word
+                else:
+                    chunks.append(candidate[:width])
+                    candidate = candidate[width:]
+            current = candidate
+        if text:
+            chunks.append(current)
+        return chunks
 
     def _draw_chat_composer(self, row, h, w, left, width, compact=True):
         """Shared homepage and build chat appearance."""
         first_row = row
-        if compact and h - row < 8:
-            row -= 1  # Hide the greeting first on short terminals.
+        build = self.state == 'running'
+        if build and compact:
+            # No greeting on the build page; the build output gets the row.
+            row -= 1
+            greeting = False
+        else:
+            greeting = True
+            if compact and h - row < 8:
+                row -= 1  # Hide the greeting first on short terminals.
+                greeting = False
         color = getattr(self, 'color', {})
-        def put(y, text, attr=0, centered=False):
+        def put(y, text, attr=0, centered=False, right=False):
             if not first_row <= y < h:
                 return
             text = text[:width]
-            x = left + max(0, (width - len(text)) // 2) if centered else left
+            x = left + max(0, width - len(text)) if right else left + max(0, (width - len(text)) // 2) if centered else left
             try:
                 self.stdscr.addnstr(y, x, text, min(width, max(0, w - x - 1)), attr)
             except curses.error:
                 pass
-        put(row + (0 if compact else 1), 'What can uncle do for you?', color.get('title', 0) | curses.A_BOLD, True)
-        put(row + (1 if compact else 3), ('/ commands   @ file mentions   Ctrl-P menu  Tab to chat' if width >= 52 else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 34 else '@ files  Ctrl-P menu Tab chat' if width >= 28 else 'Ctrl-P menu'), color.get('muted', curses.A_DIM), True)
+        if greeting:
+            put(row + (0 if compact else 1), 'What can uncle do for you?', color.get('title', 0) | curses.A_BOLD, True)
+        put(row + (1 if compact else 3), ('/ commands   @ files   # issues   Ctrl-P menu  Tab to chat' if width >= 60 else '/ cmds  @ files  # issues  Ctrl-P menu  Tab chat' if width >= 52 else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 34 else '@ files  Ctrl-P menu Tab chat' if width >= 28 else 'Ctrl-P menu'), color.get('muted', curses.A_DIM), not build)
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
         text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
-        visible_text = text[-max(1, width - 3):]
-        placeholder = 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
-        put(row + (3 if compact else 6), '› ' + (visible_text if text else placeholder),
-            color.get('accent', 0) if text else color.get('muted', curses.A_DIM))
-        put(row + (3 if compact else 6), '›', color.get('warning', curses.A_BOLD))
+        placeholder = 'Ask about the failure · /do N · /resume' if getattr(self, 'recovery_active', False) else 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
+        if self.state == 'running' and getattr(self, 'prompt_kind', '') and self.chat_focus == 'chat':
+            placeholder = 'Ask a question · Tab returns to the pending dialog'
+        composer_row = row + (3 if compact else 6)
+        wrap_width = max(8, width - 2)
+        # The composer grows as the input wraps; long pastes scroll to the tail.
+        chunks = self._wrap_input(text, wrap_width)
+        chunks = chunks[-max(1, min(6, h - composer_row - 3)):]
+        extra = len(chunks) - 1 if text else 0
+        if text:
+            for i, chunk in enumerate(chunks):
+                put(composer_row + i, ('› ' if i == 0 else '  ') + chunk, color.get('accent', 0))
+        else:
+            put(composer_row, '› ' + placeholder, color.get('muted', curses.A_DIM))
+        put(composer_row, '›', color.get('warning', curses.A_BOLD))
         if self.chat_focus == 'chat' and (self.state != 'menu' or not getattr(self, 'home_menu_open', False)):
-            cursor_x = left + 2 + (len(visible_text) if text else 0)
-            if row + (3 if compact else 6) < h and cursor_x < w - 1:
+            cursor_y = composer_row + extra
+            cursor_x = left + 2 + (len(chunks[-1]) if chunks else 0)
+            if cursor_y < h and cursor_x < w - 1:
                 try:
-                    self.stdscr.addnstr(row + (3 if compact else 6), cursor_x, ' ' if text else placeholder[0], 1,
+                    self.stdscr.addnstr(cursor_y, min(cursor_x, left + width - 1), ' ' if text else placeholder[0], 1,
                                        color.get('warning', 0) | curses.A_REVERSE)
                 except curses.error:
                     pass
-        put(row + (4 if compact else 7), '─' * width, color.get('muted', curses.A_DIM))
+        put(composer_row + 1 + extra, '─' * width, color.get('muted', curses.A_DIM))
         model_label = 'Configure a model'
         if hasattr(self, 'stage_runners'):
             _, runner, model, effort = self.chat_model()
             model_label = (model or runner or model_label) + ' (' + effort + ')'
-        put(row + (5 if compact else 9), model_label + ('  ·  Workflow stopped' if self.state == 'running' and getattr(self, 'workflow_exit_reported', False) else '  ·  Thinking…' if getattr(self, 'home_request', None) else '  ·  Chat ready'), color.get('muted', curses.A_DIM))
+        stage_status = ''
+        if build and getattr(self, 'status_stage', ''):
+            stage_status = self.status_stage
+            if getattr(self, 'status_stage_index', 0) and getattr(self, 'status_stage_total', 0):
+                stage_status += ' (%d/%d)' % (self.status_stage_index, self.status_stage_total)
+            stage_status += '  ·  '
+        model_status = stage_status + model_label + ('  ·  Recovering…' if getattr(self, 'triage_request', None) else '  ·  Recovery ready' if getattr(self, 'recovery_active', False) else '  ·  Workflow stopped' if self.state == 'running' and getattr(self, 'workflow_exit_reported', False) else '  ·  Thinking…' if getattr(self, 'home_request', None) else '  ·  Chat ready')
         project = os.path.basename(_project_root()) or _project_root()
         try:
             with open(os.path.join(_project_root(), '.git', 'HEAD')) as source:
@@ -3139,18 +3357,22 @@ class UncleTUI:
         except OSError:
             pass
         auto = getattr(self, 'misc', {}).get('auto_mode') == 'true'
-        put(row + (6 if compact else 10), project + '  ·  ' + ('Auto mode on' if auto else 'Manual approvals'),
-            color.get('good', 0) if auto else color.get('accent', 0))
+        project_status = project + '  ·  ' + ('Auto mode on' if auto else 'Manual approvals')
+        status_row = composer_row + extra + (2 if build or compact else 3)
+        right_width = min(len(project_status), max(1, width - 18))
+        put(status_row, model_status[:max(0, width - right_width - 2)], color.get('muted', curses.A_DIM))
+        put(status_row, project_status[:right_width], color.get('good', 0) if auto else color.get('accent', 0), right=True)
+        feedback_row = status_row + 1
         if self.chat_error:
-            put(row + (7 if compact else 11), self.chat_error, color.get('warning', curses.A_BOLD))
+            put(feedback_row, self.chat_error, color.get('warning', curses.A_BOLD))
         elif self.chat_choices:
-            put(row + (7 if compact else 11), 'File: ' + self.chat_choices[self.chat_pick], color.get('accent', 0))
+            put(feedback_row, 'File: ' + self.chat_choices[self.chat_pick], color.get('accent', 0))
         elif self.chat_composer.startswith('/'):
-            put(row + (7 if compact else 11), '/configure /settings /file /quit /issue # /requirements /change /approve /clear', color.get('muted', curses.A_DIM))
+            put(feedback_row, '/configure /settings /file /quit /issue # /requirements /change /approve /clear', color.get('muted', curses.A_DIM))
 
-        self._draw_file_picker(row + (3 if compact else 6), left, width)
+        self._draw_file_picker(composer_row, left, width)
     def _draw_chat_panel(self, top, bottom, left, width):
-        """Keep the homepage composer centered below the build output."""
+        """The chat composer below the content area, positioned by the caller."""
         if bottom - top < 2 or width < 4:
             return
         _, screen_width = self.stdscr.getmaxyx()
@@ -3363,7 +3585,7 @@ class UncleTUI:
             group["tokens"].append(event.get("total_tokens"))
             group["costs"].append(self._live_cost(event) if event else (None, False))
             group["attempts"] += 1
-        lines = ["EACH STAGE", "Cost of usage so far", ""]
+        lines = ["STAGE", "Cost of usage so far", ""]
         tokens, costs = [], []
         self._panel_stage_styles = {}
         for stage, group in sorted(groups.items(), key=lambda item: item[1]["started"]):
@@ -3390,7 +3612,7 @@ class UncleTUI:
             costs.extend(group["costs"])
         if not groups:
             lines += ["Waiting for stage…", ""]
-        lines += ["SESSION TOTALS",
+        lines += ["TOTALS",
                   "Time   " + duration(sum(group["seconds"] for group in groups.values())),
                   "Tokens " + subtotal(tokens, count),
                   "Cost   " + cost_subtotal(costs), "Reported + projected"]
@@ -3401,7 +3623,7 @@ class UncleTUI:
         stage_style = getattr(self, "_panel_stage_styles", {}).get(line)
         if stage_style:
             return palette.get(stage_style, 0)
-        if line in ("EACH STAGE", "SESSION TOTALS"):
+        if line in ("STAGE", "TOTALS"):
             return palette.get("title", 0) | curses.A_BOLD
         if "Unavailable" in line or "(partial)" in line or line.startswith("Waiting"):
             return palette.get("warning", 0)
@@ -3433,10 +3655,6 @@ class UncleTUI:
                 self.stdscr.addnstr(y, left + 2, line, panel - 3, self._session_panel_attr(line))
             except curses.error:
                 pass
-        try:
-            self.stdscr.addnstr(h - 2, left + 2, r"[ ] stages; \ follow", panel - 3, getattr(self, "color", {}).get("muted", curses.A_DIM))
-        except curses.error:
-            pass
 
     def _title(self):
         if self.state == "picker":
@@ -3456,6 +3674,8 @@ class UncleTUI:
         if self.state == "stage":
             if getattr(self, "notice", ""):
                 return self.notice
+            if self.stage_target == "triage":
+                return "Recovery model — Enter: change, d: default, q back"
             if self.stage_target.startswith("@"):
                 return "OpenCode connection — Enter: edit, q back"
             return "%s — Enter: change, a: use OpenCode for all stages, d: default, q back" % self.stage_target
@@ -3640,7 +3860,7 @@ class UncleTUI:
                     except curses.error:
                         pass
                     row += 1
-            if self.state in ("config", "stage"):
+            if self.state == "config" and getattr(self, "config_section", "") == "stages":
                 self._draw_config_desc(top, row, h, w, cx)
         elif self.state == "picker":
             self._draw_picker(h, w, cx, row)
@@ -3695,6 +3915,17 @@ class UncleTUI:
         gets the middle of the screen rather than one more line of scrollback.
         """
         lines = self._wrap(self.prompt_text, max(20, min(72, w - 12)))
+        support_url = ""
+        if self.prompt_kind == "support":
+            # The URL gets its own line so one OSC 8 span covers all of it and
+            # the narrow-terminal padding below can keep every character visible.
+            words = self.prompt_text.split()
+            support_url = next((t for t in words if t.startswith("https://")), "")
+            if support_url:
+                at = words.index(support_url)
+                width = max(20, min(72, w - 12))
+                lines = (self._wrap(" ".join(words[:at]), width) + [support_url]
+                         + self._wrap(" ".join(words[at + 1:]), width))
         if self.prompt_kind == "confirm":
             footer = "[y] approve      [n] decline"
             if self.gate_file:
@@ -3703,14 +3934,19 @@ class UncleTUI:
                 footer = "[y] Ignore  [n] Keep blocking  [v] audit  [↑↓] scroll"
         elif self.prompt_kind == "audit":
             footer = "[s] Skip  [r] Human reviewed — OK  [n] Keep blocking"
+        elif self.prompt_kind == "finished":
+            footer = "[Enter/Esc] dismiss"
         elif self.prompt_kind == "support":
             footer = "[s] open GitHub to star      [Enter/Esc] dismiss"
         elif self.prompt_kind == "enter":
             footer = "[Enter] continue      [Esc] decline"
-            if self.prompt_text.startswith("Commit signing needs your help."):
+            if self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help.")):
                 footer = "[c] Copy command  [Enter] resume  [Esc] cancel"
         else:
             footer = "type an answer, [Enter] send, [Esc] cancel"
+        footer += ('   Chat focused · [Tab] return to dialog'
+                   if getattr(self, 'chat_focus', 'gate') == 'chat'
+                   else '   [Tab] ask in chat')
         body = list(lines)
         if self.prompt_text.startswith("Audit finding "):
             visible = max(1, h - 10)
@@ -3718,7 +3954,7 @@ class UncleTUI:
             body = lines[self.prompt_scroll:self.prompt_scroll + visible]
         if self.prompt_kind == "input":
             body += ["", "> " + self.prompt_buf + "\u2588"]
-        if self.prompt_text.startswith("Commit signing needs your help."):
+        if self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help.")):
             width = max(1, w - 10)
             import textwrap
             lines = [line for paragraph in self.prompt_text.splitlines()
@@ -3733,13 +3969,16 @@ class UncleTUI:
 
         box_w = min(w - 4, max(len(l) for l in body + [footer]) + 6)
         box_w = (min(w - 2, max(box_w, min(30, w - 2)))
-                 if self.prompt_text.startswith("Commit signing needs your help.") else max(box_w, 30))
+                 if self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help.")) else max(box_w, 30))
+        if support_url:
+            # 43 visible URL characters need a 48-wide box at 1-column padding.
+            box_w = min(w - 2, max(box_w, len(support_url) + 5))
         box_h = len(body) + 4
         top = max(0, (h - box_h) // 2)
         left = max(0, (w - box_w) // 2)
-        title = {"confirm": " approve ", "enter": " review ", "input": " input ", "support": " support Uncle "}.get(
+        title = {"confirm": " approve ", "enter": " review ", "input": " input ", "support": " support Uncle ", "finished": " Finished "}.get(
             self.prompt_kind, " uncle ")
-        if self.prompt_text.startswith("Commit signing needs your help."):
+        if self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help.")):
             title = " signed commit required "
         if self.prompt_text.startswith("Audit finding "):
             title = " blocking audit finding "
@@ -3752,81 +3991,50 @@ class UncleTUI:
             self.stdscr.addnstr(top + box_h - 1, left, "\u2514" + "\u2500" * (box_w - 2) + "\u2518", box_w, border)
         except curses.error:
             pass
+        self.support_link = None
         for i, line in enumerate(body):
             attr = self.color["accent"]
+            col, width = left + 3, box_w - 6
             if line is body[-1]:
                 attr = self.color["sel"]
             elif self.prompt_kind == "input" and line.startswith("> "):
                 attr = self.color["cursor"]
+            elif support_url and line == support_url:
+                col, width = left + 2, box_w - 4
+                self.support_link = (top + 2 + i, col, support_url)
             try:
-                self.stdscr.addnstr(top + 2 + i, left + 3, line, box_w - 6, attr)
+                self.stdscr.addnstr(top + 2 + i, col, line, width, attr)
             except curses.error:
                 pass
 
-    def _draw_status(self, h, w):
-        if self.state == "viewer":
+    def _paint_support_link(self):
+        """Wrap the support URL already on screen in an OSC 8 hyperlink.
+
+        curses has no hyperlink attribute, so after it refreshes we rewrite
+        the same cells raw with the link open/close sequences around them,
+        then restore the cursor so curses' idea of it stays true.
+        """
+        link = getattr(self, "support_link", None)
+        if not link or self.prompt_kind != "support":
             return
-        if self.state == "running":
-            model = self.status_model or "—"
-            if getattr(self, "workflow_exit_reported", False):
-                mode = "Stopped (exit %s)" % self.workflow_exit_code
-                bar_attr = self.color.get("warning", 0)
-            elif self.prompt_kind:
-                mode = "Waiting for you"
-                bar_attr = self.color["sel"]
-            elif self.status_mode == "act":
-                mode = "Act"
-                bar_attr = self.color["good"]
-            elif self.status_mode in ("plan", "review"):
-                mode = "Review" if self.status_mode == "review" else "Plan"
-                bar_attr = self.color["accent"]
-            else:
-                mode = "—"
-                bar_attr = 0
-            stage = "stage: %s" % (self.status_stage or "—")
-            if self.status_stage_index and self.status_stage_total:
-                stage = "stage: %s (%d/%d)" % (
-                    self.status_stage, self.status_stage_index, self.status_stage_total)
-        else:
-            model = "—"
-            mode = "—"
-            bar_attr = 0
-            stage = ""
-        runner = self.status_runner or "—"
-        effort = "—"
-        if self.state == "running" and self.status_stage:
-            effort = (getattr(self, "status_effort", "") or
-                      getattr(self, "stage_efforts", {}).get(self.status_stage) or DEFAULT_EFFORT)
-        parts = " runner: %s   model: %s   effort: %s   mode: %s " % (runner, model, effort, mode)
-        if stage:
-            parts += "  %s" % stage
-        text = parts
-        issue = ""
-        if self.state == "running":
-            if self.workflow_idx == 1:
-                issue = self.issue
-            elif self.workflow_idx == 2:
-                issue = getattr(self, "direct_issue", "")
-        if issue:
-            import re
-            issue_match = re.match(
-                r"^https?://github\.com/[^/]+/[^/]+/issues/([0-9]+)", issue)
-            if issue_match is None:
-                issue_match = re.fullmatch(r"([0-9]+)", issue)
-            if issue_match:
-                label = "change request %s" % issue_match.group(1)
-                padding = w - 1 - len(parts) - len(label)
-                if padding >= 1:
-                    text += " " * padding + label
+        y, x, url = link
+        # DECSC/DECRC bracket the write so cursor and SGR state return intact.
+        seq = ("\x1b7\x1b[%d;%dH\x1b[4m\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\\x1b8"
+               % (y + 1, x + 1, url, url)).encode()
         try:
-            self.stdscr.attrset(bar_attr | curses.A_REVERSE)
-            self.stdscr.addnstr(h - 1, 0, text.ljust(w)[: w - 1], w - 1)
-            self.stdscr.attrset(0)
-        except curses.error:
-            self.stdscr.attrset(0)
+            os.write(sys.stdout.fileno(), seq)
+        except (OSError, ValueError):
+            pass
 
     # ---- input ----
     def handle_key(self, k):
+        preview = getattr(self, 'completion_preview', None)
+        if (k == 27 and self.state == 'running' and preview
+                and not getattr(self, 'prompt_kind', '')
+                and not getattr(self, 'chat_picker', False)
+                and preview.process and preview.process.poll() is None):
+            preview.close()
+            return
         if self.state == 'triage':
             self._triage_key(k)
             return
@@ -3846,7 +4054,7 @@ class UncleTUI:
             if self._chat_key(k):
                 return
         if (self.state == "running" and getattr(self, "prompt_kind", "") == "enter"
-                and self.prompt_text.startswith("Commit signing needs your help.")):
+                and self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help."))):
             if k in (ord("c"), ord("C")) and getattr(self, "signing_command", ""):
                 self._copy_signing_command()
                 return
@@ -3858,12 +4066,12 @@ class UncleTUI:
             if k in (curses.KEY_UP, curses.KEY_DOWN):
                 self.prompt_scroll = max(0, self.prompt_scroll + (1 if k == curses.KEY_DOWN else -1))
                 return
-        if self.state == "running" and getattr(self, "prompt_kind", "") == "support":
-            if k in (ord("s"), ord("S")):
+        if self.state == "running" and getattr(self, "prompt_kind", "") in ("support", "finished"):
+            if self.prompt_kind == "support" and k in (ord("s"), ord("S")):
                 self.prompt_kind = ""
                 self.chat_focus = "chat"
                 threading.Thread(target=webbrowser.open,
-                                 args=("https://github.com/unclehq/uncle",),
+                                 args=(STAR_URL,),
                                  daemon=True).start()
             elif k in (10, 13, 27, ord("q"), ord("Q")):
                 self.prompt_kind = ""
@@ -4018,9 +4226,13 @@ class UncleTUI:
             return
 
         if self.state in ("menu", "issue_mode"):
-            if k == curses.KEY_UP or k in (ord("k"), ord("K")):
+            # The main menu is a horizontal bar, so left/right move along it.
+            side = self.state == "menu"
+            if k == curses.KEY_UP or k in (ord("k"), ord("K")) \
+                    or (side and k in (curses.KEY_LEFT, ord("h"), ord("H"))):
                 self.sel = (self.sel - 1) % len(self.items())
-            elif k == curses.KEY_DOWN or k in (ord("j"), ord("J")):
+            elif k == curses.KEY_DOWN or k in (ord("j"), ord("J")) \
+                    or (side and k in (curses.KEY_RIGHT, ord("l"), ord("L"))):
                 self.sel = (self.sel + 1) % len(self.items())
             elif k in (10, 13):
                 self._confirm()
@@ -4078,9 +4290,6 @@ class UncleTUI:
 
     def _confirm(self):
         if self.state == "menu":
-            if self.sel == len(WORKFLOWS) + 2:
-                self.open_chat()
-                return
             if self.sel == len(WORKFLOWS) + 1:
                 self._quit()
                 return
@@ -4147,6 +4356,9 @@ class UncleTUI:
 
     def _run(self):
         self._ensure_chat()
+        if getattr(self, 'triage_request', None) is not None:
+            self.chat_error = 'Wait for recovery to finish or use /clear to cancel before starting a workflow.'
+            return
         if self.home_request is not None:
             self.chat_error = 'Wait for the current chat request or cancel it with /clear before starting a workflow.'
             return
@@ -4161,10 +4373,13 @@ class UncleTUI:
         self.direct_issue = ""
         if self.workflow_idx == 2:
             self.direct_issue = _direct_origin_issue()
+        self.recovery_active = False
         self.state = "running"
         self.start_workflow()
 
     def _quit(self):
+        if getattr(self, "completion_preview", None):
+            self.completion_preview.close()
         self.state = "quit"
 
     # ---- main loop ----
@@ -4201,6 +4416,7 @@ class UncleTUI:
         while self.state != "quit":
             dirty = self.poll_home_chat() or dirty
             dirty = self.poll_triage() or dirty
+            dirty = self.poll_issue_picker() or dirty
             self._poll_workflow()
             dirty = self.poll_supervision() or dirty
             dirty = self.poll_status() or dirty

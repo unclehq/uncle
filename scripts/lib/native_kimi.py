@@ -8,6 +8,7 @@ import subprocess
 import time
 import tomllib
 import urllib.request
+from process_tree import timed_popen
 from process_tree import launch_command, group_options
 
 
@@ -16,7 +17,7 @@ def run(stage, directory):
         sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
     log_path=Path(directory)/'server.log'
     with log_path.open('w') as log:
-        stage.child=subprocess.Popen(launch_command([os.environ.get('WORKFLOW_KIMI_CMD','kimi'),
+        stage.child=timed_popen(launch_command([os.environ.get('WORKFLOW_KIMI_CMD','kimi'),
             'web','--no-open','--host','127.0.0.1','--port',str(port)]),env=stage.env,
             stdout=log,stderr=log,**group_options())
     token=None
@@ -82,6 +83,7 @@ def run(stage, directory):
         stage.pending[id]=True
         stage.ack({'id':id,'result':{}})
     seen={}
+    timing_seen={}
     deadline=time.monotonic()+int(os.environ.get('WORKFLOW_NATIVE_STAGE_SECONDS','3600'))
     while time.monotonic()<deadline:
         stage.incoming(steer)
@@ -93,6 +95,10 @@ def run(stage, directory):
                      u.get('total_cost_usd'),inclusive=False)
         # Snapshot messages are newest first; publish in chronological order.
         for msg in reversed(snapshot.get('messages',{}).get('items',[])):
+            fingerprint=json.dumps(msg,sort_keys=True)
+            if timing_seen.get(msg['id']) != fingerprint:
+                stage.timing.observe({'type':msg.get('role'), 'message':msg})
+                timing_seen[msg['id']]=fingerprint
             if msg.get('role')!='assistant':continue
             text=''.join(p.get('text','') for p in msg.get('content',[]) if p.get('type')=='text')
             old=seen.get(msg['id'],'')

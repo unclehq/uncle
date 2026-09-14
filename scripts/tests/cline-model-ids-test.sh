@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 if ! command -v cline > /dev/null 2>&1; then
     echo "cline-model-ids-test.sh: skipped, cline is not installed"
-    exit 0
+    exit 77
 fi
 resolved="$(command -v cline)"
 while [ -L "$resolved" ]; do
@@ -27,7 +27,7 @@ done
 catalog="$(cd "$(dirname "$resolved")/../node_modules/@cline/llms/dist" 2>/dev/null && pwd || true)"
 if [[ -z "$catalog" || ! -f "$catalog/models.js" ]]; then
     echo "cline-model-ids-test.sh: skipped, cline's model catalogue was not found"
-    exit 0
+    exit 77
 fi
 
 ids="$(UNCLE_TUI="$ROOT/uncle_tui.py" python3 - <<'PY'

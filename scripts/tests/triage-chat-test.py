@@ -224,7 +224,8 @@ class TriageTests(unittest.TestCase):
     def test_failure_exit_opens_triage_once_with_bundle(self):
         hook = 'bash "%s" --write --state-dir .uncle/workflow > /dev/null' % (self.install / 'scripts/lib/triage.sh')
         ui = self.run_driver(self.ui(), '#!/usr/bin/env bash\nprintf \'{"x":"jq: error (at <stdin>:3)"}\\n\' > .uncle/workflow/logs/adversarial-review.jsonl\n' + hook + '\nexit 3\n')
-        self.assertEqual(ui.state, 'triage')
+        self.assertTrue(ui.recovery_active)
+        self.assertNotEqual(ui.state, 'triage')
         self.assertIsNotNone(ui.triage_request)
         self.finish_turn(ui)
         self.assertEqual(len(self.prompts()) - 1, 1)
@@ -232,6 +233,10 @@ class TriageTests(unittest.TestCase):
         self.assertIn('jq: error (at <stdin>:3)', self.prompts()[0])
         self.assertEqual(ui.triage_classification, 'tool bug')
         self.assertEqual([n for n, _ in ui.triage_proposals], [1, 2])
+        self.assertEqual(ui.state, 'running')
+        self.assertEqual(ui.chat_focus, 'chat')
+        self.assertTrue(any('Recovery:' in line and 'Proposal 1:' in line for line in ui.chat_display()))
+        self.assertEqual(ui.chat_model()[0], 'triage')
         self.assertTrue((self.project / '.uncle/workflow/logs/triage-1.jsonl').exists())
         ui._poll_workflow()
         self.assertEqual(ui.triage_turn, 1)
@@ -270,7 +275,8 @@ class TriageTests(unittest.TestCase):
         ui = self.gate_ui()
         text = ui.prompt_text
         ui.handle_key(ord('t'))
-        self.assertEqual(ui.state, 'triage')
+        self.assertTrue(ui.recovery_active)
+        self.assertNotEqual(ui.state, 'triage')
         self.finish_turn(ui)
         self.assertIn('Current state: WAIT_PLAN_APPROVAL', self.prompts()[0])
         ui.handle_key(27)
@@ -335,8 +341,8 @@ class TriageTests(unittest.TestCase):
         self.assertTrue(any(role == 'system' and 'nothing is selectable' in text for role, text in ui.triage_history))
         self.assertEqual(ui.triage_proposals, [])
         ui.handle_key(ord('1'))
-        self.assertEqual(ui.triage_composer, '1')  # not a selection: nothing is on offer
-        ui.triage_composer = ''
+        self.assertEqual(ui.chat_composer, '1')  # not a selection: nothing is on offer
+        ui.chat_composer = ''
         ui._triage_command('/do 1')
         self.assertIn('No proposal 1 is selectable', ui.triage_error)
         self.assertIsNone(ui.triage_request)
@@ -442,7 +448,9 @@ class TriageTests(unittest.TestCase):
         ui.open_triage()
         self.finish_turn(ui)
         self.assertEqual(ui.triage_classification, 'tool bug')
-        ui.handle_key(ord('1'))
+        for char in '/do 1':
+            ui.handle_key(ord(char))
+        ui.handle_key(10)
         self.finish_turn(ui)
         draft = self.project / '.uncle/workflow/triage-issue-1.md'
         self.assertTrue(draft.exists(), ui.triage_history)
@@ -467,7 +475,9 @@ class TriageTests(unittest.TestCase):
         self.assertFalse((self.project / '.uncle/workflow/triage/sandbox').exists())
         with patch.object(ui, 'start_workflow') as start:
             start.side_effect = lambda: setattr(ui, 'state', 'running')
-            ui.handle_key(ord('r'))
+            for char in '/resume':
+                ui.handle_key(ord(char))
+            ui.handle_key(10)
             start.assert_called_once()
         self.assertEqual(ui.state, 'running')
 
@@ -502,7 +512,8 @@ class TriageTests(unittest.TestCase):
         ui = self.ui()
         ui.stage_runner = lambda stage: ''
         ui.open_triage()
-        self.assertEqual(ui.state, 'triage')
+        self.assertTrue(ui.recovery_active)
+        self.assertNotEqual(ui.state, 'triage')
         self.assertEqual(ui.triage_error, 'Choose a runner in Configure first')
         self.assertIsNone(ui.triage_request)
         ui.handle_key(27)
@@ -529,9 +540,27 @@ class TriageTests(unittest.TestCase):
         self.assertEqual(len(parsed['proposals']), 3)
         self.assertTrue(parsed['offer_resume'])
 
-    def test_config_offers_triage_stage(self):
+    def test_config_offers_recovery_separately(self):
         self.assertIn(('triage', tui.AGENT), tui.STAGES)
-        self.assertIn('triage', tui.CONFIG_STAGES)
+        self.assertIn('triage', tui.CONFIG_STAGES)  # Keep persisted settings compatible.
+        ui = self.ui()
+        ui.config_section = 'stages'
+        self.assertNotIn('triage', tui.BUILD_CONFIG_STAGES)
+        self.assertFalse(any(row.startswith('triage ') for row in ui._config_items()))
+        ui.config_section = 'recovery'
+        ui.config_sel = 0
+        self.assertEqual(ui._config_row(), 'triage')
+        self.assertIn('Recovery model', ui._config_items()[0])
+
+    def test_shared_chat_followup_uses_recovery_not_stage_steering(self):
+        ui = self.ui('running')
+        with patch.object(ui, '_triage_turn') as turn, patch.object(ui, 'steer_stage') as steer:
+            ui.open_triage()
+            turn.reset_mock()
+            ui.send_home_chat('Why did the check fail?')
+            turn.assert_called_once_with('diagnosis', followup='Why did the check fail?')
+            steer.assert_not_called()
+            self.assertEqual(ui.state, 'running')
 
 
 if __name__ == '__main__':

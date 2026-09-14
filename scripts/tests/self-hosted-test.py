@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'scripts/lib'))
-from self_hosted import read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models
+from self_hosted import read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models, parse_arguments
 from process_tree import bash_executable
 
 
@@ -261,6 +261,7 @@ class SelfHosted(unittest.TestCase):
                 self.assertEqual(command[command.index('--dir')+1], str(self.root))
                 config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
                 self.assertEqual(config['provider']['local']['options']['baseURL'], self.values()['base_url'])
+                self.assertNotIn('options', config['provider']['local']['models']['local-model:Q4'])
                 self.assertEqual(env['UNCLE_OPENCODE_API_KEY'], 'test-secret')
                 self.assertNotIn('test-secret', str(command) + env['OPENCODE_CONFIG_CONTENT'])
                 self.assertEqual(config['permission']['edit'], 'allow' if side == 'agent' else 'deny')
@@ -268,6 +269,32 @@ class SelfHosted(unittest.TestCase):
                 self.assertEqual(config['permission']['task'] if 'task' in config['permission'] else config['permission']['*'], 'deny')
                 self.assertFalse(config['snapshot'])
                 self.assertFalse((self.root/'.git').exists())
+
+    def test_effort_reaches_the_opencode_model_options(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, env = opencode_invocation('agent', dict(self.values(), effort='high'), 'Test prompt', self.root, directory)
+            config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+            self.assertEqual(config['provider']['local']['models']['local-model:Q4']['options'],
+                             {'reasoningEffort': 'high'})
+
+    def test_effort_parsed_from_runner_flags(self):
+        import io
+        cases = [(['-p', '--effort', 'medium'], 'agent', 'medium'),
+                 (['exec', '-c', 'model_reasoning_effort=high', '--output-last-message', 'out.md', 'Do it'], 'reviewer', 'high'),
+                 (['exec', '-c', 'model=x', 'Do it'], 'reviewer', '')]
+        for args, side, expected in cases:
+            with self.subTest(args=args), patch('sys.stdin', io.StringIO('prompt from stdin')):
+                self.assertEqual(parse_arguments(side, args)[3], expected)
+
+    def test_reviewer_zero_status_limit_uses_default(self):
+        with patch.dict(os.environ, UNCLE_STATUS_STAGE_TURNS='0'):
+            self.assertEqual(parse_arguments('reviewer', ['exec', 'Review the checklist'])[2], 80)
+            self.assertEqual(parse_arguments('reviewer', ['exec', '--max-turns', '12', 'Review'])[2], 12)
+            for limit in ('0', '-1'):
+                with self.assertRaisesRegex(ValueError, 'positive turn limit'):
+                    parse_arguments('reviewer', ['exec', '--max-turns', limit, 'Review'])
+        with patch.dict(os.environ, UNCLE_STATUS_STAGE_TURNS='15'):
+            self.assertEqual(parse_arguments('reviewer', ['exec', 'Review'])[2], 15)
 
     def stub_environment(self):
         stub=self.root/'fake_opencode.py'

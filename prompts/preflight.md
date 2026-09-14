@@ -67,8 +67,9 @@ Any capability that cannot be exercised now is blocked, and which kind of
 blocked is the most useful thing this report can say:
 
 - `BLOCKED-SETUP` -- one action would make it available. Name the action:
-  `safaridriver --enable` (admin), granting Accessibility consent, committing
-  the tree, installing a browser.
+  `safaridriver --enable` (admin), granting Accessibility consent, installing
+  a browser. A project commit or clean working tree is not a build prerequisite;
+  use file snapshots for integrity checks instead.
 - `BLOCKED-HUMAN` -- it waits on a person. Name who and for what.
 - `BLOCKED-IMPOSSIBLE` -- this environment cannot do it as specified, and no
   effort will change that. Say what the limit is: a browser that will not size

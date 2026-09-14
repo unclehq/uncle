@@ -6,7 +6,26 @@
     "url": "@URL@",
     "hash": "@SHA256@",
     "extract_dir": "@EXTRACT_DIR@",
-    "depends": ["git", "python", "jq", "gh"],
-    "bin": [["packaging/windows/uncle.ps1", "uncle"]],
-    "notes": "Install and authenticate your selected agent CLIs. For the full-screen UI: python -m pip install windows-curses."
+    "depends": [
+        "git",
+        "python",
+        "jq",
+        "gh"
+    ],
+    "bin": [
+        [
+            "packaging/windows/uncle.ps1",
+            "uncle"
+        ]
+    ],
+    "notes": "Install and authenticate your selected agent CLIs. pytest, pytest-xdist and windows-curses are installed in Uncle's private Python environment.",
+    "post_install": [
+        "$python = Join-Path (appdir 'python' $global) 'current\\python.exe'",
+        "& $python -m venv \"$dir\\venv\"",
+        "if ($LASTEXITCODE -ne 0) { throw 'Failed to create Uncle Python environment.' }",
+        "& \"$dir\\venv\\Scripts\\python.exe\" -m pip install 'pytest>=8,<10' 'pytest-xdist==3.8.0' windows-curses",
+        "if ($LASTEXITCODE -ne 0) { throw 'Failed to install Uncle Python dependencies.' }",
+        "& \"$dir\\venv\\Scripts\\python.exe\" -c 'import pytest, xdist'",
+        "if ($LASTEXITCODE -ne 0) { throw 'Uncle pytest-xdist verification failed.' }"
+    ]
 }

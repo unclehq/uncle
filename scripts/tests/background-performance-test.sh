@@ -20,6 +20,7 @@ chmod +x "$TMP/reviewer"
 awk '/^start_codex_bg\(\)/ { copy=1 } /^wait_codex_bg\(\)/ { exit } copy' \
     "$ROOT/scripts/change-workflow.sh" > "$TMP/function.sh"
 resolve_prompt() { printf '%s' "$1"; }
+uncle_resolve_stage_runner() { printf '%s' "$TMP/reviewer"; }
 stage_reviewer_cmd() { printf '%s' "$TMP/reviewer"; }
 stage_effort_for() { printf low; }
 stage_model_for() { :; }

@@ -7,7 +7,8 @@ trap 'rm -rf "$work"' EXIT
 UNCLE_CONFIG="$work/config"
 for stage in requirements baseline change-spec project-plan change-plan adversarial-review updated-plan updated-change-plan preflight implementation test-review manual-checklist execute-checklist final-audit; do
     rm -f "$UNCLE_CONFIG"
-    [[ "$(uncle_effective_stage_effort "$stage")" == medium ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+    case "$stage" in project-plan|adversarial-review|implementation) expected=medium ;; *) expected=low ;; esac
+    [[ "$(uncle_effective_stage_effort "$stage")" == "$expected" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     printf 'effort low\n' > "$UNCLE_CONFIG"
     [[ "$(uncle_effective_stage_effort "$stage")" == low ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     printf '%s.effort high\n' "$stage" >> "$UNCLE_CONFIG"

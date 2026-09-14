@@ -4,7 +4,7 @@ Section: devel
 Priority: optional
 Architecture: all
 Maintainer: Uncle maintainers <me@brian.biz>
-Depends: bash (>= 3.2), git, python3 (>= 3.9), jq, curl, ca-certificates, gh
+Depends: bash (>= 3.2), git, python3 (>= 3.9), jq, curl, ca-certificates, gh, python3-pytest, python3-pytest-xdist
 Homepage: https://github.com/unclehq/uncle
 Description: Human-gated workflows for coding agents
  Plans, implements, and independently reviews changes with explicit approval

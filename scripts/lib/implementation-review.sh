@@ -93,6 +93,10 @@ implementation_has_changes() {
 write_change_diff() {
     local out="$1" f
 
+    if command -v python3 >/dev/null 2>&1; then
+        change_diff_files | python3 -B "$(dirname "${BASH_SOURCE[0]}")/parallel_diff.py" > "$out"
+        return $?
+    fi
     : > "$out"
 
     while IFS= read -r f; do

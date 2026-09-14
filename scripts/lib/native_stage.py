@@ -12,9 +12,25 @@ import tempfile
 import threading
 import time
 import uuid
+from runner_timing import RunnerTiming
+from read_cache import ReadCache
+from process_tree import timed_popen
 from process_tree import launch_command, group_options, kill_tree, finish_check
 
 KEYS = ('input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')
+
+STEERING_INSTRUCTIONS = """Live stage chat:
+User messages may arrive while you work. Apply relevant steering to the current
+stage. Answer status or general questions briefly, then continue unfinished stage
+work without waiting for another message. A question does not cancel the task.
+Honor explicit requests to stop or change direction. Keep the stage's permissions,
+approval gates, and required deliverables; do not approve gates on the user's behalf.
+Before completing, produce the required stage output in its required format, even
+if you also answered chat questions. Finish normally when the stage is complete;
+the workflow driver owns advancement to the next stage.
+
+Stage task:
+"""
 
 class Stage:
     def __init__(self, runner, side, stage, args, prompt=None):
@@ -29,6 +45,14 @@ class Stage:
                 self.effort = args[i+1].split('=', 1)[1]
         self.output = self.option('--output-last-message', '-o')
         self.prompt = prompt if prompt is not None else (sys.stdin.read() if side == 'agent' else args[-1])
+        self.read_cache = ReadCache(os.getcwd())
+        self.prompt += self.read_cache.context(self.prompt)
+        self.prompt = STEERING_INSTRUCTIONS + self.prompt
+        execution_rules = Path(__file__).resolve().parents[2] / 'lib/gates/EXECUTION_RULES.md'
+        if execution_rules.is_file():
+            policy = execution_rules.read_text(encoding='utf-8')
+            if policy not in self.prompt:
+                self.prompt = policy + '\n\n' + self.prompt
         self.events = queue.Queue()
         self.child = None
         self.usage = dict.fromkeys(KEYS, 0)
@@ -39,6 +63,7 @@ class Stage:
         self.final_answer = ''
         self.assessment_answer = ''
         self.started = time.monotonic()
+        self.timing = RunnerTiming(stage)
         self.channel = None
         self.pending = {}
         # Submitted inputs in order, the original prompt first. A runner that
@@ -76,14 +101,16 @@ class Stage:
         self.inclusive = inclusive
         reported = {key: self.usage[key] + self.usage_baseline.get(key, 0) for key in KEYS}
         reported_cost = None if self.cost is None else self.cost + self.usage_baseline.get('_total_cost_usd', 0)
+        self.timing.usage(reported, reported_cost if cost is not None else None, inclusive, self.model)
         self.status('usage', usage=reported, total_cost_usd=reported_cost, input_includes_cache=inclusive,
                     total_tokens=sum(reported.values()) - (sum(reported[k] for k in KEYS[2:]) if inclusive else 0))
 
     def text(self, text):
         if not text:
             return
+        self.timing.response()
         self.answer += text
-        print(json.dumps({'type':'assistant', 'uncle_chat_output':bool(os.environ.get('UNCLE_STATUS_FILE')), 'message':{'content':[{'type':'text','text':text}]}}), flush=True)
+        print(json.dumps({'type':'assistant', 'uncle_timing_native':True, 'uncle_chat_output':bool(os.environ.get('UNCLE_STATUS_FILE')), 'message':{'content':[{'type':'text','text':text}]}}), flush=True)
         self.status('chat_output', text=text)
 
     def completed_answer(self, text, response_id=None):
@@ -123,14 +150,17 @@ class Stage:
         threading.Thread(target=watch, daemon=True).start()
 
     def spawn(self, command, env=None):
-        self.child = subprocess.Popen(launch_command(command), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        self.child = timed_popen(launch_command(command), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=sys.stderr, text=True, encoding='utf-8', bufsize=1,
                                       env=env or self.env, **group_options())
         def read():
             try:
                 for line in self.child.stdout:
                     try:
-                        self.events.put(json.loads(line))
+                        value = json.loads(line)
+                        self.read_cache.observe(value)
+                        self.timing.observe(value)
+                        self.events.put(value)
                     except ValueError:
                         continue
             finally:
@@ -340,13 +370,10 @@ class Stage:
         live_usage = {}
         self.ready(directory)
         def steer(text,id):
-            nonlocal outstanding
-            outstanding += 1
             self.pending[id]=True
             self.submitted(id)
             message(text,id)
         def handle(e):
-            nonlocal outstanding
             if e.get('type')=='system': self.session=e.get('session_id',self.session)
             if e.get('type')=='user' and e.get('uuid') in self.pending:
                 self.ack({'id':e['uuid'],'result':{}})
@@ -430,6 +457,7 @@ class Stage:
             except (OSError,ValueError,KeyError,TypeError,queue.Empty,KeyboardInterrupt) as exc:
                 error='Workflow parent exited; native stage cancelled' if self.parent_lost else str(exc) or 'Stage interrupted'
             finally:
+                self.timing.finish()
                 self.parent_watch_stop.set()
                 if self.channel:
                     self.status('steering_closed',channel=str(self.channel))
@@ -443,7 +471,7 @@ class Stage:
                     if self.child.poll() is None:
                         kill_tree(self.child);self.child.wait()
                     finish_check(self.child)
-        result=dict(type='result',subtype='success' if success else 'error_during_execution',is_error=not success,
+        result=dict(type='result',uncle_timing_native=True,subtype='success' if success else 'error_during_execution',is_error=not success,
             error_detail=error,usage=self.usage,total_cost_usd=self.cost,input_includes_cache=self.inclusive,
             num_turns=1,duration_ms=int((time.monotonic()-self.started)*1000))
         print(json.dumps(result),flush=True)

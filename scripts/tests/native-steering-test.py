@@ -43,9 +43,9 @@ for line in sys.stdin:
   out({'method':'event','params':{'type':'ContentPart','payload':{'type':'text','text':'Steered reply'}}})
   out({'id':turn,'result':{'status':'finished'}})
  elif e.get('type')=='user':
-  out({'type':'user','uuid':e['uuid']})
   if e['message']['content']=='Use the requested direction':
    out({'type':'result','is_error':False,'usage':{'input_tokens':100,'output_tokens':20},'total_cost_usd':0.005})
+   out({'type':'user','uuid':e['uuid']})
    out({'type':'assistant','message':{'content':[{'type':'text','text':'Steered reply'}]}})
    out({'type':'result','is_error':False,'usage':{'input_tokens':150,'output_tokens':30,'cache_read_input_tokens':15},'total_cost_usd':0.01})
 '''
@@ -153,14 +153,54 @@ for line in sys.stdin:
   stage.completed_answer('Summary: ' + first)
   self.assertEqual(stage.output_answer(), 'Summary: ' + first)
 
+ def test_all_stage_prompts_preserve_work_after_chat(self):
+  sys.path.insert(0, str(ROOT))
+  import uncle_tui
+  for name, side in uncle_tui.STAGES:
+   for runner in ('claude', 'codex', 'kimi', 'cline', 'self-hosted'):
+    with self.subTest(stage=name, side=side, runner=runner):
+     stage = Stage(runner, side, name, [], prompt='Required stage task')
+     self.assertIn('continue unfinished stage', stage.prompt)
+     self.assertIn('required stage output in its required format', stage.prompt)
+     self.assertIn('All automated tests and test fixtures MUST disable', stage.prompt)
+     self.assertIn('--no-gpg-sign', stage.prompt)
+     self.assertIn('present the exact', stage.prompt)
+     self.assertIn('must work without creating a project commit', stage.prompt)
+     self.assertIn('resuming an older plan', stage.prompt)
+     self.assertTrue(stage.prompt.endswith('Required stage task'))
+
+ def test_claude_batched_steering_completes_all_stages(self):
+  sys.path.insert(0, str(ROOT))
+  import uncle_tui
+  for name, side in uncle_tui.STAGES:
+   with self.subTest(stage=name, side=side):
+    stage = Stage('claude', side, name, [], prompt='Required stage task')
+    stage.spawn = lambda command: None
+    stage.send = lambda message: None
+    stage.ready = lambda directory: None
+    stage.status = lambda *args, **kwargs: None
+    stage.text = lambda text: None
+    stage.tokens = lambda *args, **kwargs: None
+    def loop(handle, steer):
+     steer('Use the reference image', 'one')
+     steer('What is happening?', 'two')
+     handle({'type': 'user', 'uuid': 'one'})
+     handle({'type': 'user', 'uuid': 'two'})
+     self.assertTrue(handle({'type': 'result', 'is_error': False, 'usage': {}}))
+    stage.loop = loop
+    stage.claude('unused')
+
  def test_native_same_session_and_metrics(self):
-  for runner in ('codex','kimi','claude'):
-   with self.subTest(runner=runner),tempfile.TemporaryDirectory() as d:
+  sys.path.insert(0, str(ROOT))
+  import uncle_tui
+  for runner, name, side in ((r, n, s) for r in ('codex','kimi','claude') for n, s in uncle_tui.STAGES):
+   with self.subTest(runner=runner, stage=name, side=side),tempfile.TemporaryDirectory() as d:
     root=Path(d);fake=root/'runner';fake.write_text(FAKE);fake.chmod(0o755)
     status=root/'status';status.touch()
     env=dict(os.environ,UNCLE_STATUS_FILE=str(status),PYTHONDONTWRITEBYTECODE='1')
     env['WORKFLOW_'+runner.upper()+'_CMD']=str(fake)
-    args=[sys.executable,'-B',str(ROOT/'scripts/lib/native_stage.py'),'--runner',runner,'--side','agent','--stage','implementation','--','-p','--model','fake-model','--effort','high']
+    args=[sys.executable,'-B',str(ROOT/'scripts/lib/native_stage.py'),'--runner',runner,'--side',side,'--stage',name,'--','-p','--model','fake-model','--effort','high']
+    if side == 'reviewer': args.append('Initial task')
     child=subprocess.Popen(args,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,env=env,cwd=d)
     try:
      child.stdin.write('Initial task');child.stdin.close();child.stdin=None

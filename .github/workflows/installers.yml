@@ -55,6 +55,7 @@ jobs:
           export UNCLE_WINDOWS_BASH="$(cygpath -w "$BASH")"
           python -B scripts/tests/windows-portability-test.py
           python -B scripts/tests/windows-driver-test.py
+          python -B scripts/tests/shell-syntax-test.py
       - name: Install Scoop on the disposable runner
         run: |
           Invoke-WebRequest -UseBasicParsing https://get.scoop.sh -OutFile "$env:RUNNER_TEMP/scoop-install.ps1"
@@ -70,34 +71,15 @@ jobs:
           export PATH="$PWD/packaging/windows:$PATH"
           export UNCLE_WINDOWS_PYTHON="$(cygpath -w "$(command -v python)")"
           export UNCLE_WINDOWS_BASH="$(cygpath -w "$BASH")"
-          failures=0
-          failed_suites=""
-          run_suite() {
-            local name="$1"
-            shift
-            echo "::group::$name"
-            if "$@"; then
-              echo "PASS: $name"
-            else
-              local status=$?
-              echo "::error::$name failed (exit $status)"
-              failures=$((failures + 1))
-              failed_suites="${failed_suites}${failed_suites:+, }$name"
-            fi
-            echo "::endgroup::"
-          }
-          for test in verification-integrity checklist-groups parallel-checks review-compaction agent-kimi reviewer-claude document-budget provided-inputs windows-probes; do
-            run_suite "$test" bash "scripts/tests/$test-test.sh"
-          done
-          run_suite self-hosted python3 -B scripts/tests/self-hosted-test.py
-          run_suite session-totals python3 -B scripts/tests/session-totals-test.py
-          run_suite audit-findings python3 -B scripts/tests/audit-findings-test.py
-          echo "Regression suites failed: $failures"
-          if [[ "$failures" -gt 0 ]]; then
-            echo "Failed suites: $failed_suites"
-            printf 'Regression suites failed: %s\n' "$failed_suites" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          test "$failures" -eq 0
+          python3 -B scripts/tests/windows-regressions.py
+      - name: Upload Windows regression logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-regression-logs
+          path: .uncle/workflow/regression-logs/*.log
+          include-hidden-files: true
+          if-no-files-found: ignore
       - name: Smoke test outside the checkout
         run: |
           Set-Location $env:RUNNER_TEMP

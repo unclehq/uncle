@@ -231,6 +231,8 @@ force. The PR targets the base repository's default branch and includes
 the issue or writes `issue-closed`; GitHub closes the linked issue on merge into
 the default branch. Originless runs must confirm the base repository.
 
+New default-branch handoffs use `<prefix>/<slug>-<owner[:12]>`: labels (case-insensitive, enhancement before bug before documentation) select `feat/`, `bug/`, or `doc/`, otherwise `uncle/` (also on lookup failure); the slug is a lowercase ASCII title from the Summary or first heading in `CHANGE_REQUEST.md` (otherwise `REQUIREMENTS.md`), limited to 40 characters with `change` as the empty fallback.
+
 The handoff rejects source, branch, audit, origin or remote drift and ambiguous
 remotes. It supports one GitHub head remote, optionally with a base upstream
 remote and a direct user-owned fork. Unsupported selectors and submodules stop

@@ -6,6 +6,17 @@ import uncle_tui as tui
 from home_chat import HomeRequest
 
 class HomeTests(unittest.TestCase):
+    def test_first_launch_opens_home_without_configuration_or_viewer(self):
+        with tempfile.TemporaryDirectory() as d:
+            with patch.object(tui, '_project_root', return_value=d), patch.object(tui, 'CONFIG_PATH', str(Path(d) / '.uncle/config')), patch.object(tui, 'list_models', return_value=[]), patch.object(tui, 'default_model', return_value=''), patch.object(tui, 'read_keys', return_value={}), patch.object(tui.UncleTUI, '_viewer_command', return_value=''):
+                ui = tui.UncleTUI(None)
+                self.assertTrue(ui.first_run)
+                self.assertEqual(ui.state, 'menu')
+                self.assertTrue(ui.chat_open)
+                self.assertEqual(ui.chat_focus, 'chat')
+                self.assertEqual(ui.sel, 0)
+                self.assertFalse(ui.home_menu_open)
+
     def test_startup_homepage_sends_and_displays_reply(self):
         with tempfile.TemporaryDirectory() as d:
             config = Path(d) / 'config'
@@ -15,11 +26,9 @@ class HomeTests(unittest.TestCase):
                 ui = tui.UncleTUI(None)
                 self.assertEqual(ui.state, 'menu')
                 self.assertTrue(ui.chat_open)
-                self.assertEqual(ui.chat_focus, 'menu')
-                self.assertEqual(ui.sel, 0)
-                self.assertTrue(ui.home_menu_open)
-                ui.handle_key(9)
                 self.assertEqual(ui.chat_focus, 'chat')
+                self.assertEqual(ui.sel, 0)
+                self.assertFalse(ui.home_menu_open)
                 request.assert_not_called()
                 for char in 'Hello':
                     ui.handle_key(ord(char))
@@ -58,6 +67,54 @@ class HomeTests(unittest.TestCase):
                 ui.send_home_chat('Do not lose this message')
             self.assertEqual(len(list(Path(d).glob('*.json'))), 1)
 
+    def test_pending_dialog_stays_visible_with_chat_focus(self):
+        from unittest.mock import Mock
+        ui = tui.UncleTUI.__new__(tui.UncleTUI)
+        ui.state = 'running'
+        ui.prompt_kind = 'confirm'
+        ui.chat_focus = 'chat'
+        ui.partial = ''
+        ui._build_messages = Mock(return_value=['Latest build output'])
+        ui._draw_modal = Mock()
+        ui.stdscr = Mock()
+        ui.stdscr.getmaxyx.return_value = (40, 120)
+        ui._draw_running(25, 90)
+        ui._draw_modal.assert_called_once_with(25, 90)
+        self.assertEqual(ui.chat_focus, 'chat')
+        self.assertEqual(ui.prompt_kind, 'confirm')
+
+    def test_pending_gate_questions_preserve_approval_and_use_stage_model(self):
+        from unittest.mock import Mock
+        ui = tui.UncleTUI.__new__(tui.UncleTUI)
+        ui.state = 'running'
+        ui.prompt_kind = 'confirm'
+        ui.prompt_text = 'Ready to approve CHANGE_PLAN.md?'
+        ui.gate_file = 'CHANGE_PLAN.md'
+        ui.status_stage = 'change-plan'
+        ui.steering_channels = {'change-plan': '/stale-channel-from-completed-stage'}
+        ui.proc = Mock()
+        ui.proc.poll.return_value = None
+        ui.home_request = None
+        ui.home_history = []
+        ui.chat = Mock()
+        ui.chat.refs.expand.side_effect = lambda value: value
+        ui.chat_model = lambda: ('change-plan', 'codex', 'stage-model', 'low')
+        with tempfile.TemporaryDirectory() as d, patch.object(tui, '_project_root', return_value=d), patch.object(tui, 'HomeRequest') as request:
+            Path(d, 'CHANGE_PLAN.md').write_text('Plan evidence')
+            ui.send_home_chat('Why is this change necessary?')
+            command, prompt, env = request.call_args.args
+            self.assertIn('stage-model', command)
+            self.assertIn('Plan evidence', prompt)
+            self.assertIn('Only the user can answer', prompt)
+            self.assertEqual(ui.prompt_kind, 'confirm')
+            ui.proc.stdin.write.assert_not_called()
+            ui.home_request.events = queue.Queue()
+            ui.home_request.events.put(('reply', '{"uncle_action":"run_change"}'))
+            with patch.object(ui, '_home_action') as action:
+                ui.poll_home_chat()
+                action.assert_not_called()
+            self.assertEqual(ui.prompt_kind, 'confirm')
+
     def test_running_chat_tracks_live_stage_model(self):
         ui = tui.UncleTUI.__new__(tui.UncleTUI)
         ui.state = 'running'
@@ -87,6 +144,20 @@ class HomeTests(unittest.TestCase):
             request=HomeRequest([sys.executable,'-c','raise SystemExit(2)'],'hello',os.environ.copy())
             self.assertEqual(request.events.get(timeout=5)[0],'error')
             request.thread.join(5)
+    def test_background_chat_reads_launch_directory_and_keeps_reply_temporary(self):
+        with tempfile.TemporaryDirectory(prefix='chat project ') as d:
+            root = Path(d)
+            (root/'local.txt').write_text('project file contents')
+            script = root/'fake.py'
+            script.write_text("import sys; from pathlib import Path; "
+                              "reply=Path(sys.argv[sys.argv.index('--output-last-message')+1]); "
+                              "assert reply.parent != Path.cwd(); "
+                              "reply.write_text(Path('local.txt').read_text())")
+            request = HomeRequest([sys.executable, str(script)], 'Read local.txt', os.environ.copy(), cwd=d)
+            self.assertEqual(request.events.get(timeout=5), ('reply', 'project file contents'))
+            request.thread.join(5)
+            self.assertFalse((root/'reply.txt').exists())
+            self.assertFalse(request.thread.is_alive())
     def test_cancel(self):
         request=HomeRequest([sys.executable,'-c','import time; time.sleep(30)'],'hello',os.environ.copy())
         request.cancel()

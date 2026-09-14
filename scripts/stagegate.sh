@@ -77,7 +77,12 @@ if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/pla
     [[ "$UNATTENDED" != 1 ]] || driver_args+=(--unattended)
     exec python3 "$ROOT/scripts/lib/plan-executability.py" lock-run "${driver_args[@]}"
 fi
+python3 "$ROOT/scripts/lib/workflow_family.py" app
+unset UNCLE_NEW_WORKFLOW
+. "$ROOT/scripts/lib/project-git.sh"
+uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
+. "$ROOT/scripts/lib/state.sh"
 
 STATE_DIR=".uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
@@ -859,11 +864,7 @@ set_state() {
 }
 
 get_state() {
-    if [[ -s "$STATE_FILE" ]]; then
-        cat "$STATE_FILE"
-    else
-        echo "DERIVE_BRIEF"
-    fi
+    state_read "$STATE_FILE" DERIVE_BRIEF
 }
 
 require_file() {
@@ -974,17 +975,6 @@ review_and_approve() {
         echo "  code $file"
         echo
 
-        # Closed stdin here would abort the driver under `set -e` before the
-        # Y/N prompt, so EOF is routed to the same decline path as any other
-        # non-answer.
-        if ! read -r -p "Press ENTER after reviewing the file..."; then
-            if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 1; fi
-            echo
-            echo "Gate not accepted. Workflow paused."
-            exit 0
-        fi
-
-        echo
         gate_prompt "Ready to $wording $file? [Y/N] "
         # IFS= keeps surrounding whitespace, so " y" is not an approval.
         # `|| true` keeps EOF from tripping `set -e` before the decline path
@@ -1125,7 +1115,7 @@ run_claude() {
             --allowedTools "$tools" \
             < "$effective_prompt" \
             2>&1 \
-            | tee "$LOG_DIR/${log_name}.jsonl" \
+            | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.jsonl" \
             | format_claude_stream || status=$?
         perf_record agent "$log_name" "$((SECONDS-started))" "$status" \
             "$LOG_DIR/${log_name}.jsonl" "$cmd" "$model" "$effort"
@@ -1230,7 +1220,7 @@ run_codex_review() {
             "${model_args[@]+"${model_args[@]}"}" \
             --output-last-message "$output_file" \
             "$(cat "$prompt_file")" \
-            < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
+            < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" || status=$?
         perf_record reviewer "$log_name" "$((SECONDS-started))" "$status" \
             "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
         supervision_stage_end "$log_name" "$status" "$LOG_DIR/${log_name}.log"
@@ -1565,6 +1555,7 @@ rm -f "$STATE_DIR/stop-reason"
 
 while true; do
     state="$(get_state)"
+    if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi
 
     echo
     echo "Current workflow state: $state"

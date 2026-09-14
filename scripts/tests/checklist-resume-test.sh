@@ -10,11 +10,13 @@ export ROOT
 cat > harness.sh <<'SH'
 set -euo pipefail
 . "$ROOT/scripts/lib/acceptance.sh"
+. "$ROOT/scripts/lib/state.sh"
 STATE_DIR=workflow
 STATE_FILE=workflow/state
 DIFF_GATE=1
 GREEN_CHECK=1
 GREEN_CLASS=workflow/green.tsv
+GREEN_CMDS=workflow/commands
 GREEN_MD=workflow/green.md
 UNATTENDED=0
 . "$ROOT/scripts/lib/waivers.sh"
@@ -30,7 +32,10 @@ check_verification_inputs() {
 }
 check_document_budget() { echo budget >> calls; }
 run_green_check() { echo green >> calls; }
+green_failed_ids() { :; }
 green_regressions() { cat "$GREEN_CLASS"; }
+plan_delivery_summary() { :; }
+plan_before_write() { :; }
 snapshot_checklist_checks() { :; }
 snapshot_checklist_groups() { :; }
 ensure_checklist_runner() { :; }
@@ -60,7 +65,7 @@ reset() {
     printf '0\n' > workflow/green.tsv
     report $'| COVERAGE | YES | PASS | ok |\n| INTEGRITY | YES | PASS | ok |\n| ASSERTIONS | YES | PASS | ok |\n| ORACLE | YES | PASS | ok |\n| NEGATIVE | YES | PASS | ok |\n| RESULTS | YES | PASS | ok |' TEST_REVIEW.md
 }
-run() { bash harness.sh > output 2>&1; }
+run() { local status=0; bash harness.sh > output 2>&1 || status=$?; if [[ "$status" != 0 ]]; then cat output >&2; fi; return "$status"; }
 count() { [[ "$(grep -c "^$1$" calls)" == "$2" ]]; }
 
 # A human-blocked report must reach audit after exactly one execution.
@@ -71,10 +76,10 @@ count EXECUTE_CHECKLIST 1
 count FINAL_AUDIT 1
 count green 1
 
-# The actual incident: a description in ID pauses report validation. Multiple
+# Unsupported ID syntax pauses report validation. Multiple
 # resumes and an in-place formatting correction must not rerun any checks.
 reset
-report '| REQ-71 (`:71` mutation validity) | YES | PASS | mutant assertions passed |' candidate.md
+report '| REQ-71 `:71` mutation validity | YES | PASS | mutant assertions passed |' candidate.md
 if run; then echo 'Malformed report advanced' >&2; exit 1; fi
 [[ "$(cat workflow/state)" == VALIDATE_CHECKLIST ]]
 grep -q 'not a plain identifier' output

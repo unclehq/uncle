@@ -100,6 +100,14 @@ A check that is already failing is still listed. The driver records that it
 failed before the change, so it will not be blamed on the change; omitting it
 only hides it.
 
+Prefer the project's documented test runner over constructing shell loops.
+When analyzing Uncle itself, if `scripts/run-shell-tests.sh` exists, use
+`bash scripts/run-shell-tests.sh` for its shell regression suites and record
+that exact command. It already parallelizes suites and aggregates failures;
+do not also run those suites individually or wrap them in a serial loop.
+For other projects, inspect their runner and fixture isolation before choosing
+parallelism; do not assume this Uncle-specific script exists.
+
 Automated browsers and local test servers are permitted when required for
 acceptance. Run independent test suites in parallel by default. Append
 `## Parallel verification groups` for independent suites, holding one

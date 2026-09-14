@@ -99,6 +99,32 @@ class FindingsTests(unittest.TestCase):
             result = self.run_review('r\ns\n')
             self.assertEqual(result.returncode, 0, result.stdout)
 
+    def test_trailing_commentary_preserved_and_requires_decisions(self):
+        for summary in ('Checked: regression checks passed.',
+                        'Category 1 sweep: every PASS tied to evidence.\n'
+                        'Re-run: `python3 -m py_compile uncle_tui.py` rc=0.\n\nNo waivers.'):
+            with self.subTest(summary=summary):
+                shutil.rmtree(self.state, ignore_errors=True)
+                report = TABLE.replace('NOT READY', summary + '\n\nNOT READY')
+                self.report.write_text(report, encoding='utf-8')
+                self.assertEqual(self.run_review('').returncode, 1)
+                result = self.run_review('s\nr\n')
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(set(self.record()['decisions']), {'FA-1', 'FA-2'})
+                for line in summary.splitlines():
+                    if line:
+                        self.assertIn(line, result.stdout)
+                        for decision in self.record()['decisions'].values():
+                            self.assertIn(line, decision['finding']['evidence'])
+                self.assertEqual(self.report.read_text(), report)
+
+    def test_commentary_cannot_hide_rows(self):
+        for row in ('| FA-4 | high | Missing | Fix | YES |', '| malformed row'):
+            self.report.write_text(TABLE.replace('NOT READY',
+                'Category 1 sweep: checks run.\n' + row + '\nNOT READY'))
+            self.assertEqual(self.run_review('s\nr\n').returncode, 2)
+            self.assertFalse((self.state / 'audit-dispositions').exists())
+
     def test_row_after_verdict_cannot_be_hidden(self):
         self.report.write_bytes((TABLE + '| FA-4 | blocking | Missing check | Run check | YES |\n').encode("utf-8"))
         self.assertEqual(self.run_review('s\ns\n').returncode, 2)

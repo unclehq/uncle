@@ -257,28 +257,30 @@ def validate(j, ready=True):
 
 def manual_signed_commit(j):
     import shlex
-    # `git commit -a` cannot stage untracked files, but the audited tree
-    # includes them, so any change that added a file produced a tree
-    # mismatch. Stage everything, drop the driver's own state, then force
-    # FINAL_AUDIT.md back in: that reproduces commit_tree exactly.
-    command = ('git add -A'
-               ' && git rm -r --cached --ignore-unmatch -- .uncle/workflow'
-               ' && git add -f -- FINAL_AUDIT.md'
-               ' && git commit -S -m ' + shlex.quote(j['title']))
+    # Stage the exact reviewed tree, including untracked files, without
+    # reapplying clean filters or changing working files. Only the user runs it.
+    command = ('git read-tree ' + shlex.quote(j['commit_tree'])
+               + ' && git commit ' + ('-S ' if j.get('requires_signature', True) else '--no-gpg-sign ')
+               + '-m ' + shlex.quote(j['title']))
     if os.environ.get('UNCLE_SIGNING_JSON') == '1':
         block = json.dumps(command) + ' '
     else:
         block = 'In another terminal, open this project, review the audited changes, then run:\n' + command + '\n'
-    ask('Commit signing needs your help. ' + block +
-        'Return here and press ENTER (OK) when finished: ')
     candidate = head()
-    if candidate == j['original_head']:
-        raise ValueError('No new commit found; PR remains pending. Finish the signed commit and rerun.')
+    while candidate == j['original_head']:
+        prefix = 'Commit signing needs your help. ' if j.get('requires_signature', True) else 'Commit needs your help. '
+        ask(prefix + block +
+            'Return here and press ENTER (OK) when finished: ')
+        candidate = head()
+        if candidate == j['original_head']:
+            if ask('No new commit found. Keep the commit dialog open? [y/n]: ').lower() != 'y':
+                raise ValueError('No new commit found; PR remains pending. Finish the commit and resume.')
     if git('rev-parse', candidate + '^{tree}') != j['commit_tree']:
         raise ValueError('Manual commit differs from the audited files; rerun FINAL_AUDIT.')
     if git('rev-list', '--parents', '-n', '1', candidate).split() != [candidate, j['original_head']]:
         raise ValueError('Manual commit must have the audited HEAD as its only parent.')
-    git('verify-commit', candidate)
+    if j.get('requires_signature', True):
+        git('verify-commit', candidate)
     previous = j['intended_head']
     j['intended_head'] = candidate
     try:
@@ -312,7 +314,8 @@ def signing_resume(j):
         raise ValueError('Signed handoff tree differs from audit.')
     if git('rev-list', '--parents', '-n', '1', candidate).split() != [candidate, j['original_head']]:
         raise ValueError('Signed handoff must have the audited HEAD as its only parent.')
-    git('verify-commit', candidate)
+    if j.get('requires_signature', True):
+        git('verify-commit', candidate)
     validate(dict(j, intended_head=candidate))
 
 
@@ -321,22 +324,11 @@ def prepare_commit(j):
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if setting.returncode not in (0, 1):
         raise ValueError('Cannot read commit signing configuration: ' + setting.stderr.strip())
-    if setting.stdout.strip() == 'true':
-        j['manual_signing'] = True
-        save(j)
-        manual_signed_commit(j)
-        return
-    try:
-        j['intended_head'] = git('commit-tree', j['commit_tree'], '-p', j['original_head'],
-                                 data=(j['title'] + '\n').encode())
-    except ValueError as error:
-        if not re.search(r'gpg|signing|failed to sign|no agent running|pinentry', str(error), re.I):
-            raise
-        print(str(error), flush=True)
-        j['manual_signing'] = True
-        save(j)
-        manual_signed_commit(j)
-    save(j)
+    j['requires_signature'] = setting.stdout.strip() == 'true'
+    j['manual_signing'] = True
+    save(j)  # Record the pending user action before displaying it.
+    manual_signed_commit(j)
+
 
 
 def ask(prompt, default=None):
@@ -348,8 +340,23 @@ def ask(prompt, default=None):
                 answer = input(prompt)
             finally:
                 readline.set_startup_hook(None)
-        else:
+        elif sys.stdin.isatty():
             answer = input(prompt)
+        else:
+            # Read exactly one answer. TextIO buffering can consume answers
+            # intended for the next engine process (override then handoff).
+            print(prompt, end='', flush=True)
+            data = bytearray()
+            while True:
+                char = os.read(sys.stdin.fileno(), 1)
+                if not char:
+                    if not data:
+                        raise EOFError
+                    break
+                if char == b'\n':
+                    break
+                data.extend(char)
+            answer = data.decode('utf-8')
     except EOFError:
         raise ValueError('No answer received; PR remains pending. Rerun to resume.')
     return answer.strip() or default or ''
@@ -361,6 +368,45 @@ def title_default():
     title = match.group(1) if match else ''
     title = ''.join(' ' if unicodedata.category(c).startswith('C') else c for c in title)
     return ' '.join(title.split())[:72].strip() or 'Completed change'
+
+
+def slug_text():
+    path = Path('CHANGE_REQUEST.md')
+    text = read(path if path.exists() else Path('REQUIREMENTS.md'))
+    match = re.search(r'^##\s+(?:\d+\.\s+)?Summary\s*\n(.*?)(?=^##\s|\Z)', text, re.M | re.S | re.I)
+    if match:
+        return match.group(1)
+    match = re.search(r'^# ([^\n]*)', text, re.M)
+    return match.group(1) if match else ''
+
+
+def slug(text):
+    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode().lower()
+    return re.sub(r'[^a-z0-9]+', '-', text).strip('-')[:40].strip('-') or 'change'
+
+
+def label_prefix(origin):
+    fields = origin.strip().split('\t')
+    if len(fields) != 3 or fields[2] != 'gh':
+        return 'uncle/'
+    try:
+        result = subprocess.run(['gh', 'issue', 'view', fields[1], '--repo', fields[0],
+                                 '--json', 'labels'], capture_output=True, text=True,
+                                timeout=int(os.environ.get('STAGEGATE_CLOSE_TIMEOUT', '30')))
+        if result.returncode:
+            raise ValueError('Label lookup failed')
+        labels = {label['name'].casefold() for label in json.loads(result.stdout)['labels']}
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError, AttributeError):
+        print('Label lookup failed; using uncle/ prefix', flush=True)
+        return 'uncle/'
+    for label, prefix in [('enhancement', 'feat/'), ('bug', 'bug/'), ('documentation', 'doc/')]:
+        if label in labels:
+            return prefix
+    return 'uncle/'
+
+
+def branch_name(j):
+    return label_prefix(j['origin']) + slug(slug_text()) + '-' + j['owner'][:12]
 
 
 def repo_name(value):
@@ -396,6 +442,17 @@ def remote_sha(j):
 def resolve(j):
     origin = j['origin'].strip().split('\t')
     remotes = git('remote').splitlines()
+    if not remotes:
+        url = ask('No Git remote is configured. GitHub remote URL for this PR (blank to cancel): ')
+        if not url:
+            raise ValueError('PR destination not configured; resume publication after adding a remote.')
+        identity = remote_repo(url)
+        if origin != [''] and identity.lower() != origin[0].lower():
+            fork = json.loads(gh('api', 'repos/' + identity))
+            if not fork.get('fork') or fork.get('parent', {}).get('full_name', '').lower() != origin[0].lower():
+                raise ValueError('Destination must match the issue repository or its direct fork; no remote was added.')
+        git('remote', 'add', 'origin', url)
+        remotes = ['origin']
     identities = {r: remote_identity(r) for r in remotes}
     if origin != ['']:
         if len(origin) == 2 and origin[1].isdigit():
@@ -436,7 +493,7 @@ def resolve(j):
             raise ValueError('Unsupported fork owner for gh --head.')
     target = j['original_branch']
     if target == base_branch:
-        target = 'uncle/change-' + j['owner'][:12]
+        target = branch_name(j)
     git('check-ref-format', '--branch', target)
     j.update(base_repo=base, base_branch=base_branch, head_repo=head_repo,
              head_branch=target, remote=remote)

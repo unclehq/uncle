@@ -24,9 +24,27 @@ def run(jobs, suites=()):
     if not files:
         print('FAIL: no shell test suites found', file=sys.stderr)
         return 1
+<<<<<<< HEAD
     return run_commands(jobs, {path: [bash_executable(), path] for path in files})
 
 
+=======
+    isolate_git()
+    return run_commands(jobs, {path: [bash_executable(), path] for path in files})
+
+
+def isolate_git():
+    """Fixture git never sees the user's global or system configuration, so no
+    suite can reach a real signer or key even if a fixture forgets a flag."""
+    if 'GIT_CONFIG_GLOBAL' not in os.environ:
+        fd, path = tempfile.mkstemp(prefix='uncle-shell-tests-gitconfig-')
+        os.write(fd, b'[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[user]\n\tname = Fixture\n\temail = fixture@example.test\n')
+        os.close(fd)
+        os.environ['GIT_CONFIG_GLOBAL'] = path
+    os.environ.setdefault('GIT_CONFIG_NOSYSTEM', '1')
+
+
+>>>>>>> b9468f1f (Add bounded event-triggered AI supervision for workflow stages)
 def run_commands(jobs, commands):
     """Execute named isolated commands with shared progress and cleanup."""
     if not 1 <= jobs <= 8:

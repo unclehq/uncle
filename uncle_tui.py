@@ -46,6 +46,8 @@ from triage_chat import (TriageRequest, parse_reply as parse_triage_reply, compo
 from github_issues import IssuePicker, references as issue_references, issue_context
 from self_hosted import settings as home_settings
 from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
+import supervisor as supervision_lib
+from supervisor_runner import SupervisorRequest, build_command as supervisor_command
 
 CLINE_CONFIG = os.environ.get("CLINE_CONFIG", os.path.expanduser("~/.cline/data/settings/providers.json"))
 
@@ -563,6 +565,106 @@ def default_model():
     return ""
 
 
+SUPERVISION_MARKER_RE = re.compile(r'\s*' + re.escape(supervision_lib.MARKER_PREFIX) + r'[0-9a-f]{8}\s*')
+
+SUPERVISION_DESC = {
+    "enabled": "Opt in to event-triggered diagnosis (true/false). Off, nothing else here is read and no supervisor process ever starts; turning it off mid-run cancels the pending diagnosis and keeps the counters.",
+    "runner": "The CLI that answers a diagnosis. Only claude is supported; anything else reports unavailable, never falls back. Corrections are fixed templates; the model's wording never reaches a stage.",
+    "model": "Model id passed to the supervisor runner (default sonnet).",
+    "effort": "Reasoning effort for the supervisor: low, medium or high.",
+    "max_interventions": "Corrections applied per stage per run (default 2; 0 disables corrections). The next trigger asks you instead of calling a model.",
+    "steering_timeout_seconds": "Seconds an accepted steering message may go unanswered during active stage time before a diagnosis (default 120). Only runners that confirm answers (claude, OpenCode) are timed.",
+    "stage_time_seconds": "Active seconds a stage may run before a diagnosis, excluding gate waits (default 1800; 0 disables).",
+    "stage_tokens": "Reported tokens a stage may use before a diagnosis (default 0 = off; unknown usage never triggers).",
+    "call_timeout_seconds": "Deadline for one supervisor call; the worker tree is killed at the deadline (default 300).",
+    "max_calls_per_run": "Supervisor calls allowed per workflow run, counted before each spawn (default 8).",
+    "call_max_cost_usd": "Dollar cap passed to each supervisor call (default 0.50).",
+}
+
+
+class TuiSupervisionHost:
+    """The controller's view of this screen: clocks, transcript, delivery, retry."""
+
+    def __init__(self, tui, config):
+        self.tui = tui
+        self.config = config
+        state_dir = os.path.join(_project_root(), '.uncle', 'workflow')
+        contract_path = os.path.join(ROOT, 'prompts', 'supervise.md')
+        with open(contract_path, encoding='utf-8') as fh:
+            contract = fh.read()
+        new_workflow = not os.path.exists(os.path.join(state_dir, 'state'))
+        # Ownership (D-10) and live configuration reload (D-17) both live in the controller.
+        self.controller = supervision_lib.Controller(state_dir, config, self, contract, new_workflow=new_workflow,
+                                                     config_path=CONFIG_PATH)
+        tui._ensure_chat()
+        if self.controller.status:
+            tui.home_history.append(('supervisor', sanitize(self.controller.status)))
+        else:
+            tui.home_history.append(('supervisor', 'Supervision enabled: %s/%s, %d interventions per stage, %d calls per run.'
+                                     % (config.runner, config.model, config.max_interventions, config.max_calls_per_run)))
+
+    def now(self):
+        return time.monotonic()
+
+    def transcript(self, text):
+        self.tui._ensure_chat()
+        self.tui.home_history.append(('supervisor', sanitize(text)))
+
+    def ask(self, text):
+        self.tui._ensure_chat()
+        self.tui.home_history.append(('supervisor', sanitize(text)))
+        self.tui.chat_error = sanitize(text)[:200]
+
+    def roots(self):
+        return [ROOT]
+
+    def recent_output(self):
+        return [line for line in list(getattr(self.tui, 'output', []))[-20:]]
+
+    def workflow_state(self):
+        try:
+            with open(os.path.join(_project_root(), '.uncle', 'workflow', 'state'), encoding='utf-8') as fh:
+                raw = fh.readline().strip()
+        except OSError:
+            return ''
+        return raw.split(':', 1)[1] if re.match(r'^[0-9]+:', raw) else raw
+
+    def driver_running(self):
+        proc = getattr(self.tui, 'proc', None)
+        return bool(proc) and proc.poll() is None
+
+    def driver_stopped_by_human(self):
+        if getattr(self.tui, 'state', '') == 'quit' or getattr(self.tui, 'workflow_exit_code', 0) in (130, 143):
+            return True
+        try:
+            with open(os.path.join(_project_root(), '.uncle', 'workflow', 'stop-reason'), encoding='utf-8') as fh:
+                return fh.readline().strip() == 'human'
+        except OSError:
+            return False
+
+    def busy(self):
+        return getattr(self.tui, 'triage_request', None) is not None
+
+    def retry(self):
+        self.tui._supervision_retry()
+
+    def deliver(self, stage, channel, text, message_id):
+        if self.tui.steering_channels.get(stage) != channel:
+            return False
+        if supervision_lib.deliver_steering(channel, text, message_id):
+            self.tui.home_history.append(('supervisor', 'Steering correction queued for ' + stage))
+            return True
+        return False
+
+    def close(self):
+        self.controller.close()
+
+    def start_worker(self, prompt, meta):
+        command, env, home = supervisor_command(self.controller.config, ROOT)
+        log = os.path.join(_project_root(), '.uncle', 'workflow', 'logs', 'supervisor-%d.jsonl' % meta['number'])
+        return SupervisorRequest(command, prompt, env, home, log, meta)
+
+
 class UncleTUI:
     def __init__(self, stdscr):
         self.stdscr = stdscr
@@ -692,11 +794,19 @@ class UncleTUI:
             return "@connection"
         if section == "misc":
             return "!misc"
+<<<<<<< HEAD
         if section == "recovery":
             return "triage"
         if 0 <= self.config_sel < len(BUILD_CONFIG_STAGES):
             return BUILD_CONFIG_STAGES[self.config_sel]
         return self._profile_targets()[self.config_sel - len(BUILD_CONFIG_STAGES)]
+=======
+        if section == "supervision":
+            return "!supervision"
+        if 0 <= self.config_sel < len(CONFIG_STAGES):
+            return CONFIG_STAGES[self.config_sel]
+        return self._profile_targets()[self.config_sel - len(CONFIG_STAGES)]
+>>>>>>> b9468f1f (Add bounded event-triggered AI supervision for workflow stages)
 
     def _profile_targets(self):
         return ["@new"] + ["@" + name for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
@@ -775,6 +885,8 @@ class UncleTUI:
         """The stored value, empty when the stage inherits the default."""
         if stage == "!misc":
             return getattr(self, "misc", {}).get(field, "")
+        if stage == "!supervision":
+            return getattr(self, "supervision", {}).get(field, "")
         if stage == "@connection":
             return connection_settings(self.stage_api_keys).get(field, "")
         if stage.startswith("@"):
@@ -831,6 +943,18 @@ class UncleTUI:
             self.misc[field] = value
             self.save_config()
             return
+        if stage == "!supervision":
+            if value:
+                try:
+                    value = supervision_lib.format_value(field, supervision_lib.parse_value(field, value))
+                except ValueError as exc:
+                    self.notice = str(exc)
+                    return
+                self.supervision[field] = value
+            else:
+                self.supervision.pop(field, None)
+            self.save_config()
+            return
         if stage == "@connection":
             connection = connection_settings(self.stage_api_keys)
             connection[field] = value
@@ -884,9 +1008,15 @@ class UncleTUI:
     def _config_items(self):
         section = getattr(self, "config_section", "")
         if not section:
+<<<<<<< HEAD
             return ["1. Configure stages", "2. Configure OpenCode / self hosting", "3. Miscellaneous", "4. Recovery"]
         if section == "recovery":
             return ["Recovery model — diagnose failures and propose repairs"]
+=======
+            return ["1. Configure stages", "2. Configure OpenCode / self hosting", "3. Miscellaneous", "4. Supervision"]
+        if section == "supervision":
+            return self._supervision_items()
+>>>>>>> b9468f1f (Add bounded event-triggered AI supervision for workflow stages)
         if section == "opencode":
             return ["OpenCode connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
         if section == "misc":
@@ -943,6 +1073,8 @@ class UncleTUI:
             return desc
         if getattr(self, "config_section", "") == "misc":
             return "Auto mode runs unattended: human gates are recorded as waived; failing tests still stop the run. The approval name identifies your manual approvals."
+        if getattr(self, "config_section", "") == "supervision":
+            return self._supervision_desc()
         if not getattr(self, "config_section", ""):
             return "Choose a configuration section."
         return CONFIG_DESC.get(self._config_row(), "")
@@ -1008,7 +1140,7 @@ class UncleTUI:
         if kind == "runner" and not runners_for(STAGE_SIDE.get(target, AGENT)):
             self.notice = "No agents installed. Install claude, codex, kimi, cline, or opencode and add its executable to PATH."
             return
-        if kind in ("name", "base_url", "api_key", "approval_name"):
+        if kind in ("name", "base_url", "api_key", "approval_name") or target == "!supervision":
             self.input_buf = self._field_value(target, kind)
             self.state = "config_edit"
             return
@@ -1109,6 +1241,7 @@ class UncleTUI:
     def load_config(self):
         exists = os.path.exists(CONFIG_PATH)
         self.misc = {}
+        self.supervision = {}
         self.stage_runners = {}
         self.stage_models = {}
         self.stage_efforts = {}
@@ -1135,6 +1268,11 @@ class UncleTUI:
                     key, val = parts[0].strip(), parts[1].strip()
                     if key in ("misc.auto_mode", "misc.approval_name"):
                         self.misc[key.split(".", 1)[1]] = val
+                    elif key.startswith("supervision."):
+                        # Kept verbatim, valid or not: the typed parser reports
+                        # an invalid value on the Supervision screen and the
+                        # driver side fails closed; a rewrite must not lose it.
+                        self.supervision.setdefault(key.split(".", 1)[1], val)
                     elif key in legacy:
                         legacy[key] = val
                     elif "." in key:
@@ -1246,6 +1384,8 @@ class UncleTUI:
                 fh.write(header)
                 for key, value in getattr(self, "misc", {}).items():
                     fh.write("misc.%s %s\n" % (key, value))
+                for key, value in getattr(self, "supervision", {}).items():
+                    fh.write("supervision.%s %s\n" % (key, value))
                 for stage in CONFIG_STAGES:
                     lines = []
                     runner = self.stage_runners.get(stage, "")
@@ -1323,6 +1463,13 @@ class UncleTUI:
         except Exception:
             return
         kind = ev.get('event', '')
+        host = getattr(self, 'supervision_host', None)
+        if host is not None:
+            try:
+                host.controller.observe(ev)
+            except (OSError, ValueError) as exc:
+                self._ensure_chat()
+                self.home_history.append(('supervisor', 'Supervision error: ' + sanitize(str(exc))))
         if kind.startswith('steering_') or kind == 'chat_output':
             if getattr(self, 'workflow_exit_reported', False):
                 return  # Late buffered events cannot reconnect a stopped build.
@@ -1336,7 +1483,7 @@ class UncleTUI:
                 if channels.get(stage) == ev.get('channel'):
                     channels.pop(stage, None)
             elif kind == 'chat_output':
-                text = sanitize(ev.get('text', ''))
+                text = SUPERVISION_MARKER_RE.sub('', sanitize(ev.get('text', '')))
                 role = 'assistant (' + stage + ')'
                 if self.home_history and self.home_history[-1][0] == role:
                     self.home_history[-1] = (role, (self.home_history[-1][1] + text)[-1024*1024:])
@@ -1430,6 +1577,12 @@ class UncleTUI:
                 message = reason + '. Stage chat disconnected. Press Esc to return to the menu.'
                 self.home_history.append(('system', message))
                 self.chat_error = message
+                host = getattr(self, 'supervision_host', None)
+                if host is not None:
+                    # Triage owns a failure exit; an in-flight diagnosis is
+                    # cancelled (and charged) and queued triggers wait for it.
+                    host.controller.cancel('interrupted')
+                    host.controller.driver_exited(self.workflow_exit_code)
                 self._maybe_auto_triage()
 
     def start_workflow(self):
@@ -1443,6 +1596,7 @@ class UncleTUI:
         env["UNCLE_STATUS_FILE"] = self.status_path
         env["UNCLE_STEERING"] = "1"
         self.steering_channels = {}
+        self._supervision_start(env)
         env["UNCLE_SIGNING_JSON"] = "1"
         self.status_pos = 0
         self.panel_scroll = None
@@ -1990,6 +2144,9 @@ class UncleTUI:
             if os.path.exists(temporary): os.unlink(temporary)
         self.home_history.append(('user', sanitize(message)))
         self.home_history.append(('system', 'Steering queued for ' + stage))
+        host = getattr(self, 'supervision_host', None)
+        if host is not None:
+            host.controller.steering_queued(stage, id, payload)
 
     def send_home_chat(self, message):
         preview = getattr(self, 'completion_preview', None)
@@ -2174,6 +2331,80 @@ class UncleTUI:
                 self._run()
                 self.home_history.append(('system', 'Started the ' + kind + ' workflow using ' + filename + '.'))
         self.chat_error = ''
+
+    # ---- supervision ----
+    def _supervision_items(self):
+        config = supervision_lib.load_config(CONFIG_PATH)
+        rows = []
+        for key, _kind, default in supervision_lib.CONTROLS:
+            stored = self.supervision.get(key, "")
+            shown = stored if stored else "%s  (default)" % supervision_lib.format_value(key, default)
+            rows.append("%s  %s" % (key.ljust(26), shown))
+        if config.errors:
+            rows.append("! " + config.disabled_reason)
+        return rows
+
+    def _supervision_desc(self):
+        keys = [key for key, _, _ in supervision_lib.CONTROLS]
+        if 0 <= self.config_sel < len(keys):
+            return SUPERVISION_DESC.get(keys[self.config_sel], "") + " Enter edits; an empty value restores the default."
+        return "Fix the invalid value in .uncle/config; corrections stay disabled until every supervision key parses."
+
+    def _supervision_enter(self):
+        keys = [key for key, _, _ in supervision_lib.CONTROLS]
+        if not 0 <= self.config_sel < len(keys):
+            return
+        key = keys[self.config_sel]
+        if supervision_lib.KINDS[key] == "bool":
+            current = self.supervision.get(key, supervision_lib.format_value(key, supervision_lib.DEFAULTS[key]))
+            self._set_field("!supervision", key, "false" if current == "true" else "true")
+            return
+        self._open_picker(key, "!supervision")
+
+    def _supervision_start(self, env):
+        """Host the controller for this run; nothing is created when supervision is off."""
+        previous = getattr(self, "supervision_host", None)
+        if previous is not None:
+            previous.close()
+        self.supervision_host = None
+        config = supervision_lib.load_config(CONFIG_PATH)
+        if not config.enabled:
+            return
+        env["UNCLE_SUPERVISION_HOST"] = "tui"
+        try:
+            self.supervision_host = TuiSupervisionHost(self, config)
+        except (OSError, ValueError) as exc:
+            self._ensure_chat()
+            self.home_history.append(("supervisor", "Supervision unavailable: " + sanitize(str(exc))))
+
+    def poll_supervision(self):
+        host = getattr(self, "supervision_host", None)
+        if host is None:
+            return False
+        host.controller.gate(bool(self.prompt_kind))
+        try:
+            changed = host.controller.tick()
+        except (OSError, ValueError) as exc:
+            self.home_history.append(("supervisor", "Supervision error: " + sanitize(str(exc))))
+            return True
+        if getattr(self, "supervision_retry_pending", False):
+            # Deferred out of the controller's call stack: the old owner
+            # finishes its records and releases before the relaunch constructs
+            # the next one over the same journal.
+            self.supervision_retry_pending = False
+            if not (self.proc and self.proc.poll() is None) and getattr(self, "triage_request", None) is None:
+                self.home_history.append(("supervisor", "Relaunching the workflow to apply the retained correction."))
+                self._run()
+            return True
+        return changed
+
+    def _supervision_retry(self):
+        """A permitted retry is the ordinary start: the driver re-verifies every approval itself."""
+        if self.proc and self.proc.poll() is None:
+            return
+        if getattr(self, "triage_request", None) is not None:
+            return
+        self.supervision_retry_pending = True
 
     # ---- triage ----
     #
@@ -3972,8 +4203,14 @@ class UncleTUI:
             elif k in (10, 13):
                 section = getattr(self, "config_section", "")
                 if not section:
+<<<<<<< HEAD
                     self.config_section = ("stages", "opencode", "misc", "recovery")[self.config_sel]
+=======
+                    self.config_section = ("stages", "opencode", "misc", "supervision")[self.config_sel]
+>>>>>>> b9468f1f (Add bounded event-triggered AI supervision for workflow stages)
                     self.config_sel = self.config_scroll = 0
+                elif section == "supervision":
+                    self._supervision_enter()
                 elif section == "misc":
                     if self.config_sel == 0:
                         self._set_field("!misc", "auto_mode", "false" if self.misc.get("auto_mode") == "true" else "true")
@@ -4064,7 +4301,7 @@ class UncleTUI:
         elif self.state == "stage":
             self.state = "config"
         elif self.state == "config_edit":
-            self.state = "config" if self.picker_target in ("@new", "!misc") else "stage"
+            self.state = "config" if self.picker_target in ("@new", "!misc", "!supervision") else "stage"
         elif self.state == "picker":
             self.state = "stage"
         self.sel = 0
@@ -4128,7 +4365,7 @@ class UncleTUI:
             if self.notice:
                 return
             self.input_buf = ""
-            if self.picker_target == "!misc":
+            if self.picker_target in ("!misc", "!supervision"):
                 self.state = "config"
                 return
             self.stage_sel = min(self.stage_sel,
@@ -4179,6 +4416,10 @@ class UncleTUI:
                 if getattr(self, "triage_request", None):
                     self.triage_request.cancel()
                     self.triage_request.thread.join(timeout=5)
+                if getattr(self, "supervision_host", None):
+                    self.supervision_host.controller.cancel('cancelled')
+                    self.supervision_host.close()
+                    self.supervision_host = None
                 self.stop_workflow()
             finally:
                 signal.signal(signal.SIGTERM, previous_term)
@@ -4195,6 +4436,7 @@ class UncleTUI:
             dirty = self.poll_triage() or dirty
             dirty = self.poll_issue_picker() or dirty
             self._poll_workflow()
+            dirty = self.poll_supervision() or dirty
             dirty = self.poll_status() or dirty
             dirty = self.poll_session_stats() or dirty
             if self.state in ("running", "triage") and getattr(self, "proc", None):

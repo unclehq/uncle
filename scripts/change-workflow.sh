@@ -326,6 +326,7 @@ CLAUDE_TOOLS="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
 # terminal, so the text is printed separately. Escapes are emitted only for a
 # real terminal: piped captures and TERM=dumb stay free of control bytes.
 gate_prompt() {
+    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "${1:0:80}"; fi
     if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
         printf '%s%s%s' $'\033[1m' "$1" $'\033[0m'
     else
@@ -427,6 +428,7 @@ implementation_incomplete_choice() {
 
 require_file() {
     if [[ ! -s "$1" ]]; then
+        supervision_validation_failed require_file "$1" "Required file missing or empty: $1"
         echo "Required file missing or empty: $1"
         exit 1
     fi
@@ -742,6 +744,7 @@ human_gate() {
     # IFS= keeps surrounding whitespace, so " y" is not an approval. `|| true`
     # keeps EOF from tripping `set -e` before the decline path runs.
     IFS= read -r response || true
+    if declare -f supervision_gate_close > /dev/null; then supervision_gate_close; fi
 
     case "$response" in
         y|Y) ;;
@@ -1265,6 +1268,8 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
+        supervision_prompt "$effective_prompt" "$log_name" "$LOG_DIR/${log_name}.jsonl"
+        effective_prompt="$SUPERVISION_PROMPT"
         ( "${client_cmd[@]}" "${flags[@]}" \
             < "$effective_prompt" \
             2>&1 \
@@ -1277,6 +1282,7 @@ run_claude() {
         local elapsed="$((SECONDS - start))"
         local log="$LOG_DIR/${log_name}.jsonl"
         perf_record agent "$log_name" "$elapsed" "$status" "$log" "$cmd" "$model" "$effort"
+        supervision_stage_end "$log_name" "$status" "$log"
 
         # The final result event, if the run produced one.
         local result
@@ -1410,6 +1416,8 @@ run_codex() {
     # rules the same way an agent stage does.
     if [[ "$log_name" != plan-executability ]]; then
         prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+        supervision_prompt "$prompt_file" "$log_name" "$LOG_DIR/${log_name}.log"
+        prompt_file="$SUPERVISION_PROMPT"
     fi
 
     local review_key
@@ -1449,6 +1457,7 @@ run_codex() {
     record_codex_cost "$log_name" "$((SECONDS - start))"
     perf_record reviewer "$log_name" "$((SECONDS-start))" "$status" \
         "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
+    supervision_stage_end "$log_name" "$status" "$LOG_DIR/${log_name}.log"
 
     if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
         echo
@@ -1655,6 +1664,8 @@ implementation_complete() {
         CHANGE_SPEC.md IMPLEMENTATION_NOTES.md > "$completion"; then
         return 0
     fi
+    supervision_validation_failed implementation_completion IMPLEMENTATION_NOTES.md \
+        "$(head -n 3 "$completion" 2>/dev/null | tr '\n' ' ')" 0
     # Keep rejection evidence intact. Only explicitly waived delivery rows may
     # advance; structural errors, missing IDs, and unrelated waivers still fail.
     [[ -s "$completion" ]] || return 1

@@ -402,7 +402,7 @@ sys.exit(7 if mode=='fail' else 0)
         with patch.object(module,'CONFIG_PATH',str(self.config)):
             ui=module.UncleTUI.__new__(module.UncleTUI)
             ui.load_config()
-            self.assertEqual(ui._config_items(), ['1. Configure stages', '2. Configure OpenCode / self hosting', '3. Miscellaneous'])
+            self.assertEqual(ui._config_items(), ['1. Configure stages', '2. Configure OpenCode / self hosting', '3. Miscellaneous', '4. Supervision'])
             ui.config_section = 'misc'
             with patch.object(ui, 'maybe_reload'):
                 ui._set_field('!misc', 'auto_mode', 'true')

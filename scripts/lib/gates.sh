@@ -13,6 +13,11 @@ GATES_BASENAME="GATES.md"
 # This file's own directory, for helpers shipped beside it. $ROOT is the
 # installed uncle root, which is not the same place in a dev checkout.
 GATES_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Optional: a standalone copy of this file (scripts/codex-*.sh fixtures)
+# has no supervision hooks and needs none.
+if [[ -f "$GATES_LIB_DIR/supervision.sh" ]]; then
+    . "$GATES_LIB_DIR/supervision.sh"
+fi
 
 gates_file() {
     local f
@@ -477,6 +482,12 @@ check_document_budget() {
         if [[ "${WORKFLOW_DOC_BUDGET_ENFORCE:-0}" != 1 ]]; then
             echo "Continuing: the budget is advisory (WORKFLOW_DOC_BUDGET_ENFORCE=1 makes it blocking)." >&2
             return 0
+        fi
+        # An enforced overrun is a validation failure the supervisor may
+        # diagnose; an advisory one above, or a decline below, is not.
+        if declare -f supervision_validation_failed > /dev/null; then
+            supervision_validation_failed document_budget "$file" \
+                "Document budget exceeded: $file ($bytes bytes, $lines lines; limits $max_bytes bytes, $max_lines lines)"
         fi
         if [[ -t 0 || -n "${UNCLE_STATUS_FILE:-}" || "${WORKFLOW_BUDGET_PROMPT:-0}" == 1 ]]; then
             read -r proposed_bytes proposed_lines <<< "$(awk -v b="$bytes" -v l="$lines" -v mb="$max_bytes" -v ml="$max_lines" 'BEGIN {printf "%.0f %.0f", (b>mb?int((b*1.1+999)/1000)*1000:mb), (l>ml?int((l*1.1+9)/10)*10:ml)}')"

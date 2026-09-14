@@ -47,10 +47,19 @@ def run(stage, directory, values=None, root=None, allow_shell=True):
         request('/session/'+session+'/prompt_async',{'model':{'providerID':'local','modelID':values['model']},
                 'agent':'uncle','parts':[{'type':'text','text':text}]})
     send(stage.prompt)
+    stage.correlation='message'
     stage.ready(directory)
+    steered={}  # OpenCode user message id -> steering id, so a reply's parentID names its steering
     def steer(text,id):
+        before={m.get('info',{}).get('id') for m in (request('/session/'+session+'/message') or []) if m.get('info',{}).get('role')=='user'}
         send(text)
-        stage.status('steering_accepted',message_id=id)
+        for _ in range(50):
+            after=[m.get('info',{}).get('id') for m in (request('/session/'+session+'/message') or []) if m.get('info',{}).get('role')=='user']
+            new=[m for m in after if m not in before]
+            if new: steered[new[-1]]=id; break
+            time.sleep(.1)
+        stage.pending[id]=True
+        stage.ack({'id':id,'result':{}})
     # Read canonical stored messages so repeated polls never double-count usage or text.
     seen_text={}
     timing_seen={}
@@ -74,6 +83,8 @@ def run(stage, directory, values=None, root=None, allow_shell=True):
             if info.get('role')!='assistant': continue
             started=True;last=info
             if info.get('error'): raise ValueError(str(info['error']))
+            if info.get('parentID') in steered and info.get('time',{}).get('completed'):
+                stage.answered(steered.pop(info['parentID']),info.get('id'))
             tokens=info.get('tokens',{});cache=tokens.get('cache',{})
             totals['input_tokens']+=tokens.get('input',0)
             totals['output_tokens']+=tokens.get('output',0)+tokens.get('reasoning',0)

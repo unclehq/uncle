@@ -657,7 +657,7 @@ expect_state "99:IMPLEMENT"
 new_case git-completion-defers-close
 setup_audit_stage READY
 git -C "$REPO" init -q
-git -C "$REPO" -c commit.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --allow-empty -qm initial
+git -C "$REPO" -c commit.gpgsign=false -c tag.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --no-gpg-sign --allow-empty -qm initial
 printf '42:FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
 printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1
@@ -670,7 +670,7 @@ for setting in WORKFLOW_CLOSE_ISSUE=0 UNATTENDED=1; do
     new_case "git-disabled-$setting"
     setup_audit_stage READY
     git -C "$REPO" init -q
-    git -C "$REPO" -c commit.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --allow-empty -qm initial
+    git -C "$REPO" -c commit.gpgsign=false -c tag.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --no-gpg-sign --allow-empty -qm initial
     printf '42:FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
     printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
     run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" "$setting"
@@ -1042,6 +1042,7 @@ elif args[:2] == ['pr', 'create']:
         self.git('config', 'user.name', 'Fixture')
         self.git('config', 'user.email', 'fixture@example.test')
         self.git('config', 'commit.gpgsign', 'false')
+        self.git('config', 'tag.gpgsign', 'false')
         (self.repo / '.gitignore').write_text('.uncle/workflow/\n')
         (self.repo / 'source.txt').write_text('before\n')
         (self.repo / 'CHANGE_REQUEST.md').write_text('## Summary\n\nFix café 日本語\n')
@@ -1064,7 +1065,7 @@ elif args[:2] == ['pr', 'create']:
         path.chmod(0o755)
 
     def git(self, *args):
-        return subprocess.check_output([REAL_GIT, *args], cwd=self.repo, env=self.env, stderr=subprocess.PIPE).decode().strip()
+        return subprocess.check_output([REAL_GIT, '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', *args], cwd=self.repo, env=self.env, stderr=subprocess.PIPE).decode().strip()
 
     def engine(self, action, text='', **env):
         pending = env.pop('FIXTURE_LEAVE_COMMIT_PENDING', False)
@@ -1185,7 +1186,7 @@ elif args[:2] == ['pr', 'create']:
         self.assertEqual(self.journal()['phase'], 'created')
         self.assertEqual(len(self.creates()), 1)
         j = self.journal()
-        unsigned = self.git('-c', 'commit.gpgsign=false', 'commit-tree', j['commit_tree'], '-p', j['original_head'], '-m', 'unsigned')
+        unsigned = self.git('-c', 'commit.gpgsign=false', 'commit-tree', '--no-gpg-sign', j['commit_tree'], '-p', j['original_head'], '-m', 'unsigned')
         self.git('update-ref', 'HEAD', unsigned)
         j.update(phase='prepared', intended_head=unsigned)
         j.pop('manual_signed_head')
@@ -1376,7 +1377,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('READY\\n
         self.assertIn('HEAD or branch changed', self.publish().stdout)
 
     def test_head_drift(self):
-        self.git('commit', '--allow-empty', '-qm', 'after audit')
+        self.git('commit', '--no-gpg-sign', '--allow-empty', '-qm', 'after audit')
         self.assertIn('HEAD or branch changed', self.publish().stdout)
 
     def test_origin_and_verdict_drift(self):
@@ -1614,7 +1615,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         self.git('checkout', '-qb', 'feature')
         self.freeze()
         self.git('remote', 'add', 'upstream', str(self.bare))
-        other = self.git('commit-tree', self.git('rev-parse', 'HEAD^{tree}'), '-p', self.original, '-m', 'remote edit')
+        other = self.git('commit-tree', '--no-gpg-sign', self.git('rev-parse', 'HEAD^{tree}'), '-p', self.original, '-m', 'remote edit')
         self.git('push', '-q', 'origin', other + ':refs/heads/feature')
         self.assertIn('Remote head differs', self.publish(FORK='1').stdout)
         self.assertEqual(len(self.creates()), 0)

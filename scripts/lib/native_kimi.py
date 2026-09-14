@@ -78,7 +78,10 @@ def run(stage, directory):
             result=request(path+'/prompts:steer',{'prompt_ids':[queued['prompt_id']]})
             if not result.get('steered'):
                 raise ValueError('Kimi did not accept steering; the message remains queued in its session')
-        stage.status('steering_accepted',message_id=id)
+        # The session API returns no id tying a later message to this prompt:
+        # accepted, never confirmed answered (correlation 'none').
+        stage.pending[id]=True
+        stage.ack({'id':id,'result':{}})
     seen={}
     timing_seen={}
     deadline=time.monotonic()+int(os.environ.get('WORKFLOW_NATIVE_STAGE_SECONDS','3600'))

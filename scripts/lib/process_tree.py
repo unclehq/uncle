@@ -57,6 +57,7 @@ def group_options():
     return {'start_new_session': True}
 
 
+<<<<<<< HEAD
 def track_process(process, command, started, tick):
     from build_timing import event
     import uuid
@@ -83,6 +84,43 @@ def start_check(command, **kwargs):
         from windows_job import start
         return track_process(start(command, **kwargs, **group_options()), command, started, tick)
     return timed_popen(command, stdin=subprocess.DEVNULL, **kwargs, **group_options())
+=======
+# A POSIX child that outlives its parent is otherwise unowned: this shim is
+# the session leader of the check, and kills its whole group when the parent
+# that started it disappears. Windows checks get the same from the Job's
+# kill-on-close limit.
+_PARENT_WATCH = (
+    'import os, signal, subprocess, sys, threading, time\n'
+    'parent = os.getppid()\n'
+    'child = subprocess.Popen(sys.argv[1:])\n'
+    'def watch():\n'
+    '    while True:\n'
+    '        time.sleep(0.2)\n'
+    '        if os.getppid() != parent:\n'
+    '            os.killpg(os.getpgid(0), signal.SIGKILL)\n'
+    'threading.Thread(target=watch, daemon=True).start()\n'
+    'sys.exit(child.wait())\n')
+
+
+def start_check(command, prompt=None, **kwargs):
+    """Start `command` as its own owned tree. `prompt` (bytes) is written to
+    its stdin and then closed; without one stdin is /dev/null as before."""
+    if os.name == 'nt':
+        from windows_job import start
+        return start(command, prompt=prompt, **kwargs, **group_options())
+    import sys
+    wrapped = [sys.executable, '-B', '-c', _PARENT_WATCH, *command]
+    if prompt is None:
+        return subprocess.Popen(wrapped, stdin=subprocess.DEVNULL, **kwargs, **group_options())
+    child = subprocess.Popen(wrapped, stdin=subprocess.PIPE, **kwargs, **group_options())
+    try:
+        child.stdin.write(prompt)
+    except (BrokenPipeError, OSError):
+        pass
+    child.stdin.close()
+    child.stdin = None
+    return child
+>>>>>>> b9468f1f (Add bounded event-triggered AI supervision for workflow stages)
 
 
 def finish_check(process):

@@ -135,6 +135,127 @@ check, as they would for any other edit. The ledger is printed at COMPLETE.
 Configure the model under the `triage` row (`triage.runner`, `triage.effort`,
 `triage.model`); unset, it uses the runner's defaults.
 
+## Supervision (opt-in)
+
+Triage waits for a failure exit and for you. Supervision is the earlier,
+narrower step: with `supervision.enabled true` in `.uncle/config` (Configure
+→ Supervision), the screen -- or, for a run started from a terminal, the
+driver's lock parent -- watches the run's own status events and asks a
+tool-free model for one diagnosis when, and only when, one of four things
+happens:
+
+1. a driver validator rejects a stage's output (missing or empty artifact,
+   enforced document budget, acceptance or implementation-completion check);
+2. the same failure signature (stage, exit status, first diagnostic line)
+   recurs on the next attempt with the workflow state unchanged;
+3. a steering message was accepted by the stage but not answered within
+   `supervision.steering_timeout_seconds` of active stage time;
+4. a stage exceeds `supervision.stage_time_seconds` of active time (gate
+   waits excluded) or `supervision.stage_tokens` reported tokens.
+
+Disabled, or enabled with every stage succeeding, no supervisor process is
+started and every stage prompt is byte-identical to today's.
+
+The reply is one strict JSON object that selects an action -- `steer`,
+`retry`, `ask` or `none` -- and a fixed correction template
+(`revisit_validator`, `respond_steering`, `reassess_progress`). The
+correction a stage receives is that template filled only from
+driver-generated fields (validator name, artifact, attempt, stage,
+measurement); the untrusted excerpt behind it -- a validator diagnostic, a
+steering message -- is appended separately, quoted line by line under a
+heading that says it is data, not instructions. For `steer` and `retry`
+the model's `diagnosis` must repeat, word for word, the driver's own
+description of a cited evidence id and its `rationale` must be the fixed
+sentence for that template; any other wording is rejected. For `ask` and
+`none` the prose is shown to you and nowhere else. A proposal for another
+stage, attempt or run, an unknown template, extra keys, a file path, tool
+call, or request for approval, waiver, commit, publication, permission or
+skipped tests in its text, or a stage that has moved on is rejected and
+changes nothing. Corrections are bounded: `supervision.max_interventions`
+per stage per run (default 2), `supervision.max_calls_per_run` supervisor
+calls (default 8), one call at a time, each with
+`supervision.call_timeout_seconds` and `supervision.call_max_cost_usd`. The
+next trigger past a bound asks you and calls nothing.
+
+`steer` goes down the stage's steering channel and is reported as queued,
+accepted, answered, unconfirmed or rejected -- acceptance is not an answer.
+An answer is recorded only when the runner can tie a reply to the message:
+`claude` (one response per submitted input, in order), `self-hosted`
+OpenCode (a reply names its user message), or the marker a supervisor
+correction asks the stage to begin with. `codex`, `cline` and `kimi` accept
+steering but give no such tie: their messages end as `unconfirmed`, the
+unanswered-steering trigger does not run for them, and a correction that
+ends unconfirmed asks you to check the stage output. Every transition is
+written to the journal before it is shown, so a resume can explain it. A
+stage that has ended, or one without a channel (reviewer stages, a run
+without the screen), keeps the correction in
+`.uncle/workflow/supervision/retry-note-<stage>.json`; `retry` relaunches the
+driver through its ordinary entry, so approval hashes, integrity checks and
+the repair limit run again, and the note is appended to that stage's prompt
+once: the launch claims it (`retry-note-<stage>.launch`) before the prompt
+is built, so a second launch under the same reservation runs without it. A
+note whose run, state digest or target attempt no longer matches is left
+alone.
+
+Every trigger, call, proposal and delivery is journalled in
+`.uncle/workflow/supervision/interventions.json` (authoritative counters,
+survives resume) and `ledger.jsonl` (audit); rows carry the run, stage,
+attempt, trigger, call and action ids that join a sanitized copy of the
+proposal to its disposition and delivery. Each call writes a
+`kind=supervisor` record under `.uncle/workflow/metrics/` with tokens, cost,
+duration and the same ids, `null` when unknown; stage totals exclude them.
+One process owns a workflow's supervision at a time (`supervision/owner.lock`,
+a kernel file lock held from before the journal is read until the host
+closes); a second screen or terminal over the same checkout reports
+"Supervision unavailable" and that run continues unsupervised.
+
+Authority boundary: the supervisor cannot approve, waive, commit, sign,
+publish, change permissions, edit files, or invoke git. It runs `claude` in
+bare mode with no tools, no settings, no session, an empty temporary working
+directory and an allowlisted environment (`PATH`, locale, temporary `HOME`,
+and `ANTHROPIC_API_KEY` if set). The worker is an owned process tree: its
+combined output is capped at 1 MiB while it runs and the tree is killed at
+that cap, at `supervision.call_timeout_seconds`, on cancel, and when the
+process hosting supervision exits (a POSIX session with a parent watch; a
+Windows Job with kill-on-close). Only `supervision.runner claude` is
+supported; any other value reports "Supervision unavailable" and does
+nothing. The supervisor path never invokes the triage guard or a live-tree
+copy. Triage keeps its place: a failure exit still opens triage, an in-flight
+diagnosis is cancelled and charged, and queued triggers run after the triage
+turn only if the state digest still matches. The context a diagnosis sees
+is bounded: the head of the stage's task prompt, the tail of the rejected
+report and of the stage log (each read only from inside the project or the
+uncle checkout, never through a symlink out of them), the validator
+diagnostic, recent output, pending steering and the run's own history, all
+redacted and cut to 98 KiB by dropping entries in a fixed order.
+
+Recovery: `supervision.enabled false` is read again at every stage boundary,
+on every poll and before every effect, so it stops the current run's
+supervisor too: an in-flight diagnosis is cancelled and charged, a reply
+that arrives after the switch is discarded, and counters are kept (the
+screen says so once). Delete a `retry-note-*.json` to discard a retained
+correction. A note reported `uncertain` (the driver launched its prompt but
+exited before the stage confirmed receipt) is never replayed by itself and
+stays charged: run `python3 scripts/lib/supervisor.py note-resolve
+--state-dir .uncle/workflow --stage <stage> --redeliver` to deliver it on
+the next attempt, or `--discard` to drop it. Move `interventions.json` aside
+if it is reported unreadable (corrections stay disabled, the run is
+unaffected). Secrets: every line sent to the supervisor is filtered for
+credential assignments, authorization headers, URL credentials, token
+patterns, and the values of credential-bearing keys in the environment and
+in `.uncle/config`; suspect lines are replaced wholesale, and a private-key
+block is removed from its BEGIN line through its END line or the end of the
+text.
+
+Keys and defaults: `supervision.enabled false`, `supervision.runner claude`,
+`supervision.model sonnet`, `supervision.effort medium`,
+`supervision.max_interventions 2`, `supervision.steering_timeout_seconds 120`,
+`supervision.stage_time_seconds 1800`, `supervision.stage_tokens 0`,
+`supervision.call_timeout_seconds 300`, `supervision.max_calls_per_run 8`,
+`supervision.call_max_cost_usd 0.5`. An unknown or invalid `supervision.*`
+value disables corrections with a message naming the key; no limit is ever
+substituted.
+
 ## Ideas and feedback
 
 Have an idea for Uncle or want to discuss how it should work? Start a [GitHub Discussion](../../discussions).

@@ -110,6 +110,33 @@ final-audit.effort low
 triage.runner claude
 triage.effort low
 
+# --- supervision (opt-in) ---------------------------------------------------
+
+# Event-triggered diagnosis while a run is in progress: a validator failure,
+# a recurring failure signature, accepted-but-unanswered steering, or a
+# stage over its time/token bound asks a tool-free model for one bounded
+# action. Off by default; off, no supervisor process ever starts. Only
+# `claude` is supported as the runner; other values report unavailable.
+# An invalid value disables corrections and names the key; nothing is
+# substituted. The file is re-read while a run is in progress: setting
+# enabled to false cancels the pending diagnosis and keeps the counters.
+# Corrections are fixed templates; the model's wording never reaches a
+# stage. Only claude confirms steering answers by turn order (and OpenCode
+# by message id); codex, cline and kimi accept steering without a
+# confirmed answer. See README.md "Supervision" for recovery, including
+# `supervisor.py note-resolve` for an uncertain retained note.
+# supervision.enabled false
+# supervision.runner claude
+# supervision.model sonnet
+# supervision.effort medium
+# supervision.max_interventions 2
+# supervision.steering_timeout_seconds 120
+# supervision.stage_time_seconds 1800
+# supervision.stage_tokens 0
+# supervision.call_timeout_seconds 300
+# supervision.max_calls_per_run 8
+# supervision.call_max_cost_usd 0.5
+
 # Self-hosted Aider runner using an OpenAI-compatible endpoint.
 # Configure → Configure Aider / self hosting: enter Base URL and masked API key.
 # Supported model IDs are discovered from the endpoint automatically.

@@ -176,8 +176,13 @@ EOF
     git -C "$REPO" config user.email test@example.com
     git -C "$REPO" config user.name Test
     git -C "$REPO" config commit.gpgsign false
+    git -C "$REPO" config tag.gpgsign false
     git -C "$REPO" add -A
+<<<<<<< HEAD
     git -C "$REPO" -c core.hooksPath=/dev/null commit --no-gpg-sign -qm baseline
+=======
+    git -C "$REPO" -c commit.gpgsign=false -c tag.gpgsign=false commit --no-gpg-sign -qm baseline
+>>>>>>> b9468f1f (Add bounded event-triggered AI supervision for workflow stages)
 
     # Stub agent: one JSON result event, plus whatever artifact the prompt
     # implies. FAKE_IMPL is the per-case body of the implementation stage.

@@ -204,6 +204,7 @@ def alive(pid):
 
 
 def lock_run(command):
+<<<<<<< HEAD
     from build_timing import BuildTiming
     with BuildTiming(STATE) as timing:
         result = _lock_run(command)
@@ -212,6 +213,22 @@ def lock_run(command):
 
 
 def _lock_run(command):
+=======
+    """One supervised launch, or several when an enabled supervisor permits a retry.
+
+    Each retry re-enters `_lock_run_once`: the lock is released and
+    reacquired, and the driver runs every approval, integrity and repair
+    check again. With supervision disabled this is exactly one launch.
+    """
+    # No bytecode: this import runs inside project checkouts, and a stray
+    # __pycache__ in a copied lib would show up in the change diff.
+    sys.dont_write_bytecode = True
+    from supervisor import supervised_lock_run
+    return supervised_lock_run(_lock_run_once, command, STATE, Path(__file__).resolve().parents[2])
+
+
+def _lock_run_once(command):
+>>>>>>> b9468f1f (Add bounded event-triggered AI supervision for workflow stages)
     """Permanent inode, supervised process group, orphan detection across driver families."""
     if os.name == 'nt':
         from windows_driver import lock_run as windows_lock_run

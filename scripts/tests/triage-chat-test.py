@@ -139,9 +139,11 @@ class TriageTests(unittest.TestCase):
         (self.project / 'CHANGE_PLAN.md').write_text('| AC-1 | plan row |\n')
         (self.project / 'ADVERSARIAL_REVIEW.md').write_text('review\n')
         subprocess.run(['git', 'init', '-q', '.'], cwd=self.project, check=True)
+        subprocess.run(['git', 'config', 'commit.gpgsign', 'false'], cwd=self.project, check=True)
+        subprocess.run(['git', 'config', 'tag.gpgsign', 'false'], cwd=self.project, check=True)
         (self.project / '.gitignore').write_text('.uncle/workflow/\n')
         subprocess.run(['git', 'add', '-A'], cwd=self.project, check=True)
-        subprocess.run(['git', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--no-gpg-sign', '-qm', 'init'],
+        subprocess.run(['git', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--no-gpg-sign', '-qm', 'init'],
                        cwd=self.project, check=True)
         # A fake install: the guard, bundle lib, and prompt the TUI needs, so
         # the installed-tree check has a tree the fake master can try to edit.

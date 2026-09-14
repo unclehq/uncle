@@ -336,12 +336,11 @@ class ChatInteractionTests(unittest.TestCase):
         self.assertTrue(self.ui.chat_picker)
         self.assertIn('notes.txt', self.ui.chat_choices)
 
-    def test_running_chat_is_always_bottom_centered(self):
+    def test_running_chat_is_bottom_left_full_width(self):
         self.ui.state = 'running'
         self.ui.color = dict(title=0, sel=0, accent=0)
         self.ui._draw_running = Mock()
         self.ui._draw_session_stats = Mock()
-        self.ui._draw_status = Mock()
         self.ui._draw_chat_panel = Mock()
         for h, w in ((40, 160), (30, 120), (24, 80), (12, 40)):
             for stage in ('requirements', 'implementation', 'final-audit'):
@@ -351,11 +350,11 @@ class ChatInteractionTests(unittest.TestCase):
                 self.ui.stdscr.getmaxyx.return_value = (h, w)
                 self.ui.draw()
                 panel = min(34, w // 3) if w >= 60 else 0
-                width = min(76, w - panel)
+                chat_height = min(6, max(0, h - 3))
                 self.ui._draw_chat_panel.assert_called_with(
-                    h - min(7, max(0, h - 3)) - 1, h - 1, (w - panel - width) // 2, width)
+                    h - chat_height, h, 0, w - panel)
                 self.ui._draw_running.assert_called_with(
-                    h - min(7, max(0, h - 3)) - 1, w - panel)
+                    h - chat_height, w - panel)
                 self.assertTrue(self.ui.chat_open)
 
     def test_running_preserves_dialog_and_statistics_renderer(self):
@@ -365,11 +364,9 @@ class ChatInteractionTests(unittest.TestCase):
         self.ui.stdscr.getmaxyx.return_value = (30, 120)
         self.ui._draw_running = Mock()
         self.ui._draw_session_stats = Mock()
-        self.ui._draw_status = Mock()
         self.ui.draw()
-        self.ui._draw_running.assert_called_once_with(22, 86)
+        self.ui._draw_running.assert_called_once_with(24, 86)
         self.ui._draw_session_stats.assert_called_once_with(30, 120, 34)
-        self.ui._draw_status.assert_called_once_with(30, 120)
 
     def test_homepage_focus_and_configuration_preserve_draft(self):
         self.ui.state = 'menu'
@@ -395,6 +392,36 @@ class ChatInteractionTests(unittest.TestCase):
         self.ui.handle_key(10)
         self.assertEqual(self.ui.chat.messages, ['Design a task list'])
         self.ui.answer_prompt.assert_not_called()
+
+    def test_implement_issue_selects_auto_and_lands_on_build_page(self):
+        del self.ui.send_home_chat  # Exercise the real homepage send path.
+        self.ui.misc = {}
+        self.ui.stage_runners = {}
+        self.ui.stage_efforts = {}
+        self.ui.stage_models = {}
+        self.ui.stage_networks = {}
+        self.ui.stage_billings = {}
+        self.ui.stage_base_urls = {}
+        self.ui.stage_api_keys = {}
+        self.ui.maybe_reload = Mock(return_value=False)
+        self.ui.start_workflow = Mock()
+        self.ui.state = 'menu'
+        self.ui.chat_focus = 'chat'
+        config = patch.object(tui, 'CONFIG_PATH', str(self.root / 'config'))
+        config.start()
+        self.addCleanup(config.stop)
+        self.type('implement issue https://github.com/unclehq/uncle/issues/44')
+        self.ui.handle_key(10)
+        self.assertEqual(self.ui.misc['auto_mode'], 'true')
+        self.assertIn('misc.auto_mode true', (self.root / 'config').read_text())
+        self.assertEqual(self.ui.workflow_idx, 1)
+        self.assertEqual(self.ui.issue, 'https://github.com/unclehq/uncle/issues/44')
+        self.assertEqual(self.ui.issue_mode, '')
+        self.assertEqual(self.ui.state, 'running')
+        self.ui.start_workflow.assert_called_once()
+        cmd = self.ui.cmd_for()
+        self.assertIn('https://github.com/unclehq/uncle/issues/44', cmd)
+        self.assertIn('--unattended', cmd)
 
     def test_picker_shows_and_enters_all_directories(self):
         for name in ('.git', '.ssh', '.uncle', 'visible'):
@@ -777,7 +804,7 @@ class ChatInteractionTests(unittest.TestCase):
         entry = next(call for call in calls if call.args[2].startswith('› '))
         self.assertEqual(entry.args[1], 25)
         self.assertEqual(entry.args[2], '› what day is it')
-        cursor = next(call for call in calls if call.args[0] == 28 and call.args[2] == ' ')
+        cursor = next(call for call in calls if call.args[0] == 27 and call.args[2] == ' ')
         self.assertEqual(cursor.args[1], 27 + len('what day is it'))
 
     def test_chat_approve_answers_pending_gate_once(self):
@@ -952,7 +979,7 @@ def terminal_case(screen):
         assert any('› ' in row for row in rows), rows
         assert any('Approve brief?' in row for row in rows), rows
         assert any('Tab' in row for row in rows), rows
-        assert 'runner:' in rows[h - 1], rows
+        assert '·' in rows[h - 2], rows
         before = len(answers)
         tui.curses.ungetch(ord('x'))
         ui.handle_key(screen.getch())

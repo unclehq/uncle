@@ -665,7 +665,7 @@ class UncleTUI:
 
     # ---- item lists ----
     def menu_items(self):
-        return [w[0] for w in WORKFLOWS] + ["Configure", "Quit", "Chat"]
+        return [w[0] for w in WORKFLOWS] + ["Configure", "Quit"]
 
     def items(self):
         if self.state == "menu":
@@ -2012,6 +2012,9 @@ class UncleTUI:
             message.strip(), re.IGNORECASE)
         if issue_request and not gate_question:
             self.home_history.append(('user', sanitize(message)))
+            # Asked to implement an issue now: select auto mode so the run
+            # answers its own gates and the build page goes straight to work.
+            self._set_field("!misc", "auto_mode", "true")
             self._home_action({'uncle_action': 'github_issue',
                                'issue': issue_request['issue'].removeprefix('#'),
                                'start': True,
@@ -2816,13 +2819,20 @@ class UncleTUI:
         self.stdscr.erase()
         if self.state in ("running", "viewer"):
             panel = min(34, w // 3) if w >= 60 else 0
-            chat_height = min(7, max(0, h - 3)) if self.state == 'running' and getattr(self, 'chat_open', False) else 0
-            # Reserve a blank row above the fixed-position build composer.
-            self._draw_running(h - chat_height - (1 if chat_height else 0), w - panel)
+            chat_height = 0
+            chat_width = 0
+            if self.state == 'running' and getattr(self, 'chat_open', False):
+                # Left-justified, as wide as the output, and a row taller per
+                # wrap — every row it takes comes from the build output.
+                chat_width = w - panel
+                text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
+                extra = min(len(self._wrap_input(text, max(8, chat_width - 2))), 6) - 1 if text else 0
+                chat_height = min(6 + extra, max(0, h - 3))
+            # The chat panel sits at the very bottom, in the row the old
+            # status bar used; the output takes everything above it.
+            self._draw_running(h - chat_height, w - panel)
             if chat_height:
-                chat_width = min(76, w - panel)
-                chat_left = max(0, (w - panel - chat_width) // 2)
-                self._draw_chat_panel(h - chat_height - 1, h - 1, chat_left, chat_width)
+                self._draw_chat_panel(h - chat_height, h, 0, chat_width)
             if panel:
                 self._draw_session_stats(h, w, panel)
         elif self.state == "notice":
@@ -2834,7 +2844,6 @@ class UncleTUI:
                 left = LOGO_W + 2 if logo_fits else 0
                 top = len(self.menu_items()) + (1 if logo_fits else 3)
                 self._draw_chat_panel(top, h - 1, left, w - left)
-        self._draw_status(h, w)
         self.stdscr.refresh()
         self._paint_support_link()
 
@@ -2975,20 +2984,34 @@ class UncleTUI:
         history = self.chat_display()
         if self.chat.preview:
             history += ['Preview: ', self.chat.preview]
-        menu_width = min(24, max(1, w - 2))
         width = max(1, min(76, w - 4))
         left = max(0, (w - width) // 2)
         compact = h < len(LOGO) + 12
         footer_rows = 8 if compact else 12
-        logo_fits = w >= LOGO_W + 4 and h >= len(LOGO) + footer_rows
+        # The menu is a bar along the very top; Ctrl-P/Tab only change focus.
+        focused = self.chat_focus == 'menu'
+        bar = []
+        x = 0
+        bar_y = 0
+        for i, label in enumerate(items):
+            selected = focused and i == self.sel
+            text = ('› ' if selected else '') + label
+            if x:
+                if x + 3 + len(text) > w - 1:
+                    bar_y += 1
+                    x = 0
+                else:
+                    text = '   ' + text
+            bar.append((bar_y, x, text, selected))
+            x += len(text)
+        # The decorative logo yields its rows to the bar before the prompt does.
+        logo_fits = w >= LOGO_W + 4 and h >= len(LOGO) + footer_rows + bar_y + 1
         logo = LOGO if logo_fits and not history else []
-        body_rows = max(len(LOGO) if logo_fits else 0, len(items))
+        body_rows = len(LOGO) if logo_fits else 0
         if h < 18:
             body_rows = 0
-        top = max(0, (h - body_rows - footer_rows) // 2)
+        top = max(bar_y + 1, (h - body_rows - footer_rows) // 2)
         logo_left = left + max(0, (width - LOGO_W) // 2)
-        menu_left = logo_left + LOGO_W + 2 if logo_fits else max(0, (w - menu_width) // 2)
-        menu_top = top
         if logo:
             for i, line in enumerate(logo):
                 try:
@@ -3006,33 +3029,53 @@ class UncleTUI:
                 pass
         if history:
             lines = []
-            history_width = max(1, min(width, menu_left - left - 2)) if logo_fits else width
             for line in '\n'.join(history)[-max(1, width * body_rows * 2):].splitlines():
-                lines.extend(textwrap.wrap(line, history_width) or [''])
-            room = max(0, body_rows - len(items) - 1)
+                lines.extend(textwrap.wrap(line, width) or [''])
+            room = max(0, body_rows - 1)
             for i, line in enumerate(lines[-room:] if room else []):
-                put(top + len(items) + 1 + i, line, color.get('accent', 0))
+                put(top + 1 + i, line, color.get('accent', 0))
         row = top + body_rows
         self._draw_chat_composer(row, h, w, left, width, compact)
-        # The menu stays visible; Ctrl-P/Tab only change keyboard focus.
-        focused = self.chat_focus == 'menu'
-        for i, label in enumerate(items, 1):
-            selected = focused and i > 0 and i - 1 == self.sel
-            text = label if i == 0 else ('› ' if selected else '  ') + label
-            if menu_top + i < h and menu_left < w - 1:
-                try:
-                    self.stdscr.addnstr(menu_top + i, menu_left, text, min(menu_width, w - menu_left - 1),
-                        color.get('sel', curses.A_REVERSE) if selected else color.get('title' if i == 0 else 'accent', 0))
-                except curses.error:
-                    pass
+        for y, x, text, selected in bar:
+            try:
+                self.stdscr.addnstr(y, x, text, min(len(text), max(0, w - x - 1)),
+                                    color.get('sel', curses.A_REVERSE) if selected else color.get('accent', 0))
+            except curses.error:
+                pass
 
+
+    @staticmethod
+    def _wrap_input(text, width):
+        # Wrap on words but keep every typed space: the cursor position is
+        # derived from the wrapped text, so dropping whitespace stalls it.
+        chunks, current = [], ''
+        for word in text.split(' '):
+            candidate = word if not current else current + ' ' + word
+            while len(candidate) > width:
+                if current:
+                    chunks.append(current)
+                    current, candidate = '', word
+                else:
+                    chunks.append(candidate[:width])
+                    candidate = candidate[width:]
+            current = candidate
+        if text:
+            chunks.append(current)
+        return chunks
 
     def _draw_chat_composer(self, row, h, w, left, width, compact=True):
         """Shared homepage and build chat appearance."""
         first_row = row
         build = self.state == 'running'
-        if compact and h - row < (7 if build else 8):
-            row -= 1  # Hide the greeting first on short terminals.
+        if build and compact:
+            # No greeting on the build page; the build output gets the row.
+            row -= 1
+            greeting = False
+        else:
+            greeting = True
+            if compact and h - row < 8:
+                row -= 1  # Hide the greeting first on short terminals.
+                greeting = False
         color = getattr(self, 'color', {})
         def put(y, text, attr=0, centered=False, right=False):
             if not first_row <= y < h:
@@ -3043,8 +3086,9 @@ class UncleTUI:
                 self.stdscr.addnstr(y, x, text, min(width, max(0, w - x - 1)), attr)
             except curses.error:
                 pass
-        put(row + (0 if compact else 1), 'What can uncle do for you?', color.get('title', 0) | curses.A_BOLD, True)
-        put(row + (1 if compact else 3), ('/ commands   @ files   # issues   Ctrl-P menu  Tab to chat' if width >= 60 else '/ cmds  @ files  # issues  Ctrl-P menu  Tab chat' if width >= 52 else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 34 else '@ files  Ctrl-P menu Tab chat' if width >= 28 else 'Ctrl-P menu'), color.get('muted', curses.A_DIM), True)
+        if greeting:
+            put(row + (0 if compact else 1), 'What can uncle do for you?', color.get('title', 0) | curses.A_BOLD, True)
+        put(row + (1 if compact else 3), ('/ commands   @ files   # issues   Ctrl-P menu  Tab to chat' if width >= 60 else '/ cmds  @ files  # issues  Ctrl-P menu  Tab chat' if width >= 52 else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 34 else '@ files  Ctrl-P menu Tab chat' if width >= 28 else 'Ctrl-P menu'), color.get('muted', curses.A_DIM), not build)
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
         text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
         placeholder = 'Ask about the failure · /do N · /resume' if getattr(self, 'recovery_active', False) else 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
@@ -3053,21 +3097,7 @@ class UncleTUI:
         composer_row = row + (3 if compact else 6)
         wrap_width = max(8, width - 2)
         # The composer grows as the input wraps; long pastes scroll to the tail.
-        # Wrap on words but keep every typed space: the cursor position is
-        # derived from the wrapped text, so dropping whitespace stalls it.
-        chunks, current = [], ''
-        for word in text.split(' '):
-            candidate = word if not current else current + ' ' + word
-            while len(candidate) > wrap_width:
-                if current:
-                    chunks.append(current)
-                    current, candidate = '', word
-                else:
-                    chunks.append(candidate[:wrap_width])
-                    candidate = candidate[wrap_width:]
-            current = candidate
-        if text:
-            chunks.append(current)
+        chunks = self._wrap_input(text, wrap_width)
         chunks = chunks[-max(1, min(6, h - composer_row - 3)):]
         extra = len(chunks) - 1 if text else 0
         if text:
@@ -3090,7 +3120,13 @@ class UncleTUI:
         if hasattr(self, 'stage_runners'):
             _, runner, model, effort = self.chat_model()
             model_label = (model or runner or model_label) + ' (' + effort + ')'
-        model_status = model_label + ('  ·  Recovering…' if getattr(self, 'triage_request', None) else '  ·  Recovery ready' if getattr(self, 'recovery_active', False) else '  ·  Workflow stopped' if self.state == 'running' and getattr(self, 'workflow_exit_reported', False) else '  ·  Thinking…' if getattr(self, 'home_request', None) else '  ·  Chat ready')
+        stage_status = ''
+        if build and getattr(self, 'status_stage', ''):
+            stage_status = self.status_stage
+            if getattr(self, 'status_stage_index', 0) and getattr(self, 'status_stage_total', 0):
+                stage_status += ' (%d/%d)' % (self.status_stage_index, self.status_stage_total)
+            stage_status += '  ·  '
+        model_status = stage_status + model_label + ('  ·  Recovering…' if getattr(self, 'triage_request', None) else '  ·  Recovery ready' if getattr(self, 'recovery_active', False) else '  ·  Workflow stopped' if self.state == 'running' and getattr(self, 'workflow_exit_reported', False) else '  ·  Thinking…' if getattr(self, 'home_request', None) else '  ·  Chat ready')
         project = os.path.basename(_project_root()) or _project_root()
         try:
             with open(os.path.join(_project_root(), '.git', 'HEAD')) as source:
@@ -3114,7 +3150,7 @@ class UncleTUI:
 
         self._draw_file_picker(composer_row, left, width)
     def _draw_chat_panel(self, top, bottom, left, width):
-        """Keep the homepage composer centered below the build output."""
+        """The chat composer below the content area, positioned by the caller."""
         if bottom - top < 2 or width < 4:
             return
         _, screen_width = self.stdscr.getmaxyx()
@@ -3397,10 +3433,6 @@ class UncleTUI:
                 self.stdscr.addnstr(y, left + 2, line, panel - 3, self._session_panel_attr(line))
             except curses.error:
                 pass
-        try:
-            self.stdscr.addnstr(h - 2, left + 2, r"[ ] stages; \ follow", panel - 3, getattr(self, "color", {}).get("muted", curses.A_DIM))
-        except curses.error:
-            pass
 
     def _title(self):
         if self.state == "picker":
@@ -3772,68 +3804,6 @@ class UncleTUI:
         except (OSError, ValueError):
             pass
 
-    def _draw_status(self, h, w):
-        if self.state == "viewer":
-            return
-        if self.state == "running":
-            model = self.status_model or "—"
-            if getattr(self, "workflow_exit_reported", False):
-                mode = "Stopped (exit %s)" % self.workflow_exit_code
-                bar_attr = self.color.get("warning", 0)
-            elif self.prompt_kind:
-                mode = "Waiting for you"
-                bar_attr = self.color["sel"]
-            elif self.status_mode == "act":
-                mode = "Act"
-                bar_attr = self.color["good"]
-            elif self.status_mode in ("plan", "review"):
-                mode = "Review" if self.status_mode == "review" else "Plan"
-                bar_attr = self.color["accent"]
-            else:
-                mode = "—"
-                bar_attr = 0
-            stage = "stage: %s" % (self.status_stage or "—")
-            if self.status_stage_index and self.status_stage_total:
-                stage = "stage: %s (%d/%d)" % (
-                    self.status_stage, self.status_stage_index, self.status_stage_total)
-        else:
-            model = "—"
-            mode = "—"
-            bar_attr = 0
-            stage = ""
-        runner = self.status_runner or "—"
-        effort = "—"
-        if self.state == "running" and self.status_stage:
-            effort = (getattr(self, "status_effort", "") or
-                      getattr(self, "stage_efforts", {}).get(self.status_stage) or default_stage_effort(self.status_stage))
-        parts = " runner: %s   model: %s   effort: %s   mode: %s " % (runner, model, effort, mode)
-        if stage:
-            parts += "  %s" % stage
-        text = parts
-        issue = ""
-        if self.state == "running":
-            if self.workflow_idx == 1:
-                issue = self.issue
-            elif self.workflow_idx == 2:
-                issue = getattr(self, "direct_issue", "")
-        if issue:
-            import re
-            issue_match = re.match(
-                r"^https?://github\.com/[^/]+/[^/]+/issues/([0-9]+)", issue)
-            if issue_match is None:
-                issue_match = re.fullmatch(r"([0-9]+)", issue)
-            if issue_match:
-                label = "change request %s" % issue_match.group(1)
-                padding = w - 1 - len(parts) - len(label)
-                if padding >= 1:
-                    text += " " * padding + label
-        try:
-            self.stdscr.attrset(bar_attr | curses.A_REVERSE)
-            self.stdscr.addnstr(h - 1, 0, text.ljust(w)[: w - 1], w - 1)
-            self.stdscr.attrset(0)
-        except curses.error:
-            self.stdscr.attrset(0)
-
     # ---- input ----
     def handle_key(self, k):
         preview = getattr(self, 'completion_preview', None)
@@ -4032,9 +4002,13 @@ class UncleTUI:
             return
 
         if self.state in ("menu", "issue_mode"):
-            if k == curses.KEY_UP or k in (ord("k"), ord("K")):
+            # The main menu is a horizontal bar, so left/right move along it.
+            side = self.state == "menu"
+            if k == curses.KEY_UP or k in (ord("k"), ord("K")) \
+                    or (side and k in (curses.KEY_LEFT, ord("h"), ord("H"))):
                 self.sel = (self.sel - 1) % len(self.items())
-            elif k == curses.KEY_DOWN or k in (ord("j"), ord("J")):
+            elif k == curses.KEY_DOWN or k in (ord("j"), ord("J")) \
+                    or (side and k in (curses.KEY_RIGHT, ord("l"), ord("L"))):
                 self.sel = (self.sel + 1) % len(self.items())
             elif k in (10, 13):
                 self._confirm()
@@ -4092,9 +4066,6 @@ class UncleTUI:
 
     def _confirm(self):
         if self.state == "menu":
-            if self.sel == len(WORKFLOWS) + 2:
-                self.open_chat()
-                return
             if self.sel == len(WORKFLOWS) + 1:
                 self._quit()
                 return

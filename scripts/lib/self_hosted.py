@@ -147,15 +147,22 @@ def settings(config, stage):
 
 def parse_arguments(side, args):
     output, prompt = '', ''
+    effort = ''
     turns = int(os.environ.get('UNCLE_STATUS_STAGE_TURNS') or 80)
     iterator = iter(args)
-    valued = {'--model','-m','--effort','-c','--sandbox','--allowedTools','--output-format',
+    valued = {'--model','-m','--sandbox','--allowedTools','--output-format',
               '--max-budget-usd','--resume','--mcp-config'}
     for arg in iterator:
         if arg == '--output-last-message':
             output = next(iterator)
         elif arg == '--max-turns':
             turns = int(next(iterator))
+        elif arg == '--effort':
+            effort = next(iterator)
+        elif arg == '-c':
+            override = next(iterator)
+            if override.startswith('model_reasoning_effort='):
+                effort = override.split('=', 1)[1]
         elif arg in valued:
             next(iterator)
         elif arg in ('exec','-p','--ephemeral','--json','--skip-git-repo-check','--verbose',
@@ -169,7 +176,7 @@ def parse_arguments(side, args):
         prompt = sys.stdin.read() or prompt
     if not prompt.strip() or turns < 1:
         raise ValueError('Self hosted requires a prompt and a positive turn limit')
-    return output, prompt, turns
+    return output, prompt, turns, effort
 
 
 
@@ -216,6 +223,11 @@ def opencode_invocation(side, values, prompt, root, directory, allow_shell=True)
                   'list': 'allow', 'edit': 'allow' if side == 'agent' else 'deny',
                   'bash': 'allow' if side == 'agent' and allow_shell else 'deny',
                   'external_directory': 'deny'}
+    entry = {'name': model, 'tool_call': True, 'limit': {'context': context, 'output': output}}
+    if values.get('effort'):
+        # Passthrough per opencode's model options; the endpoint decides
+        # whether a reasoning effort changes anything.
+        entry['options'] = {'reasoningEffort': values['effort']}
     config = {
         '$schema': 'https://opencode.ai/config.json',
         'enabled_providers': ['local'], 'model': 'local/' + model,
@@ -227,8 +239,7 @@ def opencode_invocation(side, values, prompt, root, directory, allow_shell=True)
         'provider': {'local': {'npm': '@ai-sdk/openai-compatible', 'name': 'Uncle self hosted',
                      'options': {'baseURL': values['base_url'].rstrip('/'),
                                  'apiKey': '{env:UNCLE_OPENCODE_API_KEY}', 'timeout': request_seconds * 1000},
-                     'models': {model: {'name': model, 'tool_call': True, 'limit': {
-                         'context': context, 'output': output}}}}},
+                     'models': {model: entry}}},
     }
     env = {k: v for k, v in os.environ.items() if not k.startswith(('OPENCODE_', 'AIDER_'))}
     # The adapter owns the live channel; tools/tests launched by the client
@@ -563,13 +574,15 @@ def main(side, args):
         return 0
     if side not in ('agent','reviewer'):
         raise ValueError('Invalid runner side')
-    output, prompt, _turns = parse_arguments(side, args)
+    output, prompt, _turns, effort = parse_arguments(side, args)
     stage = os.environ.get('UNCLE_STATUS_STAGE', '')
     if not stage and side == 'reviewer' and output:
         stage = Path(output).stem.lower().replace('_','-')
     config = os.environ.get('UNCLE_CONFIG', str(Path.cwd()/'.uncle/config'))
     values = settings(config, stage)
     values['max_turns'] = _turns
+    if effort:
+        values['effort'] = effort
     def interrupt(*_): raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, interrupt)
     if hasattr(signal, 'SIGBREAK'):

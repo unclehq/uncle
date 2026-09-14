@@ -724,22 +724,6 @@ human_gate() {
     show_spend
     echo
 
-    # Closed stdin here would abort the driver under `set -e` before the Y/N
-    # prompt, so EOF is routed to the same decline path as any other non-answer.
-    local prompt="Press ENTER after reviewing..."
-    if [[ "${#files[@]}" -gt 1 ]]; then
-        prompt="Press ENTER after reviewing all documents above..."
-    fi
-    # read -p hides the prompt on the TUI's piped stdin. Emit it explicitly
-    # so the TUI can open its review dialog before the approval question.
-    printf '%s' "$prompt"
-    if ! read -r; then
-        if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 1; fi
-        echo
-        echo "Gate not accepted. Workflow remains paused."
-        exit 0
-    fi
-
     # Digests are captured before the prompt and recorded afterwards, so each
     # approval attests to the bytes the operator was shown.
     local -a digests=()

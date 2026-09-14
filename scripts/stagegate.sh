@@ -968,17 +968,6 @@ review_and_approve() {
         echo "  code $file"
         echo
 
-        # Closed stdin here would abort the driver under `set -e` before the
-        # Y/N prompt, so EOF is routed to the same decline path as any other
-        # non-answer.
-        if ! read -r -p "Press ENTER after reviewing the file..."; then
-            if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 1; fi
-            echo
-            echo "Gate not accepted. Workflow paused."
-            exit 0
-        fi
-
-        echo
         gate_prompt "Ready to $wording $file? [Y/N] "
         # IFS= keeps surrounding whitespace, so " y" is not an approval.
         # `|| true` keeps EOF from tripping `set -e` before the decline path

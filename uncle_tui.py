@@ -3047,22 +3047,31 @@ class UncleTUI:
         put(row + (1 if compact else 3), ('/ commands   @ files   # issues   Ctrl-P menu  Tab to chat' if width >= 60 else '/ cmds  @ files  # issues  Ctrl-P menu  Tab chat' if width >= 52 else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 34 else '@ files  Ctrl-P menu Tab chat' if width >= 28 else 'Ctrl-P menu'), color.get('muted', curses.A_DIM), True)
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
         text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
-        visible_text = text[-max(1, width - 3):]
         placeholder = 'Ask about the failure · /do N · /resume' if getattr(self, 'recovery_active', False) else 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
-        if self.state == 'running' and self.prompt_kind and self.chat_focus == 'chat':
+        if self.state == 'running' and getattr(self, 'prompt_kind', '') and self.chat_focus == 'chat':
             placeholder = 'Ask a question · Tab returns to the pending dialog'
-        put(row + (3 if compact else 6), '› ' + (visible_text if text else placeholder),
-            color.get('accent', 0) if text else color.get('muted', curses.A_DIM))
-        put(row + (3 if compact else 6), '›', color.get('warning', curses.A_BOLD))
+        composer_row = row + (3 if compact else 6)
+        wrap_width = max(8, width - 2)
+        # The composer grows as the input wraps; long pastes scroll to the tail.
+        chunks = textwrap.wrap(text, wrap_width, break_long_words=True, break_on_hyphens=False) if text else []
+        chunks = chunks[-max(1, min(6, h - composer_row - 3)):]
+        extra = len(chunks) - 1 if text else 0
+        if text:
+            for i, chunk in enumerate(chunks):
+                put(composer_row + i, ('› ' if i == 0 else '  ') + chunk, color.get('accent', 0))
+        else:
+            put(composer_row, '› ' + placeholder, color.get('muted', curses.A_DIM))
+        put(composer_row, '›', color.get('warning', curses.A_BOLD))
         if self.chat_focus == 'chat' and (self.state != 'menu' or not getattr(self, 'home_menu_open', False)):
-            cursor_x = left + 2 + (len(visible_text) if text else 0)
-            if row + (3 if compact else 6) < h and cursor_x < w - 1:
+            cursor_y = composer_row + extra
+            cursor_x = left + 2 + (len(chunks[-1]) if chunks else 0)
+            if cursor_y < h and cursor_x < w - 1:
                 try:
-                    self.stdscr.addnstr(row + (3 if compact else 6), cursor_x, ' ' if text else placeholder[0], 1,
+                    self.stdscr.addnstr(cursor_y, min(cursor_x, left + width - 1), ' ' if text else placeholder[0], 1,
                                        color.get('warning', 0) | curses.A_REVERSE)
                 except curses.error:
                     pass
-        put(row + (4 if compact else 7), '─' * width, color.get('muted', curses.A_DIM))
+        put(composer_row + 1 + extra, '─' * width, color.get('muted', curses.A_DIM))
         model_label = 'Configure a model'
         if hasattr(self, 'stage_runners'):
             _, runner, model, effort = self.chat_model()
@@ -3077,14 +3086,11 @@ class UncleTUI:
             pass
         auto = getattr(self, 'misc', {}).get('auto_mode') == 'true'
         project_status = project + '  ·  ' + ('Auto mode on' if auto else 'Manual approvals')
-        if build:
-            right_width = min(len(project_status), max(1, width - 18))
-            put(row + 5, model_status[:max(0, width - right_width - 2)], color.get('muted', curses.A_DIM))
-            put(row + 5, project_status[:right_width], color.get('good', 0) if auto else color.get('accent', 0), right=True)
-        else:
-            put(row + (5 if compact else 9), model_status, color.get('muted', curses.A_DIM))
-            put(row + (6 if compact else 10), project_status, color.get('good', 0) if auto else color.get('accent', 0))
-        feedback_row = row + (6 if build else 7 if compact else 11)
+        status_row = composer_row + extra + (2 if build or compact else 3)
+        right_width = min(len(project_status), max(1, width - 18))
+        put(status_row, model_status[:max(0, width - right_width - 2)], color.get('muted', curses.A_DIM))
+        put(status_row, project_status[:right_width], color.get('good', 0) if auto else color.get('accent', 0), right=True)
+        feedback_row = status_row + 1
         if self.chat_error:
             put(feedback_row, self.chat_error, color.get('warning', curses.A_BOLD))
         elif self.chat_choices:
@@ -3092,7 +3098,7 @@ class UncleTUI:
         elif self.chat_composer.startswith('/'):
             put(feedback_row, '/configure /settings /file /quit /issue # /requirements /change /approve /clear', color.get('muted', curses.A_DIM))
 
-        self._draw_file_picker(row + (3 if compact else 6), left, width)
+        self._draw_file_picker(composer_row, left, width)
     def _draw_chat_panel(self, top, bottom, left, width):
         """Keep the homepage composer centered below the build output."""
         if bottom - top < 2 or width < 4:

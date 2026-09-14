@@ -145,7 +145,7 @@ class FindingsTests(unittest.TestCase):
         self.assertEqual(raw_answers, [])
         self.assertEqual(ui.gate_file, 'FINAL_AUDIT.md')
         ui._read_banner('HUMAN REVIEW REQUIRED: REQUIREMENTS.md')
-        self.assertEqual(raw_answers, [''])
+        self.assertEqual(raw_answers, [])
         ui.prompt_kind = ''
         ui.partial = 'Audit finding FA-1. Choose [s] Skip, [r] Human reviewed — OK, [n] Keep blocking: '
         ui.prompt_seen = 2

@@ -37,6 +37,20 @@ class MenuInputTests(unittest.TestCase):
         self.root_patch.start()
         self.addCleanup(self.root_patch.stop)
 
+    def test_review_banner_waits_for_user_approval(self):
+        self.ui.state = 'running'
+        self.ui._send_raw = Mock()
+        self.ui.prompt_kind = ''
+        self.ui._read_banner('HUMAN REVIEW REQUIRED: REQUIREMENTS_INTERPRETATION.md')
+        self.ui._send_raw.assert_not_called()
+        self.assertEqual(self.ui.gate_file, 'REQUIREMENTS_INTERPRETATION.md')
+        self.ui.partial = 'Ready to approve REQUIREMENTS_INTERPRETATION.md? [Y/N] '
+        self.ui.prompt_seen = 2
+        self.ui._detect_prompt()
+        self.assertTrue(self.ui.prompt_kind)
+        self.assertEqual(self.ui.chat_focus, 'gate')
+        self.ui._send_raw.assert_not_called()
+
     def test_unsigned_commit_command_opens_focused_dialog(self):
         self.ui.prompt_kind = ''
         self.ui.prompt_seen = 2

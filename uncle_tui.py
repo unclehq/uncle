@@ -1750,11 +1750,8 @@ class UncleTUI:
         text = line.strip()
         if text in ("Workflow complete.", "Change workflow complete."):
             self.workflow_completed = True
-        # A gate opens with this banner, then reads a bare newline before it
-        # asks the real question. bash prints a `read -p` prompt only to a
-        # terminal, so over a pipe that read is invisible: nothing appears and
-        # the run looks hung. Answer it here — the decision is the [Y/N] that
-        # follows, and that one gets a modal.
+        # Review banners identify the document only. The following question
+        # owns stdin; never synthesize an answer on the user's behalf.
         if text.startswith("AUDIT REVIEW REQUIRED:"):
             # Audit findings ask for a decision immediately, with no initial
             # press-Enter gate. Never send a synthetic answer here.
@@ -1762,7 +1759,6 @@ class UncleTUI:
             return
         if text.startswith("HUMAN REVIEW REQUIRED:"):
             self.gate_file = text.split(":", 1)[1].strip()
-            self._send_raw("")
             return
         if text.startswith("Ready to approve") or text.startswith("Ready to acknowledge"):
             return

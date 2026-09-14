@@ -17,7 +17,31 @@ from verification_manifest import manifest
 from shell_syntax import syntax_command
 
 
+def _test_status(state):
+    path = os.environ.get('UNCLE_STATUS_FILE')
+    if not path:
+        return
+    try:
+        event = json.dumps({'event': 'test_execution', 'state': state,
+                            'id': str(os.getpid())}) + '\n'
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, event.encode('utf-8'))
+        finally:
+            os.close(fd)
+    except OSError:
+        pass  # Display telemetry cannot change verification outcomes.
+
+
 def run(args):
+    _test_status('Running')
+    try:
+        return _run_checks(args)
+    finally:
+        _test_status('Stopped')
+
+
+def _run_checks(args):
     run_started = time.monotonic()
     passed = failed = 0
     commands = [row.removesuffix(b'\r').decode('utf-8')

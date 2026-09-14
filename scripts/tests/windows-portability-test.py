@@ -88,6 +88,18 @@ class Portability(unittest.TestCase):
                 self.assertIs(raised.exception, error)
                 directory.cleanup.assert_called_once()
 
+    def test_cleanup_never_masks_an_in_flight_error(self):
+        error = PermissionError('output.log still open')
+        error.winerror = 32
+        directory = Mock()
+        directory.cleanup.side_effect = error
+        with self.assertRaisesRegex(ValueError, 'original timeout; diagnostic log'):
+            try:
+                raise ValueError('original timeout; diagnostic log: saved.log')
+            finally:
+                process_tree.cleanup_directory(directory, timeout=0)
+        directory.cleanup.assert_called_once()
+
     @unittest.skipUnless(os.name == 'nt', 'Windows denies deletion of open files')
     def test_cleanup_waits_for_native_child_file_handle(self):
         directory = tempfile.TemporaryDirectory()

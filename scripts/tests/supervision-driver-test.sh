@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# These fixtures use one-shot stubs, not the live build's streaming adapters.
+# In particular, never route a stage reviewer into the supervisor CLI stub.
+export UNCLE_STEERING=0
+
 # Supervision through both real drivers, headless (the lock parent hosts the
 # controller). Covers CHANGE_PLAN.md AT-7, AT-8, AT-9. Hermetic: the stage
 # agent and the supervisor runner are stubs; a signer trap and a git trap on
@@ -42,11 +46,27 @@ echo '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"durat
 EOF
 chmod +x "$AGENT"
 
+# Reviewer stages take their prompt in argv and write --output-last-message.
+# Keep them separate from the supervisor protocol (which consumes stdin).
+REVIEWER="$TMP/reviewer"
+cat > "$REVIEWER" <<'EOF'
+#!/usr/bin/env python3
+import pathlib, sys
+args = sys.argv[1:]
+output = args[args.index('--output-last-message') + 1]
+pathlib.Path(output).write_text('No blocking findings.\n', encoding='utf-8')
+print('No blocking findings.')
+EOF
+chmod +x "$REVIEWER"
+export WORKFLOW_REVIEWER_CMD="$REVIEWER"
+
 # The supervisor runner: logs argv/env/prompt and answers from SUPERVISOR_MODE.
 SUPERVISOR="$TMP/claude"
 cat > "$SUPERVISOR" <<'EOF'
 #!/usr/bin/env python3
 import json, os, re, sys
+if '--input-format' in sys.argv:
+    sys.exit('Supervisor fixture cannot be used as a streaming stage runner')
 prompt = sys.stdin.read()
 # The worker environment is an allowlist, so the stub finds its project through a pointer beside itself.
 proj = open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), 'current')).read().strip()

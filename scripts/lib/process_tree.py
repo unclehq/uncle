@@ -3,12 +3,21 @@ import os
 import signal
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 
-def cleanup_directory(directory, timeout=3):
-    """Allow terminated Windows descendants to release inherited file handles."""
+def cleanup_directory(directory, timeout=30):
+    """Allow terminated Windows descendants to release inherited file handles.
+
+    CI hosts and malware scanners hold new files open for seconds, so the
+    window is generous. A lock that outlives it still must not mask the error
+    the cleanup runs under: with another exception in flight, the failure is
+    reported and the temporary directory is left for the OS to reclaim.
+    Standalone calls keep raising so persistent cleanup errors stay visible.
+    """
+    in_flight = sys.exc_info()[1]
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -18,7 +27,13 @@ def cleanup_directory(directory, timeout=3):
             # TerminateProcess is asynchronous; taskkill returning and the
             # direct child exiting do not imply every descendant closed its
             # handles. Retry only sharing/lock violations, never other errors.
-            if getattr(error, 'winerror', None) not in (32, 33) or time.monotonic() >= deadline:
+            if getattr(error, 'winerror', None) not in (32, 33):
+                raise
+            if time.monotonic() >= deadline:
+                if in_flight is not None:
+                    print('cleanup_directory: leaving %s behind: %s' % (directory.name, error),
+                          file=sys.stderr)
+                    return
                 raise
             time.sleep(0.05)
 

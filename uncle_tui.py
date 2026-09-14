@@ -1449,6 +1449,18 @@ class UncleTUI:
         except Exception:
             return
         kind = ev.get('event', '')
+        if kind == 'test_execution':
+            if getattr(self, 'workflow_exit_reported', False):
+                return
+            active = getattr(self, 'active_test_runs', set())
+            identity = ev.get('id')
+            if isinstance(identity, str):
+                if ev.get('state') == 'Running':
+                    active.add(identity)
+                elif ev.get('state') == 'Stopped':
+                    active.discard(identity)
+            self.active_test_runs = active
+            return
         host = getattr(self, 'supervision_host', None)
         if host is not None:
             try:
@@ -1582,6 +1594,7 @@ class UncleTUI:
         env["UNCLE_STATUS_FILE"] = self.status_path
         env["UNCLE_STEERING"] = "1"
         self.steering_channels = {}
+        self.active_test_runs = set()
         self._supervision_start(env)
         env["UNCLE_SIGNING_JSON"] = "1"
         self.status_pos = 0
@@ -1770,6 +1783,8 @@ class UncleTUI:
                 cmd, _, tail = rest.partition(")")
                 self.status_runner = self._runner_name(cmd)
                 stage = tail.split(":", 1)[1].strip() if ":" in tail else ""
+                # Banner metadata must not become part of the stage label.
+                stage = re.split(r'\s+(?:Effort|Model|Cap):', stage, maxsplit=1)[0]
                 self.status_stage = stage.replace("stage: ", "").strip() or self.status_stage
                 self.status_mode = mode
                 self.status_model = ""
@@ -2078,6 +2093,13 @@ class UncleTUI:
         """Use the first stage shown in Configure for homepage inference."""
         stage = CONFIG_STAGES[0]
         return stage, self.stage_runner(stage), self.stage_model(stage), self.stage_effort(stage)
+
+    def test_execution_status(self):
+        process = getattr(self, 'proc', None)
+        running = (getattr(self, 'active_test_runs', set()) and process is not None
+                   and process.poll() is None
+                   and not getattr(self, 'workflow_exit_reported', False))
+        return 'Running' if running else 'Stopped'
 
     def chat_model(self):
         """Follow the live stage for workflow chat; use the first stage at home."""
@@ -3360,6 +3382,8 @@ class UncleTUI:
             pass
         auto = getattr(self, 'misc', {}).get('auto_mode') == 'true'
         project_status = project + '  ·  ' + ('Auto mode on' if auto else 'Manual approvals')
+        if build:
+            model_status = 'Tests: ' + self.test_execution_status() + '  ·  ' + model_status
         status_row = composer_row + extra + (2 if build or compact else 3)
         right_width = min(len(project_status), max(1, width - 18))
         put(status_row, model_status[:max(0, width - right_width - 2)], color.get('muted', curses.A_DIM))

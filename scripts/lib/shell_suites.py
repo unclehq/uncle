@@ -24,11 +24,6 @@ def run(jobs, suites=()):
     if not files:
         print('FAIL: no shell test suites found', file=sys.stderr)
         return 1
-<<<<<<< HEAD
-    return run_commands(jobs, {path: [bash_executable(), path] for path in files})
-
-
-=======
     isolate_git()
     return run_commands(jobs, {path: [bash_executable(), path] for path in files})
 
@@ -44,7 +39,6 @@ def isolate_git():
     os.environ.setdefault('GIT_CONFIG_NOSYSTEM', '1')
 
 
->>>>>>> b9468f1f (Add bounded event-triggered AI supervision for workflow stages)
 def run_commands(jobs, commands):
     """Execute named isolated commands with shared progress and cleanup."""
     if not 1 <= jobs <= 8:

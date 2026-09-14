@@ -57,34 +57,6 @@ def group_options():
     return {'start_new_session': True}
 
 
-<<<<<<< HEAD
-def track_process(process, command, started, tick):
-    from build_timing import event
-    import uuid
-    name = Path(str(command[0])).name
-    if len(command) > 1 and (name.startswith('python') or name in ('bash', 'sh')):
-        script = Path(str(command[1]))
-        if script.suffix in ('.py', '.sh'):
-            name += ' ' + script.name
-    identity = uuid.uuid4().hex
-    process._uncle_timing = (name, started, tick, identity)
-    event('process_start', name, started, 0, child_pid=process.pid,
-          span_id=identity, workflow_state=os.environ.get('UNCLE_TIMING_STAGE', ''))
-    return process
-
-
-def timed_popen(command, **kwargs):
-    started, tick = time.time(), time.monotonic()
-    return track_process(subprocess.Popen(command, **kwargs), command, started, tick)
-
-
-def start_check(command, **kwargs):
-    started, tick = time.time(), time.monotonic()
-    if os.name == 'nt':
-        from windows_job import start
-        return track_process(start(command, **kwargs, **group_options()), command, started, tick)
-    return timed_popen(command, stdin=subprocess.DEVNULL, **kwargs, **group_options())
-=======
 # A POSIX child that outlives its parent is otherwise unowned: this shim is
 # the session leader of the check, and kills its whole group when the parent
 # that started it disappears. Windows checks get the same from the Job's
@@ -120,7 +92,6 @@ def start_check(command, prompt=None, **kwargs):
     child.stdin.close()
     child.stdin = None
     return child
->>>>>>> b9468f1f (Add bounded event-triggered AI supervision for workflow stages)
 
 
 def finish_check(process):

@@ -794,19 +794,11 @@ class UncleTUI:
             return "@connection"
         if section == "misc":
             return "!misc"
-<<<<<<< HEAD
-        if section == "recovery":
-            return "triage"
-        if 0 <= self.config_sel < len(BUILD_CONFIG_STAGES):
-            return BUILD_CONFIG_STAGES[self.config_sel]
-        return self._profile_targets()[self.config_sel - len(BUILD_CONFIG_STAGES)]
-=======
         if section == "supervision":
             return "!supervision"
         if 0 <= self.config_sel < len(CONFIG_STAGES):
             return CONFIG_STAGES[self.config_sel]
         return self._profile_targets()[self.config_sel - len(CONFIG_STAGES)]
->>>>>>> b9468f1f (Add bounded event-triggered AI supervision for workflow stages)
 
     def _profile_targets(self):
         return ["@new"] + ["@" + name for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
@@ -1008,15 +1000,9 @@ class UncleTUI:
     def _config_items(self):
         section = getattr(self, "config_section", "")
         if not section:
-<<<<<<< HEAD
-            return ["1. Configure stages", "2. Configure OpenCode / self hosting", "3. Miscellaneous", "4. Recovery"]
-        if section == "recovery":
-            return ["Recovery model — diagnose failures and propose repairs"]
-=======
             return ["1. Configure stages", "2. Configure OpenCode / self hosting", "3. Miscellaneous", "4. Supervision"]
         if section == "supervision":
             return self._supervision_items()
->>>>>>> b9468f1f (Add bounded event-triggered AI supervision for workflow stages)
         if section == "opencode":
             return ["OpenCode connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
         if section == "misc":
@@ -4203,11 +4189,7 @@ class UncleTUI:
             elif k in (10, 13):
                 section = getattr(self, "config_section", "")
                 if not section:
-<<<<<<< HEAD
-                    self.config_section = ("stages", "opencode", "misc", "recovery")[self.config_sel]
-=======
                     self.config_section = ("stages", "opencode", "misc", "supervision")[self.config_sel]
->>>>>>> b9468f1f (Add bounded event-triggered AI supervision for workflow stages)
                     self.config_sel = self.config_scroll = 0
                 elif section == "supervision":
                     self._supervision_enter()

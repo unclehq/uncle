@@ -738,7 +738,10 @@ class UncleTUI:
         self.sel = 0
     # ---- colors (cline's CLI palette) ----
     def _setup_colors(self):
-        self.color = {"title": 0, "accent": 0, "good": 0, "sel": 0, "cursor": 0, "warning": curses.A_BOLD, "bad": curses.A_BOLD, "muted": curses.A_DIM}
+        # emphasis sits between plain text and the bold user rows of the supervisor chat;
+        # without colours reverse video is the only level guaranteed to differ from bold.
+        self.color = {"title": 0, "accent": 0, "good": 0, "sel": 0, "cursor": 0, "warning": curses.A_BOLD, "bad": curses.A_BOLD, "muted": curses.A_DIM,
+                      "emphasis": curses.A_REVERSE}
         if not curses.has_colors():
             return
         try:
@@ -762,6 +765,7 @@ class UncleTUI:
         reg("good", curses.COLOR_GREEN)
         reg("warning", curses.COLOR_YELLOW)
         reg("bad", curses.COLOR_RED, curses.A_BOLD)
+        reg("emphasis", curses.COLOR_YELLOW, curses.A_BOLD)
         idx[0] += 1
         curses.init_pair(idx[0], curses.COLOR_BLACK, curses.COLOR_CYAN)
         self.color["sel"] = curses.color_pair(idx[0]) | curses.A_BOLD
@@ -3109,14 +3113,29 @@ class UncleTUI:
         put(h - 1, 0, '1-3 select proposal | r resume | Esc back | /do N /resume /clear | text = follow-up question', w)
         self.stdscr.refresh()
 
-    def chat_display(self):
+    def chat_attr(self, role, base=0):
+        """Attribute for one chat row, keyed by the stored history role only (never by text)."""
+        role = str(role).lower()
+        if role == 'user':
+            return base | curses.A_BOLD
+        if role == 'supervisor':
+            return getattr(self, 'color', {}).get('emphasis', curses.A_REVERSE)
+        return base
+
+    def chat_entries(self):
+        """`chat_display()` rows paired with the role that produced each one."""
         recovery = getattr(self, 'triage_history', [])
         seen = getattr(self, '_recovery_displayed', 0)
         for role, text in recovery[seen:]:
             self.home_history.append(('Recovery' if role == 'master' else 'User' if role == 'operator' else 'System', text))
         self._recovery_displayed = len(recovery)
         history = getattr(self, 'home_history', [])
-        return [str(role).capitalize() + ': ' + text for role, text in history] if history else list(self.chat.messages)
+        if history:
+            return [(role, str(role).capitalize() + ': ' + text) for role, text in history]
+        return [(None, line) for line in self.chat.messages]
+
+    def chat_display(self):
+        return [line for _, line in self.chat_entries()]
 
     def start_chat_workflow(self):
         if self.state == 'running' or (self.proc and self.proc.poll() is None):
@@ -3630,9 +3649,10 @@ class UncleTUI:
         """Centered, prompt-first landing screen; workflow rendering is separate."""
         color = getattr(self, 'color', {})
         items = self.menu_items()
-        history = self.chat_display()
+        entries = self.chat_entries()
         if self.chat.preview:
-            history += ['Preview: ', self.chat.preview]
+            entries += [('preview', 'Preview: '), ('preview', self.chat.preview)]
+        history = [line for _, line in entries]
         width = max(1, min(76, w - 4))
         left = max(0, (w - width) // 2)
         compact = h < len(LOGO) + 12
@@ -3677,12 +3697,24 @@ class UncleTUI:
             except curses.error:
                 pass
         if history:
+            joined = '\n'.join(history)
+            tail = joined[-max(1, width * body_rows * 2):]
+            # Each surviving line takes the role of the entry that owns its first
+            # character; the text itself is cut and split exactly as before.
+            spans = []
+            start = 0
+            for role, line in entries:
+                spans.append((start, role))
+                start += len(line) + 1
+            offset = len(joined) - len(tail)
             lines = []
-            for line in '\n'.join(history)[-max(1, width * body_rows * 2):].splitlines():
-                lines.extend(textwrap.wrap(line, width) or [''])
+            for line, raw in zip(tail.splitlines(), tail.splitlines(keepends=True)):
+                role = next((r for s, r in reversed(spans) if s <= offset), None)
+                offset += len(raw)
+                lines.extend((role, part) for part in textwrap.wrap(line, width) or [''])
             room = max(0, body_rows - 1)
-            for i, line in enumerate(lines[-room:] if room else []):
-                put(top + 1 + i, line, color.get('accent', 0))
+            for i, (role, line) in enumerate(lines[-room:] if room else []):
+                put(top + 1 + i, line, self.chat_attr(role, color.get('accent', 0)))
         row = top + body_rows
         self._draw_chat_composer(row, h, w, left, width, compact)
         for y, x, text, selected in bar:
@@ -3810,7 +3842,9 @@ class UncleTUI:
     def _build_messages(self):
         """Collect build output and chat in one chronological viewport."""
         output = list(self.output)
-        chat = self.chat_display()
+        entries = self.chat_entries()
+        chat = [line for _, line in entries]
+        roles = {'chat': [role for role, _ in entries]}
         previous_output, previous_chat = getattr(self, '_message_snapshot', ([], []))
         messages = getattr(self, '_message_stream', [])
         for kind, current, previous in (('build', output, previous_output), ('chat', chat, previous_chat)):
@@ -3827,7 +3861,11 @@ class UncleTUI:
                 while overlap and previous[-overlap:] != current[:overlap]:
                     overlap -= 1
                 common = overlap
-            messages.extend((kind, i, line) for i, line in enumerate(current[common:], common))
+            # Each row keeps the history role that produced it, so styling
+            # survives replacement, eviction, and mocked string-only callers.
+            kind_roles = roles.get(kind, [])
+            messages.extend((kind, i, line, kind_roles[i] if i < len(kind_roles) else None)
+                            for i, line in enumerate(current[common:], common))
         self._message_snapshot = (output, chat)
         self._message_stream = messages[-4000:]
         return [item[2] for item in self._message_stream]
@@ -3837,19 +3875,25 @@ class UncleTUI:
             self._draw_viewer(h, w)
             return
         tail = self._build_messages()
+        stream = getattr(self, '_message_stream', [])
+        # Roles come from the stored stream; a mocked string-only
+        # `_build_messages` has no matching stream and draws unstyled.
+        roles = ([item[3] if len(item) > 3 else None for item in stream]
+                 if len(stream) == len(tail) else [None] * len(tail))
         if self.partial.strip() and not self.prompt_kind:
             tail.append(self.partial.rstrip())
+            roles.append(None)
         # The transcript uses every column before the sidebar, independently
         # of the centered composer's narrower width.
         screen_width = self.stdscr.getmaxyx()[1]
         message_width = max(1, min(w, screen_width - 1))
         wrapped = []
-        for message in tail[-max(1, h * 2):]:
+        for message, role in list(zip(tail, roles))[-max(1, h * 2):]:
             for line in message.splitlines() or ['']:
-                wrapped.extend(textwrap.wrap(line, message_width) or [''])
-        for i, line in enumerate(wrapped[-max(0, h - 1):] if h > 1 else []):
+                wrapped.extend((role, part) for part in textwrap.wrap(line, message_width) or [''])
+        for i, (role, line) in enumerate(wrapped[-max(0, h - 1):] if h > 1 else []):
             try:
-                self.stdscr.addnstr(i, 0, line, message_width)
+                self.stdscr.addnstr(i, 0, line, message_width, self.chat_attr(role))
             except curses.error:
                 pass
         if self.prompt_kind:

@@ -11,14 +11,24 @@ supports each claim. Do not classify from the stage name alone.
 
 You run in a sandbox copy of the project. During a diagnosis turn every write
 is discarded. During an execute turn (the prompt says "Execute Proposal N
-only") edits to source, tests, primary-agent reports, and protected
+only") edits to source, tests, primary-agent and reviewer reports, and protected
 verification paths are copied into the live tree when the turn ends, and each
 is recorded in `.uncle/workflow/triage-actions.tsv`.
+
+During a selected execute proposal you may edit reviewer reports, including
+`ADVERSARIAL_REVIEW.md`, `MANUAL_CHECKLIST.md`, `TEST_REVIEW.md`, and
+`FINAL_AUDIT.md`, in the sandbox. Repair malformed tables and other report
+errors when the selected proposal requires it. Preserve findings, evidence,
+and verdicts unless the proposal explicitly authorizes an evidence-backed
+correction. An edit is not approval or a passing check: identify what must be
+revalidated on resume. Do not claim that reviewer ownership prevents an
+otherwise authorized proposal edit. Diagnosis turns still persist no edits.
+If a selected no-edit proposal cannot complete because a file needs repair,
+explain the blocker and offer a new edit proposal for the user to select.
 
 These are refused and reverted whatever the turn:
 
 - `.uncle/workflow/approvals/`, `.uncle/workflow/waivers/`
-- `ADVERSARIAL_REVIEW.md`, `MANUAL_CHECKLIST.md`, `TEST_REVIEW.md`, `FINAL_AUDIT.md`
 - `.uncle/workflow/state`, `stop-reason`, `repair-limit`, `repair-count`, `unattended-gates`
 - `.uncle/workflow/green-check.*`, `verification.*`, `VERIFICATION_INTEGRITY.md`, `TEST_CHANGES.diff`
 - `.uncle/workflow/TRIAGE.md`, `triage-actions.tsv`, `triage/`

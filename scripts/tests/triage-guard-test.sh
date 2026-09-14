@@ -54,6 +54,8 @@ project() {
     printf '# notes\n' > "$dir/IMPLEMENTATION_NOTES.md"
     if [[ "$kind" != plain ]]; then
         git -C "$dir" init -q .
+        git -C "$dir" config commit.gpgsign false
+        git -C "$dir" config tag.gpgsign false
         printf '.uncle/workflow/\nignored.txt\n' > "$dir/.gitignore"
         if [[ "$kind" == git ]]; then
             git -C "$dir" add -A
@@ -74,6 +76,23 @@ begin() {  # begin <project> <turn> <mode> [root]
 end() {    # end <project> <turn> <mode> <digest> [root] [proposal]
     python3 "$GUARD" end --state-dir .uncle/workflow --project "$1" --root "${5:-$INSTALL}" --turn "$2" --mode "$3" --digest "$4" --proposal "${6:-Proposal 1: test}"
 }
+
+# Reviewer reports can be repaired only in an explicitly executed proposal.
+for mode in diagnosis execute; do
+    P="$(project "report-$mode")"; cd "$P"
+    printf 'original verdict NOT_READY\n' > FINAL_AUDIT.md
+    out="$(begin "$P" 1 "$mode")"
+    SB="$P/.uncle/workflow/triage/sandbox"
+    printf 'fixed table; verdict NOT_READY\n' > "$SB/FINAL_AUDIT.md"
+    mkdir -p "$SB/.uncle/workflow/approvals"
+    printf 'forged\n' > "$SB/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+    res="$(end "$P" 1 "$mode" "$(printf '%s' "$out" | json_field digest)")"
+    expected='original verdict NOT_READY'; outcome=REFUSED
+    if [[ "$mode" == execute ]]; then expected='fixed table; verdict NOT_READY'; outcome=APPLIED; fi
+    check_file_is "$mode report edit policy" "$expected" FINAL_AUDIT.md
+    check_row "$mode report edit recorded" "$outcome" FINAL_AUDIT.md .uncle/workflow/triage-actions.tsv
+    check_file_is "$mode cannot forge approval" approved-hash .uncle/workflow/approvals/CHANGE_PLAN.sha256
+ done
 
 # --- AC-10: forbidden writes are reverted, recorded, and the install taints ----
 

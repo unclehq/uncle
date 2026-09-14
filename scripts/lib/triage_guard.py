@@ -393,7 +393,9 @@ def end(args):
         post = after.get(rel)
         pre_hash = pre[0] if pre else '-'
         post_hash = post[0] if post else '-'
-        if is_forbidden(rel) or install_pinned(rel, project, args.root) or args.mode != 'execute':
+        proposal_report_edit = args.mode == 'execute' and rel in FORBIDDEN_FILES
+        if ((is_forbidden(rel) and not proposal_report_edit) or rel in result['refused']
+                or install_pinned(rel, project, args.root) or args.mode != 'execute'):
             result['refused'].append(rel)
             tsv_row(args.state_dir, args.turn, proposal, 'REFUSED', rel, pre_hash, post_hash)
             if install_pinned(rel, project, args.root) and args.mode == 'execute':

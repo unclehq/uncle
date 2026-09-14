@@ -1724,9 +1724,25 @@ class UncleTUI:
         preview_changed = self._poll_completion_preview()
         return got or preview_changed or before != (self.proc_done, self.prompt_kind)
 
+    def _build_completed(self):
+        """The run exited cleanly and the driver said it was complete."""
+        return (getattr(self, "workflow_exit_reported", False)
+                and getattr(self, "workflow_exit_code", None) == 0
+                and getattr(self, "workflow_completed", False))
+
+    def _show_build_complete(self):
+        self.prompt_kind = "complete"
+        self.chat_focus = "gate"
+        self.prompt_text = "The build is complete. Press Enter to return to the home page."
+        self.prompt_buf = ""
+        self.prompt_scroll = 0
+
     def _offer_support(self):
         """Offer once per local user, only after this workflow finishes."""
         if getattr(self, "support_checked", False) or not self.proc:
+            return
+        # The completion modal owns the screen until Enter; the offer waits.
+        if getattr(self, "prompt_kind", "") == "complete":
             return
         code = self.proc.poll()
         if code is None:
@@ -3407,7 +3423,7 @@ class UncleTUI:
             gate = 'Answer> ' + sanitize(self.prompt_buf)[-max(1, w - 10):]
         put(h - 2, 0, gate, w)
         controls = {'confirm': 'y/n/v', 'audit': 's/r/n/v', 'enter': 'Enter',
-                    'input': 'type, Enter', 'support': 's/Enter'}
+                    'input': 'type, Enter', 'support': 's/Enter', 'complete': 'Enter'}
         put(h - 1, 0, ('Tab menu/chat | Enter select/send' if self.state == 'menu' else 'Tab chat/gate | ' + controls.get(self.prompt_kind, 'Enter send | Esc back')), w)
         self._draw_file_picker(h - 3, 0, w)
         self.stdscr.refresh()
@@ -4395,6 +4411,8 @@ class UncleTUI:
             footer = "[Enter/Esc] dismiss"
         elif self.prompt_kind == "support":
             footer = "[s] open GitHub to star      [Enter/Esc] dismiss"
+        elif self.prompt_kind == "complete":
+            footer = "[Enter] return home"
         elif self.prompt_kind == "enter":
             footer = "[Enter] continue      [Esc] decline"
             if self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help.")):
@@ -4503,6 +4521,22 @@ class UncleTUI:
             except (OSError, ValueError) as exc:
                 self.chat_error = sanitize(str(exc))
             return
+        if self.state == "running" and getattr(self, "prompt_kind", "") == "complete":
+            # The only way off a finished build is through this modal.
+            if k in (10, 13):
+                self.state = "menu"
+                self.prompt_kind = ""
+                self.chat_error = ""
+                self.chat_focus = "chat"
+                self.sel = 0
+            elif k == 3:
+                self._quit()
+            return
+        if self.state == "running" and self._build_completed():
+            chat_typing = getattr(self, "chat_open", False) and self.chat_focus == "chat"
+            if k == 27 or (k in (ord("q"), ord("Q")) and not chat_typing):
+                self._show_build_complete()
+                return
         if self.state == 'menu':
             self._ensure_chat()
             if self._homepage_key(k):

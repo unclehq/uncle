@@ -105,6 +105,17 @@ class Actions(unittest.TestCase):
                 self.assertEqual(self.ui.issue_mode, mode)
                 request.assert_not_called()
 
+    def test_build_issue_number_without_issue_keyword(self):
+        for text in ('build #45', 'build 45', 'implement #45', 'please build #45'):
+            with self.subTest(text=text), patch.object(tui, 'HomeRequest') as request:
+                self.ui.state = 'menu'
+                self.ui._run.reset_mock()
+                self.ui.send_home_chat(text)
+                self.assertEqual(self.ui.issue, '45')
+                self.assertEqual(self.ui.workflow_idx, 1)
+                self.ui._run.assert_called_once()
+                request.assert_not_called()
+
     def test_auto_selection_advances_prefilled_issue_to_build(self):
         # Exercise the actual transition, stubbing only reload and launch.
         del self.ui._run

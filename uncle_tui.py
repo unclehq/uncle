@@ -2155,7 +2155,7 @@ class UncleTUI:
         issue_request = re.fullmatch(
             r'(?:please\s+)?(?:build|implement|start|run|work on)\s+'
             r'(?:(?P<change>change\s+request)\s+)?'
-            r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+|this\s+(?:issue\s+)?)'
+            r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+|this\s+(?:issue\s+)?)?'
             r'(?P<issue>https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?|#?[1-9][0-9]*)[.!]?',
             message.strip(), re.IGNORECASE)
         if issue_request and not gate_question:

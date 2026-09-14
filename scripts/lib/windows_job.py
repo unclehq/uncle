@@ -32,6 +32,33 @@ class Job:
         self.handle = self.api.CreateJobObjectW(None, None)
         if not self.handle:
             raise ctypes.WinError(ctypes.get_last_error())
+        self.kill_on_close()
+
+    def kill_on_close(self):
+        """JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: when the owning process exits and
+        its last handle closes, every process in the job is terminated."""
+        class BasicLimit(ctypes.Structure):
+            _fields_ = [('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
+                        ('LimitFlags', wintypes.DWORD), ('MinimumWorkingSetSize', ctypes.c_size_t),
+                        ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', wintypes.DWORD),
+                        ('Affinity', ctypes.c_size_t), ('PriorityClass', wintypes.DWORD),
+                        ('SchedulingClass', wintypes.DWORD)]
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_uint64) for name in (
+                'ReadOperationCount', 'WriteOperationCount', 'OtherOperationCount',
+                'ReadTransferCount', 'WriteTransferCount', 'OtherTransferCount')]
+
+        class ExtendedLimit(ctypes.Structure):
+            _fields_ = [('BasicLimitInformation', BasicLimit), ('IoInfo', IoCounters),
+                        ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
+                        ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
+        info = ExtendedLimit()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        setter = self.api.SetInformationJobObject
+        setter.argtypes, setter.restype = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD], wintypes.BOOL
+        if not setter(self.handle, 9, ctypes.byref(info), ctypes.sizeof(info)):  # JobObjectExtendedLimitInformation
+            raise ctypes.WinError(ctypes.get_last_error())
 
     def assign(self, process):
         if not self.api.AssignProcessToJobObject(self.handle, int(process._handle)):
@@ -62,17 +89,25 @@ class Job:
             self.handle = None
 
 
-def start(command, **kwargs):
+def start(command, prompt=None, **kwargs):
+    """Start `command` inside a fresh Job. With `prompt` (bytes) the command
+    reads it from stdin after the handshake byte; otherwise stdin is NUL."""
     job = Job()
     child = None
     try:
         # A pipe handshake prevents a fast shell from forking/exiting before
         # assignment. EOF on failed setup exits without executing the command.
-        child = subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()), *command],
+        forward = ['--forward-stdin'] if prompt is not None else []
+        child = subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()), *forward, *command],
                                  stdin=subprocess.PIPE, **kwargs)
         job.assign(child)
         child._uncle_job = job
         child.stdin.write(b'G')
+        if prompt is not None:
+            try:
+                child.stdin.write(prompt)
+            except OSError:
+                pass
         child.stdin.close()
         child.stdin = None
         return child
@@ -88,6 +123,10 @@ def start(command, **kwargs):
 
 
 if __name__ == '__main__':
-    if sys.stdin.buffer.read(1) != b'G':
+    import os
+    # Unbuffered: the bytes after the handshake belong to the command.
+    if os.read(0, 1) != b'G':
         sys.exit(125)
+    if sys.argv[1:2] == ['--forward-stdin']:
+        sys.exit(subprocess.call(sys.argv[2:], stdin=0))
     sys.exit(subprocess.call(sys.argv[1:], stdin=subprocess.DEVNULL))

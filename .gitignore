@@ -1,4 +1,4 @@
-.uncle/workflow/
+.uncle/*
 
 # Local agent workflow state
 .uncle/workflow/state

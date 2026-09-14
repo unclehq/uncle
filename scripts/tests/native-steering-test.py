@@ -181,7 +181,21 @@ for line in sys.stdin:
      self.assertEqual(result['usage']['output_tokens'],50 if runner=='claude' else 30)
      events=[json.loads(x) for x in status.read_text().splitlines()]
      self.assertEqual(len([e for e in events if e['event']=='steering_ready']),1)
-     self.assertEqual(len([e for e in events if e['event']=='steering_accepted']),1)
+     accepted=[e for e in events if e['event']=='steering_accepted']
+     self.assertEqual(len(accepted),1)
+     answered=[e for e in events if e['event']=='steering_answered']
+     if runner=='claude':
+      # D-13: the original prompt's result arrives after acceptance and is not the
+      # answer; only the result of the steered turn answers it.
+      self.assertEqual(accepted[0]['correlation'],'turn')
+      self.assertEqual([e['message_id'] for e in answered],['direction'])
+      order=[e['event'] for e in events if e['event'] in ('steering_accepted','chat_output','steering_answered')]
+      self.assertEqual(order,['steering_accepted','chat_output','steering_answered'])
+      self.assertEqual([e for e in events if e['event']=='steering_unconfirmed'],[])
+     else:
+      self.assertEqual(accepted[0]['correlation'],'none')
+      self.assertEqual(answered,[],'no native correlation: never guessed answered')
+      self.assertEqual([e['message_id'] for e in events if e['event']=='steering_unconfirmed'],['direction'])
      self.assertFalse(Path(ready['channel']).exists())
     finally:
      if child.poll() is None:child.kill();child.wait()
@@ -221,7 +235,16 @@ for line in sys.stdin:
      self.assertEqual(result['total_cost_usd'],.02)
      self.assertEqual((root/'reply').read_text(),'Steered reply')
      events=[json.loads(x) for x in status.read_text().splitlines()]
-     self.assertEqual(len([e for e in events if e['event']=='steering_accepted']),1)
+     accepted=[e for e in events if e['event']=='steering_accepted']
+     self.assertEqual(len(accepted),1)
+     answered=[e for e in events if e['event']=='steering_answered']
+     if runner=='self-hosted':
+      self.assertEqual(accepted[0]['correlation'],'message')
+      self.assertEqual([(e['message_id'],e['response_id']) for e in answered],[('direction','a1')])
+     else:
+      self.assertEqual(accepted[0]['correlation'],'none')
+      self.assertEqual(answered,[])
+      self.assertEqual([e['message_id'] for e in events if e['event']=='steering_unconfirmed'],['direction'])
     finally:
      if child.poll() is None:child.kill();child.wait()
 

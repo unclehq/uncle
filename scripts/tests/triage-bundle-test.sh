@@ -216,13 +216,13 @@ check_eq "unwritable bundle keeps exit 1" 1 "$status"
 check_eq "unwritable bundle says so once" "triage: could not write .uncle/workflow/TRIAGE.md" "$err"
 
 # Each real driver, failing before any stage: bundle written, status kept.
-P="$(fresh driver-change)"; cd "$P"; git init -q .
+P="$(fresh driver-change)"; cd "$P"; git init -q .; git config commit.gpgsign false; git config tag.gpgsign false
 status=0
 UNCLE_PROJECT_ROOT="$P" bash "$ROOT/scripts/change-workflow.sh" < /dev/null > "$TMP/cw.out" 2>&1 || status=$?
 check_eq "change-workflow failure exits 1" 1 "$status"
 check_contains "change-workflow failure writes TRIAGE.md" "- exit status: 1" .uncle/workflow/TRIAGE.md
 
-P="$(fresh driver-stagegate)"; cd "$P"; git init -q .
+P="$(fresh driver-stagegate)"; cd "$P"; git init -q .; git config commit.gpgsign false; git config tag.gpgsign false
 printf 'NOT_A_STATE\n' > .uncle/workflow/state
 status=0
 UNCLE_PROJECT_ROOT="$P" bash "$ROOT/scripts/stagegate.sh" < /dev/null > "$TMP/sg.out" 2>&1 || status=$?
@@ -230,7 +230,7 @@ check_eq "stagegate failure exits 1" 1 "$status"
 check_contains "stagegate failure writes TRIAGE.md" "- state: NOT_A_STATE" .uncle/workflow/TRIAGE.md
 
 # A declined gate is exit 0 and writes nothing (stagegate reaches its first gate).
-P="$(fresh driver-decline)"; cd "$P"; git init -q .
+P="$(fresh driver-decline)"; cd "$P"; git init -q .; git config commit.gpgsign false; git config tag.gpgsign false
 printf 'WAIT_REQUIREMENTS_APPROVAL\n' > .uncle/workflow/state
 printf '# interp\n' > REQUIREMENTS_INTERPRETATION.md
 status=0

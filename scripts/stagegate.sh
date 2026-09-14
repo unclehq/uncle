@@ -552,6 +552,10 @@ acceptance_transition() {
     python3 "$ROOT/scripts/lib/repair-acceptance.py" "$report" || return 1
     result="$(acceptance_result "$report" "${3:-}")"
     case "$result" in
+        REPAIR|BLOCKED-SETUP|BLOCKED-IMPOSSIBLE)
+            supervision_validation_failed acceptance "$report" "Acceptance $result: $report" 0 ;;
+    esac
+    case "$result" in
         PASS) set_state "$next" ;;
         REPAIR)
             printf '%s\n' "$report" > "$STATE_DIR/repair-source"
@@ -693,6 +697,7 @@ lower() {
 # terminal, so the text is printed separately. Escapes are emitted only for a
 # real terminal: piped captures and TERM=dumb stay free of control bytes.
 gate_prompt() {
+    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "${1:0:80}"; fi
     if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
         printf '%s%s%s' $'\033[1m' "$1" $'\033[0m'
     else
@@ -863,6 +868,7 @@ get_state() {
 
 require_file() {
     if [[ ! -s "$1" ]]; then
+        supervision_validation_failed require_file "$1" "Required file is missing or empty: $1"
         echo "Required file is missing or empty: $1"
         exit 1
     fi
@@ -872,6 +878,7 @@ require_file() {
 # tool, not a refusal to work.
 require_artifact() {
     if [[ ! -s "$1" ]]; then
+        supervision_validation_failed require_artifact "$1" "Stage produced no artifact: $1"
         echo
         echo "Stage produced no artifact: $1"
         echo "Check the log for '[tool ERROR]' lines — a denied Write is the"
@@ -984,6 +991,7 @@ review_and_approve() {
         # runs.
         response=""
         IFS= read -r response || true
+        if declare -f supervision_gate_close > /dev/null; then supervision_gate_close; fi
 
         case "$response" in
             y|Y) ;;
@@ -1102,6 +1110,8 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
+        supervision_prompt "$effective_prompt" "$log_name" "$LOG_DIR/${log_name}.jsonl"
+        effective_prompt="$SUPERVISION_PROMPT"
         local -a model_args=()
         [[ -n "$model" ]] && model_args=(--model "$model")
         local started="$SECONDS"
@@ -1119,6 +1129,7 @@ run_claude() {
             | format_claude_stream || status=$?
         perf_record agent "$log_name" "$((SECONDS-started))" "$status" \
             "$LOG_DIR/${log_name}.jsonl" "$cmd" "$model" "$effort"
+        supervision_stage_end "$log_name" "$status" "$LOG_DIR/${log_name}.jsonl"
 
         if [[ "$status" -ne 0 ]]; then
             local log="$LOG_DIR/${log_name}.jsonl"
@@ -1188,6 +1199,10 @@ run_codex_review() {
         python3 "$ROOT/scripts/lib/test-review-context.py" "$PWD" "$STATE_DIR" >> "$evidence_prompt" || return 1
         prompt_file="$evidence_prompt"
     fi
+    if [[ "$log_name" != plan-executability ]]; then
+        supervision_prompt "$prompt_file" "$log_name" "$LOG_DIR/${log_name}.log"
+        prompt_file="$SUPERVISION_PROMPT"
+    fi
 
     local review_key
     review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"
@@ -1218,6 +1233,7 @@ run_codex_review() {
             < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
         perf_record reviewer "$log_name" "$((SECONDS-started))" "$status" \
             "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
+        supervision_stage_end "$log_name" "$status" "$LOG_DIR/${log_name}.log"
 
         if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
             echo

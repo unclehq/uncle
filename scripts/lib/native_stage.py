@@ -41,10 +41,19 @@ class Stage:
         self.started = time.monotonic()
         self.channel = None
         self.pending = {}
+        # Submitted inputs in order, the original prompt first. A runner that
+        # answers inputs one response at a time (correlation 'turn') pops the
+        # head on every completed response, so the original response can never
+        # count as the answer to steering accepted while it was still running.
+        self.turns = []
+        self.accepted = set()
+        self.correlation = 'none'  # 'turn' | 'message' | 'none': how answers are tied to steering
+        self.note = os.environ.get('UNCLE_SUPERVISION_NOTE', '')
         self.turn = self.session = None
         self.env = os.environ.copy()
         for key in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG', 'UNCLE_STEERING',
-                    'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE', 'DOCUMENT_BUDGET_SOURCE'):
+                    'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE', 'DOCUMENT_BUDGET_SOURCE',
+                    'UNCLE_SUPERVISION_NOTE', 'UNCLE_SUPERVISION_HOST'):
             self.env.pop(key, None)
 
     def option(self, *names):
@@ -77,8 +86,9 @@ class Stage:
         print(json.dumps({'type':'assistant', 'uncle_chat_output':bool(os.environ.get('UNCLE_STATUS_FILE')), 'message':{'content':[{'type':'text','text':text}]}}), flush=True)
         self.status('chat_output', text=text)
 
-    def completed_answer(self, text):
+    def completed_answer(self, text, response_id=None):
         self.final_answer = text
+        self.responded(response_id)
         if self.side != 'reviewer' or self.stage != 'plan-executability':
             return
         # A later steering reply must not overwrite a completed assessment.
@@ -158,6 +168,30 @@ class Stage:
         self.channel = Path(directory)/'inbox'
         self.channel.mkdir()
         self.status('steering_ready', channel=str(self.channel), session=self.session, turn=self.turn)
+        if self.note:
+            # The prompt carrying a supervisor note has been submitted to the runner.
+            self.status('note_received', note=self.note)
+
+    def submitted(self, id):
+        self.turns.append(id)
+
+    def responded(self, response_id=None):
+        # A completed response answers the input at the head of the submission
+        # order, and only when that input was steering the runner accepted.
+        # Acceptance alone never counts as an answer; without a turn-ordered
+        # runner nothing is answered here (see `answered`).
+        if self.correlation != 'turn' or not self.turns:
+            return
+        head = self.turns.pop(0)
+        if head in self.accepted:
+            self.accepted.discard(head)
+            self.status('steering_answered', message_id=head, response_id=response_id)
+
+    def answered(self, id, response_id=None):
+        # A runner that names the input a response belongs to (correlation 'message').
+        if id in self.accepted:
+            self.accepted.discard(id)
+            self.status('steering_answered', message_id=id, response_id=response_id)
 
     def incoming(self, steer):
         if not self.channel:
@@ -181,8 +215,12 @@ class Stage:
         if id not in self.pending:
             return False
         self.pending.pop(id)
-        self.status('steering_rejected' if 'error' in event else 'steering_accepted',
-                    message_id=id, detail=str(event.get('error', '')))
+        if 'error' not in event:
+            self.accepted.add(id)
+            self.status('steering_accepted', message_id=id, detail='', correlation=self.correlation)
+        else:
+            if id in self.turns: self.turns.remove(id)
+            self.status('steering_rejected', message_id=id, detail=str(event.get('error', '')))
         return True
 
     def loop(self, handler, steer):
@@ -226,7 +264,7 @@ class Stage:
             method,p=event.get('method'),event.get('params',{})
             if method=='item/agentMessage/delta': self.text(p.get('delta',''))
             if method=='item/completed' and p.get('item',{}).get('type')=='agentMessage':
-                self.completed_answer(p['item'].get('text',''))
+                self.completed_answer(p['item'].get('text',''),p['item'].get('id'))
             if method=='thread/tokenUsage/updated':
                 u=p.get('tokenUsage',{}).get('total',{})
                 self.tokens(dict(input_tokens=u.get('inputTokens'),output_tokens=u.get('outputTokens'),
@@ -293,7 +331,10 @@ class Stage:
         def message(text,id):
             self.send({'type':'user','uuid':id,'session_id':self.session or '',
                        'message':{'role':'user','content':text}})
-        message(self.prompt,uuid.uuid4().hex)
+        self.correlation='turn'
+        first=uuid.uuid4().hex
+        self.submitted(first)
+        message(self.prompt,first)
         outstanding = 1
         completed_usage = dict.fromkeys(KEYS, 0)
         live_usage = {}
@@ -302,6 +343,7 @@ class Stage:
             nonlocal outstanding
             outstanding += 1
             self.pending[id]=True
+            self.submitted(id)
             message(text,id)
         def handle(e):
             nonlocal outstanding
@@ -324,6 +366,7 @@ class Stage:
                 live_usage.clear()
                 self.tokens(completed_usage,e.get('total_cost_usd'),inclusive=False)
                 if e.get('is_error'): raise ValueError(str(e.get('errors') or e.get('subtype')))
+                self.responded(e.get('uuid') or e.get('session_id'))
                 outstanding -= 1
                 return outstanding == 0 and not self.pending
         self.loop(handle,steer)
@@ -348,7 +391,7 @@ class Stage:
             if e.get('method')=='agent_event':
                 p=e['params']
                 if p.get('type')=='content_end' and p.get('contentType')=='text':
-                    self.text(p.get('text',''));self.final_answer=p.get('text','')
+                    self.text(p.get('text',''));self.completed_answer(p.get('text',''),p.get('id'))
                 if p.get('type')=='error':
                     self.status('chat_output',text='Cline: '+str(p.get('message') or p.get('error') or 'runner error'))
                 if p.get('type')=='usage': self.tokens(dict(input_tokens=p.get('totalInputTokens'),output_tokens=p.get('totalOutputTokens'),
@@ -394,6 +437,8 @@ class Stage:
                         self.status('steering_rejected',message_id=path.stem,detail='Stage completed before delivery')
                 for id in self.pending:
                     self.status('steering_rejected',message_id=id,detail='Stage ended before acknowledgment')
+                for id in sorted(self.accepted):
+                    self.status('steering_unconfirmed',message_id=id,detail='Stage ended without a correlated reply')
                 if self.child is not None:
                     if self.child.poll() is None:
                         kill_tree(self.child);self.child.wait()

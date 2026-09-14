@@ -80,12 +80,14 @@ cd "$REPO"
 git init -q .
 git config user.email test@example.com
 git config user.name Test
+git config commit.gpgsign false
+git config tag.gpgsign false
 
 mkdir -p app
 printf 'def add(a, b):\n    return a + b\n' > app/calc.py
 printf 'unchanged\n' > app/other.py
 git add -A
-git -c commit.gpgsign=false commit -qm baseline
+git -c commit.gpgsign=false -c tag.gpgsign=false commit --no-gpg-sign -qm baseline
 
 # Workflow paperwork alone must not count as delivered implementation.
 printf '# stopped before implementation\n' > IMPLEMENTATION_NOTES.md

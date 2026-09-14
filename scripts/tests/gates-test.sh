@@ -176,8 +176,9 @@ EOF
     git -C "$REPO" config user.email test@example.com
     git -C "$REPO" config user.name Test
     git -C "$REPO" config commit.gpgsign false
+    git -C "$REPO" config tag.gpgsign false
     git -C "$REPO" add -A
-    git -C "$REPO" commit -qm baseline
+    git -C "$REPO" -c commit.gpgsign=false -c tag.gpgsign=false commit --no-gpg-sign -qm baseline
 
     # Stub agent: one JSON result event, plus whatever artifact the prompt
     # implies. FAKE_IMPL is the per-case body of the implementation stage.

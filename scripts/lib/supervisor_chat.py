@@ -123,6 +123,11 @@ def home_intent(message):
     """Whether an idle-state home action proposed by the model may run: the
     operator asked for something to be built, drafted or started."""
     text = _clean(message)
+    # Polite requests are commands even when they end in a question mark.
+    request = re.match(r'^(?:(?:can|could|would|will) you\s+)?(?:please\s+)?'
+                       r'(?:build|create|make|implement|start|run|draft|generate)\b', text, re.I)
+    if request and not _NEGATED.search(text):
+        return True
     return bool(text) and not _QUESTION.search(text) and not _NEGATED.search(text) and bool(_HOME.search(text))
 
 

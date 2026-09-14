@@ -185,6 +185,24 @@ class RoutingTests(Base):
         self.assertEqual(len(FakeChat.calls), 1)
         self.assertNotIn('stage-model', ' '.join(FakeChat.calls[0].command))
 
+    def test_brief_description_builds_app_without_manual_formatting(self):
+        for description in ('create a webapp that prints hello world!',
+                            'build an app with Hello World centered in a large font',
+                            'can you build a hello world webapp?'):
+            with self.subTest(description=description):
+                target = self.project / 'REQUIREMENTS.md'
+                target.unlink(missing_ok=True)
+                ui = self.ui('menu')
+                ui._run = Mock()
+                request = self.send(ui, description)
+                self.assertIn('Functional requirements', request.prompt)
+                self.answer(ui, request, 'Preparing the build.', home_action={
+                    'uncle_action': 'create_app', 'message': 'Build it',
+                    'document': description, 'start': True})
+                self.assertIn('## Summary\n' + description, target.read_text())
+                ui._run.assert_called_once()
+                self.assertEqual(ui.workflow_idx, 0)
+
     def test_issue_build_phrase_and_home_intent(self):
         ui = self.ui('menu')
         ui._home_action = Mock()

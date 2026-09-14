@@ -2403,9 +2403,11 @@ class UncleTUI:
             if excerpt:
                 extra['dialog_document'] = {'file': dialog['file'], 'excerpt': supervision_lib.redact(excerpt, known)}
         if not running:
-            extra['home_actions'] = ('Idle homepage actions (uncle_action, message; create_app/create_change add '
-                                     'document and start; github_issue adds issue and start; run_app/run_change take '
-                                     'no more keys): create_app, create_change, run_app, run_change, github_issue.')
+            extra['home_actions'] = (home_action_prompt([], root) +
+                                     '\nPut the action object in home_action within the supervisor reply envelope. '
+                                     'A brief description is enough to request an app build. Structure it into the '
+                                     'required Markdown sections; preserve all stated details. Set start=true '
+                                     'when asked to build or create the app; do not ask for another confirmation.')
         user_text = self.chat.refs.expand(sanitize(message)) if trigger == 'chat' else sanitize(message)
         history = self.home_history + [('user' if trigger == 'chat' else 'system', user_text)]
         state = {'running': running, 'gate_pending': gate_question, 'stage': stage,
@@ -2719,7 +2721,15 @@ class UncleTUI:
                     raise ValueError(filename + ' already exists. Run it or choose a new project; it was not overwritten.')
                 draft = Conversation(root)
                 draft.kind = kind
-                draft.preview = sanitize(action['document'])
+                document = action['document']
+                if kind == 'app' and not re.search(r'^## ', document, re.M):
+                    # Plain descriptions are valid app seeds; do not force users
+                    # to supply the internal Markdown section schema.
+                    document = '# Application brief\n\n' + '\n\n'.join(
+                        '## ' + field + '\n' + (document.strip() if field == 'Summary' else
+                        'Not specified in the brief.' if field == 'Open questions' else 'None')
+                        for field in Conversation.fields['app'])
+                draft.preview = sanitize(document)
                 draft.commit()
                 self.new_workflow_pending = True
                 self.chat.kind, self.chat.preview, self.chat.seed = kind, draft.preview, draft.seed

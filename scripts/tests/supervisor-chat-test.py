@@ -601,7 +601,10 @@ class MetricTests(Base):
         self.assertIn('--tools', seen['argv'])
         self.assertNotIn('CLAUDE_CODE_SETTINGS', seen['env'])
         self.assertNotIn('UNCLE_STATUS_FILE', seen['env'])
-        self.assertNotIn('/real/home', worker_env['HOME'])
+        # The Claude login lives in the real home; config and cache stay isolated.
+        self.assertEqual(worker_env['HOME'], '/real/home')
+        self.assertTrue(worker_env['XDG_CONFIG_HOME'].startswith(home))
+        self.assertTrue(worker_env['XDG_CACHE_HOME'].startswith(home))
         self.assertNotEqual(Path(seen['cwd']).resolve(), ROOT.resolve())
         self.assertFalse(Path(home).exists(), 'temporary home removed after the call')
 

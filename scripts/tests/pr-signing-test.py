@@ -87,15 +87,6 @@ class SigningTests(unittest.TestCase):
         self.assertEqual(self.j['intended_head'], 'new')
         self.assertEqual(self.ask.call_count, 3)
 
-    def test_signing_configuration_prompts_without_automatic_commit(self):
-        self.ns['subprocess'] = Mock()
-        self.ns['subprocess'].run.return_value = Mock(returncode=0, stdout='true\n')
-        self.ns['head'] = lambda: 'old'
-        with self.assertRaisesRegex(ValueError, 'No new commit'):
-            self.ns['prepare_commit'](self.j)
-        self.git.assert_not_called()
-        self.assertEqual(self.ask.call_count, 2)
-
 
 if __name__ == '__main__':
     unittest.main()

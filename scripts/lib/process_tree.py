@@ -66,14 +66,17 @@ def launch_command(command):
     return command
 
 
-def timed_popen(command, **kwargs):
-    """Launch a process with optional timing; preserve caller process options."""
-    started, tick = time.time(), time.monotonic()
-    process = subprocess.Popen(command, **kwargs)
+def track_process(process, command, started, tick):
+    """Attach the timing record finish_check completes; name interpreter
+    launches by their script so the report reads `python3 foo.py`, not `python3`."""
     try:
         import uuid
         from build_timing import event
         name = Path(str(command[0])).name
+        if len(command) > 1 and (name.startswith('python') or name in ('bash', 'sh')):
+            script = Path(str(command[1]))
+            if script.suffix in ('.py', '.sh'):
+                name += ' ' + script.name
         identity = uuid.uuid4().hex
         process._uncle_timing = (name, started, tick, identity)
         event('process_start', name, started, 0, child_pid=process.pid,
@@ -81,6 +84,12 @@ def timed_popen(command, **kwargs):
     except Exception:
         pass  # Optional telemetry must not strand a successfully launched child.
     return process
+
+
+def timed_popen(command, **kwargs):
+    """Launch a process with optional timing; preserve caller process options."""
+    started, tick = time.time(), time.monotonic()
+    return track_process(subprocess.Popen(command, **kwargs), command, started, tick)
 
 
 def group_options():
@@ -109,13 +118,15 @@ _PARENT_WATCH = (
 def start_check(command, prompt=None, **kwargs):
     """Start `command` as its own owned tree. `prompt` (bytes) is written to
     its stdin and then closed; without one stdin is /dev/null as before."""
+    started, tick = time.time(), time.monotonic()
     if os.name == 'nt':
         from windows_job import start
-        return start(command, prompt=prompt, **kwargs, **group_options())
+        return track_process(start(command, prompt=prompt, **kwargs, **group_options()), command, started, tick)
     import sys
     wrapped = [sys.executable, '-B', '-c', _PARENT_WATCH, *command]
     if prompt is None:
-        return subprocess.Popen(wrapped, stdin=subprocess.DEVNULL, **kwargs, **group_options())
+        child = subprocess.Popen(wrapped, stdin=subprocess.DEVNULL, **kwargs, **group_options())
+        return track_process(child, command, started, tick)
     child = subprocess.Popen(wrapped, stdin=subprocess.PIPE, **kwargs, **group_options())
     try:
         child.stdin.write(prompt)
@@ -123,7 +134,7 @@ def start_check(command, prompt=None, **kwargs):
         pass
     child.stdin.close()
     child.stdin = None
-    return child
+    return track_process(child, command, started, tick)
 
 
 def finish_check(process):

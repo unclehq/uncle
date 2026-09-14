@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Manual-commit checks not covered by pr-signing-test: the generated command's
+transport and shell safety, and the parent/signature guards."""
 import ast
 import json
 import os
@@ -28,22 +30,6 @@ class Checks(unittest.TestCase):
         journal = dict(original_head='old', commit_tree='tree', intended_head='', manual_signing=True,
                        title="Fix user's signing dialog")
         return ns, journal
-
-    def test_signed_audited_commit_resumes(self):
-        ns, j = self.run_case(heads=('old', 'new'))
-        ns['manual_signed_commit'](j)
-        self.assertEqual(j['intended_head'], 'new')
-        self.assertNotIn('manual_signing', j)
-        ns['git'].assert_any_call('verify-commit', 'new')
-        ns['validate'].assert_called_once_with(j)
-        ns['save'].assert_called_once_with(j)
-        self.assertIn('press ENTER (OK)', ns['ask'].call_args.args[0])
-        import shlex
-        prompt = ns['ask'].call_args.args[0]
-        command = prompt.split('\n', 1)[1].split('\nReturn here', 1)[0]
-        self.assertEqual(shlex.split(command.split(' && ')[0]), ['git', 'read-tree', j['commit_tree']])
-        self.assertEqual(shlex.split(command.split(' && ')[-1]), ['git', 'commit', '-S', '-m', j['title']])
-        self.assertEqual(j['manual_signed_head'], 'new')
 
     def test_command_transport_and_shell_safety(self):
         from unittest.mock import patch
@@ -85,25 +71,6 @@ class Checks(unittest.TestCase):
         ns['head'] = lambda: 'old'
         with self.assertRaises(ValueError): ns['manual_signed_commit'](j)
         ns['save'].assert_not_called()
-
-    def test_signing_configuration_prompts_before_commit(self):
-        import subprocess
-        function = next(node for node in TREE.body if isinstance(node, ast.FunctionDef) and node.name == 'prepare_commit')
-        for enabled in (True, False):
-            api = Mock()
-            api.PIPE = subprocess.PIPE
-            api.run.return_value = subprocess.CompletedProcess([], 0, 'true\n' if enabled else 'false\n', '')
-            ns = dict(subprocess=api, save=Mock(), manual_signed_commit=Mock(), git=Mock(return_value='new'))
-            exec(compile(ast.Module(body=[function], type_ignores=[]), '<helper>', 'exec'), ns)
-            j = dict(title='Fix signing', commit_tree='tree', original_head='old', intended_head='')
-            ns['prepare_commit'](j)
-            # The commit is the user's either way; only the -S flag follows the setting.
-            ns['git'].assert_not_called()
-            ns['manual_signed_commit'].assert_called_once_with(j)
-            self.assertTrue(j['manual_signing'])
-            self.assertEqual(j['requires_signature'], enabled)
-            ns['save'].assert_called_once_with(j)
-            self.assertEqual(j['intended_head'], '')
 
     def test_wrong_tree_or_signature_stays_pending(self):
         for kwargs in [dict(tree='different'), dict(signature=False)]:

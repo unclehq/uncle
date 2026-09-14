@@ -95,7 +95,7 @@ new_case() {
     OUT="$CASE/out.txt"
     GH_LOG="$CASE/gh.log"
 
-    mkdir -p "$REPO/scripts/lib" "$REPO/.uncle/workflow" "$CASE/bin" "$CASE/emptybin"
+    mkdir -p "$REPO/scripts/lib" "$REPO/.uncle/workflow" "$CASE/bin"
     cp "$ROOT/scripts/from-issue.sh" "$REPO/scripts/from-issue.sh"
     cp "$ROOT"/scripts/lib/*.sh "$REPO/scripts/lib/"
     cp "$ROOT"/scripts/lib/*.py "$REPO/scripts/lib/"
@@ -130,9 +130,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 mkdir -p .uncle/workflow
 echo "ran" >> .uncle/workflow/driver.log
-if [[ -n "${FAKE_DRIVER_ORIGIN:-}" ]]; then
-    printf '%s\n' "$FAKE_DRIVER_ORIGIN" > .uncle/workflow/origin
-fi
 if [[ -n "${FAKE_DRIVER_VERDICT_TEXT:-}" ]]; then
     printf '%s\n' "$FAKE_DRIVER_VERDICT_TEXT" > FINAL_AUDIT.md
     . "$ROOT/scripts/lib/audit-verdict.sh"
@@ -140,7 +137,7 @@ if [[ -n "${FAKE_DRIVER_VERDICT_TEXT:-}" ]]; then
     class="$(classify_audit_verdict FINAL_AUDIT.md)"
     hash="$(hash_file FINAL_AUDIT.md)"
     printf '%s\t%s\t%s\n' \
-        "${FAKE_DRIVER_RUN_ID:-${STAGEGATE_RUN_ID:--}}" "$class" "$hash" \
+        "${STAGEGATE_RUN_ID:--}" "$class" "$hash" \
         > .uncle/workflow/audit-verdict
 fi
 if [[ "${FAKE_DRIVER_CLOSED_MARKER:-0}" == "1" ]]; then
@@ -149,9 +146,6 @@ if [[ "${FAKE_DRIVER_CLOSED_MARKER:-0}" == "1" ]]; then
         > .uncle/workflow/issue-closed
 elif [[ -n "${FAKE_DRIVER_MARKER_TEXT:-}" ]]; then
     printf '%s\n' "$FAKE_DRIVER_MARKER_TEXT" > .uncle/workflow/issue-closed
-fi
-if [[ "${FAKE_DRIVER_TAMPER:-0}" == "1" ]]; then
-    printf 'tampered\n' >> FINAL_AUDIT.md
 fi
 exit "${FAKE_DRIVER_EXIT:-0}"
 DRV
@@ -291,53 +285,20 @@ expect_driver_ran
 expect_not_closed
 
 # ---------------------------------------------------------------------------
-# Verdict-gated close (B-04, B-05, I-08)
+# The runner never closes the issue itself: a READY audit with gh
+# authenticated is the one case that used to, and it must not (B-04, B-05,
+# I-08). Closing follows the PR merge; the verdict guards that used to sit
+# here are attestation-test's T2 rows now.
 # ---------------------------------------------------------------------------
 
-new_case ready-closes
+new_case ready-never-closes
 run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY"
 expect_status 0
-expect_not_closed
-
-new_case ready-with-non-blocking-closes
-run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY WITH NON-BLOCKING ISSUES"
-expect_status 0
+expect_out "Issues remain open until their PR is merged."
 expect_not_closed
 
 new_case not-ready-stays-open
 run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="NOT READY"
-expect_status 0
-expect_not_closed
-
-new_case unknown-verdict-stays-open
-run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="Rerun until READY"
-expect_status 0
-expect_not_closed
-
-new_case missing-verdict-file
-run_runner confirm ""
-expect_status 0
-expect_not_closed
-
-new_case malformed-verdict-file
-printf 'garbage\n' > "$REPO/.uncle/workflow/audit-verdict"
-run_runner confirm ""
-expect_status 0
-expect_not_closed
-
-new_case run-id-mismatch
-run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_RUN_ID="some-other-run"
-expect_status 0
-expect_not_closed
-
-new_case origin-mismatch-at-close
-run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" \
-    FAKE_DRIVER_ORIGIN="other/repo	99"
-expect_status 0
-expect_not_closed
-
-new_case audit-hash-mismatch
-run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_TAMPER=1
 expect_status 0
 expect_not_closed
 
@@ -352,37 +313,6 @@ for rc in 1 7 130; do
     expect_out "change-workflow.sh exited $rc; owner/repo#42 remains open."
     expect_not_closed
 done
-
-# ---------------------------------------------------------------------------
-# gh availability and auth (B-07, I-09, §9)
-# ---------------------------------------------------------------------------
-
-new_case curl-fallback-skips-close
-run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" T_USED_GH=0
-expect_status 0
-expect_not_closed
-
-new_case gh-unauthenticated-skips-close
-run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_AUTH_RC=1
-expect_status 0
-expect_not_closed
-
-new_case gh-missing-skips-close
-if PATH="$CASE/emptybin:/usr/bin:/bin" command -v gh >/dev/null 2>&1; then
-    echo "NOTE [$CASE_NAME] skipped: gh is present in /usr/bin or /bin"
-else
-    printf 'RUN\n' | env PATH="$CASE/emptybin:/usr/bin:/bin" \
-        GH_LOG_FILE="$GH_LOG" FAKE_DRIVER_VERDICT_TEXT="READY" \
-        bash "$REPO/runner.sh" confirm > "$OUT" 2>&1
-    RC=$?
-    expect_status 0
-    expect_not_closed
-fi
-
-new_case gh-close-fails
-run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_CLOSE_RC=1
-expect_status 0
-expect_not_closed
 
 # ---------------------------------------------------------------------------
 # Seed gate in from-issue.sh (AR-001, AR-004)

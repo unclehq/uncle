@@ -8,6 +8,25 @@ import time
 from pathlib import Path
 
 
+def check_timeout(name='WORKFLOW_CHECK_TIMEOUT_SECONDS', default=900):
+    value = float(os.environ.get(name, default))
+    if not 0 < value <= 86400:
+        raise ValueError(name + ' must be greater than 0 and at most 86400')
+    return value
+
+
+def wait_check(child, timeout, output):
+    """Bound a check's lifetime, including its owned descendants."""
+    try:
+        return child.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_tree(child)
+        child.wait()
+        output.write(('\nTIMEOUT after %gs; check process tree terminated.\n' % timeout).encode())
+        output.flush()
+        return 124
+
+
 def cleanup_directory(directory, timeout=30):
     """Allow terminated Windows descendants to release inherited file handles.
 

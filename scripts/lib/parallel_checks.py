@@ -1,3 +1,4 @@
+from process_tree import check_timeout, wait_check
 """Run explicitly approved independent check groups; keep evidence ordered."""
 from process_tree import bash_executable, cleanup_directory, finish_check, start_check, kill_tree
 
@@ -42,6 +43,7 @@ def run(args):
 
 
 def _run_checks(args):
+    timeout = check_timeout()
     run_started = time.monotonic()
     passed = failed = 0
     commands = [row.removesuffix(b'\r').decode('utf-8')
@@ -116,13 +118,13 @@ def _run_checks(args):
                 check_env = dict(os.environ)
                 for key in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG',
                             'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE',
-                            'DOCUMENT_BUDGET_SOURCE'):
+                            'DOCUMENT_BUDGET_SOURCE', 'UNCLE_STEERING', 'UNCLE_SUPERVISION_HOST'):
                     check_env.pop(key, None)
                 argv = syntax_command(command, args.jobs) or [bash_executable(), '-c', command]
                 child = start_check(argv, env=check_env,
                                     stdout=output, stderr=subprocess.STDOUT)
                 children.add(child)
-            status = child.wait()
+            status = wait_check(child, timeout, output)
             with lock:
                 finish_check(child)
                 children.discard(child)

@@ -1,3 +1,4 @@
+from process_tree import check_timeout, wait_check
 """Run shell regression suites concurrently with separate output and live progress."""
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 import glob
@@ -43,6 +44,7 @@ def run_commands(jobs, commands):
     """Execute named isolated commands with shared progress and cleanup."""
     if not 1 <= jobs <= 8:
         raise ValueError('Worker count must be from 1 to 8')
+    timeout = check_timeout('WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS', 600)
     files = list(commands)
     active, lock, stopped = set(), threading.Lock(), threading.Event()
     running = {}
@@ -62,7 +64,7 @@ def run_commands(jobs, commands):
                         active.add(child)
                         running[path] = time.monotonic()
                     try:
-                        status = child.wait()
+                        status = wait_check(child, timeout, output)
                     finally:
                         finish_check(child)
                         with lock:

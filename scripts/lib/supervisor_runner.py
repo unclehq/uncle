@@ -23,13 +23,13 @@ from process_tree import launch_command, kill_tree, start_check
 MAX_REPLY = 1024 * 1024
 POLL_SECONDS = 0.1
 GRACE_SECONDS = 12 if os.name == 'nt' else 2
-ENV_ALLOW = ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'ANTHROPIC_API_KEY')
+ENV_ALLOW = ('PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'USER', 'LOGNAME', 'CLAUDE_CONFIG_DIR')
 ENV_ALLOW_WINDOWS = ('SYSTEMROOT', 'SYSTEMDRIVE', 'COMSPEC', 'PATHEXT', 'WINDIR', 'TEMP', 'TMP',
                      'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMDATA')
 
 
 def worker_env(environ, home):
-    """The allowlisted environment: resolved PATH, locale, the API key, temporary HOME/config/cache."""
+    """The allowlisted environment: resolved PATH, locale, the API key, login identity and temporary config/cache."""
     env = {}
     names = ENV_ALLOW + (ENV_ALLOW_WINDOWS if os.name == 'nt' else ())
     for name in names:
@@ -37,7 +37,9 @@ def worker_env(environ, home):
         if value:
             env[name] = value
     home = str(home)
-    env['HOME'] = home
+    # Claude's subscription login is tied to the user's home and OS identity.
+    # The call still runs in an empty cwd with tools and settings disabled.
+    env['HOME'] = environ.get('HOME') or home
     env['XDG_CONFIG_HOME'] = os.path.join(home, 'config')
     env['XDG_CACHE_HOME'] = os.path.join(home, 'cache')
     env['TMPDIR'] = os.path.join(home, 'tmp')
@@ -57,7 +59,8 @@ def build_command(config, root, environ=None):
         raise ValueError('unavailable: %s is not on PATH' % executable)
     home = tempfile.mkdtemp(prefix='uncle-supervisor-')
     env = worker_env(environ, home)
-    argv = [resolved, '--bare', '-p', '--tools', '', '--disable-slash-commands', '--setting-sources', '',
+    # --bare disables keychain reads, breaking an existing Claude login.
+    argv = [resolved, '-p', '--tools', '', '--disable-slash-commands', '--setting-sources', '',
             '--strict-mcp-config', '--permission-mode', 'dontAsk', '--no-session-persistence',
             '--output-format', 'stream-json', '--verbose', '--model', config.model, '--effort', config.effort,
             '--max-budget-usd', '%.2f' % config.call_max_cost_usd]
@@ -93,7 +96,7 @@ def parse_stream(lines):
             cost = event.get('total_cost_usd', cost)
             flag = event.get('is_error')
             if flag is True or str(flag).lower() == 'true':
-                error = str(event.get('error_detail') or event.get('subtype') or 'runner reported an error')
+                error = str(event.get('error_detail') or event.get('result') or event.get('subtype') or 'runner reported an error')
             if isinstance(event.get('result'), str) and not reply.strip():
                 reply = event['result']
     return reply, usage, cost, error

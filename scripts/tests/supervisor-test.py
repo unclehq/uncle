@@ -712,13 +712,20 @@ class WorkerTests(unittest.TestCase):
             time.sleep(0.05)
         self.fail('worker did not finish')
 
+    def test_success_subtype_does_not_hide_login_error(self):
+        from supervisor_runner import parse_stream
+        result = dict(type='result', subtype='success', is_error=True,
+                      result='Not logged in · Please run /login')
+        self.assertEqual(parse_stream([json.dumps(result)])[3], result['result'])
+
     def test_argv_env_cwd(self):
         request = self.call(reply='{}')
         result = self.wait(request)
         self.assertEqual(result['status'], 'reply')
         record = json.loads(self.argv_log.read_text().splitlines()[-1])
         argv = record['argv']
-        self.assertEqual(argv[:2], ['--bare', '-p'])
+        self.assertEqual(argv[0], '-p')
+        self.assertNotIn('--bare', argv)
         self.assertIn('--tools', argv)
         self.assertEqual(argv[argv.index('--tools') + 1], '')
         for flag in ('--disable-slash-commands', '--strict-mcp-config', '--no-session-persistence'):
@@ -732,7 +739,7 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn('UNCLE_STATUS_FILE', env)
         self.assertNotIn('GITHUB_TOKEN', env)
         self.assertEqual(env.get('ANTHROPIC_API_KEY'), 'sk-ant-testkey123456')
-        self.assertNotEqual(env['HOME'], os.path.expanduser('~'))
+        self.assertEqual(env['HOME'], os.path.expanduser('~'))
         self.assertTrue(record['cwd'].endswith('cwd'))
         self.assertEqual(os.listdir(record['cwd']) if os.path.isdir(record['cwd']) else [], [])
         self.assertEqual(record['prompt'], 'PROMPT')

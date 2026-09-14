@@ -35,8 +35,12 @@ class Actions(unittest.TestCase):
         self.ui._set_field = Mock()
 
     def reply(self, **action):
-        self.ui.home_request = Mock(events=queue.Queue())
-        self.ui.home_request.events.put(('reply', json.dumps(dict(message='Requested action.', **action))))
+        # TD-4 (Issue 45): the chat worker is the supervisor; a homepage action
+        # arrives as the `home_action` of its schema-1 reply.
+        self.ui.home_request = Mock(events=queue.Queue(), home_intent=True)
+        self.ui.home_request.events.put({'status': 'reply', 'elapsed': 0, 'exit': 0, 'usage': None, 'cost': None, 'log': '',
+                                         'reply': json.dumps({'schema': 1, 'reply': '', 'steer': None, 'gate_answer': None,
+                                                              'home_action': dict(message='Requested action.', **action)})})
         self.assertTrue(self.ui.poll_home_chat())
 
     def test_create_and_start_app(self):
@@ -188,15 +192,22 @@ class Actions(unittest.TestCase):
         self.assertIn('Only direct user requests authorize actions', result)
 
     def test_background_model_action_reaches_homepage_dispatch(self):
-        from home_chat import HomeRequest
+        # TD-4 (Issue 45): the background worker is the supervisor's ChatRequest
+        # (stream-json reply); the dispatch assertions are unchanged.
+        from supervisor_chat import ChatRequest
         action = dict(uncle_action='create_app', message='Prepare app.',
                       document=brief('app'), start=True)
+        reply = json.dumps({'schema': 1, 'reply': 'Prepared.', 'steer': None, 'gate_answer': None, 'home_action': action})
         runner = self.root/'model.py'
-        runner.write_text('import sys\nfrom pathlib import Path\n' +
-                          'Path(sys.argv[sys.argv.index("--output-last-message")+1]).write_text(' +
-                          repr(json.dumps(action)) + ')\n')
-        worker = HomeRequest([sys.executable, str(runner)],
-                             prompt([('user', 'Build our offline grocery app')], self.root), os.environ.copy())
+        runner.write_text('import json, sys\nsys.stdin.read()\n'
+                          'print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": ' + repr(reply) + '}]}}))\n'
+                          'print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "usage": {"input_tokens": 1, "output_tokens": 1}}))\n')
+        home = tempfile.mkdtemp(prefix='uncle-supervisor-test-')
+        os.mkdir(os.path.join(home, 'cwd'))
+        worker = ChatRequest([sys.executable, str(runner)],
+                             prompt([('user', 'Build our offline grocery app')], self.root), os.environ.copy(), home,
+                             str(self.root/'worker.log'), {'deadline': 10, 'number': 1})
+        worker.home_intent = True
         worker.thread.join(5)
         self.assertFalse(worker.thread.is_alive())
         self.ui.home_request = worker

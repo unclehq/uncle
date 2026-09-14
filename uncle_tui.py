@@ -48,6 +48,9 @@ from self_hosted import settings as home_settings
 from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
 import supervisor as supervision_lib
 from supervisor_runner import SupervisorRequest, build_command as supervisor_command
+import supervisor_chat
+from supervisor_chat import ChatRequest
+import gate_answer
 
 CLINE_CONFIG = os.environ.get("CLINE_CONFIG", os.path.expanduser("~/.cline/data/settings/providers.json"))
 
@@ -579,6 +582,7 @@ SUPERVISION_DESC = {
     "call_timeout_seconds": "Deadline for one supervisor call; the worker tree is killed at the deadline (default 300).",
     "max_calls_per_run": "Supervisor calls allowed per workflow run, counted before each spawn (default 8).",
     "call_max_cost_usd": "Dollar cap passed to each supervisor call (default 0.50).",
+    "delegate_gates": "Standing delegation for routine dialogs (none/routine). With routine, the supervisor answers document approvals, audit findings and press-Enter prompts once each as they open, recorded as supervisor:standing. Signing, publication and waiver gates always need your explicit ask in chat.",
 }
 
 
@@ -1468,6 +1472,20 @@ class UncleTUI:
             except (OSError, ValueError) as exc:
                 self._ensure_chat()
                 self.home_history.append(('supervisor', 'Supervision error: ' + sanitize(str(exc))))
+        if kind in ('gate_open', 'gate_close', 'gate_answer'):
+            # Driver-named dialog identity (D-5): the supervisor may answer a
+            # prompt only while this metadata names it.
+            self._ensure_chat()
+            if kind == 'gate_open':
+                self.gate_meta = {key: ev.get(key, '') for key in
+                                  ('run', 'prompt_id', 'text', 'kind', 'class', 'reason', 'file', 'stage')}
+                self.gate_meta['choices'] = list(ev.get('choices') or [])
+            elif self.gate_meta and (self.gate_meta.get('run'), self.gate_meta.get('prompt_id')) == (
+                    ev.get('run', self.gate_meta.get('run')), ev.get('prompt_id', self.gate_meta.get('prompt_id'))):
+                if kind == 'gate_answer':
+                    self.gate_meta['answered_by'] = ev.get('answered_by', '')
+                else:
+                    self.gate_meta = None
         if kind.startswith('steering_') or kind == 'chat_output':
             if getattr(self, 'workflow_exit_reported', False):
                 return  # Late buffered events cannot reconnect a stopped build.
@@ -1475,6 +1493,7 @@ class UncleTUI:
             channels = getattr(self, 'steering_channels', {})
             self.steering_channels = channels
             stage = ev.get('stage', '')
+            record = next((r for r in self.steer_records if r['id'] == ev.get('message_id')), None)
             if kind == 'steering_ready':
                 channels[stage] = ev.get('channel', '')
             elif kind == 'steering_closed':
@@ -1490,8 +1509,17 @@ class UncleTUI:
             elif kind in ('steering_accepted', 'steering_rejected'):
                 text = ('Steering accepted by ' + stage if kind == 'steering_accepted' else
                         'Steering was not delivered: ' + sanitize(ev.get('detail', 'Stage ended')))
+                if record is not None:
+                    confirmable = str(ev.get('correlation', '') or '') in supervision_lib.CORRELATED
+                    record['state'] = (('accepted' if confirmable else 'accepted-unconfirmed')
+                                       if kind == 'steering_accepted' else 'rejected')
+                    record['detail'] = sanitize(str(ev.get('detail', '')))[:400]
+                    text = 'Steering %s %s by %s' % (record['id'][:8], record['state'], stage) if kind == 'steering_accepted' else text
                 self.home_history.append(('system', text))
                 if kind == 'steering_rejected': self.chat_error = text
+            elif kind == 'steering_answered' and record is not None:
+                record['state'] = 'answered'
+                self.home_history.append(('system', 'Steering %s answered by %s' % (record['id'][:8], stage)))
             return
         self._restore_session_totals()
         stats = getattr(self, "session_stats", None)
@@ -1502,6 +1530,8 @@ class UncleTUI:
             elif ev.get("event") == "usage":
                 stats["live"][stage] = ev
         if ev.get("event") == "start":
+            if ev.get("stage", "") != self.status_stage and self.status_stage:
+                self.previous_stage = self.status_stage
             self.status_runner = ev.get("runner", getattr(self, "status_runner", ""))
             self.status_model = ev.get("model", "")
             self.status_effort = ev.get("effort", "")
@@ -1571,6 +1601,9 @@ class UncleTUI:
                     self.prompt_kind = ''
                     self.chat_focus = 'chat'
                 self._ensure_chat()
+                self._dialog_closed('driver exited')
+                self.gate_meta = None
+                self.delegation_session = None
                 reason = 'Workflow was killed (SIGKILL, exit code 137)' if self.workflow_exit_code in (137, -9) else 'Workflow stopped (exit code %s)' % self.workflow_exit_code
                 message = reason + '. Stage chat disconnected. Press Esc to return to the menu.'
                 self.home_history.append(('system', message))
@@ -1957,6 +1990,7 @@ class UncleTUI:
                 self.prompt_text = signing_prefix + "Run in another terminal:\n" + command
                 self.prompt_buf = ""
                 self.prompt_scroll = 0
+                self._dialog_opened(plain)
                 return
         upper = plain.upper()
         if plain.startswith("PR title [default: "):
@@ -1975,6 +2009,52 @@ class UncleTUI:
         if plain.startswith("PR title [default: ") and plain.endswith("]:"):
             self.prompt_buf = plain[len("PR title [default: "):-2]
         self.prompt_scroll = 0
+        self._dialog_opened(plain)
+
+    def _dialog_opened(self, plain):
+        """SB-9: the chat partner sees every dialog open, with its driver-named class when known."""
+        focus = getattr(self, 'chat_focus', 'gate')
+        self._ensure_chat()
+        self.chat_focus = focus  # a first _ensure_chat must not steal the gate focus just set
+        self.prompt_raw = plain
+        dialog = self._dialog_record()
+        label = dialog['kind'] + (', ' + dialog['class'] + (':' + dialog['reason'] if dialog['reason'] else '')
+                                  if dialog['class'] else '')
+        self.home_history.append(('system', 'Dialog opened (%s): %s' % (label, sanitize(plain)[:300])))
+
+    def _dialog_closed(self, how):
+        if getattr(self, 'prompt_raw', ''):
+            self._ensure_chat()
+            self.home_history.append(('system', 'Dialog closed (%s): %s' % (how, sanitize(self.prompt_raw)[:120])))
+        self.prompt_raw = ''
+
+    def _gate_matches(self):
+        """The driver metadata for the prompt on screen, or None (text fallback: advice only)."""
+        meta = getattr(self, 'gate_meta', None)
+        if not meta or not getattr(self, 'prompt_kind', '') or not getattr(self, 'prompt_raw', ''):
+            return None
+        shown = re.sub(r'\s+', ' ', self.prompt_raw).strip()
+        named = re.sub(r'\s+', ' ', str(meta.get('text', ''))).strip()
+        if not named or not (shown.startswith(named[:60]) or named.startswith(shown[:60])):
+            return None
+        return meta
+
+    def _dialog_record(self):
+        """The dialog block the supervisor sees: driver class when named, else text-classified advice only."""
+        if not getattr(self, 'prompt_kind', ''):
+            return None
+        meta = self._gate_matches()
+        if meta:
+            return supervisor_chat.dialog_record(meta.get('kind') or self.prompt_kind, meta.get('text'),
+                                                 meta.get('file') or getattr(self, 'gate_file', ''), meta.get('class'),
+                                                 meta.get('reason'), meta.get('run'), meta.get('prompt_id'),
+                                                 meta.get('choices'))
+        kind, klass, reason, choices = gate_answer.classify(getattr(self, 'prompt_raw', ''),
+                                                            signing=bool(getattr(self, 'signing_command', '')))
+        record = supervisor_chat.dialog_record(self.prompt_kind or kind, getattr(self, 'prompt_raw', ''),
+                                               getattr(self, 'gate_file', ''), klass, reason, choices=choices)
+        record['answerable'] = False
+        return record
 
     def _copy_signing_command(self):
         if sys.platform == "darwin":
@@ -2028,19 +2108,25 @@ class UncleTUI:
         except Exception:
             pass
 
-    def answer_prompt(self, answer):
-        """Send one line down the driver's stdin and close the modal."""
-        if self._triage_blocks_stdin():
-            return
-        self.chat_focus = "chat"
-        if not self.proc or self.proc.poll() is not None:
-            self.prompt_kind = ""
-            return
+    def _stdin_line(self, answer):
+        """One line to the driver's stdin; True only when the write and flush succeeded."""
         try:
             self.proc.stdin.write((answer + "\n").encode())
             self.proc.stdin.flush()
+            return True
         except Exception:
-            pass
+            return False
+
+    def answer_prompt(self, answer, how='human'):
+        """Send one line down the driver's stdin and close the modal."""
+        if self._triage_blocks_stdin():
+            return False
+        self.chat_focus = "chat"
+        if not self.proc or self.proc.poll() is not None:
+            self.prompt_kind = ""
+            self._dialog_closed('driver gone')
+            return False
+        sent = self._stdin_line(answer)
         # Keep the answer in the transcript, so the log reads like a session.
         self._absorb_line("%s%s" % (self.partial.rstrip(), answer))
         self.partial = ""
@@ -2048,6 +2134,8 @@ class UncleTUI:
         self.prompt_text = ""
         self.prompt_buf = ""
         self.prompt_seen = 0
+        self._dialog_closed(how)
+        return sent
 
     def stop_workflow(self):
         if getattr(self, "completion_preview", None):
@@ -2082,6 +2170,15 @@ class UncleTUI:
             self.home_request = None
             self.home_history = []
             self.home_issue_context = ''
+        # Supervisor chat state (Issue 45): the latest driver-named gate, the
+        # session's standing grant, steering delivery records and call counts.
+        # Set individually: tests bind `chat` before the first call here.
+        for name, default in (('gate_meta', None), ('prompt_raw', ''), ('delegation_session', None),
+                              ('standing_answered', set), ('steer_records', list), ('steer_retained', None),
+                              ('chat_calls', 0), ('standing_calls', 0), ('previous_stage', ''),
+                              ('home_request', None), ('home_history', list), ('home_issue_context', '')):
+            if not hasattr(self, name):
+                setattr(self, name, default() if callable(default) else default)
         self.chat_open = True
 
     def open_chat(self):
@@ -2153,30 +2250,29 @@ class UncleTUI:
             host.controller.steering_queued(stage, id, payload)
 
     def send_home_chat(self, message):
-        preview = getattr(self, 'completion_preview', None)
-        if preview and preview.kind == 'command' and preview.process and preview.process.poll() is None:
-            preview.send(message)
-            return
-        if getattr(self, 'recovery_active', False):
-            self._triage_turn('diagnosis', followup=message)
-            return
-        gate_question = (self.state == 'running' and bool(getattr(self, 'prompt_kind', ''))
-                         and self.proc is not None and self.proc.poll() is None)
-        # A channel can outlive its runner while the driver waits for approval.
-        # Gate questions must get a reply, not enter that unconsumed queue.
-        if self.state == 'running' and not gate_question:
-            return self.steer_stage(message)
+        """Every prose message goes to the supervisor, in every state (SI-1).
+
+        Deterministic operator commands stay local: an issue-build phrase at
+        home, `/app-input` for a running preview, `/do` and `/resume` for
+        recovery. Nothing here spawns a stage runner or writes raw prose to a
+        steering channel; steering is a supervisor action the operator asked for.
+        """
+        self._ensure_chat()
         if self.home_request is not None:
             raise ValueError('A reply is still running. Wait or use /clear to cancel.')
         if not message.strip():
             return
+        proc = getattr(self, 'proc', None)
+        gate_question = (self.state == 'running' and bool(getattr(self, 'prompt_kind', ''))
+                         and proc is not None and proc.poll() is None)
+        running = self.state == 'running' or bool(proc and proc.poll() is None)
         issue_request = re.fullmatch(
             r'(?:please\s+)?(?:build|bulid|implement|start|run|work on)\s+'
             r'(?:(?P<change>change\s+request)\s+)?'
             r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+|this\s+(?:issue\s+)?)?'
             r'(?P<issue>https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?|#?[1-9][0-9]*)[.!]?',
             message.strip(), re.IGNORECASE)
-        if issue_request and not gate_question:
+        if issue_request and not running and not getattr(self, 'recovery_active', False):
             self.home_history.append(('user', sanitize(message)))
             # Asked to implement an issue now: select auto mode so the run
             # answers its own gates and the build page goes straight to work.
@@ -2186,105 +2282,346 @@ class UncleTUI:
                                'start': True,
                                'issue_mode': '--change' if issue_request['change'] else ''})
             return
-        stage, runner, model, effort = self.chat_model()
-        if self.state == 'running' and not stage:
-            raise ValueError('Waiting for the current stage model. Retry when the stage starts.')
-        if not runner:
-            raise ValueError('Choose a runner in Configure first')
-        user_text = self.chat.refs.expand(sanitize(message))
-        history = self.home_history + [('user', user_text)]
-        if gate_question:
-            prompt = ('Answer questions about the pending stage decision. The workflow is paused. '
-                      'Do not approve, reject, run commands, edit files, or emit homepage actions. '
-                      'Only the user can answer the pending dialog. Explain proposed changes; '
-                      'do not claim to have applied them. This is a separate question session '
-                      'using the stage model, not a continuation of the completed runner.\n'
-                      + 'Stage: ' + stage + '\nPending dialog: ' + self.prompt_text + '\n')
-            root = Path(_project_root())
-            candidates = [getattr(self, 'gate_file', ''), 'MANUAL_CHECKLIST.md',
-                          'IMPLEMENTATION_NOTES.md', 'VERIFICATION_REPORT.md', 'FINAL_AUDIT.md',
-                          'CHANGE_PLAN.md', 'UPDATED_PROJECT_PLAN.md']
-            remaining = 55000
-            seen = set()
-            for name in candidates:
-                if not name or name in seen:
-                    continue
-                seen.add(name)
-                path = (root / name).resolve()
-                if not path.is_relative_to(root.resolve()) or not path.is_file():
-                    continue
-                with path.open('rb') as source:
-                    content = source.read(min(12000, remaining))
-                remaining -= len(content)
-                prompt += '\nDocument excerpt (' + name + '):\n' + content.decode('utf-8', 'replace') + '\n'
-                if remaining <= 0:
-                    break
-            prompt += '\nConversation:\n' + '\n'.join(role + ': ' + text for role, text in history[-12:])
-        else:
-            prompt = home_action_prompt(history, _project_root())
-        if not issue_references(message):
+        intent = supervisor_chat.delegation_intent(message)
+        delegation = None
+        if intent and intent['source'] == 'revoke':
+            self.home_history.append(('user', sanitize(message)))
+            self.delegation_session = None
+            self.home_history.append(('system', 'Standing delegation revoked for this session; gates are yours again.'))
+            return
+        if intent and intent['source'] == 'standing':
+            self.home_history.append(('user', sanitize(message)))
+            self.delegation_session = {'request': intent['request'], 'granted': int(time.time())}
+            self.home_history.append(('system', 'Standing delegation granted for routine dialogs this run '
+                                                '(document approvals, audit findings, press-Enter, plain input). '
+                                                'Signing, publication and waiver gates still need an explicit ask. '
+                                                '/delegate off revokes it.'))
+            if not gate_question:
+                return
+            delegation = {'source': 'standing', 'request': intent['request'], 'choice': None, 'literal': None,
+                          'config_key': '', 'config_value': ''}
+        elif intent and intent['source'] == 'explicit':
+            if not gate_question:
+                self.home_history.append(('user', sanitize(message)))
+                self.home_history.append(('system', 'No dialog is waiting, so there is nothing to answer.'))
+                return
+            delegation = dict(intent, config_key='', config_value='')
+        self._supervisor_turn(message, delegation=delegation, trigger='chat')
+
+    def _supervisor_turn(self, message, delegation=None, trigger='chat'):
+        """One bounded supervisor call on the isolated worker (D-1, D-9, D-12)."""
+        self._ensure_chat()
+        config = supervision_lib.load_config(CONFIG_PATH)
+        proc = getattr(self, 'proc', None)
+        gate_question = (self.state == 'running' and bool(getattr(self, 'prompt_kind', ''))
+                         and proc is not None and proc.poll() is None)
+        running = bool(proc and proc.poll() is None)
+        dialog = self._dialog_record()
+        if delegation is not None and dialog is not None:
+            delegation = dict(delegation, dialog_class=dialog.get('class'), dialog_kind=dialog.get('kind'),
+                              answerable=bool(dialog.get('run')))
+        steer_request = supervisor_chat.steer_intent(message) if trigger == 'chat' else None
+        resend = trigger == 'chat' and supervisor_chat.send_intent(message)
+        if resend:
+            self.home_history.append(('user', sanitize(message)))
+            self._resend_steering()
+            return
+        try:
+            command, env, home = supervisor_command(config, ROOT)
+        except (OSError, ValueError) as exc:
+            raise ValueError('Supervisor unavailable: %s. Set supervision.runner claude in Configure and retry.'
+                             % sanitize(str(exc)))
+        root = _project_root()
+        state_dir = os.path.join(root, '.uncle', 'workflow')
+        known = supervision_lib.known_secret_values(os.environ, CONFIG_PATH)
+        roots = [root]
+        stage = getattr(self, 'status_stage', '')
+        logs = supervisor_chat.gather_logs(state_dir, [stage, getattr(self, 'previous_stage', '')], roots, known)
+        status = supervisor_chat.status_tail(getattr(self, 'status_path', None), [tempfile.gettempdir(), root], known)
+        recovery = ''
+        if getattr(self, 'recovery_active', False):
+            recovery = supervision_lib.redact(
+                supervision_lib.bounded_read(os.path.join(state_dir, 'TRIAGE.md'), roots, supervisor_chat.LOG_TAIL), known)
+        extra = {}
+        if dialog and dialog.get('file'):
+            excerpt = supervision_lib.bounded_read(os.path.join(root, dialog['file']), roots, supervisor_chat.LOG_TAIL)
+            if excerpt:
+                extra['dialog_document'] = {'file': dialog['file'], 'excerpt': supervision_lib.redact(excerpt, known)}
+        if not running:
+            extra['home_actions'] = ('Idle homepage actions (uncle_action, message; create_app/create_change add '
+                                     'document and start; github_issue adds issue and start; run_app/run_change take '
+                                     'no more keys): create_app, create_change, run_app, run_change, github_issue.')
+        user_text = self.chat.refs.expand(sanitize(message)) if trigger == 'chat' else sanitize(message)
+        history = self.home_history + [('user' if trigger == 'chat' else 'system', user_text)]
+        state = {'running': running, 'gate_pending': gate_question, 'stage': stage,
+                 'previous_stage': getattr(self, 'previous_stage', ''), 'workflow_state': self._workflow_state(),
+                 'recovery': bool(getattr(self, 'recovery_active', False)),
+                 'standing_delegation': bool(self.delegation_session) or config.delegate_gates == 'routine'}
+        context_delegation = dict(delegation or {'source': None}, steer_request=steer_request)
+        prompt = supervisor_chat.compose_context(self._chat_contract(), user_text, history, dialog, context_delegation,
+                                                 [{k: r.get(k) for k in ('id', 'stage', 'state', 'detail')}
+                                                  for r in self.steer_records],
+                                                 logs, status, supervisor_chat.cost_summary(state_dir), state,
+                                                 recovery=recovery, extra=extra)
+        if trigger == 'chat' and not issue_references(message):
             prompt += getattr(self, 'home_issue_context', '')
-        if len(prompt.encode('utf-8')) > 100000:
-            raise ValueError('Chat context is too large for this runner. Use /clear or smaller attachments.')
-        command = [runner_command(runner, REVIEWER), 'exec', '--ephemeral',
-                   '--skip-git-repo-check', '--sandbox', 'read-only',
-                   '-c', 'model_reasoning_effort=' + effort]
-        if model:
-            command += ['--model', model]
-        env = os.environ.copy()
-        for name in ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_STEERING', 'STAGEGATE_RUN_ID',
-                     'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE'):
-            env.pop(name, None)
-        env['UNCLE_CONFIG'] = str(CONFIG_PATH)
-        env['UNCLE_STATUS_STAGE'] = stage
-        if runner == 'self-hosted':
-            values = home_settings(CONFIG_PATH, stage)
-            if self.state == 'running' and getattr(self, 'status_model', ''):
-                values['model'] = model.removeprefix('openai/').removeprefix('local/')
-            for field in ('model', 'base_url', 'api_key'):
-                env['UNCLE_SELF_HOSTED_' + field.upper()] = values[field]
-        if runner == 'cline':
-            env['UNCLE_CLINE_EFFORT'] = effort
-            if model:
-                env['UNCLE_CLINE_MODEL'] = env['UNCLE_CLINE_REVIEWER_MODEL'] = model
-        self.chat.send(message)
+        self.chat_calls += 1
+        meta = {'call_id': uuid.uuid4().hex, 'number': self.chat_calls, 'trigger': trigger,
+                'deadline': config.call_timeout_seconds, 'workflow_state': self._workflow_state(), 'stage': stage}
+        log = os.path.join(state_dir, 'logs', 'supervisor-chat-%d.jsonl' % self.chat_calls)
+        lookup = None
+        if trigger == 'chat' and not running and issue_references(message):
+            lookup = lambda: issue_context(root, message)
+        if trigger == 'chat':
+            self.chat.send(message)
         self.home_history = history
-        if issue_references(message) and not gate_question:
-            root = _project_root()
-            self.home_request = HomeRequest(command, prompt, env,
-                                            issue_lookup=lambda: issue_context(root, message), cwd=root)
-        else:
-            self.home_request = HomeRequest(command, prompt, env, cwd=_project_root())
-        self.home_request.gate_question = gate_question
+        request = ChatRequest(command, prompt, env, home, log, meta, issue_lookup=lookup)
+        request.delegation = delegation
+        request.dialog_id = (dialog['run'], dialog['prompt_id']) if dialog and dialog.get('run') else None
+        request.steer_request = steer_request
+        request.home_intent = trigger == 'chat' and supervisor_chat.home_intent(message)
+        request.operator = message
+        request.config = config
+        self.home_request = request
+
+    def _chat_contract(self):
+        path = os.path.join(ROOT, 'prompts', 'supervise-chat.md')
+        with open(path, encoding='utf-8') as fh:
+            return fh.read()
+
+    def _workflow_state(self):
+        try:
+            with open(os.path.join(_project_root(), '.uncle', 'workflow', 'state'), encoding='utf-8') as fh:
+                raw = fh.readline().strip()
+        except OSError:
+            return ''
+        return raw.split(':', 1)[1] if re.match(r'^[0-9]+:', raw) else raw
 
     def poll_home_chat(self):
         request = getattr(self, 'home_request', None)
         if request is None:
             return False
         try:
-            kind, value = request.events.get_nowait()
+            item = request.events.get_nowait()
         except queue.Empty:
             return False
         self.home_request = None
-        if kind == 'reply':
-            context = getattr(request, 'issue_context', '')
-            if isinstance(context, str) and context:
-                self.home_issue_context = context
-            try:
-                action = None if getattr(request, 'gate_question', False) is True else parse_home_action(value)
-                if action is None:
-                    self.home_history.append(('assistant', sanitize(value)))
-                    self.chat_error = ''
-                else:
-                    self._home_action(action)
-            except (OSError, ValueError) as exc:
-                self.chat_error = sanitize(str(exc))
-                self.home_history.append(('system', self.chat_error))
-        elif kind == 'issue_seeded':
-            self.home_history.append(('system', sanitize(value)))
-            self.chat_error = ''
+        if isinstance(item, tuple):
+            # Issue imports keep the homepage tuple protocol.
+            kind, value = item
+            if kind == 'issue_seeded':
+                self.home_history.append(('system', sanitize(value)))
+                self.chat_error = ''
+            else:
+                self.chat_error = sanitize(str(value))
+            return True
+        outcome = item
+        context = getattr(request, 'issue_context', '')
+        if isinstance(context, str) and context:
+            self.home_issue_context = context
+        self._record_chat_call(request, outcome)
+        status = outcome.get('status')
+        if status != 'reply':
+            detail = sanitize(str(outcome.get('detail', '')))[:400]
+            message = {'unavailable': 'Supervisor unavailable: configure supervision.runner',
+                       'timeout': 'Supervisor call timed out after %ds' % (getattr(request, 'config', None).call_timeout_seconds
+                                                                            if isinstance(getattr(request, 'config', None), supervision_lib.Config) else 0),
+                       'cancelled': 'Supervisor call cancelled'}.get(status, 'Supervisor call failed')
+            self.chat_error = message + (': ' + detail if detail else '') + '. The dialog is unchanged; retry.'
+            self.home_history.append(('system', self.chat_error))
+            return True
+        try:
+            parsed = supervisor_chat.parse_reply(outcome.get('reply', ''))
+        except ValueError as exc:
+            self.home_history.append(('supervisor', sanitize(str(outcome.get('reply', '')))[:8000]))
+            self.chat_error = 'Supervisor reply did not follow the contract (%s); no action taken.' % sanitize(str(exc))
+            self.home_history.append(('system', self.chat_error))
+            return True
+        if parsed['reply'].strip():
+            self.home_history.append(('supervisor', sanitize(parsed['reply'])))
+        self.chat_error = ''
+        try:
+            if parsed['gate_answer'] is not None:
+                self._apply_gate_answer(request, parsed['gate_answer'])
+            elif parsed['steer'] is not None:
+                self._apply_steer(request, parsed['steer'])
+            elif parsed['home_action'] is not None:
+                self._apply_home_action(request, parsed['home_action'])
+        except (OSError, ValueError) as exc:
+            self.chat_error = sanitize(str(exc))
+            self.home_history.append(('system', self.chat_error))
+        return True
+
+    def _record_chat_call(self, request, outcome):
+        """AC-6: every chat call is measured separately from stage and diagnosis usage."""
+        meta = getattr(request, 'meta', None)
+        meta = meta if isinstance(meta, dict) else {}
+        config = getattr(request, 'config', None)
+        config = config if isinstance(config, supervision_lib.Config) else supervision_lib.load_config(CONFIG_PATH)
+        try:
+            supervision_lib.write_metric(
+                os.path.join(_project_root(), '.uncle', 'workflow'), meta.get('number', 0), config.runner, config.model,
+                config.effort, outcome.get('elapsed', 0), outcome.get('exit'), outcome.get('usage'), outcome.get('cost'),
+                outcome.get('log', ''), meta.get('workflow_state', ''), outcome.get('usage_source'),
+                error=outcome.get('status') != 'reply', usage_scope='supervisor chat',
+                join={'call_id': meta.get('call_id'), 'trigger': meta.get('trigger'), 'supervised_stage': meta.get('stage'),
+                      'outcome': outcome.get('status')})
+        except OSError as exc:
+            self.home_history.append(('system', 'Supervisor usage could not be recorded: ' + sanitize(str(exc))))
+
+    def _apply_gate_answer(self, request, proposal):
+        """SI-2/SI-3/SI-4: a stdin write needs TUI-decided delegation, the same
+        driver-named prompt, a valid literal, and a persisted receipt, in that order."""
+        delegation = getattr(request, 'delegation', None)
+        answer = sanitize(proposal.get('answer', ''))
+        rationale = sanitize(proposal.get('rationale', ''))
+        if not delegation or delegation.get('source') not in ('explicit', 'standing'):
+            self.home_history.append(('system', 'Recommendation only: the supervisor would answer %r (%s). '
+                                                'Say "answer this one" to have it submitted.' % (answer, rationale[:200])))
+            return
+        dialog = self._dialog_record()
+        if dialog is None or not dialog.get('run') or (dialog['run'], dialog['prompt_id']) != getattr(request, 'dialog_id', None):
+            self.home_history.append(('system', 'Not sent: the dialog changed or closed before the supervisor replied '
+                                                '(proposed %r). Ask again if it is still waiting.' % answer))
+            return
+        if delegation['source'] == 'standing' and dialog.get('class') == 'sensitive':
+            self.home_history.append(('system', 'Not sent: this is a %s gate; standing delegation covers routine dialogs only. '
+                                                'Say "answer this one" if you want the supervisor to answer it.'
+                                      % (dialog.get('reason') or 'sensitive')))
+            return
+        if delegation.get('literal') is not None:
+            answer = delegation['literal']
+        elif delegation.get('choice') is not None:
+            answer = delegation['choice']
+        try:
+            line = gate_answer.validate_answer(dialog['kind'], answer, dialog.get('choices') or ())
+        except ValueError as exc:
+            raise ValueError('Not sent: %s (proposed %r).' % (exc, answer))
+        if self._triage_blocks_stdin():
+            return
+        state_dir = os.path.join(_project_root(), '.uncle', 'workflow')
+        name = getattr(self, 'misc', {}).get('approval_name', '')
+        try:
+            record = gate_answer.write_envelope(state_dir, dialog['run'], dialog['prompt_id'], line, delegation['source'],
+                                                name, delegation.get('request', ''), rationale, dialog['kind'],
+                                                dialog['text'], delegation.get('config_key', ''),
+                                                delegation.get('config_value', ''))
+        except OSError as exc:
+            raise ValueError('Not sent: the answer record could not be written (%s).' % exc)
+        self.home_history.append(('supervisor', 'Answering %r on your request (%s): %s'
+                                  % (line, record['attribution'], rationale or 'no rationale given')))
+        if self.answer_prompt(line, how=record['attribution']):
+            gate_answer.update_envelope(state_dir, dialog['run'], dialog['prompt_id'], 'delivered')
         else:
-            self.chat_error = sanitize(value)
+            gate_answer.discard_envelope(state_dir, dialog['run'], dialog['prompt_id'], 'stdin write failed')
+            raise ValueError('The answer could not be written to the driver; nothing was recorded as answered.')
+
+    def _apply_steer(self, request, steer):
+        """SI-5: a steering delivery needs an operator steering request in this turn."""
+        if not getattr(request, 'steer_request', None):
+            self.home_history.append(('system', 'Recommendation only: the supervisor suggests steering the stage: %s. '
+                                                'Say "tell it to ..." to have it relayed.' % sanitize(steer['text'])[:400]))
+            return
+        record = {'id': str(uuid.uuid4()), 'stage': getattr(self, 'status_stage', ''), 'text': sanitize(steer['text']),
+                  'operator': sanitize(getattr(request, 'operator', '')), 'state': 'retained', 'detail': ''}
+        self.steer_records.append(record)
+        del self.steer_records[:-supervisor_chat.DELIVERY_STATES]
+        self._deliver_steering(record)
+
+    def _deliver_steering(self, record):
+        stage = getattr(self, 'status_stage', '')
+        channel = getattr(self, 'steering_channels', {}).get(stage)
+        if not channel or not self.proc or self.proc.poll() is not None or getattr(self, 'workflow_exit_reported', False):
+            record['state'] = 'retained'
+            record['detail'] = 'no live steering channel'
+            self.steer_retained = record
+            self.home_history.append(('system', 'Steering not delivered; retained (no live channel for %s). '
+                                                'Say "send it" once the stage accepts steering.' % (stage or 'the stage')))
+            return False
+        payload = supervisor_chat.steer_payload(record['text'])
+        if len(payload.encode('utf-8')) > 60000:
+            record['state'] = 'failed'
+            record['detail'] = 'payload exceeds 60 KB'
+            raise ValueError('Steering not delivered: the instruction exceeds 60 KB; it was retained.')
+        record['id'] = str(uuid.uuid4())
+        record['stage'] = stage
+        fd, temporary = tempfile.mkstemp(prefix='.pending-', dir=channel)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+                json.dump({'id': record['id'], 'text': payload}, stream)
+            os.replace(temporary, os.path.join(channel, str(time.time_ns()) + '-' + record['id'] + '.json'))
+        except OSError as exc:
+            record['state'] = 'failed'
+            record['detail'] = str(exc)[:200]
+            self.steer_retained = record
+            raise ValueError('Steering not delivered (%s); retained. Say "send it" to retry.' % exc)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        record['state'] = 'queued'
+        self.steer_retained = None
+        self.home_history.append(('system', 'Steering %s queued for %s' % (record['id'][:8], stage)))
+        host = getattr(self, 'supervision_host', None)
+        if host is not None:
+            host.controller.steering_queued(stage, record['id'], payload)
+        return True
+
+    def _resend_steering(self):
+        record = getattr(self, 'steer_retained', None)
+        if record is None:
+            self.home_history.append(('system', 'Nothing is retained to send.'))
+            return
+        self._deliver_steering(record)
+
+    def _apply_home_action(self, request, action):
+        proc = getattr(self, 'proc', None)
+        running = self.state == 'running' or bool(proc and proc.poll() is None)
+        if running:
+            self.home_history.append(('system', 'Ignored: homepage actions cannot run while a workflow is active.'))
+            return
+        if not getattr(request, 'home_intent', False):
+            self.home_history.append(('system', 'Recommendation only: the supervisor proposed %s. Ask to build, '
+                                                'draft or start it to run the action.' % sanitize(str(action.get('uncle_action')))))
+            return
+        parsed = parse_home_action(json.dumps(action))
+        if parsed is None:
+            raise ValueError('The supervisor proposed an invalid homepage action.')
+        self._home_action(parsed)
+
+    def poll_delegation(self):
+        """SB-7: standing delegation answers a routine, driver-named dialog once as it opens."""
+        if not getattr(self, 'prompt_kind', '') or getattr(self, 'home_request', None) is not None:
+            return False
+        if self.state != 'running' or not self.proc or self.proc.poll() is not None:
+            return False
+        dialog = self._dialog_record()
+        if dialog is None or not dialog.get('run') or dialog.get('class') != 'routine':
+            return False
+        key = (dialog['run'], dialog['prompt_id'])
+        if key in self.standing_answered:
+            return False
+        config = supervision_lib.load_config(CONFIG_PATH)
+        session = getattr(self, 'delegation_session', None)
+        if config.delegate_gates != 'routine' and not session:
+            return False
+        self.standing_answered.add(key)
+        if self.standing_calls >= config.max_calls_per_run:
+            self.home_history.append(('system', 'Standing delegation paused: supervision.max_calls_per_run (%d) reached; '
+                                                'this dialog is yours.' % config.max_calls_per_run))
+            return True
+        self.standing_calls += 1
+        if session:
+            delegation = {'source': 'standing', 'request': session['request'], 'choice': None, 'literal': None,
+                          'config_key': '', 'config_value': ''}
+        else:
+            delegation = {'source': 'standing', 'request': 'supervision.delegate_gates routine', 'choice': None,
+                          'literal': None, 'config_key': 'supervision.delegate_gates', 'config_value': 'routine'}
+        try:
+            self._supervisor_turn('Standing delegation: answer this routine dialog (%s).' % dialog['kind'],
+                                  delegation=delegation, trigger='standing_gate')
+        except (OSError, ValueError) as exc:
+            self.chat_error = sanitize(str(exc))
+            self.home_history.append(('system', self.chat_error))
         return True
 
     def _home_action(self, action):
@@ -3117,7 +3454,7 @@ class UncleTUI:
         return False
 
     def _slash_choices(self):
-        commands = ['/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/triage', '/do', '/resume']
+        commands = ['/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/triage', '/do', '/resume', '/delegate', '/app-input']
         text = self.chat_composer.lower()
         return [command for command in commands if command.startswith(text)] if text.startswith('/') and ' ' not in text else []
 
@@ -3143,8 +3480,25 @@ class UncleTUI:
                     self.state == 'running' or (self.proc and self.proc.poll() is None)):
                 self.chat_error = 'A workflow is already active. Finish or stop it before starting another.'
                 return True
-            if argument and command not in ('/issue', '/do'):
+            if argument and command not in ('/issue', '/do', '/delegate', '/app-input'):
                 self.chat_error = command + ' does not take arguments'
+                return True
+            if command == '/delegate':
+                self.chat_composer = ''
+                self.chat_choices = []
+                self.chat_error = ''
+                self._delegate_command(argument.lower())
+                return True
+            if command == '/app-input':
+                self.chat_composer = ''
+                self.chat_choices = []
+                preview = getattr(self, 'completion_preview', None)
+                if preview and preview.kind == 'command' and preview.process and preview.process.poll() is None:
+                    preview.send(argument)
+                    self.chat_error = ''
+                    self.home_history.append(('system', 'Sent to the running application: ' + sanitize(argument)[:200]))
+                else:
+                    self.chat_error = 'No running application preview accepts input.'
                 return True
             if command in ('/triage', '/do', '/resume'):
                 self.chat_composer = ''
@@ -3219,9 +3573,30 @@ class UncleTUI:
                 self.chat_error = ''
                 self.chat_choices = []
             else:
-                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /triage /do N /resume'
+                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /triage /do N /resume /delegate on|off|status /app-input TEXT'
             return True
         return False
+
+    def _delegate_command(self, argument):
+        """Session standing delegation for routine dialogs; config `delegate_gates` is the persistent form."""
+        self._ensure_chat()
+        config = supervision_lib.load_config(CONFIG_PATH)
+        if argument == 'on':
+            self.delegation_session = {'request': '/delegate on', 'granted': int(time.time())}
+            self.home_history.append(('system', 'Standing delegation granted for routine dialogs this session; '
+                                                'sensitive gates still need an explicit ask.'))
+        elif argument == 'off':
+            self.delegation_session = None
+            self.home_history.append(('system', 'Session standing delegation revoked.'
+                                      + (' supervision.delegate_gates routine still applies from .uncle/config.'
+                                         if config.delegate_gates == 'routine' else '')))
+        elif argument in ('', 'status'):
+            source = ('session (%s)' % self.delegation_session['request'] if self.delegation_session
+                      else 'config (supervision.delegate_gates routine)' if config.delegate_gates == 'routine' else 'none')
+            self.home_history.append(('system', 'Standing delegation: %s. Sensitive gates (signing, publication, waiver) '
+                                                'always need an explicit ask.' % source))
+        else:
+            self.chat_error = 'Usage: /delegate on | off | status'
 
     def _draw_homepage(self, h, w):
         """Centered, prompt-first landing screen; workflow rendering is separate."""
@@ -4441,6 +4816,7 @@ class UncleTUI:
         size = None
         while self.state != "quit":
             dirty = self.poll_home_chat() or dirty
+            dirty = self.poll_delegation() or dirty
             dirty = self.poll_triage() or dirty
             dirty = self.poll_issue_picker() or dirty
             self._poll_workflow()

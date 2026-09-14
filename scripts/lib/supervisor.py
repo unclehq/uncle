@@ -52,7 +52,9 @@ CONTROLS = (
     ('call_timeout_seconds', 'count1', 300),
     ('max_calls_per_run', 'count1', 8),
     ('call_max_cost_usd', 'money', 0.5),
+    ('delegate_gates', 'delegate', 'none'),
 )
+DELEGATIONS = ('none', 'routine')
 DEFAULTS = {key: default for key, _, default in CONTROLS}
 KINDS = {key: kind for key, kind, _ in CONTROLS}
 
@@ -100,6 +102,10 @@ def parse_value(key, raw):
         if text in EFFORTS:
             return text
         raise ValueError('supervision.%s must be one of %s' % (key, ', '.join(EFFORTS)))
+    if kind == 'delegate':
+        if text in DELEGATIONS:
+            return text
+        raise ValueError('supervision.%s must be one of %s' % (key, ', '.join(DELEGATIONS)))
     if kind in ('text', 'runner'):
         if text and re.fullmatch(r'[A-Za-z0-9._/:-]+', text):
             return text
@@ -764,9 +770,10 @@ def compose_prompt(contract, data_json, stage, attempt, run_id, evidence_ids, de
 # --- metrics --------------------------------------------------------------
 
 def write_metric(state_dir, number, runner, model, effort, elapsed, exit_code, usage, cost, log, workflow_state='',
-                 usage_source=None, error=False, join=None):
+                 usage_source=None, error=False, join=None, usage_scope='supervisor call'):
     """One schema-1 `kind=supervisor` record with unknowns as null, shaped like
-    perf_record's, joined to its call/trigger/action ids and disposition (D-14)."""
+    perf_record's, joined to its call/trigger/action ids and disposition (D-14).
+    `usage_scope` separates operator chat ('supervisor chat') from diagnosis calls."""
     usage = usage or {}
     def number_or_none(value):
         return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
@@ -774,15 +781,16 @@ def write_metric(state_dir, number, runner, model, effort, elapsed, exit_code, u
               ('input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')}
     known = [v for v in tokens.values() if v is not None]
     ended = int(time.time())
+    prefix = 'supervisor-chat' if usage_scope == 'supervisor chat' else 'supervisor'
     row = {
-        'schema': 1, 'kind': 'supervisor', 'stage': 'supervisor-%d' % number, 'workflow_state': workflow_state,
+        'schema': 1, 'kind': 'supervisor', 'stage': '%s-%d' % (prefix, number), 'workflow_state': workflow_state,
         'runner': runner, 'model': model, 'effort': effort, 'speculative': False,
         'ended_at': ended, 'started_at': ended - int(elapsed), 'elapsed_seconds': int(elapsed),
         'process_exit': exit_code, 'reported_error': bool(error), 'turns': 1 if not error else None,
         'input_tokens': tokens['input_tokens'], 'output_tokens': tokens['output_tokens'],
         'reported_total_tokens': sum(known) if known else None,
         'cache_read_tokens': tokens['cache_read_input_tokens'], 'cache_write_tokens': tokens['cache_creation_input_tokens'],
-        'reported_cost_usd': number_or_none(cost), 'usage_scope': 'supervisor call',
+        'reported_cost_usd': number_or_none(cost), 'usage_scope': usage_scope,
         'usage_source': usage_source, 'input_includes_cache': False, 'log': str(log),
         'supervisor': dict({'run_id': None, 'call_id': None, 'trigger': None, 'trigger_id': None, 'supervised_stage': None,
                             'attempt': None, 'outcome': None, 'action': None, 'action_id': None, 'delivery': None},
@@ -790,7 +798,7 @@ def write_metric(state_dir, number, runner, model, effort, elapsed, exit_code, u
     }
     directory = Path(state_dir) / 'metrics'
     directory.mkdir(parents=True, exist_ok=True)
-    atomic_write(directory / ('supervisor-%d-%s.json' % (number, uuid.uuid4().hex[:6])), json.dumps(row))
+    atomic_write(directory / ('%s-%d-%s.json' % (prefix, number, uuid.uuid4().hex[:6])), json.dumps(row))
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import importlib

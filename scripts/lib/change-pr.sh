@@ -331,7 +331,29 @@ def prepare_commit(j):
 
 
 
+GATE = None
+
+
+def gate():
+    """The gate-identity helper (receipts for supervisor-relayed answers); a
+    bare load of this engine without the library path has none."""
+    global GATE
+    if GATE is None:
+        lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        try:
+            import gate_answer
+            GATE = gate_answer.Gate()
+        except ImportError:
+            GATE = False
+    return GATE or None
+
+
 def ask(prompt, default=None):
+    helper = gate()
+    if helper is not None:
+        helper.open(prompt, signing=prompt.startswith(('Commit signing needs your help.', 'Commit needs your help.')))
     try:
         if sys.stdin.isatty() and default is not None:
             import readline
@@ -358,7 +380,12 @@ def ask(prompt, default=None):
                 data.extend(char)
             answer = data.decode('utf-8')
     except EOFError:
+        if helper is not None:
+            helper.read('')
         raise ValueError('No answer received; PR remains pending. Rerun to resume.')
+    if helper is not None:
+        # Attribution comes from the receipt alone; the answer is used as read.
+        os.environ['UNCLE_GATE_ANSWERED_BY'] = helper.read(answer)
     return answer.strip() or default or ''
 
 

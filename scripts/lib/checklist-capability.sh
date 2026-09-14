@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+
+# gate_read VAR: the supervision-aware read (receipt attribution, gate close)
+# when the driver loaded supervision.sh; the plain read otherwise.
+if ! declare -f gate_read > /dev/null; then gate_read() { IFS= read -r "$1"; }; fi
 # Stop before a checklist the configured runner cannot execute.
 #
 # The reviewer declares what each check needs exclusively -- a port, a browser
@@ -294,7 +298,7 @@ ensure_checklist_runner() {
         echo "cannot do GUI work at all."
 
         gate_prompt "Runner cannot execute this checklist: 'r' to re-read the config after changing it, 'run' to run anyway and record BLOCKED rows, or Enter to leave this run pending: "
-        if ! IFS= read -r answer; then
+        if ! gate_read answer; then
             echo
             echo 'Run remains pending; the runner was not changed.'
             return 1

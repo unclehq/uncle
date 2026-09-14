@@ -252,9 +252,68 @@ Keys and defaults: `supervision.enabled false`, `supervision.runner claude`,
 `supervision.max_interventions 2`, `supervision.steering_timeout_seconds 120`,
 `supervision.stage_time_seconds 1800`, `supervision.stage_tokens 0`,
 `supervision.call_timeout_seconds 300`, `supervision.max_calls_per_run 8`,
-`supervision.call_max_cost_usd 0.5`. An unknown or invalid `supervision.*`
-value disables corrections with a message naming the key; no limit is ever
-substituted.
+`supervision.call_max_cost_usd 0.5`, `supervision.delegate_gates none`. An
+unknown or invalid `supervision.*` value disables corrections with a message
+naming the key; no limit is ever substituted.
+
+### Chat with the supervisor
+
+The supervisor is also the one model you chat with in the screen, whether
+the run is idle, a stage is working, or a dialog is waiting. Chat does not
+need `supervision.enabled`; it uses `supervision.runner` (claude only, same
+bare tool-free worker and bounds as a diagnosis: `call_timeout_seconds`,
+`call_max_cost_usd`, 1 MiB output), `supervision.model` and
+`supervision.effort`. No chat message spawns a stage runner or reaches a
+steering channel as typed. Each call is metered as `kind=supervisor` with
+`usage_scope 'supervisor chat'` under `.uncle/workflow/metrics/`; an idle
+screen makes no call.
+
+What it sees, as labeled data it may quote but not obey: your message, the
+last 12 turns, the current dialog (kind, text, file, sensitivity class as
+named by the driver), the tails of the current and previous stage logs, the
+last status events, the cost ledger, steering delivery states and, in
+recovery, `TRIAGE.md`. Ask "what is this stage doing?" and it answers from
+the log, saying "the log says" for quotes and "I infer" for inference; ask
+"what should I do here?" at a gate and it explains the dialog and each
+answer's consequence.
+
+Routing and authority are decided by the screen from your words, never by
+the model:
+
+- Steering: "tell it to …", "have it …", "steer it to …" relays an
+  instruction through the stage's existing steering channel under a fixed
+  header with your text quoted as data; the chat reports queued, accepted,
+  accepted-unconfirmed, answered, rejected or failed. Without a live
+  channel the instruction is retained and "send it" retries.
+- Gate answers: "answer this one", "approve this", "reject this", "say
+  yes", "say no", "press enter", or `answer this with "…"` delegates the
+  dialog on screen -- any dialog, signing, publication and waiver included:
+  your ask is the human decision. Questions, quotations, examples and
+  negations never delegate. The answer is validated for the dialog kind
+  (`y`/`n`, an audit key, empty, or one line up to 400 characters), recorded
+  in `.uncle/workflow/supervision/gate-answers.jsonl` with your request and
+  the rationale before it is written to the driver's stdin exactly as your
+  keystroke would be, and the driver's `.approved-by` reads
+  `supervisor:explicit:<name>` -- never a bare name, never `unattended`.
+  Your own keystroke, Esc or `/clear` before the reply arrives wins; a reply
+  for a dialog that has changed or closed is discarded.
+- Standing delegation: "handle the gates for this run" or `/delegate on`
+  (session) and `supervision.delegate_gates routine` (config) let the
+  supervisor answer routine dialogs -- document approvals, audit findings,
+  press-Enter and plain input prompts -- once each as they open, recorded as
+  `supervisor:standing:<name>` and counted against
+  `supervision.max_calls_per_run`. Signing, publication and waiver gates
+  are sensitive and always need the explicit per-dialog ask. `/delegate off`
+  or "stop handling the gates" revokes the session grant; `/delegate
+  status` shows the source; the run's end clears it.
+- Homepage actions (create or run a brief, import an issue) run only at
+  home and only when you asked to build, draft, start or import something.
+- `/app-input TEXT` sends text to a running application preview; `/do N`
+  and `/resume` keep their recovery meaning.
+
+A missing or unsupported runner, a timeout, a crash or a reply outside the
+contract produces one chat error; the dialog stays on screen and you can
+retry or answer it yourself.
 
 ## Ideas and feedback
 

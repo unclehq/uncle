@@ -204,11 +204,13 @@ class SupervisorRequest:
                     if outcome['exit'] is None:
                         outcome['exit'] = process.returncode
                 log.flush()
-            if outcome['status'] in ('cancelled', 'timeout') or flooded.is_set():
+            if flooded.is_set():
                 return
             with open(self.log_path, encoding='utf-8', errors='replace') as fh:
                 reply, usage, cost, error = parse_stream(fh)
             outcome.update(usage=usage, cost=cost, usage_source='stream-json result' if usage else None)
+            if outcome['status'] in ('cancelled', 'timeout'):
+                return  # charged: whatever usage the stream reported before the kill is kept
             if error:
                 outcome.update(status='error', detail=error)
             elif outcome['exit']:

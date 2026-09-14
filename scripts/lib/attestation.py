@@ -108,7 +108,15 @@ def _gate_plan(state, root):
     by = Path(state) / 'approvals' / 'CHANGE_PLAN.approved-by'
     if not by.exists():
         return None
-    return 'APPROVED (unattended)' if _read(by).strip() == 'unattended' else 'APPROVED (human)'
+    value = _read(by).strip()
+    if value == 'unattended':
+        return 'APPROVED (unattended)'
+    # A supervisor-relayed answer is machine-made at a human's request; the
+    # receipt keeps the request. It is labelled as such, never as human.
+    match = re.fullmatch(r'supervisor:(explicit|standing):(.*)', value, re.S)
+    if match:
+        return 'APPROVED (supervisor:%s%s)' % (match.group(1), ':' + match.group(2).strip() if match.group(2).strip() else '')
+    return 'APPROVED (human)'
 
 
 def _records(state):

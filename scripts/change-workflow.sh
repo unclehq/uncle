@@ -326,7 +326,7 @@ CLAUDE_TOOLS="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
 # terminal, so the text is printed separately. Escapes are emitted only for a
 # real terminal: piped captures and TERM=dumb stay free of control bytes.
 gate_prompt() {
-    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "${1:0:80}"; fi
+    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$1"; fi
     if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
         printf '%s%s%s' $'\033[1m' "$1" $'\033[0m'
     else
@@ -390,8 +390,10 @@ implementation_incomplete_choice() {
     fi
     echo
     while true; do
+        UNCLE_GATE_CLASS="sensitive:waiver"
         gate_prompt "Retry the implementation, waive the rows above, or stop? [retry/waive/stop]: "
-        if ! IFS= read -r answer; then
+        UNCLE_GATE_CLASS=""
+        if ! { if declare -f gate_read > /dev/null; then gate_read answer; else IFS= read -r answer; fi; }; then
             echo
             echo "No answer; the run remains pending at IMPLEMENT."
             return 1
@@ -699,7 +701,7 @@ human_gate() {
         act="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
         for j in "${!files[@]}"; do
             printf '%s\n' "$(hash_file "${files[$j]}")" > "$APPROVAL_DIR/${names[$j]}.sha256"
-            printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > "$APPROVAL_DIR/${names[$j]}.approved-by"
+            printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${names[$j]}.approved-by"
             record_unattended_gate "${names[$j]}" "$act ${files[$j]} without human review"
         done
         echo "Unattended: recorded $act of ${files[*]} with no human review."
@@ -740,11 +742,14 @@ human_gate() {
     targets="${targets%, }"
 
     echo
+    UNCLE_GATE_FILE="${files[0]}"
     gate_prompt "Ready to $verb $targets? [Y/N] "
+    UNCLE_GATE_FILE=""
     # IFS= keeps surrounding whitespace, so " y" is not an approval. `|| true`
-    # keeps EOF from tripping `set -e` before the decline path runs.
-    IFS= read -r response || true
-    if declare -f supervision_gate_close > /dev/null; then supervision_gate_close; fi
+    # keeps EOF from tripping `set -e` before the decline path runs. The
+    # wrapper attributes the line (human, or a supervisor receipt) and closes
+    # the gate; the answer itself is validated exactly as before.
+    if declare -f gate_read > /dev/null; then gate_read response || true; else IFS= read -r response || true; fi
 
     case "$response" in
         y|Y) ;;
@@ -769,7 +774,7 @@ human_gate() {
 
     for i in "${!files[@]}"; do
         printf '%s\n' "${digests[$i]}" > "$APPROVAL_DIR/${names[$i]}.sha256"
-        printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > "$APPROVAL_DIR/${names[$i]}.approved-by"
+        printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${names[$i]}.approved-by"
         echo "Recorded approval for ${files[$i]}"
     done
     if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi

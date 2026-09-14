@@ -66,12 +66,68 @@ supervision_stage_end() {
 # the read sites of the approval gates close. Any later stage activity also
 # closes it on the controller side, so a missed close never counts as human time
 # forever.
+# The gate's identity (run UUID + monotonic prompt id, kind, class, choices,
+# file) is emitted whether or not supervision is enabled: the TUI may answer
+# a prompt at a human's request only when this metadata names it, and the
+# read wrapper below attributes the line it reads from the matching receipt
+# alone (D-5, D-6). Nothing here changes what the driver does with the line.
+# Sets and exports UNCLE_GATE_RUN once per driver process. Not a command
+# substitution: the assignment has to land in the calling shell.
+supervision_gate_run() {
+    if [[ -z "${UNCLE_GATE_RUN:-}" ]]; then
+        UNCLE_GATE_RUN="$(python3 "$SUPERVISION_LIB_DIR/gate_answer.py" run-id 2>/dev/null || echo "run-$$")"
+        export UNCLE_GATE_RUN
+    fi
+}
+
 supervision_gate_open() {
-    supervision_event gate_open "stage=${UNCLE_STATUS_STAGE:-}" "prompt=${1:-}"
+    supervision_gate_run
+    UNCLE_GATE_PROMPT="$(python3 "$SUPERVISION_LIB_DIR/gate_answer.py" open \
+        --state-dir "${STATE_DIR:-.uncle/workflow}" --file "${UNCLE_STATUS_FILE:-}" --stage "${UNCLE_STATUS_STAGE:-}" \
+        --run "$UNCLE_GATE_RUN" --text "${1:-}" --class "${UNCLE_GATE_CLASS:-}" --gate-file "${UNCLE_GATE_FILE:-}" 2>/dev/null || true)"
 }
 
 supervision_gate_close() {
     supervision_event gate_close "stage=${UNCLE_STATUS_STAGE:-}"
+}
+
+# supervision_gate_read VAR -- read one answer line into VAR (no command
+# substitution: the caller's variable is assigned directly), then set
+# UNCLE_GATE_ANSWERED_BY from the receipt for this exact run, prompt and
+# answer, or to empty. The read's own status is returned unchanged.
+supervision_gate_read() {
+    local __var="$1" __line="" __rc=0
+    IFS= read -r __line || __rc=$?
+    printf -v "$__var" '%s' "$__line"
+    UNCLE_GATE_ANSWERED_BY=""
+    if [[ $__rc -eq 0 && -n "${UNCLE_GATE_PROMPT:-}" ]]; then
+        UNCLE_GATE_ANSWERED_BY="$(python3 "$SUPERVISION_LIB_DIR/gate_answer.py" consume \
+            --state-dir "${STATE_DIR:-.uncle/workflow}" --file "${UNCLE_STATUS_FILE:-}" --stage "${UNCLE_STATUS_STAGE:-}" \
+            --run "${UNCLE_GATE_RUN:-}" --prompt-id "$UNCLE_GATE_PROMPT" --answer "$__line" 2>/dev/null || true)"
+    else
+        supervision_gate_close
+    fi
+    UNCLE_GATE_PROMPT=""
+    return $__rc
+}
+
+# supervision_approved_by -- the `.approved-by` value for the answer just read:
+# `unattended`, the supervisor receipt (`supervisor:<explicit|standing>:<name>`),
+# or the human's configured name.
+supervision_approved_by() {
+    if [[ "${UNATTENDED:-0}" == 1 ]]; then
+        printf unattended
+    elif [[ -n "${UNCLE_GATE_ANSWERED_BY:-}" ]]; then
+        printf '%s' "$UNCLE_GATE_ANSWERED_BY"
+    else
+        printf '%s' "${UNCLE_APPROVAL_NAME:-}"
+    fi
+}
+
+# gate_read VAR -- the read every interactive prompt uses; libraries sourced
+# without supervision.sh define the plain fallback themselves.
+gate_read() {
+    supervision_gate_read "$1"
 }
 
 # supervision_prompt <prompt_path> <stage> [log] -- set SUPERVISION_PROMPT to the

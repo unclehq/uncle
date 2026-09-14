@@ -305,7 +305,7 @@ preflight_blocked_menu() {
     local choice
     while :; do
         gate_prompt "Blocked prerequisites: [r]eview, [p]rovide, [s]kip, [d]ecline? "
-        if ! IFS= read -r choice; then
+        if ! { if declare -f gate_read > /dev/null; then gate_read choice; else IFS= read -r choice; fi; }; then
             echo "No answer at the preflight gate; the run remains pending."
             exit 1
         fi
@@ -702,7 +702,7 @@ lower() {
 # terminal, so the text is printed separately. Escapes are emitted only for a
 # real terminal: piped captures and TERM=dumb stay free of control bytes.
 gate_prompt() {
-    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "${1:0:80}"; fi
+    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$1"; fi
     if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
         printf '%s%s%s' $'\033[1m' "$1" $'\033[0m'
     else
@@ -951,7 +951,7 @@ review_and_approve() {
     if [[ "${UNATTENDED:-0}" == 1 ]]; then
         before="$(hash_file "$file")"
         printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
-        printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > "$APPROVAL_DIR/${name}.approved-by"
+        printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${name}.approved-by"
         record_unattended_gate "$name" "$wording $file without human review"
         echo "Unattended: recorded $wording of $file with no human review."
         if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
@@ -975,13 +975,15 @@ review_and_approve() {
         echo "  code $file"
         echo
 
+        UNCLE_GATE_FILE="$file"
         gate_prompt "Ready to $wording $file? [Y/N] "
+        UNCLE_GATE_FILE=""
         # IFS= keeps surrounding whitespace, so " y" is not an approval.
         # `|| true` keeps EOF from tripping `set -e` before the decline path
-        # runs.
+        # runs. The wrapper attributes the line (human, or a supervisor
+        # receipt) and closes the gate; the answer is validated as before.
         response=""
-        IFS= read -r response || true
-        if declare -f supervision_gate_close > /dev/null; then supervision_gate_close; fi
+        if declare -f gate_read > /dev/null; then gate_read response || true; else IFS= read -r response || true; fi
 
         case "$response" in
             y|Y) ;;
@@ -1011,7 +1013,7 @@ review_and_approve() {
     # what gets recorded. Re-hashing here would attest to bytes that could have
     # landed after the check.
     printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
-    printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > "$APPROVAL_DIR/${name}.approved-by"
+    printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${name}.approved-by"
     echo "Recorded approval for $file"
     if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
 }
@@ -1233,7 +1235,7 @@ run_codex_review() {
 
         [[ "$status" != 0 ]] || break
         gate_prompt "Reviewer $log_name failed (exit $status). Retry this reviewer stage? [Y/N]"
-        if ! IFS= read -r retry_answer; then return "$status"; fi
+        if ! { if declare -f gate_read > /dev/null; then gate_read retry_answer; else IFS= read -r retry_answer; fi; }; then return "$status"; fi
         case "$retry_answer" in y|Y) status=0 ;; *) return "$status" ;; esac
     done
     require_file "$output_file"

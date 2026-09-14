@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+
+# gate_read VAR: the supervision-aware read (receipt attribution, gate close)
+# when the driver loaded supervision.sh; the plain read otherwise.
+if ! declare -f gate_read > /dev/null; then gate_read() { IFS= read -r "$1"; }; fi
 # Ask before spending more repair attempts. EOF/decline never grants attempts.
 ensure_repair_capacity() {
     local used="$1" saved answer proposed relative
@@ -20,7 +24,7 @@ ensure_repair_capacity() {
     fi
     while true; do
         gate_prompt "Repair limit reached: $used of $MAX_REPAIRS attempts used. Enter a new total ($((used + 1))-100), '+N' for N more attempts, or 'stop' to leave this run pending: "
-        if ! IFS= read -r answer; then
+        if ! gate_read answer; then
             echo
             echo 'No additional repairs authorized; run remains pending.'
             return 1

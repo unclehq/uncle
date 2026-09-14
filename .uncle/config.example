@@ -136,6 +136,24 @@ triage.effort low
 # supervision.call_timeout_seconds 300
 # supervision.max_calls_per_run 8
 # supervision.call_max_cost_usd 0.5
+#
+# Chat: every message typed into the screen's chat goes to the same
+# supervisor model (runner/model/effort above; claude only), in every state.
+# It reads the current and previous stage logs, status events and the cost
+# ledger, explains the dialog on screen, and can relay steering ("tell it
+# to ...") or answer a gate -- but only when you ask in chat ("answer this
+# one", "approve this", "say no", "press enter", answer this with "..."), a
+# question, quotation, example or negation never counts. Standing delegation
+# for routine dialogs (document approvals, audit findings, press-Enter,
+# plain input) comes from `delegate_gates routine` or "handle the gates" /
+# `/delegate on` in chat; signing, publication and waiver gates always need
+# the explicit ask. Answers are written to the driver's stdin exactly as
+# yours, recorded first in .uncle/workflow/supervision/gate-answers.jsonl
+# with your request and the rationale, and the approval reads
+# `supervisor:explicit:<name>` or `supervisor:standing:<name>`, never a bare
+# name. Chat calls are metered separately (`usage_scope 'supervisor chat'`)
+# and are not counted against max_calls_per_run; standing answers are.
+# supervision.delegate_gates none
 
 # --- supervision (opt-in) ---------------------------------------------------
 

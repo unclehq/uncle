@@ -86,13 +86,15 @@ class Issues(unittest.TestCase):
             ui=tui.UncleTUI.__new__(tui.UncleTUI)
             ui.state='menu';ui._ensure_chat()
             ui.chat_model=lambda: ('baseline','cline','model','medium')
-            with patch.object(tui,'HomeRequest') as request, patch.object(tui,'issue_context',return_value='Issue reference data') as lookup:
+            # TD-4 (Issue 45): the chat worker is the supervisor's ChatRequest; assertions unchanged.
+            with patch.object(tui,'ChatRequest') as request, patch.object(tui,'supervisor_command',return_value=(['fake-claude'],{},'/tmp/x')), patch.object(tui,'issue_context',return_value='Issue reference data') as lookup:
                 ui.send_home_chat('Explain #12')
                 self.assertEqual(request.call_args.kwargs['issue_lookup'](), 'Issue reference data')
                 lookup.assert_called_once_with(root,'Explain #12')
                 request.return_value.issue_context='Issue reference data'
                 request.return_value.events=issues.queue.Queue()
-                request.return_value.events.put(('reply','Answer'))
+                request.return_value.events.put({'status':'reply','elapsed':0,'exit':0,'usage':None,'cost':None,'log':'',
+                                                 'reply':'{"schema":1,"reply":"Answer","steer":null,"gate_answer":null,"home_action":null}'})
                 ui.poll_home_chat()
                 self.assertNotIn('Issue reference data','\n'.join(ui.chat_display()))
                 ui.send_home_chat('What is the next step?')

@@ -18,6 +18,7 @@ GATES_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$GATES_LIB_DIR/supervision.sh" ]]; then
     . "$GATES_LIB_DIR/supervision.sh"
 fi
+if ! declare -f gate_read > /dev/null; then gate_read() { IFS= read -r "$1"; }; fi
 
 gates_file() {
     local f
@@ -456,7 +457,7 @@ BUDGET
 
 # Check newly authored stage artifacts; never rewrite approved inputs.
 check_document_budget() {
-    local file="$1" bytes lines limits max_bytes max_lines key answer proposed_bytes proposed_lines saved_path temporary
+    local file="$1" bytes lines limits max_bytes max_lines key answer question proposed_bytes proposed_lines saved_path temporary
     document_budget_defaults "$file" > /dev/null || return 0
     limits="$(document_budget "$file")" || return 1
     read -r max_bytes max_lines <<< "$limits"
@@ -491,8 +492,10 @@ check_document_budget() {
         fi
         if [[ -t 0 || -n "${UNCLE_STATUS_FILE:-}" || "${WORKFLOW_BUDGET_PROMPT:-0}" == 1 ]]; then
             read -r proposed_bytes proposed_lines <<< "$(awk -v b="$bytes" -v l="$lines" -v mb="$max_bytes" -v ml="$max_lines" 'BEGIN {printf "%.0f %.0f", (b>mb?int((b*1.1+999)/1000)*1000:mb), (l>ml?int((l*1.1+9)/10)*10:ml)}')"
-            printf 'Document budget exceeded: %s. Increase limits from %s bytes / %s lines to %s bytes / %s lines and continue with the preserved document? [Y/N]' "$file" "$max_bytes" "$max_lines" "$proposed_bytes" "$proposed_lines" >&2
-            if IFS= read -r answer; then
+            question="$(printf 'Document budget exceeded: %s. Increase limits from %s bytes / %s lines to %s bytes / %s lines and continue with the preserved document? [Y/N]' "$file" "$max_bytes" "$max_lines" "$proposed_bytes" "$proposed_lines")"
+            if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$question"; fi
+            printf '%s' "$question" >&2
+            if gate_read answer; then
                 case "$answer" in
                     y|Y)
                         saved_path="$(document_budget_override_path "$file")"

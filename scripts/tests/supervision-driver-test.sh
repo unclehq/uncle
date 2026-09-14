@@ -270,9 +270,122 @@ COUNT=$((COUNT + 1)); grep -q "git" "$ROOT/scripts/lib/supervisor.py" "$ROOT/scr
     && grep -n "subprocess.*git\|\['git'" "$ROOT/scripts/lib/supervisor.py" "$ROOT/scripts/lib/supervisor_runner.py" \
     && fail "supervisor modules invoke git" || true
 
+# --- Issue 45 T-3: supervisor-answered gates through the real stdin protocol ---------
+
+# The answerer stands in for the screen: it waits for the driver's gate_open
+# event, writes the receipt envelope for that exact run/prompt (optionally
+# with a different answer, or none at all), then writes one line to the
+# driver's stdin and closes it, so the next gate reads EOF and declines.
+ANSWERER="$TMP/answerer.py"
+cat > "$ANSWERER" <<'EOF2'
+import json, os, sys, time
+sys.path.insert(0, os.environ['UNCLE_LIB'])
+import gate_answer
+status, state_dir, answer = sys.argv[1], sys.argv[2], sys.argv[3]
+mode = sys.argv[4] if len(sys.argv) > 4 else 'match'
+deadline = time.time() + 60
+event = None
+while time.time() < deadline and event is None:
+    try:
+        for line in open(status, encoding='utf-8'):
+            row = json.loads(line)
+            if row.get('event') == 'gate_open' and row.get('prompt_id'):
+                event = row
+                break
+    except (OSError, ValueError):
+        pass
+    time.sleep(0.05)
+if event is None:
+    sys.exit(3)
+open(os.path.join(state_dir, '..', 'gate-open.json'), 'w').write(json.dumps(event))
+if mode == 'match':
+    gate_answer.write_envelope(state_dir, event['run'], event['prompt_id'], answer, 'explicit', 'Brian',
+                               'answer this one', 'the documents are complete', event['kind'], event['text'])
+elif mode == 'standing':
+    gate_answer.write_envelope(state_dir, event['run'], event['prompt_id'], answer, 'standing', 'Brian',
+                               'handle the gates for this run', 'routine document approval', event['kind'], event['text'])
+elif mode == 'mismatch':
+    gate_answer.write_envelope(state_dir, event['run'], event['prompt_id'], 'n', 'explicit', 'Brian',
+                               'answer this one', 'stale', event['kind'], event['text'])
+elif mode == 'stale-run':
+    gate_answer.write_envelope(state_dir, 'another-run', event['prompt_id'], answer, 'explicit', 'Brian',
+                               'answer this one', 'old run', event['kind'], event['text'])
+sys.stdout.write(answer + '\n')
+sys.stdout.flush()
+EOF2
+
+run_answered() {
+    # run_answered <driver> <project> <answer> <mode>
+    local driver="$1" proj="$2" answer="$3" mode="$4"
+    export AGENT_ARGV="$proj/agent.argv" AGENT_CALLS="$proj/agent.calls" AGENT_PROMPT="$proj/agent.prompt"
+    printf 'malformed\n' > "$proj/sup.mode"
+    printf '%s\n' "$proj" > "$TMP/current"
+    rm -f "$AGENT_CALLS" "$proj/status.jsonl"
+    mkdir -p "$proj/.uncle"
+    printf 'implementation.runner claude\nsupervision.enabled false\n' > "$proj/.uncle/config"
+    local status=0
+    (cd "$proj" && UNCLE_LIB="$ROOT/scripts/lib" python3 "$ANSWERER" "$proj/status.jsonl" "$proj/.uncle/workflow" "$answer" "$mode" \
+        | AGENT_WRITE=1 UNCLE_PROJECT_ROOT="$proj" UNCLE_CONFIG="$proj/.uncle/config" UNCLE_STATUS_FILE="$proj/status.jsonl" \
+        UNCLE_APPROVAL_NAME="Brian" WORKFLOW_AGENT_CMD="$AGENT" WORKFLOW_CLAUDE_CMD="$SUPERVISOR" WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
+        GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+        bash "$ROOT/scripts/$driver" > "$proj/driver.out" 2>&1) || status=$?
+    echo "$status"
+}
+
+for driver in stagegate.sh change-workflow.sh; do
+    first=REQUIREMENTS_INTERPRETATION; [[ "$driver" != change-workflow.sh ]] || first=BASELINE_REPORT
+    P="$(new_project "answered-$driver")"
+    run_answered "$driver" "$P" y match > /dev/null
+    check_contains "$driver answered: gate_open names run, prompt, kind and class" '"kind": "confirm", "class": "routine"' "$(cat "$P/.uncle/gate-open.json")"
+    check_contains "$driver answered: approval recorded" "" "$(cat "$P/.uncle/workflow/approvals/$first.sha256" 2>/dev/null)"
+    check_eq "$driver answered: approved-by is the supervisor receipt, never a bare name" "supervisor:explicit:Brian" "$(cat "$P/.uncle/workflow/approvals/$first.approved-by")"
+    if [[ "$driver" == change-workflow.sh ]]; then
+        check_eq "$driver answered: every artifact of the gate carries the same attribution" "supervisor:explicit:Brian" "$(cat "$P/.uncle/workflow/approvals/CHANGE_SPEC.approved-by")"
+    fi
+    check_contains "$driver answered: receipt consumed with the request" '"request": "answer this one"' "$(grep '"status": "consumed"' "$P/.uncle/workflow/supervision/gate-answers.jsonl")"
+    check_contains "$driver answered: gate_answer event attributes the line" '"answered_by": "supervisor:explicit:Brian"' "$(cat "$P/status.jsonl")"
+    [[ -e "$P/.uncle/workflow/supervision/answers" && -n "$(find "$P/.uncle/workflow/supervision/answers" -name '*.json')" ]] \
+        && fail "$driver answered: envelope left behind after consumption" || COUNT=$((COUNT + 1))
+    check_absent "$driver answered: no later gate inherits the attribution" "supervisor" "$(cat "$P"/.uncle/workflow/approvals/*.approved-by | grep -v "^supervisor:explicit:Brian$" || true)"
+
+    P="$(new_project "standing-$driver")"
+    run_answered "$driver" "$P" y standing > /dev/null
+    check_eq "$driver standing: approved-by names standing delegation" "supervisor:standing:Brian" "$(cat "$P/.uncle/workflow/approvals/$first.approved-by")"
+
+    P="$(new_project "declined-$driver")"
+    rc="$(run_answered "$driver" "$P" n match)"
+    check_eq "$driver declined by supervisor: run pauses exactly as a human decline" 0 "$rc"
+    [[ -e "$P/.uncle/workflow/approvals/$first.sha256" ]] && fail "$driver declined: approval written" || COUNT=$((COUNT + 1))
+    check_contains "$driver declined: receipt still consumed" '"status": "consumed"' "$(cat "$P/.uncle/workflow/supervision/gate-answers.jsonl")"
+
+    P="$(new_project "mismatch-$driver")"
+    run_answered "$driver" "$P" y mismatch > /dev/null
+    check_eq "$driver mismatch: a receipt for a different answer confers nothing" "Brian" "$(cat "$P/.uncle/workflow/approvals/$first.approved-by")"
+    check_contains "$driver mismatch: recorded as mismatch" '"status": "mismatch"' "$(cat "$P/.uncle/workflow/supervision/gate-answers.jsonl")"
+
+    P="$(new_project "stale-$driver")"
+    run_answered "$driver" "$P" y stale-run > /dev/null
+    check_eq "$driver stale run: an old run's envelope confers nothing" "Brian" "$(cat "$P/.uncle/workflow/approvals/$first.approved-by")"
+done
+
+# Reopen after an edit: the stale digest stays, the new approval is the human's.
+P="$(new_project reopen)"
+run_answered stagegate.sh "$P" y match > /dev/null
+printf 'edited\n' >> "$P/REQUIREMENTS_INTERPRETATION.md"
+rc="$(run_driver stagegate.sh "$P" false 1)"
+check_contains "reopen: edited document reopens its gate" "changed after approval" "$(cat "$P/driver.out")"
+check_eq "reopen: the supervisor attribution is not carried to the new decision" "supervisor:explicit:Brian" "$(cat "$P/.uncle/workflow/approvals/REQUIREMENTS_INTERPRETATION.approved-by")"
+
+# Unattended keeps its own word regardless of receipts.
+P="$(new_project unattended-word)"
+(cd "$P" && mkdir -p .uncle && printf 'implementation.runner claude\n' > .uncle/config && AGENT_ARGV="$P/agent.argv" AGENT_CALLS="$P/agent.calls" AGENT_PROMPT="$P/agent.prompt" AGENT_WRITE=1 \
+    UNCLE_PROJECT_ROOT="$P" UNCLE_CONFIG="$P/.uncle/config" WORKFLOW_AGENT_CMD="$AGENT" WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
+    GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_NOSYSTEM=1 bash "$ROOT/scripts/stagegate.sh" --unattended > "$P/driver.out" 2>&1 < /dev/null) || true
+check_eq "unattended: approved-by stays unattended" "unattended" "$(cat "$P/.uncle/workflow/approvals/REQUIREMENTS_INTERPRETATION.approved-by")"
+
 # --- AT-9: every control documented -------------------------------------------------
 
-for key in enabled runner model effort max_interventions steering_timeout_seconds stage_time_seconds stage_tokens call_timeout_seconds max_calls_per_run call_max_cost_usd; do
+for key in enabled runner model effort max_interventions steering_timeout_seconds stage_time_seconds stage_tokens call_timeout_seconds max_calls_per_run call_max_cost_usd delegate_gates; do
     check_contains "README documents supervision.$key" "supervision.$key" "$(cat "$ROOT/README.md")"
     check_contains "config.example documents supervision.$key" "supervision.$key" "$(cat "$ROOT/.uncle/config.example")"
 done

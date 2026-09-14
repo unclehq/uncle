@@ -821,7 +821,7 @@ class ConfigTests(unittest.TestCase):
             'supervision.enabled false', 'supervision.runner claude', 'supervision.model sonnet',
             'supervision.effort medium', 'supervision.max_interventions 2', 'supervision.steering_timeout_seconds 120',
             'supervision.stage_time_seconds 1800', 'supervision.stage_tokens 0', 'supervision.call_timeout_seconds 300',
-            'supervision.max_calls_per_run 8', 'supervision.call_max_cost_usd 0.5'])
+            'supervision.max_calls_per_run 8', 'supervision.call_max_cost_usd 0.5', 'supervision.delegate_gates none'])
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'config'
             path.write_text('implementation.runner claude\nsupervision.enabled true\nsupervision.max_interventions 3\n'

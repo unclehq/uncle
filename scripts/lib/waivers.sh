@@ -12,6 +12,10 @@
 # an impossible check as a reason to abandon the run.
 waive_file() { printf '%s/waivers/%s' "$STATE_DIR" "$1"; }
 
+# gate_read VAR: the supervision-aware read (receipt attribution, gate close)
+# when the driver loaded supervision.sh; the plain read otherwise.
+if ! declare -f gate_read > /dev/null; then gate_read() { IFS= read -r "$1"; }; fi
+
 waived_ids() {
     local id
     for id in "$@"; do
@@ -78,8 +82,10 @@ record_waiver() {
     echo "happen here. A waiver is the other option: it records why a required"
     echo "check cannot be performed and lets the run continue to its audit."
     echo "It does not make the check pass, and the report keeps saying so."
+    UNCLE_GATE_CLASS="sensitive:waiver"
     gate_prompt "Type a reason to waive these checks for this run, or Enter to stop and amend the plan: "
-    if ! IFS= read -r reason || [[ -z "$reason" ]]; then
+    UNCLE_GATE_CLASS=""
+    if ! gate_read reason || [[ -z "$reason" ]]; then
         echo 'No waiver recorded; the run remains pending.'
         return 1
     fi

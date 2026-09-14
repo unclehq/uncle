@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+
+# gate_read VAR: the supervision-aware read (receipt attribution, gate close)
+# when the driver loaded supervision.sh; the plain read otherwise.
+if ! declare -f gate_read > /dev/null; then gate_read() { IFS= read -r "$1"; }; fi
 # Take the human inputs a preflight blocker is waiting on, at the gate, and put
 # them where the next run looks.
 #
@@ -47,7 +51,7 @@ collect_human_inputs() {
         echo "$id  [$status]"
         [[ -z "$evidence" ]] || echo "  $evidence"
         gate_prompt "Provide $id now? 's' to record a signed statement, 'f' to copy a file in, Enter to skip: "
-        IFS= read -r answer || return 1
+        gate_read answer || return 1
         case "$answer" in
             s|S) ;;
             f|F) ;;
@@ -62,7 +66,7 @@ collect_human_inputs() {
         while [[ "$attempts" -lt 5 ]]; do
             attempts=$((attempts + 1))
             gate_prompt "Path to write it to${suggestion:+ [$suggestion]}: "
-            IFS= read -r target || return 1
+            gate_read target || return 1
             [[ -n "$target" ]] || target="$suggestion"
             if [[ -z "$target" ]]; then
                 echo "  no path given, and none to suggest."
@@ -88,7 +92,7 @@ collect_human_inputs() {
                 # blocks on the same prerequisite again.
                 echo "  $id names $suggestion, not $target."
                 gate_prompt "  Write to $target anyway? [y/N]: "
-                IFS= read -r confirm || return 1
+                gate_read confirm || return 1
                 case "$confirm" in
                     y|Y) ;;
                     *) target=""; continue ;;
@@ -110,7 +114,7 @@ collect_human_inputs() {
                     *.pdf|*.png|*.jpg|*.jpeg|*.zip|*.gz|*.sha256|*.json|*.csv|*.py)
                         echo "  $target looks like a file to supply, not a statement to write."
                         gate_prompt "  Write a typed statement there anyway? [y/N]: "
-                        IFS= read -r confirm || return 1
+                        gate_read confirm || return 1
                         case "$confirm" in
                             y|Y) ;;
                             *) echo "  skipped; use 'f' to copy the real file in."; continue ;;
@@ -118,7 +122,7 @@ collect_human_inputs() {
                         ;;
                 esac
                 gate_prompt "Statement -- who approved what, in your words: "
-                IFS= read -r payload || return 1
+                gate_read payload || return 1
                 if [[ -z "$payload" ]]; then
                     echo "  no statement given; skipped."
                     continue
@@ -127,7 +131,7 @@ collect_human_inputs() {
                 ;;
             f|F)
                 gate_prompt "Path of the existing file to copy: "
-                IFS= read -r payload || return 1
+                gate_read payload || return 1
                 if [[ -z "$payload" ]]; then
                     echo "  no source given; skipped."
                     continue

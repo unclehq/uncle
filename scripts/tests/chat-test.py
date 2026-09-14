@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 import sys
 import tempfile
+import textwrap
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
@@ -942,6 +943,153 @@ class ChatInteractionTests(unittest.TestCase):
                 y, x, text, width = call.args[:4]
                 self.assertTrue(0 <= y < h and 0 <= x < w)
                 self.assertLessEqual(x + width, w)
+
+
+def styled_ui(state, history, output=(), partial='', preview=''):
+    """A renderer with a distinguishable palette; both draw paths share it."""
+    ui = tui.UncleTUI.__new__(tui.UncleTUI)
+    ui.state = state
+    ui.sel = 0
+    ui.chat_focus = 'chat'
+    ui.home_menu_open = False
+    ui.prompt_kind = ''
+    ui.partial = partial
+    ui.color = dict(title=1, sel=2, accent=4, emphasis=8 | tui.curses.A_BOLD)
+    ui.home_history = list(history)
+    ui.output = list(output)
+    ui.chat = Mock()
+    ui.chat.preview = preview
+    ui._draw_chat_composer = Mock()
+    ui.stdscr = Mock()
+    ui.stdscr.getmaxyx.return_value = (40, 120)
+    return ui
+
+
+def drawn(ui):
+    return [(c.args[0], c.args[1], c.args[2], c.args[3], c.args[4] if len(c.args) > 4 else 0)
+            for c in ui.stdscr.addnstr.call_args_list
+            if c.args[2] and c.args[2] not in tui.LOGO and (ui.state != 'menu' or c.args[0] > 0)]
+
+
+# Literal oracles captured from the pre-change renderer (issue 52, AC-4).
+HOME_MULTI = [(4, 22, 'User: Question one', 76), (5, 22, 'second line', 76),
+              (6, 22, 'Supervisor: ' + 'x' * 64, 76), (7, 22, 'x' * 36, 76), (8, 22, 'System: Note', 76)]
+HOME_CAP = ([(4, 22, 'u' * 7, 76), (5, 22, 'Supervisor: ' + 'v' * 64, 76)]
+            + [(y, 22, 'v' * 76, 76) for y in range(6, 24)] + [(24, 22, 'v' * 68, 76)])
+RUN = [(0, 0, 'Supervisor: fake', 60), (1, 0, 'build line', 60), (2, 0, 'User: Ask', 60),
+       (3, 0, 'Supervisor:' + ' Reply' * 8, 60), (4, 0, ' '.join(['Reply'] * 10), 60),
+       (5, 0, 'Reply Reply', 60), (6, 0, 'System: sys', 60), (7, 0, 'partial out', 60)]
+
+
+class ChatStylingTests(unittest.TestCase):
+    """Issue 52: user rows bold, supervisor rows emphasised, text unchanged."""
+    BOLD = tui.curses.A_BOLD
+
+    def attrs(self, rows):
+        return [row[4] for row in rows]
+
+    def test_t1_home_roles_and_t5_home_literals(self):
+        ui = styled_ui('menu', [('user', 'Question one\nsecond line'), ('supervisor', 'x' * 100), ('system', 'Note')])
+        ui._draw_homepage(40, 120)
+        rows = drawn(ui)
+        self.assertEqual([row[:4] for row in rows], HOME_MULTI)
+        self.assertEqual(self.attrs(rows), [4 | self.BOLD, 4 | self.BOLD, ui.color['emphasis'], ui.color['emphasis'], 4])
+
+    def test_t4_t5_home_tail_cap_keeps_roles(self):
+        ui = styled_ui('menu', [('user', 'u' * 2000), ('supervisor', 'v' * 1500)])
+        ui._draw_homepage(40, 120)
+        rows = drawn(ui)
+        self.assertEqual([row[:4] for row in rows], HOME_CAP)
+        self.assertEqual(self.attrs(rows), [4 | self.BOLD] + [ui.color['emphasis']] * 20)
+
+    def test_t1_home_preview_rows_keep_accent(self):
+        ui = styled_ui('menu', [('user', 'Hi')], preview='Preview body')
+        ui._draw_homepage(40, 120)
+        rows = drawn(ui)
+        self.assertEqual([row[2] for row in rows], ['User: Hi', 'Preview:', 'Preview body'])
+        self.assertEqual(self.attrs(rows), [4 | self.BOLD, 4, 4])
+        self.assertEqual(ui.home_history, [('user', 'Hi')])
+
+    def test_t2_t5_running_roles_and_literals(self):
+        ui = styled_ui('running', [('user', 'Ask'), ('supervisor', 'Reply ' * 20), ('system', 'sys')],
+                       output=['Supervisor: fake', 'build line'], partial='partial out')
+        ui._draw_running(10, 60)
+        rows = drawn(ui)
+        self.assertEqual([row[:4] for row in rows], RUN)
+        emphasis = ui.color['emphasis']
+        self.assertEqual(self.attrs(rows), [0, 0, self.BOLD, emphasis, emphasis, emphasis, 0, 0])
+
+    def test_t3_palette_colour_and_monochrome(self):
+        pairs = {}
+        with patch.object(tui.curses, 'has_colors', return_value=True), \
+             patch.object(tui.curses, 'start_color'), patch.object(tui.curses, 'use_default_colors'), \
+             patch.object(tui.curses, 'init_pair', side_effect=lambda n, fg, bg: pairs.__setitem__(n, (fg, bg))), \
+             patch.object(tui.curses, 'color_pair', side_effect=lambda n: n << 8):
+            ui = tui.UncleTUI.__new__(tui.UncleTUI)
+            ui._setup_colors()
+        emphasis = ui.color['emphasis']
+        pair = (emphasis & ~self.BOLD) >> 8
+        self.assertEqual(pairs[pair], (tui.curses.COLOR_YELLOW, -1))
+        self.assertEqual(emphasis, pair << 8 | self.BOLD)
+        self.assertNotEqual(emphasis, self.BOLD)
+        self.assertNotEqual(emphasis, ui.color['accent'])
+        self.assertEqual(ui.chat_attr('user', ui.color['accent']), ui.color['accent'] | self.BOLD)
+        self.assertEqual(ui.chat_attr('supervisor', ui.color['accent']), emphasis)
+        self.assertEqual(ui.chat_attr('system', ui.color['accent']), ui.color['accent'])
+        for failing in ({'has_colors': Mock(return_value=False)},
+                        {'has_colors': Mock(return_value=True), 'start_color': Mock(side_effect=Exception('no'))}):
+            with patch.multiple(tui.curses, **failing):
+                ui = tui.UncleTUI.__new__(tui.UncleTUI)
+                ui._setup_colors()
+            self.assertEqual(ui.color['emphasis'], tui.curses.A_REVERSE)
+            self.assertNotEqual(ui.color['emphasis'], self.BOLD)
+            self.assertNotEqual(ui.chat_attr('supervisor', 0), ui.chat_attr('user', 0))
+        ui.color = {}
+        self.assertEqual(ui.chat_attr('supervisor', 0), tui.curses.A_REVERSE)
+        self.assertEqual(ui.chat_attr('user', 0), self.BOLD)
+
+    def test_t6_stream_mutation_keeps_chat_attrs(self):
+        ui = styled_ui('running', [('user', 'Question'), ('supervisor', 'Draft')], output=['b0'])
+        ui._build_messages()
+        ui.home_history[-1] = ('supervisor', 'Draft ' + 'grown ' * 5)
+        ui.output = ['b%d' % i for i in range(1, 4100)]
+        ui.output.append('User: fake')
+        ui.home_history.append(('user', 'Follow-up'))
+        ui.home_history.append(('system', 'note'))
+        ui.partial = 'partial chunk'
+        ui._draw_running(20, 30)
+        rows = drawn(ui)
+        emphasis = ui.color['emphasis']
+        expect = {'User: Follow-up': self.BOLD, 'System: note': 0, 'partial chunk': 0, 'User: fake': 0}
+        expect.update((line, emphasis) for line in textwrap.wrap('Supervisor: Draft ' + 'grown ' * 5, 30))
+        self.assertEqual(len(rows), 19)
+        for _, _, text, _, attr in rows:
+            self.assertEqual(attr, expect.get(text, 0), text)
+        self.assertEqual(sum(1 for row in rows if row[4] == emphasis), 2)
+        self.assertEqual(ui._build_messages()[0], 'b104')
+        self.assertEqual(ui._build_messages()[-4:], ['User: fake', 'Supervisor: Draft ' + 'grown ' * 5,
+                                                     'User: Follow-up', 'System: note'])
+        # Whole-stream replacement after the earliest chat rows were evicted.
+        ui.home_history[:] = [('user', 'Reset')]
+        ui._draw_running(20, 30)
+        rows = drawn(ui)
+        self.assertEqual(rows[-2][2:], ('User: Reset', 30, self.BOLD))
+        self.assertEqual(rows[-1][2:], ('partial chunk', 30, 0))
+
+    def test_t7_string_only_build_messages(self):
+        ui = styled_ui('running', [])
+        ui._build_messages = Mock(return_value=['User: mocked', 'Supervisor: mocked'])
+        ui._draw_running(10, 60)
+        rows = drawn(ui)
+        self.assertEqual([row[2] for row in rows], ['User: mocked', 'Supervisor: mocked'])
+        self.assertEqual(self.attrs(rows), [0, 0])
+        del ui.color
+        ui.home_history = [('user', 'Q'), ('supervisor', 'A')]
+        ui._build_messages = tui.UncleTUI._build_messages.__get__(ui)
+        ui.stdscr = Mock()
+        ui.stdscr.getmaxyx.return_value = (40, 120)
+        ui._draw_running(10, 60)
+        self.assertEqual(self.attrs(drawn(ui)), [self.BOLD, tui.curses.A_REVERSE])
 
 
 def renderer_state(ui):

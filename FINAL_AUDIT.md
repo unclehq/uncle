@@ -1,30 +1,11 @@
-## Work done so far on Issue 48: "Auto mode stops at the publication boundary"
+## Findings
 
-### Implementation Complete
-- **Code changes** across 4 files in `.uncle/workflow/change.diff` (812 lines):
-  - `change-pr.sh` — Added `change_pr_person_channel()` function, split `change_pr_complete()` into headless/attended paths with "publication boundary" logic, added `change_pr_publish()` helper and `completed-signing-resume` engine action
-  - `gate_answer.py` — Extended `Gate.open()` signature to accept `class_hint` parameter for prompt classification (`sensitive:publication`, `sensitive:signing`)
-  - `uncle_tui.py` — Blocked supervisor submissions from answering publication/signing dialogs in Auto mode; recorded `workflow_unattended` flag at launch
-  - `auto-boundary-test.py` — New 772-line test suite (14 tests covering headless skip, attended rerun, relay publishing, signing rejection, verdict-override, TUI isolation, etc.)
+| ID | Severity | Evidence | Affected behavior | Affected invariant | Required correction | Blocks completion |
+|---|---|---|---|---|---|---|
+| FA-1 | Low | CHANGE_TEST_REPORT.md IT-2/IT-3; VERIFICATION_REPORT.md MC-011/MC-012/MC-027/MC-028 marked BLOCKED-HUMAN. AC-2 perceptual distinction confirmed only by SGR escape sequences, not human observation. | Perceptual bold-vs-bold-yellow and bold-vs-reverse distinction (AC-2) | I-5 — distinct role attributes on both pages | None required within this stage; LV-1/LV-2 require interactive terminal access outside automation scope | NO |
 
-### Verification Results
-- All **5 acceptance criteria PASS** (automated): AC-1 through AC-5 verified by `auto-boundary-test.py` and `close-flow-test.sh`
-- All **14 new tests pass** green
-- **No regressions**: 17 pre-existing failures unchanged; close-flow-test.sh 193 checks all passed in clean env
-- Security/invariant tests all pass (signing block never executed, isolated signer, zero TUI submissions for publication gates)
+## Summary of what was checked
 
-### Defects Identified (`DEFECTS.md`)
-| # | Severity | Issue |
-|---|----------|-------|
-| DEF-1 | High (process) | `MANUAL_CHECKLIST.md` — reviewer refused; no independent manual verification exists |
-| DEF-2 | Medium (product) | Version skew: `UNCLE_LIB_DIR` pointing at older lib tree causes `Gate.open() got unexpected keyword argument 'class_hint'`; 27/41 handoff cases fail in driver's own environment |
-| DEF-3 | Low (environment) | `self-hosted-test.py` — 6 false failures from OpenCode server startup noise; not in change surface |
+Source diff (.uncle/workflow/change.diff), target code regions (uncle_tui.py:740-768, 3100-3122, 3632-3701, 3826-3880), test suite methods in scripts/tests/chat-test.py:947-1092 (ChatStylingTests T-1..T-7 plus helpers/stubs/fixed oracles), existing regression suites (home-chat-test.py lines 61/120, tui-support-test.py, github-issues-test.py). Spec-to-delivery traceability: all 6 acceptance criteria (AC-1 through AC-6) map to executed implementation notes and passing tests. Protected files (FN-1/FN-2 via IMPLEMENTATION_NOTES.md F-25, RUN/SHA256 hash check RT-6): unchanged. Deviations documented (DV-1: A_REVERSE vs A_BOLD fallback per CHANGE_SPEC §9 — approved by CHANGE_PLAN; DV-2: test consolidation; DV-3: pty probe instead of interactive). Waivers absent. No unrelated changes, no tests weakened or deleted, no snapshots updated without justification, no review findings unaddressed, no compatibility/migration/rollback gaps, no prototype leakage, no performance/security/documentation regressions.
 
-### What Stops Completion
-1. **DEF-1** — No manual checklist exists; needs the reviewer to rerun the checklist stage (`MANUAL_CHECKLIST.md` must have content beyond a refusal)
-2. **DEF-2** — Driver's environment inherits `UNCLE_LIB_DIR` pointing at an older `gate_answer.py`; `change-pr.sh:387-404` needs a fallback for `Gate.open()` without `class_hint`, OR the driver needs to clear/unset that variable before running
-3. **A-4 (CHANGE_SPEC.md)** — TUI Auto-mode manual verification is BLOCKED-HUMAN; requires Brian to start a chat-initiated Auto run and observe handoff dialogs rendering
-
-### Workflow Status
-- `delivery-summary.tsv` shows all 5 AC marked as **INCOMPLETE** (status = verified by automated evidence only, not completed)
-- `VERIFICATION_REPORT.md` concludes: **"Not ready to complete"** pending DEF-1, DEF-2 fixes, and A-4 manual run
+READY WITH NON-BLOCKING ISSUES

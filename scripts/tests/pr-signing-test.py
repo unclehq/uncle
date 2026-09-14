@@ -8,6 +8,21 @@ SOURCE = (ROOT / 'scripts/lib/change-pr.sh').read_text().split("<<'PY'", 1)[1].s
 
 
 class SigningTests(unittest.TestCase):
+    def test_legacy_origin_is_verified_before_resolving_repository(self):
+        import json
+        self.j.update(origin='owner/repo\t34\n', original_branch='main')
+        self.ns['git'] = Mock(return_value='origin')
+        self.ns['remote_identity'] = Mock(return_value='owner/repo')
+        for issue, expected in [({'number':35,'html_url':'https://github.com/owner/repo/issues/35'}, 'Legacy issue'),
+                                ({'number':34,'html_url':'https://github.com/owner/repo/issues/34'}, 'verified origin')]:
+            def gh(*args):
+                if args[0] == 'api': return json.dumps(issue)
+                raise ValueError('verified origin')
+            self.ns['gh'] = gh
+            with self.assertRaisesRegex(ValueError, expected):
+                self.ns['resolve'](self.j)
+            self.assertEqual(self.j['origin'], 'owner/repo\t34\n')
+
     def setUp(self):
         self.ns = {}
         exec(SOURCE[:SOURCE.rindex('\ntry:\n    main()')], self.ns)

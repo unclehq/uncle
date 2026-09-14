@@ -1558,6 +1558,11 @@ class UncleTUI:
                     self.home_history.append(('application', sanitize(value)))
                 elif kind == 'done':
                     self._completion_dialog(value)
+                elif kind == 'terminal':
+                    try:
+                        self._run_in_terminal(value, cwd=preview.root)
+                    finally:
+                        preview.terminal_done.set()
         except queue.Empty:
             pass
         return changed
@@ -1700,7 +1705,7 @@ class UncleTUI:
         self.view_scroll = 0
         self.state = "viewer"
 
-    def _run_in_terminal(self, cmd):
+    def _run_in_terminal(self, cmd, cwd=None):
         """Hand the terminal to an external reader, then take it back.
 
         def_prog_mode saves the curses screen state; endwin restores the
@@ -1713,7 +1718,7 @@ class UncleTUI:
         except curses.error:
             pass
         try:
-            viewer = subprocess.Popen(cmd, shell=True)
+            viewer = subprocess.Popen(cmd, shell=isinstance(cmd, str), cwd=cwd)
             while viewer.poll() is None:
                 self.poll_home_chat()
                 self._poll_workflow()

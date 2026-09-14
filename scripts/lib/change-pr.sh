@@ -455,7 +455,15 @@ def resolve(j):
         remotes = ['origin']
     identities = {r: remote_identity(r) for r in remotes}
     if origin != ['']:
-        if len(origin) != 3 or origin[2] != 'gh' or not origin[1].isdigit():
+        if len(origin) == 2 and origin[1].isdigit():
+            # Older runs saved repo + number without a fetch-provider field.
+            # Verify that identity now; retain the original bound journal bytes.
+            base = repo_name(origin[0])
+            issue = json.loads(gh('api', 'repos/' + base + '/issues/' + origin[1]))
+            if (issue.get('number') != int(origin[1]) or issue.get('pull_request')
+                    or str(issue.get('html_url', '')).lower() != ('https://github.com/' + base + '/issues/' + origin[1]).lower()):
+                raise ValueError('Legacy issue origin could not be verified with GitHub.')
+        elif len(origin) != 3 or origin[2] != 'gh' or not origin[1].isdigit():
             raise ValueError('Only a gh-fetched origin authorizes this PR.')
         base = repo_name(origin[0])
     else:

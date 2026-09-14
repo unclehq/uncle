@@ -39,6 +39,10 @@ def launch_spec(root):
             raise ValueError('Launch command must be a nonempty argument array')
         if data['kind'] == 'command' and command is None:
             raise ValueError('Command project requires a launch command')
+        if 'terminal' in data and not isinstance(data['terminal'], bool):
+            raise ValueError('Launch terminal flag must be boolean')
+        if data['kind'] == 'command' and any(Path(arg).name in ('uncle', 'uncle_tui.py') for arg in command):
+            data['terminal'] = True
         if data['kind'] == 'webpage':
             if data.get('path'):
                 target = (root / data['path']).resolve()
@@ -62,6 +66,7 @@ class CompletionPreview:
         self.process = None
         self.reader_thread = None
         self.cancelled = threading.Event()
+        self.terminal_done = threading.Event()
         self.lock = threading.Lock()
         self.kind = 'none'
         self.thread = threading.Thread(target=self.run, daemon=True)
@@ -71,6 +76,11 @@ class CompletionPreview:
         try:
             spec = launch_spec(self.root)
             self.kind = spec['kind']
+            if self.kind == 'command' and spec.get('terminal'):
+                self.events.put(('terminal', spec['command']))
+                while not self.cancelled.is_set() and not self.terminal_done.wait(.1):
+                    pass
+                return
             if spec.get('command'):
                 with self.lock:
                     if self.cancelled.is_set():

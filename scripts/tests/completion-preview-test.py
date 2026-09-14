@@ -12,6 +12,19 @@ from completion_preview import CompletionPreview, launch_spec, has_starred
 
 
 class PreviewTests(unittest.TestCase):
+    def test_uncle_preview_hands_off_terminal_before_completion(self):
+        self.spec({'kind':'command','command':['python3','uncle_tui.py']})
+        with patch('completion_preview.subprocess.Popen') as spawn, patch('completion_preview.has_starred', return_value=True):
+            preview = CompletionPreview(self.root)
+            try:
+                self.assertEqual(preview.events.get(timeout=3), ('terminal', ['python3','uncle_tui.py']))
+                spawn.assert_not_called()
+                self.assertTrue(preview.events.empty())
+                preview.terminal_done.set()
+                self.assertEqual(preview.events.get(timeout=3), ('done', True))
+            finally:
+                preview.close()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

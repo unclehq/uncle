@@ -229,9 +229,10 @@ class Gate:
         self.run = env.get('UNCLE_GATE_RUN') or uuid.uuid4().hex
         self.prompt_id = ''
 
-    def open(self, text, signing=False):
+    def open(self, text, signing=False, class_hint=''):
         try:
-            self.prompt_id = open_gate(self.state_dir, self.status_file, self.stage, self.run, text, signing=signing)
+            self.prompt_id = open_gate(self.state_dir, self.status_file, self.stage, self.run, text,
+                                       class_hint=class_hint, signing=signing)
         except OSError:
             self.prompt_id = ''
         return self.prompt_id

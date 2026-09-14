@@ -1062,7 +1062,7 @@ class UncleTUI:
                     side, ", ".join(runners_for(side)))
             return desc
         if getattr(self, "config_section", "") == "misc":
-            return "Auto mode runs unattended: human gates are recorded as waived; failing tests still stop the run. The approval name identifies your manual approvals."
+            return "Auto mode runs unattended: human gates are recorded as waived; failing tests still stop the run. It stops at the publication boundary: the PR title, summary, consent and any commit signing are asked of you here, never delegated. The approval name identifies your manual approvals."
         if getattr(self, "config_section", "") == "supervision":
             return self._supervision_desc()
         if not getattr(self, "config_section", ""):
@@ -1661,7 +1661,11 @@ class UncleTUI:
         # and written down the pipe.
         self._begin_title(env)
         try:
-            self.proc = subprocess.Popen(self.cmd_for(), cwd=_project_root(), env=env,
+            command = self.cmd_for()
+            # Recorded at launch: the boundary guard in _apply_gate_answer must
+            # not follow a settings change made while this run is in flight.
+            self.workflow_unattended = "--unattended" in command
+            self.proc = subprocess.Popen(command, cwd=_project_root(), env=env,
                                          stdin=subprocess.PIPE,
                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                          bufsize=0)
@@ -2488,6 +2492,14 @@ class UncleTUI:
             self.home_history.append(('system', 'Not sent: this is a %s gate; standing delegation covers routine dialogs only. '
                                                 'Say "answer this one" if you want the supervisor to answer it.'
                                       % (dialog.get('reason') or 'sensitive')))
+            return
+        if getattr(self, 'workflow_unattended', False) and dialog.get('reason') in ('publication', 'signing'):
+            # Auto mode ended at the publication boundary: the PR dialogs are
+            # the person's own answers, so no supervisor submission (explicit,
+            # literal or choice) is written or receipted for them.
+            self.home_history.append(('system', 'Not sent: this %s gate is the publication boundary of an Auto run; '
+                                                'the supervisor proposed %r. Type the answer into the dialog yourself.'
+                                      % (dialog.get('reason'), answer)))
             return
         if delegation.get('literal') is not None:
             answer = delegation['literal']

@@ -1,9 +1,35 @@
 #!/usr/bin/env bash
 # Bash 3.2 entry points; Python owns the atomic journal and temporary Git index.
 # No close marker is written by this library.
+
+# Whether a person can answer the handoff prompts: a terminal, or the TUI
+# relay (uncle_tui.py sets UNCLE_STATUS_FILE and types answers down the pipe).
+# A bare pipe grants nothing, so a headless run keeps the skip below.
+change_pr_person_channel() {
+    [[ -t 0 || -n "${UNCLE_STATUS_FILE:-}" ]]
+}
+
 change_pr_complete() {
-    if [[ "$CLOSE_ISSUE" != 1 || "${UNATTENDED:-0}" == 1 || -s "$UNATTENDED_FILE" ]]; then
-        if ! change_pr_engine signing-resume >/dev/null 2>&1; then
+    # The publication boundary. The unattended stages have ended; whether the
+    # handoff dialogs open depends only on whether someone can answer them.
+    # The unattended ledger never routes: an attended rerun after a headless
+    # run still publishes.
+    local interactive=0 boundary=0
+    if [[ "$CLOSE_ISSUE" == 1 ]]; then
+        if [[ "${UNATTENDED:-0}" != 1 ]]; then
+            interactive=1
+            if [[ -s "$UNATTENDED_FILE" ]]; then
+                boundary=1
+            fi
+        elif change_pr_person_channel; then
+            interactive=1
+            boundary=1
+        fi
+    fi
+    if [[ "$interactive" != 1 ]]; then
+        # Disabled or headless: only a commit the person already made
+        # continues, and no dialog may wait on anyone (EOF pends instead).
+        if ! change_pr_engine completed-signing-resume >/dev/null 2>&1 </dev/null; then
             if [[ -s "$ORIGIN_FILE" ]]; then
                 echo "PR handoff disabled or unattended; leaving the issue open."
             else
@@ -11,17 +37,31 @@ change_pr_complete() {
             fi
             return 0
         fi
+        change_pr_publish 0 </dev/null
+        return 0
+    fi
+    if [[ "$boundary" == 1 ]]; then
+        echo "Publication boundary: unattended stages ended; a person answers from here."
+    fi
+    change_pr_publish 1
+}
+
+change_pr_publish() {
+    local interactive="$1" status=0
+    # The engine reads this for the override dialog only; the driver's own
+    # unattended flag and ledger are untouched. Only a person may overrule.
+    local -x UNCLE_UNATTENDED="${UNCLE_UNATTENDED:-0}"
+    if [[ "$interactive" == 1 ]]; then
+        UNCLE_UNATTENDED=0
     fi
     # Journal validation proves PR ownership separately from close ownership.
     # The close sentinel retains its existing meaning on the no-Git path.
     # Exit 3 is the one recoverable failure: the recorded verdict is not
     # READY, so the operator gets one explicit override decision, showing the
-    # actual verdict. Unattended runs are never asked.
-    local status=0
+    # actual verdict. Headless runs are never asked.
     change_pr_engine validate || status=$?
     if [[ "$status" == 3 ]]; then
-        if [[ "${UNATTENDED:-0}" != 1 && ! -s "$UNATTENDED_FILE" ]] \
-            && change_pr_engine verdict-override; then
+        if [[ "$interactive" == 1 ]] && change_pr_engine verdict-override; then
             change_pr_engine validate || return 0
         else
             return 0
@@ -358,7 +398,10 @@ def gate():
 def ask(prompt, default=None):
     helper = gate()
     if helper is not None:
-        helper.open(prompt, signing=prompt.startswith(('Commit signing needs your help.', 'Commit needs your help.')))
+        # Every handoff prompt decides publication; the signing prefix takes
+        # precedence in the classifier. Standing delegation never answers either.
+        helper.open(prompt, signing=prompt.startswith(('Commit signing needs your help.', 'Commit needs your help.')),
+                    class_hint='sensitive:publication')
     try:
         if sys.stdin.isatty() and default is not None:
             import readline
@@ -807,6 +850,13 @@ def main():
         print('Override recorded; creating the PR over a ' + verdict[1] + ' verdict.', flush=True)
     elif action == 'signing-resume':
         signing_resume(load())
+    elif action == 'completed-signing-resume':
+        # Headless probe: a commit the person already made resumes; an
+        # unchanged HEAD would reopen a dialog nobody is there to answer.
+        j = load()
+        if head() == j['original_head']:
+            raise ValueError('No completed signed handoff commit.')
+        signing_resume(j)
     elif action == 'handoff':
         handoff(load())
     else:

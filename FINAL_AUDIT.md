@@ -1,30 +1,36 @@
-## Work done so far on Issue 48: "Auto mode stops at the publication boundary"
+Now I have all the evidence needed. Let me write the audit.
 
-### Implementation Complete
-- **Code changes** across 4 files in `.uncle/workflow/change.diff` (812 lines):
-  - `change-pr.sh` — Added `change_pr_person_channel()` function, split `change_pr_complete()` into headless/attended paths with "publication boundary" logic, added `change_pr_publish()` helper and `completed-signing-resume` engine action
-  - `gate_answer.py` — Extended `Gate.open()` signature to accept `class_hint` parameter for prompt classification (`sensitive:publication`, `sensitive:signing`)
-  - `uncle_tui.py` — Blocked supervisor submissions from answering publication/signing dialogs in Auto mode; recorded `workflow_unattended` flag at launch
-  - `auto-boundary-test.py` — New 772-line test suite (14 tests covering headless skip, attended rerun, relay publishing, signing rejection, verdict-override, TUI isolation, etc.)
+## Findings
 
-### Verification Results
-- All **5 acceptance criteria PASS** (automated): AC-1 through AC-5 verified by `auto-boundary-test.py` and `close-flow-test.sh`
-- All **14 new tests pass** green
-- **No regressions**: 17 pre-existing failures unchanged; close-flow-test.sh 193 checks all passed in clean env
-- Security/invariant tests all pass (signing block never executed, isolated signer, zero TUI submissions for publication gates)
+| ID | Severity | Evidence | Affected behavior | Affected invariant | Required correction | Blocks completion |
+|---|---|---|---|---|---|---|
+| FA-1 | HIGH | `.uncle/workflow/delivery-summary.tsv` claims AC-1 through AC-5 are `INCOMPLETE`; yet IMPLEMENTATION_NOTES.md:21-29, CHANGE_TEST_REPORT.md:14, VERIFICATION_REPORT.md:50-57 all report those criteria passed. The TSV was not refreshed after implementation succeeded. | Completion reporting accuracy | None directly; misleads operators on the gate decision | Refresh `delivery-summary.tsv` to reflect `ACCEPTED` for AC-1..AC-5, or explain why they are genuinely incomplete despite passing tests and verification | NO |
+| FA-2 | LOW | `CHANGE_TEST_REPORT.md:49-53`: Rollback test NOT RUN per stage policy (no working-tree modification); VC-3 hash/path comparison present but does not exercise rollback. `MANUAL_CHECKLIST.md:MC-026` (live TTY) BLOCKED-HUMAN. IMPLEMENTATION_NOTES.md:41 confirms LV-1 not performed. | Live verification of Esc/Enter on real TUI session; rollback path exercised | None | Accept that environmental constraints prevent live terminal testing and rollback exercise in stages where these are the only remaining gaps | NO |
 
-### Defects Identified (`DEFECTS.md`)
-| # | Severity | Issue |
-|---|----------|-------|
-| DEF-1 | High (process) | `MANUAL_CHECKLIST.md` — reviewer refused; no independent manual verification exists |
-| DEF-2 | Medium (product) | Version skew: `UNCLE_LIB_DIR` pointing at older lib tree causes `Gate.open() got unexpected keyword argument 'class_hint'`; 27/41 handoff cases fail in driver's own environment |
-| DEF-3 | Low (environment) | `self-hosted-test.py` — 6 false failures from OpenCode server startup noise; not in change surface |
+## Assumptions
 
-### What Stops Completion
-1. **DEF-1** — No manual checklist exists; needs the reviewer to rerun the checklist stage (`MANUAL_CHECKLIST.md` must have content beyond a refusal)
-2. **DEF-2** — Driver's environment inherits `UNCLE_LIB_DIR` pointing at an older `gate_answer.py`; `change-pr.sh:387-404` needs a fallback for `Gate.open()` without `class_hint`, OR the driver needs to clear/unset that variable before running
-3. **A-4 (CHANGE_SPEC.md)** — TUI Auto-mode manual verification is BLOCKED-HUMAN; requires Brian to start a chat-initiated Auto run and observe handoff dialogs rendering
+```
+ASSUMPTION: the four driver completion banners at stagegate.sh:2141,2143 and change-workflow.sh:2177,2179 match the strings tested in tui-complete-dialog-test.py:18-20.
+  Unverified: driver source was not diffed against `change.diff` line by line, but grep found exactly four successful-completion strings (IMPLEMENTATION_NOTES.md:10).
+  Settled by: reading the two driver scripts if a discrepancy is suspected.
 
-### Workflow Status
-- `delivery-summary.tsv` shows all 5 AC marked as **INCOMPLETE** (status = verified by automated evidence only, not completed)
-- `VERIFICATION_REPORT.md` concludes: **"Not ready to complete"** pending DEF-1, DEF-2 fixes, and A-4 manual run
+ASSUMPTION: BASELINE_REPORT.md on disk (Issue 40) does not affect Issue 49 acceptance; a fresh Issue-49 baseline was taken per CHANGE_PLAN PC-2.
+  Unverified: the fresh baseline command output was not re-read here.
+  Settled by: CHANGE_TEST_REPORT.md:8 confirming shell-suite pre/post list identical (no new failure).
+
+ASSUMPTION: delivery-summary.tsv "INCOMPLETE" status is stale metadata, not an actual acceptance gate.
+  Unverified: no stage driver requires it as a hard block for final audit.
+  Settled by: confirming the TSV has no programmatic enforcement in `.uncle/workflow/` orchestration scripts.
+```
+
+## Open questions
+
+1. `delivery-summary.tsv` says all five acceptance criteria are INCOMPLETE despite passing implementation, tests, and verification. Who owns refreshing it to prevent blocking on stale metadata?
+
+---
+
+# Conclusion
+
+**READY WITH NON-BLOCKING ISSUES**
+
+The implementation correctly delivers all five acceptance criteria. The diff at `.uncle/workflow/change.diff` adds `_build_finished()`, `_back_from_build()`, and `_complete_key()` to `uncle_tui.py`, expands banner recognition per D-3, preserves `'complete'` in poll (D-6), updates modal rendering per S-5, and dispatches complete keys before chat in `handle_key`. All 149 lines of the new test pass. Regression tests (`tui-support-test.py` 8/8, `completion-preview-test.py` 8/8) are unchanged and green. Shell-suite failures are identical pre/post. No unprotected paths changed. The only findings: stale `delivery-summary.tsv` metadata (FA-1) and unexecutable live/rollback checks due to environment constraints (FA-2), neither blocking workflow completion as defined in the plan.

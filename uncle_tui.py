@@ -1597,7 +1597,7 @@ class UncleTUI:
                 self.steering_channels = {}
                 # EOF handling can open the completion dialog just before
                 # this poll observes process exit. Keep that dialog focused.
-                if getattr(self, 'prompt_kind', '') not in ('support', 'finished'):
+                if getattr(self, 'prompt_kind', '') not in ('support', 'finished', 'complete'):
                     self.prompt_kind = ''
                     self.chat_focus = 'chat'
                 self._ensure_chat()
@@ -1720,6 +1720,42 @@ class UncleTUI:
         preview_changed = self._poll_completion_preview()
         return got or preview_changed or before != (self.proc_done, self.prompt_kind)
 
+    def _build_finished(self):
+        """A successful, finished run: banner seen, exit observed, exit code 0.
+
+        Failures and human stops keep today's Esc behaviour; only a build that
+        actually completed has nothing left to step back into.
+        """
+        return (getattr(self, "workflow_completed", False)
+                and getattr(self, "workflow_exit_reported", False)
+                and getattr(self, "workflow_exit_code", None) == 0)
+
+    def _back_from_build(self):
+        """Esc on a finished build page opens the complete dialog instead of
+        walking back through screens of a run that no longer exists."""
+        if (self.state != "running" or getattr(self, "prompt_kind", "")
+                or getattr(self, "recovery_active", False) or not self._build_finished()):
+            return False
+        self.prompt_kind = "complete"
+        self.prompt_text = "Build is complete. Press Enter to return to the home page."
+        self.chat_focus = "gate"
+        self.chat_error = ""
+        return True
+
+    def _complete_key(self, k):
+        """Only Enter leaves the complete dialog; every other key keeps it."""
+        if k in (10, 13):
+            self.stop_workflow()
+            self.state = "menu"
+            self.sel = 0
+            self.prompt_kind = ""
+            self.prompt_text = ""
+            self.recovery_active = False
+            self.chat_focus = "chat"
+            self.chat_error = ""
+        elif k == 3:
+            self._quit()
+
     def _offer_support(self):
         """Offer once per local user, only after this workflow finishes."""
         if getattr(self, "support_checked", False) or not self.proc:
@@ -1798,7 +1834,9 @@ class UncleTUI:
     # model, which was never this stage's model at all.
     def _read_banner(self, line):
         text = line.strip()
-        if text in ("Workflow complete.", "Change workflow complete."):
+        if text in ("Workflow complete.", "Change workflow complete.",
+                    "Workflow complete with waived acceptance.",
+                    "Change workflow complete with waived acceptance."):
             self.workflow_completed = True
         # Review banners identify the document only. The following question
         # owns stdin; never synthesize an answer on the user's behalf.
@@ -3388,7 +3426,7 @@ class UncleTUI:
             gate = 'Answer> ' + sanitize(self.prompt_buf)[-max(1, w - 10):]
         put(h - 2, 0, gate, w)
         controls = {'confirm': 'y/n/v', 'audit': 's/r/n/v', 'enter': 'Enter',
-                    'input': 'type, Enter', 'support': 's/Enter'}
+                    'input': 'type, Enter', 'support': 's/Enter', 'complete': 'Enter'}
         put(h - 1, 0, ('Tab menu/chat | Enter select/send' if self.state == 'menu' else 'Tab chat/gate | ' + controls.get(self.prompt_kind, 'Enter send | Esc back')), w)
         self._draw_file_picker(h - 3, 0, w)
         self.stdscr.refresh()
@@ -4349,6 +4387,8 @@ class UncleTUI:
             footer = "[s] Skip  [r] Human reviewed — OK  [n] Keep blocking"
         elif self.prompt_kind == "finished":
             footer = "[Enter/Esc] dismiss"
+        elif self.prompt_kind == "complete":
+            footer = "[Enter] return to home"
         elif self.prompt_kind == "support":
             footer = "[s] open GitHub to star      [Enter/Esc] dismiss"
         elif self.prompt_kind == "enter":
@@ -4389,7 +4429,8 @@ class UncleTUI:
         box_h = len(body) + 4
         top = max(0, (h - box_h) // 2)
         left = max(0, (w - box_w) // 2)
-        title = {"confirm": " approve ", "enter": " review ", "input": " input ", "support": " support Uncle ", "finished": " Finished "}.get(
+        title = {"confirm": " approve ", "enter": " review ", "input": " input ", "support": " support Uncle ", "finished": " Finished ",
+                 "complete": " build complete "}.get(
             self.prompt_kind, " uncle ")
         if self.prompt_text.startswith(("Commit signing needs your help.", "Commit needs your help.")):
             title = " signed commit required "
@@ -4463,6 +4504,13 @@ class UncleTUI:
             self._ensure_chat()
             if self._homepage_key(k):
                 return
+        # A finished build's only way back is through its dialog; chat must
+        # not see these keys, or Esc there would jump straight to the menu.
+        if self.state == "running" and getattr(self, "prompt_kind", "") == "complete":
+            self._complete_key(k)
+            return
+        if k == 27 and self._back_from_build():
+            return
         if getattr(self, 'chat_open', False) and self.state in ('menu', 'chat', 'running'):
             if self._chat_key(k):
                 return

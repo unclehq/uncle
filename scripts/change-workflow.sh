@@ -2225,8 +2225,10 @@ REPAIR
             triage_print_actions "$STATE_DIR"
             if git rev-parse --verify HEAD >/dev/null 2>&1; then
                 change_pr_complete
-            else
+            elif [[ -s "$ORIGIN_FILE" ]]; then
                 echo "Build complete without a commit. PR publication requires an existing base commit; the issue remains open."
+            else
+                echo "Build complete without a commit. PR publication requires an existing base commit; no PR was created."
             fi
             exit 0
             ;;

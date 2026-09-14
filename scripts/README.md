@@ -229,7 +229,14 @@ creates a feature branch when starting on the default branch, and pushes without
 force. The PR targets the base repository's default branch and includes
 `Closes owner/repo#issue` for an eligible bound origin. Creating the PR never closes
 the issue or writes `issue-closed`; GitHub closes the linked issue on merge into
-the default branch. Originless runs must confirm the base repository.
+the default branch. Originless runs (chat text or a hand-written
+`CHANGE_REQUEST.md`) derive the base repository from the remotes without a
+prompt: `upstream`, else `origin`, else the sole remote; no remote, several
+unnamed candidates, an unsupported host or an ambiguous fetch/push identity
+leave the handoff `PR pending` and resumable. Their PR body carries no
+`Closes` line. The audit freezes the remote configuration for originless runs;
+any later change to remote names or fetch/push URLs, including repairing a
+missing remote, requires rerunning FINAL_AUDIT before publication.
 
 New default-branch handoffs use `<prefix>/<slug>-<owner[:12]>`: labels (case-insensitive, enhancement before bug before documentation) select `feat/`, `bug/`, or `doc/`, otherwise `uncle/` (also on lookup failure); the slug is a lowercase ASCII title from the Summary or first heading in `CHANGE_REQUEST.md` (otherwise `REQUIREMENTS.md`), limited to 40 characters with `change` as the empty fallback.
 

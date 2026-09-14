@@ -4,7 +4,11 @@
 change_pr_complete() {
     if [[ "$CLOSE_ISSUE" != 1 || "${UNATTENDED:-0}" == 1 || -s "$UNATTENDED_FILE" ]]; then
         if ! change_pr_engine signing-resume >/dev/null 2>&1; then
-            echo "PR handoff disabled or unattended; leaving the issue open."
+            if [[ -s "$ORIGIN_FILE" ]]; then
+                echo "PR handoff disabled or unattended; leaving the issue open."
+            else
+                echo "PR handoff disabled or unattended; no PR was created."
+            fi
             return 0
         fi
     fi
@@ -233,6 +237,7 @@ def validate(j, ready=True):
         raise ValueError('Signed handoff marker differs from intended HEAD.')
     if j['origin'] != read(STATE / 'origin') or j['audit_hash'] != audit_hash():
         raise ValueError('Origin or audit changed; rerun FINAL_AUDIT.')
+    check_remotes(j)
     verdict = read(STATE / 'audit-verdict').strip().split('\t')
     if len(verdict) != 3 or verdict[0] != j['verdict_run'] or verdict[2] != j['audit_hash']:
         raise ValueError('Verdict binding changed; rerun FINAL_AUDIT.')
@@ -457,6 +462,31 @@ def remote_identity(remote):
     return remote_repo(urls[0])
 
 
+def remote_configuration():
+    # Effective fetch and push URLs per remote, captured verbatim: an invalid
+    # destination must not block the audit, only the handoff that uses it.
+    config = {}
+    for remote in git('remote').splitlines():
+        config[remote] = [git('remote', 'get-url', '--all', remote).splitlines(),
+                          git('remote', 'get-url', '--push', '--all', remote).splitlines()]
+    return config
+
+
+def check_remotes(j):
+    # An origin-less run has no issue naming its destination, so the audit
+    # binds the remote configuration instead. Journals bound before this field
+    # existed fail closed; the guard is never backfilled.
+    if j['origin']:
+        return
+    recorded = j.get('audit_remotes')
+    well_formed = (isinstance(recorded, dict) and all(
+        isinstance(name, str) and isinstance(urls, list) and len(urls) == 2
+        and all(isinstance(group, list) and all(isinstance(url, str) for url in group) for group in urls)
+        for name, urls in recorded.items()))
+    if not well_formed or recorded != remote_configuration():
+        raise ValueError('Remote configuration changed; rerun FINAL_AUDIT.')
+
+
 def remote_sha(j):
     if remote_identity(j['remote']).lower() != j['head_repo'].lower():
         raise ValueError('Head remote changed; rerun FINAL_AUDIT.')
@@ -469,6 +499,10 @@ def remote_sha(j):
 def resolve(j):
     origin = j['origin'].strip().split('\t')
     remotes = git('remote').splitlines()
+    if not remotes and origin == ['']:
+        # No issue names a destination and nothing can be derived: fail before
+        # any prompt or remote mutation; the bound journal resumes after repair.
+        raise ValueError('No Git remote is configured; add a GitHub remote and rerun to resume PR handoff.')
     if not remotes:
         url = ask('No Git remote is configured. GitHub remote URL for this PR (blank to cancel): ')
         if not url:
@@ -494,8 +528,16 @@ def resolve(j):
             raise ValueError('Only a gh-fetched origin authorizes this PR.')
         base = repo_name(origin[0])
     else:
-        candidate = identities.get('origin', '')
-        base = repo_name(ask('Base repository [owner/repo]: ', candidate))
+        # Base derived from the remotes, never asked: upstream, else origin,
+        # else the sole remote. Anything else fails closed and resumable.
+        for name in ('upstream', 'origin'):
+            if name in identities:
+                base = identities[name]
+                break
+        else:
+            if len(identities) != 1:
+                raise ValueError('Ambiguous base remote; name one remote origin or upstream.')
+            base = next(iter(identities.values()))
     info = json.loads(gh('repo', 'view', base, '--json', 'nameWithOwner,defaultBranchRef'))
     if info['nameWithOwner'].lower() != base.lower():
         raise ValueError('Base repository identity mismatch.')
@@ -728,12 +770,15 @@ def main():
                  intended_head='', commit_tree='', audit_hash='', verdict_run='',
                  base_repo='', head_repo='', base_branch='', head_branch='',
                  phase='auditing', url='', number=None)
+        if not j['origin']:
+            j['audit_remotes'] = remote_configuration()
         save(j)
     elif action == 'bind':
         j = load()
         if (j['phase'] != 'auditing' or head() != j['original_head'] or branch() != j['original_branch']
                 or snapshot() != j['reviewed_tree'] or read(STATE / 'origin') != j['origin']):
             raise ValueError('Files, origin, HEAD or branch changed during audit; rerun FINAL_AUDIT.')
+        check_remotes(j)
         j.update(audit_hash=audit_hash(), commit_tree=snapshot(True),
                  verdict_run=read(STATE / 'audit-verdict').split('\t')[0], phase='bound')
         # Sealed here, after the last agent stage and before any handoff.

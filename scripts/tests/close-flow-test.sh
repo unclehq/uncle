@@ -1536,10 +1536,12 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         self.assertIn('Ambiguous head remote', self.publish().stdout)
         self.assertEqual(len(self.creates()), 0)
 
-    def test_originless_requires_repository_answer(self):
+    def test_originless_derives_repository(self):
         (self.state / 'origin').unlink()
         self.freeze()
-        self.ok(self.engine('handoff', 'owner/repo\nCustom title\nSummary\nManual\ny\n'))
+        result = self.engine('handoff', 'Custom title\nSummary\nManual\ny\n')
+        self.ok(result)
+        self.assertNotIn('Base repository [', result.stdout)
         self.assert_named('uncle')
         self.assertFalse([a for a in self.calls() if a[:2] == ['issue', 'view']])
         self.assertNotIn('Closes ', (self.root / 'server.body').read_text())

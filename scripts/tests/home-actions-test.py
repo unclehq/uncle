@@ -116,6 +116,26 @@ class Actions(unittest.TestCase):
                 self.ui._run.assert_called_once()
                 request.assert_not_called()
 
+    def test_enter_submits_numeric_issue_with_picker_open(self):
+        for choices in ([], ['#45 Example']):
+            with self.subTest(choices=choices):
+                self.ui.state = 'menu'
+                self.ui.chat_focus = 'chat'
+                self.ui.chat_composer = 'build #45'
+                self.ui.chat_picker = True
+                self.ui.chat_picker_kind = 'issue'
+                self.ui.chat_choices = choices
+                self.ui._run.reset_mock()
+                self.ui._chat_key(10)
+                self.ui._run.assert_called_once()
+                self.assertEqual(self.ui.issue, '45')
+                self.assertEqual(self.ui.chat_composer, '')
+
+    def test_model_issue_hash_is_normalized(self):
+        self.reply(uncle_action='github_issue', issue='#45', start=True)
+        self.ui._run.assert_called_once()
+        self.assertEqual(self.ui.issue, '45')
+
     def test_auto_selection_advances_prefilled_issue_to_build(self):
         # Exercise the actual transition, stubbing only reload and launch.
         del self.ui._run

@@ -2872,6 +2872,12 @@ class UncleTUI:
                 self.chat_pick = (self.chat_pick + (1 if k == curses.KEY_DOWN else -1)) % len(self.chat_choices)
                 return True
             if k in (10, 13):
+                # A complete numeric mention is already usable, even while the
+                # asynchronous picker is loading or has no matching results.
+                if (self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'issue'
+                        and re.search(r'(?<!\S)#[1-9][0-9]*\s*$', self.chat_composer)):
+                    self.chat_picker = False
+                    self.chat_choices = []
                 if self.chat_choices:
                     self._complete_chat_file()
                 elif self.chat_picker:

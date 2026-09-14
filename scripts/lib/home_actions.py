@@ -73,6 +73,9 @@ def parse_reply(text):
             raise ValueError('The chat model returned an empty brief.')
     if action == 'github_issue':
         issue = data['issue']
+        if isinstance(issue, str):
+            issue = issue.strip().removeprefix('#')
+            data['issue'] = issue
         if not isinstance(issue, str) or not re.fullmatch(
                 r'[1-9][0-9]*|https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*/?', issue):
             raise ValueError('Enter an issue number or a full GitHub issue URL.')

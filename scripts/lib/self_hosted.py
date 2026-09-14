@@ -1,5 +1,6 @@
 """OpenCode-backed self-hosted runner and private endpoint configuration."""
 import json
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import subprocess
@@ -10,6 +11,17 @@ import shutil
 from urllib.parse import urlsplit
 import re
 import time
+
+
+
+@contextmanager
+def runner_directory(prefix):
+    from process_tree import cleanup_directory
+    directory = tempfile.TemporaryDirectory(prefix=prefix)
+    try:
+        yield directory.name
+    finally:
+        cleanup_directory(directory)
 
 
 def key_file(config):
@@ -465,7 +477,7 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
         adapter = Stage('self-hosted', side, os.environ.get('UNCLE_STATUS_STAGE', ''), [], prompt=prompt)
         adapter.model = values['model']
         adapter.usage_baseline = dict(usage_baseline or {})
-        with tempfile.TemporaryDirectory(prefix='uncle-opencode-live-') as directory:
+        with runner_directory(prefix='uncle-opencode-live-') as directory:
             try:
                 adapter.watch_parent()
                 native_run(adapter, directory, values=values, root=root, allow_shell=allow_shell)
@@ -487,7 +499,7 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
                         kill_tree(adapter.child)
                         adapter.child.wait()
                     finish_check(adapter.child)
-    with tempfile.TemporaryDirectory(prefix='uncle-opencode-') as directory:
+    with runner_directory(prefix='uncle-opencode-') as directory:
         command, env = opencode_invocation(side, values, prompt, root, directory, allow_shell=allow_shell)
         try:
             with (Path(directory)/'output.log').open('wb') as log:

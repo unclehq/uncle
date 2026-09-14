@@ -347,6 +347,25 @@ sys.exit(7 if mode=='fail' else 0)
                     self.assertEqual(final['result'],'## Findings\n\nNOT READY')
                     self.assertIsNone(final['total_cost_usd'])
 
+    def test_runner_directory_retries_windows_sharing_violation(self):
+        import self_hosted
+        real_cleanup = tempfile.TemporaryDirectory.cleanup
+        calls = []
+        def cleanup(directory):
+            calls.append(directory.name)
+            if len(calls) == 1:
+                error = PermissionError('output.log still open')
+                error.winerror = 32
+                raise error
+            real_cleanup(directory)
+        with patch.object(tempfile.TemporaryDirectory, 'cleanup', cleanup):
+            with self.assertRaisesRegex(ValueError, 'original timeout; diagnostic log:'):
+                with self_hosted.runner_directory('uncle-cleanup-test-') as directory:
+                    (Path(directory) / 'output.log').write_text('timeout')
+                    raise ValueError('original timeout; diagnostic log: saved.log')
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(Path(directory).exists())
+
     def test_failures_never_write_a_review(self):
         env=self.stub_environment()
         for mode in ('fail','empty','timeout','api-timeout'):
@@ -420,10 +439,11 @@ sys.exit(7 if mode=='fail' else 0)
             ui._draw_logo(60, 160)
             ui.stdscr.addnstr.assert_any_call(len(module.LOGO), (module.LOGO_W-5)//2, 'uncle', 5, 1)
             ui.config_section = 'stages'
-            self.assertEqual(len(ui._config_items()), len(module.CONFIG_STAGES))
+            self.assertEqual([row.split()[0] for row in ui._config_items()], module.BUILD_CONFIG_STAGES)
+            self.assertNotIn('triage', [row.split()[0] for row in ui._config_items()])
             ui.config_section = 'opencode'
             self.assertIn('1 loaded', ui._config_items()[1])
-            self.assertEqual(ui.stage_fields('implementation'),['runner','model'])
+            self.assertEqual(ui.stage_fields('implementation'),['runner','effort','model'])
             self.assertEqual(ui._field_display('@local/local-model:Q4','api_key'),'********')
             ui.save_config()
             ui.load_config()
@@ -432,13 +452,13 @@ sys.exit(7 if mode=='fail' else 0)
             self.assertEqual(read_keys(self.config)['__opencode_models__']['local/local-model:Q4']['api_key'],'secret-with-#-characters')
             ui._open_picker('model','implementation')
             self.assertEqual(ui.state,'picker')
-            self.assertEqual(ui._picker_rows(), [('option', 'local/local-model:Q4')])
+            self.assertEqual(ui._picker_rows(), [('option', 'local/local-model:Q4'), ('custom', 'Custom… (type a model id)')])
             ui._open_stage('@connection')
             self.assertEqual(ui.stage_fields('@connection'), ['base_url', 'api_key'])
             with patch.object(ui, 'maybe_reload'), patch('self_hosted.discover_models', return_value=['local/local-model:Q4', 'local/second-model']):
                 ui._set_field('@connection', 'api_key', 'secret-with-#-characters')
             ui._open_picker('model', 'implementation')
-            self.assertEqual(ui._picker_rows(), [('option', 'local/local-model:Q4'), ('option', 'local/second-model')])
+            self.assertEqual(ui._picker_rows(), [('option', 'local/local-model:Q4'), ('option', 'local/second-model'), ('custom', 'Custom… (type a model id)')])
             self.assertNotIn('second-secret', str(ui._config_items()))
             self.assertNotIn('second-secret', self.config.read_text(encoding='utf-8'))
             ui.stage_target = 'implementation'

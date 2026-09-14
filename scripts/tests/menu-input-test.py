@@ -282,7 +282,7 @@ class MenuInputTests(unittest.TestCase):
                                 self.ui._confirm_text()
                                 self.ui.sel = 2
                                 self.ui._confirm()
-                            self.ui.proc.stdin.close()  # Never confirm RUN.
+                            self.ui.proc.stdin.close()  # No gate answers.
                             code = self.ui.proc.wait(timeout=max(0.01, deadline - time.monotonic()))
                             self.assertEqual(len(threads), 1)
                             threads[0].join(timeout=max(0.01, deadline - time.monotonic()))
@@ -326,7 +326,10 @@ class MenuInputTests(unittest.TestCase):
                     self.assertFalse((install / '.uncle').exists(), output)
                     self.assertEqual(list((self.project / '.uncle').iterdir()),
                                      [Path(env['UNCLE_CONFIG'])], output)
-                    self.assertFalse(Path(env['CALLS']).exists(), output)
+                    # Seeding hands straight over to the new-application driver.
+                    self.assertEqual(Path(env['CALLS']).read_text().splitlines(),
+                                     [f'stagegate.sh|{self.project}|'], output)
+                    Path(env['CALLS']).unlink()
 
     def test_launch_cwd(self):
         self.ui.stage_env = Mock(return_value={})
@@ -352,7 +355,10 @@ class MenuInputTests(unittest.TestCase):
         config = self.project / '.uncle/config'
         config.parent.mkdir(exist_ok=True)
         config.write_text('requirements.runner kimi\nrequirements.effort medium\n')
-        env = {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin',
+        # The drivers must run on the interpreter this suite runs on; the system
+        # python3 ahead of it on a bare PATH may be too old for them.
+        env = {'PATH': os.pathsep.join([os.path.dirname(sys.executable), '/usr/bin', '/bin', '/usr/sbin',
+                                        '/sbin', '/opt/homebrew/bin', '/usr/local/bin']),
                'HOME': str(self.base), 'UNCLE_CONFIG': str(config),
                'CALLS': str(self.base / 'calls'), 'PYTHONDONTWRITEBYTECODE': '1', 'NO_COLOR': '1'}
         return install, env

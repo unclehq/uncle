@@ -97,11 +97,11 @@ check_eq "cw: state is the plan gate" WAIT_PLAN_APPROVAL "$(cat "$P/.uncle/workf
 check_eq "cw: digest untouched by the driver" "$old" "$(cat "$P/.uncle/workflow/approvals/CHANGE_PLAN.sha256")"
 check_absent "cw: exit 0 writes no bundle" "$P/.uncle/workflow/TRIAGE.md"
 # Declining keeps the stale digest; accepting records the new bytes.
-drive change-workflow.sh "$P" $'\nn\n\nn\n'
+drive change-workflow.sh "$P" $'n\nn\n'
 check_eq "cw: decline exits 0" 0 "$STATUS"
 check_eq "cw: decline leaves the digest" "$old" "$(cat "$P/.uncle/workflow/approvals/CHANGE_PLAN.sha256")"
 check_eq "cw: decline leaves the state" WAIT_PLAN_APPROVAL "$(cat "$P/.uncle/workflow/state")"
-drive change-workflow.sh "$P" $'\ny\n\ny\n'
+drive change-workflow.sh "$P" $'y\ny\n'
 check_eq "cw: accept records the new digest" "$(hash_file "$P/CHANGE_PLAN.md")" "$(cat "$P/.uncle/workflow/approvals/CHANGE_PLAN.sha256")"
 check_eq "cw: accept advances to the next stage (stub runner fails there)" UPDATED_PLAN "$(cat "$P/.uncle/workflow/state")"
 
@@ -133,10 +133,10 @@ check_contains "sg: says changed after approval" "PROJECT_PLAN.md changed after 
 check_eq "sg: state is the plan gate" WAIT_PLAN_APPROVAL "$(cat "$P/.uncle/workflow/state")"
 check_eq "sg: digest untouched by the driver" "$old" "$(cat "$P/.uncle/workflow/approvals/PROJECT_PLAN.sha256")"
 check_absent "sg: exit 0 writes no bundle" "$P/.uncle/workflow/TRIAGE.md"
-drive stagegate.sh "$P" $'\nn\n'
+drive stagegate.sh "$P" $'n\n'
 check_eq "sg: decline exits 0" 0 "$STATUS"
 check_eq "sg: decline leaves the digest" "$old" "$(cat "$P/.uncle/workflow/approvals/PROJECT_PLAN.sha256")"
-drive stagegate.sh "$P" $'\ny\n'
+drive stagegate.sh "$P" $'y\n'
 check_eq "sg: accept records the new digest" "$(hash_file "$P/PROJECT_PLAN.md")" "$(cat "$P/.uncle/workflow/approvals/PROJECT_PLAN.sha256")"
 check_eq "sg: accept advances to the next stage (stub runner fails there)" ADVERSARIAL_REVIEW "$(cat "$P/.uncle/workflow/state")"
 

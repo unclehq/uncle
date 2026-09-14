@@ -267,8 +267,8 @@ set_state() {
     printf '%s\n' "$1" > "$REPO/.uncle/workflow/state"
 }
 
-# gate_input <line>... — the keystrokes one human_gate consumes: the ENTER
-# after reviewing, then the Y/N answer.
+# gate_input <line>... — the keystrokes one human_gate consumes: the Y/N
+# answer for each gate reached, in order.
 gate_input() {
     printf '%s\n' "$@" > "$CASE/gate-input"
     printf '%s' "$CASE/gate-input"
@@ -283,8 +283,10 @@ run_driver_stdin() {
     shift
 
     cp "$ROOT/scripts/change-workflow.sh" "$REPO/scripts/change-workflow.sh"
+    # The fixture commits scripts/lib as part of the project, so bytecode the
+    # driver's Python would write there reads as an unrecorded scope change.
     env -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u STAGEGATE_RUN_ID \
-        PATH="$CASE/bin:$PATH" \
+        PATH="$CASE/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 \
         WORKFLOW_AGENT_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
         WORKFLOW_PARALLEL_CHECKLIST=0 \
@@ -385,7 +387,7 @@ run_stagegate_stdin() {
     shift
 
     cp "$ROOT/scripts/stagegate.sh" "$REPO/scripts/stagegate.sh"
-    env PATH="$CASE/bin:$PATH" \
+    env PATH="$CASE/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 \
         WORKFLOW_AGENT_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
         WORKFLOW_SPECULATE=0 FAKE_WORKFLOW=stagegate \
@@ -494,7 +496,7 @@ expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "- app/added.sh"
 new_case approval-advances-to-complete
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
-run_driver_stdin "$(gate_input '' y)" \
+run_driver_stdin "$(gate_input y)" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
 expect_out "Recorded approval for .uncle/workflow/IMPLEMENTATION_REVIEW.md"
@@ -509,7 +511,7 @@ expect_no_file ".uncle/workflow/audit-override"
 new_case decline-holds-the-state
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
-run_driver_stdin "$(gate_input '' n)" \
+run_driver_stdin "$(gate_input n)" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
 expect_out "Gate not accepted."
@@ -600,8 +602,8 @@ gate_group_2() {
 new_case regression-is-found-despite-the-report
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
-# One newline, so the gate reaches its Y/N prompt before EOF declines it: the
-# wording of that prompt is what this case is about.
+# A blank answer declines the gate; the wording of that prompt is what this
+# case is about.
 run_driver_stdin "$(gate_input '')" FAKE_IMPL="printf 'exit 1\n' > app/test.sh"
 expect_status 0
 expect_out "GREEN CHECK FAILED: 1 regression(s)"
@@ -615,7 +617,7 @@ expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "1 command(s) regresse
 new_case regression-override-is-recorded
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
-run_driver_stdin "$(gate_input '' y)" FAKE_IMPL="printf 'exit 1\n' > app/test.sh"
+run_driver_stdin "$(gate_input y)" FAKE_IMPL="printf 'exit 1\n' > app/test.sh"
 expect_status 0
 expect_out "Change workflow complete."
 expect_out "Completed with a failing green check, by human override:"
@@ -774,7 +776,7 @@ expect_no_file ".uncle/workflow/implemented"
 new_stagegate_case sg-approval-advances-to-complete
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate_stdin "$(gate_input '' y)" \
+run_stagegate_stdin "$(gate_input y)" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
 expect_out "Recorded approval for .uncle/workflow/IMPLEMENTATION_REVIEW.md"
@@ -787,7 +789,7 @@ expect_state "COMPLETE"
 new_stagegate_case sg-not-ready-stops-at-gate
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate_stdin "$(gate_input '' y)" \
+run_stagegate_stdin "$(gate_input y)" \
     FAKE_AUDIT="NOT READY" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 1
@@ -840,7 +842,7 @@ expect_no_file .uncle/workflow/repaired
 new_stagegate_case sg-test-failure-repairs-and-regates
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate_stdin "$(gate_input '' y)" FAKE_TEST_REVIEW=FAIL_ONCE \
+run_stagegate_stdin "$(gate_input y)" FAKE_TEST_REVIEW=FAIL_ONCE \
     FAKE_IMPL="printf 'new source\n' > app/new.sh" \
     FAKE_REPAIR="printf '#!/bin/sh\nsh app/main.sh | grep -qx hello\n' > app/test.sh"
 expect_status 0
@@ -851,7 +853,7 @@ expect_in_file .uncle/workflow/TEST_CHANGES.diff '-sh app/main.sh | grep -q . ||
 expect_in_file .uncle/workflow/IMPLEMENTATION_REVIEW.md '+sh app/main.sh | grep -qx hello'
 expect_no_file VERIFICATION_REPORT.md
 expect_no_file FINAL_AUDIT.md
-run_stagegate_stdin "$(gate_input '' y)" FAKE_TEST_REVIEW=FAIL_ONCE
+run_stagegate_stdin "$(gate_input y)" FAKE_TEST_REVIEW=FAIL_ONCE
 expect_status 0
 expect_state COMPLETE
 expect_in_file .uncle/workflow/repair-count '1'
@@ -897,7 +899,7 @@ expect_out 'Repair limit (1) reached'
 new_stagegate_case sg-review-cannot-bless-failed-command
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate_stdin "$(gate_input '' y)" FAKE_IMPL="printf 'exit 1\n' > app/test.sh" \
+run_stagegate_stdin "$(gate_input y)" FAKE_IMPL="printf 'exit 1\n' > app/test.sh" \
     WORKFLOW_MAX_REPAIRS=0
 expect_status 1
 expect_state REPAIR
@@ -1142,7 +1144,7 @@ printf 'requirements\n' > "$REPO/REQUIREMENTS.md"
 printf 'plan\n' > "$REPO/PROJECT_PLAN.md"
 printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
 set_state WAIT_PLAN_APPROVAL
-run_stagegate_stdin "$(gate_input '' y)" WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_SPECULATE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+run_stagegate_stdin "$(gate_input y)" WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_SPECULATE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
 expect_status 42
 expect_state ADVERSARIAL_REVIEW
 expect_out 'pausing without another full review'
@@ -1273,7 +1275,7 @@ for exhausted in 0 1; do
     [[ $(wc -l < "$REPO/.uncle/workflow/attempts") -eq $((2 * (1 - exhausted))) ]] || fail 'resume reran waived implementation'
 
     # The waiver must not bypass the human diff approval; approve normally.
-    run_driver_stdin "$(gate_input '' y)"
+    run_driver_stdin "$(gate_input y)"
     expect_status 0
     expect_state COMPLETE
     expect_file FINAL_AUDIT.md

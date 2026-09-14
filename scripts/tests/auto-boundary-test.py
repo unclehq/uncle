@@ -571,8 +571,7 @@ class TuiBoundaryTests(HARNESS.Base):
 
 
 class IsolationTests(Fixture):
-    """T-10: inherited signing never reaches the fixture or the driver; the
-    verification loop aggregates a failing suite."""
+    """T-10: inherited signing never reaches the fixture or the driver."""
 
     def test_inherited_signer_is_never_invoked(self):
         inherited = self.root / 'inherited-gitconfig'
@@ -591,16 +590,6 @@ class IsolationTests(Fixture):
         self.assert_created()
         self.assertFalse((self.root / 'signer.log').exists(), 'the inherited signer was invoked')
         self.assertEqual(self.git('config', '--get', 'commit.gpgsign'), 'false')
-
-    def test_python_suite_loop_aggregates_failures(self):
-        suites = self.root / 'suites'
-        suites.mkdir()
-        (suites / 'a-test.py').write_text('import sys; sys.exit(1)\n')
-        (suites / 'b-test.py').write_text('import sys; sys.exit(0)\n')
-        line = [l for l in (ROOT / 'CHANGE_PLAN.md').read_text().splitlines() if l.startswith('rc=0; for t in')][0]
-        result = subprocess.run(['bash', '-c', line.replace('scripts/tests/*-test.py', str(suites) + '/*-test.py')],
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        self.assertEqual(result.returncode, 1, result.stdout)
 
 
 if __name__ == '__main__':

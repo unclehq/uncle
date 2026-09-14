@@ -18,7 +18,7 @@ expect_in_file CHANGE_PLAN.md 'isolated-context revision'
 
 new_case denial-revised-from-plan
 set_state PLAN
-run_driver_stdin "$(gate_input '' y '' y '' y '' y '' y '' n)" FAKE_ASSESS_NO_APPROVAL=1 FAKE_CAP_STATUS=UNSUPPORTED FAKE_PLAN_DENIAL=1 FAKE_IMPL='echo alternative > app/main.sh'
+run_driver_stdin "$(gate_input y y y y y n)" FAKE_ASSESS_NO_APPROVAL=1 FAKE_CAP_STATUS=UNSUPPORTED FAKE_PLAN_DENIAL=1 FAKE_IMPL='echo alternative > app/main.sh'
 expect_status 0
 expect_state COMPLETE
 expect_in_file app/main.sh alternative
@@ -29,7 +29,7 @@ new_stagegate_case stagegate-alternative
 stagegate_agent
 printf '\nR-1: DESIGN blanket denial, required property mediated access.\n' >> "$REPO/UPDATED_PROJECT_PLAN.md"
 set_state WAIT_UPDATED_PLAN_APPROVAL
-run_stagegate_stdin "$(gate_input '' y '' y '' y '' y '' n)" FAKE_ASSESS_NO_APPROVAL=1 FAKE_CAP_STATUS=UNSUPPORTED FAKE_IMPL='echo alternative > app/main.sh'
+run_stagegate_stdin "$(gate_input y y y y n)" FAKE_ASSESS_NO_APPROVAL=1 FAKE_CAP_STATUS=UNSUPPORTED FAKE_IMPL='echo alternative > app/main.sh'
 expect_status 0
 expect_in_file app/main.sh alternative
 expect_in_file .uncle/workflow/plan-recovery.json '"design_count": 1'
@@ -168,7 +168,7 @@ expect_state WAIT_PLAN_APPROVAL
 expect_in_file app/added.sh retained
 expect_in_file .uncle/workflow/plan-recovery.json '"design_count": 1'
 expect_no_file .uncle/workflow/implementation-completion-repair
-run_driver_stdin "$(gate_input '' y '' y '' y '' n)" FAKE_IMPL="$design_impl"
+run_driver_stdin "$(gate_input y y y n)" FAKE_IMPL="$design_impl"
 expect_status 0
 expect_state WAIT_IMPLEMENT_APPROVAL
 expect_in_file app/added.sh retained

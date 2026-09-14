@@ -33,12 +33,12 @@ AGENT
     expect_file .uncle/workflow/change-plan.draft-key
     expect_in_file .uncle/workflow/combined-prompt 'CHANGE_SPEC.md: at most'
     expect_in_file .uncle/workflow/combined-prompt 'CHANGE_PLAN.md: at most'
-    expect_in_file .uncle/workflow/combined-prompt 'using your current context and the same model'
+    expect_in_file .uncle/workflow/combined-prompt 'same model and context'
     expect_not_out ': change-spec'
     if [[ "$edited" == 1 ]]; then
         printf '\nUser clarification at approval.\n' >> "$REPO/CHANGE_SPEC.md"
     fi
-    run_driver_stdin "$(gate_input '' y)"
+    run_driver_stdin "$(gate_input y)"
     expect_status 0
     expect_state WAIT_PLAN_APPROVAL
     expect_file ADVERSARIAL_REVIEW.md

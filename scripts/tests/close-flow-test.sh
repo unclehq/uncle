@@ -70,13 +70,6 @@ expect_not_out() {
     fi
 }
 
-expect_closed() {
-    COUNT=$((COUNT + 1))
-    if ! grep -qF "issue close" "$GH_LOG"; then
-        fail "expected a gh issue close call"
-    fi
-}
-
 expect_not_closed() {
     COUNT=$((COUNT + 1))
     if grep -qF "issue close" "$GH_LOG"; then
@@ -88,13 +81,6 @@ expect_driver_ran() {
     COUNT=$((COUNT + 1))
     if [[ ! -s "$REPO/.uncle/workflow/driver.log" ]]; then
         fail "expected the driver to have run"
-    fi
-}
-
-expect_driver_not_run() {
-    COUNT=$((COUNT + 1))
-    if [[ -s "$REPO/.uncle/workflow/driver.log" ]]; then
-        fail "expected the driver NOT to have run"
     fi
 }
 
@@ -227,8 +213,8 @@ run_driver_stdin() {
     RC=$?
 }
 
-# gate_input <line>... — a file holding the keystrokes one human_gate consumes:
-# the ENTER after reviewing, then the Y/N answer.
+# gate_input <line>... — a file holding the keystrokes one human_gate consumes,
+# one Y/N answer per gate reached.
 gate_input() {
     local f="$CASE/gate-input"
     printf '%s\n' "$@" > "$f"
@@ -272,13 +258,6 @@ expect_state() {
     COUNT=$((COUNT + 1))
     if [[ "$(cat "$REPO/.uncle/workflow/state" 2>/dev/null)" != "$1" ]]; then
         fail "expected state '$1', got '$(cat "$REPO/.uncle/workflow/state" 2>/dev/null)'"
-    fi
-}
-
-expect_marker() {
-    COUNT=$((COUNT + 1))
-    if [[ ! -s "$REPO/.uncle/workflow/issue-closed" ]]; then
-        fail "expected the close marker to be written"
     fi
 }
 

@@ -23,6 +23,7 @@ UNATTENDED=0
 for fn in get_state set_state require_file     acceptance_setup_pause acceptance_human_continue acceptance_after_waiver acceptance_transition; do
     eval "$(awk -v start="^${fn}\\(\\)" '$0 ~ start {active=1} active {print} active && /^}$/ {exit}' "$ROOT/scripts/stagegate.sh")"
 done
+supervision_validation_failed() { :; }
 verify_implementation_review() { echo approval >> calls; }
 verify_approval() { :; }
 ensure_repair_capacity() { :; }

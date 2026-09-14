@@ -81,7 +81,7 @@ class PreviewTests(unittest.TestCase):
             self.assertIsNotNone(preview.process.poll())
 
     def test_invalid_manifest_does_not_launch(self):
-        for spec in ({'kind':'command','command':'git commit'},
+        for spec in ({'kind':'command','command':'git commit'},  # rejected manifest, never run
                      {'kind':'webpage','url':'https://example.com'},
                      {'kind':'webpage','path':'../outside.html'}):
             self.spec(spec)

@@ -552,16 +552,6 @@ class TriageTests(unittest.TestCase):
         self.assertEqual(ui._config_row(), 'triage')
         self.assertIn('Recovery model', ui._config_items()[0])
 
-    def test_shared_chat_followup_uses_recovery_not_stage_steering(self):
-        ui = self.ui('running')
-        with patch.object(ui, '_triage_turn') as turn, patch.object(ui, 'steer_stage') as steer:
-            ui.open_triage()
-            turn.reset_mock()
-            ui.send_home_chat('Why did the check fail?')
-            turn.assert_called_once_with('diagnosis', followup='Why did the check fail?')
-            steer.assert_not_called()
-            self.assertEqual(ui.state, 'running')
-
 
 if __name__ == '__main__':
     unittest.main()

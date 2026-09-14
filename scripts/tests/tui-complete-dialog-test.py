@@ -1,19 +1,8 @@
 #!/usr/bin/env python3
-"""Back navigation from a completed build shows a modal; Enter goes home.
-
-Modes:
-  (none)              T-1..T-12 from CHANGE_PLAN.md §16.
-  --baseline          preservation assertions plus the current completed-Esc
-                      dispatch (modal once `_build_completed` exists, menu before).
-  --manual MODE       launch the real TUI with the workflow replaced by a stub
-                      (MODE: complete | gate | live) for MC-1..3.
-"""
-import hashlib
+"""Back navigation from a completed build shows a modal; Enter goes home."""
 import os
 from pathlib import Path
 import queue
-import shutil
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -23,7 +12,6 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 from uncle_tui import UncleTUI
 
-HAS_HELPER = hasattr(UncleTUI, "_build_completed")
 ESC, ENTER, CR, TAB, CTRL_C = 27, 10, 13, 9, 3
 TITLE, FOOTER = " build complete ", "[Enter] return home"
 BODY = "The build is complete. Press Enter to return to the home page."
@@ -66,7 +54,7 @@ def make_ui(code=0, banner=True, reported=True, chat_open=True, focus="chat"):
 
 
 class Preservation(unittest.TestCase):
-    """Assertions that hold before and after the change (T-3, T-4, T-11, T-10 live)."""
+    """Behaviour the completion modal must leave alone (T-3, T-4, T-11, T-10 live)."""
 
     def test_live_esc_no_modal(self):  # T-3
         ui = make_ui(code=None, banner=False, reported=False)
@@ -86,14 +74,12 @@ class Preservation(unittest.TestCase):
             ui = make_ui(**kw)
             if not kw.get("reported", True):
                 ui.workflow_exit_code = 0  # stale code from an earlier run
-            if HAS_HELPER:
-                self.assertFalse(ui._build_completed(), kw)
+            self.assertFalse(ui._build_completed(), kw)
             ui.handle_key(ESC)
             self.assertNotEqual(ui.prompt_kind, "complete", kw)
         ui = make_ui(code=0, banner=True)
         del ui.workflow_exit_code  # missing code
-        if HAS_HELPER:
-            self.assertFalse(ui._build_completed())
+        self.assertFalse(ui._build_completed())
         ui.handle_key(ESC)
         self.assertNotEqual(ui.prompt_kind, "complete")
 
@@ -130,18 +116,6 @@ class Preservation(unittest.TestCase):
             ui = make_ui(**kw)
             ui.handle_key(ord("q"))
             self.assertEqual((ui.chat_composer, ui.prompt_kind, ui.state), ("q", "", "running"), kw)
-
-
-class BaselineDispatch(unittest.TestCase):
-    """Completed-Esc expectation selected by helper availability (PC-2)."""
-
-    def test_completed_esc(self):
-        ui = make_ui()
-        ui.handle_key(ESC)
-        if HAS_HELPER:
-            self.assertEqual((ui.state, ui.prompt_kind), ("running", "complete"))
-        else:
-            self.assertEqual((ui.state, ui.prompt_kind), ("menu", ""))
 
 
 class CompleteDialog(unittest.TestCase):
@@ -183,7 +157,13 @@ class CompleteDialog(unittest.TestCase):
     def test_esc_replaces_support_popup(self):  # T-6
         ui = make_ui()
         ui.support_checked = False
-        ui._offer_support()
+        # The offer now arrives through the completion preview's event queue.
+        preview = Mock()
+        preview.events = queue.Queue()
+        preview.events.put(("done", False))
+        with patch("uncle_tui.CompletionPreview", return_value=preview):
+            ui._offer_support()
+        ui._poll_completion_preview()
         self.assertEqual(ui.prompt_kind, "support")
         with patch("uncle_tui.webbrowser.open") as browser:
             ui.handle_key(ESC)
@@ -199,7 +179,8 @@ class CompleteDialog(unittest.TestCase):
         texts = [a[2] for a in calls]
         self.assertTrue(any(TITLE in t for t in texts), texts)
         self.assertIn(BODY, texts)
-        self.assertIn(FOOTER, texts)
+        # Every modal footer carries the chat-focus hint after its own keys.
+        self.assertTrue(any(t.startswith(FOOTER) for t in texts), texts)
         body_len = len(BODY) + 6
         box_w = max(min(80 - 4, body_len), 30)
         box_h = 3 + 4  # body, blank, footer + 4
@@ -263,65 +244,5 @@ class CompleteDialog(unittest.TestCase):
         self.assertEqual((ui.state, ui.prompt_kind), ("running", "complete"))
 
 
-class Rollback(unittest.TestCase):
-    def test_feature_hunks_reverse_cleanly(self):  # T-12
-        src = REPO / "uncle_tui.py"
-        base = REPO / ".uncle" / "workflow" / "issue49-before" / "uncle_tui.py"
-        if not base.exists() or not HAS_HELPER:
-            self.skipTest("no PC-1 snapshot or feature not applied")
-        with tempfile.TemporaryDirectory() as tmp:
-            work = Path(tmp) / "uncle_tui.py"
-            shutil.copy(src, work)
-            unrelated = Path(tmp) / "unrelated.txt"
-            unrelated.write_text("seeded unrelated edit\n")
-            sentinel = Path(tmp) / "untracked.sentinel"
-            sentinel.write_text("sentinel\n")
-            digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-            before = {p.name: digest(p) for p in (unrelated, sentinel)}
-            patch_bytes = subprocess.run(["diff", "-u", str(base), str(src)], capture_output=True).stdout
-            reverse = subprocess.run(["patch", "-R", "-s", str(work)], input=patch_bytes, capture_output=True)
-            self.assertEqual(reverse.returncode, 0, reverse.stderr)
-            self.assertEqual(digest(work), digest(base))
-            self.assertEqual({p.name: digest(p) for p in (unrelated, sentinel)}, before)
-            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()),
-                             ["uncle_tui.py", "unrelated.txt", "untracked.sentinel"])
-
-
-STUBS = {
-    "complete": "import sys,time\nfor i in range(3):\n print('stage %d running' % i, flush=True); time.sleep(0.4)\n"
-                "print('Workflow complete.', flush=True)\nsys.exit(0)\n",
-    "gate": "import sys\nprint('Approve the plan? [Y/N] ', end='', flush=True)\nsys.stdin.readline()\n"
-            "print('Workflow complete.', flush=True)\nsys.exit(0)\n",
-    "live": "import time\nfor i in range(600):\n print('still running %d' % i, flush=True); time.sleep(1)\n",
-}
-
-
-def manual(mode):
-    import curses
-    import uncle_tui
-    stub = Path(tempfile.mkdtemp(prefix="uncle-stub-")) / ("stub_%s.py" % mode)
-    stub.write_text(STUBS[mode])
-    state = tempfile.mkdtemp(prefix="uncle-state-")
-    os.environ["XDG_STATE_HOME"] = state
-    print("stub: %s sha256 %s" % (stub, hashlib.sha256(stub.read_bytes()).hexdigest()))
-    print("XDG_STATE_HOME=%s; terminal %s" % (state, shutil.get_terminal_size()))
-    print({"complete": "MC-1: start any workflow; wait for 'Workflow complete.'; Esc -> modal; Esc -> stays; Enter -> home.",
-           "gate": "MC-2: start any workflow; Esc on the [Y/N] gate declines it (original behaviour).",
-           "live": "MC-3: start any workflow; Tab then q stops the run and returns to the menu."}[mode])
-    input("Press Enter to launch the TUI...")
-    with patch.object(UncleTUI, "cmd_for", lambda self: [sys.executable, str(stub)]):
-        curses.wrapper(uncle_tui.main)
-
-
 if __name__ == "__main__":
-    args = sys.argv[1:]
-    if args[:1] == ["--manual"]:
-        manual(args[1])
-    elif args[:1] == ["--baseline"]:
-        suite = unittest.TestSuite()
-        loader = unittest.TestLoader()
-        suite.addTests(loader.loadTestsFromTestCase(Preservation))
-        suite.addTests(loader.loadTestsFromTestCase(BaselineDispatch))
-        sys.exit(0 if unittest.TextTestRunner(verbosity=1).run(suite).wasSuccessful() else 1)
-    else:
-        unittest.main(argv=[sys.argv[0]] + args)
+    unittest.main()

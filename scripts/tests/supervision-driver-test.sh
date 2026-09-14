@@ -20,8 +20,6 @@ fail() { echo "FAIL: $1"; FAILED=$((FAILED + 1)); }
 check_eq() { COUNT=$((COUNT + 1)); [[ "$3" == "$2" ]] || fail "$1 — expected '$2', got '$3'"; }
 check_contains() { COUNT=$((COUNT + 1)); case "$3" in *"$2"*) ;; *) fail "$1 — '$2' not in: ${3:0:400}" ;; esac; }
 check_absent() { COUNT=$((COUNT + 1)); case "$3" in *"$2"*) fail "$1 — '$2' should not be in: ${3:0:400}" ;; esac; }
-count_lines() { if [[ -s "$1" ]]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
-
 # --- stubs ------------------------------------------------------------------
 
 # The stage agent: logs argv and its prompt, writes the artifact only when

@@ -23,14 +23,6 @@ fail() {
     FAILED=$((FAILED + 1))
 }
 
-check_eq() {
-    local name="$1" expected="$2" actual="$3"
-    COUNT=$((COUNT + 1))
-    if [[ "$actual" != "$expected" ]]; then
-        fail "$name — expected '$expected', got '$actual'"
-    fi
-}
-
 check_contains() {
     local name="$1" needle="$2" hay="$3"
     COUNT=$((COUNT + 1))
@@ -119,6 +111,7 @@ cat > /dev/null
 printf '# artifact\n' > REQUIREMENTS_INTERPRETATION.md
 printf '# baseline\n\n## 8. Verification commands\n\n\`\`\`sh\ntrue\n\`\`\`\n' > BASELINE_REPORT.md
 printf '# spec\n' > CHANGE_SPEC.md
+printf '# plan\n' > CHANGE_PLAN.md
 echo '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":1,"total_cost_usd":0}'
 EOF
     chmod +x "$path"
@@ -189,7 +182,7 @@ if command -v git > /dev/null 2>&1; then
         WORKFLOW_AGENT_CMD_BASELINE="$TMP/agent-stage" \
         WORKFLOW_MODEL_BASELINE= \
         WORKFLOW_EFFORT_BASELINE=high \
-        WORKFLOW_MODEL_CHANGE_SPEC=cline-pass/glm-5.3 \
+        WORKFLOW_MODEL_CHANGE_PLAN=cline-pass/glm-5.3 \
         WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
         bash "$ROOT/scripts/change-workflow.sh" 2>&1)"
 
@@ -197,7 +190,7 @@ if command -v git > /dev/null 2>&1; then
     spec_argv="$(grep '^GLOBAL ' "$ARGV" || true)"
     check_contains "change: baseline ran on its own command" "--effort high" "$baseline_argv"
     check_absent "change: baseline empty model emits no --model" "--model" "$baseline_argv"
-    check_contains "change: change-spec ran on the global command" \
+    check_contains "change: combined spec+plan stage ran on the global command" \
         "--model cline-pass/glm-5.3" "$spec_argv"
 else
     echo "NOTE skipped change-workflow cases: git is not available"

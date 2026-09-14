@@ -13,8 +13,16 @@ cat > "$TMP/bin/gh" <<'GH'
 printf '%s\n' '{"title":"Selected issue","body":"Exact issue body\n\n## Details\nKeep this text.","url":"https://github.com/example/project/issues/42"}'
 GH
 chmod +x "$TMP/bin/gh"
-UNCLE_PROJECT_ROOT="$TMP/project with spaces" PATH="$TMP/bin:$PATH" \
+# --change starts the driver directly once CHANGE_REQUEST.md is seeded; stub
+# both drivers so the launch is recorded instead of run.
+for name in stagegate.sh change-workflow.sh; do
+    printf '#!/bin/bash\necho driver >> "$CALLS"\n' > "$TMP/install/scripts/$name"
+    chmod +x "$TMP/install/scripts/$name"
+done
+UNCLE_PROJECT_ROOT="$TMP/project with spaces" PATH="$TMP/bin:$PATH" CALLS="$TMP/calls" \
     bash "$TMP/install/scripts/from-issue.sh" https://github.com/example/project/issues/42 --change < /dev/null > "$TMP/output"
+[[ "$(cat "$TMP/calls")" == driver ]]
+rm "$TMP/calls"
 grep -q '^Selected issue$' "$TMP/project with spaces/CHANGE_REQUEST.md"
 grep -q '^Keep this text\.$' "$TMP/project with spaces/CHANGE_REQUEST.md"
 grep -q 'example/project#42' "$TMP/project with spaces/CHANGE_REQUEST.md"
@@ -120,11 +128,9 @@ for kind in ('request', 'code', 'fresh'):
     r = run(p)
     assert r.returncode == 0, r.stderr
     assert (p / ('REQUIREMENTS.md' if kind == 'fresh' else 'CHANGE_REQUEST.md')).exists()
-    if kind == 'fresh':
-        assert (tmp / 'calls').read_text() == 'driver\n'
-        (tmp / 'calls').unlink()
-    else:
-        no_effects(p, r)
+    # Either mode starts its driver directly once the document is seeded.
+    assert (tmp / 'calls').read_text() == 'driver\n', r.stdout
+    (tmp / 'calls').unlink()
 
 original_gh = (tmp / 'bin/gh').read_text()
 for kind, body in [('fetch', 'exit 1'), ('parse', "echo '{broken'"), ('empty', "echo '{}' ")]:

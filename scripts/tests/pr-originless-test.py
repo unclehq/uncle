@@ -285,10 +285,6 @@ class HandoffFixture(unittest.TestCase):
         path = self.root / 'git.log'
         return path.read_text().splitlines() if path.exists() else []
 
-    def mutations(self):
-        return [line for line in self.git_log() if line.split(' ')[0] in ('push', 'commit', 'commit-tree', 'update-ref', 'symbolic-ref')
-                and not line.startswith('update-ref refs/heads/') or line.startswith('push')]
-
     def publish(self, text='Custom title\nSummary text\nManual steps\ny\n', **env):
         return self.engine('handoff', text, **env)
 

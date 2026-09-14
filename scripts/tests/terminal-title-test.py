@@ -330,6 +330,10 @@ class CursesTitles(unittest.TestCase):
             self.assertEqual(self.ui._title_issue({}), '')
 
     def test_eof_does_not_reset_before_exit(self):
+        # A failure exit checks the project's workflow dir for TRIAGE.md; keep
+        # this checkout's own workflow state out of the bare fixture.
+        empty = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, empty)
+        self.ui._workflow_dir = lambda: empty
         self.ui._begin_title({})
         self.ui.proc = Mock(); self.ui.proc.poll.return_value = None
         self.ui._poll_workflow()

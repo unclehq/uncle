@@ -374,6 +374,7 @@ class Stage:
             self.submitted(id)
             message(text,id)
         def handle(e):
+            nonlocal outstanding
             if e.get('type')=='system': self.session=e.get('session_id',self.session)
             if e.get('type')=='user' and e.get('uuid') in self.pending:
                 self.ack({'id':e['uuid'],'result':{}})
@@ -395,7 +396,7 @@ class Stage:
                 if e.get('is_error'): raise ValueError(str(e.get('errors') or e.get('subtype')))
                 self.responded(e.get('uuid') or e.get('session_id'))
                 outstanding -= 1
-                return outstanding == 0 and not self.pending
+                return outstanding <= 0 and not self.pending
         self.loop(handle,steer)
 
     def cline(self, directory):

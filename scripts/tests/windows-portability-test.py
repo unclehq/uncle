@@ -17,6 +17,15 @@ sys.path.insert(0, str(ROOT / 'scripts/lib'))
 import process_tree
 
 class Portability(unittest.TestCase):
+    def test_timed_popen_remains_available_to_native_runners(self):
+        import native_stage
+        import native_opencode
+        child = Mock()
+        with patch.object(process_tree.subprocess, 'Popen', return_value=child) as launch, \
+             patch('build_timing.event', side_effect=OSError('telemetry unavailable')):
+            self.assertIs(process_tree.timed_popen(['runner'], cwd='project'), child)
+            launch.assert_called_once_with(['runner'], cwd='project')
+
     def test_job_termination_waits_for_descendants(self):
         import windows_job
         job = windows_job.Job.__new__(windows_job.Job)

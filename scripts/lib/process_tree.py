@@ -51,6 +51,23 @@ def launch_command(command):
     return command
 
 
+def timed_popen(command, **kwargs):
+    """Launch a process with optional timing; preserve caller process options."""
+    started, tick = time.time(), time.monotonic()
+    process = subprocess.Popen(command, **kwargs)
+    try:
+        import uuid
+        from build_timing import event
+        name = Path(str(command[0])).name
+        identity = uuid.uuid4().hex
+        process._uncle_timing = (name, started, tick, identity)
+        event('process_start', name, started, 0, child_pid=process.pid,
+              span_id=identity, workflow_state=os.environ.get('UNCLE_TIMING_STAGE', ''))
+    except Exception:
+        pass  # Optional telemetry must not strand a successfully launched child.
+    return process
+
+
 def group_options():
     if os.name == 'nt':
         return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}

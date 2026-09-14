@@ -32,6 +32,7 @@ class Actions(unittest.TestCase):
         self.ui._ensure_chat()
         self.ui.state, self.ui.proc = 'menu', None
         self.ui._run = Mock()
+        self.ui._set_field = Mock()
 
     def reply(self, **action):
         self.ui.home_request = Mock(events=queue.Queue())
@@ -92,7 +93,7 @@ class Actions(unittest.TestCase):
 
     def test_natural_issue_launch_phrases(self):
         url = 'https://github.com/unclehq/uncle/issues/44'
-        for phrase, mode in [('build from github issue ', ''),
+        for phrase, mode in [('build this issue ', ''), ('build from github issue ', ''),
                              ('start change request from github issue ', '--change'),
                              ('build this ', '')]:
             with self.subTest(phrase=phrase), patch.object(tui, 'HomeRequest') as request:

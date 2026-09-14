@@ -26,7 +26,8 @@ Actions:
 - run_change: run the existing CHANGE_REQUEST.md; no document/start fields.
 - github_issue: include "issue" (positive issue number or full https://github.com/
   owner/repo/issues/number URL), and "start". The existing issue importer fetches
-  the issue and creates CHANGE_REQUEST.md. A bare issue reference means import
+  the issue. When start is true, use Auto issue classification and immediately
+  start the From GitHub issue workflow. A bare issue reference means import
   only; start only when the user requests implementation. Never invent its contents.
 
 Use the user's conversation to include all stated requirements, corrections,
@@ -72,6 +73,9 @@ def parse_reply(text):
             raise ValueError('The chat model returned an empty brief.')
     if action == 'github_issue':
         issue = data['issue']
+        if isinstance(issue, str):
+            issue = issue.strip().removeprefix('#')
+            data['issue'] = issue
         if not isinstance(issue, str) or not re.fullmatch(
                 r'[1-9][0-9]*|https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*/?', issue):
             raise ValueError('Enter an issue number or a full GitHub issue URL.')

@@ -6,19 +6,20 @@ perf_record() (
     local kind="$1" stage="$2" elapsed="$3" status="$4"
     local log="${5:-/dev/null}" runner="${6:-}" model="${7:-}" effort="${8:-}"
     local dir="$STATE_DIR/metrics" tmp
+    local timing_dir="${UNCLE_TIMING_DIR:-}"
     mkdir -p "$dir" || exit 0
     tmp="$(mktemp "$dir/.pending.XXXXXX")" || exit 0
     [[ -f "$log" ]] || log=/dev/null
     if jq -R -s -c --arg kind "$kind" --arg stage "$stage" \
         --arg runner "$runner" --arg model "$model" --arg effort "$effort" \
-        --arg log "$log" --arg state "${state:-}" \
+        --arg log "$log" --arg state "${state:-}" --arg run_id "${timing_dir##*/}" \
         --argjson elapsed "$elapsed" --argjson exit_code "$status" \
         --argjson ended "$(date +%s)" \
         --argjson speculative "${UNCLE_SPECULATIVE:-false}" '
         [split("\n")[] | fromjson? | select(type == "object" and .type == "result")] as $results
         | ($results[-1] // {}) as $r
         | [scan("tokens used[\\r\\n ]+([0-9,]+)") | .[0] | gsub(","; "") | tonumber] as $totals
-        | {schema:1, kind:$kind, stage:$stage, workflow_state:$state,
+        | {schema:1, kind:$kind, stage:$stage, workflow_state:$state, run_id:$run_id,
            runner:$runner, model:($r.model // $model), effort:$effort, speculative:$speculative,
            ended_at:$ended, started_at:($ended-$elapsed), elapsed_seconds:$elapsed,
            process_exit:$exit_code, reported_error:$r.is_error,
@@ -41,3 +42,21 @@ perf_record() (
     fi
     exit 0
 )
+
+# State boundaries are separate from model attempts: they include driver work
+# and human waits, and remain readable while a build is still running.
+perf_stage() {
+    [[ -n "${UNCLE_TIMING_DIR:-}" && "${WORKFLOW_METRICS:-1}" == 1 ]] || return 0
+    export UNCLE_TIMING_STAGE="$1"
+    python3 -B "$(dirname "${BASH_SOURCE[0]}")/build_timing.py" stage "$1" 2>/dev/null || true
+}
+
+# Transparent raw-stream observation; native adapters retain their own events.
+perf_stream() {
+    if [[ -n "${UNCLE_TIMING_DIR:-}" && "${WORKFLOW_METRICS:-1}" == 1 ]]; then
+        UNCLE_TIMING_MODEL="${model:-}" python3 -B "$(dirname "${BASH_SOURCE[0]}")/runner_timing.py" stream "$1"
+    else
+        cat
+    fi
+}
+export UNCLE_TIMING_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner_timing.py"

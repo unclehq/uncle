@@ -204,6 +204,20 @@ def alive(pid):
 
 
 def lock_run(command):
+    """One supervised launch, or several when an enabled supervisor permits a retry.
+
+    Each retry re-enters `_lock_run_once`: the lock is released and
+    reacquired, and the driver runs every approval, integrity and repair
+    check again. With supervision disabled this is exactly one launch.
+    """
+    # No bytecode: this import runs inside project checkouts, and a stray
+    # __pycache__ in a copied lib would show up in the change diff.
+    sys.dont_write_bytecode = True
+    from supervisor import supervised_lock_run
+    return supervised_lock_run(_lock_run_once, command, STATE, Path(__file__).resolve().parents[2])
+
+
+def _lock_run_once(command):
     """Permanent inode, supervised process group, orphan detection across driver families."""
     if os.name == 'nt':
         from windows_driver import lock_run as windows_lock_run
@@ -224,7 +238,13 @@ def lock_run(command):
                 require(not alive(-owner['pgid']), 'previous workflow process group still alive')
         legacy = STATE / 'lock/pid'
         if legacy.exists():
-            require(not alive(int(legacy.read_text().strip())), 'live legacy workflow lock owner')
+            holder = int(legacy.read_text().strip())
+            if alive(holder):
+                print(f'Refusing to start: another change-workflow.sh run (pid {holder}) holds this checkout.', file=sys.stderr)
+                return 1
+            print(f'Clearing stale lock {legacy.parent} (pid {holder} is not running).', flush=True)
+            legacy.unlink()
+            legacy.parent.rmdir()
         # The child waits until its identity is durably recorded before executing Bash.
         rfd, wfd = os.pipe()
         env = dict(os.environ, UNCLE_DRIVER_SUPERVISED='1')

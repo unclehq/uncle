@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -16,6 +17,15 @@ sys.path.insert(0, str(ROOT / 'scripts/lib'))
 import process_tree
 
 class Portability(unittest.TestCase):
+    def test_timed_popen_remains_available_to_native_runners(self):
+        import native_stage
+        import native_opencode
+        child = Mock()
+        with patch.object(process_tree.subprocess, 'Popen', return_value=child) as launch, \
+             patch('build_timing.event', side_effect=OSError('telemetry unavailable')):
+            self.assertIs(process_tree.timed_popen(['runner'], cwd='project'), child)
+            launch.assert_called_once_with(['runner'], cwd='project')
+
     def test_job_termination_waits_for_descendants(self):
         import windows_job
         job = windows_job.Job.__new__(windows_job.Job)
@@ -78,6 +88,18 @@ class Portability(unittest.TestCase):
                 self.assertIs(raised.exception, error)
                 directory.cleanup.assert_called_once()
 
+    def test_cleanup_never_masks_an_in_flight_error(self):
+        error = PermissionError('output.log still open')
+        error.winerror = 32
+        directory = Mock()
+        directory.cleanup.side_effect = error
+        with self.assertRaisesRegex(ValueError, 'original timeout; diagnostic log'):
+            try:
+                raise ValueError('original timeout; diagnostic log: saved.log')
+            finally:
+                process_tree.cleanup_directory(directory, timeout=0)
+        directory.cleanup.assert_called_once()
+
     @unittest.skipUnless(os.name == 'nt', 'Windows denies deletion of open files')
     def test_cleanup_waits_for_native_child_file_handle(self):
         directory = tempfile.TemporaryDirectory()
@@ -135,6 +157,25 @@ class Portability(unittest.TestCase):
         job.terminate.assert_called_once()
         child.kill.assert_not_called()
         process_tree.finish_check(child)
+        job.close.assert_called_once()
+
+    def test_finish_without_timing_does_not_emit_and_still_closes_job(self):
+        job = Mock()
+        child = Mock(pid=123, _uncle_job=job)
+        with patch('build_timing.event') as record:
+            process_tree.finish_check(child)
+        record.assert_not_called()
+        job.terminate.assert_called_once()
+        job.close.assert_called_once()
+
+    def test_timing_failure_does_not_prevent_job_cleanup(self):
+        job = Mock()
+        child = Mock(pid=123, returncode=0, _uncle_job=job,
+                     _uncle_timing=('test', time.time(), time.monotonic(), 'attempt'))
+        with patch('build_timing.event', side_effect=RuntimeError('record failed')):
+            process_tree.finish_check(child)
+        self.assertIsNone(child._uncle_timing)
+        job.terminate.assert_called_once()
         job.close.assert_called_once()
 
     def test_job_bootstrap_requires_release_and_preserves_exit(self):

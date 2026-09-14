@@ -15,7 +15,7 @@ export UNCLE_PROJECT_ROOT="$PWD"
 # Change-workflow chaining
 #
 # These functions run after CHANGE_REQUEST.md is seeded on the --change path:
-# they confirm with the human and run the driver, which owns PR handoff.
+# they start the driver directly, which owns PR handoff.
 # Issues stay open until PR merge. These functions read the
 # globals resolved further down (OWNER, REPO, ISSUE_NUM, USED_GH) at call time.
 # ---------------------------------------------------------------------------
@@ -25,7 +25,6 @@ STATE_FILE="$STATE_DIR/state"
 ORIGIN_FILE="$STATE_DIR/origin"
 VERDICT_FILE="$STATE_DIR/audit-verdict"
 MARKER_FILE="$STATE_DIR/issue-closed"
-CONFIRM_WORD="RUN"
 
 # .uncle/workflow/state grammar, and the shared INV-3 close gate the driver also uses.
 . "$ROOT/scripts/lib/state.sh"
@@ -107,8 +106,8 @@ write_origin() {
     printf '%s\t%s\t%s\n' "$OWNER/$REPO" "$ISSUE_NUM" "$fetch" > "$ORIGIN_FILE"
 }
 
-confirm_and_run_workflow() {
-    local run_id status response
+run_issue_workflow() {
+    local run_id status
 
     run_id="$$-$(date +%Y%m%d%H%M%S)"
 
@@ -118,35 +117,7 @@ confirm_and_run_workflow() {
     echo "  CHANGE_REQUEST.md  (from $OWNER/$REPO#$ISSUE_NUM)"
     echo "=================================================="
     echo
-    echo "Review and edit it now if it needs more than the issue text:"
-    echo "  less CHANGE_REQUEST.md"
-    echo "  code CHANGE_REQUEST.md"
-    echo
-    echo "Confirming starts ./scripts/change-workflow.sh here. That runs the"
-    echo "multi-stage agent pipeline, spends real budget, and — only on a READY"
-    echo "final audit — closes $OWNER/$REPO#$ISSUE_NUM."
-    echo "Commit or stash unrelated work first: the driver records git diff of the"
-    echo "whole working tree as the change record."
-    echo
-
-    # Printed rather than passed to `read -p`: bash suppresses a -p prompt when
-    # stdin is not a terminal, and a non-interactive caller must still see what
-    # it is blocking on (CHANGE_SPEC §8).
-    response=""
-    printf '%s' "Type $CONFIRM_WORD exactly to start the change workflow: "
-    if [[ " ${ISSUE_WORKFLOW_ARGS[*]-} " == *" --unattended "* ]]; then
-        response="$CONFIRM_WORD"
-        echo "Unattended: starting without human review."
-    else
-        read -r response || true
-    fi
-    echo
-
-    if [[ "$response" != "$CONFIRM_WORD" ]]; then
-        echo "Not confirmed. CHANGE_REQUEST.md is written; nothing else ran."
-        echo "Run: ./scripts/change-workflow.sh"
-        return 0
-    fi
+    echo "Starting the change workflow from this issue."
 
     write_origin
 
@@ -549,9 +520,14 @@ case "$MODE" in
         else
             write_change_request
         fi
-        confirm_and_run_workflow
+        run_issue_workflow
         ;;
     new)
         write_new_project_brief
+        # Launch only after the seed succeeds; the driver owns approvals and
+        # durable workflow state in the selected project, not the install dir.
+        STAGEGATE_ORIGIN_REPO="$OWNER/$REPO" \
+        STAGEGATE_ORIGIN_ISSUE="$ISSUE_NUM" \
+            uncle_run bash "$ROOT/scripts/stagegate.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"}
         ;;
 esac

@@ -8,6 +8,7 @@ import threading
 import time
 import urllib.request
 from self_hosted import settings, opencode_invocation
+from process_tree import timed_popen
 from process_tree import launch_command, group_options
 
 
@@ -22,7 +23,7 @@ def run(stage, directory, values=None, root=None, allow_shell=True):
     env['OPENCODE_SERVER_PASSWORD']=password
     with socket.socket() as sock:
         sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-    stage.child=subprocess.Popen(launch_command([os.environ.get('WORKFLOW_OPENCODE_CMD','opencode'),
+    stage.child=timed_popen(launch_command([os.environ.get('WORKFLOW_OPENCODE_CMD','opencode'),
         'serve','--hostname','127.0.0.1','--port',str(port)]),env=env,stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,cwd=root,**group_options())
     base=f'http://127.0.0.1:{port}'
@@ -46,13 +47,25 @@ def run(stage, directory, values=None, root=None, allow_shell=True):
         request('/session/'+session+'/prompt_async',{'model':{'providerID':'local','modelID':values['model']},
                 'agent':'uncle','parts':[{'type':'text','text':text}]})
     send(stage.prompt)
+    stage.correlation='message'
     stage.ready(directory)
+    steered={}  # OpenCode user message id -> steering id, so a reply's parentID names its steering
     def steer(text,id):
+        before={m.get('info',{}).get('id') for m in (request('/session/'+session+'/message') or []) if m.get('info',{}).get('role')=='user'}
         send(text)
-        stage.status('steering_accepted',message_id=id)
+        for _ in range(50):
+            after=[m.get('info',{}).get('id') for m in (request('/session/'+session+'/message') or []) if m.get('info',{}).get('role')=='user']
+            new=[m for m in after if m not in before]
+            if new: steered[new[-1]]=id; break
+            time.sleep(.1)
+        stage.pending[id]=True
+        stage.ack({'id':id,'result':{}})
     # Read canonical stored messages so repeated polls never double-count usage or text.
     seen_text={}
+    timing_seen={}
     started=False
+    empty_response_retries=0
+    awaiting_new_user=None
     deadline=time.monotonic()+int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS','3600'))
     while time.monotonic()<deadline:
         stage.incoming(steer)
@@ -63,9 +76,15 @@ def run(stage, directory, values=None, root=None, allow_shell=True):
         users=[msg.get('info',{}).get('id') for msg in messages if msg.get('info',{}).get('role')=='user']
         for msg in messages:
             info=msg.get('info',{})
+            fingerprint=json.dumps(msg,sort_keys=True)
+            if timing_seen.get(info.get('id')) != fingerprint:
+                stage.timing.observe({'method':'http/message','params':msg})
+                timing_seen[info.get('id')]=fingerprint
             if info.get('role')!='assistant': continue
             started=True;last=info
             if info.get('error'): raise ValueError(str(info['error']))
+            if info.get('parentID') in steered and info.get('time',{}).get('completed'):
+                stage.answered(steered.pop(info['parentID']),info.get('id'))
             tokens=info.get('tokens',{});cache=tokens.get('cache',{})
             totals['input_tokens']+=tokens.get('input',0)
             totals['output_tokens']+=tokens.get('output',0)+tokens.get('reasoning',0)
@@ -82,6 +101,28 @@ def run(stage, directory, values=None, root=None, allow_shell=True):
             stage.tokens(totals,cost,inclusive=False)
             statuses=request('/session/status') or {}
             if statuses.get(session,{}).get('type','idle')=='idle' and last and last.get('time',{}).get('completed') and users and last.get('parentID') == users[-1]:
+                if awaiting_new_user == users[-1]:
+                    time.sleep(.2)
+                    continue  # prompt_async may not have persisted the recovery message yet.
+                final_parts = [part.get('text', '') for msg in messages
+                               if msg.get('info', {}).get('id') == last.get('id')
+                               for part in msg.get('parts', []) if part.get('type') == 'text']
+                answer = '\n'.join(final_parts).strip()
+                if not answer:
+                    if empty_response_retries < 1:
+                        empty_response_retries += 1
+                        awaiting_new_user = users[-1]
+                        stage.status('chat_output', text='OpenCode returned no final text; requesting completion once in the same session.')
+                        send('Your turn ended without a final text response. Continue from the work already done. '
+                             'Do not rerun completed checks just to produce a response. Finish any remaining required '
+                             'artifacts, then return the final response required by the original task. If blocked, '
+                             'state the blocker explicitly. Do not claim success from reasoning alone.')
+                        continue
+                    raise ValueError('OpenCode returned no final text after one same-session recovery attempt '
+                                     f'(finish={last.get("finish", "unknown")}; '
+                                     f'input tokens={totals["input_tokens"]}; output/reasoning tokens={totals["output_tokens"]}). '
+                                     'No successful completion recorded; retry or select another model.')
+                stage.final_answer=answer
                 return
         time.sleep(.2)
     raise ValueError('OpenCode stage timed out')

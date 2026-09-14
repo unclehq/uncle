@@ -26,15 +26,16 @@
 #            denies loopback binds. Leave it off everywhere else: an agent that
 #            writes code and can also open a socket is a different proposition.
 #
-# A stage that is not listed here runs on the defaults: cline, medium effort,
-# and cline-pass/deepseek-v4-pro. Edit from `uncle` -> Configure, or by hand.
+# A stage that is not listed here runs on the defaults: cline, low effort,
+# and cline-pass/deepseek-v4-pro. The project-plan, adversarial-review, and
+# implementation effort fallback remains medium. Edit from `uncle` -> Configure, or by hand.
 
 # --- new application ---------------------------------------------------------
 
 # Reading a brief and writing it out again does not need the top tier.
 requirements.runner cline
 requirements.model cline-pass/deepseek-v4-flash
-requirements.effort medium
+requirements.effort low
 
 # The plan carries the design.
 project-plan.runner cline
@@ -43,14 +44,14 @@ project-plan.effort high
 
 updated-plan.runner cline
 updated-plan.model cline-pass/kimi-k3
-updated-plan.effort high
+updated-plan.effort low
 
 # Preflight must exercise the capabilities later stages depend on, which means
 # it needs whatever they need -- otherwise it probes under conditions the real
 # stage will not have and passes a prerequisite that later blocks.
 preflight.runner cline
 preflight.model cline-pass/deepseek-v4-flash
-preflight.effort medium
+preflight.effort low
 preflight.network true
 
 # Implementation is the stage worth paying for.
@@ -62,26 +63,26 @@ implementation.effort high
 # record BLOCKED on every attempt, and repairs cannot fix a missing socket.
 execute-checklist.runner cline
 execute-checklist.model cline-pass/deepseek-v4-flash
-execute-checklist.effort medium
+execute-checklist.effort low
 execute-checklist.network true
 
 # --- change request ----------------------------------------------------------
 
 baseline.runner cline
 baseline.model cline-pass/deepseek-v4-flash
-baseline.effort medium
+baseline.effort low
 
 change-spec.runner cline
 change-spec.model cline-pass/deepseek-v4-pro
-change-spec.effort medium
+change-spec.effort low
 
 change-plan.runner cline
 change-plan.model cline-pass/kimi-k3
-change-plan.effort high
+change-plan.effort low
 
 updated-change-plan.runner cline
 updated-change-plan.model cline-pass/kimi-k3
-updated-change-plan.effort high
+updated-change-plan.effort low
 
 # --- review (both workflows) -------------------------------------------------
 
@@ -91,14 +92,95 @@ adversarial-review.runner codex
 adversarial-review.effort high
 
 test-review.runner codex
-test-review.effort high
+test-review.effort low
 
 manual-checklist.runner cline
 manual-checklist.model cline-pass/glm-5.3
-manual-checklist.effort medium
+manual-checklist.effort low
 
 final-audit.runner codex
-final-audit.effort high
+final-audit.effort low
+
+# --- triage ------------------------------------------------------------------
+
+# The model the screen opens after a stage failure (or on `t` / `/triage` at
+# any stop) to explain the failure and propose fixes. An agent-side runner: a
+# proposal you select runs in a sandbox copy of the project and only its
+# allowed edits are copied back. Unset, the runner's own defaults apply.
+triage.runner claude
+triage.effort low
+
+# --- supervision (opt-in) ---------------------------------------------------
+
+# Event-triggered diagnosis while a run is in progress: a validator failure,
+# a recurring failure signature, accepted-but-unanswered steering, or a
+# stage over its time/token bound asks a tool-free model for one bounded
+# action. Off by default; off, no supervisor process ever starts. Only
+# `claude` is supported as the runner; other values report unavailable.
+# An invalid value disables corrections and names the key; nothing is
+# substituted. The file is re-read while a run is in progress: setting
+# enabled to false cancels the pending diagnosis and keeps the counters.
+# Corrections are fixed templates; the model's wording never reaches a
+# stage. Only claude confirms steering answers by turn order (and OpenCode
+# by message id); codex, cline and kimi accept steering without a
+# confirmed answer. See README.md "Supervision" for recovery, including
+# `supervisor.py note-resolve` for an uncertain retained note.
+# supervision.enabled false
+# supervision.runner claude
+# supervision.model sonnet
+# supervision.effort medium
+# supervision.max_interventions 2
+# supervision.steering_timeout_seconds 120
+# supervision.stage_time_seconds 1800
+# supervision.stage_tokens 0
+# supervision.call_timeout_seconds 300
+# supervision.max_calls_per_run 8
+# supervision.call_max_cost_usd 0.5
+#
+# Chat: every message typed into the screen's chat goes to the same
+# supervisor model (runner/model/effort above; claude only), in every state.
+# It reads the current and previous stage logs, status events and the cost
+# ledger, explains the dialog on screen, and can relay steering ("tell it
+# to ...") or answer a gate -- but only when you ask in chat ("answer this
+# one", "approve this", "say no", "press enter", answer this with "..."), a
+# question, quotation, example or negation never counts. Standing delegation
+# for routine dialogs (document approvals, audit findings, press-Enter,
+# plain input) comes from `delegate_gates routine` or "handle the gates" /
+# `/delegate on` in chat; signing, publication and waiver gates always need
+# the explicit ask. Answers are written to the driver's stdin exactly as
+# yours, recorded first in .uncle/workflow/supervision/gate-answers.jsonl
+# with your request and the rationale, and the approval reads
+# `supervisor:explicit:<name>` or `supervisor:standing:<name>`, never a bare
+# name. Chat calls are metered separately (`usage_scope 'supervisor chat'`)
+# and are not counted against max_calls_per_run; standing answers are.
+# supervision.delegate_gates none
+
+# --- supervision (opt-in) ---------------------------------------------------
+
+# Event-triggered diagnosis while a run is in progress: a validator failure,
+# a recurring failure signature, accepted-but-unanswered steering, or a
+# stage over its time/token bound asks a tool-free model for one bounded
+# action. Off by default; off, no supervisor process ever starts. Only
+# `claude` is supported as the runner; other values report unavailable.
+# An invalid value disables corrections and names the key; nothing is
+# substituted. The file is re-read while a run is in progress: setting
+# enabled to false cancels the pending diagnosis and keeps the counters.
+# Corrections are fixed templates; the model's wording never reaches a
+# stage. Only claude confirms steering answers by turn order (and OpenCode
+# by message id); codex, cline and kimi accept steering without a
+# confirmed answer. See README.md "Supervision" for recovery, including
+# `supervisor.py note-resolve` for an uncertain retained note.
+# supervision.enabled false
+# supervision.runner claude
+# supervision.model sonnet
+# supervision.effort medium
+# supervision.max_interventions 2
+# supervision.steering_timeout_seconds 120
+# supervision.stage_time_seconds 1800
+# supervision.stage_tokens 0
+# supervision.call_timeout_seconds 300
+# supervision.max_calls_per_run 8
+# supervision.call_max_cost_usd 0.5
 
 # Self-hosted Aider runner using an OpenAI-compatible endpoint.
 # Configure → Configure Aider / self hosting: enter Base URL and masked API key.

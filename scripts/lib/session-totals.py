@@ -41,7 +41,14 @@ def update(workflow, source=None, origin=''):
                     origin = '#'.join((workflow / 'origin').read_text(encoding="utf-8").splitlines()[0].split()[:2])
                 except (OSError, IndexError):
                     origin = '#'
-            identity = [source.name, hashlib.sha256(source.read_bytes()).hexdigest(), origin]
+            try:
+                content = source.read_bytes()
+            except FileNotFoundError:
+                # A completed/resumed workflow may no longer have its source.
+                # Keep the existing session identity and accumulated metrics.
+                pass
+            else:
+                identity = [source.name, hashlib.sha256(content).hexdigest(), origin]
         metrics = workflow / 'metrics'
         names = sorted(p.name for p in metrics.glob('*.json'))
         if saved is None or (identity is not None and saved['identity'] != identity):

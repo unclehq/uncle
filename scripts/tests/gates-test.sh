@@ -176,8 +176,9 @@ EOF
     git -C "$REPO" config user.email test@example.com
     git -C "$REPO" config user.name Test
     git -C "$REPO" config commit.gpgsign false
+    git -C "$REPO" config tag.gpgsign false
     git -C "$REPO" add -A
-    git -C "$REPO" commit -qm baseline
+    git -C "$REPO" -c commit.gpgsign=false -c tag.gpgsign=false commit --no-gpg-sign -qm baseline
 
     # Stub agent: one JSON result event, plus whatever artifact the prompt
     # implies. FAKE_IMPL is the per-case body of the implementation stage.
@@ -453,9 +454,13 @@ if [[ "${UNCLE_TEST_FIXTURES_ONLY:-0}" == 1 ]]; then return 0; fi
 # The diff gate
 # ---------------------------------------------------------------------------
 
-if [[ "${UNCLE_TEST_COMPLETION_ONLY:-0}" != 1 ]]; then
 
-# Implementation no longer runs straight into verification.
+# Independent suites plan-executability-test.py and plan-recovery-test.sh are
+# run by their normal suite runners, never nested here.
+# Each group owns its fixtures; resumes within a group remain sequential.
+partial_impl="printf '#!/bin/sh\necho goodbye\n' > app/main.sh; sed -i.bak 's/IMPLEMENTED/INCOMPLETE/' IMPLEMENTATION_NOTES.md; rm IMPLEMENTATION_NOTES.md.bak; echo attempt >> .uncle/workflow/attempts"
+
+gate_group_1() {
 new_case implement-stops-for-review
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
@@ -588,6 +593,10 @@ expect_state "WAIT_IMPLEMENT_APPROVAL"
 
 # The driver runs the commands itself. The agent's report says everything
 # passed; the commands say otherwise, and the gate reports the commands.
+
+}
+
+gate_group_2() {
 new_case regression-is-found-despite-the-report
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
@@ -686,6 +695,10 @@ expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "unverified account"
 
 # The baseline is taken from the approved BASELINE_REPORT.md, after its gate
 # and before any code changes.
+
+}
+
+gate_group_3() {
 new_case baseline-is-captured-at-plan
 set_state PLAN
 run_driver
@@ -718,6 +731,10 @@ expect_no_file ".uncle/workflow/green-check.baseline.tsv"
 # to compare against, and the audit verdict was previously not classified at
 # all.
 
+
+}
+
+gate_group_4() {
 new_stagegate_case sg-implement-stops-for-review
 stagegate_agent
 set_state IMPLEMENT
@@ -805,6 +822,10 @@ for result in BLOCKED 'NOT RUN'; do
 done
 
 # A malformed review cannot pass or trigger unbounded implementation work.
+
+}
+
+gate_group_5() {
 new_stagegate_case sg-test-review-malformed
 stagegate_agent
 set_state IMPLEMENT
@@ -854,6 +875,10 @@ if [[ "$(grep -c '^TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 
 fi
 
 # A persistent defect is bounded across restarts, not just within one process.
+
+}
+
+gate_group_6() {
 new_stagegate_case sg-repair-limit
 stagegate_agent
 set_state IMPLEMENT
@@ -988,6 +1013,10 @@ expect_no_file .uncle/workflow/implemented
 # the original review is preserved. The blocking
 # form is covered by the enforced review-cache cases below and the budget
 # unit tests.
+
+}
+
+gate_group_7() {
 for artifact in IMPLEMENTATION_NOTES AUTOMATED_TEST_REPORT VERIFICATION_REPORT DEFECTS FINAL_AUDIT; do
     new_stagegate_case "sg-budget-$artifact"
     stagegate_agent
@@ -1019,6 +1048,10 @@ for artifact in IMPLEMENTATION_NOTES CHANGE_TEST_REPORT VERIFICATION_REPORT; do
     expect_state COMPLETE
 done
 
+
+}
+
+gate_group_8() {
 new_case change-budget-background-checklist
 green_baseline 0 'bash app/test.sh'
 printf 'write a base checklist\n' > "$REPO/prompts/change/manual-checklist-base.md"
@@ -1072,6 +1105,10 @@ expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
 # Budget failures reuse the finished review, not a new full reviewer run.
 # The pause being tested here is the enforced path; by default an overrun is
 # advisory and the run would simply continue.
+
+}
+
+gate_group_9() {
 new_stagegate_case sg-review-cache
 printf 'requirements\n' > "$REPO/REQUIREMENTS.md"
 printf 'plan\n' > "$REPO/PROJECT_PLAN.md"
@@ -1142,9 +1179,12 @@ expect_state PLAN
 expect_out 'missing or empty source file: data.csv'
 expect_not_out 'Launching agent'
 
-fi
 
 # A partial source edit is not acceptance delivery, even with a successful CLI.
+
+}
+
+gate_group_10() {
 new_case partial-delivery
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
@@ -1181,6 +1221,10 @@ expect_status 0
 expect_state WAIT_IMPLEMENT_APPROVAL
 expect_in_file '.uncle/workflow/change.diff' 'new implementation'
 
+
+}
+
+gate_group_11() {
 for resumed in WAIT_IMPLEMENT_APPROVAL CHECKLIST EXECUTE_CHECKLIST FINAL_AUDIT; do
     new_case "partial-resume-$resumed"
     green_baseline 0 'bash app/test.sh'
@@ -1195,6 +1239,10 @@ done
 
 # A recorded waiver must survive errexit, skip further repairs, and survive
 # every later state check without turning the rejected row into IMPLEMENTED.
+
+}
+
+gate_group_12() {
 for exhausted in 0 1; do
     new_case "waiver-continues-$exhausted"
     green_baseline 0 'bash app/test.sh'
@@ -1235,6 +1283,10 @@ for exhausted in 0 1; do
 
 done
 
+
+}
+
+gate_group_13() {
 for invalid in foreign missing structural; do
     new_case "waiver-rejects-$invalid"
     green_baseline 0 'bash app/test.sh'
@@ -1256,18 +1308,9 @@ for invalid in foreign missing structural; do
     expect_out 'Incomplete acceptance delivery; returning to IMPLEMENT'
 done
 
-if [[ "${UNCLE_TEST_COMPLETION_ONLY:-0}" != 1 ]]; then
-    python3 -B "$ROOT/scripts/tests/plan-executability-test.py" -q || fail 'plan executability contracts'
-    bash "$ROOT/scripts/tests/plan-recovery-test.sh" || fail 'plan recovery workflows'
-fi
+}
 
-if [[ "$FAILED" -ne 0 ]]; then
-    echo "gates-test.sh: $FAILED of $COUNT checks failed"
-    exit 1
-fi
-
-echo "gates-test.sh: $COUNT checks passed"
-
+gate_group_14() {
 # --- `local` inside the top-level state machine ----------------------------
 # Each driver's state machine is a `while true; do` loop at column 0, not a
 # function, so a `local` declaration inside it is a runtime error -- and
@@ -1286,3 +1329,16 @@ for driver in "$ROOT/scripts/stagegate.sh" "$ROOT/scripts/change-workflow.sh"; d
     ' "$driver" || exit 1
 done
 echo 'gates-test.sh: no `local` in the drivers state machines'
+
+}
+
+if [[ "${1:-}" == --group ]]; then
+    case "${2:-}" in
+        1|2|3|4|5|6|7|8|9|10|11|12|13|14) "gate_group_$2" ;;
+        *) echo 'Invalid gate group' >&2; exit 2 ;;
+    esac
+    echo "gates group $2: $COUNT checks, $FAILED failures"
+    [[ "$FAILED" == 0 ]]
+else
+    python3 -B "$ROOT/scripts/lib/gate_suites.py" "$ROOT/scripts/tests/gates-test.sh"
+fi

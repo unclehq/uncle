@@ -3,12 +3,21 @@ import os
 import signal
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 
-def cleanup_directory(directory, timeout=3):
-    """Allow terminated Windows descendants to release inherited file handles."""
+def cleanup_directory(directory, timeout=30):
+    """Allow terminated Windows descendants to release inherited file handles.
+
+    CI hosts and malware scanners hold new files open for seconds, so the
+    window is generous. A lock that outlives it still must not mask the error
+    the cleanup runs under: with another exception in flight, the failure is
+    reported and the temporary directory is left for the OS to reclaim.
+    Standalone calls keep raising so persistent cleanup errors stay visible.
+    """
+    in_flight = sys.exc_info()[1]
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -18,7 +27,13 @@ def cleanup_directory(directory, timeout=3):
             # TerminateProcess is asynchronous; taskkill returning and the
             # direct child exiting do not imply every descendant closed its
             # handles. Retry only sharing/lock violations, never other errors.
-            if getattr(error, 'winerror', None) not in (32, 33) or time.monotonic() >= deadline:
+            if getattr(error, 'winerror', None) not in (32, 33):
+                raise
+            if time.monotonic() >= deadline:
+                if in_flight is not None:
+                    print('cleanup_directory: leaving %s behind: %s' % (directory.name, error),
+                          file=sys.stderr)
+                    return
                 raise
             time.sleep(0.05)
 
@@ -51,20 +66,80 @@ def launch_command(command):
     return command
 
 
+def timed_popen(command, **kwargs):
+    """Launch a process with optional timing; preserve caller process options."""
+    started, tick = time.time(), time.monotonic()
+    process = subprocess.Popen(command, **kwargs)
+    try:
+        import uuid
+        from build_timing import event
+        name = Path(str(command[0])).name
+        identity = uuid.uuid4().hex
+        process._uncle_timing = (name, started, tick, identity)
+        event('process_start', name, started, 0, child_pid=process.pid,
+              span_id=identity, workflow_state=os.environ.get('UNCLE_TIMING_STAGE', ''))
+    except Exception:
+        pass  # Optional telemetry must not strand a successfully launched child.
+    return process
+
+
 def group_options():
     if os.name == 'nt':
         return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
     return {'start_new_session': True}
 
 
-def start_check(command, **kwargs):
+# A POSIX child that outlives its parent is otherwise unowned: this shim is
+# the session leader of the check, and kills its whole group when the parent
+# that started it disappears. Windows checks get the same from the Job's
+# kill-on-close limit.
+_PARENT_WATCH = (
+    'import os, signal, subprocess, sys, threading, time\n'
+    'parent = os.getppid()\n'
+    'child = subprocess.Popen(sys.argv[1:])\n'
+    'def watch():\n'
+    '    while True:\n'
+    '        time.sleep(0.2)\n'
+    '        if os.getppid() != parent:\n'
+    '            os.killpg(os.getpgid(0), signal.SIGKILL)\n'
+    'threading.Thread(target=watch, daemon=True).start()\n'
+    'sys.exit(child.wait())\n')
+
+
+def start_check(command, prompt=None, **kwargs):
+    """Start `command` as its own owned tree. `prompt` (bytes) is written to
+    its stdin and then closed; without one stdin is /dev/null as before."""
     if os.name == 'nt':
         from windows_job import start
-        return start(command, **kwargs, **group_options())
-    return subprocess.Popen(command, stdin=subprocess.DEVNULL, **kwargs, **group_options())
+        return start(command, prompt=prompt, **kwargs, **group_options())
+    import sys
+    wrapped = [sys.executable, '-B', '-c', _PARENT_WATCH, *command]
+    if prompt is None:
+        return subprocess.Popen(wrapped, stdin=subprocess.DEVNULL, **kwargs, **group_options())
+    child = subprocess.Popen(wrapped, stdin=subprocess.PIPE, **kwargs, **group_options())
+    try:
+        child.stdin.write(prompt)
+    except (BrokenPipeError, OSError):
+        pass
+    child.stdin.close()
+    child.stdin = None
+    return child
 
 
 def finish_check(process):
+    timing = getattr(process, '_uncle_timing', None)
+    # Only track_process's explicit record is timing data. Mock/proxy objects
+    # can synthesize attributes even when no record was ever attached.
+    if isinstance(timing, tuple) and len(timing) == 4:
+        process._uncle_timing = None
+        try:
+            from build_timing import event
+            name, started, tick, identity = timing
+            event('process', name, started, time.monotonic() - tick,
+                  process.returncode, child_pid=process.pid, span_id=identity,
+                  workflow_state=os.environ.get('UNCLE_TIMING_STAGE', ''))
+        except Exception:
+            pass  # Observability must never prevent Job Object cleanup.
     job = getattr(process, '_uncle_job', None)
     if job is not None:
         try:

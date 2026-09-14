@@ -21,7 +21,7 @@
 # keeps working until it is next saved.
 
 UNCLE_REVIEWER_STAGES=" adversarial-review test-review manual-checklist final-audit "
-UNCLE_DEFAULT_EFFORT="medium"
+UNCLE_DEFAULT_EFFORT="low"
 UNCLE_DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
 UNCLE_DEFAULT_CLINE_USAGE_MODEL="deepseek/deepseek-v4-flash"
 # Free models cost nothing under either billing, so they are offered in both
@@ -165,7 +165,13 @@ uncle_stage_effort() {
     case "$stage" in implementation-step-*) stage=implementation ;; esac
     v="$(uncle_config_get "$stage.effort")"
     [[ -n "$v" ]] || v="$(uncle_config_get effort)"
-    printf '%s' "${v:-$UNCLE_DEFAULT_EFFORT}"
+    if [[ -z "$v" ]]; then
+        case "$stage" in
+            adversarial-review|project-plan|implementation) v=medium ;;
+            *) v="$UNCLE_DEFAULT_EFFORT" ;;
+        esac
+    fi
+    printf '%s' "$v"
 }
 
 # Cline and self-hosted stages use explicit models; other runners have their own default,

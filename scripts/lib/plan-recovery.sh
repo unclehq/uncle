@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+
+# gate_read VAR: the supervision-aware read (receipt attribution, gate close)
+# when the driver loaded supervision.sh; the plain read otherwise.
+if ! declare -f gate_read > /dev/null; then gate_read() { IFS= read -r "$1"; }; fi
 # Shared orchestration; all source-writing calls remain in the existing launchers.
 plan_tool() { python3 "$ROOT/scripts/lib/plan-executability.py" "$@"; }
 
@@ -133,7 +137,7 @@ plan_decision() {
     else
         printf 'Record an authority answer, or leave empty to keep pending: '
     fi
-    IFS= read -r answer || return 1
+    gate_read answer || return 1
     [[ -n "$answer" ]] || return 1
     printf '%s' "$answer" | python3 -c 'import json,sys,os; p=".uncle/workflow/authority-answer.json"; t=p+".tmp"; json.dump({"source":"workflow gate input", "answer":sys.stdin.read()},open(t,"w")); os.replace(t,p)'
     rm -f "$APPROVAL_DIR/PLAN_EXECUTABILITY.sha256"
@@ -188,7 +192,7 @@ plan_before_write() {
     if [[ "$status" == 25 ]]; then
         local retry_answer
         gate_prompt 'The previous implementation was interrupted. Retry from the current files? [Y/N]: '
-        IFS= read -r retry_answer || return 25
+        gate_read retry_answer || return 25
         case "$retry_answer" in
             y|Y) plan_tool retry || return 1
                  status=0
@@ -203,7 +207,7 @@ plan_before_write() {
     if [[ "$status" == 20 ]] && grep -q '"phase": "WAIT_LIVE"' "$STATE_DIR/plan-recovery.json"; then
         local retry_answer
         gate_prompt 'Live prerequisites are unchanged. Explicitly retry approved verification? [Y/N]: '
-        IFS= read -r retry_answer || return 20
+        gate_read retry_answer || return 20
         case "$retry_answer" in
             y|Y) plan_tool live-retry || return 1
                  status=0
@@ -248,7 +252,7 @@ plan_after_write() {
     if [[ "$status" == 24 ]]; then
         local retry_answer
         gate_prompt 'Implementation delivery is incomplete. Retry the approved implementation? [Y/N]: '
-        IFS= read -r retry_answer || return 24
+        gate_read retry_answer || return 24
         case "$retry_answer" in
             y|Y) plan_tool retry || return 1; return 27 ;;
             *) echo 'Implementation remains incomplete; resume to choose retry.'; return 24 ;;

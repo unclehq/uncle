@@ -77,7 +77,12 @@ if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/pla
     [[ "$UNATTENDED" != 1 ]] || driver_args+=(--unattended)
     exec python3 "$ROOT/scripts/lib/plan-executability.py" lock-run "${driver_args[@]}"
 fi
+python3 "$ROOT/scripts/lib/workflow_family.py" app
+unset UNCLE_NEW_WORKFLOW
+. "$ROOT/scripts/lib/project-git.sh"
+uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
+. "$ROOT/scripts/lib/state.sh"
 
 STATE_DIR=".uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
@@ -189,6 +194,19 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/performance.sh"
 
 . "$ROOT/scripts/lib/sha256.sh"
+. "$ROOT/scripts/lib/triage.sh"
+
+# One EXIT hook for the whole run: cancel speculation, then hand the exit
+# status to the triage hook, which writes the failure bundle for anything
+# that is not a decline, a cancel, or a stop a person chose. Installed here
+# so a failure before any stage starts (lock, origin, prerequisites) is
+# bundled too; cancel_speculation is defined further down.
+on_exit() {
+    local rc=$?
+    if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
+    triage_on_exit "$rc"
+}
+trap on_exit EXIT
 
 # A repair always comes back through the independent checks and human diff
 # gate. Bound retries across restarts so an unfixable defect cannot spin.
@@ -287,7 +305,7 @@ preflight_blocked_menu() {
     local choice
     while :; do
         gate_prompt "Blocked prerequisites: [r]eview, [p]rovide, [s]kip, [d]ecline? "
-        if ! IFS= read -r choice; then
+        if ! { if declare -f gate_read > /dev/null; then gate_read choice; else IFS= read -r choice; fi; }; then
             echo "No answer at the preflight gate; the run remains pending."
             exit 1
         fi
@@ -539,6 +557,10 @@ acceptance_transition() {
     python3 "$ROOT/scripts/lib/repair-acceptance.py" "$report" || return 1
     result="$(acceptance_result "$report" "${3:-}")"
     case "$result" in
+        REPAIR|BLOCKED-SETUP|BLOCKED-IMPOSSIBLE)
+            supervision_validation_failed acceptance "$report" "Acceptance $result: $report" 0 ;;
+    esac
+    case "$result" in
         PASS) set_state "$next" ;;
         REPAIR)
             printf '%s\n' "$report" > "$STATE_DIR/repair-source"
@@ -583,6 +605,7 @@ acceptance_transition() {
             # shellcheck disable=SC2086
             elif ! record_waiver "$report" $ids; then
                 echo "The current stage remains pending; no acceptance pass was recorded."
+                triage_stop_reason "$STATE_DIR" human
                 exit 1
             fi
             acceptance_after_waiver "$report" "$next"
@@ -679,6 +702,7 @@ lower() {
 # terminal, so the text is printed separately. Escapes are emitted only for a
 # real terminal: piped captures and TERM=dumb stay free of control bytes.
 gate_prompt() {
+    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$1"; fi
     if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
         printf '%s%s%s' $'\033[1m' "$1" $'\033[0m'
     else
@@ -840,15 +864,12 @@ set_state() {
 }
 
 get_state() {
-    if [[ -s "$STATE_FILE" ]]; then
-        cat "$STATE_FILE"
-    else
-        echo "DERIVE_BRIEF"
-    fi
+    state_read "$STATE_FILE" DERIVE_BRIEF
 }
 
 require_file() {
     if [[ ! -s "$1" ]]; then
+        supervision_validation_failed require_file "$1" "Required file is missing or empty: $1"
         echo "Required file is missing or empty: $1"
         exit 1
     fi
@@ -858,6 +879,7 @@ require_file() {
 # tool, not a refusal to work.
 require_artifact() {
     if [[ ! -s "$1" ]]; then
+        supervision_validation_failed require_artifact "$1" "Stage produced no artifact: $1"
         echo
         echo "Stage produced no artifact: $1"
         echo "Check the log for '[tool ERROR]' lines — a denied Write is the"
@@ -886,8 +908,28 @@ verify_approval() {
     if [[ "$expected" != "$actual" ]]; then
         echo "$file changed after approval."
         echo "Review and approve it again."
+        triage_reopen_gate "$name"
         exit 1
     fi
+}
+
+# An approved document that changed -- by hand, or by a triage action the
+# operator selected -- sends the run back to the gate that approved it, so
+# the new bytes are read and approved by a keystroke. Nothing is written
+# under approvals/ here; the stale digest stays until the operator answers.
+# A document with no gate of its own keeps the plain exit 1 above.
+triage_reopen_gate() {
+    local gate=""
+    case "$1" in
+        REQUIREMENTS_INTERPRETATION) gate=WAIT_REQUIREMENTS_APPROVAL ;;
+        PROJECT_PLAN) gate=WAIT_PLAN_APPROVAL ;;
+        ADVERSARIAL_REVIEW) gate=WAIT_REVIEW_ACKNOWLEDGEMENT ;;
+        UPDATED_PROJECT_PLAN) gate=WAIT_UPDATED_PLAN_APPROVAL ;;
+    esac
+    [[ -n "$gate" ]] || return 0
+    set_state "$gate"
+    echo "Reopening $gate: re-run the driver to review and approve what is there now."
+    exit 0
 }
 
 review_and_approve() {
@@ -909,7 +951,7 @@ review_and_approve() {
     if [[ "${UNATTENDED:-0}" == 1 ]]; then
         before="$(hash_file "$file")"
         printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
-        printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > "$APPROVAL_DIR/${name}.approved-by"
+        printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${name}.approved-by"
         record_unattended_gate "$name" "$wording $file without human review"
         echo "Unattended: recorded $wording of $file with no human review."
         if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
@@ -933,23 +975,15 @@ review_and_approve() {
         echo "  code $file"
         echo
 
-        # Closed stdin here would abort the driver under `set -e` before the
-        # Y/N prompt, so EOF is routed to the same decline path as any other
-        # non-answer.
-        if ! read -r -p "Press ENTER after reviewing the file..."; then
-            if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 1; fi
-            echo
-            echo "Gate not accepted. Workflow paused."
-            exit 0
-        fi
-
-        echo
+        UNCLE_GATE_FILE="$file"
         gate_prompt "Ready to $wording $file? [Y/N] "
+        UNCLE_GATE_FILE=""
         # IFS= keeps surrounding whitespace, so " y" is not an approval.
         # `|| true` keeps EOF from tripping `set -e` before the decline path
-        # runs.
+        # runs. The wrapper attributes the line (human, or a supervisor
+        # receipt) and closes the gate; the answer is validated as before.
         response=""
-        IFS= read -r response || true
+        if declare -f gate_read > /dev/null; then gate_read response || true; else IFS= read -r response || true; fi
 
         case "$response" in
             y|Y) ;;
@@ -979,7 +1013,7 @@ review_and_approve() {
     # what gets recorded. Re-hashing here would attest to bytes that could have
     # landed after the check.
     printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
-    printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > "$APPROVAL_DIR/${name}.approved-by"
+    printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${name}.approved-by"
     echo "Recorded approval for $file"
     if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
 }
@@ -1068,6 +1102,8 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
+        supervision_prompt "$effective_prompt" "$log_name" "$LOG_DIR/${log_name}.jsonl"
+        effective_prompt="$SUPERVISION_PROMPT"
         local -a model_args=()
         [[ -n "$model" ]] && model_args=(--model "$model")
         local started="$SECONDS"
@@ -1081,10 +1117,11 @@ run_claude() {
             --allowedTools "$tools" \
             < "$effective_prompt" \
             2>&1 \
-            | tee "$LOG_DIR/${log_name}.jsonl" \
+            | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.jsonl" \
             | format_claude_stream || status=$?
         perf_record agent "$log_name" "$((SECONDS-started))" "$status" \
             "$LOG_DIR/${log_name}.jsonl" "$cmd" "$model" "$effort"
+        supervision_stage_end "$log_name" "$status" "$LOG_DIR/${log_name}.jsonl"
 
         if [[ "$status" -ne 0 ]]; then
             local log="$LOG_DIR/${log_name}.jsonl"
@@ -1098,6 +1135,7 @@ run_claude() {
                     continue
                 fi
                 echo
+                triage_stop_reason "$STATE_DIR" human
             fi
             echo "Agent ($cmd) exited with status $status."
             echo "Raw event log: $log"
@@ -1153,6 +1191,10 @@ run_codex_review() {
         python3 "$ROOT/scripts/lib/test-review-context.py" "$PWD" "$STATE_DIR" >> "$evidence_prompt" || return 1
         prompt_file="$evidence_prompt"
     fi
+    if [[ "$log_name" != plan-executability ]]; then
+        supervision_prompt "$prompt_file" "$log_name" "$LOG_DIR/${log_name}.log"
+        prompt_file="$SUPERVISION_PROMPT"
+    fi
 
     local review_key
     review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"
@@ -1180,9 +1222,10 @@ run_codex_review() {
             "${model_args[@]+"${model_args[@]}"}" \
             --output-last-message "$output_file" \
             "$(cat "$prompt_file")" \
-            < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" || status=$?
+            < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" || status=$?
         perf_record reviewer "$log_name" "$((SECONDS-started))" "$status" \
             "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
+        supervision_stage_end "$log_name" "$status" "$LOG_DIR/${log_name}.log"
 
         if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
             echo
@@ -1192,7 +1235,7 @@ run_codex_review() {
 
         [[ "$status" != 0 ]] || break
         gate_prompt "Reviewer $log_name failed (exit $status). Retry this reviewer stage? [Y/N]"
-        if ! IFS= read -r retry_answer; then return "$status"; fi
+        if ! { if declare -f gate_read > /dev/null; then gate_read retry_answer; else IFS= read -r retry_answer; fi; }; then return "$status"; fi
         case "$retry_answer" in y|Y) status=0 ;; *) return "$status" ;; esac
     done
     require_file "$output_file"
@@ -1428,7 +1471,7 @@ cancel_speculation() {
     spec_stage=""
 }
 
-trap cancel_speculation EXIT
+trap on_exit EXIT
 
 speculate() {
     local stage="$1"
@@ -1508,8 +1551,13 @@ run_gated_stage() {
 python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" REQUIREMENTS.md \
     "${STAGEGATE_ORIGIN_REPO:-}#${STAGEGATE_ORIGIN_ISSUE:-}" || true
 
+# A stop reason belongs to the run that recorded it. Left in place, a
+# previous "human" stop would silence the triage bundle on this run's failure.
+rm -f "$STATE_DIR/stop-reason"
+
 while true; do
     state="$(get_state)"
+    if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi
 
     echo
     echo "Current workflow state: $state"
@@ -1900,7 +1948,7 @@ while true; do
                 case "$plan_status" in 22) ;; 10) continue ;; *) exit 1 ;; esac
             fi
             if [[ "$plan_status" != 22 ]]; then
-                ensure_repair_capacity "$repair_count" || exit 1
+                ensure_repair_capacity "$repair_count" || { triage_stop_reason "$STATE_DIR" human; exit 1; }
                 repair_count=$((repair_count + 1))
                 plan_before_write "repair-$repair_count" || plan_status=$?
                 case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac
@@ -2140,6 +2188,7 @@ while true; do
                 echo "Waived checks were not performed. They are not passes, and this"
                 echo "summary is the only place that says so out loud."
             fi
+            triage_print_actions "$STATE_DIR"
 
             exit 0
             ;;

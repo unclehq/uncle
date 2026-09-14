@@ -181,7 +181,7 @@ REPO="${T_REPO:-repo}"
 ISSUE_NUM="${T_ISSUE:-42}"
 USED_GH="${T_USED_GH:-1}"
 case "$1" in
-    confirm) confirm_and_run_workflow ;;
+    confirm) run_issue_workflow ;;
     seed_gate)
         check_origin_or_refuse
         if seed_is_current; then echo "SEED_SKIPPED"; else echo "SEED_WRITE"; fi
@@ -302,36 +302,12 @@ expect_close_count() {
 }
 
 # ---------------------------------------------------------------------------
-# Confirmation gate (B-01, B-02, B-03; §1.5 no TTY precondition)
+# Issue launch starts directly, including with closed stdin.
 # ---------------------------------------------------------------------------
-
-new_case decline-wrong-word
-run_runner confirm "nope\n"
+new_case direct-launch-eof
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY"
 expect_status 0
-expect_out "Type RUN exactly to start the change workflow:"
-expect_out "Not confirmed."
-expect_out "Run: ./scripts/change-workflow.sh"
-expect_driver_not_run
-expect_not_closed
-
-new_case decline-empty-enter
-run_runner confirm "\n"
-expect_status 0
-expect_out "Not confirmed."
-expect_driver_not_run
-
-new_case decline-eof
-run_runner confirm ""
-expect_status 0
-expect_out "Not confirmed."
-expect_driver_not_run
-
-# The prompt is reached over a pipe, with no TTY anywhere: the approved
-# compatibility break (CHANGE_SPEC §8) rather than an early decline.
-new_case piped-stdin-proceeds
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY"
-expect_status 0
-expect_out "Type RUN exactly to start the change workflow:"
+expect_out "Starting the change workflow from this issue."
 expect_driver_ran
 expect_not_closed
 
@@ -340,49 +316,49 @@ expect_not_closed
 # ---------------------------------------------------------------------------
 
 new_case ready-closes
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY"
 expect_status 0
 expect_not_closed
 
 new_case ready-with-non-blocking-closes
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY WITH NON-BLOCKING ISSUES"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY WITH NON-BLOCKING ISSUES"
 expect_status 0
 expect_not_closed
 
 new_case not-ready-stays-open
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="NOT READY"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="NOT READY"
 expect_status 0
 expect_not_closed
 
 new_case unknown-verdict-stays-open
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="Rerun until READY"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="Rerun until READY"
 expect_status 0
 expect_not_closed
 
 new_case missing-verdict-file
-run_runner confirm "RUN\n"
+run_runner confirm ""
 expect_status 0
 expect_not_closed
 
 new_case malformed-verdict-file
 printf 'garbage\n' > "$REPO/.uncle/workflow/audit-verdict"
-run_runner confirm "RUN\n"
+run_runner confirm ""
 expect_status 0
 expect_not_closed
 
 new_case run-id-mismatch
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_RUN_ID="some-other-run"
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_RUN_ID="some-other-run"
 expect_status 0
 expect_not_closed
 
 new_case origin-mismatch-at-close
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" \
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" \
     FAKE_DRIVER_ORIGIN="other/repo	99"
 expect_status 0
 expect_not_closed
 
 new_case audit-hash-mismatch
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_TAMPER=1
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_TAMPER=1
 expect_status 0
 expect_not_closed
 
@@ -392,7 +368,7 @@ expect_not_closed
 
 for rc in 1 7 130; do
     new_case "driver-exit-$rc"
-    run_runner confirm "RUN\n" FAKE_DRIVER_EXIT="$rc" FAKE_DRIVER_VERDICT_TEXT="READY"
+    run_runner confirm "" FAKE_DRIVER_EXIT="$rc" FAKE_DRIVER_VERDICT_TEXT="READY"
     expect_status "$rc"
     expect_out "change-workflow.sh exited $rc; owner/repo#42 remains open."
     expect_not_closed
@@ -403,12 +379,12 @@ done
 # ---------------------------------------------------------------------------
 
 new_case curl-fallback-skips-close
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" T_USED_GH=0
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" T_USED_GH=0
 expect_status 0
 expect_not_closed
 
 new_case gh-unauthenticated-skips-close
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_AUTH_RC=1
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_AUTH_RC=1
 expect_status 0
 expect_not_closed
 
@@ -425,7 +401,7 @@ else
 fi
 
 new_case gh-close-fails
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_CLOSE_RC=1
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_GH_CLOSE_RC=1
 expect_status 0
 expect_not_closed
 
@@ -532,6 +508,10 @@ printf 'other/repo\t99\n' > "$REPO/.uncle/workflow/origin"
 run_driver STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 0
 expect_out "Change workflow complete."
+# The support prompt belongs to the TUI only; a non-TUI completion must never
+# print it (B-7).
+expect_not_out "github.com/unclehq/uncle"
+expect_not_out "support Uncle"
 
 # ---------------------------------------------------------------------------
 # FINAL_AUDIT freshness and verdict record (AR-002)
@@ -677,7 +657,7 @@ expect_state "99:IMPLEMENT"
 new_case git-completion-defers-close
 setup_audit_stage READY
 git -C "$REPO" init -q
-git -C "$REPO" -c commit.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --allow-empty -qm initial
+git -C "$REPO" -c commit.gpgsign=false -c tag.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --no-gpg-sign --allow-empty -qm initial
 printf '42:FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
 printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1
@@ -690,7 +670,7 @@ for setting in WORKFLOW_CLOSE_ISSUE=0 UNATTENDED=1; do
     new_case "git-disabled-$setting"
     setup_audit_stage READY
     git -C "$REPO" init -q
-    git -C "$REPO" -c commit.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --allow-empty -qm initial
+    git -C "$REPO" -c commit.gpgsign=false -c tag.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --no-gpg-sign --allow-empty -qm initial
     printf '42:FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
     printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
     run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" "$setting"
@@ -703,7 +683,7 @@ done
 
 new_case git-wrapper-never-closes
 mkdir "$REPO/.git"
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT=READY
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT=READY
 expect_status 0
 expect_not_closed
 expect_no_marker
@@ -833,12 +813,12 @@ expect_no_marker
 # ---------------------------------------------------------------------------
 
 new_case no-double-close-after-driver
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_CLOSED_MARKER=1
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" FAKE_DRIVER_CLOSED_MARKER=1
 expect_status 0
 expect_not_closed
 
 new_case stale-marker-ignored
-run_runner confirm "RUN\n" FAKE_DRIVER_VERDICT_TEXT="READY" \
+run_runner confirm "" FAKE_DRIVER_VERDICT_TEXT="READY" \
     FAKE_DRIVER_MARKER_TEXT="other-run	other/repo	99"
 expect_status 0
 expect_not_closed
@@ -1015,17 +995,7 @@ class HandoffTests(unittest.TestCase):
                         GIT_CONFIG_NOSYSTEM='1')
         for key in ('STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE', 'UNCLE_PROJECT_ROOT'):
             self.env.pop(key, None)
-        self.exe('git', '''#!/usr/bin/env python3
-import os, subprocess, sys
-args = sys.argv[1:]
-if args[:2] == ['remote', 'get-url']:
-    print('https://github.com/' + ('forker/repo.git' if os.environ.get('FORK') and args[-1] == 'origin' else 'owner/repo.git'))
-    sys.exit(0)
-if os.environ.get('CRASH_GIT') == args[0]:
-    subprocess.run([os.environ['REAL_GIT']] + args)
-    sys.exit(70)
-os.execv(os.environ['REAL_GIT'], ['git'] + args)
-''')
+        self.exe('git', '#!/usr/bin/env bash\nif [[ "$1" == remote && "${2:-}" == get-url ]]; then\n    if [[ -n "${FORK:-}" && "${@: -1}" == origin ]]; then\n        echo \'https://github.com/forker/repo.git\'\n    else\n        echo \'https://github.com/owner/repo.git\'\n    fi\n    exit 0\nfi\nif [[ "${CRASH_GIT:-}" == "$1" ]]; then\n    "$REAL_GIT" "$@"\n    exit 70\nfi\nexec "$REAL_GIT" "$@"\n')
         self.exe('gh', '''#!/usr/bin/env python3
 import json, os, pathlib, subprocess, sys
 args = sys.argv[1:]
@@ -1072,11 +1042,12 @@ elif args[:2] == ['pr', 'create']:
         self.git('config', 'user.name', 'Fixture')
         self.git('config', 'user.email', 'fixture@example.test')
         self.git('config', 'commit.gpgsign', 'false')
+        self.git('config', 'tag.gpgsign', 'false')
         (self.repo / '.gitignore').write_text('.uncle/workflow/\n')
         (self.repo / 'source.txt').write_text('before\n')
         (self.repo / 'CHANGE_REQUEST.md').write_text('## Summary\n\nFix café 日本語\n')
         self.git('add', '.')
-        self.git('commit', '-qm', 'initial')
+        self.git('commit', '--no-gpg-sign', '-qm', 'initial')
         self.original = self.git('rev-parse', 'HEAD')
         self.bare = self.root / 'remote.git'
         subprocess.run([REAL_GIT, 'init', '--bare', '-q', str(self.bare)], check=True, env=self.env)
@@ -1094,12 +1065,24 @@ elif args[:2] == ['pr', 'create']:
         path.chmod(0o755)
 
     def git(self, *args):
-        return subprocess.check_output([REAL_GIT, *args], cwd=self.repo, env=self.env, stderr=subprocess.PIPE).decode().strip()
+        return subprocess.check_output([REAL_GIT, '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', *args], cwd=self.repo, env=self.env, stderr=subprocess.PIPE).decode().strip()
 
     def engine(self, action, text='', **env):
-        return subprocess.run(['bash', '-c', '. "$1"; change_pr_engine "$2"', 'test', str(LIB), action],
+        pending = env.pop('FIXTURE_LEAVE_COMMIT_PENDING', False)
+        result = subprocess.run(['bash', '-c', '. "$1"; change_pr_engine "$2"', 'test', str(LIB), action],
                               cwd=self.repo, env=dict(self.env, **env), input=text, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        # Simulate the operator in this disposable fixture. Production never
+        # executes this command; it waits for the user to commit and confirm.
+        if not pending and 'Commit needs your help.' in result.stdout and 'No answer received' in result.stdout:
+            command = result.stdout.split('then run:\n', 1)[1].split('\nReturn here', 1)[0]
+            self.assertIn('git commit --no-gpg-sign', command)
+            self.ok(subprocess.run(['sh', '-c', command], cwd=self.repo, env=self.env,
+                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT))
+            resumed = self.engine(action, **env)
+            resumed.stdout = result.stdout + resumed.stdout
+            return resumed
+        return result
 
     def ok(self, result):
         self.assertEqual(result.returncode, 0, result.stdout)
@@ -1203,7 +1186,7 @@ elif args[:2] == ['pr', 'create']:
         self.assertEqual(self.journal()['phase'], 'created')
         self.assertEqual(len(self.creates()), 1)
         j = self.journal()
-        unsigned = self.git('-c', 'commit.gpgsign=false', 'commit-tree', j['commit_tree'], '-p', j['original_head'], '-m', 'unsigned')
+        unsigned = self.git('-c', 'commit.gpgsign=false', 'commit-tree', '--no-gpg-sign', j['commit_tree'], '-p', j['original_head'], '-m', 'unsigned')
         self.git('update-ref', 'HEAD', unsigned)
         j.update(phase='prepared', intended_head=unsigned)
         j.pop('manual_signed_head')
@@ -1239,6 +1222,8 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('READY\\n
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
         self.ok(result)
         self.assertEqual((self.state / 'state').read_text().strip(), '42:COMPLETE')
+        self.assertIn('Commit needs your help.', result.stdout)
+        self.ok(self.engine('handoff'))  # Simulated user commit, then resume COMPLETE.
         self.assertEqual(len(self.creates()), 1, result.stdout)
         self.assertFalse((self.state / 'issue-closed').exists())
         result = subprocess.run(command, cwd=self.repo, env=env, input='', text=True,
@@ -1392,7 +1377,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('READY\\n
         self.assertIn('HEAD or branch changed', self.publish().stdout)
 
     def test_head_drift(self):
-        self.git('commit', '--allow-empty', '-qm', 'after audit')
+        self.git('commit', '--no-gpg-sign', '--allow-empty', '-qm', 'after audit')
         self.assertIn('HEAD or branch changed', self.publish().stdout)
 
     def test_origin_and_verdict_drift(self):
@@ -1474,6 +1459,8 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
         self.ok(approved)
         self.assertIn('Override recorded', approved.stdout)
+        self.assertIn('Commit needs your help.', approved.stdout)
+        self.ok(self.engine('handoff'))
         self.assertEqual(len(self.creates()), 1, approved.stdout)
         self.assertEqual((self.state / 'state').read_text().strip(), '42:COMPLETE')
         self.assertFalse((self.state / 'issue-closed').exists())
@@ -1498,7 +1485,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         self.assertEqual(len(self.creates()), 0)
 
     def test_commit_and_push_crash_recovery(self):
-        self.assertNotEqual(self.publish(CRASH_GIT='commit-tree').returncode, 0)
+        self.assertNotEqual(self.publish(FIXTURE_LEAVE_COMMIT_PENDING=True).returncode, 0)
         self.assertEqual(self.journal()['phase'], 'prepared')
         self.assertNotEqual(self.engine('handoff', CRASH_GIT='push').returncode, 0)
         sha = self.journal()['intended_head']
@@ -1549,10 +1536,12 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         self.assertIn('Ambiguous head remote', self.publish().stdout)
         self.assertEqual(len(self.creates()), 0)
 
-    def test_originless_requires_repository_answer(self):
+    def test_originless_derives_repository(self):
         (self.state / 'origin').unlink()
         self.freeze()
-        self.ok(self.engine('handoff', 'owner/repo\nCustom title\nSummary\nManual\ny\n'))
+        result = self.engine('handoff', 'Custom title\nSummary\nManual\ny\n')
+        self.ok(result)
+        self.assertNotIn('Base repository [', result.stdout)
         self.assert_named('uncle')
         self.assertFalse([a for a in self.calls() if a[:2] == ['issue', 'view']])
         self.assertNotIn('Closes ', (self.root / 'server.body').read_text())
@@ -1628,7 +1617,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         self.git('checkout', '-qb', 'feature')
         self.freeze()
         self.git('remote', 'add', 'upstream', str(self.bare))
-        other = self.git('commit-tree', self.git('rev-parse', 'HEAD^{tree}'), '-p', self.original, '-m', 'remote edit')
+        other = self.git('commit-tree', '--no-gpg-sign', self.git('rev-parse', 'HEAD^{tree}'), '-p', self.original, '-m', 'remote edit')
         self.git('push', '-q', 'origin', other + ':refs/heads/feature')
         self.assertIn('Remote head differs', self.publish(FORK='1').stdout)
         self.assertEqual(len(self.creates()), 0)
@@ -1653,7 +1642,33 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         self.assertEqual(self.git('show', 'HEAD:source.txt'), 'worktree edit')
 
 
-unittest.main()
+# Cases own independent repositories, keys, and fake GitHub servers.
+import io
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+workers = int(os.environ.get('WORKFLOW_TEST_JOBS', '4'))
+if not 1 <= workers <= 8:
+    raise SystemExit('WORKFLOW_TEST_JOBS must be from 1 to 8')
+def run_case(name):
+    output = io.StringIO()
+    started = time.monotonic()
+    result = unittest.TextTestRunner(stream=output).run(HandoffTests(name))
+    return name, time.monotonic() - started, result, output.getvalue()
+started = time.monotonic()
+failures = 0
+names = unittest.defaultTestLoader.getTestCaseNames(HandoffTests)
+print(f'PR handoff: {len(names)} cases, up to {workers} workers', flush=True)
+with ThreadPoolExecutor(max_workers=workers) as pool:
+    for future in as_completed([pool.submit(run_case, name) for name in names]):
+        name, elapsed, result, output = future.result()
+        status = 'PASS' if result.wasSuccessful() else 'FAIL'
+        print(f'{status} {name} ({elapsed:.2f}s)', flush=True)
+        if not result.wasSuccessful():
+            print(output, flush=True)
+            failures += 1
+print(f'PR handoff: {len(names) - failures} passed, {failures} failed '
+      f'in {time.monotonic() - started:.2f}s', flush=True)
+raise SystemExit(bool(failures))
 PY
 pr_rc=$?
 COUNT=$((COUNT + 1))

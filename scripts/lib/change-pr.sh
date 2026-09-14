@@ -1,23 +1,67 @@
 #!/usr/bin/env bash
 # Bash 3.2 entry points; Python owns the atomic journal and temporary Git index.
 # No close marker is written by this library.
+
+# Whether a person can answer the handoff prompts: a terminal, or the TUI
+# relay (uncle_tui.py sets UNCLE_STATUS_FILE and types answers down the pipe).
+# A bare pipe grants nothing, so a headless run keeps the skip below.
+change_pr_person_channel() {
+    [[ -t 0 || -n "${UNCLE_STATUS_FILE:-}" ]]
+}
+
 change_pr_complete() {
-    if [[ "$CLOSE_ISSUE" != 1 || "${UNATTENDED:-0}" == 1 || -s "$UNATTENDED_FILE" ]]; then
-        if ! change_pr_engine signing-resume >/dev/null 2>&1; then
-            echo "PR handoff disabled or unattended; leaving the issue open."
+    # The publication boundary. The unattended stages have ended; whether the
+    # handoff dialogs open depends only on whether someone can answer them.
+    # The unattended ledger never routes: an attended rerun after a headless
+    # run still publishes.
+    local interactive=0 boundary=0
+    if [[ "$CLOSE_ISSUE" == 1 ]]; then
+        if [[ "${UNATTENDED:-0}" != 1 ]]; then
+            interactive=1
+            if [[ -s "$UNATTENDED_FILE" ]]; then
+                boundary=1
+            fi
+        elif change_pr_person_channel; then
+            interactive=1
+            boundary=1
+        fi
+    fi
+    if [[ "$interactive" != 1 ]]; then
+        # Disabled or headless: only a commit the person already made
+        # continues, and no dialog may wait on anyone (EOF pends instead).
+        if ! change_pr_engine completed-signing-resume >/dev/null 2>&1 </dev/null; then
+            if [[ -s "$ORIGIN_FILE" ]]; then
+                echo "PR handoff disabled or unattended; leaving the issue open."
+            else
+                echo "PR handoff disabled or unattended; no PR was created."
+            fi
             return 0
         fi
+        change_pr_publish 0 </dev/null
+        return 0
+    fi
+    if [[ "$boundary" == 1 ]]; then
+        echo "Publication boundary: unattended stages ended; a person answers from here."
+    fi
+    change_pr_publish 1
+}
+
+change_pr_publish() {
+    local interactive="$1" status=0
+    # The engine reads this for the override dialog only; the driver's own
+    # unattended flag and ledger are untouched. Only a person may overrule.
+    local -x UNCLE_UNATTENDED="${UNCLE_UNATTENDED:-0}"
+    if [[ "$interactive" == 1 ]]; then
+        UNCLE_UNATTENDED=0
     fi
     # Journal validation proves PR ownership separately from close ownership.
     # The close sentinel retains its existing meaning on the no-Git path.
     # Exit 3 is the one recoverable failure: the recorded verdict is not
     # READY, so the operator gets one explicit override decision, showing the
-    # actual verdict. Unattended runs are never asked.
-    local status=0
+    # actual verdict. Headless runs are never asked.
     change_pr_engine validate || status=$?
     if [[ "$status" == 3 ]]; then
-        if [[ "${UNATTENDED:-0}" != 1 && ! -s "$UNATTENDED_FILE" ]] \
-            && change_pr_engine verdict-override; then
+        if [[ "$interactive" == 1 ]] && change_pr_engine verdict-override; then
             change_pr_engine validate || return 0
         else
             return 0
@@ -233,6 +277,7 @@ def validate(j, ready=True):
         raise ValueError('Signed handoff marker differs from intended HEAD.')
     if j['origin'] != read(STATE / 'origin') or j['audit_hash'] != audit_hash():
         raise ValueError('Origin or audit changed; rerun FINAL_AUDIT.')
+    check_remotes(j)
     verdict = read(STATE / 'audit-verdict').strip().split('\t')
     if len(verdict) != 3 or verdict[0] != j['verdict_run'] or verdict[2] != j['audit_hash']:
         raise ValueError('Verdict binding changed; rerun FINAL_AUDIT.')
@@ -257,28 +302,30 @@ def validate(j, ready=True):
 
 def manual_signed_commit(j):
     import shlex
-    # `git commit -a` cannot stage untracked files, but the audited tree
-    # includes them, so any change that added a file produced a tree
-    # mismatch. Stage everything, drop the driver's own state, then force
-    # FINAL_AUDIT.md back in: that reproduces commit_tree exactly.
-    command = ('git add -A'
-               ' && git rm -r --cached --ignore-unmatch -- .uncle/workflow'
-               ' && git add -f -- FINAL_AUDIT.md'
-               ' && git commit -S -m ' + shlex.quote(j['title']))
+    # Stage the exact reviewed tree, including untracked files, without
+    # reapplying clean filters or changing working files. Only the user runs it.
+    command = ('git read-tree ' + shlex.quote(j['commit_tree'])
+               + ' && git commit ' + ('-S ' if j.get('requires_signature', True) else '--no-gpg-sign ')
+               + '-m ' + shlex.quote(j['title']))
     if os.environ.get('UNCLE_SIGNING_JSON') == '1':
         block = json.dumps(command) + ' '
     else:
         block = 'In another terminal, open this project, review the audited changes, then run:\n' + command + '\n'
-    ask('Commit signing needs your help. ' + block +
-        'Return here and press ENTER (OK) when finished: ')
     candidate = head()
-    if candidate == j['original_head']:
-        raise ValueError('No new commit found; PR remains pending. Finish the signed commit and rerun.')
+    while candidate == j['original_head']:
+        prefix = 'Commit signing needs your help. ' if j.get('requires_signature', True) else 'Commit needs your help. '
+        ask(prefix + block +
+            'Return here and press ENTER (OK) when finished: ')
+        candidate = head()
+        if candidate == j['original_head']:
+            if ask('No new commit found. Keep the commit dialog open? [y/n]: ').lower() != 'y':
+                raise ValueError('No new commit found; PR remains pending. Finish the commit and resume.')
     if git('rev-parse', candidate + '^{tree}') != j['commit_tree']:
         raise ValueError('Manual commit differs from the audited files; rerun FINAL_AUDIT.')
     if git('rev-list', '--parents', '-n', '1', candidate).split() != [candidate, j['original_head']]:
         raise ValueError('Manual commit must have the audited HEAD as its only parent.')
-    git('verify-commit', candidate)
+    if j.get('requires_signature', True):
+        git('verify-commit', candidate)
     previous = j['intended_head']
     j['intended_head'] = candidate
     try:
@@ -312,7 +359,8 @@ def signing_resume(j):
         raise ValueError('Signed handoff tree differs from audit.')
     if git('rev-list', '--parents', '-n', '1', candidate).split() != [candidate, j['original_head']]:
         raise ValueError('Signed handoff must have the audited HEAD as its only parent.')
-    git('verify-commit', candidate)
+    if j.get('requires_signature', True):
+        git('verify-commit', candidate)
     validate(dict(j, intended_head=candidate))
 
 
@@ -321,25 +369,39 @@ def prepare_commit(j):
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if setting.returncode not in (0, 1):
         raise ValueError('Cannot read commit signing configuration: ' + setting.stderr.strip())
-    if setting.stdout.strip() == 'true':
-        j['manual_signing'] = True
-        save(j)
-        manual_signed_commit(j)
-        return
-    try:
-        j['intended_head'] = git('commit-tree', j['commit_tree'], '-p', j['original_head'],
-                                 data=(j['title'] + '\n').encode())
-    except ValueError as error:
-        if not re.search(r'gpg|signing|failed to sign|no agent running|pinentry', str(error), re.I):
-            raise
-        print(str(error), flush=True)
-        j['manual_signing'] = True
-        save(j)
-        manual_signed_commit(j)
-    save(j)
+    j['requires_signature'] = setting.stdout.strip() == 'true'
+    j['manual_signing'] = True
+    save(j)  # Record the pending user action before displaying it.
+    manual_signed_commit(j)
+
+
+
+GATE = None
+
+
+def gate():
+    """The gate-identity helper (receipts for supervisor-relayed answers); a
+    bare load of this engine without the library path has none."""
+    global GATE
+    if GATE is None:
+        lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        try:
+            import gate_answer
+            GATE = gate_answer.Gate()
+        except ImportError:
+            GATE = False
+    return GATE or None
 
 
 def ask(prompt, default=None):
+    helper = gate()
+    if helper is not None:
+        # Every handoff prompt decides publication; the signing prefix takes
+        # precedence in the classifier. Standing delegation never answers either.
+        helper.open(prompt, signing=prompt.startswith(('Commit signing needs your help.', 'Commit needs your help.')),
+                    class_hint='sensitive:publication')
     try:
         if sys.stdin.isatty() and default is not None:
             import readline
@@ -348,10 +410,30 @@ def ask(prompt, default=None):
                 answer = input(prompt)
             finally:
                 readline.set_startup_hook(None)
-        else:
+        elif sys.stdin.isatty():
             answer = input(prompt)
+        else:
+            # Read exactly one answer. TextIO buffering can consume answers
+            # intended for the next engine process (override then handoff).
+            print(prompt, end='', flush=True)
+            data = bytearray()
+            while True:
+                char = os.read(sys.stdin.fileno(), 1)
+                if not char:
+                    if not data:
+                        raise EOFError
+                    break
+                if char == b'\n':
+                    break
+                data.extend(char)
+            answer = data.decode('utf-8')
     except EOFError:
+        if helper is not None:
+            helper.read('')
         raise ValueError('No answer received; PR remains pending. Rerun to resume.')
+    if helper is not None:
+        # Attribution comes from the receipt alone; the answer is used as read.
+        os.environ['UNCLE_GATE_ANSWERED_BY'] = helper.read(answer)
     return answer.strip() or default or ''
 
 
@@ -423,6 +505,31 @@ def remote_identity(remote):
     return remote_repo(urls[0])
 
 
+def remote_configuration():
+    # Effective fetch and push URLs per remote, captured verbatim: an invalid
+    # destination must not block the audit, only the handoff that uses it.
+    config = {}
+    for remote in git('remote').splitlines():
+        config[remote] = [git('remote', 'get-url', '--all', remote).splitlines(),
+                          git('remote', 'get-url', '--push', '--all', remote).splitlines()]
+    return config
+
+
+def check_remotes(j):
+    # An origin-less run has no issue naming its destination, so the audit
+    # binds the remote configuration instead. Journals bound before this field
+    # existed fail closed; the guard is never backfilled.
+    if j['origin']:
+        return
+    recorded = j.get('audit_remotes')
+    well_formed = (isinstance(recorded, dict) and all(
+        isinstance(name, str) and isinstance(urls, list) and len(urls) == 2
+        and all(isinstance(group, list) and all(isinstance(url, str) for url in group) for group in urls)
+        for name, urls in recorded.items()))
+    if not well_formed or recorded != remote_configuration():
+        raise ValueError('Remote configuration changed; rerun FINAL_AUDIT.')
+
+
 def remote_sha(j):
     if remote_identity(j['remote']).lower() != j['head_repo'].lower():
         raise ValueError('Head remote changed; rerun FINAL_AUDIT.')
@@ -435,14 +542,45 @@ def remote_sha(j):
 def resolve(j):
     origin = j['origin'].strip().split('\t')
     remotes = git('remote').splitlines()
+    if not remotes and origin == ['']:
+        # No issue names a destination and nothing can be derived: fail before
+        # any prompt or remote mutation; the bound journal resumes after repair.
+        raise ValueError('No Git remote is configured; add a GitHub remote and rerun to resume PR handoff.')
+    if not remotes:
+        url = ask('No Git remote is configured. GitHub remote URL for this PR (blank to cancel): ')
+        if not url:
+            raise ValueError('PR destination not configured; resume publication after adding a remote.')
+        identity = remote_repo(url)
+        if origin != [''] and identity.lower() != origin[0].lower():
+            fork = json.loads(gh('api', 'repos/' + identity))
+            if not fork.get('fork') or fork.get('parent', {}).get('full_name', '').lower() != origin[0].lower():
+                raise ValueError('Destination must match the issue repository or its direct fork; no remote was added.')
+        git('remote', 'add', 'origin', url)
+        remotes = ['origin']
     identities = {r: remote_identity(r) for r in remotes}
     if origin != ['']:
-        if len(origin) != 3 or origin[2] != 'gh' or not origin[1].isdigit():
+        if len(origin) == 2 and origin[1].isdigit():
+            # Older runs saved repo + number without a fetch-provider field.
+            # Verify that identity now; retain the original bound journal bytes.
+            base = repo_name(origin[0])
+            issue = json.loads(gh('api', 'repos/' + base + '/issues/' + origin[1]))
+            if (issue.get('number') != int(origin[1]) or issue.get('pull_request')
+                    or str(issue.get('html_url', '')).lower() != ('https://github.com/' + base + '/issues/' + origin[1]).lower()):
+                raise ValueError('Legacy issue origin could not be verified with GitHub.')
+        elif len(origin) != 3 or origin[2] != 'gh' or not origin[1].isdigit():
             raise ValueError('Only a gh-fetched origin authorizes this PR.')
         base = repo_name(origin[0])
     else:
-        candidate = identities.get('origin', '')
-        base = repo_name(ask('Base repository [owner/repo]: ', candidate))
+        # Base derived from the remotes, never asked: upstream, else origin,
+        # else the sole remote. Anything else fails closed and resumable.
+        for name in ('upstream', 'origin'):
+            if name in identities:
+                base = identities[name]
+                break
+        else:
+            if len(identities) != 1:
+                raise ValueError('Ambiguous base remote; name one remote origin or upstream.')
+            base = next(iter(identities.values()))
     info = json.loads(gh('repo', 'view', base, '--json', 'nameWithOwner,defaultBranchRef'))
     if info['nameWithOwner'].lower() != base.lower():
         raise ValueError('Base repository identity mismatch.')
@@ -675,12 +813,15 @@ def main():
                  intended_head='', commit_tree='', audit_hash='', verdict_run='',
                  base_repo='', head_repo='', base_branch='', head_branch='',
                  phase='auditing', url='', number=None)
+        if not j['origin']:
+            j['audit_remotes'] = remote_configuration()
         save(j)
     elif action == 'bind':
         j = load()
         if (j['phase'] != 'auditing' or head() != j['original_head'] or branch() != j['original_branch']
                 or snapshot() != j['reviewed_tree'] or read(STATE / 'origin') != j['origin']):
             raise ValueError('Files, origin, HEAD or branch changed during audit; rerun FINAL_AUDIT.')
+        check_remotes(j)
         j.update(audit_hash=audit_hash(), commit_tree=snapshot(True),
                  verdict_run=read(STATE / 'audit-verdict').split('\t')[0], phase='bound')
         # Sealed here, after the last agent stage and before any handoff.
@@ -709,6 +850,13 @@ def main():
         print('Override recorded; creating the PR over a ' + verdict[1] + ' verdict.', flush=True)
     elif action == 'signing-resume':
         signing_resume(load())
+    elif action == 'completed-signing-resume':
+        # Headless probe: a commit the person already made resumes; an
+        # unchanged HEAD would reopen a dialog nobody is there to answer.
+        j = load()
+        if head() == j['original_head']:
+            raise ValueError('No completed signed handoff commit.')
+        signing_resume(j)
     elif action == 'handoff':
         handoff(load())
     else:

@@ -39,6 +39,19 @@ prerequisites that nobody can supply are waived, and each one is appended to
 `.uncle/workflow/unattended-gates`. COMPLETE reports how many gates went
 unreviewed, so a run finished this way never reads as one a person signed off.
 
+The flag ends at the publication boundary. After the COMPLETE summary the
+driver prints `Publication boundary: unattended stages ended; a person answers
+from here.` and runs the PR handoff as an attended one — diff, title, summary,
+manual steps, consent, the signing block when `commit.gpgsign` is true, and
+the override dialog for a verdict that is not READY — but only when a person
+can answer: stdin is a terminal, or the TUI relay (`UNCLE_STATUS_FILE`) is
+set. A headless run (pipe, no relay) prints the existing `PR handoff disabled
+or unattended` line, exits 0 and leaves the journal `bound`; rerunning it
+attended later runs the handoff, since the ledger never suppresses it. These
+dialogs are classified `sensitive:publication` (signing stays
+`sensitive:signing`): the TUI supervisor never answers them by standing
+delegation, and in an Auto run not on an explicit ask either.
+
 What it does not do is make anything pass. A waiver records that a required
 check was not performed and keeps saying so; a failing verification suite, a
 regressed baseline, and a final audit that does not say READY all still stop
@@ -229,15 +242,24 @@ creates a feature branch when starting on the default branch, and pushes without
 force. The PR targets the base repository's default branch and includes
 `Closes owner/repo#issue` for an eligible bound origin. Creating the PR never closes
 the issue or writes `issue-closed`; GitHub closes the linked issue on merge into
-the default branch. Originless runs must confirm the base repository.
+the default branch. Originless runs (chat text or a hand-written
+`CHANGE_REQUEST.md`) derive the base repository from the remotes without a
+prompt: `upstream`, else `origin`, else the sole remote; no remote, several
+unnamed candidates, an unsupported host or an ambiguous fetch/push identity
+leave the handoff `PR pending` and resumable. Their PR body carries no
+`Closes` line. The audit freezes the remote configuration for originless runs;
+any later change to remote names or fetch/push URLs, including repairing a
+missing remote, requires rerunning FINAL_AUDIT before publication.
 
 New default-branch handoffs use `<prefix>/<slug>-<owner[:12]>`: labels (case-insensitive, enhancement before bug before documentation) select `feat/`, `bug/`, or `doc/`, otherwise `uncle/` (also on lookup failure); the slug is a lowercase ASCII title from the Summary or first heading in `CHANGE_REQUEST.md` (otherwise `REQUIREMENTS.md`), limited to 40 characters with `change` as the empty fallback.
 
 The handoff rejects source, branch, audit, origin or remote drift and ambiguous
 remotes. It supports one GitHub head remote, optionally with a base upstream
 remote and a direct user-owned fork. Unsupported selectors and submodules stop
-the handoff. `WORKFLOW_CLOSE_ISSUE=0` and unattended runs suppress PR prompts.
-The workflow lock stays held throughout the handoff.
+the handoff. `WORKFLOW_CLOSE_ISSUE=0` and headless unattended runs (no
+terminal, no TUI relay) suppress PR prompts; see [`--unattended`](#--unattended)
+for the publication boundary. The workflow lock stays held throughout the
+handoff.
 
 If commit signing fails, a dialog asks you to stage and commit the audited
 changes with `git commit -S` in another terminal. Press OK/Enter to resume.

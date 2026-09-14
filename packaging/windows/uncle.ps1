@@ -21,7 +21,7 @@ if (!$bash -or !(Test-Path $bash)) {
         }
     }
 }
-$pythonCandidates = @($env:UNCLE_WINDOWS_PYTHON, $python)
+$pythonCandidates = @($env:UNCLE_WINDOWS_PYTHON, (Join-Path $root 'venv\Scripts\python.exe'), $python)
 foreach ($name in @('python.exe', 'python3.exe')) {
     $pythonCandidates += @(Get-Command $name -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
 }

@@ -20,10 +20,15 @@ def findings(text):
     # also sometimes wrap the table in a Markdown fence. Neither changes rows.
     lines = []
     verdict_seen = False
-    checked_summary = None
+    commentary = []
+    table_ended = False
     for raw in section.splitlines():
         line = raw.strip()
-        if not line or re.fullmatch(r"```(?:markdown|md)?|~~~(?:markdown|md)?", line):
+        if not line:
+            if len(lines) >= 3:
+                table_ended = True
+            continue
+        if re.fullmatch(r"```(?:markdown|md)?|~~~(?:markdown|md)?", line):
             continue
         if re.fullmatch(r"(?:\*\*|__)?NOT READY(?:\*\*|__)?", line):
             if verdict_seen or not lines:
@@ -32,13 +37,13 @@ def findings(text):
             continue
         if verdict_seen:
             raise ValueError('Unexpected content after the audit verdict')
-        if line.startswith('Checked:') and lines and checked_summary is None:
-            if not line.removeprefix('Checked:').strip():
-                raise ValueError('Empty audit evidence summary')
-            checked_summary = line
+        # Preserve separated prose in the human review; never silently drop it.
+        # Table-shaped content after prose is ambiguous and remains an error.
+        if table_ended and not line.startswith('|') and not line.endswith('|'):
+            commentary.append(line)
             continue
-        if checked_summary is not None:
-            raise ValueError('Unexpected content after the audit evidence summary')
+        if commentary:
+            raise ValueError('Unexpected table row after audit commentary')
         lines.append(line)
     if len(lines) < 3 or any(not line.startswith('|') or not line.endswith('|') for line in lines):
         raise ValueError('Findings must be a table with ID and Blocks columns')
@@ -63,8 +68,8 @@ def findings(text):
             raise ValueError('Missing finding evidence, correction, or YES/NO blocking status')
         seen.add(identifier)
         if blocks == 'YES':
-            if checked_summary is not None:
-                item['evidence'] += ' — ' + checked_summary
+            if commentary:
+                item['evidence'] += ' — Audit commentary: ' + ' '.join(commentary)
             result.append(item)
     if not result:
         raise ValueError('NOT READY audit has no explicit blocking findings')

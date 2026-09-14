@@ -354,11 +354,11 @@ for s in 0 1 2 3; do
 
     new_case "g2-site$s-accept"
     write_cw_harness
-    run_gate "\ny\n" -- "${site_args[@]}"
+    run_gate "y\n" -- "${site_args[@]}"
     expect_status 0
     expect_out "GATE_ACCEPTED"
     expect_out "Ready to $verb "
-    expect_out "Press ENTER after reviewing"
+    if grep -q "Press ENTER after reviewing" "$OUT"; then fail "Redundant review prompt"; fi
     expect_out "? [Y/N]"
     for i in "${!site_files[@]}"; do
         expect_out "${site_files[$i]}"
@@ -368,7 +368,7 @@ for s in 0 1 2 3; do
 
     new_case "g2-site$s-decline"
     write_cw_harness
-    run_gate "\nn\n" -- "${site_args[@]}"
+    run_gate "n\n" -- "${site_args[@]}"
     expect_status 0
     expect_out "Gate not accepted. Workflow remains paused."
     expect_not_out "GATE_ACCEPTED"
@@ -380,7 +380,7 @@ done
 # Prompt names every gated file, joined, with the lowercased action verb.
 new_case "g2-prompt-text"
 write_cw_harness
-run_gate "\nn\n" -- ACKNOWLEDGE \
+run_gate "n\n" -- ACKNOWLEDGE \
     BASELINE_REPORT.md BASELINE_REPORT \
     CHANGE_SPEC.md CHANGE_SPEC \
     CHANGE_PLAN.md CHANGE_PLAN \
@@ -390,12 +390,12 @@ expect_not_out "exactly to continue"
 
 new_case "g2-prompt-text-single"
 write_cw_harness
-run_gate "\nn\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
+run_gate "n\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
 expect_out "Ready to approve UPDATED_CHANGE_PLAN.md? [Y/N]"
 
 new_case "g2-accept-upper-Y"
 write_cw_harness
-run_gate "\nY\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
+run_gate "Y\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
 expect_status 0
 expect_out "GATE_ACCEPTED"
 expect_hash_of "$REPO/.uncle/workflow/approvals/UPDATED_CHANGE_PLAN.sha256" \
@@ -404,7 +404,7 @@ expect_hash_of "$REPO/.uncle/workflow/approvals/UPDATED_CHANGE_PLAN.sha256" \
 for answer in "N" "foo" "" "APPROVE" "ACKNOWLEDGE"; do
     new_case "g2-decline-${answer:-empty}"
     write_cw_harness
-    run_gate "\n$answer\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
+    run_gate "$answer\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
     expect_status 0
     expect_out "Gate not accepted. Workflow remains paused."
     expect_not_out "GATE_ACCEPTED"
@@ -414,19 +414,19 @@ done
 for answer in APPROVE ACKNOWLEDGE; do
     new_case "g2-legacy-$answer"
     write_cw_harness
-    run_gate "\n$answer\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
+    run_gate "$answer\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
     expect_out "requires 'y' to approve"
 done
 
-# EOF at the Y/N read: the ENTER line is consumed, then stdin closes.
+# EOF at the single Y/N prompt declines approval.
 new_case "g2-eof-at-yn"
 write_cw_harness
-run_gate "\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
+run_gate "" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
 expect_status 0
 expect_out "Gate not accepted. Workflow remains paused."
 expect_no_approval "$REPO/.uncle/workflow/approvals/UPDATED_CHANGE_PLAN.sha256"
 
-# AR-001: EOF at the preliminary "Press ENTER" read must not trip `set -e`.
+# EOF at multi-document approval must not trip `set -e`.
 for site in 0 3; do
     read -r -a site_args <<< "${CW_SITES_ARGS[$site]}"
     new_case "g2-eof-preliminary-site$site"
@@ -442,7 +442,7 @@ done
 # A gated file mutated between the prompt digest and the response must decline.
 new_case "g2-race"
 write_cw_harness
-run_gate "\ny\n" MUTATE_AFTER_HASH_CALL=1 -- ACKNOWLEDGE \
+run_gate "y\n" MUTATE_AFTER_HASH_CALL=1 -- ACKNOWLEDGE \
     CHANGE_PLAN.md CHANGE_PLAN \
     ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
 expect_status 0
@@ -480,7 +480,7 @@ for s in 0 1 2 3; do
 
     new_case "g3-site$s-accept"
     write_sg_harness
-    run_gate "\ny\n" -- "${site_args[@]}"
+    run_gate "y\n" -- "${site_args[@]}"
     expect_status 0
     expect_out "GATE_ACCEPTED"
     expect_out "Ready to $verb $file? [Y/N]"
@@ -488,7 +488,7 @@ for s in 0 1 2 3; do
 
     new_case "g3-site$s-decline"
     write_sg_harness
-    run_gate "\nn\n" -- "${site_args[@]}"
+    run_gate "n\n" -- "${site_args[@]}"
     expect_status 0
     expect_out "Gate not accepted. Workflow paused."
     expect_not_out "GATE_ACCEPTED"
@@ -498,13 +498,13 @@ done
 # The default wording is still `approve`.
 new_case "g3-default-wording"
 write_sg_harness
-run_gate "\nn\n" -- PROJECT_PLAN.md PROJECT_PLAN
+run_gate "n\n" -- PROJECT_PLAN.md PROJECT_PLAN
 expect_out "Ready to approve PROJECT_PLAN.md? [Y/N]"
 expect_not_out "exactly to continue"
 
 new_case "g3-accept-upper-Y"
 write_sg_harness
-run_gate "\nY\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
+run_gate "Y\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
 expect_status 0
 expect_out "GATE_ACCEPTED"
 expect_hash_of "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256" "$REPO/PROJECT_PLAN.md"
@@ -512,7 +512,7 @@ expect_hash_of "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256" "$REPO/PROJ
 for answer in "N" "foo" "" "APPROVE" "ACKNOWLEDGE"; do
     new_case "g3-decline-${answer:-empty}"
     write_sg_harness
-    run_gate "\n$answer\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
+    run_gate "$answer\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
     expect_status 0
     expect_out "Gate not accepted. Workflow paused."
     expect_no_approval "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
@@ -521,13 +521,13 @@ done
 for answer in APPROVE ACKNOWLEDGE; do
     new_case "g3-legacy-$answer"
     write_sg_harness
-    run_gate "\n$answer\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
+    run_gate "$answer\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
     expect_out "requires 'y' to approve"
 done
 
 new_case "g3-eof-at-yn"
 write_sg_harness
-run_gate "\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
+run_gate "" -- PROJECT_PLAN.md PROJECT_PLAN approve
 expect_status 0
 expect_out "Gate not accepted. Workflow paused."
 expect_no_approval "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
@@ -544,7 +544,7 @@ expect_no_approval "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
 # The second pass then approves the bytes actually read.
 new_case "g3-reopen-on-edit"
 write_sg_harness
-run_gate "\ny\n\ny\n" MUTATE_AFTER_HASH_CALL=1 -- PROJECT_PLAN.md PROJECT_PLAN approve
+run_gate "y\ny\n" MUTATE_AFTER_HASH_CALL=1 -- PROJECT_PLAN.md PROJECT_PLAN approve
 expect_status 0
 expect_out "changed while you were reviewing it."
 expect_out "CANCEL_SPECULATION"
@@ -556,7 +556,7 @@ expect_hash_of "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256" "$REPO/PROJ
 new_case "g3-race-after-response"
 write_sg_harness
 SG_PRE_RACE_DIGEST="$(hash_file "$REPO/PROJECT_PLAN.md")"
-run_gate "\ny\n" MUTATE_AFTER_HASH_CALL=2 -- PROJECT_PLAN.md PROJECT_PLAN approve
+run_gate "y\n" MUTATE_AFTER_HASH_CALL=2 -- PROJECT_PLAN.md PROJECT_PLAN approve
 expect_status 0
 expect_hash_literal "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256" "$SG_PRE_RACE_DIGEST"
 COUNT=$((COUNT + 1))
@@ -574,12 +574,12 @@ expect_no_ansi
 
 new_case "g4-dumb-harness"
 write_cw_harness
-run_gate "\nn\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
+run_gate "n\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
 expect_no_ansi
 
 new_case "g4-sg-piped"
 write_sg_harness
-run_gate "\nn\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
+run_gate "n\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
 expect_no_ansi
 
 # PTY: `script` argument order differs between BSD and GNU. Try both; if
@@ -647,14 +647,14 @@ expect_no_approval "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
 
 new_case "g5-leading-space-cw"
 write_cw_harness
-run_gate "\n y\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
+run_gate " y\n" -- APPROVE UPDATED_CHANGE_PLAN.md UPDATED_CHANGE_PLAN
 expect_status 0
 expect_not_out "GATE_ACCEPTED"
 expect_no_approval "$REPO/.uncle/workflow/approvals/UPDATED_CHANGE_PLAN.sha256"
 
 new_case "g5-leading-space-sg"
 write_sg_harness
-run_gate "\n y\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
+run_gate " y\n" -- PROJECT_PLAN.md PROJECT_PLAN approve
 expect_status 0
 expect_not_out "GATE_ACCEPTED"
 expect_no_approval "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"

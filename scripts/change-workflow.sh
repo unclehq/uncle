@@ -79,6 +79,10 @@ if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/pla
     [[ "$UNATTENDED" != 1 ]] || driver_args+=(--unattended)
     exec python3 "$ROOT/scripts/lib/plan-executability.py" lock-run "${driver_args[@]}"
 fi
+python3 "$ROOT/scripts/lib/workflow_family.py" change
+unset UNCLE_NEW_WORKFLOW
+. "$ROOT/scripts/lib/project-git.sh"
+uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
 
 STATE_DIR=".uncle/workflow"
@@ -322,6 +326,7 @@ CLAUDE_TOOLS="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
 # terminal, so the text is printed separately. Escapes are emitted only for a
 # real terminal: piped captures and TERM=dumb stay free of control bytes.
 gate_prompt() {
+    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$1"; fi
     if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
         printf '%s%s%s' $'\033[1m' "$1" $'\033[0m'
     else
@@ -360,6 +365,7 @@ legacy_word_notice() {
 . "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/performance.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
+. "$ROOT/scripts/lib/triage.sh"
 
 # The implementation stage can end with acceptance rows the agent could not
 # deliver. Exiting there is right when someone is about to go fix it, and wrong
@@ -384,8 +390,10 @@ implementation_incomplete_choice() {
     fi
     echo
     while true; do
+        UNCLE_GATE_CLASS="sensitive:waiver"
         gate_prompt "Retry the implementation, waive the rows above, or stop? [retry/waive/stop]: "
-        if ! IFS= read -r answer; then
+        UNCLE_GATE_CLASS=""
+        if ! { if declare -f gate_read > /dev/null; then gate_read answer; else IFS= read -r answer; fi; }; then
             echo
             echo "No answer; the run remains pending at IMPLEMENT."
             return 1
@@ -422,6 +430,7 @@ implementation_incomplete_choice() {
 
 require_file() {
     if [[ ! -s "$1" ]]; then
+        supervision_validation_failed require_file "$1" "Required file missing or empty: $1"
         echo "Required file missing or empty: $1"
         exit 1
     fi
@@ -438,7 +447,21 @@ current_issue() {
 }
 
 . "$ROOT/scripts/lib/terminal-title.sh"
-trap 'uncle_title_end' EXIT
+
+# One EXIT hook for the whole run. The cleanup list used to be re-declared at
+# each trap site and one of them dropped the lock release; every site now
+# names this function. The exit status is read first and handed to the triage
+# hook, which writes the failure bundle for anything that is not a decline,
+# a cancel, or a stop a person chose.
+on_exit() {
+    local rc=$?
+    if declare -f progress_end > /dev/null; then progress_end; fi
+    if declare -f cleanup_bg > /dev/null; then cleanup_bg; fi
+    if declare -f release_lock > /dev/null; then release_lock; fi
+    uncle_title_end
+    triage_on_exit "$rc"
+}
+trap on_exit EXIT
 trap 'uncle_cancel 130' INT
 trap 'uncle_cancel 143' TERM
 if [[ -n "${STAGEGATE_ORIGIN_REPO:-$(origin_field "$ORIGIN_FILE" 1)}" ]]; then
@@ -473,7 +496,7 @@ acquire_lock() {
         if mkdir "$LOCK_DIR" 2>/dev/null; then
             printf '%s\n' "$$" > "$LOCK_DIR/pid"
             LOCK_HELD=1
-            trap 'progress_end; cleanup_bg; release_lock; uncle_title_end' EXIT
+            trap on_exit EXIT
             return 0
         fi
 
@@ -622,8 +645,32 @@ verify_approval() {
     if [[ "$expected" != "$actual" ]]; then
         echo "$file changed after approval."
         echo "Review and approve the new contents."
+        triage_reopen_gate "$approval_name"
         exit 1
     fi
+}
+
+# An approved document that changed -- by hand, or by a triage action the
+# operator selected -- sends the run back to the gate that approved it, so
+# the new bytes are read and approved by a keystroke. Nothing is written
+# under approvals/ here; the stale digest stays until the operator answers.
+# A document with no gate of its own keeps the plain exit 1 above.
+triage_reopen_gate() {
+    local gate=""
+    case "$1" in
+        CHANGE_PLAN)
+            gate=WAIT_PLAN_APPROVAL
+            case "$(cat "$STATE_DIR/approval-route" 2>/dev/null || true)" in
+                WAIT_UPDATED_PLAN_APPROVAL) gate=WAIT_UPDATED_PLAN_APPROVAL ;;
+            esac
+            ;;
+        ADVERSARIAL_REVIEW) gate=WAIT_PLAN_APPROVAL ;;
+        CHANGE_SPEC|BASELINE_REPORT) gate=WAIT_ANALYSIS_APPROVAL ;;
+    esac
+    [[ -n "$gate" ]] || return 0
+    set_state "$gate"
+    echo "Reopening $gate: re-run the driver to review and approve what is there now."
+    exit 0
 }
 
 # One gate can cover several documents. Each document is still hashed and
@@ -654,7 +701,7 @@ human_gate() {
         act="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
         for j in "${!files[@]}"; do
             printf '%s\n' "$(hash_file "${files[$j]}")" > "$APPROVAL_DIR/${names[$j]}.sha256"
-            printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > "$APPROVAL_DIR/${names[$j]}.approved-by"
+            printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${names[$j]}.approved-by"
             record_unattended_gate "${names[$j]}" "$act ${files[$j]} without human review"
         done
         echo "Unattended: recorded $act of ${files[*]} with no human review."
@@ -681,22 +728,6 @@ human_gate() {
     show_spend
     echo
 
-    # Closed stdin here would abort the driver under `set -e` before the Y/N
-    # prompt, so EOF is routed to the same decline path as any other non-answer.
-    local prompt="Press ENTER after reviewing..."
-    if [[ "${#files[@]}" -gt 1 ]]; then
-        prompt="Press ENTER after reviewing all documents above..."
-    fi
-    # read -p hides the prompt on the TUI's piped stdin. Emit it explicitly
-    # so the TUI can open its review dialog before the approval question.
-    printf '%s' "$prompt"
-    if ! read -r; then
-        if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 1; fi
-        echo
-        echo "Gate not accepted. Workflow remains paused."
-        exit 0
-    fi
-
     # Digests are captured before the prompt and recorded afterwards, so each
     # approval attests to the bytes the operator was shown.
     local -a digests=()
@@ -711,10 +742,14 @@ human_gate() {
     targets="${targets%, }"
 
     echo
+    UNCLE_GATE_FILE="${files[0]}"
     gate_prompt "Ready to $verb $targets? [Y/N] "
+    UNCLE_GATE_FILE=""
     # IFS= keeps surrounding whitespace, so " y" is not an approval. `|| true`
-    # keeps EOF from tripping `set -e` before the decline path runs.
-    IFS= read -r response || true
+    # keeps EOF from tripping `set -e` before the decline path runs. The
+    # wrapper attributes the line (human, or a supervisor receipt) and closes
+    # the gate; the answer itself is validated exactly as before.
+    if declare -f gate_read > /dev/null; then gate_read response || true; else IFS= read -r response || true; fi
 
     case "$response" in
         y|Y) ;;
@@ -739,7 +774,7 @@ human_gate() {
 
     for i in "${!files[@]}"; do
         printf '%s\n' "${digests[$i]}" > "$APPROVAL_DIR/${names[$i]}.sha256"
-        printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > "$APPROVAL_DIR/${names[$i]}.approved-by"
+        printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${names[$i]}.approved-by"
         echo "Recorded approval for ${files[$i]}"
     done
     if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi
@@ -1238,10 +1273,12 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
+        supervision_prompt "$effective_prompt" "$log_name" "$LOG_DIR/${log_name}.jsonl"
+        effective_prompt="$SUPERVISION_PROMPT"
         ( "${client_cmd[@]}" "${flags[@]}" \
             < "$effective_prompt" \
             2>&1 \
-            | tee "$LOG_DIR/${log_name}.jsonl" \
+            | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.jsonl" \
             | progress_tap "${PROGRESS_TOTAL:-0}" "${PROGRESS_LABEL:-stage}" \
             | format_claude_stream ) &
         wait "$!" || status=$?
@@ -1250,6 +1287,7 @@ run_claude() {
         local elapsed="$((SECONDS - start))"
         local log="$LOG_DIR/${log_name}.jsonl"
         perf_record agent "$log_name" "$elapsed" "$status" "$log" "$cmd" "$model" "$effort"
+        supervision_stage_end "$log_name" "$status" "$log"
 
         # The final result event, if the run produced one.
         local result
@@ -1303,6 +1341,7 @@ run_claude() {
                     continue
                 fi
                 echo
+                triage_stop_reason "$STATE_DIR" human
             fi
             if [[ "$subtype" == *budget* ]]; then
                 echo "The \$$budget cap for this stage was reached."
@@ -1382,6 +1421,8 @@ run_codex() {
     # rules the same way an agent stage does.
     if [[ "$log_name" != plan-executability ]]; then
         prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+        supervision_prompt "$prompt_file" "$log_name" "$LOG_DIR/${log_name}.log"
+        prompt_file="$SUPERVISION_PROMPT"
     fi
 
     local review_key
@@ -1415,12 +1456,13 @@ run_codex() {
     # stdin is the operator's gate-answer channel, not stage input: codex
     # appends a non-TTY stdin to the prompt and would block on it forever.
     ( "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
-        < /dev/null 2>&1 | tee "$LOG_DIR/${log_name}.log" ) &
+        < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" ) &
     wait "$!" || status=$?
 
     record_codex_cost "$log_name" "$((SECONDS - start))"
     perf_record reviewer "$log_name" "$((SECONDS-start))" "$status" \
         "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
+    supervision_stage_end "$log_name" "$status" "$LOG_DIR/${log_name}.log"
 
     if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
         echo
@@ -1455,7 +1497,7 @@ cleanup_bg() {
         wait "$BG_PID" 2>/dev/null || true
     fi
 }
-trap 'progress_end; cleanup_bg; uncle_title_end' EXIT
+trap on_exit EXIT
 
 start_codex_bg() {
     local prompt_file
@@ -1570,6 +1612,10 @@ wait_codex_bg() {
 # The shared supervisor owns the permanent lock.
 origin_preflight
 
+# A stop reason belongs to the run that recorded it. Left in place, a
+# previous "human" stop would silence the triage bundle on this run's failure.
+rm -f "$STATE_DIR/stop-reason"
+
 # Whether this invocation can prove it owns .uncle/workflow/origin, rather than having
 # found a leftover one on disk. Computed once here, before this run performs any
 # state write, so a run that only *becomes* issue-bound mid-run cannot later
@@ -1623,6 +1669,8 @@ implementation_complete() {
         CHANGE_SPEC.md IMPLEMENTATION_NOTES.md > "$completion"; then
         return 0
     fi
+    supervision_validation_failed implementation_completion IMPLEMENTATION_NOTES.md \
+        "$(head -n 3 "$completion" 2>/dev/null | tr '\n' ' ')" 0
     # Keep rejection evidence intact. Only explicitly waived delivery rows may
     # advance; structural errors, missing IDs, and unrelated waivers still fail.
     [[ -s "$completion" ]] || return 1
@@ -1641,6 +1689,7 @@ implementation_complete() {
 
 while true; do
     state="$(get_state)"
+    if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi
 
     echo
     echo "Current state: $state"
@@ -1734,6 +1783,7 @@ while true; do
             ;;
 
         WAIT_PLAN_APPROVAL)
+            printf '%s\n' WAIT_PLAN_APPROVAL > "$STATE_DIR/approval-route"
             human_gate ACKNOWLEDGE \
                 CHANGE_PLAN.md CHANGE_PLAN \
                 ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
@@ -1770,6 +1820,7 @@ while true; do
             # Re-approving CHANGE_PLAN overwrites the ACKNOWLEDGE hash taken
             # before the revision, so the recorded approval always names the
             # text implementation will run against.
+            printf '%s\n' WAIT_UPDATED_PLAN_APPROVAL > "$STATE_DIR/approval-route"
             human_gate APPROVE \
                 CHANGE_PLAN.md CHANGE_PLAN
             set_state IMPLEMENT
@@ -1841,7 +1892,7 @@ while true; do
                     case "$choice_status" in
                         0) continue ;;
                         2) ;;
-                        *) exit 1 ;;
+                        *) triage_stop_reason "$STATE_DIR" human; exit 1 ;;
                     esac
                 else
                     echo "Implementation is incomplete. Attempting repair once."
@@ -1880,7 +1931,7 @@ REPAIR
                         case "$choice_status" in
                             0) continue ;;
                             2) ;;
-                            *) exit 1 ;;
+                            *) triage_stop_reason "$STATE_DIR" human; exit 1 ;;
                         esac
                     fi
                     require_file IMPLEMENTATION_NOTES.md
@@ -2014,7 +2065,7 @@ REPAIR
             # Remove any prior audit first: run_codex's require_file then treats
             # the file's existence as proof this invocation produced it, so a
             # reviewer call that exits 0 without writing cannot be read as fresh.
-            if [[ -e .git ]]; then change_pr_engine freeze || exit 1; fi
+            if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine freeze || exit 1; fi
             rm -f FINAL_AUDIT.md
             run_codex \
                 prompts/change/final-audit.md \
@@ -2028,7 +2079,7 @@ REPAIR
                 "$audit_class" \
                 "$(hash_file FINAL_AUDIT.md)" \
                 > "$VERDICT_FILE"
-            if [[ -e .git ]]; then change_pr_engine bind || exit 1; fi
+            if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine bind || exit 1; fi
             echo "Audit verdict: $audit_class"
             VERDICT_WRITTEN_THIS_RUN=1
 
@@ -2171,10 +2222,13 @@ REPAIR
                 echo "Waived checks were not performed. They are not passes, and this"
                 echo "summary is the only place that says so out loud."
             fi
-            if [[ -e .git ]]; then
+            triage_print_actions "$STATE_DIR"
+            if git rev-parse --verify HEAD >/dev/null 2>&1; then
                 change_pr_complete
+            elif [[ -s "$ORIGIN_FILE" ]]; then
+                echo "Build complete without a commit. PR publication requires an existing base commit; the issue remains open."
             else
-                echo "No Git checkout: PR creation is unavailable; the issue remains open."
+                echo "Build complete without a commit. PR publication requires an existing base commit; no PR was created."
             fi
             exit 0
             ;;

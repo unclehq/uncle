@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'scripts/lib'))
-from self_hosted import read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models
+from self_hosted import read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models, parse_arguments
 from process_tree import bash_executable
 
 
@@ -261,6 +261,7 @@ class SelfHosted(unittest.TestCase):
                 self.assertEqual(command[command.index('--dir')+1], str(self.root))
                 config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
                 self.assertEqual(config['provider']['local']['options']['baseURL'], self.values()['base_url'])
+                self.assertNotIn('options', config['provider']['local']['models']['local-model:Q4'])
                 self.assertEqual(env['UNCLE_OPENCODE_API_KEY'], 'test-secret')
                 self.assertNotIn('test-secret', str(command) + env['OPENCODE_CONFIG_CONTENT'])
                 self.assertEqual(config['permission']['edit'], 'allow' if side == 'agent' else 'deny')
@@ -268,6 +269,32 @@ class SelfHosted(unittest.TestCase):
                 self.assertEqual(config['permission']['task'] if 'task' in config['permission'] else config['permission']['*'], 'deny')
                 self.assertFalse(config['snapshot'])
                 self.assertFalse((self.root/'.git').exists())
+
+    def test_effort_reaches_the_opencode_model_options(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, env = opencode_invocation('agent', dict(self.values(), effort='high'), 'Test prompt', self.root, directory)
+            config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+            self.assertEqual(config['provider']['local']['models']['local-model:Q4']['options'],
+                             {'reasoningEffort': 'high'})
+
+    def test_effort_parsed_from_runner_flags(self):
+        import io
+        cases = [(['-p', '--effort', 'medium'], 'agent', 'medium'),
+                 (['exec', '-c', 'model_reasoning_effort=high', '--output-last-message', 'out.md', 'Do it'], 'reviewer', 'high'),
+                 (['exec', '-c', 'model=x', 'Do it'], 'reviewer', '')]
+        for args, side, expected in cases:
+            with self.subTest(args=args), patch('sys.stdin', io.StringIO('prompt from stdin')):
+                self.assertEqual(parse_arguments(side, args)[3], expected)
+
+    def test_reviewer_zero_status_limit_uses_default(self):
+        with patch.dict(os.environ, UNCLE_STATUS_STAGE_TURNS='0'):
+            self.assertEqual(parse_arguments('reviewer', ['exec', 'Review the checklist'])[2], 80)
+            self.assertEqual(parse_arguments('reviewer', ['exec', '--max-turns', '12', 'Review'])[2], 12)
+            for limit in ('0', '-1'):
+                with self.assertRaisesRegex(ValueError, 'positive turn limit'):
+                    parse_arguments('reviewer', ['exec', '--max-turns', limit, 'Review'])
+        with patch.dict(os.environ, UNCLE_STATUS_STAGE_TURNS='15'):
+            self.assertEqual(parse_arguments('reviewer', ['exec', 'Review'])[2], 15)
 
     def stub_environment(self):
         stub=self.root/'fake_opencode.py'
@@ -319,6 +346,25 @@ sys.exit(7 if mode=='fail' else 0)
                     self.assertGreaterEqual(final['duration_ms'], 0)
                     self.assertEqual(final['result'],'## Findings\n\nNOT READY')
                     self.assertIsNone(final['total_cost_usd'])
+
+    def test_runner_directory_retries_windows_sharing_violation(self):
+        import self_hosted
+        real_cleanup = tempfile.TemporaryDirectory.cleanup
+        calls = []
+        def cleanup(directory):
+            calls.append(directory.name)
+            if len(calls) == 1:
+                error = PermissionError('output.log still open')
+                error.winerror = 32
+                raise error
+            real_cleanup(directory)
+        with patch.object(tempfile.TemporaryDirectory, 'cleanup', cleanup):
+            with self.assertRaisesRegex(ValueError, 'original timeout; diagnostic log:'):
+                with self_hosted.runner_directory('uncle-cleanup-test-') as directory:
+                    (Path(directory) / 'output.log').write_text('timeout')
+                    raise ValueError('original timeout; diagnostic log: saved.log')
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(Path(directory).exists())
 
     def test_failures_never_write_a_review(self):
         env=self.stub_environment()
@@ -375,7 +421,7 @@ sys.exit(7 if mode=='fail' else 0)
         with patch.object(module,'CONFIG_PATH',str(self.config)):
             ui=module.UncleTUI.__new__(module.UncleTUI)
             ui.load_config()
-            self.assertEqual(ui._config_items(), ['1. Configure stages', '2. Configure OpenCode / self hosting', '3. Miscellaneous'])
+            self.assertEqual(ui._config_items(), ['1. Configure stages', '2. Configure OpenCode / self hosting', '3. Miscellaneous', '4. Supervision'])
             ui.config_section = 'misc'
             with patch.object(ui, 'maybe_reload'):
                 ui._set_field('!misc', 'auto_mode', 'true')
@@ -393,10 +439,11 @@ sys.exit(7 if mode=='fail' else 0)
             ui._draw_logo(60, 160)
             ui.stdscr.addnstr.assert_any_call(len(module.LOGO), (module.LOGO_W-5)//2, 'uncle', 5, 1)
             ui.config_section = 'stages'
-            self.assertEqual(len(ui._config_items()), len(module.CONFIG_STAGES))
+            self.assertEqual([row.split()[0] for row in ui._config_items()], module.BUILD_CONFIG_STAGES)
+            self.assertNotIn('triage', [row.split()[0] for row in ui._config_items()])
             ui.config_section = 'opencode'
             self.assertIn('1 loaded', ui._config_items()[1])
-            self.assertEqual(ui.stage_fields('implementation'),['runner','model'])
+            self.assertEqual(ui.stage_fields('implementation'),['runner','effort','model'])
             self.assertEqual(ui._field_display('@local/local-model:Q4','api_key'),'********')
             ui.save_config()
             ui.load_config()
@@ -405,13 +452,13 @@ sys.exit(7 if mode=='fail' else 0)
             self.assertEqual(read_keys(self.config)['__opencode_models__']['local/local-model:Q4']['api_key'],'secret-with-#-characters')
             ui._open_picker('model','implementation')
             self.assertEqual(ui.state,'picker')
-            self.assertEqual(ui._picker_rows(), [('option', 'local/local-model:Q4')])
+            self.assertEqual(ui._picker_rows(), [('option', 'local/local-model:Q4'), ('custom', 'Custom… (type a model id)')])
             ui._open_stage('@connection')
             self.assertEqual(ui.stage_fields('@connection'), ['base_url', 'api_key'])
             with patch.object(ui, 'maybe_reload'), patch('self_hosted.discover_models', return_value=['local/local-model:Q4', 'local/second-model']):
                 ui._set_field('@connection', 'api_key', 'secret-with-#-characters')
             ui._open_picker('model', 'implementation')
-            self.assertEqual(ui._picker_rows(), [('option', 'local/local-model:Q4'), ('option', 'local/second-model')])
+            self.assertEqual(ui._picker_rows(), [('option', 'local/local-model:Q4'), ('option', 'local/second-model'), ('custom', 'Custom… (type a model id)')])
             self.assertNotIn('second-secret', str(ui._config_items()))
             self.assertNotIn('second-secret', self.config.read_text(encoding='utf-8'))
             ui.stage_target = 'implementation'

@@ -174,9 +174,10 @@ if command -v git > /dev/null 2>&1; then
         git config user.email t@e.st
         git config user.name t
         git config commit.gpgsign false
+        git config tag.gpgsign false
         echo hi > app.txt
         git add -A
-        git commit -qm init
+        git -c commit.gpgsign=false -c tag.gpgsign=false commit --no-gpg-sign -qm init
     )
     printf '## Summary\nChange it.\n\n## Motivation\nTesting.\n' > "$CPROJ/CHANGE_REQUEST.md"
     ARGV="$TMP/cw.argv"

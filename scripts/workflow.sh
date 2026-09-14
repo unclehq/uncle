@@ -22,11 +22,18 @@ esac
 mkdir -p .uncle/workflow/approvals
 
 . "$ROOT/scripts/lib/sha256.sh"
+# Gate identity and supervisor receipts; a fixture copy without the library
+# runs the plain read.
+if [[ -f "$ROOT/scripts/lib/supervision.sh" ]]; then
+    . "$ROOT/scripts/lib/supervision.sh"
+fi
+if ! declare -f gate_read > /dev/null; then gate_read() { IFS= read -r "$1"; }; fi
 
 # One bold prompt line. `read -p` suppresses its prompt when stdin is not a
 # terminal, so the text is printed separately. Escapes are emitted only for a
 # real terminal: piped captures and TERM=dumb stay free of control bytes.
 gate_prompt() {
+    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$1"; fi
     if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
         printf '%s%s%s' $'\033[1m' "$1" $'\033[0m'
     else
@@ -66,10 +73,12 @@ approve_file() {
     echo "You are approving: $file"
     echo "SHA-256: $captured"
     echo
+    UNCLE_GATE_FILE="$file"
     gate_prompt "Ready to approve $file? [Y/N] "
+    UNCLE_GATE_FILE=""
     # IFS= keeps surrounding whitespace, so " y" is not an approval. `|| true`
     # keeps EOF from tripping `set -e` before the decline path runs.
-    IFS= read -r confirmation || true
+    gate_read confirmation || true
 
     case "$confirmation" in
         y|Y) ;;
@@ -87,7 +96,7 @@ approve_file() {
     fi
 
     printf '%s\n' "$captured" > ".uncle/workflow/approvals/${approval_name}.sha256"
-    printf '%s\n' "$([[ "${UNATTENDED:-0}" == 1 ]] && printf unattended || printf '%s' "${UNCLE_APPROVAL_NAME:-}")" > ".uncle/workflow/approvals/${approval_name}.approved-by"
+    printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > ".uncle/workflow/approvals/${approval_name}.approved-by"
     echo "Approved $file"
 }
 

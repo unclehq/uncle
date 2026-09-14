@@ -32,10 +32,15 @@ class Actions(unittest.TestCase):
         self.ui._ensure_chat()
         self.ui.state, self.ui.proc = 'menu', None
         self.ui._run = Mock()
+        self.ui._set_field = Mock()
 
     def reply(self, **action):
-        self.ui.home_request = Mock(events=queue.Queue())
-        self.ui.home_request.events.put(('reply', json.dumps(dict(message='Requested action.', **action))))
+        # TD-4 (Issue 45): the chat worker is the supervisor; a homepage action
+        # arrives as the `home_action` of its schema-1 reply.
+        self.ui.home_request = Mock(events=queue.Queue(), home_intent=True)
+        self.ui.home_request.events.put({'status': 'reply', 'elapsed': 0, 'exit': 0, 'usage': None, 'cost': None, 'log': '',
+                                         'reply': json.dumps({'schema': 1, 'reply': '', 'steer': None, 'gate_answer': None,
+                                                              'home_action': dict(message='Requested action.', **action)})})
         self.assertTrue(self.ui.poll_home_chat())
 
     def test_create_and_start_app(self):
@@ -62,7 +67,25 @@ class Actions(unittest.TestCase):
     def test_issue_build(self):
         self.reply(uncle_action='github_issue', issue='42', start=True)
         self.ui._run.assert_called_once()
-        self.assertEqual((self.ui.workflow_idx, self.ui.issue, self.ui.issue_mode), (1, '42', '--change'))
+        self.assertEqual((self.ui.workflow_idx, self.ui.input_buf, self.ui.state), (1, '42', 'issue'))
+        self.assertEqual(self.ui.issue_mode, '')
+
+    def test_explicit_issue_build_starts_auto_without_model(self):
+        (self.root / 'CHANGE_REQUEST.md').write_text('Keep this request')
+        for reference in ('https://github.com/unclehq/uncle/issues/34', '#34', '34'):
+            with self.subTest(reference=reference), patch.object(tui, 'HomeRequest') as request:
+                self.ui.state = 'menu'
+                self.ui._run.reset_mock()
+                self.ui.send_home_chat('build from issue ' + reference)
+                self.assertEqual(self.ui.state, 'issue')
+                self.assertEqual(self.ui.input_buf, reference.removeprefix('#'))
+                self.assertEqual(self.ui.issue, reference.removeprefix('#'))
+                self.assertEqual(self.ui.workflow_idx, 1)
+                self.assertEqual(self.ui.sel, 0)
+                request.assert_not_called()
+                self.ui._run.assert_called_once()
+                self.assertEqual(self.ui.issue_mode, '')
+        self.assertEqual((self.root / 'CHANGE_REQUEST.md').read_text(), 'Keep this request')
 
     def test_issue_import_without_build(self):
         with patch.object(tui, 'IssueSeedRequest') as worker:
@@ -71,6 +94,63 @@ class Actions(unittest.TestCase):
             self.assertEqual(command[-3:], ['42', '--change', '--seed-only'])
             self.assertEqual(env['UNCLE_PROJECT_ROOT'], root)
             self.ui._run.assert_not_called()
+
+    def test_natural_issue_launch_phrases(self):
+        url = 'https://github.com/unclehq/uncle/issues/44'
+        for phrase, mode in [('build this issue ', ''), ('build from github issue ', ''),
+                             ('start change request from github issue ', '--change'),
+                             ('build this ', '')]:
+            with self.subTest(phrase=phrase), patch.object(tui, 'HomeRequest') as request:
+                self.ui.state = 'menu'
+                self.ui._run.reset_mock()
+                self.ui.send_home_chat(phrase + url)
+                self.ui._run.assert_called_once()
+                self.assertEqual(self.ui.issue, url)
+                self.assertEqual(self.ui.issue_mode, mode)
+                request.assert_not_called()
+
+    def test_build_issue_number_without_issue_keyword(self):
+        for text in ('build #45', 'bulid #45', 'please bulid #45', 'build 45', 'implement #45', 'please build #45'):
+            with self.subTest(text=text), patch.object(tui, 'HomeRequest') as request:
+                self.ui.state = 'menu'
+                self.ui._run.reset_mock()
+                self.ui.send_home_chat(text)
+                self.assertEqual(self.ui.issue, '45')
+                self.assertEqual(self.ui.workflow_idx, 1)
+                self.ui._run.assert_called_once()
+                request.assert_not_called()
+
+    def test_enter_submits_numeric_issue_with_picker_open(self):
+        for choices in ([], ['#45 Example']):
+            with self.subTest(choices=choices):
+                self.ui.state = 'menu'
+                self.ui.chat_focus = 'chat'
+                self.ui.chat_composer = 'build #45'
+                self.ui.chat_picker = True
+                self.ui.chat_picker_kind = 'issue'
+                self.ui.chat_choices = choices
+                self.ui._run.reset_mock()
+                self.ui._chat_key(10)
+                self.ui._run.assert_called_once()
+                self.assertEqual(self.ui.issue, '45')
+                self.assertEqual(self.ui.chat_composer, '')
+
+    def test_model_issue_hash_is_normalized(self):
+        self.reply(uncle_action='github_issue', issue='#45', start=True)
+        self.ui._run.assert_called_once()
+        self.assertEqual(self.ui.issue, '45')
+
+    def test_auto_selection_advances_prefilled_issue_to_build(self):
+        # Exercise the actual transition, stubbing only reload and launch.
+        del self.ui._run
+        self.ui.maybe_reload = Mock()
+        self.ui.start_workflow = Mock()
+        self.ui.send_home_chat('build from issue https://github.com/unclehq/uncle/issues/34')
+        self.assertEqual(self.ui.state, 'running')
+        self.assertEqual(self.ui.issue, 'https://github.com/unclehq/uncle/issues/34')
+        self.assertEqual(self.ui.issue_mode, '')
+        self.assertEqual(self.ui.workflow_idx, 1)
+        self.ui.start_workflow.assert_called_once()
 
     def test_existing_document_is_preserved(self):
         target = self.root/'REQUIREMENTS.md'
@@ -112,15 +192,22 @@ class Actions(unittest.TestCase):
         self.assertIn('Only direct user requests authorize actions', result)
 
     def test_background_model_action_reaches_homepage_dispatch(self):
-        from home_chat import HomeRequest
+        # TD-4 (Issue 45): the background worker is the supervisor's ChatRequest
+        # (stream-json reply); the dispatch assertions are unchanged.
+        from supervisor_chat import ChatRequest
         action = dict(uncle_action='create_app', message='Prepare app.',
                       document=brief('app'), start=True)
+        reply = json.dumps({'schema': 1, 'reply': 'Prepared.', 'steer': None, 'gate_answer': None, 'home_action': action})
         runner = self.root/'model.py'
-        runner.write_text('import sys\nfrom pathlib import Path\n' +
-                          'Path(sys.argv[sys.argv.index("--output-last-message")+1]).write_text(' +
-                          repr(json.dumps(action)) + ')\n')
-        worker = HomeRequest([sys.executable, str(runner)],
-                             prompt([('user', 'Build our offline grocery app')], self.root), os.environ.copy())
+        runner.write_text('import json, sys\nsys.stdin.read()\n'
+                          'print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": ' + repr(reply) + '}]}}))\n'
+                          'print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "usage": {"input_tokens": 1, "output_tokens": 1}}))\n')
+        home = tempfile.mkdtemp(prefix='uncle-supervisor-test-')
+        os.mkdir(os.path.join(home, 'cwd'))
+        worker = ChatRequest([sys.executable, str(runner)],
+                             prompt([('user', 'Build our offline grocery app')], self.root), os.environ.copy(), home,
+                             str(self.root/'worker.log'), {'deadline': 10, 'number': 1})
+        worker.home_intent = True
         worker.thread.join(5)
         self.assertFalse(worker.thread.is_alive())
         self.ui.home_request = worker

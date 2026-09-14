@@ -14,12 +14,40 @@ import threading
 import time
 
 from verification_manifest import manifest
+from shell_syntax import syntax_command
+
+
+def _test_status(state):
+    path = os.environ.get('UNCLE_STATUS_FILE')
+    if not path:
+        return
+    try:
+        event = json.dumps({'event': 'test_execution', 'state': state,
+                            'id': str(os.getpid())}) + '\n'
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, event.encode('utf-8'))
+        finally:
+            os.close(fd)
+    except OSError:
+        pass  # Display telemetry cannot change verification outcomes.
 
 
 def run(args):
+    _test_status('Running')
+    try:
+        return _run_checks(args)
+    finally:
+        _test_status('Stopped')
+
+
+def _run_checks(args):
     run_started = time.monotonic()
     passed = failed = 0
-    commands = Path(args.commands).read_text(encoding="utf-8").splitlines()
+    commands = [row.removesuffix(b'\r').decode('utf-8')
+                for row in Path(args.commands).read_bytes().split(b'\n')]
+    if commands and commands[-1] == '':
+        commands.pop()
     groups = {}
     previous = 0
     for row in Path(args.groups).read_text(encoding="utf-8").splitlines():
@@ -64,6 +92,8 @@ def run(args):
             directory.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=directory, prefix=".pending.", delete=False) as out:
                 json.dump(dict(schema=1, kind="check", stage=command,
+                               run_id=Path(os.environ.get("UNCLE_TIMING_DIR", "")).name,
+                               workflow_state=os.environ.get("UNCLE_TIMING_STAGE", ""),
                                elapsed_seconds=round(elapsed, 6), process_exit=status,
                                ended_at=time.time(), speculative=False, log=log,
                                input_tokens=None, output_tokens=None), out)
@@ -88,7 +118,8 @@ def run(args):
                             'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE',
                             'DOCUMENT_BUDGET_SOURCE'):
                     check_env.pop(key, None)
-                child = start_check([bash_executable(), "-c", command], env=check_env,
+                argv = syntax_command(command, args.jobs) or [bash_executable(), '-c', command]
+                child = start_check(argv, env=check_env,
                                     stdout=output, stderr=subprocess.STDOUT)
                 children.add(child)
             status = child.wait()

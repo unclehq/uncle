@@ -752,16 +752,18 @@ class UncleTUI:
     def stage_fields(self, stage):
         """The fields this stage's popup shows.
 
-        A model and its billing belong to cline alone -- it is the only runner
-        uncle passes a model to. Network belongs to codex alone: it is the only
-        runner that sandboxes a stage, and so the only one where the setting
-        changes anything.
+        Billing belongs to cline alone -- it is the only runner whose model
+        list is bought two ways. Network belongs to codex alone: it is the
+        only runner that sandboxes a stage, and so the only one where the
+        setting changes anything. Every runner takes an effort: claude, kimi,
+        cline, and codex as a reasoning level, self-hosted as the OpenCode
+        model's reasoningEffort option.
         """
         if stage.startswith("@"):
             return ["base_url", "api_key"]
         runner = self.stage_runner(stage)
         if runner == "self-hosted":
-            return ["runner", "model"]
+            return ["runner", "effort", "model"]
         if runner == "cline":
             # Billing sits above model because it decides which models exist.
             return ["runner", "effort", "billing", "model"]
@@ -846,9 +848,6 @@ class UncleTUI:
             return
         if field == "runner" and value != self.stage_runner(stage):
             self.stage_models.pop(stage, None)
-        if field == "model" and self.stage_runner(stage) == "self-hosted" and value and value not in self.stage_api_keys.get("__opencode_models__", {}):
-            self.notice = "Choose a model from OpenCode self-hosted models."
-            return
         store = {"runner": self.stage_runners,
                  "effort": self.stage_efforts,
                  "model": self.stage_models,
@@ -965,7 +964,8 @@ class UncleTUI:
             # meaning nothing to the flag it becomes.
             return [("option", v) for v in NETWORK_CHOICES]
         if self.picker_kind == "model" and self.stage_runner(self.picker_target) == "self-hosted":
-            return [("option", name) for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
+            return ([("option", name) for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
+                    + [("custom", "Custom… (type a model id)")])
         rows = []
         for group, entries in model_catalog(self.stage_billing(self.picker_target)):
             rows.append(("header", group))
@@ -3363,7 +3363,7 @@ class UncleTUI:
             group["tokens"].append(event.get("total_tokens"))
             group["costs"].append(self._live_cost(event) if event else (None, False))
             group["attempts"] += 1
-        lines = ["EACH STAGE", "Cost of usage so far", ""]
+        lines = ["STAGE", "Cost of usage so far", ""]
         tokens, costs = [], []
         self._panel_stage_styles = {}
         for stage, group in sorted(groups.items(), key=lambda item: item[1]["started"]):
@@ -3390,7 +3390,7 @@ class UncleTUI:
             costs.extend(group["costs"])
         if not groups:
             lines += ["Waiting for stage…", ""]
-        lines += ["SESSION TOTALS",
+        lines += ["TOTALS",
                   "Time   " + duration(sum(group["seconds"] for group in groups.values())),
                   "Tokens " + subtotal(tokens, count),
                   "Cost   " + cost_subtotal(costs), "Reported + projected"]
@@ -3401,7 +3401,7 @@ class UncleTUI:
         stage_style = getattr(self, "_panel_stage_styles", {}).get(line)
         if stage_style:
             return palette.get(stage_style, 0)
-        if line in ("EACH STAGE", "SESSION TOTALS"):
+        if line in ("STAGE", "TOTALS"):
             return palette.get("title", 0) | curses.A_BOLD
         if "Unavailable" in line or "(partial)" in line or line.startswith("Waiting"):
             return palette.get("warning", 0)

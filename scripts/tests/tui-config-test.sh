@@ -140,13 +140,32 @@ check("default runner with Cline installed", "cline", t.stage_runner("requiremen
 check("default effort", m.DEFAULT_EFFORT, t.stage_effort("requirements"))
 check("default cline model", m.DEFAULT_CLINE_MODEL, t.stage_model("requirements"))
 
-# cline is the only runner with a model field.
+# cline is the only runner with a billing field.
 check("cline shows billing and model", ["runner", "effort", "billing", "model"],
       t.stage_fields("requirements"))
 t.stage_runners["requirements"] = "claude"
 check("claude hides both", ["runner", "effort"],
       t.stage_fields("requirements"))
 check("claude resolves to no model", "", t.stage_model("requirements"))
+
+# self-hosted takes a model and, like claude or codex, an effort.
+t.stage_runners["requirements"] = "self-hosted"
+check("self-hosted shows effort and model", ["runner", "effort", "model"],
+      t.stage_fields("requirements"))
+t.picker_kind, t.picker_target, t.pick_filter = "effort", "requirements", ""
+check("the effort picker offers the standard levels",
+      [("option", "high"), ("option", "medium"), ("option", "low"),
+       ("custom", "Custom… (type an effort)")], t._picker_rows())
+
+# Its model picker takes custom ids the way cline's does.
+t.picker_kind, t.picker_target, t.pick_filter = "model", "requirements", ""
+check("the self-hosted model picker takes a custom id", True,
+      any(kind == "custom" for kind, _ in t._picker_rows()))
+t._set_field("requirements", "model", "my-fine-tune:latest")
+check("a custom self-hosted model id is stored", "my-fine-tune:latest",
+      t.stage_models["requirements"])
+t.stage_models.pop("requirements")
+t.stage_runners.pop("requirements")
 
 # codex is the only runner that sandboxes a stage, so it is the only one with a
 # network to open. Showing the row anywhere else would offer a setting that

@@ -3053,7 +3053,21 @@ class UncleTUI:
         composer_row = row + (3 if compact else 6)
         wrap_width = max(8, width - 2)
         # The composer grows as the input wraps; long pastes scroll to the tail.
-        chunks = textwrap.wrap(text, wrap_width, break_long_words=True, break_on_hyphens=False) if text else []
+        # Wrap on words but keep every typed space: the cursor position is
+        # derived from the wrapped text, so dropping whitespace stalls it.
+        chunks, current = [], ''
+        for word in text.split(' '):
+            candidate = word if not current else current + ' ' + word
+            while len(candidate) > wrap_width:
+                if current:
+                    chunks.append(current)
+                    current, candidate = '', word
+                else:
+                    chunks.append(candidate[:wrap_width])
+                    candidate = candidate[wrap_width:]
+            current = candidate
+        if text:
+            chunks.append(current)
         chunks = chunks[-max(1, min(6, h - composer_row - 3)):]
         extra = len(chunks) - 1 if text else 0
         if text:

@@ -106,7 +106,7 @@ class Actions(unittest.TestCase):
                 request.assert_not_called()
 
     def test_build_issue_number_without_issue_keyword(self):
-        for text in ('build #45', 'build 45', 'implement #45', 'please build #45'):
+        for text in ('build #45', 'bulid #45', 'please bulid #45', 'build 45', 'implement #45', 'please build #45'):
             with self.subTest(text=text), patch.object(tui, 'HomeRequest') as request:
                 self.ui.state = 'menu'
                 self.ui._run.reset_mock()

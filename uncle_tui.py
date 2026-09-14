@@ -2153,7 +2153,7 @@ class UncleTUI:
         if not message.strip():
             return
         issue_request = re.fullmatch(
-            r'(?:please\s+)?(?:build|implement|start|run|work on)\s+'
+            r'(?:please\s+)?(?:build|bulid|implement|start|run|work on)\s+'
             r'(?:(?P<change>change\s+request)\s+)?'
             r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+|this\s+(?:issue\s+)?)?'
             r'(?P<issue>https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?|#?[1-9][0-9]*)[.!]?',

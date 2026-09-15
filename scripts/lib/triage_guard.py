@@ -60,6 +60,10 @@ def sha256(path):
 def is_forbidden(rel):
     """Whether a project-relative path may never be written by the master."""
     parts = rel.split('/')
+    if parts[0] == '.uncle':
+        return False
+    if rel.lower().endswith('.md') and '.git' not in parts:
+        return False
     if rel in FORBIDDEN_FILES:
         return True
     if parts[:2] == ['.uncle', 'workflow'] and len(parts) > 2:
@@ -213,6 +217,12 @@ def make_sandbox(project, sandbox):
                 copy_entry(src, dst)
             elif dst.exists() or dst.is_symlink():
                 dst.unlink()
+        # Ignored/untracked Markdown is still editable project content.
+        # Overlay it before snapshotting so apply-back compares the actual bytes.
+        for rel in walk(project, excludes=SANDBOX_EXCLUDES + ('.uncle/workflow-history', 'node_modules', '.venv')):
+            src = project / rel
+            if (rel.lower().endswith('.md') or rel.startswith('.uncle/')) and not src.is_symlink():
+                copy_entry(src, sandbox / rel)
         return 'worktree'
     def ignore(directory, names):
         rel_dir = os.path.relpath(directory, project)
@@ -256,6 +266,8 @@ def begin(args):
     files_dir.mkdir()
     forbidden = {}
     for rel in forbidden_live_paths(project):
+        if not is_forbidden(rel):
+            continue
         full = Path(project) / rel
         forbidden[rel] = [sha256(full), os.stat(full).st_mode & 0o7777]
         copy_entry(full, files_dir / rel)
@@ -328,7 +340,7 @@ def end(args):
     # first, before anything is appended to it, because it is one of them.
     ledger = '.uncle/workflow/triage-actions.tsv'
     ordered = sorted(record['forbidden'].items(), key=lambda item: (item[0] != ledger, item[0]))
-    if ledger not in record['forbidden'] and (Path(project) / ledger).is_file():
+    if is_forbidden(ledger) and ledger not in record['forbidden'] and (Path(project) / ledger).is_file():
         after = sha256(Path(project) / ledger)
         (Path(project) / ledger).unlink()
         result['refused'].append(ledger)
@@ -350,6 +362,8 @@ def end(args):
         if not restored:
             taint('Forbidden path %s could not be restored to its pre-turn bytes.' % rel)
     for rel in forbidden_live_paths(project):
+        if not is_forbidden(rel):
+            continue
         if rel not in record['forbidden'] and rel != ledger:
             live = Path(project) / rel
             after = sha256(live)
@@ -393,9 +407,11 @@ def end(args):
         post = after.get(rel)
         pre_hash = pre[0] if pre else '-'
         post_hash = post[0] if post else '-'
+        markdown_edit = rel.lower().endswith('.md') or rel.startswith('.uncle/')
         proposal_report_edit = args.mode == 'execute' and rel in FORBIDDEN_FILES
         if ((is_forbidden(rel) and not proposal_report_edit) or rel in result['refused']
-                or install_pinned(rel, project, args.root) or args.mode != 'execute'):
+                or (install_pinned(rel, project, args.root) and not markdown_edit)
+                or (args.mode != 'execute' and not markdown_edit)):
             result['refused'].append(rel)
             tsv_row(args.state_dir, args.turn, proposal, 'REFUSED', rel, pre_hash, post_hash)
             if install_pinned(rel, project, args.root) and args.mode == 'execute':

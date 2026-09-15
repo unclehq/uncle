@@ -11,6 +11,19 @@ class Document(unittest.TestCase):
                 with self.assertRaises(ValueError):validate(p)
             p.write_text('## MC-1\nExact action: Open page\nExpected result: Greeting\n')
             self.assertEqual(len(validate(p)),1)
+    def test_categorized_check_ids_preserve_dependencies(self):
+        from checklist_document import validate_text
+        rows = validate_text("""# Checklist
+| ID | Excl | Deps | Action | Expected |
+|---|---|---|---|---|
+| MC-S-1 | none | none | Read evidence | All assertions present |
+| MC-UV-1 | browser:system | MC-S-1 | View page | Greeting visible |
+| MC-H-2 | browser:system | MC-UV-1 | Open file | Page renders |
+""")
+        self.assertEqual([r.id for r in rows], ['MC-S-1','MC-UV-1','MC-H-2'])
+        self.assertEqual(rows[1].depends, ['MC-S-1'])
+        self.assertEqual(rows[2].depends, ['MC-UV-1'])
+
     def test_native_correction_is_bounded_and_only_for_invalid_checklists(self):
         from types import SimpleNamespace
         from native_kimi import checklist_correction

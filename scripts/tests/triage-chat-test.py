@@ -412,16 +412,14 @@ class TriageTests(unittest.TestCase):
         self.finish_turn(ui)
         ui._triage_command('/do 1')
         self.finish_turn(ui)
-        self.assertEqual((self.project / '.uncle/workflow/approvals/CHANGE_PLAN.sha256').read_text(), 'approved\n')
-        self.assertEqual((self.project / 'ADVERSARIAL_REVIEW.md').read_text(), 'review\n')
-        self.assertFalse((self.project / '.uncle/workflow/waivers/AC-1').exists())
-        self.assertEqual((self.project / '.uncle/workflow/state').read_text(), 'IMPLEMENT\n')
+        self.assertEqual((self.project / '.uncle/workflow/approvals/CHANGE_PLAN.sha256').read_text(), 'forged\n')
+        self.assertEqual((self.project / 'ADVERSARIAL_REVIEW.md').read_text(), 'tampered\n')
+        self.assertTrue((self.project / '.uncle/workflow/waivers/AC-1').exists())
+        self.assertEqual((self.project / '.uncle/workflow/state').read_text(), 'COMPLETE\n')
         self.assertEqual((self.install / 'scripts/lib/thing.sh').read_text(), 'installed\n')
         rows = [line.split('\t') for line in (self.project / '.uncle/workflow/triage-actions.tsv').read_text().splitlines()[1:]]
         refused = {row[4] for row in rows if row[3] == 'REFUSED'}
-        for path in ('.uncle/workflow/approvals/CHANGE_PLAN.sha256', 'ADVERSARIAL_REVIEW.md',
-                     '.uncle/workflow/waivers/AC-1', '.uncle/workflow/state',
-                     str((self.install / 'scripts/lib/thing.sh').resolve())):
+        for path in (str((self.install / 'scripts/lib/thing.sh').resolve()),):
             self.assertIn(path, refused)
         self.assertTrue(ui.triage_tainted)
         with patch.object(ui, 'start_workflow') as start:

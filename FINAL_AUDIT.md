@@ -1,36 +1,17 @@
-Now I have all the evidence needed. Let me write the audit.
-
 ## Findings
 
 | ID | Severity | Evidence | Affected behavior | Affected invariant | Required correction | Blocks completion |
 |---|---|---|---|---|---|---|
-| FA-1 | HIGH | `.uncle/workflow/delivery-summary.tsv` claims AC-1 through AC-5 are `INCOMPLETE`; yet IMPLEMENTATION_NOTES.md:21-29, CHANGE_TEST_REPORT.md:14, VERIFICATION_REPORT.md:50-57 all report those criteria passed. The TSV was not refreshed after implementation succeeded. | Completion reporting accuracy | None directly; misleads operators on the gate decision | Refresh `delivery-summary.tsv` to reflect `ACCEPTED` for AC-1..AC-5, or explain why they are genuinely incomplete despite passing tests and verification | NO |
-| FA-2 | LOW | `CHANGE_TEST_REPORT.md:49-53`: Rollback test NOT RUN per stage policy (no working-tree modification); VC-3 hash/path comparison present but does not exercise rollback. `MANUAL_CHECKLIST.md:MC-026` (live TTY) BLOCKED-HUMAN. IMPLEMENTATION_NOTES.md:41 confirms LV-1 not performed. | Live verification of Esc/Enter on real TUI session; rollback path exercised | None | Accept that environmental constraints prevent live terminal testing and rollback exercise in stages where these are the only remaining gaps | NO |
+| FA-1 | Blocking | `grep -c 'VIEWER_PROGRAMS\|markdown_viewer' uncle_tui.py` → 0 (rerun at audit); `git diff HEAD -- uncle_tui.py` holds only `/run` stage-rerun hunks (`send_home_chat`, `run_named_stage`); `.uncle/workflow/change.diff:385-620` has the 9 approved viewer hunks; `delivery-summary.tsv` AC-1..AC-7 INCOMPLETE; DEFECTS.md DEF-1 | B-2..B-8, B-13 (all ADD/MODIFY) | I-3, I-4, I-5, I-6, I-7, I-8 | Reapply the `uncle_tui.py` portion of `change.diff` (or rerun implementation), reopen the diff gate, rerun checklist execution | YES |
+| FA-2 | Blocking | CHANGE_TEST_REPORT.md:14 claims `tui-viewer-test.py` → OK, 8 tests; audit rerun → `FAILED (failures=7, errors=1)`; only log cited is IMPLEMENTATION_NOTES.md, no archived runner log | AC-1..AC-7 | I-3..I-8 | Re-execute after FA-1 and cite a retained log under `.uncle/workflow/` | YES |
+| FA-3 | Blocking | CHANGE_TEST_REPORT.md:79 claims VC-3 `shasum -c` shows only `uncle_tui.py` differing and `_run_in_terminal` identical for the implemented tree; current tree has no implemented `_viewer_command`; MC-006 PASS in VERIFICATION_REPORT.md:22 was measured on baseline code (VERIFICATION_REPORT.md:63) | AC-5 (FN-1 preservation) | I-2 | Re-run VC-3 against the restored implementation | YES |
+| FA-4 | Blocking | CHANGE_TEST_REPORT.md:63 claims `shlex.quote` in every `_viewer_command` branch via `test_t1`, `test_t3`; those tests fail at audit; MC-023 FAIL (VERIFICATION_REPORT.md:39) | B-2..B-6 | I-8 | Re-verify after FA-1 | YES |
+| FA-5 | Blocking | CHANGE_TEST_REPORT.md:35 "`py_compile` (after editing) → exit 0" and IMPLEMENTATION_NOTES.md `## Acceptance delivery` rows IMPLEMENTED with line refs `:1936-2010` that do not exist in the current file; `implementation-completion.txt` is 0 bytes | AC-1..AC-7 | — | Regenerate notes and completion record from the restored tree | YES |
+| FA-6 | Blocking | VERIFICATION_REPORT.md:23-47: MC-007..MC-022, MC-024..MC-026, MC-031 NOT RUN (no TTY, ENV-1); CHANGE_PLAN.md LV-1..LV-3 LIVE_VERIFICATION not performed (CHANGE_TEST_REPORT.md:76) | B-4, B-7..B-12 | I-1, I-4, I-7 | After FA-1, Brian runs `python3 uncle_tui.py` live rows; record as BLOCKED-HUMAN until signed | YES |
+| FA-7 | Major | MC-028 BLOCKED-IMPOSSIBLE (VERIFICATION_REPORT.md:44); `.uncle/workflow/waivers/` absent; the check is executable without mutation: run `load_config` from the `/tmp/uncle-51-head` HEAD archive (CHANGE_TEST_REPORT.md:3) against a config containing `misc.markdown_viewer` | B-13 old-loader tolerance (CHANGE_SPEC.md §8) | I-5 | Execute MC-028 from the HEAD archive, or record an operator waiver | YES |
+| FA-8 | Major | `change.diff:1-111` includes `prompts/change/baseline.md`, `scripts/lib/checklist_groups.py`, `scripts/lib/gates.sh`, `scripts/tests/checklist-document-test.py`; CHANGE_PLAN.md FS-1/FE-1/FE-2 scope only `uncle_tui.py` and `tui-viewer-test.py`; IMPLEMENTATION_NOTES.md:5 calls them pre-existing unrelated edits | Unrelated driver behavior (core rule 5) | — | Exclude the four files from the Issue 51 change before publishing; regenerate `change.diff` scoped to FE-1/FE-2 | NO |
+| FA-9 | Minor | IMPLEMENTATION_NOTES.md DV-4 and CHANGE_TEST_REPORT.md:77: `OSError` snapshot-copy fallback untested; MC-031 NOT RUN | B-4 fallback path | I-4 (explanation lines absent on this path) | Add a `copyfile` OSError test or accept DV-4 explicitly in CHANGE_PLAN.md | NO |
+| FA-10 | Minor | MANUAL_CHECKLIST.md:3-194 contains reviewer drafting narrative ("Let me reconsider", "I'll reproduce each check") before the check table | Checklist readability; parse of `Exclusive resources` groups | — | Reviewer trims to the check table and traceability notes | NO |
+| FA-11 | Minor | IMPLEMENTATION_NOTES.md DV-1: `cursor`/`code` retain the `0444` snapshot directory in the OS temp dir with no cleanup; CHANGE_PLAN.md D-4 requires removal; PB-1 recorded, accepted at the diff gate | B-10 detached editors | — | Record D-4 amendment in CHANGE_PLAN.md or add age-based cleanup; no action needed if the gate acceptance stands | NO |
 
-## Assumptions
-
-```
-ASSUMPTION: the four driver completion banners at stagegate.sh:2141,2143 and change-workflow.sh:2177,2179 match the strings tested in tui-complete-dialog-test.py:18-20.
-  Unverified: driver source was not diffed against `change.diff` line by line, but grep found exactly four successful-completion strings (IMPLEMENTATION_NOTES.md:10).
-  Settled by: reading the two driver scripts if a discrepancy is suspected.
-
-ASSUMPTION: BASELINE_REPORT.md on disk (Issue 40) does not affect Issue 49 acceptance; a fresh Issue-49 baseline was taken per CHANGE_PLAN PC-2.
-  Unverified: the fresh baseline command output was not re-read here.
-  Settled by: CHANGE_TEST_REPORT.md:8 confirming shell-suite pre/post list identical (no new failure).
-
-ASSUMPTION: delivery-summary.tsv "INCOMPLETE" status is stale metadata, not an actual acceptance gate.
-  Unverified: no stage driver requires it as a hard block for final audit.
-  Settled by: confirming the TSV has no programmatic enforcement in `.uncle/workflow/` orchestration scripts.
-```
-
-## Open questions
-
-1. `delivery-summary.tsv` says all five acceptance criteria are INCOMPLETE despite passing implementation, tests, and verification. Who owns refreshing it to prevent blocking on stale metadata?
-
----
-
-# Conclusion
-
-**READY WITH NON-BLOCKING ISSUES**
-
-The implementation correctly delivers all five acceptance criteria. The diff at `.uncle/workflow/change.diff` adds `_build_finished()`, `_back_from_build()`, and `_complete_key()` to `uncle_tui.py`, expands banner recognition per D-3, preserves `'complete'` in poll (D-6), updates modal rendering per S-5, and dispatches complete keys before chat in `handle_key`. All 149 lines of the new test pass. Regression tests (`tui-support-test.py` 8/8, `completion-preview-test.py` 8/8) are unchanged and green. Shell-suite failures are identical pre/post. No unprotected paths changed. The only findings: stale `delivery-summary.tsv` metadata (FA-1) and unexecutable live/rollback checks due to environment constraints (FA-2), neither blocking workflow completion as defined in the plan.
+NOT READY

@@ -35,7 +35,9 @@ def replace(original, candidate):
     if verdict.findall(before.decode()) != verdict.findall(after.decode()):
         raise ValueError('Candidate changes verdict')
     # Preserve a recoverable source even after successful replacement.
-    backup = original.parent / ('.' + original.name + '.precompact-' + hashlib.sha256(before).hexdigest()[:12])
+    backup_dir = original.parent / '.uncle' / 'workflow' / 'compaction-backups'
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir / (original.name + '-' + hashlib.sha256(before).hexdigest())
     if not backup.exists():
         backup.write_bytes(before)
     fd, temp = tempfile.mkstemp(dir=original.parent,prefix='.compact-')

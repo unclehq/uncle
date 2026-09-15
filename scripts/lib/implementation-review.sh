@@ -54,29 +54,8 @@ in_git_repo() {
 # the agent created is the one file in the change with no prior reviewer at
 # all — precisely what this gate exists to show.
 change_diff_files() {
-    local f
-
-    # Every git call is allowed to fail: a repository with no commits has no
-    # HEAD, and a directory that was never initialised has no git at all.
-    # Callers run under `set -o pipefail`, so the group must not carry a
-    # non-zero status out of the pipeline.
-    {
-        git diff --name-only HEAD 2>/dev/null \
-            || git diff --name-only 2>/dev/null \
-            || true
-        git ls-files --others --exclude-standard 2>/dev/null || true
-    } | sort -u | while IFS= read -r f; do
-        [[ -n "$f" ]] || continue
-        if workflow_artifact "$f"; then
-            continue
-        fi
-        if [[ -n "$WORKFLOW_UNTRACKED_BASELINE" \
-            && -s "$WORKFLOW_UNTRACKED_BASELINE" ]] \
-            && grep -qxF -- "$f" "$WORKFLOW_UNTRACKED_BASELINE"; then
-            continue
-        fi
-        printf '%s\n' "$f"
-    done
+    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" \
+        python3 -B "$(dirname "${BASH_SOURCE[0]}")/review_paths.py"
 }
 
 # write_change_diff <out> — the reviewable diff, tracked and untracked.
@@ -170,17 +149,14 @@ write_implementation_review() {
             # --stat only knows about tracked paths, so an untracked file
             # appears in the list above and not in the summary. It is still in
             # the diff below, which is what the approval covers.
-            local -a tracked=()
+            local -a changed=()
             local f
             while IFS= read -r f; do
-                [[ -n "$f" ]] || continue
-                if git ls-files --error-unmatch -- "$f" > /dev/null 2>&1; then
-                    tracked+=("$f")
-                fi
+                [[ -n "$f" ]] && changed+=("$f")
             done <<< "$files"
-
-            if [[ "${#tracked[@]}" -gt 0 ]]; then
-                git diff --stat HEAD -- "${tracked[@]}" 2>/dev/null \
+            # Git ignores untracked paths in --stat; no per-file membership probes.
+            if [[ "${#changed[@]}" -gt 0 ]]; then
+                git diff --stat HEAD -- "${changed[@]}" 2>/dev/null \
                     | sed 's/^/    /' || true
             fi
         fi

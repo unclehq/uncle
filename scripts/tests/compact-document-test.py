@@ -17,5 +17,5 @@ class Compact(unittest.TestCase):
             a,b=replace(original,candidate)
             self.assertGreater(a,b)
             self.assertEqual(original.read_text(),contract)
-            self.assertEqual(len(list(root.glob('.report.md.precompact-*'))),1)
+            self.assertEqual(len(list((root/'.uncle/workflow/compaction-backups').glob('report.md-*'))),1)
 if __name__=='__main__':unittest.main()

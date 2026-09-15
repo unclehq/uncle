@@ -53,3 +53,15 @@ esac
     || { echo "FAIL $0:$LINENO the document must be left alone" >&2; exit 1; }
 
 echo 'document-budget-prompt-test.sh: approve, decline, EOF, probe, resume, source change, line limits, and the advisory default passed'
+
+# Model instructions must agree with the actual enforcement mode.
+for mode in 0 1; do
+    prompt="$(WORKFLOW_DOC_BUDGET_ENFORCE="$mode" document_budget_prompt manual-checklist)"
+    if [[ "$mode" == 0 ]]; then
+        [[ "$prompt" == *'Budget enforcement is disabled'* ]]
+    else
+        [[ "$prompt" == *'Budget enforcement is enabled'* ]]
+    fi
+    [[ "$prompt" == *'Return the complete document as the final response, even if oversized.'* ]]
+    [[ "$prompt" != *'budgets (binding)'* ]]
+done

@@ -21,5 +21,5 @@ def validate(path):
 if __name__=='__main__':
     try:validate(sys.argv[1])
     except (OSError,ValueError) as error:
-        print(f'Checklist artifact invalid: {error}. Correct MANUAL_CHECKLIST.md and resume; execution has not started.',file=sys.stderr)
+        print(f'Checklist artifact invalid: {error}. Correct MANUAL_CHECKLIST.md and resume; resume only revalidates this saved file and does not regenerate it. Execution has not started.',file=sys.stderr)
         raise SystemExit(1)

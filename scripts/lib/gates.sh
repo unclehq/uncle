@@ -412,7 +412,12 @@ requirements_document_max_bytes() {
 
 document_budget_prompt() {
     local stage="$1" file limits bytes lines target target_lines
-    printf '\n\n# Compact output budgets (binding)\n\n'
+    printf '\n\n# Compact output budgets\n\n'
+    if [[ "${WORKFLOW_DOC_BUDGET_ENFORCE:-0}" == "1" ]]; then
+        printf 'Budget enforcement is enabled. Return the complete artifact even if oversized; the driver resolves overages.\n'
+    else
+        printf 'Budget enforcement is disabled: byte and line limits are advisory. Complete required content takes precedence over size.\n'
+    fi
     while IFS= read -r file; do
         limits="$(document_budget "$file")" || return 1
         read -r bytes lines <<< "$limits"
@@ -482,8 +487,9 @@ output documents. The initial draft is not a pass. Each subsequent size-driven
 rewrite or trim counts as a pass, including a "final trim" or a few-byte edit.
 Keep the count across chat questions and steering; those do not reset it.
 After pass 2, stop size-only edits even if the document is still over budget.
-Preserve the complete document, report its final byte/line counts and remaining
-overage, and finish the stage. Do not attempt a third pass, restart the stage,
+Return the complete document as the final response, even if oversized. The driver
+measures and reports byte/line overages. Never replace the document with size
+counts, a filename, a progress message, or a promise to trim later. Do not attempt a third pass, restart the stage,
 or request another model just to fit the budget. This two-pass limit takes
 precedence over instructions to keep shrinking until a byte or word limit fits.
 If mandatory content alone cannot fit, preserve it. The driver retains the

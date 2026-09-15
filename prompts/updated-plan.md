@@ -199,3 +199,16 @@ can batch it. Name concrete reasons for serial dependencies. Arrange for each
 required report to be written once after evidence is collected. On revision,
 change only what findings or requirements require; do not expand scope or invent
 additional tooling merely because another planning pass is occurring.
+
+## Targeted revision
+
+Start with the driver revision packet and read omitted input sections directly.
+Use the existing plan as the base. Revise only sections affected by review
+findings, changed requirements, or contradictions discovered during revision.
+Preserve unaffected decisions, stable IDs, commands, and ordering. Do not
+rediscover the repository or rerun probes without a concrete unresolved finding.
+Record each finding ID once with its disposition and affected plan section;
+do not repeat reviewer prose. Preserve all mandatory criteria and constraints.
+Return a complete final plan, not a patch or a progress message. Before writing,
+check revised and unchanged sections for contradictions and verify required
+command blocks. Formatting corrections use the saved plan without replanning.

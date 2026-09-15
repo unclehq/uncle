@@ -1199,7 +1199,9 @@ run_codex_review() {
     local review_key
     review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"
     if restore_plan_review "$output_file" "$review_key"; then
-        finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || { [[ "$log_name" != adversarial-review ]] || exit 42; exit 1; }
+        if [[ "$log_name" != adversarial-review ]]; then
+        finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
+    fi
         save_plan_review "$output_file" "$review_key"
         return 0
     fi
@@ -1246,7 +1248,9 @@ run_codex_review() {
     else
         review_key=""
     fi
-    finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || { [[ "$log_name" != adversarial-review ]] || exit 42; exit 1; }
+    if [[ "$log_name" != adversarial-review ]]; then
+        finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
+    fi
     save_plan_review "$output_file" "$review_key"
 }
 
@@ -1275,7 +1279,6 @@ run_stage() {
             ;;
         REQUIREMENTS)
             run_claude prompts/requirements.md requirements
-            require_artifact REQUIREMENTS_INTERPRETATION.md
             ;;
         PROJECT_PLAN)
             run_claude prompts/project-plan.md project-plan
@@ -1289,7 +1292,6 @@ run_stage() {
             ;;
         UPDATED_PLAN)
             run_claude prompts/updated-plan.md updated-plan
-            require_artifact UPDATED_PROJECT_PLAN.md
             ;;
         IMPLEMENT)
             run_claude prompts/implement.md implementation
@@ -1592,6 +1594,13 @@ while true; do
 
         REQUIREMENTS)
             run_stage REQUIREMENTS
+            set_state VALIDATE_REQUIREMENTS
+            ;;
+
+        VALIDATE_REQUIREMENTS)
+            echo "Validating saved requirements; discovery will not be rerun."
+            python3 "$ROOT/scripts/lib/requirements-context.py" --validate REQUIREMENTS_INTERPRETATION.md || exit 1
+            require_artifact REQUIREMENTS_INTERPRETATION.md
             set_state WAIT_REQUIREMENTS_APPROVAL
             ;;
 
@@ -1625,6 +1634,13 @@ while true; do
             run_gated_stage ADVERSARIAL_REVIEW \
                 PROJECT_PLAN.md \
                 ADVERSARIAL_REVIEW.md
+            set_state VALIDATE_ADVERSARIAL_REVIEW
+            ;;
+
+        VALIDATE_ADVERSARIAL_REVIEW)
+            verify_approval PROJECT_PLAN.md PROJECT_PLAN
+            python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md || exit 1
+            check_document_budget ADVERSARIAL_REVIEW.md || exit 1
             set_state WAIT_REVIEW_ACKNOWLEDGEMENT
             ;;
 
@@ -1645,6 +1661,13 @@ while true; do
             run_gated_stage UPDATED_PLAN \
                 ADVERSARIAL_REVIEW.md \
                 UPDATED_PROJECT_PLAN.md
+            set_state VALIDATE_UPDATED_PLAN
+            ;;
+
+        VALIDATE_UPDATED_PLAN)
+            verify_approval PROJECT_PLAN.md PROJECT_PLAN
+            verify_approval ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
+            require_artifact UPDATED_PROJECT_PLAN.md
             set_state WAIT_UPDATED_PLAN_APPROVAL
             ;;
 

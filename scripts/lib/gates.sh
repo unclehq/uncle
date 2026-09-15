@@ -173,6 +173,24 @@ gated_prompt() {
             printf '\n\n'
             cat "$GATES_LIB_DIR/../../lib/gates/EXECUTION_RULES.md"
         fi
+        if [[ "$log_name" == updated-plan || "$log_name" == updated-change-plan ]]; then
+            if [[ -f "$GATES_LIB_DIR/updated-plan-context.py" ]]; then
+                local revision_family=app
+                [[ "$log_name" != updated-change-plan ]] || revision_family=change
+                python3 -B "$GATES_LIB_DIR/updated-plan-context.py" "$PWD" "${STATE_DIR:-.uncle/workflow}" "$revision_family" \
+                    || printf '\nRevision packet unavailable; read required inputs directly.\n'
+            fi
+        fi
+        if [[ "$log_name" == adversarial-review && -f "$GATES_LIB_DIR/adversarial-context.py" ]]; then
+            local review_family=app
+            [[ "$prompt_file" != */change/* ]] || review_family=change
+            python3 -B "$GATES_LIB_DIR/adversarial-context.py" "$PWD" "$review_family" \
+                || printf '\nReview packet unavailable; read required inputs directly.\n'
+        fi
+        if [[ "$log_name" == requirements && -f "$GATES_LIB_DIR/requirements-context.py" ]]; then
+            python3 -B "$GATES_LIB_DIR/requirements-context.py" "$PWD" \
+                || printf '\nRequirements packet unavailable; read REQUIREMENTS.md directly.\n'
+        fi
         if [[ "$log_name" == final-audit && -f "$GATES_LIB_DIR/final-audit-context.py" ]]; then
             python3 -B "$GATES_LIB_DIR/final-audit-context.py" "$PWD" "${STATE_DIR:-.uncle/workflow}" \
                 || printf '\nAudit packet unavailable; read required inputs directly.\n'

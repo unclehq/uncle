@@ -13,9 +13,38 @@ class Preflight(unittest.TestCase):
         self.assertEqual(preflight.prerequisites('PLAYWRIGHT_BROWSERS_PATH=.pw-browsers node --test a.mjs'), ['node'])
 
     def test_unknown_or_compound_commands_require_diagnosis(self):
-        for command in ('custom-check --all', 'node a.js && node b.js', 'for f in *.sh; do bash "$f"; done'):
+        for command in ('custom-check --all', 'for f in *.sh; do bash "$f"; done'):
             with self.subTest(command=command), self.assertRaises(ValueError):
                 preflight.prerequisites(command)
+
+    def test_compound_commands_and_redirections(self):
+        commands = """mkdir -p evidence && shasum -a 256 index.html > evidence/hashes
+bash tests/static.sh > evidence/static.log 2>&1
+PLAYWRIGHT_BROWSERS_PATH=.pw-browsers npx playwright test --reporter=list,json
+shasum -a 256 -c evidence/hashes && test -s evidence/static.log
+node a.js | node b.js; python3 checks.py || printf failure
+"""
+        self.assertEqual(preflight.prerequisites(commands), ['bash', 'node', 'npx', 'python3', 'shasum'])
+
+    def test_hidden_commands_and_malformed_syntax_fall_back(self):
+        for command in ('node $(touch sentinel)', 'echo `touch sentinel`',
+                        'node a.js &', 'node a.js &&', 'node a.js >',
+                        'node a.js <<EOF', 'bash -c "custom-tool"',
+                        'node a.js && PATH=/tmp node b.js', 'node a.js && custom-tool'):
+            with self.subTest(command=command), self.assertRaises(ValueError):
+                preflight.prerequisites(command)
+
+    def test_commands_are_not_executed_or_redirected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            commands, report = root/'commands', root/'report'
+            sentinel = root/'must-not-exist'
+            commands.write_text(f'mkdir -p "{sentinel}" && shasum -a 256 missing > "{sentinel}"')
+            with patch.object(preflight, 'probe', return_value='shasum runtime started') as probe:
+                preflight.run(commands, report)
+                probe.assert_called_once_with('shasum')
+            self.assertFalse(sentinel.exists())
+            self.assertLess(report.stat().st_size, 1500)
 
     def test_report_created_only_when_all_probes_pass(self):
         with tempfile.TemporaryDirectory() as directory:

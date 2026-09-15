@@ -1428,7 +1428,9 @@ run_codex() {
     local review_key
     review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"
     if restore_plan_review "$output_file" "$review_key"; then
-        finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || { [[ "$log_name" != adversarial-review ]] || exit 42; exit 1; }
+        if [[ "$log_name" != adversarial-review ]]; then
+        finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
+    fi
         save_plan_review "$output_file" "$review_key"
         return 0
     fi
@@ -1479,7 +1481,9 @@ run_codex() {
     else
         review_key=""
     fi
-    finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || { [[ "$log_name" != adversarial-review ]] || exit 42; exit 1; }
+    if [[ "$log_name" != adversarial-review ]]; then
+        finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
+    fi
     save_plan_review "$output_file" "$review_key"
 }
 
@@ -1779,6 +1783,14 @@ while true; do
                 adversarial-review \
                 "$CODEX_EFFORT_REVIEW"
 
+            set_state VALIDATE_ADVERSARIAL_REVIEW
+            ;;
+
+        VALIDATE_ADVERSARIAL_REVIEW)
+            verify_approval BASELINE_REPORT.md BASELINE_REPORT
+            verify_approval CHANGE_SPEC.md CHANGE_SPEC
+            python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md || exit 1
+            check_document_budget ADVERSARIAL_REVIEW.md || exit 1
             set_state WAIT_PLAN_APPROVAL
             ;;
 
@@ -1807,6 +1819,13 @@ while true; do
             run_claude prompts/change/updated-change-plan.md updated-change-plan \
                 "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \
                 "$BUDGET_UPDATED_PLAN"
+            set_state VALIDATE_UPDATED_PLAN
+            ;;
+
+        VALIDATE_UPDATED_PLAN)
+            verify_approval BASELINE_REPORT.md BASELINE_REPORT
+            verify_approval CHANGE_SPEC.md CHANGE_SPEC
+            verify_approval ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
             require_file CHANGE_PLAN.md
             check_document_budget CHANGE_PLAN.md || exit 1
 

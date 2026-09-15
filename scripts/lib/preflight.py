@@ -11,32 +11,68 @@ import sys
 
 PROBES = {name: ['--version'] for name in
           ('node', 'npm', 'npx', 'python', 'python3', 'bash', 'git', 'ruby', 'go', 'cargo', 'rustc', 'pytest', 'ruff')}
+PROBES['shasum'] = ['--version']
 BUILTINS = {'true', ':', 'echo', 'printf', 'mkdir', 'test', '['}
 
 
 def prerequisites(commands):
+    """Recognize simple shell lists; inspect tokens, never evaluate shell code."""
     names = set()
-    for line in commands.splitlines():
-        if not line.strip():
-            continue
-        # Compound shell programs require diagnosis, not speculative execution.
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=';&|<>')
-        lexer.whitespace_split = True
-        words = list(lexer)
-        if not words or any(word in (';', '&&', '||', '|', '&', '>', '>>', '<') for word in words):
-            raise ValueError('Complex verification command needs model preflight')
+    separators = {'&&', '||', ';', '|'}
+    redirects = {'>', '>>', '<', '>&', '<&'}
+
+    def inspect(words):
+        if not words:
+            raise ValueError('Empty command needs model preflight')
         while words and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', words[0]):
             key = words.pop(0).split('=', 1)[0]
-            if key in ('PATH', 'HOME', 'PYTHONHOME', 'NODE_OPTIONS'):
+            if key in ('PATH', 'HOME', 'PYTHONHOME', 'NODE_OPTIONS', 'BASH_ENV', 'ENV'):
                 raise ValueError('Runtime-changing assignment needs model preflight: ' + key)
         if not words:
-            continue
+            raise ValueError('Standalone assignment needs model preflight')
         name = words[0]
         if name in BUILTINS:
-            continue
+            return
         if name not in PROBES:
             raise ValueError('Unrecognized verification executable: ' + name)
+        if name in ('bash',) and any(arg == '-c' or arg.startswith('-') and 'c' in arg for arg in words[1:]):
+            raise ValueError('Embedded shell program needs model preflight')
         names.add(name)
+
+    for line in commands.splitlines():
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        # Expansion and control structures may hide additional executables.
+        # Even quoted substitution text falls back conservatively.
+        if any(token in line for token in ('$(', '`', '${', '\\\n')):
+            raise ValueError('Shell expansion needs model preflight')
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=';&|<>()')
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+        words = []
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            if token in separators:
+                inspect(words)
+                words = []
+            elif token in redirects:
+                if words and words[-1].isdigit():
+                    words.pop()  # Optional file descriptor, e.g. 2>&1.
+                i += 1
+                if i >= len(tokens) or tokens[i] in separators | redirects or re.fullmatch(r'[;&|<>()]+', tokens[i]):
+                    raise ValueError('Missing redirection target')
+                if token in ('>&', '<&') and not re.fullmatch(r'\d+|-', tokens[i]):
+                    raise ValueError('Unsupported descriptor redirection')
+            elif re.fullmatch(r'[;&|<>()]+', token):
+                raise ValueError('Unsupported shell syntax: ' + token)
+            else:
+                words.append(token)
+            i += 1
+        if words:
+            inspect(words)
+        elif tokens and tokens[-1] != ';':
+            raise ValueError('Incomplete shell command')
     return sorted(names)
 
 

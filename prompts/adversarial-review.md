@@ -67,3 +67,15 @@ For every restriction finding, distinguish the concrete failure and required pro
 from a suggested mechanism. Record provenance and selected-runner feasibility evidence.
 Do not promote blanket denial or another generated mitigation into external authority.
 Accept evidenced in-scope alternatives preserving the property; retain every finding ID.
+
+## Focused review and output validation
+
+Start with the driver evidence packet. Inspect referenced code only to resolve
+concrete questions about requirements, feasibility, verification, or constraints.
+Keep independent judgment: plan assertions and packet hashes are not proof.
+Do not run setup or repeat test suites merely to review a proposed plan.
+Preserve every concrete blocker; avoid speculative concerns outside the scope.
+Use the exact finding fields above, unique AR IDs, and a nonempty level-two
+Overall assessment section. A clean review must explicitly say "No findings."
+On formatting correction, preserve findings and their meaning; use the saved
+review without repeating discovery. Return the complete corrected document.

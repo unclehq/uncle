@@ -250,7 +250,11 @@ fi
 if [[ "$out" == ADVERSARIAL_REVIEW.md ]] && grep -q 'R-1' CHANGE_PLAN.md; then
     printf 'AR-001: preserve mediated access; validate isolated context.\n' >> "$out"
 fi
-printf 'MC-1 Check the greeting.\n\nREADY\n' >> "$out"
+case "$out" in
+    ADVERSARIAL_REVIEW.md) printf '## Overall assessment\nNo findings.\n' >> "$out" ;;
+    FINAL_AUDIT.md) printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nREADY\n' >> "$out" ;;
+    *) printf 'MC-1 Check the greeting.\n\nREADY\n' >> "$out" ;;
+esac
 REV
     chmod +x "$CASE/bin/fake-reviewer"
 }
@@ -370,8 +374,12 @@ else
     fi
     if [[ "$out" == FINAL_AUDIT.md && "${FAKE_AUDIT:-READY}" == 'NOT READY' ]]; then
         printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n| FA-1 | Missing review | Review greeting | YES |\n\nNOT READY\n' >> "$out"
+    elif [[ "$out" == FINAL_AUDIT.md ]]; then
+        printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\n%s\n' "${FAKE_AUDIT:-READY}" >> "$out"
+    elif [[ "$out" == ADVERSARIAL_REVIEW.md ]]; then
+        printf '## Overall assessment\nNo findings.\n' >> "$out"
     else
-        printf 'MC-1 Check the greeting.\n\n%s\n' "${FAKE_AUDIT:-READY}" >> "$out"
+        printf 'MC-1 Check the greeting.\n\nREADY\n' >> "$out"
     fi
 fi
 REV
@@ -800,6 +808,8 @@ expect_state "WAIT_AUDIT_OVERRIDE"
 
 # Unavailable prerequisites stop before source changes, then resume in place.
 new_stagegate_case sg-preflight-blocked
+# Force the unresolved-prerequisite path; supported runtimes now bypass models.
+printf 'raise SystemExit(2)\n' > "$REPO/scripts/lib/preflight.py"
 stagegate_agent
 set_state IMPLEMENT
 run_stagegate FAKE_PREFLIGHT=BLOCKED
@@ -833,7 +843,7 @@ stagegate_agent
 set_state IMPLEMENT
 run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=MALFORMED
 expect_status 1
-expect_state TEST_REVIEW
+expect_state VALIDATE_TEST_REVIEW
 expect_no_file FINAL_AUDIT.md
 expect_no_file .uncle/workflow/repaired
 
@@ -857,7 +867,7 @@ run_stagegate_stdin "$(gate_input y)" FAKE_TEST_REVIEW=FAIL_ONCE
 expect_status 0
 expect_state COMPLETE
 expect_in_file .uncle/workflow/repair-count '1'
-expect_in_file .uncle/workflow/received-test-review-prompt.md 'Driver-supplied test review evidence'
+expect_in_file .uncle/workflow/received-test-review-prompt.md 'Shared driver evidence index'
 expect_in_file .uncle/workflow/received-test-review-prompt.md 'All verification commands passed.'
 expect_in_file .uncle/workflow/received-test-review-prompt.md "$REPO/.uncle/workflow/TEST_CHANGES.diff"
 
@@ -911,7 +921,7 @@ stagegate_agent
 set_state IMPLEMENT
 run_stagegate WORKFLOW_DIFF_GATE=0 WORKFLOW_GREEN_CHECK=0
 expect_status 1
-expect_state TEST_REVIEW
+expect_state VALIDATE_TEST_REVIEW
 expect_no_file FINAL_AUDIT.md
 
 # Legacy/manual resumes cannot take a pre-existing ready audit past missing
@@ -1119,12 +1129,12 @@ hash_file "$REPO/PROJECT_PLAN.md" > "$REPO/.uncle/workflow/approvals/PROJECT_PLA
 set_state ADVERSARIAL_REVIEW
 for attempt in 1 2; do
     run_stagegate WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
-    expect_status 42
-    expect_state ADVERSARIAL_REVIEW
+    expect_status 1
+    expect_state VALIDATE_ADVERSARIAL_REVIEW
     COUNT=$((COUNT + 1))
     [[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'full review repeated'
 done
-expect_out 'Reusing completed plan review'
+expect_out 'Document budget exceeded'
 # Raising only the budget adopts the preserved review without another call.
 run_stagegate WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=100
 expect_status 0
@@ -1135,7 +1145,7 @@ COUNT=$((COUNT + 1))
 printf 'changed requirements\n' >> "$REPO/REQUIREMENTS.md"
 set_state ADVERSARIAL_REVIEW
 run_stagegate WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
-expect_status 42
+expect_status 1
 COUNT=$((COUNT + 1))
 [[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'changed inputs reused stale review'
 
@@ -1145,9 +1155,9 @@ printf 'plan\n' > "$REPO/PROJECT_PLAN.md"
 printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
 set_state WAIT_PLAN_APPROVAL
 run_stagegate_stdin "$(gate_input y)" WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_SPECULATE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
-expect_status 42
-expect_state ADVERSARIAL_REVIEW
-expect_out 'pausing without another full review'
+expect_status 1
+expect_state VALIDATE_ADVERSARIAL_REVIEW
+expect_out 'Document budget exceeded'
 COUNT=$((COUNT + 1))
 [[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'speculative budget failure repeated review'
 
@@ -1155,12 +1165,12 @@ new_case change-review-cache
 set_state PLAN
 for attempt in 1 2; do
     run_driver WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
-    expect_status 42
-    expect_state PLAN
+    expect_status 1
+    expect_state VALIDATE_ADVERSARIAL_REVIEW
     COUNT=$((COUNT + 1))
     [[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'change workflow repeated review'
 done
-expect_out 'Reusing completed plan review'
+expect_out 'Document budget exceeded'
 
 # Explicit source prerequisites stop both drivers before any planning launch.
 new_stagegate_case sg-early-source

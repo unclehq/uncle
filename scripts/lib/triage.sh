@@ -183,6 +183,9 @@ write_triage() {
         echo "- repair-count: $(cat "$state_dir/repair-count" 2>/dev/null || printf MISSING)"
         echo "- repair-source: $(cat "$state_dir/repair-source" 2>/dev/null || printf MISSING)"
         echo "- generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        if [[ -s "$state_dir/validation-error.txt" ]]; then
+            triage_embed_tail "$state_dir/validation-error.txt" "Driver validation error"
+        fi
         if [[ -n "$stage" ]]; then
             triage_embed_tail "$state_dir/logs/$stage.jsonl" "Stage log tail: $stage"
         else

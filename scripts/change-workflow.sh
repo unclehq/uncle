@@ -1789,7 +1789,14 @@ while true; do
         VALIDATE_ADVERSARIAL_REVIEW)
             verify_approval BASELINE_REPORT.md BASELINE_REPORT
             verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md || exit 1
+            validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md 2>&1)" || {
+                printf '%s\n' "$validation_error" >&2
+                printf '%s\n' "$validation_error" > "$STATE_DIR/validation-error.txt"
+                printf '%s\n' "validation: $validation_error" > "$STATE_DIR/stop-reason"
+                supervision_validation_failed adversarial-review ADVERSARIAL_REVIEW.md "$validation_error"
+                exit 1
+            }
+            rm -f "$STATE_DIR/validation-error.txt"
             check_document_budget ADVERSARIAL_REVIEW.md || exit 1
             set_state WAIT_PLAN_APPROVAL
             ;;

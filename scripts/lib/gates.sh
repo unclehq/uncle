@@ -161,45 +161,17 @@ gated_prompt() {
     local combined="$LOG_DIR/${log_name}.gated-prompt.md"
     {
         cat "$prompt_file"
-        case "$log_name" in
-            manual-checklist|manual-checklist-base|manual-checklist-delta)
-                if [[ -f "$GATES_LIB_DIR/manual-checklist-context.py" ]]; then
-                    python3 -B "$GATES_LIB_DIR/manual-checklist-context.py" "$PWD" "${STATE_DIR:-.uncle/workflow}" "$log_name" \
-                        || printf '\nEvidence packet unavailable; read the required inputs directly.\n'
-                fi
-                ;;
-        esac
+        if [[ -f "$GATES_LIB_DIR/evidence_index.py" ]]; then
+            local evidence_family=app
+            [[ "$prompt_file" != */change/* ]] || evidence_family=change
+            python3 -B "$GATES_LIB_DIR/evidence_index.py" "$PWD" "${STATE_DIR:-.uncle/workflow}" "$log_name" --family "$evidence_family" \
+                || printf '\nShared evidence index unavailable; read required inputs directly.\n'
+        fi
         if [[ -f "$GATES_LIB_DIR/../../lib/gates/EXECUTION_RULES.md" ]]; then
             printf '\n\n'
             cat "$GATES_LIB_DIR/../../lib/gates/EXECUTION_RULES.md"
         fi
-        if [[ "$log_name" == updated-plan || "$log_name" == updated-change-plan ]]; then
-            if [[ -f "$GATES_LIB_DIR/updated-plan-context.py" ]]; then
-                local revision_family=app
-                [[ "$log_name" != updated-change-plan ]] || revision_family=change
-                python3 -B "$GATES_LIB_DIR/updated-plan-context.py" "$PWD" "${STATE_DIR:-.uncle/workflow}" "$revision_family" \
-                    || printf '\nRevision packet unavailable; read required inputs directly.\n'
-            fi
-        fi
-        if [[ "$log_name" == adversarial-review && -f "$GATES_LIB_DIR/adversarial-context.py" ]]; then
-            local review_family=app
-            [[ "$prompt_file" != */change/* ]] || review_family=change
-            python3 -B "$GATES_LIB_DIR/adversarial-context.py" "$PWD" "$review_family" \
-                || printf '\nReview packet unavailable; read required inputs directly.\n'
-        fi
-        if [[ "$log_name" == requirements && -f "$GATES_LIB_DIR/requirements-context.py" ]]; then
-            python3 -B "$GATES_LIB_DIR/requirements-context.py" "$PWD" \
-                || printf '\nRequirements packet unavailable; read REQUIREMENTS.md directly.\n'
-        fi
-        if [[ "$log_name" == final-audit && -f "$GATES_LIB_DIR/final-audit-context.py" ]]; then
-            python3 -B "$GATES_LIB_DIR/final-audit-context.py" "$PWD" "${STATE_DIR:-.uncle/workflow}" \
-                || printf '\nAudit packet unavailable; read required inputs directly.\n'
-        fi
         if [[ "$log_name" == execute-checklist ]]; then
-            if [[ -f "$GATES_LIB_DIR/execute-checklist-context.py" ]]; then
-                python3 -B "$GATES_LIB_DIR/execute-checklist-context.py" "$PWD" "${STATE_DIR:-.uncle/workflow}" \
-                    || printf '\nExecution packet unavailable; read the required inputs directly.\n'
-            fi
             printf '\nReusable checklist runner: python3 "%s/checklist_batch.py" .uncle/workflow/check-commands.json\n' "$GATES_LIB_DIR"
             cat <<'CHECK_BATCH'
 
@@ -431,6 +403,7 @@ document_budget_prompt() {
         read -r target target_lines <<< "$(awk -v b="$bytes" -v l="$lines" 'BEGIN {b=int(b*.75); l=int(l*.75); printf "%.0f %.0f", (b<1?1:b), (l<1?1:l)}')"
         printf -- '- %s: at most %s UTF-8 bytes and %s lines. Draft toward %s bytes and %s lines to leave revision room.\n' "$file" "$bytes" "$lines" "$target" "$target_lines"
     done < <(stage_documents "$stage")
+    printf '\nFor writable artifacts, validate compaction with: python3 "%s/compact_document.py" ORIGINAL CANDIDATE\n' "$GATES_LIB_DIR"
     cat <<'BUDGET'
 
 These numeric limits supersede any fixed byte target in earlier instructions.
@@ -472,6 +445,18 @@ rewrite. Missing an advisory drafting target does not require compaction.
 For reviewer output, draft directly in the final required format and budget;
 the driver measures the returned artifact. Do not request write permissions or
 extra tool calls solely to measure a read-only reviewer's final response.
+For a writable artifact, retain the original and write size-only edits into a
+separate candidate file. Run the compaction validator above to apply it; never
+overwrite the original directly. It preserves tables, fenced commands, headings,
+IDs, references and verdicts, and rejects destructive edits. Do not bypass a
+rejection to meet a budget. Prose meaning still requires your review: retain
+thresholds, obligations, exceptions and failure behavior. The validator cannot
+prove semantic equivalence. Read-only reviewers apply the same preservation
+rules in context and return only the complete document, never a compaction note.
+Compute bytes_to_remove = current_bytes - ceiling. Aim for 90% of both ceilings
+in one pass, preserving required content. Remove repeated background first,
+then repeated explanations; reference existing IDs instead of duplicating text.
+
 Only if an actual ceiling is exceeded, compact the affected document using the
 same model and context. Address byte and line overages together in each pass;
 leave already-compliant documents unchanged. Do not launch another model,

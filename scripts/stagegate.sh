@@ -1185,12 +1185,6 @@ run_codex_review() {
     if [[ "$log_name" != plan-executability ]]; then
         prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
     fi
-    if [[ "$log_name" == test-review ]]; then
-        local evidence_prompt="$LOG_DIR/test-review.evidence-prompt.md"
-        cat "$prompt_file" > "$evidence_prompt"
-        python3 "$ROOT/scripts/lib/test-review-context.py" "$PWD" "$STATE_DIR" >> "$evidence_prompt" || return 1
-        prompt_file="$evidence_prompt"
-    fi
     if [[ "$log_name" != plan-executability ]]; then
         supervision_prompt "$prompt_file" "$log_name" "$LOG_DIR/${log_name}.log"
         prompt_file="$SUPERVISION_PROMPT"
@@ -1639,7 +1633,14 @@ while true; do
 
         VALIDATE_ADVERSARIAL_REVIEW)
             verify_approval PROJECT_PLAN.md PROJECT_PLAN
-            python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md || exit 1
+            validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md 2>&1)" || {
+                printf '%s\n' "$validation_error" >&2
+                printf '%s\n' "$validation_error" > "$STATE_DIR/validation-error.txt"
+                printf '%s\n' "validation: $validation_error" > "$STATE_DIR/stop-reason"
+                supervision_validation_failed adversarial-review ADVERSARIAL_REVIEW.md "$validation_error"
+                exit 1
+            }
+            rm -f "$STATE_DIR/validation-error.txt"
             check_document_budget ADVERSARIAL_REVIEW.md || exit 1
             set_state WAIT_REVIEW_ACKNOWLEDGEMENT
             ;;

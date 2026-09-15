@@ -1572,6 +1572,7 @@ python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" REQUIREMENTS.md \
 rm -f "$STATE_DIR/stop-reason"
 
 while true; do
+    python3 "$ROOT/scripts/lib/rerun_stage.py" app || exit 1
     state="$(get_state)"
     if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi
 

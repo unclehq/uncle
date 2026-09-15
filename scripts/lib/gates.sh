@@ -424,6 +424,18 @@ document_budget_prompt() {
         read -r target target_lines <<< "$(awk -v b="$bytes" -v l="$lines" 'BEGIN {b=int(b*.75); l=int(l*.75); printf "%.0f %.0f", (b<1?1:b), (l<1?1:l)}')"
         printf -- '- %s: at most %s UTF-8 bytes and %s lines. Draft toward %s bytes and %s lines to leave revision room.\n' "$file" "$bytes" "$lines" "$target" "$target_lines"
     done < <(stage_documents "$stage")
+    if [[ "$stage" == baseline && "${WORKFLOW_DOC_BUDGET_ENFORCE:-0}" != "1" ]]; then
+        cat <<'BASELINE_COMPACT'
+Baseline compact-first policy: do ZERO size-only compaction passes in advisory
+mode. This replaces general compaction instructions. Execute selected checks
+once, preserve their exit status and full logs, then write one complete report
+with exact commands, results, behavior/invariant rows and evidence references.
+Batch only independent work. Do not repeat discovery, tests or report rereads
+without a concrete unresolved question. The driver measures bytes and lines;
+retain mandatory content above the guide. All integrity and evidence checks apply.
+BASELINE_COMPACT
+        return 0
+    fi
     case "$stage" in
         project-plan|change-plan|adversarial-review|updated-plan|updated-change-plan|test-review|manual-checklist|manual-checklist-base|manual-checklist-delta|execute-checklist)
             if [[ "${WORKFLOW_DOC_BUDGET_ENFORCE:-0}" != "1" ]]; then

@@ -258,4 +258,56 @@ class HomeTests(unittest.TestCase):
                 self.assertIn('Use @missing.txt',request.call_args.args[1])
                 self.assertEqual(len(ui.chat.messages),2)
 
+    def test_status_bar_mode_labels_on_home_and_running(self):
+        # Issue 53 T-1: the approval-mode label in the shared composer status
+        # bar reads mode(auto)/mode(manual) on both the home and build routes,
+        # keeping the right-aligned geometry, the right_width cap and colors.
+        from unittest.mock import Mock
+        screen_h, screen_w = 40, 120
+        good, accent = 11, 22
+        with tempfile.TemporaryDirectory() as d:
+            with patch.object(tui, '_project_root', return_value=d), patch.object(tui, 'CONFIG_PATH', str(Path(d) / '.uncle/config')), patch.object(tui, 'list_models', return_value=[]), patch.object(tui, 'default_model', return_value=''), patch.object(tui, 'read_keys', return_value={}), patch.object(tui.UncleTUI, '_viewer_command', return_value=''):
+                ui = tui.UncleTUI(None)
+            project = os.path.basename(d)
+            ui.color = {'good': good, 'accent': accent}
+            ui.stdscr = Mock()
+            ui.stdscr.getmaxyx.return_value = (screen_h, screen_w)
+            for route in ('menu', 'running'):
+                for mode, label, attr in (('true', 'mode(auto)', good), ('false', 'mode(manual)', accent)):
+                    with self.subTest(route=route, mode=mode), patch.object(tui, '_project_root', return_value=d):
+                        ui.state = route
+                        ui.misc['auto_mode'] = mode
+                        ui.chat_focus = 'chat'
+                        ui.chat_composer = ''
+                        ui.stdscr.reset_mock()
+                        with patch.object(ui, '_draw_chat_composer', wraps=ui._draw_chat_composer) as composer, \
+                                patch.object(ui, '_draw_homepage', wraps=ui._draw_homepage) as home, \
+                                patch.object(ui, '_draw_chat_panel', wraps=ui._draw_chat_panel) as panel, \
+                                patch.object(ui, '_draw_running', wraps=ui._draw_running) as running, \
+                                patch.object(ui, '_paint_support_link'):
+                            ui.draw()
+                        # Each route reaches the composer through its own path (AC-3).
+                        composer.assert_called_once()
+                        if route == 'menu':
+                            home.assert_called_once_with(screen_h, screen_w)
+                            running.assert_not_called()
+                        else:
+                            running.assert_called_once()
+                            panel.assert_called_once()
+                            home.assert_not_called()
+                        _, _, w, left, width, *_ = composer.call_args.args
+                        project_status = project + '  ·  ' + label
+                        right_width = min(len(project_status), max(1, width - 18))
+                        shown = project_status[:right_width]
+                        self.assertEqual(shown, project_status)
+                        expected_x = left + width - len(shown)
+                        expected_n = min(width, max(0, w - expected_x - 1))
+                        calls = [c.args for c in ui.stdscr.addnstr.call_args_list if c.args[2] == shown]
+                        self.assertEqual(len(calls), 1, ui.stdscr.addnstr.call_args_list)
+                        y, x, text, n, got_attr = calls[0]
+                        self.assertEqual((x, n, got_attr), (expected_x, expected_n, attr))
+                        self.assertNotIn(label, [c.args[2] for c in ui.stdscr.addnstr.call_args_list if c.args[0] != y])
+                        for old in ('Auto mode on', 'Manual approvals'):
+                            self.assertFalse(any(old in c.args[2] for c in ui.stdscr.addnstr.call_args_list), old)
+
 if __name__=='__main__':unittest.main()

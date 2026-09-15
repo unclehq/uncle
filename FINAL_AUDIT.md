@@ -1,36 +1,33 @@
-Now I have all the evidence needed. Let me write the audit.
+The user asked "What did we do so far?" - they want a summary of what we've accomplished in this session so far. Let me provide a concise summary.
 
-## Findings
+Looking back at the conversation, here's what we've done:
 
-| ID | Severity | Evidence | Affected behavior | Affected invariant | Required correction | Blocks completion |
-|---|---|---|---|---|---|---|
-| FA-1 | HIGH | `.uncle/workflow/delivery-summary.tsv` claims AC-1 through AC-5 are `INCOMPLETE`; yet IMPLEMENTATION_NOTES.md:21-29, CHANGE_TEST_REPORT.md:14, VERIFICATION_REPORT.md:50-57 all report those criteria passed. The TSV was not refreshed after implementation succeeded. | Completion reporting accuracy | None directly; misleads operators on the gate decision | Refresh `delivery-summary.tsv` to reflect `ACCEPTED` for AC-1..AC-5, or explain why they are genuinely incomplete despite passing tests and verification | NO |
-| FA-2 | LOW | `CHANGE_TEST_REPORT.md:49-53`: Rollback test NOT RUN per stage policy (no working-tree modification); VC-3 hash/path comparison present but does not exercise rollback. `MANUAL_CHECKLIST.md:MC-026` (live TTY) BLOCKED-HUMAN. IMPLEMENTATION_NOTES.md:41 confirms LV-1 not performed. | Live verification of Esc/Enter on real TUI session; rollback path exercised | None | Accept that environmental constraints prevent live terminal testing and rollback exercise in stages where these are the only remaining gaps | NO |
+1. User asked me to read VERIFICATION_REPORT.md to check MC-006 PASS/FAIL
+2. I started reading various evidence files to do a final change audit for Issue 53
+3. I've been reading through: change.diff, CHECK_SCRIPTS.md, various MC-*.sh scripts, CHANGE_PLAN.md, VERIFICATION_REPORT.md, check logs, etc.
+4. I've been analyzing whether the evidence supports the PASS claims in VERIFICATION_REPORT.md
+5. I've identified potential findings (FA-1, FA-2, FA-3)
+6. I've been verifying evidence by reading logs and comparing against claims
+7. The last thing I did was read MC-003.log, MC-007.log, MC-009.log
 
-## Assumptions
+So the audit is still in progress - I've read the evidence but not yet produced the final Findings table and conclusion.
 
-```
-ASSUMPTION: the four driver completion banners at stagegate.sh:2141,2143 and change-workflow.sh:2177,2179 match the strings tested in tui-complete-dialog-test.py:18-20.
-  Unverified: driver source was not diffed against `change.diff` line by line, but grep found exactly four successful-completion strings (IMPLEMENTATION_NOTES.md:10).
-  Settled by: reading the two driver scripts if a discrepancy is suspected.
+The user seems to want a summary of what we've done so far. They may also be indicating they want to stop/check in before continuing.We're partway through a **final change audit** for Issue 53 (status bar `'Auto mode on'`/`'Manual approvals'` → `'mode(auto)'`/`'mode(manual)'` in `uncle_tui.py:3903`).
 
-ASSUMPTION: BASELINE_REPORT.md on disk (Issue 40) does not affect Issue 49 acceptance; a fresh Issue-49 baseline was taken per CHANGE_PLAN PC-2.
-  Unverified: the fresh baseline command output was not re-read here.
-  Settled by: CHANGE_TEST_REPORT.md:8 confirming shell-suite pre/post list identical (no new failure).
+### Done
+- Read all mandated inputs: `change.diff`, `CHANGE_SPEC.md`, `CHANGE_PLAN.md`, `BASELINE_REPORT.md`, `IMPLEMENTATION_NOTES.md`, `CHANGE_TEST_REPORT.md`, `VERIFICATION_REPORT.md`, `DEFECTS.md`, `MANUAL_CHECKLIST.md`, green-check evidence, `delivery-summary.tsv`, all MC-*.sh scripts, all check-run logs.
+- Verified evidence against PASS claims:
+  - MC-003 log: T-1 test `test_status_bar_mode_labels_on_home_and_running` → ok
+  - MC-006 log: P-1 lines identical, launch.json hash unchanged, P-2 manifests absent
+  - MC-007 log: new labels confirmed at line 3902
+  - MC-008 log: "Auto mode" retained at lines 1025, 1077, 2563; new label at 3903
+  - MC-009 log: old literals restored → OK; both files compile OK
+  - MC-011 log: truncation branch verified (menu/running, true/false, width 32/36)
+  - Driver checks: all 5 exit 0 in `results.tsv`
+- Identified 3 potential findings (FA-1: unrelated files in diff, FA-2: MC-010 BLOCKED-HUMAN, FA-3: MC-001–MC-005 misaligned with Issue 53)
 
-ASSUMPTION: delivery-summary.tsv "INCOMPLETE" status is stale metadata, not an actual acceptance gate.
-  Unverified: no stage driver requires it as a hard block for final audit.
-  Settled by: confirming the TSV has no programmatic enforcement in `.uncle/workflow/` orchestration scripts.
-```
+### Not yet done
+- Produce the final **Findings table** (ID, Severity, Evidence, Affected behavior, Affected invariant, Required correction, Blocks completion)
+- Write the conclusion: **READY** / **READY WITH NON-BLOCKING ISSUES** / **NOT READY**
 
-## Open questions
-
-1. `delivery-summary.tsv` says all five acceptance criteria are INCOMPLETE despite passing implementation, tests, and verification. Who owns refreshing it to prevent blocking on stale metadata?
-
----
-
-# Conclusion
-
-**READY WITH NON-BLOCKING ISSUES**
-
-The implementation correctly delivers all five acceptance criteria. The diff at `.uncle/workflow/change.diff` adds `_build_finished()`, `_back_from_build()`, and `_complete_key()` to `uncle_tui.py`, expands banner recognition per D-3, preserves `'complete'` in poll (D-6), updates modal rendering per S-5, and dispatches complete keys before chat in `handle_key`. All 149 lines of the new test pass. Regression tests (`tui-support-test.py` 8/8, `completion-preview-test.py` 8/8) are unchanged and green. Shell-suite failures are identical pre/post. No unprotected paths changed. The only findings: stale `delivery-summary.tsv` metadata (FA-1) and unexecutable live/rollback checks due to environment constraints (FA-2), neither blocking workflow completion as defined in the plan.
+Want me to finish by writing the Findings table and conclusion?

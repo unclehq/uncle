@@ -2309,6 +2309,18 @@ class UncleTUI:
             host.controller.steering_queued(stage, id, payload)
 
     def send_home_chat(self, message):
+        fix = re.match(r'^(?:please\s+)?fix(?:\s|$)', message.strip(), re.I)
+        markdown_request = re.match(r'^(?:please\s+)?(?:edit|update|correct|repair|rewrite)\b', message.strip(), re.I) and re.search(r'\.md\b|markdown|\.uncle(?:/|\b)', message, re.I)
+        if fix or markdown_request:
+            self._ensure_chat()
+            self.recovery_active = True
+            self.chat_focus = 'chat'
+            self._triage_turn('execute', proposal=(1, message.strip()), followup=message.strip())
+            return
+        rerun = re.fullmatch(r'(?:please\s+)?(?:run|rerun)\s+(?:the\s+)?([a-z][a-z-]+)\s+stage(?:\s+again)?[.!]?', message.strip(), re.I)
+        if rerun:
+            self.run_named_stage(rerun[1].lower())
+            return
         pending = getattr(self, 'home_replace_proposal', None)
         if pending and message.strip().lower() in ('approve replacement', 'decline replacement'):
             self.home_history.append(('user', message))
@@ -3058,6 +3070,28 @@ class UncleTUI:
             self.chat_error = self.triage_error
         return True
 
+    def run_named_stage(self, stage):
+        from rerun_stage import APP, CHANGE
+        if getattr(self, 'proc', None) and self.proc.poll() is None:
+            raise ValueError('Stop the active workflow before running another stage.')
+        if getattr(self, 'home_request', None) or getattr(self, 'triage_request', None):
+            raise ValueError('Wait for the current chat request to finish.')
+        root = Path(_project_root())
+        directory = root / '.uncle/workflow'
+        family = (directory / 'family').read_text().strip()
+        choices = CHANGE if family == 'change' else APP
+        stage = stage.strip().lower()
+        if stage not in choices:
+            raise ValueError('Usage: /run STAGE. Available: ' + ', '.join(choices))
+        if not (directory / 'state').is_file():
+            raise ValueError('Start a workflow before selecting a stage.')
+        with (directory / 'rerun-request.json').open('x') as stream:
+            json.dump({'stage': stage, 'source': 'explicit-user-request'}, stream)
+        self.workflow_idx = 2 if family == 'change' else 0
+        self.new_workflow_pending = False
+        self.home_history.append(('system', 'Requested rerun of ' + stage + '.'))
+        self._run()
+
     def triage_resume(self):
         """Relaunch the driver from its recorded state: the ordinary start, no shortcut."""
         self._triage_init()
@@ -3580,7 +3614,7 @@ class UncleTUI:
         return False
 
     def _slash_choices(self):
-        commands = ['/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/triage', '/do', '/resume', '/delegate', '/app-input']
+        commands = ['/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/triage', '/do', '/resume', '/run', '/delegate', '/app-input']
         text = self.chat_composer.lower()
         return [command for command in commands if command.startswith(text)] if text.startswith('/') and ' ' not in text else []
 
@@ -3608,6 +3642,13 @@ class UncleTUI:
                 return True
             if argument and command not in ('/issue', '/do', '/delegate', '/app-input'):
                 self.chat_error = command + ' does not take arguments'
+                return True
+            if command == '/run':
+                try:
+                    self.run_named_stage(argument)
+                    self.chat_composer = ''
+                except (OSError, ValueError) as exc:
+                    self.chat_error = str(exc)
                 return True
             if command == '/delegate':
                 self.chat_composer = ''
@@ -3900,7 +3941,7 @@ class UncleTUI:
         except OSError:
             pass
         auto = getattr(self, 'misc', {}).get('auto_mode') == 'true'
-        project_status = project + '  ·  ' + ('Auto mode on' if auto else 'Manual approvals')
+        project_status = project + '  ·  ' + ('mode(auto)' if auto else 'mode(manual)')
         if build:
             model_status = 'Tests: ' + self.test_execution_status() + '  ·  ' + model_status
         status_row = composer_row + extra + (2 if build or compact else 3)

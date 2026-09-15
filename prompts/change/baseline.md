@@ -67,8 +67,7 @@ Length is a cost. Write the shortest report a reviewer can act on. Six later
 stages read this report, and each of them re-sends it on every turn, so a word
 here is paid for six times over.
 
-- Budget: **1,200 words or fewer**, excluding tables. Over that means prose is
-  doing a table's job.
+- Use the appended budget and enforcement mode; no separate word limit.
 - Omit any numbered section with no substantive content for this change.
 - Directly under the title write one line:
   `Omitted sections: <name> (<reason>); <name> (<reason>)`
@@ -127,3 +126,36 @@ The driver uses the approved groups for both baseline and post-change checks;
 do not regroup commands after approval.
 
 Write BASELINE_REPORT.md and stop.
+
+## Bounded baseline and compact first draft
+
+Start with CHANGE_REQUEST.md and the repository's documented verification entry
+points. Build a short map of affected symbols, their callers and relevant tests.
+Read only documentation and code needed to establish current behavior, invariants
+and regression risks for this change. Expand discovery only to answer a concrete
+unresolved question; do not read remaining large-file sections for completeness.
+Batch independent reads. Existing reports are navigation hints, not fresh PASS
+evidence, and reports from other issues must not become this baseline.
+
+Choose the documented relevant checks once, including any repository-mandated
+full suite. Execute each selected command once and capture full stdout/stderr
+and its real exit status in workflow logs. For Uncle use run-shell-tests.sh;
+do not run its selected suites again individually. Group other independent
+commands only when their fixtures, ports and outputs are isolated. Do not overlap
+a full suite with its constituent tests. Poll an active command rather than
+launching it again. Inspect a failing check's saved log before considering a
+rerun; rerun only for a specific reproduction or flakiness question and record why.
+Do not pipe a check through tail in a way that loses its failure exit status.
+
+Compose the report after collecting evidence: one canonical row per behavior,
+invariant and executed result, referenced elsewhere by ID. Preserve exact commands,
+exit codes, failures, evidence paths and unknowns. Reconcile sections 8/9 and
+parallel groups once. No repeated narrated format sweeps or whole-report rereads
+without a specific discrepancy. In advisory-budget mode perform ZERO size-only
+compaction passes; mandatory evidence survives above the guide. The driver
+measures the report. Enforced budgets retain the two-pass limit.
+
+Return/write the complete BASELINE_REPORT.md under the runner contract. Steering
+questions do not replace the task: answer them, then finish the baseline. Never
+substitute a conversation summary, filename or progress note for the report.
+Do not modify source code or create project commits.

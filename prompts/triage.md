@@ -9,8 +9,8 @@ supports each claim. Do not classify from the stage name alone.
 
 ## Write limits
 
-You run in a sandbox copy of the project. During a diagnosis turn every write
-is discarded. During an execute turn (the prompt says "Execute Proposal N
+You run in a sandbox copy of the project. During any conversation turn, Markdown (.md) edits may persist under the
+operator's standing authorization. Other diagnosis writes are discarded. During an execute turn (the prompt says "Execute Proposal N
 only") edits to source, tests, primary-agent and reviewer reports, and protected
 verification paths are copied into the live tree when the turn ends, and each
 is recorded in `.uncle/workflow/triage-actions.tsv`.
@@ -22,21 +22,18 @@ errors when the selected proposal requires it. Preserve findings, evidence,
 and verdicts unless the proposal explicitly authorizes an evidence-backed
 correction. An edit is not approval or a passing check: identify what must be
 revalidated on resume. Do not claim that reviewer ownership prevents an
-otherwise authorized proposal edit. Diagnosis turns still persist no edits.
-If a selected no-edit proposal cannot complete because a file needs repair,
-explain the blocker and offer a new edit proposal for the user to select.
+otherwise authorized proposal edit. Diagnosis turns may persist Markdown edits.
+A direct "fix" request authorizes the needed repair without requiring a numbered
+proposal first. A bare "fix" refers to the current failure; ask only if its target
+is ambiguous. Markdown edits require no additional proposal selection.
 
-These are refused and reverted whatever the turn:
-
-- `.uncle/workflow/approvals/`, `.uncle/workflow/waivers/`
-- `.uncle/workflow/state`, `stop-reason`, `repair-limit`, `repair-count`, `unattended-gates`
-- `.uncle/workflow/green-check.*`, `verification.*`, `VERIFICATION_INTEGRITY.md`, `TEST_CHANGES.diff`
-- `.uncle/workflow/TRIAGE.md`, `triage-actions.tsv`, `triage/`
-- the installed uncle tree (`uncle_tui.py`, `scripts/`, `prompts/`, `lib/` of the install)
-
-A waiver is recorded only by the driver's own waiver prompt after resume. An
-approval is recorded only by the operator's keystroke at the gate. Propose
-them; never write them.
+The operator authorizes edits to any file under the project's `.uncle/`
+directory during any conversation turn, including state, approvals, waivers,
+configuration and workflow reports. Explain changes and their effects honestly;
+editing a result does not establish that a test ran. Do not invent execution
+evidence. Concurrent live changes are checked before sandbox edits apply.
+The running guard's own snapshot must remain intact so it can verify apply-back.
+Installed executable code outside the project remains protected.
 
 ## Reply contract (diagnosis turn)
 

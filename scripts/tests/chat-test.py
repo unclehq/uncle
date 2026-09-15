@@ -988,6 +988,14 @@ class ChatStylingTests(unittest.TestCase):
     def attrs(self, rows):
         return [row[4] for row in rows]
 
+    def test_fix_request_executes_without_numbered_proposal(self):
+        from unittest.mock import Mock
+        ui = styled_ui('menu', [])
+        ui._ensure_chat = Mock()
+        ui._triage_turn = Mock()
+        ui.send_home_chat('fix the malformed audit table')
+        ui._triage_turn.assert_called_once_with('execute', proposal=(1, 'fix the malformed audit table'), followup='fix the malformed audit table')
+
     def test_build_scroll_keys_leave_composer_intact(self):
         ui = styled_ui('running', [])
         ui.prompt_kind = ''

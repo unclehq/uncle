@@ -66,6 +66,22 @@ node a.js | node b.js; python3 checks.py || printf failure
             preflight.prerequisites('sh -c "custom-tool"')
         self.assertIn('fixed startup probe exited 0', preflight.probe('sh'))
 
+    def test_tee_pipeline_probe_does_not_write_plan_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sentinel = root / 'must-not-exist'
+            commands, report = root / 'commands', root / 'report'
+            commands.write_text(f'python3 missing.py 2>&1 | tee "{sentinel}"')
+            self.assertEqual(preflight.prerequisites(commands.read_text()), ['python3', 'tee'])
+            preflight.run(commands, report)
+            self.assertFalse(sentinel.exists())
+            self.assertIn('tee fixed startup probe exited 0', report.read_text())
+
+    def test_missing_tee_still_requires_diagnosis(self):
+        with patch.object(preflight.shutil, 'which', return_value=None):
+            with self.assertRaisesRegex(ValueError, 'Missing runtime: tee'):
+                preflight.probe('tee')
+
     def test_real_python_probe(self):
         self.assertIn('exited 0', preflight.probe('python3'))
 

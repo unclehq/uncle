@@ -14,6 +14,8 @@ PROBES = {name: ['--version'] for name in
 PROBES['shasum'] = ['--version']
 # POSIX sh has no portable --version; execute only our fixed no-op probe.
 PROBES['sh'] = ['-c', ':']
+# BSD tee has no --version. With EOF on stdin and no paths, this writes nothing.
+PROBES['tee'] = []
 BUILTINS = {'true', ':', 'echo', 'printf', 'mkdir', 'test', '['}
 
 
@@ -92,7 +94,7 @@ def probe(name):
             finish_check(child)
         if status:
             raise ValueError('%s runtime probe exited %s' % (name, status))
-    return name + (' fixed startup probe exited 0' if name == 'sh' else ' --version exited 0')
+    return name + (' fixed startup probe exited 0' if name in ('sh', 'tee') else ' --version exited 0')
 
 
 def run(commands, report):

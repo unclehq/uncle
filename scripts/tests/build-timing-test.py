@@ -15,6 +15,29 @@ from process_tree import start_check, finish_check
 
 
 class TimingTests(unittest.TestCase):
+    def test_driver_supervision_initializes_timing_for_child_and_preserves_exit(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('timed_driver',
+            Path(__file__).resolve().parents[1] / 'lib/plan-executability.py')
+        driver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(driver)
+        with tempfile.TemporaryDirectory() as directory, patch.object(driver, 'STATE', Path(directory)), \
+                patch.dict(os.environ, WORKFLOW_METRICS='1'):
+            def supervised(callback, command, state, root):
+                target = Path(os.environ['UNCLE_TIMING_DIR'])
+                self.assertTrue((target / 'run.json').exists())
+                code = "import os; from build_timing import event; event('test', 'child', 0, .1, 0)"
+                env = dict(os.environ, PYTHONPATH=str(Path(driver.__file__).parent))
+                subprocess.run([sys.executable, '-c', code], env=env, check=True)
+                return 7
+            with patch('supervisor.supervised_lock_run', side_effect=supervised):
+                self.assertEqual(driver.lock_run(['fake-driver']), 7)
+            runs = list((Path(directory) / 'performance').glob('*/run.json'))
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(json.loads(runs[0].read_text())['process_exit'], 7)
+            events = [json.loads(p.read_text()) for p in (runs[0].parent / 'events').glob('*.json')]
+            self.assertTrue(any(e.get('name') == 'child' for e in events))
+
     def test_real_process_and_stage_failure_preserve_status(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, WORKFLOW_PROFILE_INTERVAL='.1'):
             with BuildTiming(Path(directory)) as timing:

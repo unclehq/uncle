@@ -26,7 +26,9 @@ classify_audit_verdict() {
     line="$(tr -d '\r' < "$file" | awk 'NF { last = $0 } END { print last }')"
     line="$(printf '%s' "$line" \
         | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-              -e 's/^[#*_[:space:]]*//' -e 's/[*_[:space:]]*$//')"
+              -e 's/^[#*_[:space:]]*//' -e 's/[*_[:space:]]*$//' \
+              -e 's/^Conclusion:[[:space:]]*//' \
+              -e 's/^[*_[:space:]]*//' -e 's/[*_[:space:]]*$//')"
 
     case "$line" in
         "READY")                          printf '%s\n' READY ;;

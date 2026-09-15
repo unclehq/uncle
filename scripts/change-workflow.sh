@@ -2076,10 +2076,19 @@ REPAIR
                     manual-checklist \
                     "$CODEX_EFFORT_CHECKLIST"
             fi
+            set_state VALIDATE_MANUAL_CHECKLIST
+            ;;
+
+        VALIDATE_MANUAL_CHECKLIST)
+            python3 "$ROOT/scripts/lib/checklist_document.py" MANUAL_CHECKLIST.md || exit 1
             set_state EXECUTE_CHECKLIST
             ;;
 
         EXECUTE_CHECKLIST)
+            if ! python3 "$ROOT/scripts/lib/checklist_document.py" MANUAL_CHECKLIST.md; then
+                set_state VALIDATE_MANUAL_CHECKLIST
+                exit 1
+            fi
             run_green_check || true
             plan_delivery_summary
             snapshot_checklist_groups

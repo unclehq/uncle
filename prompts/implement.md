@@ -153,3 +153,14 @@ at the end. Do not repeatedly write progress into final reports or rerun passing
 checks just to reproduce their output for a report. If interrupted, preserve a
 short checkpoint of unfinished work and existing evidence instead of starting
 the implementation and checks over. Do not claim unobserved results.
+
+## Minimal stage handoff
+
+Use the shared input index and structured handoffs to locate approved decisions,
+files and evidence. Read complete relevant sections, not the entire repository.
+Retain unchanged IDs, decisions and commands. Inspect or probe only to resolve a
+specific missing fact. Do not repeat dependency discovery already supported by
+current evidence. Write one concise final report: changed behavior, exact checks
+and evidence references, unresolved findings. No chronological work diary or
+restatement of requirements. Planning revisions must remain complete plans;
+implementation reports must preserve every required result and failure.

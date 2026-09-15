@@ -166,3 +166,14 @@ do not repeat reviewer prose. Preserve all mandatory criteria and constraints.
 Return a complete final plan, not a patch or a progress message. Before writing,
 check revised and unchanged sections for contradictions and verify required
 command blocks. Formatting corrections use the saved plan without replanning.
+
+## Minimal stage handoff
+
+Use the shared input index and structured handoffs to locate approved decisions,
+files and evidence. Read complete relevant sections, not the entire repository.
+Retain unchanged IDs, decisions and commands. Inspect or probe only to resolve a
+specific missing fact. Do not repeat dependency discovery already supported by
+current evidence. Write one concise final report: changed behavior, exact checks
+and evidence references, unresolved findings. No chronological work diary or
+restatement of requirements. Planning revisions must remain complete plans;
+implementation reports must preserve every required result and failure.

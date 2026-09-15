@@ -253,7 +253,7 @@ fi
 case "$out" in
     ADVERSARIAL_REVIEW.md) printf '## Overall assessment\nNo findings.\n' >> "$out" ;;
     FINAL_AUDIT.md) printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nREADY\n' >> "$out" ;;
-    *) printf 'MC-1 Check the greeting.\n\nREADY\n' >> "$out" ;;
+    *) printf '## MC-1 Check the greeting.\nExact action: Open the page\nExpected result: Greeting visible\n\nREADY\n' >> "$out" ;;
 esac
 REV
     chmod +x "$CASE/bin/fake-reviewer"
@@ -379,7 +379,7 @@ else
     elif [[ "$out" == ADVERSARIAL_REVIEW.md ]]; then
         printf '## Overall assessment\nNo findings.\n' >> "$out"
     else
-        printf 'MC-1 Check the greeting.\n\nREADY\n' >> "$out"
+        printf '## MC-1 Check the greeting.\nExact action: Open the page\nExpected result: Greeting visible\n\nREADY\n' >> "$out"
     fi
 fi
 REV
@@ -1076,7 +1076,7 @@ expect_state WAIT_IMPLEMENT_APPROVAL
 expect_no_file '.uncle/workflow/logs/manual-checklist-base.compact-3.log'
 COUNT=$((COUNT + 1))
 [[ $(grep -c '/candidate.md$' "$REPO/.uncle/workflow/reviewer-calls") == 0 ]] || fail 'unexpected separate background compaction call'
-printf 'MC-1 Check the greeting.\n\nREADY\n' > "$CASE/expected.md"
+printf '## MC-1 Check the greeting.\nExact action: Open the page\nExpected result: Greeting visible\n\nREADY\n' > "$CASE/expected.md"
 COUNT=$((COUNT + 1))
 cmp -s "$CASE/expected.md" "$REPO/.uncle/workflow/MANUAL_CHECKLIST.base.md" || fail 'background exhaustion changed original bytes'
 

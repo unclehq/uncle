@@ -9,6 +9,7 @@ import sys
 def validate(path):
     text = Path(path).read_text(encoding='utf-8')
     last = text.strip().splitlines()[-1].strip().strip('#*_ ')
+    last = re.sub(r'^Conclusion:[ \t]*', '', last).strip('*_ ')
     if last not in ('READY', 'READY WITH NON-BLOCKING ISSUES', 'NOT READY'):
         raise ValueError('Missing final audit verdict')
     spec = importlib.util.spec_from_file_location('audit_findings', Path(__file__).with_name('audit-findings.py'))

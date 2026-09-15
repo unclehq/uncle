@@ -27,6 +27,10 @@ check() {
     fi
 }
 
+check 'labelled-not-ready' NOT_READY 'Conclusion: NOT READY\n'
+check 'labelled-ready' READY 'Conclusion: READY\n'
+check 'labelled-ambiguous' UNKNOWN 'Conclusion: READY or NOT READY\n'
+
 check_missing() {
     local name="$1" expected="$2" file="$3"
     COUNT=$((COUNT + 1))

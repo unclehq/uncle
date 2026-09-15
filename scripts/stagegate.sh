@@ -1322,6 +1322,10 @@ run_stage() {
                 manual-checklist
             ;;
         EXECUTE_CHECKLIST)
+            if ! python3 "$ROOT/scripts/lib/checklist_document.py" MANUAL_CHECKLIST.md; then
+                set_state VALIDATE_MANUAL_CHECKLIST
+                exit 1
+            fi
             rm -f VERIFICATION_REPORT.md
             run_claude prompts/execute-checklist.md execute-checklist
             ;;
@@ -2029,6 +2033,11 @@ while true; do
             # do, not against what the plan hoped for.
             snapshot_preflight_capabilities
             run_stage MANUAL_CHECKLIST
+            set_state VALIDATE_MANUAL_CHECKLIST
+            ;;
+
+        VALIDATE_MANUAL_CHECKLIST)
+            python3 "$ROOT/scripts/lib/checklist_document.py" MANUAL_CHECKLIST.md || exit 1
             set_state EXECUTE_CHECKLIST
             ;;
 

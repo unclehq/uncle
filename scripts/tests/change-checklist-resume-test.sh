@@ -28,7 +28,7 @@ while true; do
     eval "$(sed -n '/^        EXECUTE_CHECKLIST)/,/^        FINAL_AUDIT)/p' "$ROOT/scripts/change-workflow.sh" | sed '$d' | { printf 'case "$state" in\n'; cat; printf 'esac\n'; })"
 done
 EOF
-echo MC-001 > MANUAL_CHECKLIST.md
+printf '## MC-001\nExact action: check\nExpected result: greeting\n' > MANUAL_CHECKLIST.md
 echo EXECUTE_CHECKLIST > state
 touch bad-report
 if bash harness.sh; then exit 1; fi

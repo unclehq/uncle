@@ -24,6 +24,7 @@ def findings(text, require_blockers=True):
     table_ended = False
     for raw in section.splitlines():
         line = raw.strip()
+        line = re.sub(r'^Conclusion:[ \t]*', '', line)
         if not line:
             if len(lines) >= 3:
                 table_ended = True

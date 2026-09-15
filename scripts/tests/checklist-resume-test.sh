@@ -60,6 +60,7 @@ report() {
     printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n%s\n' "$1" > "$2"
 }
 reset() {
+    printf '## MC-1\nExact action: check\nExpected result: greeting\n' > MANUAL_CHECKLIST.md
     rm -f calls invalid-inputs
     rm -rf workflow/waivers
     printf 'EXECUTE_CHECKLIST\n' > workflow/state

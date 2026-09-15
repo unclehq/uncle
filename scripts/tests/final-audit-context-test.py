@@ -13,7 +13,7 @@ class Audit(unittest.TestCase):
     def test_formats(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d)/'audit.md'
-            for text in [HEADER+'\nREADY\n', HEADER+'| FA-1 | file:1 | repair | YES |\n\nNOT READY\n']:
+            for text in [HEADER+'\nConclusion: READY\n', HEADER+'| FA-1 | file:1 | repair | YES |\n\nConclusion: NOT READY\n', HEADER+'\nREADY\n', HEADER+'| FA-1 | file:1 | repair | YES |\n\nNOT READY\n']:
                 p.write_text(text)
                 module.validate(p)
             for text in ['READY', HEADER+'| FA-1 | file:1 | repair | YES |\nREADY\n', HEADER+'\nNOT READY\n', HEADER+'| FA-1 | x | y | maybe |\nREADY\n']:

@@ -1696,7 +1696,7 @@ while true; do
 
     # Older drivers could advance despite an explicitly partial delivery.
     case "$state" in
-        WAIT_IMPLEMENT_APPROVAL|CHECKLIST|EXECUTE_CHECKLIST|FINAL_AUDIT)
+        WAIT_IMPLEMENT_APPROVAL|CHECKLIST|EXECUTE_CHECKLIST|VALIDATE_CHECKLIST|FINAL_AUDIT|VALIDATE_AUDIT)
             if ! implementation_complete; then
                 echo "Incomplete acceptance delivery; returning to IMPLEMENT."
                 cat "$STATE_DIR/implementation-completion.txt"
@@ -2053,6 +2053,11 @@ REPAIR
             run_claude prompts/change/execute-change-checklist.md execute-checklist \
                 "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 200 "$BUDGET_EXECUTE"
             PROGRESS_TOTAL=0
+            set_state VALIDATE_CHECKLIST
+            ;;
+
+        VALIDATE_CHECKLIST)
+            echo "Validating saved checklist reports; checks will not be rerun."
             require_file VERIFICATION_REPORT.md
             check_document_budget VERIFICATION_REPORT.md || exit 1
             if [[ -e DEFECTS.md ]]; then
@@ -2073,6 +2078,13 @@ REPAIR
                 final-audit \
                 "$CODEX_EFFORT_AUDIT"
 
+            set_state VALIDATE_AUDIT
+            ;;
+
+        VALIDATE_AUDIT)
+            echo "Validating saved audit; the reviewer will not be rerun."
+            require_file FINAL_AUDIT.md
+            python3 "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md || exit 1
             audit_class="$(classify_audit_verdict FINAL_AUDIT.md)"
             printf '%s\t%s\t%s\n' \
                 "${STAGEGATE_RUN_ID:--}" \

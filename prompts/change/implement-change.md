@@ -174,3 +174,33 @@ question and alternatives. DESIGN means an unsupported generated mechanism, not 
 ordinary coding defect. LIVE_VERIFICATION means only dependent approved live checks
 remain unavailable or failing; preserve INCOMPLETE/BLOCKED delivery rows until they pass.
 Never remove acceptance IDs, weaken protected tests, suppress findings, or auto-waive.
+
+## Avoid repeated setup and model round trips
+
+Before installing dependencies, check whether the declared versions are already
+usable with the current manifest and lockfile. Reuse a matching installation;
+use the package manager's download cache when installation is necessary. A
+folder's existence alone does not prove a valid installation. Invalidate reuse
+when the lockfile, manifest, runtime/ABI, platform, or dependency configuration
+changes, or when the capability probe fails. Never skip an explicitly approved
+clean-install verification command or a check intended to test installation.
+
+Reuse an installed browser only when its engine/revision matches the pinned
+automation package and it successfully launches in the execution environment.
+Do not repeatedly download browsers, switch engines, upgrade packages, or change
+lockfiles to save time. Keep cache use distinct from test-result reuse: tests
+still run against the implemented files and current environment.
+
+After focused inspection, author independent related source and test files in
+one batch of tool calls. Preserve plan dependencies and protected-input snapshot
+ordering. Then run a single verification batch, parallelizing only independent
+checks with separate outputs and no conflicting resources. When a check fails,
+fix it and rerun affected checks and their dependents; rerun the full batch only
+when the change or the approved plan requires it. Keep every required check.
+
+Collect command exits, output paths, and acceptance mappings during execution.
+Write each required implementation/test report once from the collected evidence
+at the end. Do not repeatedly write progress into final reports or rerun passing
+checks just to reproduce their output for a report. If interrupted, preserve a
+short checkpoint of unfinished work and existing evidence instead of starting
+the implementation and checks over. Do not claim unobserved results.

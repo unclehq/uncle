@@ -94,3 +94,13 @@ Read .uncle/workflow/plan-executability/assessment.md, plan-recovery.json and
 and live verification results against delivery claims. A WAIVED row permits only
 explicitly scoped workflow advancement, never implemented-and-verified delivery.
 Report completion with waivers as "workflow complete with waived acceptance".
+
+## Evidence and retry economy
+
+Use the driver evidence packet to locate current results and changed inputs.
+Hashes establish identity, not correctness. Match each PASS to its exact
+assertions and execution evidence. Rerun only checks with missing, stale,
+contradictory, or insufficient evidence; do not repeat an entire suite merely
+because this is a new review stage. Human observations cannot be inferred.
+Before returning, verify the Findings table fields, unique IDs, YES/NO blocking
+values, and final verdict. Return the complete audit once, without progress text.

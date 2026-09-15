@@ -140,3 +140,25 @@ not pad a section to make it look complete. If a section has no meaningful
 check for this project, write "none applicable" and why.
 
 Return only the checklist.
+
+## Efficient checklist delivery
+
+Use the driver evidence packet as an index, not as proof of coverage. Preserve
+all required acceptance criteria. Where fresh driver evidence already covers an
+assertion, keep its checklist mapping and cite the exact command/evidence to
+inspect rather than inventing an equivalent manual rerun. Missing or stale
+results still require execution. Identify genuinely human judgment separately
+from automatable assertions; never invent a human observation.
+
+Each check must have a concrete action, observable expected result, evidence
+path, required-for-acceptance flag, exclusive resources, and dependencies. Use
+stable unique MC IDs. Before returning, verify all required fields, dependency
+references, and absence of dependency cycles. Correct malformed fields in the
+current draft; return the complete checklist, not a progress message.
+
+On a delta or repair pass, retain unaffected check IDs and wording. Change only
+rows affected by implementation differences, unresolved findings, changed inputs,
+or missing coverage. Compare the supplied hashes with the evidence used before
+carrying a conclusion forward; if the prior basis is unavailable, recheck that
+row. Record why a row was changed or removed. Never delete required checks merely
+to reduce count, runtime, or report length. Write the final checklist once.

@@ -129,3 +129,27 @@ These add length without adding information, and their presence is a defect:
 - Quote code only when the document's claim depends on the exact text. Quote
   the smallest span that carries the claim, and cite its location.
 - Never paste a whole file. Never paste a diff the driver already records.
+
+
+## Proportional work and bounded inspection
+
+For a small application or change, use the shortest report that satisfies every
+required section, acceptance row, and evidence reference. Do not turn a simple
+page into an extensive design exercise. Prefer one concise table over repeated
+prose; reference earlier requirements by ID instead of restating them. Preserve
+all actual requirements and blockers. Budgets are drafting targets, not a reason
+to repeatedly rewrite an otherwise complete report.
+
+Before inspection, collect the known input paths and read independent files in
+one batch. Start with files named in the approved plan and current evidence.
+Avoid recursive searches from the project root. Exclude `.uncle/workflow-history`,
+`.git`, dependency directories, virtual environments, caches, and generated build
+outputs from discovery unless a specific investigation requires them. Read named
+hidden workflow files directly; never infer absence from a Glob result.
+
+Reviewers should use current driver exit codes and linked test output before
+requesting additional execution. Rerun only to resolve a concrete evidence gap,
+changed input, or failure; state why. Inspect assertions and negative cases, but
+do not duplicate passing driver checks merely to produce another passing record.
+Batch independent inspections and report only findings, decisions, and required
+acceptance evidence. Keep progress commentary out of the final report response.

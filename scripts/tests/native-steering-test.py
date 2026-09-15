@@ -138,6 +138,15 @@ for line in sys.stdin:
    self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
    self.assertEqual(json.loads(output.read_text()), {'version':1, 'input_digest':'fixture', 'verdict':'REVISE'})
 
+ def test_review_final_answer_is_not_replaced_by_compaction_commentary(self):
+  stage = Stage('codex', 'reviewer', 'test-review', [], prompt='Review')
+  stage.answer = 'Streamed compaction commentary'
+  stage.completed_answer('Compacting the report', phase='commentary')
+  self.assertEqual(stage.output_answer(), '')
+  stage.completed_answer('## Acceptance gate\nComplete report', phase='final_answer')
+  stage.completed_answer('Compacting (pass 1)', phase='commentary')
+  self.assertEqual(stage.output_answer(), '## Acceptance gate\nComplete report')
+
  def test_assessment_capture_is_scoped_and_uses_latest_complete_object(self):
   stage = Stage('codex', 'reviewer', 'plan-executability', [], prompt='Review')
   first = json.dumps({'version':1, 'input_digest':'first', 'verdict':'READY'})

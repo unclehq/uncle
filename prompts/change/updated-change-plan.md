@@ -133,3 +133,23 @@ Preserve genuine constraints and required properties while selecting feasible al
 Inventory steps with IDs, paths, requirements, dependencies, capability IDs and decision IDs.
 Separate unavailable live authentication from coding prerequisites; include approved live
 check IDs/commands and non-secret prerequisite evidence paths for verification resume.
+
+## Proportional implementation and verification
+
+Choose the smallest architecture and toolchain that meets the actual requested
+behavior and the repository's conventions. For a static page, prefer plain HTML
+and CSS unless a stated requirement needs more. Do not add a framework, linter,
+formatter, build system, browser matrix, or test dependency solely to populate a
+plan section. Reuse existing suitable tools. Retain required browser-grounded
+checks, negative cases, and acceptance evidence; simplicity does not waive them.
+
+Plan setup separately from verification. Allow reuse of dependencies and browser
+binaries only after checking version/lockfile compatibility and actual usability.
+Require fresh installation only when testing installation, when reuse is invalid,
+or when explicitly requested. State cache invalidation inputs in the setup step.
+
+Group independent file creation and verification work so the implementation model
+can batch it. Name concrete reasons for serial dependencies. Arrange for each
+required report to be written once after evidence is collected. On revision,
+change only what findings or requirements require; do not expand scope or invent
+additional tooling merely because another planning pass is occurring.

@@ -88,3 +88,16 @@ in Evidence rather than in the ID cell. A row whose ID contains spaces is not
 parsed, and the driver records no acceptance pass for the stage.
 
 Return the complete review as your final message.
+
+
+## Review economy and final delivery
+
+Use the driver evidence packet as the starting index. Read only the additional
+source, assertion, fixture, or log excerpts needed to judge each required row.
+Do not enumerate clean code as separate findings: concise PASS evidence belongs
+in the six required acceptance rows. Findings are concrete defects or unresolved
+gaps. Keep every required row and real blocker; no extra summary of each PASS.
+
+Return the complete TEST_REVIEW.md as the final response, not a status message
+about writing or compacting it. Do not emit a compaction announcement as the final
+answer. A report-size warning alone does not require another model iteration.

@@ -113,7 +113,13 @@ class Stage:
         print(json.dumps({'type':'assistant', 'uncle_timing_native':True, 'uncle_chat_output':bool(os.environ.get('UNCLE_STATUS_FILE')), 'message':{'content':[{'type':'text','text':text}]}}), flush=True)
         self.status('chat_output', text=text)
 
-    def completed_answer(self, text, response_id=None):
+    def completed_answer(self, text, response_id=None, phase=None):
+        if phase in ('commentary', 'final_answer'):
+            self.phased_answers = True
+        if phase == 'commentary':
+            return
+        if phase == 'final_answer':
+            self.explicit_final_answer = text
         self.final_answer = text
         self.responded(response_id)
         if self.side != 'reviewer' or self.stage != 'plan-executability':
@@ -132,7 +138,9 @@ class Stage:
         if self.side == 'reviewer' and self.stage == 'plan-executability' and self.assessment_answer:
             # The workflow still validates the full schema, digest and evidence.
             return self.assessment_answer
-        return self.final_answer or self.answer
+        if self.side == 'reviewer' and getattr(self, 'phased_answers', False):
+            return getattr(self, 'explicit_final_answer', '')
+        return getattr(self, 'explicit_final_answer', '') or self.final_answer or self.answer
 
     def watch_parent(self):
         # Windows supervisors own descendants through a Job Object. On POSIX,
@@ -294,7 +302,7 @@ class Stage:
             method,p=event.get('method'),event.get('params',{})
             if method=='item/agentMessage/delta': self.text(p.get('delta',''))
             if method=='item/completed' and p.get('item',{}).get('type')=='agentMessage':
-                self.completed_answer(p['item'].get('text',''),p['item'].get('id'))
+                self.completed_answer(p['item'].get('text',''),p['item'].get('id'),p['item'].get('phase'))
             if method=='thread/tokenUsage/updated':
                 u=p.get('tokenUsage',{}).get('total',{})
                 self.tokens(dict(input_tokens=u.get('inputTokens'),output_tokens=u.get('outputTokens'),

@@ -161,11 +161,27 @@ gated_prompt() {
     local combined="$LOG_DIR/${log_name}.gated-prompt.md"
     {
         cat "$prompt_file"
+        case "$log_name" in
+            manual-checklist|manual-checklist-base|manual-checklist-delta)
+                if [[ -f "$GATES_LIB_DIR/manual-checklist-context.py" ]]; then
+                    python3 -B "$GATES_LIB_DIR/manual-checklist-context.py" "$PWD" "${STATE_DIR:-.uncle/workflow}" "$log_name" \
+                        || printf '\nEvidence packet unavailable; read the required inputs directly.\n'
+                fi
+                ;;
+        esac
         if [[ -f "$GATES_LIB_DIR/../../lib/gates/EXECUTION_RULES.md" ]]; then
             printf '\n\n'
             cat "$GATES_LIB_DIR/../../lib/gates/EXECUTION_RULES.md"
         fi
+        if [[ "$log_name" == final-audit && -f "$GATES_LIB_DIR/final-audit-context.py" ]]; then
+            python3 -B "$GATES_LIB_DIR/final-audit-context.py" "$PWD" "${STATE_DIR:-.uncle/workflow}" \
+                || printf '\nAudit packet unavailable; read required inputs directly.\n'
+        fi
         if [[ "$log_name" == execute-checklist ]]; then
+            if [[ -f "$GATES_LIB_DIR/execute-checklist-context.py" ]]; then
+                python3 -B "$GATES_LIB_DIR/execute-checklist-context.py" "$PWD" "${STATE_DIR:-.uncle/workflow}" \
+                    || printf '\nExecution packet unavailable; read the required inputs directly.\n'
+            fi
             printf '\nReusable checklist runner: python3 "%s/checklist_batch.py" .uncle/workflow/check-commands.json\n' "$GATES_LIB_DIR"
             cat <<'CHECK_BATCH'
 
@@ -191,7 +207,9 @@ block dependent commands; run those separately only after verifying prerequisite
 evidence. Do not add dummy successful commands to bypass dependencies.
 
 Invoke the runner above once for all mapped checks, then read results.json and
-relevant logs in one batch. It enforces group barriers, separate logs, timeouts,
+relevant logs and report-draft.md in one batch. The draft records command results
+without declaring acceptance: compare assertions and resolve every NOT RUN row
+before using it in VERIFICATION_REPORT.md. It enforces group barriers, separate logs, timeouts,
 and per-check timing. An EXIT_0 is command evidence, not an automatic acceptance
 PASS; verify each expected result. Preserve NOT_RUN and failed-check evidence.
 Avoid per-check tool round trips and repeated command generation. Do not nest

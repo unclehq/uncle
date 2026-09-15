@@ -34,6 +34,39 @@ class ReviewContextTest(unittest.TestCase):
             (state / "green-check.tsv").write_text("REGRESSION\tbash tests/browser.sh\n")
             self.assertIn("REGRESSION\tbash tests/browser.sh", context.render(root, state))
 
+    def test_requirement_assertion_and_failure_locations_are_included(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / '.uncle/workflow'
+            (state / 'logs').mkdir(parents=True)
+            (root / 'tests').mkdir()
+            test = root / 'tests/page.js'
+            test.write_text("test('centering', () => {\n  expect(center).toBe(50);\n});\n")
+            (root / 'UPDATED_PROJECT_PLAN.md').write_text('| AC-1 | Center text |\n')
+            (state / 'verification.manifest').write_text(hashlib.sha256(test.read_bytes()).hexdigest() + '\ttests/page.js\n')
+            (state / 'logs/green-check.log').write_text('not ok 1 centering\n')
+            output = context.render(root, state)
+            self.assertIn('UPDATED_PROJECT_PLAN.md:1: | AC-1', output)
+            self.assertIn('tests/page.js:2:   expect(center)', output)
+            self.assertIn('green-check.log:1: not ok 1', output)
+            test.write_text('assert(newValue);\n')
+            self.assertIn('tests/page.js:1: assert(newValue)', context.render(root, state))
+
+    def test_index_is_bounded_and_does_not_follow_external_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'project'
+            root.mkdir()
+            state = root / '.uncle/workflow'
+            state.mkdir(parents=True)
+            (Path(tmp) / 'outside.py').write_text('assert(private_marker);')
+            (state / 'verification.manifest').write_text('a' * 64 + '\t../outside.py\n')
+            output = context.focused_evidence(root.resolve(), state.resolve())
+            self.assertNotIn('private_marker', output)
+            (root / 'UPDATED_PROJECT_PLAN.md').write_text('| AC-1 | ' + 'x' * 500 + '\n' +
+                ('| AC-2 | ' + 'x' * 500 + '\n') * 1000)
+            self.assertLess(len(context.focused_evidence(root.resolve(), state.resolve()).encode()), 13000)
+
     def test_missing_empty_and_truncated_results_are_explicit(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

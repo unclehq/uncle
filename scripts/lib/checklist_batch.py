@@ -16,6 +16,22 @@ from checklist_groups import parse, runs, validate
 from process_tree import finish_check, kill_tree, launch_command, start_check
 
 
+def report_draft(checks, results):
+    """Deterministic command evidence, deliberately not acceptance decisions."""
+    def cell(value):
+        return str(value).replace('|', '&#124;').replace('\n', ' ').replace('\r', ' ')
+    lines = ['# Checklist command evidence',
+             'Draft only: EXIT_0 does not establish acceptance. Review exact assertions.',
+             '', '| ID | Command outcome | Exit | Evidence |',
+             '|---|---|---|---|']
+    for check in checks:
+        row = results.get(check.id, {})
+        evidence = row.get('log') or row.get('reason') or 'Not executed in this batch'
+        lines.append('| ' + ' | '.join(map(cell, [check.id, row.get('status', 'NOT_RUN'),
+                                                   row.get('exit_code', ''), evidence])) + ' |')
+    return '\n'.join(lines) + '\n'
+
+
 def run(mapping, checklist, groups_file, output, jobs=4, timeout=300):
     if not 1 <= jobs <= 8 or timeout <= 0:
         raise ValueError('Jobs must be 1–8 and timeout must be positive')
@@ -112,6 +128,7 @@ def run(mapping, checklist, groups_file, output, jobs=4, timeout=300):
                 results.update(group_results)
                 # Persist after every barrier so earlier evidence survives interruption.
                 (folder / 'results.json').write_text(json.dumps({'checklist_sha256': digest, 'results': results}, indent=2) + '\n')
+                (folder / 'report-draft.md').write_text(report_draft(checks, results), encoding='utf-8')
                 for cid, result in group_results.items():
                     print(cid + ': ' + result['status'], flush=True)
     finally:

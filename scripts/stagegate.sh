@@ -1298,7 +1298,12 @@ run_stage() {
             ;;
         PREFLIGHT)
             rm -f PREFLIGHT_REPORT.md
-            run_claude prompts/preflight.md preflight
+            if python3 -B "$ROOT/scripts/lib/preflight.py" "$GREEN_CMDS" PREFLIGHT_REPORT.md; then
+                echo "Preflight: runtime checks passed without a model call."
+            else
+                echo "Preflight: requesting model diagnosis of unresolved prerequisites."
+                run_claude prompts/preflight.md preflight
+            fi
             require_artifact PREFLIGHT_REPORT.md
             ;;
         TEST_REVIEW)
@@ -1880,6 +1885,17 @@ while true; do
             check_verification_inputs
             run_stage TEST_REVIEW
             check_verification_inputs
+            set_state VALIDATE_TEST_REVIEW
+            ;;
+
+        VALIDATE_TEST_REVIEW)
+            if [[ "$DIFF_GATE" == "1" ]]; then
+                verify_implementation_review
+            fi
+            require_file "$STATE_DIR/verification.manifest"
+            EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
+            check_verification_inputs
+            require_file TEST_REVIEW.md
             if [[ "$GREEN_CHECK" != 1 || ! -s "$GREEN_CLASS" ]]; then
                 echo "Acceptance BLOCKED: the driver must run the approved verification suite."
                 echo "Enable WORKFLOW_GREEN_CHECK and rerun IMPLEMENT to capture its results."
@@ -2043,6 +2059,17 @@ while true; do
             rm -f FINAL_AUDIT.md
             run_stage FINAL_AUDIT
 
+            set_state VALIDATE_AUDIT
+            ;;
+
+        VALIDATE_AUDIT)
+            if [[ "$DIFF_GATE" == "1" ]]; then verify_implementation_review; fi
+            require_file "$STATE_DIR/verification.manifest"
+            EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
+            check_verification_inputs
+            echo "Validating saved audit; the reviewer will not be rerun."
+            require_file FINAL_AUDIT.md
+            python3 "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md || exit 1
             audit_class="$(classify_audit_verdict FINAL_AUDIT.md)"
             printf '%s\t%s\n' "$audit_class" "$(hash_file FINAL_AUDIT.md)" \
                 > "$VERDICT_FILE"

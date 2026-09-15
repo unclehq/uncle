@@ -43,6 +43,7 @@ ensure_checklist_runner() { :; }
 run_stage() {
     echo "$1" >> calls
     case "$1" in
+        TEST_REVIEW) printf 'Compacting report\n' > TEST_REVIEW.md ;;
         EXECUTE_CHECKLIST)
             # Stop an accidental loop quickly, without calling any real agent.
             [[ "$(grep -c '^EXECUTE_CHECKLIST$' calls)" == 1 ]] || exit 8
@@ -129,4 +130,16 @@ report '| MC-1 | YES | PASS | agent says ok |' candidate.md
 run
 count REPAIR 1
 [[ "$(cat workflow/repair-source)" == workflow/green.md ]]
+# A malformed saved review must not replay the reviewer on resume.
+reset
+printf 'TEST_REVIEW\n' > workflow/state
+if run; then echo 'Malformed test review advanced' >&2; exit 1; fi
+[[ "$(cat workflow/state)" == VALIDATE_TEST_REVIEW ]]
+count TEST_REVIEW 1
+if run; then echo 'Malformed saved review advanced' >&2; exit 1; fi
+count TEST_REVIEW 1
+touch invalid-inputs
+rc=0; run || rc=$?
+[[ "$rc" == 9 ]]
+count TEST_REVIEW 1
 echo 'checklist-resume-test.sh: one execution, durable validation, audit, blockers, repair, and integrity passed'

@@ -1,0 +1,100 @@
+"""Cheap runtime prerequisite probes; never execute the plan's commands."""
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+import os
+import re
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+
+PROBES = {name: ['--version'] for name in
+          ('node', 'npm', 'npx', 'python', 'python3', 'bash', 'git', 'ruby', 'go', 'cargo', 'rustc', 'pytest', 'ruff')}
+BUILTINS = {'true', ':', 'echo', 'printf', 'mkdir', 'test', '['}
+
+
+def prerequisites(commands):
+    names = set()
+    for line in commands.splitlines():
+        if not line.strip():
+            continue
+        # Compound shell programs require diagnosis, not speculative execution.
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=';&|<>')
+        lexer.whitespace_split = True
+        words = list(lexer)
+        if not words or any(word in (';', '&&', '||', '|', '&', '>', '>>', '<') for word in words):
+            raise ValueError('Complex verification command needs model preflight')
+        while words and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', words[0]):
+            key = words.pop(0).split('=', 1)[0]
+            if key in ('PATH', 'HOME', 'PYTHONHOME', 'NODE_OPTIONS'):
+                raise ValueError('Runtime-changing assignment needs model preflight: ' + key)
+        if not words:
+            continue
+        name = words[0]
+        if name in BUILTINS:
+            continue
+        if name not in PROBES:
+            raise ValueError('Unrecognized verification executable: ' + name)
+        names.add(name)
+    return sorted(names)
+
+
+def probe(name):
+    executable = shutil.which(name)
+    if not executable:
+        raise ValueError('Missing runtime: ' + name)
+    from process_tree import start_check, wait_check, finish_check
+    import tempfile
+    with tempfile.TemporaryFile() as output:
+        child = start_check([executable, *PROBES[name]], stdout=output, stderr=subprocess.STDOUT)
+        try:
+            status = wait_check(child, 10, output)
+        finally:
+            finish_check(child)
+        if status:
+            raise ValueError('%s runtime probe exited %s' % (name, status))
+    return name + ' --version exited 0'
+
+
+def run(commands, report):
+    names = prerequisites(Path(commands).read_text())
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(probe, names))
+    body = '''# Preflight report
+
+## Summary
+Deterministic runtime probes completed. Approved commands were not executed.
+
+## Findings
+'''
+    body += '\n'.join('- ' + result for result in results) or '- No external runtime required by the command list.'
+    body += '''
+
+## Assumptions
+Dependency installation and application-specific browser, service, credential,
+and human checks remain subject to implementation and checklist verification.
+Runtime availability does not establish that those capabilities work.
+
+## Open questions
+None about runtime startup. This report makes no application acceptance claims.
+
+## Acceptance gate
+
+| ID | Required | Status | Evidence |
+|---|---|---|---|
+| PF-RUNTIME | YES | PASS | Recognized verification runtimes started successfully; shell command structure was inspected |
+'''
+    Path(report).write_text(body, encoding='utf-8')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('commands')
+    parser.add_argument('report')
+    args = parser.parse_args()
+    try:
+        run(args.commands, args.report)
+    except (OSError, ValueError) as exc:
+        print('Deterministic preflight needs diagnosis: ' + str(exc), file=sys.stderr)
+        raise SystemExit(2)

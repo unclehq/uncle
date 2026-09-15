@@ -86,8 +86,8 @@ The seventeen audit categories are search directions, not an output template.
 - Rank findings by severity, most severe first. Blocking findings come first
   regardless of category order above.
 
-If the audit is clean, the correct output is short: the conclusion line and a
-one-line statement of what you checked to reach it.
+If the audit is clean, return the Findings heading, the required table header
+and separator with no finding rows, then READY. Do not omit the empty table.
 
 Category 1 is the exception to all of the above. Every PASS claim in
 VERIFICATION_REPORT.md and CHANGE_TEST_REPORT.md that you could not tie to
@@ -100,3 +100,13 @@ Read .uncle/workflow/plan-executability/assessment.md, plan-recovery.json and
 and live verification results against delivery claims. A WAIVED row permits only
 explicitly scoped workflow advancement, never implemented-and-verified delivery.
 Report completion with waivers as "workflow complete with waived acceptance".
+
+## Evidence and retry economy
+
+Use the driver evidence packet to locate current results and changed inputs.
+Hashes establish identity, not correctness. Match each PASS to its exact
+assertions and execution evidence. Rerun only checks with missing, stale,
+contradictory, or insufficient evidence; do not repeat an entire suite merely
+because this is a new review stage. Human observations cannot be inferred.
+Before returning, verify the Findings table fields, unique IDs, YES/NO blocking
+values, and final verdict. Return the complete audit once, without progress text.

@@ -29,8 +29,19 @@ def prepare(root, family, fresh=False):
         archive.mkdir(parents=True)
         # Keep the locked inode and directory in place. Archive evidence and
         # approvals; never delete them or transfer their authority to a new run.
+        active_timing = os.environ.get('UNCLE_TIMING_DIR')
         for path in sorted(entries, key=lambda p: p.name == 'state'):
-            path.rename(archive / path.name)
+            if path.name == 'performance' and active_timing:
+                # The launcher starts profiling before the driver prepares its
+                # state. Keep this launch's metadata and events together.
+                active = Path(active_timing).resolve()
+                for run in path.iterdir():
+                    if run.resolve() != active:
+                        target = archive / 'performance' / run.name
+                        target.parent.mkdir(exist_ok=True)
+                        run.rename(target)
+            else:
+                path.rename(archive / path.name)
         print('Previous workflow archived at ' + str(archive), flush=True)
     marker.write_text(family + '\n')
     return archive

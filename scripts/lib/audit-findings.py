@@ -10,7 +10,7 @@ import re
 import tempfile
 
 
-def findings(text):
+def findings(text, require_blockers=True):
     """Read the Findings table; reject ambiguity rather than omit blockers."""
     sections = re.split(r'^##\s+Findings\s*$', text, flags=re.M)
     if len(sections) != 2:
@@ -30,7 +30,7 @@ def findings(text):
             continue
         if re.fullmatch(r"```(?:markdown|md)?|~~~(?:markdown|md)?", line):
             continue
-        if re.fullmatch(r"(?:\*\*|__)?NOT READY(?:\*\*|__)?", line):
+        if re.fullmatch(r"(?:\*\*|__)?(?:NOT READY|READY WITH NON-BLOCKING ISSUES|READY)(?:\*\*|__)?", line):
             if verdict_seen or not lines:
                 raise ValueError('Unexpected audit verdict in findings table')
             verdict_seen = True
@@ -45,7 +45,7 @@ def findings(text):
         if commentary:
             raise ValueError('Unexpected table row after audit commentary')
         lines.append(line)
-    if len(lines) < 3 or any(not line.startswith('|') or not line.endswith('|') for line in lines):
+    if len(lines) < 2 or any(not line.startswith('|') or not line.endswith('|') for line in lines):
         raise ValueError('Findings must be a table with ID and Blocks columns')
     rows = [[cell.strip().replace(r'\|', '|') for cell in re.split(r'(?<!\\)\|', line[1:-1])] for line in lines]
     header = [cell.lower() for cell in rows[0]]
@@ -71,7 +71,7 @@ def findings(text):
             if commentary:
                 item['evidence'] += ' — Audit commentary: ' + ' '.join(commentary)
             result.append(item)
-    if not result:
+    if require_blockers and not result:
         raise ValueError('NOT READY audit has no explicit blocking findings')
     return result
 

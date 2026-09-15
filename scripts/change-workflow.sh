@@ -1008,6 +1008,8 @@ build_implementation_review() {
     write_change_diff "$DIFF_FILE"
     write_implementation_review "$REVIEW_FILE" "$DIFF_FILE" "$GREEN_MD" \
         IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md
+    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" prepare "$STATE_DIR"
+
 }
 
 # Regenerate the document and compare it with what was approved. A mismatch
@@ -1017,6 +1019,15 @@ verify_implementation_review() {
     local approval="$APPROVAL_DIR/IMPLEMENTATION_REVIEW.sha256"
 
     require_file "$approval"
+    if [[ -f "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.inputs.json" ]]; then
+        if WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" check "$STATE_DIR"; then
+            return 0
+        fi
+        build_implementation_review
+        set_state WAIT_IMPLEMENT_APPROVAL
+        echo "Approved inputs changed; review the current implementation again."
+        exit 0
+    fi
     build_implementation_review
 
     if [[ "$(hash_file "$REVIEW_FILE")" != "$(cat "$approval")" ]]; then
@@ -2032,6 +2043,7 @@ REPAIR
             echo "opens, and the approval records the state of the tree."
 
             human_gate "$gate_action" "$REVIEW_FILE" IMPLEMENTATION_REVIEW
+            WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" record "$STATE_DIR" || exit 1
 
             if [[ "$green_regressed" -gt 0 ]]; then
                 printf '%s\t%s\n' \

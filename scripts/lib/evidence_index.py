@@ -104,6 +104,12 @@ def packet(project, state, stage, family='app'):
     snapshot = {'version': VERSION, 'stage': stage, 'family': family, 'files': records,
                 'changed': changed, 'removed': removed, 'excerpt_cache_hits': hits}
     save(cache/'stages'/f'{stage}-{family}.json', snapshot)
+    # Structured handoff for downstream tools; Markdown is only its presentation.
+    handoff = {'schema': 1, 'stage': stage, 'family': family, 'inputs': records,
+               'changed_inputs': changed, 'removed_inputs': removed,
+               'evidence_references': {name: value.splitlines() for name, value in excerpts.items()}}
+    save(state/'handoffs'/f'{stage}-{family}.json', handoff)
+
     lines = ['\n## Shared driver evidence index',
              'Current files were rehashed. Cached excerpts are navigation only, never PASS or approval evidence.',
              'Read omitted input and exact assertion evidence directly. Missing files do not imply satisfied requirements.',

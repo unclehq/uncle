@@ -60,6 +60,12 @@ node a.js | node b.js; python3 checks.py || printf failure
             self.assertIn('PF-RUNTIME', report.read_text())
             self.assertIn('no application acceptance claims', report.read_text())
 
+    def test_posix_shell_probe(self):
+        self.assertEqual(preflight.prerequisites('sh tests/static.sh > output.log 2>&1'), ['sh'])
+        with self.assertRaises(ValueError):
+            preflight.prerequisites('sh -c "custom-tool"')
+        self.assertIn('fixed startup probe exited 0', preflight.probe('sh'))
+
     def test_real_python_probe(self):
         self.assertIn('exited 0', preflight.probe('python3'))
 

@@ -12,6 +12,8 @@ import sys
 PROBES = {name: ['--version'] for name in
           ('node', 'npm', 'npx', 'python', 'python3', 'bash', 'git', 'ruby', 'go', 'cargo', 'rustc', 'pytest', 'ruff')}
 PROBES['shasum'] = ['--version']
+# POSIX sh has no portable --version; execute only our fixed no-op probe.
+PROBES['sh'] = ['-c', ':']
 BUILTINS = {'true', ':', 'echo', 'printf', 'mkdir', 'test', '['}
 
 
@@ -35,7 +37,7 @@ def prerequisites(commands):
             return
         if name not in PROBES:
             raise ValueError('Unrecognized verification executable: ' + name)
-        if name in ('bash',) and any(arg == '-c' or arg.startswith('-') and 'c' in arg for arg in words[1:]):
+        if name in ('bash', 'sh') and any(arg == '-c' or arg.startswith('-') and 'c' in arg for arg in words[1:]):
             raise ValueError('Embedded shell program needs model preflight')
         names.add(name)
 
@@ -90,7 +92,7 @@ def probe(name):
             finish_check(child)
         if status:
             raise ValueError('%s runtime probe exited %s' % (name, status))
-    return name + ' --version exited 0'
+    return name + (' fixed startup probe exited 0' if name == 'sh' else ' --version exited 0')
 
 
 def run(commands, report):

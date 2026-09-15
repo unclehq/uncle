@@ -1424,6 +1424,8 @@ build_implementation_review() {
         IMPLEMENTATION_NOTES.md AUTOMATED_TEST_REPORT.md \
         "$STATE_DIR/verification.paths" "$STATE_DIR/verification.manifest" \
         "$STATE_DIR/verification-snapshot" "$STATE_DIR/TEST_CHANGES.diff"
+    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" prepare "$STATE_DIR"
+
 }
 
 # Regenerate the document and compare it with what was approved. A mismatch
@@ -1433,6 +1435,15 @@ verify_implementation_review() {
     local approval="$APPROVAL_DIR/IMPLEMENTATION_REVIEW.sha256"
 
     require_file "$approval"
+    if [[ -f "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.inputs.json" ]]; then
+        if WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" check "$STATE_DIR"; then
+            return 0
+        fi
+        build_implementation_review
+        set_state WAIT_IMPLEMENT_APPROVAL
+        echo "Approved inputs changed; review the current implementation again."
+        exit 0
+    fi
     build_implementation_review
 
     if [[ "$(hash_file "$REVIEW_FILE")" != "$(cat "$approval")" ]]; then
@@ -1887,6 +1898,7 @@ while true; do
                 "$REVIEW_FILE" \
                 IMPLEMENTATION_REVIEW \
                 "$gate_wording"
+            WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" record "$STATE_DIR" || exit 1
 
             if [[ "$green_failed" -gt 0 ]]; then
                 printf '%s\t%s\n' \

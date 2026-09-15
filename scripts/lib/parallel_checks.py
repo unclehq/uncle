@@ -16,6 +16,7 @@ import time
 
 from verification_manifest import manifest
 from shell_syntax import syntax_command
+import check_reuse
 
 
 def _test_status(state):
@@ -111,6 +112,12 @@ def _run_checks(args):
             if halted.is_set() or not intact():
                 output.write(b"NOT RUN: protected verification inputs changed.\n")
                 return 125, log
+            reuse_key = check_reuse.key(command)
+            if check_reuse.restore(reuse_key, output):
+                if intact():
+                    record(command, time.monotonic() - started, 0, args.log)
+                    return 0, log
+                return 125, log
             with lock:
                 if halted.is_set():
                     output.write(b"NOT RUN: protected verification inputs changed.\n")
@@ -129,6 +136,8 @@ def _run_checks(args):
                 finish_check(child)
                 children.discard(child)
             intact()  # Check each command, even if a peer later restores bytes.
+        if status == 0 and not halted.is_set() and reuse_key == check_reuse.key(command):
+            check_reuse.record(reuse_key, log)
         record(command, time.monotonic() - started, status, args.log)
         return status, log
 

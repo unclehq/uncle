@@ -214,7 +214,13 @@ def lock_run(command):
     # __pycache__ in a copied lib would show up in the change diff.
     sys.dont_write_bytecode = True
     from supervisor import supervised_lock_run
-    return supervised_lock_run(_lock_run_once, command, STATE, Path(__file__).resolve().parents[2])
+    from build_timing import BuildTiming
+    # The timing environment must exist before supervision launches the driver
+    # so stage streams, tools, caches and retries all share the same run ID.
+    with BuildTiming(STATE) as timing:
+        timing.status = supervised_lock_run(
+            _lock_run_once, command, STATE, Path(__file__).resolve().parents[2])
+        return timing.status
 
 
 def _lock_run_once(command):

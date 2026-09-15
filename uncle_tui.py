@@ -681,6 +681,8 @@ class UncleTUI:
         self.issue_mode = ""
         self.input_buf = ""
         self.output = []
+        self.build_scroll = 0
+        self.build_wrapped_count = 0
         self._message_snapshot = ([], [])
         self._message_stream = []
         self.proc = None
@@ -1652,6 +1654,8 @@ class UncleTUI:
                               "seen": set(os.listdir(metrics)) if os.path.isdir(metrics) else set()}
         self._restore_session_totals()
         self.output = []
+        self.build_scroll = 0
+        self.build_wrapped_count = 0
         self._message_snapshot = ([], [])
         self._message_stream = []
         self.partial = ""
@@ -2305,6 +2309,15 @@ class UncleTUI:
             host.controller.steering_queued(stage, id, payload)
 
     def send_home_chat(self, message):
+        pending = getattr(self, 'home_replace_proposal', None)
+        if pending and message.strip().lower() in ('approve replacement', 'decline replacement'):
+            self.home_history.append(('user', message))
+            self.home_replace_proposal = None
+            if message.strip().lower() == 'approve replacement':
+                self._home_action(pending, replace_approved=True)
+            else:
+                self.home_history.append(('system', 'Replacement declined; existing brief preserved.'))
+            return
         """Every prose message goes to the supervisor, in every state (SI-1).
 
         Deterministic operator commands stay local: an issue-build phrase at
@@ -2689,7 +2702,7 @@ class UncleTUI:
             self.home_history.append(('system', self.chat_error))
         return True
 
-    def _home_action(self, action):
+    def _home_action(self, action, replace_approved=False):
         if self.state == 'running' or (getattr(self, 'proc', None) and self.proc.poll() is None):
             raise ValueError('A workflow is already active; the homepage action was not executed.')
         root = _project_root()
@@ -2717,8 +2730,6 @@ class UncleTUI:
             kind = 'app' if name.endswith('_app') else 'change'
             filename = 'REQUIREMENTS.md' if kind == 'app' else 'CHANGE_REQUEST.md'
             if name.startswith('create_'):
-                if os.path.lexists(os.path.join(root, filename)):
-                    raise ValueError(filename + ' already exists. Run it or choose a new project; it was not overwritten.')
                 draft = Conversation(root)
                 draft.kind = kind
                 document = action['document']
@@ -2730,7 +2741,31 @@ class UncleTUI:
                         'Not specified in the brief.' if field == 'Open questions' else 'None')
                         for field in Conversation.fields['app'])
                 draft.preview = sanitize(document)
-                draft.commit()
+                target = Path(root) / filename
+                backup = None
+                if target.is_symlink() or (target.exists() and not target.is_file()):
+                    raise ValueError(filename + ' must be a regular file.')
+                if target.exists() and not replace_approved:
+                    self.home_replace_proposal = dict(action)
+                    self.home_history.append(('system', draft.preview))
+                    self.home_history.append(('system', 'Proposal: replace ' + filename +
+                        ' with the brief above' + (' and start the workflow' if action['start'] else '') +
+                        '. The previous file will be archived.\n'
+                        'Waiting for your decision: type "approve replacement" or "decline replacement".'))
+                    return
+                if target.exists():
+                    history = Path(root) / '.uncle' / 'brief-history'
+                    history.mkdir(parents=True, exist_ok=True)
+                    backup = Path(tempfile.mkdtemp(prefix='brief-', dir=history)) / filename
+                    target.rename(backup)
+                try:
+                    draft.commit()
+                except Exception:
+                    if backup is not None and not target.exists():
+                        backup.rename(target)
+                    raise
+                if backup is not None:
+                    self.home_history.append(('system', 'Previous ' + filename + ' saved to ' + str(backup)))
                 self.new_workflow_pending = True
                 self.chat.kind, self.chat.preview, self.chat.seed = kind, draft.preview, draft.seed
                 self.home_history.append(('system', 'Created ' + filename + ' from this conversation.'))
@@ -3134,21 +3169,23 @@ class UncleTUI:
         put(1, 0, 'Classification: ' + (self.triage_classification or '—'), w)
         lines = []
         for role, text in self.triage_history:
+            proposal = bool(re.search(r'(?im)^\s*(?:\*\*)?Proposal(?:\s+\d+)?\s*:', str(text)))
             for i, line in enumerate(str(text).splitlines() or ['']):
-                lines.extend(textwrap.wrap(('%s: ' % role if i == 0 else '') + line, max(1, w - 2)) or [''])
-            lines.append('')
+                lines.extend((part, curses.A_BOLD if proposal else curses.A_NORMAL) for part in
+                             (textwrap.wrap(('%s: ' % role if i == 0 else '') + line, max(1, w - 2)) or ['']))
+            lines.append(('', curses.A_NORMAL))
         bottom = h - 5
         rows = max(0, bottom - 3)
         end = max(0, len(lines) - self.triage_scroll)
-        for i, line in enumerate(lines[max(0, end - rows):end]):
-            put(3 + i, 0, line, w)
+        for i, (line, attr) in enumerate(lines[max(0, end - rows):end]):
+            put(3 + i, 0, line, w, attr)
         if self.triage_proposals:
             offer = 'Select: ' + '  '.join('[%d] %s' % (n, body[:max(1, w // 3)]) for n, body in self.triage_proposals)
         else:
             offer = 'No proposal is selectable.'
         if self.triage_offer_resume:
             offer += '  [r] resume'
-        put(h - 4, 0, offer, w)
+        put(h - 4, 0, offer, w, curses.A_BOLD)
         put(h - 3, 0, self.triage_error, w)
         put(h - 2, 0, 'Triage> ' + self.triage_composer[-max(1, w - 10):], w)
         put(h - 1, 0, '1-3 select proposal | r resume | Esc back | /do N /resume /clear | text = follow-up question', w)
@@ -3157,7 +3194,7 @@ class UncleTUI:
     def chat_attr(self, role, base=0):
         """Attribute for one chat row, keyed by the stored history role only (never by text)."""
         role = str(role).lower()
-        if role == 'user':
+        if role in ('user', 'proposal'):
             return base | curses.A_BOLD
         if role == 'supervisor':
             return getattr(self, 'color', {}).get('emphasis', curses.A_REVERSE)
@@ -3172,7 +3209,8 @@ class UncleTUI:
         self._recovery_displayed = len(recovery)
         history = getattr(self, 'home_history', [])
         if history:
-            return [(role, str(role).capitalize() + ': ' + text) for role, text in history]
+            return [('proposal' if str(role).lower() != 'user' and re.search(r'(?im)^\s*(?:\*\*)?Proposal(?:\s+\d+)?\s*:', text) else role,
+                     str(role).capitalize() + ': ' + text) for role, text in history]
         return [(None, line) for line in self.chat.messages]
 
     def chat_display(self):
@@ -3693,6 +3731,11 @@ class UncleTUI:
         entries = self.chat_entries()
         if self.chat.preview:
             entries += [('preview', 'Preview: '), ('preview', self.chat.preview)]
+        pending = getattr(self, 'home_replace_proposal', None)
+        if pending:
+            filename = 'REQUIREMENTS.md' if pending['uncle_action'] == 'create_app' else 'CHANGE_REQUEST.md'
+            entries.append(('proposal', 'Replace ' + filename + '? Previous file will be archived.'))
+            entries.append(('proposal', 'Type "approve replacement" or "decline replacement".'))
         history = [line for _, line in entries]
         width = max(1, min(76, w - 4))
         left = max(0, (w - width) // 2)
@@ -3929,10 +3972,18 @@ class UncleTUI:
         screen_width = self.stdscr.getmaxyx()[1]
         message_width = max(1, min(w, screen_width - 1))
         wrapped = []
-        for message, role in list(zip(tail, roles))[-max(1, h * 2):]:
+        for message, role in zip(tail, roles):
             for line in message.splitlines() or ['']:
                 wrapped.extend((role, part) for part in textwrap.wrap(line, message_width) or [''])
-        for i, (role, line) in enumerate(wrapped[-max(0, h - 1):] if h > 1 else []):
+        rows = max(0, h - 1)
+        self.build_page_rows = max(1, rows)
+        offset = getattr(self, 'build_scroll', 0)
+        if offset:
+            offset += max(0, len(wrapped) - getattr(self, 'build_wrapped_count', len(wrapped)))
+        self.build_wrapped_count = len(wrapped)
+        self.build_scroll = min(offset, max(0, len(wrapped) - rows))
+        end = len(wrapped) - self.build_scroll
+        for i, (role, line) in enumerate(wrapped[max(0, end - rows):end] if rows else []):
             try:
                 self.stdscr.addnstr(i, 0, line, message_width, self.chat_attr(role))
             except curses.error:
@@ -4545,6 +4596,18 @@ class UncleTUI:
 
     # ---- input ----
     def handle_key(self, k):
+        # Scroll transcript before the composer can consume navigation keys.
+        # Dialog-focused navigation remains owned by the dialog.
+        if self.state == 'running' and (not getattr(self, 'prompt_kind', '') or
+                                       getattr(self, 'chat_focus', '') == 'chat'):
+            if k in (curses.KEY_PPAGE, curses.KEY_NPAGE):
+                step = getattr(self, 'build_page_rows', 10)
+                self.build_scroll = max(0, getattr(self, 'build_scroll', 0) +
+                                        (step if k == curses.KEY_PPAGE else -step))
+                return
+            if k == curses.KEY_END:
+                self.build_scroll = 0
+                return
         preview = getattr(self, 'completion_preview', None)
         if (k == 27 and self.state == 'running' and preview
                 and not getattr(self, 'prompt_kind', '')

@@ -140,3 +140,27 @@ can batch it. Name concrete reasons for serial dependencies. Arrange for each
 required report to be written once after evidence is collected. On revision,
 change only what findings or requirements require; do not expand scope or invent
 additional tooling merely because another planning pass is occurring.
+
+## Compact first draft
+
+Build the required heading skeleton and canonical rows before drafting prose.
+Each behavior, invariant, acceptance obligation, restriction and implementation
+step has one complete location with a stable ID. Other sections reference that
+ID instead of repeating its wording. Preserve exact assertions, thresholds,
+failure behavior, dependencies, evidence requirements and restriction fields.
+Use concise tables initially, not an expanded narrative to compress afterward.
+Keep short None entries where appropriate; do not omit required sections.
+
+Define each verification command and protected path once in its required
+location. Strategy and step rows reference those commands and check IDs; avoid
+second lists that can diverge. Before the single final write, reconcile coverage,
+traceability, dependencies, commands and paths once. Resolve actual omissions or
+contradictions without narrating repeated compliance checks. Return the complete
+plan, with no preamble, work diary, filename-only answer or closing recap.
+
+Do not repeatedly estimate byte counts or request unavailable tools to measure
+size. The driver measures the artifact. In advisory-budget mode, do ZERO
+size-only compaction passes after the complete draft. Mandatory content survives
+even above the guide. Enforced budgets retain the preservation validator and
+at most two passes total; retain an oversized complete artifact for driver
+resolution if needed. Format, completeness and executability checks still apply.

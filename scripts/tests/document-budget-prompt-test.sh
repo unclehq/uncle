@@ -56,7 +56,7 @@ echo 'document-budget-prompt-test.sh: approve, decline, EOF, probe, resume, sour
 
 # Model instructions must agree with the actual enforcement mode.
 for mode in 0 1; do
-    prompt="$(WORKFLOW_DOC_BUDGET_ENFORCE="$mode" document_budget_prompt manual-checklist)"
+    prompt="$(WORKFLOW_DOC_BUDGET_ENFORCE="$mode" document_budget_prompt implementation)"
     if [[ "$mode" == 0 ]]; then
         [[ "$prompt" == *'Budget enforcement is disabled'* ]]
     else
@@ -65,3 +65,14 @@ for mode in 0 1; do
     [[ "$prompt" == *'Return the complete document as the final response, even if oversized.'* ]]
     [[ "$prompt" != *'budgets (binding)'* ]]
 done
+
+for stage in project-plan change-plan adversarial-review updated-plan updated-change-plan test-review manual-checklist manual-checklist-base manual-checklist-delta execute-checklist; do
+    prompt="$(WORKFLOW_DOC_BUDGET_ENFORCE=0 document_budget_prompt "$stage")"
+    [[ "$prompt" == *'do ZERO size-only compaction passes'* ]]
+    [[ "$prompt" != *'Compaction limit: at most TWO'* ]]
+    [[ "$prompt" == *'The driver measures bytes and lines.'* ]]
+    prompt="$(WORKFLOW_DOC_BUDGET_ENFORCE=1 document_budget_prompt "$stage")"
+    [[ "$prompt" != *'do ZERO size-only compaction passes'* ]]
+done
+prompt="$(WORKFLOW_DOC_BUDGET_ENFORCE=0 document_budget_prompt implementation)"
+[[ "$prompt" != *'do ZERO size-only compaction passes'* ]]

@@ -106,3 +106,32 @@ After verification, create DEFECTS.md for every failed check and unresolved
 blocker, preserving stable IDs across repairs. Record dispositions for prior
 defects based on rerun evidence; do not silently drop them. If none remain,
 write an explicit empty findings table. These two reports are the stage outputs.
+
+## Compact first draft
+
+Execute all required checks and collect their actual evidence before composing
+reports. This policy changes report writing, not which checks must run. Preserve
+approved dependency barriers, resource isolation and mandatory repeatability
+runs. Reuse current evidence only when existing workflow rules permit it; never
+infer PASS from a plan, stale result or unexecuted command.
+
+Build the required report skeleton and check-ID inventory before drafting
+narrative. Give each check one canonical result with its required/optional
+status, observed outcome and precise evidence reference. Give each distinct
+defect one stable ID with failure, affected requirement and correction. Other
+sections reference those IDs rather than duplicate results or raw logs. Retain
+all required acceptance rows, blockers, provenance and defect details. Record
+blocked and failed checks honestly; never relabel them to fit the report.
+
+After collecting evidence, reconcile coverage, results, defects and acceptance
+rows once, then write each required artifact once. Correct actual omissions or
+contradictions without rerunning unchanged successful checks merely to compose
+or shorten a report. Repairs and invalidated evidence still require the checks
+specified by the workflow.
+
+In advisory-budget mode, do ZERO size-only compaction passes across these
+reports. Preserve mandatory evidence even above the guide. Do not repeatedly
+count bytes, trim whitespace or return a size/progress message instead of the
+required artifacts. The driver measures them. Enforced budgets retain at most
+two passes total and the preservation rules. Acceptance and integrity gates
+remain mandatory.

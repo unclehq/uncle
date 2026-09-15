@@ -74,9 +74,10 @@ none.
 
 ## Rule 5 — Length
 
-- Every stage document has an enforced per-file byte and line budget, including
+- Every stage document has a per-file byte and line budget, including
   implementation, repair, review, checklist, and acceptance reports. The appended
-  budget lists the exact limits; ceilings are not targets to fill.
+  budget lists the exact limits and enforcement mode. Budgets are advisory
+  unless WORKFLOW_DOC_BUDGET_ENFORCE=1; ceilings are not targets to fill.
 - Default budgets scale from authoritative REQUIREMENTS.md (new builds) or
   CHANGE_REQUEST.md (changes), with artifact-specific floors and ceilings listed
   in README.md. Plans, reports and reviews use twice the source byte size;
@@ -100,7 +101,12 @@ none.
   advisory target is not a reason to compact. Reviewers return a concise final
   artifact directly; the driver measures it. Do not request filesystem writes
   solely to measure a read-only reviewer's response.
-- Only compact an oversized document, within the producing stage and using its
+- For project-plan, change-plan, adversarial-review, updated-plan and
+  updated-change-plan, test-review and manual-checklist (including base/delta),
+  and execute-checklist, advisory budgets require compact-first drafting with ZERO
+  size-only rewrite passes. Preserve complete artifacts even above the guide.
+  This stage-specific policy takes precedence over the general rule below.
+- Otherwise, only compact an oversized document, within the producing stage and using its
   model and context, at most twice total across its output documents. Leave
   compliant documents unchanged. The initial draft is not a pass;
   every later size-driven rewrite or trim counts, including a "final trim".

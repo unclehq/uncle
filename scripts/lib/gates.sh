@@ -424,6 +424,41 @@ document_budget_prompt() {
         read -r target target_lines <<< "$(awk -v b="$bytes" -v l="$lines" 'BEGIN {b=int(b*.75); l=int(l*.75); printf "%.0f %.0f", (b<1?1:b), (l<1?1:l)}')"
         printf -- '- %s: at most %s UTF-8 bytes and %s lines. Draft toward %s bytes and %s lines to leave revision room.\n' "$file" "$bytes" "$lines" "$target" "$target_lines"
     done < <(stage_documents "$stage")
+    case "$stage" in
+        project-plan|change-plan|adversarial-review|updated-plan|updated-change-plan|test-review|manual-checklist|manual-checklist-base|manual-checklist-delta|execute-checklist)
+            if [[ "${WORKFLOW_DOC_BUDGET_ENFORCE:-0}" != "1" ]]; then
+                cat <<'COMPACT_FIRST'
+
+## Compact-first artifact policy
+This stage's size limits are advisory drafting guides, not completion gates.
+Draft compactly once; do ZERO size-only compaction passes. This policy replaces
+all general size-only rewrite instructions, including local output rules.
+
+Start from the required section skeleton and inventory all mandatory rows and
+finding IDs. Give every obligation or distinct defect one complete canonical
+location. Reference its ID elsewhere, never repeat its narrative. Preserve all
+thresholds, exact commands, paths, dependencies, evidence, restriction provenance,
+and acceptance criteria. Keep required headings and meaningful field values.
+Do not delete mandatory content, remove Markdown spacing, or shorten identifiers
+just to meet a byte/line guide. Completeness takes precedence over size.
+
+For revisions, retain unaffected rows and change only what findings or changed
+requirements demand. For reviews, investigate independently: a plan or shared
+packet is not proof. Do not omit a genuine finding to make the report shorter.
+Batch independent reads; do not repeat discovery or checks supported by current
+evidence. Reconcile traceability, fields, command blocks and contradictions once
+before finalizing. Correct actual defects, not cosmetic size overages.
+
+Write/return the complete artifact once as required by the runner contract.
+Never return a filename, progress note, or summary in place of the document.
+The driver measures bytes and lines. Do not make counting or whitespace-only
+tool calls, narrate size estimates, or start a second drafting pass for size.
+This policy does not skip format, acceptance, integrity or executability gates.
+COMPACT_FIRST
+                return 0
+            fi
+            ;;
+    esac
     printf '\nFor writable artifacts, validate compaction with: python3 "%s/compact_document.py" ORIGINAL CANDIDATE\n' "$GATES_LIB_DIR"
     cat <<'BUDGET'
 
@@ -496,6 +531,7 @@ If mandatory content alone cannot fit, preserve it. The driver retains the
 artifact and reports the overage; enforced budgets still require resolution.
 Never truncate required content.
 BUDGET
+
 }
 
 # Check newly authored stage artifacts; never rewrite approved inputs.

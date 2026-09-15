@@ -158,7 +158,21 @@ class Actions(unittest.TestCase):
         self.reply(uncle_action='create_app', document=brief('app'), start=True)
         self.assertEqual(target.read_text(), 'Keep this')
         self.ui._run.assert_not_called()
-        self.assertIn('not overwritten', self.ui.chat_error)
+        self.assertIn('Waiting for your decision', self.ui.home_history[-1][1])
+        self.assertIn('approve replacement', self.ui.home_history[-1][1])
+        self.ui.send_home_chat('approve replacement')
+        self.assertIn('## Summary', target.read_text())
+        self.ui._run.assert_called_once()
+        backups = list((self.root/'.uncle/brief-history').glob('*/REQUIREMENTS.md'))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(), 'Keep this')
+
+    def test_invalid_replacement_restores_existing_brief(self):
+        target = self.root/'REQUIREMENTS.md'
+        target.write_text('Original brief')
+        self.reply(uncle_action='create_app', document='## Summary\n', start=True)
+        self.assertEqual(target.read_text(), 'Original brief')
+        self.ui._run.assert_not_called()
 
     def test_incomplete_brief_and_missing_input_do_not_launch(self):
         self.reply(uncle_action='create_app', document='## Summary\nIncomplete', start=True)

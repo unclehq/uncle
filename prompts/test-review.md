@@ -101,3 +101,27 @@ gaps. Keep every required row and real blocker; no extra summary of each PASS.
 Return the complete TEST_REVIEW.md as the final response, not a status message
 about writing or compacting it. Do not emit a compaction announcement as the final
 answer. A report-size warning alone does not require another model iteration.
+
+## Compact first draft
+
+Draft the required acceptance-table skeleton before composing narrative. Keep
+all six mandatory rows with their exact IDs, Required/Status values and concrete
+evidence. Give each distinct defect or unresolved gap one canonical finding ID;
+acceptance rows and follow-up checks reference it instead of repeating it.
+Preserve the failure scenario, affected requirement, correction and observable
+verification needed by manual-checklist. Do not turn unverified claims into PASS
+or omit blockers to fit a size guide. Keep the Acceptance gate table last.
+
+Review assertions, fixtures and execution evidence independently. Use the shared
+index to locate relevant material, not as proof that tests are adequate. Batch
+independent reads and reuse current evidence; do not rerun unchanged suites just
+to compose the report. Before returning it, reconcile findings, evidence and
+acceptance rows once. Correct actual omissions or contradictions without a
+repeated narrated compliance sweep.
+
+Return the complete TEST_REVIEW.md once. In advisory-budget mode, do ZERO
+size-only compaction passes: retain required evidence even above the guide.
+Do not count bytes repeatedly, remove Markdown spacing or emit a size report
+instead of the review. The driver measures the artifact. Enforced budgets retain
+the two-pass limit and content-preservation rules; all acceptance and integrity
+checks remain mandatory.

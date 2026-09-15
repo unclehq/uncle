@@ -162,3 +162,28 @@ or missing coverage. Compare the supplied hashes with the evidence used before
 carrying a conclusion forward; if the prior basis is unavailable, recheck that
 row. Record why a row was changed or removed. Never delete required checks merely
 to reduce count, runtime, or report length. Write the final checklist once.
+
+## Compact first draft
+
+Draft the executable checklist directly in its required structure. Give each
+check one stable ID and canonical definition. Preserve its exact action,
+observable expected result, required/optional status, requirement and finding
+references, prerequisites, exclusive resources and dependencies. Use complete
+concise fields or table rows; never substitute a summary of what checks exist.
+Traceability and section summaries reference check IDs rather than repeat them.
+Do not duplicate checks already satisfied by applicable current evidence, but
+retain every genuinely unverified obligation and independent validation needed.
+Do not claim execution or PASS while only designing a check.
+
+Batch independent evidence reads. Before finalizing, check coverage, IDs,
+prerequisites, expected results and dependency consistency once. Correct real
+gaps without repeated narrated compliance sweeps. Base and delta variants must
+still respect their original scope, evidence restrictions and merge contract.
+
+Return the complete requested artifact, not a filename, progress message or
+bullet summary saying the checklist was written. Execute-checklist must be able
+to run each check from this document without inventing actions or expectations.
+In advisory-budget mode, do ZERO size-only compaction passes. Preserve mandatory
+content even above the guide; do not repeatedly count bytes or trim whitespace.
+The driver measures the artifact. Enforced budgets retain the two-pass limit
+and preservation rules. All format and completeness checks still apply.

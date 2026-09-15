@@ -988,6 +988,33 @@ class ChatStylingTests(unittest.TestCase):
     def attrs(self, rows):
         return [row[4] for row in rows]
 
+    def test_build_scroll_keys_leave_composer_intact(self):
+        ui = styled_ui('running', [])
+        ui.prompt_kind = ''
+        ui.build_page_rows = 8
+        ui.chat_buf = 'draft'
+        ui.handle_key(tui.curses.KEY_PPAGE)
+        self.assertEqual(ui.build_scroll, 8)
+        self.assertEqual(ui.chat_buf, 'draft')
+        ui.handle_key(tui.curses.KEY_NPAGE)
+        self.assertEqual(ui.build_scroll, 0)
+        ui.handle_key(tui.curses.KEY_PPAGE)
+        ui.handle_key(tui.curses.KEY_END)
+        self.assertEqual(ui.build_scroll, 0)
+
+    def test_pending_replacement_visible_after_long_preview(self):
+        ui = styled_ui('menu', [('system', 'Proposal')])
+        ui.chat.preview = '## Interfaces\n' + ('Long brief content\n' * 100)
+        ui.home_replace_proposal = {'uncle_action': 'create_app'}
+        ui._draw_homepage(40, 120)
+        text = '\n'.join(row[2] for row in drawn(ui))
+        self.assertIn('Replace REQUIREMENTS.md?', text)
+        self.assertIn('approve replacement', text)
+        self.assertIn('decline replacement', text)
+        for row in drawn(ui):
+            if 'Replace REQUIREMENTS' in row[2] or 'approve replacement' in row[2]:
+                self.assertTrue(row[4] & tui.curses.A_BOLD)
+
     def test_t1_home_roles_and_t5_home_literals(self):
         ui = styled_ui('menu', [('user', 'Question one\nsecond line'), ('supervisor', 'x' * 100), ('system', 'Note')])
         ui._draw_homepage(40, 120)

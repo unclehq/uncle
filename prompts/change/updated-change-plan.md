@@ -105,9 +105,8 @@ Do not implement code.
 Length is a cost. The revised CHANGE_PLAN.md is read by five later stages and
 re-sent on every turn of each of them.
 
-- Budget: the disposition table and the ten appended sections together should
-  come to **1,200 words or fewer**. Going over means the appended sections are
-  carrying prose that belongs in a table.
+- Use the appended stage budget and enforcement mode; no separate word limit.
+  Draft concise disposition rows and sections without dropping obligations.
 - Editing a section means changing the lines the review invalidated. It does
   not mean rewriting the section from scratch.
 - Do not summarize what you changed at the end. The disposition table is that
@@ -154,26 +153,40 @@ required report to be written once after evidence is collected. On revision,
 change only what findings or requirements require; do not expand scope or invent
 additional tooling merely because another planning pass is occurring.
 
-## Targeted revision
+## Compact first draft
 
-Start with the driver revision packet and read omitted input sections directly.
-Use the existing plan as the base. Revise only sections affected by review
-findings, changed requirements, or contradictions discovered during revision.
-Preserve unaffected decisions, stable IDs, commands, and ordering. Do not
-rediscover the repository or rerun probes without a concrete unresolved finding.
-Record each finding ID once with its disposition and affected plan section;
-do not repeat reviewer prose. Preserve all mandatory criteria and constraints.
-Return a complete final plan, not a patch or a progress message. Before writing,
-check revised and unchanged sections for contradictions and verify required
-command blocks. Formatting corrections use the saved plan without replanning.
+Construct the final plan directly; do not write an expanded draft and then
+compress it. Use the supplied input index to locate the original plan and each
+finding. Read missing normative content before revising; excerpts are not a
+replacement for complete obligations.
 
-## Minimal stage handoff
+1. Preserve the required heading skeleton and inventory the existing IDs,
+   acceptance rows, restrictions, steps, commands and protected paths. Resolve
+   each finding against that inventory before producing the document.
+2. Give each obligation one canonical location in this plan. Other sections
+   cite its stable ID instead of repeating its wording. Keep the obligation's
+   observable assertion, threshold, failure behavior and evidence requirement
+   at that location; never make downstream readers consult a superseded plan.
+3. Write one disposition row per finding: ID, disposition, concise reason,
+   affected section/row. Do not copy the finding or repeat the disposition in
+   a closing summary. Keep required headings with a short None where allowed.
+4. Draft tables densely from the start: one complete row per behavior,
+   invariant, test, restriction or step. Preserve every required field and
+   exact literal. Do not merge distinct IDs, abbreviate away meaning, or trim
+   protected table cells later just to hit a byte target.
+5. Define exact commands and protected paths only in their executable fenced
+   blocks. Testing and implementation sections refer to command positions and
+   check IDs. Check that all required helpers, fixtures and lockfiles appear in
+   the protected block; do not maintain a second conflicting path list.
+6. Before the single final write/response, reconcile dispositions, traceability,
+   steps and commands once. Correct actual omissions or contradictions; do not
+   narrate repeated section-by-section compliance checks. No preamble, work
+   diary, file-name-only answer or closing recap. Return the complete plan.
 
-Use the shared input index and structured handoffs to locate approved decisions,
-files and evidence. Read complete relevant sections, not the entire repository.
-Retain unchanged IDs, decisions and commands. Inspect or probe only to resolve a
-specific missing fact. Do not repeat dependency discovery already supported by
-current evidence. Write one concise final report: changed behavior, exact checks
-and evidence references, unresolved findings. No chronological work diary or
-restatement of requirements. Planning revisions must remain complete plans;
-implementation reports must preserve every required result and failure.
+The budget is a drafting guide, not evidence that mandatory content will fit.
+Do not estimate bytes repeatedly in prose or request unavailable shell tools
+just to count them. The driver measures the result. With advisory enforcement,
+do no size-only compaction passes after the complete draft. With enforced
+budgets, use the existing preservation validator and at most two passes total;
+if mandatory content cannot fit, retain it for the driver's budget resolution.
+This does not waive format, completeness, acceptance or executability checks.

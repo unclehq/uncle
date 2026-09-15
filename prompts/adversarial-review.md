@@ -79,3 +79,28 @@ Use the exact finding fields above, unique AR IDs, and a nonempty level-two
 Overall assessment section. A clean review must explicitly say "No findings."
 On formatting correction, preserve findings and their meaning; use the saved
 review without repeating discovery. Return the complete corrected document.
+
+## Compact first draft
+
+Investigate independently, then construct the final review directly in the
+required finding format. Keep one canonical finding per distinct defect: its
+ID, severity, evidence references, concrete failure, correction and verification.
+Merge only duplicate causes where all distinct consequences and corrections
+survive. Never merge away separate blockers, weaken evidence or cap finding count.
+Use IDs and precise locations instead of copying plan narrative. Write concise
+field values from the start, not long paragraphs to compress afterward.
+
+Closing sections reference finding IDs rather than repeat their descriptions.
+Keep the required nonempty Overall assessment: briefly state whether the plan
+is executable and the remaining blockers. Before returning the document, check
+finding uniqueness, required fields and closing sections once. Correct real
+omissions; do not narrate repeated section-by-section compliance checks.
+Return the entire review as the final response, never a filename, progress
+message or summary claiming the review was written elsewhere.
+
+Do not repeatedly estimate byte counts or request unavailable tools to measure
+size. The driver measures the response. In advisory-budget mode, do ZERO
+size-only compaction passes after the complete draft. All genuine findings and
+required evidence survive even above the guide. Enforced budgets retain the
+two-pass maximum and preservation rules. This changes report composition only:
+it does not replace independent review with acceptance of the plan's claims.

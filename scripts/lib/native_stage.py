@@ -32,6 +32,11 @@ the workflow driver owns advancement to the next stage.
 Stage task:
 """
 
+CONTEXT_BUDGET_NOTE = ('Context budget: your requests now carry %d tokens. Before continuing, '
+    'persist anything you still need to your stage handoff or output document, then work with '
+    'the smallest set that finishes the stage: do not re-read files or logs already inspected, '
+    'read by path and section when needed, and keep tool outputs short.')
+
 class Stage:
     def __init__(self, runner, side, stage, args, prompt=None):
         self.parent_pid = os.getppid()
@@ -59,6 +64,9 @@ class Stage:
         self.usage_baseline = {}
         self.cost = None
         self.inclusive = True
+        self._prev_ctx = 0
+        self._budget_steered = False
+        self.context_budget_hit = 0
         self.answer = ''
         self.final_answer = ''
         self.assessment_answer = ''
@@ -102,8 +110,20 @@ class Stage:
         reported = {key: self.usage[key] + self.usage_baseline.get(key, 0) for key in KEYS}
         reported_cost = None if self.cost is None else self.cost + self.usage_baseline.get('_total_cost_usd', 0)
         self.timing.usage(reported, reported_cost if cost is not None else None, inclusive, self.model)
+        ctx = sum(reported.values()) - (sum(reported[k] for k in KEYS[2:]) if inclusive else 0)
         self.status('usage', usage=reported, total_cost_usd=reported_cost, input_includes_cache=inclusive,
-                    total_tokens=sum(reported.values()) - (sum(reported[k] for k in KEYS[2:]) if inclusive else 0))
+                    total_tokens=ctx)
+        per_request = ctx - self._prev_ctx
+        self._prev_ctx = max(self._prev_ctx, ctx)
+        if per_request > 0:
+            ceiling = int(os.environ.get('WORKFLOW_CONTEXT_CEILING_TOKENS', '0'))
+            if ceiling and per_request > ceiling:
+                raise ValueError('Stage context budget exceeded (%d tokens in one request); '
+                                 'split the change or use a larger-context model' % per_request)
+            budget = int(os.environ.get('WORKFLOW_CONTEXT_BUDGET_TOKENS', '200000'))
+            if per_request > budget and not self._budget_steered:
+                self._budget_steered = True
+                self.context_budget_hit = per_request
 
     def text(self, text):
         if not text:
@@ -265,6 +285,9 @@ class Stage:
         seconds = int(os.environ.get('WORKFLOW_NATIVE_STAGE_SECONDS', '3600'))
         while time.monotonic()-self.started < seconds:
             self.incoming(steer)
+            if self.context_budget_hit:
+                hit, self.context_budget_hit = self.context_budget_hit, 0
+                steer(CONTEXT_BUDGET_NOTE % hit, 'context-budget')
             try:
                 event = self.events.get(timeout=.1)
             except queue.Empty:

@@ -356,4 +356,65 @@ for line in sys.stdin:
   with self.assertRaisesRegex(ValueError,'disconnected'):
    stage.loop(lambda event:False,lambda text,id:None)
 
+BUDGET_FAKE = '''#!/usr/bin/env python3
+import sys,json,os
+if '--help' in sys.argv:
+ print('--wire');sys.exit()
+def out(v):print(json.dumps(v),flush=True)
+steps=[int(x) for x in os.environ.get('STEPS','100000,350000,400000').split(',')]
+def usage(n):out({'method':'thread/tokenUsage/updated','params':{'tokenUsage':{'total':{'inputTokens':n,'outputTokens':10,'cachedInputTokens':0}}}})
+def done():
+ out({'method':'item/agentMessage/delta','params':{'delta':'done'}})
+ out({'method':'item/completed','params':{'item':{'type':'agentMessage','text':'done'}}})
+ out({'method':'turn/completed','params':{'turn':{'id':'u','status':'completed'}}})
+for line in sys.stdin:
+ e=json.loads(line);m=e.get('method');i=e.get('id');p=e.get('params',{})
+ if m=='initialize':out({'id':i,'result':{}})
+ elif m=='thread/start':out({'id':i,'result':{'thread':{'id':'t'},'model':'fake-model'}})
+ elif m=='turn/start':
+  out({'id':i,'result':{'turn':{'id':'u'}}})
+  for n in steps:usage(n)
+  if os.environ.get('COMPLETE_ON_START'):done()
+ elif m=='turn/steer':
+  with open(os.environ['RECORD'],'a') as f:f.write(p['input'][0]['text']+'\\n')
+  out({'id':i,'result':{'turnId':'u'}})
+  done()
+'''
+
+class ContextBudgetTests(unittest.TestCase):
+ def run_stage(self,root,env_extra):
+  root=Path(root);fake=root/'runner';fake.write_text(BUDGET_FAKE);fake.chmod(0o755)
+  status=root/'status';status.touch()
+  env=dict(os.environ,UNCLE_STATUS_FILE=str(status),PYTHONDONTWRITEBYTECODE='1',
+           RECORD=str(root/'record'),**env_extra)
+  env['WORKFLOW_CODEX_CMD']=str(fake)
+  args=[sys.executable,'-B',str(ROOT/'scripts/lib/native_stage.py'),'--runner','codex','--side','agent','--stage','implementation','--','-p','--model','fake-model']
+  child=subprocess.Popen(args,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,env=env,cwd=root)
+  child.stdin.write('Initial task');child.stdin.close();child.stdin=None
+  stdout,stderr=child.communicate(timeout=10)
+  return child,stdout,stderr,status
+
+ def test_auto_steer_fires_once_above_budget(self):
+  with tempfile.TemporaryDirectory() as d:
+   child,stdout,stderr,status=self.run_stage(d,{'STEPS':'100000,350000,400000'})
+   self.assertEqual(child.returncode,0,stderr+stdout)
+   text=(Path(d)/'record').read_text()
+   self.assertEqual(text.count('Context budget'),1)
+   self.assertIn('250000',text)
+   events=[json.loads(x) for x in status.read_text().splitlines()]
+   accepted=[e for e in events if e['event']=='steering_accepted' and e.get('message_id')=='context-budget']
+   self.assertEqual(len(accepted),1)
+
+ def test_no_steer_below_budget(self):
+  with tempfile.TemporaryDirectory() as d:
+   child,stdout,stderr,_=self.run_stage(d,{'STEPS':'100000,150000,180000','COMPLETE_ON_START':'1'})
+   self.assertEqual(child.returncode,0,stderr+stdout)
+   self.assertFalse((Path(d)/'record').exists())
+
+ def test_ceiling_fails_closed(self):
+  with tempfile.TemporaryDirectory() as d:
+   child,stdout,stderr,_=self.run_stage(d,{'STEPS':'100000,400000','WORKFLOW_CONTEXT_CEILING_TOKENS':'250000'})
+   self.assertNotEqual(child.returncode,0)
+   self.assertIn('context budget exceeded',stderr+stdout)
+
 if __name__=='__main__':unittest.main()

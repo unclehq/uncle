@@ -6,7 +6,10 @@ from checklist_groups import parse
 
 
 def validate(path):
-    text=Path(path).read_text(encoding='utf-8')
+    return validate_text(Path(path).read_text(encoding='utf-8'))
+
+
+def validate_text(text):
     checks,_,warnings=parse(text)
     if not checks:
         raise ValueError('No checklist rows: return the complete checklist, not a filename or progress message')

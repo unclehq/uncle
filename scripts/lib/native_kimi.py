@@ -12,6 +12,28 @@ from process_tree import timed_popen
 from process_tree import launch_command, group_options
 
 
+def checklist_correction(stage, attempts):
+    """At most one format-only follow-up, using the reviewer's existing context."""
+    if attempts or stage.side != 'reviewer' or stage.stage not in (
+            'manual-checklist', 'manual-checklist-base', 'manual-checklist-delta'):
+        return ''
+    from checklist_document import validate_text
+    try:
+        validate_text(stage.final_answer)
+    except ValueError as error:
+        return (
+            'The final response is not a complete checklist: ' + str(error) + '. '
+            'Return the entire MANUAL_CHECKLIST.md document now as your final message, '
+            'using the evidence and checks already developed in this session. '
+            'Use a heading for each check (e.g. ## MC-1), with Exact action and '
+            'Expected result, and preserve required/optional status, dependencies, '
+            'resources and traceability. Do not rerun checks or repeat investigation. '
+            'Do not claim a file was written. Do not return a summary or filename. '
+            'Preserve complete content even if oversized; do not compact again. '
+            'This is the only format correction attempt.')
+    return ''
+
+
 def run(stage, directory):
     with socket.socket() as sock:
         sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
@@ -82,6 +104,7 @@ def run(stage, directory):
         # accepted, never confirmed answered (correlation 'none').
         stage.pending[id]=True
         stage.ack({'id':id,'result':{}})
+    correction_attempts=0
     seen={}
     timing_seen={}
     deadline=time.monotonic()+int(os.environ.get('WORKFLOW_NATIVE_STAGE_SECONDS','3600'))
@@ -108,6 +131,13 @@ def run(stage, directory):
         prompts=request(path+'/prompts')
         if not info.get('main_turn_active') and not prompts.get('active') and not prompts.get('queued'):
             if info.get('last_turn_reason')!='completed':raise ValueError('Kimi stage '+str(info.get('last_turn_reason')))
+            correction=checklist_correction(stage, correction_attempts)
+            if correction:
+                correction_attempts += 1
+                stage.text('Checklist response format invalid; requesting one correction in the same session.\n')
+                followup=send(correction)
+                stage.turn=followup['prompt_id']
+                continue
             return
         if snapshot.get('pending_approvals') or snapshot.get('pending_questions'):
             raise ValueError('Kimi needs an interactive tool response; inspect the stage log and retry')

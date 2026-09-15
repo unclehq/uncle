@@ -218,6 +218,28 @@ class RoutingTests(Base):
         self.answer(ui, request, 'Running', home_action={'uncle_action': 'run_change', 'message': 'go'})
         self.assertEqual(ui._home_action.call_count, 2)
 
+    def test_direct_homepage_edit_and_document_requests_authorize_action(self):
+        from supervisor_chat import home_intent
+        for message in (
+                'change the main page to have a line underneath the Hello World! text',
+                'Please update the homepage', 'Can you add a line under "Hello World!"?',
+                'write REQUIREMENTS.md for a hello world app',
+                'draft CHANGE_REQUEST.md to add a horizontal line'):
+            with self.subTest(message=message):
+                self.assertTrue(home_intent(message))
+        for message in ('what day is it', 'Should we change the homepage?',
+                        'Do not change the homepage', 'Explain how to change the page'):
+            with self.subTest(message=message):
+                self.assertFalse(home_intent(message))
+        ui = self.ui('menu')
+        ui._home_action = Mock()
+        request = self.send(ui, 'change the main page to have a line underneath the Hello World! text')
+        self.answer(ui, request, 'Starting the requested change',
+                    home_action={'uncle_action': 'create_change', 'message': 'Starting',
+                                 'document': '## Summary\nAdd a horizontal line.', 'start': True})
+        ui._home_action.assert_called_once()
+
+
 
 class SteeringTests(Base):
     """AC-2 / T-8: authorized steering on the live channel with honest states."""

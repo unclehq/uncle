@@ -30,11 +30,26 @@ verification_paths() {
 # Prints one deterministic manifest. Directory inventories detect additions
 # and deletions as well as edits. Python bytecode is not a verification input.
 verification_manifest() {
+    local result status
     case "${WORKFLOW_HASH_BACKEND:-auto}" in
         auto|python)
             if command -v python3 > /dev/null 2>&1 && [[ -f "$VERIFICATION_LIB_DIR/verification_manifest.py" ]]; then
-                python3 -B "$VERIFICATION_LIB_DIR/verification_manifest.py" "$1"
-                return $?
+                if result=$(python3 -B "$VERIFICATION_LIB_DIR/verification_manifest.py" "$1"); then
+                    [[ -z "$result" ]] || printf '%s\n' "$result"
+                    return 0
+                else
+                    status=$?
+                fi
+                # Keep the successful path to one Python startup. Only probe
+                # after failure: a Store alias can exist without working Python.
+                # A working interpreter's manifest error must remain fatal.
+                if python3 -c 'pass' >/dev/null 2>&1; then
+                    return "$status"
+                fi
+                if [[ "${WORKFLOW_HASH_BACKEND:-auto}" == python ]]; then
+                    echo 'Python manifest backend is unavailable.' >&2
+                    return "$status"
+                fi
             elif [[ "${WORKFLOW_HASH_BACKEND:-auto}" == python ]]; then
                 echo 'Python manifest backend is unavailable.' >&2
                 return 1

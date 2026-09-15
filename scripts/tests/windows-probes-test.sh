@@ -14,6 +14,19 @@ printf 'fixture\n' > scopes
 PATH="$work/bin:$PATH" bash -c '. "$1/scripts/lib/verification-integrity.sh"; verification_manifest scopes' _ "$ROOT" > actual
 bash -c '. "$1/scripts/lib/verification-integrity.sh"; WORKFLOW_HASH_BACKEND=shell verification_manifest scopes' _ "$ROOT" > expected
 cmp actual expected
+# Explicit Python selection must not silently choose another backend.
+if PATH="$work/bin:$PATH" WORKFLOW_HASH_BACKEND=python bash -c '. "$1/scripts/lib/verification-integrity.sh"; verification_manifest scopes' _ "$ROOT" > explicit 2> explicit-error; then
+    echo 'FAIL: unavailable explicit Python backend succeeded' >&2
+    exit 1
+fi
+[[ ! -s explicit ]]
+grep -q 'unavailable' explicit-error
+# A functioning interpreter returning a manifest error must not fall back.
+if bash -c '. "$1/scripts/lib/verification-integrity.sh"; verification_manifest_shell() { echo FALLBACK; }; verification_manifest missing-scopes' _ "$ROOT" > invalid 2> invalid-error; then
+    echo 'FAIL: invalid manifest succeeded' >&2
+    exit 1
+fi
+[[ ! -s invalid ]]
 # Unavailable process inspection must refuse installation, not report idle.
 . "$ROOT/scripts/lib/running-workflow.sh"
 ps() { return 2; }

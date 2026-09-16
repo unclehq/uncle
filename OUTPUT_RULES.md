@@ -103,7 +103,7 @@ none.
   solely to measure a read-only reviewer's response.
 - For project-plan, change-plan, adversarial-review, updated-plan and
   updated-change-plan, test-review and manual-checklist (including base/delta),
-  and execute-checklist, advisory budgets require compact-first drafting with ZERO
+  execute-checklist and final-audit, advisory budgets require compact-first drafting with ZERO
   size-only rewrite passes. Preserve complete artifacts even above the guide.
   This stage-specific policy takes precedence over the general rule below.
 - Otherwise, only compact an oversized document, within the producing stage and using its

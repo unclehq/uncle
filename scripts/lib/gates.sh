@@ -437,7 +437,7 @@ BASELINE_COMPACT
         return 0
     fi
     case "$stage" in
-        project-plan|change-plan|adversarial-review|updated-plan|updated-change-plan|test-review|manual-checklist|manual-checklist-base|manual-checklist-delta|execute-checklist)
+        project-plan|change-plan|adversarial-review|updated-plan|updated-change-plan|test-review|manual-checklist|manual-checklist-base|manual-checklist-delta|execute-checklist|final-audit)
             if [[ "${WORKFLOW_DOC_BUDGET_ENFORCE:-0}" != "1" ]]; then
                 cat <<'COMPACT_FIRST'
 

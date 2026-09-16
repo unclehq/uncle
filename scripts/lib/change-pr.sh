@@ -300,7 +300,14 @@ def validate(j, ready=True):
         raise ValueError('Published HEAD changed; rerun FINAL_AUDIT.')
 
 
-def manual_signed_commit(j):
+def signing_reason(reason):
+    # One decoded, whitespace-collapsed line so the prompt stays a prompt.
+    if isinstance(reason, bytes):
+        reason = reason.decode('utf-8', 'replace')
+    return ' '.join(str(reason).split())[:240]
+
+
+def manual_signed_commit(j, reason=None):
     import shlex
     # Stage the exact reviewed tree, including untracked files, without
     # reapplying clean filters or changing working files. Only the user runs it.
@@ -311,10 +318,13 @@ def manual_signed_commit(j):
         block = json.dumps(command) + ' '
     else:
         block = 'In another terminal, open this project, review the audited changes, then run:\n' + command + '\n'
+    # The classifier in ask() keys on the leading sentence, so the reason
+    # follows it rather than replacing it.
+    explanation = 'Automatic unsigned commit failed: ' + signing_reason(reason) + '. ' if reason else ''
     candidate = head()
     while candidate == j['original_head']:
         prefix = 'Commit signing needs your help. ' if j.get('requires_signature', True) else 'Commit needs your help. '
-        ask(prefix + block +
+        ask(prefix + explanation + block +
             'Return here and press ENTER (OK) when finished: ')
         candidate = head()
         if candidate == j['original_head']:
@@ -365,14 +375,41 @@ def signing_resume(j):
 
 
 def prepare_commit(j):
-    setting = subprocess.run(['git', 'config', '--bool', '--get', 'commit.gpgsign'],
+    # Effective value across system, global, local, includes and enabled
+    # worktree config. Read only: nothing here writes Git configuration.
+    setting = subprocess.run(['git', 'config', '--includes', '--bool', '--get', 'commit.gpgsign'],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if setting.returncode not in (0, 1):
-        raise ValueError('Cannot read commit signing configuration: ' + setting.stderr.strip())
-    j['requires_signature'] = setting.stdout.strip() == 'true'
+    value = setting.stdout.strip()
+    if setting.returncode == 1 or (setting.returncode == 0 and value == 'false'):
+        j['requires_signature'] = False
+        j.pop('manual_signing', None)
+        save(j)
+        # Porcelain, not commit-tree: hooks and any enforcement still run.
+        git('read-tree', j['commit_tree'])
+        result = subprocess.run(['git', 'commit', '--no-gpg-sign', '-m', j['title']],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode == 0:
+            candidate = head()
+            j['intended_head'] = candidate
+            try:
+                validate(j)
+            except Exception:
+                j['intended_head'] = ''
+                raise
+            save(j)
+            return
+        if not any(token in result.stderr.lower() for token in ('gpg', 'signing', 'pinentry')):
+            raise ValueError('Automatic commit failed: ' + result.stderr.strip())
+        reason = result.stderr
+    elif setting.returncode == 0 and value == 'true':
+        reason = None
+    else:
+        # Unreadable configuration never relaxes signing.
+        reason = 'cannot read commit signing configuration: ' + (setting.stderr.strip() or 'exit ' + str(setting.returncode))
+    j['requires_signature'] = True
     j['manual_signing'] = True
     save(j)  # Record the pending user action before displaying it.
-    manual_signed_commit(j)
+    manual_signed_commit(j, reason)
 
 
 
@@ -662,7 +699,11 @@ def record_pr(j, row):
 
 def handoff(j):
     if j.get('manual_signing'):
-        manual_signed_commit(j)
+        if j['intended_head']:
+            manual_signed_commit(j)
+        else:
+            # A pending journal from before automatic commits redetects config.
+            prepare_commit(j)
     validate(j)
     gh('auth', 'status')
     if not j['base_repo']:

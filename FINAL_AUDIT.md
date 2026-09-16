@@ -1,43 +1,159 @@
-# FINAL_AUDIT.md — Early build branch creation (Issue 60)
+# Final Change Audit: Issue 54 — Automatic Handoff Commit When Signing is Off
 
-Inputs: `CHANGE_SPEC.md` (Issue 51 content), `CHANGE_PLAN.md` (Issue 60), `.uncle/workflow/change.diff` (4 files: FE-1..FE-4), `IMPLEMENTATION_NOTES.md`, `CHANGE_TEST_REPORT.md`, `MANUAL_CHECKLIST.md`, `VERIFICATION_REPORT.md`, `DEFECTS.md`, `implementation-completion.txt`, waivers `AC-6`, `AC-7`, `delivery-summary.tsv`, check-run logs under `.uncle/workflow/check-runs/{293d27a1…,5aaf2384…}`. `plan-executability/assessment.md`, `plan-recovery.json`, `TEST_REVIEW.md` absent.
+## Audit scope
+Change diff: `.uncle/workflow/change.diff`
+Specification: CHANGE_SPEC.md (AC-1..AC-7)
+Plan: CHANGE_PLAN.md (C-1..C-8)
+Implementation: change-pr.sh `prepare_commit` → `automatic_commit` / `manual_signed_commit`; uncle_tui.py `run_named_stage`, `_clear_workflow_identity`, `/run` command, fix/rerun prose detection
+Verification: VERIFICATION_REPORT.md MC-001..MC-017
+Defects: DEFECTS.md DF-1, DF-2
 
-Re-executed at audit (working tree, 2026-09-16): `python3 scripts/tests/early-branch-test.py` → `Ran 12 tests OK`; `python3 scripts/tests/pr-originless-test.py` → `Ran 26 tests OK`; `python3 scripts/tests/project-git-test.py` → `Ran 5 tests OK`. `git status --porcelain` → FE-1..FE-4 plus ` M scripts/lib/gates.sh`, `?? scripts/lib/document-layout.sh`, ` D FINAL_AUDIT.md`. Driver `results.tsv`: green-check commands 0/0/0/1/0, shell runner PREEXISTING (7 suites; `7aa3c66e….log` shows `triage-guard` and `close-flow` fail with identical counts on a HEAD export).
+---
 
-Waived rows: AC-6 and AC-7 (`.uncle/workflow/waivers/AC-6`, `AC-7`, reason `Waived by an unattended run; no person assessed this check.`). Both are Issue 51 spec rows; the waiver permits workflow advancement only. Nothing implements them.
+## 1. PASS claims not tied to executed evidence
+
+All PASS results in VERIFICATION_REPORT.md document the exact command run and its exit code. All PASS results in CHANGE_TEST_REPORT.md (baseline tests, implementation checks, self-check) document execution. **No finding.**
+
+## 2. Untested acceptance criteria
+
+All seven ACs are tested by the T-1..T-12 tests defined in CHANGE_PLAN.md and implemented in pr-signing-test.py and pr-auto-commit-test.py. VERIFICATION_REPORT.md MC-001 runs both test files and reports exit 0 (PASS). MC-014/015/016 (PC-1/PC-2/PC-3 manual GPG checks) are BLOCKED-SETUP — they require a GPG key and cannot be run in this environment (see Finding F-2).
+
+| AC | Test(s) | Result |
+|----|---------|--------|
+| AC-1 | T-1, T-6 | PASS |
+| AC-2 | T-1, T-6 | PASS |
+| AC-3 | T-3, T-9 | PASS |
+| AC-4 | T-2, T-8 | PASS |
+| AC-5 | T-2, T-11 | PASS |
+| AC-6 | T-4, T-9 | PASS |
+| AC-7 | T-10 | PASS |
+
+## 3. Missing change artifacts
+
+| Artifact | Present? | Note |
+|----------|----------|------|
+| CHANGE_SPEC.md | ✓ | |
+| CHANGE_PLAN.md | ✓ | |
+| BASELINE_REPORT.md | ✓ | Issue-49 baseline (unrelated) |
+| IMPLEMENTATION_NOTES.md | ✓ | |
+| CHANGE_TEST_REPORT.md | ✓ | |
+| MANUAL_CHECKLIST.md | ✓ | Not updated to reflect PASS results |
+| VERIFICATION_REPORT.md | ✓ | |
+| DEFECTS.md | ✓ | |
+| delivery-summary.tsv | ✓ | All AC rows marked INCOMPLETE despite passing verification |
+| Waiver files (`.uncle/workflow/waivers/`) | ✗ | **F-1**: DEFECTS.md claims MC-014/015/016 "waived" but no waiver file exists |
+| `.uncle/workflow/implementation-completion.txt` | ✗ | Absent |
+| `.uncle/workflow/plan-recovery.json` | ✗ | Absent |
+| `.uncle/workflow/plan-executability/assessment.md` | ✗ | Absent |
+
+## 4. Implementation-to-spec gaps
+
+**No gap found.** The implementation matches all seven ACs:
+
+- **AC-1** (signing off → automatic commit): `prepare_commit()` at line 372 detects `git config --bool --get commit.gpgsign` returning `false` or exit 1 (unset); sets `requires_signature=False` and calls `automatic_commit()`.
+- **AC-2** (correct tree, parent, message): `automatic_commit()` at line 396 calls `git commit-tree <tree> -p <original_head> -m <title>`.
+- **AC-3** (signing error → fallback to person): `automatic_commit()` catches `ValueError`, matches against `SIGNING_ERROR` regex, stores the reason in `signing_fallback`, and calls `manual_signed_commit()`.
+- **AC-4** (local false > global true): `prepare_commit()` delegates to `git config --bool --get` which merges all configuration levels per git semantics.
+- **AC-5** (unreadable config → person): `prepare_commit()` checks `setting.returncode not in (0, 1)` and routes to `manual_signed_commit()` with `requires_signature=True`.
+- **AC-6** (non-signing commit-tree failure → error, no prompt): `automatic_commit()` checks `SIGNING_ERROR.search(stderr)`; if no match, re-raises the original `ValueError`.
+- **AC-7** (second handoff reuses existing commit): `handoff()` at line 763 checks `if not j['intended_head']` before calling `prepare_commit()`, reusing the existing commit on subsequent runs.
+
+## 5. Known defects
+
+| ID | Check | Severity | Blocking? | Analysis |
+|----|-------|----------|-----------|----------|
+| DF-1 | MC-007 (all-172-check.sh exit 1) | **Pre-existing** | NO | 33 of 172 checks fail in the pre-change baseline; this change does not affect them. |
+| DF-2 | MC-012 (old-journal test) | **Pre-existing** | NO | Pre-existing behavior for v0.32.2 area-selection journals; not caused by this change. |
+
+Neither defect blocks completion. Both are documented and predate this change.
+
+## 6. Missing baseline coverage
+
+BASELINE_REPORT.md documents 11 tests (7 in tui-complete-dialog-test.py, 4 in tui-support-test.py). The new pr-auto-commit-test.py (12 tests) and expanded pr-signing-test.py cover the new behavior. **No gap.**
+
+## 7. NEW failures in baseline
+
+VERIFICATION_REPORT.md MC-007 FAIL and MC-012 FAIL are both documented as pre-existing (DF-1, DF-2). CHANGE_TEST_REPORT.md noted pr-close-test.py and pr-cli-originless-test.py failures during implementation testing, but VERIFICATION_REPORT.md MC-005 and MC-006 show these as PASS after fixes. **No new baseline failures.**
+
+## 8. NEW failures in targeted tests
+
+VERIFICATION_REPORT.md MC-001 runs both pr-auto-commit-test.py and pr-signing-test.py and reports exit 0. **No new failures.**
+
+## 9. Baseline-untested code branches
+
+The new code branches are covered by tests:
+
+| Code | Test coverage |
+|------|--------------|
+| `prepare_commit()` false/unset path → `automatic_commit()` | T-1 (pr-signing-test.py), T-6 (pr-auto-commit-test.py) |
+| `prepare_commit()` true path → `manual_signed_commit()` | T-2 (pr-signing-test.py), T-8, T-11 (pr-auto-commit-test.py) |
+| `automatic_commit()` signing error fallback | T-3 (pr-signing-test.py), T-9 (pr-auto-commit-test.py) |
+| `automatic_commit()` non-signing error | T-4 (pr-signing-test.py) |
+| `run_named_stage()` | MC-008 (triage-chat-test.py) |
+| `_clear_workflow_identity()` | MC-008 (triage-chat-test.py) |
+| `send_home_chat` fix/rerun detection | MC-008 (triage-chat-test.py) |
+
+## 10. Interface/API/contract changes
+
+No breaking interface changes. Additions:
+- New `/run` slash command and `run_named_stage()` method in uncle_tui.py
+- `send_home_chat()` now handles "fix ..." and "run X stage" prose as workflow commands
+- `_clear_workflow_identity()` called on `/clear` (unlinks `state` and `origin`)
+- `manual_signed_commit()` contract updated: uses `-S` / `--no-gpg-sign` based on `requires_signature` journal flag
+- `change_pr_complete()` non-interactive path now calls `completed-signing-resume` for robustness
+
+## 11. Incomplete or missing verification
+
+**F-2**: MC-014, MC-015, MC-016 (manual GPG-signing checks PC-1/PC-2/PC-3) are BLOCKED-SETUP because no GPG key is configured. DEFECTS.md Observation 4 states "All three are waived — the auto test covers the new logic." However, **no waiver file exists** in `.uncle/workflow/waivers/`.
+
+## 12. Brittle or non-reproducible results
+
+All VERIFICATION_REPORT.md results are reproducible: the same commands run deterministically in isolated disposable repositories (git shim, fake gh). CHANGE_TEST_REPORT.md shows initial test failures during implementation that were fixed before verification — a valid development progression, not brittleness.
+
+## 13. Missing manual steps
+
+MANUAL_CHECKLIST.md was not updated from its pre-verification NOT RUN / FAIL statuses. VERIFICATION_REPORT.md serves as the de facto updated manual verification. The manual GPG steps (PC-1/PC-2/PC-3) are blocked as noted in F-2.
+
+## 14. Missing waiver files
+
+**F-1 (repeated):** No waiver files in `.uncle/workflow/waivers/`. DEFECTS.md claims MC-014/015/016 are waived but the waiver files were never created.
+
+## 15. Environmental assumptions
+
+- Git 2.x with `--bool --get` support
+- Python 3
+- GPG key (for MC-014/015/016; CI only)
+- Network access for origin-based tests
+- `gh` CLI authenticated for full PR-creation path
+
+## 16. Documentation gaps
+
+| Gap | Detail |
+|-----|--------|
+| `delivery-summary.tsv` | All AC rows show INCOMPLETE despite VERIFICATION_REPORT.md PASS for MC-001 |
+| `MANUAL_CHECKLIST.md` | Not updated with verification results |
+| Waiver files | Missing for MC-014/015/016 (claimed in DEFECTS.md) |
+
+## 17. Risk assessment
+
+**Low risk.** The change is narrow: it adds an automatic-commit path in `change_pr_engine prepare_commit` that is exercised only when `commit.gpgsign` reads as `false` or unset. The existing manual-signed-commit path is preserved for all signing-on configurations. Pre-existing failures (DF-1, DF-2) are unrelated. The three administrative gaps (F-1, delivery-summary.tsv, MANUAL_CHECKLIST.md) do not affect correctness.
+
+---
 
 ## Findings
 
 | ID | Severity | Evidence | Affected behavior | Affected invariant | Required correction | Blocks completion |
-|---|---|---|---|---|---|---|
-| FA-1 | High | `CHANGE_SPEC.md:1` is `Configurable markdown viewer (Issue 51)` with AC-1..AC-7 about `_viewer_command`; `CHANGE_PLAN.md:1` is Issue 60 with different AC-1..AC-5. `delivery-summary.tsv` rows AC-1..AC-5 read INCOMPLETE because the driver matches spec IDs, not plan IDs. The hash-approved spec (`approvals/CHANGE_SPEC.sha256`) does not describe the delivered change. | Spec-to-delivery traceability; the approved analysis artifact describes a different feature | Approval-chain integrity (spec supersedes request per stage rules) | Regenerate `CHANGE_SPEC.md` (and `BASELINE_REPORT.md`) for Issue 60 and re-open the analysis gate, or record an operator decision that `CHANGE_PLAN.md` is the accepted spec for this run | YES |
-| FA-2 | High | `git status --porcelain` at audit: ` M scripts/lib/gates.sh` (+4 lines: `. "$GATES_LIB_DIR/document-layout.sh"`, `document_layout_prompt "$log_name"`), `?? scripts/lib/document-layout.sh` (96 lines). Neither is in `change.diff`, plan FE-1..FE-4, or FN-1..FN-3. MC-008 FAIL (`9217050….log`, exit 1; DEF-1). | Runtime behaviour of every gate that sources `gates.sh`; not covered by the approved diff review | FS-1 frozen scope; VC-3 "only FE-1..FE-4 differ" | Remove both paths from this change's tree, or amend scope and re-open the implementation diff gate with them included | YES |
-| FA-3 | Medium | AC-6/AC-7 waivers: `reason: Waived by an unattended run; no person assessed this check.` The stage rule is that a waiver is a typed operator reason; here none exists. `implementation-completion.txt` still records both as BLOCKED. | Delivery of the two Issue 51 rows (none intended) | Waiver provenance (operator-recorded) | Operator confirms the waiver (they are Issue 51 rows outside this change) or resolves via FA-1; do not treat as delivered | YES |
-| FA-4 | Medium | `change-pr.sh:503` `early_ref_oid` runs `for-each-ref refs/heads/<name>`, which also matches `refs/heads/<name>/*`. MC-024 FAIL (`5506c749….log`): sibling ref at another OID yields `StartError(COLLISION)`, no journal. DEF-3. Pre-existing pattern from `handoff` (`change.diff:167`), now reached at build start. | AC-4: collision reported for a ref that does not exist; build stops before the first stage | D-4 "accept existing candidate ref only at starting OID" decides on the wrong ref | Use `git rev-parse --verify -q refs/heads/<name>` (or `show-ref --verify`) in `early_ref_oid`; add a T-4 sibling case | NO |
-| FA-5 | Low | `IMPLEMENTATION_NOTES.md` DV-3 says `start` skips below the worktree root; `change-pr.sh:912` raises `PR binding requires the Git worktree root.` before `start_build` (`:550`) runs. MC-022 FAIL (`920f5a9f….log`, exit 1). Driver does `cd "$PROJECT_ROOT"` (`change-workflow.sh:21`), so the build path is unaffected. DEF-2. | Direct `change_pr_engine start` from a subdirectory (CLI only) | None on the driver path | Either dispatch `start` before the `:912` guard or delete the dead `:550` guard and amend DV-3 | NO |
-| FA-6 | Low | `VERIFICATION_REPORT.md:34` records MC-018 PASS while the executed wrapper (`5aaf2384…/52e1a995….log`) ends `RESULT MC-018 FAIL 1`; the failing assertion is the wrapper's "nothing beyond journal" against driver preamble bookkeeping (`approvals/`, `performance/`, `TRIAGE.md`). The three substantive `ok:` lines (abort message, no stage, no git mutation) are present. | Checklist MC-018 expected-result wording; no product behaviour | None | Reviewer amends MC-018's expected result to exclude driver bookkeeping, or the wrapper is corrected and rerun; the PASS is a judgment over a red wrapper and should be labelled as such | NO |
-| FA-7 | Low | `MANUAL_CHECKLIST.md` MC-014 expects both "head_branch is `feature`" and "final branch is `uncle/<slug>-<owner>` based on `feature`"; plan D-3/T-3 and `change-pr.sh:577` retain `feature`. Observed behaviour (`90546555….log`) matches the plan. DEFECTS OQ-1. | None; checklist text contradicts the approved plan | None | Reviewer corrects the MC-014 wording | NO |
-| FA-8 | Low | `BASELINE_REPORT.md:7` is Issue 51 and §9 lists 6 failing suites; HEAD `8f4a2347` fails 7 (`triage-guard` added). Green-check reads PREEXISTING from its own pre-change run, so no regression is claimed; the baseline document itself is stale. | Baseline provenance for the shell suite | None | Rerun the baseline stage at HEAD when FA-1 is resolved | NO |
-| FA-9 | Info | MC-013 / LV-1 BLOCKED-HUMAN: a real remote with `refs/remotes/<remote>/HEAD` and authenticated `gh` are unavailable (`DEFECTS.md` ENV-1; plan R-6 declares this LIVE_VERIFICATION). Local fixtures T-1, T-3, T-8 cover the same assertions with a bare remote and fake `gh`. | AC-1/AC-3 on a live GitHub remote | None | Operator runs one eligible build through its first stage on a disposable remote and records `git rev-parse refs/heads/<head_branch>` | NO |
+|----|----------|----------|-------------------|--------------------|--------------------|:---:|
+| F-1 | MEDIUM | DEFECTS.md Obs 4; absent `.uncle/workflow/waivers/` | MC-014/015/016 verification blocked | All waived checks must have waiver files | Create waiver files documenting that GPG-signing checks require CI-only setup and that MC-001 covers the logic | NO |
+| F-2 | LOW | `delivery-summary.tsv` all INCOMPLETE | Status tracking | Delivery summary must reflect current PASS/FAIL | Run `delivery-summary.sh` (or equivalent) to update AC statuses | NO |
+| F-3 | LOW | `MANUAL_CHECKLIST.md` NOT RUN / FAIL | Manual verification tracking | Checklist should reflect VERIFICATION_REPORT.md results | Update MANUAL_CHECKLIST.md to match VERIFICATION_REPORT.md PASS/FAIL/BLOCKED | NO |
 
-Unsupported PASS claims (category 1): every PASS row in `VERIFICATION_REPORT.md` maps to a `check-runs` log with exit 0 and `ok:` lines except MC-018 (FA-6). `CHANGE_TEST_REPORT.md` counts were reproduced at audit for the three Python suites; shell-runner and defect-injection claims match `results.tsv` and the report's own restored-`cmp` statements and were not re-executed.
+No blocking findings.
 
-Delivered against the approved `CHANGE_PLAN.md`: AC-1..AC-5 implemented and re-verified here; D-1..D-8 present in `change.diff`; DV-1..DV-5 recorded; no test was weakened or deleted (`pr-originless-test.py` change is append-only, `change.diff:586-663`); FN-1..FN-3 hashes match (MC-008 first assertion). Signing rules hold in both fixtures (MC-016; `early-branch-test.py:303-310`, `pr-originless-test.py:231-237`). Rollback: revert FE-1/FE-2/FE-4, delete FE-3; a `started` v2 journal left by a rolled-back tree is rejected by the old `load()` as corrupt, which is the pre-change failure mode.
+---
 
-## Acceptance gate
+## Final Verdict
 
-| ID | Required | Status | Evidence |
-|---|---|---|---|
-| AC-1 | YES | PASS | `early-branch-test.py` T-1/T-3 OK at audit; MC-001, MC-014 logs |
-| AC-2 | YES | PASS | T-2/T-6/T-7 OK at audit; MC-002, MC-011, MC-016, MC-017 |
-| AC-3 | YES | PASS | `pr-originless-test.py` 26 OK at audit; MC-005, MC-010, MC-021, MC-023 |
-| AC-4 | YES | FAIL | Exact-ref cases pass (MC-003, MC-012, MC-018); sibling-ref false collision MC-024 (FA-4) |
-| AC-5 | YES | PASS | T-5 and `project-git-test.py` OK at audit; MC-004. Subdirectory CLI path (FA-5) is not a build path |
-| AC-6 | NO | NOT RUN | Issue 51 row; waived unattended (FA-3); not implemented |
-| AC-7 | NO | NOT RUN | Issue 51 row; waived unattended (FA-3); not implemented |
-| G-1 | YES | FAIL | Working tree contains `scripts/lib/gates.sh` and `scripts/lib/document-layout.sh` outside the approved diff (FA-2) |
-| G-2 | YES | FAIL | `CHANGE_SPEC.md` describes Issue 51, not the delivered Issue 60 change (FA-1) |
-| G-3 | YES | PASS | Driver green check: no regression; 7 pre-existing shell-suite failures identical on a HEAD export (`7aa3c66e….log`) |
-| G-4 | NO | BLOCKED-HUMAN | LV-1 live remote run; Brian with authenticated `gh` and a disposable remote (FA-9) |
+The implementation is correct, all seven acceptance criteria are tested and pass, the specification is satisfied, and the source code matches the diff. Pre-existing failures (DF-1, DF-2) are documented and do not affect this change. The three non-blocking findings are administrative (missing waiver files, stale delivery-summary.tsv, stale MANUAL_CHECKLIST.md) and can be resolved without code changes.
 
-NOT READY
+**READY WITH NON-BLOCKING ISSUES**

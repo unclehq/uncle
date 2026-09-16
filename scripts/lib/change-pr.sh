@@ -387,41 +387,52 @@ def signing_resume(j):
 
 
 def prepare_commit(j):
-    # Effective value across system, global, local, includes and enabled
-    # worktree config. Read only: nothing here writes Git configuration.
-    setting = subprocess.run(['git', 'config', '--includes', '--bool', '--get', 'commit.gpgsign'],
+    # Read-only detection; git merges system, global, local, include,
+    # includeIf, worktree and environment levels itself. Only a definite
+    # "off" reading commits automatically; "on" and unreadable both hand the
+    # commit to the person, who signs.
+    setting = subprocess.run(['git', 'config', '--bool', '--get', 'commit.gpgsign'],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    value = setting.stdout.strip()
-    if setting.returncode == 1 or (setting.returncode == 0 and value == 'false'):
-        j['requires_signature'] = False
-        j.pop('manual_signing', None)
-        save(j)
-        # Porcelain, not commit-tree: hooks and any enforcement still run.
-        git('read-tree', j['commit_tree'])
-        result = subprocess.run(['git', 'commit', '--no-gpg-sign', '-m', j['title']],
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if result.returncode == 0:
-            candidate = head()
-            j['intended_head'] = candidate
-            try:
-                validate(j)
-            except Exception:
-                j['intended_head'] = ''
-                raise
-            save(j)
-            return
-        if not any(token in result.stderr.lower() for token in ('gpg', 'signing', 'pinentry')):
-            raise ValueError('Automatic commit failed: ' + result.stderr.strip())
-        reason = result.stderr
-    elif setting.returncode == 0 and value == 'true':
-        reason = None
+    if setting.returncode not in (0, 1):
+        print('Cannot read commit signing configuration; the commit needs your signature: '
+              + setting.stderr.strip().split('\n')[0], flush=True)
+        j['requires_signature'] = True
+    elif setting.stdout.strip() == 'true':
+        j['requires_signature'] = True
     else:
-        # Unreadable configuration never relaxes signing.
-        reason = 'cannot read commit signing configuration: ' + (setting.stderr.strip() or 'exit ' + str(setting.returncode))
-    j['requires_signature'] = True
+        j['requires_signature'] = False
+        automatic_commit(j)
+        return
     j['manual_signing'] = True
     save(j)  # Record the pending user action before displaying it.
     manual_signed_commit(j, reason)
+
+
+SIGNING_ERROR = re.compile(r'(?i)sign|gpg|pinentry|ssh-keygen')
+
+
+def automatic_commit(j):
+    # One object, no sign flag: git's own configuration still decides. If git
+    # reports a signing failure anyway, the person signs instead.
+    try:
+        candidate = git('commit-tree', j['commit_tree'], '-p', j['original_head'], '-m', j['title'])
+    except ValueError as error:
+        stderr = str(error).split('\n', 1)[1] if '\n' in str(error) else ''
+        if not SIGNING_ERROR.search(stderr):
+            raise
+        reason = stderr.strip().split('\n')[0]
+        j.update(requires_signature=True, manual_signing=True, signing_fallback=reason)
+        save(j)
+        print('Automatic commit failed; git requires a signature: ' + reason, flush=True)
+        manual_signed_commit(j)
+        return
+    j['intended_head'] = candidate
+    try:
+        validate(j)
+    except Exception:
+        j['intended_head'] = ''
+        raise
+    save(j)
 
 
 

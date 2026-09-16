@@ -104,3 +104,30 @@ contradictory, or insufficient evidence; do not repeat an entire suite merely
 because this is a new review stage. Human observations cannot be inferred.
 Before returning, verify the Findings table fields, unique IDs, YES/NO blocking
 values, and final verdict. Return the complete audit once, without progress text.
+
+## Compact first audit
+
+Start with the dedicated audit-evidence JSON index supplied by the driver. It
+contains reported claim rows, literal references, command/result records and
+explicit missing/empty-file statuses. It does not prove any claim. Use source
+line numbers to inspect the exact assertions and raw execution evidence. Claims
+not extractable as table rows still require review in the source reports.
+
+Audit each acceptance claim once. Resolve its requirement, assertion, executed
+command and current evidence; batch independent reads. Do not repeatedly glob
+for files already inventoried as absent or reopen unchanged reports just to
+confirm they were read. Recheck only after an input change or a concrete gap.
+Missing or header-only records are not successful delivery evidence. Keep every
+unsupported PASS finding; do not skip a claim because its evidence is inconvenient.
+Rerun a check only for missing, stale, contradictory or insufficient evidence,
+not to repeat a complete passing suite at the audit boundary.
+
+Construct the required Findings table directly, one row per distinct defect,
+with exact evidence, required correction and YES/NO blocking value. Refer to IDs
+instead of repeating plan prose. Preserve every blocker and waiver scope. End
+with the required verdict; do not append a narrative of clean checks or a recap.
+Perform one consistency check between findings and verdict before returning the
+complete audit. In advisory-budget mode do ZERO size-only compaction passes;
+preserve mandatory findings even above the guide. The driver measures size.
+Enforced budgets retain the two-pass limit. Independent judgment, evidence
+verification and all acceptance gates remain mandatory.

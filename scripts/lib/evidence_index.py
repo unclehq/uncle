@@ -110,6 +110,20 @@ def packet(project, state, stage, family='app'):
                'evidence_references': {name: value.splitlines() for name, value in excerpts.items()}}
     save(state/'handoffs'/f'{stage}-{family}.json', handoff)
 
+    audit_note = ''
+    if stage == 'final-audit':
+        from audit_evidence import build
+        audit = build(root, state, family)
+        audit_path = state/'handoffs'/f'audit-evidence-{family}.json'
+        save(audit_path, audit)
+        inventory = {name: row.get('status') + ('; header only' if row.get('header_only') else '')
+                     for name, row in audit['files'].items()}
+        audit_note = ('\n## Dedicated audit evidence index\nRead ' + str(audit_path) +
+                      ' for all extracted claim rows and command/result records with source line numbers. '
+                      'Literal references are navigation, not proven mappings. Resolve each claim against '
+                      'actual assertions and execution evidence once. Do not infer PASS.\nFile availability: ' +
+                      json.dumps(inventory) + '\nWaivers directory: ' + audit['waivers_directory'] + '\n')
+
     lines = ['\n## Shared driver evidence index',
              'Current files were rehashed. Cached excerpts are navigation only, never PASS or approval evidence.',
              'Read omitted input and exact assertion evidence directly. Missing files do not imply satisfied requirements.',
@@ -125,7 +139,7 @@ def packet(project, state, stage, family='app'):
         lines.append(entry)
         budget -= len(raw)
     lines.append('All excerpts are bounded; read source documents for complete requirements and command blocks.')
-    return '\n'.join(lines) + '\n'
+    return audit_note + '\n'.join(lines) + '\n'
 
 
 if __name__ == '__main__':

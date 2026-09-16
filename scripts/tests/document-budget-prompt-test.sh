@@ -66,7 +66,7 @@ for mode in 0 1; do
     [[ "$prompt" != *'budgets (binding)'* ]]
 done
 
-for stage in project-plan change-plan adversarial-review updated-plan updated-change-plan test-review manual-checklist manual-checklist-base manual-checklist-delta execute-checklist; do
+for stage in project-plan change-plan adversarial-review updated-plan updated-change-plan test-review manual-checklist manual-checklist-base manual-checklist-delta execute-checklist final-audit; do
     prompt="$(WORKFLOW_DOC_BUDGET_ENFORCE=0 document_budget_prompt "$stage")"
     [[ "$prompt" == *'do ZERO size-only compaction passes'* ]]
     [[ "$prompt" != *'Compaction limit: at most TWO'* ]]

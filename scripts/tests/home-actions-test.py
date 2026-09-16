@@ -34,6 +34,34 @@ class Actions(unittest.TestCase):
         self.ui._run = Mock()
         self.ui._set_field = Mock()
 
+    def test_run_slash_command_accepts_stage_argument(self):
+        self.ui.run_named_stage = Mock()
+        self.ui.chat_composer = '/run adversarial-review'
+        self.assertTrue(self.ui._chat_command(10))
+        self.ui.run_named_stage.assert_called_once_with('adversarial-review')
+        self.assertEqual(self.ui.chat_composer, '')
+
+    def test_run_completion_leaves_room_for_stage(self):
+        self.ui.run_named_stage = Mock()
+        self.ui.chat_composer = '/ru'
+        self.assertTrue(self.ui._chat_command(10))
+        self.assertEqual(self.ui.chat_composer, '/run ')
+        self.ui.run_named_stage.assert_not_called()
+
+    def test_clear_removes_workflow_identity_only(self):
+        directory = self.root/'.uncle/workflow'
+        directory.mkdir(parents=True)
+        for name in ('state', 'origin', 'keep.txt'):
+            (directory/name).write_text('saved')
+        self.ui.chat_composer = '/clear'
+        self.ui._chat_command(10)
+        self.assertFalse((directory/'state').exists())
+        self.assertFalse((directory/'origin').exists())
+        self.assertEqual((directory/'keep.txt').read_text(), 'saved')
+        self.ui.chat_composer = '/clear'
+        self.ui._chat_command(10)
+        self.assertEqual(self.ui.chat_error, '')
+
     def reply(self, **action):
         # TD-4 (Issue 45): the chat worker is the supervisor; a homepage action
         # arrives as the `home_action` of its schema-1 reply.

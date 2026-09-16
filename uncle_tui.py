@@ -3108,6 +3108,11 @@ class UncleTUI:
         if self.state != 'running':
             raise ValueError(self.chat_error or 'The workflow did not start.')
 
+    def _clear_workflow_identity(self):
+        directory = Path(_project_root()) / '.uncle' / 'workflow'
+        for name in ('state', 'origin'):
+            (directory / name).unlink(missing_ok=True)
+
     def _triage_command(self, text):
         if not text:
             return
@@ -3121,6 +3126,7 @@ class UncleTUI:
                 elif command in ('/resume', '/r'):
                     self.triage_resume()
                 elif command == '/clear':
+                    self._clear_workflow_identity()
                     if self.triage_request is not None:
                         self.triage_request.cancel()
                     self.triage_error = ''
@@ -3625,7 +3631,7 @@ class UncleTUI:
             return True
         if choices and k in (10, 13) and self.chat_composer.lower() not in choices:
             self.chat_composer = choices[getattr(self, 'slash_pick', 0) % len(choices)]
-            if self.chat_composer == '/issue':
+            if self.chat_composer in ('/issue', '/run'):
                 self.chat_composer += ' '
                 return True
         if k not in (10, 13):
@@ -3640,7 +3646,7 @@ class UncleTUI:
                     self.state == 'running' or (self.proc and self.proc.poll() is None)):
                 self.chat_error = 'A workflow is already active. Finish or stop it before starting another.'
                 return True
-            if argument and command not in ('/issue', '/do', '/delegate', '/app-input'):
+            if argument and command not in ('/issue', '/do', '/run', '/delegate', '/app-input'):
                 self.chat_error = command + ' does not take arguments'
                 return True
             if command == '/run':
@@ -3725,6 +3731,11 @@ class UncleTUI:
                 self.chat_choices = self.chat.refs.browse('')
                 self.chat_pick = 0
             elif command == '/clear':
+                try:
+                    self._clear_workflow_identity()
+                except OSError as exc:
+                    self.chat_error = 'Could not clear workflow state/origin: ' + str(exc)
+                    return True
                 if getattr(self, 'triage_request', None):
                     self.triage_request.cancel()
                 self.recovery_active = False

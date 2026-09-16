@@ -1,15 +1,17 @@
-# FINAL_AUDIT.md
-
-**Triage-authored placeholder, not an independent reviewer audit.** Written
-during triage (Proposal 3, 2026-09-15) after the final-audit stage produced a
-reply with no findings table and no verdict. This file exists only to route the
-run to the owner-decision/repair path for PB-1. The reviewer must audit again
-before COMPLETE; nothing below is a passing check.
-
 ## Findings
 
 | ID | Severity | Evidence | Affected behavior | Affected invariant | Required correction | Blocks completion |
 |---|---|---|---|---|---|---|
-| FA-1 | Blocking | IMPLEMENTATION_NOTES.md PB-1 (class AUTHORITY): `scripts/tests/close-flow-test.sh:1397` `test_commit_and_push_crash_recovery` fails `AssertionError: 0 == 0` after the change and passed at baseline; VERIFICATION_REPORT.md MC-019 (BLOCKED-HUMAN, D-2) and MC-009 (FAIL, D-1/D-2) record the same failure. The test asserts the old B-1 behavior that CHANGE_SPEC.md B-1 (MODIFY) intentionally replaces; P-2/FS-1 forbid editing that file in this change. | B-1 | I-7 | Owner decision: authorize a scoped repair editing `close-flow-test.sh:1397-1398` to the new B-1 expectation (or gate `FIXTURE_LEAVE_COMMIT_PENDING` on signing on), or record a waiver for D-2. Then rerun MC-009/MC-019 and re-audit with the real reviewer. | Yes |
+| FA-1 | Blocking | `grep -c 'VIEWER_PROGRAMS\|markdown_viewer' uncle_tui.py` → 0 (rerun at audit); `git diff HEAD -- uncle_tui.py` holds only `/run` stage-rerun hunks (`send_home_chat`, `run_named_stage`); `.uncle/workflow/change.diff:385-620` has the 9 approved viewer hunks; `delivery-summary.tsv` AC-1..AC-7 INCOMPLETE; DEFECTS.md DEF-1 | B-2..B-8, B-13 (all ADD/MODIFY) | I-3, I-4, I-5, I-6, I-7, I-8 | Reapply the `uncle_tui.py` portion of `change.diff` (or rerun implementation), reopen the diff gate, rerun checklist execution | YES |
+| FA-2 | Blocking | CHANGE_TEST_REPORT.md:14 claims `tui-viewer-test.py` → OK, 8 tests; audit rerun → `FAILED (failures=7, errors=1)`; only log cited is IMPLEMENTATION_NOTES.md, no archived runner log | AC-1..AC-7 | I-3..I-8 | Re-execute after FA-1 and cite a retained log under `.uncle/workflow/` | YES |
+| FA-3 | Blocking | CHANGE_TEST_REPORT.md:79 claims VC-3 `shasum -c` shows only `uncle_tui.py` differing and `_run_in_terminal` identical for the implemented tree; current tree has no implemented `_viewer_command`; MC-006 PASS in VERIFICATION_REPORT.md:22 was measured on baseline code (VERIFICATION_REPORT.md:63) | AC-5 (FN-1 preservation) | I-2 | Re-run VC-3 against the restored implementation | YES |
+| FA-4 | Blocking | CHANGE_TEST_REPORT.md:63 claims `shlex.quote` in every `_viewer_command` branch via `test_t1`, `test_t3`; those tests fail at audit; MC-023 FAIL (VERIFICATION_REPORT.md:39) | B-2..B-6 | I-8 | Re-verify after FA-1 | YES |
+| FA-5 | Blocking | CHANGE_TEST_REPORT.md:35 "`py_compile` (after editing) → exit 0" and IMPLEMENTATION_NOTES.md `## Acceptance delivery` rows IMPLEMENTED with line refs `:1936-2010` that do not exist in the current file; `implementation-completion.txt` is 0 bytes | AC-1..AC-7 | — | Regenerate notes and completion record from the restored tree | YES |
+| FA-6 | Blocking | VERIFICATION_REPORT.md:23-47: MC-007..MC-022, MC-024..MC-026, MC-031 NOT RUN (no TTY, ENV-1); CHANGE_PLAN.md LV-1..LV-3 LIVE_VERIFICATION not performed (CHANGE_TEST_REPORT.md:76) | B-4, B-7..B-12 | I-1, I-4, I-7 | After FA-1, Brian runs `python3 uncle_tui.py` live rows; record as BLOCKED-HUMAN until signed | YES |
+| FA-7 | Major | MC-028 BLOCKED-IMPOSSIBLE (VERIFICATION_REPORT.md:44); `.uncle/workflow/waivers/` absent; the check is executable without mutation: run `load_config` from the `/tmp/uncle-51-head` HEAD archive (CHANGE_TEST_REPORT.md:3) against a config containing `misc.markdown_viewer` | B-13 old-loader tolerance (CHANGE_SPEC.md §8) | I-5 | Execute MC-028 from the HEAD archive, or record an operator waiver | YES |
+| FA-8 | Major | `change.diff:1-111` includes `prompts/change/baseline.md`, `scripts/lib/checklist_groups.py`, `scripts/lib/gates.sh`, `scripts/tests/checklist-document-test.py`; CHANGE_PLAN.md FS-1/FE-1/FE-2 scope only `uncle_tui.py` and `tui-viewer-test.py`; IMPLEMENTATION_NOTES.md:5 calls them pre-existing unrelated edits | Unrelated driver behavior (core rule 5) | — | Exclude the four files from the Issue 51 change before publishing; regenerate `change.diff` scoped to FE-1/FE-2 | NO |
+| FA-9 | Minor | IMPLEMENTATION_NOTES.md DV-4 and CHANGE_TEST_REPORT.md:77: `OSError` snapshot-copy fallback untested; MC-031 NOT RUN | B-4 fallback path | I-4 (explanation lines absent on this path) | Add a `copyfile` OSError test or accept DV-4 explicitly in CHANGE_PLAN.md | NO |
+| FA-10 | Minor | MANUAL_CHECKLIST.md:3-194 contains reviewer drafting narrative ("Let me reconsider", "I'll reproduce each check") before the check table | Checklist readability; parse of `Exclusive resources` groups | — | Reviewer trims to the check table and traceability notes | NO |
+| FA-11 | Minor | IMPLEMENTATION_NOTES.md DV-1: `cursor`/`code` retain the `0444` snapshot directory in the OS temp dir with no cleanup; CHANGE_PLAN.md D-4 requires removal; PB-1 recorded, accepted at the diff gate | B-10 detached editors | — | Record D-4 amendment in CHANGE_PLAN.md or add age-based cleanup; no action needed if the gate acceptance stands | NO |
 
 NOT READY

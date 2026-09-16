@@ -62,13 +62,18 @@ use:
 - run independent commands concurrently rather than one per turn;
 - do not re-read a file you just wrote;
 - read the region of a file you need, not the whole file, once it is large;
-- while iterating, run the narrowest test that covers the change; run the full
-  suite when the slice is complete, not after every edit;
+- while iterating, run the narrowest test that covers the change; leave the
+  approved full verification block to the driver after this stage;
 - when a command floods the terminal, re-run it filtered to the failures
   rather than reading the whole transcript.
 
-Run all applicable checks. Checks that do not contend for the same build
-artifacts or ports should be launched together, not serially:
+Run applicable targeted checks. The driver owns UPDATED_PROJECT_PLAN.md's full
+verification block and runs it once immediately after this stage. Do not run a
+full-project regression command or an equivalent loop over every suite here
+unless a narrower target cannot establish a specific acceptance criterion.
+Record the full block as `DRIVER PENDING`; the subsequent green check is the
+authoritative result. Checks that do not contend for the same build artifacts
+or ports should be launched together, not serially:
 
 - formatting;
 - compilation;

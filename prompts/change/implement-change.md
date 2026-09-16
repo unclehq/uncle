@@ -96,7 +96,8 @@ Create IMPLEMENTATION_NOTES.md containing:
 - deviations
 - unresolved concerns
 
-Run all applicable checks and create CHANGE_TEST_REPORT.md containing:
+Run the targeted checks needed to demonstrate the changed behavior and create
+CHANGE_TEST_REPORT.md containing:
 
 - baseline result
 - targeted tests
@@ -115,13 +116,21 @@ Run all applicable checks and create CHANGE_TEST_REPORT.md containing:
 - pre-existing failures
 - untested areas
 
+The driver owns the full regression command block and runs it once immediately
+after this stage. Do not run `scripts/run-shell-tests.sh`, an equivalent loop
+over every test suite, or another full-project regression command here unless a
+specific acceptance criterion cannot be established by a narrower target. Mark
+the full-suite row `DRIVER PENDING` in CHANGE_TEST_REPORT.md. The driver's green
+check and implementation review provide the authoritative result. After a
+targeted failure, rerun only that target and its dependents.
+
 ## Context economy
 
 Everything a tool returns stays in context and is re-sent on every later turn.
 You run the most commands of any stage, so this is where it costs most.
 
-- Run the narrowest test target that covers what you just changed. Run the
-  full suite once, at the end, not after every step.
+- Run the narrowest test target that covers what you just changed. Leave the
+  full regression block to the driver; do not run it from this stage.
 - Use the quietest flag that still reports failures. Never paste passing
   output into the report.
 - Pipe unbounded output through `tail` or a summary flag.

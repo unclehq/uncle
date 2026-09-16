@@ -1092,6 +1092,35 @@ expect_state WAIT_IMPLEMENT_APPROVAL
 expect_no_file '.uncle/workflow/implement-step-done'
 expect_in_file '.uncle/workflow/logs/implementation-step-1.gated-prompt.md' 'Compact output budgets'
 
+new_case change-stepwise-auto-for-large-plan
+green_baseline 0 'bash app/test.sh'
+cat > "$REPO/CHANGE_PLAN.md" <<'EOF'
+# Change Plan
+
+## 20. Implementation sequence
+
+1. First step.
+2. Second step.
+3. Third step.
+4. Final step.
+
+## Change-impact table
+
+| Component | Planned change | Test coverage |
+|---|---|---|
+| `app/main.sh` | New greeting | `app/test.sh` |
+EOF
+hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+set_state IMPLEMENT
+run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
+expect_status 0
+expect_out 'Implementation step 1/4'
+expect_out 'Implementation step 4/4'
+expect_state WAIT_IMPLEMENT_APPROVAL
+expect_no_file '.uncle/workflow/implement-step-done'
+expect_in_file '.uncle/workflow/logs/implementation-step-4.gated-prompt.md' \
+    'driver runs the full regression block once'
+
 # Overages preserve the producing stage output without a separate model call.
 new_stagegate_case sg-compact-final-audit
 stagegate_agent

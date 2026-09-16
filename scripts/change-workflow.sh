@@ -196,9 +196,27 @@ SESSION_REUSE="${WORKFLOW_SESSION_REUSE:-0}"
 # spec are re-read per step, so the fixed part is paid N times while the
 # growing part is paid once per step instead of once per run.
 #
-# Off by default: it changes how the most consequential stage runs, and a step
-# boundary in the wrong place costs coherence, which is worth more than tokens.
-STEPWISE_IMPLEMENT="${WORKFLOW_STEPWISE_IMPLEMENT:-0}"
+# Auto mode uses the approved plan's own sequence only when it is detailed
+# enough to provide safe handoff boundaries. Small changes keep one context;
+# larger changes stop carrying every tool result through the entire stage.
+# Set 0 to force one context or 1 to force one invocation per plan step.
+STEPWISE_IMPLEMENT="${WORKFLOW_STEPWISE_IMPLEMENT:-auto}"
+
+stepwise_implementation_enabled() {
+    case "$STEPWISE_IMPLEMENT" in
+        1|true|yes|on) return 0 ;;
+        0|false|no|off) return 1 ;;
+        auto)
+            local count
+            count="$(plan_steps CHANGE_PLAN.md 2>/dev/null | grep -c . || true)"
+            [[ "${count:-0}" -ge 4 ]]
+            ;;
+        *)
+            echo "Invalid WORKFLOW_STEPWISE_IMPLEMENT: $STEPWISE_IMPLEMENT (expected auto, 0, or 1)" >&2
+            return 1
+            ;;
+    esac
+}
 
 # Write the Codex verification checklist concurrently with implementation.
 # Set to 0 to fall back to the serial single-shot checklist stage.
@@ -1193,10 +1211,15 @@ run_stepwise_implementation() {
         return 0
     fi
 
-    # Split the single stage's caps across the steps rather than multiplying
-    # them: the point is to spend fewer tokens, not to authorise more.
-    local turns=$(( 200 / total ))
-    [[ "$turns" -lt 40 ]] && turns=40
+    # Split the single stage's cap across the steps rather than multiplying it.
+    # Reserve more room for the last step because it reconciles acceptance rows
+    # and reports; all earlier contexts get an even share of the remainder.
+    local final_turns=50 turns=50 step_turns
+    if [[ "$total" -gt 1 ]]; then
+        turns=$(( 150 / (total - 1) ))
+        [[ "$turns" -lt 8 ]] && turns=8
+        [[ "$turns" -gt 50 ]] && turns=50
+    fi
 
     local completed=0
     if [[ -s "$done_file" ]]; then
@@ -1229,10 +1252,11 @@ run_stepwise_implementation() {
             echo "covers this step."
             if [[ "$i" -eq "$total" ]]; then
                 echo
-                echo "This is the final step. After it, run the full gate from"
-                echo "CHANGE_PLAN.md's automated-test strategy and write"
+                echo "This is the final step. After it, run the remaining"
+                echo "targeted checks and write"
                 echo "CHANGE_TEST_REPORT.md covering the whole change, not only"
-                echo "this step."
+                echo "this step. The driver runs the full regression block once"
+                echo "after this invocation; do not run that block here."
             else
                 echo
                 echo "Do not run the full suite; the final step does that once."
@@ -1242,8 +1266,10 @@ run_stepwise_implementation() {
         echo
         echo "Implementation step $i/$total: ${step:0:70}"
         plan_assess || return $?
+        step_turns="$turns"
+        [[ "$i" -eq "$total" ]] && step_turns="$final_turns"
         run_claude "$prompt" "implementation-step-$i" \
-            "$MODEL_IMPLEMENT" "" "$turns" "$BUDGET_IMPLEMENT"
+            "$MODEL_IMPLEMENT" "" "$step_turns" "$BUDGET_IMPLEMENT"
 
         check_document_budget IMPLEMENTATION_NOTES.md || exit 1
         if [[ "$i" -eq "$total" ]]; then
@@ -2089,7 +2115,7 @@ while true; do
                 echo 'Verification-only resume finished; checking delivery.'
             elif [[ "$(cat "$STATE_DIR/implementation-completion-repair" 2>/dev/null || true)" == "$(hash_file CHANGE_PLAN.md)" ]]; then
                 echo 'Implementation remains incomplete; automatic repair already attempted for this plan.'
-            elif [[ "$STEPWISE_IMPLEMENT" == "1" ]] && { ! plan_executability_enabled || ! grep -q '"verdict": "DECISION"' "$PLAN_ASSESS_DIR/assessment.json"; }; then
+            elif stepwise_implementation_enabled && { ! plan_executability_enabled || ! grep -q '"verdict": "DECISION"' "$PLAN_ASSESS_DIR/assessment.json"; }; then
                 step_status=0
                 envelope_guard_begin
                 run_stepwise_implementation prompts/change/implement-change.md || step_status=$?

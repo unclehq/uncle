@@ -78,5 +78,7 @@ class UsageTests(unittest.TestCase):
             self.assertIn('Estimated USD',report)
             self.assertIn('Token coverage',report)
             self.assertIn('0.010000',report)
+            self.assertIn('## Model API Continuation',report)
+            self.assertIn('not independent user turns',report)
 
 if __name__=='__main__': unittest.main()

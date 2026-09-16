@@ -246,6 +246,7 @@ def render(directory):
              'Times overlap across stages, subprocesses, and parallel work; do not add categories together.',
              'Sampled process spans are approximate observed lifetimes. Short processes may be missed; CPU is unavailable on Windows.',
              'Checklist times require explicit timer commands; missing timers mean unavailable, not zero or passed. Tool times are observed event intervals, not isolated CPU time.',
+             'Model usage spans are runner-reported API continuations, commonly one continuation after each tool result. They are not independent user turns. Cache-read totals sum the reused conversation prefix across continuations, not unique bytes reread from disk.',
              'Runner event gaps include any work or wait between received events; they do not prove API latency or model reasoning time. The 20 largest gaps per attempt are retained.',
              'Unfinished processes have no completion event; their displayed span ends at report time or run termination, not a confirmed process exit.',
              'Stage durations include waiting for people and tools. Model, approval, and check rows below include only this invocation.', '']
@@ -275,7 +276,8 @@ def render(directory):
             total[0] += 1; total[1] += row['elapsed_seconds']
             if row.get('cpu_seconds') is not None:
                 total[2] += row['cpu_seconds']; total[3] += 1
-        lines += [f'## {kind.replace("_", " ").title()}', '', '| Name | State | Spans | Seconds | CPU seconds | Input | Output | Cache read | Cache write | Total tokens | Token coverage | Reported USD | Estimated USD | Cost coverage |', '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|']
+        title = 'Model API Continuation' if kind == 'model_usage' else kind.replace('_', ' ').title()
+        lines += [f'## {title}', '', '| Name | State | Spans | Seconds | CPU seconds | Input | Output | Cache read | Cache write | Total tokens | Token coverage | Reported USD | Estimated USD | Cost coverage |', '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|']
         for (name, state), (count, elapsed, cpu, known) in sorted(totals.items(), key=lambda item: item[1][1], reverse=True):
             usage = combine(usage_rows[(name, state)])
             name = name.replace('|', '&#124;').replace('\n', ' ')

@@ -13,6 +13,9 @@ GATES_BASENAME="GATES.md"
 # This file's own directory, for helpers shipped beside it. $ROOT is the
 # installed uncle root, which is not the same place in a dev checkout.
 GATES_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# gates.sh calls document_layout_prompt, so it sources its own dependency
+# rather than relying on every caller to have done it first.
+. "$GATES_LIB_DIR/document-layout.sh"
 # Optional: a standalone copy of this file (scripts/codex-*.sh fixtures)
 # has no supervision hooks and needs none.
 if [[ -f "$GATES_LIB_DIR/supervision.sh" ]]; then
@@ -249,6 +252,7 @@ TIMING
             load_gates
         fi
         if [[ "$is_doc" == "1" ]]; then
+            document_layout_prompt "$log_name" || return 1
             document_budget_prompt "$log_name" || return 1
         fi
         case "$log_name" in

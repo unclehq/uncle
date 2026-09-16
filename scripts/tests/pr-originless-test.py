@@ -501,5 +501,76 @@ class OriginlessHandoffTests(HandoffFixture):
         self.assertEqual(len(self.creates()), 1)
 
 
+class EarlyBranchHandoffTests(HandoffFixture):
+    """Issue 60 T-8: a journal started before the first stage reaches the same handoff."""
+
+    def start(self):
+        self.git('remote', 'set-head', 'origin', 'main')
+        self.ok(self.engine('start'))
+        j = self.journal()
+        self.assertEqual((j['version'], j['phase'], j['early_ref']), (2, 'started', True))
+        self.assertEqual(self.git('rev-parse', 'refs/heads/' + j['head_branch']), self.original)
+        return j
+
+    def test_t8_started_identity_reaches_freeze_bind_and_handoff(self):
+        started = self.start()
+        self.freeze()
+        j = self.journal()
+        self.assertEqual((j['version'], j['phase'], j['owner'], j['head_branch'], j['early_ref']),
+                         (2, 'bound', started['owner'], started['head_branch'], True))
+        self.assertEqual(self.git('rev-list', '--count', '--all'), '1')
+        result = self.publish()
+        self.ok(result)
+        j = self.journal()
+        self.assertEqual((j['phase'], j['head_branch']), ('created', started['head_branch']))
+        self.assertEqual(self.git('branch', '--show-current'), started['head_branch'])
+        self.assertEqual(self.git('rev-parse', 'HEAD'), j['intended_head'])
+        self.assertEqual(self.git('rev-parse', 'HEAD^'), self.original)
+        self.assertEqual(self.git('rev-parse', 'HEAD^{tree}'), j['commit_tree'])
+        self.assertEqual([l for l in self.git_log() if l.startswith('push ')],
+                         ['push -- origin ' + j['intended_head'] + ':refs/heads/' + started['head_branch']])
+        remote_sha = subprocess.check_output([REAL_GIT, '--git-dir', str(self.bare), 'rev-parse', started['head_branch']]).decode().strip()
+        self.assertEqual(remote_sha, j['intended_head'])
+        # The ref was claimed once, at start; handoff advanced it instead of creating it.
+        creations = [l for l in self.git_log() if l.startswith('update-ref refs/heads/' + started['head_branch'] + ' ')]
+        self.assertEqual(creations, ['update-ref refs/heads/' + started['head_branch'] + ' ' + self.original + ' ' + '0' * 40])
+        create = self.creates()
+        self.assertEqual(len(create), 1)
+        self.assertEqual(create[0][create[0].index('--head') + 1], 'owner:' + started['head_branch'])
+
+    def test_t8_started_identity_survives_a_rerun_before_audit(self):
+        started = self.start()
+        self.ok(self.engine('start'))
+        self.assertEqual(self.journal(), started)
+        self.freeze()
+        self.ok(self.engine('start'))  # a driver rerun after the audit leaves the bound journal alone
+        self.assertEqual(self.journal()['phase'], 'bound')
+        self.assertEqual(self.journal()['owner'], started['owner'])
+
+    def test_t8_missing_early_ref_pends_instead_of_recreating(self):
+        started = self.start()
+        self.freeze()
+        self.git('update-ref', '-d', 'refs/heads/' + started['head_branch'], self.original)
+        result = self.publish()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('PR pending: Pre-created branch is missing; rerun FINAL_AUDIT.', result.stdout)
+        self.assertEqual(self.creates(), [])
+        self.assertFalse([l for l in self.git_log() if l.startswith('push ')])
+        self.assertEqual(self.git('branch', '--show-current'), 'main')
+
+    def test_t8_moved_early_ref_defers_naming_at_freeze(self):
+        started = self.start()
+        other = self.git('commit-tree', '--no-gpg-sign', self.git('rev-parse', 'HEAD^{tree}'), '-p', self.original, '-m', 'other')
+        self.git('update-ref', 'refs/heads/' + started['head_branch'], other, self.original)
+        self.freeze()
+        j = self.journal()
+        self.assertEqual((j['version'], j['phase']), (1, 'bound'))
+        self.assertNotIn('early_ref', j)
+        self.assertNotEqual(j['owner'], started['owner'])
+        self.ok(self.publish())
+        self.assertEqual(self.journal()['head_branch'], 'uncle/chat-request-' + j['owner'][:12])
+        self.assertEqual(self.git('rev-parse', 'refs/heads/' + started['head_branch']), other)
+
+
 if __name__ == '__main__':
     unittest.main()

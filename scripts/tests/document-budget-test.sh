@@ -58,8 +58,14 @@ PY
 [[ $(requirements_document_max_bytes) == 40000 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Every document stage (including step handoffs and background checklists)
 # advertises exactly the limits enforced for each named artifact.
+#
+# Asserted under enforcement, because that is the mode the two-pass limit
+# belongs to. In advisory mode baseline and the compact-first stages are held to
+# ZERO size-only passes instead, and that policy deliberately replaces the
+# two-pass text rather than joining it; asserting both would require the prompt
+# to contradict itself. The advisory policies are checked separately below.
 for stage in $DOC_STAGES implementation-step-2; do
-    budget_prompt="$(document_budget_prompt "$stage")"
+    budget_prompt="$(WORKFLOW_DOC_BUDGET_ENFORCE=1 document_budget_prompt "$stage")"
     for rule in 'at most TWO passes total' 'including a "final trim"' \
                 'those do not reset it' 'After pass 2, stop size-only edits' \
                 'finish without any size-only' 'measure all authored artifacts in one tool call' \
@@ -77,6 +83,17 @@ for stage in $DOC_STAGES implementation-step-2; do
         if WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_LINES=1 check_document_budget "$file" 2>/dev/null; then exit 1; fi
         [[ $(cat "$file") == $'abc\ndef' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     done < <(stage_documents "$stage")
+done
+
+# Advisory mode: every document stage must still state a compaction policy, and
+# never merely fall silent about it. Zero-pass and two-pass are both valid; an
+# empty policy is not.
+for stage in $DOC_STAGES implementation-step-2; do
+    advisory_prompt="$(document_budget_prompt "$stage")"
+    case "$advisory_prompt" in
+        *'do ZERO size-only compaction passes'*|*'at most TWO passes total'*) ;;
+        *) echo "No compaction policy for $stage in advisory mode" >&2; exit 1 ;;
+    esac
 done
 [[ $(document_budget PROJECT_PLAN.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 [[ $(document_budget IMPLEMENTATION_NOTES.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
@@ -133,7 +150,11 @@ grep -qF 'FINAL_AUDIT.md: at most 7 UTF-8 bytes' "$(cat resolved)"
 grep -q 'Reviewer output' "$(cat resolved)"
 if WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=invalid gated_prompt prompt.md final-audit 2>/dev/null; then exit 1; fi
 # Draft targets use the effective override, including leading-zero integers.
-WORKFLOW_DOC_MAX_BYTES=01000 gated_prompt prompt.md updated-plan > resolved
+# updated-plan is a compact-first stage: in advisory mode it is held to ZERO
+# size-only passes and never reaches the BUDGET block, so assert the numeric
+# limits under enforcement, where that block is what the agent is given.
+WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_BYTES=01000 \
+    gated_prompt prompt.md updated-plan > resolved
 grep -qF 'Draft toward 750 bytes' "$(cat resolved)"
 grep -qF 'supersede any fixed byte target' "$(cat resolved)"
 # No installed/local output rules must not disable prompt budgets.
@@ -168,7 +189,9 @@ rm -f advanced
 [[ -e advanced ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Standalone reviewer entry points also advertise and enforce the same cap.
 mkdir -p standalone/scripts/lib standalone/.uncle/workflow/approvals
-cp "$ROOT/scripts/lib/gates.sh" "$ROOT/scripts/lib/compact-review.py" "$ROOT/scripts/lib/repair-acceptance.py" standalone/scripts/lib/
+# gates.sh sources document-layout.sh, so a standalone copy needs both.
+cp "$ROOT/scripts/lib/gates.sh" "$ROOT/scripts/lib/document-layout.sh" \
+   "$ROOT/scripts/lib/compact-review.py" "$ROOT/scripts/lib/repair-acceptance.py" standalone/scripts/lib/
 cp "$ROOT/scripts/codex-review-plan.sh" "$ROOT/scripts/codex-create-checklist.sh" standalone/scripts/
 cat > standalone/reviewer <<'STUB'
 #!/usr/bin/env bash

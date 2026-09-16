@@ -1102,7 +1102,11 @@ cat > "$REPO/CHANGE_PLAN.md" <<'EOF'
 1. First step.
 2. Second step.
 3. Third step.
-4. Final step.
+4. Fourth step.
+5. Fifth step.
+6. Sixth step.
+7. Seventh step.
+8. Final step.
 
 ## Change-impact table
 
@@ -1114,11 +1118,11 @@ hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.
 set_state IMPLEMENT
 run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
-expect_out 'Implementation step 1/4'
-expect_out 'Implementation step 4/4'
+expect_out 'Implementation step 1/8'
+expect_out 'Implementation step 8/8'
 expect_state WAIT_IMPLEMENT_APPROVAL
 expect_no_file '.uncle/workflow/implement-step-done'
-expect_in_file '.uncle/workflow/logs/implementation-step-4.gated-prompt.md' \
+expect_in_file '.uncle/workflow/logs/implementation-step-8.gated-prompt.md' \
     'driver runs the full regression block once'
 
 # Overages preserve the producing stage output without a separate model call.

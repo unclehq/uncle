@@ -368,7 +368,7 @@ under "Configuration". The two that decide which external CLI is spawned:
 
 | Variable | Default | Used by |
 |---|---|---|
-| `WORKFLOW_STEPWISE_IMPLEMENT` | `0` | `change-workflow.sh` |
+| `WORKFLOW_STEPWISE_IMPLEMENT` | `auto` | `change-workflow.sh` |
 | `WORKFLOW_DIFF_GATE` | `1` | both drivers |
 | `WORKFLOW_GREEN_CHECK` | `1` | both drivers |
 | `WORKFLOW_AUDIT_GATE` | `1` | both drivers |
@@ -470,18 +470,20 @@ A plan with no change-impact table is a warning, not a failure: the scope is
 unknown rather than empty, and failing every file would punish plan formatting
 rather than scope creep.
 
-`WORKFLOW_STEPWISE_IMPLEMENT=1` runs implementation as one invocation per step
-of the sequence, each starting cold, instead of one run of up to 200 turns.
-Nothing is evicted from a context, so cost is turns x context and the last
-turns of a long run are the most expensive tokens in the pipeline. Splitting
-resets the accumulated tool output at each step; the plan is re-read per step,
-so the fixed part is paid N times while the growing part is paid once per step.
-`IMPLEMENTATION_NOTES.md` and the code on disk are the handoff between steps.
+`WORKFLOW_STEPWISE_IMPLEMENT=auto` runs implementation as one invocation per
+step of the sequence when the approved plan has at least eight implementation
+steps. Each invocation starts cold instead of sharing one run of up to 200
+turns. Nothing is evicted from a context, so cost is turns x context and the
+last turns of a long run are the most expensive tokens in the pipeline.
+Splitting resets the accumulated tool output at each step; the plan is re-read
+per step, so the fixed part is paid N times while the growing part is paid once
+per step. `IMPLEMENTATION_NOTES.md` and the code on disk are the handoff between
+steps.
 
 The turn cap is divided across the steps rather than multiplied, and
-`.uncle/workflow/implement-step-done` makes a partial run resumable. It is off by
-default: it changes how the most consequential stage runs, and a step boundary
-in the wrong place costs coherence, which is worth more than tokens.
+`.uncle/workflow/implement-step-done` makes a partial run resumable. Set the
+variable to `1` to force stepwise execution or `0` to keep one context. A step
+boundary in the wrong place costs coherence, which is worth more than tokens.
 
 Covered by `scripts/tests/plan-scope-test.sh`.
 

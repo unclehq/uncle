@@ -209,7 +209,7 @@ stepwise_implementation_enabled() {
         auto)
             local count
             count="$(plan_steps CHANGE_PLAN.md 2>/dev/null | grep -c . || true)"
-            [[ "${count:-0}" -ge 4 ]]
+            [[ "${count:-0}" -ge 8 ]]
             ;;
         *)
             echo "Invalid WORKFLOW_STEPWISE_IMPLEMENT: $STEPWISE_IMPLEMENT (expected auto, 0, or 1)" >&2

@@ -1702,6 +1702,12 @@ implementation_complete() {
     return 0
 }
 
+# Claim the PR head branch as a local ref before any stage runs (Issue 60).
+# Only a ref is created, never a commit or push; the engine skips unborn or
+# detached HEAD and no-remote checkouts, and a name collision stops the build
+# here, before the first stage.
+change_pr_engine start || exit 1
+
 while true; do
     python3 "$ROOT/scripts/lib/rerun_stage.py" change || exit 1
     state="$(get_state)"

@@ -42,7 +42,7 @@ import sys
 # MC-001, and anything shaped like it: a prefix, a hyphen, a number. The change
 # pipeline standardizes on MC; the new-application checklist prompt does not
 # name a format, so do not require one.
-ID = r"[A-Z][A-Z0-9]{0,7}-\d{1,4}"
+ID = r"[A-Z][A-Z0-9]{0,7}(?:-[A-Z][A-Z0-9]{0,7})*-\d{1,4}"
 
 # A check begins at a heading that leads with its ID, or at an explicit
 # "Check ID:" field. Both layouts appear in practice, and a bare ID token is

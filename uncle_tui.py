@@ -3952,7 +3952,7 @@ class UncleTUI:
         except OSError:
             pass
         auto = getattr(self, 'misc', {}).get('auto_mode') == 'true'
-        project_status = project + '  ·  ' + ('Auto mode on' if auto else 'Manual approvals')
+        project_status = project + '  ·  ' + ('mode(auto)' if auto else 'mode(manual)')
         if build:
             model_status = 'Tests: ' + self.test_execution_status() + '  ·  ' + model_status
         status_row = composer_row + extra + (2 if build or compact else 3)

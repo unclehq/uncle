@@ -103,10 +103,17 @@ cmp expected.md ADVERSARIAL_REVIEW.md
 [[ "$(acceptance_result ADVERSARIAL_REVIEW.md R-1)" == REPAIR ]] \
     || { echo 'FAIL: repaired failing report must route to repair'; exit 1; }
 [[ -n "$(find .uncle/workflow/logs -name '*before-table-repair-*.md')" ]]
-document_budget_prompt adversarial-review > budget-prompt
+# adversarial-review is a compact-first stage: in advisory mode it is held to
+# ZERO size-only passes and the two-pass text is deliberately replaced, not
+# added to. Assert the two-pass limit where it applies, under enforcement.
+WORKFLOW_DOC_BUDGET_ENFORCE=1 document_budget_prompt adversarial-review > budget-prompt
 grep -q 'at most TWO passes total during this stage' budget-prompt
 grep -q 'same model and context' budget-prompt
 grep -q 'finish without any size-only' budget-prompt
 grep -q 'After pass 2, stop size-only edits' budget-prompt
+# ...and that advisory mode states the stricter policy rather than nothing.
+document_budget_prompt adversarial-review > advisory-prompt
+grep -q 'do ZERO size-only compaction passes' advisory-prompt
+grep -q 'Never return a filename, progress note, or summary in place of the document.' advisory-prompt
 [[ ! -e "$CALLS" ]]
 echo 'review-compaction-test: passed'

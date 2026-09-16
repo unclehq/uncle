@@ -117,6 +117,12 @@ class NotReadyError(ValueError):
     pass
 
 
+# Raised only by `start`, which runs before any stage: the message names a
+# branch problem, not a pending PR.
+class StartError(ValueError):
+    pass
+
+
 ATTESTATION = None
 
 
@@ -253,9 +259,15 @@ def load():
     required = {'version', 'owner', 'origin', 'audit_hash', 'reviewed_tree', 'commit_tree',
                 'original_head', 'intended_head', 'original_branch', 'head_branch',
                 'base_repo', 'head_repo', 'base_branch', 'phase', 'url', 'number', 'verdict_run'}
-    if (not isinstance(j, dict) or not required <= j.keys() or j['version'] != 1
+    phases = ('auditing', 'bound', 'prepared', 'published', 'creating', 'created', 'unknown')
+    if isinstance(j, dict) and j.get('version') == 2:
+        # Version 2 (Issue 60): the journal may begin at `start`, before any
+        # stage, and records whether the head ref was claimed then.
+        required = required | {'early_ref'}
+        phases += ('started',)
+    if (not isinstance(j, dict) or not required <= j.keys() or j['version'] not in (1, 2)
             or not isinstance(j['owner'], str) or not re.fullmatch(r'[0-9a-f]{32}', j['owner'])
-            or j['phase'] not in ('auditing', 'bound', 'prepared', 'published', 'creating', 'created', 'unknown')):
+            or not isinstance(j.get('early_ref', False), bool) or j['phase'] not in phases):
         raise ValueError('Missing/corrupt PR binding; rerun FINAL_AUDIT.')
     return j
 
@@ -300,7 +312,14 @@ def validate(j, ready=True):
         raise ValueError('Published HEAD changed; rerun FINAL_AUDIT.')
 
 
-def manual_signed_commit(j):
+def signing_reason(reason):
+    # One decoded, whitespace-collapsed line so the prompt stays a prompt.
+    if isinstance(reason, bytes):
+        reason = reason.decode('utf-8', 'replace')
+    return ' '.join(str(reason).split())[:240]
+
+
+def manual_signed_commit(j, reason=None):
     import shlex
     # Stage the exact reviewed tree, including untracked files, without
     # reapplying clean filters or changing working files. Only the user runs it.
@@ -311,10 +330,13 @@ def manual_signed_commit(j):
         block = json.dumps(command) + ' '
     else:
         block = 'In another terminal, open this project, review the audited changes, then run:\n' + command + '\n'
+    # The classifier in ask() keys on the leading sentence, so the reason
+    # follows it rather than replacing it.
+    explanation = 'Automatic unsigned commit failed: ' + signing_reason(reason) + '. ' if reason else ''
     candidate = head()
     while candidate == j['original_head']:
         prefix = 'Commit signing needs your help. ' if j.get('requires_signature', True) else 'Commit needs your help. '
-        ask(prefix + block +
+        ask(prefix + explanation + block +
             'Return here and press ENTER (OK) when finished: ')
         candidate = head()
         if candidate == j['original_head']:
@@ -383,7 +405,7 @@ def prepare_commit(j):
         return
     j['manual_signing'] = True
     save(j)  # Record the pending user action before displaying it.
-    manual_signed_commit(j)
+    manual_signed_commit(j, reason)
 
 
 SIGNING_ERROR = re.compile(r'(?i)sign|gpg|pinentry|ssh-keygen')
@@ -522,6 +544,93 @@ def branch_name(j):
     return label_prefix(j['origin']) + slug(slug_text()) + '-' + j['owner'][:12]
 
 
+COLLISION = 'Intended branch already exists with different content.'
+
+
+def early_ref_oid(j):
+    return git('for-each-ref', '--format=%(objectname)', 'refs/heads/' + j['head_branch'])
+
+
+def claim_ref(j):
+    # The one mutation `start` makes: a local ref at the starting HEAD, created
+    # only if absent (zero old-OID). An existing ref is accepted only at that
+    # OID; anything else is someone's branch and is never moved.
+    if j['head_branch'] == j['original_branch']:
+        return
+    existing = early_ref_oid(j)
+    if existing == j['original_head']:
+        return
+    if existing:
+        raise StartError(COLLISION)
+    git('update-ref', 'refs/heads/' + j['head_branch'], j['original_head'], '0' * 40)
+
+
+def default_branch(remotes):
+    # Only a unique local refs/remotes/<remote>/HEAD identifies the default
+    # branch without GitHub access; anything else defers naming to resolve().
+    found = set()
+    for row in git('for-each-ref', '--format=%(refname)\t%(symref)', 'refs/remotes/').splitlines():
+        name, _, target = row.partition('\t')
+        match = re.fullmatch(r'refs/remotes/([^/]+)/HEAD', name)
+        if match and match.group(1) in remotes and target.startswith('refs/remotes/' + match.group(1) + '/'):
+            found.add(target[len('refs/remotes/' + match.group(1) + '/'):])
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def started_journal():
+    # A `started` journal that still describes this checkout; None otherwise.
+    if not JOURNAL.exists():
+        return None
+    j = load()
+    if j['phase'] != 'started' or j['original_head'] != head() or j['original_branch'] != branch():
+        return None
+    return j
+
+
+def start():
+    try:
+        start_build()
+    except ValueError as error:
+        raise StartError(str(error)) from error
+
+
+def start_build():
+    if git('rev-parse', '--show-prefix'):
+        return
+    if subprocess.run(['git', 'rev-parse', '--verify', '-q', 'HEAD'], stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL).returncode:
+        return  # unborn HEAD: nothing to branch from
+    current_branch = git('branch', '--show-current')
+    remotes = git('remote').splitlines()
+    if not current_branch or not remotes:
+        return  # detached HEAD or no remote: today's path, no journal
+    if JOURNAL.exists():
+        try:
+            j = load()
+        except ValueError:
+            return  # left for the audit, which reports it today
+        if j['phase'] != 'started':
+            return  # an audit or handoff owns this journal
+        if j['original_head'] == head() and j['original_branch'] == current_branch:
+            if j['early_ref']:
+                claim_ref(j)
+            return
+    j = dict(version=2, owner=uuid.uuid4().hex, origin=read(STATE / 'origin'),
+             original_head=head(), original_branch=current_branch, reviewed_tree='',
+             intended_head='', commit_tree='', audit_hash='', verdict_run='',
+             base_repo='', head_repo='', base_branch='', head_branch='',
+             phase='started', url='', number=None, early_ref=False)
+    default = default_branch(remotes)
+    if default is not None:
+        target = current_branch if current_branch != default else branch_name(j)
+        git('check-ref-format', '--branch', target)
+        j.update(head_branch=target, early_ref=True)
+        claim_ref(j)  # a collision leaves no journal behind
+    save(j)
+    if j['early_ref']:
+        print('Branch: ' + j['head_branch'], flush=True)
+
+
 def repo_name(value):
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', value):
         raise ValueError('Unsupported repository identity: ' + value)
@@ -642,7 +751,14 @@ def resolve(j):
         if owner.lower() == base.split('/')[0].lower() or fork.get('owner', {}).get('type') != 'User':
             raise ValueError('Unsupported fork owner for gh --head.')
     target = j['original_branch']
-    if target == base_branch:
+    if j.get('early_ref'):
+        # A started journal owns the head identity (Issue 60). Only the
+        # current-versus-default classification is recomputed: a name bound
+        # before the label lookup or a brief rewrite still publishes.
+        if (target == base_branch) == (j['head_branch'] == target):
+            raise ValueError('Early branch identity conflicts with the base branch; rerun FINAL_AUDIT.')
+        target = j['head_branch']
+    elif target == base_branch:
         target = branch_name(j)
     git('check-ref-format', '--branch', target)
     j.update(base_repo=base, base_branch=base_branch, head_repo=head_repo,
@@ -700,7 +816,11 @@ def record_pr(j, row):
 
 def handoff(j):
     if j.get('manual_signing'):
-        manual_signed_commit(j)
+        if j['intended_head']:
+            manual_signed_commit(j)
+        else:
+            # A pending journal from before automatic commits redetects config.
+            prepare_commit(j)
     validate(j)
     gh('auth', 'status')
     if not j['base_repo']:
@@ -765,10 +885,12 @@ def handoff(j):
         current_branch = branch()
         if current_branch != j['head_branch']:
             # Branch creation precedes switching; a crash resumes the same ref.
-            refs = git('for-each-ref', '--format=%(objectname)', 'refs/heads/' + j['head_branch'])
+            refs = early_ref_oid(j)
             if refs and refs != j['original_head']:
-                raise ValueError('Intended branch already exists with different content.')
+                raise ValueError(COLLISION)
             if not refs:
+                if j.get('early_ref'):
+                    raise ValueError('Pre-created branch is missing; rerun FINAL_AUDIT.')
                 git('update-ref', 'refs/heads/' + j['head_branch'], j['original_head'], '0' * 40)
             git('symbolic-ref', 'HEAD', 'refs/heads/' + j['head_branch'])
         if head() == j['original_head']:
@@ -841,16 +963,26 @@ def main():
     action = sys.argv[1]
     if git('rev-parse', '--show-prefix'):
         raise ValueError('PR binding requires the Git worktree root.')
-    if action == 'freeze':
+    if action == 'start':
+        start()
+    elif action == 'freeze':
+        started = None
         if JOURNAL.exists():
             previous = load()
             if previous['phase'] in ('creating', 'unknown'):
                 raise ValueError('Unresolved PR outcome; reconcile existing journal before a fresh audit.')
+            started = started_journal()
         j = dict(version=1, owner=uuid.uuid4().hex, origin=read(STATE / 'origin'),
                  original_head=head(), original_branch=branch(), reviewed_tree=snapshot(),
                  intended_head='', commit_tree='', audit_hash='', verdict_run='',
                  base_repo='', head_repo='', base_branch='', head_branch='',
                  phase='auditing', url='', number=None)
+        if started and (not started['early_ref'] or started['head_branch'] == started['original_branch']
+                        or early_ref_oid(started) == started['original_head']):
+            # The audit binds the identity claimed at start. A ref that was
+            # moved or deleted since is left alone; naming defers to resolve().
+            j.update(version=2, owner=started['owner'], head_branch=started['head_branch'],
+                     early_ref=started['early_ref'])
         if not j['origin']:
             j['audit_remotes'] = remote_configuration()
         save(j)
@@ -905,6 +1037,9 @@ try:
 except NotReadyError as error:
     print('PR pending: ' + str(error), flush=True)
     sys.exit(3)
+except StartError as error:
+    print('Branch setup failed: ' + str(error), flush=True)
+    sys.exit(1)
 except (OSError, ValueError, KeyError, TypeError, IndexError, subprocess.SubprocessError) as error:
     if ATTESTATION is not None and isinstance(error, ATTESTATION.AttestationError):
         # Recoverable like NotReady (exit 3) but not overridable: the

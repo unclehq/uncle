@@ -149,3 +149,61 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
             ;;
     esac
 fi
+
+# worktree_auto — put this run in its own worktree, and print where.
+#
+# One checkout holds one branch and one driver lock, so two pieces of work in
+# one directory cannot run at the same time. Work arrives from chat, from an
+# issue, from a CHANGE_REQUEST.md someone wrote by hand, and a second piece can
+# arrive while the first is still running -- none of which the driver gets to
+# predict. So the isolation is not a flag the operator remembers to pass; every
+# run gets its own directory.
+#
+# Prints the worktree path on success. Prints nothing and returns 0 when a
+# worktree is not wanted or not possible: no git, no brief to name one from,
+# already inside a run's worktree, or WORKFLOW_WORKTREE=0. The run then
+# proceeds where it is, exactly as before.
+worktree_auto() {
+    local root="${1:-$PWD}" branch base dir n=2
+
+    [[ "${WORKFLOW_WORKTREE:-1}" == "1" ]] || return 0
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+    # A worktree this function already made, or one the operator made: either
+    # way the run is isolated and moving again would be wrong.
+    [[ -f "$root/.uncle/workflow/worktree-owned" ]] && return 0
+    [[ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]] && return 0
+
+    branch="$(cd "$root" && ROOT="$ROOT" bash -c \
+        '. "$ROOT/scripts/lib/change-pr.sh"; change_pr_engine run-branch-name' 2>/dev/null | tail -n 1)"
+    [[ -n "$branch" && "$branch" != */ ]] || return 0
+
+    # A name already in use means a previous run for the same brief. Number it
+    # rather than colliding: the operator asked for more work, not for the old
+    # work to be disturbed.
+    base="$branch"
+    while git show-ref --verify --quiet "refs/heads/$branch" \
+          || [[ -e "$(dirname "$root")/$(basename "$root")-$(basename "$branch")" ]]; do
+        branch="$base-$n"
+        n=$((n + 1))
+        [[ "$n" -gt 64 ]] && return 0
+    done
+    dir="$(dirname "$root")/$(basename "$root")-$(basename "$branch")"
+
+    worktree_create "$dir" "$branch" >&2 || return 0
+    mkdir -p "$dir/.uncle/workflow" && : > "$dir/.uncle/workflow/worktree-owned"
+
+    # `git worktree add` checks out HEAD, and the brief is usually not in HEAD:
+    # chat writes it, or a person does, and nobody commits it before starting.
+    # Without this the run would begin in a directory with nothing to build.
+    local name
+    for name in CHANGE_REQUEST.md REQUIREMENTS.md; do
+        [[ -s "$root/$name" ]] || continue
+        cp -p "$root/$name" "$dir/$name" || {
+            echo "Could not copy $name into $dir; running in place." >&2
+            rm -rf "$dir/.uncle"
+            git worktree remove --force "$dir" >/dev/null 2>&1 || true
+            return 0
+        }
+    done
+    printf '%s\n' "$dir"
+}

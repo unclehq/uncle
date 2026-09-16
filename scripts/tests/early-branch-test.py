@@ -20,7 +20,16 @@ DRIVER = ROOT / 'scripts/change-workflow.sh'
 SOURCE = LIB.read_text().split("<<'PY'", 1)[1].split('\n', 1)[1].split('\nPY\n', 1)[0]
 REAL_GIT = shutil.which('git')
 COLLISION = 'Intended branch already exists with different content.'
-MUTATING = ('commit', 'commit-tree', 'push', 'tag', 'checkout', 'switch', 'reset', 'symbolic-ref', 'remote add')
+MUTATING = ('commit', 'commit-tree', 'push', 'tag', 'checkout', 'switch', 'reset', 'remote add')
+# `symbolic-ref --short HEAD` reads the current branch; `symbolic-ref HEAD <ref>`
+# moves it. Matching the bare verb counted every read of the branch name as a
+# mutation, so it is classified by whether a target argument is present.
+
+
+def mutates(line):
+    if line.startswith('symbolic-ref '):
+        return len([a for a in line.split()[1:] if not a.startswith('-')]) > 1
+    return line.startswith(MUTATING)
 
 GIT_SHIM = '''#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$GIT_CALLS"
@@ -141,7 +150,7 @@ class EarlyBranchFixture(unittest.TestCase):
         return path.read_text().splitlines() if path.exists() else []
 
     def assert_no_mutation(self, log):
-        self.assertFalse([l for l in log if l.startswith(MUTATING)], log)
+        self.assertFalse([l for l in log if mutates(l)], log)
 
     def seen(self):
         return self.marker.read_text().splitlines()
@@ -153,8 +162,13 @@ class StartTests(EarlyBranchFixture):
         result = self.driver()
         self.assertEqual(result.returncode, 7, result.stdout)
         j = self.journal()
-        self.assertEqual((j['version'], j['phase'], j['early_ref'], j['original_head'], j['original_branch']),
-                         (2, 'started', True, self.original, 'main'))
+        # The run starts on its own branch, so original_branch names that; the
+        # branch the checkout came from is kept separately, and is what a repair
+        # and a deferred naming both fall back to.
+        self.assertEqual((j['version'], j['phase'], j['early_ref'], j['original_head']),
+                         (2, 'started', True, self.original))
+        self.assertEqual(j['original_branch'], j['head_branch'])
+        self.assertEqual(j['base_checkout_branch'], 'main')
         self.assertEqual(j['head_branch'], 'uncle/early-branch-demo-' + j['owner'][:12])
         self.assertIn('Branch: ' + j['head_branch'], result.stdout)
         # The stub stage saw the ref at the starting HEAD, on the starting branch.
@@ -162,7 +176,9 @@ class StartTests(EarlyBranchFixture):
         self.assertIn('refs/heads/' + j['head_branch'] + ' ' + self.original, seen)
         self.assertEqual(seen[-1], self.original)
         self.assertLess(result.stdout.index('Branch: '), result.stdout.index('Launching agent'))
-        self.assertEqual(self.git('branch', '--show-current'), 'main')
+        # The first stage runs on the run's branch, not the default one.
+        self.assertEqual(self.git('branch', '--show-current'), j['head_branch'])
+        self.assertEqual(self.git('rev-parse', 'main'), self.original)
         driver = DRIVER.read_text()
         self.assertLess(driver.index('change_pr_engine start || exit 1'), driver.index('\nwhile true; do\n'))
 
@@ -221,8 +237,19 @@ class StartTests(EarlyBranchFixture):
         self.assertNotIn('PR pending', result.stdout)
         self.assertEqual(self.git('rev-parse', 'refs/heads/' + j['head_branch']), other)
         self.assertEqual(self.journal_path().read_bytes(), journal)
-        self.assertEqual(self.snapshot(), state)
-        self.assert_no_mutation(self.git_log())
+        # Moving the candidate ref drags HEAD with it, because HEAD is now a
+        # symbolic ref to that branch. The run refuses the collision *and*
+        # leaves the checkout back where the operator had it, on the commit
+        # they were on -- not on someone else's commit.
+        self.assertEqual(self.git('branch', '--show-current'), 'main')
+        self.assertEqual(self.git('rev-parse', '--verify', 'HEAD'), self.original)
+        files, index = state[2], state[3]
+        self.assertEqual((self.git('ls-files', '-s'), self.git('status', '--porcelain')), (files, index))
+        self.assertEqual(self.git('rev-list', '--count', '--all'), state[4])
+        # The only write is the repair itself: HEAD back onto the operator's
+        # branch. Nothing was committed, pushed, or checked out.
+        self.assertEqual([l for l in self.git_log() if mutates(l)],
+                         ['symbolic-ref HEAD refs/heads/main'])
         # The driver stops before the first stage.
         result = self.driver()
         self.assertEqual(result.returncode, 1, result.stdout)
@@ -305,13 +332,22 @@ class StartTests(EarlyBranchFixture):
         result = self.start()
         self.assertEqual(result.returncode, 0, result.stdout)
         log = self.git_log()
-        self.assert_no_mutation(log)
         self.assertFalse((self.root / 'gh.log').exists())
-        writes = [l for l in log if l.startswith('update-ref ')]
-        self.assertEqual(writes, ['update-ref refs/heads/' + self.journal()['head_branch'] + ' ' + self.original + ' ' + '0' * 40])
+        # Two writes, both on refs and neither on a file: the ref is created at
+        # the starting commit, then HEAD is pointed at it so no stage writes to
+        # the default branch. Pointing HEAD at a ref that already holds the
+        # current commit changes no file and no index entry.
+        head_branch = self.journal()['head_branch']
+        writes = [l for l in log if l.startswith(('update-ref ', 'symbolic-ref HEAD '))]
+        self.assertEqual(writes, [
+            'update-ref refs/heads/' + head_branch + ' ' + self.original + ' ' + '0' * 40,
+            'symbolic-ref HEAD refs/heads/' + head_branch])
         # An issue-bound start needs no working gh: the label lookup fails and
         # the plain prefix is used.
         self.journal_path().unlink()
+        # HEAD lives on that branch now, so step off it before deleting it --
+        # otherwise this simulates a broken checkout rather than a fresh run.
+        self.git('symbolic-ref', 'HEAD', 'refs/heads/main')
         self.git('update-ref', '-d', writes[0].split()[1], self.original)
         (self.state / 'origin').write_text('owner/repo\t7\tgh\n')
         result = self.start()

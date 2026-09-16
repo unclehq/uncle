@@ -73,6 +73,23 @@ while [[ $# -gt 0 ]]; do
 done
 export UNCLE_UNATTENDED="$UNATTENDED"
 
+# Every run gets its own directory. One checkout holds one branch and one
+# driver lock, so without this a second piece of work cannot start until the
+# first finishes -- and work arrives from chat, from an issue, and from a brief
+# someone wrote by hand, at times the driver does not get to predict. Declining
+# is silent and safe: no git, no brief to name a branch from, already inside a
+# worktree, or WORKFLOW_WORKTREE=0, and the run proceeds where it is.
+# Before the lock, so the lock taken is the new directory's own.
+if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]]; then
+    . "$ROOT/scripts/lib/worktrees.sh"
+    uncle_worktree="$(worktree_auto "$PWD" || true)"
+    if [[ -n "$uncle_worktree" ]]; then
+        echo "Working in $uncle_worktree"
+        cd "$uncle_worktree" || exit 1
+        export UNCLE_PROJECT_ROOT="$PWD"
+    fi
+fi
+
 # Serialize both workflow families before mutable initialization.
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
     driver_args=(bash "${BASH_SOURCE[0]}")

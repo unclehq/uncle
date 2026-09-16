@@ -716,7 +716,11 @@ def claim_ref(j):
     # The one mutation `start` makes: a local ref at the starting HEAD, created
     # only if absent (zero old-OID). An existing ref is accepted only at that
     # OID; anything else is someone's branch and is never moved.
-    if j['head_branch'] == j['original_branch']:
+    # Nothing to claim only when the target is the branch the operator was
+    # already on. original_branch now names this run's own branch once start
+    # has moved HEAD, so comparing against it would skip the claim entirely --
+    # and with it the collision check that protects someone else's ref.
+    if j['head_branch'] == (j.get('base_checkout_branch') or j['original_branch']):
         return
     existing = early_ref_oid(j)
     if existing == j['original_head']:
@@ -840,7 +844,13 @@ def start_build():
             return  # left for the audit, which reports it today
         if j['phase'] != 'started':
             return  # an audit or handoff owns this journal
-        if j['original_head'] == head() and j['original_branch'] == current_branch:
+        # After a repair the checkout sits on base_checkout_branch rather than
+        # the branch the journal recorded. That is still this run's journal, and
+        # resuming it is what re-runs claim_ref -- so a candidate ref someone
+        # else moved is reported as a collision instead of being quietly stepped
+        # around with a fresh name.
+        if j['original_head'] == head() and current_branch in (
+                j['original_branch'], j.get('base_checkout_branch')):
             if j['early_ref']:
                 claim_ref(j)
             return
@@ -1301,6 +1311,12 @@ def main():
         # The digest every envelope and the Statement subject name: working
         # files minus the workflow's own state and documents.
         print(snapshot(excludes=envelope().ARTIFACT_EXCLUDES))
+    elif action == 'run-branch-name':
+        # The branch a run works on, derived from whichever brief this project
+        # has. Read-only and journal-free, so it can be asked before anything
+        # exists -- which is when a worktree has to be created. No owner suffix:
+        # the caller makes it unique if the name is taken.
+        print(label_prefix(read(STATE / 'origin')) + slug(slug_text()))
     elif action == 'branch-name':
         # Read-only: the name a worktree run works in, derived exactly as
         # `start` would from the same origin and title, minus the owner suffix

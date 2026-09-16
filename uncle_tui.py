@@ -1668,7 +1668,35 @@ class UncleTUI:
                     host.controller.driver_exited(self.workflow_exit_code)
                 self._maybe_auto_triage()
 
+    def _enter_run_worktree(self):
+        """Move this run into its own worktree before anything reads the root.
+
+        It has to happen here rather than inside the driver: the driver can
+        export UNCLE_PROJECT_ROOT to its own children, but this process already
+        computed _project_root() and would spend the whole run watching the
+        directory the driver left. Setting it in our own environment points
+        both at the same place, since the driver inherits this env.
+        """
+        if os.environ.get("UNCLE_PROJECT_ROOT_LOCKED"):
+            return
+        try:
+            result = subprocess.run(
+                ["bash", "-c", '. "$1/scripts/lib/worktrees.sh"; worktree_auto "$2"',
+                 "_", ROOT, _project_root()],
+                capture_output=True, text=True, timeout=120,
+                env=dict(os.environ, ROOT=ROOT), cwd=_project_root())
+        except (OSError, subprocess.SubprocessError):
+            return
+        directory = (result.stdout or "").strip().splitlines()
+        directory = directory[-1] if directory else ""
+        if result.returncode or not directory or not os.path.isdir(directory):
+            return
+        os.environ["UNCLE_PROJECT_ROOT"] = directory
+        os.environ["UNCLE_PROJECT_ROOT_LOCKED"] = "1"
+        self.home_history.append(("system", "Working in " + sanitize(directory)))
+
     def start_workflow(self):
+        self._enter_run_worktree()
         fd, self.status_path = tempfile.mkstemp(prefix="uncle-status-", suffix=".jsonl")
         os.close(fd)
         env = dict(os.environ)

@@ -21,6 +21,8 @@ import threading
 import time
 import importlib.util
 import webbrowser
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 import textwrap
 import uuid
 
@@ -1672,6 +1674,8 @@ class UncleTUI:
         self.proc_done = False
         self.workflow_completed = False
         self.early_preview_shown = False
+        self._early_preview_stamp = None
+        self._early_preview_next = 0.0
         self.workflow_exit_reported = False
         self.support_checked = False
         self.completion_preview = None
@@ -1757,6 +1761,7 @@ class UncleTUI:
             self._offer_support()
         else:
             self._detect_prompt()
+        self._poll_early_preview()
         preview_changed = self._poll_completion_preview()
         return got or preview_changed or before != (self.proc_done, self.prompt_kind)
 
@@ -1813,26 +1818,77 @@ class UncleTUI:
         self.completion_preview = CompletionPreview(_project_root())
         self.chat_focus = "chat"
 
-    def _preview_after_implementation(self, finished_stage):
-        """Show a web app as soon as implementation ends, not at completion.
+    # Two identical readings this far apart mean the page has settled.
+    _PREVIEW_POLL_SECONDS = 2.0
 
-        Only for `webpage` projects: a command project would start a server or
-        a process, which is the operator's call and not something to do behind
-        their back mid-run. launch_spec falls back to index.html, so an ordinary
-        static site needs no configuration.
+    def _poll_early_preview(self):
+        """Open a web app while implementation is still running.
+
+        For a static site the page is viewable long before the stage that wrote
+        it is finished -- tests, notes and the report all come after. Waiting
+        for the stage boundary hides the part of a build a person most wants to
+        look at, so watch the page itself instead of the pipeline.
+
+        The file is opened only once two consecutive polls agree on its size and
+        mtime: an agent halfway through writing index.html would otherwise be
+        rendered as a broken page, which is worse than waiting two seconds.
         """
-        if finished_stage not in ("implementation", "implementation-step"):
-            if not finished_stage.startswith("implementation-step-"):
-                return
         if getattr(self, "completion_preview", None) is not None:
             return
         if getattr(self, "early_preview_shown", False):
             return
+        if not (getattr(self, "status_stage", "") or "").startswith("implementation"):
+            return
+        now = time.monotonic()
+        if now < getattr(self, "_early_preview_next", 0.0):
+            return
+        self._early_preview_next = now + self._PREVIEW_POLL_SECONDS
+        stamp = self._previewable_page()
+        if stamp is None:
+            self._early_preview_stamp = None
+            return
+        if stamp != getattr(self, "_early_preview_stamp", None):
+            self._early_preview_stamp = stamp
+            return
+        self._show_early_preview()
+
+    def _previewable_page(self):
+        """(size, mtime) of a finished-enough page on disk, or None.
+
+        Only file-backed pages qualify. A `webpage` spec pointing at a local
+        server needs that server running, which during implementation it is
+        not, and a `command` project would start a process behind the
+        operator's back. launch_spec falls back to index.html, so an ordinary
+        static site needs no configuration.
+        """
         try:
             spec = launch_spec(_project_root())
         except (OSError, ValueError):
-            return
+            return None
         if spec.get("kind") != "webpage":
+            return None
+        url = spec.get("url", "")
+        if not url.startswith("file://"):
+            return None
+        try:
+            info = os.stat(url2pathname(urlparse(url).path))
+        except OSError:
+            return None
+        return (info.st_size, info.st_mtime_ns) if info.st_size else None
+
+    def _preview_after_implementation(self, finished_stage):
+        """Fallback for a page that only appears as the stage ends."""
+        if finished_stage not in ("implementation", "implementation-step"):
+            if not finished_stage.startswith("implementation-step-"):
+                return
+        if self._previewable_page() is None:
+            return
+        self._show_early_preview()
+
+    def _show_early_preview(self):
+        if getattr(self, "completion_preview", None) is not None:
+            return
+        if getattr(self, "early_preview_shown", False):
             return
         self.early_preview_shown = True
         self.completion_preview = CompletionPreview(_project_root())

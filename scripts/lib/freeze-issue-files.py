@@ -194,4 +194,6 @@ def freeze(body, root):
 
 if __name__ == '__main__':
     root = Path(os.environ.get('UNCLE_PROJECT_ROOT') or Path.cwd())
+    # Windows text mode would translate LF to CRLF on the way to the artifact.
+    sys.stdout.reconfigure(newline='\n')
     sys.stdout.write(freeze(sys.stdin.read(), root))

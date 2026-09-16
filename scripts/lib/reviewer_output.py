@@ -48,6 +48,8 @@ if __name__ == '__main__':
     # Filter: document on stdin, same document on stdout, or exit 1 with the
     # reason on stderr so the shim can fail before writing the artifact.
     runner = sys.argv[1] if len(sys.argv) > 1 else 'reviewer'
+    # Windows text mode would translate LF to CRLF on the way to the artifact.
+    sys.stdout.reconfigure(newline='\n')
     body = sys.stdin.read()
     try:
         sys.stdout.write(check(body, runner))

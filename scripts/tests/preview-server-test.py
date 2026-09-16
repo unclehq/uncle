@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""The early preview shows a live page and never claims the run is over.
+
+Two failures drove this, both seen on a real calculator build. The page went up
+at 01:49:15 and implementation kept rewriting it until 01:54:25, so a one-shot
+open showed a first draft whose stylesheet did not exist yet. And the preview
+was launched through CompletionPreview, which announces `done` -- raising the
+finished/star dialog in the middle of a build that was still running.
+"""
+import importlib.util
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+import urllib.request
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts/lib'))
+from preview_server import PreviewServer, VERSION_PATH, tree_version
+
+
+def get(url):
+    return urllib.request.urlopen(url, timeout=5).read().decode('utf-8')
+
+
+def project(**files):
+    root = Path(tempfile.mkdtemp())
+    for name, text in files.items():
+        path = root / name.replace('__', '/')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return root
+
+
+class Server(unittest.TestCase):
+    def setUp(self):
+        self.root = project(**{'index.html': '<h1>draft</h1>', 'style.css': 'h1{color:red}'})
+        self.server = PreviewServer(self.root)
+        self.addCleanup(self.server.close)
+        self.base = self.server.url.rsplit('/', 1)[0]
+
+    def test_serves_on_loopback_only(self):
+        self.assertTrue(self.server.url.startswith('http://127.0.0.1:'))
+
+    def test_page_is_served_with_a_reload_script(self):
+        body = get(self.server.url)
+        self.assertIn('<h1>draft</h1>', body)
+        self.assertIn(VERSION_PATH, body)
+        self.assertIn('location.reload', body)
+
+    def test_injection_never_touches_the_file(self):
+        get(self.server.url)
+        self.assertEqual((self.root / 'index.html').read_text(), '<h1>draft</h1>')
+
+    def test_assets_are_served_untouched(self):
+        self.assertEqual(get(self.base + '/style.css'), 'h1{color:red}')
+
+    def test_version_moves_only_when_a_served_file_does(self):
+        first = get(self.base + VERSION_PATH)
+        self.assertEqual(get(self.base + VERSION_PATH), first)
+        os.utime(self.root / 'style.css', (0, 0))
+        self.assertNotEqual(get(self.base + VERSION_PATH), first)
+
+    def test_noise_directories_do_not_churn_the_version(self):
+        first = get(self.base + VERSION_PATH)
+        for noise in ('.git', 'node_modules', '__pycache__'):
+            (self.root / noise).mkdir()
+            (self.root / noise / 'x').write_text('x')
+        self.assertEqual(get(self.base + VERSION_PATH), first)
+
+    def test_rewrites_reach_the_browser(self):
+        (self.root / 'index.html').write_text('<h1>final</h1>')
+        self.assertIn('<h1>final</h1>', get(self.server.url))
+
+    def test_close_stops_listening(self):
+        self.server.close()
+        with self.assertRaises(Exception):
+            get(self.base + VERSION_PATH)
+
+    def test_a_root_that_cannot_be_served_does_not_raise(self):
+        PreviewServer('/nonexistent/nope').close()
+
+    def test_tree_version_survives_a_vanishing_file(self):
+        tree_version(self.root)                     # must not raise on churn
+
+
+class EarlyPreview(unittest.TestCase):
+    """The TUI side: one tab, live, and no end-of-run dialog."""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('uncle_tui', ROOT / 'uncle_tui.py')
+        self.tui = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.tui)
+        self.opened, self.dialogs = [], []
+        self.tui.webbrowser = type('W', (), {
+            'open': staticmethod(lambda url: self.opened.append(url) or True)})()
+
+    def make(self, root, stage='implementation'):
+        self.tui._project_root = lambda: str(root)
+        names = ('_poll_early_preview', '_previewable_page', '_show_early_preview',
+                 '_close_early_preview', '_preview_after_implementation',
+                 '_poll_completion_preview')
+        body = {name: getattr(self.tui.UncleTUI, name) for name in names}
+        body['_PREVIEW_POLL_SECONDS'] = 0
+        body['_completion_dialog'] = lambda _self, value: self.dialogs.append(value)
+        screen = type('Screen', (), body)()
+        screen.status_stage, screen.completion_preview = stage, None
+        screen.early_preview_shown, screen._early_preview_stamp = False, None
+        screen._early_preview_next, screen._preview_page = 0.0, 'index.html'
+        screen.preview_server = None
+        self.addCleanup(screen._close_early_preview)
+        return screen
+
+    @staticmethod
+    def settle(screen):
+        for _ in range(2):
+            screen._early_preview_next = 0.0
+            screen._poll_early_preview()
+
+    def test_no_page_opens_nothing(self):
+        self.settle(self.make(project()))
+        self.assertEqual(self.opened, [])
+
+    def test_one_tab_serving_the_live_page(self):
+        screen = self.make(project(**{'index.html': '<h1>calc</h1>'}))
+        self.settle(screen)
+        self.assertEqual(len(self.opened), 1)
+        self.assertTrue(self.opened[0].startswith('http://127.0.0.1:'))
+        self.assertIn('<h1>calc</h1>', get(self.opened[0]))
+
+    def test_no_finished_dialog_during_a_running_build(self):
+        screen = self.make(project(**{'index.html': '<h1>calc</h1>'}))
+        self.settle(screen)
+        self.assertIsNone(screen.completion_preview)
+        self.assertFalse(screen._poll_completion_preview())
+        self.assertEqual(self.dialogs, [])
+
+    def test_later_rewrites_do_not_open_another_tab(self):
+        root = project(**{'index.html': '<h1>v1</h1>'})
+        screen = self.make(root)
+        self.settle(screen)
+        (root / 'index.html').write_text('<h1>v2</h1>')
+        (root / 'style.css').write_text('body{background:linear-gradient(red,blue)}')
+        self.settle(screen)
+        self.assertEqual(len(self.opened), 1)
+        self.assertIn('<h1>v2</h1>', get(self.opened[0]))
+        self.assertIn('linear-gradient', get(self.opened[0].rsplit('/', 1)[0] + '/style.css'))
+
+    def test_declared_nested_page_is_honoured(self):
+        root = project(**{'public__app.html': '<h1>nested</h1>',
+                          '.uncle__launch.json': '{"kind":"webpage","path":"public/app.html"}'})
+        self.settle(self.make(root))
+        self.assertTrue(self.opened[0].endswith('public/app.html'))
+        self.assertIn('<h1>nested</h1>', get(self.opened[0]))
+
+    def test_only_implementation_stages_preview(self):
+        for stage in ('change-plan', 'final-audit', 'test-review', 'execute-checklist'):
+            self.opened.clear()
+            self.settle(self.make(project(**{'index.html': '<h1>x</h1>'}), stage))
+            self.assertEqual(self.opened, [], stage)
+
+    def test_command_projects_are_never_launched(self):
+        root = project(**{'.uncle__launch.json': '{"kind":"command","command":["./run.sh"]}'})
+        self.settle(self.make(root))
+        self.assertEqual(self.opened, [])
+
+    def test_half_written_page_waits_for_it_to_settle(self):
+        root = project()
+        screen = self.make(root)
+        screen._early_preview_next = 0.0
+        screen._poll_early_preview()
+        (root / 'index.html').write_text('<h1>partial')
+        screen._early_preview_next = 0.0
+        screen._poll_early_preview()
+        self.assertEqual(self.opened, [], 'opened a page that was still being written')
+        (root / 'index.html').write_text('<h1>partial</h1><p>rest</p>')
+        screen._early_preview_next = 0.0
+        screen._poll_early_preview()
+        self.assertEqual(self.opened, [])
+        screen._early_preview_next = 0.0
+        screen._poll_early_preview()
+        self.assertEqual(len(self.opened), 1)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=0)

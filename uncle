@@ -48,7 +48,7 @@ fi
 
 usage() {
     cat <<'EOF'
-Usage: uncle [-h|--help|--performance] [--unattended]
+Usage: uncle [-h|--help|--performance|--runs] [--unattended]
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]
                     [--allowed-signers PATH] [--certificate-identity ID]
                     [--certificate-oidc-issuer URL]
@@ -65,6 +65,9 @@ and per-stage overrides from `.uncle/config` (menu option 4).
 
 Runs with no arguments. -h / --help print this message and exit 0.
 --performance reports recorded runtime and token usage for the current project.
+--runs lists the runs across this project's git worktrees (see
+`from-issue.sh --worktree`): one line per worktree holding a run, as
+`#<issue> <state> <locked|idle> <path>`; `no runs` or `no worktrees` otherwise.
 --unattended is passed to the driver you pick: it runs every human gate
 without a person, records what nobody reviewed, and reports that at the end.
 verify runs the standalone attestation verifier (scripts/uncle-verify.py) in
@@ -81,6 +84,7 @@ while [[ $# -gt 0 ]]; do
         # The verifier reads the caller's checkout, not the install dir.
         verify)        shift; cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/uncle-verify.py" "$@" ;;
         --performance) exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
+        --runs)        exec python3 "$ROOT/scripts/lib/worktree_runs.py" "$PROJECT_ROOT" ;;
         --unattended)  UNCLE_ARGS+=(--unattended); shift ;;
         *)             printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
     esac
@@ -608,8 +612,27 @@ run_from_issue() {
         esac
     done
 
-    if [[ -n "$flag" ]]; then
+    # A worktree run is a change run; the question is skipped for --new.
+    local worktree=""
+    if [[ "$flag" != "--new" ]]; then
+        printf '%s' "Run in a new worktree? [y/N]: "
+        if read -r worktree; then
+            case "$(printf '%s' "$worktree" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+                y|yes) worktree="--worktree" ;;
+                *)     worktree="" ;;
+            esac
+        else
+            echo
+            worktree=""
+        fi
+    fi
+
+    if [[ -n "$flag" && -n "$worktree" ]]; then
+        run_workflow "$ROOT/scripts/from-issue.sh" "$issue" "$flag" "$worktree"
+    elif [[ -n "$flag" ]]; then
         run_workflow "$ROOT/scripts/from-issue.sh" "$issue" "$flag"
+    elif [[ -n "$worktree" ]]; then
+        run_workflow "$ROOT/scripts/from-issue.sh" "$issue" "$worktree"
     else
         run_workflow "$ROOT/scripts/from-issue.sh" "$issue"
     fi

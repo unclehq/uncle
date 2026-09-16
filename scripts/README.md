@@ -202,13 +202,66 @@ Fetches a GitHub issue and writes `CHANGE_REQUEST.md` or the project-brief
 section of `REQUIREMENTS.md` from it.
 
 ```sh
-./scripts/from-issue.sh <issue-number | github-url> [--change | --new]
+./scripts/from-issue.sh <issue-number | github-url> [--change | --new] [--worktree]
 ./scripts/from-issue.sh 123
 ./scripts/from-issue.sh https://github.com/owner/repo/issues/123 --new
+./scripts/from-issue.sh 123 --worktree                       # run in <project>-issue-123
+./scripts/from-issue.sh 123 --worktree-dir ../x --branch topic/x
 ./scripts/from-issue.sh -h
 ./scripts/from-issue.sh --help
 ./scripts/from-issue.sh                   # no arguments: same as --help
 ```
+
+#### `--worktree`, `--worktree-dir`, `--branch` — run an issue in a git worktree
+
+One change run per directory is a rule the driver's lock enforces; a second
+issue on the same project therefore needs a second checkout. `--worktree`
+creates one with `git worktree add <dir> -b <branch> HEAD` and runs the whole
+change workflow inside it:
+
+- `<dir>` defaults to `<parent of project>/<project dirname>-issue-<N>`;
+  `--worktree-dir PATH` overrides it and implies `--worktree`. A directory
+  inside the project is refused (`.uncle/**/*.md` is copied into recovery
+  sandboxes, so a nested worktree would leak into them).
+- `<branch>` defaults to `<label prefix><slug of the issue title>` from the
+  same `label_prefix`/`slug` code the PR handoff uses (`change-pr.sh
+  branch-name`), so the handoff adopts the worktree branch as the PR head;
+  `--branch NAME` overrides it. A failed label lookup uses the `uncle/` prefix.
+- `--worktree` implies `--change`; with `--new` it exits 1 before fetching.
+- An existing branch or a non-empty target directory exits 1 before anything is
+  written: no worktree, no `CHANGE_REQUEST.md`.
+- `.uncle/config` is copied into the worktree byte-for-byte when the project has
+  one, so the run uses the same runner and model settings. `.uncle/workflow`
+  (lock, state, approvals, origin) is per worktree, so two runs never share
+  state; the source project holds none of it.
+- Without the flag nothing changes: same files, cwd and driver arguments.
+
+When the driver exits 0 with state `COMPLETE`, an interactive run asks
+`Remove worktree <dir>? [y/N]`; `n`, a non-terminal stdin (the TUI) and
+`--unattended` keep the directory and print the removal command instead:
+
+```sh
+bash scripts/lib/worktrees.sh remove <dir>
+```
+
+Removal refuses, leaving the directory untouched, while
+`<dir>/.uncle/workflow/lock` exists, while the state is not `COMPLETE`, or when
+git reports uncommitted files (`git worktree remove` without `--force`). It
+never deletes the branch: `git branch -d <branch>` is the operator's call after
+the PR merges. A failed `.uncle/config` copy during creation removes the fresh
+directory and keeps the branch, printing that same command.
+
+Listing: `uncle --runs` prints one line per worktree of the project that holds
+`.uncle/workflow/state`, as `#<issue> <state> <locked|idle> <path>` (tab
+separated), `no runs` when none, and `no worktrees` when `git worktree list`
+fails. The TUI homepage shows the same rows under the menu bar. The issue is
+read from `.uncle/workflow/origin`, else from the `<issue>:` state prefix, else
+shown as `?`, so a worktree made by hand is listed too.
+
+Shared-install caveat: every worktree runs the one installed `uncle`
+(`scripts/`, `prompts/`). Upgrading or editing the install while runs are in
+flight changes the stages every worktree executes next; finish or pause the
+runs first.
 
 - `--change` writes `CHANGE_REQUEST.md` (the default if `CHANGE_REQUEST.md`
   already exists or the repo is not empty), then prompts for the exact word
@@ -348,7 +401,7 @@ by the driver; can be run by hand.
 | `codex-review-plan.sh` | usage, exit 0 | not supported | none | usage on **stderr**, exit 1 |
 | `codex-create-checklist.sh` | usage, exit 0 | not supported | none | usage on **stderr**, exit 1 |
 | `workflow.sh` | usage, exit 0 | not supported | exactly one subcommand | usage on **stdout**, exit 1 |
-| `from-issue.sh` | usage, exit 0 | not supported | issue number or URL, optional `--change` / `--new` | usage on **stdout**, exit 1 |
+| `from-issue.sh` | usage, exit 0 | not supported | issue number or URL, optional `--change` / `--new` / `--worktree` / `--worktree-dir PATH` / `--branch NAME` | usage on **stdout**, exit 1 |
 
 Two intentional exceptions to the "unrecognized argument goes to stderr" rule:
 `workflow.sh`'s fall-through branch and all of `from-issue.sh` write usage to
@@ -606,7 +659,11 @@ option 4) and persisted to `.uncle/config`; when a driver runs they are exported
 as `UNCLE_CLINE_MODEL`/`UNCLE_CLINE_EFFORT`, and
 `WORKFLOW_AGENT_CMD`/`WORKFLOW_REVIEWER_CMD` are set to the matching shims. When
 stdin and stdout are real terminals it opens a full-screen TUI (`uncle_tui.py`);
-otherwise it falls back to a line menu. The config is `STAGE VALUE` lines:
+otherwise it falls back to a line menu. `uncle --runs` lists the runs across
+the project's git worktrees (see `from-issue.sh --worktree`); the line menu's
+"From GitHub issue" entry asks `Run in a new worktree? [y/N]` for change
+runs, and the TUI offers `change request in worktree` as an issue mode. The
+config is `STAGE VALUE` lines:
 
 | Key | Meaning |
 |---|---|

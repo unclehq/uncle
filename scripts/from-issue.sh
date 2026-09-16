@@ -137,6 +137,32 @@ run_issue_workflow() {
     echo "Making PR, please wait..."
 }
 
+# Worktree creation and removal (--worktree). Sourced above the test hook so
+# close-flow-test.sh's sourced copy sees the same functions.
+. "$ROOT/scripts/lib/worktrees.sh"
+
+# offer_worktree_removal <dir> — ask on stdin; `y` removes through the guarded
+# worktree_remove, anything else keeps the directory. The branch survives
+# either way. Steps out of <dir> first so the removal is not made from inside it.
+offer_worktree_removal() {
+    local dir="$1" answer=""
+    printf '%s' "Remove worktree $dir? [y/N] "
+    if ! read -r answer; then
+        echo
+    fi
+    case "$answer" in
+        y|Y|yes|YES)
+            case "$PWD/" in
+                "$dir"/*) cd "$(dirname "$dir")" ;;
+            esac
+            worktree_remove "$dir"
+            ;;
+        *)
+            echo "Keeping worktree $dir; remove later with: scripts/lib/worktrees.sh remove $dir"
+            ;;
+    esac
+}
+
 
 
 # Test hook: sourcing this script with STAGEGATE_FROM_ISSUE_SOURCE_ONLY=1 yields
@@ -149,7 +175,7 @@ fi
 
 usage() {
     cat <<'EOF'
-Usage: from-issue.sh <issue-number | github-url> [--change | --new]
+Usage: from-issue.sh <issue-number | github-url> [--change | --new] [--worktree]
 
 Fetch a GitHub issue and seed a workflow from it.
 
@@ -158,6 +184,10 @@ Fetch a GitHub issue and seed a workflow from it.
   --seed-only  With --change, create the request without starting a workflow.
   --new      Replace the project-brief section of REQUIREMENTS.md for
              ./scripts/stagegate.sh.
+  --worktree Run the change in a new git worktree beside the project
+             (<project>-issue-<N>) on a new branch; implies --change.
+  --worktree-dir PATH  Worktree directory (implies --worktree).
+  --branch NAME        Worktree branch (default: <label prefix><issue slug>).
 
 The issue can be:
   - a number like 123 (repo read from the current git remote)
@@ -176,6 +206,10 @@ ISSUE_ARG="$1"
 MODE=""
 SEED_ONLY=0
 ISSUE_WORKFLOW_ARGS=()
+WORKTREE=0
+WORKTREE_DIR=""
+WORKTREE_BRANCH=""
+UNATTENDED=0
 shift || true
 
 while [[ $# -gt 0 ]]; do
@@ -183,7 +217,14 @@ while [[ $# -gt 0 ]]; do
         --change) MODE="change" ;;
         --seed-only) SEED_ONLY=1 ;;
         --new) MODE="new" ;;
-        --unattended) ISSUE_WORKFLOW_ARGS+=(--unattended) ;;
+        --unattended) ISSUE_WORKFLOW_ARGS+=(--unattended); UNATTENDED=1 ;;
+        --worktree) WORKTREE=1 ;;
+        --worktree-dir)
+            if [[ -z "${2:-}" ]]; then echo "--worktree-dir requires a path."; usage; exit 1; fi
+            WORKTREE=1; WORKTREE_DIR="$2"; shift ;;
+        --branch)
+            if [[ -z "${2:-}" ]]; then echo "--branch requires a name."; usage; exit 1; fi
+            WORKTREE_BRANCH="$2"; shift ;;
         *) echo "Unknown option: $1"; usage; exit 1 ;;
     esac
     shift
@@ -191,6 +232,25 @@ done
 
 if [[ "$SEED_ONLY" == 1 && "$MODE" != change ]]; then
     echo '--seed-only requires --change.' >&2
+    exit 1
+fi
+
+# --worktree is a change-workflow feature: greenfield seeding writes
+# REQUIREMENTS.md in place and has no branch to work on.
+if [[ "$WORKTREE" == 1 ]]; then
+    if [[ "$MODE" == new ]]; then
+        echo '--worktree and --worktree-dir require --change; --new is not supported.'
+        usage
+        exit 1
+    fi
+    MODE="change"
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "Not a git repository: $PWD"
+        exit 1
+    fi
+elif [[ -n "$WORKTREE_BRANCH" ]]; then
+    echo '--branch requires --worktree.'
+    usage
     exit 1
 fi
 
@@ -300,6 +360,36 @@ fi
 if [[ -z "$TITLE" ]]; then
     echo "Issue title was empty; response may have been rate-limited or unauthorized."
     exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Worktree: created after the fetch (the title names the branch) and before
+# the freeze and the seed, which both write under UNCLE_PROJECT_ROOT.
+# ---------------------------------------------------------------------------
+
+SOURCE_PROJECT_ROOT="$PROJECT_ROOT"
+if [[ "$WORKTREE" == 1 ]]; then
+    if [[ -z "$WORKTREE_BRANCH" ]]; then
+        # Same label_prefix/slug the PR handoff uses; label lookup failure
+        # falls back to `uncle/` inside branch-name. The last line is the name.
+        . "$ROOT/scripts/lib/change-pr.sh"
+        fetch_kind="curl"
+        [[ "$USED_GH" == 1 ]] && fetch_kind="gh"
+        WORKTREE_BRANCH="$(change_pr_engine branch-name "$TITLE" "$OWNER/$REPO" "$ISSUE_NUM" "$fetch_kind" | tail -n 1)"
+        if [[ -z "$WORKTREE_BRANCH" ]]; then
+            echo "Could not derive a branch name for $OWNER/$REPO#$ISSUE_NUM."
+            exit 1
+        fi
+    fi
+    if [[ -z "$WORKTREE_DIR" ]]; then
+        WORKTREE_DIR="$(worktree_default_dir "$PROJECT_ROOT" "$ISSUE_NUM")"
+    fi
+    worktree_create "$WORKTREE_DIR" "$WORKTREE_BRANCH" || exit 1
+    cd "$WORKTREE_DIR"
+    PROJECT_ROOT="$PWD"
+    WORKTREE_DIR="$PWD"
+    export UNCLE_PROJECT_ROOT="$PWD"
+    echo "Created worktree $WORKTREE_DIR on branch $WORKTREE_BRANCH"
 fi
 
 # ---------------------------------------------------------------------------
@@ -521,6 +611,18 @@ case "$MODE" in
             write_change_request
         fi
         run_issue_workflow
+        if [[ "$WORKTREE" == 1 && "$(workflow_state)" == "COMPLETE" ]]; then
+            # The TUI drives this script through a pipe and cannot answer;
+            # unattended runs have nobody to ask. Both get the command instead.
+            if [[ -t 0 && "$UNATTENDED" != 1 ]]; then
+                cd "$SOURCE_PROJECT_ROOT"
+                # A refused removal (dirty tree) keeps the worktree and its
+                # reason; the run itself succeeded, so the exit status stays 0.
+                offer_worktree_removal "$WORKTREE_DIR" || true
+            else
+                echo "Worktree $WORKTREE_DIR kept; remove with: scripts/lib/worktrees.sh remove $WORKTREE_DIR"
+            fi
+        fi
         ;;
     new)
         write_new_project_brief

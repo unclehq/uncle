@@ -62,7 +62,8 @@ def build_command(config, root, environ=None):
     # --bare disables keychain reads, breaking an existing Claude login.
     argv = [resolved, '-p', '--tools', '', '--disable-slash-commands', '--setting-sources', '',
             '--strict-mcp-config', '--permission-mode', 'dontAsk', '--no-session-persistence',
-            '--output-format', 'stream-json', '--verbose', '--model', config.model, '--effort', config.effort,
+            '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+            '--model', config.model, '--effort', config.effort,
             '--max-budget-usd', '%.2f' % config.call_max_cost_usd]
     return argv, env, home
 
@@ -102,12 +103,48 @@ def parse_stream(lines):
     return reply, usage, cost, error
 
 
+def delta_text(lines):
+    """Text fragments from partial-message events; everything else ignored.
+
+    Deliberately total: a malformed line, an unknown event shape or a
+    non-text block yields nothing rather than raising. This runs on the
+    thread draining the worker's pipe, where an exception would stall the
+    read and hang the call.
+    """
+    out = []
+    for line in lines:
+        if isinstance(line, bytes):
+            line = line.decode('utf-8', errors='replace')
+        line = line.strip()
+        if not line.startswith('{'):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get('type') != 'stream_event':
+            continue
+        inner = event.get('event') or {}
+        if inner.get('type') != 'content_block_delta':
+            continue
+        delta = inner.get('delta') or {}
+        if delta.get('type') in (None, 'text_delta'):
+            text = delta.get('text')
+            if isinstance(text, str) and text:
+                out.append(text)
+    return out
+
+
 class SupervisorRequest:
     """One worker call in a background thread; `poll()` returns the result dict once."""
 
     def __init__(self, command, prompt, env, home, log_path, meta):
         self.meta = dict(meta)
         self.events = queue.Queue()
+        # Text as it streams, for display only. `events` carries exactly one
+        # item -- the finished outcome -- and poll() caches it, so partial text
+        # must never go there.
+        self.progress = queue.Queue()
         self.cancelled = threading.Event()
         self.log_path = str(log_path)
         self.home = home
@@ -160,9 +197,14 @@ class SupervisorRequest:
 
                 def pump():
                     nonlocal written
+                    pending = b''
                     try:
                         while True:
-                            chunk = process.stdout.read(65536)
+                            # read() blocks for the full count or EOF, and a
+                            # whole turn is far under 64 KiB -- so it returned
+                            # only when the worker exited, which is why nothing
+                            # could stream. read1() returns what has arrived.
+                            chunk = process.stdout.read1(65536)
                             if not chunk:
                                 return
                             written += len(chunk)
@@ -170,6 +212,15 @@ class SupervisorRequest:
                                 flooded.set()
                                 return
                             log.write(chunk)
+                            # The log was already being written incrementally
+                            # and read only after the process exited, so a reply
+                            # that took sixteen seconds showed nothing for
+                            # sixteen seconds. Same bytes, surfaced as they land.
+                            pending += chunk
+                            if b'\n' in pending:
+                                *lines, pending = pending.split(b'\n')
+                                for text in delta_text(lines):
+                                    self.progress.put(text)
                     except (OSError, ValueError):
                         return
 

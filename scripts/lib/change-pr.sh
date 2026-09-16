@@ -1187,6 +1187,12 @@ def main():
         # The digest every envelope and the Statement subject name: working
         # files minus the workflow's own state and documents.
         print(snapshot(excludes=envelope().ARTIFACT_EXCLUDES))
+    elif action == 'branch-name':
+        # Read-only: the name a worktree run works in, derived exactly as
+        # `start` would from the same origin and title, minus the owner suffix
+        # that does not exist before `start`. Neither reads nor writes the journal.
+        title, repo, issue, fetch = sys.argv[2:6]
+        print(label_prefix('\t'.join([repo, issue, fetch])) + slug(title))
     elif action == 'validate':
         j = load()
         if j.get('manual_signing'):

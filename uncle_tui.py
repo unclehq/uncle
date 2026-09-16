@@ -39,6 +39,7 @@ except ImportError:  # Windows has no curses in the stdlib
 ROOT = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
 from completion_preview import CompletionPreview, STAR_URL, launch_spec
+from preview_server import PreviewServer
 from chat import Conversation, sanitize
 from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
@@ -53,6 +54,7 @@ from supervisor_runner import SupervisorRequest, build_command as supervisor_com
 import supervisor_chat
 from supervisor_chat import ChatRequest
 import gate_answer
+import worktree_runs
 
 CLINE_CONFIG = os.environ.get("CLINE_CONFIG", os.path.expanduser("~/.cline/data/settings/providers.json"))
 
@@ -62,7 +64,8 @@ WORKFLOWS = [
     ("Change request", [os.path.join(ROOT, "scripts", "change-workflow.sh")]),
 ]
 EFFORTS = ["high", "medium", "low"]
-ISSUE_MODES = [("auto", ""), ("change request", "--change"), ("new application", "--new")]
+ISSUE_MODES = [("auto", ""), ("change request", "--change"), ("new application", "--new"),
+               ("change request in worktree", "--worktree")]
 # The per-project config lives in the caller's project root, so each project
 # gets its own model/effort/runner settings. The `uncle` launcher exports
 # UNCLE_PROJECT_ROOT (= the cwd it was invoked from) because it cd's into the
@@ -1643,10 +1646,20 @@ class UncleTUI:
                 self._dialog_closed('driver exited')
                 self.gate_meta = None
                 self.delegation_session = None
-                reason = 'Workflow was killed (SIGKILL, exit code 137)' if self.workflow_exit_code in (137, -9) else 'Workflow stopped (exit code %s)' % self.workflow_exit_code
-                message = reason + '. Stage chat disconnected. Press Esc to return to the menu.'
-                self.home_history.append(('system', message))
-                self.chat_error = message
+                if self.workflow_exit_code == 0:
+                    # A run that ended because it was done is not a stopped
+                    # run. It said so in neither the output nor the chat, and
+                    # the old text sent the operator to the menu as if there
+                    # were nothing left to look at.
+                    getattr(self, 'output', []).append('Finished.')
+                    message = 'Finished.'
+                    self.home_history.append(('system', message))
+                    self.chat_error = ''
+                else:
+                    reason = 'Workflow was killed (SIGKILL, exit code 137)' if self.workflow_exit_code in (137, -9) else 'Workflow stopped (exit code %s)' % self.workflow_exit_code
+                    message = reason + '. Stage chat disconnected. Type /homepage to return to the menu.'
+                    self.home_history.append(('system', message))
+                    self.chat_error = message
                 host = getattr(self, 'supervision_host', None)
                 if host is not None:
                     # Triage owns a failure exit; an in-flight diagnosis is
@@ -1676,6 +1689,8 @@ class UncleTUI:
         self.early_preview_shown = False
         self._early_preview_stamp = None
         self._early_preview_next = 0.0
+        self._preview_page = "index.html"
+        self._close_early_preview()
         self.workflow_exit_reported = False
         self.support_checked = False
         self.completion_preview = None
@@ -1788,11 +1803,14 @@ class UncleTUI:
         return True
 
     def _complete_key(self, k):
-        """Only Enter leaves the complete dialog; every other key keeps it."""
+        """Enter dismisses the completion dialog and stays on the build page.
+
+        It used to drop to the home page, which threw away the thing the
+        operator had just spent the whole run producing: the output, the stage
+        history and the chat about it. Leaving is now an explicit /homepage.
+        """
         if k in (10, 13):
             self.stop_workflow()
-            self.state = "menu"
-            self.sel = 0
             self.prompt_kind = ""
             self.prompt_text = ""
             self.recovery_active = False
@@ -1871,10 +1889,21 @@ class UncleTUI:
         if not url.startswith("file://"):
             return None
         try:
-            info = os.stat(url2pathname(urlparse(url).path))
+            page = url2pathname(urlparse(url).path)
+            info = os.stat(page)
         except OSError:
             return None
-        return (info.st_size, info.st_mtime_ns) if info.st_size else None
+        if not info.st_size:
+            return None
+        # launch_spec resolves the root, so relpath must too: on macOS a
+        # /var project root resolves to /private/var, and comparing the two
+        # spellings yields a ../.. path the preview server rightly 404s.
+        try:
+            relative = Path(page).relative_to(Path(_project_root()).resolve())
+        except ValueError:
+            return None
+        self._preview_page = relative.as_posix()
+        return (info.st_size, info.st_mtime_ns)
 
     def _preview_after_implementation(self, finished_stage):
         """Fallback for a page that only appears as the stage ends."""
@@ -1886,12 +1915,31 @@ class UncleTUI:
         self._show_early_preview()
 
     def _show_early_preview(self):
-        if getattr(self, "completion_preview", None) is not None:
-            return
+        """Open the page in a browser, served so it can refresh itself.
+
+        Deliberately not CompletionPreview: that object announces `done` when it
+        finishes launching, which raises the finished/star dialog. Correct at the
+        end of a run, wrong in the middle of one -- the build is still going, and
+        the dialog also burns the once-per-user star prompt.
+        """
         if getattr(self, "early_preview_shown", False):
             return
+        if getattr(self, "completion_preview", None) is not None:
+            return
         self.early_preview_shown = True
-        self.completion_preview = CompletionPreview(_project_root())
+        server = PreviewServer(_project_root(), self._preview_page)
+        if server.url is None:
+            return
+        self.preview_server = server
+        if not webbrowser.open(server.url):
+            server.close()
+            self.preview_server = None
+
+    def _close_early_preview(self):
+        server = getattr(self, "preview_server", None)
+        if server is not None:
+            server.close()
+            self.preview_server = None
 
     def _poll_completion_preview(self):
         preview = getattr(self, 'completion_preview', None)
@@ -2316,6 +2364,10 @@ class UncleTUI:
         if getattr(self, "completion_preview", None):
             self.completion_preview.close()
             self.completion_preview = None
+        # The preview server outlives the stage that triggered it, but never
+        # the run: a stray listener on a working tree is not something to leave
+        # behind.
+        self._close_early_preview()
         if self.proc and self.proc.poll() is None:
             subprocess.run(["bash", os.path.join(ROOT, "scripts", "lib", "terminal-title.sh"),
                             "--stop-tree", str(self.proc.pid), "include-root"], check=True)
@@ -2595,6 +2647,41 @@ class UncleTUI:
             return ''
         return raw.split(':', 1)[1] if re.match(r'^[0-9]+:', raw) else raw
 
+    def poll_chat_progress(self):
+        """Show the supervisor's answer as it streams, not once it finishes.
+
+        The runner writes stream-json to its log while the call runs, but the
+        log was only parsed after the worker exited, so a sixteen-second reply
+        showed nothing for sixteen seconds and then arrived whole. The bytes
+        were always there; this reads them on the way past.
+
+        The text never enters `home_history`: that list is replayed to the
+        model as conversation, and a half-written sentence is not something it
+        should be told it said.
+        """
+        request = getattr(self, 'home_request', None)
+        if request is None:
+            return False
+        progress = getattr(request, 'progress', None)
+        if progress is None:
+            return False
+        raw = getattr(self, '_chat_partial_raw', '')
+        got = False
+        try:
+            while True:
+                raw += progress.get_nowait()
+                got = True
+        except queue.Empty:
+            pass
+        if not got:
+            return False
+        self._chat_partial_raw = raw
+        text = supervisor_chat.partial_reply(raw)
+        if text == getattr(self, 'chat_partial', ''):
+            return False
+        self.chat_partial = text
+        return True
+
     def poll_home_chat(self):
         request = getattr(self, 'home_request', None)
         if request is None:
@@ -2604,6 +2691,9 @@ class UncleTUI:
         except queue.Empty:
             return False
         self.home_request = None
+        # The finished reply replaces the streamed preview.
+        self.chat_partial = ''
+        self._chat_partial_raw = ''
         if isinstance(item, tuple):
             # Issue imports keep the homepage tuple protocol.
             kind, value = item
@@ -3364,10 +3454,14 @@ class UncleTUI:
             self.home_history.append(('Recovery' if role == 'master' else 'User' if role == 'operator' else 'System', text))
         self._recovery_displayed = len(recovery)
         history = getattr(self, 'home_history', [])
-        if history:
-            return [('proposal' if str(role).lower() != 'user' and re.search(r'(?im)^\s*(?:\*\*)?Proposal(?:\s+\d+)?\s*:', text) else role,
-                     str(role).capitalize() + ': ' + text) for role, text in history]
-        return [(None, line) for line in self.chat.messages]
+        rows = [('proposal' if str(role).lower() != 'user' and re.search(r'(?im)^\s*(?:\*\*)?Proposal(?:\s+\d+)?\s*:', text) else role,
+                 str(role).capitalize() + ': ' + text) for role, text in history]
+        if not rows:
+            rows = [(None, line) for line in self.chat.messages]
+        partial = getattr(self, 'chat_partial', '')
+        if partial and getattr(self, 'home_request', None) is not None:
+            rows = rows + [('supervisor', 'Supervisor: ' + partial)]
+        return rows
 
     def chat_display(self):
         return [line for _, line in self.chat_entries()]
@@ -3460,7 +3554,9 @@ class UncleTUI:
             self.chat_error = ''
             return True
         if k == 27 and self.state == 'running' and getattr(self, 'workflow_exit_reported', False):
-            self.state = 'menu'
+            # Esc used to leave for the home page the moment a run ended, so a
+            # stray keypress discarded the finished build's screen. Clear the
+            # transient state and stay; /homepage is how you leave.
             self.recovery_active = False
             self.chat_focus = 'chat'
             self.chat_error = ''
@@ -3736,7 +3832,7 @@ class UncleTUI:
         return False
 
     def _slash_choices(self):
-        commands = ['/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/triage', '/do', '/resume', '/run', '/delegate', '/app-input']
+        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/triage', '/do', '/resume', '/run', '/delegate', '/app-input']
         text = self.chat_composer.lower()
         return [command for command in commands if command.startswith(text)] if text.startswith('/') and ' ' not in text else []
 
@@ -3804,6 +3900,21 @@ class UncleTUI:
                         self._triage_do(argument)
                 except (OSError, ValueError) as exc:
                     self.chat_error = sanitize(str(exc))
+                return True
+            if command == '/homepage':
+                # The build page no longer leaves on its own, so leaving is a
+                # command. Stopping first keeps a live run from being orphaned.
+                self.stop_workflow()
+                self.state = 'menu'
+                self.sel = 0
+                self.prompt_kind = ''
+                self.prompt_text = ''
+                self.recovery_active = False
+                self.chat_focus = 'chat'
+                self.chat_composer = ''
+                self.chat_error = ''
+                self.chat_picker = False
+                self.chat_choices = []
                 return True
             if command == '/issue' and argument:
                 if not self._valid_issue(argument.removeprefix('#')):
@@ -3892,6 +4003,22 @@ class UncleTUI:
         else:
             self.chat_error = 'Usage: /delegate on | off | status'
 
+    def _worktree_rows(self):
+        """Runs across this project's worktrees, polled at most every 5 s.
+
+        A listing failure reads as no rows: the homepage must not depend on git.
+        """
+        now = time.monotonic()
+        cached = getattr(self, '_worktree_cache', None)
+        if cached is not None and now - cached[0] < 5:
+            return cached[1]
+        try:
+            rows = worktree_runs.runs(_project_root())
+        except worktree_runs.WorktreeListError:
+            rows = []
+        self._worktree_cache = (now, rows)
+        return rows
+
     def _draw_homepage(self, h, w):
         """Centered, prompt-first landing screen; workflow rendering is separate."""
         color = getattr(self, 'color', {})
@@ -3925,13 +4052,29 @@ class UncleTUI:
                     text = '   ' + text
             bar.append((bar_y, x, text, selected))
             x += len(text)
+        # Runs in other worktrees, one line each under the bar; a single-run
+        # project draws nothing here. Long paths lose their head, not their tail.
+        run_y = bar_y + 1
+        for run in self._worktree_rows():
+            head = '#%s %s %s ' % (run['issue'], run['state'], 'locked' if run['locked'] else 'idle')
+            room = max(0, w - 1 - len(head))
+            path = run['path']
+            if len(path) > room:
+                path = ('…' + path[len(path) - room + 1:]) if room > 1 else ''
+            if not 0 <= run_y < h:
+                break
+            try:
+                self.stdscr.addnstr(run_y, 0, head + path, max(0, w - 1), color.get('accent', 0))
+            except curses.error:
+                pass
+            run_y += 1
         # The decorative logo yields its rows to the bar before the prompt does.
-        logo_fits = w >= LOGO_W + 4 and h >= len(LOGO) + footer_rows + bar_y + 1
+        logo_fits = w >= LOGO_W + 4 and h >= len(LOGO) + footer_rows + run_y
         logo = LOGO if logo_fits and not history else []
         body_rows = len(LOGO) if logo_fits else 0
         if h < 18:
             body_rows = 0
-        top = max(bar_y + 1, (h - body_rows - footer_rows) // 2)
+        top = max(run_y, (h - body_rows - footer_rows) // 2)
         logo_left = left + max(0, (width - LOGO_W) // 2)
         if logo:
             for i, line in enumerate(logo):
@@ -4021,7 +4164,17 @@ class UncleTUI:
                 pass
         if greeting:
             put(row + (0 if compact else 1), 'What can uncle do for you?', color.get('title', 0) | curses.A_BOLD, True)
-        put(row + (1 if compact else 3), ('/ commands   @ files   # issues   Ctrl-P menu  Tab to chat' if width >= 60 else '/ cmds  @ files  # issues  Ctrl-P menu  Tab chat' if width >= 52 else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 34 else '@ files  Ctrl-P menu Tab chat' if width >= 28 else 'Ctrl-P menu'), color.get('muted', curses.A_DIM), not build)
+        if build:
+            hint = ('/homepage to leave   / commands   @ files   # issues   Tab to chat' if width >= 66
+                    else '/homepage   / cmds  @ files  # issues  Tab chat' if width >= 48
+                    else '/homepage  / cmds  Tab chat' if width >= 28 else '/homepage')
+        else:
+            hint = ('/homepage   / commands   @ files   # issues   Ctrl-P menu  Tab to chat' if width >= 72
+                    else '/ commands   @ files   # issues   Ctrl-P menu  Tab to chat' if width >= 60
+                    else '/ cmds  @ files  # issues  Ctrl-P menu  Tab chat' if width >= 52
+                    else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 35
+                    else '@ files  Ctrl-P menu Tab chat' if width >= 29 else 'Ctrl-P menu')
+        put(row + (1 if compact else 3), hint, color.get('muted', curses.A_DIM), not build)
         put(row + (2 if compact else 5), '─' * width, color.get('muted', curses.A_DIM))
         text = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4).lstrip()
         placeholder = 'Ask about the failure · /do N · /resume' if getattr(self, 'recovery_active', False) else 'Talk to uncle while he builds' if self.state == 'running' else 'Describe an app or a change…'
@@ -5171,6 +5324,7 @@ class UncleTUI:
         dirty = True
         size = None
         while self.state != "quit":
+            dirty = self.poll_chat_progress() or dirty
             dirty = self.poll_home_chat() or dirty
             dirty = self.poll_delegation() or dirty
             dirty = self.poll_triage() or dirty

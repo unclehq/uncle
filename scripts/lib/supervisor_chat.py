@@ -312,3 +312,51 @@ class ChatRequest(SupervisorRequest):
                 return
             prompt += self.issue_context
         super()._run(command, prompt, env)
+
+
+def partial_reply(raw):
+    """The `reply` text decodable so far from a half-written envelope.
+
+    The supervisor answers with one JSON object, so the deltas arriving from
+    the runner are envelope characters, not prose: shown raw the operator
+    would watch `{"schema": 1, "reply": "` assemble itself. This pulls out
+    just the reply string, decoding what has arrived and ignoring the rest.
+
+    Returns '' until the key appears, which is the honest answer -- nothing
+    displayable has been produced yet.
+    """
+    if not raw:
+        return ''
+    marker = raw.find('"reply"')
+    if marker < 0:
+        return ''
+    index = raw.find(':', marker + 7)
+    if index < 0:
+        return ''
+    index += 1
+    while index < len(raw) and raw[index] in ' \t\r\n':
+        index += 1
+    if index >= len(raw) or raw[index] != '"':
+        return ''
+    index += 1
+    body, escaped = [], False
+    for char in raw[index:]:
+        if escaped:
+            body.append(char)
+            escaped = False
+        elif char == '\\':
+            body.append(char)
+            escaped = True
+        elif char == '"':
+            break
+        else:
+            body.append(char)
+    # A trailing escape that has not finished arriving is not yet decodable;
+    # \u needs four more characters after it.
+    text = ''.join(body)
+    while text:
+        try:
+            return json.loads('"%s"' % text)
+        except ValueError:
+            text = text[:-1]
+    return ''

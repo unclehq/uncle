@@ -3,11 +3,12 @@
 <img src="uncle.png" alt="Uncle" width="180">
 
 
-</div>
 
 # uncle
 
 **Give Uncle an issue. Talk to it while it works.  Get a verified pull request.**
+
+</div>
 
 Uncle is a terminal-native agentic software engineer that works inside your repository.
 

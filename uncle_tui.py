@@ -36,7 +36,7 @@ except ImportError:  # Windows has no curses in the stdlib
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
-from completion_preview import CompletionPreview, STAR_URL
+from completion_preview import CompletionPreview, STAR_URL, launch_spec
 from chat import Conversation, sanitize
 from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
@@ -1563,6 +1563,12 @@ class UncleTUI:
         if ev.get("event") == "start":
             if ev.get("stage", "") != self.status_stage and self.status_stage:
                 self.previous_stage = self.status_stage
+                # A web app is viewable the moment implementation stops writing
+                # code. Verification, the checklist and the audit still have to
+                # run -- and still gate completion -- but they take longer than
+                # the build did, and nothing is served by making someone wait
+                # out a review to see whether the page looks right.
+                self._preview_after_implementation(self.status_stage)
             self.status_runner = ev.get("runner", getattr(self, "status_runner", ""))
             self.status_model = ev.get("model", "")
             self.status_effort = ev.get("effort", "")
@@ -1665,6 +1671,7 @@ class UncleTUI:
         self.panel_scroll = None
         self.proc_done = False
         self.workflow_completed = False
+        self.early_preview_shown = False
         self.workflow_exit_reported = False
         self.support_checked = False
         self.completion_preview = None
@@ -1805,6 +1812,30 @@ class UncleTUI:
             return
         self.completion_preview = CompletionPreview(_project_root())
         self.chat_focus = "chat"
+
+    def _preview_after_implementation(self, finished_stage):
+        """Show a web app as soon as implementation ends, not at completion.
+
+        Only for `webpage` projects: a command project would start a server or
+        a process, which is the operator's call and not something to do behind
+        their back mid-run. launch_spec falls back to index.html, so an ordinary
+        static site needs no configuration.
+        """
+        if finished_stage not in ("implementation", "implementation-step"):
+            if not finished_stage.startswith("implementation-step-"):
+                return
+        if getattr(self, "completion_preview", None) is not None:
+            return
+        if getattr(self, "early_preview_shown", False):
+            return
+        try:
+            spec = launch_spec(_project_root())
+        except (OSError, ValueError):
+            return
+        if spec.get("kind") != "webpage":
+            return
+        self.early_preview_shown = True
+        self.completion_preview = CompletionPreview(_project_root())
 
     def _poll_completion_preview(self):
         preview = getattr(self, 'completion_preview', None)

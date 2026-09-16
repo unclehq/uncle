@@ -2202,7 +2202,13 @@ REPAIR
 
             check_scope_deviations
 
-            python3 "$ROOT/scripts/lib/fix-report-whitespace.py"
+            # Whitespace tidying is cosmetic. Under `set -e` a bare call
+            # made a nonzero status kill the driver between a successful
+            # stage and the record of it, leaving no stop reason and no
+            # completion marker -- a stage that had worked looked like a
+            # crash. Report it and continue; the gate still sees the diff.
+            python3 "$ROOT/scripts/lib/fix-report-whitespace.py" || \
+                echo "Whitespace tidy reported issues; continuing."
             git diff --stat > "$STATE_DIR/change-stat.txt"
 
             # Independent of the agent that just claimed its checks passed.

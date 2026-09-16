@@ -5,6 +5,11 @@ import subprocess
 from pathlib import Path
 
 
+# Top-level workflow markdown: the only files this script may rewrite.
+REPAIRABLE = re.compile(
+    r'([A-Z][A-Z0-9_]*\.md):(\d+): (trailing whitespace\.|new blank line at EOF\.)')
+
+
 def check():
     return subprocess.run(['git', '-c', 'core.quotePath=false', 'diff', '--check'],
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -16,7 +21,7 @@ def main():
         return 0
     fixes = {}
     for line in result.stdout.decode('utf-8', errors='replace').splitlines():
-        match = re.fullmatch(r'([A-Z][A-Z0-9_]*\.md):(\d+): (trailing whitespace\.|new blank line at EOF\.)', line)
+        match = REPAIRABLE.fullmatch(line)
         if match:
             name, number, problem = match.groups()
             fixes.setdefault(name, []).append((int(number), problem))
@@ -43,7 +48,19 @@ def main():
     import sys
     sys.stdout.buffer.write(result.stdout)
     sys.stderr.buffer.write(result.stderr)
-    return result.returncode
+    # `git diff --check` fails on ANY changed file with trailing whitespace:
+    # product code, tests, and the driver's own logs under .uncle/. This script
+    # repairs only top-level workflow markdown, so returning git's status made
+    # the driver die on whitespace it had just refused to touch -- and because
+    # the caller runs under `set -e` without checking, it died silently right
+    # after a stage reported success, with no stop reason and no completion
+    # marker written. Report everything, but fail only when something this
+    # script is responsible for is still wrong.
+    remaining = [line for line in result.stdout.decode('utf-8', errors='replace').splitlines()
+                 if REPAIRABLE.fullmatch(line)]
+    if remaining:
+        return result.returncode or 1
+    return 0
 
 
 if __name__ == '__main__':

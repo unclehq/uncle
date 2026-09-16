@@ -181,10 +181,21 @@ class TriageRequest:
             with open(self.log_path, 'wb') as log, open(prompt_path, 'rb') as stdin:
                 process = subprocess.Popen(launch_command(command), cwd=cwd, env=env, stdin=stdin,
                                            stdout=log, stderr=subprocess.STDOUT, **group_options())
+                streamed = ''
                 try:
                     for _ in range(TIMEOUT_TICKS):
                         if self.cancelled.is_set():
                             raise ValueError('Triage turn cancelled')
+                        # Show the reply forming instead of one blob at exit:
+                        # the newest assistant text so far, as it lands.
+                        try:
+                            if os.path.exists(self.log_path):
+                                text, _ = extract_reply_from_log(self.log_path)
+                                if text != streamed:
+                                    streamed = text
+                                    self.events.put(('delta', streamed))
+                        except OSError:
+                            pass
                         try:
                             code = process.wait(timeout=0.2)
                             break

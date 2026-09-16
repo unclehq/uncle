@@ -550,6 +550,80 @@ class TriageTests(unittest.TestCase):
         self.assertEqual(ui._config_row(), 'triage')
         self.assertIn('Recovery model', ui._config_items()[0])
 
+    def test_do_no_edit_proposal_skips_the_master(self):
+        ui = self.ui()
+        ui._triage_init()
+        ui.recovery_active = True
+        ui.triage_proposals = [(1, 'Resume as is; no files edited.')]
+        ui._triage_do(1)
+        self.assertIsNone(ui.triage_request)
+        self.assertEqual(self.prompts(), [])
+        self.assertTrue(ui.triage_offer_resume)
+        self.assertTrue(any('/do 1' in text for _, text in ui.triage_history))
+        self.assertTrue(any('No files changed.' in text for _, text in ui.triage_history))
+
+    def test_do_edit_proposal_still_uses_the_master(self):
+        ui = self.ui()
+        ui._triage_init()
+        ui.triage_proposals = [(2, 'Edit CHANGE_PLAN.md to record the fix.')]
+        ui._triage_do(2)
+        self.assertIsNotNone(ui.triage_request)
+        self.finish_turn(ui)
+        self.assertTrue(ui.triage_offer_resume)
+        self.assertTrue(any('/do 2' in text for _, text in ui.triage_history))
+
+    def test_master_reply_streams_before_completion(self):
+        stub = Path(self.tmp.name) / 'streamer.py'
+        stub.write_text(
+            'import json,time,sys\n'
+            'def say(t):\n'
+            '    print(json.dumps({"type":"assistant","message":{"content":[{"type":"text","text":t}]}}))\n'
+            '    sys.stdout.flush()\n'
+            'say("part one")\n'
+            'time.sleep(1)\n'
+            'say("part two and done")\n')
+        log = Path(self.tmp.name) / 'stream.jsonl'
+        request = triage_chat.TriageRequest([sys.executable, str(stub)], 'prompt', dict(os.environ),
+                                            str(self.project), str(log))
+        events = []
+        deadline = time.time() + 15
+        empties = 0
+        while time.time() < deadline and empties < 10:
+            try:
+                events.append(request.events.get(timeout=0.2))
+                empties = 0
+            except queue.Empty:
+                empties += 1
+            if events and events[-1][0] == 'reply':
+                break
+        kinds = [kind for kind, _ in events]
+        self.assertIn('delta', kinds)
+        self.assertEqual(kinds[-1], 'reply')
+        self.assertLess(kinds.index('delta'), kinds.index('reply'))
+        deltas = [value for kind, value in events if kind == 'delta']
+        self.assertEqual(deltas[0], 'part one')
+        self.assertEqual(deltas[-1], 'part two and done')
+
+    def test_poll_triage_streams_and_clears(self):
+        ui = self.ui()
+        ui._triage_init()
+        ui.triage_request = Mock()
+        ui.triage_request.events = queue.Queue()
+        ui.triage_pending = None
+        ui.triage_request.events.put(('delta', 'forming'))
+        self.assertTrue(ui.poll_triage())
+        self.assertEqual(ui.triage_stream, 'forming')
+        ui.triage_request.events.put(('delta', 'forming more'))
+        self.assertTrue(ui.poll_triage())
+        self.assertEqual(ui.triage_stream, 'forming more')
+        ui.triage_request.events.put(('reply', 'final text'))
+        ui.triage_pending = {'mode': 'diagnosis', 'digest': ''}
+        ui._triage_guard = Mock(return_value={'applied': [], 'refused': [], 'failed': [],
+                                              'no_edit': False, 'tainted': False, 'messages': []})
+        self.assertTrue(ui.poll_triage())
+        self.assertEqual(ui.triage_stream, '')
+        self.assertIn(('master', 'final text'), ui.triage_history)
+
 
 if __name__ == '__main__':
     unittest.main()

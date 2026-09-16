@@ -67,6 +67,10 @@ WORKFLOWS = [
 EFFORTS = ["high", "medium", "low"]
 ISSUE_MODES = [("auto", ""), ("change request", "--change"), ("new application", "--new"),
                ("change request in worktree", "--worktree")]
+# A triage proposal that says there is nothing to edit needs no master turn.
+NO_EDIT_PROPOSAL = re.compile(
+    r'(?i)\bno\s+(?:files?\s+)?edits?\b|\bno\s+files?\s+edited\b|\bnothing\s+to\s+(?:edit|change)\b'
+    r'|\bno\s+files?\s+changed\b|\bno\s+changes\s+(?:needed|required)\b|\bresume\s+as\s+is\b')
 # The per-project config lives in the caller's project root, so each project
 # gets its own model/effort/runner settings. The `uncle` launcher exports
 # UNCLE_PROJECT_ROOT (= the cwd it was invoked from) because it cd's into the
@@ -3226,6 +3230,7 @@ class UncleTUI:
             self.triage_error = ''
             self.triage_return = 'chat'
             self.triage_scroll = 0
+            self.triage_stream = ''
 
     def _workflow_dir(self):
         return os.path.join(_project_root(), '.uncle', 'workflow')
@@ -3346,7 +3351,49 @@ class UncleTUI:
         chosen = [p for p in self.triage_proposals if p[0] == number]
         if not chosen:
             raise ValueError('No proposal %d is selectable. Open triage and read the current reply.' % number)
-        self._triage_turn('execute', proposal=chosen[0])
+        if NO_EDIT_PROPOSAL.search(chosen[0][1]):
+            self._triage_apply_local(chosen[0])
+        else:
+            self._triage_turn('execute', proposal=chosen[0])
+
+    def _triage_apply_local(self, proposal):
+        """A proposal that needs no edit never pays for the master: the guard
+        verifies the untouched tree and the resume offer opens at once."""
+        root = _project_root()
+        wf = self._workflow_dir()
+        turn = self.triage_turn + 1
+        try:
+            info = self._triage_guard('begin', '--state-dir', wf, '--project', root, '--root', ROOT,
+                                      '--turn', str(turn), '--mode', 'execute')
+            summary = self._triage_guard('end', '--state-dir', wf, '--project', root, '--root', ROOT,
+                                         '--turn', str(turn), '--mode', 'execute',
+                                         '--digest', info['digest'],
+                                         '--proposal', 'Proposal %d: %s' % proposal)
+        except (OSError, ValueError, KeyError) as exc:
+            # The cheap path could not verify the tree; the master turn handles it.
+            self._triage_turn('execute', proposal=proposal)
+            return
+        self.triage_turn = turn
+        self.triage_proposals = []
+        self.triage_history.append(('operator', '/do %d — %s' % (proposal[0], sanitize(proposal[1]))))
+        notes = []
+        if summary.get('applied'):
+            notes.append('Applied: ' + ', '.join(summary['applied']))
+        if summary.get('refused'):
+            notes.append('Refused and reverted: ' + ', '.join(summary['refused']))
+        if summary.get('failed'):
+            notes.append('Not applied: ' + ', '.join(summary['failed']))
+        if summary.get('no_edit'):
+            notes.append('No files changed.')
+        notes.extend(summary.get('messages', []))
+        if summary.get('tainted'):
+            self.triage_tainted = 'Resume refused: ' + ' '.join(summary.get('messages') or ['the guard could not verify the tree.'])
+        if notes:
+            self.triage_history.append(('system', sanitize(' '.join(notes))))
+        if not summary.get('tainted'):
+            self.triage_offer_resume = True
+        if getattr(self, 'recovery_active', False):
+            self.chat_error = ''
 
     def poll_triage(self):
         request = getattr(self, 'triage_request', None)
@@ -3356,7 +3403,11 @@ class UncleTUI:
             kind, value = request.events.get_nowait()
         except queue.Empty:
             return False
+        if kind == 'delta':
+            self.triage_stream = value
+            return True
         self.triage_request = None
+        self.triage_stream = ''
         pending = self.triage_pending or {}
         self.triage_pending = None
         # The guard runs whatever the turn's outcome: a runner that crashed
@@ -3576,6 +3627,12 @@ class UncleTUI:
             for i, line in enumerate(str(text).splitlines() or ['']):
                 lines.extend((part, curses.A_BOLD if proposal else curses.A_NORMAL) for part in
                              (textwrap.wrap(('%s: ' % role if i == 0 else '') + line, max(1, w - 2)) or ['']))
+            lines.append(('', curses.A_NORMAL))
+        if self.triage_stream:
+            # The reply forming: shown as it lands, replaced by the final text.
+            for i, line in enumerate(self.triage_stream.splitlines() or ['']):
+                lines.extend((part, curses.A_NORMAL) for part in
+                             (textwrap.wrap(('master: ' if i == 0 else '') + line, max(1, w - 2)) or ['']))
             lines.append(('', curses.A_NORMAL))
         bottom = h - 5
         rows = max(0, bottom - 3)

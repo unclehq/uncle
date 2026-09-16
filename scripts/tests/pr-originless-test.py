@@ -247,18 +247,12 @@ class HandoffFixture(unittest.TestCase):
                                        cwd=self.repo, env=self.env, stderr=subprocess.PIPE).decode().strip()
 
     def engine(self, action, text='', **env):
+        # Signing is off in this fixture, so the engine commits itself; no
+        # operator step is simulated and no prompt for one may appear.
         result = subprocess.run(['bash', '-c', '. "$1"; change_pr_engine "$2"', 'test', str(LIB), action],
                                 cwd=self.repo, env=dict(self.env, **env), input=text, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        # Simulated operator commit in this disposable fixture only.
-        if 'Commit needs your help.' in result.stdout and 'No answer received' in result.stdout:
-            command = result.stdout.split('then run:\n', 1)[1].split('\nReturn here', 1)[0]
-            self.assertIn('git commit --no-gpg-sign', command)
-            self.ok(subprocess.run(['sh', '-c', command], cwd=self.repo, env=self.env, text=True,
-                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT))
-            resumed = self.engine(action, **env)
-            resumed.stdout = result.stdout + resumed.stdout
-            return resumed
+        self.assertNotIn('needs your help', result.stdout)
         return result
 
     def ok(self, result):
@@ -489,8 +483,8 @@ class OriginlessHandoffTests(HandoffFixture):
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
         self.ok(result)
         self.assertNotIn('Base repository [', result.stdout)
-        self.assertIn('Commit needs your help.', result.stdout)
-        self.ok(self.engine('handoff'))
+        self.assertNotIn('needs your help', result.stdout)
+        self.assertIn('PR: https://github.com/owner/repo/pull/7', result.stdout)
         self.assertEqual(len(self.creates()), 1, result.stdout)
         self.assertFalse((self.state / 'issue-closed').exists())
         self.assertNotIn('Closes', (self.root / 'server.body').read_text())

@@ -7,7 +7,7 @@ import sys
 
 def validate(path):
     text = Path(path).read_text(encoding='utf-8')
-    matches = list(re.finditer(r'^##\s+(AR-[A-Za-z0-9]+):\s*\S.*$', text, re.M))
+    matches = list(re.finditer(r'^##[ \t]+(AR-[A-Za-z0-9]+)(?:[ \t]+\([^\n)]+\))?[ \t]*(?::|—|–|-)[ \t]+\S[^\n]*$', text, re.M))
     seen = set()
     for index, match in enumerate(matches):
         identifier = match[1]
@@ -15,8 +15,16 @@ def validate(path):
             raise ValueError('Duplicate finding ID: ' + identifier)
         seen.add(identifier)
         body = text[match.end():matches[index+1].start() if index+1 < len(matches) else len(text)]
+        body = re.split(r'^##[ \t]+', body, maxsplit=1, flags=re.M)[0]
+        fields = list(re.finditer(
+            r'^[ \t]*(?:[-*+][ \t]+)?(?:\*\*)?'
+            r'(Severity|References|Failure|Fix|Verify|Observation)(?:\*\*)?:', body, re.M))
+        values = {}
+        for i, field in enumerate(fields):
+            value = body[field.end():fields[i+1].start() if i+1 < len(fields) else len(body)]
+            values[field[1]] = value.strip().strip('*').strip()
         for field in ('Severity', 'References', 'Failure', 'Fix', 'Verify'):
-            if not re.search(r'^-\s+' + field + r':\s*\S[^\n]*$', body, re.M):
+            if not values.get(field) or not re.search(r'\w', values[field]):
                 raise ValueError(identifier + ' missing ' + field)
     if not re.search(r'^##[ \t]+(?:\d+[.)][ \t]+)?(?:\*\*)?Overall assessment(?:\*\*)?[ \t]*#*[ \t]*\r?\n(?:(?:[ \t]*\r?\n)*)(?![ \t]*#)[ \t]*[^\s#]', text, re.M | re.I):
         raise ValueError('Missing nonempty Overall assessment section')

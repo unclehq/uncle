@@ -20,6 +20,23 @@ class Review(unittest.TestCase):
                 p.write_text(text)
                 with self.assertRaises(ValueError): module.validate(p)
 
+    def test_equivalent_markdown_and_missing_substantive_fields(self):
+        alternate = FINDING.replace('## AR-001:', '## AR-001 (Critical) —')
+        for field in ('Severity','References','Failure','Fix','Verify'):
+            alternate = alternate.replace('- '+field+':', '**'+field+'**:')
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'review'
+            p.write_text(alternate)
+            module.validate(p)
+            p.write_text(alternate.replace('**Failure**: Missing output', '**Failure**:\n1. Missing output'))
+            module.validate(p)
+            for text in (
+                    alternate.replace('**Failure**: Missing output\n',''),
+                    '## AR-014 (Low) — Observation\n**Severity**: Low\n**References**: source\n**Observation**: No fix needed.\n'+CLEAN,
+                    alternate.replace('**Verify**: Assert output\n','')+'\n## Other\n- Verify: unrelated\n'):
+                p.write_text(text)
+                with self.assertRaises(ValueError):module.validate(p)
+
     def test_packet_selects_family_and_refreshes(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d)

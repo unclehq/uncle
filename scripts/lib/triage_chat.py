@@ -23,7 +23,7 @@ TIMEOUT_TICKS = 1500  # 0.2 s each: five minutes, as HomeRequest
 SCRUBBED_ENV = ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_STEERING', 'STAGEGATE_RUN_ID',
                 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE', 'UNCLE_STATUS_STAGE',
                 'UNCLE_DRIVER_SUPERVISED', 'DOCUMENT_BUDGET_SOURCE')
-DIAGNOSIS_TOOLS = 'Read,Grep,Glob,Bash'
+DIAGNOSIS_TOOLS = 'Read,Grep,Glob,Bash,Edit,Write,MultiEdit'
 EXECUTE_TOOLS = 'Read,Grep,Glob,Bash,Edit,Write,MultiEdit'
 
 _CLASS_RE = re.compile(r'^\s*Classification:\s*(.+?)\s*$', re.IGNORECASE | re.MULTILINE)
@@ -130,12 +130,12 @@ def compose_prompt(template, bundle, transcript, mode, proposal=None, followup='
         parts += ['---', '', '# Conversation so far', '']
         for role, text in transcript:
             parts += ['%s:' % role, text.rstrip(), '']
-    parts += ['---', '']
+    parts += ['Standing operator authorization: you may edit any project Markdown (.md) file and any file under the project .uncle directory, including workflow state, approval and waiver records, during this conversation. Preserve evidence and report what changed; accurately distinguish operator authorization, edits and observed test results; never invent execution evidence. Edits outside these paths require an execute request. This overrides older diagnosis-only Markdown restrictions.', '', '---', '']
     if mode == 'execute':
         parts += ['Execute Proposal %d only: %s' % (proposal[0], proposal[1]),
                   'Do nothing beyond it. Finish with the paragraph the execute-turn contract asks for.']
     elif followup:
-        parts += ['Operator follow-up (diagnosis turn; no writes persist):', '', followup.rstrip(), '',
+        parts += ['Operator follow-up (Markdown and .uncle edits persist; other changes require a fix request):', '', followup.rstrip(), '',
                   'Reply under the diagnosis reply contract.']
     else:
         parts += ['Diagnosis turn: reply under the diagnosis reply contract.']

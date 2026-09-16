@@ -1703,6 +1703,7 @@ implementation_complete() {
 }
 
 while true; do
+    python3 "$ROOT/scripts/lib/rerun_stage.py" change || exit 1
     state="$(get_state)"
     if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi
 
@@ -1794,6 +1795,13 @@ while true; do
                 adversarial-review \
                 "$CODEX_EFFORT_REVIEW"
 
+            set_state VALIDATE_ADVERSARIAL_REVIEW
+            ;;
+
+        ADVERSARIAL_REVIEW)
+            verify_approval BASELINE_REPORT.md BASELINE_REPORT
+            verify_approval CHANGE_SPEC.md CHANGE_SPEC
+            run_codex prompts/change/adversarial-review.md ADVERSARIAL_REVIEW.md adversarial-review "$CODEX_EFFORT_REVIEW"
             set_state VALIDATE_ADVERSARIAL_REVIEW
             ;;
 

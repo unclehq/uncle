@@ -8,6 +8,27 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'lib'))
 from evidence_index import packet
 
 class Index(unittest.TestCase):
+    def test_audit_index_refreshes_claims_and_marks_missing_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); state=root/'.uncle/workflow';state.mkdir(parents=True)
+            report=root/'VERIFICATION_REPORT.md'
+            report.write_text('| ID | Required | Status | Evidence |\n|---|---|---|---|\n| MC-H-1 | YES | PASS | `tests/page.py:12` |\n')
+            (state/'delivery-summary.tsv').write_text('id\tstatus\n')
+            for family in ('app','change'):
+                text=packet(root,state,'final-audit',family)
+                self.assertIn('Dedicated audit evidence index',text)
+                path=state/'handoffs'/f'audit-evidence-{family}.json'
+                data=json.loads(path.read_text())
+                self.assertEqual(data['claims'][0]['id'],'MC-H-1')
+                self.assertEqual(data['claims'][0]['line'],3)
+                self.assertIn('UNRESOLVED',data['claims'][0]['mapping'])
+                self.assertTrue(data['files']['@delivery-summary.tsv']['header_only'])
+                self.assertEqual(data['files']['@plan-recovery.json']['status'],'missing or unreadable')
+            report.unlink()
+            packet(root,state,'final-audit','app')
+            data=json.loads((state/'handoffs/audit-evidence-app.json').read_text())
+            self.assertEqual(data['claims'],[])
+
     def test_refresh_reuse_and_delete(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); state=root/'.uncle/workflow'; brief=root/'REQUIREMENTS.md'

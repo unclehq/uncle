@@ -351,7 +351,21 @@ run_workflow() {
     # UNCLE_CLINE_MODEL / UNCLE_CLINE_EFFORT are deliberately not exported:
     # they are global overrides inside the cline shims and would win over the
     # per-stage settings the drivers resolve from .uncle/config.
-    local approval_name
+    local approval_name uncle_worktree
+
+    # The run gets its own directory, so a second piece of work can start
+    # while this one is going. Done here rather than in the driver: the driver
+    # is handed a project root by whoever launched it and relocating under its
+    # caller would surprise every one of them. Declining is silent -- no git,
+    # no brief, already in a worktree, or WORKFLOW_WORKTREE=0.
+    . "$ROOT/scripts/lib/worktrees.sh"
+    uncle_worktree="$(worktree_auto "$PWD" || true)"
+    if [[ -n "$uncle_worktree" ]]; then
+        echo "Working in $uncle_worktree"
+        cd "$uncle_worktree" || return 1
+        export UNCLE_PROJECT_ROOT="$PWD"
+    fi
+
     approval_name="$(config_get misc.approval_name)"
     if [[ "$(config_get misc.auto_mode)" == true ]]; then
         UNCLE_APPROVAL_NAME="$approval_name" launch "$@" --unattended

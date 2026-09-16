@@ -1696,7 +1696,6 @@ class UncleTUI:
         self.home_history.append(("system", "Working in " + sanitize(directory)))
 
     def start_workflow(self):
-        self._enter_run_worktree()
         fd, self.status_path = tempfile.mkstemp(prefix="uncle-status-", suffix=".jsonl")
         os.close(fd)
         env = dict(os.environ)
@@ -5317,6 +5316,9 @@ class UncleTUI:
         if self.workflow_idx == 2:
             self.direct_issue = _direct_origin_issue()
         self.recovery_active = False
+        # Before the state flips: everything after this reads _project_root(),
+        # and it must already name the directory the run will happen in.
+        self._enter_run_worktree()
         self.state = "running"
         self.start_workflow()
 

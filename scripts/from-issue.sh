@@ -206,6 +206,9 @@ ISSUE_ARG="$1"
 MODE=""
 SEED_ONLY=0
 ISSUE_WORKFLOW_ARGS=()
+# Left off here on purpose. Automatic worktrees are applied by the launcher
+# before this script runs, which covers every entry point rather than just
+# this one; --worktree stays as the explicit, change-only older path.
 WORKTREE=0
 WORKTREE_DIR=""
 WORKTREE_BRANCH=""
@@ -219,6 +222,7 @@ while [[ $# -gt 0 ]]; do
         --new) MODE="new" ;;
         --unattended) ISSUE_WORKFLOW_ARGS+=(--unattended); UNATTENDED=1 ;;
         --worktree) WORKTREE=1 ;;
+        --no-worktree) WORKTREE=0 ;;
         --worktree-dir)
             if [[ -z "${2:-}" ]]; then echo "--worktree-dir requires a path."; usage; exit 1; fi
             WORKTREE=1; WORKTREE_DIR="$2"; shift ;;

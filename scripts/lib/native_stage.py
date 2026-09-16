@@ -60,6 +60,7 @@ class Stage:
                 self.prompt = policy + '\n\n' + self.prompt
         self.events = queue.Queue()
         self.child = None
+        self.pooled = False
         self.usage = dict.fromkeys(KEYS, 0)
         self.usage_baseline = {}
         self.cost = None
@@ -178,7 +179,16 @@ class Stage:
         threading.Thread(target=watch, daemon=True).start()
 
     def spawn(self, command, env=None):
-        self.child = timed_popen(launch_command(command), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        command = launch_command(command)
+        owner = os.environ.get('UNCLE_RUNNER_POOL_OWNER_PID', '')
+        if owner and os.environ.get('UNCLE_RUNNER_REUSE', '1') != '0':
+            pool = Path(os.getcwd()) / '.uncle' / 'workflow' / 'runner-pool'
+            command = [sys.executable, '-B', str(Path(__file__).with_name('runner_pool.py')),
+                       'connect', '--root', str(pool), '--owner', owner,
+                       '--runner', self.runner, '--side', self.side, '--', *command]
+            self.pooled = True
+            self.status('runner_pool', owner=int(owner), pool=str(pool))
+        self.child = timed_popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=sys.stderr, text=True, encoding='utf-8', bufsize=1,
                                       env=env or self.env, **group_options())
         def read():
@@ -186,6 +196,10 @@ class Stage:
                 for line in self.child.stdout:
                     try:
                         value = json.loads(line)
+                        if value.get('type') == 'runner_pool':
+                            self.status('runner_reused' if value.get('reused') else 'runner_started',
+                                        pool_pid=value.get('pool_pid'))
+                            continue
                         self.read_cache.observe(value)
                         self.timing.observe(value)
                         self.events.put(value)
@@ -501,7 +515,11 @@ class Stage:
                     self.status('steering_unconfirmed',message_id=id,detail='Stage ended without a correlated reply')
                 if self.child is not None:
                     if self.child.poll() is None:
-                        kill_tree(self.child);self.child.wait()
+                        if self.pooled:
+                            self.child.terminate()
+                        else:
+                            kill_tree(self.child)
+                        self.child.wait()
                     finish_check(self.child)
         result=dict(type='result',uncle_timing_native=True,subtype='success' if success else 'error_during_execution',is_error=not success,
             error_detail=error,usage=self.usage,total_cost_usd=self.cost,input_includes_cache=self.inclusive,

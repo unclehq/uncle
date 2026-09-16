@@ -338,7 +338,7 @@ class PersonChannelTests(Fixture):
         j = self.assert_created()
         self.assertFalse(j['requires_signature'])
         self.assertNotIn('manual_signing', j)
-        self.assertEqual([line.split(' ')[0] for line in self.commits()], ['commit-tree'])
+        self.assertEqual([line.split(' ')[0] for line in self.commits()], ['commit'])
         self.assertEqual(j['attestation']['gate_publication'], 'APPROVED (human)')
         self.assertEqual(self.ledger.read_bytes(), before)
         self.assertEqual(before, LEDGER.encode())
@@ -577,7 +577,7 @@ class IsolationTests(Fixture):
         self.ok(result)
         self.assertNotIn('needs your help', result.stdout)
         self.assert_created()
-        self.assertEqual([line.split(' ')[0] for line in self.commits()], ['commit-tree'])
+        self.assertEqual([line.split(' ')[0] for line in self.commits()], ['commit'])
         self.assertFalse((self.root / 'signer.log').exists(), 'the inherited signer was invoked')
         self.assertEqual(self.git('config', '--get', 'commit.gpgsign'), 'false')
 

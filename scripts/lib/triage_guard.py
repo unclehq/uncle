@@ -60,6 +60,8 @@ def sha256(path):
 def is_forbidden(rel):
     """Whether a project-relative path may never be written by the master."""
     parts = rel.split('/')
+    if rel == '.uncle/workflow/triage-actions.tsv' or rel.startswith('.uncle/workflow/triage/'):
+        return True
     if parts[0] == '.uncle':
         return False
     if rel.lower().endswith('.md') and '.git' not in parts:

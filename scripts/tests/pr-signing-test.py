@@ -94,18 +94,20 @@ class SigningTests(unittest.TestCase):
 
     def test_unsigned_commit_is_automatic(self):
         # T-1 / AC-1: signing off creates the commit itself; nobody is asked.
-        self.signing_config(0, 'false\n')
-        self.ns['head'] = lambda: 'old'
-        self.git.side_effect = lambda *a, **k: 'auto'  # mocked engine git; no process runs
+        run = self.mock_git_runs(result(0, 'false\n'), result(0))
+        self.ns['head'] = lambda: 'auto'
         self.ns['prepare_commit'](self.j)
         self.ask.assert_not_called()
-        self.git.assert_called_once_with('commit-tree', 'tree', '-p', 'old', '-m', 'Change')
+        self.git.assert_called_once_with('read-tree', 'tree')
+        self.assertEqual(run.call_args_list[1].args[0],
+                         ['git', 'commit', '--no-gpg-sign', '-m', 'Change'])
         self.assertEqual(self.j['intended_head'], 'auto')
         self.assertFalse(self.j['requires_signature'])
         self.assertNotIn('manual_signing', self.j)
         self.ns['validate'].assert_called_once_with(self.j)
         self.ns['save'].assert_called_once_with(self.j)
-        self.assertEqual(self.ns['subprocess'].run.call_args.args[0], ['git', 'config', '--bool', '--get', 'commit.gpgsign'])
+        self.assertEqual(run.call_args_list[0].args[0],
+                         ['git', 'config', '--includes', '--bool', '--get', 'commit.gpgsign'])
 
     def test_unreadable_signing_config_asks_for_a_signature(self):
         # T-2 / AC-5: UNCERTAIN routes to the human signing handoff.
@@ -122,12 +124,11 @@ class SigningTests(unittest.TestCase):
     def test_signing_error_from_automatic_commit_falls_back_to_person(self):
         # T-3 / AC-3: git reports a signing failure; the reason is printed and the person signs.
         import contextlib, io
-        self.signing_config(0, 'false\n')
+        self.mock_git_runs(result(0, 'false\n'),
+                           result(128, err='error: gpg failed to sign the data'))
         self.ns['head'] = Mock(side_effect=['old', 'new'])
         def git(*a, **k):
-            if a[0] == 'commit-tree':
-                raise ValueError('Command failed: git commit-tree tree -p old -m Change\nerror: gpg failed to sign the data')  # mocked stderr
-            return {'rev-parse': 'tree', 'rev-list': 'new old', 'verify-commit': ''}[a[0]]
+            return {'read-tree': '', 'rev-parse': 'tree', 'rev-list': 'new old', 'verify-commit': ''}[a[0]]
         self.git.side_effect = git
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -142,9 +143,9 @@ class SigningTests(unittest.TestCase):
 
     def test_other_commit_tree_failure_raises_without_prompt(self):
         # T-4 / AC-6: a non-signing failure is an error, not a handoff.
-        self.signing_config(0, 'false\n')
+        self.mock_git_runs(result(0, 'false\n'),
+                           result(128, err='fatal: not a valid object name tree'))
         self.ns['head'] = lambda: 'old'
-        self.git.side_effect = ValueError('Command failed: git commit-tree tree -p old -m Change\nfatal: not a valid object name tree')  # mocked stderr
         with self.assertRaisesRegex(ValueError, 'not a valid object name'):
             self.ns['prepare_commit'](self.j)
         self.ask.assert_not_called()
@@ -327,7 +328,8 @@ class SigningTests(unittest.TestCase):
         with self.fixture() as (repo, g):
             g('config', '--unset', 'commit.gpgsign')
             self.assertEqual(self.config_value()[0], 1)
-            hook = Path(repo, '.git', 'hooks', 'pre-commit')
+            hook_dir = Path(repo) / '.git' / 'hooks'
+            hook = hook_dir / 'pre-commit'
             hook.write_text('#!/bin/sh\necho "policy: signing required for every commit" >&2\nexit 1\n')
             hook.chmod(0o755)
             self.ask.return_value = ''

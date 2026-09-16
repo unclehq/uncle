@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import sys
 import uuid
+from supervisor import state_digest
 
 APP = {'requirements':'REQUIREMENTS','project-plan':'PROJECT_PLAN','adversarial-review':'ADVERSARIAL_REVIEW','updated-plan':'UPDATED_PLAN','preflight':'PREFLIGHT','implementation':'IMPLEMENT','test-review':'TEST_REVIEW','manual-checklist':'MANUAL_CHECKLIST','execute-checklist':'EXECUTE_CHECKLIST','final-audit':'FINAL_AUDIT'}
 CHANGE = {'baseline':'ANALYZE','change-plan':'PLAN','adversarial-review':'ADVERSARIAL_REVIEW','updated-change-plan':'UPDATED_PLAN','implementation':'IMPLEMENT','manual-checklist':'CHECKLIST','execute-checklist':'EXECUTE_CHECKLIST','final-audit':'FINAL_AUDIT'}
@@ -35,6 +36,17 @@ def consume(root, family):
         p=state/item
         if p.exists(): p.rename(archive/item)
     pending=state/'state.rerun-pending';pending.write_text(mapping[name]+'\n');os.replace(pending,state/'state')
+    # A supervisor retry retains a correction before requesting the rewind.
+    # Bind that note to the newly reset control state so the next stage launch
+    # can claim it. Explicit /run requests normally have no such note.
+    note=state/'supervision'/('retry-note-'+name+'.json')
+    if note.is_file():
+        data=json.loads(note.read_text())
+        if data.get('delivery')=='pending':
+            data['state_digest']=state_digest(state)
+            temporary=note.with_name(note.name+'.pending')
+            temporary.write_text(json.dumps(data,sort_keys=True)+'\n')
+            os.replace(temporary,note)
     request.unlink()
     print('Explicit rerun: '+name+'. Previous reports preserved at '+str(archive))
 

@@ -189,6 +189,11 @@ Coding agent
 
 Uncle supervises the work while maintaining authority boundaries.
 
+During a build, native runner processes are pooled by runner, permission side,
+model and command profile. Once started, a compatible runner stays alive for
+later stages and is terminated when the workflow driver exits. Set
+`UNCLE_RUNNER_REUSE=0` to diagnose a runner with the previous one-process-per-stage behavior.
+
 The supervisor can observe, explain, diagnose, and steer work. It cannot silently grant itself the authority to waive integrity requirements or publish changes.
 
 You stay in the loop without having to babysit the underlying agents.
@@ -324,6 +329,46 @@ See [GitHub integration](GITHUB_INTEGRATION.md) for setup, signing, approvals, a
 
 Uncle includes interactive triage for failed stages and optional supervision for detecting and correcting problems while work is still running.
 
+Supervision is configured with `supervision.enabled`, `supervision.runner`,
+`supervision.model`, `supervision.effort`, `supervision.max_interventions`,
+`supervision.steering_timeout_seconds`, `supervision.stage_time_seconds`,
+`supervision.stage_tokens`, `supervision.call_timeout_seconds`,
+`supervision.max_calls_per_run`, `supervision.call_max_cost_usd`, and
+`supervision.delegate_gates` in `.uncle/config`.
+
+The defaults are:
+
+```text
+supervision.enabled false
+supervision.runner claude
+supervision.model sonnet
+supervision.effort medium
+supervision.max_interventions 2
+supervision.steering_timeout_seconds 120
+supervision.stage_time_seconds 1800
+supervision.stage_tokens 0
+supervision.call_timeout_seconds 300
+supervision.max_calls_per_run 8
+supervision.call_max_cost_usd 0.5
+supervision.delegate_gates none
+```
+
+Only `supervision.runner claude` is currently supported. Use `/delegate` for
+standing dialog delegation, `/app-input` for application input, and phrases
+such as “answer this one” or “tell it to” for a single explicit action.
+
+### Authority boundary
+
+Supervisor answers are recorded in `gate-answers.jsonl` as
+`supervisor:explicit:<name>` or `supervisor:standing:<name>`. Metrics identify
+their usage as usage_scope 'supervisor chat'. Decisions involving signing, publication and waiver
+decisions remain with the user.
+
+### Recovery
+
+Recovery can diagnose stopped stages and propose repairs while preserving the
+same authority boundary.
+
 These systems operate within Uncle's authority boundaries. Protected approvals, reviewer artifacts, waivers, workflow state, and publication controls remain outside the coding agent's authority.
 
 See the workflow documentation for the detailed supervision, triage, recovery, security, and configuration model.
@@ -342,4 +387,3 @@ Found a bug or have a concrete feature request? Open an [issue](../../issues).
 
 ```
 ```
-

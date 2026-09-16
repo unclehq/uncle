@@ -1,4 +1,4 @@
-import io,json,os
+import io,json,os,subprocess
 from pathlib import Path
 import sys,tempfile,unittest
 from unittest.mock import patch
@@ -10,6 +10,9 @@ class Reuse(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             old=os.getcwd();os.chdir(d)
             try:
+                subprocess.run(['git','init','-q'],check=True)
+                subprocess.run(['git','config','commit.gpgsign','false'],check=True)
+                subprocess.run(['git','config','tag.gpgsign','false'],check=True)
                 state=Path('.uncle/workflow');(state/'approvals').mkdir(parents=True)
                 Path('app.txt').write_text('source')
                 (state/'approvals/IMPLEMENTATION_REVIEW.sha256').write_text('approved')
@@ -19,6 +22,25 @@ class Reuse(unittest.TestCase):
                     approval_snapshot.main('python3 --version',state)
                     Path('app.txt').write_text('modified')
                     with self.assertRaises(ValueError):approval_snapshot.main('python3 --version',state)
+            finally:os.chdir(old)
+
+    def test_approval_ignores_generated_uncle_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            old=os.getcwd();os.chdir(d)
+            try:
+                subprocess.run(['git','init','-q'],check=True)
+                subprocess.run(['git','config','commit.gpgsign','false'],check=True)
+                subprocess.run(['git','config','tag.gpgsign','false'],check=True)
+                state=Path('.uncle/workflow');(state/'approvals').mkdir(parents=True)
+                evidence=Path('.uncle/verify/check.log');evidence.parent.mkdir(parents=True)
+                Path('app.txt').write_text('source');evidence.write_text('first run')
+                (state/'green-check.current.tsv').write_text('PASS\tcheck\n')
+                (state/'approvals/IMPLEMENTATION_REVIEW.sha256').write_text('approved')
+                approval_snapshot.main('prepare',state);approval_snapshot.main('record',state)
+                evidence.write_text('rerun output')
+                approval_snapshot.main('check',state)
+                Path('app.txt').write_text('modified')
+                with self.assertRaises(ValueError):approval_snapshot.main('check',state)
             finally:os.chdir(old)
 
     def test_reuse_is_opt_in_and_invalidates(self):

@@ -108,7 +108,28 @@ make_agent_stub() {
 #!/usr/bin/env bash
 printf '$tag %s\n' "\$*" >> "\$ARGV_LOG"
 cat > /dev/null
-printf '# artifact\n' > REQUIREMENTS_INTERPRETATION.md
+cat > REQUIREMENTS_INTERPRETATION.md <<'DOC'
+## Required functionality
+Required.
+## Optional functionality
+None.
+## Constraints
+None.
+## User-visible behaviors
+Visible.
+## System behaviors
+System behavior.
+## Failure behaviors
+Fail clearly.
+## Ambiguities
+None.
+## Assumptions
+None.
+## Explicit non-goals
+None.
+## Definition of done
+Done.
+DOC
 printf '# baseline\n\n## 8. Verification commands\n\n\`\`\`sh\ntrue\n\`\`\`\n' > BASELINE_REPORT.md
 printf '# spec\n' > CHANGE_SPEC.md
 printf '# plan\n' > CHANGE_PLAN.md
@@ -266,7 +287,16 @@ cat > "$TMP/config-reviewer" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$ARGV_LOG"
 while [[ $# -gt 0 ]]; do
-    if [[ "$1" == --output-last-message ]]; then printf 'review\n' > "$2"; break; fi
+    if [[ "$1" == --output-last-message ]]; then
+        cat > "$2" <<'DOC'
+## Overall assessment
+No findings.
+
+## Findings
+None.
+DOC
+        break
+    fi
     shift
 done
 EOF

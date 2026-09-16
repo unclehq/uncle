@@ -21,6 +21,8 @@ class Paths(unittest.TestCase):
             (root/'new file.txt').write_text('new')
             (root/'old.txt').write_text('old')
             (root/'FINAL_AUDIT.md').write_text('generated')
+            evidence=root/'.uncle/verify/check.log';evidence.parent.mkdir(parents=True)
+            evidence.write_text('generated evidence')
             history=root/'.uncle/workflow-history/run';history.mkdir(parents=True)
             for i in range(500): (history/str(i)).write_text('event')
             baseline=root/'.uncle/baseline';baseline.write_text('old.txt\n.uncle/baseline\n')
@@ -32,6 +34,6 @@ class Paths(unittest.TestCase):
 
     def test_canonical_patterns(self):
         self.assertIn('FINAL_AUDIT.md',artifact_patterns())
-        self.assertIn('.uncle/workflow-history/*',artifact_patterns())
+        self.assertIn('.uncle/*',artifact_patterns())
 
 if __name__=='__main__':unittest.main()

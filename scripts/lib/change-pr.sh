@@ -391,9 +391,12 @@ def prepare_commit(j):
     # includeIf, worktree and environment levels itself. Only a definite
     # "off" reading commits automatically; "on" and unreadable both hand the
     # commit to the person, who signs.
-    setting = subprocess.run(['git', 'config', '--bool', '--get', 'commit.gpgsign'],
+    setting = subprocess.run(['git', 'config', '--includes', '--bool', '--get', 'commit.gpgsign'],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    reason = None
     if setting.returncode not in (0, 1):
+        reason = ('cannot read commit signing configuration: '
+                  + setting.stderr.strip().split('\n')[0])
         print('Cannot read commit signing configuration; the commit needs your signature: '
               + setting.stderr.strip().split('\n')[0], flush=True)
         j['requires_signature'] = True
@@ -401,6 +404,7 @@ def prepare_commit(j):
         j['requires_signature'] = True
     else:
         j['requires_signature'] = False
+        j.pop('manual_signing', None)
         automatic_commit(j)
         return
     j['manual_signing'] = True
@@ -412,20 +416,24 @@ SIGNING_ERROR = re.compile(r'(?i)sign|gpg|pinentry|ssh-keygen')
 
 
 def automatic_commit(j):
-    # One object, no sign flag: git's own configuration still decides. If git
-    # reports a signing failure anyway, the person signs instead.
-    try:
-        candidate = git('commit-tree', j['commit_tree'], '-p', j['original_head'], '-m', j['title'])
-    except ValueError as error:
-        stderr = str(error).split('\n', 1)[1] if '\n' in str(error) else ''
-        if not SIGNING_ERROR.search(stderr):
-            raise
-        reason = stderr.strip().split('\n')[0]
-        j.update(requires_signature=True, manual_signing=True, signing_fallback=reason)
+    # Stage the exact audited tree and let normal hooks run. The explicit flag
+    # prevents inherited configuration from invoking the user's signer.
+    git('read-tree', j['commit_tree'])
+    committed = subprocess.run(['git', 'commit', '--no-gpg-sign', '-m', j['title']],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if committed.returncode:
+        reason = committed.stderr.strip()
+        if not SIGNING_ERROR.search(committed.stderr):
+            raise ValueError('Automatic commit failed: ' + reason.split('\n')[0])
+        j.update(requires_signature=True, manual_signing=True,
+                 signing_fallback=reason.split('\n')[0])
         save(j)
-        print('Automatic commit failed; git requires a signature: ' + reason, flush=True)
-        manual_signed_commit(j)
+        print('Automatic commit failed; git requires a signature: '
+              + reason.split('\n')[0], flush=True)
+        manual_signed_commit(j, reason)
         return
+    candidate = head()
+    j.pop('manual_signing', None)
     j['intended_head'] = candidate
     try:
         validate(j)
@@ -815,9 +823,22 @@ def record_pr(j, row):
 
 
 def handoff(j):
+    # Recover an exact commit that completed immediately before its journal
+    # update. This check must precede validate(), whose job is to reject any
+    # other unexpected HEAD movement.
+    if (j.get('phase') == 'prepared' and not j.get('intended_head')
+            and branch() == j['head_branch'] and head() != j['original_head']
+            and git('rev-parse', 'HEAD^{tree}') == j['commit_tree']
+            and git('rev-parse', 'HEAD^') == j['original_head']):
+        j['intended_head'] = head()
+        j['requires_signature'] = False
+        j.pop('manual_signing', None)
+        save(j)
     if j.get('manual_signing'):
         if j['intended_head']:
             manual_signed_commit(j)
+        elif j.get('signing_fallback'):
+            manual_signed_commit(j, j['signing_fallback'])
         else:
             # A pending journal from before automatic commits redetects config.
             prepare_commit(j)
@@ -879,9 +900,18 @@ def handoff(j):
         j.update(phase='prepared', title=title, body=body)
         save(j)  # Consent and mutation intent precede commit creation.
     if j['phase'] == 'prepared':
+        # A commit may have completed immediately before an interruption. If
+        # HEAD is the exact audited child on Uncle's publication branch, adopt
+        # it instead of creating a duplicate commit or rejecting the resume.
+        if (not j['intended_head'] and branch() == j['head_branch']
+                and head() != j['original_head']
+                and git('rev-parse', 'HEAD^{tree}') == j['commit_tree']
+                and git('rev-parse', 'HEAD^') == j['original_head']):
+            j['intended_head'] = head()
+            j['requires_signature'] = False
+            j.pop('manual_signing', None)
+            save(j)
         validate(j)
-        if not j['intended_head']:
-            prepare_commit(j)
         current_branch = branch()
         if current_branch != j['head_branch']:
             # Branch creation precedes switching; a crash resumes the same ref.
@@ -893,6 +923,9 @@ def handoff(j):
                     raise ValueError('Pre-created branch is missing; rerun FINAL_AUDIT.')
                 git('update-ref', 'refs/heads/' + j['head_branch'], j['original_head'], '0' * 40)
             git('symbolic-ref', 'HEAD', 'refs/heads/' + j['head_branch'])
+        if not j['intended_head']:
+            prepare_commit(j)
+        current_branch = branch()
         if head() == j['original_head']:
             git('update-ref', 'HEAD', j['intended_head'], j['original_head'])
         # Update only the index after the exact tree was approved; never reset,

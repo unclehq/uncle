@@ -86,6 +86,7 @@ uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
 
 STATE_DIR=".uncle/workflow"
+export UNCLE_RUNNER_POOL_OWNER_PID="${UNCLE_RUNNER_POOL_OWNER_PID:-$$}"
 APPROVAL_DIR="$STATE_DIR/approvals"
 # Every gate an unattended run passed without a person, dated. The whole cost
 # of the flag in one file.
@@ -280,6 +281,13 @@ stage_reviewer_cmd() {
     else
         uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
     fi
+}
+
+stage_command_overridden() {
+    local side="$1" stage="$2" var global
+    var="WORKFLOW_${side}_CMD_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
+    global="WORKFLOW_${side}_CMD"
+    [[ -n "${!var:-}" || -n "${!global:-}" ]]
 }
 
 stage_effort_for() {
@@ -1226,7 +1234,9 @@ run_claude() {
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
-    if [[ "${UNCLE_STEERING:-}" == 1 && -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]]; then
+    if [[ -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]] \
+       && { [[ "${UNCLE_STEERING:-}" == 1 ]] \
+            || { [[ "${UNCLE_RUNNER_REUSE:-1}" != 0 ]] && ! stage_command_overridden AGENT "$log_name"; }; }; then
         client_cmd=(python3 "$ROOT/scripts/lib/native_stage.py" --runner "$UNCLE_RESOLVED_RUNNER" --side agent --stage "$log_name" --)
     fi
     # A stage configured in `uncle` overrides what the call site asked for.
@@ -1418,7 +1428,9 @@ run_codex() {
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
-    if [[ "${UNCLE_STEERING:-}" == 1 && -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]]; then
+    if [[ -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]] \
+       && { [[ "${UNCLE_STEERING:-}" == 1 ]] \
+            || { [[ "${UNCLE_RUNNER_REUSE:-1}" != 0 ]] && ! stage_command_overridden REVIEWER "$log_name"; }; }; then
         client_cmd=(python3 "$ROOT/scripts/lib/native_stage.py" --runner "$UNCLE_RESOLVED_RUNNER" --side reviewer --stage "$log_name" --)
     fi
     effort="$(stage_effort_for "$log_name")"
@@ -1528,7 +1540,9 @@ start_codex_bg() {
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
-    if [[ "${UNCLE_STEERING:-}" == 1 && -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]]; then
+    if [[ -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]] \
+       && { [[ "${UNCLE_STEERING:-}" == 1 ]] \
+            || { [[ "${UNCLE_RUNNER_REUSE:-1}" != 0 ]] && ! stage_command_overridden REVIEWER "$log_name"; }; }; then
         client_cmd=(python3 "$ROOT/scripts/lib/native_stage.py" --runner "$UNCLE_RESOLVED_RUNNER" --side reviewer --stage "$log_name" --)
     fi
     effort="$(stage_effort_for "$log_name")"
@@ -1662,7 +1676,7 @@ run_combined_change_plan() {
     local prompt="$LOG_DIR/change-planning.prompt.md"
     {
         printf '# Combined change specification and planning\n\n'
-        printf 'In this single stage, first write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+        printf 'In this single stage and the same model and context, first write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
         cat "$(resolve_prompt prompts/change/change-spec.md)"
         printf '\n\n# Then plan the specified change\n\n'
         cat "$(resolve_prompt prompts/change/change-plan.md)"
@@ -2159,7 +2173,7 @@ REPAIR
         VALIDATE_AUDIT)
             echo "Validating saved audit; the reviewer will not be rerun."
             require_file FINAL_AUDIT.md
-            python3 "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md || exit 1
+            python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md || exit 1
             audit_class="$(classify_audit_verdict FINAL_AUDIT.md)"
             printf '%s\t%s\t%s\n' \
                 "${STAGEGATE_RUN_ID:--}" \

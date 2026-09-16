@@ -33,16 +33,16 @@ if [[ "$1" == remote && "${2:-}" == get-url ]]; then
     done
     exit 0
 fi
-if [[ "$1" == commit-tree && "${FAIL_COMMIT_TREE:-}" == signing ]]; then
+if [[ "$1" == commit && "${FAIL_COMMIT_TREE:-}" == signing ]]; then
     echo 'error: gpg failed to sign the data:' >&2
     echo 'gpg: signing failed: No pinentry' >&2
     exit 128
 fi
-if [[ "$1" == commit-tree && "${FAIL_COMMIT_TREE:-}" == object ]]; then
+if [[ "$1" == commit && "${FAIL_COMMIT_TREE:-}" == object ]]; then
     echo 'fatal: not a valid object name deadbeef' >&2
     exit 128
 fi
-if [[ "$1" == commit-tree && "${CRASH_AFTER_COMMIT_TREE:-}" == 1 ]]; then
+if [[ "$1" == commit && "${CRASH_AFTER_COMMIT_TREE:-}" == 1 ]]; then
     "$REAL_GIT" "$@" > /dev/null
     kill -9 "$PPID"
     exit 1
@@ -184,8 +184,8 @@ class Fixture(unittest.TestCase):
         self.assertNotIn('manual_signing', j)
         self.assertNotIn('manual_signed_head', j)
         self.assertEqual(len(self.creates()), 1)
-        self.assertEqual([line.split(' ')[0] for line in self.commits()], ['commit-tree'] * commit_trees)
-        self.assertEqual(self.commits()[-1], 'commit-tree %s -p %s -m %s' % (j['commit_tree'], self.original, j['title']))
+        self.assertEqual([line.split(' ')[0] for line in self.commits()], ['commit'] * commit_trees)
+        self.assertEqual(self.commits()[-1], 'commit --no-gpg-sign -m %s' % j['title'])
         self.assertEqual(self.git('rev-parse', 'HEAD'), j['intended_head'])
         self.assertEqual(self.git('rev-parse', 'HEAD^{tree}'), j['commit_tree'])
         self.assertEqual(self.git('rev-list', '--parents', '-n', '1', 'HEAD').split(), [j['intended_head'], self.original])
@@ -219,9 +219,10 @@ class SourceTests(unittest.TestCase):
         self.assertIn('manual_signed_commit', blocks)
         self.assertIn('automatic_commit', blocks)
         rest = ''.join(text for name, text in blocks.items() if name != 'manual_signed_commit')
-        for flag in ("'-S'", "'-S ", '--gpg-sign', '--no-gpg-sign', '-S '):
+        for flag in ("'-S'", "'-S ", '--gpg-sign', '-S '):
             self.assertNotIn(flag, rest, flag)
-        self.assertRegex(blocks['automatic_commit'], r"git\('commit-tree', j\['commit_tree'\], '-p', j\['original_head'\], '-m', j\['title'\]\)")
+        self.assertIn("['git', 'commit', '--no-gpg-sign', '-m', j['title']]",
+                      blocks['automatic_commit'])
 
     def test_only_git_config_call_is_a_read(self):
         calls = [m.group(0) for m in re.finditer(r"\[?'git',\s*'config'[^\]\)]*|git\('config'[^\)]*", SOURCE)]
@@ -242,7 +243,8 @@ class AutomaticCommitTests(Fixture):
         result = self.handoff()
         j = self.assert_created_automatically(result)
         log = self.git_log()
-        self.assertLess(log.index(self.commits()[0]), log.index('update-ref HEAD %s %s' % (j['intended_head'], self.original)))
+        self.assertLess(log.index('symbolic-ref HEAD refs/heads/' + j['head_branch']),
+                        log.index(self.commits()[0]))
         pushed = subprocess.check_output([REAL_GIT, 'rev-parse', j['head_branch']], cwd=self.bare, env=self.env)
         self.assertEqual(pushed.decode().strip(), j['intended_head'])
         for text in ('PR title [default:', 'Work summary:', 'Manual verification steps:',
@@ -292,9 +294,9 @@ class AutomaticCommitTests(Fixture):
         self.assertEqual((j['phase'], j['intended_head']), ('prepared', ''))
         self.assertNotIn('manual_signing', j)
         self.assertEqual(len(self.commits()), 1)
-        self.assertEqual(self.git('rev-parse', 'HEAD'), self.original)
+        self.assertNotEqual(self.git('rev-parse', 'HEAD'), self.original)
         self.assertEqual(self.creates(), [])
-        self.assert_created_automatically(self.handoff(''), commit_trees=2)
+        self.assert_created_automatically(self.handoff(''), commit_trees=1)
 
 
 class SigningOnTests(Fixture):
@@ -364,7 +366,7 @@ class FailureTests(Fixture):
         self.freeze()
         result = self.handoff(FAIL_COMMIT_TREE='object')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('PR pending: Command failed: git commit-tree', result.stdout)
+        self.assertIn('PR pending: Automatic commit failed:', result.stdout)
         self.assertIn('fatal: not a valid object name deadbeef', result.stdout)
         self.assertNotIn('needs your help', result.stdout)
         j = self.journal()

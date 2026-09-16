@@ -77,7 +77,7 @@ end() {    # end <project> <turn> <mode> <digest> [root] [proposal]
     python3 "$GUARD" end --state-dir .uncle/workflow --project "$1" --root "${5:-$INSTALL}" --turn "$2" --mode "$3" --digest "$4" --proposal "${6:-Proposal 1: test}"
 }
 
-# Reviewer reports can be repaired only in an explicitly executed proposal.
+# Markdown and .uncle files are writable in both diagnosis and execute turns.
 for mode in diagnosis execute; do
     P="$(project "report-$mode")"; cd "$P"
     printf 'original verdict NOT_READY\n' > FINAL_AUDIT.md
@@ -87,14 +87,13 @@ for mode in diagnosis execute; do
     mkdir -p "$SB/.uncle/workflow/approvals"
     printf 'forged\n' > "$SB/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
     res="$(end "$P" 1 "$mode" "$(printf '%s' "$out" | json_field digest)")"
-    expected='original verdict NOT_READY'; outcome=REFUSED
-    if [[ "$mode" == execute ]]; then expected='fixed table; verdict NOT_READY'; outcome=APPLIED; fi
-    check_file_is "$mode report edit policy" "$expected" FINAL_AUDIT.md
-    check_row "$mode report edit recorded" "$outcome" FINAL_AUDIT.md .uncle/workflow/triage-actions.tsv
-    check_file_is "$mode cannot forge approval" approved-hash .uncle/workflow/approvals/CHANGE_PLAN.sha256
+    check_file_is "$mode report edit policy" 'fixed table; verdict NOT_READY' FINAL_AUDIT.md
+    check_row "$mode report edit recorded" APPLIED FINAL_AUDIT.md .uncle/workflow/triage-actions.tsv
+    check_file_is "$mode .uncle edit policy" forged .uncle/workflow/approvals/CHANGE_PLAN.sha256
+    check_row "$mode .uncle edit recorded" APPLIED .uncle/workflow/approvals/CHANGE_PLAN.sha256 .uncle/workflow/triage-actions.tsv
  done
 
-# --- AC-10: forbidden writes are reverted, recorded, and the install taints ----
+# --- AC-10: project writes persist, while installed-code writes still taint ----
 
 P="$(project forbidden)"; cd "$P"
 out="$(begin "$P" 1 execute)"
@@ -110,14 +109,11 @@ COUNT=$((COUNT + 1)); [[ -f "$SB/src/x" ]] || fail "sandbox mirrors the tree"
     && printf 'ok\n' > src/x)
 res="$(end "$P" 1 execute "$digest")"
 TSV="$P/.uncle/workflow/triage-actions.tsv"
-check_file_is "approval digest restored" "approved-hash" .uncle/workflow/approvals/CHANGE_PLAN.sha256
-check_file_is "reviewer artifact restored" "review" ADVERSARIAL_REVIEW.md
-check_absent "waiver removed" .uncle/workflow/waivers/AC-1
-check_file_is "state restored" "IMPLEMENT" .uncle/workflow/state
-check_row "approval refused" REFUSED .uncle/workflow/approvals/CHANGE_PLAN.sha256 "$TSV"
-check_row "reviewer artifact refused" REFUSED ADVERSARIAL_REVIEW.md "$TSV"
-check_row "waiver refused" REFUSED .uncle/workflow/waivers/AC-1 "$TSV"
-check_row "state refused" REFUSED .uncle/workflow/state "$TSV"
+check_file_is "approval edit retained" forged .uncle/workflow/approvals/CHANGE_PLAN.sha256
+check_file_is "reviewer artifact edit retained" tampered ADVERSARIAL_REVIEW.md
+check_file_is "waiver edit retained" 'id: AC-1' .uncle/workflow/waivers/AC-1
+check_file_is "state edit retained" COMPLETE .uncle/workflow/state
+check_row "concurrent reviewer edit recorded" FAILED ADVERSARIAL_REVIEW.md "$TSV"
 check_row "install refused" REFUSED "$(cd "$INSTALL" && pwd -P)/scripts/lib/thing.sh" "$TSV"
 check_file_is "install file restored" installed "$INSTALL/scripts/lib/thing.sh"
 check_eq "install modification taints" true "$(printf '%s' "$res" | json_field tainted)"
@@ -153,7 +149,7 @@ python3 - <<'EOF'
 import json, pathlib
 p = pathlib.Path('.uncle/workflow/triage/snapshot/turn-1.json')
 r = json.loads(p.read_text())
-r['forbidden'] = {}
+r['mode'] = 'diagnosis'
 p.write_text(json.dumps(r, sort_keys=True))
 EOF
 res="$(end "$P" 1 execute "$digest")"

@@ -554,7 +554,12 @@ def note_prompt(state_dir, stage, prompt_path, out_path, config_path):
     journal = read_json(Path(state_dir) / SUBDIR / 'interventions.json') or {}
     if note.get('run_id') != journal.get('run_id') or note.get('state_digest') != state_digest(state_dir):
         return prompt_path, ''
-    if note.get('target_attempt') != (journal.get('attempts') or {}).get(stage, 0) + 1:
+    attempts = (journal.get('attempts') or {}).get(stage, 0)
+    # The status observer and prompt construction run concurrently. It may
+    # record the new stage_start before this prompt claims the note, especially
+    # after an explicit rerun archives prior artifacts. Accept the reserved
+    # attempt either just before or just after that observation.
+    if note.get('target_attempt') not in (attempts, attempts + 1):
         return prompt_path, ''
     launch_id = uuid.uuid4().hex
     try:
@@ -1710,6 +1715,13 @@ def supervised_lock_run(run_once, command, state_dir, root, environ=None):
                 host.poll()
                 if not host.settle(host.controller.config.call_timeout_seconds + 5):
                     return rc
+                # A validator fails after the driver has durably advanced to a
+                # VALIDATE_* state. Re-enter the stage itself so the retained
+                # correction is included in a fresh model call instead of
+                # merely re-running the same deterministic validator.
+                stage = host.controller.stage
+                request = Path(state_dir) / 'rerun-request.json'
+                atomic_write(request, json.dumps({'stage': stage, 'source': 'supervisor-retry'}) + '\n')
                 host.transcript('Retrying the driver with the retained correction.')
             return rc
         finally:

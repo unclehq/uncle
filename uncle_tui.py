@@ -670,6 +670,8 @@ class TuiSupervisionHost:
 
 
 class UncleTUI:
+    VIEWER_PROGRAMS = ("cursor", "code", "glow", "bat", "less", "more", "cat")
+
     def __init__(self, stdscr):
         self.stdscr = stdscr
         self.models = list_models()
@@ -943,7 +945,11 @@ class UncleTUI:
         return "%s  (default)%s" % (fallback, "  " + label if label else "")
 
     def _set_field(self, stage, field, value):
-        value = (value or "").strip()
+        value = value or ""
+        if not (stage == "!misc" and field == "markdown_viewer"):
+            value = value.strip()
+        elif not value.strip():
+            value = ""
         self.maybe_reload()
         if stage == "!misc":
             self.misc[field] = value
@@ -1023,7 +1029,8 @@ class UncleTUI:
             return ["OpenCode connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
         if section == "misc":
             return ["Auto mode: " + ("on" if getattr(self, "misc", {}).get("auto_mode") == "true" else "off"),
-                    "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set")]
+                    "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set"),
+                    "Markdown viewer: " + (getattr(self, "misc", {}).get("markdown_viewer") or "auto (first installed)")]
         """One row per stage: the stage, its runner, and what that runner uses."""
         width = max(len(s) for s in BUILD_CONFIG_STAGES)
         rows = []
@@ -1084,6 +1091,9 @@ class UncleTUI:
     # ---- generic picker (model / effort / runner) ----
     def _picker_rows(self):
         """Rows for the active picker: (kind, text), kind in header/option/model/custom."""
+        if self.picker_kind == "markdown_viewer":
+            return ([('option', name) for name in self.VIEWER_PROGRAMS if shutil.which(name)]
+                    + [('custom', 'Custom… (type a command)')])
         if self.picker_kind == "effort":
             return [("option", e) for e in EFFORTS] + [("custom", "Custom… (type an effort)")]
         if self.picker_kind == "runner":
@@ -1133,6 +1143,8 @@ class UncleTUI:
             return self.stage_network(stage)
         if self.picker_kind == "billing":
             return self.stage_billing(stage)
+        if self.picker_kind == "markdown_viewer":
+            return self._field_value(stage, self.picker_kind)
         return self.stage_model(stage)
 
     def _open_picker(self, kind, target):
@@ -1192,7 +1204,8 @@ class UncleTUI:
         if kind == "custom":
             self.state = "config_edit"
             self.notice = ""
-            self.input_buf = self.pick_filter.strip() or self._picker_current()
+            self.input_buf = (self.pick_filter if self.picker_kind == "markdown_viewer"
+                              else self.pick_filter.strip()) or self._picker_current()
             return
         if self.picker_kind == "billing":
             # The stored model belongs to one billing or the other. Carrying a
@@ -1206,7 +1219,7 @@ class UncleTUI:
         # Choosing a non-cline runner drops the model row out of the popup.
         self.stage_sel = min(self.stage_sel,
                              len(self.stage_fields(self.picker_target)) - 1)
-        self.state = "stage"
+        self.state = "config" if self.picker_target == "!misc" else "stage"
 
     @staticmethod
     def _valid_issue(value):
@@ -1261,6 +1274,12 @@ class UncleTUI:
         try:
             with open(CONFIG_PATH) as fh:
                 for line in fh:
+                    raw = line.rstrip("\r\n")
+                    viewer_key = "misc.markdown_viewer"
+                    if raw.startswith(viewer_key) and len(raw) > len(viewer_key) and raw[len(viewer_key)].isspace():
+                        value = raw[len(viewer_key) + 1:]
+                        self.misc["markdown_viewer"] = value if value.strip() else ""
+                        continue
                     line = line.split("#", 1)[0].strip()
                     if not line:
                         continue
@@ -1904,25 +1923,23 @@ class UncleTUI:
     # The driver's advice is to open the file in another terminal. That works,
     # but a gate that cannot show you what you are approving is half a gate.
     #
-    # A rendered markdown reader is worth handing the screen to, so glow and
-    # bat are used when they are installed, in that order, in this window: the
-    # screen is released, the reader runs as it normally would, and the TUI is
-    # restored when it exits. Without either, the built-in pager below shows
-    # the raw text rather than refusing.
     def _viewer_command(self, full):
-        """glow, then bat, whichever is on PATH — installed anywhere.
-
-        `less` is only used when it is there too: it is standard on macOS and
-        Linux and present in Git Bash, but not in a bare Windows shell, and
-        glow pages well enough on its own.
-        """
+        """Return the configured reader, or the first installed safe default."""
         quoted = shlex.quote(full)
-        if shutil.which("glow"):
-            if shutil.which("less"):
-                return "glow %s | less" % quoted
-            return "glow -p %s" % quoted
-        if shutil.which("bat"):
-            return "bat %s" % quoted
+        configured = getattr(self, "misc", {}).get("markdown_viewer", "")
+        candidates = list(self.VIEWER_PROGRAMS)
+        if configured:
+            if configured not in self.VIEWER_PROGRAMS:
+                return configured + " " + quoted
+            candidates.remove(configured)
+            candidates.insert(0, configured)
+        for name in candidates:
+            if not shutil.which(name):
+                continue
+            if name == "glow":
+                return ("glow %s | less" % quoted if shutil.which("less")
+                        else "glow -p %s" % quoted)
+            return "%s %s" % (name, quoted)
         return ""
 
     def _open_viewer(self, path):
@@ -1934,16 +1951,28 @@ class UncleTUI:
             self.state = "viewer"
             return
 
-        cmd = self._viewer_command(full)
-        if cmd:
-            self._run_in_terminal(cmd)
-            return
-
+        snapshot_dir = tempfile.mkdtemp(prefix="uncle-viewer-")
+        snapshot = os.path.join(snapshot_dir, os.path.basename(full))
         try:
+            shutil.copyfile(full, snapshot)
+            os.chmod(snapshot, 0o444)
+            cmd = self._viewer_command(snapshot)
+            if cmd:
+                self._run_in_terminal(cmd)
+                if shlex.split(cmd)[0] in ("cursor", "code"):
+                    snapshot_dir = ""  # detached editors may read after returning
+                return
             with open(full, errors="replace") as fh:
-                self.view_lines = fh.read().splitlines() or ["(empty file)"]
+                body = fh.read().splitlines() or ["(empty file)"]
+            self.view_lines = [
+                "No Markdown viewer found (%s)." % ", ".join(self.VIEWER_PROGRAMS),
+                "Choose one in Configure > Miscellaneous > Markdown viewer.",
+            ] + body
         except Exception as exc:
             self.view_lines = ["could not read %s" % full, str(exc)]
+        finally:
+            if snapshot_dir:
+                shutil.rmtree(snapshot_dir, ignore_errors=True)
         self.view_title = path
         self.view_scroll = 0
         self.state = "viewer"
@@ -4835,8 +4864,10 @@ class UncleTUI:
                 elif section == "misc":
                     if self.config_sel == 0:
                         self._set_field("!misc", "auto_mode", "false" if self.misc.get("auto_mode") == "true" else "true")
-                    else:
+                    elif self.config_sel == 1:
                         self._open_picker("approval_name", "!misc")
+                    else:
+                        self._open_picker("markdown_viewer", "!misc")
                 elif section == "opencode" and self.config_sel == 1:
                     self._set_field("@connection", "base_url", connection_settings(self.stage_api_keys).get("base_url", ""))
                 else:
@@ -4924,7 +4955,7 @@ class UncleTUI:
         elif self.state == "config_edit":
             self.state = "config" if self.picker_target in ("@new", "!misc", "!supervision") else "stage"
         elif self.state == "picker":
-            self.state = "stage"
+            self.state = "config" if self.picker_target == "!misc" else "stage"
         self.sel = 0
 
     def _confirm(self):
@@ -4976,7 +5007,7 @@ class UncleTUI:
             self.state = "issue_mode"
             self.sel = 0
         elif self.state == "config_edit":
-            val = self.input_buf.strip()
+            val = self.input_buf if self.picker_kind == "markdown_viewer" else self.input_buf.strip()
             if self.picker_kind == "model" and self.stage_runner(self.picker_target) != "self-hosted" and not valid_model_id(val):
                 # Storing it would only surface as a failed stage later.
                 self.notice = "not a cline model id: %s (expected modelType/model)" % val

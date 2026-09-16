@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$ROOT/scripts/lib/sha256.sh"   # hash_file, portable across platforms
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+trap 'if [[ "${UNCLE_KEEP_TEST_TMP:-0}" == 1 ]]; then echo "Kept close-flow fixtures: $TMP"; else rm -rf "$TMP"; fi' EXIT
 
 # Exercise timeout coverage even on hosts without coreutils.
 if ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1; then
@@ -218,6 +218,10 @@ gate_input() {
 # Prepares the scratch repo to run the real driver's FINAL_AUDIT stage with a
 # reviewer stub that writes <verdict text> into FINAL_AUDIT.md.
 setup_audit_stage() {
+    local verdict="$1" finding=""
+    if [[ "$verdict" == "NOT READY" ]]; then
+        finding='| F-1 | Fixture blocker | Review fixture | YES |'
+    fi
     mkdir -p "$REPO/prompts/change"
     mkdir -p "$REPO/.uncle/workflow/approvals"
     printf 'Approved fixture plan\n' > "$REPO/CHANGE_PLAN.md"
@@ -243,7 +247,7 @@ while [[ \$# -gt 0 ]]; do
     if [[ "\$1" == "--output-last-message" ]]; then out="\$2"; shift; fi
     shift
 done
-printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n| F-1 | Fixture blocker | Review fixture | YES |\n\n%s\n' "$1" > "\$out"
+printf '%s\n' '## Findings' '' '| ID | Evidence | Required correction | Blocks |' '|---|---|---|---|' '$finding' '' '$verdict' > "\$out"
 REV
     chmod +x "$CASE/bin/fake-reviewer"
 }
@@ -457,7 +461,7 @@ while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
     shift
 done
-printf 'Audit body.\n\nREADY\n' > "$out"
+printf '%s\n' '## Findings' '' '| ID | Evidence | Required correction | Blocks |' '|---|---|---|---|' '' 'READY' > "$out"
 REV
 chmod +x "$CASE/bin/fake-reviewer"
 printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
@@ -566,7 +570,8 @@ expect_state "99:IMPLEMENT"
 new_case git-completion-defers-close
 setup_audit_stage READY
 git -C "$REPO" init -q
-git -C "$REPO" -c commit.gpgsign=false -c tag.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --no-gpg-sign --allow-empty -qm initial
+git -C "$REPO" add -A
+git -C "$REPO" -c commit.gpgsign=false -c tag.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --no-gpg-sign -qm initial
 printf '42:FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
 printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1
@@ -579,7 +584,8 @@ for setting in WORKFLOW_CLOSE_ISSUE=0 UNATTENDED=1; do
     new_case "git-disabled-$setting"
     setup_audit_stage READY
     git -C "$REPO" init -q
-    git -C "$REPO" -c commit.gpgsign=false -c tag.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --no-gpg-sign --allow-empty -qm initial
+    git -C "$REPO" add -A
+    git -C "$REPO" -c commit.gpgsign=false -c tag.gpgsign=false -c user.name=Fixture -c user.email=fixture@example.test commit --no-gpg-sign -qm initial
     printf '42:FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
     printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
     run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" "$setting"
@@ -624,18 +630,17 @@ expect_state "42:WAIT_AUDIT_OVERRIDE"
 expect_not_closed
 expect_no_marker
 
-# An audit whose last line is not one of the three verdict phrases is not a
-# pass either: UNKNOWN reaches the same gate.
+# An audit whose last line is not one of the three verdict phrases is rejected
+# by deterministic validation before it can reach the audit gate.
 new_case direct-run-unknown-verdict-stops-at-gate
 setup_audit_stage "probably fine, ship it"
 printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
 printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
 run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-1 \
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
-expect_status 0
-expect_out "Audit verdict: UNKNOWN"
-expect_out "An unreadable verdict is not a pass."
-expect_state "42:WAIT_AUDIT_OVERRIDE"
+expect_status 1
+expect_out "Audit format invalid: Missing final audit verdict"
+expect_state "42:VALIDATE_AUDIT"
 expect_not_closed
 
 # Per-finding acceptance produces effective READY; retained blockers deny close.
@@ -1113,7 +1118,9 @@ elif args[:2] == ['pr', 'create']:
         self.exe('reviewer', """#!/usr/bin/env python3
 from pathlib import Path
 import sys
-Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('READY\\n')
+Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
+    '## Findings\\n\\n| ID | Evidence | Required correction | Blocks |\\n'
+    '|---|---|---|---|\\n\\nREADY\\n')
 """)
         (self.state / 'state').write_text('42:FINAL_AUDIT\n')
         env = dict(self.env, UNCLE_PROJECT_ROOT=str(self.repo),
@@ -1342,7 +1349,9 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('READY\\n
         self.exe('reviewer', """#!/usr/bin/env python3
 from pathlib import Path
 import sys
-Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READY\\n')
+Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
+    '## Findings\\n\\n| ID | Evidence | Required correction | Blocks |\\n'
+    '|---|---|---|---|\\n| F-1 | Fixture blocker | Review fixture | YES |\\n\\nNOT READY\\n')
 """)
         (self.state / 'state').write_text('42:FINAL_AUDIT\n')
         env = dict(self.env, UNCLE_PROJECT_ROOT=str(self.repo), WORKFLOW_AUDIT_GATE='0',
@@ -1385,10 +1394,11 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('NOT READ
         self.assertEqual(len(self.creates()), 0)
 
     def test_commit_and_push_crash_recovery(self):
-        # A failed automatic commit-tree leaves no intended head; the rerun commits.
-        self.assertNotEqual(self.publish(CRASH_GIT='commit-tree').returncode, 0)
+        # A completed commit whose wrapper fails before journaling is adopted
+        # on resume rather than duplicated.
+        self.assertNotEqual(self.publish(CRASH_GIT='commit').returncode, 0)
         self.assertEqual((self.journal()['phase'], self.journal()['intended_head']), ('prepared', ''))
-        self.assertEqual(self.git('rev-parse', 'HEAD'), self.original)
+        self.assertNotEqual(self.git('rev-parse', 'HEAD'), self.original)
         self.assertNotEqual(self.engine('handoff', CRASH_GIT='push').returncode, 0)
         sha = self.journal()['intended_head']
         self.assertEqual(self.journal()['phase'], 'prepared')

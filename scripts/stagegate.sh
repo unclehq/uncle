@@ -89,6 +89,7 @@ APPROVAL_DIR="$STATE_DIR/approvals"
 LOG_DIR="$STATE_DIR/logs"
 SPEC_DIR="$STATE_DIR/speculative"
 STATE_FILE="$STATE_DIR/state"
+export UNCLE_RUNNER_POOL_OWNER_PID="${UNCLE_RUNNER_POOL_OWNER_PID:-$$}"
 
 # Post-implementation gate: the generated document the operator reads, and the
 # diff it is built from.
@@ -789,6 +790,13 @@ stage_reviewer_cmd() {
     fi
 }
 
+stage_command_overridden() {
+    local side="$1" stage="$2" var global
+    var="WORKFLOW_${side}_CMD_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
+    global="WORKFLOW_${side}_CMD"
+    [[ -n "${!var:-}" || -n "${!global:-}" ]]
+}
+
 stage_effort() {
     uncle_effective_stage_effort "$1"
 }
@@ -1075,7 +1083,9 @@ run_claude() {
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
-    if [[ "${UNCLE_STEERING:-}" == 1 && -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]]; then
+    if [[ -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]] \
+       && { [[ "${UNCLE_STEERING:-}" == 1 ]] \
+            || { [[ "${UNCLE_RUNNER_REUSE:-1}" != 0 ]] && ! stage_command_overridden AGENT "$log_name"; }; }; then
         client_cmd=(python3 "$ROOT/scripts/lib/native_stage.py" --runner "$UNCLE_RESOLVED_RUNNER" --side agent --stage "$log_name" --)
     fi
 
@@ -1162,7 +1172,9 @@ run_codex_review() {
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
     esac
-    if [[ "${UNCLE_STEERING:-}" == 1 && -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]]; then
+    if [[ -n "${UNCLE_RESOLVED_RUNNER:-}" && "$UNCLE_RESOLVED_RUNNER" != self-hosted ]] \
+       && { [[ "${UNCLE_STEERING:-}" == 1 ]] \
+            || { [[ "${UNCLE_RUNNER_REUSE:-1}" != 0 ]] && ! stage_command_overridden REVIEWER "$log_name"; }; }; then
         client_cmd=(python3 "$ROOT/scripts/lib/native_stage.py" --runner "$UNCLE_RESOLVED_RUNNER" --side reviewer --stage "$log_name" --)
     fi
 
@@ -1609,8 +1621,12 @@ while true; do
 
         VALIDATE_REQUIREMENTS)
             echo "Validating saved requirements; discovery will not be rerun."
-            python3 "$ROOT/scripts/lib/requirements-context.py" --validate REQUIREMENTS_INTERPRETATION.md || exit 1
             require_artifact REQUIREMENTS_INTERPRETATION.md
+            validation_error="$(python3 "$ROOT/scripts/lib/requirements-context.py" --validate REQUIREMENTS_INTERPRETATION.md 2>&1)" || {
+                printf '%s\n' "$validation_error" >&2
+                supervision_validation_failed requirements REQUIREMENTS_INTERPRETATION.md "$validation_error"
+                exit 1
+            }
             set_state WAIT_REQUIREMENTS_APPROVAL
             ;;
 
@@ -2115,7 +2131,7 @@ while true; do
             check_verification_inputs
             echo "Validating saved audit; the reviewer will not be rerun."
             require_file FINAL_AUDIT.md
-            python3 "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md || exit 1
+            python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md || exit 1
             audit_class="$(classify_audit_verdict FINAL_AUDIT.md)"
             printf '%s\t%s\n' "$audit_class" "$(hash_file FINAL_AUDIT.md)" \
                 > "$VERDICT_FILE"

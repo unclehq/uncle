@@ -18,7 +18,7 @@ COUNT=0
 
 fail() { echo "FAIL: $1"; FAILED=$((FAILED + 1)); }
 check_eq() { COUNT=$((COUNT + 1)); [[ "$3" == "$2" ]] || fail "$1 — expected '$2', got '$3'"; }
-check_contains() { COUNT=$((COUNT + 1)); case "$3" in *"$2"*) ;; *) fail "$1 — '$2' not in: ${3:0:400}" ;; esac; }
+check_contains() { COUNT=$((COUNT + 1)); case "$3" in *"$2"*) ;; *) fail "$1 — '$2' not in: ${3:0:4000}" ;; esac; }
 check_absent() { COUNT=$((COUNT + 1)); case "$3" in *"$2"*) fail "$1 — '$2' should not be in: ${3:0:400}" ;; esac; }
 # --- stubs ------------------------------------------------------------------
 
@@ -35,7 +35,28 @@ cat > "$AGENT_PROMPT.$n"
 write="${AGENT_WRITE:-0}"
 [[ "${AGENT_WRITE_ON_CALL:-0}" != "$n" ]] || write=1
 if [[ "$write" == 1 ]]; then
-    printf '# artifact\n' > REQUIREMENTS_INTERPRETATION.md
+    cat > REQUIREMENTS_INTERPRETATION.md <<'DOC'
+## Required functionality
+Required.
+## Optional functionality
+None.
+## Constraints
+None.
+## User-visible behaviors
+Visible.
+## System behaviors
+System behavior.
+## Failure behaviors
+Fail clearly.
+## Ambiguities
+None.
+## Assumptions
+None.
+## Explicit non-goals
+None.
+## Definition of done
+Done.
+DOC
     printf '# baseline\n\n## 8. Verification commands\n\n```sh\ntrue\n```\n' > BASELINE_REPORT.md
     printf '# spec\n' > CHANGE_SPEC.md
     printf '# plan\n' > CHANGE_PLAN.md
@@ -232,7 +253,7 @@ for mode in stale authority paraphrase; do
     check_contains "reject $mode: ledger rejected" '"outcome": "rejected"' "$(cat "$P/.uncle/workflow/supervision/ledger.jsonl")"
     [[ -e "$P/.uncle/workflow/supervision/retry-note-requirements.json" ]] && fail "reject $mode: note written" || COUNT=$((COUNT + 1))
     [[ -d "$P/.uncle/workflow/approvals" && -n "$(ls "$P/.uncle/workflow/approvals")" ]] && fail "reject $mode: approvals written" || COUNT=$((COUNT + 1))
-    check_eq "reject $mode: state unchanged" "REQUIREMENTS" "$(cat "$P/.uncle/workflow/state")"
+    check_eq "reject $mode: validation state remains pending" "VALIDATE_REQUIREMENTS" "$(cat "$P/.uncle/workflow/state")"
 done
 
 # --- AT-8: flag off with a pending note leaves the prompt byte-identical ---------
@@ -244,7 +265,8 @@ mkdir -p "$P/.uncle/workflow/supervision"
 digest="$(cd "$P" && python3 -c "import sys; sys.path.insert(0, '$ROOT/scripts/lib'); import supervisor; print(supervisor.state_digest('.uncle/workflow'))")"
 printf '{"schema":1,"run_id":"r","closed":false,"attempts":{},"consumed":[],"calls":0,"interventions":{},"actions":{},"signatures":{},"cursor":0,"tx":0,"pending_calls":[]}' > "$P/.uncle/workflow/supervision/interventions.json"
 printf '{"schema":1,"run_id":"r","stage":"requirements","source_attempt":1,"target_attempt":2,"action_id":"a1","template":"revisit_validator","evidence":[],"text":"Supervisor note a1: pending","state_digest":"%s","delivery":"pending","created":0}' "$digest" > "$P/.uncle/workflow/supervision/retry-note-requirements.json"
-rm -rf "$P/.uncle/workflow/state" "$P/REQUIREMENTS_INTERPRETATION.md" "$P/.uncle/workflow/approvals"
+rm -rf "$P/.uncle/workflow/state" "$P/REQUIREMENTS_INTERPRETATION.md" \
+    "$P/.uncle/workflow/approvals" "$P/.uncle/workflow/evidence-index"
 rc="$(run_driver stagegate.sh "$P" false 1)"
 check_eq "flag off: prompt bytes identical with a pending note" "$plain" "$(cat "$P/agent.prompt.1")"
 check_contains "flag off: note still pending" '"delivery": "pending"' "$(python3 -c "import json;print(json.dumps(json.load(open('$P/.uncle/workflow/supervision/retry-note-requirements.json')), indent=1))")"

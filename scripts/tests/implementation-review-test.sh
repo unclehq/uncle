@@ -58,7 +58,7 @@ check_not_contains() {
 
 for a in IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md CHANGE_PLAN.md \
          FINAL_AUDIT.md AUTOMATED_TEST_REPORT.md PREFLIGHT_REPORT.md TEST_REVIEW.md \
-         .uncle/workflow/change.diff; do
+         .uncle/workflow/change.diff .uncle/verify/check.log; do
     COUNT=$((COUNT + 1))
     if ! workflow_artifact "$a"; then
         fail "$a should be excluded from the reviewed diff"

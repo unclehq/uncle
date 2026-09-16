@@ -342,7 +342,13 @@ def reviewer_document(response):
     text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
     lines = text.splitlines()
     start = next((i for i, line in enumerate(lines) if re.match(r'^#{1,6}\s+\S', line)), None)
-    if start is None or start == 0:
+    if start is None:
+        # No heading anywhere. One definition of "is this a document" for every
+        # runner lives in reviewer_output; see it for why this check exists.
+        from reviewer_output import check as _check_document
+        _check_document(text, 'self-hosted reviewer')
+        return text.rstrip() + '\n'
+    if start == 0:
         return text.rstrip() + '\n'
     return '\n'.join(lines[start:]).strip() + '\n'
 

@@ -16,13 +16,13 @@ case "${TEST_MODE:-ok}" in
 esac
 printf '%s\n' '{"role":"assistant","content":"intermediate"}'
 printf '%s\n' '{"role":"assistant","tool_calls":[{"function":{"name":"ReadFile"}}]}'
-printf '%s\n' '{"role":"assistant","content":"final review"}'
+printf '%s\n' '{"role":"assistant","content":"# REVIEW\\n\\nfinal review"}'
 STUB
 chmod +x "$tmp/kimi"
 export WORKFLOW_KIMI_CMD="$tmp/kimi"
 bash "$ROOT/scripts/reviewer-kimi.sh" exec --sandbox read-only --ephemeral \
     -c model_reasoning_effort=high --output-last-message "$tmp/review" 'Review files' > "$tmp/log"
-[[ $(cat "$tmp/review") == 'final review' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ $(cat "$tmp/review") == *'final review'* ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 grep -Fx -- '-p' "$KIMI_ARGS"
 grep -Fx -- '--agent-file' "$KIMI_ARGS"
 grep -Fx -- "$ROOT/lib/kimi/reviewer.md" "$KIMI_ARGS"

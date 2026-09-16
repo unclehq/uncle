@@ -29,4 +29,7 @@ review=$(jq -rs '[.[] | select(.type == "assistant") |
     [.message.content[]? | select(.type == "text") | .text] | join("") |
     select(length > 0)] | last // empty' "$stream")
 [[ -n "$review" ]] || { echo "Kimi produced no review." >&2; exit 1; }
+# Non-empty is not the same as a document: a model can end its turn having only
+# announced the work. Fail here, where the reason is still visible.
+review="$(printf '%s' "$review" | python3 "$ROOT/scripts/lib/reviewer_output.py" kimi)" || exit 1
 printf '%s\n' "$review" > "$output_file"

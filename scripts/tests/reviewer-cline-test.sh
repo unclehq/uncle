@@ -49,9 +49,9 @@ if [[ -n "${ARGV_FILE:-}" ]]; then
     printf '%s\n' "$*" > "$ARGV_FILE"
 fi
 if [[ "${EMIT_RESULT:-1}" == "1" ]]; then
-    echo '{"type":"run_result","finishReason":"completed","iterations":1,"usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":2,"cacheWriteTokens":1,"totalCost":0.01},"durationMs":99,"text":"REVIEW TEXT","model":"m"}' | sed "s/completed/${FAKE_FINISH:-completed}/"
+    echo '{"type":"run_result","finishReason":"completed","iterations":1,"usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":2,"cacheWriteTokens":1,"totalCost":0.01},"durationMs":99,"text":"## REVIEW TEXT","model":"m"}' | sed "s/completed/${FAKE_FINISH:-completed}/"
 elif [[ "${EMIT_DONE:-0}" == "1" ]]; then
-    echo '{"type":"agent_event","event":{"type":"done","reason":"completed","text":"DONE TEXT","iterations":1}}'
+    echo '{"type":"agent_event","event":{"type":"done","reason":"completed","text":"## DONE TEXT","iterations":1}}'
 fi
 exit "${FAKE_EXIT:-0}"
 EOF
@@ -75,8 +75,8 @@ run_shim exec --ephemeral --sandbox read-only \
     "REVIEW THE PLAN" > "$TMP/stdout" 2>&1 || status=$?
 
 check_eq "success: shim exit status" "0" "$status"
-check_eq "artifact content" "REVIEW TEXT" "$(cat "$out")"
-check_eq "review printed to stdout" "1" "$(grep -c '^REVIEW TEXT$' "$TMP/stdout")"
+check_eq "artifact content" "## REVIEW TEXT" "$(cat "$out")"
+check_eq "review printed to stdout" "1" "$(grep -c '^## REVIEW TEXT$' "$TMP/stdout")"
 check_eq "review cost preserved" "0.01" "$(jq -R -r 'fromjson? | select(.type == "result") | .total_cost_usd' "$TMP/stdout")"
 check_eq "token line excludes duplicate cache counts" "15" "$(tokens_from "$TMP/stdout")"
 
@@ -168,7 +168,7 @@ status=0
 EMIT_RESULT=0 EMIT_DONE=1 run_shim exec --output-last-message "$out" "P" \
     > "$TMP/done-out" 2>&1 || status=$?
 check_eq "done fallback: exit 0" "0" "$status"
-check_eq "done fallback: review text" "DONE TEXT" "$(cat "$out")"
+check_eq "done fallback: review text" "## DONE TEXT" "$(cat "$out")"
 check_eq "done fallback: tokens zero" "0" "$(tokens_from "$TMP/done-out")"
 
 # --- a failed review must not leave an artifact behind ----------------------

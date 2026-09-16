@@ -20,6 +20,7 @@
 #
 # bash 3.2 compatible: no associative arrays, no ${var^^}.
 set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Native jq otherwise translates LF to CRLF, including inside raw review
 # text and scalar values used by Bash comparisons. Keep POSIX jq compatible.
@@ -162,6 +163,7 @@ fi
 # Only written on success: the drivers `require_file` this afterwards, so a
 # failed review must not leave a file behind for the next run to mistake for a
 # fresh one.
+review="$(printf '%s' "$review" | python3 "$ROOT/scripts/lib/reviewer_output.py" claude)" || exit 1
 if [[ -n "$output_file" ]]; then
     printf '%s\n' "$review" > "$output_file"
 fi

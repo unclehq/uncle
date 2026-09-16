@@ -119,5 +119,39 @@ class LayoutExamples(unittest.TestCase):
         adversarial.validate(write('ADVERSARIAL_REVIEW.md', document))
 
 
+class ReviewerOutput(unittest.TestCase):
+    """A reply that only talks about the document must not become the document."""
+
+    def setUp(self):
+        self.mod = _load('reviewer_output', 'reviewer_output.py')
+
+    def test_announcement_is_rejected(self):
+        # The unclehq/uncle#59 shape: the model ends its turn having listed what
+        # it still intends to do, and the runner reports success.
+        with self.assertRaises(ValueError) as caught:
+            self.mod.check('I will now analyze CHANGE_PLAN.md.\n'
+                           '- Confirm the signature\n'
+                           '- Produce ADVERSARIAL_REVIEW.md with concrete findings\n', 'kimi')
+        self.assertIn('no document', str(caught.exception))
+        self.assertIn('kimi', str(caught.exception))
+
+    def test_chat_answer_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.mod.check('The user asked "What did we do so far?" Here is a summary.\n')
+
+    def test_empty_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.mod.check('')
+
+    def test_heading_document_is_accepted(self):
+        text = '# ADVERSARIAL_REVIEW.md\n\n## AR-001: X\n'
+        self.assertEqual(self.mod.check(text), text)
+
+    def test_table_only_document_is_accepted(self):
+        # A findings table with no heading is still a document.
+        text = '| ID | Blocks |\n|---|---|\n| FA-1 | NO |\n'
+        self.assertEqual(self.mod.check(text), text)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=0)

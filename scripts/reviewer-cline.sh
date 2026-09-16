@@ -14,6 +14,7 @@
 # Read-only is enforced by plan mode, not by a tool allowlist: a reviewer that
 # could edit the plan it is reviewing would not be an independent check.
 set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 CLINE_CMD="${WORKFLOW_CLINE_CMD:-cline}"
 
@@ -175,6 +176,7 @@ if [[ -z "$review" ]]; then
     exit 1
 fi
 
+review="$(printf '%s' "$review" | python3 "$ROOT/scripts/lib/reviewer_output.py" cline)" || exit 1
 if [[ -n "$output_file" ]]; then
     printf '%s\n' "$review" > "$output_file"
 fi

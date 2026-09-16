@@ -49,6 +49,9 @@ fi
 usage() {
     cat <<'EOF'
 Usage: uncle [-h|--help|--performance] [--unattended]
+       uncle verify [<pr>] [--attestation PATH] [--tree SHA]
+                    [--allowed-signers PATH] [--certificate-identity ID]
+                    [--certificate-oidc-issuer URL]
 
 Interactive launcher for the governed-CI workflows. Picks one of the three
 drivers and runs the stages through `cline` using the model, reasoning effort,
@@ -64,6 +67,8 @@ Runs with no arguments. -h / --help print this message and exit 0.
 --performance reports recorded runtime and token usage for the current project.
 --unattended is passed to the driver you pick: it runs every human gate
 without a person, records what nobody reviewed, and reports that at the end.
+verify runs the standalone attestation verifier (scripts/uncle-verify.py) in
+the directory you invoked uncle from; exit 0 only for VERIFIED.
 EOF
 }
 
@@ -73,6 +78,8 @@ UNCLE_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)     usage; exit 0 ;;
+        # The verifier reads the caller's checkout, not the install dir.
+        verify)        shift; cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/uncle-verify.py" "$@" ;;
         --performance) exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
         --unattended)  UNCLE_ARGS+=(--unattended); shift ;;
         *)             printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;

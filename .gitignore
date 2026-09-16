@@ -1,4 +1,9 @@
 .uncle/*
+# The change attestation and its trust root are committed on the feature
+# branch; a negation only works under `.uncle/*`, never `.uncle/`.
+!.uncle/attestation.json
+!.uncle/attestation.sig
+!.uncle/allowed_signers
 
 # Local agent workflow state
 .uncle/workflow/state

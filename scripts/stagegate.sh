@@ -1553,6 +1553,8 @@ adopt_speculation() {
     if [[ "$(cat "$SPEC_DIR/${stage}.input")" != "$(hash_file "$gate_file")" ]]; then
         echo "$gate_file changed during review. Discarding speculative $stage."
         rm -f "$artifact"
+        # A discarded stage leaves no claim behind either (Issue 59).
+        rm -f "$STATE_DIR/envelopes/${stage}.json"
         return 1
     fi
 

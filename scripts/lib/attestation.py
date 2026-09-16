@@ -102,21 +102,76 @@ def _approved(state, root, name):
     return recorded
 
 
+def _gate_label(value):
+    if value == 'unattended':
+        return 'APPROVED (unattended)'
+    # A supervisor-relayed answer is machine-made at a human's request; the
+    # receipt keeps the request. It is labelled as such, never as human.
+    match = re.fullmatch(r'supervisor:(explicit|standing):(.*)', value or '', re.S)
+    if match:
+        return 'APPROVED (supervisor:%s%s)' % (match.group(1), ':' + match.group(2).strip() if match.group(2).strip() else '')
+    match = re.fullmatch(r'disabled:(.*)', value or '', re.S)
+    if match:
+        return 'SKIPPED (' + match.group(1).strip() + ')'
+    return 'APPROVED (human)'
+
+
 def _gate_plan(state, root):
     if not _approved(state, root, 'CHANGE_PLAN'):
         return None
     by = Path(state) / 'approvals' / 'CHANGE_PLAN.approved-by'
     if not by.exists():
         return None
-    value = _read(by).strip()
-    if value == 'unattended':
-        return 'APPROVED (unattended)'
-    # A supervisor-relayed answer is machine-made at a human's request; the
-    # receipt keeps the request. It is labelled as such, never as human.
-    match = re.fullmatch(r'supervisor:(explicit|standing):(.*)', value, re.S)
-    if match:
-        return 'APPROVED (supervisor:%s%s)' % (match.group(1), ':' + match.group(2).strip() if match.group(2).strip() else '')
-    return 'APPROVED (human)'
+    # The delegation record, when the driver wrote one; older runs kept the
+    # `unattended`/`supervisor:*` value in `.approved-by` itself.
+    delegated = _read(Path(state) / 'approvals' / 'CHANGE_PLAN.delegated-by').strip()
+    return _gate_label(delegated or _read(by).strip())
+
+
+def from_statement(statement):
+    """The PR block rows, read from a Statement's predicate. The rendering
+    vocabulary (tree, agent, PR) appears only here."""
+    predicate = statement.get('predicate') if isinstance(statement, dict) else None
+    predicate = predicate if isinstance(predicate, dict) else {}
+    envelopes = predicate.get('envelopes') if isinstance(predicate.get('envelopes'), dict) else {}
+    approvals = {row.get('gate'): row for row in predicate.get('approvals') or [] if isinstance(row, dict)}
+
+    def gate(name):
+        row = approvals.get(name)
+        if not row:
+            return None
+        return _gate_label(row.get('delegated_by') or ('' if row.get('approved_by') else 'unattended'))
+
+    def producer(stage):
+        row = (envelopes.get(stage) or {}).get('producer') or {}
+        return _identity(row.get('runner'), None if row.get('model') in ('driver', 'unavailable') else row.get('model'))
+
+    audit = envelopes.get('audit') or {}
+    verdict = audit.get('reason') if audit.get('reason') in VERDICTS else None
+    if not verdict and audit.get('result'):
+        verdict = {'pass': 'READY', 'fail': 'NOT_READY'}.get(audit['result'], UNAVAILABLE)
+    verification = envelopes.get('verification') or {}
+    source = predicate.get('source') if isinstance(predicate.get('source'), dict) else {}
+    subjects = statement.get('subject') if isinstance(statement, dict) else None
+    subject = subjects[0] if isinstance(subjects, list) and subjects and isinstance(subjects[0], dict) else {}
+    tree = atom(str((subject.get('digest') or {}).get('gitTree') or ''), HASH)
+    sealed = {
+        'issue': atom('#' + str(source.get('issue') or ''), r'#[0-9]+'),
+        'specification': atom((approvals.get('CHANGE_SPEC') or {}).get('digest') or '', HASH),
+        'implementation': producer('implementation'),
+        'review_agent': producer('audit'),
+        'review_result': verdict,
+        'verification': atom(verification.get('reason') or verification.get('result') or '', r'[ -~]{1,80}'),
+        'tree': tree[:12] if tree else None,
+        'gate_plan': gate('CHANGE_PLAN'),
+        'gate_publication': gate('publication'),
+        'version': atom(str(predicate.get('uncle_version') or ''), r'[0-9A-Za-z._+-]{1,40}'),
+    }
+    sealed = {key: value or UNAVAILABLE for key, value in sealed.items()}
+    override = (envelopes.get('release') or {}).get('override')
+    if isinstance(override, dict) and override.get('gate'):
+        sealed['audit_override'] = 'operator override (' + str(override['gate']) + ') recorded; no release'
+    return sealed
 
 
 def _records(state):

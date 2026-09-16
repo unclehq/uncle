@@ -129,6 +129,31 @@ requires at least one finding row with Blocks = YES.
 LAYOUT
 }
 
+# The change plan. plan-scope.sh reads the frozen change scope from a level-2
+# `## Change-impact table` and takes each backticked path in its rows as the
+# plan committing to that file. No prompt stated this, so a planner that wrote
+# `Change-impact table:` as a bold label produced a plan whose scope could not
+# be resolved, and the run stopped needing an approved-plan edit to continue.
+_layout_change_plan() {
+    cat <<'LAYOUT'
+The frozen change scope is read from a level-2 heading spelled exactly
+`## Change-impact table`, followed by a table. A bold label or a `###` heading
+is NOT recognised, and the driver cannot resolve the scope without it.
+
+## Change-impact table
+
+| Component | Change | Test coverage |
+|---|---|---|
+| `scripts/lib/example.sh` | add the guard | `scripts/tests/example-test.sh` |
+
+Name every file the change touches in backticks, in the Component cell, and the
+tests that must change with it in Test coverage. Repo-relative paths only: a
+leading slash reads as a route, not a file. These rows are the plan committing
+to a file set, and later stages check the diff against them.
+LAYOUT
+    _layout_id_tables
+}
+
 # file -> required layout. Silent for a document no parser constrains: an
 # invented rule costs tokens on every run and binds nothing.
 document_layout() {
@@ -138,8 +163,9 @@ document_layout() {
             _layout_acceptance_gate ;;
         ADVERSARIAL_REVIEW.md) _layout_adversarial_review ;;
         FINAL_AUDIT.md) _layout_final_audit ;;
+        CHANGE_PLAN.md) _layout_change_plan ;;
         REQUIREMENTS_INTERPRETATION.md|PROJECT_PLAN.md|UPDATED_PROJECT_PLAN.md|\
-        CHANGE_SPEC.md|CHANGE_PLAN.md|BASELINE_REPORT.md|DEFECTS.md)
+        CHANGE_SPEC.md|BASELINE_REPORT.md|DEFECTS.md)
             _layout_id_tables ;;
         *) return 1 ;;
     esac

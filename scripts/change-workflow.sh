@@ -658,6 +658,94 @@ verify_approval() {
     fi
 }
 
+# --- Envelopes (Issue 59) ----------------------------------------------------
+#
+# Every claim about a stage is written here, by the driver, from validator
+# exit codes, gate records and its own hashing. scripts/lib/envelope.py owns
+# the format; these wrappers keep each call site to one line.
+envelope_py() {
+    python3 "$ROOT/scripts/lib/envelope.py" "$@"
+}
+
+envelope_write() {
+    envelope_py write --state "$STATE_DIR" "$@" || exit 1
+}
+
+envelope_invalidate() {
+    envelope_py invalidate --state "$STATE_DIR" "$@" || exit 1
+}
+
+# The artifact digest: working files minus the workflow's own state and
+# documents (change-pr.sh `artifact`). Empty without a Git HEAD.
+change_artifact() {
+    local out
+    if git rev-parse --verify HEAD >/dev/null 2>&1; then
+        if out="$(change_pr_engine artifact 2>/dev/null)"; then
+            printf '%s' "$out"
+        fi
+    fi
+}
+
+# The green check's own numbers, in the row format the PR block has always used.
+green_summary() {
+    awk -F'\t' '
+        NF && $1 != "" { total++ }
+        $1 == "PASS" || $1 == "FIXED" { pass++ }
+        $1 == "PREEXISTING" { pre++ }
+        $1 == "REGRESSION" { reg++ }
+        END { printf "%d commands: %d pass, %d pre-existing, %d regressed", total + 0, pass + 0, pre + 0, reg + 0 }
+    ' "$GREEN_CLASS"
+}
+
+write_verification_envelope() {
+    local result reason artifact
+    artifact="$(change_artifact)"
+    if [[ "$GREEN_CHECK" != "1" ]]; then
+        result=unavailable
+        reason='WORKFLOW_GREEN_CHECK=0: the driver did not re-run the checks'
+    elif [[ ! -s "$GREEN_CLASS" ]]; then
+        result=unavailable
+        reason='no green-check results'
+    elif [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then
+        result=fail
+        reason="$(green_summary)"
+    else
+        result=pass
+        reason="$(green_summary)"
+    fi
+    envelope_write --stage verification --result "$result" --reason "$reason" \
+        ${artifact:+--input "artifact=$artifact"} \
+        --evidence "$STATE_DIR/green-check.tsv" CHANGE_TEST_REPORT.md
+}
+
+write_implementation_envelope() {
+    local result="$1" reason="${2:-}" artifact
+    artifact="$(change_artifact)"
+    envelope_write --stage implementation --result "$result" ${reason:+--reason "$reason"} \
+        ${artifact:+--artifact "$artifact"} --approval IMPLEMENTATION_REVIEW \
+        --evidence IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md "$REVIEW_FILE" \
+        --producer-stage implementation --producer-kind agent
+}
+
+write_review_envelope() {
+    local input=()
+    [[ -f CHANGE_PLAN.md ]] && input=(--input "plan=$(hash_file CHANGE_PLAN.md)")
+    envelope_write --stage review --result pass --evidence ADVERSARIAL_REVIEW.md \
+        --findings ADVERSARIAL_REVIEW.md ${input[@]+"${input[@]}"} \
+        --producer-stage adversarial-review --producer-kind reviewer
+}
+
+# Around each implementation agent run: envelopes are driver-owned, so a
+# write there by the agent is reverted from the snapshot, logged, and ends
+# the run.
+envelope_guard_begin() {
+    envelope_py snapshot --state "$STATE_DIR" || exit 1
+}
+
+envelope_guard_end() {
+    envelope_py restore --state "$STATE_DIR" || exit 1
+}
+
 # An approved document that changed -- by hand, or by a triage action the
 # operator selected -- sends the run back to the gate that approved it, so
 # the new bytes are read and approved by a keystroke. Nothing is written
@@ -676,6 +764,8 @@ triage_reopen_gate() {
         CHANGE_SPEC|BASELINE_REPORT) gate=WAIT_ANALYSIS_APPROVAL ;;
     esac
     [[ -n "$gate" ]] || return 0
+    # Every claim downstream of the changed document is withdrawn with it.
+    envelope_invalidate "$1"
     set_state "$gate"
     echo "Reopening $gate: re-run the driver to review and approve what is there now."
     exit 0
@@ -693,6 +783,7 @@ human_gate() {
 
     local -a files=()
     local -a names=()
+    local gate_by
 
     while [[ "$#" -gt 0 ]]; do
         require_file "$1"
@@ -709,7 +800,22 @@ human_gate() {
         act="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
         for j in "${!files[@]}"; do
             printf '%s\n' "$(hash_file "${files[$j]}")" > "$APPROVAL_DIR/${names[$j]}.sha256"
-            printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${names[$j]}.approved-by"
+            gate_by="$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)"
+            # A human name goes to `.approved-by`; `unattended` and supervisor
+            # receipts go to `.delegated-by` with `.approved-by` left empty, so
+            # nothing downstream reads a delegated answer as a keystroke.
+            # `.gate-action` records what the gate asked for (Issue 59).
+            case "$gate_by" in
+                unattended|supervisor:*)
+                    printf '%s\n' "$gate_by" > "$APPROVAL_DIR/${names[$j]}.delegated-by"
+                    printf '\n' > "$APPROVAL_DIR/${names[$j]}.approved-by"
+                    ;;
+                *)
+                    printf '%s\n' "$gate_by" > "$APPROVAL_DIR/${names[$j]}.approved-by"
+                    printf '\n' > "$APPROVAL_DIR/${names[$j]}.delegated-by"
+                    ;;
+            esac
+            printf '%s\n' "$action" > "$APPROVAL_DIR/${names[$j]}.gate-action"
             record_unattended_gate "${names[$j]}" "$act ${files[$j]} without human review"
         done
         echo "Unattended: recorded $act of ${files[*]} with no human review."
@@ -782,7 +888,22 @@ human_gate() {
 
     for i in "${!files[@]}"; do
         printf '%s\n' "${digests[$i]}" > "$APPROVAL_DIR/${names[$i]}.sha256"
-        printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${names[$i]}.approved-by"
+        gate_by="$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)"
+        # A human name goes to `.approved-by`; `unattended` and supervisor
+        # receipts go to `.delegated-by` with `.approved-by` left empty, so
+        # nothing downstream reads a delegated answer as a keystroke.
+        # `.gate-action` records what the gate asked for (Issue 59).
+        case "$gate_by" in
+            unattended|supervisor:*)
+                printf '%s\n' "$gate_by" > "$APPROVAL_DIR/${names[$i]}.delegated-by"
+                printf '\n' > "$APPROVAL_DIR/${names[$i]}.approved-by"
+                ;;
+            *)
+                printf '%s\n' "$gate_by" > "$APPROVAL_DIR/${names[$i]}.approved-by"
+                printf '\n' > "$APPROVAL_DIR/${names[$i]}.delegated-by"
+                ;;
+        esac
+        printf '%s\n' "$action" > "$APPROVAL_DIR/${names[$i]}.gate-action"
         echo "Recorded approval for ${files[$i]}"
     done
     if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi
@@ -1786,6 +1907,12 @@ while true; do
             human_gate APPROVE \
                 BASELINE_REPORT.md BASELINE_REPORT \
                 CHANGE_SPEC.md CHANGE_SPEC
+            # A newly approved specification starts the evidence chain over.
+            envelope_invalidate CHANGE_SPEC
+            envelope_write --stage requirements --result pass \
+                --evidence BASELINE_REPORT.md CHANGE_SPEC.md \
+                --approval BASELINE_REPORT CHANGE_SPEC \
+                --producer-stage change-spec --producer-kind agent
             set_state PLAN
             ;;
 
@@ -1809,6 +1936,9 @@ while true; do
                 check_document_budget CHANGE_PLAN.md || exit 1
             fi
 
+            # Written before the reviewer runs: a reviewer that never returns
+            # leaves the reason nothing was verified, and blocks release.
+            envelope_write --stage review --result unavailable --reason 'reviewer did not complete'
             run_codex \
                 prompts/change/adversarial-review.md \
                 ADVERSARIAL_REVIEW.md \
@@ -1821,6 +1951,7 @@ while true; do
         ADVERSARIAL_REVIEW)
             verify_approval BASELINE_REPORT.md BASELINE_REPORT
             verify_approval CHANGE_SPEC.md CHANGE_SPEC
+            envelope_write --stage review --result unavailable --reason 'reviewer did not complete'
             run_codex prompts/change/adversarial-review.md ADVERSARIAL_REVIEW.md adversarial-review "$CODEX_EFFORT_REVIEW"
             set_state VALIDATE_ADVERSARIAL_REVIEW
             ;;
@@ -1839,10 +1970,12 @@ while true; do
                         echo "Repaired the review format; continuing."
                         rm -f "$STATE_DIR/validation-error.txt"
                         check_document_budget ADVERSARIAL_REVIEW.md || exit 1
+                        write_review_envelope
                         set_state WAIT_PLAN_APPROVAL
                         continue
                     fi
                 fi
+                envelope_write --stage review --result fail --reason "validation: ${validation_error%%$'\n'*}"
                 printf '%s\n' "$validation_error" >&2
                 printf '%s\n' "$validation_error" > "$STATE_DIR/validation-error.txt"
                 printf '%s\n' "validation: $validation_error" > "$STATE_DIR/stop-reason"
@@ -1851,6 +1984,7 @@ while true; do
             }
             rm -f "$STATE_DIR/validation-error.txt"
             check_document_budget ADVERSARIAL_REVIEW.md || exit 1
+            write_review_envelope
             set_state WAIT_PLAN_APPROVAL
             ;;
 
@@ -1899,9 +2033,19 @@ while true; do
             # Re-approving CHANGE_PLAN overwrites the ACKNOWLEDGE hash taken
             # before the revision, so the recorded approval always names the
             # text implementation will run against.
+            # The gate does not open while a blocking review finding has no
+            # disposition row in the revised plan.
+            envelope_py plan-gate ADVERSARIAL_REVIEW.md CHANGE_PLAN.md || exit 1
             printf '%s\n' WAIT_UPDATED_PLAN_APPROVAL > "$STATE_DIR/approval-route"
             human_gate APPROVE \
                 CHANGE_PLAN.md CHANGE_PLAN
+            plan_review_input=()
+            [[ -f ADVERSARIAL_REVIEW.md ]] && plan_review_input=(--input "review=$(hash_file ADVERSARIAL_REVIEW.md)")
+            envelope_write --stage plan --result pass \
+                --evidence CHANGE_PLAN.md ADVERSARIAL_REVIEW.md \
+                --dispositions CHANGE_PLAN.md ${plan_review_input[@]+"${plan_review_input[@]}"} \
+                --approval CHANGE_PLAN ADVERSARIAL_REVIEW --reapprovals \
+                --producer-stage updated-change-plan --producer-kind agent
             set_state IMPLEMENT
             ;;
 
@@ -1911,6 +2055,10 @@ while true; do
             plan_status=0
             plan_before_write || plan_status=$?
             case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac
+
+            # Re-entering implementation withdraws every claim made about
+            # the previous one; the directory itself turns attestation on.
+            envelope_invalidate IMPLEMENT
 
             # Taken before the agent runs, so an untracked file that was
             # already sitting in the operator's checkout is not read as
@@ -1943,15 +2091,19 @@ while true; do
                 echo 'Implementation remains incomplete; automatic repair already attempted for this plan.'
             elif [[ "$STEPWISE_IMPLEMENT" == "1" ]] && { ! plan_executability_enabled || ! grep -q '"verdict": "DECISION"' "$PLAN_ASSESS_DIR/assessment.json"; }; then
                 step_status=0
+                envelope_guard_begin
                 run_stepwise_implementation prompts/change/implement-change.md || step_status=$?
+                envelope_guard_end
                 case "$step_status" in 0) ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
             else
                 compose_implementation_prompt \
                     prompts/change/implement-change.md \
                     "$STATE_DIR/implement-change.resolved.md"
 
+                envelope_guard_begin
                 run_claude "$STATE_DIR/implement-change.resolved.md" implementation \
                     "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
+                envelope_guard_end
             fi
             plan_status=0
             plan_after_write || plan_status=$?
@@ -1996,8 +2148,10 @@ REPAIR
                     plan_status=0
                     plan_before_write repair || plan_status=$?
                     case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
+                    envelope_guard_begin
                     run_claude "$STATE_DIR/implementation-repair.md" implementation \
                         "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
+                    envelope_guard_end
                     plan_status=0
                     plan_after_write || plan_status=$?
                     case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
@@ -2030,6 +2184,7 @@ REPAIR
             # regression is for the operator to weigh against the diff, and
             # killing the run here would throw away the stage that produced it.
             run_green_check || true
+            write_verification_envelope
             plan_delivery_summary
 
             # Waited for before the gate, not after: declining the gate exits
@@ -2057,6 +2212,13 @@ REPAIR
                 echo
                 echo "Implementation gate disabled (WORKFLOW_DIFF_GATE=0);" \
                      "no human reads the diff."
+                # Recorded as a required gate nobody answered: the attestation
+                # cannot say a person read this diff.
+                mkdir -p "$APPROVAL_DIR"
+                printf 'SKIPPED\n' > "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.gate-action"
+                printf 'disabled:WORKFLOW_DIFF_GATE=0\n' > "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.delegated-by"
+                printf '\n' > "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.approved-by"
+                write_implementation_envelope unavailable 'WORKFLOW_DIFF_GATE=0: no human read the diff'
                 set_state CHECKLIST
                 continue
             fi
@@ -2086,6 +2248,7 @@ REPAIR
 
             human_gate "$gate_action" "$REVIEW_FILE" IMPLEMENTATION_REVIEW
             WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" record "$STATE_DIR" || exit 1
+            write_implementation_envelope pass
 
             if [[ "$green_regressed" -gt 0 ]]; then
                 printf '%s\t%s\n' \
@@ -2159,6 +2322,8 @@ REPAIR
             # Remove any prior audit first: run_codex's require_file then treats
             # the file's existence as proof this invocation produced it, so a
             # reviewer call that exits 0 without writing cannot be read as fresh.
+            envelope_invalidate FINAL_AUDIT
+            envelope_write --stage audit --result unavailable --reason 'reviewer did not complete'
             if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine freeze || exit 1; fi
             rm -f FINAL_AUDIT.md
             run_codex \
@@ -2173,7 +2338,10 @@ REPAIR
         VALIDATE_AUDIT)
             echo "Validating saved audit; the reviewer will not be rerun."
             require_file FINAL_AUDIT.md
-            python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md || exit 1
+            python3 "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md || {
+                envelope_write --stage audit --result fail --reason 'audit format invalid'
+                exit 1
+            }
             audit_class="$(classify_audit_verdict FINAL_AUDIT.md)"
             printf '%s\t%s\t%s\n' \
                 "${STAGEGATE_RUN_ID:--}" \
@@ -2181,6 +2349,15 @@ REPAIR
                 "$(hash_file FINAL_AUDIT.md)" \
                 > "$VERDICT_FILE"
             if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine bind || exit 1; fi
+            # The audit claim: pass only for a READY verdict. An override
+            # recorded later never rewrites it; release reads this file.
+            audit_result=fail
+            case "$audit_class" in READY|READY_WITH_NON_BLOCKING_ISSUES) audit_result=pass ;; esac
+            audit_artifact="$(change_artifact)"
+            envelope_write --stage audit --result "$audit_result" --reason "$audit_class" \
+                ${audit_artifact:+--input "artifact=$audit_artifact"} \
+                --evidence FINAL_AUDIT.md VERIFICATION_REPORT.md \
+                --producer-stage final-audit --producer-kind reviewer
             echo "Audit verdict: $audit_class"
             VERDICT_WRITTEN_THIS_RUN=1
 

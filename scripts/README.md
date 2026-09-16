@@ -551,6 +551,20 @@ Covered by `scripts/tests/green-check-test.sh`,
 `scripts/tests/gates-test.sh`, which drives both real drivers through these
 states in a scratch git repository against stub CLIs.
 
+### uncle-verify.py — standalone attestation verifier
+
+`uncle verify [<pr>] [--attestation PATH] [--tree SHA] [--allowed-signers PATH]
+[--certificate-identity ID] [--certificate-oidc-issuer URL]` runs
+`scripts/uncle-verify.py` in the directory `uncle` was invoked from. The
+script imports only the standard library and needs `git`; `ssh-keygen`,
+`cosign`, and `gh` are optional and their absence is a one-line message, so
+it runs in CI on a machine that has never seen Uncle. It carries its own copy
+of the RFC 8785 canonicalizer and of `ARTIFACT_EXCLUDES` from
+`scripts/lib/envelope.py`; `scripts/tests/envelope-test.py` fails when the
+two drift. Checks 1-8, the output format, and the exit codes (0 `VERIFIED`,
+1 `NOT VERIFIED`, 2 usage or missing required tool, 3 integrity only) are
+described in `GITHUB_INTEGRATION.md` under Attestation.
+
 ### agent-kimi.sh
 
 The default agent command is a shim, not a CLI. The drivers spawn one agent
@@ -604,6 +618,26 @@ Valid stage keys: `requirements`, `project-plan`, `updated-plan`,
 `preflight`, `implementation`, `execute-checklist`, `baseline`, `change-spec`,
 `change-plan`, `updated-change-plan`, `adversarial-review`, `test-review`,
 `manual-checklist`, `final-audit`. Repairs use the `implementation` settings.
+
+### Envelopes and attestation
+
+`scripts/lib/envelope.py` is the one writer of `.uncle/workflow/envelopes/`
+(`requirements`, `review`, `plan`, `implementation`, `verification`, `audit`,
+`release`) and owns the canonical serializer, the fixed `BLOCKING` policy,
+`ARTIFACT_EXCLUDES`, the finding and disposition parsers behind the
+`WAIT_UPDATED_PLAN_APPROVAL` gate (`plan-gate`), the downstream invalidation
+map (`invalidate`), and the snapshot/restore pair the change driver wraps
+around every implementation agent run (`snapshot`, `restore`; differences are
+reverted, logged to `.uncle/workflow/envelope-tamper.log`, and exit 1).
+`human_gate` writes `<DOC>.gate-action` and `<DOC>.delegated-by` beside
+`<DOC>.sha256`/`<DOC>.approved-by`; a delegated answer leaves `.approved-by`
+empty. `change-pr.sh` computes the artifact digest (`change_pr_engine
+artifact`), and after publication consent writes `release.json`, the in-toto
+Statement at `.uncle/attestation.json` (and `.sig` when git has an SSH
+signing key or a gitsign/cosign setup), appends both to the commit tree, and
+refuses before any git write when the policy says so. Handoffs without an
+`envelopes/` directory (fixtures and journals from before this existed) keep
+the previous behavior.
 
 ### agent-cline.sh / reviewer-cline.sh
 

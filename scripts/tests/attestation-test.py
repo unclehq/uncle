@@ -109,8 +109,59 @@ class T1FullSeal(Fixture):
         self.assertEqual(sealed['version'], (ROOT / 'VERSION').read_text().strip())
 
     def test_unattended_plan_gate_is_labelled(self):
+        # D-8: the delegation lives in `.delegated-by`; `.approved-by` is empty.
+        (self.state / 'approvals/CHANGE_PLAN.approved-by').write_text('\n')
+        (self.state / 'approvals/CHANGE_PLAN.delegated-by').write_text('unattended\n')
+        self.assertEqual(self.rows()['Gate: plan approval'], 'APPROVED (unattended)')
+        (self.state / 'approvals/CHANGE_PLAN.delegated-by').write_text('supervisor:standing:Brian\n')
+        self.assertEqual(self.rows()['Gate: plan approval'], 'APPROVED (supervisor:standing:Brian)')
+        # Legacy files kept the value in `.approved-by` itself.
+        (self.state / 'approvals/CHANGE_PLAN.delegated-by').unlink()
         (self.state / 'approvals/CHANGE_PLAN.approved-by').write_text('unattended\n')
         self.assertEqual(self.rows()['Gate: plan approval'], 'APPROVED (unattended)')
+
+    def test_render_from_statement_predicate(self):
+        # AC-12 / D-11: the block is rendered from the Statement, with the
+        # same labels; nothing outside the whitelist appears.
+        envelopes = {
+            'implementation': {'producer': {'runner': 'agent-claude.sh', 'model': 'claude-opus-5'}},
+            'audit': {'producer': {'runner': 'codex', 'model': 'gpt-5-codex'}, 'result': 'pass', 'reason': 'READY_WITH_NON_BLOCKING_ISSUES'},
+            'verification': {'result': 'pass', 'reason': '4 commands: 2 pass, 1 pre-existing, 1 regressed'},
+            'release': {'result': 'pass'},
+        }
+        statement = {'_type': 'https://in-toto.io/Statement/v1', 'predicateType': 'https://uncle.dev/attestation/v1',
+                     'subject': [{'name': 'owner/repo@uncle/x', 'digest': {'gitTree': TREE}}],
+                     'predicate': {'schema_version': '1', 'uncle_version': '0.1.0', 'run_id': 'run-1',
+                                   'source': {'repository': 'owner/repo', 'issue': '38'}, 'envelopes': envelopes,
+                                   'approvals': [{'gate': 'CHANGE_SPEC', 'digest': 'f' * 64, 'approved_by': 'Brian', 'delegated_by': '', 'required': True},
+                                                 {'gate': 'CHANGE_PLAN', 'digest': 'e' * 64, 'approved_by': '', 'delegated_by': 'supervisor:explicit:Brian', 'required': True},
+                                                 {'gate': 'publication', 'digest': TREE, 'approved_by': 'Brian', 'delegated_by': '', 'required': True}],
+                                   'release': {'artifact': {'digest': {'gitTree': TREE}}}, 'authentication': 'none'}}
+        sealed = attestation.from_statement(statement)
+        body = attestation.render(sealed)
+        self.assertEqual(self.rows(body), {
+            'Issue': '#38',
+            'Specification (SHA-256)': 'f' * 64,
+            'Implementation agent': 'claude (claude-opus-5)',
+            'Review agent': 'codex (gpt-5-codex)',
+            'Review result': 'READY_WITH_NON_BLOCKING_ISSUES',
+            'Verification': '4 commands: 2 pass, 1 pre-existing, 1 regressed',
+            'Audited tree': TREE[:12],
+            'Gate: plan approval': 'APPROVED (supervisor:explicit:Brian)',
+            'Gate: publication': 'APPROVED (human)',
+            'Uncle version': '0.1.0',
+        })
+        self.assertTrue(set(self.rows(body)) <= {label for _, label in attestation.FIELDS})
+        # The engine's sealed_attestation() takes this path when a Statement exists.
+        ns = dict(__name__='engine')
+        os.environ['UNCLE_LIB_DIR'] = str(ROOT / 'scripts/lib')
+        exec(compile(ENGINE, '<engine>', 'exec'), ns)
+        ns['STATE'] = self.state
+        merged = ns['sealed_attestation'](journal(statement=statement, intended_head=HEAD))
+        self.assertEqual(merged['published_commit'], HEAD[:12])
+        self.assertEqual(merged['gate_publication'], 'APPROVED (human)')
+        # An empty predicate renders every row as unavailable, never as a crash.
+        self.assertEqual(set(self.rows(attestation.render(attestation.from_statement({'predicate': {}}))).values()), {'unavailable'})
 
     def test_override_row_appears_only_with_a_bound_override(self):
         self.write('pr/verdict-override', '\t'.join(['run-1', 'NOT_READY', AUDIT, 'now']) + '\n')

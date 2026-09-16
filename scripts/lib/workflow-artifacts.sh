@@ -8,6 +8,9 @@
 # files were examined the divergence was invisible, because none of these
 # artifacts is committed in a target repository.
 #
+# The `.uncle/workflow/*` prefix also covers the driver's stage envelopes
+# (`.uncle/workflow/envelopes/<stage>.json`, Issue 59).
+#
 # bash 3.2 compatible.
 
 # workflow_artifact <path> — true for a file some stage of the workflow writes.

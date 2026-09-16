@@ -1316,13 +1316,34 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
         self.assertEqual(self.engine('validate').returncode, 3)
 
     def test_verdict_override_creates_pr(self):
+        # Issue 59 (D-17): with a driver-created envelopes/ directory the
+        # override is recorded and validate() accepts it, but handoff refuses
+        # before any git write; the legacy path without the directory still
+        # publishes exactly as before.
+        (self.state / 'envelopes').mkdir()
         self.not_ready_verdict()
         result = self.engine('verdict-override', 'y\n')
         self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('Override recorded', result.stdout)
         verdict = (self.state / 'audit-verdict').read_text().strip().split('\t')
         record = (self.state / 'pr/verdict-override').read_text().strip().split('\t')
         self.assertEqual(record[:3], verdict)
         self.assertRegex(record[3], r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
+        self.ok(self.engine('validate'))
+        blocked = self.publish()
+        self.assertEqual(blocked.returncode, 3, blocked.stdout)
+        self.assertIn('PR pending: Attestation blocked', blocked.stdout)
+        self.assertEqual(self.creates(), [])
+        self.assertEqual(self.git('rev-parse', 'HEAD'), self.original)
+        self.assertEqual(self.journal()['phase'], 'bound')
+        self.assertFalse((self.repo / '.uncle/attestation.json').exists())
+        release = json.loads((self.state / 'envelopes/release.json').read_text())
+        self.assertEqual(release['result'], 'fail')
+        self.assertEqual(release['override']['gate'], 'verdict-override')
+        # Without the directory (a journal from before attestation) the
+        # override still creates the PR, and says so in the body.
+        import shutil
+        shutil.rmtree(self.state / 'envelopes')
         self.ok(self.publish())
         j = self.journal()
         self.assertEqual(j['phase'], 'created')
@@ -1346,12 +1367,13 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
         for artifact in ('CHANGE_SPEC', 'CHANGE_PLAN'):
             digest = hashlib.sha256((self.repo / (artifact + '.md')).read_bytes()).hexdigest()
             (approvals / (artifact + '.sha256')).write_text(digest + '\n')
+        # A NOT READY audit the validator accepts: one explicit blocking finding.
         self.exe('reviewer', """#!/usr/bin/env python3
 from pathlib import Path
 import sys
 Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
-    '## Findings\\n\\n| ID | Evidence | Required correction | Blocks |\\n'
-    '|---|---|---|---|\\n| F-1 | Fixture blocker | Review fixture | YES |\\n\\nNOT READY\\n')
+    '# Audit\\n\\n## Findings\\n\\n| ID | Severity | Evidence | Required correction | Blocks |\\n'
+    '|---|---|---|---|---|\\n| FA-1 | blocking | fixture | fix it | YES |\\n\\nNOT READY\\n')
 """)
         (self.state / 'state').write_text('42:FINAL_AUDIT\n')
         env = dict(self.env, UNCLE_PROJECT_ROOT=str(self.repo), WORKFLOW_AUDIT_GATE='0',
@@ -1364,13 +1386,22 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
         self.assertIn('PR pending', declined.stdout)
         self.assertEqual(len(self.creates()), 0)
         self.assertFalse((self.state / 'pr/verdict-override').exists())
+        # Issue 59 (D-17): the driver created envelopes/ on FINAL_AUDIT entry
+        # and recorded audit.json as fail, so the override is recorded, the
+        # run reaches COMPLETE, and the handoff refuses to publish.
+        self.assertTrue((self.state / 'envelopes').is_dir())
+        self.assertEqual(json.loads((self.state / 'envelopes/audit.json').read_text())['result'], 'fail')
         (self.state / 'state').write_text('42:FINAL_AUDIT\n')
         approved = subprocess.run(command, cwd=self.repo, env=env, input='y\n\nSummary\nManual\ny\n',
                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
         self.ok(approved)
         self.assertIn('Override recorded', approved.stdout)
         self.assertNotIn('needs your help', approved.stdout)
-        self.assertEqual(len(self.creates()), 1, approved.stdout)
+        self.assertIn('PR pending: Attestation blocked', approved.stdout)
+        self.assertIn('the override is recorded but does not release', approved.stdout)
+        self.assertEqual(len(self.creates()), 0, approved.stdout)
+        self.assertEqual(self.git('rev-parse', 'HEAD'), self.original)
+        self.assertEqual(json.loads((self.state / 'envelopes/release.json').read_text())['result'], 'fail')
         self.assertEqual((self.state / 'state').read_text().strip(), '42:COMPLETE')
         self.assertFalse((self.state / 'issue-closed').exists())
 

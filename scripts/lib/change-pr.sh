@@ -148,11 +148,147 @@ def seal_attestation(j):
 def sealed_attestation(j):
     # The bind seal, plus the rows the driver itself writes after bind. A
     # journal bound before attestation existed is sealed now; validate() has
-    # just proved it still names this audited change.
+    # just proved it still names this audited change. Once a Statement exists
+    # the PR block is rendered from its predicate, never from a second seal.
+    if isinstance(j.get('statement'), dict):
+        return attestation().amend(attestation().from_statement(j['statement']), j, STATE)
     sealed = j.get('attestation')
     if not isinstance(sealed, dict):
         sealed = seal_attestation(j)
     return attestation().amend(sealed, j, STATE)
+
+
+ENVELOPE = None
+ATTESTATION_FILES = ('.uncle/attestation.json', '.uncle/attestation.sig')
+
+
+def envelope():
+    # The envelope/Statement module beside attestation.py; imported lazily for
+    # the same reason.
+    global ENVELOPE
+    if ENVELOPE is None:
+        lib = os.environ.get('UNCLE_LIB_DIR') or 'scripts/lib'
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        import envelope as module
+        ENVELOPE = module
+    return ENVELOPE
+
+
+def envelopes_enabled():
+    # Attestation is enforced for every run whose driver created envelopes/;
+    # a manifest without the directory is a directory that went missing.
+    return (STATE / 'envelopes').is_dir() or (STATE / 'envelopes.manifest').exists()
+
+
+def gate_names():
+    names = set()
+    for path in (STATE / 'approvals').glob('*'):
+        if path.suffix in ('.sha256', '.gate-action'):
+            names.add(path.name[:-len(path.suffix)])
+    return sorted(names)
+
+
+def consent_entry(artifact):
+    # The consent just given: a person at the terminal, or a supervisor
+    # receipt relayed for one. Only the former counts as human.
+    env = envelope()
+    answered = os.environ.get('UNCLE_GATE_ANSWERED_BY', '')
+    delegated = answered if env.DELEGATED.match(answered) else ''
+    approved = '' if delegated else (answered or os.environ.get('UNCLE_APPROVAL_NAME', '') or 'operator')
+    return {'gate': 'publication', 'required': True, 'approved_by': approved,
+            'delegated_by': delegated, 'digest': artifact, 'timestamp': env.utc_now()}
+
+
+def override_entry(j):
+    if (STATE / 'audit-override').exists():
+        entry = envelope().approval_entry(STATE, 'FINAL_AUDIT_OVERRIDE')
+        return {'gate': 'FINAL_AUDIT_OVERRIDE', 'approved_by': entry['approved_by'], 'delegated_by': entry['delegated_by']}
+    record = override_record()
+    if len(record) == 4 and record[0] == j['verdict_run'] and record[2] == j['audit_hash']:
+        return {'gate': 'verdict-override', 'approved_by': os.environ.get('UNCLE_APPROVAL_NAME', '') or 'operator', 'delegated_by': ''}
+    original = read(STATE / 'audit-verdict.original').strip().split('\t')
+    if len(original) == 3 and original[2] == j['audit_hash'] and original[1] == 'NOT_READY':
+        return {'gate': 'audit-findings', 'approved_by': os.environ.get('UNCLE_APPROVAL_NAME', '') or 'operator', 'delegated_by': ''}
+    return None
+
+
+def attest(j):
+    """After consent: the release envelope, the Statement and its signature,
+    written into the working tree and appended to the commit tree. Refuses
+    before any git write when the blocking policy says so."""
+    env = envelope()
+    error = attestation().AttestationError
+    if not (STATE / 'envelopes').is_dir():
+        raise error('envelopes directory is missing but its manifest exists; rerun FINAL_AUDIT')
+    artifact = snapshot(excludes=env.ARTIFACT_EXCLUDES)
+    try:
+        envelopes = env.load_envelopes(STATE)
+    except env.EnvelopeError as failure:
+        raise error(str(failure)) from failure
+    approvals = [env.approval_entry(STATE, name) for name in gate_names()] + [consent_entry(artifact)]
+    override = override_entry(j)
+    reason = env.blocking_reason(envelopes, artifact)
+    if reason and override:
+        reason += '; the override is recorded but does not release'
+    extra = {'approvals': approvals}
+    if override:
+        extra['override'] = override
+    release = env.write_envelope(STATE, 'release', 'fail' if reason else 'pass', reason=reason, artifact=artifact,
+                                 inputs={'artifact': artifact}, evidence=['FINAL_AUDIT.md'], extra=extra)
+    print('Envelope: release ' + release['result'], flush=True)
+    if reason:
+        raise error(reason)
+    envelopes['release'] = release
+    method, detail = env.select_signer()
+    origin = j['origin'].strip().split('\t')
+    source = {'repository': j['base_repo'], 'issue': origin[1] if len(origin) >= 2 and origin[1].isdigit() else ''}
+    run_id = os.environ.get('STAGEGATE_RUN_ID', '') or j['verdict_run']
+    import supervisor
+    known = supervisor.known_secret_values()
+
+    def build(authentication):
+        stmt = env.statement(j['head_repo'] + '@' + j['head_branch'], artifact, envelopes, approvals, source,
+                             authentication, os.environ.get('UNCLE_VERSION', ''), run_id)
+        return env.filter_strings(stmt, '.', known=known)
+
+    stmt = build(method)
+    payload = env.canonical(stmt)
+    sig = None
+    if method != 'none':
+        sig, failure = env.sign(payload, method, detail)
+        if sig is None:
+            print('Signing failed: ' + failure + '; attestation written unauthenticated', flush=True)
+            method = 'none'
+            stmt = build(method)
+            payload = env.canonical(stmt)
+    write_attestation_files(payload, sig)
+    j['statement'] = stmt
+    j['signature'] = sig
+    j['audited_tree'] = j['commit_tree']
+    j['commit_tree'] = snapshot(True, attestation=True)
+    print('Attestation: ' + method + ' ' + artifact[:12], flush=True)
+
+
+def write_attestation_files(payload, sig):
+    Path('.uncle').mkdir(exist_ok=True)
+    target = Path(ATTESTATION_FILES[0])
+    if not target.exists() or target.read_bytes() != payload:
+        target.write_bytes(payload)
+    sig_path = Path(ATTESTATION_FILES[1])
+    if sig is None:
+        if sig_path.exists():
+            sig_path.unlink()
+    else:
+        data = envelope().canonical(sig)
+        if not sig_path.exists() or sig_path.read_bytes() != data:
+            sig_path.write_bytes(data)
+
+
+def restore_attestation_files(j):
+    # Resuming at `prepared`: the files come back from the journal, byte for
+    # byte, so the stored signature stays valid and the commit tree unchanged.
+    write_attestation_files(envelope().canonical(j['statement']), j.get('signature'))
 
 
 def run(*args, env=None, data=None):
@@ -203,7 +339,7 @@ def branch():
     return git('symbolic-ref', '--short', 'HEAD')
 
 
-def snapshot(audit=False):
+def snapshot(audit=False, excludes=(), attestation=False):
     # Never write the user's index. Store raw bytes so clean filters cannot
     # hide drift or publish content different from the files the auditor read.
     fd, index = tempfile.mkstemp(dir=STATE, prefix='pr-index-')
@@ -220,7 +356,15 @@ def snapshot(audit=False):
         for raw in sorted(paths):
             if not raw or raw.startswith(b'.uncle/workflow/') or raw == b'FINAL_AUDIT.md':
                 continue
-            path = Path(os.fsdecode(raw))
+            name = os.fsdecode(raw)
+            # The attestation names the tree it is committed into, so the
+            # files carrying it are never part of the walk; they are appended
+            # under the `attestation` flag, like FINAL_AUDIT.md under `audit`.
+            if name in ATTESTATION_FILES:
+                continue
+            if any(name.startswith(x) if x.endswith('/') else name == x for x in excludes):
+                continue
+            path = Path(name)
             if not path.exists() and not path.is_symlink():
                 continue
             if path.is_symlink():
@@ -238,6 +382,13 @@ def snapshot(audit=False):
             oid = git('hash-object', '-w', '--no-filters', '--stdin', data=AUDIT.read_bytes())
             mode = b'100755' if AUDIT.stat().st_mode & 0o100 else b'100644'
             entries.append(mode + b' ' + oid.encode() + b'\tFINAL_AUDIT.md\0')
+        if attestation:
+            for name in ATTESTATION_FILES:
+                path = Path(name)
+                if not path.is_file() or path.is_symlink():
+                    continue
+                oid = git('hash-object', '-w', '--no-filters', '--stdin', data=path.read_bytes())
+                entries.append(b'100644 ' + oid.encode() + b'\t' + name.encode() + b'\0')
         git('update-index', '-z', '--index-info', env=env, data=b''.join(entries))
         tree = git('write-tree', env=env)
         return tree
@@ -296,7 +447,9 @@ def validate(j, ready=True):
     if ready and verdict[1] not in ('READY', 'READY_WITH_NON_BLOCKING_ISSUES'):
         if not override_allows(j, verdict[1]):
             raise NotReadyError('PR requires an owned READY verdict.')
-    if snapshot() != j['reviewed_tree'] or snapshot(True) != j['commit_tree']:
+    # With a Statement the commit tree also carries the attestation files.
+    committed = snapshot(True, attestation=True) if isinstance(j.get('statement'), dict) else snapshot(True)
+    if snapshot() != j['reviewed_tree'] or committed != j['commit_tree']:
         raise ValueError('Reviewed files changed; rerun FINAL_AUDIT.')
     current = head()
     allowed = [j['original_head']]
@@ -872,6 +1025,8 @@ def handoff(j):
         print(git('diff', '--name-status', j['original_head'], j['commit_tree']), flush=True)
         print(git('diff', '--no-ext-diff', '--no-textconv', j['original_head'], j['commit_tree']), flush=True)
         print('Target: ' + j['base_repo'] + ':' + j['base_branch'] + ' <- ' + j['head_repo'] + ':' + j['head_branch'], flush=True)
+        if envelopes_enabled():
+            print('After consent, .uncle/attestation.json (and .sig when a signer exists) are added to this commit.', flush=True)
         title = ask('PR title [default: ' + title_default() + ']: ', title_default())
         summary = ask('Work summary: ')
         manual = ask('Manual verification steps: ')
@@ -888,10 +1043,17 @@ def handoff(j):
             # An overridden verdict is not a READY verdict; the PR says so.
             body = ('> Created by operator override over a **' + record[1]
                     + '** audit verdict.\n\n') + body
-        # The consent just given is the publication gate; only a person at the
-        # terminal reaches this line, so it is the one field stamped here.
-        sealed = sealed_attestation(j)
-        sealed['gate_publication'] = 'APPROVED (human)'
+        if envelopes_enabled():
+            # The release envelope, Statement and signature; refuses here,
+            # before any git write, when the blocking policy says so.
+            attest(j)
+            sealed = sealed_attestation(j)
+        else:
+            print('Attestation: none (no envelopes directory; run predates attestation)', flush=True)
+            # The consent just given is the publication gate; only a person at
+            # the terminal reaches this line, so it is the one field stamped here.
+            sealed = sealed_attestation(j)
+            sealed['gate_publication'] = 'APPROVED (human)'
         j['attestation'] = sealed
         body = attestation().attach_body(body, sealed)
         if j['origin']:
@@ -900,17 +1062,8 @@ def handoff(j):
         j.update(phase='prepared', title=title, body=body)
         save(j)  # Consent and mutation intent precede commit creation.
     if j['phase'] == 'prepared':
-        # A commit may have completed immediately before an interruption. If
-        # HEAD is the exact audited child on Uncle's publication branch, adopt
-        # it instead of creating a duplicate commit or rejecting the resume.
-        if (not j['intended_head'] and branch() == j['head_branch']
-                and head() != j['original_head']
-                and git('rev-parse', 'HEAD^{tree}') == j['commit_tree']
-                and git('rev-parse', 'HEAD^') == j['original_head']):
-            j['intended_head'] = head()
-            j['requires_signature'] = False
-            j.pop('manual_signing', None)
-            save(j)
+        if isinstance(j.get('statement'), dict):
+            restore_attestation_files(j)
         validate(j)
         current_branch = branch()
         if current_branch != j['head_branch']:
@@ -1030,6 +1183,10 @@ def main():
         # Sealed here, after the last agent stage and before any handoff.
         j['attestation'] = seal_attestation(j)
         save(j)
+    elif action == 'artifact':
+        # The digest every envelope and the Statement subject name: working
+        # files minus the workflow's own state and documents.
+        print(snapshot(excludes=envelope().ARTIFACT_EXCLUDES))
     elif action == 'validate':
         j = load()
         if j.get('manual_signing'):

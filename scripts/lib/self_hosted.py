@@ -330,6 +330,23 @@ def validate_plan(text, protected=True):
             raise ValueError('Plan requires one complete, nonempty fenced block under ' + required)
 
 
+def reviewer_document(response):
+    """A reviewer's response with any leading think-aloud removed.
+
+    Deliberately narrower than document_response: no fence handling, no title
+    synthesis, no rejection. The reviewer owns this artifact and the validators
+    downstream judge its content; this only drops text above the first heading,
+    which cannot be part of the document. A response with no heading at all is
+    returned unchanged so the stage's own validator reports the real problem.
+    """
+    text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if re.match(r'^#{1,6}\s+\S', line)), None)
+    if start is None or start == 0:
+        return text.rstrip() + '\n'
+    return '\n'.join(lines[start:]).strip() + '\n'
+
+
 def document_response(response, artifact):
     text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
     if any(marker in text for marker in ('<<<<<<< SEARCH', '>>>>>>> REPLACE')):
@@ -616,7 +633,13 @@ def main(side, args):
         raise
     if side == 'reviewer':
         if output:
-            Path(output).write_bytes((text.rstrip()+'\n').encode('utf-8'))
+            # A reviewer's document is its final message, so any think-aloud the
+            # model emitted before the document lands in the artifact. The agent
+            # path already strips that; reviewers reached the file untouched,
+            # and a reviewer-owned artifact is the one thing no later stage may
+            # edit. Strip here, and only when a document is actually present --
+            # a response with no heading is a real failure, not a preamble.
+            Path(output).write_bytes(reviewer_document(text).encode('utf-8'))
         print(text)
         if usage:
             print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,

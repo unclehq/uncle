@@ -75,16 +75,71 @@ existing id; add new ones at the end. One row per item, one item per row.
 LAYOUT
 }
 
+# The adversarial review. adversarial-context.py enforces all of this: a level-2
+# Overall assessment heading with body text, `## AR-001: Title` finding
+# headings, five named fields per finding, and the words "No findings" when
+# there are none.
+_layout_adversarial_review() {
+    cat <<'LAYOUT'
+Write each finding as a level-2 heading `## AR-001: Title`, then its fields one
+per line. End with a level-2 `## Overall assessment` heading followed by body
+text. Both are headings, not bold labels inside another section: a line reading
+`**Overall assessment:** ...` is NOT recognised and the stage is rejected.
+
+## AR-001: Plan omits the rollback path
+
+- Severity: high
+- References: CHANGE_PLAN.md:41
+- Failure: a failed migration leaves the schema half-applied
+- Fix: state the rollback step and its verification
+- Verify: run the migration against a copy and roll back
+
+## Overall assessment
+
+The plan is sound apart from AR-001; the behavior tables are complete.
+
+Every finding needs all five of Severity, References, Failure, Fix and Verify
+with nonempty values. With no findings at all, still write the
+`## Overall assessment` section and state the words "No findings" explicitly.
+LAYOUT
+}
+
+# The final audit. final-audit-context.py reads the LAST line of the file as the
+# verdict, and audit-findings.py parses the findings table's ID and Blocks
+# columns.
+_layout_final_audit() {
+    cat <<'LAYOUT'
+Findings go in a table whose columns include `ID` and `Blocks`, each row
+carrying evidence, a correction, and YES or NO in Blocks:
+
+| ID | Finding | Evidence | Correction | Blocks |
+|---|---|---|---|---|
+| FA-1 | Checklist MC-3 not executed | VERIFICATION_REPORT.md:22 | Run MC-3 | YES |
+
+The VERY LAST line of the document is the verdict, alone on its line, exactly
+one of:
+
+READY
+READY WITH NON-BLOCKING ISSUES
+NOT READY
+
+Nothing may follow it -- no summary, no sign-off, no trailing prose. A verdict
+placed anywhere else is not found, and the stage is rejected. `NOT READY`
+requires at least one finding row with Blocks = YES.
+LAYOUT
+}
+
 # file -> required layout. Silent for a document no parser constrains: an
 # invented rule costs tokens on every run and binds nothing.
 document_layout() {
     case "${1##*/}" in
         MANUAL_CHECKLIST.md|MANUAL_CHECKLIST.base.md) _layout_manual_checklist ;;
-        PREFLIGHT_REPORT.md|TEST_REVIEW.md|VERIFICATION_REPORT.md|FINAL_AUDIT.md)
+        PREFLIGHT_REPORT.md|TEST_REVIEW.md|VERIFICATION_REPORT.md)
             _layout_acceptance_gate ;;
+        ADVERSARIAL_REVIEW.md) _layout_adversarial_review ;;
+        FINAL_AUDIT.md) _layout_final_audit ;;
         REQUIREMENTS_INTERPRETATION.md|PROJECT_PLAN.md|UPDATED_PROJECT_PLAN.md|\
-        CHANGE_SPEC.md|CHANGE_PLAN.md|ADVERSARIAL_REVIEW.md|BASELINE_REPORT.md|\
-        DEFECTS.md)
+        CHANGE_SPEC.md|CHANGE_PLAN.md|BASELINE_REPORT.md|DEFECTS.md)
             _layout_id_tables ;;
         *) return 1 ;;
     esac

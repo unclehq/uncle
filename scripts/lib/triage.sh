@@ -37,10 +37,28 @@ triage_failing_stage() {
         return 0
     fi
     [[ -d "$state_dir/logs" ]] || return 0
-    newest="$(ls -t "$state_dir/logs"/*.jsonl 2>/dev/null | head -n 1)"
+    # Agent stages write <stage>.jsonl; reviewer stages write <stage>.log. Only
+    # looking at .jsonl made every reviewer failure look like it had no log at
+    # all, so triage reported the stage log MISSING and had no trace to cite.
+    newest="$(ls -t "$state_dir/logs"/*.jsonl "$state_dir/logs"/*.log 2>/dev/null | head -n 1)"
     [[ -n "$newest" ]] || return 0
     newest="${newest##*/}"
-    printf '%s' "${newest%.jsonl}"
+    newest="${newest%.jsonl}"
+    printf '%s' "${newest%.log}"
+}
+
+# The log a stage actually wrote, whichever side it ran on.
+triage_stage_log() {
+    local state_dir="$1" stage="$2" candidate
+    for candidate in "$state_dir/logs/$stage.jsonl" "$state_dir/logs/$stage.log"; do
+        if [[ -s "$candidate" ]]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    # Neither exists: name the one the stage would have written, so the bundle
+    # reports a real path rather than inventing an extension.
+    printf '%s' "$state_dir/logs/$stage.jsonl"
 }
 
 # triage_stage_reports <stage> -- the reports the failing stage writes or
@@ -187,7 +205,7 @@ write_triage() {
             triage_embed_tail "$state_dir/validation-error.txt" "Driver validation error"
         fi
         if [[ -n "$stage" ]]; then
-            triage_embed_tail "$state_dir/logs/$stage.jsonl" "Stage log tail: $stage"
+            triage_embed_tail "$(triage_stage_log "$state_dir" "$stage")" "Stage log tail: $stage"
         else
             echo
             echo "## Stage log tail"

@@ -744,7 +744,16 @@ snapshot_checklist_checks() {
     {
         echo '# Driver checks for checklist execution'
         printf '\nRecorded: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        if [[ "${GREEN_CHECK:-0}" == 1 && -s "$GREEN_CMDS" && -f "$GREEN_CUR" ]]; then
+        if [[ -n "${GREEN_BG_PID:-}" ]]; then
+            # The checks are running alongside this stage. Their results file
+            # is being rewritten right now, and the copy on disk is the
+            # previous run's -- which is exactly what must not be presented as
+            # fresh evidence.
+            echo
+            echo 'RUNNING: the driver is executing the approved commands while this stage runs.'
+            echo 'There is no fresh driver evidence to cite yet. Verify these items yourself'
+            echo 'and do not substitute an older green-check log.'
+        elif [[ "${GREEN_CHECK:-0}" == 1 && -s "$GREEN_CMDS" && -f "$GREEN_CUR" ]]; then
             cp "$GREEN_CUR" "$directory/results.tsv"
             cp "$LOG_DIR/green-check.log" "$directory/output.log"
             echo

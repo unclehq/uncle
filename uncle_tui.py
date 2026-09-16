@@ -2423,7 +2423,7 @@ class UncleTUI:
         running = (getattr(self, 'active_test_runs', set()) and process is not None
                    and process.poll() is None
                    and not getattr(self, 'workflow_exit_reported', False))
-        return 'Running' if running else 'Stopped'
+        return 'Running' if running else ''
 
     def chat_model(self):
         """Follow the live stage for workflow chat; use the first stage at home."""
@@ -4223,7 +4223,12 @@ class UncleTUI:
         auto = getattr(self, 'misc', {}).get('auto_mode') == 'true'
         project_status = project + '  ·  ' + ('mode(auto)' if auto else 'mode(manual)')
         if build:
-            model_status = 'Tests: ' + self.test_execution_status() + '  ·  ' + model_status
+            # Only shown while checks are actually running. "Tests: Stopped"
+            # was on screen for most of every run and read as a fault, when it
+            # only ever meant "no check is executing this second".
+            tests = self.test_execution_status()
+            if tests:
+                model_status = 'Tests: ' + tests + '  ·  ' + model_status
         status_row = composer_row + extra + (2 if build or compact else 3)
         right_width = min(len(project_status), max(1, width - 18))
         put(status_row, model_status[:max(0, width - right_width - 2)], color.get('muted', curses.A_DIM))

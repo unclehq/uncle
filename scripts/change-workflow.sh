@@ -1147,6 +1147,60 @@ run_green_check() {
     return 0
 }
 
+# --- Background green check for the checklist stage -------------------------
+#
+# At EXECUTE_CHECKLIST the green check's exit status was already discarded
+# (`run_green_check || true`): nothing there gates on it. What it cost was
+# wall-clock -- on this repo, re-running the whole shell suite before the
+# checklist agent could start, with no output while it ran, which reads as a
+# hang. So it runs alongside the stage instead of in front of it.
+#
+# The result is still consumed. A failure goes to triage exactly as a
+# foreground failure would; a pass is ignored, because a pass at this call site
+# never fed a decision.
+#
+# The one thing this gives up is stated rather than hidden: the checklist agent
+# is told the driver checks are still running, so it cannot cite them as fresh
+# evidence and verifies those items itself. snapshot_checklist_checks refuses
+# to present a previous run's log as fresh, and that stays true here.
+GREEN_BG_PID=""
+
+start_green_check_bg() {
+    if [[ "$GREEN_CHECK" != "1" || ! -s "$GREEN_CMDS" ]]; then
+        return 0
+    fi
+    echo
+    echo "Re-running this project's checks in the background while the checklist runs."
+    echo "Log: $LOG_DIR/green-check.log"
+    ( run_green_check ) > "$LOG_DIR/green-check.bg.log" 2>&1 < /dev/null &
+    GREEN_BG_PID=$!
+}
+
+# Consume the background result: triage a failure, ignore a pass.
+wait_green_check_bg() {
+    [[ -n "$GREEN_BG_PID" ]] || return 0
+    local status=0 pid="$GREEN_BG_PID"
+    GREEN_BG_PID=""
+    echo
+    echo "Collecting the background check results..."
+    wait "$pid" || status=$?
+    sed 's/^/  /' "$LOG_DIR/green-check.bg.log" 2>/dev/null || true
+    if [[ "$status" -eq 0 ]]; then
+        echo "Background checks: no regressions."
+        return 0
+    fi
+    # Surfaced, not fatal -- the same status the foreground call discarded with
+    # `|| true`. A regression here is the operator's to weigh at the gate and
+    # override on the record; stopping the run would delete that choice, and
+    # green-check.md and the final audit still carry the failure either way.
+    echo
+    echo "Background checks reported regressions (status $status)."
+    echo "They are recorded, not silently dropped: the gate and the final audit"
+    echo "both see them, and completing over one requires an explicit override."
+    echo "Detail: $GREEN_MD"
+    return 0
+}
+
 # --- Post-implementation review document ------------------------------------
 
 # Rebuilt from the working tree every time the gate opens, so the approval
@@ -1665,6 +1719,12 @@ BG_MODEL=""
 BG_EFFORT=""
 
 cleanup_bg() {
+    if [[ -n "${GREEN_BG_PID:-}" ]] && kill -0 "$GREEN_BG_PID" 2>/dev/null; then
+        echo "Stopping background checks"
+        kill "$GREEN_BG_PID" 2>/dev/null || true
+        wait "$GREEN_BG_PID" 2>/dev/null || true
+        GREEN_BG_PID=""
+    fi
     if [[ -n "$BG_PID" ]] && kill -0 "$BG_PID" 2>/dev/null; then
         echo "Stopping background stage: $BG_LABEL"
         bash "$ROOT/scripts/lib/terminal-title.sh" --stop-tree "$BG_PID" include-root
@@ -2326,7 +2386,7 @@ REPAIR
                 set_state VALIDATE_MANUAL_CHECKLIST
                 exit 1
             fi
-            run_green_check || true
+            start_green_check_bg
             plan_delivery_summary
             snapshot_checklist_groups
             snapshot_checklist_checks
@@ -2337,6 +2397,7 @@ REPAIR
             run_claude prompts/change/execute-change-checklist.md execute-checklist \
                 "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 200 "$BUDGET_EXECUTE"
             PROGRESS_TOTAL=0
+            wait_green_check_bg || exit $?
             set_state VALIDATE_CHECKLIST
             ;;
 

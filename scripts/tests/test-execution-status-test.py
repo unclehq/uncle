@@ -32,7 +32,7 @@ class Status(unittest.TestCase):
         ui = uncle_tui.UncleTUI.__new__(uncle_tui.UncleTUI)
         ui.proc = Mock()
         ui.proc.poll.return_value = None
-        self.assertEqual(ui.test_execution_status(), 'Stopped')
+        self.assertEqual(ui.test_execution_status(), '')
         def event(identity, state):
             ui._apply_status(json.dumps(dict(event='test_execution', id=identity, state=state)))
         event('1', 'Running')
@@ -40,14 +40,14 @@ class Status(unittest.TestCase):
         event('1', 'Stopped')
         self.assertEqual(ui.test_execution_status(), 'Running')
         event('2', 'Stopped')
-        self.assertEqual(ui.test_execution_status(), 'Stopped')
+        self.assertEqual(ui.test_execution_status(), '')
         event('3', 'Running')
         ui.proc.poll.return_value = 1
-        self.assertEqual(ui.test_execution_status(), 'Stopped')
+        self.assertEqual(ui.test_execution_status(), '')
         ui.workflow_exit_reported = True
         ui.proc.poll.return_value = None
         event('4', 'Running')
-        self.assertEqual(ui.test_execution_status(), 'Stopped')
+        self.assertEqual(ui.test_execution_status(), '')
         self.assertNotIn('4', ui.active_test_runs)
 
 

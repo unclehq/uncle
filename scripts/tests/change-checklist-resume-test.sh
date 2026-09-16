@@ -10,6 +10,10 @@ cat > harness.sh <<'EOF'
 set -euo pipefail
 MODEL_EXECUTE=fake EFFORT_EXECUTE=low BUDGET_EXECUTE=1
 run_green_check() { echo green >> calls; }
+# The checks now run beside the stage; the contract is that they are still
+# started exactly once and their result is still collected exactly once.
+start_green_check_bg() { run_green_check; }
+wait_green_check_bg() { echo collected >> calls; }
 plan_delivery_summary() { :; }
 snapshot_checklist_groups() { :; }
 snapshot_checklist_checks() { :; }
@@ -36,8 +40,11 @@ if bash harness.sh; then exit 1; fi
 if bash harness.sh; then exit 1; fi
 [[ "$(grep -c '^execute$' calls)" == 1 ]]
 [[ "$(grep -c '^green$' calls)" == 1 ]]
+[[ "$(grep -c '^collected$' calls)" == 1 ]]
 rm bad-report
 bash harness.sh
 [[ "$(cat state)" == FINAL_AUDIT ]]
 [[ "$(grep -c '^execute$' calls)" == 1 ]]
+# Every started check is collected: a background run must never be abandoned.
+[[ "$(grep -c '^green$' calls)" == "$(grep -c '^collected$' calls)" ]]
 echo 'change-checklist-resume-test: report retries do not repeat execution'

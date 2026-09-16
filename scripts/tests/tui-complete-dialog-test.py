@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Back navigation from a finished build opens a 'build is complete' dialog (Issue 49)."""
+"""Back navigation from a finished build opens a 'build is complete' dialog (Issue 49).
+
+Leaving for the home page is no longer part of it. Finishing a build used to
+discard the screen that build had just produced -- its output, stage history
+and the chat about it -- on an Enter or a stray Esc. The dialog still opens
+and still stops the workflow; the page stays put, and /homepage leaves.
+"""
 import curses
 from pathlib import Path
 import sys
@@ -48,7 +54,7 @@ class CompleteDialogTests(unittest.TestCase):
         self.assertIn("complete", ui.prompt_text)
         self.assertIn("Enter", ui.prompt_text)
 
-    def test_esc_opens_dialog_and_enter_returns_home(self):  # T-1 (AC-1, AC-2)
+    def test_esc_opens_dialog_and_enter_stays_on_the_build_page(self):  # T-1 (AC-1, AC-2)
         for chat_open, focus, enter in [(True, 'chat', 10), (True, 'gate', 13), (False, 'chat', 10)]:
             ui = build(chat_open=chat_open, focus=focus)
             ui.handle_key(27)
@@ -57,10 +63,9 @@ class CompleteDialogTests(unittest.TestCase):
                 stop.side_effect = lambda self: setattr(self, "proc", None)
                 ui.handle_key(enter)
                 self.assertEqual(stop.call_count, 1)
-            self.assertEqual(ui.state, "menu")
+            self.assertEqual(ui.state, "running")
             self.assertEqual(ui.prompt_kind, "")
             self.assertIsNone(ui.proc)
-            self.assertEqual(ui.sel, 0)
 
     def test_other_keys_keep_dialog_and_send_nothing(self):  # T-2 (AC-4)
         ui = build()
@@ -82,15 +87,15 @@ class CompleteDialogTests(unittest.TestCase):
             self.assert_complete(ui)
             ui = build(banner, code=1)
             ui.handle_key(27)
-            self.assertEqual(ui.state, "menu")
+            self.assertEqual(ui.state, "running")
             self.assertEqual(ui.prompt_kind, "")
         ui = build(banner="")
         ui.handle_key(27)
-        self.assertEqual(ui.state, "menu")
+        self.assertEqual(ui.state, "running")
         self.assertEqual(ui.prompt_kind, "")
         ui = build(banner="Build verdict: PASS")
         ui.handle_key(27)
-        self.assertEqual(ui.state, "menu")
+        self.assertEqual(ui.state, "running")
 
     def test_unfinished_builds_keep_existing_esc_behavior(self):  # T-4 (AC-3)
         ui = build(code=None, exited=False, chat_open=False)  # still running, no gate
@@ -116,11 +121,11 @@ class CompleteDialogTests(unittest.TestCase):
             self.assertEqual((ui.state, ui.prompt_kind), ("running", ""))
             ui.handle_key(27)
             self.assert_complete(ui)
-            ui = build(chat_open=True)  # chat open: existing _chat_key route to menu
+            ui = build(chat_open=True)  # chat open: _chat_key keeps the build page
             ui.prompt_kind = kind
             ui.chat_focus = "gate"
             ui.handle_key(27)
-            self.assertEqual(ui.state, "menu")
+            self.assertEqual(ui.state, "running")
 
     def test_exit_poll_preserves_complete_dialog(self):  # D-6
         ui = build(exited=False)

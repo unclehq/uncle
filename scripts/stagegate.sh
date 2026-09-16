@@ -128,6 +128,9 @@ mkdir -p "$APPROVAL_DIR" "$LOG_DIR" "$SPEC_DIR"
 # the gate, so the expected waste is low — but if tokens matter more than wall
 # clock, or you habitually edit documents during review, set this to 0.
 WORKFLOW_SPECULATE="${WORKFLOW_SPECULATE:-1}"
+# One pass for REQUIREMENTS_INTERPRETATION.md and PROJECT_PLAN.md.
+# WORKFLOW_MERGE_REQUIREMENTS_PLAN=0 restores two separate stages.
+MERGE_REQUIREMENTS_PLAN="${WORKFLOW_MERGE_REQUIREMENTS_PLAN:-1}"
 
 # Agent/reviewer CLI commands. Defaults are `claude` and `codex`. Swap either
 # for a compatible CLI or a wrapper script. The agent CLI must accept the same
@@ -1284,7 +1287,17 @@ run_stage() {
             fi
             ;;
         REQUIREMENTS)
-            run_claude prompts/requirements.md requirements
+            # One pass writes both documents. The plan half otherwise re-reads
+            # the brief and the interpretation that the requirements half just
+            # produced, paying for a second process, a second cold context and
+            # a second read of files already in hand. Both documents are still
+            # written separately, validated separately and approved separately;
+            # only the invocation is shared.
+            if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" ]]; then
+                run_claude prompts/requirements-plan.md requirements
+            else
+                run_claude prompts/requirements.md requirements
+            fi
             ;;
         PROJECT_PLAN)
             run_claude prompts/project-plan.md project-plan
@@ -1629,11 +1642,25 @@ while true; do
                 supervision_validation_failed requirements REQUIREMENTS_INTERPRETATION.md "$validation_error"
                 exit 1
             }
+            # A plan from the merged pass is a bonus, never a requirement. A
+            # model that ran out of turns after the interpretation, or one too
+            # weak to do both, must fall back to running the plan stage -- not
+            # fail a validation of the document it did write.
+            rm -f "$STATE_DIR/merged-plan.input"
+            if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" && -s PROJECT_PLAN.md ]]; then
+                # The interpretation the plan was written against. If the
+                # operator edits it at the gate, the plan beside it is stale and
+                # must be rewritten -- the same rule adoption applies to a
+                # speculative stage.
+                hash_file REQUIREMENTS_INTERPRETATION.md > "$STATE_DIR/merged-plan.input"
+            fi
             set_state WAIT_REQUIREMENTS_APPROVAL
             ;;
 
         WAIT_REQUIREMENTS_APPROVAL)
-            speculate PROJECT_PLAN REQUIREMENTS_INTERPRETATION.md
+            if [[ "$MERGE_REQUIREMENTS_PLAN" != "1" ]]; then
+                speculate PROJECT_PLAN REQUIREMENTS_INTERPRETATION.md
+            fi
             review_and_approve \
                 REQUIREMENTS_INTERPRETATION.md \
                 REQUIREMENTS_INTERPRETATION \
@@ -1645,9 +1672,28 @@ while true; do
             verify_approval \
                 REQUIREMENTS_INTERPRETATION.md \
                 REQUIREMENTS_INTERPRETATION
-            run_gated_stage PROJECT_PLAN \
-                REQUIREMENTS_INTERPRETATION.md \
-                PROJECT_PLAN.md
+            # Written already by the merged pass -- but only usable if the
+            # document it was written against is byte-identical to what the
+            # operator just approved. An edited interpretation means the plan
+            # beside it answers a question nobody asked any more.
+            merged_plan_usable=0
+            if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" && -s PROJECT_PLAN.md \
+                  && -s "$STATE_DIR/merged-plan.input" ]]; then
+                if [[ "$(hash_file REQUIREMENTS_INTERPRETATION.md)" \
+                      == "$(cat "$STATE_DIR/merged-plan.input")" ]]; then
+                    merged_plan_usable=1
+                else
+                    echo "Requirements changed during review; rewriting the plan."
+                fi
+            fi
+            rm -f "$STATE_DIR/merged-plan.input"
+            if [[ "$merged_plan_usable" == 1 ]]; then
+                echo "Using the plan written with the approved requirements; not rerunning it."
+            else
+                run_gated_stage PROJECT_PLAN \
+                    REQUIREMENTS_INTERPRETATION.md \
+                    PROJECT_PLAN.md
+            fi
             set_state WAIT_PLAN_APPROVAL
             ;;
 

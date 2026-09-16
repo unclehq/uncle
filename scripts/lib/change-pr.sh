@@ -738,6 +738,74 @@ def default_branch(remotes):
     return next(iter(found)) if len(found) == 1 else None
 
 
+def restore_unborn_head():
+    """Repair a HEAD left pointing at a branch that no longer exists.
+
+    `start` moves HEAD onto the branch it creates so the run's work never lands
+    on the default branch. That leaves one way to break the checkout that did
+    not exist before: if something outside the run deletes or renames that
+    branch, HEAD names a ref with no commit, `git rev-parse HEAD` fails, and
+    every tracked file reads as newly added. The working tree is untouched --
+    only the pointer is wrong -- so this puts it back on the branch the run
+    started from and lets the caller report the real problem.
+
+    Returns the restored branch name, or '' when there is nothing to repair or
+    nothing safe to repair it with.
+    """
+    if not JOURNAL.exists():
+        return ''
+    if subprocess.run(['git', 'rev-parse', '--verify', '-q', 'HEAD'],
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+        return ''                       # HEAD resolves; nothing is broken
+    try:
+        j = load()
+    except ValueError:
+        return ''
+    base = j.get('base_checkout_branch')
+    if not base:
+        return ''                       # pre-switch journal: not ours to fix
+    # Only onto a branch that exists and still holds the commit the run began
+    # at. Anything else would move the checkout somewhere the operator did not
+    # leave it, which is worse than reporting an unborn HEAD.
+    if git('for-each-ref', '--format=%(objectname)', 'refs/heads/' + base) != j['original_head']:
+        return ''
+    git('symbolic-ref', 'HEAD', 'refs/heads/' + base)
+    return base
+
+
+def restore_moved_head():
+    """Put HEAD back when uncle's own branch was moved out from under it.
+
+    Deleting the run's branch leaves HEAD unborn, which is loud. Moving it is
+    silent and worse: HEAD is a symbolic ref, so the operator's checkout
+    follows the branch to a commit this run never created, while the working
+    tree still holds the original content.
+
+    Only while the run is still `started`. Once an audit has bound a commit,
+    HEAD advancing is the run's own doing, not tampering, and moving it back
+    would undo legitimate work.
+
+    Returns the branch HEAD was restored to, or '' when there is nothing to do.
+    """
+    if not JOURNAL.exists():
+        return ''
+    try:
+        j = load()
+    except ValueError:
+        return ''
+    base = j.get('base_checkout_branch')
+    if not base or j.get('phase') != 'started' or not j.get('head_branch'):
+        return ''
+    if branch() != j['head_branch'] or head() == j['original_head']:
+        return ''
+    # Only back onto a branch still holding the commit the run began at;
+    # anything else is not the position the operator left.
+    if git('for-each-ref', '--format=%(objectname)', 'refs/heads/' + base) != j['original_head']:
+        return ''
+    git('symbolic-ref', 'HEAD', 'refs/heads/' + base)
+    return base
+
+
 def started_journal():
     # A `started` journal that still describes this checkout; None otherwise.
     if not JOURNAL.exists():
@@ -787,6 +855,25 @@ def start_build():
         git('check-ref-format', '--branch', target)
         j.update(head_branch=target, early_ref=True)
         claim_ref(j)  # a collision leaves no journal behind
+        if j['head_branch'] != j['original_branch']:
+            # Move onto the branch now, so every stage's work happens there and
+            # the default branch is never written to. The ref was just created
+            # at this exact commit, so pointing HEAD at it changes no file and
+            # touches no index entry -- uncommitted work carries over untouched.
+            # This is the same mechanism publication uses for the same reason;
+            # it simply happens before the first stage instead of after the
+            # last one.
+            git('symbolic-ref', 'HEAD', 'refs/heads/' + j['head_branch'])
+            # Where the checkout actually came from, kept before the next line
+            # overwrites it. If this branch is deleted or moved from outside the
+            # run, HEAD is left unborn and every tracked file reads as newly
+            # added; recovering needs the name that was here first, and nothing
+            # else records it.
+            j['base_checkout_branch'] = j['original_branch']
+            # From here the run *starts* on the branch. Every later phase
+            # checks `branch() == original_branch` to detect someone moving the
+            # checkout mid-run, and that check must keep meaning that.
+            j['original_branch'] = j['head_branch']
     save(j)
     if j['early_ref']:
         print('Branch: ' + j['head_branch'], flush=True)
@@ -911,7 +998,11 @@ def resolve(j):
         # gh --head owner:branch cannot select same-owner sibling repositories.
         if owner.lower() == base.split('/')[0].lower() or fork.get('owner', {}).get('type') != 'User':
             raise ValueError('Unsupported fork owner for gh --head.')
-    target = j['original_branch']
+    # The branch the checkout was on before this run moved it, when it did.
+    # Asking original_branch here would name uncle's own branch as the
+    # operator's, so a deferred naming would reuse the very identity that
+    # was abandoned.
+    target = j.get('base_checkout_branch') or j['original_branch']
     if j.get('early_ref'):
         # A started journal owns the head identity (Issue 60). Only the
         # current-versus-default classification is recomputed: a name bound
@@ -1149,10 +1240,25 @@ def main():
     action = sys.argv[1]
     if git('rev-parse', '--show-prefix'):
         raise ValueError('PR binding requires the Git worktree root.')
+    restored = restore_unborn_head()
+    if restored:
+        print('Recovered HEAD onto ' + restored + ': the run\'s branch was removed.',
+              flush=True)
+        if action != 'start':
+            # `start` can simply claim the name again. Every later action was
+            # bound to that exact branch, so the run stops -- and says which of
+            # the two things went wrong. Falling through would reach the generic
+            # "HEAD or branch changed", which describes the repair this function
+            # just performed rather than the cause.
+            raise ValueError('Pre-created branch is missing; rerun FINAL_AUDIT.')
+    moved = restore_moved_head()
+    if moved:
+        print('Recovered HEAD onto ' + moved + ": the run's branch was moved.", flush=True)
     if action == 'start':
         start()
     elif action == 'freeze':
         started = None
+        previous = None
         if JOURNAL.exists():
             previous = load()
             if previous['phase'] in ('creating', 'unknown'):
@@ -1169,6 +1275,14 @@ def main():
             # moved or deleted since is left alone; naming defers to resolve().
             j.update(version=2, owner=started['owner'], head_branch=started['head_branch'],
                      early_ref=started['early_ref'])
+        # Carried across the journal handover whether or not the early identity
+        # survived: it records where the checkout was before the run moved it,
+        # which is what puts HEAD back if the branch is removed, and what
+        # resolve() must treat as the base. An abandoned identity does not make
+        # the checkout's origin unknown.
+        carried = (started or previous or {}).get('base_checkout_branch')
+        if carried:
+            j['base_checkout_branch'] = carried
         if not j['origin']:
             j['audit_remotes'] = remote_configuration()
         save(j)

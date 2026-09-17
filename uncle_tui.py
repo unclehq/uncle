@@ -1864,37 +1864,36 @@ class UncleTUI:
         self.completion_preview = CompletionPreview(_project_root())
         self.chat_focus = "chat"
 
-    # Two identical readings this far apart mean the page has settled.
-    _PREVIEW_POLL_SECONDS = 2.0
+    # How often to look for a page. Not a settling delay: the first
+    # sighting opens it.
+    _PREVIEW_POLL_SECONDS = 0.5
+
+    # Stages that write the application. The preview build exists purely to put
+    # something on screen early, so it is the first place to watch, not the last.
+    _PREVIEW_STAGES = ("implementation", "preview-build")
 
     def _poll_early_preview(self):
-        """Open a web app while implementation is still running.
+        """Open the page the moment one exists, from whichever stage wrote it.
 
-        For a static site the page is viewable long before the stage that wrote
-        it is finished -- tests, notes and the report all come after. Waiting
-        for the stage boundary hides the part of a build a person most wants to
-        look at, so watch the page itself instead of the pipeline.
-
-        The file is opened only once two consecutive polls agree on its size and
-        mtime: an agent halfway through writing index.html would otherwise be
-        rendered as a broken page, which is worse than waiting two seconds.
+        Opened on first sighting rather than after it settles. The earlier
+        two-reading wait existed because a `file://` page could not correct
+        itself: catch index.html half-written and the operator was left looking
+        at a broken page until the stage ended. The page is now served with a
+        reload script, so an early open fixes itself within a poll -- and an
+        empty file is still skipped, which is the only case worth waiting for.
         """
         if getattr(self, "completion_preview", None) is not None:
             return
         if getattr(self, "early_preview_shown", False):
             return
-        if not (getattr(self, "status_stage", "") or "").startswith("implementation"):
+        stage = (getattr(self, "status_stage", "") or "")
+        if not any(stage.startswith(name) for name in self._PREVIEW_STAGES):
             return
         now = time.monotonic()
         if now < getattr(self, "_early_preview_next", 0.0):
             return
         self._early_preview_next = now + self._PREVIEW_POLL_SECONDS
-        stamp = self._previewable_page()
-        if stamp is None:
-            self._early_preview_stamp = None
-            return
-        if stamp != getattr(self, "_early_preview_stamp", None):
-            self._early_preview_stamp = stamp
+        if self._previewable_page() is None:
             return
         self._show_early_preview()
 

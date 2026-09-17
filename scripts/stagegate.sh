@@ -80,6 +80,7 @@ fi
 python3 "$ROOT/scripts/lib/workflow_family.py" app
 unset UNCLE_NEW_WORKFLOW
 . "$ROOT/scripts/lib/project-git.sh"
+. "$ROOT/scripts/lib/preview-build.sh"
 uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
 . "$ROOT/scripts/lib/state.sh"
@@ -214,6 +215,7 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 on_exit() {
     local rc=$?
     if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
+    if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
     # A probe must not outlive the run that started it.
     if [[ -n "${PREFLIGHT_BG_PID:-}" ]] && kill -0 "$PREFLIGHT_BG_PID" 2>/dev/null; then
         kill "$PREFLIGHT_BG_PID" 2>/dev/null || true
@@ -838,7 +840,10 @@ stage_tools() {
     case "$1" in
         updated-plan|derive-brief)
             fallback="Read,Glob,Grep,Write,Edit" ;;
-        implementation|execute-checklist|preflight)
+        implementation|execute-checklist|preflight|preview-build)
+            # The preview build is an implementation, just an early one: a
+            # scaffolded app needs the same tools as the real stage, and with
+            # Write alone it cannot get a framework project off the ground.
             fallback="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
             ;;
     esac
@@ -1754,6 +1759,10 @@ while true; do
 
         ADVERSARIAL_REVIEW)
             verify_approval PROJECT_PLAN.md PROJECT_PLAN
+            # From here the plan is approved, and the two review stages take
+            # minutes during which the operator sees nothing running. Build
+            # something viewable beside them.
+            preview_build_start
             run_gated_stage ADVERSARIAL_REVIEW \
                 PROJECT_PLAN.md \
                 ADVERSARIAL_REVIEW.md
@@ -1795,6 +1804,14 @@ while true; do
             ;;
 
         VALIDATE_UPDATED_PLAN)
+            # Probe only: would an implementation started from PROJECT_PLAN.md,
+            # running beside the review, have survived it? Records the answer
+            # and acts on nothing. Cannot fail the stage.
+            if [[ -s PROJECT_PLAN.md && -s UPDATED_PROJECT_PLAN.md ]]; then
+                python3 -B "$ROOT/scripts/lib/plan_drift.py" \
+                    PROJECT_PLAN.md UPDATED_PROJECT_PLAN.md \
+                    "$STATE_DIR/plan-drift.json" 2>/dev/null || true
+            fi
             verify_approval PROJECT_PLAN.md PROJECT_PLAN
             verify_approval ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
             require_artifact UPDATED_PROJECT_PLAN.md
@@ -1958,6 +1975,16 @@ while true; do
             verify_approval \
                 UPDATED_PROJECT_PLAN.md \
                 UPDATED_PROJECT_PLAN
+            # Nothing may read or write the tree while the preview is still
+            # writing it -- including the verification baseline captured below.
+            preview_build_wait
+            if preview_build_survived; then
+                echo "The review left every section the preview was built from unchanged."
+                echo "Implementation continues from that code rather than an empty tree."
+            elif [[ "$PREVIEW_STARTED" == 1 ]]; then
+                echo "The review changed the plan the preview was built from."
+                echo "Implementation rebuilds to the approved plan; preview code is not evidence."
+            fi
             # A backgrounded probe has no report yet, and demanding one here
             # would send the run straight back to PREFLIGHT for ever. The plan
             # hash is still checked: a plan revised since the probe started

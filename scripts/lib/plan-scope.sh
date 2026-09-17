@@ -53,6 +53,12 @@ plan_scope_files() {
     ' "$plan" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d' | sort -u
 }
 
+# The heading is numbered in a change plan ("## 20. Implementation sequence")
+# and bare in a greenfield plan ("## Implementation order"): the prompts list
+# sections by number, but the plan writes the heading it is given. Requiring the
+# number meant this matched no greenfield plan at all, so stepwise implementation
+# silently did nothing there.
+#
 # plan_steps <plan> — the implementation sequence, one step per line, in order,
 # with its leading number removed.
 plan_steps() {
@@ -61,12 +67,79 @@ plan_steps() {
     [[ -s "$plan" ]] || return 0
 
     awk '
-        /^## [0-9]+\. Implementation sequence/ { inseq = 1; next }
+        # Greenfield plans head this "Implementation order"; change plans say
+        # "Implementation sequence". Matching only the latter meant stepwise
+        # implementation could never engage on a greenfield plan at all.
+        /^## ([0-9]+\. )?Implementation (sequence|order)/ { inseq = 1; next }
         inseq && /^## / { inseq = 0 }
         !inseq { next }
         /^[0-9]+\./ {
             sub(/^[0-9]+\.[[:space:]]*/, "")
             print
+        }
+    ' "$plan"
+}
+
+# plan_step_owns <plan> — "<step number>TAB<path>" for every path a step claims.
+#
+# The plan declares which files each implementation step owns, in the same
+# backticked form the change-impact table already uses:
+#
+#   1. Arithmetic core — Owns: `calc.js`, `tests/calc.test.js`
+#   4. Reconcile — Owns: `*` — Depends on: 1, 2, 3
+#
+# Silence is not a partition: a step that declares nothing emits nothing, and
+# every caller treats an undeclared step as owning the whole tree.
+plan_step_owns() {
+    local plan="$1"
+
+    [[ -s "$plan" ]] || return 0
+
+    awk '
+        /^## ([0-9]+\. )?Implementation (sequence|order)/ { inseq = 1; next }
+        inseq && /^## / { inseq = 0 }
+        !inseq { next }
+        /^[0-9]+\./ {
+            n = $0; sub(/\..*$/, "", n)
+            line = $0
+            if (match(line, /[Oo]wns:/)) {
+                line = substr(line, RSTART + RLENGTH)
+                # Stop at a following field so "Depends on" paths are not owned.
+                if (match(line, /[Dd]epends[ \t]+on:/)) line = substr(line, 1, RSTART - 1)
+                while (match(line, /`[^`]+`/)) {
+                    tok = substr(line, RSTART + 1, RLENGTH - 2)
+                    line = substr(line, RSTART + RLENGTH)
+                    gsub(/^[ \t]+|[ \t]+$/, "", tok)
+                    if (tok == "") continue
+                    if (tok ~ /^\//) continue
+                    sub(/^\.\//, "", tok)
+                    print n "\t" tok
+                }
+            }
+        }
+    ' "$plan"
+}
+
+# plan_step_depends <plan> — "<step>TAB<step it waits for>" per declared edge.
+plan_step_depends() {
+    local plan="$1"
+
+    [[ -s "$plan" ]] || return 0
+
+    awk '
+        /^## ([0-9]+\. )?Implementation (sequence|order)/ { inseq = 1; next }
+        inseq && /^## / { inseq = 0 }
+        !inseq { next }
+        /^[0-9]+\./ {
+            n = $0; sub(/\..*$/, "", n)
+            line = $0
+            if (match(line, /[Dd]epends[ \t]+on:/)) {
+                line = substr(line, RSTART + RLENGTH)
+                while (match(line, /[0-9]+/)) {
+                    print n "\t" substr(line, RSTART, RLENGTH)
+                    line = substr(line, RSTART + RLENGTH)
+                }
+            }
         }
     ' "$plan"
 }

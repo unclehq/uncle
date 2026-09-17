@@ -2276,6 +2276,12 @@ REPAIR
             # regression is for the operator to weigh against the diff, and
             # killing the run here would throw away the stage that produced it.
             run_green_check || true
+
+            # Probe only: records what a parallel implementation would have
+            # done and whether the plan's file ownership matched the tree.
+            # Runs nothing in parallel and cannot fail the stage.
+            python3 -B "$ROOT/scripts/lib/step_groups.py" CHANGE_PLAN.md . \
+                > "$STATE_DIR/step-groups.json" 2>/dev/null || true
             write_verification_envelope
             plan_delivery_summary
 

@@ -89,6 +89,7 @@ Include:
 18. Manual-verification strategy
 19. Observability changes
 20. Implementation sequence
+
 21. Scope cuts under time pressure
 22. Risks and unresolved questions
 
@@ -192,3 +193,18 @@ size-only compaction passes after the complete draft. Mandatory content survives
 even above the guide. Enforced budgets retain the preservation validator and
 at most two passes total; retain an oversized complete artifact for driver
 resolution if needed. Format, completeness and executability checks still apply.
+
+Every step in the implementation sequence must end with `Owns:` — the
+repository-relative files that step writes, backticked and comma-separated. A
+step owns a file when it is the only step that writes it. Add
+`Depends on: <step numbers>` when a step needs an earlier one finished first.
+A step that touches everything declares `Owns: *`.
+
+  1. Arithmetic core — Owns: `src/calc.js`, `tests/calc.test.js`
+  2. Keypad and display — Owns: `src/ui.js`, `index.html`
+  3. Reconcile — Owns: `*` — Depends on: 1, 2
+
+A step is not complete without it. Declare honestly rather than optimistically:
+claiming a file the step does not write is worse than claiming none, and a step
+whose files genuinely overlap another's should say so by naming the same file,
+not by omitting the field.

@@ -237,3 +237,18 @@ do no size-only compaction passes after the complete draft. With enforced
 budgets, use the existing preservation validator and at most two passes total;
 if mandatory content cannot fit, retain it for the driver's budget resolution.
 This does not waive format, completeness, acceptance or executability checks.
+
+Every step in the implementation sequence must end with `Owns:` — the
+repository-relative files that step writes, backticked and comma-separated. A
+step owns a file when it is the only step that writes it. Add
+`Depends on: <step numbers>` when a step needs an earlier one finished first.
+A step that touches everything declares `Owns: *`.
+
+  1. Arithmetic core — Owns: `src/calc.js`, `tests/calc.test.js`
+  2. Keypad and display — Owns: `src/ui.js`, `index.html`
+  3. Reconcile — Owns: `*` — Depends on: 1, 2
+
+A step is not complete without it. Declare honestly rather than optimistically:
+claiming a file the step does not write is worse than claiming none, and a step
+whose files genuinely overlap another's should say so by naming the same file,
+not by omitting the field.

@@ -53,22 +53,20 @@ class HomepageRowsTests(unittest.TestCase):
     def drawn(self, ui):
         return [call.args[2] for call in ui.stdscr.addnstr.call_args_list]
 
-    def test_rows_render_issue_state_lock_and_path(self):
+    def test_homepage_lists_no_worktree_runs(self):
+        """The homepage is the menu and the prompt, and nothing else.
+
+        Every run in every worktree used to be listed above both. With an issue
+        run taking its own worktree by default that block only grows, and it
+        pushed the two things the screen is for down the page.
+        `scripts/lib/worktree_runs.py` still prints the list on demand.
+        """
         ui = self.ui()
         with patch.object(uncle_tui.worktree_runs, 'runs', return_value=ROWS) as runs:
             ui._draw_homepage(24, 100)
-        runs.assert_called_once()
-        texts = self.drawn(ui)
-        first = [t for t in texts if '#64' in t]
-        second = [t for t in texts if '#7' in t]
-        self.assertEqual(len(first), 1, texts)
-        self.assertEqual(len(second), 1, texts)
-        for needle in ('IMPLEMENT', 'locked', '/p/uncle-issue-64'):
-            self.assertIn(needle, first[0])
-        for needle in ('COMPLETE', 'idle', '/p/uncle-issue-7'):
-            self.assertIn(needle, second[0])
-        rows_y = [call.args[0] for call in ui.stdscr.addnstr.call_args_list if '#' in call.args[2]]
-        self.assertEqual(rows_y, [1, 2])
+        runs.assert_not_called()
+        for text in self.drawn(ui):
+            self.assertNotIn('/p/uncle-issue-', text)
         self.assertFalse(self.signer_log.exists())
 
     def test_no_rows_draws_nothing(self):
@@ -82,33 +80,6 @@ class HomepageRowsTests(unittest.TestCase):
         with patch.object(uncle_tui.worktree_runs, 'runs', side_effect=uncle_tui.worktree_runs.WorktreeListError('x')):
             ui._draw_homepage(24, 100)
         self.assertFalse([t for t in self.drawn(ui) if '#' in t])
-
-    def test_narrow_width_keeps_the_path_tail(self):
-        ui = self.ui()
-        with patch.object(uncle_tui.worktree_runs, 'runs', return_value=ROWS):
-            ui._draw_homepage(24, 40)
-        rows = [t for t in self.drawn(ui) if t.startswith('#')]
-        self.assertEqual(len(rows), 2)
-        for text, row in zip(rows, ROWS):
-            self.assertLessEqual(len(text), 40)
-            self.assertTrue(text.endswith(row['path']), text)
-        # Narrower than the line: the path loses its head, keeps its tail.
-        ui = self.ui()
-        with patch.object(uncle_tui.worktree_runs, 'runs', return_value=ROWS):
-            ui._draw_homepage(24, 30)
-        rows = [t for t in self.drawn(ui) if t.startswith('#')]
-        self.assertEqual(len(rows), 2)
-        for text, row in zip(rows, ROWS):
-            self.assertLessEqual(len(text), 29)
-            self.assertTrue(text.endswith(row['path'][-6:]), text)
-            self.assertIn(' …', text)
-
-    def test_rows_are_cached_for_five_seconds(self):
-        ui = self.ui()
-        with patch.object(uncle_tui.worktree_runs, 'runs', return_value=ROWS) as runs:
-            ui._draw_homepage(24, 100)
-            ui._draw_homepage(24, 100)
-        self.assertEqual(runs.call_count, 1)
 
     def test_issue_modes(self):
         self.assertEqual(ISSUE_MODES[:3], [('auto', ''), ('change request', '--change'), ('new application', '--new')])

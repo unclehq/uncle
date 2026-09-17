@@ -4090,22 +4090,6 @@ class UncleTUI:
         else:
             self.chat_error = 'Usage: /delegate on | off | status'
 
-    def _worktree_rows(self):
-        """Runs across this project's worktrees, polled at most every 5 s.
-
-        A listing failure reads as no rows: the homepage must not depend on git.
-        """
-        now = time.monotonic()
-        cached = getattr(self, '_worktree_cache', None)
-        if cached is not None and now - cached[0] < 5:
-            return cached[1]
-        try:
-            rows = worktree_runs.runs(_project_root())
-        except worktree_runs.WorktreeListError:
-            rows = []
-        self._worktree_cache = (now, rows)
-        return rows
-
     def _draw_homepage(self, h, w):
         """Centered, prompt-first landing screen; workflow rendering is separate."""
         color = getattr(self, 'color', {})
@@ -4139,22 +4123,11 @@ class UncleTUI:
                     text = '   ' + text
             bar.append((bar_y, x, text, selected))
             x += len(text)
-        # Runs in other worktrees, one line each under the bar; a single-run
-        # project draws nothing here. Long paths lose their head, not their tail.
+        # The homepage is the menu and the prompt. Listing every worktree run
+        # here put a growing block of paths above both -- and now that an issue
+        # run takes its own worktree by default, that list only gets longer.
+        # `scripts/lib/worktree_runs.py` still prints it on demand.
         run_y = bar_y + 1
-        for run in self._worktree_rows():
-            head = '#%s %s %s ' % (run['issue'], run['state'], 'locked' if run['locked'] else 'idle')
-            room = max(0, w - 1 - len(head))
-            path = run['path']
-            if len(path) > room:
-                path = ('…' + path[len(path) - room + 1:]) if room > 1 else ''
-            if not 0 <= run_y < h:
-                break
-            try:
-                self.stdscr.addnstr(run_y, 0, head + path, max(0, w - 1), color.get('accent', 0))
-            except curses.error:
-                pass
-            run_y += 1
         # The decorative logo yields its rows to the bar before the prompt does.
         logo_fits = w >= LOGO_W + 4 and h >= len(LOGO) + footer_rows + run_y
         logo = LOGO if logo_fits and not history else []

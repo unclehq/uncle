@@ -2103,6 +2103,14 @@ while true; do
             ;;
 
         VALIDATE_UPDATED_PLAN)
+            # Probe only: would code written from the pre-review plan have
+            # survived the review? The snapshot above already holds that plan,
+            # so this costs a diff. Acts on nothing, cannot fail the stage.
+            if [[ -s "$STATE_DIR/CHANGE_PLAN.pre-review.md" && -s CHANGE_PLAN.md ]]; then
+                python3 -B "$ROOT/scripts/lib/plan_drift.py" \
+                    "$STATE_DIR/CHANGE_PLAN.pre-review.md" CHANGE_PLAN.md \
+                    "$STATE_DIR/plan-drift.json" 2>/dev/null || true
+            fi
             verify_approval BASELINE_REPORT.md BASELINE_REPORT
             verify_approval CHANGE_SPEC.md CHANGE_SPEC
             verify_approval ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW

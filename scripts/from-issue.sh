@@ -206,9 +206,14 @@ ISSUE_ARG="$1"
 MODE=""
 SEED_ONLY=0
 ISSUE_WORKFLOW_ARGS=()
-# Left off here on purpose. Automatic worktrees are applied by the launcher
-# before this script runs, which covers every entry point rather than just
-# this one; --worktree stays as the explicit, change-only older path.
+# Off by default, and it cannot simply be flipped: the worktree is created
+# before the issue is classified, so requesting one forces MODE=change below.
+# Turning it on by default would silently make every issue run a change run.
+#
+# The launcher deliberately creates no worktree for an issue run either --
+# only this script knows the issue's title, and a name taken before the fetch
+# describes the previous run's work. Automatic worktrees for issue runs need
+# the creation moved after classification, which is a separate change.
 WORKTREE=0
 WORKTREE_DIR=""
 WORKTREE_BRANCH=""

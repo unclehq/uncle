@@ -358,8 +358,18 @@ run_workflow() {
     # is handed a project root by whoever launched it and relocating under its
     # caller would surprise every one of them. Declining is silent -- no git,
     # no brief, already in a worktree, or WORKFLOW_WORKTREE=0.
+    #
+    # Never for an issue run. Naming here reads the brief sitting in the
+    # project directory, which for an issue run is the *previous* run's -- the
+    # new one is fetched and seeded later. That produced three worktrees for
+    # issues 68, 69 and 70 all named after issue 54, separated only by a
+    # counter. from-issue.sh names from the issue title it just fetched, which
+    # is the only name that describes the work.
     . "$ROOT/scripts/lib/worktrees.sh"
-    uncle_worktree="$(worktree_auto "$PWD" || true)"
+    case "${1##*/}" in
+        from-issue.sh) uncle_worktree="" ;;
+        *) uncle_worktree="$(worktree_auto "$PWD" || true)" ;;
+    esac
     if [[ -n "$uncle_worktree" ]]; then
         echo "Working in $uncle_worktree"
         cd "$uncle_worktree" || return 1

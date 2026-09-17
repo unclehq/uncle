@@ -75,7 +75,8 @@ def main():
     }
     Path(out_path).write_text(json.dumps(report, indent=2) + '\n')
     verdict = 'ADOPT' if report['would_adopt'] else 'DISCARD'
-    print('Speculative implementation from PROJECT_PLAN.md would have been: %s' % verdict)
+    print('Code written from %s would have been: %s'
+          % (Path(before_path).name, verdict))
     if not report['would_adopt']:
         print('  material sections the review changed: %s'
               % (', '.join(changed_sections) or 'none'))

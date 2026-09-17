@@ -26,9 +26,23 @@ SCRUBBED_ENV = ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_STEERING', 'ST
 DIAGNOSIS_TOOLS = 'Read,Grep,Glob,Bash,Edit,Write,MultiEdit'
 EXECUTE_TOOLS = 'Read,Grep,Glob,Bash,Edit,Write,MultiEdit'
 
-_CLASS_RE = re.compile(r'^\s*Classification:\s*(.+?)\s*$', re.IGNORECASE | re.MULTILINE)
-_PROPOSAL_RE = re.compile(r'^\s*Proposal\s+([1-3]):\s*(.*)$', re.IGNORECASE | re.MULTILINE)
-_RESUME_RE = re.compile(r'^\s*Offer:\s*resume\s*$', re.IGNORECASE | re.MULTILINE)
+# Markdown emphasis around the label and its value. Models write
+# "**Proposal 1:** ..." and "Classification: `tool bug`" as readily as the plain
+# form, and rejecting those threw away a reply that followed the contract in
+# every way that matters -- leaving the operator a diagnosis they could read but
+# not act on.
+_EMPH = r'[*_`]*'
+_CLASS_RE = re.compile(r'^\s*%s\s*Classification\s*%s\s*:\s*(.+?)\s*$' % (_EMPH, _EMPH),
+                       re.IGNORECASE | re.MULTILINE)
+_PROPOSAL_RE = re.compile(r'^\s*%s\s*Proposal\s+([1-3])\s*%s\s*:%s\s*(.*)$' % (_EMPH, _EMPH, _EMPH),
+                          re.IGNORECASE | re.MULTILINE)
+_RESUME_RE = re.compile(r'^\s*%s\s*Offer\s*%s\s*:\s*%s\s*resume\s*%s\s*$' % (_EMPH, _EMPH, _EMPH, _EMPH),
+                        re.IGNORECASE | re.MULTILINE)
+
+
+def _plain(value):
+    """A label's value without the emphasis a model wrapped it in."""
+    return re.sub(r'^[*_`]+|[*_`]+$', '', (value or '').strip()).strip()
 
 
 def parse_reply(text):
@@ -43,12 +57,12 @@ def parse_reply(text):
     match = _CLASS_RE.search(text or '')
     if not match:
         return None
-    klass = match.group(1).strip().strip('`*').lower()
+    klass = _plain(match.group(1)).lower()
     if klass not in CLASSES:
         return None
     proposals = []
     for number, body in _PROPOSAL_RE.findall(text):
-        proposals.append((int(number), body.strip()))
+        proposals.append((int(number), _plain(body)))
     numbers = [n for n, _ in proposals]
     if not numbers or numbers != list(range(1, len(numbers) + 1)):
         return None

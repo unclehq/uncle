@@ -69,7 +69,6 @@ Retain and update:
 - testing strategy;
 - failure handling;
 - implementation order;
-- time-based priorities;
 - explicit non-goals.
 
 Clearly identify changes from PROJECT_PLAN.md.

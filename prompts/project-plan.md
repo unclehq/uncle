@@ -53,8 +53,9 @@ Include:
     one fenced block, one runnable command per line, from the repository root
 11. Manual-test strategy
 12. Implementation order
-13. Explicit non-goals
-14. Risks and unresolved questions
+13. Requirement traceability
+14. Explicit non-goals
+15. Risks and unresolved questions
 
 Use this invariant table:
 

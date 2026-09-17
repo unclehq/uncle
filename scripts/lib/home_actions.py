@@ -20,6 +20,9 @@ has completed: the application reports the actual result.
 Actions:
 - create_app: turn the conversation into REQUIREMENTS.md; include "document"
   (complete Markdown) and "start" (boolean). Start when the user asks to build.
+  Write the whole document in this same reply. Saying you will draft it, or
+  that you will refine it after a first pass, produces no document and no
+  build: there is no later turn in which you write it.
 - create_change: turn the conversation into CHANGE_REQUEST.md, with the same
   document/start fields. Use for requested changes to the current project.
 - run_app: build the existing REQUIREMENTS.md; no document/start fields.
@@ -65,8 +68,25 @@ def parse_reply(text):
         keys |= {'document', 'start'}
     elif action == 'github_issue':
         keys |= {'issue', 'start'}
-    if set(data) != keys or not isinstance(data['message'], str):
-        raise ValueError('The chat model returned an invalid action.')
+    # A null-valued extra is the model spelling out a field that does not apply
+    # to this action -- `issue: null` on a create_app -- and carries nothing, so
+    # it is dropped. Every other unknown key is refused: an action object that
+    # arrives with a field the schema never defined is exactly the shape a
+    # smuggled instruction takes, and sanitizing it away would hide that.
+    data = {name: value for name, value in data.items() if name in keys or value is not None}
+    unknown = sorted(set(data) - keys)
+    if unknown:
+        raise ValueError('The chat model returned an action with unexpected fields: %s'
+                         % ', '.join(unknown))
+    missing = sorted(keys - set(data))
+    if missing:
+        # Naming the field distinguishes the common case -- the model described
+        # the document instead of including it -- from a malformed reply.
+        raise ValueError('The chat model left out %s. It usually means it '
+                         'described the brief instead of writing it; ask again.'
+                         % ', '.join(missing))
+    if not isinstance(data['message'], str):
+        raise ValueError('The chat model returned an invalid action message.')
     if 'start' in keys and not isinstance(data['start'], bool):
         raise ValueError('The chat model returned an invalid start flag.')
     if action.startswith('create_'):

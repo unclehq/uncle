@@ -134,15 +134,24 @@ _PARENT_WATCH = (
     'sys.exit(child.wait())\n')
 
 
+KEEP_STDIN = object()
+
+
 def start_check(command, prompt=None, **kwargs):
     """Start `command` as its own owned tree. `prompt` (bytes) is written to
-    its stdin and then closed; without one stdin is /dev/null as before."""
+    its stdin and then closed; without one stdin is /dev/null as before.
+    Pass KEEP_STDIN to leave stdin open for a worker fed more than once."""
     started, tick = time.time(), time.monotonic()
     if os.name == 'nt':
         from windows_job import start
         return track_process(start(command, prompt=prompt, **kwargs, **group_options()), command, started, tick)
     import sys
     wrapped = [sys.executable, '-B', '-c', _PARENT_WATCH, *command]
+    if prompt is KEEP_STDIN:
+        # A worker that answers many turns is fed over its whole life, so stdin
+        # stays open. It keeps the parent watch: the tree still dies with us.
+        child = subprocess.Popen(wrapped, stdin=subprocess.PIPE, **kwargs, **group_options())
+        return track_process(child, command, started, tick)
     if prompt is None:
         child = subprocess.Popen(wrapped, stdin=subprocess.DEVNULL, **kwargs, **group_options())
         return track_process(child, command, started, tick)

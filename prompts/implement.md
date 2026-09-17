@@ -5,9 +5,14 @@ Read these in one parallel batch of tool calls:
 - REQUIREMENTS.md
 - REQUIREMENTS_INTERPRETATION.md
 - UPDATED_PROJECT_PLAN.md
-- PREFLIGHT_REPORT.md
+- PREFLIGHT_REPORT.md, if it exists
 
-That is the whole input set. UPDATED_PROJECT_PLAN.md is the approved plan: it
+That is the whole input set. PREFLIGHT_REPORT.md may legitimately be absent:
+the prerequisite probe now runs alongside this stage instead of in front of it,
+so implementation does not wait on it. Its absence is not an error and not a
+reason to stop or to go looking for one; build from the plan. It also means no
+prerequisite has been confirmed yet, so do not record any capability as
+verified on the strength of a report you did not read. UPDATED_PROJECT_PLAN.md is the approved plan: it
 supersedes PROJECT_PLAN.md and records a disposition for every finding in
 ADVERSARIAL_REVIEW.md, so do not read either one. If the updated plan turns out
 to be missing something you need, read the superseded document, and record in

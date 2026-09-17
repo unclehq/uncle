@@ -128,6 +128,12 @@ mkdir -p "$APPROVAL_DIR" "$LOG_DIR" "$SPEC_DIR"
 # the gate, so the expected waste is low — but if tokens matter more than wall
 # clock, or you habitually edit documents during review, set this to 0.
 WORKFLOW_SPECULATE="${WORKFLOW_SPECULATE:-1}"
+# Preflight probes the environment. Blocking on it cost 147s and $1.32 on a
+# calculator build before a line of code was written. It now runs beside
+# implementation and reports through the supervisor instead of gating.
+# WORKFLOW_PREFLIGHT_BLOCKING=1 restores the gate.
+PREFLIGHT_BLOCKING="${WORKFLOW_PREFLIGHT_BLOCKING:-0}"
+PREFLIGHT_BG_PID=""
 # One pass for REQUIREMENTS_INTERPRETATION.md and PROJECT_PLAN.md.
 # WORKFLOW_MERGE_REQUIREMENTS_PLAN=0 restores two separate stages.
 MERGE_REQUIREMENTS_PLAN="${WORKFLOW_MERGE_REQUIREMENTS_PLAN:-1}"
@@ -208,6 +214,11 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 on_exit() {
     local rc=$?
     if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
+    # A probe must not outlive the run that started it.
+    if [[ -n "${PREFLIGHT_BG_PID:-}" ]] && kill -0 "$PREFLIGHT_BG_PID" 2>/dev/null; then
+        kill "$PREFLIGHT_BG_PID" 2>/dev/null || true
+        wait "$PREFLIGHT_BG_PID" 2>/dev/null || true
+    fi
     triage_on_exit "$rc"
 }
 trap on_exit EXIT
@@ -1581,6 +1592,44 @@ adopt_speculation() {
     return 0
 }
 
+# Collect a backgrounded preflight probe. Never stops the run: the operator
+# asked for implementation not to wait on it, so a problem is surfaced -- to the
+# supervisor, to the log, and at the gate the operator is about to read -- while
+# the code that was written in the meantime is kept. It says plainly that the
+# prerequisites were not confirmed, because a probe that never reported is not
+# the same as one that passed.
+collect_background_preflight() {
+    [[ -e "$STATE_DIR/preflight-backgrounded" ]] || return 0
+    local status="" result=""
+
+    if [[ -n "$PREFLIGHT_BG_PID" ]] && kill -0 "$PREFLIGHT_BG_PID" 2>/dev/null; then
+        echo
+        echo "Waiting for the prerequisite probe started before implementation..."
+        wait "$PREFLIGHT_BG_PID" 2>/dev/null || true
+    fi
+    PREFLIGHT_BG_PID=""
+    rm -f "$STATE_DIR/preflight-backgrounded"
+    [[ -s "$STATE_DIR/preflight-bg.status" ]] && status="$(cat "$STATE_DIR/preflight-bg.status")"
+    [[ -s PREFLIGHT_REPORT.md ]] && result="$(acceptance_result PREFLIGHT_REPORT.md)"
+
+    if [[ "$status" == 0 && "$result" == PASS ]]; then
+        echo "Prerequisites confirmed (probed alongside implementation)."
+        snapshot_preflight_capabilities PREFLIGHT_REPORT.md 2>/dev/null || true
+        return 0
+    fi
+
+    echo
+    echo "Prerequisite probe did not confirm this environment: ${result:-no report}."
+    [[ -s PREFLIGHT_REPORT.md ]] && acceptance_problem PREFLIGHT_REPORT.md 2>/dev/null | sed 's/^/  /'
+    echo "Implementation ran without waiting for it, so the code exists but the"
+    echo "prerequisites behind it were not proved. Weigh this with the diff."
+    echo "Log: $LOG_DIR/preflight.background.log"
+    supervision_validation_failed preflight PREFLIGHT_REPORT.md \
+        "Prerequisite probe did not confirm the environment: ${result:-no report}." 0 || true
+    snapshot_preflight_capabilities PREFLIGHT_REPORT.md 2>/dev/null || true
+    return 0
+}
+
 # Run a stage, using the speculative result when one is valid.
 run_gated_stage() {
     local stage="$1"
@@ -1807,6 +1856,28 @@ while true; do
                 echo "Amend the plan and renew its approval."
                 exit 1
             fi
+            # The structural checks above stay in front of implementation: they
+            # cost nothing, need no model, and a plan missing its verification
+            # commands or protected paths must not reach code. What moves is the
+            # probe -- the part that spends minutes and dollars asking a model
+            # about the environment.
+            if [[ "$PREFLIGHT_BLOCKING" != "1" ]]; then
+                : > "$STATE_DIR/preflight-backgrounded"
+                rm -f "$STATE_DIR/preflight-bg.status"
+                echo
+                echo "Probing prerequisites in the background; implementation starts now."
+                echo "A problem is reported through the supervisor, not by stopping here."
+                (
+                    status=0
+                    run_stage PREFLIGHT || status=$?
+                    printf '%s\n' "$status" > "$STATE_DIR/preflight-bg.status"
+                ) > "$LOG_DIR/preflight.background.log" 2>&1 < /dev/null &
+                PREFLIGHT_BG_PID=$!
+                hash_file UPDATED_PROJECT_PLAN.md > "$STATE_DIR/preflight-plan.sha256"
+                set_state IMPLEMENT
+                continue
+            fi
+            rm -f "$STATE_DIR/preflight-backgrounded"
             run_stage PREFLIGHT
             if plan_executability_enabled && [[ -s "$STATE_DIR/plan-executability/assessment.json" ]]; then
                 plan_tool preflight-check || exit 1
@@ -1887,9 +1958,14 @@ while true; do
             verify_approval \
                 UPDATED_PROJECT_PLAN.md \
                 UPDATED_PROJECT_PLAN
+            # A backgrounded probe has no report yet, and demanding one here
+            # would send the run straight back to PREFLIGHT for ever. The plan
+            # hash is still checked: a plan revised since the probe started
+            # invalidates it either way.
             if [[ ! -s "$STATE_DIR/preflight-plan.sha256" ]] \
                 || [[ "$(cat "$STATE_DIR/preflight-plan.sha256")" != "$(hash_file UPDATED_PROJECT_PLAN.md)" ]] \
-                || ! preflight_settled "$(acceptance_result PREFLIGHT_REPORT.md)"; then
+                || { [[ ! -e "$STATE_DIR/preflight-backgrounded" ]] \
+                     && ! preflight_settled "$(acceptance_result PREFLIGHT_REPORT.md)"; }; then
                 set_state PREFLIGHT
                 continue
             fi
@@ -1915,6 +1991,7 @@ while true; do
             # failure is for the operator to weigh against the diff, and
             # killing the run here would throw away the stage that produced it.
             run_green_check || true
+            collect_background_preflight
             plan_delivery_summary
             check_verification_inputs
 

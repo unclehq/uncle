@@ -295,11 +295,11 @@ class ChatRequest(SupervisorRequest):
     """One chat call on the supervisor worker; an optional issue lookup runs in
     the worker thread before the prompt is sent, as the homepage did."""
 
-    def __init__(self, command, prompt, env, home, log_path, meta, issue_lookup=None):
+    def __init__(self, command, prompt, env, home, log_path, meta, issue_lookup=None, session=None):
         self.issue_context = ''
         self.home_intent = False
         self._issue_lookup = issue_lookup
-        super().__init__(command, prompt, env, home, log_path, meta)
+        super().__init__(command, prompt, env, home, log_path, meta, session=session)
 
     def _run(self, command, prompt, env):
         if self._issue_lookup is not None:

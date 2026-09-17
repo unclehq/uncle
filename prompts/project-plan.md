@@ -40,24 +40,21 @@ Create PROJECT_PLAN.md.
 
 Include:
 
-1. Requirement interpretation
-2. Architecture
-3. Authoritative state
-4. Domain model
-5. Components and responsibilities
-6. Data flow
-7. Observable behaviors
-8. Domain invariants
-9. Failure handling
-10. Concurrency model
-11. Automated-test strategy, ending in a `## Verification commands` block:
+1. Architecture
+2. Authoritative state
+3. Domain model
+4. Components and responsibilities
+5. Data flow
+6. Observable behaviors
+7. Domain invariants
+8. Failure handling
+9. Concurrency model
+10. Automated-test strategy, ending in a `## Verification commands` block:
     one fenced block, one runnable command per line, from the repository root
-12. Manual-test strategy
-13. Requirement traceability
-14. Implementation order
-15. Time-based priorities
-16. Explicit non-goals
-17. Risks and unresolved questions
+11. Manual-test strategy
+12. Implementation order
+13. Explicit non-goals
+14. Risks and unresolved questions
 
 Use this invariant table:
 

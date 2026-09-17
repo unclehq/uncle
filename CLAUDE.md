@@ -47,21 +47,19 @@ Create PROJECT_PLAN.md.
 
 It must include:
 
-1. Requirement interpretation
-2. Assumptions and ambiguities
-3. User-visible behaviors
-4. System behaviors
-5. Domain model
-6. Authoritative state
-7. Architecture
-8. Invariants
-9. Failure and edge-case behavior
-10. Automated verification strategy
-11. Manual verification strategy
-12. Implementation sequence
-13. Time-based priorities
-14. Explicit non-goals
-15. Risks and unresolved questions
+1. Assumptions and ambiguities
+2. User-visible behaviors
+3. System behaviors
+4. Domain model
+5. Authoritative state
+6. Architecture
+7. Invariants
+8. Failure and edge-case behavior
+9. Automated verification strategy
+10. Manual verification strategy
+11. Implementation sequence
+12. Explicit non-goals
+13. Risks and unresolved questions
 
 For each behavior, include:
 

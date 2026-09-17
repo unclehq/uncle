@@ -73,7 +73,12 @@ preview_build_start() {
     # driver does referenced variables that do not exist here, and the preview
     # died on an unbound variable before it wrote anything.
     (
+        # A throwaway first look does not need the top tier deliberating over
+        # it: the last one spent 124s and ~11,900 output tokens to produce a
+        # 2 KB page. Speed is the whole product of this stage.
         UNCLE_PREVIEW_BUILD=true \
+        WORKFLOW_MODEL_PREVIEW_BUILD="${WORKFLOW_MODEL_PREVIEW_BUILD:-haiku}" \
+        WORKFLOW_EFFORT_PREVIEW_BUILD="${WORKFLOW_EFFORT_PREVIEW_BUILD:-low}" \
             run_claude prompts/preview-build.md preview-build
     ) > "$LOG_DIR/preview-build.log" 2>&1 < /dev/null &
     PREVIEW_PID=$!

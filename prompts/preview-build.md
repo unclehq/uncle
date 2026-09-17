@@ -24,10 +24,16 @@ the full test suite: a later stage implements the approved plan properly and
 will rewrite most of this. Something viewable now is worth more than something
 thorough later, which is the whole reason this stage exists.
 
-Write IMPLEMENTATION_NOTES.md with one line per file you created and what it
-does. Do not write AUTOMATED_TEST_REPORT.md, do not claim any check passed, and
-do not record anything as verified: nothing here has been reviewed, and this
-build is not evidence of anything.
+Write no documents at all. Not IMPLEMENTATION_NOTES.md, not
+AUTOMATED_TEST_REPORT.md, nothing. The stage that implements the approved plan
+writes those, and prose describing code that is about to be rebuilt costs the
+operator the very seconds this stage exists to save. Do not claim any check
+passed or record anything as verified: nothing here has been reviewed.
+
+Work fast and narrow. Do not explore the repository, plan your approach at
+length, enumerate alternatives, or re-read what you have written. Decide the
+shortest thing that runs, write it, and stop. One file is ideal where the
+application allows it.
 
 Touch only source files. Do not edit REQUIREMENTS.md, PROJECT_PLAN.md, or any
 document under `.uncle/`.

@@ -214,7 +214,8 @@ ISSUE_WORKFLOW_ARGS=()
 # only this script knows the issue's title, and a name taken before the fetch
 # describes the previous run's work. Automatic worktrees for issue runs need
 # the creation moved after classification, which is a separate change.
-WORKTREE=0
+WORKTREE=1
+WORKTREE_EXPLICIT=0
 WORKTREE_DIR=""
 WORKTREE_BRANCH=""
 UNATTENDED=0
@@ -226,11 +227,11 @@ while [[ $# -gt 0 ]]; do
         --seed-only) SEED_ONLY=1 ;;
         --new) MODE="new" ;;
         --unattended) ISSUE_WORKFLOW_ARGS+=(--unattended); UNATTENDED=1 ;;
-        --worktree) WORKTREE=1 ;;
-        --no-worktree) WORKTREE=0 ;;
+        --worktree) WORKTREE=1; WORKTREE_EXPLICIT=1 ;;
+        --no-worktree) WORKTREE=0; WORKTREE_EXPLICIT=1 ;;
         --worktree-dir)
             if [[ -z "${2:-}" ]]; then echo "--worktree-dir requires a path."; usage; exit 1; fi
-            WORKTREE=1; WORKTREE_DIR="$2"; shift ;;
+            WORKTREE=1; WORKTREE_EXPLICIT=1; WORKTREE_DIR="$2"; shift ;;
         --branch)
             if [[ -z "${2:-}" ]]; then echo "--branch requires a name."; usage; exit 1; fi
             WORKTREE_BRANCH="$2"; shift ;;
@@ -244,15 +245,16 @@ if [[ "$SEED_ONLY" == 1 && "$MODE" != change ]]; then
     exit 1
 fi
 
-# --worktree is a change-workflow feature: greenfield seeding writes
-# REQUIREMENTS.md in place and has no branch to work on.
+# An explicit --worktree with an explicit --new is a contradiction and is caught
+# here, where both were stated. The default case cannot be judged yet: MODE is
+# classified further down, and this once ran before it -- so requesting a
+# worktree forced MODE=change and silently reclassified the run.
+if [[ "$WORKTREE" == 1 && "$WORKTREE_EXPLICIT" == 1 && "$MODE" == new ]]; then
+    echo '--worktree and --worktree-dir require --change; --new is not supported.'
+    usage
+    exit 1
+fi
 if [[ "$WORKTREE" == 1 ]]; then
-    if [[ "$MODE" == new ]]; then
-        echo '--worktree and --worktree-dir require --change; --new is not supported.'
-        usage
-        exit 1
-    fi
-    MODE="change"
     if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         echo "Not a git repository: $PWD"
         exit 1
@@ -371,6 +373,40 @@ if [[ -z "$TITLE" ]]; then
     exit 1
 fi
 
+# Classified before the worktree, not after. The worktree decision needs to know
+# whether this is a change run, and deciding it the other way round -- requesting
+# a worktree and letting that force MODE=change -- silently reclassified every
+# run that wanted its own directory.
+if [[ -z "$MODE" ]]; then
+    # If CHANGE_REQUEST.md already exists, assume the user is continuing a
+    # change workflow. Otherwise, if the repo contains files beyond the workflow
+    # scaffolding, default to change; if it looks like a fresh template, default
+    # to new.
+    if [[ -s CHANGE_REQUEST.md ]]; then
+        MODE="change"
+    elif git ls-files 2>/dev/null | grep -q -v \
+            -e '^README\.md$' \
+            -e '^REQUIREMENTS\.md$' \
+            -e '^CLAUDE\.md$' \
+            -e '^CHANGE_REQUEST\.md$' \
+            -e '^scripts/' \
+            -e '^prompts/' \
+            -e '^\.claude/' \
+            -e '^\.github/' \
+            -e '^\.gitignore$'; then
+        MODE="change"
+    else
+        MODE="new"
+    fi
+fi
+
+# Greenfield seeding writes REQUIREMENTS.md in place and has no branch to work
+# on, so it takes no worktree. Now that MODE is known this is a fact, not a
+# request to refuse.
+if [[ "$MODE" == new ]]; then
+    WORKTREE=0
+fi
+
 # ---------------------------------------------------------------------------
 # Worktree: created after the fetch (the title names the branch) and before
 # the freeze and the seed, which both write under UNCLE_PROJECT_ROOT.
@@ -427,28 +463,6 @@ fi
 # Decide mode if not supplied.
 # ---------------------------------------------------------------------------
 
-if [[ -z "$MODE" ]]; then
-    # If CHANGE_REQUEST.md already exists, assume the user is continuing a
-    # change workflow. Otherwise, if the repo contains files beyond the workflow
-    # scaffolding, default to change; if it looks like a fresh template, default
-    # to new.
-    if [[ -s CHANGE_REQUEST.md ]]; then
-        MODE="change"
-    elif git ls-files 2>/dev/null | grep -q -v \
-            -e '^README\.md$' \
-            -e '^REQUIREMENTS\.md$' \
-            -e '^CLAUDE\.md$' \
-            -e '^CHANGE_REQUEST\.md$' \
-            -e '^scripts/' \
-            -e '^prompts/' \
-            -e '^\.claude/' \
-            -e '^\.github/' \
-            -e '^\.gitignore$'; then
-        MODE="change"
-    else
-        MODE="new"
-    fi
-fi
 
 # ---------------------------------------------------------------------------
 # Write the seed document.

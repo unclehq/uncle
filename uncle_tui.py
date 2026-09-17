@@ -1680,6 +1680,14 @@ class UncleTUI:
         """
         if os.environ.get("UNCLE_PROJECT_ROOT_LOCKED"):
             return
+        # Never for an issue run. The name would be taken from whatever brief is
+        # sitting in the project directory -- the *previous* run's, since this
+        # one is fetched and written afterwards. That produced worktrees for
+        # issues 68, 69 and 70 all named after an older request, separated only
+        # by a counter. from-issue.sh creates the worktree once it knows the
+        # issue's title, which is the only name that describes the work.
+        if getattr(self, "workflow_idx", None) == 1:
+            return
         try:
             result = subprocess.run(
                 ["bash", "-c", '. "$1/scripts/lib/worktrees.sh"; worktree_auto "$2"',

@@ -393,7 +393,9 @@ run_issue /dev/null 42 --worktree-dir "$CASE/x" --new
 expect_status 1
 expect_out "require --change"
 check "nothing fetched" test ! -s "$GH_LOG"
-run_issue /dev/null 42 --branch topic/x
+# --branch names the worktree's branch. It no longer needs --worktree, because
+# an issue run has one unless --no-worktree says otherwise.
+run_issue /dev/null 42 --branch topic/x --no-worktree
 expect_status 1
 expect_out "--branch requires --worktree"
 
@@ -408,8 +410,19 @@ check "nothing fetched" test ! -s "$GH_LOG"
 # AC-8: without the flag, files, cwd and driver args are as before.
 # ---------------------------------------------------------------------------
 
-new_case no-flag-parity
+# An issue run takes its own worktree by default: one issue, one directory, one
+# branch, so a second issue can start while this one is going.
+new_case default-worktree
 run_issue /dev/null 42 --change --unattended
+expect_status 0
+check "a worktree was created" test "$(g -C "$PROJ" worktree list --porcelain | grep -c '^worktree ')" == 2
+check "driver cwd is the worktree" test "$(driver_field cwd)" != "$(cd "$PROJ" && pwd -P)"
+check "CHANGE_REQUEST.md in the worktree" test ! -s "$PROJ/CHANGE_REQUEST.md"
+check "driver args unchanged" test "$(driver_field args)" == "--unattended"
+
+# --no-worktree is the opt-out, and keeps everything where it was.
+new_case no-worktree-opt-out
+run_issue /dev/null 42 --change --no-worktree --unattended
 expect_status 0
 check "driver cwd is the project" test "$(driver_field cwd)" == "$(cd "$PROJ" && pwd -P)"
 check "driver root is the project" test "$(driver_field root)" == "$PROJ"

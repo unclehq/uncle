@@ -1090,6 +1090,55 @@ capture_green_baseline() {
     hash_file BASELINE_REPORT.md > "$GREEN_SOURCE"
 }
 
+# The baseline suite, run beside the planning stages instead of in front of them.
+#
+# capture_green_baseline executes the approved command list against the
+# unmodified tree. On this repository that is about three minutes of test suite,
+# and nothing reads its results until the green check compares them after
+# implementation -- with change-plan, adversarial-review and updated-change-plan
+# in between. Waiting for it before planning spends that time twice.
+#
+# Two properties it must keep. It still runs against the *unmodified* tree, so
+# it is joined before IMPLEMENT, the first stage that writes code. And a failure
+# still stops the run: the result is checked at the join, not discarded.
+#
+# WORKFLOW_BASELINE_BACKGROUND=0 restores the blocking behaviour.
+BASELINE_BACKGROUND="${WORKFLOW_BASELINE_BACKGROUND:-1}"
+BASELINE_BG_PID=""
+
+start_green_baseline_bg() {
+    if [[ "$BASELINE_BACKGROUND" != "1" || "$GREEN_CHECK" != "1" ]]; then
+        capture_green_baseline
+        return 0
+    fi
+    echo
+    echo "Recording the green-check baseline in the background while planning runs."
+    echo "Log: $LOG_DIR/green-check-baseline.log"
+    ( capture_green_baseline ) > "$LOG_DIR/green-baseline.bg.log" 2>&1 < /dev/null &
+    BASELINE_BG_PID=$!
+}
+
+# Joined before anything writes code. A failure here is fatal, exactly as it was
+# when this ran in the foreground: without a baseline there is nothing for the
+# green check to compare against, and proceeding would quietly drop the
+# comparison rather than make it.
+wait_green_baseline_bg() {
+    [[ -n "$BASELINE_BG_PID" ]] || return 0
+    local status=0 pid="$BASELINE_BG_PID"
+    BASELINE_BG_PID=""
+    echo
+    echo "Waiting for the baseline suite started during planning..."
+    wait "$pid" || status=$?
+    sed 's/^/  /' "$LOG_DIR/green-baseline.bg.log" 2>/dev/null || true
+    if [[ "$status" -ne 0 ]]; then
+        echo "Baseline capture failed (status $status); the green check has nothing"
+        echo "to compare against. Log: $LOG_DIR/green-check-baseline.log"
+        printf '%s\n' "baseline: capture failed with status $status" > "$STATE_DIR/stop-reason"
+        exit "$status"
+    fi
+    return 0
+}
+
 # Run the same commands against the changed tree and classify each against its
 # baseline. Returns non-zero when something that passed before now fails.
 #
@@ -1719,6 +1768,13 @@ BG_MODEL=""
 BG_EFFORT=""
 
 cleanup_bg() {
+    # A baseline suite must not outlive the run that started it.
+    if [[ -n "${BASELINE_BG_PID:-}" ]] && kill -0 "$BASELINE_BG_PID" 2>/dev/null; then
+        echo "Stopping the baseline suite"
+        kill "$BASELINE_BG_PID" 2>/dev/null || true
+        wait "$BASELINE_BG_PID" 2>/dev/null || true
+        BASELINE_BG_PID=""
+    fi
     if [[ -n "${GREEN_BG_PID:-}" ]] && kill -0 "$GREEN_BG_PID" 2>/dev/null; then
         echo "Stopping background checks"
         kill "$GREEN_BG_PID" 2>/dev/null || true
@@ -2009,7 +2065,7 @@ while true; do
             # First point in the pipeline where the command list has been
             # approved and the tree is still untouched, which is the only
             # window in which a baseline means anything.
-            capture_green_baseline
+            start_green_baseline_bg
 
             if [[ -s "$STATE_DIR/change-plan.draft-key" ]] && \
                     [[ "$(cat "$STATE_DIR/change-plan.draft-key")" == "$(change_plan_draft_key)" ]]; then
@@ -2144,6 +2200,9 @@ while true; do
             ;;
 
         IMPLEMENT)
+            # Before a single line of code is written: the baseline only means
+            # anything against the unmodified tree.
+            wait_green_baseline_bg
             verify_approval CHANGE_PLAN.md CHANGE_PLAN
             verify_approval CHANGE_SPEC.md CHANGE_SPEC
             plan_status=0

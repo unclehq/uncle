@@ -189,6 +189,107 @@ def gate_names():
     return sorted(names)
 
 
+def blocking_findings():
+    """The audit rows that block release, as short lines. Never raises."""
+    try:
+        text = Path('FINAL_AUDIT.md').read_text(errors='replace')
+    except OSError:
+        return []
+    rows = []
+    for line in text.splitlines():
+        if not line.strip().startswith('|'):
+            continue
+        cells = [c.strip() for c in line.strip().strip('|').split('|')]
+        if len(cells) < 3 or cells[-1].upper() not in ('YES', '**YES**'):
+            continue
+        rows.append('%s  %s  %s' % (cells[0], cells[1] if len(cells) > 1 else '', cells[2][:96]))
+    return rows
+
+
+def blocked_gate(reason):
+    """Show why publication is refused, and let the operator read the findings.
+
+    The other blocked gates in this workflow ask rather than announce, and this
+    one announced: it printed a line and exited, leaving the operator to open
+    FINAL_AUDIT.md themselves to learn what was wrong.
+
+    Skipping publishes anyway. It never turns a failing audit into a passing
+    one: the release envelope still records `fail` and its reason, the Statement
+    still carries them, and the PR opens with the blocking findings at the top
+    so the first thing any reviewer reads is what the audit refused. A PR is a
+    proposal under review, not a merge, which is why this is the operator's call
+    to make -- but it is made on the record, not by quietly clearing the flag.
+    """
+    rows = blocking_findings()
+    while True:
+        print('', flush=True)
+        print('Not publishing: ' + reason, flush=True)
+        if rows:
+            print('%d finding%s block this change:' % (len(rows), '' if len(rows) == 1 else 's'), flush=True)
+            for row in rows[:8]:
+                print('  ' + row, flush=True)
+        print('Fix the findings and rerun FINAL_AUDIT, stop here and come back to', flush=True)
+        print('it, or skip -- which publishes with these findings quoted in the PR', flush=True)
+        print('and recorded as a failed release. It does not mark the audit passed.', flush=True)
+        answer = ask('Blocked publication: [r]eview, [s]top, or s[k]ip and publish anyway? ',
+                     's').strip().lower()
+        if answer in ('r', 'review'):
+            try:
+                print(Path('FINAL_AUDIT.md').read_text(errors='replace'), flush=True)
+            except OSError as failure:
+                print('Could not read FINAL_AUDIT.md: %s' % failure, flush=True)
+            continue
+        if answer in ('k', 'skip'):
+            # Typed in full: a single keystroke is too small a gesture for
+            # publishing over an audit that says the change is broken.
+            confirm = ask('Type "publish over the audit" to confirm: ', '').strip().lower()
+            if confirm != 'publish over the audit':
+                print('Not confirmed; publication remains blocked.', flush=True)
+                continue
+            return 'skip'
+        return 'stop'
+
+
+def release_blocked_reason(j):
+    """Why release would be refused, or '' -- computed without asking anything.
+
+    A preview of the check `write_attestation` performs after consent. When it
+    blocks, the refusal is recorded exactly as the post-consent path records it:
+    a `release` envelope with result `fail`. That envelope is the evidence that
+    publication was refused and why, so skipping it to save the operator four
+    questions would trade a record for a convenience.
+
+    Any failure to work it out returns '': this exists to spare the operator
+    questions, never to refuse a publication the real gate would have allowed.
+    """
+    if not envelopes_enabled():
+        return ''
+    try:
+        env = envelope()
+        if not (STATE / 'envelopes').is_dir():
+            return ''
+        artifact = snapshot(excludes=env.ARTIFACT_EXCLUDES)
+        reason = env.blocking_reason(env.load_envelopes(STATE), artifact)
+    except Exception:
+        return ''
+    if not reason:
+        return ''
+    override = override_entry(j)
+    if override:
+        reason += '; the override is recorded but does not release'
+    try:
+        extra = {'approvals': [env.approval_entry(STATE, name) for name in gate_names()]}
+        if override:
+            extra['override'] = override
+        release = env.write_envelope(STATE, 'release', 'fail', reason=reason, artifact=artifact,
+                                     inputs={'artifact': artifact}, evidence=['FINAL_AUDIT.md'],
+                                     extra=extra)
+        print('Envelope: release ' + release['result'], flush=True)
+    except Exception:
+        return ''          # cannot record the refusal: let the real gate handle it
+    return reason
+
+
 def consent_entry(artifact):
     # The consent just given: a person at the terminal, or a supervisor
     # receipt relayed for one. Only the former counts as human.
@@ -237,7 +338,13 @@ def attest(j):
     release = env.write_envelope(STATE, 'release', 'fail' if reason else 'pass', reason=reason, artifact=artifact,
                                  inputs={'artifact': artifact}, evidence=['FINAL_AUDIT.md'], extra=extra)
     print('Envelope: release ' + release['result'], flush=True)
-    if reason:
+    if reason and j.get('release_skipped') == reason:
+        # The envelope above already says `fail` and why; the Statement carries
+        # it. Publishing proceeds because the operator said so at the gate, on
+        # the record -- nothing here is rewritten to look like a pass.
+        print('Release refused by policy; publishing anyway at the operator\'s', flush=True)
+        print('recorded instruction. The envelope and Statement record the refusal.', flush=True)
+    elif reason:
         raise error(reason)
     envelopes['release'] = release
     method, detail = env.select_signer()
@@ -1122,6 +1229,22 @@ def handoff(j):
             return
         reconcile_absent(j)
     if j['phase'] == 'bound':
+        # What blocks release depends on the envelopes and the artifact, not on
+        # the consent given below -- so it can be known now. It used to be
+        # checked only after the operator had typed a PR title, a work summary,
+        # verification steps and a y/n: four answers collected for a PR the
+        # driver had already decided it would not create.
+        blocked = release_blocked_reason(j)
+        if blocked:
+            if blocked_gate(blocked) != 'skip':
+                # The same error the post-consent gate raises, so the exit code
+                # and the wording do not depend on which one caught it.
+                raise attestation().AttestationError(blocked)
+            # Durable, so the later gate sees the same decision this one made
+            # and the record survives a resume.
+            j['release_skipped'] = blocked
+            save(j)
+            print('Publishing over a failed audit, on the record.', flush=True)
         print('Audited files to commit and publish:', flush=True)
         print(git('diff', '--name-status', j['original_head'], j['commit_tree']), flush=True)
         print(git('diff', '--no-ext-diff', '--no-textconv', j['original_head'], j['commit_tree']), flush=True)
@@ -1139,6 +1262,18 @@ def handoff(j):
         if remote_sha(j) != j['remote_before']:
             raise ValueError('Remote changed during prompts; rerun FINAL_AUDIT.')
         body = '## Work summary\n\n' + summary + '\n\n## Manual verification\n\n' + manual + '\n'
+        skipped = j.get('release_skipped')
+        if skipped:
+            # First thing a reviewer reads. A PR published over a failing audit
+            # must not look like one that passed.
+            rows = blocking_findings()
+            banner = ('> [!WARNING]\n'
+                      '> **Published over a failing final audit.** ' + skipped + '\n')
+            if rows:
+                banner += '>\n> Blocking findings:\n'
+                for row in rows[:10]:
+                    banner += '> - ' + row.replace('\n', ' ') + '\n'
+            body = banner + '\n' + body
         record = override_record()
         if len(record) == 4 and record[0] == j['verdict_run'] and record[2] == j['audit_hash']:
             # An overridden verdict is not a READY verdict; the PR says so.

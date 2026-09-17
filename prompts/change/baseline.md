@@ -104,6 +104,13 @@ When analyzing Uncle itself, if `scripts/run-shell-tests.sh` exists, use
 `bash scripts/run-shell-tests.sh` for its shell regression suites and record
 that exact command. It already parallelizes suites and aggregates failures;
 do not also run those suites individually or wrap them in a serial loop.
+
+It takes about three minutes at the default four jobs; allow ten before
+treating it as hung. Two things make that worse rather than better: cutting it
+off early and retrying, and lowering `--jobs`, which only makes the same work
+take longer. Run it with `bash` -- the suites are shell scripts, and `python3`
+on one fails with a parse error that reads like a broken test rather than the
+wrong interpreter.
 For other projects, inspect their runner and fixture isolation before choosing
 parallelism; do not assume this Uncle-specific script exists.
 

@@ -429,7 +429,24 @@ if [[ "$WORKTREE" == 1 ]]; then
     if [[ -z "$WORKTREE_DIR" ]]; then
         WORKTREE_DIR="$(worktree_default_dir "$PROJECT_ROOT" "$ISSUE_NUM")"
     fi
-    worktree_create "$WORKTREE_DIR" "$WORKTREE_BRANCH" || exit 1
+    # One issue, one worktree. worktree_default_dir is derived from the issue
+    # number, so a rerun lands on the same directory -- and worktree_create
+    # refuses an existing branch, which stopped every second run of an issue
+    # with "Branch already exists". Reuse it when it is this repo's worktree on
+    # the branch this issue derives; anything else is someone else's and is
+    # reported rather than adopted.
+    if [[ -d "$WORKTREE_DIR" ]] && worktree_registered "$PROJECT_ROOT" "$WORKTREE_DIR"; then
+        existing_branch="$(git -C "$WORKTREE_DIR" branch --show-current 2>/dev/null)"
+        if [[ "$existing_branch" != "$WORKTREE_BRANCH" ]]; then
+            echo "Worktree $WORKTREE_DIR is on branch '$existing_branch', not" >&2
+            echo "'$WORKTREE_BRANCH' for $OWNER/$REPO#$ISSUE_NUM." >&2
+            echo "Finish or remove it first: scripts/lib/worktrees.sh remove $WORKTREE_DIR" >&2
+            exit 1
+        fi
+        echo "Reusing worktree $WORKTREE_DIR on branch $WORKTREE_BRANCH"
+    else
+        worktree_create "$WORKTREE_DIR" "$WORKTREE_BRANCH" || exit 1
+    fi
     cd "$WORKTREE_DIR"
     PROJECT_ROOT="$PWD"
     WORKTREE_DIR="$PWD"

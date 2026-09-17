@@ -82,6 +82,36 @@ def _project_root():
     return os.getcwd()
 
 
+_APPROVE_WORDS = frozenset(('approve', 'approved', 'approval', 'accept', 'accepted',
+                            'yes', 'y', 'ok', 'okay', 'confirm', 'confirmed',
+                            'go', 'proceed', 'do', 'it'))
+_DECLINE_WORDS = frozenset(('decline', 'declined', 'deny', 'reject', 'rejected',
+                            'no', 'n', 'cancel', 'keep', 'stop', 'abort'))
+
+
+def _replacement_decision(text):
+    """'approve', 'decline', or None for a pending replacement proposal.
+
+    The prompt names two exact phrases, and only those were accepted. A typo --
+    "approval replacement" for "approve replacement" -- fell through to the
+    supervisor, which read it as approval and said so, while the TUI refused the
+    action it proposed and re-showed the prompt. The operator was told both that
+    it was proceeding and that it was not, with no way out.
+
+    Short answers only: four words at most, so a sentence that merely mentions
+    approving something is still a question for the supervisor rather than a
+    decision. A message carrying both senses is neither.
+    """
+    words = re.findall(r"[a-z]+", (text or '').lower())
+    if not words or len(words) > 4:
+        return None
+    approve = bool(_APPROVE_WORDS & set(words))
+    decline = bool(_DECLINE_WORDS & set(words))
+    if approve == decline:
+        return None
+    return 'approve' if approve else 'decline'
+
+
 def _direct_origin_issue():
     try:
         with open(os.path.join(_project_root(), ".uncle", "workflow", "origin"),
@@ -1669,6 +1699,13 @@ class UncleTUI:
                     host.controller.driver_exited(self.workflow_exit_code)
                 self._maybe_auto_triage()
 
+    def _rerun_pending(self):
+        """True when a stage rerun is waiting to be consumed in this project."""
+        try:
+            return (Path(_project_root()) / '.uncle/workflow/rerun-request.json').is_file()
+        except OSError:
+            return False
+
     def _enter_run_worktree(self):
         """Move this run into its own worktree before anything reads the root.
 
@@ -2520,15 +2557,22 @@ class UncleTUI:
             self.chat_focus = 'chat'
             self._triage_turn('execute', proposal=(1, message.strip()), followup=message.strip())
             return
-        rerun = re.fullmatch(r'(?:please\s+)?(?:run|rerun)\s+(?:the\s+)?([a-z][a-z-]+)\s+stage(?:\s+again)?[.!]?', message.strip(), re.I)
-        if rerun:
+        # "stage" is optional. Requiring it meant "rerun final-audit" -- the
+        # exact remedy the driver prints when an audit binding goes stale --
+        # went to the supervisor, which has no action for running one stage and
+        # could only offer to rerun the whole workflow.
+        rerun = re.fullmatch(
+            r'(?:please\s+)?(?:run|rerun)\s+(?:the\s+)?([a-z][a-z-]+)(?:\s+stage)?(?:\s+again)?[.!]?',
+            message.strip(), re.I)
+        if rerun and self._is_known_stage(rerun[1].lower()):
             self.run_named_stage(rerun[1].lower())
             return
         pending = getattr(self, 'home_replace_proposal', None)
-        if pending and message.strip().lower() in ('approve replacement', 'decline replacement'):
+        decision = _replacement_decision(message) if pending else None
+        if decision:
             self.home_history.append(('user', message))
             self.home_replace_proposal = None
-            if message.strip().lower() == 'approve replacement':
+            if decision == 'approve':
                 self._home_action(pending, replace_approved=True)
             else:
                 self.home_history.append(('system', 'Replacement declined; existing brief preserved.'))
@@ -3363,6 +3407,19 @@ class UncleTUI:
             self.chat_error = self.triage_error
         return True
 
+    def _is_known_stage(self, name):
+        """True when this project's workflow really has a stage by that name.
+
+        Without the word "stage" to anchor on, "rerun the tests" would otherwise
+        be read as a stage request. Unknown names belong to the supervisor.
+        """
+        try:
+            from rerun_stage import APP, CHANGE
+            family = (Path(_project_root()) / '.uncle/workflow/family').read_text().strip()
+        except (OSError, ImportError, ValueError):
+            return False
+        return name in (CHANGE if family == 'change' else APP)
+
     def run_named_stage(self, stage):
         from rerun_stage import APP, CHANGE
         if getattr(self, 'proc', None) and self.proc.poll() is None:
@@ -3378,8 +3435,21 @@ class UncleTUI:
             raise ValueError('Usage: /run STAGE. Available: ' + ', '.join(choices))
         if not (directory / 'state').is_file():
             raise ValueError('Start a workflow before selecting a stage.')
-        with (directory / 'rerun-request.json').open('x') as stream:
-            json.dump({'stage': stage, 'source': 'explicit-user-request'}, stream)
+        # Replace, do not refuse. This was an exclusive create, so a request the
+        # driver never consumed -- it failed to start, or stopped before
+        # reaching the state machine -- stranded the file and made every later
+        # /run fail with a raw "File exists" errno naming a path the operator
+        # had no reason to know about. No driver is running (checked above), so
+        # the newest request is simply the one that counts.
+        request = directory / 'rerun-request.json'
+        pending = directory / 'rerun-request.json.pending'
+        try:
+            with pending.open('w') as stream:
+                json.dump({'stage': stage, 'source': 'explicit-user-request'}, stream)
+            os.replace(pending, request)
+        except OSError as failure:
+            pending.unlink(missing_ok=True)
+            raise ValueError('Could not request the %s rerun: %s' % (stage, failure))
         self.workflow_idx = 2 if family == 'change' else 0
         self.new_workflow_pending = False
         self.home_history.append(('system', 'Requested rerun of ' + stage + '.'))
@@ -5351,7 +5421,12 @@ class UncleTUI:
         self.recovery_active = False
         # Before the state flips: everything after this reads _project_root(),
         # and it must already name the directory the run will happen in.
-        self._enter_run_worktree()
+        # A rerun happens where its request was written. Relocating first left
+        # the request in the old project root while the driver started in a new
+        # worktree, which never saw it -- so "rerun final-audit" became a fresh
+        # build from DERIVE_BRIEF in a directory named after an unrelated brief.
+        if not self._rerun_pending():
+            self._enter_run_worktree()
         self.state = "running"
         self.start_workflow()
 

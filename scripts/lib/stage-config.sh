@@ -186,6 +186,15 @@ uncle_stage_model() {
         printf '%s' "$v"
         return 0
     fi
+    if [[ "$runner" == "claude" ]]; then
+        # A claude stage ran on the CLI's default tier with no way to choose
+        # one, even though the config header documents `<stage>.model` and both
+        # claude paths -- the bare CLI for an agent, reviewer-claude.sh for a
+        # reviewer -- already take --model. Empty stays empty, so a stage that
+        # names no model keeps the default it has always had.
+        uncle_config_get "$stage.model"
+        return 0
+    fi
     [[ "$runner" == "cline" ]] || return 0
     v="$(uncle_config_get "$stage.model")"
     [[ -n "$v" ]] || v="$(uncle_config_get "$stage")"

@@ -176,3 +176,41 @@ plan_out_of_scope() {
         printf '%s\n' "$f"
     done
 }
+
+# The plan sections that decide whether written code is still valid. A review
+# that rewrites prose elsewhere -- risks, priorities, traceability, the
+# disposition table it must add -- has not invalidated anything already built.
+#
+# Verification commands are deliberately absent: when only they move, the code
+# is still right and the checks simply run differently, so that is a reason to
+# re-run the green check, not to discard an implementation.
+PLAN_MATERIAL_SECTIONS='Architecture|Components and responsibilities|Observable behaviors|Domain invariants|Domain model|Authoritative state|Data flow|Failure handling|Concurrency model|Implementation (order|sequence)'
+
+# plan_material_sections <plan> — the text of those sections, normalised.
+plan_material_sections() {
+    local plan="$1"
+
+    [[ -s "$plan" ]] || return 0
+
+    awk -v want="$PLAN_MATERIAL_SECTIONS" '
+        /^#{2,3} / {
+            title = $0
+            sub(/^#{2,3} +/, "", title)
+            sub(/^[0-9]+\. +/, "", title)
+            inwant = (title ~ "^(" want ")$")
+            if (inwant) print "### " title
+            next
+        }
+        inwant {
+            line = $0
+            gsub(/[ \t]+$/, "", line)
+            if (line != "") print line
+        }
+    ' "$plan"
+}
+
+# plan_material_hash <plan> — one digest over those sections.
+plan_material_hash() {
+    plan_material_sections "$1" | python3 -c \
+        'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+}

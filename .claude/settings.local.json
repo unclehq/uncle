@@ -6,7 +6,9 @@
       "Bash(gh pr *)",
       "Bash(gh issue *)",
       "Bash(grep -E \"\\\\.md$|gate\")",
-      "Bash(./uncle --help)"
+      "Bash(./uncle --help)",
+      "Bash(ls -la ~/src/unclehq/ | grep uncle-issue)",
+      "Read(//Users/brianwoods/src/unclehq/**)"
     ]
   }
 }

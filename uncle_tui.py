@@ -817,8 +817,24 @@ class UncleTUI:
         self.color["cursor"] = curses.color_pair(idx[0])
 
     # ---- item lists ----
+    def _resume_available(self):
+        """Whether this workspace holds a stopped, resumable workflow."""
+        proc = getattr(self, 'proc', None)
+        if proc is not None and proc.poll() is None:
+            return False
+        try:
+            workflow = Path(_project_root()) / '.uncle' / 'workflow'
+            state = workflow.joinpath('state').read_text().strip().split(':', 1)[-1]
+            family = workflow.joinpath('family').read_text().strip()
+        except OSError:
+            return False
+        return bool(state and state != 'COMPLETE' and family in ('app', 'change'))
+
     def menu_items(self):
-        return [w[0] for w in WORKFLOWS] + ["Configure", "Quit"]
+        items = [w[0] for w in WORKFLOWS]
+        if self._resume_available():
+            items.append('Resume stopped build')
+        return items + ["Configure", "Quit"]
 
     def items(self):
         if self.state == "menu":
@@ -3629,6 +3645,7 @@ class UncleTUI:
         if getattr(self, 'workflow_idx', None) is None:
             raise ValueError('No workflow has run in this session; start one from the menu.')
         self.triage_history.append(('system', 'Resuming the workflow from its recorded state.'))
+        self.resume_workflow_pending = True
         self._run()
         if self.state != 'running':
             raise ValueError(self.chat_error or 'The workflow did not start.')
@@ -3641,6 +3658,15 @@ class UncleTUI:
         stage = getattr(self, 'status_stage', '') or 'its current stage'
         self.stop_workflow()
         self.proc_done = True
+        # stop_workflow clears self.proc, so the normal polling path cannot
+        # transition the screen out of ``running`` afterward.  Do that here,
+        # just as the q/Esc cancellation paths do, so a stopped build neither
+        # looks live nor blocks the next workflow.
+        self.state = 'menu'
+        self.sel = 0
+        self.prompt_kind = ''
+        self.prompt_text = ''
+        self.chat_focus = 'chat'
         return 'Stopped the build at %s. Its state is kept; run it again to resume, or /clear to archive it.' % sanitize(stage)
 
     def _run_locked(self, path):
@@ -4318,12 +4344,19 @@ class UncleTUI:
                 return True
         if k not in (10, 13):
             self.slash_pick = 0
-        if k in (10, 13) and self.chat_composer.startswith('/'):
+        if k in (10, 13) and self.chat_composer.startswith(('/', '\\')):
             parts = self.chat_composer.strip().split(maxsplit=1)
             command = parts[0].lower()
+            if command.startswith('\\'):
+                command = '/' + command[1:]
+            if command == '/q':
+                command = '/quit'
             argument = parts[1].strip() if len(parts) > 1 else ''
             commands = {'/new': 0, '/requirements': 0, '/issue': 1,
-                        '/change': 2, '/configure': 3, '/settings': 3, '/quit': 4}
+                        '/change': 2,
+                        '/configure': self.menu_items().index('Configure'),
+                        '/settings': self.menu_items().index('Configure'),
+                        '/quit': self.menu_items().index('Quit')}
             if command in ('/new', '/requirements', '/change', '/issue') and (
                     self.state == 'running' or (self.proc and self.proc.poll() is None)):
                 self.chat_error = 'A workflow is already active. Finish or stop it before starting another.'
@@ -4373,6 +4406,10 @@ class UncleTUI:
                 return True
             if command == '/stop':
                 self.home_history.append(('system', self._stop_build()))
+                self.chat_composer = ''
+                self.chat_error = ''
+                self.chat_picker = False
+                self.chat_choices = []
                 return True
             if command == '/homepage':
                 # The build page no longer leaves on its own, so leaving is a
@@ -5654,13 +5691,19 @@ class UncleTUI:
 
     def _confirm(self):
         if self.state == "menu":
-            if self.sel == len(WORKFLOWS) + 1:
+            item = self.menu_items()[self.sel]
+            if item == 'Quit':
                 self._quit()
                 return
-            if self.sel == len(WORKFLOWS):
+            if item == 'Configure':
                 self.state = "config"
                 self.config_sel = 0
                 self.sel = 0
+                return
+            if item == 'Resume stopped build':
+                family = (Path(_project_root()) / '.uncle' / 'workflow' / 'family').read_text().strip()
+                self.workflow_idx = 2 if family == 'change' else 0
+                self.triage_resume()
                 return
             self.workflow_idx = self.sel
             if self.workflow_idx == 1:
@@ -5734,6 +5777,14 @@ class UncleTUI:
         # The run reads the file, so make sure we are not about to launch on
         # top of an edit we have not seen.
         self.maybe_reload()
+        # Choosing a workflow is a fresh start, even when it uses a brief or
+        # an issue worktree that already exists.  The driver archives that
+        # workspace's prior workflow state before it begins.  Only recovery's
+        # explicit /resume and a named stage rerun retain state.
+        rerun_pending = self._rerun_pending()
+        resuming = rerun_pending or getattr(self, 'resume_workflow_pending', False)
+        self.new_workflow_pending = not resuming
+        self.resume_workflow_pending = False
         self.direct_issue = ""
         if self.workflow_idx == 2:
             self.direct_issue = _direct_origin_issue()
@@ -5745,7 +5796,7 @@ class UncleTUI:
         # worktree, which never saw it -- so "rerun final-audit" became a fresh
         # build from DERIVE_BRIEF in a directory named after an unrelated brief.
         self._restore_launch_root()
-        if not self._rerun_pending():
+        if not rerun_pending:
             self._enter_run_worktree()
         self.state = "running"
         self.start_workflow()

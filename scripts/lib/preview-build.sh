@@ -41,6 +41,43 @@ PREVIEW_BUILD="${WORKFLOW_PREVIEW_BUILD:-1}"
 PREVIEW_PID=""
 PREVIEW_STARTED=0
 
+# preview_build_model — use the first model the operator configured rather
+# than silently sending the speculative build to Haiku.  The Configure screen
+# writes selections in display order, so the first `.model` line is also the
+# first model selection in the project configuration.  A dedicated environment
+# override remains useful for one-off preview experiments.
+#
+# Only Cline model ids have a slash and can safely be supplied to the preview's
+# default Cline runner.  Self-hosted model names belong to their own runner and
+# must not be passed to Cline.  Keep Haiku as the no-config fallback so a brand
+# new project retains the inexpensive first-look behavior.
+preview_build_model() {
+    if [[ -n "${WORKFLOW_MODEL_PREVIEW_BUILD:-}" ]]; then
+        printf '%s' "$WORKFLOW_MODEL_PREVIEW_BUILD"
+        return 0
+    fi
+
+    local config line key value
+    if declare -f uncle_config_file > /dev/null 2>&1; then
+        config="$(uncle_config_file)"
+    else
+        config="${UNCLE_CONFIG:-$PWD/.uncle/config}"
+    fi
+    if [[ -r "$config" ]]; then
+        while IFS= read -r line; do
+            line="${line%%#*}"
+            key="${line%%[[:space:]]*}"
+            [[ "$key" == *.model ]] || continue
+            value="${line#"$key"}"
+            value="${value##[[:space:]]}"
+            [[ "$value" == */* ]] || continue
+            printf '%s' "$value"
+            return 0
+        done < "$config"
+    fi
+    printf '%s' haiku
+}
+
 # preview_build_start — launch it, detached, and return immediately.
 preview_build_start() {
     [[ "$PREVIEW_BUILD" == "1" ]] || return 0
@@ -101,7 +138,7 @@ preview_build_start() {
         # it: the last one spent 124s and ~11,900 output tokens to produce a
         # 2 KB page. Speed is the whole product of this stage.
         UNCLE_PREVIEW_BUILD=true \
-        WORKFLOW_MODEL_PREVIEW_BUILD="${WORKFLOW_MODEL_PREVIEW_BUILD:-haiku}" \
+        WORKFLOW_MODEL_PREVIEW_BUILD="$(preview_build_model)" \
         WORKFLOW_EFFORT_PREVIEW_BUILD="${WORKFLOW_EFFORT_PREVIEW_BUILD:-low}" \
             run_claude prompts/preview-build.md preview-build || status=$?
         if [[ -n "$launch_before" ]]; then

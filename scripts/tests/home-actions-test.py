@@ -122,11 +122,14 @@ class Actions(unittest.TestCase):
         self.assertIn('No build is running', self.ui.home_history[-1][1])
         self.ui.proc = Mock()
         self.ui.proc.poll.return_value = None
+        self.ui.state = 'running'
         self.ui.status_stage = 'implementation'
         self.ui.chat_composer = '/stop'
         self.ui._chat_command(10)
         self.ui.stop_workflow.assert_called_once()
         self.assertIn('Stopped the build at implementation', self.ui.home_history[-1][1])
+        self.assertEqual(self.ui.state, 'menu')
+        self.assertEqual(self.ui.chat_composer, '')
         # The supervisor can do the same while a build runs.
         self.ui.stop_workflow.reset_mock()
         self.ui.proc.poll.return_value = None
@@ -182,6 +185,24 @@ class Actions(unittest.TestCase):
         self.reply(uncle_action='run_app')
         self.ui._run.assert_called_once()
         self.assertEqual(self.ui.workflow_idx, 0)
+
+    def test_start_archives_existing_workflow_but_resume_keeps_it(self):
+        """Only the recovery path is allowed to reuse a workspace's state."""
+        del self.ui._run
+        self.ui.workflow_idx = 0
+        self.ui.maybe_reload = Mock()
+        self.ui._restore_launch_root = Mock()
+        self.ui._rerun_pending = Mock(return_value=False)
+        self.ui._enter_run_worktree = Mock()
+        self.ui.start_workflow = Mock()
+
+        self.ui._run()
+        self.assertTrue(self.ui.new_workflow_pending)
+        self.ui.start_workflow.assert_called_once()
+
+        self.ui.resume_workflow_pending = True
+        self.ui._run()
+        self.assertFalse(self.ui.new_workflow_pending)
 
     def test_issue_build(self):
         self.reply(uncle_action='github_issue', issue='42', start=True)

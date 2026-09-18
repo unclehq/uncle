@@ -21,6 +21,7 @@ run_case() {
         ROOT="$ROOT" STATE_DIR=".uncle/workflow" LOG_DIR=".uncle/workflow/logs"
         run_claude() {
             printf '%s\n' "$*" > "$STATE_DIR/ran"
+            printf '%s\n' "${WORKFLOW_MODEL_PREVIEW_BUILD:-}" > "$STATE_DIR/model"
             [[ -z "${STUB_LAUNCH:-}" ]] || printf '%s' "$STUB_LAUNCH" > .uncle/launch.json
         }
         . "$ROOT/scripts/lib/preview-build.sh"
@@ -52,6 +53,13 @@ run_case with-plan REQUIREMENTS.md "$WEB_BRIEF" PROJECT_PLAN.md "$PLAN"
 check "starts with a plan"                     test "$(cat "$TMP/with-plan/.uncle/workflow/started")" == 1
 check "records the plan hash"                  test -s "$TMP/with-plan/.uncle/workflow/preview-build.plan"
 check "says it builds from the plan"           grep -q "preview from the plan" "$TMP/with-plan/.uncle/workflow/out"
+
+CONFIG_MODELS=$'project-plan.model cline-pass/kimi-k3\nimplementation.model anthropic/claude-opus-5'
+run_case configured-model REQUIREMENTS.md "$WEB_BRIEF" .uncle/config "$CONFIG_MODELS"
+check "preview uses the first configured model" test "$(cat "$TMP/configured-model/.uncle/workflow/model")" == cline-pass/kimi-k3
+
+WORKFLOW_MODEL_PREVIEW_BUILD=anthropic/claude-haiku-4-5 run_case overridden-model REQUIREMENTS.md "$WEB_BRIEF" .uncle/config "$CONFIG_MODELS"
+check "preview model override wins" test "$(cat "$TMP/overridden-model/.uncle/workflow/model")" == anthropic/claude-haiku-4-5
 
 run_case nothing
 check "nothing to build from: stays off"       test "$(cat "$TMP/nothing/.uncle/workflow/started")" == 0

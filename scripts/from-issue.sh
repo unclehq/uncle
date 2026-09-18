@@ -674,6 +674,21 @@ EOF
 case "$MODE" in
     change)
         check_origin_or_refuse
+        if [[ "${UNCLE_NEW_WORKFLOW:-}" == 1 && "$SEED_ONLY" != 1 ]]; then
+            if worktree_run_locked .; then
+                echo "Refusing to start fresh: this issue worktree has a live workflow." >&2
+                exit 1
+            fi
+            # A normal Start is intentionally not a resume.  This matters for
+            # the stable per-issue worktree: archive its workflow evidence
+            # before reseeding the issue, so seed_is_current cannot retain an
+            # old request.  The live-driver check above prevents moving files
+            # out from under an active process.
+            python3 "$ROOT/scripts/lib/workflow_family.py" change || exit 1
+            # change-workflow.sh must not archive the newly written seed a
+            # second time when it inherits the launch environment.
+            unset UNCLE_NEW_WORKFLOW
+        fi
         if [[ "$SEED_ONLY" == 1 ]]; then
             # Exclusive creation prevents chat imports from replacing a user's brief.
             (set -o noclobber; write_change_request)

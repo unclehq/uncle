@@ -676,6 +676,43 @@ verify_approval() {
     fi
 }
 
+# Start verification in background and return immediately
+start_verification_bg() {
+    local file="$1"
+    local approval_name="$2"
+    local log_file="$STATE_DIR/verification.${approval_name}.log"
+
+    (
+        verify_approval "$file" "$approval_name" >> "$log_file" 2>&1
+    ) > /dev/null 2>&1 &
+
+    local pid=$!
+    echo "$pid $file $approval_name" >> "$STATE_DIR/pending-verifications.txt"
+}
+
+# Wait for all pending verifications and check results
+wait_verifications() {
+    local verification_file="$STATE_DIR/pending-verifications.txt"
+    [[ ! -f "$verification_file" ]] && return 0
+
+    local failed=0
+    while IFS= read -r pid file approval_name; do
+        wait "$pid" || {
+            failed=1
+            local log_file="$STATE_DIR/verification.${approval_name}.log"
+            echo "Verification failed for $file ($approval_name)"
+            [[ -f "$log_file" ]] && cat "$log_file"
+            # Go back to stage that created this file
+            set_state "$(basename "${file%.*}" | tr '[:lower:]' '[:upper:]')"
+            continue 2
+        }
+    done < "$verification_file"
+
+    rm -f "$verification_file"
+    return "$failed"
+}
+}
+
 # --- Envelopes (Issue 59) ----------------------------------------------------
 #
 # Every claim about a stage is written here, by the driver, from validator
@@ -2076,8 +2113,9 @@ while true; do
             ;;
 
         PLAN)
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
+            # Start verifications in background
+            start_verification_bg BASELINE_REPORT.md BASELINE_REPORT
+            start_verification_bg CHANGE_SPEC.md CHANGE_SPEC
 
             # First point in the pipeline where the command list has been
             # approved and the tree is still untouched, which is the only
@@ -2118,10 +2156,11 @@ while true; do
             ;;
 
         UPDATED_PLAN)
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            verify_approval CHANGE_PLAN.md CHANGE_PLAN
-            verify_approval ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
+            # Start verifications in background (will fail build if docs changed)
+            start_verification_bg BASELINE_REPORT.md BASELINE_REPORT
+            start_verification_bg CHANGE_SPEC.md CHANGE_SPEC
+            start_verification_bg CHANGE_PLAN.md CHANGE_PLAN
+            start_verification_bg ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
 
             # The review response revises CHANGE_PLAN.md in place rather than
             # writing a second plan. A separate UPDATED_CHANGE_PLAN.md restated
@@ -2134,10 +2173,7 @@ while true; do
             run_claude prompts/change/updated-change-plan.md updated-change-plan \
                 "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \
                 "$BUDGET_UPDATED_PLAN"
-            set_state VALIDATE_UPDATED_PLAN
-            ;;
 
-        VALIDATE_UPDATED_PLAN)
             # Probe only: would code written from the pre-review plan have
             # survived the review? The snapshot above already holds that plan,
             # so this costs a diff. Acts on nothing, cannot fail the stage.
@@ -2146,9 +2182,7 @@ while true; do
                     "$STATE_DIR/CHANGE_PLAN.pre-review.md" CHANGE_PLAN.md \
                     "$STATE_DIR/plan-drift.json" 2>/dev/null || true
             fi
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            verify_approval ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
+
             require_file CHANGE_PLAN.md
             check_document_budget CHANGE_PLAN.md || exit 1
 
@@ -2172,11 +2206,12 @@ while true; do
             ;;
 
         IMPLEMENT)
+            # Wait for all background verifications to complete before implementing
+            wait_verifications || exit 1
+
             # Before a single line of code is written: the baseline only means
             # anything against the unmodified tree.
             wait_green_baseline_bg
-            verify_approval CHANGE_PLAN.md CHANGE_PLAN
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
             plan_status=0
             plan_before_write || plan_status=$?
             case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac

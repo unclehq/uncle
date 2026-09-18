@@ -84,6 +84,7 @@ unset UNCLE_NEW_WORKFLOW
 . "$ROOT/scripts/lib/project-git.sh"
 uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
+. "$ROOT/scripts/lib/supervision.sh"
 
 STATE_DIR=".uncle/workflow"
 export UNCLE_RUNNER_POOL_OWNER_PID="${UNCLE_RUNNER_POOL_OWNER_PID:-$$}"

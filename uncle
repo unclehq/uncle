@@ -67,7 +67,10 @@ and per-stage overrides from `.uncle/config` (menu option 4).
 
 Runs with no arguments. -h / --help print this message and exit 0.
 --application TEXT starts a new application build immediately with the given
-description, skipping interactive input. Composes with --unattended.
+description, skipping interactive input. The homepage supervisor drafts
+REQUIREMENTS.md from TEXT, as if it had been typed there, and starts the
+build; without a supervisor the build starts from TEXT as written. Composes
+with --unattended.
 --issue ISSUE starts a GitHub issue build immediately with the given issue
 reference (number, #number, or full https://github.com/... URL), skipping
 interactive input. Composes with --unattended. --application and --issue are

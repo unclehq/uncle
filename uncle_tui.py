@@ -2854,6 +2854,19 @@ class UncleTUI:
         except queue.Empty:
             return False
         self.home_request = None
+        changed = self._apply_home_reply(request, item)
+        text = getattr(request, 'startup_text', None)
+        if isinstance(text, str) and self.state != 'running':
+            self.home_history.append(('system', 'The supervisor did not start the build; '
+                                                'starting from the description as written.'))
+            try:
+                self._startup_direct_action(text)
+            except (OSError, ValueError) as exc:
+                self.chat_error = sanitize(str(exc))
+                self.home_history.append(('system', self.chat_error))
+        return changed
+
+    def _apply_home_reply(self, request, item):
         # The finished reply replaces the streamed preview.
         self.chat_partial = ''
         self._chat_partial_raw = ''
@@ -3038,14 +3051,19 @@ class UncleTUI:
         if running:
             self.home_history.append(('system', 'Ignored: homepage actions cannot run while a workflow is active.'))
             return
-        if not getattr(request, 'home_intent', False):
+        # isinstance, not truth: test doubles answer any attribute with a Mock.
+        startup = isinstance(getattr(request, 'startup_text', None), str)
+        if not startup and not getattr(request, 'home_intent', False):
             self.home_history.append(('system', 'Recommendation only: the supervisor proposed %s. Ask to build, '
                                                 'draft or start it to run the action.' % sanitize(str(action.get('uncle_action')))))
             return
         parsed = parse_home_action(json.dumps(action))
         if parsed is None:
             raise ValueError('The supervisor proposed an invalid homepage action.')
-        self._home_action(parsed)
+        if startup and str(parsed.get('uncle_action', '')).startswith(('create_', 'github_')):
+            # The flag promised a build, not a draft waiting for approval.
+            parsed['start'] = True
+        self._home_action(parsed, replace_approved=startup)
 
     def poll_delegation(self):
         """SB-7: standing delegation answers a routine, driver-named dialog once as it opens."""
@@ -3165,21 +3183,9 @@ class UncleTUI:
     def _handle_startup_action(self):
         if self.state == 'running' or (getattr(self, 'proc', None) and self.proc.poll() is None):
             raise ValueError('A workflow is already active.')
-        root = _project_root()
         try:
             if self._startup_action == 'create_app':
-                req_path = Path(root) / 'REQUIREMENTS.md'
-                if req_path.exists():
-                    action_type = 'create_change'
-                else:
-                    action_type = 'create_app'
-                action = {
-                    'uncle_action': action_type,
-                    'document': self._startup_text,
-                    'start': True,
-                    'message': 'Starting ' + ('change' if action_type == 'create_change' else 'application') + ' build'
-                }
-                self._home_action(action, replace_approved=True)
+                self._startup_brief_turn(self._startup_text)
             elif self._startup_action == 'github_issue':
                 action = {
                     'uncle_action': 'github_issue',
@@ -3193,6 +3199,34 @@ class UncleTUI:
         finally:
             self._startup_action = None
             self._startup_text = None
+
+    def _startup_brief_turn(self, text):
+        """Hand a launch-flag description to the homepage supervisor, as if typed.
+
+        The supervisor drafts REQUIREMENTS.md from it -- every section, not the
+        description wrapped in a template -- and starts the build. Its reply
+        is taken up in poll_home_chat; anything short of a started build there
+        falls back to the description as written, because a launch flag has
+        nobody behind it to answer a question.
+        """
+        try:
+            self._supervisor_turn(text, trigger='chat')
+        except ValueError as exc:
+            self.home_history.append(('system', sanitize(str(exc)) + ' Starting from the description as written.'))
+            self._startup_direct_action(text)
+            return
+        request = getattr(self, 'home_request', None)
+        if request is None:
+            self._startup_direct_action(text)
+            return
+        request.startup_text = text
+
+    def _startup_direct_action(self, text):
+        """Start from the description as written, with no supervisor pass."""
+        kind = 'create_change' if (Path(_project_root()) / 'REQUIREMENTS.md').exists() else 'create_app'
+        self._home_action({'uncle_action': kind, 'document': text, 'start': True,
+                           'message': 'Starting ' + ('change' if kind == 'create_change' else 'application') + ' build'},
+                          replace_approved=True)
 
     # ---- supervision ----
     def _supervision_items(self):

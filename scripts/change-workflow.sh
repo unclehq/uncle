@@ -2167,14 +2167,26 @@ while true; do
             # window in which a baseline means anything.
             start_green_baseline_bg
 
-            # Delete old ADVERSARIAL_REVIEW.md so it gets recreated fresh
-            rm -f ADVERSARIAL_REVIEW.md
+            # Check if any of the planning files are from a previous run
+            # If so, regenerate all three with fresh baseline
+            if ! is_file_from_this_run BASELINE_REPORT.md || \
+               ! is_file_from_this_run CHANGE_SPEC.md || \
+               ! is_file_from_this_run CHANGE_PLAN.md; then
+                echo "Planning files from previous run detected; regenerating all with fresh baseline..."
+                rm -f BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md ADVERSARIAL_REVIEW.md
+                run_combined_change_plan_with_baseline || exit 1
+            else
+                # All files are from this run, just regenerate the plan with approved spec
+                rm -f ADVERSARIAL_REVIEW.md
+                run_combined_change_plan || exit 1
+            fi
 
-            # Use already-approved baseline and spec; only regenerate the plan
-            run_combined_change_plan || exit 1
-
-            # Verify the plan file was created
+            # Verify all required files exist
+            require_file BASELINE_REPORT.md
+            require_file CHANGE_SPEC.md
             require_file CHANGE_PLAN.md
+            check_document_budget BASELINE_REPORT.md || exit 1
+            check_document_budget CHANGE_SPEC.md || exit 1
             check_document_budget CHANGE_PLAN.md || exit 1
 
             envelope_invalidate CHANGE_PLAN

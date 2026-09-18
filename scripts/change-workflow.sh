@@ -1945,41 +1945,103 @@ change_plan_draft_key() {
     done
 }
 
-run_combined_change_plan_with_baseline() {
-    local prompt="$LOG_DIR/change-planning.prompt.md"
-    {
-        printf '# Combined baseline, change specification, and planning\n\n'
-        printf 'In this single stage and the same model and context, first establish the baseline by running verification commands, then write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
-        cat "$(resolve_prompt prompts/change/baseline.md)"
-        printf '\n\n# Then specify the change\n\n'
-        cat "$(resolve_prompt prompts/change/change-spec.md)"
-        printf '\n\n# Then plan the specified change\n\n'
-        cat "$(resolve_prompt prompts/change/change-plan.md)"
-    } > "$prompt"
-    UNCLE_COMBINED_CHANGE_PLAN=1 run_claude "$prompt" change-plan \
-        "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN" || return $?
-    require_file BASELINE_REPORT.md
-    require_file CHANGE_SPEC.md
-    require_file CHANGE_PLAN.md
-    check_document_budget BASELINE_REPORT.md || return 1
-    check_document_budget CHANGE_SPEC.md || return 1
-    check_document_budget CHANGE_PLAN.md || return 1
-    change_plan_draft_key > "$STATE_DIR/change-plan.draft-key"
+# --- Planning, with documents as checkpoints --------------------------------
+#
+# The combined stage writes BASELINE_REPORT.md, CHANGE_SPEC.md and
+# CHANGE_PLAN.md in one context so the plan is written by the model that did
+# the baseline. On a large repository that context can run out while the agent
+# is still reading: Claude compacts, the model takes the compaction summary for
+# a question, answers "what did we do so far", and the turn ends with nothing
+# on disk. Three such passes cost twenty minutes and 600k tokens on one issue.
+#
+# So the stage is judged by the documents it left, not by its exit. Whatever
+# was written is kept; a second pass writes only what is missing, in a fresh
+# context, with a note saying what happened. Two passes that write nothing
+# stop with the cause, which is the request pointing at too much repository.
+PLANNING_CONTEXT_LIMIT="${WORKFLOW_CONTEXT_EXHAUSTED_TOKENS:-150000}"
+
+planning_context_used() {
+    jq -R -s '[split("\n")[] | fromjson? | select(type == "object" and .type == "result")]
+        | (last // {}) | (.usage // {})
+        | ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))' \
+        "$1" 2>/dev/null || printf 0
 }
 
-run_combined_change_plan() {
+planning_documents_complete() {
+    [[ -s BASELINE_REPORT.md && -s CHANGE_SPEC.md && -s CHANGE_PLAN.md ]]
+}
+
+# run_planning_pass with-baseline|spec-and-plan [note-file]
+run_planning_pass() {
     local prompt="$LOG_DIR/change-planning.prompt.md"
     {
-        printf '# Combined change specification and planning\n\n'
-        printf 'In this single stage and the same model and context, first write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+        if [[ "$1" == with-baseline ]]; then
+            printf '# Combined baseline, change specification, and planning\n\n'
+            printf 'In this single stage and the same model and context, first establish the baseline by running verification commands and write BASELINE_REPORT.md, then write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+        else
+            printf '# Combined change specification and planning\n\n'
+            printf 'BASELINE_REPORT.md is already written; read it and do not redo the baseline. In this single stage and the same context, write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+        fi
+        printf 'Write each document to disk the moment its inputs are in hand -- BASELINE_REPORT.md before any reading for the specification, CHANGE_SPEC.md before any reading for the plan. A document on disk survives a context that runs out; work still in progress does not. Grep for the symbols CHANGE_REQUEST.md names and read the surrounding lines; never read a large file end to end.\n\n'
+        if [[ -n "${2:-}" && -s "$2" ]]; then
+            cat "$2"
+            printf '\n\n'
+        fi
+        if [[ "$1" == with-baseline ]]; then
+            cat "$(resolve_prompt prompts/change/baseline.md)"
+            printf '\n\n# Then specify the change\n\n'
+        fi
         cat "$(resolve_prompt prompts/change/change-spec.md)"
         printf '\n\n# Then plan the specified change\n\n'
         cat "$(resolve_prompt prompts/change/change-plan.md)"
     } > "$prompt"
     UNCLE_COMBINED_CHANGE_PLAN=1 run_claude "$prompt" change-plan \
-        "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN" || return $?
-    require_file CHANGE_SPEC.md
-    require_file CHANGE_PLAN.md
+        "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"
+}
+
+run_planning_stage() {
+    local pass used missing f note="$STATE_DIR/planning-context-note.md"
+    rm -f "$note"
+    for pass in 1 2; do
+        if [[ -s BASELINE_REPORT.md ]]; then
+            run_planning_pass spec-and-plan "$note" || return $?
+        else
+            run_planning_pass with-baseline "$note" || return $?
+        fi
+        planning_documents_complete && break
+        missing=""
+        for f in BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md; do
+            [[ -s "$f" ]] || missing="$missing$f "
+        done
+        used="$(planning_context_used "$LOG_DIR/change-plan.jsonl")"
+        case "$used" in ''|*[!0-9]*) used=0 ;; esac
+        echo
+        if [[ "$used" -ge "$PLANNING_CONTEXT_LIMIT" ]]; then
+            echo "The planning stage ran out of context ($used tokens) before writing: $missing"
+            echo "Reading a large repository end to end spends the whole context on exploring."
+        else
+            echo "The planning stage ended without writing: $missing"
+        fi
+        if [[ "$pass" == 1 ]]; then
+            echo "Whatever it wrote is kept; the rest is written in a fresh context."
+            {
+                printf '## Context note from the driver\n\n'
+                printf 'The previous pass of this stage ended after %s tokens without writing: %s\n' "$used" "$missing"
+                printf 'Documents already on disk are kept and are not rewritten; write only the missing ones.\n'
+                printf 'Grep for the symbols CHANGE_REQUEST.md names instead of reading large files end to end,\n'
+                printf 'and write each document as soon as its inputs are in hand.\n'
+            } > "$note"
+        fi
+    done
+    rm -f "$note"
+    if ! planning_documents_complete; then
+        echo "Planning did not complete in two passes. Narrow CHANGE_REQUEST.md, or name the files"
+        echo "the change touches so the baseline can go straight to them, then re-run."
+        supervision_validation_failed change-plan BASELINE_REPORT.md \
+            "planning stage ended twice without completing its documents (context used: $used tokens)" 1 || true
+        return 1
+    fi
+    check_document_budget BASELINE_REPORT.md || return 1
     check_document_budget CHANGE_SPEC.md || return 1
     check_document_budget CHANGE_PLAN.md || return 1
     change_plan_draft_key > "$STATE_DIR/change-plan.draft-key"
@@ -2067,7 +2129,7 @@ while true; do
             # A fresh run legitimately claims this checkout for its issue.
             write_origin
 
-            run_combined_change_plan_with_baseline || exit 1
+            run_planning_stage || exit 1
 
             set_state WAIT_ANALYSIS_APPROVAL
             ;;

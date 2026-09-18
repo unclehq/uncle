@@ -114,6 +114,8 @@ new_case() {
 
     # Prompt files the driver reads and pipes to the stub CLIs. Each carries a
     # token the stub agent switches on.
+    printf 'STUB:baseline\n'  > "$REPO/prompts/change/baseline.md"
+    printf 'STUB:spec\n'      > "$REPO/prompts/change/change-spec.md"
     printf 'STUB:plan\n'      > "$REPO/prompts/change/change-plan.md"
     printf 'STUB:implement\n' > "$REPO/prompts/change/implement-change.md"
     printf 'STUB:execute\n'   > "$REPO/prompts/change/execute-change-checklist.md"
@@ -212,6 +214,27 @@ DELIVERY
     *STUB:execute*)
         printf '# Verification Report\n\nMC-1 PASS\n' > VERIFICATION_REPORT.md
         ;;
+    *STUB:baseline*)
+        # The combined planning pass. FAKE_ANALYZE=baseline-only dies after the
+        # baseline, once; FAKE_ANALYZE=exhaust writes nothing, every time.
+        printf 'x\n' >> .uncle/workflow/agent-calls
+        mode="${FAKE_ANALYZE:-}"
+        [[ "$mode" == baseline-only && -e .uncle/workflow/stub-analyze-done ]] && mode=""
+        : > .uncle/workflow/stub-analyze-done
+        if [[ "$mode" != exhaust ]]; then
+            printf '# Baseline Report\n\n## Exact build and test commands executed\n\n```\nbash app/test.sh\n```\n' > BASELINE_REPORT.md
+        fi
+        if [[ -z "$mode" ]]; then
+            printf '# Change Spec\n\nAC-1: greeting.\n' > CHANGE_SPEC.md
+            printf '# Change Plan\n\n## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n' > CHANGE_PLAN.md
+        fi
+        ;;
+    *STUB:spec*)
+        # The follow-up pass: the baseline exists, only spec and plan are written.
+        printf 'x\n' >> .uncle/workflow/agent-calls
+        printf '# Change Spec\n\nAC-1: greeting.\n' > CHANGE_SPEC.md
+        printf '# Change Plan\n\n## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n' > CHANGE_PLAN.md
+        ;;
     *STUB:plan*)
         printf '# Change Plan\n\n## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n' \
             > CHANGE_PLAN.md
@@ -220,7 +243,7 @@ DELIVERY
         fi
         ;;
 esac
-printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"session_id":"stub"}'
+printf '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0,"usage":{"input_tokens":%s,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"session_id":"stub"}\n' "${FAKE_INPUT_TOKENS:-1}"
 AGENT
     chmod +x "$CASE/bin/fake-agent"
 
@@ -1038,6 +1061,42 @@ run_driver
 expect_status 0
 expect_state WAIT_PLAN_APPROVAL
 expect_out 'CHANGE_PLAN.md has no approval on record'
+
+# Planning is judged by the documents it leaves. A pass that runs out of
+# context after the baseline keeps it; the rest is written in a fresh pass.
+new_case analyze-keeps-the-baseline-and-finishes-in-a-second-pass
+[[ -s "$REPO/CHANGE_REQUEST.md" ]] || printf '# Change request\n\nFix the greeting.\n' > "$REPO/CHANGE_REQUEST.md"
+rm -f "$REPO/BASELINE_REPORT.md" "$REPO/CHANGE_SPEC.md" "$REPO/CHANGE_PLAN.md"
+set_state ANALYZE
+run_driver FAKE_ANALYZE=baseline-only FAKE_INPUT_TOKENS=198597
+expect_out 'ran out of context (198597 tokens) before writing: CHANGE_SPEC.md CHANGE_PLAN.md'
+expect_out 'Whatever it wrote is kept'
+expect_file BASELINE_REPORT.md
+expect_file CHANGE_SPEC.md
+expect_file CHANGE_PLAN.md
+expect_state WAIT_ANALYSIS_APPROVAL
+COUNT=$((COUNT + 1))
+if [[ "$(wc -l < "$REPO/.uncle/workflow/agent-calls")" -ne 2 ]]; then
+    fail 'expected exactly two planning passes'
+fi
+expect_in_file .uncle/workflow/logs/change-planning.prompt.md 'BASELINE_REPORT.md is already written'
+expect_in_file .uncle/workflow/logs/change-planning.prompt.md 'Context note from the driver'
+
+# Two passes that write nothing stop with the cause, not "Required file missing".
+new_case analyze-exhausted-twice-stops-with-the-cause
+[[ -s "$REPO/CHANGE_REQUEST.md" ]] || printf '# Change request\n\nFix the greeting.\n' > "$REPO/CHANGE_REQUEST.md"
+rm -f "$REPO/BASELINE_REPORT.md" "$REPO/CHANGE_SPEC.md" "$REPO/CHANGE_PLAN.md"
+set_state ANALYZE
+run_driver FAKE_ANALYZE=exhaust FAKE_INPUT_TOKENS=198597
+expect_status 1
+expect_state ANALYZE
+expect_out 'ran out of context (198597 tokens) before writing: BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md'
+expect_out 'Planning did not complete in two passes'
+expect_not_out 'Required file is missing or empty: BASELINE_REPORT.md'
+COUNT=$((COUNT + 1))
+if [[ "$(wc -l < "$REPO/.uncle/workflow/agent-calls")" -ne 2 ]]; then
+    fail 'expected exactly two planning passes before stopping'
+fi
 
 # A reviewer cannot overrule the driver failure by returning PASS.
 new_stagegate_case sg-review-cannot-bless-failed-command

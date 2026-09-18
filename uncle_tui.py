@@ -146,8 +146,6 @@ AGENT, REVIEWER = "agent", "reviewer"
 # counterparts and shared review/execution stages in execution order.
 STAGES = [
     ("derive-brief", AGENT),
-    ("requirements", AGENT),
-    ("baseline", AGENT),
     ("project-plan", AGENT),
     ("change-plan", AGENT),
     ("adversarial-review", REVIEWER),
@@ -419,13 +417,6 @@ CONFIG_DESC = {
         "a TODO rather than an invented requirement. Skipped for a hand-written "
         "brief."
     ),
-    "requirements": (
-        "The stage that interprets the brief and turns it into a concrete, "
-        "testable set of requirements. It runs after derive-brief in the New "
-        "application and From GitHub issue workflows. Give it a model ID to use a "
-        "dedicated model for this stage, or leave it at (default) to use the "
-        "global model."
-    ),
     "project-plan": (
         "Writes the project plan that translates the requirements into an "
         "ordered set of work. This stage benefits from a strong planning model. "
@@ -449,12 +440,6 @@ CONFIG_DESC = {
         "records the results. It works through every item and reports pass or "
         "fail so you can see what still stands between the code and shipping. "
         "Leave it at (default) to use the global model."
-    ),
-    "baseline": (
-        "Records the current behavior of the system before a change is made, "
-        "so the change can be verified against a known starting point. This "
-        "stage runs ahead of change work to capture a before snapshot. Leave "
-        "it at (default) to use the global model."
     ),
     "change-spec": (
         "Writes the change specification that precisely defines what will "

@@ -711,7 +711,6 @@ wait_verifications() {
     rm -f "$verification_file"
     return "$failed"
 }
-}
 
 # --- Envelopes (Issue 59) ----------------------------------------------------
 #

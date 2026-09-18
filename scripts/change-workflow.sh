@@ -2141,7 +2141,8 @@ while true; do
             start_green_baseline_bg
 
             # Always regenerate all three files with fresh baseline
-            rm -f BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md
+            # Also delete old ADVERSARIAL_REVIEW.md so it gets recreated fresh
+            rm -f BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md ADVERSARIAL_REVIEW.md
             run_combined_change_plan_with_baseline || exit 1
 
             # Start verifications for the freshly created files

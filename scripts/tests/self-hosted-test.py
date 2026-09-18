@@ -197,6 +197,39 @@ class SelfHosted(unittest.TestCase):
                 run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-plan')
         self.assertEqual(plan.read_text(encoding='utf-8'), 'Original\n')
 
+    def test_output_at_the_limit_is_a_fragment_not_a_success(self):
+        from self_hosted import ensure_output_complete, OutputTruncated
+        ensure_output_complete({'output_tokens': 8191}, 8192)
+        ensure_output_complete({}, 8192)
+        with self.assertRaises(OutputTruncated):
+            ensure_output_complete({'output_tokens': 8192}, 8192)
+        with self.assertRaises(OutputTruncated):
+            ensure_output_complete({'output_tokens': 8342}, 8192)
+        path = self.root/'events.jsonl'
+        path.write_text('\n'.join(json.dumps(e) for e in [
+            dict(type='text', part=dict(text='## AR-001\n- Severity: Medium')),
+            dict(type='step_finish', part=dict(reason='length', tokens=dict(input=10, output=8192)))]))
+        with self.assertRaises(OutputTruncated):
+            response_from_events(path)
+
+    def test_truncated_review_is_retried_once_with_a_larger_output_limit(self):
+        env = self.stub_environment()
+        out = self.root/'report.md'
+        command = [bash_executable(), (ROOT/'scripts/reviewer-self-hosted.sh').as_posix(), 'exec', '--output-last-message', str(out), 'Test prompt']
+        result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
+                                env=dict(env, FAKE_OPENCODE_MODE='truncate-once', WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS='8192'))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Retrying once with an output limit of 16384 tokens', result.stderr)
+        self.assertEqual(out.read_bytes(), b'## Findings\n\nNOT READY\n')
+        self.assertIn('"output": 16384', (self.root/'record.config').read_text(encoding='utf-8'), 'the retry ran with the doubled cap')
+        # Always truncated: an error result, and no fragment written as the report.
+        out.unlink()
+        result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
+                                env=dict(env, FAKE_OPENCODE_MODE='truncate', WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS='8192'))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('reached the configured limit', result.stderr)
+        self.assertFalse(out.exists(), 'a fragment must not become the reviewer-owned artifact')
+
     def test_exact_usage_sums_messages_without_console_rounding(self):
         from self_hosted import opencode_usage
         path = self.root/'usage.jsonl'
@@ -327,8 +360,27 @@ assert args[args.index('--model')+1]=='local/local-model:Q4'
 assert 'secret-with-#-characters' not in str(args)
 assert pathlib.Path(args[args.index('--file')+1]).read_text(encoding='utf-8')=='Test prompt'
 pathlib.Path(os.environ['RECORD']).write_text(str(pathlib.Path(os.environ['XDG_CONFIG_HOME']).parent),encoding='utf-8')
-print(json.dumps(dict(type='step_finish', part=dict(reason='stop',tokens=dict(input=1234,output=57)))),flush=True)
 mode=os.environ.get('FAKE_OPENCODE_MODE','ok')
+calls=pathlib.Path(os.environ['RECORD']+'.calls'); n=int(calls.read_text()) if calls.exists() else 0; calls.write_text(str(n+1))
+pathlib.Path(os.environ['RECORD']+'.config').write_text(json.dumps(config),encoding='utf-8')
+def find_output(o):
+    if isinstance(o,dict):
+        if isinstance(o.get('limit'),dict) and 'output' in o['limit']: return o['limit']['output']
+        for v in o.values():
+            r=find_output(v)
+            if r: return r
+    if isinstance(o,list):
+        for v in o:
+            r=find_output(v)
+            if r: return r
+cap=find_output(config) or 8192
+if mode=='truncate' or (mode=='truncate-once' and n==0):
+    # A model cut off at whatever output limit it was given: a fragment, and
+    # a token count equal to the cap.
+    print(json.dumps(dict(type='text',part=dict(text='## AR-001\\n- Severity: Medium'))))
+    print(json.dumps(dict(type='step_finish', part=dict(reason='stop',tokens=dict(input=1234,output=cap)))),flush=True)
+    sys.exit(0)
+print(json.dumps(dict(type='step_finish', part=dict(reason='stop',tokens=dict(input=1234,output=57)))),flush=True)
 if mode=='timeout': time.sleep(30)
 if mode=='api-timeout': print('provider timed out')
 if mode not in ('empty','api-timeout'):

@@ -376,6 +376,13 @@ if [[ "$out" == *assessment.json ]]; then
     exit $?
 fi
 printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
+# A speculative review that came back as a fragment: heading, severity,
+# references, and nothing else -- what a model cut off at its output limit
+# leaves behind. The foreground rerun writes the normal review.
+if [[ "$out" == ADVERSARIAL_REVIEW.md && "${FAKE_SPEC_REVIEW:-}" == fragment && "${UNCLE_SPECULATIVE:-}" == true ]]; then
+    printf '## AR-001: display does not reject Infinity\n\n- Severity: Medium\n- References: I-1\n' > "$out"
+    exit 0
+fi
 if [[ "$out" == TEST_REVIEW.md ]]; then
     printf '%s\n' "$review_prompt" > .uncle/workflow/received-test-review-prompt.md
     status="${FAKE_TEST_REVIEW:-PASS}"
@@ -1123,6 +1130,25 @@ fi
 COUNT=$((COUNT + 1))
 case "$(cat "$REPO/.uncle/workflow/state")" in
     UPDATED_PLAN|VALIDATE_UPDATED_PLAN|WAIT_UPDATED_PLAN_APPROVAL|WAIT_PLAN_APPROVAL) fail "run did not get past the revised plan: $(cat "$REPO/.uncle/workflow/state")" ;;
+esac
+
+# A speculative review is validated before it is adopted. A fragment is set
+# aside and the stage rerun, instead of being adopted and then stopping the
+# run at VALIDATE_ADVERSARIAL_REVIEW with "correct it and resume".
+new_stagegate_case sg-speculative-fragment-is-rerun-not-adopted
+stagegate_agent
+cp "$REPO/UPDATED_PROJECT_PLAN.md" "$REPO/PROJECT_PLAN.md"
+hash_file "$REPO/PROJECT_PLAN.md" > "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
+set_state WAIT_PLAN_APPROVAL
+run_stagegate_stdin "$(gate_input y)" WORKFLOW_SPECULATE=1 FAKE_SPEC_REVIEW=fragment WORKFLOW_DIFF_GATE=0
+expect_out 'Speculative ADVERSARIAL_REVIEW produced a document that fails validation. Running it again.'
+expect_not_out 'Review format invalid'
+expect_not_out 'Adopted speculative ADVERSARIAL_REVIEW'
+expect_file .uncle/workflow/logs/ADVERSARIAL_REVIEW.speculative.rejected.md
+expect_in_file .uncle/workflow/logs/ADVERSARIAL_REVIEW.speculative.rejected.md 'AR-001'
+COUNT=$((COUNT + 1))
+case "$(cat "$REPO/.uncle/workflow/state")" in
+    ADVERSARIAL_REVIEW|VALIDATE_ADVERSARIAL_REVIEW|WAIT_PLAN_APPROVAL) fail "run did not get past the review: $(cat "$REPO/.uncle/workflow/state")" ;;
 esac
 
 # A reviewer cannot overrule the driver failure by returning PASS.

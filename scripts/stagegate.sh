@@ -1560,6 +1560,19 @@ speculate() {
     spec_stage="$stage"
 }
 
+# The stage's own format validator, with the one-reading repairer allowed a
+# pass first -- exactly what the VALIDATE_* state does afterwards.
+speculation_artifact_valid() {
+    case "$1" in
+        ADVERSARIAL_REVIEW)
+            python3 "$ROOT/scripts/lib/adversarial-context.py" --validate "$2" >/dev/null 2>&1 && return 0
+            python3 "$ROOT/scripts/lib/repair_document_format.py" "$2" >/dev/null 2>&1 || return 1
+            python3 "$ROOT/scripts/lib/adversarial-context.py" --validate "$2" >/dev/null 2>&1
+            ;;
+        *) return 0 ;;
+    esac
+}
+
 # Succeeds when a usable speculative artifact is in place, in which case the
 # caller skips the stage.
 adopt_speculation() {
@@ -1599,6 +1612,17 @@ adopt_speculation() {
 
     if [[ ! -s "$artifact" ]]; then
         echo "Speculative $stage produced no artifact. Running it again."
+        return 1
+    fi
+
+    # The same validation the VALIDATE_* state applies, before adoption: a
+    # fragment adopted here failed there with "correct it and resume", which
+    # left a run stopped on a document no one had finished writing.
+    if ! speculation_artifact_valid "$stage" "$artifact"; then
+        echo "Speculative $stage produced a document that fails validation. Running it again."
+        mv -f "$artifact" "$LOG_DIR/${stage}.speculative.rejected.md" 2>/dev/null || rm -f "$artifact"
+        rm -f "$STATE_DIR/envelopes/${stage}.json"
+        echo "Rejected document: $LOG_DIR/${stage}.speculative.rejected.md"
         return 1
     fi
 

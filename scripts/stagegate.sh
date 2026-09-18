@@ -1312,7 +1312,7 @@ run_stage() {
             # written separately, validated separately and approved separately;
             # only the invocation is shared.
             if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" ]]; then
-                run_claude prompts/requirements-plan.md requirements
+                run_claude prompts/requirements-plan.md project-plan
             else
                 run_claude prompts/requirements.md requirements
             fi

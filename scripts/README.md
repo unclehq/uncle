@@ -674,9 +674,18 @@ config is `STAGE VALUE` lines:
 | `<stage>` | cline model id for that stage (`WORKFLOW_MODEL_<STAGE>`) |
 
 Valid stage keys: `requirements`, `project-plan`, `updated-plan`,
-`preflight`, `implementation`, `execute-checklist`, `change-plan`,
+`preflight`, `implementation`, `repair`, `execute-checklist`, `change-plan`,
 `updated-change-plan`, `adversarial-review`, `test-review`,
-`manual-checklist`, `final-audit`. Repairs use the `implementation` settings.
+`manual-checklist`, `final-audit`. A `repair` key left unset inherits the
+`implementation` setting, so a repair pass can run on a stronger model than
+bulk implementation without configuring anything else.
+
+A repair pass is judged by the files it changes, not by its reports: the
+driver hashes the files each blocking finding names before the pass and
+compares afterwards. A pass that changed none of them is not reviewed and does
+not count against `WORKFLOW_MAX_REPAIRS`; it is retried once with a
+driver-written `.uncle/workflow/REPAIR_BRIEF.md`, and a second such pass stops
+the run for a person.
 
 ### Envelopes and attestation
 

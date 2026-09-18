@@ -199,6 +199,7 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/stage-config.sh"
 . "$ROOT/scripts/lib/acceptance.sh"
 . "$ROOT/scripts/lib/repair-limit.sh"
+. "$ROOT/scripts/lib/repair-judge.sh"
 . "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/human-input.sh"
 . "$ROOT/scripts/lib/verification-integrity.sh"
@@ -827,7 +828,7 @@ stage_effort() {
 stage_turns() {
     local fallback=40
     case "$1" in
-        implementation) fallback=200 ;;
+        implementation|repair) fallback=200 ;;
         execute-checklist) fallback=120 ;;
     esac
     stage_setting TURNS "$1" "$fallback"
@@ -842,7 +843,7 @@ stage_tools() {
     case "$1" in
         updated-plan|derive-brief)
             fallback="Read,Glob,Grep,Write,Edit" ;;
-        implementation|execute-checklist|preflight|preview-build)
+        implementation|repair|execute-checklist|preflight|preview-build)
             # The preview build is an implementation, just an early one: a
             # scaffolded app needs the same tools as the real stage, and with
             # Write alone it cannot get a framework project off the ground.
@@ -1354,7 +1355,7 @@ run_stage() {
             run_codex_review prompts/test-review.md TEST_REVIEW.md test-review
             ;;
         REPAIR)
-            run_claude prompts/repair.md implementation
+            run_claude "$REPAIR_PROMPT" repair
             require_artifact IMPLEMENTATION_NOTES.md
             require_artifact AUTOMATED_TEST_REPORT.md
             ;;
@@ -2198,7 +2199,15 @@ while true; do
             PREVIOUS_VERIFICATION_SNAPSHOT="$(cat "$STATE_DIR/verification-snapshot" 2>/dev/null || true)"
             if [[ "$plan_status" != 22 ]]; then
                 printf '%s\n' "$repair_count" > "$STATE_DIR/repair-count"
+                repair_begin || exit 1
                 run_stage REPAIR
+                repair_status=0
+                repair_judge || repair_status=$?
+                case "$repair_status" in
+                    0) ;;
+                    3) continue ;;
+                    *) exit 1 ;;
+                esac
             fi
             plan_status=0
             plan_after_write || plan_status=$?

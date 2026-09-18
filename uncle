@@ -179,7 +179,7 @@ export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
 # The TUI reads the launch flags from its environment; unexported, they were
 # parsed and then never seen, and --application opened an idle homepage.
 export UNCLE_STARTUP_ACTION UNCLE_STARTUP_TEXT
-CONFIG_STAGES="requirements change-spec project-plan change-plan adversarial-review updated-plan updated-change-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
+CONFIG_STAGES="requirements change-spec project-plan change-plan adversarial-review updated-plan updated-change-plan preflight implementation repair test-review manual-checklist execute-checklist final-audit"
 
 # Full-screen terminal UI when both stdin and stdout are real terminals; the
 # line-based menu below remains for pipes and scripts. Force TUI with --noinput

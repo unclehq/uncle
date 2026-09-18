@@ -426,10 +426,19 @@ case "$prompt" in
         gate_report PREFLIGHT_REPORT.md "${FAKE_PREFLIGHT:-PASS}"
         ;;
     *STUB:repair*)
-        printf 'repaired\n' > .uncle/workflow/repaired
         printf '\nRepair disposition.\n' >> IMPLEMENTATION_NOTES.md
         printf '\nRetested.\n' >> AUTOMATED_TEST_REPORT.md
-        if [[ -n "${FAKE_REPAIR:-}" ]]; then bash -c "$FAKE_REPAIR"; fi
+        # FAKE_REPAIR_NOOP=1: every pass reports without repairing.
+        # FAKE_REPAIR_NOOP=once: only the first pass does.
+        if [[ "${FAKE_REPAIR_NOOP:-}" == 1 ]] \
+           || { [[ "${FAKE_REPAIR_NOOP:-}" == once && ! -e .uncle/workflow/stub-noop-done ]] \
+                && : > .uncle/workflow/stub-noop-done; }; then
+            :
+        else
+            printf 'repaired\n' > .uncle/workflow/repaired
+            printf '# repaired\n' >> app/main.sh
+            if [[ -n "${FAKE_REPAIR:-}" ]]; then bash -c "$FAKE_REPAIR"; fi
+        fi
         ;;
     *STUB:implement*)
         printf 'implemented\n' > .uncle/workflow/implemented
@@ -918,6 +927,44 @@ expect_status 1
 expect_state REPAIR
 expect_in_file .uncle/workflow/repair-count '1'
 expect_out 'Repair limit (1) reached'
+
+# A repair pass that changes none of the files its findings name is a report,
+# not a repair: it is not reviewed, consumes no attempt, is retried once with a
+# driver-written brief, and a second such pass stops the run for a person.
+new_stagegate_case sg-repair-noop-retries-then-stops
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL FAKE_REPAIR_NOOP=1
+expect_status 1
+expect_state REPAIR
+expect_out 'changed none of the files these findings name: COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+expect_out 'Retrying once with a driver-written brief'
+expect_out 'second pass in a row that changed nothing'
+expect_in_file .uncle/workflow/repair-count '0'
+expect_in_file .uncle/workflow/REPAIR_BRIEF.md '**COVERAGE**'
+expect_in_file .uncle/workflow/REPAIR_BRIEF.md '| NEGATIVE | YES | FAIL |'
+expect_in_file .uncle/workflow/REPAIR_BRIEF.md 'not as evidence'
+expect_in_file .uncle/workflow/stop-reason 'human'
+expect_no_file FINAL_AUDIT.md
+COUNT=$((COUNT + 1))
+if [[ "$(grep -c '^TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 1 ]]; then
+    fail 'a no-op repair pass must not be sent to review'
+fi
+
+# The retry reads the brief, and a pass that does change the tree counts as
+# the one attempt WORKFLOW_MAX_REPAIRS=1 allows.
+new_stagegate_case sg-repair-noop-once-then-repairs
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL_ONCE FAKE_REPAIR_NOOP=once WORKFLOW_MAX_REPAIRS=1
+expect_status 0
+expect_state COMPLETE
+expect_in_file .uncle/workflow/repair-count '1'
+expect_out 'Retrying once with a driver-written brief'
+expect_no_file .uncle/workflow/repair-retry
+expect_no_file .uncle/workflow/REPAIR_BRIEF.md
+expect_file .uncle/workflow/logs/repair-retry.prompt.md
+expect_in_file .uncle/workflow/logs/repair-retry.prompt.md 'Repair brief (written by the driver)'
 
 # A reviewer cannot overrule the driver failure by returning PASS.
 new_stagegate_case sg-review-cannot-bless-failed-command

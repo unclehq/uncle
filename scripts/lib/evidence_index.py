@@ -19,6 +19,12 @@ STAGES = {
     'updated-plan': ['REQUIREMENTS.md', 'REQUIREMENTS_INTERPRETATION.md', 'PROJECT_PLAN.md', 'ADVERSARIAL_REVIEW.md'],
     'updated-change-plan': ['CHANGE_SPEC.md', '@CHANGE_PLAN.pre-review.md', 'ADVERSARIAL_REVIEW.md'],
     'manual-checklist-base': ['CHANGE_SPEC.md', 'CHANGE_PLAN.md'],
+    # Not IMPLEMENTATION_NOTES.md or AUTOMATED_TEST_REPORT.md: those are the
+    # repairing agent's own earlier claims, and quoting their PASS lines back
+    # is how a pass came to report findings fixed without touching a file.
+    'repair': ['UPDATED_PROJECT_PLAN.md', 'TEST_REVIEW.md', 'VERIFICATION_REPORT.md', 'DEFECTS.md',
+               '@green-check.md', '@green-check.tsv', '@TEST_CHANGES.diff', '@verification.manifest',
+               '@REPAIR_BRIEF.md'],
 }
 REPORTS = ['MANUAL_CHECKLIST.md', 'VERIFICATION_REPORT.md', 'DEFECTS.md',
            '@checklist-driver-checks/README.md', '@checklist-driver-checks/results.tsv',

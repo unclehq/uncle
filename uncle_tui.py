@@ -153,6 +153,7 @@ STAGES = [
     ("updated-change-plan", AGENT),
     ("preflight", AGENT),
     ("implementation", AGENT),
+    ("repair", AGENT),
     ("test-review", REVIEWER),
     ("manual-checklist", REVIEWER),
     ("execute-checklist", AGENT),
@@ -434,6 +435,12 @@ CONFIG_DESC = {
         "correctness and respect for existing conventions matter most. Set a "
         "model you trust for coding, or leave it at (default) to use the "
         "global model."
+    ),
+    "repair": (
+        "Fixes what an independent test review or verification run rejected, "
+        "then goes back through the driver checks, the diff gate and review. "
+        "Judged by the files it changes, not by its report. Leave it at "
+        "(default) to inherit the implementation setting."
     ),
     "execute-checklist": (
         "Runs the manual checklist against the finished implementation and "
@@ -1947,7 +1954,7 @@ class UncleTUI:
     # the planning stage and runs through review, so the page is watched for
     # from planning onward, not only while the application proper is written.
     _PREVIEW_STAGES = ("requirements", "project-plan", "adversarial-review",
-                       "updated-plan", "preflight", "implementation", "preview-build")
+                       "updated-plan", "preflight", "implementation", "repair", "preview-build")
 
     def _poll_early_preview(self):
         """Open the page the moment one exists, from whichever stage wrote it.

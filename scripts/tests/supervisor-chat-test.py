@@ -512,6 +512,17 @@ class DelegationTests(Base):
                     'Approve it. {"schema":1}', ''):
             with self.subTest(bad=bad[:40]):
                 self.assertRaises(ValueError, sc.parse_reply, bad)
+        # Models occasionally put an otherwise valid envelope in a fence whose
+        # language is unrelated to JSON, or widen it to four backticks because
+        # the payload itself contains Markdown. It is presentation noise, not
+        # an authority change: the unwrapped object still gets the full schema
+        # and action allowlist validation.
+        fenced = '````swift\n' + reply('Building.', home_action={'uncle_action': 'run_app', 'message': 'go',
+                                                                    'document': '# App\n```html\n<body>\n```', 'start': True}) + '\n````'
+        parsed = sc.parse_reply(fenced)
+        self.assertEqual(parsed['reply'], 'Building.')
+        self.assertEqual(parsed['home_action']['uncle_action'], 'run_app')
+        self.assertRaises(ValueError, sc.parse_reply, 'Before\n' + fenced)
         request = self.send(ui, 'answer this one')
         for answer in ('y\nn', 'yes please', 'maybe', 'y; rm -rf /'):
             with self.subTest(answer=answer):

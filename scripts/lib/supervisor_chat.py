@@ -142,12 +142,19 @@ def parse_reply(text):
     """The reply dict for a conforming worker reply, or ValueError('malformed: ...').
 
     Exactly the keys of REPLY_KEYS may appear; `reply` is prose; at most one
-    of the action keys may be non-null. A fenced JSON block is accepted.
+    of the action keys may be non-null. A single, whole-response Markdown code
+    fence is unwrapped as transport noise regardless of its language or fence
+    length. Everything inside still has to be the exact JSON envelope.
     """
     candidate = str(text or '').strip()
-    fence = re.match(r'^```(?:json)?\s*(.*?)\s*```$', candidate, re.S)
+    # Some runners label a JSON response as `swift`, and some renderers widen
+    # its fence to four backticks when the payload contains Markdown fences.
+    # Accept one enclosing fence, but never prose around it or an embedded JSON
+    # fragment: that would weaken the reply allowlist rather than repair the
+    # presentation wrapper.
+    fence = re.match(r'^(?P<mark>`{3,}|~{3,})[^\r\n]*[\r\n](?P<body>.*?)[\r\n]?(?P=mark)$', candidate, re.S)
     if fence:
-        candidate = fence.group(1).strip()
+        candidate = fence.group('body').strip()
     try:
         data = json.loads(candidate)
     except ValueError:

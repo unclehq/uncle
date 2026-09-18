@@ -713,7 +713,7 @@ new_case baseline-is-captured-at-plan
 set_state PLAN
 run_driver
 expect_status 0
-expect_out "Recording the green-check baseline before anything changes."
+expect_out "Recording the green-check baseline in the background while planning runs."
 expect_file ".uncle/workflow/green-check.baseline.tsv"
 expect_in_file ".uncle/workflow/green-check.baseline.tsv" "bash app/test.sh"
 COUNT=$((COUNT + 1))
@@ -806,17 +806,31 @@ expect_out "No decision received; audit remains pending."
 expect_not_out "Workflow complete."
 expect_state "WAIT_AUDIT_OVERRIDE"
 
-# Unavailable prerequisites stop before source changes, then resume in place.
+# The probe runs beside implementation by default: an unconfirmed environment
+# is reported at the diff gate, with the code kept, rather than stopping first.
 new_stagegate_case sg-preflight-blocked
 # Force the unresolved-prerequisite path; supported runtimes now bypass models.
 printf 'raise SystemExit(2)\n' > "$REPO/scripts/lib/preflight.py"
 stagegate_agent
 set_state IMPLEMENT
 run_stagegate FAKE_PREFLIGHT=BLOCKED
+expect_status 0
+expect_state WAIT_IMPLEMENT_APPROVAL
+expect_file .uncle/workflow/implemented
+expect_out "Probing prerequisites in the background; implementation starts now."
+expect_out "Prerequisite probe did not confirm this environment: BLOCKED-SETUP."
+
+# WORKFLOW_PREFLIGHT_BLOCKING=1 restores the gate: unavailable prerequisites
+# stop before source changes, then resume in place.
+new_stagegate_case sg-preflight-blocked-gate
+printf 'raise SystemExit(2)\n' > "$REPO/scripts/lib/preflight.py"
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_PREFLIGHT_BLOCKING=1 FAKE_PREFLIGHT=BLOCKED
 expect_status 1
 expect_state PREFLIGHT
 expect_no_file .uncle/workflow/implemented
-run_stagegate
+run_stagegate WORKFLOW_PREFLIGHT_BLOCKING=1
 expect_status 0
 expect_state WAIT_IMPLEMENT_APPROVAL
 expect_file .uncle/workflow/implemented

@@ -1107,7 +1107,10 @@ BASELINE_BACKGROUND="${WORKFLOW_BASELINE_BACKGROUND:-1}"
 BASELINE_BG_PID=""
 
 start_green_baseline_bg() {
-    if [[ "$BASELINE_BACKGROUND" != "1" || "$GREEN_CHECK" != "1" ]]; then
+    if [[ "$BASELINE_BACKGROUND" != "1" || "$GREEN_CHECK" != "1" ]] \
+       || [[ -z "$(verify_commands BASELINE_REPORT.md 2>/dev/null)" ]]; then
+        # Nothing to run takes no time to run; with no command block the
+        # warning is the whole result and belongs on screen now.
         capture_green_baseline
         return 0
     fi

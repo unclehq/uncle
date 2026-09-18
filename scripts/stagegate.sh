@@ -927,7 +927,14 @@ verify_approval() {
     local approval="$APPROVAL_DIR/${name}.sha256"
 
     require_file "$file"
-    require_file "$approval"
+    if [[ ! -s "$approval" ]]; then
+        # State that presupposes an approval nobody recorded: send the run to
+        # the gate rather than stopping on a file the operator never heard of.
+        echo "$file has no approval on record."
+        echo "Review and approve it."
+        triage_reopen_gate "$name"
+        require_file "$approval"
+    fi
 
     local expected
     local actual

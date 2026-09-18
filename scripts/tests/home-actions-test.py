@@ -60,11 +60,17 @@ class Actions(unittest.TestCase):
         (self.root/'src').mkdir()
         (self.root/'src/app.js').write_text('code')
         (self.root/'index.html').write_text('<h1>app</h1>')
+        # A document the repository tracks belongs to the project and stays.
+        (self.root/'FINAL_AUDIT.md').write_text('committed audit')
+        import subprocess
+        subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
+        subprocess.run(['git', '-C', str(self.root), 'add', 'FINAL_AUDIT.md'], check=True)
         self.ui.chat_composer = '/clear'
         self.ui._chat_command(10)
         self.assertEqual(self.ui.chat_error, '')
         for doc in ('REQUIREMENTS.md', 'PROJECT_PLAN.md', 'IMPLEMENTATION_NOTES.md'):
             self.assertFalse((self.root/doc).exists(), doc)
+        self.assertEqual((self.root/'FINAL_AUDIT.md').read_text(), 'committed audit', 'tracked documents stay')
         self.assertFalse((self.root/'.uncle/launch.json').exists())
         for name in ('state', 'origin', 'keep.txt', 'approvals'):
             self.assertFalse((wf/name).exists(), name)

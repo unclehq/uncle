@@ -1001,6 +1001,27 @@ if [[ "$(grep -c '^TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 
     fail 'a partial repair must not be sent to review while findings have no change'
 fi
 
+# State that presupposes an approval nobody recorded reopens that gate instead
+# of stopping on a file the operator never heard of.
+new_stagegate_case sg-missing-approval-reopens-gate
+stagegate_agent
+set_state ADVERSARIAL_REVIEW
+cp "$REPO/UPDATED_PROJECT_PLAN.md" "$REPO/PROJECT_PLAN.md"
+rm -f "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
+run_stagegate
+expect_status 0
+expect_state WAIT_PLAN_APPROVAL
+expect_out 'PROJECT_PLAN.md has no approval on record'
+expect_out 'Reopening WAIT_PLAN_APPROVAL'
+
+new_case missing-approval-reopens-gate
+set_state UPDATED_PLAN
+rm -f "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+run_driver
+expect_status 0
+expect_state WAIT_PLAN_APPROVAL
+expect_out 'CHANGE_PLAN.md has no approval on record'
+
 # A reviewer cannot overrule the driver failure by returning PASS.
 new_stagegate_case sg-review-cannot-bless-failed-command
 stagegate_agent

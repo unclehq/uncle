@@ -448,6 +448,15 @@ if [[ "$WORKTREE" == 1 ]]; then
         worktree_create "$WORKTREE_DIR" "$WORKTREE_BRANCH" || exit 1
     fi
     cd "$WORKTREE_DIR"
+    # This worktree exists for one issue -- its name and branch both derive
+    # from the number -- so in-flight state with no recorded owner can only be
+    # an earlier run of the same issue. Archive it and start clean rather than
+    # refuse with a remedy nobody can type from the TUI. A run that is live
+    # still holds the lock, and that is refused below as before.
+    if run_in_flight && [[ ! -s "$ORIGIN_FILE" ]] && ! worktree_run_locked .; then
+        echo "The previous run in this worktree recorded no owner; archiving it and starting $OWNER/$REPO#$ISSUE_NUM fresh."
+        UNCLE_NEW_WORKFLOW=1 python3 "$ROOT/scripts/lib/workflow_family.py" change || exit 1
+    fi
     PROJECT_ROOT="$PWD"
     WORKTREE_DIR="$PWD"
     export UNCLE_PROJECT_ROOT="$PWD"

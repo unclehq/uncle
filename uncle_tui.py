@@ -3660,7 +3660,15 @@ class UncleTUI:
             with contextlib.redirect_stdout(io.StringIO()):
                 archive = workflow_family.prepare(root, family if family in ('app', 'change') else 'app', fresh=True)
         documents = [name for name in envelope.ARTIFACT_EXCLUDES if not name.endswith('/')] + ['REQUIREMENTS.md']
-        moves = [(root / name, name) for name in documents if (root / name).is_file() and not (root / name).is_symlink()]
+        # A document the repository tracks is the project's, not the last
+        # build's leftover; the next build rewrites what it needs.
+        try:
+            tracked = set(subprocess.run(['git', '-C', str(root), 'ls-files', '-z', '--', *documents],
+                                         capture_output=True, text=True, timeout=10).stdout.split('\0'))
+        except (OSError, subprocess.SubprocessError):
+            tracked = set()
+        moves = [(root / name, name) for name in documents
+                 if (root / name).is_file() and not (root / name).is_symlink() and name not in tracked]
         launch = root / '.uncle' / 'launch.json'
         if launch.is_file() and not launch.is_symlink():
             moves.append((launch, 'launch.json'))
@@ -3675,9 +3683,23 @@ class UncleTUI:
         self.home_replace_proposal = None
         self.new_workflow_pending = False
         if archive is None:
-            return 'Nothing to clear: no build state or documents in ' + sanitize(str(root)) + '.'
-        return ('Cleared the last build: %d document%s and the workflow state archived at %s. '
-                'Source files were left alone.' % (len(moves), '' if len(moves) == 1 else 's', sanitize(str(archive))))
+            message = 'Nothing to clear: no build state or documents in ' + sanitize(str(root)) + '.'
+        else:
+            message = ('Cleared the last build: %d document%s and the workflow state archived at %s. '
+                       'Source files were left alone.' % (len(moves), '' if len(moves) == 1 else 's', sanitize(str(archive))))
+        # Runs live in their own worktrees; a /clear here does not reach them,
+        # and a stale one is what "build #N" would otherwise trip over.
+        others = []
+        try:
+            for row in worktree_runs.runs(str(root)):
+                if Path(row['path']).resolve() != root.resolve():
+                    others.append('%s (#%s, %s)' % (row['path'], row['issue'], row['state']))
+        except (OSError, ValueError, KeyError):
+            others = []
+        if others:
+            message += (' Runs with state also exist in: ' + '; '.join(sanitize(o) for o in others) +
+                        '. Building an issue again resumes or restarts its worktree; /clear from inside one clears it.')
+        return message
 
     def _triage_command(self, text):
         if not text:

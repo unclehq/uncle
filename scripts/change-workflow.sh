@@ -676,6 +676,25 @@ verify_approval() {
     fi
 }
 
+# Record when this run started (for tracking file freshness)
+record_run_start() {
+    date +%s > "$STATE_DIR/run-start-time"
+}
+
+# Check if a file was created in this run (after run start time)
+is_file_from_this_run() {
+    local file="$1"
+    local run_start_file="$STATE_DIR/run-start-time"
+
+    [[ ! -f "$run_start_file" ]] && return 1  # No run start recorded, assume old
+    [[ ! -f "$file" ]] && return 1  # File doesn't exist
+
+    local run_start="$(cat "$run_start_file")"
+    local file_mtime="$(stat -f "%m" "$file" 2>/dev/null || echo 0)"
+
+    [[ "$file_mtime" -gt "$run_start" ]] && return 0 || return 1
+}
+
 # Start verification in background and return immediately
 start_verification_bg() {
     local file="$1"
@@ -2093,6 +2112,9 @@ while true; do
             # A fresh run legitimately claims this checkout for its issue.
             write_origin
 
+            # Record when this run started (for ignoring old files)
+            record_run_start
+
             run_combined_change_plan_with_baseline || exit 1
 
             set_state WAIT_ANALYSIS_APPROVAL
@@ -2121,9 +2143,12 @@ while true; do
             # window in which a baseline means anything.
             start_green_baseline_bg
 
-            # Always create a fresh CHANGE_PLAN after baseline and spec are approved
-            run_claude prompts/change/change-plan.md change-plan \
-                "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"
+            # Always regenerate CHANGE_PLAN if it's not from this run
+            if ! is_file_from_this_run CHANGE_PLAN.md; then
+                rm -f CHANGE_PLAN.md
+                run_claude prompts/change/change-plan.md change-plan \
+                    "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN" || exit 1
+            fi
             require_file CHANGE_PLAN.md
             check_document_budget CHANGE_PLAN.md || exit 1
 

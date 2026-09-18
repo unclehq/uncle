@@ -26,5 +26,26 @@ check "unrelated flag exits 1"              test "$RC" -eq 1
 check "unrelated flag gets usage"           grep -qF "Usage: uncle" "$TMP/err"
 check "unrelated flag gets no hint"         test "$(grep -c "Did you mean" "$TMP/err")" -eq 0
 
+# The launch flags must reach the TUI process, not just the parser: a fake
+# python3 stands in for the TUI and records what it was handed.
+REAL_PYTHON3="$(command -v python3)"
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/python3" <<FAKE
+#!/usr/bin/env bash
+for a in "\$@"; do
+    case "\$a" in
+        *uncle_tui.py)
+            printf 'action=%s\ntext=%s\n' "\${UNCLE_STARTUP_ACTION:-}" "\${UNCLE_STARTUP_TEXT:-}" > "$TMP/tui-env"
+            exit 0 ;;
+    esac
+done
+exec "$REAL_PYTHON3" "\$@"
+FAKE
+chmod +x "$TMP/bin/python3"
+(cd "$TMP" && PATH="$TMP/bin:$PATH" NO_COLOR=1 bash "$ROOT/uncle" --application 'build a groovy calculator' --unattended > "$TMP/out" 2> "$TMP/err"); RC=$?
+check "--application launches the TUI"            test "$RC" -eq 0
+check "TUI receives the startup action"           grep -qxF "action=create_app" "$TMP/tui-env"
+check "TUI receives the description"              grep -qxF "text=build a groovy calculator" "$TMP/tui-env"
+
 if [[ "$fails" -gt 0 ]]; then echo "launcher-args-test.sh: $fails failure(s)"; exit 1; fi
 echo "launcher-args-test.sh: all checks passed"

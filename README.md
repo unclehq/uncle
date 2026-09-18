@@ -157,7 +157,7 @@ The goal is that a reviewer can independently answer:
 
 without trusting the coding agent that produced it.
 
-See [#59: Add verifiable change provenance and portable attestations](../../issues/59).
+See [#59: Add verifiable change provenance and portable attestations](../../issues/59) and [Attestations](ATTESTATIONS.md) for setup and verification.
 
 ## Talk to Uncle while it works
 
@@ -401,7 +401,7 @@ Found a bug or have a concrete feature request? Open an [issue](../../issues).
 
 ---
 
-[Workflow documentation](docs/) · [GitHub integration](GITHUB_INTEGRATION.md) · [Contributing](CONTRIBUTING.md) · [License](LICENSE)
+[Workflow documentation](docs/) · [GitHub integration](GITHUB_INTEGRATION.md) · [Attestations](ATTESTATIONS.md) · [Contributing](CONTRIBUTING.md) · [License](LICENSE)
 
 ```
 ```

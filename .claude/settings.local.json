@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(codex --version)",
-      "Bash(codex login *)"
+      "Bash(codex login *)",
+      "Bash(gh pr *)"
     ]
   }
 }

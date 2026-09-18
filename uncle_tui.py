@@ -67,6 +67,10 @@ WORKFLOWS = [
 EFFORTS = ["high", "medium", "low"]
 ISSUE_MODES = [("auto", ""), ("change request", "--change"), ("new application", "--new"),
                ("change request in worktree", "--worktree")]
+# A triage proposal that says there is nothing to edit needs no master turn.
+NO_EDIT_PROPOSAL = re.compile(
+    r'(?i)\bno\s+(?:files?\s+)?edits?\b|\bno\s+files?\s+edited\b|\bnothing\s+to\s+(?:edit|change)\b'
+    r'|\bno\s+files?\s+changed\b|\bno\s+changes\s+(?:needed|required)\b|\bresume\s+as\s+is\b')
 # The per-project config lives in the caller's project root, so each project
 # gets its own model/effort/runner settings. The `uncle` launcher exports
 # UNCLE_PROJECT_ROOT (= the cwd it was invoked from) because it cd's into the
@@ -80,6 +84,36 @@ def _project_root():
     if root and os.path.isabs(root):
         return root
     return os.getcwd()
+
+
+_APPROVE_WORDS = frozenset(('approve', 'approved', 'approval', 'accept', 'accepted',
+                            'yes', 'y', 'ok', 'okay', 'confirm', 'confirmed',
+                            'go', 'proceed', 'do', 'it'))
+_DECLINE_WORDS = frozenset(('decline', 'declined', 'deny', 'reject', 'rejected',
+                            'no', 'n', 'cancel', 'keep', 'stop', 'abort'))
+
+
+def _replacement_decision(text):
+    """'approve', 'decline', or None for a pending replacement proposal.
+
+    The prompt names two exact phrases, and only those were accepted. A typo --
+    "approval replacement" for "approve replacement" -- fell through to the
+    supervisor, which read it as approval and said so, while the TUI refused the
+    action it proposed and re-showed the prompt. The operator was told both that
+    it was proceeding and that it was not, with no way out.
+
+    Short answers only: four words at most, so a sentence that merely mentions
+    approving something is still a question for the supervisor rather than a
+    decision. A message carrying both senses is neither.
+    """
+    words = re.findall(r"[a-z]+", (text or '').lower())
+    if not words or len(words) > 4:
+        return None
+    approve = bool(_APPROVE_WORDS & set(words))
+    decline = bool(_DECLINE_WORDS & set(words))
+    if approve == decline:
+        return None
+    return 'approve' if approve else 'decline'
 
 
 def _direct_origin_issue():
@@ -1676,6 +1710,13 @@ class UncleTUI:
                     host.controller.driver_exited(self.workflow_exit_code)
                 self._maybe_auto_triage()
 
+    def _rerun_pending(self):
+        """True when a stage rerun is waiting to be consumed in this project."""
+        try:
+            return (Path(_project_root()) / '.uncle/workflow/rerun-request.json').is_file()
+        except OSError:
+            return False
+
     def _enter_run_worktree(self):
         """Move this run into its own worktree before anything reads the root.
 
@@ -2527,15 +2568,22 @@ class UncleTUI:
             self.chat_focus = 'chat'
             self._triage_turn('execute', proposal=(1, message.strip()), followup=message.strip())
             return
-        rerun = re.fullmatch(r'(?:please\s+)?(?:run|rerun)\s+(?:the\s+)?([a-z][a-z-]+)\s+stage(?:\s+again)?[.!]?', message.strip(), re.I)
-        if rerun:
+        # "stage" is optional. Requiring it meant "rerun final-audit" -- the
+        # exact remedy the driver prints when an audit binding goes stale --
+        # went to the supervisor, which has no action for running one stage and
+        # could only offer to rerun the whole workflow.
+        rerun = re.fullmatch(
+            r'(?:please\s+)?(?:run|rerun)\s+(?:the\s+)?([a-z][a-z-]+)(?:\s+stage)?(?:\s+again)?[.!]?',
+            message.strip(), re.I)
+        if rerun and self._is_known_stage(rerun[1].lower()):
             self.run_named_stage(rerun[1].lower())
             return
         pending = getattr(self, 'home_replace_proposal', None)
-        if pending and message.strip().lower() in ('approve replacement', 'decline replacement'):
+        decision = _replacement_decision(message) if pending else None
+        if decision:
             self.home_history.append(('user', message))
             self.home_replace_proposal = None
-            if message.strip().lower() == 'approve replacement':
+            if decision == 'approve':
                 self._home_action(pending, replace_approved=True)
             else:
                 self.home_history.append(('system', 'Replacement declined; existing brief preserved.'))
@@ -3221,6 +3269,7 @@ class UncleTUI:
             self.triage_error = ''
             self.triage_return = 'chat'
             self.triage_scroll = 0
+            self.triage_stream = ''
 
     def _workflow_dir(self):
         return os.path.join(_project_root(), '.uncle', 'workflow')
@@ -3341,7 +3390,49 @@ class UncleTUI:
         chosen = [p for p in self.triage_proposals if p[0] == number]
         if not chosen:
             raise ValueError('No proposal %d is selectable. Open triage and read the current reply.' % number)
-        self._triage_turn('execute', proposal=chosen[0])
+        if NO_EDIT_PROPOSAL.search(chosen[0][1]):
+            self._triage_apply_local(chosen[0])
+        else:
+            self._triage_turn('execute', proposal=chosen[0])
+
+    def _triage_apply_local(self, proposal):
+        """A proposal that needs no edit never pays for the master: the guard
+        verifies the untouched tree and the resume offer opens at once."""
+        root = _project_root()
+        wf = self._workflow_dir()
+        turn = self.triage_turn + 1
+        try:
+            info = self._triage_guard('begin', '--state-dir', wf, '--project', root, '--root', ROOT,
+                                      '--turn', str(turn), '--mode', 'execute')
+            summary = self._triage_guard('end', '--state-dir', wf, '--project', root, '--root', ROOT,
+                                         '--turn', str(turn), '--mode', 'execute',
+                                         '--digest', info['digest'],
+                                         '--proposal', 'Proposal %d: %s' % proposal)
+        except (OSError, ValueError, KeyError) as exc:
+            # The cheap path could not verify the tree; the master turn handles it.
+            self._triage_turn('execute', proposal=proposal)
+            return
+        self.triage_turn = turn
+        self.triage_proposals = []
+        self.triage_history.append(('operator', '/do %d — %s' % (proposal[0], sanitize(proposal[1]))))
+        notes = []
+        if summary.get('applied'):
+            notes.append('Applied: ' + ', '.join(summary['applied']))
+        if summary.get('refused'):
+            notes.append('Refused and reverted: ' + ', '.join(summary['refused']))
+        if summary.get('failed'):
+            notes.append('Not applied: ' + ', '.join(summary['failed']))
+        if summary.get('no_edit'):
+            notes.append('No files changed.')
+        notes.extend(summary.get('messages', []))
+        if summary.get('tainted'):
+            self.triage_tainted = 'Resume refused: ' + ' '.join(summary.get('messages') or ['the guard could not verify the tree.'])
+        if notes:
+            self.triage_history.append(('system', sanitize(' '.join(notes))))
+        if not summary.get('tainted'):
+            self.triage_offer_resume = True
+        if getattr(self, 'recovery_active', False):
+            self.chat_error = ''
 
     def poll_triage(self):
         request = getattr(self, 'triage_request', None)
@@ -3351,7 +3442,11 @@ class UncleTUI:
             kind, value = request.events.get_nowait()
         except queue.Empty:
             return False
+        if kind == 'delta':
+            self.triage_stream = value
+            return True
         self.triage_request = None
+        self.triage_stream = ''
         pending = self.triage_pending or {}
         self.triage_pending = None
         # The guard runs whatever the turn's outcome: a runner that crashed
@@ -3402,6 +3497,19 @@ class UncleTUI:
             self.chat_error = self.triage_error
         return True
 
+    def _is_known_stage(self, name):
+        """True when this project's workflow really has a stage by that name.
+
+        Without the word "stage" to anchor on, "rerun the tests" would otherwise
+        be read as a stage request. Unknown names belong to the supervisor.
+        """
+        try:
+            from rerun_stage import APP, CHANGE
+            family = (Path(_project_root()) / '.uncle/workflow/family').read_text().strip()
+        except (OSError, ImportError, ValueError):
+            return False
+        return name in (CHANGE if family == 'change' else APP)
+
     def run_named_stage(self, stage):
         from rerun_stage import APP, CHANGE
         if getattr(self, 'proc', None) and self.proc.poll() is None:
@@ -3417,8 +3525,21 @@ class UncleTUI:
             raise ValueError('Usage: /run STAGE. Available: ' + ', '.join(choices))
         if not (directory / 'state').is_file():
             raise ValueError('Start a workflow before selecting a stage.')
-        with (directory / 'rerun-request.json').open('x') as stream:
-            json.dump({'stage': stage, 'source': 'explicit-user-request'}, stream)
+        # Replace, do not refuse. This was an exclusive create, so a request the
+        # driver never consumed -- it failed to start, or stopped before
+        # reaching the state machine -- stranded the file and made every later
+        # /run fail with a raw "File exists" errno naming a path the operator
+        # had no reason to know about. No driver is running (checked above), so
+        # the newest request is simply the one that counts.
+        request = directory / 'rerun-request.json'
+        pending = directory / 'rerun-request.json.pending'
+        try:
+            with pending.open('w') as stream:
+                json.dump({'stage': stage, 'source': 'explicit-user-request'}, stream)
+            os.replace(pending, request)
+        except OSError as failure:
+            pending.unlink(missing_ok=True)
+            raise ValueError('Could not request the %s rerun: %s' % (stage, failure))
         self.workflow_idx = 2 if family == 'change' else 0
         self.new_workflow_pending = False
         self.home_history.append(('system', 'Requested rerun of ' + stage + '.'))
@@ -3545,6 +3666,12 @@ class UncleTUI:
             for i, line in enumerate(str(text).splitlines() or ['']):
                 lines.extend((part, curses.A_BOLD if proposal else curses.A_NORMAL) for part in
                              (textwrap.wrap(('%s: ' % role if i == 0 else '') + line, max(1, w - 2)) or ['']))
+            lines.append(('', curses.A_NORMAL))
+        if self.triage_stream:
+            # The reply forming: shown as it lands, replaced by the final text.
+            for i, line in enumerate(self.triage_stream.splitlines() or ['']):
+                lines.extend((part, curses.A_NORMAL) for part in
+                             (textwrap.wrap(('master: ' if i == 0 else '') + line, max(1, w - 2)) or ['']))
             lines.append(('', curses.A_NORMAL))
         bottom = h - 5
         rows = max(0, bottom - 3)
@@ -4129,22 +4256,6 @@ class UncleTUI:
         else:
             self.chat_error = 'Usage: /delegate on | off | status'
 
-    def _worktree_rows(self):
-        """Runs across this project's worktrees, polled at most every 5 s.
-
-        A listing failure reads as no rows: the homepage must not depend on git.
-        """
-        now = time.monotonic()
-        cached = getattr(self, '_worktree_cache', None)
-        if cached is not None and now - cached[0] < 5:
-            return cached[1]
-        try:
-            rows = worktree_runs.runs(_project_root())
-        except worktree_runs.WorktreeListError:
-            rows = []
-        self._worktree_cache = (now, rows)
-        return rows
-
     def _draw_homepage(self, h, w):
         """Centered, prompt-first landing screen; workflow rendering is separate."""
         color = getattr(self, 'color', {})
@@ -4178,22 +4289,11 @@ class UncleTUI:
                     text = '   ' + text
             bar.append((bar_y, x, text, selected))
             x += len(text)
-        # Runs in other worktrees, one line each under the bar; a single-run
-        # project draws nothing here. Long paths lose their head, not their tail.
+        # The homepage is the menu and the prompt. Listing every worktree run
+        # here put a growing block of paths above both -- and now that an issue
+        # run takes its own worktree by default, that list only gets longer.
+        # `scripts/lib/worktree_runs.py` still prints it on demand.
         run_y = bar_y + 1
-        for run in self._worktree_rows():
-            head = '#%s %s %s ' % (run['issue'], run['state'], 'locked' if run['locked'] else 'idle')
-            room = max(0, w - 1 - len(head))
-            path = run['path']
-            if len(path) > room:
-                path = ('…' + path[len(path) - room + 1:]) if room > 1 else ''
-            if not 0 <= run_y < h:
-                break
-            try:
-                self.stdscr.addnstr(run_y, 0, head + path, max(0, w - 1), color.get('accent', 0))
-            except curses.error:
-                pass
-            run_y += 1
         # The decorative logo yields its rows to the bar before the prompt does.
         logo_fits = w >= LOGO_W + 4 and h >= len(LOGO) + footer_rows + run_y
         logo = LOGO if logo_fits and not history else []
@@ -5417,7 +5517,12 @@ class UncleTUI:
         self.recovery_active = False
         # Before the state flips: everything after this reads _project_root(),
         # and it must already name the directory the run will happen in.
-        self._enter_run_worktree()
+        # A rerun happens where its request was written. Relocating first left
+        # the request in the old project root while the driver started in a new
+        # worktree, which never saw it -- so "rerun final-audit" became a fresh
+        # build from DERIVE_BRIEF in a directory named after an unrelated brief.
+        if not self._rerun_pending():
+            self._enter_run_worktree()
         self.state = "running"
         self.start_workflow()
 

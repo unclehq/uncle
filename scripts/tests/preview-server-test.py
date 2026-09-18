@@ -103,6 +103,8 @@ class EarlyPreview(unittest.TestCase):
                  '_poll_completion_preview')
         body = {name: getattr(self.tui.UncleTUI, name) for name in names}
         body['_PREVIEW_POLL_SECONDS'] = 0
+        # Which stages are watched; the preview build is one of them.
+        body['_PREVIEW_STAGES'] = self.tui.UncleTUI._PREVIEW_STAGES
         body['_completion_dialog'] = lambda _self, value: self.dialogs.append(value)
         screen = type('Screen', (), body)()
         screen.status_stage, screen.completion_preview = stage, None
@@ -165,23 +167,31 @@ class EarlyPreview(unittest.TestCase):
         self.settle(self.make(root))
         self.assertEqual(self.opened, [])
 
-    def test_half_written_page_waits_for_it_to_settle(self):
+    def test_opens_on_first_sighting_and_corrects_itself(self):
+        """A half-written page is opened, not waited out.
+
+        The earlier behaviour held the page back until two readings agreed,
+        because a `file://` page could not correct itself. The page is now
+        served with a reload script, so opening early costs one refresh and
+        saves the wait -- and an empty file is still skipped, which is the only
+        case worth holding for.
+        """
         root = project()
         screen = self.make(root)
         screen._early_preview_next = 0.0
         screen._poll_early_preview()
+        self.assertEqual(self.opened, [], 'nothing on disk yet')
+
         (root / 'index.html').write_text('<h1>partial')
         screen._early_preview_next = 0.0
         screen._poll_early_preview()
-        self.assertEqual(self.opened, [], 'opened a page that was still being written')
+        self.assertEqual(len(self.opened), 1, 'opens as soon as a page exists')
+
         (root / 'index.html').write_text('<h1>partial</h1><p>rest</p>')
         screen._early_preview_next = 0.0
         screen._poll_early_preview()
-        self.assertEqual(self.opened, [])
-        screen._early_preview_next = 0.0
-        screen._poll_early_preview()
-        self.assertEqual(len(self.opened), 1)
-
+        self.assertEqual(len(self.opened), 1, 'the same tab, refreshed by the page itself')
+        self.assertIn('rest', get(self.opened[0]))
 
 if __name__ == '__main__':
     unittest.main(verbosity=0)

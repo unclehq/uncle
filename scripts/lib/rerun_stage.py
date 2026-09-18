@@ -35,7 +35,14 @@ def consume(root, family):
     for item in ('review-cache','speculative','change-plan.draft-key','validation-error.txt','stop-reason'):
         p=state/item
         if p.exists(): p.rename(archive/item)
-    pending=state/'state.rerun-pending';pending.write_text(mapping[name]+'\n');os.replace(pending,state/'state')
+    # Keep the issue binding. The state file for an issue run is "<issue>:<stage>",
+    # and writing a bare stage dropped the prefix -- after which the driver saw a
+    # COMPLETE run with no issue, decided the finished work belonged to a
+    # different one, cleared the verdict and override records and restarted the
+    # whole workflow at its first stage. A rewind to one stage became a rebuild.
+    previous=(state/'state').read_text().strip() if (state/'state').is_file() else ''
+    prefix=previous.split(':',1)[0]+':' if ':' in previous and previous.split(':',1)[0].isdigit() else ''
+    pending=state/'state.rerun-pending';pending.write_text(prefix+mapping[name]+'\n');os.replace(pending,state/'state')
     # A supervisor retry retains a correction before requesting the rewind.
     # Bind that note to the newly reset control state so the next stage launch
     # can claim it. Explicit /run requests normally have no such note.

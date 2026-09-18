@@ -145,7 +145,21 @@ while [[ $# -gt 0 ]]; do
             UNCLE_STARTUP_TEXT="$issue_ref"
             shift
             ;;
-        *)             printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
+        *)
+            printf 'Unknown argument: %s\n' "$1" >&2
+            # A near miss gets the one flag it was reaching for, not the whole
+            # usage text to search through.
+            hint="$(python3 -c '
+import difflib, sys
+close = difflib.get_close_matches(sys.argv[1], sys.argv[2:], n=1, cutoff=0.6)
+print(close[0] if close else "")' "$1" --help --performance --runs --unattended --application --issue verify 2>/dev/null)"
+            if [[ -n "$hint" ]]; then
+                printf 'Did you mean %s? Run uncle --help for usage.\n' "$hint" >&2
+            else
+                usage >&2
+            fi
+            exit 1
+            ;;
     esac
 done
 

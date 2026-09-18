@@ -101,6 +101,20 @@ class StartupAction(unittest.TestCase):
         self.assertEqual([b.read_text() for b in backups], ['Old brief'])
         self.assertEqual(self.ui.state, 'running')
 
+    def test_malformed_reply_keeps_an_application_launch_an_application(self):
+        """A fallback must not infer change mode merely from an old brief."""
+        (self.root / 'REQUIREMENTS.md').write_text('Old brief')
+        self.ui._handle_startup_action()
+        self.ChatRequest.return_value.events.put({
+            'status': 'reply', 'elapsed': 0, 'exit': 0, 'usage': None, 'cost': None, 'log': '',
+            'reply': 'Functional\n- calculator operations, not a reply envelope'})
+        self.assertTrue(self.ui.poll_home_chat())
+        self.assertTrue((self.root / 'REQUIREMENTS.md').exists())
+        self.assertFalse((self.root / 'CHANGE_REQUEST.md').exists())
+        self.assertIn(DESCRIPTION, self.brief())
+        self.assertEqual(self.ui.workflow_idx, 0)
+        self.assertEqual(self.ui.state, 'running')
+
     def test_typed_messages_are_unchanged(self):
         # No launch flag: a drafted-only reply stays a draft, as before.
         self.ui._startup_action = None

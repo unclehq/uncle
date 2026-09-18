@@ -2066,10 +2066,24 @@ change_pr_engine start || exit 1
 state_to_log_name() {
     local state="$1"
     case "$state" in
+        # Planning stages
+        DERIVE_BRIEF) echo "derive-brief" ;;
+        ANALYZE) echo "change-plan" ;;  # Combined with change-spec and plan
         PLAN) echo "change-plan" ;;
+
+        # Review and refinement
         ADVERSARIAL_REVIEW) echo "adversarial-review" ;;
         UPDATED_PLAN) echo "updated-change-plan" ;;
+
+        # Implementation and verification
         IMPLEMENT) echo "implementation" ;;
+        EXECUTE_CHECKLIST) echo "execute-checklist" ;;
+        FINAL_AUDIT) echo "final-audit" ;;
+
+        # Gate/approval states - don't report completion (they're gates, not work)
+        WAIT_*|VALIDATE_*|CHECKLIST) return 0 ;;
+
+        # Default: use state name as-is
         *) echo "$state" ;;
     esac
 }

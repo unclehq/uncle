@@ -2541,16 +2541,31 @@ class UncleTUI:
         self.state = 'running' if self.proc and self.proc.poll() is None else 'chat'
 
     def homepage_model(self):
-        """Use the first stage shown in Configure for homepage inference."""
+        """Use Configure's first persisted model selection on the homepage."""
+        # Stage defaults are useful for running a build, but the homepage
+        # should not silently switch models as those defaults or discovery
+        # change.  Its choice is the first explicitly saved model in Configure
+        # order, paired with the stage's runner and effort.  This keeps the
+        # homepage model stable across launches and configuration reloads.
+        saved_models = getattr(self, 'stage_models', {})
+        for stage in CONFIG_STAGES:
+            if saved_models.get(stage) and self.stage_model(stage):
+                return stage, self.stage_runner(stage), self.stage_model(stage), self.stage_effort(stage)
         stage = CONFIG_STAGES[0]
-        return stage, self.stage_runner(stage), self.stage_model(stage), self.stage_effort(stage)
+        # Lightweight UI fixtures can ask homepage supervision before config
+        # fields have been initialized; production initialization always sets
+        # them.  Empty values leave any explicit supervision settings intact.
+        try:
+            return stage, self.stage_runner(stage), self.stage_model(stage), self.stage_effort(stage)
+        except AttributeError:
+            return stage, '', '', ''
 
     def homepage_supervision_config(self):
         config = supervision_lib.load_config(CONFIG_PATH)
         explicit = dict(supervision_lib.read_config_lines(CONFIG_PATH))
         stage, runner, model, effort = self.homepage_model()
         if 'runner' not in explicit: config.values['runner'] = runner
-        if 'model' not in explicit: config.values['model'] = model
+        if model: config.values['model'] = model
         if 'effort' not in explicit: config.values['effort'] = effort
         return config, stage
 

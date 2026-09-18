@@ -49,7 +49,7 @@ class HomeTests(unittest.TestCase):
                 ui.handle_key(10)
                 argv, prompt, env = request.call_args.args[:3]
                 self.assertEqual(argv, ['fake-claude', '--bare'])
-                self.assertEqual(command.call_args.args[0].model, 'sonnet')
+                self.assertEqual(command.call_args.args[0].model, 'cline-pass/test')
                 self.assertEqual(command.call_args.args[0].effort, 'high')
                 self.assertIn('Hello', prompt)
                 self.assertNotIn('UNCLE_CLINE_EFFORT', env)
@@ -83,6 +83,26 @@ class HomeTests(unittest.TestCase):
                 self.assertIn('Hello', prompt)
                 self.assertEqual(env['UNCLE_CLINE_EFFORT'], 'high')
                 self.assertIsNotNone(fixture)
+
+    def test_homepage_model_uses_the_first_persisted_stage_model(self):
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / 'config'
+            config.write_text('derive-brief.runner cline\n'
+                              'project-plan.runner cline\n'
+                              'project-plan.model cline-pass/persistent\n'
+                              'implementation.model cline-pass/later\n'
+                              'supervision.model ignored-for-homepage\n')
+            with patch.object(tui, '_project_root', return_value=d), \
+                    patch.object(tui, 'CONFIG_PATH', str(config)), \
+                    patch.object(tui, 'list_models', return_value=[]), \
+                    patch.object(tui, 'default_model', return_value=''), \
+                    patch.object(tui, 'read_keys', return_value={}):
+                ui = tui.UncleTUI(None)
+                self.assertEqual(ui.homepage_model()[:3],
+                                 ('project-plan', 'cline', 'cline-pass/persistent'))
+                supervisor, stage = ui.homepage_supervision_config()
+                self.assertEqual((stage, supervisor.model),
+                                 ('project-plan', 'cline-pass/persistent'))
 
     def test_running_chat_delivers_only_to_active_stage(self):
         # TD-1 (Issue 45): raw prose no longer reaches a channel from chat; the

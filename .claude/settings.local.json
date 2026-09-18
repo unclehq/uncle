@@ -3,7 +3,10 @@
     "allow": [
       "Bash(codex --version)",
       "Bash(codex login *)",
-      "Bash(gh pr *)"
+      "Bash(gh pr *)",
+      "Bash(gh issue *)",
+      "Bash(grep -E \"\\\\.md$|gate\")",
+      "Bash(./uncle --help)"
     ]
   }
 }

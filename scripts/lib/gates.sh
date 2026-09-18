@@ -347,13 +347,10 @@ document_budget_defaults() {
 }
 
 document_budget_source() {
-    case "${1##*/}" in
-        REQUIREMENTS_INTERPRETATION.md|PROJECT_PLAN.md|UPDATED_PROJECT_PLAN.md)
-            echo REQUIREMENTS.md ;;
-        CHANGE_SPEC.md|CHANGE_PLAN.md|UPDATED_CHANGE_PLAN.md|BASELINE_REPORT.md|CHANGE_TEST_REPORT.md)
-            echo CHANGE_REQUEST.md ;;
-        *) echo "${DOCUMENT_BUDGET_SOURCE:-REQUIREMENTS.md}" ;;
-    esac
+    # Every artifact follows the adversarial review budget.  Keeping one
+    # source prevents a change-plan or audit from quietly receiving a larger
+    # allowance than the review that evaluates the same work.
+    echo "${DOCUMENT_BUDGET_SOURCE:-REQUIREMENTS.md}"
 }
 
 # Scope approved increases to this source document, never to another project brief.

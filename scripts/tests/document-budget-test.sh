@@ -100,12 +100,12 @@ done
 [[ $(document_budget FINAL_AUDIT.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 [[ $(document_budget VERIFICATION_REPORT.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 printf 'small change' > CHANGE_REQUEST.md
-[[ $(document_budget CHANGE_SPEC.md) == '4000 120' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
-# Shared artifacts use workflow context when both authoritative inputs exist.
+[[ $(document_budget CHANGE_SPEC.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+# Every artifact uses the adversarial-review source, including change documents.
 [[ $(DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md document_budget FINAL_AUDIT.md) == '4000 120' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 [[ $(DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md document_budget FINAL_AUDIT.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
-[[ $(DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md document_budget CHANGE_PLAN.md) == '4000 120' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
-[[ $(DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md document_budget PROJECT_PLAN.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ $(DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md document_budget CHANGE_PLAN.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ $(DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md document_budget PROJECT_PLAN.md) == '4000 120' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Every artifact has bounded, monotonic defaults; generated output has no effect.
 for stage in $DOC_STAGES implementation-step-2; do
     while IFS= read -r file; do

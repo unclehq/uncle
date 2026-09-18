@@ -769,14 +769,16 @@ stage_setting_opt() {
 # The config file is read at the moment the stage starts, so an edit made at a
 # human gate applies to the stages after it.
 stage_model() {
+    local lookup_stage="$1"
     local fallback="$DEFAULT_MODEL"
     case "$1" in
-        requirements|execute-checklist) fallback="kimi" ;;
+        requirements) lookup_stage="project-plan" ;;
+        execute-checklist) fallback="kimi" ;;
     esac
     if uncle_has_config || [[ -n "${UNCLE_RESOLVED_RUNNER:-}" ]]; then
-        fallback="$(uncle_stage_model "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}")"
+        fallback="$(uncle_stage_model "$lookup_stage" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$lookup_stage")}")"
     fi
-    stage_setting_opt MODEL "$1" "$fallback"
+    stage_setting_opt MODEL "$lookup_stage" "$fallback"
 }
 
 # Which CLI runs one stage. An explicit variable always wins over the config

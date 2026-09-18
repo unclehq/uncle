@@ -230,6 +230,28 @@ class SelfHosted(unittest.TestCase):
         self.assertIn('reached the configured limit', result.stderr)
         self.assertFalse(out.exists(), 'a fragment must not become the reviewer-owned artifact')
 
+    def test_reviewer_document_is_validated_before_it_is_published(self):
+        env = self.stub_environment()
+        out = self.root/'ADVERSARIAL_REVIEW.md'
+        command = [bash_executable(), (ROOT/'scripts/reviewer-self-hosted.sh').as_posix(), 'exec', '--output-last-message', str(out), 'Test prompt']
+        result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
+                                env=dict(env, FAKE_OPENCODE_MODE='summary-once'))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('not a valid ADVERSARIAL_REVIEW.md', result.stderr)
+        self.assertIn('retrying once', result.stderr)
+        self.assertEqual((self.root/'record.calls').read_text(), '2')
+        self.assertTrue(out.read_text(encoding='utf-8').startswith('## AR-001: Display accepts Infinity'))
+        self.assertIn('## Overall assessment', out.read_text(encoding='utf-8'))
+        self.assertTrue(list((self.root/'.uncle/workflow/logs').glob('adversarial_review-rejected-*.md')), 'the summary is kept as evidence')
+        # Always a summary: an error, and nothing published as the review.
+        out.unlink()
+        (self.root/'record.calls').unlink()
+        result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
+                                env=dict(env, FAKE_OPENCODE_MODE='summary'))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('not a valid ADVERSARIAL_REVIEW.md', result.stderr)
+        self.assertFalse(out.exists(), 'a compaction summary must never become the review')
+
     def test_exact_usage_sums_messages_without_console_rounding(self):
         from self_hosted import opencode_usage
         path = self.root/'usage.jsonl'
@@ -358,7 +380,7 @@ config=json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])
 assert config['provider']['local']['options']['baseURL']=='http://localhost:8123/v1'
 assert args[args.index('--model')+1]=='local/local-model:Q4'
 assert 'secret-with-#-characters' not in str(args)
-assert pathlib.Path(args[args.index('--file')+1]).read_text(encoding='utf-8')=='Test prompt'
+assert pathlib.Path(args[args.index('--file')+1]).read_text(encoding='utf-8').startswith('Test prompt')
 pathlib.Path(os.environ['RECORD']).write_text(str(pathlib.Path(os.environ['XDG_CONFIG_HOME']).parent),encoding='utf-8')
 mode=os.environ.get('FAKE_OPENCODE_MODE','ok')
 calls=pathlib.Path(os.environ['RECORD']+'.calls'); n=int(calls.read_text()) if calls.exists() else 0; calls.write_text(str(n+1))
@@ -374,6 +396,15 @@ def find_output(o):
             r=find_output(v)
             if r: return r
 cap=find_output(config) or 8192
+if mode=='summary' or (mode=='summary-once' and n==0):
+    # A model answering OpenCode's compaction prompt instead of reviewing.
+    print(json.dumps(dict(type='text',part=dict(text='## Conversation Summary\\n### Objective\\nReview the plan.\\n### Next Step\\nWrite findings to ADVERSARIAL_REVIEW.md.'))))
+    print(json.dumps(dict(type='step_finish', part=dict(reason='stop',tokens=dict(input=1234,output=57)))),flush=True)
+    sys.exit(0)
+if mode=='summary-once':
+    print(json.dumps(dict(type='text',part=dict(text='## AR-001: Display accepts Infinity\\n\\n- Severity: high\\n- References: I-1\\n- Failure: Infinity is shown\\n- Fix: reject it\\n- Verify: unit test\\n\\n## Overall assessment\\n\\nOne blocking finding.'))))
+    print(json.dumps(dict(type='step_finish', part=dict(reason='stop',tokens=dict(input=1234,output=57)))),flush=True)
+    sys.exit(0)
 if mode=='truncate' or (mode=='truncate-once' and n==0):
     # A model cut off at whatever output limit it was given: a fragment, and
     # a token count equal to the cap.

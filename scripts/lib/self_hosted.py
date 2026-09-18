@@ -375,6 +375,44 @@ def validate_plan(text, protected=True):
             raise ValueError('Plan requires one complete, nonempty fenced block under ' + required)
 
 
+REVIEW_VALIDATORS = {
+    'ADVERSARIAL_REVIEW.md': 'adversarial-context.py',
+    'FINAL_AUDIT.md': 'final-audit-context.py',
+}
+
+
+class InvalidReviewerDocument(ValueError):
+    """The reviewer's final message is not the document the stage owns."""
+
+
+def validate_reviewer_document(output, document):
+    """Run the artifact's own format validator on the candidate text.
+
+    A reviewer's artifact is its last message, and its last message is not
+    always the review: after OpenCode compacts a full context the model
+    answers the compaction prompt -- "what did we do so far" -- and that
+    summary was written as ADVERSARIAL_REVIEW.md. The agent path already
+    validates a plan before publishing it; the reviewer path published
+    whatever came back.
+    """
+    validator = REVIEW_VALIDATORS.get(Path(output).name)
+    if not validator:
+        return
+    with tempfile.NamedTemporaryFile('w', suffix='.md', prefix='reviewer-candidate-', delete=False, encoding='utf-8') as handle:
+        handle.write(document)
+        candidate = handle.name
+    try:
+        result = subprocess.run([sys.executable, '-B', str(Path(__file__).parent / validator), '--validate', candidate],
+                                capture_output=True, text=True, timeout=60)
+    finally:
+        os.unlink(candidate)
+    if result.returncode:
+        reason = (result.stderr or result.stdout).strip().splitlines()
+        reason = reason[0] if reason else 'validator rejected the document'
+        reason = reason.split('. Correct the saved')[0]
+        raise InvalidReviewerDocument('Reviewer response is not a valid %s: %s' % (Path(output).name, reason))
+
+
 def reviewer_document(response):
     """A reviewer's response with any leading think-aloud removed.
 
@@ -683,33 +721,60 @@ def main(side, args):
             stream.write(json.dumps({'event':'start','stage':stage,'model':local_model(values['model']),
                                      'mode':'act' if side=='agent' else 'review'})+'\n')
     usage = {}
-    for attempt in range(2):
-        attempt_usage = {}
-        try:
-            text, turns = run_opencode(side, values, prompt, Path.cwd().resolve(), stage=stage, usage=attempt_usage)
-        except OutputTruncated as error:
-            for key, value in attempt_usage.items():
-                if isinstance(value, (int, float)) and isinstance(usage.get(key, 0), (int, float)):
-                    usage[key] = usage.get(key, 0) + value
-            # A fragment reported as success is what the whole stage then
-            # adopts. Once, the cap is doubled and the stage rerun; a second
-            # fragment is the failure it always was.
-            limit = output_token_limit()
-            larger = min(limit * 2, context_token_limit() - 1024)
-            if attempt or larger <= limit:
-                error.opencode_usage = usage
-                raise
-            print('Self hosted: %s. Retrying once with an output limit of %d tokens.' % (error, larger), file=sys.stderr)
-            os.environ[OUTPUT_TOKENS_ENV] = str(larger)
-            continue
-        except (ValueError, OSError) as error:
-            error.opencode_usage = attempt_usage
-            raise
+    def add_usage(attempt_usage):
         for key, value in attempt_usage.items():
             if isinstance(value, (int, float)) and isinstance(usage.get(key, 0), (int, float)):
                 usage[key] = usage.get(key, 0) + value
             else:
                 usage[key] = value
+    truncation_retried = format_retried = False
+    document = None
+    while True:
+        attempt_usage = {}
+        try:
+            text, turns = run_opencode(side, values, prompt, Path.cwd().resolve(), stage=stage, usage=attempt_usage)
+            add_usage(attempt_usage)
+            if side == 'reviewer' and output:
+                document = reviewer_document(text)
+                validate_reviewer_document(output, document)
+        except OutputTruncated as error:
+            add_usage(attempt_usage)
+            # A fragment reported as success is what the whole stage then
+            # adopts. Once, the cap is doubled and the stage rerun; a second
+            # fragment is the failure it always was.
+            limit = output_token_limit()
+            larger = min(limit * 2, context_token_limit() - 1024)
+            if truncation_retried or larger <= limit:
+                error.opencode_usage = usage
+                raise
+            truncation_retried = True
+            print('Self hosted: %s. Retrying once with an output limit of %d tokens.' % (error, larger), file=sys.stderr)
+            os.environ[OUTPUT_TOKENS_ENV] = str(larger)
+            continue
+        except InvalidReviewerDocument as error:
+            # Not the document: a compaction summary, a findings table with a
+            # "next step" of writing the review, a fragment. Keep it in the
+            # logs as evidence, and ask once more in a fresh session; never
+            # publish it as the reviewer-owned artifact.
+            logs = Path.cwd() / '.uncle/workflow/logs'
+            logs.mkdir(parents=True, exist_ok=True)
+            fd, rejected = tempfile.mkstemp(prefix=Path(output).stem.lower() + '-rejected-', suffix='.md', dir=logs)
+            with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+                stream.write(text)
+            if format_retried:
+                error.opencode_usage = usage
+                raise InvalidReviewerDocument(str(error) + '; rejected response saved to ' + rejected) from None
+            format_retried = True
+            print('Self hosted: %s. Rejected response saved to %s; retrying once.' % (error, rejected), file=sys.stderr)
+            prompt += ('\n\nThe previous response was rejected: ' + str(error) +
+                       '\nReturn only the complete ' + Path(output).name + ' in the required layout: '
+                       'every finding as a `## AR-NNN: Title` heading with its Severity, References, Failure, Fix and '
+                       'Verify lines, then a `## Overall assessment` heading with body text. No summary of your work, '
+                       'no preamble, no plan to write it later.')
+            continue
+        except (ValueError, OSError) as error:
+            error.opencode_usage = attempt_usage
+            raise
         break
     if side == 'reviewer':
         if output:
@@ -719,7 +784,7 @@ def main(side, args):
             # and a reviewer-owned artifact is the one thing no later stage may
             # edit. Strip here, and only when a document is actually present --
             # a response with no heading is a real failure, not a preamble.
-            Path(output).write_bytes(reviewer_document(text).encode('utf-8'))
+            Path(output).write_bytes((document if document is not None else reviewer_document(text)).encode('utf-8'))
         print(text)
         if usage:
             print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,

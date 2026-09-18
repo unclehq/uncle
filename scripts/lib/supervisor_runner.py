@@ -1,6 +1,6 @@
 """The tool-free, bounded supervisor worker: one prompt in, one reply out.
 
-Claude, Kimi and self-hosted supervisors use the same bounded worker shell.
+Claude, Cline, Codex, Kimi and self-hosted supervisors use the same bounded worker shell.
 The environment is an allowlist, the cwd an empty temporary directory, and
 the parent enforces the deadline and a 1 MiB output cap itself while the
 worker runs: a runner that ignores its own limits is killed with its whole
@@ -67,8 +67,32 @@ def build_command(config, root, environ=None, config_path=None, stage=''):
         # an explicit `kimi:<alias>` is preserved.
         model = config.model if str(config.model).startswith('kimi:') else 'kimi'
         return [str(Path(root) / 'scripts' / 'agent-kimi.sh'), '--model', model], env, home
+    if config.runner == 'cline':
+        home = tempfile.mkdtemp(prefix='uncle-supervisor-')
+        env = worker_env(environ, home)
+        # Cline's adapter expects its provider/model id, not Claude's default
+        # `sonnet` label. A homepage selection always supplies that id; retain
+        # an empty value as Cline's own configured default for legacy configs.
+        model = '' if str(config.model) == 'sonnet' else str(config.model)
+        argv = [str(Path(root) / 'scripts' / 'agent-cline.sh'), '--effort', config.effort]
+        if model:
+            argv += ['--model', model]
+        return argv, env, home
+    if config.runner == 'codex':
+        home = tempfile.mkdtemp(prefix='uncle-supervisor-')
+        env = worker_env(environ, home)
+        # Reuse the driver adapter for its stream-json translation, but force
+        # the supervisor into Codex's read-only sandbox. It receives no stage
+        # network grant and runs in the worker's empty cwd.
+        env['UNCLE_CODEX_SANDBOX'] = 'read-only'
+        env['UNCLE_STAGE_NETWORK'] = 'false'
+        model = '' if str(config.model) == 'sonnet' else str(config.model)
+        argv = [str(Path(root) / 'scripts' / 'agent-codex.sh'), '--effort', config.effort]
+        if model:
+            argv += ['--model', model]
+        return argv, env, home
     if config.runner not in ('claude',):
-        raise ValueError('unavailable: supervision.runner %s is not supported; use claude, kimi, or self-hosted' % config.runner)
+        raise ValueError('unavailable: supervision.runner %s is not supported; use claude, cline, codex, kimi, or self-hosted' % config.runner)
     executable = environ.get('WORKFLOW_CLAUDE_CMD') or 'claude'
     resolved = shutil.which(executable)
     if not resolved:

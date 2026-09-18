@@ -779,8 +779,24 @@ class WorkerTests(unittest.TestCase):
                 runner.build_command(self.config, ROOT)
             self.assertIn('unavailable', str(caught.exception))
         with self.assertRaises(ValueError) as caught:
-            runner.build_command(sv.Config(dict(runner='codex')), ROOT)
+            runner.build_command(sv.Config(dict(runner='unsupported-runner')), ROOT)
         self.assertIn('not supported', str(caught.exception))
+
+    def test_cline_supervisor_uses_the_configured_provider_model(self):
+        config = sv.Config(dict(runner='cline', model='cline-pass/kimi-k3', effort='low'))
+        argv, _, home = runner.build_command(config, ROOT)
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        self.assertEqual(argv[:3], [str(ROOT / 'scripts' / 'agent-cline.sh'), '--effort', 'low'])
+        self.assertEqual(argv[3:], ['--model', 'cline-pass/kimi-k3'])
+
+    def test_codex_supervisor_uses_a_read_only_adapter(self):
+        config = sv.Config(dict(runner='codex', model='gpt-5.4-codex', effort='high'))
+        argv, env, home = runner.build_command(config, ROOT)
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        self.assertEqual(argv[:3], [str(ROOT / 'scripts' / 'agent-codex.sh'), '--effort', 'high'])
+        self.assertEqual(argv[3:], ['--model', 'gpt-5.4-codex'])
+        self.assertEqual(env['UNCLE_CODEX_SANDBOX'], 'read-only')
+        self.assertEqual(env['UNCLE_STAGE_NETWORK'], 'false')
 
     def test_controller_records_worker_failures_once_and_never_recurses(self):
         host = FakeHost()

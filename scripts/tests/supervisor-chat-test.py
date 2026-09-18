@@ -82,7 +82,7 @@ class Base(unittest.TestCase):
         FakeChat.calls = []
         for target, value in (('_project_root', lambda: str(self.project)), ('CONFIG_PATH', str(self.config)),
                               ('ChatRequest', FakeChat),
-                              ('supervisor_command', lambda config, root: (['fake-claude', '--bare'], {'PATH': '/bin'}, '/tmp/x'))):
+                              ('supervisor_command', lambda config, root, **kwargs: (['fake-claude', '--bare'], {'PATH': '/bin'}, '/tmp/x'))):
             p = patch.object(tui, target, value)
             p.start()
             self.addCleanup(p.stop)

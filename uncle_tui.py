@@ -2551,9 +2551,21 @@ class UncleTUI:
         # change.  Its choice is the first explicitly saved model in Configure
         # order, paired with the stage's runner and effort.  This keeps the
         # homepage model stable across launches and configuration reloads.
+        # An explicit supervision.runner is the homepage's own setting and
+        # wins over any stage; it is also what the footer must show, or the
+        # chat runs on one model while the screen names another.
+        supervision = getattr(self, 'supervision', {}) or {}
+        if supervision.get('runner'):
+            effort = supervision.get('effort') or supervision_lib.load_config(CONFIG_PATH).effort
+            return 'supervision', supervision['runner'], supervision.get('model', ''), effort
         saved_models = getattr(self, 'stage_models', {})
+        saved_runners = getattr(self, 'stage_runners', {})
         for stage in CONFIG_STAGES:
-            if saved_models.get(stage) and self.stage_model(stage):
+            # A saved model completes any runner's selection. A saved claude
+            # runner is complete on its own -- claude takes no model here --
+            # and skipping it handed the homepage to the first stage that
+            # happened to name a model, however far down Configure it sat.
+            if (saved_models.get(stage) and self.stage_model(stage)) or saved_runners.get(stage) == 'claude':
                 return stage, self.stage_runner(stage), self.stage_model(stage), self.stage_effort(stage)
         stage = CONFIG_STAGES[0]
         # Lightweight UI fixtures can ask homepage supervision before config
@@ -2913,7 +2925,7 @@ class UncleTUI:
             self.home_history.append(('system', 'The supervisor did not start the build; '
                                                 'starting from the description as written.'))
             try:
-                self._startup_direct_action(text)
+                self._startup_direct_action(text, getattr(request, 'startup_kind', 'app'))
             except (OSError, ValueError) as exc:
                 self.chat_error = sanitize(str(exc))
                 self.home_history.append(('system', self.chat_error))
@@ -3276,19 +3288,20 @@ class UncleTUI:
             self._supervisor_turn(text, trigger='chat')
         except ValueError as exc:
             self.home_history.append(('system', sanitize(str(exc)) + ' Starting from the description as written.'))
-            self._startup_direct_action(text)
+            self._startup_direct_action(text, 'app')
             return
         request = getattr(self, 'home_request', None)
         if request is None:
-            self._startup_direct_action(text)
+            self._startup_direct_action(text, 'app')
             return
         request.startup_text = text
+        request.startup_kind = 'app'
 
-    def _startup_direct_action(self, text):
+    def _startup_direct_action(self, text, kind='app'):
         """Start from the description as written, with no supervisor pass."""
-        kind = 'create_change' if (Path(_project_root()) / 'REQUIREMENTS.md').exists() else 'create_app'
-        self._home_action({'uncle_action': kind, 'document': text, 'start': True,
-                           'message': 'Starting ' + ('change' if kind == 'create_change' else 'application') + ' build'},
+        action = 'create_change' if kind == 'change' else 'create_app'
+        self._home_action({'uncle_action': action, 'document': text, 'start': True,
+                           'message': 'Starting ' + ('change' if action == 'create_change' else 'application') + ' build'},
                           replace_approved=True)
 
     # ---- supervision ----

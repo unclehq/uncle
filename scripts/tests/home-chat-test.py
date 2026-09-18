@@ -104,6 +104,44 @@ class HomeTests(unittest.TestCase):
                 self.assertEqual((stage, supervisor.model),
                                  ('project-plan', 'cline-pass/persistent'))
 
+    def test_homepage_model_takes_a_saved_claude_stage_before_a_later_model(self):
+        # derive-brief on claude is a complete selection: claude names no model
+        # here, and the homepage must not fall through to change-plan's deepseek.
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / 'config'
+            config.write_text('derive-brief.runner claude\n'
+                              'derive-brief.effort low\n'
+                              'change-plan.runner self-hosted\n'
+                              'change-plan.effort low\n'
+                              'change-plan.model local/deepseek-v4-flash\n')
+            with patch.object(tui, '_project_root', return_value=d), \
+                    patch.object(tui, 'CONFIG_PATH', str(config)), \
+                    patch.object(tui, 'list_models', return_value=[]), \
+                    patch.object(tui, 'default_model', return_value=''), \
+                    patch.object(tui, 'read_keys', return_value={}):
+                ui = tui.UncleTUI(None)
+                self.assertEqual(ui.homepage_model(), ('derive-brief', 'claude', '', 'low'))
+                supervisor, stage = ui.homepage_supervision_config()
+                self.assertEqual((stage, supervisor.runner, supervisor.effort), ('derive-brief', 'claude', 'low'))
+                self.assertNotEqual(supervisor.model, 'local/deepseek-v4-flash')
+
+    def test_explicit_supervision_runner_wins_everywhere(self):
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / 'config'
+            config.write_text('supervision.runner claude\n'
+                              'supervision.effort high\n'
+                              'change-plan.runner self-hosted\n'
+                              'change-plan.model local/deepseek-v4-flash\n')
+            with patch.object(tui, '_project_root', return_value=d), \
+                    patch.object(tui, 'CONFIG_PATH', str(config)), \
+                    patch.object(tui, 'list_models', return_value=[]), \
+                    patch.object(tui, 'default_model', return_value=''), \
+                    patch.object(tui, 'read_keys', return_value={}):
+                ui = tui.UncleTUI(None)
+                self.assertEqual(ui.homepage_model(), ('supervision', 'claude', '', 'high'))
+                supervisor, _ = ui.homepage_supervision_config()
+                self.assertEqual((supervisor.runner, supervisor.effort), ('claude', 'high'))
+
     def test_workflow_supervision_reuses_the_homepage_session(self):
         """Diagnostic calls share the persistent homepage worker when live."""
         session = object()

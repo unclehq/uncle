@@ -3181,6 +3181,13 @@ class UncleTUI:
             self.home_history.append(('system', self._clear_build('#' + issue if issue else '')))
             self.chat_error = ''
             return
+        if name == 'resume_build':
+            issue = action.get('issue')
+            message = self._resume_build('#' + issue if issue else '')
+            if message:
+                self.home_history.append(('system', message))
+            self.chat_error = ''
+            return
         if name == 'github_issue':
             if action['start']:
                 self.workflow_idx = 1
@@ -3712,6 +3719,52 @@ class UncleTUI:
         self.chat_focus = 'chat'
         return 'Stopped the build at %s. Its state is kept; run it again to resume, or /clear to archive it.' % sanitize(stage)
 
+    def _resume_build(self, target=''):
+        """Resume a build from its recorded state.
+
+        With no target, this is `triage_resume()`'s ordinary continuation of
+        whatever workflow this session already started -- unchanged. With
+        `#N` or a worktree path, it resumes *that* run directly, whether or
+        not this session ever touched it: it reads .uncle/workflow/state and
+        .uncle/workflow/family in the named worktree and relaunches the
+        matching driver there.
+
+        This does not go through from-issue.sh. That script's own "a normal
+        Start is intentionally not a resume" logic (a63596e9) re-fetches the
+        issue and archives prior workflow state on every ordinary Start --
+        exactly the state a resume must not disturb -- and a worktree that
+        already exists needs neither its network fetch nor its worktree
+        bookkeeping repeated.
+        """
+        target = (target or '').strip()
+        if not target:
+            self.triage_resume()
+            return ''
+        if getattr(self, 'triage_request', None) is not None:
+            raise ValueError('A triage turn is still running. Wait for it before resuming.')
+        if self.proc and self.proc.poll() is None:
+            raise ValueError('The workflow is still running; answer its prompt.')
+        root = Path(_project_root())
+        path = self._find_run_worktree(root, target, '/resume')
+        workflow = path / '.uncle' / 'workflow'
+        if not (workflow / 'state').is_file():
+            raise ValueError('No recorded workflow state at %s.' % sanitize(str(path)))
+        if self._run_locked(path):
+            raise ValueError('A run holds %s; wait for it to finish.' % sanitize(str(path)))
+        try:
+            family = (workflow / 'family').read_text().strip()
+        except OSError:
+            family = ''
+        if family not in ('app', 'change'):
+            raise ValueError('%s has no recorded workflow family to resume.' % sanitize(str(path)))
+        self._restore_launch_root()
+        os.environ['UNCLE_PROJECT_ROOT'] = str(path)
+        os.environ['UNCLE_PROJECT_ROOT_LOCKED'] = '1'
+        self.workflow_idx = 2 if family == 'change' else 0
+        self.resume_workflow_pending = True
+        self._run()
+        return 'Resuming the run at %s from its recorded state.' % sanitize(str(path))
+
     def _run_locked(self, path):
         """Whether a driver holds the run in `path`: legacy lock directory,
         the driver.lock flock, or a live recorded process group."""
@@ -3741,8 +3794,8 @@ class UncleTUI:
                 pass
         return False
 
-    def _clear_target(self, root, target):
-        """The run worktree `/clear #N` or `/clear <path>` names."""
+    def _find_run_worktree(self, root, target, command):
+        """The run worktree `<command> #N` or `<command> <path>` names."""
         wanted = target.lstrip('#')
         if wanted.isdigit():
             for row in worktree_runs.runs(str(root)):
@@ -3758,7 +3811,7 @@ class UncleTUI:
             listed = []
         if path.is_dir() and path.resolve() in listed:
             return path
-        raise ValueError('/clear takes #issue, or the path of one of this project\'s worktrees.')
+        raise ValueError('%s takes #issue, or the path of one of this project\'s worktrees.' % command)
 
     def _clear_build(self, target=''):
         """Archive the last build so the next one starts from none of it.
@@ -3784,7 +3837,7 @@ class UncleTUI:
         root = Path(_project_root())
         target = (target or '').strip()
         if target:
-            root = self._clear_target(root, target)
+            root = self._find_run_worktree(root, target, '/clear')
             if self._run_locked(root):
                 raise ValueError('A run holds %s; stop it before /clear.' % sanitize(str(root)))
         elif proc is not None and proc.poll() is None:
@@ -3863,7 +3916,9 @@ class UncleTUI:
                 if command == '/do':
                     self._triage_do(argument)
                 elif command in ('/resume', '/r'):
-                    self.triage_resume()
+                    message = self._resume_build(argument)
+                    if message:
+                        self.triage_history.append(('system', message))
                 elif command == '/clear':
                     self.home_history.append(('system', self._clear_build()))
                     if self.triage_request is not None:
@@ -3874,7 +3929,7 @@ class UncleTUI:
                 elif command == '/triage':
                     pass
                 else:
-                    raise ValueError('Commands: /do N  /resume  /clear  /quit')
+                    raise ValueError('Commands: /do N  /resume [#N]  /clear  /quit')
             else:
                 self._triage_turn('diagnosis', followup=text)
             if self.state == 'triage':
@@ -3973,7 +4028,7 @@ class UncleTUI:
         put(h - 4, 0, offer, w, curses.A_BOLD)
         put(h - 3, 0, self.triage_error, w)
         put(h - 2, 0, 'Triage> ' + self.triage_composer[-max(1, w - 10):], w)
-        put(h - 1, 0, '1-3 select proposal | r resume | Esc back | /do N /resume /clear | text = follow-up question', w)
+        put(h - 1, 0, '1-3 select proposal | r resume | Esc back | /do N /resume [#N] /clear | text = follow-up question', w)
         self.stdscr.refresh()
 
     def chat_attr(self, role, base=0):
@@ -4404,7 +4459,7 @@ class UncleTUI:
                     self.state == 'running' or (self.proc and self.proc.poll() is None)):
                 self.chat_error = 'A workflow is already active. Finish or stop it before starting another.'
                 return True
-            if argument and command not in ('/issue', '/do', '/run', '/delegate', '/app-input', '/clear'):
+            if argument and command not in ('/issue', '/do', '/run', '/delegate', '/app-input', '/clear', '/resume'):
                 self.chat_error = command + ' does not take arguments'
                 return True
             if command == '/run':
@@ -4440,7 +4495,9 @@ class UncleTUI:
                     if command == '/triage':
                         self.open_triage()
                     elif command == '/resume':
-                        self.triage_resume()
+                        message = self._resume_build(argument)
+                        if message:
+                            self.home_history.append(('system', message))
                     else:
                         self._triage_init()
                         self._triage_do(argument)
@@ -4534,7 +4591,7 @@ class UncleTUI:
                 self.chat_error = ''
                 self.chat_choices = []
             else:
-                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /stop /triage /do N /resume /delegate on|off|status /app-input TEXT'
+                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /stop /triage /do N /resume [#N] /delegate on|off|status /app-input TEXT'
             return True
         return False
 

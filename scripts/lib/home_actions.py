@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from chat import Conversation
 
-ACTIONS = {'create_app', 'create_change', 'run_app', 'run_change', 'github_issue', 'stop_build', 'clear_build'}
+ACTIONS = {'create_app', 'create_change', 'run_app', 'run_change', 'github_issue', 'stop_build', 'clear_build', 'resume_build'}
 
 def prompt(history, root):
     existing = [name for name in ('REQUIREMENTS.md', 'CHANGE_REQUEST.md')
@@ -37,6 +37,12 @@ Actions:
   starts fresh. Include "issue" (positive number) to clear that issue's run in
   its own worktree; omit it for the project the homepage is in. Source files
   are never touched.
+- resume_build: relaunch a stopped build from its recorded state, without
+  redoing any work already done. Include "issue" (positive number) to resume
+  that issue's run in its own worktree; omit it to resume the current
+  project's build. Only for a build that has already started and stopped
+  (a failed gate, an interrupted stage); use github_issue/run_app/run_change
+  to start one that never ran.
 
 A request to build is authorization. Emit the action in this same reply. Do not
 answer with a plan to act, a confirmation question, or a note about what you are
@@ -84,7 +90,7 @@ def parse_reply(text):
         keys |= {'document', 'start'}
     elif action == 'github_issue':
         keys |= {'issue', 'start'}
-    optional = {'issue'} if action == 'clear_build' else set()
+    optional = {'issue'} if action in ('clear_build', 'resume_build') else set()
     keys |= optional
     # A null-valued extra is the model spelling out a field that does not apply
     # to this action -- `issue: null` on a create_app -- and carries nothing, so
@@ -110,7 +116,7 @@ def parse_reply(text):
     if action.startswith('create_'):
         if not isinstance(data['document'], str) or not data['document'].strip():
             raise ValueError('The chat model returned an empty brief.')
-    if action == 'clear_build' and data.get('issue') is not None:
+    if action in ('clear_build', 'resume_build') and data.get('issue') is not None:
         issue = data['issue']
         if isinstance(issue, int) and not isinstance(issue, bool):
             issue = str(issue)
@@ -118,7 +124,7 @@ def parse_reply(text):
             issue = issue.strip().removeprefix('#')
             data['issue'] = issue
         if not isinstance(issue, str) or not re.fullmatch(r'[1-9][0-9]*', issue):
-            raise ValueError('clear_build takes an issue number.')
+            raise ValueError('%s takes an issue number.' % action)
     if action == 'github_issue':
         issue = data['issue']
         if isinstance(issue, str):

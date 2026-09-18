@@ -218,6 +218,16 @@ class RoutingTests(Base):
         self.answer(ui, request, 'Running', home_action={'uncle_action': 'run_change', 'message': 'go'})
         self.assertEqual(ui._home_action.call_count, 2)
 
+    def test_resume_phrases_authorize_home_intent(self):
+        from supervisor_chat import home_intent
+        for message in ('resume building #69', 'resume the build for issue 69',
+                        'continue building #69', 'resume issue 69', 'Resume #69'):
+            with self.subTest(message=message):
+                self.assertTrue(home_intent(message))
+        for message in ('should we resume #69?', 'do not resume yet'):
+            with self.subTest(message=message):
+                self.assertFalse(home_intent(message))
+
     def test_direct_homepage_edit_and_document_requests_authorize_action(self):
         from supervisor_chat import home_intent
         for message in (

@@ -122,6 +122,65 @@ class Actions(unittest.TestCase):
             self.ui._chat_command(10)
         self.assertIn('No run for #99', self.ui.chat_error)
 
+    def test_resume_targets_a_run_worktree_by_issue(self):
+        import shutil
+        other = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(other, ignore_errors=True))
+        (other/'.uncle/workflow').mkdir(parents=True)
+        (other/'.uncle/workflow/state').write_text('70:WAIT_PLAN_APPROVAL\n')
+        (other/'.uncle/workflow/family').write_text('change\n')
+        rows = [dict(path=str(other), issue='70', state='WAIT_PLAN_APPROVAL', locked=False)]
+        with patch.object(tui.worktree_runs, 'runs', return_value=rows), \
+                patch.object(tui.worktree_runs, 'worktrees', return_value=[str(other)]), \
+                patch.dict(os.environ, {}, clear=False):
+            self.ui.chat_composer = '/resume #70'
+            self.ui._chat_command(10)
+            self.assertEqual(os.environ.get('UNCLE_PROJECT_ROOT'), str(other))
+        self.assertEqual(self.ui.chat_error, '')
+        self.ui._run.assert_called_once()
+        self.assertEqual(self.ui.workflow_idx, 2, 'a change-family run resumes as workflow_idx 2')
+        self.assertTrue(self.ui.resume_workflow_pending)
+        self.assertIn(str(other), self.ui.home_history[-1][1])
+        # An app-family run resumes as workflow_idx 0.
+        (other/'.uncle/workflow/family').write_text('app\n')
+        self.ui._run.reset_mock()
+        with patch.object(tui.worktree_runs, 'runs', return_value=rows), \
+                patch.object(tui.worktree_runs, 'worktrees', return_value=[str(other)]), \
+                patch.dict(os.environ, {}, clear=False):
+            self.ui.chat_composer = '/resume #70'
+            self.ui._chat_command(10)
+        self.assertEqual(self.ui.chat_error, '')
+        self.assertEqual(self.ui.workflow_idx, 0, 'an app-family run resumes as workflow_idx 0')
+        self.ui._run.assert_called_once()
+        # No run for that issue.
+        with patch.object(tui.worktree_runs, 'runs', return_value=[]), patch.dict(os.environ, {}, clear=False):
+            self.ui.chat_composer = '/resume #99'
+            self.ui._chat_command(10)
+        self.assertIn('No run for #99', self.ui.chat_error)
+        # A live driver refuses instead of relaunching a second one.
+        with patch.object(tui.worktree_runs, 'runs', return_value=rows), \
+                patch.object(tui.worktree_runs, 'worktrees', return_value=[str(other)]), \
+                patch.object(self.ui, '_run_locked', return_value=True), \
+                patch.dict(os.environ, {}, clear=False):
+            self.ui.chat_composer = '/resume #70'
+            self.ui._chat_command(10)
+        self.assertIn('wait for it to finish', self.ui.chat_error)
+
+    def test_bare_resume_slash_command_is_unchanged(self):
+        self.ui.triage_resume = Mock()
+        self.ui.chat_composer = '/resume'
+        self.ui._chat_command(10)
+        self.ui.triage_resume.assert_called_once()
+        self.ui._run.assert_not_called()
+
+    def test_resume_build_action_targets_an_issue(self):
+        self.ui._resume_build = Mock(return_value='resumed')
+        self.reply(uncle_action='resume_build', issue='70')
+        self.ui._resume_build.assert_called_once_with('#70')
+        self.reply(uncle_action='resume_build')
+        self.ui._resume_build.assert_called_with('')
+        self.assertEqual(self.ui.home_history[-1], ('system', 'resumed'))
+
     def test_stop_command_and_actions(self):
         self.ui.stop_workflow = Mock()
         self.ui.chat_composer = '/stop'

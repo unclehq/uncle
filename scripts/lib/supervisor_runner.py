@@ -48,9 +48,18 @@ def worker_env(environ, home):
     return env
 
 
-def build_command(config, root, environ=None):
+def build_command(config, root, environ=None, config_path=None, stage=''):
     """(argv, env, temporary-home) for one call, or ValueError('unavailable ...')."""
     environ = os.environ if environ is None else environ
+    if config.runner in ('self-hosted', 'opencode', 'aider'):
+        if not config_path or not stage:
+            raise ValueError('unavailable: self-hosted homepage runner needs a configured stage')
+        home = tempfile.mkdtemp(prefix='uncle-supervisor-')
+        env = worker_env(environ, home)
+        env['UNCLE_CONFIG'] = str(config_path)
+        env['UNCLE_STATUS_STAGE'] = str(stage)
+        return [sys.executable, str(Path(root) / 'scripts' / 'lib' / 'self_hosted.py'),
+                'agent', '-p', '--effort', config.effort], env, home
     if config.runner not in ('claude',):
         raise ValueError('unavailable: supervision.runner %s is not supported; use claude' % config.runner)
     executable = environ.get('WORKFLOW_CLAUDE_CMD') or 'claude'

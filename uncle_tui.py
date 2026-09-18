@@ -2545,6 +2545,15 @@ class UncleTUI:
         stage = CONFIG_STAGES[0]
         return stage, self.stage_runner(stage), self.stage_model(stage), self.stage_effort(stage)
 
+    def homepage_supervision_config(self):
+        config = supervision_lib.load_config(CONFIG_PATH)
+        explicit = dict(supervision_lib.read_config_lines(CONFIG_PATH))
+        stage, runner, model, effort = self.homepage_model()
+        if 'runner' not in explicit: config.values['runner'] = runner
+        if 'model' not in explicit: config.values['model'] = model
+        if 'effort' not in explicit: config.values['effort'] = effort
+        return config, stage
+
     def test_execution_status(self):
         process = getattr(self, 'proc', None)
         running = (getattr(self, 'active_test_runs', set()) and process is not None
@@ -2693,7 +2702,7 @@ class UncleTUI:
     def _supervisor_turn(self, message, delegation=None, trigger='chat'):
         """One bounded supervisor call on the isolated worker (D-1, D-9, D-12)."""
         self._ensure_chat()
-        config = supervision_lib.load_config(CONFIG_PATH)
+        config, homepage_stage = self.homepage_supervision_config()
         proc = getattr(self, 'proc', None)
         gate_question = (self.state == 'running' and bool(getattr(self, 'prompt_kind', ''))
                          and proc is not None and proc.poll() is None)
@@ -2709,7 +2718,7 @@ class UncleTUI:
             self._resend_steering()
             return
         try:
-            command, env, home = supervisor_command(config, ROOT)
+            command, env, home = supervisor_command(config, ROOT, config_path=CONFIG_PATH, stage=homepage_stage)
         except (OSError, ValueError) as exc:
             raise ValueError('Supervisor unavailable: %s. Set supervision.runner claude in Configure and retry.'
                              % sanitize(str(exc)))
@@ -2799,8 +2808,10 @@ class UncleTUI:
         if session is not None and session.alive():
             return session
         try:
-            config = supervision_lib.load_config(CONFIG_PATH)
-            command, env, home = supervisor_command(config, ROOT)
+            config, homepage_stage = self.homepage_supervision_config()
+            if config.runner != 'claude':
+                return None
+            command, env, home = supervisor_command(config, ROOT, config_path=CONFIG_PATH, stage=homepage_stage)
             session = supervisor_runner.SupervisorSession(command, env, home)
         except (OSError, ValueError):
             self.supervisor_session = None

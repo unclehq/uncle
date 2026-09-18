@@ -682,10 +682,13 @@ bulk implementation without configuring anything else.
 
 A repair pass is judged by the files it changes, not by its reports: the
 driver hashes the files each blocking finding names before the pass and
-compares afterwards. A pass that changed none of them is not reviewed and does
-not count against `WORKFLOW_MAX_REPAIRS`; it is retried once with a
-driver-written `.uncle/workflow/REPAIR_BRIEF.md`, and a second such pass stops
-the run for a person.
+compares afterwards. When every blocking finding saw a change the pass goes
+to review. When only some did, the pass keeps its attempt and the driver
+briefs the remaining findings in `.uncle/workflow/REPAIR_BRIEF.md` for the
+next pass instead of spending a review on what the hashes already show;
+`WORKFLOW_MAX_REPAIRS` bounds this and asks a person when reached. A pass that
+changed nothing is not a repair: it is not reviewed, gives its attempt back,
+and is retried once with the brief; a second such pass stops the run.
 
 ### Envelopes and attestation
 

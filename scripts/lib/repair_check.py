@@ -7,7 +7,8 @@ what a hash comparison would have said for free. So the driver snapshots the
 files each blocking finding names before the pass and compares afterwards.
 
     snapshot <report> <out.json>            hash the files the blocking findings name
-    judge    <snapshot.json> <notes.md>     print the IDs still unrepaired; exit 1 if any
+    judge    <snapshot.json> <notes.md>     print the IDs still unrepaired;
+                                            exit 0 all changed, 4 some, 1 none
     brief    <report> <snapshot.json> <out.md> ID...   write the retry brief
 
 A finding is repaired when one of the files it names changed, or a file the
@@ -145,7 +146,7 @@ def judge(snapshot_path, notes):
     root = Path.cwd()
     data = json.loads(Path(snapshot_path).read_text())
     tree_changed = tree_digest(root) != data['tree']
-    unrepaired = []
+    unrepaired, repaired = [], []
     for ident, finding in data['findings'].items():
         candidates = list(finding['paths'])
         candidates += [p for p in named_in_notes(notes, ident, root) if p not in candidates]
@@ -154,12 +155,15 @@ def judge(snapshot_path, notes):
         else:
             changed = any(sha(root / p) != data['hashes'].get(p) for p in candidates)
         if changed:
+            repaired.append(ident)
             print('%s: changed %s' % (ident, ', '.join(candidates) or 'the source tree'), file=sys.stderr)
         else:
             unrepaired.append(ident)
     for ident in unrepaired:
         print(ident)
-    return 1 if unrepaired else 0
+    if not unrepaired:
+        return 0
+    return 4 if repaired else 1
 
 
 def brief(report, snapshot_path, out, ids):

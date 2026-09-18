@@ -79,7 +79,7 @@ class RepairCheck(unittest.TestCase):
         self.snapshot()
         (self.root / 'src/calc.js').write_text('fixed\n')
         code, ids = self.judge()
-        self.assertEqual((code, ids), (1, ['TR-2']))
+        self.assertEqual((code, ids), (4, ['TR-2']), 'partial: some findings changed, exit 4')
 
     def test_a_file_named_in_the_disposition_row_counts(self):
         self.snapshot()

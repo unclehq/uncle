@@ -362,7 +362,16 @@ if [[ "$out" == TEST_REVIEW.md ]]; then
         printf 'PASS\n' > "$out"
         exit 0
     fi
-    printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n' > "$out"
+    : > "$out"
+    if [[ "${FAKE_REVIEW_FINDINGS:-0}" == 1 ]]; then
+        # Two blocking findings naming different files: a repair that touches
+        # only app/main.sh is partial.
+        printf '## Findings\n\n| ID | Req | Blocks | Evidence | Defect | Required correction |\n|---|---|---|---|---|---|\n' >> "$out"
+        printf '| TR-A | R-1 | YES | `app/main.sh:1` | greeting | Fix `app/main.sh` |\n' >> "$out"
+        printf '| TR-B | R-2 | YES | `app/other.sh:1` | missing | Add `app/other.sh` |\n' >> "$out"
+        printf '\n' >> "$out"
+    fi
+    printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n' >> "$out"
     for id in COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS; do
         printf '| %s | YES | %s | stub evidence |\n' "$id" "$status" >> "$out"
     done
@@ -965,6 +974,32 @@ expect_no_file .uncle/workflow/repair-retry
 expect_no_file .uncle/workflow/REPAIR_BRIEF.md
 expect_file .uncle/workflow/logs/repair-retry.prompt.md
 expect_in_file .uncle/workflow/logs/repair-retry.prompt.md 'Repair brief (written by the driver)'
+
+# A pass that repairs some blocking findings but not others is real work, not
+# a strike: it keeps its attempt, is not reviewed yet, and the remaining
+# findings are briefed for the next pass -- until WORKFLOW_MAX_REPAIRS asks a
+# person. The stub only ever changes app/main.sh, so TR-B stays open.
+new_stagegate_case sg-repair-partial-continues-then-asks
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL FAKE_REVIEW_FINDINGS=1 WORKFLOW_MAX_REPAIRS=2
+expect_status 1
+expect_state REPAIR
+expect_out 'changed files for some findings but none for: TR-B'
+expect_out 'Continuing the repair on what is still open before any review.'
+expect_out 'Repair limit (2) reached'
+expect_not_out 'second pass in a row that changed nothing'
+expect_in_file .uncle/workflow/repair-count '2'
+expect_in_file .uncle/workflow/REPAIR_BRIEF.md '**TR-B**'
+expect_no_file .uncle/workflow/repair-noop-count
+COUNT=$((COUNT + 1))
+if grep -q '\*\*TR-A\*\*' "$REPO/.uncle/workflow/REPAIR_BRIEF.md"; then
+    fail 'the brief must list only the findings still open'
+fi
+COUNT=$((COUNT + 1))
+if [[ "$(grep -c '^TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 1 ]]; then
+    fail 'a partial repair must not be sent to review while findings have no change'
+fi
 
 # A reviewer cannot overrule the driver failure by returning PASS.
 new_stagegate_case sg-review-cannot-bless-failed-command

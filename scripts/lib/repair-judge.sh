@@ -31,9 +31,11 @@ repair_begin() {
     fi
 }
 
-# 0: every blocking finding saw a change. 3: nothing changed; the attempt is
-# given back and a retry with the brief is queued. 1: nothing changed twice in
-# a row; the run stops for a person.
+# 0: every blocking finding saw a change; on to review. 3: the state machine
+# re-enters REPAIR -- either a partial pass (some findings changed, the
+# attempt counts, the rest are briefed) or a no-op pass (nothing changed, the
+# attempt is given back, one retry with the brief). 1: nothing changed twice
+# in a row; the run stops for a person.
 repair_judge() {
     local report unrepaired status=0 noops count
     report="$(cat "$STATE_DIR/repair-source")"
@@ -41,6 +43,22 @@ repair_judge() {
     if [[ "$status" == 0 ]]; then
         rm -f "$STATE_DIR/repair-retry" "$STATE_DIR/repair-noop-count" "$STATE_DIR/REPAIR_BRIEF.md"
         return 0
+    fi
+    if [[ "$status" == 4 ]]; then
+        # Real work, but not on everything the review blocked on. A review now
+        # would only re-state what the hashes already show, so the pass keeps
+        # its attempt and the remaining findings are briefed for the next one.
+        # WORKFLOW_MAX_REPAIRS bounds this, and reaching it asks a person.
+        echo
+        echo "Repair pass changed files for some findings but none for: $(printf '%s' "$unrepaired" | tr '\n' ' ')"
+        echo "Continuing the repair on what is still open before any review."
+        rm -f "$STATE_DIR/repair-noop-count"
+        # shellcheck disable=SC2086
+        python3 -B "$ROOT/scripts/lib/repair_check.py" brief "$report" "$STATE_DIR/repair-check.json" \
+            "$STATE_DIR/REPAIR_BRIEF.md" $unrepaired || return 1
+        : > "$STATE_DIR/repair-retry"
+        echo "  $STATE_DIR/REPAIR_BRIEF.md"
+        return 3
     fi
     if [[ "$status" != 1 ]]; then
         echo "Could not judge the repair pass (repair_check.py exited $status)."

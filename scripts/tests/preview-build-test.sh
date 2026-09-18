@@ -19,7 +19,10 @@ run_case() {
     (
         cd "$dir"
         ROOT="$ROOT" STATE_DIR=".uncle/workflow" LOG_DIR=".uncle/workflow/logs"
-        run_claude() { printf '%s\n' "$*" > "$STATE_DIR/ran"; }
+        run_claude() {
+            printf '%s\n' "$*" > "$STATE_DIR/ran"
+            [[ -z "${STUB_LAUNCH:-}" ]] || printf '%s' "$STUB_LAUNCH" > .uncle/launch.json
+        }
         . "$ROOT/scripts/lib/preview-build.sh"
         preview_build_start > "$STATE_DIR/out" 2>&1
         [[ -n "$PREVIEW_PID" ]] && wait "$PREVIEW_PID"
@@ -43,12 +46,12 @@ check "starts from the brief alone"            test "$(cat "$TMP/brief-only/.unc
 check "runner was invoked for preview-build"   grep -q "preview-build" "$TMP/brief-only/.uncle/workflow/ran"
 check "no plan hash without a plan"            test ! -e "$TMP/brief-only/.uncle/workflow/preview-build.plan"
 check "brief-only preview never survives"      test "$(cat "$TMP/brief-only/.uncle/workflow/survived")" != 0
-check "says it builds into preview/ from brief" grep -q "preview/ from the brief" "$TMP/brief-only/.uncle/workflow/out"
+check "says it builds from the brief"          grep -q "preview from the brief" "$TMP/brief-only/.uncle/workflow/out"
 
 run_case with-plan REQUIREMENTS.md "$WEB_BRIEF" PROJECT_PLAN.md "$PLAN"
 check "starts with a plan"                     test "$(cat "$TMP/with-plan/.uncle/workflow/started")" == 1
 check "records the plan hash"                  test -s "$TMP/with-plan/.uncle/workflow/preview-build.plan"
-check "says it builds from the plan"           grep -q "preview/ from the plan" "$TMP/with-plan/.uncle/workflow/out"
+check "says it builds from the plan"           grep -q "preview from the plan" "$TMP/with-plan/.uncle/workflow/out"
 
 run_case nothing
 check "nothing to build from: stays off"       test "$(cat "$TMP/nothing/.uncle/workflow/started")" == 0
@@ -57,6 +60,13 @@ check "runner not invoked"                     test ! -e "$TMP/nothing/.uncle/wo
 run_case headless REQUIREMENTS.md "$API_BRIEF"
 check "headless brief: stays off"              test "$(cat "$TMP/headless/.uncle/workflow/started")" == 0
 check "headless brief: explains why"           grep -q "nothing to show" "$TMP/headless/.uncle/workflow/out"
+
+# The appended gates make the preview agent record a launch method; nothing it
+# wrote was verified, so it must not outlive the preview build.
+STUB_LAUNCH='{"kind":"webpage","path":"index.html"}' run_case claims-launch REQUIREMENTS.md "$WEB_BRIEF"
+check "preview's launch.json is removed after it finishes" test ! -e "$TMP/claims-launch/.uncle/launch.json"
+STUB_LAUNCH='{"kind":"webpage","path":"index.html"}' run_case keeps-launch REQUIREMENTS.md "$WEB_BRIEF" .uncle/launch.json '{"kind":"command","command":["./run"]}'
+check "a pre-existing launch.json is restored"      grep -qF '"command"' "$TMP/keeps-launch/.uncle/launch.json"
 
 run_case disabled REQUIREMENTS.md "$WEB_BRIEF"
 WORKFLOW_PREVIEW_BUILD=0 run_case disabled2 REQUIREMENTS.md "$WEB_BRIEF"

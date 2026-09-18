@@ -2,10 +2,13 @@
 # Build something viewable from the brief, while the plan, the adversarial
 # review and the updated plan are still being written.
 #
-# It starts as soon as the brief is approved and builds into preview/, so the
-# planning agents working in the same tree are not reading half-built code as
-# if it were the project. PROJECT_PLAN.md and REQUIREMENTS_INTERPRETATION.md
-# are used when they already exist and skipped when they do not.
+# It starts as soon as the brief is approved, at the repository root where the
+# implementation of record later rewrites it in place -- so the tab opened on
+# the first look is the tab that shows the real application. It never runs at
+# the same time as implementation (IMPLEMENT joins it first); it does run beside
+# planning, whose prompts say what an unexplained page at the root is.
+# PROJECT_PLAN.md and REQUIREMENTS_INTERPRETATION.md are used when they already
+# exist and skipped when they do not.
 #
 # The operator asked to see the application before the review stages finish,
 # accepting that it is paid for twice. That is the trade: wall clock is never
@@ -74,9 +77,9 @@ preview_build_start() {
     fi
     echo
     if [[ -s PROJECT_PLAN.md ]]; then
-        echo "Building a $kind preview in preview/ from the plan while the review runs."
+        echo "Building a $kind preview from the plan while the review runs."
     else
-        echo "Building a $kind preview in preview/ from the brief while planning runs."
+        echo "Building a $kind preview from the brief while planning runs."
     fi
     echo "It is a first look, not the implementation: the approved plan is"
     echo "implemented properly afterwards, and this is rebuilt if the review"
@@ -86,13 +89,27 @@ preview_build_start() {
     # driver does referenced variables that do not exist here, and the preview
     # died on an unbound variable before it wrote anything.
     (
+        # The gates appended to every implementation prompt ask the agent to
+        # record its launch method in .uncle/launch.json, and the preview agent
+        # obliges. Nothing it wrote has been verified, and the implementation
+        # of record writes the real one; whatever the preview leaves there is
+        # put back the way it was.
+        launch_before=""
+        [[ -f .uncle/launch.json ]] && launch_before="$(cat .uncle/launch.json)"
+        status=0
         # A throwaway first look does not need the top tier deliberating over
         # it: the last one spent 124s and ~11,900 output tokens to produce a
         # 2 KB page. Speed is the whole product of this stage.
         UNCLE_PREVIEW_BUILD=true \
         WORKFLOW_MODEL_PREVIEW_BUILD="${WORKFLOW_MODEL_PREVIEW_BUILD:-haiku}" \
         WORKFLOW_EFFORT_PREVIEW_BUILD="${WORKFLOW_EFFORT_PREVIEW_BUILD:-low}" \
-            run_claude prompts/preview-build.md preview-build
+            run_claude prompts/preview-build.md preview-build || status=$?
+        if [[ -n "$launch_before" ]]; then
+            printf '%s' "$launch_before" > .uncle/launch.json
+        else
+            rm -f .uncle/launch.json
+        fi
+        exit "$status"
     ) > "$LOG_DIR/preview-build.log" 2>&1 < /dev/null &
     PREVIEW_PID=$!
 }

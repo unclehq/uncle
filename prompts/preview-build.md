@@ -13,10 +13,10 @@ When the plan exists it has **not** been through adversarial review and may
 change under you. Your job is to get something running that a person can look
 at, from what is known as it stands.
 
-Write every file under `preview/`. The entry point is `preview/index.html` for
-a web application; a command line tool's script also lives under `preview/`.
-Nothing goes at the repository root: the planning stages are reading the tree
-while you write, and a page at the root would read to them as the project.
+Write the application at the repository root, where the implementation of
+record will write it: `index.html` is the entry point for a web application.
+Implementation rewrites these files in place, and the browser tab opened on
+them follows along.
 
 Build the smallest thing that is genuinely usable and visible:
 
@@ -42,6 +42,6 @@ length, enumerate alternatives, or re-read what you have written. Decide the
 shortest thing that runs, write it, and stop. One file is ideal where the
 application allows it.
 
-Write only under `preview/`. Do not edit REQUIREMENTS.md,
+Touch only source files. Do not edit REQUIREMENTS.md,
 REQUIREMENTS_INTERPRETATION.md, PROJECT_PLAN.md, or anything under `.uncle/`,
 and do not write `.uncle/launch.json`: the page is found on its own.

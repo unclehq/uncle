@@ -156,13 +156,13 @@ class EarlyPreview(unittest.TestCase):
         self.assertTrue(self.opened[0].endswith('public/app.html'))
         self.assertIn('<h1>nested</h1>', get(self.opened[0]))
 
-    def test_planning_stages_open_the_preview_directory_page(self):
+    def test_planning_stages_open_the_early_page(self):
+        # The preview build runs beside planning and writes the page at the root.
         for stage in ('requirements', 'project-plan', 'adversarial-review'):
             self.opened.clear()
-            screen = self.make(project(**{'preview__index.html': '<h1>early</h1>'}), stage)
+            screen = self.make(project(**{'index.html': '<h1>early</h1>'}), stage)
             self.settle(screen)
             self.assertEqual(len(self.opened), 1, stage)
-            self.assertTrue(self.opened[0].endswith('preview/index.html'), stage)
             self.assertIn('<h1>early</h1>', get(self.opened[0]))
             screen._close_early_preview()
 

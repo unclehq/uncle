@@ -54,9 +54,8 @@ def launch_spec(root):
                 if url.scheme not in ('http', 'https') or url.hostname not in ('localhost', '127.0.0.1', '::1'):
                     raise ValueError('Preview URL must be a local HTTP address')
         return data
-    for page in ('index.html', 'preview/index.html'):
-        if (root / page).is_file():
-            return {'kind': 'webpage', 'url': (root / page).as_uri()}
+    if (root / 'index.html').is_file():
+        return {'kind': 'webpage', 'url': (root / 'index.html').as_uri()}
     return {'kind': 'none'}
 
 

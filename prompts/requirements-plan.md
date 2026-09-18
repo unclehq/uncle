@@ -24,10 +24,10 @@ needed to resolve a concrete requirement or constraint. Do not recursively brows
 the tree or inspect dependencies for a self-contained request. Batch independent
 reads. Read any truncated part of the brief before interpreting it.
 
-A `preview/` directory, if present, is a throwaway first look being built
-from the brief in parallel with this stage. It is not part of the project
-being planned and not evidence of anything: do not read it, cite it, or plan
-around it.
+Source files already at the repository root -- a web page and its assets, a
+script -- may be a throwaway first look being built from the brief in parallel
+with this stage. They are not the project being planned and not evidence of
+anything: do not read them, cite them, or plan around them.
 
 Create REQUIREMENTS_INTERPRETATION.md containing:
 

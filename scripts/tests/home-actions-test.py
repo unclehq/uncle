@@ -48,19 +48,53 @@ class Actions(unittest.TestCase):
         self.assertEqual(self.ui.chat_composer, '/run ')
         self.ui.run_named_stage.assert_not_called()
 
-    def test_clear_removes_workflow_identity_only(self):
-        directory = self.root/'.uncle/workflow'
-        directory.mkdir(parents=True)
+    def test_clear_archives_the_build_and_leaves_source(self):
+        wf = self.root/'.uncle/workflow'
+        (wf/'approvals').mkdir(parents=True)
         for name in ('state', 'origin', 'keep.txt'):
-            (directory/name).write_text('saved')
-        self.ui.chat_composer = '/clear'
-        self.ui._chat_command(10)
-        self.assertFalse((directory/'state').exists())
-        self.assertFalse((directory/'origin').exists())
-        self.assertEqual((directory/'keep.txt').read_text(), 'saved')
+            (wf/name).write_text('saved')
+        (wf/'approvals/PROJECT_PLAN.sha256').write_text('digest')
+        (self.root/'.uncle/launch.json').write_text('{"kind":"none"}')
+        for doc in ('REQUIREMENTS.md', 'PROJECT_PLAN.md', 'IMPLEMENTATION_NOTES.md'):
+            (self.root/doc).write_text(doc)
+        (self.root/'src').mkdir()
+        (self.root/'src/app.js').write_text('code')
+        (self.root/'index.html').write_text('<h1>app</h1>')
         self.ui.chat_composer = '/clear'
         self.ui._chat_command(10)
         self.assertEqual(self.ui.chat_error, '')
+        for doc in ('REQUIREMENTS.md', 'PROJECT_PLAN.md', 'IMPLEMENTATION_NOTES.md'):
+            self.assertFalse((self.root/doc).exists(), doc)
+        self.assertFalse((self.root/'.uncle/launch.json').exists())
+        for name in ('state', 'origin', 'keep.txt', 'approvals'):
+            self.assertFalse((wf/name).exists(), name)
+        self.assertEqual((self.root/'src/app.js').read_text(), 'code', 'source is not a build artifact')
+        self.assertTrue((self.root/'index.html').exists())
+        archives = list((self.root/'.uncle/workflow-history').iterdir())
+        self.assertEqual(len(archives), 1)
+        archive = archives[0]
+        self.assertEqual((archive/'keep.txt').read_text(), 'saved')
+        self.assertTrue((archive/'approvals/PROJECT_PLAN.sha256').exists())
+        self.assertEqual((archive/'documents/PROJECT_PLAN.md').read_text(), 'PROJECT_PLAN.md')
+        self.assertEqual((archive/'documents/REQUIREMENTS.md').read_text(), 'REQUIREMENTS.md')
+        self.assertTrue((archive/'documents/launch.json').exists())
+        self.assertIn('archived', self.ui.home_history[-1][1])
+        self.ui.chat_composer = '/clear'
+        self.ui._chat_command(10)
+        self.assertEqual(self.ui.chat_error, '')
+        self.assertEqual(len(list((self.root/'.uncle/workflow-history').iterdir())), 1, 'nothing left to archive')
+        self.assertIn('Nothing to clear', self.ui.home_history[-1][1])
+
+    def test_clear_during_a_run_leaves_the_build_alone(self):
+        (self.root/'PROJECT_PLAN.md').write_text('plan')
+        self.ui.proc = Mock()
+        self.ui.proc.poll.return_value = None
+        self.ui.chat_composer = '/clear'
+        self.ui._chat_command(10)
+        self.assertEqual(self.ui.chat_error, '')
+        self.assertIn('A workflow is running', self.ui.home_history[-1][1])
+        self.assertTrue((self.root/'PROJECT_PLAN.md').exists())
+        self.assertFalse((self.root/'.uncle/workflow-history').exists())
 
     def reply(self, **action):
         # TD-4 (Issue 45): the chat worker is the supervisor; a homepage action

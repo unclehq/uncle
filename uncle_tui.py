@@ -3623,10 +3623,61 @@ class UncleTUI:
         if self.state != 'running':
             raise ValueError(self.chat_error or 'The workflow did not start.')
 
-    def _clear_workflow_identity(self):
-        directory = Path(_project_root()) / '.uncle' / 'workflow'
-        for name in ('state', 'origin'):
-            (directory / name).unlink(missing_ok=True)
+    def _clear_build(self):
+        """Archive the last build so the next one starts from none of it.
+
+        Everything moves and nothing is deleted: .uncle/workflow -- state,
+        approvals, envelopes, logs, metrics -- goes to
+        .uncle/workflow-history/<id>/, exactly as a run of the other family
+        archives it, and the build's documents at the project root, the brief
+        included, go beside it under documents/, with .uncle/launch.json. The
+        application's own source is not a build artifact and is left alone.
+        Returns the line to show for it; the callers append it after their
+        own reset, since the homepage /clear also starts a fresh chat.
+        """
+        import contextlib
+        import io
+        import envelope
+        import workflow_family
+        proc = getattr(self, 'proc', None)
+        if self.state == 'running' or (proc is not None and proc.poll() is None):
+            # /clear during a run cancels the pending reply and resets the
+            # chat (the callers do that); the build itself is not touched.
+            return 'A workflow is running: cancelled the pending reply only. Stop the build before /clear to archive it.'
+        root = Path(_project_root())
+        state = root / '.uncle' / 'workflow'
+        try:
+            family = (state / 'family').read_text().strip()
+        except OSError:
+            family = ''
+        # The family marker and the lock inode are not build state; with nothing
+        # else there, prepare() would archive a directory holding only them.
+        leftovers = [p for p in state.iterdir() if p.name not in ('driver.lock', 'driver.guard', 'lock', 'family')] \
+            if state.is_dir() else []
+        archive = None
+        if leftovers:
+            # prepare() reports the archive on stdout, which under curses is the screen.
+            with contextlib.redirect_stdout(io.StringIO()):
+                archive = workflow_family.prepare(root, family if family in ('app', 'change') else 'app', fresh=True)
+        documents = [name for name in envelope.ARTIFACT_EXCLUDES if not name.endswith('/')] + ['REQUIREMENTS.md']
+        moves = [(root / name, name) for name in documents if (root / name).is_file() and not (root / name).is_symlink()]
+        launch = root / '.uncle' / 'launch.json'
+        if launch.is_file() and not launch.is_symlink():
+            moves.append((launch, 'launch.json'))
+        if moves and archive is None:
+            archive = root / '.uncle' / 'workflow-history' / uuid.uuid4().hex
+        if archive is not None:
+            archive = Path(archive)
+            (archive / 'documents').mkdir(parents=True, exist_ok=True)
+            for source, name in moves:
+                source.rename(archive / 'documents' / name)
+        self.status_stage = ''
+        self.home_replace_proposal = None
+        self.new_workflow_pending = False
+        if archive is None:
+            return 'Nothing to clear: no build state or documents in ' + sanitize(str(root)) + '.'
+        return ('Cleared the last build: %d document%s and the workflow state archived at %s. '
+                'Source files were left alone.' % (len(moves), '' if len(moves) == 1 else 's', sanitize(str(archive))))
 
     def _triage_command(self, text):
         if not text:
@@ -3641,7 +3692,7 @@ class UncleTUI:
                 elif command in ('/resume', '/r'):
                     self.triage_resume()
                 elif command == '/clear':
-                    self._clear_workflow_identity()
+                    self.home_history.append(('system', self._clear_build()))
                     if self.triage_request is not None:
                         self.triage_request.cancel()
                     self.triage_error = ''
@@ -4274,9 +4325,9 @@ class UncleTUI:
                 self.chat_pick = 0
             elif command == '/clear':
                 try:
-                    self._clear_workflow_identity()
-                except OSError as exc:
-                    self.chat_error = 'Could not clear workflow state/origin: ' + str(exc)
+                    cleared = self._clear_build()
+                except (OSError, ValueError) as exc:
+                    self.chat_error = 'Could not clear the last build: ' + sanitize(str(exc))
                     return True
                 if getattr(self, 'triage_request', None):
                     self.triage_request.cancel()
@@ -4287,6 +4338,7 @@ class UncleTUI:
                     self.home_request = None
                 self.chat_picker = False
                 self.home_history.clear()
+                self.home_history.append(('system', cleared))
                 self.home_issue_context = ''
                 self.chat.messages.clear()
                 self.chat_composer = ''

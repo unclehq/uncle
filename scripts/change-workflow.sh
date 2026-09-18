@@ -1935,6 +1935,28 @@ change_plan_draft_key() {
     done
 }
 
+run_combined_change_plan_with_baseline() {
+    local prompt="$LOG_DIR/change-planning.prompt.md"
+    {
+        printf '# Combined baseline, change specification, and planning\n\n'
+        printf 'In this single stage and the same model and context, first establish the baseline by running verification commands, then write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+        cat "$(resolve_prompt prompts/change/baseline.md)"
+        printf '\n\n# Then specify the change\n\n'
+        cat "$(resolve_prompt prompts/change/change-spec.md)"
+        printf '\n\n# Then plan the specified change\n\n'
+        cat "$(resolve_prompt prompts/change/change-plan.md)"
+    } > "$prompt"
+    UNCLE_COMBINED_CHANGE_PLAN=1 run_claude "$prompt" change-plan \
+        "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN" || return $?
+    require_file BASELINE_REPORT.md
+    require_file CHANGE_SPEC.md
+    require_file CHANGE_PLAN.md
+    check_document_budget BASELINE_REPORT.md || return 1
+    check_document_budget CHANGE_SPEC.md || return 1
+    check_document_budget CHANGE_PLAN.md || return 1
+    change_plan_draft_key > "$STATE_DIR/change-plan.draft-key"
+}
+
 run_combined_change_plan() {
     local prompt="$LOG_DIR/change-planning.prompt.md"
     {
@@ -2035,12 +2057,7 @@ while true; do
             # A fresh run legitimately claims this checkout for its issue.
             write_origin
 
-            run_claude prompts/change/baseline.md baseline \
-                "$MODEL_BASELINE" "" 120 "$BUDGET_BASELINE"
-            require_file BASELINE_REPORT.md
-            check_document_budget BASELINE_REPORT.md || exit 1
-
-            run_combined_change_plan || exit 1
+            run_combined_change_plan_with_baseline || exit 1
 
             set_state WAIT_ANALYSIS_APPROVAL
             ;;

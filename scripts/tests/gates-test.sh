@@ -194,7 +194,9 @@ case "$prompt" in
     *'Revise the failed design'*)
         printf '\nisolated-context revision\n' >> CHANGE_PLAN.md
         ;;
-    *STUB:revise*) : ;;
+    *STUB:revise*)
+        if [[ -n "${FAKE_REVISE:-}" ]]; then bash -c "$FAKE_REVISE"; fi
+        ;;
     *STUB:implement*)
         printf '# Implementation Notes\n\nChanged app/main.sh.\n' \
             > IMPLEMENTATION_NOTES.md
@@ -1048,7 +1050,8 @@ run_driver_stdin "$(gate_input y)" WORKFLOW_DIFF_GATE=0
 expect_not_out 'Unknown workflow state'
 expect_file .uncle/workflow/approvals/CHANGE_PLAN.sha256
 expect_file .uncle/workflow/approvals/ADVERSARIAL_REVIEW.sha256
-expect_in_file .uncle/workflow/approval-route WAIT_PLAN_APPROVAL
+# The run goes on through the revised-plan gate, which rewrites the route marker.
+expect_in_file .uncle/workflow/approval-route WAIT_UPDATED_PLAN_APPROVAL
 COUNT=$((COUNT + 1))
 if [[ "$(cat "$REPO/.uncle/workflow/state")" == WAIT_PLAN_APPROVAL ]]; then
     fail 'the acknowledged gate did not advance'
@@ -1097,6 +1100,30 @@ COUNT=$((COUNT + 1))
 if [[ "$(wc -l < "$REPO/.uncle/workflow/agent-calls")" -ne 2 ]]; then
     fail 'expected exactly two planning passes before stopping'
 fi
+
+# The review response revises CHANGE_PLAN.md in place after it was
+# acknowledged. The revised text is re-approved before implementation, so the
+# recorded hash names what implementation runs against -- otherwise IMPLEMENT
+# reopens WAIT_PLAN_APPROVAL, the plan is revised again, and the run loops.
+new_case revised-plan-is-reapproved-before-implementation
+# As WAIT_PLAN_APPROVAL leaves things: both documents acknowledged as they are.
+hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+hash_file "$REPO/ADVERSARIAL_REVIEW.md" > "$REPO/.uncle/workflow/approvals/ADVERSARIAL_REVIEW.sha256"
+set_state UPDATED_PLAN
+run_driver_stdin "$(gate_input y)" WORKFLOW_DIFF_GATE=0 \
+    FAKE_REVISE="printf '\nRevised after review.\n' >> CHANGE_PLAN.md"
+expect_not_out 'CHANGE_PLAN.md changed after approval'
+expect_not_out 'Reopening WAIT_PLAN_APPROVAL'
+expect_in_file .uncle/workflow/approval-route WAIT_UPDATED_PLAN_APPROVAL
+expect_in_file CHANGE_PLAN.md 'Revised after review.'
+COUNT=$((COUNT + 1))
+if [[ "$(cat "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256")" != "$(hash_file "$REPO/CHANGE_PLAN.md")" ]]; then
+    fail 'the recorded CHANGE_PLAN approval must name the revised text'
+fi
+COUNT=$((COUNT + 1))
+case "$(cat "$REPO/.uncle/workflow/state")" in
+    UPDATED_PLAN|VALIDATE_UPDATED_PLAN|WAIT_UPDATED_PLAN_APPROVAL|WAIT_PLAN_APPROVAL) fail "run did not get past the revised plan: $(cat "$REPO/.uncle/workflow/state")" ;;
+esac
 
 # A reviewer cannot overrule the driver failure by returning PASS.
 new_stagegate_case sg-review-cannot-bless-failed-command

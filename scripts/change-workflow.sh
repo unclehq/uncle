@@ -2265,15 +2265,25 @@ while true; do
             require_file CHANGE_PLAN.md
             check_document_budget CHANGE_PLAN.md || exit 1
 
+            set_state WAIT_UPDATED_PLAN_APPROVAL
+            ;;
+
+        WAIT_UPDATED_PLAN_APPROVAL)
             plan_status=0
             plan_assess || plan_status=$?
             case "$plan_status" in 0) ;; 10) continue ;; *) exit 1 ;; esac
-            # Re-approving CHANGE_PLAN overwrites the ACKNOWLEDGE hash taken
-            # before the revision, so the recorded approval always names the
-            # text implementation will run against.
+            # The review response revised CHANGE_PLAN.md in place, so the
+            # ACKNOWLEDGE hash taken at WAIT_PLAN_APPROVAL names text that no
+            # longer exists. Without this gate IMPLEMENT finds the plan
+            # "changed after approval", reopens WAIT_PLAN_APPROVAL, the plan is
+            # revised again, and the run loops. Re-approving here records the
+            # hash of the text implementation will run against.
             # The gate does not open while a blocking review finding has no
             # disposition row in the revised plan.
             envelope_py plan-gate ADVERSARIAL_REVIEW.md CHANGE_PLAN.md || exit 1
+            printf '%s\n' WAIT_UPDATED_PLAN_APPROVAL > "$STATE_DIR/approval-route"
+            human_gate APPROVE \
+                CHANGE_PLAN.md CHANGE_PLAN
             plan_review_input=()
             [[ -f ADVERSARIAL_REVIEW.md ]] && plan_review_input=(--input "review=$(hash_file ADVERSARIAL_REVIEW.md)")
             envelope_write --stage plan --result pass \

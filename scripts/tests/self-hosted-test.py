@@ -68,6 +68,26 @@ class SelfHosted(unittest.TestCase):
             if success:
                 self.assertEqual(result.stdout.strip(), 'local/qwen')
 
+    def test_preview_build_follows_the_first_configured_model_stage(self):
+        # The preview is not a Configure row. The shell resolver hands it the
+        # first configured model stage's runner and model; reading its own key
+        # here must land on the same profile, not refuse the driver's choice.
+        self.config.write_text('derive-brief.runner claude\nchange-plan.runner self-hosted\n'
+                               'change-plan.model local/deepseek-v4-flash\n'
+                               'implementation.runner self-hosted\nimplementation.model qwen\n', encoding='utf-8')
+        profiles = {'local/deepseek-v4-flash': {'base_url': 'http://localhost:9100/v1', 'api_key': 'deepseek-secret'},
+                    'qwen': {'base_url': 'http://localhost:9200/v1', 'api_key': 'qwen-secret'}}
+        save_keys(self.config, {'__opencode_models__': profiles})
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(settings(self.config, 'preview-build'),
+                             dict(model='deepseek-v4-flash', base_url='http://localhost:9100/v1', api_key='deepseek-secret'))
+            with self.assertRaises(ValueError):
+                settings(self.config, 'requirements')
+        # An explicit preview-build.model still wins.
+        self.config.write_text(self.config.read_text(encoding='utf-8') + 'preview-build.model qwen\n', encoding='utf-8')
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(settings(self.config, 'preview-build')['api_key'], 'qwen-secret')
+
     def test_discovery_and_failed_refresh_preserves_catalog(self):
         import io
         from urllib.error import HTTPError

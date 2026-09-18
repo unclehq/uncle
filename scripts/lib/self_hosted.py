@@ -118,17 +118,32 @@ def refresh_models(keys, base_url, api_key):
     return names
 
 
-def settings(config, stage):
+def config_stage(stage, values):
+    """The stage whose config lines apply, mirroring uncle_config_stage in stage-config.sh.
+
+    The preview build is not a Configure row; the shell resolver hands it the
+    first configured model stage's runner and model. Reading its own key here
+    instead found nothing and refused the very model the driver had chosen.
+    """
     if stage in ('manual-checklist-base', 'manual-checklist-delta'):
-        stage = 'manual-checklist'
+        return 'manual-checklist'
     if stage.startswith('implementation-step-'):
-        stage = 'implementation'
+        return 'implementation'
+    if stage == 'preview-build' and not values.get('preview-build.model'):
+        for key, value in values.items():
+            if key.endswith('.model') and value and key != 'self-hosted.model':
+                return key[:-len('.model')]
+    return stage
+
+
+def settings(config, stage):
     values = {}
     if Path(config).exists():
         for line in Path(config).read_text(encoding='utf-8').splitlines():
             parts = line.split('#', 1)[0].split(None, 1)
             if len(parts) == 2:
                 values.setdefault(*parts)
+    stage = config_stage(stage, values)
     result = {}
     for field in ('base_url', 'model'):
         result[field] = os.environ.get('UNCLE_SELF_HOSTED_' + field.upper()) or values.get(stage + '.' + field) or values.get('self-hosted.' + field, '')

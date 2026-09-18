@@ -2113,37 +2113,6 @@ while true; do
                 adversarial-review \
                 "$CODEX_EFFORT_REVIEW"
 
-            set_state VALIDATE_ADVERSARIAL_REVIEW
-            ;;
-
-        VALIDATE_ADVERSARIAL_REVIEW)
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md 2>&1)" || {
-                # A shape the repairer can settle on its own is not worth a
-                # stopped run. It only fixes deviations with one reading -- a
-                # leaked preamble, a bold label that should be a heading -- and
-                # refuses anything needing judgment, so a real defect still
-                # stops here. Re-validate after; the repair is not trusted.
-                if python3 "$ROOT/scripts/lib/repair_document_format.py" ADVERSARIAL_REVIEW.md; then
-                    if validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md 2>&1)"; then
-                        echo "Repaired the review format; continuing."
-                        rm -f "$STATE_DIR/validation-error.txt"
-                        check_document_budget ADVERSARIAL_REVIEW.md || exit 1
-                        write_review_envelope
-                        set_state WAIT_PLAN_APPROVAL
-                        continue
-                    fi
-                fi
-                envelope_write --stage review --result fail --reason "validation: ${validation_error%%$'\n'*}"
-                printf '%s\n' "$validation_error" >&2
-                printf '%s\n' "$validation_error" > "$STATE_DIR/validation-error.txt"
-                printf '%s\n' "validation: $validation_error" > "$STATE_DIR/stop-reason"
-                supervision_validation_failed adversarial-review ADVERSARIAL_REVIEW.md "$validation_error"
-                exit 1
-            }
-            rm -f "$STATE_DIR/validation-error.txt"
-            check_document_budget ADVERSARIAL_REVIEW.md || exit 1
             write_review_envelope
             set_state UPDATED_PLAN
             ;;

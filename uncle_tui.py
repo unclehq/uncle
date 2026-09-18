@@ -698,7 +698,11 @@ class TuiSupervisionHost:
     def start_worker(self, prompt, meta):
         command, env, home = supervisor_command(self.controller.config, ROOT)
         log = os.path.join(_project_root(), '.uncle', 'workflow', 'logs', 'supervisor-%d.jsonl' % meta['number'])
-        return SupervisorRequest(command, prompt, env, home, log, meta)
+        # Homepage chat and workflow diagnoses share the same tool-free
+        # supervisor conversation.  SupervisorRequest falls back to this
+        # workflow's isolated one-shot command if the session has died.
+        return SupervisorRequest(command, prompt, env, home, log, meta,
+                                 session=self.tui._supervisor_session())
 
 
 class UncleTUI:

@@ -1,6 +1,6 @@
 import os, sys, tempfile, unittest, queue, json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import uncle_tui as tui
 from home_chat import HomeRequest
@@ -103,6 +103,20 @@ class HomeTests(unittest.TestCase):
                 supervisor, stage = ui.homepage_supervision_config()
                 self.assertEqual((stage, supervisor.model),
                                  ('project-plan', 'cline-pass/persistent'))
+
+    def test_workflow_supervision_reuses_the_homepage_session(self):
+        """Diagnostic calls share the persistent homepage worker when live."""
+        session = object()
+        host = tui.TuiSupervisionHost.__new__(tui.TuiSupervisionHost)
+        host.tui = Mock()
+        host.tui._supervisor_session.return_value = session
+        host.controller = Mock(config=object())
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(tui, '_project_root', return_value=d), \
+                patch.object(tui, 'supervisor_command', return_value=(['claude'], {}, d)), \
+                patch.object(tui, 'SupervisorRequest') as request:
+            host.start_worker('diagnose this stage', {'number': 3})
+        self.assertIs(request.call_args.kwargs['session'], session)
 
     def test_running_chat_delivers_only_to_active_stage(self):
         # TD-1 (Issue 45): raw prose no longer reaches a channel from chat; the

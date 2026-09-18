@@ -2063,13 +2063,22 @@ implementation_complete() {
 # here, before the first stage.
 change_pr_engine start || exit 1
 
+prev_state=""
 while true; do
     python3 "$ROOT/scripts/lib/rerun_stage.py" change || exit 1
     state="$(get_state)"
+
+    # Report completion of previous stage when state changes
+    if [[ -n "$prev_state" && "$prev_state" != "$state" ]]; then
+        supervision_stage_end "$prev_state" "success" 2>/dev/null || true
+    fi
+
     if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi
 
     echo
     echo "Current state: $state"
+
+    prev_state="$state"
 
     # Older drivers could advance despite an explicitly partial delivery.
     case "$state" in

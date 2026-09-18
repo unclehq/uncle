@@ -687,11 +687,12 @@ is_file_from_this_run() {
     local run_start_file="$STATE_DIR/run-start-time"
 
     [[ ! -f "$run_start_file" ]] && return 1  # No run start recorded, assume old
-    [[ ! -f "$file" ]] && return 1  # File doesn't exist
+    [[ ! -f "$file" ]] && return 0  # File doesn't exist yet - it's new, not old
 
     local run_start="$(cat "$run_start_file")"
     local file_mtime="$(stat -f "%m" "$file" 2>/dev/null || echo 0)"
 
+    # File is from this run if modified after run start
     [[ "$file_mtime" -gt "$run_start" ]] && return 0 || return 1
 }
 

@@ -8,10 +8,7 @@
       "Bash(grep -E \"\\\\.md$|gate\")",
       "Bash(./uncle --help)",
       "Bash(ls -la ~/src/unclehq/ | grep uncle-issue)",
-      "Read(//Users/brianwoods/src/unclehq/**)",
-      "Bash(git worktree *)",
-      "Bash(cd /Users/brianwoods/src/unclehq/uncle-issue-70 && rm -f CHANGE_PLAN.md CHANGE_SPEC.md && echo \"Deleted old files\")",
-      "Bash(grep -o '\"[^\"]*\"$')"
+      "Read(//Users/brianwoods/src/unclehq/**)"
     ]
   }
 }

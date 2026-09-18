@@ -64,6 +64,17 @@ SELF_HOSTED_MODEL=$'derive-brief.runner self-hosted\nderive-brief.model local/de
 run_case self-hosted-model REQUIREMENTS.md "$WEB_BRIEF" .uncle/config "$SELF_HOSTED_MODEL"
 check "preview preserves a self-hosted first model" test "$(cat "$TMP/self-hosted-model/.uncle/workflow/model")" == local/deepseek-v4-flash
 
+# A preview may inherit its runner/model from a reviewer-configured stage, but
+# it still writes the early application. It must therefore use the agent shim,
+# which supplies the required prompt and positive turn limit to self-hosted.
+REVIEWER_MODEL=$'adversarial-review.runner self-hosted\nadversarial-review.model local/deepseek-v4-flash'
+run_case reviewer-model REQUIREMENTS.md "$WEB_BRIEF" .uncle/config "$REVIEWER_MODEL"
+check "preview remains an agent when inheriting a reviewer model" bash -c '
+    ROOT="$1" PROJECT_ROOT="$2" UNCLE_CONFIG="$2/.uncle/config"
+    . "$ROOT/scripts/lib/stage-config.sh"
+    test "$(uncle_stage_side preview-build)" = agent
+' _ "$ROOT" "$TMP/reviewer-model"
+
 WORKFLOW_MODEL_PREVIEW_BUILD=anthropic/claude-haiku-4-5 run_case overridden-model REQUIREMENTS.md "$WEB_BRIEF" .uncle/config "$CONFIG_MODELS"
 check "preview model override wins" test "$(cat "$TMP/overridden-model/.uncle/workflow/model")" == anthropic/claude-haiku-4-5
 

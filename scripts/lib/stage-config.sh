@@ -103,6 +103,13 @@ uncle_stage_key() {
 }
 
 uncle_stage_side() {
+    # Preview inherits a configured stage's runner/model, but it is always an
+    # implementation write stage. If the inherited model comes from a review
+    # stage (for example adversarial-review's self-hosted model), resolving its
+    # side after the alias launches reviewer-self-hosted without --max-turns.
+    # OpenCode then rejects it before it sees the prompt. Keep the inherited
+    # runner/model pairing while preserving preview's agent protocol.
+    [[ "$1" == "preview-build" ]] && { printf '%s' agent; return 0; }
     local stage
     stage="$(uncle_config_stage "$1")"
     case "$UNCLE_REVIEWER_STAGES" in

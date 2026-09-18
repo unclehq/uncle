@@ -3055,7 +3055,7 @@ class UncleTUI:
     def _apply_home_action(self, request, action):
         proc = getattr(self, 'proc', None)
         running = self.state == 'running' or bool(proc and proc.poll() is None)
-        if running:
+        if running and action.get('uncle_action') not in ('stop_build', 'clear_build'):
             self.home_history.append(('system', 'Ignored: homepage actions cannot run while a workflow is active.'))
             return
         # isinstance, not truth: test doubles answer any attribute with a Mock.
@@ -3109,10 +3109,20 @@ class UncleTUI:
         return True
 
     def _home_action(self, action, replace_approved=False):
-        if self.state == 'running' or (getattr(self, 'proc', None) and self.proc.poll() is None):
+        if action.get('uncle_action') not in ('stop_build', 'clear_build') and (
+                self.state == 'running' or (getattr(self, 'proc', None) and self.proc.poll() is None)):
             raise ValueError('A workflow is already active; the homepage action was not executed.')
         root = _project_root()
         name = action['uncle_action']
+        if name == 'stop_build':
+            self.home_history.append(('system', self._stop_build()))
+            self.chat_error = ''
+            return
+        if name == 'clear_build':
+            issue = action.get('issue')
+            self.home_history.append(('system', self._clear_build('#' + issue if issue else '')))
+            self.chat_error = ''
+            return
         if name == 'github_issue':
             if action['start']:
                 self.workflow_idx = 1
@@ -3623,8 +3633,70 @@ class UncleTUI:
         if self.state != 'running':
             raise ValueError(self.chat_error or 'The workflow did not start.')
 
-    def _clear_build(self):
+    def _stop_build(self):
+        """Stop the running driver and everything under it; say what happened."""
+        proc = getattr(self, 'proc', None)
+        if proc is None or proc.poll() is not None:
+            return 'No build is running.'
+        stage = getattr(self, 'status_stage', '') or 'its current stage'
+        self.stop_workflow()
+        self.proc_done = True
+        return 'Stopped the build at %s. Its state is kept; run it again to resume, or /clear to archive it.' % sanitize(stage)
+
+    def _run_locked(self, path):
+        """Whether a driver holds the run in `path`: legacy lock directory,
+        the driver.lock flock, or a live recorded process group."""
+        workflow = Path(path) / '.uncle' / 'workflow'
+        if (workflow / 'lock').exists():
+            return True
+        lock = workflow / 'driver.lock'
+        if not lock.is_file():
+            return False
+        try:
+            import fcntl
+            with lock.open('a+') as handle:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    return True
+                handle.seek(0)
+                owner = json.loads(handle.read() or '{}')
+        except (OSError, ValueError, ImportError):
+            return False
+        pgid = owner.get('pgid') if isinstance(owner, dict) else None
+        if pgid:
+            try:
+                os.killpg(int(pgid), 0)
+                return True
+            except (OSError, ValueError):
+                pass
+        return False
+
+    def _clear_target(self, root, target):
+        """The run worktree `/clear #N` or `/clear <path>` names."""
+        wanted = target.lstrip('#')
+        if wanted.isdigit():
+            for row in worktree_runs.runs(str(root)):
+                if str(row.get('issue')) == wanted:
+                    return Path(row['path'])
+            raise ValueError('No run for #%s among this project\'s worktrees.' % wanted)
+        path = Path(target).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        try:
+            listed = [Path(p).resolve() for p in worktree_runs.worktrees(str(root))]
+        except (OSError, ValueError):
+            listed = []
+        if path.is_dir() and path.resolve() in listed:
+            return path
+        raise ValueError('/clear takes #issue, or the path of one of this project\'s worktrees.')
+
+    def _clear_build(self, target=''):
         """Archive the last build so the next one starts from none of it.
+
+        With `#N` or a worktree path, clears that run's worktree instead of
+        the project root the homepage is in -- which is where an issue's run
+        actually lives.
 
         Everything moves and nothing is deleted: .uncle/workflow -- state,
         approvals, envelopes, logs, metrics -- goes to
@@ -3640,11 +3712,17 @@ class UncleTUI:
         import envelope
         import workflow_family
         proc = getattr(self, 'proc', None)
-        if self.state == 'running' or (proc is not None and proc.poll() is None):
+        root = Path(_project_root())
+        target = (target or '').strip()
+        if target:
+            root = self._clear_target(root, target)
+            if self._run_locked(root):
+                raise ValueError('A run holds %s; stop it before /clear.' % sanitize(str(root)))
+        elif proc is not None and proc.poll() is None:
             # /clear during a run cancels the pending reply and resets the
             # chat (the callers do that); the build itself is not touched.
+            # The build page staying up after the driver exited is not a run.
             return 'A workflow is running: cancelled the pending reply only. Stop the build before /clear to archive it.'
-        root = Path(_project_root())
         state = root / '.uncle' / 'workflow'
         try:
             family = (state / 'family').read_text().strip()
@@ -3691,14 +3769,18 @@ class UncleTUI:
         # and a stale one is what "build #N" would otherwise trip over.
         others = []
         try:
-            for row in worktree_runs.runs(str(root)):
-                if Path(row['path']).resolve() != root.resolve():
+            for row in worktree_runs.runs(str(Path(_project_root()))):
+                if Path(row['path']).resolve() == root.resolve() or row.get('state') == 'COMPLETE':
+                    continue
+                if str(row.get('issue', '?')).isdigit():
                     others.append('%s (#%s, %s)' % (row['path'], row['issue'], row['state']))
+                else:
+                    others.append('%s (%s)' % (row['path'], row['state']))
         except (OSError, ValueError, KeyError):
             others = []
         if others:
             message += (' Runs with state also exist in: ' + '; '.join(sanitize(o) for o in others) +
-                        '. Building an issue again resumes or restarts its worktree; /clear from inside one clears it.')
+                        '. /clear #N clears that issue\'s run; /clear <path> any other.')
         return message
 
     def _triage_command(self, text):
@@ -4220,7 +4302,7 @@ class UncleTUI:
         return False
 
     def _slash_choices(self):
-        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/triage', '/do', '/resume', '/run', '/delegate', '/app-input']
+        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/stop', '/triage', '/do', '/resume', '/run', '/delegate', '/app-input']
         text = self.chat_composer.lower()
         return [command for command in commands if command.startswith(text)] if text.startswith('/') and ' ' not in text else []
 
@@ -4246,7 +4328,7 @@ class UncleTUI:
                     self.state == 'running' or (self.proc and self.proc.poll() is None)):
                 self.chat_error = 'A workflow is already active. Finish or stop it before starting another.'
                 return True
-            if argument and command not in ('/issue', '/do', '/run', '/delegate', '/app-input'):
+            if argument and command not in ('/issue', '/do', '/run', '/delegate', '/app-input', '/clear'):
                 self.chat_error = command + ' does not take arguments'
                 return True
             if command == '/run':
@@ -4288,6 +4370,9 @@ class UncleTUI:
                         self._triage_do(argument)
                 except (OSError, ValueError) as exc:
                     self.chat_error = sanitize(str(exc))
+                return True
+            if command == '/stop':
+                self.home_history.append(('system', self._stop_build()))
                 return True
             if command == '/homepage':
                 # The build page no longer leaves on its own, so leaving is a
@@ -4345,9 +4430,11 @@ class UncleTUI:
                 self.chat_picker_kind = 'file'
                 self.chat_choices = self.chat.refs.browse('')
                 self.chat_pick = 0
+            elif command == '/stop':
+                self.home_history.append(('system', self._stop_build()))
             elif command == '/clear':
                 try:
-                    cleared = self._clear_build()
+                    cleared = self._clear_build(argument)
                 except (OSError, ValueError) as exc:
                     self.chat_error = 'Could not clear the last build: ' + sanitize(str(exc))
                     return True
@@ -4367,7 +4454,7 @@ class UncleTUI:
                 self.chat_error = ''
                 self.chat_choices = []
             else:
-                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /triage /do N /resume /delegate on|off|status /app-input TEXT'
+                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /stop /triage /do N /resume /delegate on|off|status /app-input TEXT'
             return True
         return False
 
@@ -4601,7 +4688,7 @@ class UncleTUI:
         elif self.chat_choices:
             put(feedback_row, 'File: ' + self.chat_choices[self.chat_pick], color.get('accent', 0))
         elif self.chat_composer.startswith('/'):
-            put(feedback_row, '/configure /settings /file /quit /issue # /requirements /change /approve /clear', color.get('muted', curses.A_DIM))
+            put(feedback_row, '/configure /settings /file /quit /issue # /requirements /change /approve /clear /stop', color.get('muted', curses.A_DIM))
 
         self._draw_file_picker(composer_row, left, width)
     def _draw_chat_panel(self, top, bottom, left, width):

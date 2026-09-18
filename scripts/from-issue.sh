@@ -121,17 +121,37 @@ run_issue_workflow() {
 
     write_origin
 
-    status=0
-    STAGEGATE_RUN_ID="$run_id" \
-    STAGEGATE_ORIGIN_REPO="$OWNER/$REPO" \
-    STAGEGATE_ORIGIN_ISSUE="$ISSUE_NUM" \
-        uncle_run "$ROOT/scripts/change-workflow.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"} || status=$?
+    local state previous_state="" reentries=0
+    while :; do
+        status=0
+        STAGEGATE_RUN_ID="$run_id" \
+        STAGEGATE_ORIGIN_REPO="$OWNER/$REPO" \
+        STAGEGATE_ORIGIN_ISSUE="$ISSUE_NUM" \
+            uncle_run "$ROOT/scripts/change-workflow.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"} || status=$?
 
-    if [[ "$status" -ne 0 ]]; then
+        if [[ "$status" -ne 0 ]]; then
+            echo
+            echo "change-workflow.sh exited $status; $OWNER/$REPO#$ISSUE_NUM remains open."
+            exit "$status"
+        fi
+        state="$(workflow_state)"
+        [[ "$state" != COMPLETE ]] || break
+        # A driver that exits 0 short of COMPLETE has moved the run to a gate it
+        # wants re-entered -- a reopened approval says "re-run the driver". Do
+        # that here rather than call the run finished. It stops once the state
+        # no longer moves, which is a gate the operator declined.
+        if [[ "$state" == WAIT_* && "$state" != "$previous_state" && "$reentries" -lt 3 ]]; then
+            previous_state="$state"
+            reentries=$((reentries + 1))
+            echo
+            echo "The run is waiting at $state; opening that gate now."
+            continue
+        fi
         echo
-        echo "change-workflow.sh exited $status; $OWNER/$REPO#$ISSUE_NUM remains open."
-        exit "$status"
-    fi
+        echo "The change workflow stopped at ${state:-an unrecorded state} for $OWNER/$REPO#$ISSUE_NUM; it has not finished."
+        echo "Run it again to continue from there."
+        return 0
+    done
 
     echo "Change workflow finished. Issues remain open until their PR is merged."
     echo "Making PR, please wait..."

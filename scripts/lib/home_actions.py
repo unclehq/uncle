@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from chat import Conversation
 
-ACTIONS = {'create_app', 'create_change', 'run_app', 'run_change', 'github_issue'}
+ACTIONS = {'create_app', 'create_change', 'run_app', 'run_change', 'github_issue', 'stop_build', 'clear_build'}
 
 def prompt(history, root):
     existing = [name for name in ('REQUIREMENTS.md', 'CHANGE_REQUEST.md')
@@ -32,6 +32,11 @@ Actions:
   the issue. When start is true, use Auto issue classification and immediately
   start the From GitHub issue workflow. A bare issue reference means import
   only; start only when the user requests implementation. Never invent its contents.
+- stop_build: stop the build that is running now; no other fields.
+- clear_build: archive the last build's state and documents so the next build
+  starts fresh. Include "issue" (positive number) to clear that issue's run in
+  its own worktree; omit it for the project the homepage is in. Source files
+  are never touched.
 
 A request to build is authorization. Emit the action in this same reply. Do not
 answer with a plan to act, a confirmation question, or a note about what you are
@@ -79,6 +84,8 @@ def parse_reply(text):
         keys |= {'document', 'start'}
     elif action == 'github_issue':
         keys |= {'issue', 'start'}
+    optional = {'issue'} if action == 'clear_build' else set()
+    keys |= optional
     # A null-valued extra is the model spelling out a field that does not apply
     # to this action -- `issue: null` on a create_app -- and carries nothing, so
     # it is dropped. Every other unknown key is refused: an action object that
@@ -89,7 +96,7 @@ def parse_reply(text):
     if unknown:
         raise ValueError('The chat model returned an action with unexpected fields: %s'
                          % ', '.join(unknown))
-    missing = sorted(keys - set(data))
+    missing = sorted(keys - optional - set(data))
     if missing:
         # Naming the field distinguishes the common case -- the model described
         # the document instead of including it -- from a malformed reply.
@@ -103,6 +110,15 @@ def parse_reply(text):
     if action.startswith('create_'):
         if not isinstance(data['document'], str) or not data['document'].strip():
             raise ValueError('The chat model returned an empty brief.')
+    if action == 'clear_build' and data.get('issue') is not None:
+        issue = data['issue']
+        if isinstance(issue, int) and not isinstance(issue, bool):
+            issue = str(issue)
+        if isinstance(issue, str):
+            issue = issue.strip().removeprefix('#')
+            data['issue'] = issue
+        if not isinstance(issue, str) or not re.fullmatch(r'[1-9][0-9]*', issue):
+            raise ValueError('clear_build takes an issue number.')
     if action == 'github_issue':
         issue = data['issue']
         if isinstance(issue, str):

@@ -2155,6 +2155,16 @@ while true; do
             rm -f "$STATE_DIR/validation-error.txt"
             check_document_budget ADVERSARIAL_REVIEW.md || exit 1
             write_review_envelope
+            set_state WAIT_PLAN_APPROVAL
+            ;;
+
+        WAIT_PLAN_APPROVAL)
+            # One gate for the plan and the review of it: UPDATED_PLAN verifies
+            # both approvals, and the reopen map sends either document here.
+            printf '%s\n' WAIT_PLAN_APPROVAL > "$STATE_DIR/approval-route"
+            human_gate ACKNOWLEDGE \
+                CHANGE_PLAN.md CHANGE_PLAN \
+                ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
             set_state UPDATED_PLAN
             ;;
 

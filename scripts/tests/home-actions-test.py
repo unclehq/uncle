@@ -91,6 +91,57 @@ class Actions(unittest.TestCase):
         self.assertEqual(len(list((self.root/'.uncle/workflow-history').iterdir())), 1, 'nothing left to archive')
         self.assertIn('Nothing to clear', self.ui.home_history[-1][1])
 
+    def test_clear_targets_a_run_worktree_by_issue(self):
+        other = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(other, ignore_errors=True))
+        (other/'.uncle/workflow').mkdir(parents=True)
+        (other/'.uncle/workflow/state').write_text('70:UPDATED_PLAN\n')
+        (other/'CHANGE_PLAN.md').write_text('plan')
+        (self.root/'PROJECT_PLAN.md').write_text('mine')
+        rows = [dict(path=str(other), issue='70', state='UPDATED_PLAN', locked=False)]
+        with patch.object(tui.worktree_runs, 'runs', return_value=rows), \
+                patch.object(tui.worktree_runs, 'worktrees', return_value=[str(other)]):
+            self.ui.chat_composer = '/clear #70'
+            self.ui._chat_command(10)
+        self.assertEqual(self.ui.chat_error, '')
+        self.assertFalse((other/'.uncle/workflow/state').exists())
+        self.assertFalse((other/'CHANGE_PLAN.md').exists())
+        self.assertTrue((other/'.uncle/workflow-history').is_dir())
+        self.assertTrue((self.root/'PROJECT_PLAN.md').exists(), 'the project the homepage is in is untouched')
+        self.assertIn(str(other), self.ui.home_history[-1][1])
+        with patch.object(tui.worktree_runs, 'runs', return_value=rows):
+            self.ui.chat_composer = '/clear #99'
+            self.ui._chat_command(10)
+        self.assertIn('No run for #99', self.ui.chat_error)
+
+    def test_stop_command_and_actions(self):
+        self.ui.stop_workflow = Mock()
+        self.ui.chat_composer = '/stop'
+        self.ui._chat_command(10)
+        self.ui.stop_workflow.assert_not_called()
+        self.assertIn('No build is running', self.ui.home_history[-1][1])
+        self.ui.proc = Mock()
+        self.ui.proc.poll.return_value = None
+        self.ui.status_stage = 'implementation'
+        self.ui.chat_composer = '/stop'
+        self.ui._chat_command(10)
+        self.ui.stop_workflow.assert_called_once()
+        self.assertIn('Stopped the build at implementation', self.ui.home_history[-1][1])
+        # The supervisor can do the same while a build runs.
+        self.ui.stop_workflow.reset_mock()
+        self.ui.proc.poll.return_value = None
+        self.reply(uncle_action='stop_build')
+        self.ui.stop_workflow.assert_called_once()
+        self.assertEqual(self.ui.chat_error, '')
+
+    def test_clear_build_action_targets_an_issue(self):
+        self.ui._clear_build = Mock(return_value='cleared')
+        self.reply(uncle_action='clear_build', issue='70')
+        self.ui._clear_build.assert_called_once_with('#70')
+        self.reply(uncle_action='clear_build')
+        self.ui._clear_build.assert_called_with('')
+        self.assertEqual(self.ui.home_history[-1], ('system', 'cleared'))
+
     def test_clear_during_a_run_leaves_the_build_alone(self):
         (self.root/'PROJECT_PLAN.md').write_text('plan')
         self.ui.proc = Mock()

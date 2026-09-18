@@ -1014,6 +1014,23 @@ expect_state WAIT_PLAN_APPROVAL
 expect_out 'PROJECT_PLAN.md has no approval on record'
 expect_out 'Reopening WAIT_PLAN_APPROVAL'
 
+# The plan/review acknowledgement gate: the approvals UPDATED_PLAN verifies
+# are recorded here, and the reopen map's target exists.
+new_case plan-gate-records-plan-and-review-approvals
+[[ -s "$REPO/CHANGE_PLAN.md" ]] || printf '# Change Plan\n' > "$REPO/CHANGE_PLAN.md"
+[[ -s "$REPO/ADVERSARIAL_REVIEW.md" ]] || printf '# Review\n' > "$REPO/ADVERSARIAL_REVIEW.md"
+rm -f "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256" "$REPO/.uncle/workflow/approvals/ADVERSARIAL_REVIEW.sha256"
+set_state WAIT_PLAN_APPROVAL
+run_driver_stdin "$(gate_input y)" WORKFLOW_DIFF_GATE=0
+expect_not_out 'Unknown workflow state'
+expect_file .uncle/workflow/approvals/CHANGE_PLAN.sha256
+expect_file .uncle/workflow/approvals/ADVERSARIAL_REVIEW.sha256
+expect_in_file .uncle/workflow/approval-route WAIT_PLAN_APPROVAL
+COUNT=$((COUNT + 1))
+if [[ "$(cat "$REPO/.uncle/workflow/state")" == WAIT_PLAN_APPROVAL ]]; then
+    fail 'the acknowledged gate did not advance'
+fi
+
 new_case missing-approval-reopens-gate
 set_state UPDATED_PLAN
 rm -f "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"

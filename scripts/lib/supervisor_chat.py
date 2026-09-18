@@ -125,7 +125,8 @@ def home_intent(message):
     text = _clean(message)
     # Polite requests are commands even when they end in a question mark.
     request = re.match(r'^(?:(?:can|could|would|will) you\s+)?(?:please\s+)?'
-                       r'(?:build|create|make|implement|start|run|draft|generate|write|change|edit|update|modify|add|remove|fix)\b', text, re.I)
+                       r'(?:build|create|make|implement|start|run|draft|generate|write|change|edit|update|modify|add|remove|fix|'
+                       r'stop|cancel|abort|halt|kill|clear|reset|archive)\b', text, re.I)
     if request and not _NEGATED.search(text):
         return True
     return bool(text) and not _QUESTION.search(text) and not _NEGATED.search(text) and bool(_HOME.search(text))

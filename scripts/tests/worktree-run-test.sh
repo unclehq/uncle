@@ -260,6 +260,18 @@ expect_not_out "recorded no owner"
 check "nothing archived while the lock is held" test ! -e "$WT/.uncle/workflow-history"
 rmdir "$WT/.uncle/workflow/lock"
 
+# A driver that exits 0 short of COMPLETE has moved the run to a gate it wants
+# re-entered; the seed re-runs it instead of calling the run finished, and
+# stops once the state no longer moves.
+new_case reopened-gate-is-reentered-not-finished
+FAKE_STATE=WAIT_PLAN_APPROVAL run_issue /dev/null 42 --worktree
+expect_status 0
+expect_out "The run is waiting at WAIT_PLAN_APPROVAL; opening that gate now."
+expect_out "stopped at WAIT_PLAN_APPROVAL"
+expect_not_out "Change workflow finished"
+expect_not_out "Making PR"
+check "driver was re-entered exactly once"  test "$(grep -c '^start' "$DRIVER_LOG")" -eq 2
+
 # --branch overrides the derived name; --worktree-dir the directory.
 new_case explicit-branch-and-dir
 run_issue /dev/null 42 --worktree-dir "$CASE/elsewhere" --branch topic/x

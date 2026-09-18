@@ -68,10 +68,6 @@ execute-checklist.network true
 
 # --- change request ----------------------------------------------------------
 
-baseline.runner cline
-baseline.model cline-pass/deepseek-v4-flash
-baseline.effort low
-
 change-spec.runner cline
 change-spec.model cline-pass/deepseek-v4-pro
 change-spec.effort low

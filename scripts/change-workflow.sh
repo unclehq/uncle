@@ -2089,23 +2089,14 @@ state_to_log_name() {
     esac
 }
 
-prev_state=""
 while true; do
     python3 "$ROOT/scripts/lib/rerun_stage.py" change || exit 1
     state="$(get_state)"
-
-    # Report completion of previous stage when state changes
-    if [[ -n "$prev_state" && "$prev_state" != "$state" ]]; then
-        log_name="$(state_to_log_name "$prev_state")"
-        supervision_stage_end "$log_name" "success" 2>/dev/null || true
-    fi
 
     if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi
 
     echo
     echo "Current state: $state"
-
-    prev_state="$state"
 
     # Older drivers could advance despite an explicitly partial delivery.
     case "$state" in

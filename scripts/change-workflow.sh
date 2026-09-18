@@ -2140,15 +2140,14 @@ while true; do
             # window in which a baseline means anything.
             start_green_baseline_bg
 
-            # If baseline is from old run, regenerate all three with fresh baseline
-            if ! is_file_from_this_run BASELINE_REPORT.md; then
-                rm -f BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md
-                run_combined_change_plan_with_baseline || exit 1
-            else
-                # Start verifications only for documents that already exist from this run
-                start_verification_bg BASELINE_REPORT.md BASELINE_REPORT
-                start_verification_bg CHANGE_SPEC.md CHANGE_SPEC
-            fi
+            # Always regenerate all three files with fresh baseline
+            rm -f BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md
+            run_combined_change_plan_with_baseline || exit 1
+
+            # Start verifications for the freshly created files
+            start_verification_bg BASELINE_REPORT.md BASELINE_REPORT
+            start_verification_bg CHANGE_SPEC.md CHANGE_SPEC
+
             require_file CHANGE_PLAN.md
             check_document_budget CHANGE_PLAN.md || exit 1
 

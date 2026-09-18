@@ -1,106 +1,43 @@
-# Requirements
-
-> **This file is the input for the new-application workflow.**
->
-> Every stage of `./scripts/stagegate.sh` reads `REQUIREMENTS.md` as the
-> requirements source. Fill in the [Project brief](#project-brief) below, then
-> run the driver. Keep the brief unambiguous and let it carry the requirements.
-
----
-
-# Project brief
-
-> Replace this entire section with the project. Everything below the heading is
-> read as requirements by every agent in the pipeline. Delete the guidance in
-> each subsection — leaving it in produces requirements about the template.
->
-> Be specific and testable. Vague lines here become ambiguities in
-> `REQUIREMENTS_INTERPRETATION.md`, findings in `ADVERSARIAL_REVIEW.md`, and
-> guesses in the implementation.
-
 ## Summary
-
-One or two sentences: what is being built, and for whom.
+A web-based calculator app featuring a groovy, retro 1970s-style background (bold colors, swirling patterns, funky typography accents).
 
 ## Problem
-
-What is wrong today, and what changes for the user once this exists.
+Users want a fun, visually distinctive calculator instead of a plain utilitarian one.
 
 ## Scope
-
-What this project covers. Keep it to what must ship.
+A single-page web app with a functional basic calculator (arithmetic operations) styled with a groovy retro background and theme.
 
 ## Non-goals
-
-What this project explicitly does not do. Name the tempting adjacent features
-you are refusing — this is the strongest single lever on scope creep, and the
-review stage will cut against it.
+No scientific/advanced calculator functions, no user accounts, no persistence beyond the current session.
 
 ## Functional requirements
-
-Number them. Downstream artifacts reference these identifiers, so stable IDs
-matter more than prose.
-
-| ID | Requirement | Priority |
-|---|---|---|
-| R-001 | | Must |
-| R-002 | | Should |
-| R-003 | | Could |
+- Support addition, subtraction, multiplication, division.
+- Support decimal numbers and clear/reset.
+- Display current input and result.
 
 ## User-visible behavior
-
-For each behavior: the trigger, the observable result, and what the user sees
-when it fails. "Rejects invalid input" is not a requirement; "rejects a
-negative quantity with a 400 and the field name" is.
-
-| ID | Trigger | Expected result | On failure |
-|---|---|---|---|
-| B-001 | | | |
+User clicks number and operator buttons to build an expression, presses equals to see the result, and can clear the display. The background and UI use a groovy retro aesthetic (warm colors, swirls, funky fonts).
 
 ## Domain rules and invariants
-
-Conditions that must hold at all times, not steps. State each so a test could
-falsify it.
-
-| ID | Invariant | Consequence if violated |
-|---|---|---|
-| I-001 | | |
+Division by zero shows an error state instead of crashing. Only valid numeric/operator sequences are accepted.
 
 ## Data and state
-
-What the authoritative state is, where it lives, what may hold a cached copy,
-and what survives a restart.
+Calculator state (current input, pending operation, result) is held client-side only; no backend storage.
 
 ## Interfaces
-
-APIs, CLI surface, UI entry points, message formats, external services. Include
-the contracts you already control; say so where the shape is open.
+Browser-based UI only; no external APIs.
 
 ## Constraints
-
-Language, runtime, frameworks, libraries that are required or forbidden,
-deployment target, performance or size budgets, compatibility that must not
-break.
+Must run as a static/client-side web app.
 
 ## Failure behavior
-
-What must happen on invalid input, unavailable dependencies, partial writes,
-concurrent access, and restart mid-operation. Say which failures must be
-visible to the user and which are handled silently.
+Invalid operations (e.g., divide by zero) display a clear error message rather than crashing the app.
 
 ## Verification
-
-How correctness will be demonstrated: test frameworks, the commands the
-implementation stage should run (formatter, type checker, tests, lint, build,
-startup smoke), and anything only checkable by hand.
+Manually test all four operations, decimal input, clear function, and divide-by-zero handling in a browser.
 
 ## Definition of done
-
-The concrete conditions under which this is finished. The final audit checks
-claims against this list.
+A working calculator web app is deployed/runnable locally with a groovy retro-styled background and all functional requirements met.
 
 ## Open questions
-
-Anything genuinely undecided. Listing it here is better than letting an agent
-resolve it silently — these surface as assumptions in stage 1 and as findings
-in stage 3.
+None.

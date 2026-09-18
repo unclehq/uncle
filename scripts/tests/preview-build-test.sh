@@ -19,6 +19,8 @@ run_case() {
     (
         cd "$dir"
         ROOT="$ROOT" STATE_DIR=".uncle/workflow" LOG_DIR=".uncle/workflow/logs"
+        PROJECT_ROOT="$PWD" UNCLE_CONFIG="$PWD/.uncle/config"
+        . "$ROOT/scripts/lib/stage-config.sh"
         run_claude() {
             printf '%s\n' "$*" > "$STATE_DIR/ran"
             printf '%s\n' "${WORKFLOW_MODEL_PREVIEW_BUILD:-}" > "$STATE_DIR/model"
@@ -57,6 +59,10 @@ check "says it builds from the plan"           grep -q "preview from the plan" "
 CONFIG_MODELS=$'project-plan.model cline-pass/kimi-k3\nimplementation.model anthropic/claude-opus-5'
 run_case configured-model REQUIREMENTS.md "$WEB_BRIEF" .uncle/config "$CONFIG_MODELS"
 check "preview uses the first configured model" test "$(cat "$TMP/configured-model/.uncle/workflow/model")" == cline-pass/kimi-k3
+
+SELF_HOSTED_MODEL=$'derive-brief.runner self-hosted\nderive-brief.model local/deepseek-v4-flash'
+run_case self-hosted-model REQUIREMENTS.md "$WEB_BRIEF" .uncle/config "$SELF_HOSTED_MODEL"
+check "preview preserves a self-hosted first model" test "$(cat "$TMP/self-hosted-model/.uncle/workflow/model")" == local/deepseek-v4-flash
 
 WORKFLOW_MODEL_PREVIEW_BUILD=anthropic/claude-haiku-4-5 run_case overridden-model REQUIREMENTS.md "$WEB_BRIEF" .uncle/config "$CONFIG_MODELS"
 check "preview model override wins" test "$(cat "$TMP/overridden-model/.uncle/workflow/model")" == anthropic/claude-haiku-4-5

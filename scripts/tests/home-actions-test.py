@@ -48,6 +48,14 @@ class Actions(unittest.TestCase):
         self.assertEqual(self.ui.chat_composer, '/run ')
         self.ui.run_named_stage.assert_not_called()
 
+    def test_backslash_q_quits_when_resume_item_is_present(self):
+        # Resume is inserted before Configure and Quit, so command dispatch
+        # must not rely on their former fixed menu indices.
+        with patch.object(self.ui, '_resume_available', return_value=True):
+            self.ui.chat_composer = r'\q'
+            self.assertTrue(self.ui._chat_command(10))
+        self.assertEqual(self.ui.state, 'quit')
+
     def test_clear_archives_the_build_and_leaves_source(self):
         wf = self.root/'.uncle/workflow'
         (wf/'approvals').mkdir(parents=True)

@@ -53,9 +53,35 @@ uncle_config_get() {
     return 0
 }
 
+# The preview is deliberately not a Configure row: it is an implementation
+# shortcut, not an independently approved stage.  It therefore inherits the
+# first configured model stage, including that stage's runner.  Looking up the
+# model alone is unsafe: `local/foo` belongs to OpenCode, not to Cline.
+uncle_first_configured_model_stage() {
+    local file line key value
+    file="$(uncle_config_file)"
+    [[ -r "$file" ]] || return 0
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(printf '%s' "$line" | tr -s '[:space:]' ' ')"
+        line="${line# }"
+        [[ "${line%% *}" == *.model ]] || continue
+        key="${line%% *}"
+        value="${line#* }"
+        [[ -n "$value" ]] || continue
+        printf '%s' "${key%.model}"
+        return 0
+    done < "$file"
+}
+
 # Base and delta are executions of the configured checklist stage.
 uncle_config_stage() {
     case "$1" in
+        preview-build)
+            local first_model_stage
+            first_model_stage="$(uncle_first_configured_model_stage)"
+            [[ -n "$first_model_stage" ]] && printf '%s' "$first_model_stage" || printf '%s' "$1"
+            ;;
         plan-executability) printf 'adversarial-review' ;;
         plan-recovery) printf 'updated-plan' ;;
         manual-checklist-base|manual-checklist-delta) printf 'manual-checklist' ;;

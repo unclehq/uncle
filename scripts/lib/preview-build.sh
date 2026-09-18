@@ -41,39 +41,27 @@ PREVIEW_BUILD="${WORKFLOW_PREVIEW_BUILD:-1}"
 PREVIEW_PID=""
 PREVIEW_STARTED=0
 
-# preview_build_model — use the first model the operator configured rather
-# than silently sending the speculative build to Haiku.  The Configure screen
-# writes selections in display order, so the first `.model` line is also the
-# first model selection in the project configuration.  A dedicated environment
-# override remains useful for one-off preview experiments.
-#
-# Only Cline model ids have a slash and can safely be supplied to the preview's
-# default Cline runner.  Self-hosted model names belong to their own runner and
-# must not be passed to Cline.  Keep Haiku as the no-config fallback so a brand
-# new project retains the inexpensive first-look behavior.
+# preview_build_model — use the selected preview stage model. `preview-build`
+# resolves to the first configured model stage in stage-config.sh, so its
+# runner and model stay paired (e.g. an OpenCode `local/...` model runs through
+# OpenCode rather than being handed to Cline). A dedicated environment override
+# remains useful for one-off preview experiments.
 preview_build_model() {
     if [[ -n "${WORKFLOW_MODEL_PREVIEW_BUILD:-}" ]]; then
         printf '%s' "$WORKFLOW_MODEL_PREVIEW_BUILD"
         return 0
     fi
 
-    local config line key value
-    if declare -f uncle_config_file > /dev/null 2>&1; then
-        config="$(uncle_config_file)"
-    else
-        config="${UNCLE_CONFIG:-$PWD/.uncle/config}"
-    fi
-    if [[ -r "$config" ]]; then
-        while IFS= read -r line; do
-            line="${line%%#*}"
-            key="${line%%[[:space:]]*}"
-            [[ "$key" == *.model ]] || continue
-            value="${line#"$key"}"
-            value="${value##[[:space:]]}"
-            [[ "$value" == */* ]] || continue
-            printf '%s' "$value"
+    if declare -f uncle_has_config > /dev/null 2>&1 && uncle_has_config \
+            && declare -f uncle_stage_model > /dev/null 2>&1 \
+            && declare -f uncle_stage_runner > /dev/null 2>&1; then
+        local runner model
+        runner="$(uncle_stage_runner preview-build)"
+        model="$(uncle_stage_model preview-build "$runner")"
+        if [[ -n "$model" ]]; then
+            printf '%s' "$model"
             return 0
-        done < "$config"
+        fi
     fi
     printf '%s' haiku
 }

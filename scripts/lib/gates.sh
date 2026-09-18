@@ -279,7 +279,7 @@ FEASIBILITY
                 ;;
         esac
         if [[ "$role" == "reviewer" ]]; then
-            printf '\n\n---\n\n# Reviewer output (binding)\n\nYou run read-only: you cannot write files, so Rule 0 above cannot apply to\nyou. The document the stage asked for is your final assistant message:\nreturn it in full as that message — not a path, not a summary, not a note\nabout a file you could not write.\n'
+            printf '\n\n---\n\n# Reviewer output (binding)\n\nYou run read-only: you cannot write files, so Rule 0 above cannot apply to\nyou. The document the stage asked for is your final assistant message:\nreturn it in full as that message — not a path, not a summary, not a note\nabout a file you could not write.\n\n## Response budget (binding)\n\nUse no more than 2,000 output tokens for this entire turn, including\nreasoning, tool-call narration, and the final document. Work from the\ndriver-supplied evidence first; read only the files needed to substantiate a\nconcrete finding or required gate row. Do not narrate your investigation,\nrepeat clean evidence, re-read the same file, or perform a second review pass.\nKeep the final document dense: IDs and locations instead of quotations, one\nshort sentence per field, and closing sections that reference finding IDs\nrather than summarize them. Preserve every real blocker, but merge duplicate\ncauses and consequences into one canonical finding.\n'
         fi
     } > "$combined"
     [[ -n "$rules" ]] && echo "Output rules: $(output_rules_source) ($rules)" >&2

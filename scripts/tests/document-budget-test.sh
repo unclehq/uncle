@@ -148,6 +148,8 @@ WORKFLOW_DOC_MAX_BYTES=1 WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=7 \
     gated_prompt prompt.md final-audit reviewer > resolved
 grep -qF 'FINAL_AUDIT.md: at most 7 UTF-8 bytes' "$(cat resolved)"
 grep -q 'Reviewer output' "$(cat resolved)"
+grep -qF 'Use no more than 2,000 output tokens for this entire turn' "$(cat resolved)"
+grep -qF 'Do not narrate your investigation' "$(cat resolved)"
 if WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=invalid gated_prompt prompt.md final-audit 2>/dev/null; then exit 1; fi
 # Draft targets use the effective override, including leading-zero integers.
 # updated-plan is a compact-first stage: in advisory mode it is held to ZERO

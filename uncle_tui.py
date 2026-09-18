@@ -3723,11 +3723,53 @@ class UncleTUI:
         """Resume a build from its recorded state.
 
         With no target, this is `triage_resume()`'s ordinary continuation of
-        whatever workflow this session already started -- unchanged. With
-        `#N` or a worktree path, it resumes *that* run directly, whether or
-        not this session ever touched it: it reads .uncle/workflow/state and
-        .uncle/workflow/family in the named worktree and relaunches the
-        matching driver there.
+        whatever workflow this session already started -- or, before this
+        session has started one, `_resume_app_build()`'s application build
+        in the current directory. With `#N` or a worktree path, it resumes
+        *that* run directly, whether or not this session ever touched it: it
+        reads .uncle/workflow/state and .uncle/workflow/family in the named
+        worktree and relaunches the matching driver there.
+        """
+        target = (target or '').strip()
+        if not target:
+            if getattr(self, 'workflow_idx', None) is None:
+                return self._resume_app_build()
+            self.triage_resume()
+            return ''
+        return self._resume_run_worktree(target)
+
+    def _resume_app_build(self):
+        """Bare /resume before any workflow this session: the application
+        build in the current directory, when its brief is there.
+
+        triage_resume() can only continue a workflow this session already
+        started; before one exists there is nothing to relaunch, but a
+        REQUIREMENTS.md in the project root is an application build waiting
+        to run. The driver continues from whatever state the directory holds
+        -- prepare() archives nothing when there is none -- and runs in that
+        directory itself rather than relocating into a worktree.
+        """
+        if getattr(self, 'triage_request', None) is not None:
+            raise ValueError('A triage turn is still running. Wait for it before resuming.')
+        if self.proc and self.proc.poll() is None:
+            raise ValueError('The workflow is still running; answer its prompt.')
+        if getattr(self, 'triage_tainted', None):
+            raise ValueError(self.triage_tainted)
+        root = Path(_project_root())
+        if not (root / 'REQUIREMENTS.md').is_file():
+            raise ValueError('No workflow has run in this session; start one from the menu.')
+        if self._run_locked(root):
+            raise ValueError('A run holds %s; wait for it to finish.' % sanitize(str(root)))
+        self._restore_launch_root()
+        os.environ['UNCLE_PROJECT_ROOT'] = str(root)
+        os.environ['UNCLE_PROJECT_ROOT_LOCKED'] = '1'
+        self.workflow_idx = 0
+        self.resume_workflow_pending = True
+        self._run()
+        return 'Resuming the application build in %s.' % sanitize(str(root))
+
+    def _resume_run_worktree(self, target):
+        """The `#N`/path branch of _resume_build(): relaunch the named run.
 
         This does not go through from-issue.sh. That script's own "a normal
         Start is intentionally not a resume" logic (a63596e9) re-fetches the
@@ -3736,10 +3778,6 @@ class UncleTUI:
         already exists needs neither its network fetch nor its worktree
         bookkeeping repeated.
         """
-        target = (target or '').strip()
-        if not target:
-            self.triage_resume()
-            return ''
         if getattr(self, 'triage_request', None) is not None:
             raise ValueError('A triage turn is still running. Wait for it before resuming.')
         if self.proc and self.proc.poll() is None:

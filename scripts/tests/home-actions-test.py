@@ -167,10 +167,32 @@ class Actions(unittest.TestCase):
         self.assertIn('wait for it to finish', self.ui.chat_error)
 
     def test_bare_resume_slash_command_is_unchanged(self):
+        self.ui.workflow_idx = 0
         self.ui.triage_resume = Mock()
         self.ui.chat_composer = '/resume'
         self.ui._chat_command(10)
         self.ui.triage_resume.assert_called_once()
+        self.ui._run.assert_not_called()
+
+    def test_bare_resume_without_a_session_build_runs_the_app_in_place(self):
+        (self.root/'REQUIREMENTS.md').write_text('# Project brief\n\nA grocery list app.\n')
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('UNCLE_PROJECT_ROOT_LOCKED', None)
+            self.ui.chat_composer = '/resume'
+            self.ui._chat_command(10)
+            self.assertEqual(os.environ.get('UNCLE_PROJECT_ROOT'), str(self.root))
+            self.assertEqual(os.environ.get('UNCLE_PROJECT_ROOT_LOCKED'), '1')
+        self.assertEqual(self.ui.chat_error, '')
+        self.assertEqual(self.ui.workflow_idx, 0)
+        self.assertTrue(self.ui.resume_workflow_pending)
+        self.ui._run.assert_called_once()
+        self.assertEqual(self.ui.home_history[-1],
+                         ('system', 'Resuming the application build in %s.' % self.root))
+
+    def test_bare_resume_without_a_session_build_or_brief_still_refuses(self):
+        self.ui.chat_composer = '/resume'
+        self.ui._chat_command(10)
+        self.assertIn('No workflow has run in this session', self.ui.chat_error)
         self.ui._run.assert_not_called()
 
     def test_resume_build_action_targets_an_issue(self):

@@ -1528,6 +1528,9 @@ class UncleTUI:
                     active.discard(identity)
             self.active_test_runs = active
             return
+        if kind == 'project_root':
+            self._follow_project_root(ev.get('path', ''))
+            return
         host = getattr(self, 'supervision_host', None)
         if host is not None:
             try:
@@ -1736,6 +1739,37 @@ class UncleTUI:
         os.environ["UNCLE_PROJECT_ROOT"] = directory
         os.environ["UNCLE_PROJECT_ROOT_LOCKED"] = "1"
         self.home_history.append(("system", "Working in " + sanitize(directory)))
+
+    def _follow_project_root(self, path):
+        """Watch the directory the driver moved this run into.
+
+        from-issue.sh creates an issue's worktree only after the fetch names
+        it, so the run's state -- including the metrics records that mark a
+        stage finished -- lands one directory over from where the run was
+        launched. The launch root is remembered rather than replaced: the next
+        run derives its own worktree and branch from it.
+        """
+        if not (isinstance(path, str) and os.path.isabs(path) and os.path.isdir(path)):
+            return
+        if not hasattr(self, "_launch_root"):
+            self._launch_root = os.environ.get("UNCLE_PROJECT_ROOT")
+        os.environ["UNCLE_PROJECT_ROOT"] = path
+        stats = getattr(self, "session_stats", None)
+        if stats is not None:
+            metrics = os.path.join(path, ".uncle", "workflow", "metrics")
+            stats["seen"] = set(os.listdir(metrics)) if os.path.isdir(metrics) else set()
+            self._restore_session_totals()
+        self.home_history.append(("system", "Working in " + sanitize(path)))
+
+    def _restore_launch_root(self):
+        if not hasattr(self, "_launch_root"):
+            return
+        launch = self._launch_root
+        del self._launch_root
+        if launch is None:
+            os.environ.pop("UNCLE_PROJECT_ROOT", None)
+        else:
+            os.environ["UNCLE_PROJECT_ROOT"] = launch
 
     def start_workflow(self):
         fd, self.status_path = tempfile.mkstemp(prefix="uncle-status-", suffix=".jsonl")
@@ -5506,6 +5540,7 @@ class UncleTUI:
         # the request in the old project root while the driver started in a new
         # worktree, which never saw it -- so "rerun final-audit" became a fresh
         # build from DERIVE_BRIEF in a directory named after an unrelated brief.
+        self._restore_launch_root()
         if not self._rerun_pending():
             self._enter_run_worktree()
         self.state = "running"

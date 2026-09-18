@@ -451,6 +451,12 @@ if [[ "$WORKTREE" == 1 ]]; then
     PROJECT_ROOT="$PWD"
     WORKTREE_DIR="$PWD"
     export UNCLE_PROJECT_ROOT="$PWD"
+    # The TUI computed its project root before this directory existed and
+    # reads stage-completion records from there; tell it where the run went.
+    if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
+        jq -n -c --arg path "$PWD" '{event:"project_root",path:$path}' \
+            >> "$UNCLE_STATUS_FILE" 2>/dev/null || true
+    fi
     echo "Created worktree $WORKTREE_DIR on branch $WORKTREE_BRANCH"
 fi
 

@@ -208,9 +208,13 @@ commit_worktree() {
 # ---------------------------------------------------------------------------
 
 new_case create-seeds-and-runs-in-worktree
+export UNCLE_STATUS_FILE="$CASE/status.jsonl"
 run_issue /dev/null 42 --worktree
+unset UNCLE_STATUS_FILE
 expect_status 0
 WT="$CASE/proj-issue-42"
+check "project_root status event names the worktree" \
+    test "$(jq -r 'select(.event == "project_root") | .path' "$CASE/status.jsonl" | head -n 1)" == "$(driver_field root)"
 check "worktree registered at the default dir" registered "$WT"
 check "branch feat/add-widget-42 exists" branch_exists feat/add-widget-42
 check "worktree is on the branch" test "$(g -C "$WT" branch --show-current)" == feat/add-widget-42

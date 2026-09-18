@@ -72,8 +72,12 @@ Document sections: ''' + json.dumps(fields) + '\nExisting documents: ' + json.du
 
 def parse_reply(text):
     candidate = text.strip()
-    if candidate.startswith('```json') and candidate.endswith('```'):
-        candidate = candidate[7:-3].strip()
+    # A homepage action is occasionally rendered as a fenced object by a
+    # model. The fence is presentation, so accept one complete wrapper of any
+    # language/length; prose or a JSON fragment still fail schema validation.
+    fence = re.match(r'^(?P<mark>`{3,}|~{3,})[^\r\n]*[\r\n](?P<body>.*?)[\r\n]?(?P=mark)$', candidate, re.S)
+    if fence:
+        candidate = fence.group('body').strip()
     try:
         data = json.loads(candidate)
     except ValueError:

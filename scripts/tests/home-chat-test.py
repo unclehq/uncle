@@ -84,13 +84,13 @@ class HomeTests(unittest.TestCase):
                 self.assertEqual(env['UNCLE_CLINE_EFFORT'], 'high')
                 self.assertIsNotNone(fixture)
 
-    def test_homepage_model_uses_the_first_persisted_stage_model(self):
+    def test_homepage_model_uses_the_first_persisted_configured_runner(self):
         with tempfile.TemporaryDirectory() as d:
             config = Path(d) / 'config'
-            config.write_text('derive-brief.runner cline\n'
-                              'project-plan.runner cline\n'
-                              'project-plan.model cline-pass/persistent\n'
-                              'implementation.model cline-pass/later\n'
+            config.write_text('project-plan.runner kimi\n'
+                              'project-plan.effort high\n'
+                              'implementation.runner self-hosted\n'
+                              'implementation.model local/deepseek-v4-flash\n'
                               'supervision.model ignored-for-homepage\n')
             with patch.object(tui, '_project_root', return_value=d), \
                     patch.object(tui, 'CONFIG_PATH', str(config)), \
@@ -99,10 +99,10 @@ class HomeTests(unittest.TestCase):
                     patch.object(tui, 'read_keys', return_value={}):
                 ui = tui.UncleTUI(None)
                 self.assertEqual(ui.homepage_model()[:3],
-                                 ('project-plan', 'cline', 'cline-pass/persistent'))
+                                 ('project-plan', 'kimi', ''))
                 supervisor, stage = ui.homepage_supervision_config()
-                self.assertEqual((stage, supervisor.model),
-                                 ('project-plan', 'cline-pass/persistent'))
+                self.assertEqual((stage, supervisor.runner, supervisor.model, supervisor.effort),
+                                 ('project-plan', 'kimi', 'ignored-for-homepage', 'high'))
 
     def test_homepage_model_takes_a_saved_claude_stage_before_a_later_model(self):
         # derive-brief on claude is a complete selection: claude names no model

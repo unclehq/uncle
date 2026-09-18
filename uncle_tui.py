@@ -2561,11 +2561,14 @@ class UncleTUI:
         saved_models = getattr(self, 'stage_models', {})
         saved_runners = getattr(self, 'stage_runners', {})
         for stage in CONFIG_STAGES:
-            # A saved model completes any runner's selection. A saved claude
-            # runner is complete on its own -- claude takes no model here --
-            # and skipping it handed the homepage to the first stage that
-            # happened to name a model, however far down Configure it sat.
-            if (saved_models.get(stage) and self.stage_model(stage)) or saved_runners.get(stage) == 'claude':
+            # A configured runner is a complete model selection even when its
+            # CLI has no separate model-id field (Kimi, Claude, Codex).  The
+            # old test required a saved `.model` except for Claude, so an
+            # explicitly selected Kimi stage was skipped and the homepage
+            # incorrectly fell through to a later OpenCode/DeepSeek model.
+            # Preserve the first Configure state exactly as saved, paired with
+            # its own runner and effort.
+            if saved_runners.get(stage) or (saved_models.get(stage) and self.stage_model(stage)):
                 return stage, self.stage_runner(stage), self.stage_model(stage), self.stage_effort(stage)
         stage = CONFIG_STAGES[0]
         # Lightweight UI fixtures can ask homepage supervision before config
@@ -2962,6 +2965,28 @@ class UncleTUI:
         try:
             parsed = supervisor_chat.parse_reply(outcome.get('reply', ''))
         except ValueError as exc:
+            # Homepage creation is the one narrow case where a raw model
+            # response can safely be handed to the system's action validator:
+            # some models emit the requested home-action object directly
+            # instead of putting it in the supervisor envelope. It remains
+            # gated by the operator's current build request and by
+            # home_actions.parse_reply's exact schema; it is never a fallback
+            # for a running workflow, a gate answer, or steering.
+            raw_reply = outcome.get('reply', '')
+            proc = getattr(self, 'proc', None)
+            idle = self.state != 'running' and not bool(proc and proc.poll() is None)
+            direct_action = parse_home_action(str(raw_reply)) if idle and getattr(request, 'home_intent', False) else None
+            if direct_action is not None:
+                if direct_action.get('message', '').strip():
+                    self.home_history.append(('supervisor', sanitize(direct_action['message'])))
+                self.home_history.append(('system', 'Recovered a direct homepage action and validated it.'))
+                self.chat_error = ''
+                try:
+                    self._apply_home_action(request, direct_action)
+                except (OSError, ValueError) as action_exc:
+                    self.chat_error = sanitize(str(action_exc))
+                    self.home_history.append(('system', self.chat_error))
+                return True
             self.home_history.append(('supervisor', sanitize(str(outcome.get('reply', '')))[:8000]))
             self.chat_error = 'Supervisor reply did not follow the contract (%s); no action taken.' % sanitize(str(exc))
             self.home_history.append(('system', self.chat_error))

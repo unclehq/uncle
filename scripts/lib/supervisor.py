@@ -23,7 +23,7 @@ SUBDIR = 'supervision'
 EFFORTS = ('low', 'medium', 'high')
 ACTIONS = ('steer', 'retry', 'ask', 'none')
 TRIGGERS = ('validation', 'recurrence', 'steering', 'overrun')
-SUPPORTED_RUNNERS = ('claude',)
+SUPPORTED_RUNNERS = ('claude', 'kimi', 'self-hosted')
 PROPOSAL_KEYS = ('schema', 'diagnosis', 'evidence', 'action', 'target_stage', 'attempt',
                  'run_id', 'template_id', 'rationale')
 MAX_DIAGNOSIS = 2000

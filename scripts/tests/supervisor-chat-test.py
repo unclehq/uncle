@@ -203,6 +203,26 @@ class RoutingTests(Base):
                 ui._run.assert_called_once()
                 self.assertEqual(ui.workflow_idx, 0)
 
+    def test_direct_fenced_home_action_is_recovered_only_for_idle_build_request(self):
+        description = 'build a groovy calendar webapp'
+        action = {'uncle_action': 'create_app', 'message': 'Build a groovy calendar webapp',
+                  'document': description, 'start': True}
+        raw = '```swift\n' + json.dumps(action) + '\n```'
+        ui = self.ui('menu')
+        ui._run = Mock()
+        request = self.send(ui, description)
+        request.events.put(dict(outcome(), reply=raw))
+        self.assertTrue(ui.poll_home_chat())
+        self.assertIn('## Summary\n' + description, (self.project / 'REQUIREMENTS.md').read_text())
+        ui._run.assert_called_once()
+        self.assertIn('Recovered a direct homepage action', self.history(ui))
+        # The same bare action must not become a stage action.
+        running = self.ui('running')
+        request = self.send(running, description)
+        request.events.put(dict(outcome(), reply=raw))
+        self.assertTrue(running.poll_home_chat())
+        self.assertIn('did not follow the contract', running.chat_error)
+
     def test_issue_build_phrase_and_home_intent(self):
         ui = self.ui('menu')
         ui._home_action = Mock()
@@ -523,6 +543,9 @@ class DelegationTests(Base):
         self.assertEqual(parsed['reply'], 'Building.')
         self.assertEqual(parsed['home_action']['uncle_action'], 'run_app')
         self.assertRaises(ValueError, sc.parse_reply, 'Before\n' + fenced)
+        prefixed = 'I will now produce the required JSON.\n' + reply('Building.')
+        self.assertEqual(sc.parse_reply(prefixed)['reply'], 'Building.')
+        self.assertRaises(ValueError, sc.parse_reply, prefixed + '\nAfter')
         request = self.send(ui, 'answer this one')
         for answer in ('y\nn', 'yes please', 'maybe', 'y; rm -rf /'):
             with self.subTest(answer=answer):

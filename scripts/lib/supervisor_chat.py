@@ -158,7 +158,27 @@ def parse_reply(text):
     try:
         data = json.loads(candidate)
     except ValueError:
-        raise ValueError('malformed: reply is not a JSON object')
+        # Kimi can prefix its otherwise complete reply with a short analysis.
+        # Recover only one JSON object that runs to the physical end of the
+        # response; prose after it, fragments and multiple objects remain
+        # malformed. The recovered object goes through the same strict schema
+        # and action validation below, so this is transport normalization, not
+        # interpretation or new authority.
+        decoder = json.JSONDecoder()
+        data = None
+        for index, char in enumerate(candidate):
+            if char != '{':
+                continue
+            try:
+                value, end = decoder.raw_decode(candidate[index:])
+            except ValueError:
+                continue
+            if candidate[index + end:].strip():
+                continue
+            data = value
+            break
+        if data is None:
+            raise ValueError('malformed: reply is not a JSON object')
     if not isinstance(data, dict):
         raise ValueError('malformed: reply is not a JSON object')
     unknown = sorted(set(data) - set(REPLY_KEYS))

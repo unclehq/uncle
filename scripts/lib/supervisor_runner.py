@@ -1,11 +1,10 @@
 """The tool-free, bounded supervisor worker: one prompt in, one reply out.
 
-Only `claude` is supported. The argv is fixed (CAP-4): bare mode, no tools,
-no slash commands, no setting sources, no MCP, no session persistence, a
-dollar cap. The environment is an allowlist, the cwd an empty temporary
-directory, and the parent enforces the deadline and a 1 MiB output cap
-itself while the worker runs: a runner that ignores its own limits is
-killed with its whole tree, and the tree dies with the parent (D-16).
+Claude, Kimi and self-hosted supervisors use the same bounded worker shell.
+The environment is an allowlist, the cwd an empty temporary directory, and
+the parent enforces the deadline and a 1 MiB output cap itself while the
+worker runs: a runner that ignores its own limits is killed with its whole
+tree, and the tree dies with the parent (D-16).
 """
 import json
 import os
@@ -60,8 +59,16 @@ def build_command(config, root, environ=None, config_path=None, stage=''):
         env['UNCLE_STATUS_STAGE'] = str(stage)
         return [sys.executable, str(Path(root) / 'scripts' / 'lib' / 'self_hosted.py'),
                 'agent', '-p', '--effort', config.effort], env, home
+    if config.runner == 'kimi':
+        home = tempfile.mkdtemp(prefix='uncle-supervisor-')
+        env = worker_env(environ, home)
+        # `supervision.model` defaults to Claude's "sonnet" and is not a Kimi
+        # selector. Bare `kimi` therefore means the configured Kimi default;
+        # an explicit `kimi:<alias>` is preserved.
+        model = config.model if str(config.model).startswith('kimi:') else 'kimi'
+        return [str(Path(root) / 'scripts' / 'agent-kimi.sh'), '--model', model], env, home
     if config.runner not in ('claude',):
-        raise ValueError('unavailable: supervision.runner %s is not supported; use claude' % config.runner)
+        raise ValueError('unavailable: supervision.runner %s is not supported; use claude, kimi, or self-hosted' % config.runner)
     executable = environ.get('WORKFLOW_CLAUDE_CMD') or 'claude'
     resolved = shutil.which(executable)
     if not resolved:

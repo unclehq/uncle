@@ -84,6 +84,7 @@ unset UNCLE_NEW_WORKFLOW
 . "$ROOT/scripts/lib/project-git.sh"
 uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
+. "$ROOT/scripts/lib/supervision.sh"
 
 STATE_DIR=".uncle/workflow"
 export UNCLE_RUNNER_POOL_OWNER_PID="${UNCLE_RUNNER_POOL_OWNER_PID:-$$}"
@@ -674,6 +675,62 @@ verify_approval() {
         triage_reopen_gate "$approval_name"
         exit 1
     fi
+}
+
+# Record when this run started (for tracking file freshness)
+record_run_start() {
+    date +%s > "$STATE_DIR/run-start-time"
+}
+
+# Check if a file was created in this run (after run start time)
+is_file_from_this_run() {
+    local file="$1"
+    local run_start_file="$STATE_DIR/run-start-time"
+
+    [[ ! -f "$run_start_file" ]] && return 1  # No run start recorded, assume old
+    [[ ! -f "$file" ]] && return 0  # File doesn't exist yet - it's new, not old
+
+    local run_start="$(cat "$run_start_file")"
+    local file_mtime="$(stat -f "%m" "$file" 2>/dev/null || echo 0)"
+
+    # File is from this run if modified after run start
+    [[ "$file_mtime" -gt "$run_start" ]] && return 0 || return 1
+}
+
+# Start verification in background and return immediately
+start_verification_bg() {
+    local file="$1"
+    local approval_name="$2"
+    local log_file="$STATE_DIR/verification.${approval_name}.log"
+
+    (
+        verify_approval "$file" "$approval_name" >> "$log_file" 2>&1
+    ) > /dev/null 2>&1 &
+
+    local pid=$!
+    echo "$pid $file $approval_name" >> "$STATE_DIR/pending-verifications.txt"
+}
+
+# Wait for all pending verifications and check results
+wait_verifications() {
+    local verification_file="$STATE_DIR/pending-verifications.txt"
+    [[ ! -f "$verification_file" ]] && return 0
+
+    local failed=0
+    while IFS= read -r pid file approval_name; do
+        wait "$pid" || {
+            failed=1
+            local log_file="$STATE_DIR/verification.${approval_name}.log"
+            echo "Verification failed for $file ($approval_name)"
+            [[ -f "$log_file" ]] && cat "$log_file"
+            # Go back to stage that created this file
+            set_state "$(basename "${file%.*}" | tr '[:lower:]' '[:upper:]')"
+            continue 2
+        }
+    done < "$verification_file"
+
+    rm -f "$verification_file"
+    return "$failed"
 }
 
 # --- Envelopes (Issue 59) ----------------------------------------------------
@@ -1426,7 +1483,7 @@ progress_tap() {
 # Change-request pipeline stage order, used to report "stage N/M" to the TUI.
 # Dynamic log names (implementation-step-N, manual-checklist-base/delta) are
 # normalized to the base stage before lookup.
-STATUS_STAGE_SEQ="baseline change-spec change-plan adversarial-review updated-change-plan implementation manual-checklist execute-checklist final-audit"
+STATUS_STAGE_SEQ="change-plan adversarial-review updated-change-plan implementation manual-checklist execute-checklist final-audit"
 
 # Report the current stage to the TUI status channel. The exports feed the
 # agent shims' own status writes; the start event written here covers every
@@ -1467,7 +1524,7 @@ run_claude() {
     prompt_file="$(resolve_prompt "$1")"
     local log_name="$2"
     case "$log_name" in
-        requirements|project-plan|baseline|change-spec|change-plan)
+        requirements|project-plan|change-plan)
             python3 "$ROOT/scripts/lib/early-prerequisites.py" "$DOCUMENT_BUDGET_SOURCE" || exit $? ;;
     esac
 
@@ -1935,6 +1992,28 @@ change_plan_draft_key() {
     done
 }
 
+run_combined_change_plan_with_baseline() {
+    local prompt="$LOG_DIR/change-planning.prompt.md"
+    {
+        printf '# Combined baseline, change specification, and planning\n\n'
+        printf 'In this single stage and the same model and context, first establish the baseline by running verification commands, then write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+        cat "$(resolve_prompt prompts/change/baseline.md)"
+        printf '\n\n# Then specify the change\n\n'
+        cat "$(resolve_prompt prompts/change/change-spec.md)"
+        printf '\n\n# Then plan the specified change\n\n'
+        cat "$(resolve_prompt prompts/change/change-plan.md)"
+    } > "$prompt"
+    UNCLE_COMBINED_CHANGE_PLAN=1 run_claude "$prompt" change-plan \
+        "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN" || return $?
+    require_file BASELINE_REPORT.md
+    require_file CHANGE_SPEC.md
+    require_file CHANGE_PLAN.md
+    check_document_budget BASELINE_REPORT.md || return 1
+    check_document_budget CHANGE_SPEC.md || return 1
+    check_document_budget CHANGE_PLAN.md || return 1
+    change_plan_draft_key > "$STATE_DIR/change-plan.draft-key"
+}
+
 run_combined_change_plan() {
     local prompt="$LOG_DIR/change-planning.prompt.md"
     {
@@ -1985,13 +2064,48 @@ implementation_complete() {
 # here, before the first stage.
 change_pr_engine start || exit 1
 
+state_to_log_name() {
+    local state="$1"
+    case "$state" in
+        # Planning stages
+        DERIVE_BRIEF) echo "derive-brief" ;;
+        ANALYZE) echo "change-plan" ;;  # Combined with change-spec and plan
+        PLAN) echo "change-plan" ;;
+
+        # Review and refinement
+        ADVERSARIAL_REVIEW) echo "adversarial-review" ;;
+        UPDATED_PLAN) echo "updated-change-plan" ;;
+
+        # Implementation and verification
+        IMPLEMENT) echo "implementation" ;;
+        EXECUTE_CHECKLIST) echo "execute-checklist" ;;
+        FINAL_AUDIT) echo "final-audit" ;;
+
+        # Gate/approval states - don't report completion (they're gates, not work)
+        WAIT_*|VALIDATE_*|CHECKLIST) return 0 ;;
+
+        # Default: use state name as-is
+        *) echo "$state" ;;
+    esac
+}
+
+prev_state=""
 while true; do
     python3 "$ROOT/scripts/lib/rerun_stage.py" change || exit 1
     state="$(get_state)"
+
+    # Report completion of previous stage when state changes
+    if [[ -n "$prev_state" && "$prev_state" != "$state" ]]; then
+        log_name="$(state_to_log_name "$prev_state")"
+        supervision_stage_end "$log_name" "success" 2>/dev/null || true
+    fi
+
     if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi
 
     echo
     echo "Current state: $state"
+
+    prev_state="$state"
 
     # Older drivers could advance despite an explicitly partial delivery.
     case "$state" in
@@ -2035,12 +2149,10 @@ while true; do
             # A fresh run legitimately claims this checkout for its issue.
             write_origin
 
-            run_claude prompts/change/baseline.md baseline \
-                "$MODEL_BASELINE" "" 120 "$BUDGET_BASELINE"
-            require_file BASELINE_REPORT.md
-            check_document_budget BASELINE_REPORT.md || exit 1
+            # Record when this run started (for ignoring old files)
+            record_run_start
 
-            run_combined_change_plan || exit 1
+            run_combined_change_plan_with_baseline || exit 1
 
             set_state WAIT_ANALYSIS_APPROVAL
             ;;
@@ -2059,23 +2171,37 @@ while true; do
             ;;
 
         PLAN)
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-
             # First point in the pipeline where the command list has been
             # approved and the tree is still untouched, which is the only
             # window in which a baseline means anything.
             start_green_baseline_bg
 
-            if [[ -s "$STATE_DIR/change-plan.draft-key" ]] && \
-                    [[ "$(cat "$STATE_DIR/change-plan.draft-key")" == "$(change_plan_draft_key)" ]]; then
-                echo 'Using the plan drafted with the approved change specification.'
-            else
-                # Legacy resume, or edits made while approving the specification.
-                run_claude prompts/change/change-plan.md change-plan \
-                    "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"
-                require_file CHANGE_PLAN.md
-                check_document_budget CHANGE_PLAN.md || exit 1
+            # Always regenerate all three files with fresh baseline
+            # Also delete old ADVERSARIAL_REVIEW.md so it gets recreated fresh
+            rm -f BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md ADVERSARIAL_REVIEW.md
+            run_combined_change_plan_with_baseline || exit 1
+
+            # Verify all three files were created
+            require_file BASELINE_REPORT.md
+            require_file CHANGE_SPEC.md
+            require_file CHANGE_PLAN.md
+            check_document_budget BASELINE_REPORT.md || exit 1
+            check_document_budget CHANGE_SPEC.md || exit 1
+            check_document_budget CHANGE_PLAN.md || exit 1
+
+            envelope_invalidate CHANGE_PLAN
+            envelope_write --stage plan --result pass \
+                --evidence CHANGE_PLAN.md \
+                --producer-stage change-plan --producer-kind agent
+            set_state ADVERSARIAL_REVIEW
+            ;;
+
+        ADVERSARIAL_REVIEW)
+            # Check if CHANGE_PLAN is from this run; if not, regenerate it
+            if ! is_file_from_this_run CHANGE_PLAN.md; then
+                echo "CHANGE_PLAN.md is from old run, regenerating..."
+                set_state PLAN
+                continue
             fi
 
             # Written before the reviewer runs: a reviewer that never returns
@@ -2087,62 +2213,23 @@ while true; do
                 adversarial-review \
                 "$CODEX_EFFORT_REVIEW"
 
-            set_state VALIDATE_ADVERSARIAL_REVIEW
-            ;;
-
-        ADVERSARIAL_REVIEW)
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            envelope_write --stage review --result unavailable --reason 'reviewer did not complete'
-            run_codex prompts/change/adversarial-review.md ADVERSARIAL_REVIEW.md adversarial-review "$CODEX_EFFORT_REVIEW"
-            set_state VALIDATE_ADVERSARIAL_REVIEW
-            ;;
-
-        VALIDATE_ADVERSARIAL_REVIEW)
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md 2>&1)" || {
-                # A shape the repairer can settle on its own is not worth a
-                # stopped run. It only fixes deviations with one reading -- a
-                # leaked preamble, a bold label that should be a heading -- and
-                # refuses anything needing judgment, so a real defect still
-                # stops here. Re-validate after; the repair is not trusted.
-                if python3 "$ROOT/scripts/lib/repair_document_format.py" ADVERSARIAL_REVIEW.md; then
-                    if validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md 2>&1)"; then
-                        echo "Repaired the review format; continuing."
-                        rm -f "$STATE_DIR/validation-error.txt"
-                        check_document_budget ADVERSARIAL_REVIEW.md || exit 1
-                        write_review_envelope
-                        set_state WAIT_PLAN_APPROVAL
-                        continue
-                    fi
-                fi
-                envelope_write --stage review --result fail --reason "validation: ${validation_error%%$'\n'*}"
-                printf '%s\n' "$validation_error" >&2
-                printf '%s\n' "$validation_error" > "$STATE_DIR/validation-error.txt"
-                printf '%s\n' "validation: $validation_error" > "$STATE_DIR/stop-reason"
-                supervision_validation_failed adversarial-review ADVERSARIAL_REVIEW.md "$validation_error"
-                exit 1
-            }
-            rm -f "$STATE_DIR/validation-error.txt"
-            check_document_budget ADVERSARIAL_REVIEW.md || exit 1
             write_review_envelope
-            set_state WAIT_PLAN_APPROVAL
-            ;;
-
-        WAIT_PLAN_APPROVAL)
-            printf '%s\n' WAIT_PLAN_APPROVAL > "$STATE_DIR/approval-route"
-            human_gate ACKNOWLEDGE \
-                CHANGE_PLAN.md CHANGE_PLAN \
-                ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
             set_state UPDATED_PLAN
             ;;
 
         UPDATED_PLAN)
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            verify_approval CHANGE_PLAN.md CHANGE_PLAN
-            verify_approval ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
+            # Check if ADVERSARIAL_REVIEW is from this run; if not, regenerate it
+            if ! is_file_from_this_run ADVERSARIAL_REVIEW.md; then
+                echo "ADVERSARIAL_REVIEW.md is from old run, regenerating..."
+                set_state ADVERSARIAL_REVIEW
+                continue
+            fi
+
+            # Start verifications in background (will fail build if docs changed)
+            start_verification_bg BASELINE_REPORT.md BASELINE_REPORT
+            start_verification_bg CHANGE_SPEC.md CHANGE_SPEC
+            start_verification_bg CHANGE_PLAN.md CHANGE_PLAN
+            start_verification_bg ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
 
             # The review response revises CHANGE_PLAN.md in place rather than
             # writing a second plan. A separate UPDATED_CHANGE_PLAN.md restated
@@ -2155,10 +2242,7 @@ while true; do
             run_claude prompts/change/updated-change-plan.md updated-change-plan \
                 "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \
                 "$BUDGET_UPDATED_PLAN"
-            set_state VALIDATE_UPDATED_PLAN
-            ;;
 
-        VALIDATE_UPDATED_PLAN)
             # Probe only: would code written from the pre-review plan have
             # survived the review? The snapshot above already holds that plan,
             # so this costs a diff. Acts on nothing, cannot fail the stage.
@@ -2167,16 +2251,10 @@ while true; do
                     "$STATE_DIR/CHANGE_PLAN.pre-review.md" CHANGE_PLAN.md \
                     "$STATE_DIR/plan-drift.json" 2>/dev/null || true
             fi
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            verify_approval ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
+
             require_file CHANGE_PLAN.md
             check_document_budget CHANGE_PLAN.md || exit 1
 
-            set_state WAIT_UPDATED_PLAN_APPROVAL
-            ;;
-
-        WAIT_UPDATED_PLAN_APPROVAL)
             plan_status=0
             plan_assess || plan_status=$?
             case "$plan_status" in 0) ;; 10) continue ;; *) exit 1 ;; esac
@@ -2186,9 +2264,6 @@ while true; do
             # The gate does not open while a blocking review finding has no
             # disposition row in the revised plan.
             envelope_py plan-gate ADVERSARIAL_REVIEW.md CHANGE_PLAN.md || exit 1
-            printf '%s\n' WAIT_UPDATED_PLAN_APPROVAL > "$STATE_DIR/approval-route"
-            human_gate APPROVE \
-                CHANGE_PLAN.md CHANGE_PLAN
             plan_review_input=()
             [[ -f ADVERSARIAL_REVIEW.md ]] && plan_review_input=(--input "review=$(hash_file ADVERSARIAL_REVIEW.md)")
             envelope_write --stage plan --result pass \
@@ -2200,11 +2275,24 @@ while true; do
             ;;
 
         IMPLEMENT)
+            # Check if critical files are from this run; if not, regenerate them
+            if ! is_file_from_this_run CHANGE_PLAN.md; then
+                echo "CHANGE_PLAN.md is from old run, regenerating..."
+                set_state PLAN
+                continue
+            fi
+            if ! is_file_from_this_run ADVERSARIAL_REVIEW.md; then
+                echo "ADVERSARIAL_REVIEW.md is from old run, regenerating..."
+                set_state ADVERSARIAL_REVIEW
+                continue
+            fi
+
+            # Wait for all background verifications to complete before implementing
+            wait_verifications || exit 1
+
             # Before a single line of code is written: the baseline only means
             # anything against the unmodified tree.
             wait_green_baseline_bg
-            verify_approval CHANGE_PLAN.md CHANGE_PLAN
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
             plan_status=0
             plan_before_write || plan_status=$?
             case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac

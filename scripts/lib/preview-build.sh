@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Build something viewable from the approved PROJECT_PLAN.md, while the
-# adversarial review and the updated plan are still being written.
+# Build something viewable from the brief, while the plan, the adversarial
+# review and the updated plan are still being written.
+#
+# It starts as soon as the brief is approved and builds into preview/, so the
+# planning agents working in the same tree are not reading half-built code as
+# if it were the project. PROJECT_PLAN.md and REQUIREMENTS_INTERPRETATION.md
+# are used when they already exist and skipped when they do not.
 #
 # The operator asked to see the application before the review stages finish,
 # accepting that it is paid for twice. That is the trade: wall clock is never
@@ -37,7 +42,7 @@ PREVIEW_STARTED=0
 preview_build_start() {
     [[ "$PREVIEW_BUILD" == "1" ]] || return 0
     [[ "$PREVIEW_STARTED" == 0 ]] || return 0
-    [[ -s PROJECT_PLAN.md ]] || return 0
+    [[ -s PROJECT_PLAN.md || -s "${DOCUMENT_BUDGET_SOURCE:-REQUIREMENTS.md}" ]] || return 0
 
     # Only a web application or a command line tool has anything to show this
     # early. A library, an API or a daemon would spend an implementation's worth
@@ -46,7 +51,7 @@ preview_build_start() {
     local kind
     kind="$(python3 -B "$ROOT/scripts/lib/preview_kind.py" . 2>/dev/null)" || kind=none
     if [[ "$kind" != webpage && "$kind" != command ]]; then
-        echo "No preview build: the plan does not describe a web or command line"
+        echo "No preview build: the brief does not describe a web or command line"
         echo "application, so there would be nothing to show."
         return 0
     fi
@@ -61,10 +66,18 @@ preview_build_start() {
         snapshot_untracked "$UNTRACKED_BASELINE"
     fi
     # The plan this was built from, so the later stage can tell whether the
-    # review changed anything the code depends on.
-    plan_material_hash PROJECT_PLAN.md > "$STATE_DIR/preview-build.plan" 2>/dev/null || true
+    # review changed anything the code depends on. A preview built from the
+    # brief alone records nothing, and is never taken as built to the plan.
+    rm -f "$STATE_DIR/preview-build.plan"
+    if [[ -s PROJECT_PLAN.md ]]; then
+        plan_material_hash PROJECT_PLAN.md > "$STATE_DIR/preview-build.plan" 2>/dev/null || true
+    fi
     echo
-    echo "Building a $kind preview from the approved plan while the review runs."
+    if [[ -s PROJECT_PLAN.md ]]; then
+        echo "Building a $kind preview in preview/ from the plan while the review runs."
+    else
+        echo "Building a $kind preview in preview/ from the brief while planning runs."
+    fi
     echo "It is a first look, not the implementation: the approved plan is"
     echo "implemented properly afterwards, and this is rebuilt if the review"
     echo "changes anything it depends on."

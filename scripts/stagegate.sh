@@ -1686,6 +1686,9 @@ while true; do
             ;;
 
         REQUIREMENTS)
+            # The brief is approved and the tree is still empty: the earliest
+            # point at which there is something to build a first look from.
+            preview_build_start
             run_stage REQUIREMENTS
             set_state VALIDATE_REQUIREMENTS
             ;;
@@ -1728,6 +1731,9 @@ while true; do
             verify_approval \
                 REQUIREMENTS_INTERPRETATION.md \
                 REQUIREMENTS_INTERPRETATION
+            # Already running on a run that came through REQUIREMENTS; a run
+            # resumed here starts it now.
+            preview_build_start
             # Written already by the merged pass -- but only usable if the
             # document it was written against is byte-identical to what the
             # operator just approved. An edited interpretation means the plan
@@ -1761,9 +1767,8 @@ while true; do
 
         ADVERSARIAL_REVIEW)
             verify_approval PROJECT_PLAN.md PROJECT_PLAN
-            # From here the plan is approved, and the two review stages take
-            # minutes during which the operator sees nothing running. Build
-            # something viewable beside them.
+            # Normally started when planning began; a run resumed here starts
+            # it now, so the review stages are not minutes of nothing on screen.
             preview_build_start
             run_gated_stage ADVERSARIAL_REVIEW \
                 PROJECT_PLAN.md \
@@ -1984,8 +1989,12 @@ while true; do
                 echo "The review left every section the preview was built from unchanged."
                 echo "Implementation continues from that code rather than an empty tree."
             elif [[ "$PREVIEW_STARTED" == 1 ]]; then
-                echo "The review changed the plan the preview was built from."
-                echo "Implementation rebuilds to the approved plan; preview code is not evidence."
+                if [[ -s "$STATE_DIR/preview-build.plan" ]]; then
+                    echo "The review changed the plan the preview was built from."
+                else
+                    echo "The preview was built from the brief, before the plan existed."
+                fi
+                echo "Implementation builds to the approved plan; preview code is not evidence."
             fi
             # A backgrounded probe has no report yet, and demanding one here
             # would send the run straight back to PREFLIGHT for ever. The plan

@@ -1943,9 +1943,11 @@ class UncleTUI:
     # sighting opens it.
     _PREVIEW_POLL_SECONDS = 0.5
 
-    # Stages that write the application. The preview build exists purely to put
-    # something on screen early, so it is the first place to watch, not the last.
-    _PREVIEW_STAGES = ("implementation", "preview-build")
+    # Stages during which a page may appear. The preview build starts beside
+    # the planning stage and runs through review, so the page is watched for
+    # from planning onward, not only while the application proper is written.
+    _PREVIEW_STAGES = ("requirements", "project-plan", "adversarial-review",
+                       "updated-plan", "preflight", "implementation", "preview-build")
 
     def _poll_early_preview(self):
         """Open the page the moment one exists, from whichever stage wrote it.

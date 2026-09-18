@@ -9,6 +9,10 @@ Read:
 Do not implement code.
 Do not modify any existing artifact.
 
+A `preview/` directory, if present, is a throwaway first look built from the
+brief while planning ran. It is not the implementation and not part of the plan
+under review: do not read it or raise findings about it.
+
 Challenge the plan rather than summarizing it.
 
 Create findings covering:

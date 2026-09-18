@@ -88,6 +88,14 @@ class PreviewTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 launch_spec(self.root)
 
+    def test_preview_directory_page_is_found_when_the_root_has_none(self):
+        (self.root / 'preview').mkdir()
+        (self.root / 'preview' / 'index.html').write_text('<h1>early</h1>')
+        self.assertEqual(launch_spec(self.root),
+                         {'kind': 'webpage', 'url': (self.root / 'preview' / 'index.html').resolve().as_uri()})
+        (self.root / 'index.html').write_text('<h1>real</h1>')
+        self.assertEqual(launch_spec(self.root)['url'], (self.root / 'index.html').resolve().as_uri())
+
     def test_none_overrides_static_detection(self):
         (self.root / 'index.html').write_text('documentation')
         self.spec({'kind':'none'})

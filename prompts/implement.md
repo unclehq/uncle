@@ -18,6 +18,12 @@ ADVERSARIAL_REVIEW.md, so do not read either one. If the updated plan turns out
 to be missing something you need, read the superseded document, and record in
 IMPLEMENTATION_NOTES.md that you had to.
 
+A `preview/` directory, if present, is a first look built from the brief
+before the plan was reviewed. It is not evidence and not the application:
+build the real application at the repository root as the plan specifies,
+reuse from `preview/` only what fits that plan, and delete `preview/` once
+the real entry point exists.
+
 Implement the approved updated plan in this invocation. Deliver working
 application code and feature-specific verification, not only plans or reports.
 Map every required acceptance criterion to an implementation task and a check,

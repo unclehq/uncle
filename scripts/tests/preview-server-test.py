@@ -156,6 +156,16 @@ class EarlyPreview(unittest.TestCase):
         self.assertTrue(self.opened[0].endswith('public/app.html'))
         self.assertIn('<h1>nested</h1>', get(self.opened[0]))
 
+    def test_planning_stages_open_the_preview_directory_page(self):
+        for stage in ('requirements', 'project-plan', 'adversarial-review'):
+            self.opened.clear()
+            screen = self.make(project(**{'preview__index.html': '<h1>early</h1>'}), stage)
+            self.settle(screen)
+            self.assertEqual(len(self.opened), 1, stage)
+            self.assertTrue(self.opened[0].endswith('preview/index.html'), stage)
+            self.assertIn('<h1>early</h1>', get(self.opened[0]))
+            screen._close_early_preview()
+
     def test_only_implementation_stages_preview(self):
         for stage in ('change-plan', 'final-audit', 'test-review', 'execute-checklist'):
             self.opened.clear()

@@ -674,8 +674,8 @@ config is `STAGE VALUE` lines:
 | `<stage>` | cline model id for that stage (`WORKFLOW_MODEL_<STAGE>`) |
 
 Valid stage keys: `requirements`, `project-plan`, `updated-plan`,
-`preflight`, `implementation`, `execute-checklist`, `baseline`, `change-spec`,
-`change-plan`, `updated-change-plan`, `adversarial-review`, `test-review`,
+`preflight`, `implementation`, `execute-checklist`, `change-plan`,
+`updated-change-plan`, `adversarial-review`, `test-review`,
 `manual-checklist`, `final-audit`. Repairs use the `implementation` settings.
 
 ### Envelopes and attestation

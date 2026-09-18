@@ -64,9 +64,9 @@ done
 # Treat it as "no model given" so codex uses the model it is configured with,
 # which is the same rule the cline shim follows.
 case "$model" in
-    opus|sonnet|o3|kimi|kimi:*) model="" ;;
+    opus|sonnet|kimi|kimi:*) model="" ;;
 esac
-if [[ -z "$model" ]] && [[ -n "${UNCLE_CODEX_MODEL:-}" ]]; then
+if [[ -n "${UNCLE_CODEX_MODEL:-}" ]]; then
     model="$UNCLE_CODEX_MODEL"
 fi
 

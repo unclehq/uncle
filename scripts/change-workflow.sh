@@ -2134,20 +2134,19 @@ while true; do
             ;;
 
         PLAN)
-            # Start verifications in background
-            start_verification_bg BASELINE_REPORT.md BASELINE_REPORT
-            start_verification_bg CHANGE_SPEC.md CHANGE_SPEC
-
             # First point in the pipeline where the command list has been
             # approved and the tree is still untouched, which is the only
             # window in which a baseline means anything.
             start_green_baseline_bg
 
-            # Always regenerate CHANGE_PLAN if it's not from this run
-            if ! is_file_from_this_run CHANGE_PLAN.md; then
-                rm -f CHANGE_PLAN.md
-                run_claude prompts/change/change-plan.md change-plan \
-                    "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN" || exit 1
+            # If baseline is from old run, regenerate all three with fresh baseline
+            if ! is_file_from_this_run BASELINE_REPORT.md; then
+                rm -f BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md
+                run_combined_change_plan_with_baseline || exit 1
+            else
+                # Start verifications only for documents that already exist from this run
+                start_verification_bg BASELINE_REPORT.md BASELINE_REPORT
+                start_verification_bg CHANGE_SPEC.md CHANGE_SPEC
             fi
             require_file CHANGE_PLAN.md
             check_document_budget CHANGE_PLAN.md || exit 1

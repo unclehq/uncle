@@ -1426,7 +1426,7 @@ progress_tap() {
 # Change-request pipeline stage order, used to report "stage N/M" to the TUI.
 # Dynamic log names (implementation-step-N, manual-checklist-base/delta) are
 # normalized to the base stage before lookup.
-STATUS_STAGE_SEQ="baseline change-spec change-plan adversarial-review updated-change-plan implementation manual-checklist execute-checklist final-audit"
+STATUS_STAGE_SEQ="change-plan adversarial-review updated-change-plan implementation manual-checklist execute-checklist final-audit"
 
 # Report the current stage to the TUI status channel. The exports feed the
 # agent shims' own status writes; the start event written here covers every
@@ -1467,7 +1467,7 @@ run_claude() {
     prompt_file="$(resolve_prompt "$1")"
     local log_name="$2"
     case "$log_name" in
-        requirements|project-plan|baseline|change-spec|change-plan)
+        requirements|project-plan|change-plan)
             python3 "$ROOT/scripts/lib/early-prerequisites.py" "$DOCUMENT_BUDGET_SOURCE" || exit $? ;;
     esac
 
@@ -2078,6 +2078,23 @@ while true; do
                 check_document_budget CHANGE_PLAN.md || exit 1
             fi
 
+            set_state WAIT_CHANGE_PLAN_APPROVAL
+            ;;
+
+        WAIT_CHANGE_PLAN_APPROVAL)
+            human_gate APPROVE \
+                CHANGE_PLAN.md CHANGE_PLAN
+            envelope_invalidate CHANGE_PLAN
+            envelope_write --stage plan --result pass \
+                --evidence CHANGE_PLAN.md \
+                --approval CHANGE_PLAN \
+                --producer-stage change-plan --producer-kind agent
+            set_state ADVERSARIAL_REVIEW
+            ;;
+
+        ADVERSARIAL_REVIEW)
+            verify_approval CHANGE_PLAN.md CHANGE_PLAN
+
             # Written before the reviewer runs: a reviewer that never returns
             # leaves the reason nothing was verified, and blocks release.
             envelope_write --stage review --result unavailable --reason 'reviewer did not complete'
@@ -2087,14 +2104,6 @@ while true; do
                 adversarial-review \
                 "$CODEX_EFFORT_REVIEW"
 
-            set_state VALIDATE_ADVERSARIAL_REVIEW
-            ;;
-
-        ADVERSARIAL_REVIEW)
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            envelope_write --stage review --result unavailable --reason 'reviewer did not complete'
-            run_codex prompts/change/adversarial-review.md ADVERSARIAL_REVIEW.md adversarial-review "$CODEX_EFFORT_REVIEW"
             set_state VALIDATE_ADVERSARIAL_REVIEW
             ;;
 

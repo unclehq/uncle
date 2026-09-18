@@ -327,73 +327,6 @@ Every invariant must be classified as:
 
 Any RELAXED or REMOVED invariant requires explicit human approval.
 
-## Stages
-
-### Stage 1: Change plan
-
-In a single runner, establish the baseline and create the change plan.
-
-1. Establish a reproducible baseline: run all verification commands and record
-   results in BASELINE_REPORT.md
-2. Analyze existing code
-3. Create CHANGE_SPEC.md describing the change
-4. Create CHANGE_PLAN.md with implementation strategy
-
-After CHANGE_PLAN.md is created:
-
-- do not implement;
-- stop and ask the user to review and approve the plan.
-
-### Stage 2: Adversarial review
-
-This stage begins only after CHANGE_PLAN.md has a valid approval record.
-
-Invoke:
-
-./scripts/codex-review-plan.sh
-
-After ADVERSARIAL_REVIEW.md is created:
-
-- do not revise the plan;
-- do not implement;
-- stop and ask the user to review and approve the adversarial review.
-
-### Stage 3: Implementation and verification
-
-This stage begins only after ADVERSARIAL_REVIEW.md has a valid approval record.
-
-Read:
-
-- BASELINE_REPORT.md
-- CHANGE_PLAN.md
-- ADVERSARIAL_REVIEW.md
-
-Revise CHANGE_PLAN.md in place to address or explicitly reject every review
-finding. Record one of: Accepted, Partially accepted, Rejected, Deferred.
-
-Implement according to the approved plan. During implementation:
-
-1. Build the smallest working vertical slice first.
-2. Keep core domain behavior in pure functions where practical.
-3. Implement high-risk invariants before optional features.
-4. Record material deviations from the plan in IMPLEMENTATION_NOTES.md.
-5. Do not weaken an invariant merely to make a test pass.
-6. Do not change an approved requirement without recording the deviation.
-
-After implementation, the driver runs the plan's verification commands and
-stops at a human gate on the real diff.
-
-### Stage 4: Manual verification
-
-After implementation and driver-initiated automated verification, invoke:
-
-./scripts/codex-create-checklist.sh
-
-The reviewer CLI creates MANUAL_CHECKLIST.md.
-
-Execute every feasible critical item in MANUAL_CHECKLIST.md and write
-VERIFICATION_REPORT.md.
-
 ## Artifact ownership
 
 | Artifact | Owner |
@@ -401,16 +334,16 @@ VERIFICATION_REPORT.md.
 | CHANGE_REQUEST.md | Human |
 | .uncle/workflow/IMPLEMENTATION_REVIEW.md | Driver |
 | .uncle/workflow/green-check.md | Driver |
-| BASELINE_REPORT.md | Primary agent (stage 1) |
-| CHANGE_SPEC.md | Primary agent (stage 1) |
-| CHANGE_PLAN.md | Primary agent (stage 1, revised in stage 3) |
-| ADVERSARIAL_REVIEW.md | Reviewer (stage 2) |
-| Source changes | Primary agent (stage 3) |
-| IMPLEMENTATION_NOTES.md | Primary agent (stage 3) |
-| CHANGE_TEST_REPORT.md | Primary agent (stage 3) |
-| MANUAL_CHECKLIST.md | Reviewer (stage 4) |
-| VERIFICATION_REPORT.md | Primary agent (stage 4) |
-| FINAL_AUDIT.md | Reviewer (stage 4) |
+| BASELINE_REPORT.md | Primary agent |
+| CHANGE_SPEC.md | Primary agent |
+| CHANGE_PLAN.md | Primary agent (revised in place after review) |
+| ADVERSARIAL_REVIEW.md | Reviewer |
+| Source changes | Primary agent |
+| IMPLEMENTATION_NOTES.md | Primary agent |
+| CHANGE_TEST_REPORT.md | Primary agent |
+| MANUAL_CHECKLIST.md | Reviewer |
+| VERIFICATION_REPORT.md | Primary agent |
+| FINAL_AUDIT.md | Reviewer |
 
 ## Gates around implementation
 

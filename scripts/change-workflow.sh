@@ -2159,6 +2159,12 @@ while true; do
             ;;
 
         ADVERSARIAL_REVIEW)
+            # Check if CHANGE_PLAN is from this run; if not, regenerate it
+            if ! is_file_from_this_run CHANGE_PLAN.md; then
+                echo "CHANGE_PLAN.md is from old run, regenerating..."
+                set_state PLAN
+                continue
+            fi
 
             # Written before the reviewer runs: a reviewer that never returns
             # leaves the reason nothing was verified, and blocks release.
@@ -2174,6 +2180,13 @@ while true; do
             ;;
 
         UPDATED_PLAN)
+            # Check if ADVERSARIAL_REVIEW is from this run; if not, regenerate it
+            if ! is_file_from_this_run ADVERSARIAL_REVIEW.md; then
+                echo "ADVERSARIAL_REVIEW.md is from old run, regenerating..."
+                set_state ADVERSARIAL_REVIEW
+                continue
+            fi
+
             # Start verifications in background (will fail build if docs changed)
             start_verification_bg BASELINE_REPORT.md BASELINE_REPORT
             start_verification_bg CHANGE_SPEC.md CHANGE_SPEC
@@ -2224,6 +2237,18 @@ while true; do
             ;;
 
         IMPLEMENT)
+            # Check if critical files are from this run; if not, regenerate them
+            if ! is_file_from_this_run CHANGE_PLAN.md; then
+                echo "CHANGE_PLAN.md is from old run, regenerating..."
+                set_state PLAN
+                continue
+            fi
+            if ! is_file_from_this_run ADVERSARIAL_REVIEW.md; then
+                echo "ADVERSARIAL_REVIEW.md is from old run, regenerating..."
+                set_state ADVERSARIAL_REVIEW
+                continue
+            fi
+
             # Wait for all background verifications to complete before implementing
             wait_verifications || exit 1
 

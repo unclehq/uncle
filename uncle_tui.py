@@ -4172,7 +4172,15 @@ class UncleTUI:
                                          (1 if k == curses.KEY_DOWN else -1))
                 return True
             return False  # Gate keys use the same approval handler as /approve.
-        if not self.chat_edit and not (self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'issue') and self._chat_command(k):
+        # An open issue-mention picker (from typing #N in ordinary text) owns
+        # Enter/arrow keys so a suggestion can be confirmed or browsed. A slash
+        # command wins regardless: `/resume #69` and `/clear #69` need that same
+        # #N to reach the command's own argument parsing, not the mention picker
+        # -- _chat_command still declines (returns False) whatever it does not
+        # itself recognize, so the picker's own handling below is unaffected.
+        picker_owns_key = self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'issue' \
+            and not self.chat_composer.startswith(('/', '\\'))
+        if not self.chat_edit and not picker_owns_key and self._chat_command(k):
             return True
         try:
             if k == 27:

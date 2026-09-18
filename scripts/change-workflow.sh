@@ -2121,16 +2121,11 @@ while true; do
             # window in which a baseline means anything.
             start_green_baseline_bg
 
-            if [[ -s "$STATE_DIR/change-plan.draft-key" ]] && \
-                    [[ "$(cat "$STATE_DIR/change-plan.draft-key")" == "$(change_plan_draft_key)" ]]; then
-                echo 'Using the plan drafted with the approved change specification.'
-            else
-                # Legacy resume, or edits made while approving the specification.
-                run_claude prompts/change/change-plan.md change-plan \
-                    "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"
-                require_file CHANGE_PLAN.md
-                check_document_budget CHANGE_PLAN.md || exit 1
-            fi
+            # Always create a fresh CHANGE_PLAN after baseline and spec are approved
+            run_claude prompts/change/change-plan.md change-plan \
+                "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"
+            require_file CHANGE_PLAN.md
+            check_document_budget CHANGE_PLAN.md || exit 1
 
             envelope_invalidate CHANGE_PLAN
             envelope_write --stage plan --result pass \

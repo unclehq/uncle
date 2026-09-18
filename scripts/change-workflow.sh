@@ -2063,6 +2063,17 @@ implementation_complete() {
 # here, before the first stage.
 change_pr_engine start || exit 1
 
+state_to_log_name() {
+    local state="$1"
+    case "$state" in
+        PLAN) echo "change-plan" ;;
+        ADVERSARIAL_REVIEW) echo "adversarial-review" ;;
+        UPDATED_PLAN) echo "updated-change-plan" ;;
+        IMPLEMENT) echo "implementation" ;;
+        *) echo "$state" ;;
+    esac
+}
+
 prev_state=""
 while true; do
     python3 "$ROOT/scripts/lib/rerun_stage.py" change || exit 1
@@ -2070,7 +2081,8 @@ while true; do
 
     # Report completion of previous stage when state changes
     if [[ -n "$prev_state" && "$prev_state" != "$state" ]]; then
-        supervision_stage_end "$prev_state" "success" 2>/dev/null || true
+        log_name="$(state_to_log_name "$prev_state")"
+        supervision_stage_end "$log_name" "success" 2>/dev/null || true
     fi
 
     if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi

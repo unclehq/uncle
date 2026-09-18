@@ -49,6 +49,8 @@ fi
 usage() {
     cat <<'EOF'
 Usage: uncle [-h|--help|--performance|--runs] [--unattended]
+       uncle --application TEXT [--unattended]
+       uncle --issue ISSUE [--unattended]
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]
                     [--allowed-signers PATH] [--certificate-identity ID]
                     [--certificate-oidc-issuer URL]
@@ -64,6 +66,12 @@ and per-stage overrides from `.uncle/config` (menu option 4).
   q) Quit
 
 Runs with no arguments. -h / --help print this message and exit 0.
+--application TEXT starts a new application build immediately with the given
+description, skipping interactive input. Composes with --unattended.
+--issue ISSUE starts a GitHub issue build immediately with the given issue
+reference (number, #number, or full https://github.com/... URL), skipping
+interactive input. Composes with --unattended. --application and --issue are
+mutually exclusive.
 --performance reports recorded runtime and token usage for the current project.
 --runs lists the runs across this project's git worktrees (see
 `from-issue.sh --worktree`): one line per worktree holding a run, as
@@ -78,6 +86,8 @@ EOF
 # Collected here and handed to whichever driver the menu picks, so the choice
 # of workflow and the choice to run it unattended stay independent.
 UNCLE_ARGS=()
+UNCLE_STARTUP_ACTION=""
+UNCLE_STARTUP_TEXT=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)     usage; exit 0 ;;
@@ -86,6 +96,55 @@ while [[ $# -gt 0 ]]; do
         --performance) exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
         --runs)        exec python3 "$ROOT/scripts/lib/worktree_runs.py" "$PROJECT_ROOT" ;;
         --unattended)  UNCLE_ARGS+=(--unattended); shift ;;
+        --application)
+            if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
+                printf 'Error: --application and --issue are mutually exclusive\n' >&2
+                exit 1
+            fi
+            shift
+            if [[ $# -eq 0 ]]; then
+                printf 'Error: --application requires an argument\n' >&2
+                exit 1
+            fi
+            if [[ -z "$1" ]]; then
+                printf 'Error: --application text cannot be empty\n' >&2
+                exit 1
+            fi
+            UNCLE_STARTUP_ACTION="create_app"
+            UNCLE_STARTUP_TEXT="$1"
+            shift
+            ;;
+        --issue)
+            if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
+                printf 'Error: --application and --issue are mutually exclusive\n' >&2
+                exit 1
+            fi
+            shift
+            if [[ $# -eq 0 ]]; then
+                printf 'Error: --issue requires an argument\n' >&2
+                exit 1
+            fi
+            if [[ -z "$1" ]]; then
+                printf 'Error: --issue reference cannot be empty\n' >&2
+                exit 1
+            fi
+            issue_ref="$1"
+            issue_ref="${issue_ref#\#}"
+            if [[ "$issue_ref" =~ ^[0-9]+$ ]]; then
+                if [[ "$issue_ref" == "0" ]]; then
+                    printf 'Error: issue must be a positive integer\n' >&2
+                    exit 1
+                fi
+            elif [[ "$issue_ref" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+/?$ ]]; then
+                :
+            else
+                printf 'Error: issue must be a positive integer, #number, or full GitHub URL\n' >&2
+                exit 1
+            fi
+            UNCLE_STARTUP_ACTION="github_issue"
+            UNCLE_STARTUP_TEXT="$issue_ref"
+            shift
+            ;;
         *)             printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
     esac
 done
@@ -103,12 +162,20 @@ export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
 CONFIG_STAGES="requirements change-spec project-plan change-plan adversarial-review updated-plan updated-change-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
 
 # Full-screen terminal UI when both stdin and stdout are real terminals; the
-# line-based menu below remains for pipes and scripts.
+# line-based menu below remains for pipes and scripts. Force TUI with --noinput
+# when startup action is injected to prevent non-TTY fallback to line menu.
 if [[ -t 0 && -t 1 ]] && python3 -c pass >/dev/null 2>&1; then
     if python3 "$ROOT/uncle_tui.py"; then
         exit 0
     fi
     # TUI failed (e.g. unsupported terminal); fall through to the line menu.
+elif [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
+    # Startup action requires TUI even in non-TTY contexts; force with --noinput
+    if python3 "$ROOT/uncle_tui.py" --noinput; then
+        exit 0
+    fi
+    printf 'Error: TUI failed to start with startup action\n' >&2
+    exit 1
 fi
 
 

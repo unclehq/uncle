@@ -775,6 +775,13 @@ class UncleTUI:
         self._config_stamp = None
         self._reload_tick = 0
         self.load_config()
+        # Read startup action from environment if present
+        self._startup_action = os.environ.get("UNCLE_STARTUP_ACTION")
+        self._startup_text = os.environ.get("UNCLE_STARTUP_TEXT")
+        self._startup_unattended = os.environ.get("UNCLE_STARTUP_UNATTENDED") == "1"
+        self._startup_injected = False
+        if self._startup_unattended:
+            self.misc['auto_mode'] = True
         # Bind the homepage composer before the first frame or key event.
         self._ensure_chat()
         self.chat_focus = 'chat'
@@ -3133,6 +3140,38 @@ class UncleTUI:
                 self._run()
                 self.home_history.append(('system', 'Started the ' + kind + ' workflow using ' + filename + '.'))
         self.chat_error = ''
+
+    def _handle_startup_action(self):
+        if self.state == 'running' or (getattr(self, 'proc', None) and self.proc.poll() is None):
+            raise ValueError('A workflow is already active.')
+        root = _project_root()
+        try:
+            if self._startup_action == 'create_app':
+                req_path = Path(root) / 'REQUIREMENTS.md'
+                if req_path.exists():
+                    action_type = 'create_change'
+                else:
+                    action_type = 'create_app'
+                action = {
+                    'uncle_action': action_type,
+                    'document': self._startup_text,
+                    'start': True,
+                    'message': 'Starting ' + ('change' if action_type == 'create_change' else 'application') + ' build'
+                }
+                self._home_action(action, replace_approved=True)
+            elif self._startup_action == 'github_issue':
+                action = {
+                    'uncle_action': 'github_issue',
+                    'issue': self._startup_text,
+                    'start': True,
+                    'message': 'Starting GitHub issue build'
+                }
+                self._home_action(action, replace_approved=True)
+            else:
+                raise ValueError('Unknown startup action: ' + str(self._startup_action))
+        finally:
+            self._startup_action = None
+            self._startup_text = None
 
     # ---- supervision ----
     def _supervision_items(self):
@@ -5531,6 +5570,15 @@ class UncleTUI:
         self._setup_colors()
         dirty = True
         size = None
+        # Inject startup action on first frame if present
+        if self._startup_action and not self._startup_injected:
+            self._startup_injected = True
+            try:
+                self._handle_startup_action()
+                dirty = True
+            except Exception as exc:
+                self.home_history.append(('system', 'Startup action failed: %s. Try again or pick from menu.' % sanitize(str(exc))))
+                dirty = True
         while self.state != "quit":
             dirty = self.poll_chat_progress() or dirty
             dirty = self.poll_home_chat() or dirty

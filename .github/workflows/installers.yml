@@ -6,6 +6,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  attestations: write
 jobs:
   unix:
     strategy:
@@ -37,7 +38,7 @@ jobs:
           path: ${{ runner.temp }}/packages/*.deb
           if-no-files-found: error
       - uses: actions/attest-build-provenance@v1
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
         with:
           subject-path: ${{ runner.temp }}/packages/*.deb
           token: ${{ secrets.GITHUB_TOKEN }}

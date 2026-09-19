@@ -3416,7 +3416,24 @@ class UncleTUI:
             # the next one over the same journal.
             self.supervision_retry_pending = False
             if not (self.proc and self.proc.poll() is None) and getattr(self, "triage_request", None) is None:
-                self.home_history.append(("supervisor", "Relaunching the workflow to apply the retained correction."))
+                stage = host.controller.stage
+                root = Path(_project_root())
+                request = root / '.uncle' / 'workflow' / 'rerun-request.json'
+                try:
+                    from rerun_stage import supports
+                    family = (root / '.uncle' / 'workflow' / 'family').read_text().strip()
+                    if not stage or not supports(stage, family):
+                        raise ValueError('supervisor retry has no resumable stage')
+                    pending = request.with_name(request.name + '.pending')
+                    with pending.open('w') as stream:
+                        json.dump({'stage': stage, 'source': 'supervisor-retry'}, stream)
+                    os.replace(pending, request)
+                except (OSError, ValueError, ImportError) as error:
+                    self.home_history.append(("supervisor", "Supervision retry was not launched: " + sanitize(str(error))))
+                    return True
+                self.resume_workflow_pending = True
+                self.new_workflow_pending = False
+                self.home_history.append(("supervisor", "Retrying " + stage + " from its recorded workflow state."))
                 self._run()
             return True
         return changed

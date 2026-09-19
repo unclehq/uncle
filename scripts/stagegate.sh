@@ -862,6 +862,7 @@ stage_turns() {
     local fallback=40
     case "$1" in
         implementation|repair) fallback=200 ;;
+        implementation-report) fallback=20 ;;
         execute-checklist) fallback=120 ;;
     esac
     stage_setting TURNS "$1" "$fallback"
@@ -876,7 +877,7 @@ stage_tools() {
     case "$1" in
         updated-plan|derive-brief)
             fallback="Read,Glob,Grep,Write,Edit" ;;
-        implementation|repair|execute-checklist|preflight|preview-build)
+        implementation|implementation-report|repair|execute-checklist|preflight|preview-build)
             # The preview build is an implementation, just an early one: a
             # scaffolded app needs the same tools as the real stage, and with
             # Write alone it cannot get a framework project off the ground.
@@ -1395,6 +1396,11 @@ run_final_audit_panel() {
 # merging, so this is enabled only for an explicit Owns:/Depends on schedule.
 run_parallel_application_implementation() {
     local groups group step prompt result cmd model effort
+    local complete_marker="$STATE_DIR/parallel-implementation-complete"
+    if [[ -s "$complete_marker" ]]; then
+        echo 'Parallel implementation steps are already merged; reconciling their report only.'
+        return 0
+    fi
     groups="$(parallel_groups UPDATED_PROJECT_PLAN.md "$ROOT/scripts/lib")" || return 2
     [[ -n "$groups" ]] || return 2
     uncle_resolve_stage_runner implementation AGENT || return 1
@@ -1406,6 +1412,15 @@ run_parallel_application_implementation() {
     mkdir -p "$STATE_DIR/parallel/prompts" "$STATE_DIR/parallel/notes"
     export PARALLEL_PROMPT_DIR="$PWD/$STATE_DIR/parallel/prompts"
     plan_steps UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-steps.txt"
+    # Preserve worker handoffs in one canonical input for the report-only
+    # reconciliation stage. A worker may record its narrow check here, but it
+    # cannot truthfully attest to the whole merged application.
+    {
+        printf '# Implementation Notes\n\n'
+        printf '## Parallel implementation reconciliation\n\n'
+        printf 'The workflow driver merged the isolated approved steps below. '
+        printf 'Each worker handoff records its owned files and narrow checks.\n'
+    } > IMPLEMENTATION_NOTES.md
     while IFS= read -r group; do
         [[ -n "$group" ]] || continue
         echo "Implementation fan-out: isolated parallel steps $group."
@@ -1422,10 +1437,35 @@ run_parallel_application_implementation() {
         result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" UPDATED_PROJECT_PLAN.md $group)" || return $?
         for step in $group; do
             [[ -s "$STATE_DIR/parallel/notes/step-$step.md" ]] || return 1
+            printf '\n## Isolated step %s handoff\n\n' "$step" >> IMPLEMENTATION_NOTES.md
             cat "$STATE_DIR/parallel/notes/step-$step.md" >> IMPLEMENTATION_NOTES.md
         done
         echo "Implementation fan-out group $group merged."
     done <<< "$groups"
+
+    # This marker is a recovery boundary. If report synthesis reaches a runner
+    # limit, resuming retries just that small report stage rather than rerunning
+    # already merged implementation steps.
+    touch "$complete_marker"
+}
+
+# Parallel workers produce isolated code and handoffs. One normal agent
+# invocation then produces the same canonical reports as serial implementation
+# does. This preserves the stage contract without asking a worker to claim
+# application-wide test results it could not have observed.
+run_parallel_implementation_report() {
+    local complete_marker="$STATE_DIR/parallel-implementation-complete"
+    local report_marker="$STATE_DIR/parallel-implementation-report-complete"
+    [[ -s "$complete_marker" ]] || return 1
+    if [[ -s "$report_marker" ]]; then
+        echo 'Parallel implementation report is already reconciled.'
+        return 0
+    fi
+    echo 'Implementation report: reconciling merged worker evidence.'
+    run_claude prompts/implementation-report.md implementation-report
+    require_artifact IMPLEMENTATION_NOTES.md
+    require_artifact AUTOMATED_TEST_REPORT.md
+    touch "$report_marker"
 }
 
 # Every stage's actual work, with no state transitions and no approval checks,
@@ -1486,6 +1526,8 @@ run_stage() {
                 [[ "$parallel_status" == 2 ]] || return "$parallel_status"
                 echo "Implementation fan-out unavailable: the approved plan has no independent owned steps; running one implementation agent."
                 run_claude prompts/implement.md implementation
+            else
+                run_parallel_implementation_report
             fi
             require_artifact IMPLEMENTATION_NOTES.md
             require_artifact AUTOMATED_TEST_REPORT.md

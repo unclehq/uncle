@@ -1722,13 +1722,16 @@ def supervised_lock_run(run_once, command, state_dir, root, environ=None):
                     thread.join(timeout=5)
                 host.exit_code = rc
                 host.poll()
-                if not host.settle(host.controller.config.call_timeout_seconds + 5):
+                retry = host.settle(host.controller.config.call_timeout_seconds + 5)
+                if not retry:
                     return rc
                 # A validator fails after the driver has durably advanced to a
                 # VALIDATE_* state. Re-enter the stage itself so the retained
                 # correction is included in a fresh model call instead of
                 # merely re-running the same deterministic validator.
                 stage = host.controller.stage
+                if not stage:
+                    return rc
                 request = Path(state_dir) / 'rerun-request.json'
                 atomic_write(request, json.dumps({'stage': stage, 'source': 'supervisor-retry'}) + '\n')
                 host.transcript('Retrying the driver with the retained correction.')

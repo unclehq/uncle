@@ -1037,6 +1037,23 @@ class TuiHostTests(unittest.TestCase):
         self.assertTrue(any('stale' in t for r, t in ui.home_history if r == 'supervisor'))
         self.assertEqual((self.project / '.uncle' / 'workflow' / 'approvals' / 'CHANGE_PLAN.sha256').read_text(), 'h\n')
 
+    def test_supervision_retry_requests_the_saved_stage_not_a_fresh_workflow(self):
+        ui = self.ui()
+        workflow = self.project / '.uncle' / 'workflow'
+        (workflow / 'family').write_text('app\n')
+        (workflow / 'implement-steps.txt').write_text('step one\nstep two\nstep three\nstep four\nstep five\n')
+        ui.proc.poll.return_value = 1
+        ui.supervision_host.controller.stage = 'implementation-step-5'
+        ui.supervision_host.controller.tick = Mock(return_value=False)
+        ui.supervision_retry_pending = True
+        with patch.object(ui, '_run') as run:
+            ui.poll_supervision()
+        self.assertTrue(ui.resume_workflow_pending)
+        self.assertFalse(ui.new_workflow_pending)
+        self.assertEqual(json.loads((workflow / 'rerun-request.json').read_text()),
+                         {'stage': 'implementation-step-5', 'source': 'supervisor-retry'})
+        run.assert_called_once()
+
     def test_chat_cannot_approve_and_supervisor_never_writes_stdin(self):
         ui = self.ui()
         host = ui.supervision_host

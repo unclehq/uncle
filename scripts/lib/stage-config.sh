@@ -89,7 +89,7 @@ uncle_config_stage() {
         # A driver-owned worker inherits the parent stage's runner, model,
         # effort, billing, and network policy for every supported runner.
         *-worker-*) printf '%s' "${1%%-worker-*}" ;;
-        implementation-step-*) printf 'implementation' ;;
+        implementation-step-*|implementation-report) printf 'implementation' ;;
         *) printf '%s' "$1" ;;
     esac
 }
@@ -212,7 +212,7 @@ uncle_stage_runner() {
 uncle_stage_effort() {
     local stage v
     stage="$(uncle_config_stage "$1")"
-    case "$stage" in implementation-step-*) stage=implementation ;; esac
+    case "$stage" in implementation-step-*|implementation-report) stage=implementation ;; esac
     v="$(uncle_stage_key "$stage" effort)"
     [[ -n "$v" ]] || v="$(uncle_config_get effort)"
     if [[ -z "$v" ]]; then

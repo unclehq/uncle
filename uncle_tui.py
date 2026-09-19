@@ -39,7 +39,7 @@ except ImportError:  # Windows has no curses in the stdlib
 ROOT = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
 from completion_preview import CompletionPreview, STAR_URL, launch_spec
-from preview_server import PreviewServer
+from preview_server import DevelopmentPreview, PreviewServer, development_preview
 from chat import Conversation, sanitize
 from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
@@ -1997,12 +1997,13 @@ class UncleTUI:
         if now < getattr(self, "_early_preview_next", 0.0):
             return
         self._early_preview_next = now + self._PREVIEW_POLL_SECONDS
-        if self._previewable_page() is None:
+        preview = self._previewable_page()
+        if preview is None:
             return
-        self._show_early_preview()
+        self._show_early_preview(preview)
 
     def _previewable_page(self):
-        """(size, mtime) of a finished-enough page on disk, or None.
+        """A static-page or framework-dev preview specification, or None.
 
         Only file-backed pages qualify. A `webpage` spec pointing at a local
         server needs that server running, which during implementation it is
@@ -2010,6 +2011,9 @@ class UncleTUI:
         operator's back. launch_spec falls back to index.html, so an ordinary
         static site needs no configuration.
         """
+        dev = development_preview(_project_root())
+        if dev is not None:
+            return ('development', dev)
         try:
             spec = launch_spec(_project_root())
         except (OSError, ValueError):
@@ -2034,18 +2038,19 @@ class UncleTUI:
         except ValueError:
             return None
         self._preview_page = relative.as_posix()
-        return (info.st_size, info.st_mtime_ns)
+        return ('static', self._preview_page)
 
     def _preview_after_implementation(self, finished_stage):
         """Fallback for a page that only appears as the stage ends."""
         if finished_stage not in ("implementation", "implementation-step"):
             if not finished_stage.startswith("implementation-step-"):
                 return
-        if self._previewable_page() is None:
+        preview = self._previewable_page()
+        if preview is None:
             return
-        self._show_early_preview()
+        self._show_early_preview(preview)
 
-    def _show_early_preview(self):
+    def _show_early_preview(self, preview=None):
         """Open the page in a browser, served so it can refresh itself.
 
         Deliberately not CompletionPreview: that object announces `done` when it
@@ -2057,14 +2062,20 @@ class UncleTUI:
             return
         if getattr(self, "completion_preview", None) is not None:
             return
-        self.early_preview_shown = True
-        server = PreviewServer(_project_root(), self._preview_page)
+        preview = preview or self._previewable_page()
+        if preview is None:
+            return
+        kind, value = preview
+        server = (DevelopmentPreview(_project_root(), value) if kind == 'development'
+                  else PreviewServer(_project_root(), value))
         if server.url is None:
             return
         self.preview_server = server
-        if not webbrowser.open(server.url):
+        self.early_preview_shown = True
+        if kind == 'static' and not webbrowser.open(server.url):
             server.close()
             self.preview_server = None
+            self.early_preview_shown = False
 
     def _close_early_preview(self):
         server = getattr(self, "preview_server", None)

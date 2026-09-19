@@ -1309,6 +1309,7 @@ run_stepwise_implementation() {
     local base="$1"
     local steps_file="$STATE_DIR/implement-steps.txt"
     local done_file="$STATE_DIR/implement-step-done"
+    local report_done_file="$STATE_DIR/implement-report-done"
 
     plan_steps CHANGE_PLAN.md > "$steps_file"
 
@@ -1325,9 +1326,11 @@ run_stepwise_implementation() {
     fi
 
     # Split the single stage's cap across the steps rather than multiplying it.
-    # Reserve more room for the last step because it reconciles acceptance rows
-    # and reports; all earlier contexts get an even share of the remainder.
-    local final_turns=50 turns=50 step_turns
+    # The final code step and its change report are deliberately separate cold
+    # invocations. Some runners cap a session independently of --max-turns;
+    # making a completed implementation also reconcile a whole report can then
+    # turn a successful code change into a failed stage at that runner cap.
+    local report_turns=12 final_turns=38 turns=50 step_turns
     if [[ "$total" -gt 1 ]]; then
         turns=$(( 150 / (total - 1) ))
         [[ "$turns" -lt 8 ]] && turns=8
@@ -1363,16 +1366,17 @@ run_stepwise_implementation() {
             echo "Append your rows to IMPLEMENTATION_NOTES.md; do not rewrite"
             echo "the rows already there. Run the narrowest test target that"
             echo "covers this step."
-            if [[ "$i" -eq "$total" ]]; then
-                echo
-                echo "This is the final step. After it, run the remaining"
-                echo "targeted checks and write"
-                echo "CHANGE_TEST_REPORT.md covering the whole change, not only"
-                echo "this step. The driver runs the full regression block once"
-                echo "after this invocation; do not run that block here."
-            else
+            if [[ "$i" -ne "$total" ]]; then
                 echo
                 echo "Do not run the full suite; the final step does that once."
+            else
+                echo
+                echo "This is the final code step. Run only the narrow checks"
+                echo "needed for this code and append their result to"
+                echo "IMPLEMENTATION_NOTES.md. Do not write CHANGE_TEST_REPORT.md:"
+                echo "a fresh report-only invocation will reconcile it from the"
+                echo "on-disk notes and evidence. The driver runs the full"
+                echo "regression block once after that invocation."
             fi
         } >> "$prompt"
 
@@ -1385,13 +1389,40 @@ run_stepwise_implementation() {
             "$MODEL_IMPLEMENT" "" "$step_turns" "$BUDGET_IMPLEMENT"
 
         check_document_budget IMPLEMENTATION_NOTES.md || exit 1
-        if [[ "$i" -eq "$total" ]]; then
-            check_document_budget CHANGE_TEST_REPORT.md || exit 1
-        fi
         printf '%s\n' "$i" > "$done_file"
     done < "$steps_file"
 
+    # This is intentionally its own cold stage, rather than a postscript to
+    # the last code step. It is a checkpointed recovery boundary: if report
+    # synthesis hits a runner limit, resume retries only this small stage and
+    # never redoes a successfully checkpointed implementation step.
+    if [[ ! -f "$report_done_file" ]]; then
+        prompt="$STATE_DIR/implement-report.md"
+        compose_implementation_prompt "$base" "$prompt"
+        {
+            echo
+            echo "## Report-only invocation (no code changes)"
+            echo
+            echo "All implementation steps are complete and checkpointed. Do"
+            echo "not inspect unrelated code, change source files, rerun tests,"
+            echo "or review the implementation. Read IMPLEMENTATION_NOTES.md and"
+            echo "the existing targeted-test evidence only. Then replace"
+            echo "CHANGE_TEST_REPORT.md with its required concise, authoritative"
+            echo "whole-change report. Report only checks that actually ran; mark"
+            echo "anything absent as NOT RUN. Finish immediately after writing it."
+        } >> "$prompt"
+
+        echo
+        echo "Implementation report: reconciling checkpointed step evidence."
+        plan_assess || return $?
+        run_claude "$prompt" "implementation-step-report" \
+            "$MODEL_IMPLEMENT" "" "$report_turns" "$BUDGET_IMPLEMENT"
+        check_document_budget CHANGE_TEST_REPORT.md || exit 1
+        touch "$report_done_file"
+    fi
+
     rm -f "$done_file"
+    rm -f "$report_done_file"
 }
 
 # Count checks as they stream past and drive the pinned status line.

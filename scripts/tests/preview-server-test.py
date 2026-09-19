@@ -17,7 +17,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/lib'))
-from preview_server import PreviewServer, VERSION_PATH, tree_version
+from preview_server import PreviewServer, VERSION_PATH, development_preview, tree_version
 
 
 def get(url):
@@ -83,6 +83,18 @@ class Server(unittest.TestCase):
 
     def test_tree_version_survives_a_vanishing_file(self):
         tree_version(self.root)                     # must not raise on churn
+
+    def test_react_and_svelte_use_vite_only_after_dependencies_exist(self):
+        for framework in ('react', 'svelte'):
+            with self.subTest(framework=framework):
+                root = project(**{'package.json': '{"scripts":{"dev":"vite"},"dependencies":{"%s":"x","vite":"x"}}' % framework})
+                self.assertIsNone(development_preview(root))
+                vite = root / 'node_modules' / '.bin' / 'vite'
+                vite.parent.mkdir(parents=True)
+                vite.write_text('')
+                spec = development_preview(root)
+                self.assertEqual(spec['command'][:4], ['npm', 'run', 'dev', '--'])
+                self.assertTrue(spec['url'].startswith('http://127.0.0.1:'))
 
 
 class EarlyPreview(unittest.TestCase):

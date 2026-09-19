@@ -62,33 +62,22 @@ def changed(before, after):
 
 
 def publish_worker_end(spec, result):
-    """Tell the shared TUI stream that this isolated worker has exited.
-
-    Worker runners execute in a sandbox, so their local metrics are not a
-    reliable completion signal to the parent TUI.  The scheduler is the one
-    process that observes every runner's exit, independent of runner type.
-    """
+    """Publish the same durable completion record used by normal stage runners."""
     ended = time.time()
-    event = {'event': 'end', 'stage': 'implementation-step-%d' % spec['number'],
-             'process_exit': result['exit'], 'elapsed_seconds': result['seconds'],
-             'runner': spec['env'].get('UNCLE_RESOLVED_RUNNER', ''),
-             'model': spec['env'].get('PARALLEL_AGENT_MODEL', '')}
-    path = spec['env'].get('UNCLE_STATUS_FILE', '')
-    if path:
-        try:
-            with open(path, 'a', encoding='utf-8', newline='\n') as stream:
-                stream.write(json.dumps(event) + '\n')
-        except OSError:
-            pass
-    # Publish the same terminal result into the project metrics directory.
-    # Unlike a transient status event, this is discovered by both open and
-    # newly launched TUIs and is the source of completed green panel rows.
+    stage = 'implementation-step-%d' % spec['number']
     directory = Path(spec['project']) / '.uncle' / 'workflow' / 'metrics'
-    row = {'schema': 1, 'kind': 'agent', 'stage': event['stage'],
+    row = {'schema': 1, 'kind': 'agent', 'stage': stage,
            'started_at': ended - result['seconds'], 'ended_at': ended,
            'elapsed_seconds': result['seconds'], 'process_exit': result['exit'],
-           'runner': event['runner'], 'model': event['model'],
+           'reported_error': result['exit'] != 0,
+           'runner': spec['env'].get('UNCLE_RESOLVED_RUNNER', ''),
+           'model': spec['env'].get('PARALLEL_AGENT_MODEL', ''),
            'effort': spec['env'].get('PARALLEL_AGENT_EFFORT', ''),
+           'input_tokens': None, 'output_tokens': None,
+           'reported_total_tokens': None, 'cache_read_tokens': None,
+           'cache_write_tokens': None, 'reported_cost_usd': None,
+           'usage_scope': 'last reported result', 'usage_source': None,
+           'input_includes_cache': False,
            'log': spec['log']}
     temporary = None
     try:
@@ -97,6 +86,9 @@ def publish_worker_end(spec, result):
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
             json.dump(row, stream)
         os.replace(temporary, directory / ('parallel-worker-%d-%d.json' % (spec['number'], int(ended * 1000))))
+        subprocess.run([sys.executable, '-B', str(Path(__file__).with_name('session-totals.py')),
+                        str(Path(spec['project']) / '.uncle' / 'workflow')],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     except OSError:
         if temporary:
             try:

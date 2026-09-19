@@ -107,26 +107,22 @@ class ParallelImplementationTests(unittest.TestCase):
             handoff = (root / '.uncle/workflow/parallel/notes/step-1.md').read_text()
             self.assertIn('synthesized by the driver', handoff)
 
-    def test_worker_exit_is_published_to_the_shared_status_stream(self):
+    def test_worker_completion_uses_the_normal_persisted_metrics_path(self):
         temp, root, worker = self.fixture()
         with temp:
-            status = root / 'status.jsonl'
             request = {'project': str(root), 'owned': {'1': ['1.txt']}, 'steps': [
                 {'number': 1, 'log': str(root / 'one.log'),
                  'note': '.uncle/workflow/parallel/notes/step-1.md',
                  'command': ['bash', str(worker), '1']} ]}
             path = root / 'request.json'; path.write_text(json.dumps(request))
             result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
-                                    text=True, capture_output=True,
-                                    env=dict(**__import__('os').environ, UNCLE_STATUS_FILE=str(status)))
+                                    text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            events = [json.loads(line) for line in status.read_text().splitlines()]
-            event = next(item for item in events if item.get('event') == 'end')
-            self.assertEqual((event['stage'], event['process_exit']), ('implementation-step-1', 0))
-            self.assertGreaterEqual(event['elapsed_seconds'], 0)
             records = list((root / '.uncle/workflow/metrics').glob('parallel-worker-*.json'))
             self.assertEqual(len(records), 1)
-            self.assertEqual(json.loads(records[0].read_text())['process_exit'], 0)
+            row = json.loads(records[0].read_text())
+            self.assertEqual((row['stage'], row['process_exit']), ('implementation-step-1', 0))
+            self.assertIn(row, json.loads((root / '.uncle/workflow/session-totals.json').read_text())['records'])
 
 
 if __name__ == '__main__':

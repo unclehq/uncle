@@ -64,8 +64,16 @@ class ParallelImplementationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'a.txt').write_text('base\n')
+            # A failed earlier fan-out may leave a preserved parallel.* tree.
+            # It must never be copied into the next worker sandbox.
+            stale = root / '.uncle/workflow/parallel.failed-old'
+            stale.mkdir(parents=True)
+            (stale / 'large-stale-artifact').write_text('do not copy\n')
+            (root / '.pw-browsers').mkdir()
+            (root / '.pw-browsers' / 'browser-cache').write_text('do not copy\n')
             worker = root / 'worker.sh'
             worker.write_text('#!/usr/bin/env bash\nset -euo pipefail\n'
+                              'test ! -e .pw-browsers\n'
                               'printf copied > a.txt\n'
                               'mkdir -p .uncle/workflow/parallel/notes\n'
                               'printf handoff > .uncle/workflow/parallel/notes/step-1.md\n')

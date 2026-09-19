@@ -41,6 +41,13 @@ class Actions(unittest.TestCase):
         self.ui.run_named_stage.assert_called_once_with('adversarial-review')
         self.assertEqual(self.ui.chat_composer, '')
 
+    def test_runstage_accepts_a_numbered_implementation_step(self):
+        self.ui.run_named_stage = Mock()
+        self.ui.chat_composer = '/runstage implementation-step-7'
+        self.assertTrue(self.ui._chat_command(10))
+        self.ui.run_named_stage.assert_called_once_with('implementation-step-7')
+        self.assertEqual(self.ui.chat_composer, '')
+
     def test_run_completion_leaves_room_for_stage(self):
         self.ui.run_named_stage = Mock()
         self.ui.chat_composer = '/ru'

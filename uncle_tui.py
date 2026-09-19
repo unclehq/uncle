@@ -3678,14 +3678,14 @@ class UncleTUI:
         be read as a stage request. Unknown names belong to the supervisor.
         """
         try:
-            from rerun_stage import APP, CHANGE
+            from rerun_stage import supports
             family = (Path(_project_root()) / '.uncle/workflow/family').read_text().strip()
         except (OSError, ImportError, ValueError):
             return False
-        return name in (CHANGE if family == 'change' else APP)
+        return supports(name, family)
 
     def run_named_stage(self, stage):
-        from rerun_stage import APP, CHANGE
+        from rerun_stage import APP, CHANGE, supports
         if getattr(self, 'proc', None) and self.proc.poll() is None:
             raise ValueError('Stop the active workflow before running another stage.')
         if getattr(self, 'home_request', None) or getattr(self, 'triage_request', None):
@@ -3693,10 +3693,11 @@ class UncleTUI:
         root = Path(_project_root())
         directory = root / '.uncle/workflow'
         family = (directory / 'family').read_text().strip()
-        choices = CHANGE if family == 'change' else APP
         stage = stage.strip().lower()
-        if stage not in choices:
-            raise ValueError('Usage: /run STAGE. Available: ' + ', '.join(choices))
+        if not supports(stage, family):
+            choices = CHANGE if family == 'change' else APP
+            raise ValueError('Usage: /runstage STAGE. Available: ' + ', '.join(choices) +
+                             '; implementation-step-N for a saved plan step.')
         if not (directory / 'state').is_file():
             raise ValueError('Start a workflow before selecting a stage.')
         # Replace, do not refuse. This was an exclusive create, so a request the
@@ -4508,7 +4509,7 @@ class UncleTUI:
         return False
 
     def _slash_choices(self):
-        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/stop', '/triage', '/do', '/resume', '/run', '/delegate', '/app-input']
+        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/stop', '/triage', '/do', '/resume', '/run', '/runstage', '/delegate', '/app-input']
         text = self.chat_composer.lower()
         return [command for command in commands if command.startswith(text)] if text.startswith('/') and ' ' not in text else []
 
@@ -4519,7 +4520,7 @@ class UncleTUI:
             return True
         if choices and k in (10, 13) and self.chat_composer.lower() not in choices:
             self.chat_composer = choices[getattr(self, 'slash_pick', 0) % len(choices)]
-            if self.chat_composer in ('/issue', '/run'):
+            if self.chat_composer in ('/issue', '/run', '/runstage'):
                 self.chat_composer += ' '
                 return True
         if k not in (10, 13):
@@ -4541,10 +4542,10 @@ class UncleTUI:
                     self.state == 'running' or (self.proc and self.proc.poll() is None)):
                 self.chat_error = 'A workflow is already active. Finish or stop it before starting another.'
                 return True
-            if argument and command not in ('/issue', '/do', '/run', '/delegate', '/app-input', '/clear', '/resume'):
+            if argument and command not in ('/issue', '/do', '/run', '/runstage', '/delegate', '/app-input', '/clear', '/resume'):
                 self.chat_error = command + ' does not take arguments'
                 return True
-            if command == '/run':
+            if command in ('/run', '/runstage'):
                 try:
                     self.run_named_stage(argument)
                     self.chat_composer = ''

@@ -1132,6 +1132,28 @@ case "$(cat "$REPO/.uncle/workflow/state")" in
     UPDATED_PLAN|VALIDATE_UPDATED_PLAN|WAIT_UPDATED_PLAN_APPROVAL|WAIT_PLAN_APPROVAL) fail "run did not get past the revised plan: $(cat "$REPO/.uncle/workflow/state")" ;;
 esac
 
+# The same re-approval is automatic for an unattended build.  A review may
+# rewrite the plan after the initial acknowledgement; that is expected, and
+# must not make IMPLEMENT reopen a human gate or loop back through review.
+new_case unattended-revised-plan-is-auto-reapproved-before-implementation
+hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+hash_file "$REPO/ADVERSARIAL_REVIEW.md" > "$REPO/.uncle/workflow/approvals/ADVERSARIAL_REVIEW.sha256"
+set_state UPDATED_PLAN
+run_driver UNATTENDED=1 WORKFLOW_DIFF_GATE=0 \
+    FAKE_REVISE="printf '\nRevised unattended after review.\n' >> CHANGE_PLAN.md"
+expect_not_out 'CHANGE_PLAN.md changed after approval'
+expect_not_out 'Reopening WAIT_PLAN_APPROVAL'
+expect_in_file .uncle/workflow/approval-route WAIT_UPDATED_PLAN_APPROVAL
+expect_in_file .uncle/workflow/unattended-gates 'approve CHANGE_PLAN.md without human review'
+COUNT=$((COUNT + 1))
+if [[ "$(cat "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256")" != "$(hash_file "$REPO/CHANGE_PLAN.md")" ]]; then
+    fail 'the unattended CHANGE_PLAN approval must name the revised text'
+fi
+COUNT=$((COUNT + 1))
+case "$(cat "$REPO/.uncle/workflow/state")" in
+    UPDATED_PLAN|VALIDATE_UPDATED_PLAN|WAIT_UPDATED_PLAN_APPROVAL|WAIT_PLAN_APPROVAL) fail "unattended run did not get past the revised plan: $(cat "$REPO/.uncle/workflow/state")" ;;
+esac
+
 # A speculative review is validated before it is adopted. A fragment is set
 # aside and the stage rerun, instead of being adopted and then stopping the
 # run at VALIDATE_ADVERSARIAL_REVIEW with "correct it and resume".

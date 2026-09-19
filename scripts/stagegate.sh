@@ -631,7 +631,16 @@ acceptance_transition() {
         *)
             echo "Acceptance $result: $report."
             if [[ "$result" == UNKNOWN ]]; then
-                acceptance_problem "$report" | sed 's/^/  /'
+                # A malformed acceptance table is a validator rejection, not a
+                # product failure.  Give supervision the same line-numbered
+                # diagnosis shown to the operator so it can choose one bounded
+                # revisit_validator retry.  The retry still writes a fresh
+                # report and returns through acceptance_result; supervision
+                # never declares the malformed report valid or edits it.
+                local acceptance_error
+                acceptance_error="$(acceptance_problem "$report")"
+                printf '%s\n' "$acceptance_error" | sed 's/^/  /'
+                supervision_validation_failed acceptance-table "$report" "$acceptance_error"
             else
                 echo "Resolve its prerequisites or report errors and rerun."
             fi

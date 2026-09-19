@@ -187,7 +187,7 @@ def default_stage_effort(stage):
         stage = "implementation"
     if stage == "plan-executability":
         stage = "adversarial-review"
-    return "medium" if stage in ("adversarial-review", "project-plan", "implementation") else DEFAULT_EFFORT
+    return "medium" if stage in ("adversarial-review", "project-plan", "implementation", "repair") else DEFAULT_EFFORT
 
 DEFAULT_CLINE_MODEL = "cline-pass/deepseek-v4-pro"
 

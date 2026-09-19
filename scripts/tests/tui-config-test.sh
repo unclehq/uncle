@@ -67,9 +67,9 @@ with tempfile.TemporaryDirectory() as tmp:
         t = m.UncleTUI.__new__(m.UncleTUI)
         t.stage_runners = {}
         default = expected[0] if expected else ""
-        assert t.stage_runner("requirements") == default
+        assert t.stage_runner("derive-brief") == default
         result = subprocess.run([bash, "-c",
-            '. "$1/scripts/lib/stage-config.sh"; uncle_stage_runner requirements',
+            '. "$1/scripts/lib/stage-config.sh"; uncle_stage_runner derive-brief',
             "test", str(root)], env=dict(os.environ, UNCLE_CONFIG="/nonexistent"),
             capture_output=True, text=True)
         assert result.stdout == default, (mask, result.stdout)
@@ -82,15 +82,15 @@ with tempfile.TemporaryDirectory() as tmp:
         (bindir / name).write_text("")
         (bindir / name).chmod(0o755)
     os.environ["PATH"] = tmp
-    Path(m.CONFIG_PATH).write_text("requirements.model deepseek/deepseek-v4-flash\nrequirements.billing cline-usage\n")
+    Path(m.CONFIG_PATH).write_text("derive-brief.model deepseek/deepseek-v4-flash\nderive-brief.billing cline-usage\n")
     t.load_config()
-    t.stage_efforts["requirements"] = "high"
+    t.stage_efforts["derive-brief"] = "high"
     t.save_config()
     (bindir / "claude").unlink()
     t.load_config()
-    assert t.stage_runner("requirements") == "cline"
-    assert t.stage_models["requirements"] == "deepseek/deepseek-v4-flash"
-    assert t.stage_billings["requirements"] == "cline-usage"
+    assert t.stage_runner("derive-brief") == "cline"
+    assert t.stage_models["derive-brief"] == "deepseek/deepseek-v4-flash"
+    assert t.stage_billings["derive-brief"] == "cline-usage"
     assert not t.stage_runners
 os.environ["PATH"] = original
 print("  discovery: 32 subsets, both sides, shell parity; inferred save passed")
@@ -136,36 +136,36 @@ check("reviewer stages are configurable", True,
           for s in ("adversarial-review", "manual-checklist", "final-audit")))
 
 # An unconfigured stage runs on the defaults.
-check("default runner with Cline installed", "cline", t.stage_runner("requirements"))
-check("default effort", m.DEFAULT_EFFORT, t.stage_effort("requirements"))
-check("default cline model", m.DEFAULT_CLINE_MODEL, t.stage_model("requirements"))
+check("default runner with Cline installed", "cline", t.stage_runner("derive-brief"))
+check("default effort", m.DEFAULT_EFFORT, t.stage_effort("derive-brief"))
+check("default cline model", m.DEFAULT_CLINE_MODEL, t.stage_model("derive-brief"))
 
 # cline is the only runner with a billing field.
 check("cline shows billing and model", ["runner", "effort", "billing", "model"],
-      t.stage_fields("requirements"))
-t.stage_runners["requirements"] = "claude"
+      t.stage_fields("derive-brief"))
+t.stage_runners["derive-brief"] = "claude"
 check("claude hides both", ["runner", "effort"],
-      t.stage_fields("requirements"))
-check("claude resolves to no model", "", t.stage_model("requirements"))
+      t.stage_fields("derive-brief"))
+check("claude resolves to no model", "", t.stage_model("derive-brief"))
 
 # self-hosted takes a model and, like claude or codex, an effort.
-t.stage_runners["requirements"] = "self-hosted"
+t.stage_runners["derive-brief"] = "self-hosted"
 check("self-hosted shows effort and model", ["runner", "effort", "model"],
-      t.stage_fields("requirements"))
-t.picker_kind, t.picker_target, t.pick_filter = "effort", "requirements", ""
+      t.stage_fields("derive-brief"))
+t.picker_kind, t.picker_target, t.pick_filter = "effort", "derive-brief", ""
 check("the effort picker offers the standard levels",
       [("option", "high"), ("option", "medium"), ("option", "low"),
        ("custom", "Custom… (type an effort)")], t._picker_rows())
 
 # Its model picker takes custom ids the way cline's does.
-t.picker_kind, t.picker_target, t.pick_filter = "model", "requirements", ""
+t.picker_kind, t.picker_target, t.pick_filter = "model", "derive-brief", ""
 check("the self-hosted model picker takes a custom id", True,
       any(kind == "custom" for kind, _ in t._picker_rows()))
-t._set_field("requirements", "model", "my-fine-tune:latest")
+t._set_field("derive-brief", "model", "my-fine-tune:latest")
 check("a custom self-hosted model id is stored", "my-fine-tune:latest",
-      t.stage_models["requirements"])
-t.stage_models.pop("requirements")
-t.stage_runners.pop("requirements")
+      t.stage_models["derive-brief"])
+t.stage_models.pop("derive-brief")
+t.stage_runners.pop("derive-brief")
 
 # codex is the only runner that sandboxes a stage, so it is the only one with a
 # network to open. Showing the row anywhere else would offer a setting that
@@ -178,7 +178,7 @@ check("cline has no network field", False,
 check("codex has no billing field", False,
       "billing" in t.stage_fields("execute-checklist"))
 check("kimi has no network field", False,
-      "network" in t.stage_fields("requirements"))
+      "network" in t.stage_fields("derive-brief"))
 check("network is off by default", "false", t.stage_network("execute-checklist"))
 
 # The picker behind the row. Two states and no custom row: a typed value would
@@ -340,14 +340,14 @@ def fresh():
 
 # What the screen writes, it reads back.
 t = fresh()
-t._set_field("requirements", "runner", "claude")
+t._set_field("derive-brief", "runner", "claude")
 t._set_field("project-plan", "model", "cline-pass/kimi-k3")
 t._set_field("project-plan", "effort", "high")
 t._set_field("final-audit", "runner", "codex")
 
 back = fresh()
 back.load_config()
-check("runner round-trips", "claude", back.stage_runners.get("requirements"))
+check("runner round-trips", "claude", back.stage_runners.get("derive-brief"))
 check("model round-trips", "cline-pass/kimi-k3", back.stage_models.get("project-plan"))
 check("effort round-trips", "high", back.stage_efforts.get("project-plan"))
 check("reviewer runner round-trips", "codex", back.stage_runners.get("final-audit"))
@@ -406,11 +406,11 @@ check("cleared network is not written", False, "execute-checklist.network" in te
 
 # Hand-edited dormant models survive a save for a later runner rollback.
 t = fresh()
-t.stage_models["requirements"] = "cline-pass/glm-5.3"
-t.stage_runners["requirements"] = "kimi"
+t.stage_models["derive-brief"] = "cline-pass/glm-5.3"
+t.stage_runners["derive-brief"] = "kimi"
 t.save_config()
 text = open(os.environ["UNCLE_CONFIG"]).read()
-check("dormant model line survives", True, "requirements.model cline-pass/glm-5.3" in text)
+check("dormant model line survives", True, "derive-brief.model cline-pass/glm-5.3" in text)
 
 # The old global format seeds the stages instead of being dropped.
 with open(os.environ["UNCLE_CONFIG"], "w") as fh:
@@ -466,14 +466,14 @@ def load():
 
 fixtures = {
     "global": "model poolside/laguna-s-2.1\nbilling cline-usage\n",
-    "bare": "requirements poolside/laguna-s-2.1\nbilling cline-usage\n",
-    "stage": "requirements.model poolside/laguna-s-2.1\nrequirements.billing cline-usage\n",
+    "bare": "derive-brief poolside/laguna-s-2.1\nbilling cline-usage\n",
+    "stage": "derive-brief.model poolside/laguna-s-2.1\nderive-brief.billing cline-usage\n",
     "precedence": (
         "model poolside/laguna-s-2.1\nbilling cline-usage\n"
         "reviewer cline-pass/glm-5.3\n"
-        "requirements cline-pass/kimi-k3\n"
-        "requirements.model poolside/laguna-s-2.1\n"
-        "requirements.billing clinepass\n"
+        "derive-brief cline-pass/kimi-k3\n"
+        "derive-brief.model poolside/laguna-s-2.1\n"
+        "derive-brief.billing clinepass\n"
     ),
 }
 checks = 0
@@ -485,10 +485,10 @@ for name, config in fixtures.items():
     expected_models = dict(t.stage_models)
     expected_billings = {stage: "cline-usage" for stage in m.CONFIG_STAGES}
     if name == "stage":
-        expected_billings = {"requirements": "cline-usage"}
+        expected_billings = {"derive-brief": "cline-usage"}
     elif name == "precedence":
-        expected_billings["requirements"] = "clinepass"
-        assert t.stage_models["requirements"] == "poolside/laguna-s-2.1"
+        expected_billings["derive-brief"] = "clinepass"
+        assert t.stage_models["derive-brief"] == "poolside/laguna-s-2.1"
         assert t.stage_models["final-audit"] == "cline-pass/glm-5.3"
         checks += 2
     assert t.stage_billings == expected_billings, (name, "legacy billing load")
@@ -514,15 +514,15 @@ for name, config in fixtures.items():
     checks += 1
 for runner in ("cline", "claude", "kimi", "codex", "self-hosted"):
     with open(os.environ["UNCLE_CONFIG"], "w") as fh:
-        fh.write("requirements.runner %s\nrequirements.model poolside/laguna-s-2.1\n"
-                 "requirements.billing cline-usage\n" % runner)
+        fh.write("derive-brief.runner %s\nderive-brief.model poolside/laguna-s-2.1\n"
+                 "derive-brief.billing cline-usage\n" % runner)
     t = load()
     expected_models = dict(t.stage_models)
     t.save_config()
     t = load()
-    assert t.stage_runner("requirements") == runner
+    assert t.stage_runner("derive-brief") == runner
     assert t.stage_models == expected_models, (runner, "dormant model loss")
-    assert t.stage_billings == {"requirements": "cline-usage"}, (runner, "billing loss")
+    assert t.stage_billings == {"derive-brief": "cline-usage"}, (runner, "billing loss")
     checks += 3
 print("  dormant selections/rollback: %d checks passed" % checks)
 PY
@@ -542,8 +542,8 @@ t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
 t.stage_base_urls, t.stage_api_keys = {}, {}
 t.stage_networks, t.stage_billings = {}, {}
 t._config_stamp, t._reload_tick, t.first_run = None, 0, False
-t._set_field("requirements", "runner", "kimi")
-t._set_field("requirements", "effort", "low")
+t._set_field("derive-brief", "runner", "kimi")
+t._set_field("derive-brief", "effort", "low")
 t._set_field("project-plan", "model", "cline-pass/kimi-k3")
 t._set_field("final-audit", "runner", "codex")
 # Written by the screen, read back by the drivers: the setting that decides
@@ -578,9 +578,9 @@ PY
 actual="$(
     UNCLE_CONFIG="$TMP/proj/.uncle/config" ROOT="$ROOT" bash -c '
         . "$ROOT/scripts/lib/stage-config.sh"
-        for stage in derive-brief requirements baseline project-plan change-plan \
-                     adversarial-review updated-plan updated-change-plan preflight \
-                     implementation test-review manual-checklist execute-checklist \
+        for stage in derive-brief project-plan change-plan adversarial-review \
+                     updated-plan updated-change-plan preflight implementation repair \
+                     test-review manual-checklist execute-checklist \
                      final-audit triage; do
             effort="$(uncle_stage_effort "$stage")"
             printf "%s\t%s\t%s\t%s\t%s\n" "$stage" "$(uncle_stage_runner "$stage")" \

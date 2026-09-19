@@ -233,8 +233,19 @@ class OutputTruncated(ValueError):
     """The model reached the configured output limit: the response is a fragment."""
 
 
-def output_token_limit():
-    return int(os.environ.get(OUTPUT_TOKENS_ENV, '8192'))
+def output_token_limit(stage=''):
+    """Configured output cap, with room for implementation reasoning.
+
+    OpenCode counts reasoning inside its output limit. An implementation agent
+    can complete edits and tests yet overflow an 8K/16K final stream, which
+    incorrectly turns completed on-disk work into a failed stage. Keep review
+    and document defaults compact, but give code/repair stages a 32K first
+    attempt; an explicit operator setting always wins.
+    """
+    configured = os.environ.get(OUTPUT_TOKENS_ENV)
+    if configured:
+        return int(configured)
+    return 32768 if stage in ('implementation', 'repair') or stage.startswith('implementation-step-') else 8192
 
 
 def context_token_limit():
@@ -276,7 +287,7 @@ def opencode_invocation(side, values, prompt, root, directory, allow_shell=True)
     if request_seconds < 1:
         raise ValueError('WORKFLOW_SELF_HOSTED_REQUEST_SECONDS must be positive')
     context = context_token_limit()
-    output = output_token_limit()
+    output = output_token_limit(os.environ.get('UNCLE_STATUS_STAGE', ''))
     if not 0 < output < context:
         raise ValueError('Model limits require 0 < output tokens < context tokens')
     permission = {'*': 'deny', 'read': {'*': 'allow', '*.env': 'deny', '*.env.*': 'deny',
@@ -589,7 +600,8 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
                 native_run(adapter, directory, values=values, root=root, allow_shell=allow_shell)
                 if not adapter.answer.strip():
                     raise ValueError('OpenCode returned no response')
-                ensure_output_complete({'output_tokens': adapter.usage.get('output_tokens')}, output_token_limit())
+                ensure_output_complete({'output_tokens': adapter.usage.get('output_tokens')},
+                                       output_token_limit(os.environ.get('UNCLE_STATUS_STAGE', '')))
                 return adapter.final_answer or adapter.answer, 1
             finally:
                 adapter.parent_watch_stop.set()
@@ -742,7 +754,7 @@ def main(side, args):
             # A fragment reported as success is what the whole stage then
             # adopts. Once, the cap is doubled and the stage rerun; a second
             # fragment is the failure it always was.
-            limit = output_token_limit()
+            limit = output_token_limit(stage)
             larger = min(limit * 2, context_token_limit() - 1024)
             if truncation_retried or larger <= limit:
                 error.opencode_usage = usage

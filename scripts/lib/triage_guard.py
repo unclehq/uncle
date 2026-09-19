@@ -48,8 +48,9 @@ FORBIDDEN_WORKFLOW_PREFIXES = ('green-check.',)
 # essential for copy-mode projects (including unborn Git repositories): without
 # it copytree descends into the sandbox it is creating and never reaches a
 # worker launch.
-SANDBOX_EXCLUDES = ('.git', '.pw-browsers', '.uncle/workflow/logs', '.uncle/workflow/triage',
-                    '.uncle/workflow/parallel')
+SANDBOX_EXCLUDES = ('.git', '.pw-browsers', 'node_modules', '.venv',
+                    '.uncle/workflow-history', '.uncle/workflow/logs',
+                    '.uncle/workflow/triage', '.uncle/workflow/parallel')
 INSTALL_PINS = ('uncle_tui.py', 'scripts')
 TSV_HEADER = 'ts\tturn\tproposal\toutcome\tpath\tbefore\tafter\n'
 
@@ -226,7 +227,7 @@ def make_sandbox(project, sandbox):
                 dst.unlink()
         # Ignored/untracked Markdown is still editable project content.
         # Overlay it before snapshotting so apply-back compares the actual bytes.
-        for rel in walk(project, excludes=SANDBOX_EXCLUDES + ('.uncle/workflow-history', 'node_modules', '.venv')):
+        for rel in walk(project, excludes=SANDBOX_EXCLUDES):
             src = project / rel
             if (rel.lower().endswith('.md') or rel.startswith('.uncle/')) and not src.is_symlink():
                 copy_entry(src, sandbox / rel)

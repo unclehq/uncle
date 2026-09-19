@@ -71,9 +71,12 @@ class ParallelImplementationTests(unittest.TestCase):
             (stale / 'large-stale-artifact').write_text('do not copy\n')
             (root / '.pw-browsers').mkdir()
             (root / '.pw-browsers' / 'browser-cache').write_text('do not copy\n')
+            (root / 'node_modules').mkdir()
+            (root / 'node_modules' / 'dependency-cache').write_text('do not copy\n')
             worker = root / 'worker.sh'
             worker.write_text('#!/usr/bin/env bash\nset -euo pipefail\n'
                               'test ! -e .pw-browsers\n'
+                              'test ! -e node_modules\n'
                               'printf copied > a.txt\n'
                               'mkdir -p .uncle/workflow/parallel/notes\n'
                               'printf handoff > .uncle/workflow/parallel/notes/step-1.md\n')

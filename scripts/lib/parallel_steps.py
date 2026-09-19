@@ -22,6 +22,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -67,18 +68,41 @@ def publish_worker_end(spec, result):
     reliable completion signal to the parent TUI.  The scheduler is the one
     process that observes every runner's exit, independent of runner type.
     """
-    path = spec['env'].get('UNCLE_STATUS_FILE', '')
-    if not path:
-        return
+    ended = time.time()
     event = {'event': 'end', 'stage': 'implementation-step-%d' % spec['number'],
              'process_exit': result['exit'], 'elapsed_seconds': result['seconds'],
              'runner': spec['env'].get('UNCLE_RESOLVED_RUNNER', ''),
              'model': spec['env'].get('PARALLEL_AGENT_MODEL', '')}
+    path = spec['env'].get('UNCLE_STATUS_FILE', '')
+    if path:
+        try:
+            with open(path, 'a', encoding='utf-8', newline='\n') as stream:
+                stream.write(json.dumps(event) + '\n')
+        except OSError:
+            pass
+    # Publish the same terminal result into the project metrics directory.
+    # Unlike a transient status event, this is discovered by both open and
+    # newly launched TUIs and is the source of completed green panel rows.
+    directory = Path(spec['project']) / '.uncle' / 'workflow' / 'metrics'
+    row = {'schema': 1, 'kind': 'agent', 'stage': event['stage'],
+           'started_at': ended - result['seconds'], 'ended_at': ended,
+           'elapsed_seconds': result['seconds'], 'process_exit': result['exit'],
+           'runner': event['runner'], 'model': event['model'],
+           'effort': spec['env'].get('PARALLEL_AGENT_EFFORT', ''),
+           'log': spec['log']}
+    temporary = None
     try:
-        with open(path, 'a', encoding='utf-8', newline='\n') as stream:
-            stream.write(json.dumps(event) + '\n')
+        directory.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix='.parallel-worker-', suffix='.json', dir=directory)
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+            json.dump(row, stream)
+        os.replace(temporary, directory / ('parallel-worker-%d-%d.json' % (spec['number'], int(ended * 1000))))
     except OSError:
-        pass
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
 
 
 def run_step(spec, results):
@@ -169,7 +193,7 @@ def main():
         except (OSError, ValueError) as error:
             print('Could not mirror the tree for step %d: %s' % (number, error), file=sys.stderr)
             return 2
-        specs.append({'number': number, 'sandbox': str(sandbox),
+        specs.append({'number': number, 'project': project, 'sandbox': str(sandbox),
                       'command': step['command'], 'log': step['log'],
                       'env': dict(os.environ, **step.get('env', {}))})
 

@@ -124,6 +124,9 @@ class ParallelImplementationTests(unittest.TestCase):
             event = next(item for item in events if item.get('event') == 'end')
             self.assertEqual((event['stage'], event['process_exit']), ('implementation-step-1', 0))
             self.assertGreaterEqual(event['elapsed_seconds'], 0)
+            records = list((root / '.uncle/workflow/metrics').glob('parallel-worker-*.json'))
+            self.assertEqual(len(records), 1)
+            self.assertEqual(json.loads(records[0].read_text())['process_exit'], 0)
 
 
 if __name__ == '__main__':

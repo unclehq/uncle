@@ -15,4 +15,13 @@ for runner in codex cline claude kimi self-hosted; do
         [[ "$(uncle_stage_network "$stage")" == true ]]
     done
 done
+for runner in codex cline claude kimi self-hosted; do
+    printf 'execute-checklist.runner %s\nexecute-checklist.model local/test\nexecute-checklist.effort high\nexecute-checklist.network true\n' "$runner" > "$UNCLE_CONFIG"
+    stage='execute-checklist-worker-MC-001'
+    [[ "$(uncle_stage_side "$stage")" == agent ]]
+    [[ "$(uncle_stage_cmd "$stage")" == "$(uncle_stage_cmd execute-checklist)" ]]
+    [[ "$(uncle_stage_model "$stage")" == "$(uncle_stage_model execute-checklist)" ]]
+    [[ "$(uncle_stage_effort "$stage")" == high ]]
+    [[ "$(uncle_stage_network "$stage")" == true ]]
+done
 echo 'checklist-runner-config-test: passed'

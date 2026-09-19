@@ -42,8 +42,10 @@ or by a `Check ID:` field, and a table cell holding an ID is not recognised.
 - Status: NOT RUN
 
 IDs are a prefix, hyphens, and a number: `MC-1`, `MC-12`, `MC-S-1`. Keep every
-field, in this order, one per line. A check missing `Exact action` or
-`Expected result` is rejected before execution starts.
+field, in this order, one per line. Every check MUST declare both `Exclusive
+resources` and `Depends on`, using `none` when applicable; these are the
+driver's only inputs for safe parallel scheduling. A check missing either,
+`Exact action`, or `Expected result` is rejected before execution starts.
 LAYOUT
 }
 
@@ -150,6 +152,12 @@ Name every file the change touches in backticks, in the Component cell, and the
 tests that must change with it in Test coverage. Repo-relative paths only: a
 leading slash reads as a route, not a file. These rows are the plan committing
 to a file set, and later stages check the diff against them.
+
+Every numbered implementation step MUST end with `Owns:`, listing the exact
+repo-relative files it alone may edit (or `*` only for a final reconcile step),
+and `Depends on:`, listing prerequisite step numbers or `none`. These fields
+are the driver's only inputs for safe parallel implementation worktrees. Do
+not omit them or infer dependencies from prose.
 LAYOUT
     _layout_id_tables
 }
@@ -187,11 +195,13 @@ CONTRACT
         PROJECT_PLAN.md)
             cat <<'CONTRACT'
 Return an executable proposal, not a requirements restatement or review. Start with `# Project plan`; then give only: objective and constraints, current-state findings, ID-keyed behavior/invariant coverage, ordered implementation steps with exact files and changes, verification commands/evidence, risks/rollback, and open decisions. Do not claim implementation or test results.
+Every numbered implementation step must end with `Owns:` (exact repo-relative files, or `*` only for a final reconcile step) and `Depends on:` (prior step numbers or `none`). The parallel implementation scheduler consumes these declarations directly; never omit or infer them.
 CONTRACT
             ;;
         UPDATED_PROJECT_PLAN.md)
             cat <<'CONTRACT'
 Return the complete revised executable proposal, not a review response. Start with `# Updated project plan`; then give only: the retained objective, a disposition for every review finding, the corrected ordered implementation plan, ID-keyed behavior/invariant coverage, verification commands/evidence, risks/rollback, and remaining approval decisions. Do not repeat the review as prose or claim implementation.
+Every numbered implementation step must end with `Owns:` (exact repo-relative files, or `*` only for a final reconcile step) and `Depends on:` (prior step numbers or `none`). The parallel implementation scheduler consumes these declarations directly; never omit or infer them.
 CONTRACT
             ;;
         BASELINE_REPORT.md)
@@ -207,6 +217,7 @@ CONTRACT
         CHANGE_PLAN.md|UPDATED_CHANGE_PLAN.md)
             cat <<'CONTRACT'
 Return an executable change plan, not a specification or review. Start with `# Change plan`; then give only: scope and constraints, the exact `## Change-impact table`, ordered file-level implementation steps, requirement-to-step traceability, verification commands/evidence, rollback, and unresolved approval decisions. Do not claim the edits or tests were performed.
+Every numbered implementation step must end with `Owns:` (exact repo-relative files, or `*` only for a final reconcile step) and `Depends on:` (prior step numbers or `none`). The parallel implementation scheduler consumes these declarations directly; never omit or infer them.
 CONTRACT
             ;;
         ADVERSARIAL_REVIEW.md)
@@ -242,6 +253,7 @@ CONTRACT
         MANUAL_CHECKLIST.md|MANUAL_CHECKLIST.base.md)
             cat <<'CONTRACT'
 Return an executable human test checklist only. Start with `# Manual checklist`; then give only the required MC-ID check headings and fields, followed by traceability if needed. Every check must be independently runnable and have explicit preconditions, exact action, expected result, evidence, actual result, and status. Do not write test results before execution, a plan, or a release verdict.
+Every check must also contain `Exclusive resources` and `Depends on` in that order; use `none` for each when no lock or ordering requirement exists. These declarations are consumed directly by the parallel checklist scheduler, so never omit or infer them.
 CONTRACT
             ;;
         VERIFICATION_REPORT.md)

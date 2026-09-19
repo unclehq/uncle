@@ -203,6 +203,8 @@ class SelfHosted(unittest.TestCase):
             os.environ.pop('WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS', None)
             self.assertEqual(output_token_limit('implementation'), 32768)
             self.assertEqual(output_token_limit('implementation-step-7'), 32768)
+            self.assertEqual(output_token_limit('execute-checklist'), 32768)
+            self.assertEqual(output_token_limit('execute-checklist-worker-MC-001'), 32768)
             self.assertEqual(output_token_limit('adversarial-review'), 8192)
         with patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS': '12000'}, clear=False):
             self.assertEqual(output_token_limit('implementation'), 12000)

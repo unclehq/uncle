@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Group-at-a-time implementation, when the plan says which files each step owns.
 #
-# Off unless WORKFLOW_PARALLEL_IMPLEMENT=1, and inert whenever the plan does not
-# declare ownership: a plan that says nothing produces one step per group, which
-# is the sequential behaviour the driver already had.
+# On by default whenever the approved plan proves independent ownership. Set
+# WORKFLOW_PARALLEL_IMPLEMENT=0 only to opt out. A plan that does not declare
+# ownership, or has no multi-step group, remains serial because there is no
+# safe parallel schedule to execute.
 #
 # The grouping is the plan's statement, not this code's guess, and a group that
 # writes outside its declaration is refused whole. Both properties live in
 # step_groups.py and parallel_steps.py; this file only decides when to use them.
 
-PARALLEL_IMPLEMENT="${WORKFLOW_PARALLEL_IMPLEMENT:-0}"
+PARALLEL_IMPLEMENT="${WORKFLOW_PARALLEL_IMPLEMENT:-1}"
 
 # parallel_groups <plan> <lib-dir> — one group per line, space-separated step
 # numbers. Prints nothing (and fails) when parallel implementation is off, the

@@ -236,16 +236,18 @@ class OutputTruncated(ValueError):
 def output_token_limit(stage=''):
     """Configured output cap, with room for implementation reasoning.
 
-    OpenCode counts reasoning inside its output limit. An implementation agent
-    can complete edits and tests yet overflow an 8K/16K final stream, which
-    incorrectly turns completed on-disk work into a failed stage. Keep review
-    and document defaults compact, but give code/repair stages a 32K first
+    OpenCode counts reasoning inside its output limit. An implementation or
+    checklist-execution agent can complete edits/tests and reports yet overflow
+    an 8K/16K final stream, which incorrectly turns completed on-disk work into
+    a failed stage. Keep review and short document defaults compact, but give
+    long-running code, repair, and checklist-execution stages a 32K first
     attempt; an explicit operator setting always wins.
     """
     configured = os.environ.get(OUTPUT_TOKENS_ENV)
     if configured:
         return int(configured)
-    return 32768 if stage in ('implementation', 'repair') or stage.startswith('implementation-step-') else 8192
+    return 32768 if stage in ('implementation', 'repair', 'execute-checklist') \
+        or stage.startswith('implementation-step-') or stage.startswith('execute-checklist-worker-') else 8192
 
 
 def context_token_limit():

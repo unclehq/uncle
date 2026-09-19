@@ -222,6 +222,12 @@ stepwise_implementation_enabled() {
 # Set to 0 to fall back to the serial single-shot checklist stage.
 PARALLEL_CHECKLIST="${WORKFLOW_PARALLEL_CHECKLIST:-1}"
 
+# Execute genuinely independent checklist rows with isolated agent calls before
+# the normal report writer runs. The reviewer, not the executing agents,
+# supplies the resource/dependency grouping; the report writer remains the one
+# canonical owner of VERIFICATION_REPORT.md and DEFECTS.md.
+PARALLEL_CHECKLIST_WORKERS="${WORKFLOW_PARALLEL_CHECKLIST_WORKERS:-1}"
+
 # Stop after implementation and show the operator the actual diff, the green
 # check, and the agent's own notes, before anything downstream reads them.
 #
@@ -1261,6 +1267,96 @@ wait_green_check_bg() {
     return 0
 }
 
+# Run only the rows that the independent checklist reviewer explicitly placed
+# together.  Each worker owns a private evidence file; it never writes the
+# canonical reports or product files.  Groups remain barriers, so a row that
+# depends on an earlier group cannot start early.  A worker failure is evidence
+# for the synthesizer, not a reason to throw away results from its siblings.
+run_parallel_checklist_workers() {
+    local groups="$STATE_DIR/checklist-groups/groups.txt"
+    local directory="$STATE_DIR/checklist-workers" group id prompt evidence
+    local worker_count=0 worker_cap synthesis_cap failed=0 status pid jobs active=0
+    local -a ids pids pid_ids
+
+    [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
+    jobs="${WORKFLOW_VERIFY_JOBS:-4}"
+    [[ "$jobs" =~ ^[1-8]$ ]] || jobs=4
+    while IFS= read -r group; do
+        set -- $group
+        [[ $# -gt 1 ]] && worker_count=$((worker_count + $#))
+    done < "$groups"
+    [[ "$worker_count" -gt 1 ]] || return 0
+
+    # Reserve half of the existing stage cap for reconciliation and split the
+    # other half among workers. This bounds a fan-out to the old stage budget
+    # instead of multiplying it by the number of independent checks.
+    synthesis_cap="$BUDGET_EXECUTE"
+    worker_cap="$BUDGET_EXECUTE"
+    if [[ -n "$BUDGET_EXECUTE" ]]; then
+        synthesis_cap="$(awk -v cap="$BUDGET_EXECUTE" 'BEGIN { printf "%.2f", cap / 2 }')"
+        worker_cap="$(awk -v cap="$BUDGET_EXECUTE" -v n="$worker_count" 'BEGIN { printf "%.2f", cap / (2 * n) }')"
+    fi
+    CHECKLIST_SYNTHESIS_BUDGET="$synthesis_cap"
+
+    rm -rf "$directory"
+    mkdir -p "$directory/prompts"
+    {
+        echo '# Parallel checklist worker evidence'
+        echo
+        echo 'Only IDs on the same group line were executed concurrently.'
+        echo 'The final execute-checklist stage is the sole writer of canonical reports.'
+        echo
+    } > "$directory/README.md"
+
+    while IFS= read -r group; do
+        read -r -a ids <<< "$group"
+        [[ "${#ids[@]}" -gt 1 ]] || continue
+        echo "Checklist worker group: $group"
+        pids=()
+        pid_ids=()
+        for id in "${ids[@]}"; do
+            prompt="$directory/prompts/$id.md"
+            evidence="$directory/$id.md"
+            cp "$ROOT/prompts/change/execute-checklist-worker.md" "$prompt"
+            printf '\n## Assigned check\n\nExecute only `%s`. Write the evidence to `%s`.\n' \
+                "$id" ".uncle/workflow/checklist-workers/$id.md" >> "$prompt"
+            printf '%s\n' "- $id: `.uncle/workflow/checklist-workers/$id.md`" >> "$directory/README.md"
+            (
+                SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                    run_claude "$prompt" "execute-checklist-worker-$id" \
+                        "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 80 "$worker_cap"
+            ) > "$LOG_DIR/execute-checklist-worker-$id.log" 2>&1 &
+            pids+=("$!")
+            pid_ids+=("$id")
+            active=$((active + 1))
+            # A wide group is safe, but it still must not exhaust the machine
+            # or the configured provider concurrency. Finish this batch before
+            # launching the next workers in the same approved group.
+            if [[ "$active" -ge "$jobs" ]]; then
+                for ((status = 0; status < ${#pids[@]}; status++)); do
+                    pid="${pids[$status]}"
+                    if ! wait "$pid"; then
+                        echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run that row." >&2
+                        failed=1
+                    fi
+                done
+                pids=()
+                pid_ids=()
+                active=0
+            fi
+        done
+        for ((status = 0; status < ${#pids[@]}; status++)); do
+            pid="${pids[$status]}"
+            if ! wait "$pid"; then
+                echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run that row." >&2
+                failed=1
+            fi
+        done
+    done < "$groups"
+    [[ "$failed" == 0 ]] || printf '\nSome workers failed; their IDs require reconciliation.\n' >> "$directory/README.md"
+    return 0
+}
+
 # --- Post-implementation review document ------------------------------------
 
 # Rebuilt from the working tree every time the gate opens, so the approval
@@ -1389,7 +1485,7 @@ run_stepwise_implementation() {
         return 0
     fi
 
-    # Parallel execution is opt-in and only starts when the approved plan
+    # Parallel execution is the default and only starts when the approved plan
     # explicitly partitions ownership. A resume remains serial: preserving a
     # failed worktree for inspection is safer than recreating it on top of a
     # partial delivery.
@@ -2675,11 +2771,12 @@ REPAIR
             snapshot_checklist_groups
             snapshot_checklist_checks
             ensure_checklist_runner execute-checklist || exit 1
+            run_parallel_checklist_workers
             PROGRESS_TOTAL="$(grep -oE 'MC-[0-9]+' MANUAL_CHECKLIST.md 2>/dev/null \
                 | sort -u | grep -c . || echo 0)"
             PROGRESS_LABEL="checklist"
             run_claude prompts/change/execute-change-checklist.md execute-checklist \
-                "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 200 "$BUDGET_EXECUTE"
+                "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 200 "${CHECKLIST_SYNTHESIS_BUDGET:-$BUDGET_EXECUTE}"
             PROGRESS_TOTAL=0
             wait_green_check_bg || exit $?
             set_state VALIDATE_CHECKLIST

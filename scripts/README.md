@@ -422,7 +422,8 @@ under "Configuration". The two that decide which external CLI is spawned:
 | Variable | Default | Used by |
 |---|---|---|
 | `WORKFLOW_STEPWISE_IMPLEMENT` | `auto` | `change-workflow.sh` |
-| `WORKFLOW_PARALLEL_IMPLEMENT` | `0` | `change-workflow.sh` |
+| `WORKFLOW_PARALLEL_IMPLEMENT` | `1` | `change-workflow.sh` |
+| `WORKFLOW_PARALLEL_CHECKLIST_WORKERS` | `1` | `change-workflow.sh` |
 | `WORKFLOW_DIFF_GATE` | `1` | both drivers |
 | `WORKFLOW_GREEN_CHECK` | `1` | both drivers |
 | `WORKFLOW_AUDIT_GATE` | `1` | both drivers |
@@ -539,15 +540,21 @@ The turn cap is divided across the steps rather than multiplied, and
 variable to `1` to force stepwise execution or `0` to keep one context. A step
 boundary in the wrong place costs coherence, which is worth more than tokens.
 
-`WORKFLOW_PARALLEL_IMPLEMENT=1` lets the supervisor schedule plan-declared
-independent step groups in temporary worktrees. It is intentionally opt-in and
-only uses the approved sequence's `Owns:` and `Depends on:` fields. The driver
+Parallel implementation is enabled by default: the supervisor schedules
+plan-declared independent step groups in temporary worktrees. Set
+`WORKFLOW_PARALLEL_IMPLEMENT=0` to opt out. It only uses the approved
+sequence's `Owns:` and `Depends on:` fields. The driver
 rejects an out-of-scope write before merging, captures each step's isolated
 handoff, runs the normal merged-tree verification/report stage, and removes
 only successfully merged worktrees. Failed or conflicting worktrees remain
 under `.uncle/workflow/parallel/` for recovery.
 
 Covered by `scripts/tests/plan-scope-test.sh`.
+
+Independent checklist rows also fan out by default. The reviewer must have
+declared compatible `Exclusive resources` and `Depends on` fields; each worker
+writes isolated evidence and one final stage reconciles the canonical reports.
+Set `WORKFLOW_PARALLEL_CHECKLIST_WORKERS=0` to retain one execution agent.
 
 ### The gates around implementation
 

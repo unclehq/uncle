@@ -85,6 +85,7 @@ uncle_config_stage() {
         plan-executability) printf 'adversarial-review' ;;
         plan-recovery) printf 'updated-plan' ;;
         manual-checklist-base|manual-checklist-delta) printf 'manual-checklist' ;;
+        execute-checklist-worker-*) printf 'execute-checklist' ;;
         implementation-step-*) printf 'implementation' ;;
         *) printf '%s' "$1" ;;
     esac

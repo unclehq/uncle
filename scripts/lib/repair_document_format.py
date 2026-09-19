@@ -46,6 +46,55 @@ _HAS_ASSESSMENT_HEADING = re.compile(
     r'^##[ \t]+(?:\d+[.)][ \t]+)?(?:\*\*)?Overall assessment', re.M | re.I)
 
 _VERDICTS = ('READY WITH NON-BLOCKING ISSUES', 'NOT READY', 'READY')
+_TEST_REVIEW = re.compile(r'^# Test review[ \t]*$', re.M | re.I)
+_ACCEPTANCE_GATE = re.compile(r'^## Acceptance gate[ \t]*$', re.M | re.I)
+
+
+def _has_parseable_acceptance_gate(text):
+    """True only for the unambiguous table shape, not for its verdict."""
+    gates = list(_ACCEPTANCE_GATE.finditer(text))
+    if len(gates) != 1:
+        return False
+    lines = text[gates[0].end():].splitlines()
+    lines = [line for line in lines if line.strip()]
+    if len(lines) < 3:
+        return False
+    header = [part.strip() for part in lines[0].split('|')]
+    separator = [part.strip() for part in lines[1].split('|')]
+    if header != ['', 'ID', 'Required', 'Status', 'Evidence', '']:
+        return False
+    if len(separator) != 6 or separator[0] or separator[-1] or any(
+            not re.fullmatch(r':?-{3,}:?', cell) for cell in separator[1:-1]):
+        return False
+    rows = 0
+    prose = False
+    for line in lines[2:]:
+        if not line.lstrip().startswith('|'):
+            prose = True
+            continue
+        if prose:
+            return False
+        cells = [part.strip() for part in line.split('|')]
+        if len(cells) != 6 or cells[0] or cells[-1]:
+            return False
+        rows += 1
+    return rows > 0
+
+
+def _extract_complete_test_review(text):
+    """Discard leaked draft transcripts only when one complete review is clear."""
+    starts = list(_TEST_REVIEW.finditer(text))
+    if len(starts) < 2:
+        return text, None
+    candidates = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        candidate = text[start.start():end].strip() + '\n'
+        if _has_parseable_acceptance_gate(candidate):
+            candidates.append(candidate)
+    if len(candidates) != 1:
+        return text, None
+    return candidates[0], 'discarded leaked draft transcript and retained the one parseable Test review'
 
 
 def _strip_preamble(text):
@@ -110,7 +159,7 @@ def _verdict_last(text):
 _RULES = {
     'ADVERSARIAL_REVIEW.md': (_strip_preamble, _promote_assessment),
     'FINAL_AUDIT.md': (_strip_preamble, _verdict_last),
-    'TEST_REVIEW.md': (_strip_preamble,),
+    'TEST_REVIEW.md': (_strip_preamble, _extract_complete_test_review),
     'MANUAL_CHECKLIST.md': (_strip_preamble,),
     'VERIFICATION_REPORT.md': (_strip_preamble,),
     'PREFLIGHT_REPORT.md': (_strip_preamble,),

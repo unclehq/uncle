@@ -572,6 +572,14 @@ acceptance_after_waiver() {
 
 acceptance_transition() {
     local report="$1" next="$2" result ids
+    # A reviewer transport can occasionally concatenate its scratch draft and
+    # final answer. Treat that as a recoverable validation outcome only when
+    # exactly one independently parseable complete TEST_REVIEW exists; never
+    # select between competing verdicts. The retained artifact is still parsed
+    # below before the workflow may advance.
+    if python3 "$ROOT/scripts/lib/repair_document_format.py" "$report" >/dev/null 2>&1; then
+        echo "Validator recovered an unambiguous format-only transcript leak in $report; revalidating."
+    fi
     python3 "$ROOT/scripts/lib/repair-acceptance.py" "$report" || return 1
     result="$(acceptance_result "$report" "${3:-}")"
     case "$result" in

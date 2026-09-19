@@ -1302,6 +1302,10 @@ run_codex_review() {
         fi
 
         [[ "$status" != 0 ]] || break
+        # Panel workers are detached and have no operator stdin.  A failed
+        # packet is advisory, so return it to the panel coordinator instead of
+        # trying to open an unreachable retry prompt.
+        [[ "${UNCLE_NONINTERACTIVE:-0}" == 1 ]] && return "$status"
         gate_prompt "Reviewer $log_name failed (exit $status). Retry this reviewer stage? [Y/N]"
         if ! { if declare -f gate_read > /dev/null; then gate_read retry_answer; else IFS= read -r retry_answer; fi; }; then return "$status"; fi
         case "$retry_answer" in y|Y) status=0 ;; *) return "$status" ;; esac
@@ -1333,7 +1337,7 @@ run_adversarial_review_panel() {
         output="$directory/$lens.md"
         cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
         printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
-        ( run_codex_review "$prompt" "$output" "adversarial-review-worker-$lens" < /dev/null ) \
+        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "adversarial-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/adversarial-review-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
@@ -1350,24 +1354,17 @@ run_updated_plan_panel() {
     local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
     local -a pids=()
     [[ "${WORKFLOW_UPDATED_PLAN_PANEL:-1}" == 1 ]] || return 0
-    # UPDATED_PLAN is normally speculated while the acknowledgement gate owns
-    # the terminal.  Panel workers have their own retry/supervision lifecycle;
-    # starting them in that detached job turns a recoverable worker failure
-    # into a wait on an invisible background process.  The speculative writer
-    # remains useful on its own, and a foreground re-run can use the panel.
-    if [[ "${UNCLE_SPECULATIVE:-false}" == true ]]; then
-        echo "Updated-plan panel deferred: speculative UPDATED_PLAN runs without workers."
-        return 0
-    fi
+    echo "Updated-plan review panel: launching 4 workers in parallel."
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     for lens in dispositions ownership verification scope; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
         cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
         printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
-        ( run_codex_review "$prompt" "$output" "updated-plan-review-worker-$lens" < /dev/null ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
+        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "updated-plan-review-worker-$lens" < /dev/null ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan panel worker failed; plan writer will continue.' >&2; done
+    echo "Updated-plan review panel: worker packets collected; launching synthesis."
     UPDATED_PLAN_PROMPT="$directory/synthesis.md"
     cp "$ROOT/prompts/updated-plan.md" "$UPDATED_PLAN_PROMPT"
     printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
@@ -1382,7 +1379,7 @@ run_final_audit_panel() {
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
         cp "$ROOT/prompts/change/final-audit-review-worker.md" "$prompt"
         printf '\n## Assigned audit lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
-        ( run_codex_review "$prompt" "$output" "final-audit-review-worker-$lens" < /dev/null ) > "$LOG_DIR/final-audit-worker-$lens.log" 2>&1 &
+        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "final-audit-review-worker-$lens" < /dev/null ) > "$LOG_DIR/final-audit-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit panel worker failed; auditor will continue.' >&2; done

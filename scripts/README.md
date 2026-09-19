@@ -422,6 +422,7 @@ under "Configuration". The two that decide which external CLI is spawned:
 | Variable | Default | Used by |
 |---|---|---|
 | `WORKFLOW_STEPWISE_IMPLEMENT` | `auto` | `change-workflow.sh` |
+| `WORKFLOW_PARALLEL_IMPLEMENT` | `0` | `change-workflow.sh` |
 | `WORKFLOW_DIFF_GATE` | `1` | both drivers |
 | `WORKFLOW_GREEN_CHECK` | `1` | both drivers |
 | `WORKFLOW_AUDIT_GATE` | `1` | both drivers |
@@ -537,6 +538,14 @@ The turn cap is divided across the steps rather than multiplied, and
 `.uncle/workflow/implement-step-done` makes a partial run resumable. Set the
 variable to `1` to force stepwise execution or `0` to keep one context. A step
 boundary in the wrong place costs coherence, which is worth more than tokens.
+
+`WORKFLOW_PARALLEL_IMPLEMENT=1` lets the supervisor schedule plan-declared
+independent step groups in temporary worktrees. It is intentionally opt-in and
+only uses the approved sequence's `Owns:` and `Depends on:` fields. The driver
+rejects an out-of-scope write before merging, captures each step's isolated
+handoff, runs the normal merged-tree verification/report stage, and removes
+only successfully merged worktrees. Failed or conflicting worktrees remain
+under `.uncle/workflow/parallel/` for recovery.
 
 Covered by `scripts/tests/plan-scope-test.sh`.
 

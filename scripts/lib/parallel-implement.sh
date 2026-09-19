@@ -55,13 +55,14 @@ for line in rows:
 print(json.dumps(owned))' "$lib")"
     steps_json="$(python3 -B -c '
 import json, sys
-logdir, plan = sys.argv[1], sys.argv[2]
+logdir, plan, lib = sys.argv[1], sys.argv[2], sys.argv[3]
 steps = []
-for n in sys.argv[3:]:
+for n in sys.argv[4:]:
     steps.append({"number": int(n),
                   "log": "%s/implementation-step-%s.log" % (logdir, n),
-                  "command": ["bash", "%s/run-step.sh" % logdir, n]})
-print(json.dumps(steps))' "$logdir" "$plan" "$@")"
+                  "note": ".uncle/workflow/parallel/notes/step-%s.md" % n,
+                  "command": ["bash", "%s/parallel-agent.sh" % lib, n]})
+print(json.dumps(steps))' "$logdir" "$plan" "$lib" "$@")"
     printf '{"project": "%s", "owned": %s, "steps": %s}\n' "$PWD" "$owned_json" "$steps_json" > "$request"
     python3 -B "$lib/parallel_steps.py" "$request" || rc=$?
     rm -f "$request"

@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -62,14 +63,17 @@ def changed(before, after):
 def run_step(spec, results):
     """One step in its own mirror of the tree. Never raises into the caller."""
     number, sandbox = spec['number'], spec['sandbox']
+    started = time.monotonic()
     try:
         before = snapshot(sandbox)
         proc = subprocess.run(spec['command'], cwd=sandbox, env=spec['env'],
                               stdout=open(spec['log'], 'wb'), stderr=subprocess.STDOUT)
         results[number] = {'exit': proc.returncode,
+                           'seconds': round(time.monotonic() - started, 3),
                            'wrote': sorted(changed(before, snapshot(sandbox)))}
     except (OSError, ValueError) as error:
-        results[number] = {'exit': 1, 'wrote': [], 'detail': str(error)}
+        results[number] = {'exit': 1, 'seconds': round(time.monotonic() - started, 3),
+                           'wrote': [], 'detail': str(error)}
 
 
 def merge(project, steps, results, owned):
@@ -98,7 +102,24 @@ def merge(project, steps, results, owned):
     return {}
 
 
+def capture_notes(project, steps):
+    """Copy each worker's isolated handoff before its worktree is removed."""
+    missing = []
+    for step in steps:
+        note = step.get('note', '')
+        sandbox = Path(project) / '.uncle' / 'workflow' / 'parallel' / ('step-%d' % step['number'])
+        source = sandbox / note
+        target = Path(project) / note
+        if not note or not source.is_file() or not source.read_text(encoding='utf-8').strip():
+            missing.append(step['number'])
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    return missing
+
+
 def main():
+    started = time.monotonic()
     request = json.loads(Path(sys.argv[1]).read_text())
     project = request['project']
     steps = request['steps']
@@ -132,6 +153,13 @@ def main():
         print('Sandboxes kept under %s' % base, file=sys.stderr)
         return 1
 
+    missing_notes = capture_notes(project, steps)
+    if missing_notes:
+        print('Steps did not provide required isolated handoff notes: %s' %
+              ', '.join(str(n) for n in missing_notes), file=sys.stderr)
+        print('Nothing was merged or cleaned up; inspect the sandboxes before retrying.', file=sys.stderr)
+        return 4
+
     violations = merge(project, numbers, results, owned)
     if violations:
         for number, stray in sorted(violations.items()):
@@ -145,7 +173,10 @@ def main():
     for number in numbers:
         drop_sandbox(project, base / ('step-%d' % number))
     print(json.dumps({'merged': numbers,
-                      'files': sorted({f for n in numbers for f in results[n]['wrote']})}))
+                      'files': sorted({f for n in numbers for f in results[n]['wrote']}),
+                      'elapsed_seconds': round(time.monotonic() - started, 3),
+                      'step_seconds': {str(n): results[n]['seconds'] for n in numbers},
+                      'worktrees': 'removed'}))
     return 0
 
 

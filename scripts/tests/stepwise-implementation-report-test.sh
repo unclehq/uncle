@@ -4,6 +4,7 @@
 # code merely because report reconciliation needs more actions.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+grep -q 'at most 12 tool actions' "$ROOT/scripts/change-workflow.sh"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 cd "$work"
@@ -14,6 +15,7 @@ MODEL_IMPLEMENT=fake
 BUDGET_IMPLEMENT=1
 
 plan_steps() { printf '%s\n' 'one' 'two'; }
+run_supervised_parallel_implementation() { return 2; }
 compose_implementation_prompt() { : > "$2"; }
 plan_assess() { :; }
 check_document_budget() { test -s "$1"; }

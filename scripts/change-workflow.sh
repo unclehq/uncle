@@ -391,6 +391,7 @@ legacy_word_notice() {
 . "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/performance.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
+. "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/triage.sh"
 
 # The implementation stage can end with acceptance rows the agent could not
@@ -1300,6 +1301,69 @@ verify_implementation_review() {
     fi
 }
 
+# Run plan-declared independent implementation steps in temporary worktrees.
+# The supervisor's schedule is intentionally mechanical: it may only use the
+# approved plan's Owns:/Depends on: data.  The driver, not the model, creates,
+# merges and removes worktrees.
+run_supervised_parallel_implementation() {
+    local base="$1" groups group step prompt cmd model effort result
+    groups="$(parallel_groups CHANGE_PLAN.md "$ROOT/scripts/lib")" || return 2
+    [[ -n "$groups" ]] || return 2
+    [[ ! -s "$STATE_DIR/implement-step-done" ]] || return 2
+
+    uncle_resolve_stage_runner implementation AGENT || return 1
+    cmd="$(stage_agent_cmd implementation)" || return 1
+    model="$(stage_model_for implementation "$MODEL_IMPLEMENT")"
+    effort="$(stage_effort_for implementation)"
+    export PARALLEL_AGENT_CMD="$cmd" PARALLEL_AGENT_MODEL="$model"
+    export PARALLEL_AGENT_EFFORT="$effort" PARALLEL_AGENT_BUDGET="$BUDGET_IMPLEMENT"
+    export PARALLEL_AGENT_TOOLS="$CLAUDE_TOOLS"
+
+    mkdir -p "$STATE_DIR/parallel/prompts" "$STATE_DIR/parallel/notes"
+    while IFS= read -r group; do
+        [[ -n "$group" ]] || continue
+        for step in $group; do
+            prompt="$STATE_DIR/parallel/prompts/step-$step.md"
+            compose_implementation_prompt "$base" "$prompt"
+            {
+                echo
+                echo "## Isolated parallel implementation step $step"
+                sed -n "${step}p" "$STATE_DIR/implement-steps.txt"
+                echo
+                echo "Work only on this approved step and its declared owned files."
+                echo "Do not edit workflow documents in the project root. Append a"
+                echo "concise handoff with changed files and exact checks to"
+                echo ".uncle/workflow/parallel/notes/step-$step.md. Do not write"
+                echo "CHANGE_TEST_REPORT.md; the driver reconciles it after merging."
+                echo "Finish in at most 12 tool actions. Read only the named files,"
+                echo "make the smallest edit, run one narrow check, write the handoff,"
+                echo "and stop; do not investigate unrelated failures or repeat probes."
+            } >> "$prompt"
+        done
+        echo "Supervisor schedule: isolated parallel steps $group."
+        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" CHANGE_PLAN.md $group)" || return $?
+        PARALLEL_RESULT="$result" python3 - "$group" <<'PY'
+import json, os, sys
+group = sys.argv[1]
+data = json.loads(os.environ['PARALLEL_RESULT'])
+elapsed = float(data.get('elapsed_seconds', 0))
+total = sum(float(v) for v in (data.get('step_seconds') or {}).values())
+saved = max(0.0, total - elapsed)
+files = len(data.get('files') or [])
+print('Parallel group %s complete: %.1fs wall time; %.1fs worker time; '
+      'estimated %.1fs saved; %d files merged; worktrees %s.' %
+      (group, elapsed, total, saved, files, data.get('worktrees', 'preserved')))
+PY
+        for step in $group; do
+            require_file "$STATE_DIR/parallel/notes/step-$step.md"
+            cat "$STATE_DIR/parallel/notes/step-$step.md" >> IMPLEMENTATION_NOTES.md
+            printf '%s\n' "$step" > "$STATE_DIR/implement-step-done"
+        done
+    done <<< "$groups"
+    rm -rf "$STATE_DIR/parallel"
+    return 0
+}
+
 # One invocation per implementation-sequence step, each starting cold.
 #
 # IMPLEMENTATION_NOTES.md is the handoff: every step appends to it, and the
@@ -1323,6 +1387,17 @@ run_stepwise_implementation() {
         run_claude "$STATE_DIR/implement-change.resolved.md" implementation \
             "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
         return 0
+    fi
+
+    # Parallel execution is opt-in and only starts when the approved plan
+    # explicitly partitions ownership. A resume remains serial: preserving a
+    # failed worktree for inspection is safer than recreating it on top of a
+    # partial delivery.
+    if run_supervised_parallel_implementation "$base"; then
+        check_document_budget IMPLEMENTATION_NOTES.md || exit 1
+    else
+        local parallel_status=$?
+        [[ "$parallel_status" == 2 ]] || return "$parallel_status"
     fi
 
     # Split the single stage's cap across the steps rather than multiplying it.
@@ -1366,6 +1441,16 @@ run_stepwise_implementation() {
             echo "Append your rows to IMPLEMENTATION_NOTES.md; do not rewrite"
             echo "the rows already there. Run the narrowest test target that"
             echo "covers this step."
+            echo
+            echo "## Runtime completion bound (binding)"
+            echo
+            echo "This runner can end a session after 21 tool iterations. Finish"
+            echo "this step in at most 12 tool actions: read the named files once,"
+            echo "make the smallest edit, run the one named/narrow test, append the"
+            echo "handoff, and stop. Do not investigate unrelated failures, repeat"
+            echo "probes, review earlier steps, or broaden the test run. If a narrow"
+            echo "check exposes an unrelated pre-existing issue, record it in the"
+            echo "handoff and finish this step rather than diagnosing it."
             if [[ "$i" -ne "$total" ]]; then
                 echo
                 echo "Do not run the full suite; the final step does that once."

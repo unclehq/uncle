@@ -127,6 +127,8 @@ def config_stage(stage, values):
     """
     if stage in ('manual-checklist-base', 'manual-checklist-delta'):
         return 'manual-checklist'
+    if '-worker-' in stage:
+        return stage.split('-worker-', 1)[0]
     if stage.startswith('implementation-step-'):
         return 'implementation'
     if stage == 'preview-build' and not values.get('preview-build.model'):
@@ -243,11 +245,16 @@ def output_token_limit(stage=''):
     long-running code, repair, and checklist-execution stages a 32K first
     attempt; an explicit operator setting always wins.
     """
+    # Dynamic workers inherit the parent stage's size class as well as its
+    # configured model. This keeps every self-hosted worker consistent with
+    # Claude, Cline, Codex, and Kimi through stage-config.sh.
+    if '-worker-' in stage:
+        stage = stage.split('-worker-', 1)[0]
     configured = os.environ.get(OUTPUT_TOKENS_ENV)
     if configured:
         return int(configured)
     return 32768 if stage in ('implementation', 'repair', 'execute-checklist') \
-        or stage.startswith('implementation-step-') or stage.startswith('execute-checklist-worker-') else 8192
+        or stage.startswith('implementation-step-') else 8192
 
 
 def context_token_limit():

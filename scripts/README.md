@@ -551,10 +551,10 @@ under `.uncle/workflow/parallel/` for recovery.
 
 Covered by `scripts/tests/plan-scope-test.sh`.
 
-Independent checklist rows also fan out by default. The reviewer must have
-declared compatible `Exclusive resources` and `Depends on` fields; each worker
-writes isolated evidence and one final stage reconciles the canonical reports.
-Set `WORKFLOW_PARALLEL_CHECKLIST_WORKERS=0` to retain one execution agent.
+Independent checklist rows fan out by default through per-run temporary
+handoffs, and the final stage reconciles their evidence into the canonical
+reports. Set `WORKFLOW_PARALLEL_CHECKLIST_WORKERS=0` to opt out. The normal
+checklist stage also retains its safe parallel command batch runner.
 
 ### The gates around implementation
 

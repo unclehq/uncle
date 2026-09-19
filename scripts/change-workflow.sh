@@ -222,10 +222,9 @@ stepwise_implementation_enabled() {
 # Set to 0 to fall back to the serial single-shot checklist stage.
 PARALLEL_CHECKLIST="${WORKFLOW_PARALLEL_CHECKLIST:-1}"
 
-# Execute genuinely independent checklist rows with isolated agent calls before
-# the normal report writer runs. The reviewer, not the executing agents,
-# supplies the resource/dependency grouping; the report writer remains the one
-# canonical owner of VERIFICATION_REPORT.md and DEFECTS.md.
+# Independent checklist rows fan out through per-run temporary handoffs. The
+# normal execution stage remains the only canonical report writer. Set to 0
+# only to opt out of agent fan-out.
 PARALLEL_CHECKLIST_WORKERS="${WORKFLOW_PARALLEL_CHECKLIST_WORKERS:-1}"
 
 # Stop after implementation and show the operator the actual diff, the green
@@ -1273,8 +1272,10 @@ wait_green_check_bg() {
 # depends on an earlier group cannot start early.  A worker failure is evidence
 # for the synthesizer, not a reason to throw away results from its siblings.
 run_parallel_checklist_workers() {
-    local groups="$STATE_DIR/checklist-groups/groups.txt"
-    local directory="$STATE_DIR/checklist-workers" group id prompt evidence
+    local groups="$PROJECT_ROOT/$STATE_DIR/checklist-groups/groups.txt"
+    # Runner adapters may rebuild .uncle while they start. Worker handoffs are
+    # outside the project entirely, so no workflow cleanup can race them.
+    local directory="" group id prompt evidence
     local worker_count=0 worker_cap synthesis_cap failed=0 status pid jobs active=0
     local -a ids pids pid_ids
 
@@ -1298,7 +1299,7 @@ run_parallel_checklist_workers() {
     fi
     CHECKLIST_SYNTHESIS_BUDGET="$synthesis_cap"
 
-    rm -rf "$directory"
+    directory="$(mktemp -d "${TMPDIR:-/tmp}/uncle-checklist-workers.XXXXXX")" || return 1
     mkdir -p "$directory/prompts"
     {
         echo '# Parallel checklist worker evidence'
@@ -1308,6 +1309,23 @@ run_parallel_checklist_workers() {
         echo
     } > "$directory/README.md"
 
+    # Materialize every prompt and the full manifest before launching the first
+    # child. Some runner adapters clean transient stage state as they start;
+    # preparing siblings lazily made that cleanup race this driver's writes.
+    while IFS= read -r group; do
+        read -r -a ids <<< "$group"
+        [[ "${#ids[@]}" -gt 1 ]] || continue
+        for id in "${ids[@]}"; do
+            prompt="$directory/prompts/$id.md"
+            evidence="$directory/$id.md"
+            cp "$ROOT/prompts/change/execute-checklist-worker.md" "$prompt"
+            printf '\n## Assigned check\n\nExecute only `%s`. Write the evidence to `%s`.\n' \
+                "$id" "$evidence" >> "$prompt"
+            # Backticks are Markdown here, not shell command substitution.
+            printf '%s\n' "- $id: \`$evidence\`" >> "$directory/README.md"
+        done
+    done < "$groups"
+
     while IFS= read -r group; do
         read -r -a ids <<< "$group"
         [[ "${#ids[@]}" -gt 1 ]] || continue
@@ -1316,11 +1334,6 @@ run_parallel_checklist_workers() {
         pid_ids=()
         for id in "${ids[@]}"; do
             prompt="$directory/prompts/$id.md"
-            evidence="$directory/$id.md"
-            cp "$ROOT/prompts/change/execute-checklist-worker.md" "$prompt"
-            printf '\n## Assigned check\n\nExecute only `%s`. Write the evidence to `%s`.\n' \
-                "$id" ".uncle/workflow/checklist-workers/$id.md" >> "$prompt"
-            printf '%s\n' "- $id: `.uncle/workflow/checklist-workers/$id.md`" >> "$directory/README.md"
             (
                 SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                     run_claude "$prompt" "execute-checklist-worker-$id" \
@@ -1354,6 +1367,10 @@ run_parallel_checklist_workers() {
         done
     done < "$groups"
     [[ "$failed" == 0 ]] || printf '\nSome workers failed; their IDs require reconciliation.\n' >> "$directory/README.md"
+    CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"
+    cp "$ROOT/prompts/change/execute-change-checklist.md" "$CHECKLIST_EXECUTE_PROMPT"
+    printf '\n## Parallel worker handoff\n\nRead `%s` and every listed evidence file before reconciling reports.\n' \
+        "$directory/README.md" >> "$CHECKLIST_EXECUTE_PROMPT"
     return 0
 }
 
@@ -1982,6 +1999,89 @@ run_codex() {
     save_plan_review "$output_file" "$review_key"
 }
 
+# Focused read-only review workers broaden coverage without granting them the
+# canonical review artifact. Failures are advisory: the primary reviewer still
+# receives the original evidence and produces the only binding verdict.
+run_adversarial_review_panel() {
+    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid status
+    local -a pids=()
+    [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"
+    mkdir -p "$directory/prompts"
+    for lens in requirements regression security testability; do
+        prompt="$directory/prompts/$lens.md"
+        output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
+        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        (
+            run_codex "$prompt" "$output" "adversarial-review-worker-$lens" \
+                "$CODEX_EFFORT_REVIEW"
+        ) > "$LOG_DIR/adversarial-review-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || echo "Adversarial review panel worker failed; primary review will continue." >&2
+    done
+    ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"
+    cp "$ROOT/prompts/change/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
+    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `ADVERSARIAL_REVIEW.md`.\n' \
+        "$directory" >> "$ADVERSARIAL_REVIEW_PROMPT"
+}
+
+run_updated_plan_panel() {
+    local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_UPDATED_PLAN_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in dispositions ownership verification scope; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
+        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( run_codex "$prompt" "$output" "updated-change-plan-review-worker-$lens" "$CODEX_EFFORT_REVIEW" ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan panel worker failed; plan writer will continue.' >&2; done
+    UPDATED_PLAN_PROMPT="$directory/synthesis.md"
+    cp "$ROOT/prompts/change/updated-change-plan.md" "$UPDATED_PLAN_PROMPT"
+    printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
+}
+
+run_final_audit_panel() {
+    local directory="$STATE_DIR/final-audit-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_FINAL_AUDIT_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in verification scope regression waivers; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/final-audit-review-worker.md" "$prompt"
+        printf '\n## Assigned audit lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( run_codex "$prompt" "$output" "final-audit-review-worker-$lens" "$CODEX_EFFORT_AUDIT" ) > "$LOG_DIR/final-audit-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit panel worker failed; auditor will continue.' >&2; done
+    FINAL_AUDIT_PROMPT="$directory/synthesis.md"
+    cp "$ROOT/prompts/change/final-audit.md" "$FINAL_AUDIT_PROMPT"
+    printf '\n## Specialist audit packets\n\nRead available packets in `%s`, verify them, and write the sole canonical final audit and verdict.\n' "$directory" >> "$FINAL_AUDIT_PROMPT"
+}
+
+run_checklist_panel() {
+    local kind="$1" source="$2" directory="$STATE_DIR/checklist-$1-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || { CHECKLIST_PANEL_PROMPT="$source"; return 0; }
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in coverage invariants resources regressions; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
+        printf '\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass.\n' "$lens" "$kind" >> "$prompt"
+        ( run_codex "$prompt" "$output" "manual-checklist-review-worker-$lens" "$CODEX_EFFORT_CHECKLIST" ) > "$LOG_DIR/manual-checklist-$kind-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Checklist panel worker failed; checklist reviewer will continue.' >&2; done
+    CHECKLIST_PANEL_PROMPT="$directory/synthesis.md"
+    cp "$source" "$CHECKLIST_PANEL_PROMPT"
+    printf '\n## Specialist checklist packets\n\nRead available packets in `%s`, verify them, and write the sole canonical checklist.\n' "$directory" >> "$CHECKLIST_PANEL_PROMPT"
+}
+
 BG_PID=""
 BG_LABEL=""
 BG_START=0
@@ -2391,8 +2491,9 @@ while true; do
             # Written before the reviewer runs: a reviewer that never returns
             # leaves the reason nothing was verified, and blocks release.
             envelope_write --stage review --result unavailable --reason 'reviewer did not complete'
+            run_adversarial_review_panel
             run_codex \
-                prompts/change/adversarial-review.md \
+                "${ADVERSARIAL_REVIEW_PROMPT:-prompts/change/adversarial-review.md}" \
                 ADVERSARIAL_REVIEW.md \
                 adversarial-review \
                 "$CODEX_EFFORT_REVIEW"
@@ -2456,7 +2557,8 @@ while true; do
             # and it keeps the record of what the review actually changed.
             cp CHANGE_PLAN.md "$STATE_DIR/CHANGE_PLAN.pre-review.md"
 
-            run_claude prompts/change/updated-change-plan.md updated-change-plan \
+            run_updated_plan_panel
+            run_claude "${UPDATED_PLAN_PROMPT:-prompts/change/updated-change-plan.md}" updated-change-plan \
                 "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \
                 "$BUDGET_UPDATED_PLAN"
             set_state VALIDATE_UPDATED_PLAN
@@ -2536,8 +2638,9 @@ while true; do
             # genuinely depends on the implementation is added by the delta
             # pass in the CHECKLIST state.
             if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
+                run_checklist_panel base prompts/change/manual-checklist-base.md
                 start_codex_bg \
-                    prompts/change/manual-checklist-base.md \
+                    "$CHECKLIST_PANEL_PROMPT" \
                     "$STATE_DIR/MANUAL_CHECKLIST.base.md" \
                     manual-checklist-base \
                     "$CODEX_EFFORT_CHECKLIST"
@@ -2741,8 +2844,9 @@ REPAIR
 
             if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
                 require_file "$STATE_DIR/MANUAL_CHECKLIST.base.md"
+                run_checklist_panel delta prompts/change/manual-checklist-delta.md
                 run_codex \
-                    prompts/change/manual-checklist-delta.md \
+                    "$CHECKLIST_PANEL_PROMPT" \
                     MANUAL_CHECKLIST.md \
                     manual-checklist-delta \
                     "$CODEX_EFFORT_CHECKLIST"
@@ -2775,7 +2879,7 @@ REPAIR
             PROGRESS_TOTAL="$(grep -oE 'MC-[0-9]+' MANUAL_CHECKLIST.md 2>/dev/null \
                 | sort -u | grep -c . || echo 0)"
             PROGRESS_LABEL="checklist"
-            run_claude prompts/change/execute-change-checklist.md execute-checklist \
+            run_claude "${CHECKLIST_EXECUTE_PROMPT:-prompts/change/execute-change-checklist.md}" execute-checklist \
                 "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 200 "${CHECKLIST_SYNTHESIS_BUDGET:-$BUDGET_EXECUTE}"
             PROGRESS_TOTAL=0
             wait_green_check_bg || exit $?
@@ -2800,8 +2904,9 @@ REPAIR
             envelope_write --stage audit --result unavailable --reason 'reviewer did not complete'
             if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine freeze || exit 1; fi
             rm -f FINAL_AUDIT.md
+            run_final_audit_panel
             run_codex \
-                prompts/change/final-audit.md \
+                "${FINAL_AUDIT_PROMPT:-prompts/change/final-audit.md}" \
                 FINAL_AUDIT.md \
                 final-audit \
                 "$CODEX_EFFORT_AUDIT"

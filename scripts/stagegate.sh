@@ -1320,6 +1320,68 @@ run_codex_review() {
     save_plan_review "$output_file" "$review_key"
 }
 
+# Read-only specialist packets improve review coverage. The primary reviewer
+# remains the sole writer and verdict owner; a missing packet is non-blocking.
+run_adversarial_review_panel() {
+    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"
+    mkdir -p "$directory/prompts"
+    for lens in requirements regression security testability; do
+        prompt="$directory/prompts/$lens.md"
+        output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
+        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( run_codex_review "$prompt" "$output" "adversarial-review-worker-$lens" < /dev/null ) \
+            > "$LOG_DIR/adversarial-review-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || echo 'Adversarial review panel worker failed; primary review will continue.' >&2
+    done
+    ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"
+    cp "$ROOT/prompts/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
+    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `ADVERSARIAL_REVIEW.md`.\n' \
+        "$directory" >> "$ADVERSARIAL_REVIEW_PROMPT"
+}
+
+run_updated_plan_panel() {
+    local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_UPDATED_PLAN_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in dispositions ownership verification scope; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
+        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( run_codex_review "$prompt" "$output" "updated-plan-review-worker-$lens" < /dev/null ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan panel worker failed; plan writer will continue.' >&2; done
+    UPDATED_PLAN_PROMPT="$directory/synthesis.md"
+    cp "$ROOT/prompts/updated-plan.md" "$UPDATED_PLAN_PROMPT"
+    printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
+}
+
+run_final_audit_panel() {
+    local directory="$STATE_DIR/final-audit-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_FINAL_AUDIT_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in verification scope regression waivers; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/final-audit-review-worker.md" "$prompt"
+        printf '\n## Assigned audit lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( run_codex_review "$prompt" "$output" "final-audit-review-worker-$lens" < /dev/null ) > "$LOG_DIR/final-audit-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit panel worker failed; auditor will continue.' >&2; done
+    FINAL_AUDIT_PROMPT="$directory/synthesis.md"
+    cp "$ROOT/prompts/final-audit.md" "$FINAL_AUDIT_PROMPT"
+    printf '\n## Specialist audit packets\n\nRead available packets in `%s`, verify them, and write the sole canonical final audit and verdict.\n' "$directory" >> "$FINAL_AUDIT_PROMPT"
+}
+
 # Every stage's actual work, with no state transitions and no approval checks,
 # so a stage can be run either in the foreground or speculatively.
 run_stage() {
@@ -1361,13 +1423,15 @@ run_stage() {
             require_artifact PROJECT_PLAN.md
             ;;
         ADVERSARIAL_REVIEW)
+            run_adversarial_review_panel
             run_codex_review \
-                prompts/adversarial-review.md \
+                "${ADVERSARIAL_REVIEW_PROMPT:-prompts/adversarial-review.md}" \
                 ADVERSARIAL_REVIEW.md \
                 adversarial-review
             ;;
         UPDATED_PLAN)
-            run_claude prompts/updated-plan.md updated-plan
+            run_updated_plan_panel
+            run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan.md}" updated-plan
             ;;
         IMPLEMENT)
             run_claude prompts/implement.md implementation
@@ -1424,8 +1488,9 @@ run_stage() {
             run_claude prompts/execute-checklist.md execute-checklist
             ;;
         FINAL_AUDIT)
+            run_final_audit_panel
             run_codex_review \
-                prompts/final-audit.md \
+                "${FINAL_AUDIT_PROMPT:-prompts/final-audit.md}" \
                 FINAL_AUDIT.md \
                 final-audit
             ;;

@@ -52,7 +52,9 @@ class SelfHosted(unittest.TestCase):
         profiles = {'qwen': {'base_url': 'http://localhost:9100/v1', 'api_key': 'named-secret'}}
         save_keys(self.config, {'__opencode_models__': profiles})
         with patch.dict(os.environ, {}, clear=True):
-            for stage in ('implementation-step-2', 'final-audit'):
+            self.config.write_text(self.config.read_text(encoding='utf-8') +
+                                   'execute-checklist.runner self-hosted\nexecute-checklist.model qwen\n', encoding='utf-8')
+            for stage in ('implementation-step-2', 'execute-checklist-worker-MC-001', 'final-audit'):
                 self.assertEqual(settings(self.config, stage), dict(model='qwen', **profiles['qwen']))
             profiles['qwen']['base_url'] = 'http://localhost:9200/v1'
             save_keys(self.config, {'__opencode_models__': profiles})

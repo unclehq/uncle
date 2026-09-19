@@ -77,6 +77,7 @@ uncle_first_configured_model_stage() {
 # Base and delta are executions of the configured checklist stage.
 uncle_config_stage() {
     case "$1" in
+        *-review-worker-*) printf '%s' "${1%%-review-worker-*}" ;;
         preview-build)
             local first_model_stage
             first_model_stage="$(uncle_first_configured_model_stage)"
@@ -85,7 +86,9 @@ uncle_config_stage() {
         plan-executability) printf 'adversarial-review' ;;
         plan-recovery) printf 'updated-plan' ;;
         manual-checklist-base|manual-checklist-delta) printf 'manual-checklist' ;;
-        execute-checklist-worker-*) printf 'execute-checklist' ;;
+        # A driver-owned worker inherits the parent stage's runner, model,
+        # effort, billing, and network policy for every supported runner.
+        *-worker-*) printf '%s' "${1%%-worker-*}" ;;
         implementation-step-*) printf 'implementation' ;;
         *) printf '%s' "$1" ;;
     esac
@@ -111,6 +114,7 @@ uncle_stage_side() {
     # OpenCode then rejects it before it sees the prompt. Keep the inherited
     # runner/model pairing while preserving preview's agent protocol.
     [[ "$1" == "preview-build" ]] && { printf '%s' agent; return 0; }
+    [[ "$1" == *-review-worker-* ]] && { printf '%s' reviewer; return 0; }
     local stage
     stage="$(uncle_config_stage "$1")"
     case "$UNCLE_REVIEWER_STAGES" in

@@ -13,7 +13,7 @@ seen it. Read it in full from disk before executing anything.
 
 ## Worker evidence
 
-When `.uncle/workflow/checklist-workers/README.md` exists, read it and every
+If the prompt supplies a `Parallel worker handoff`, read its manifest and every
 listed worker evidence file before executing anything. Those files are fresh,
 isolated results for the IDs assigned to parallel workers. Validate that each
 one actually addresses its checklist row, then use it as the result for that

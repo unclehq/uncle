@@ -127,6 +127,12 @@ def config_stage(stage, values):
     """
     if stage in ('manual-checklist-base', 'manual-checklist-delta'):
         return 'manual-checklist'
+    # Review-panel names contain both "-review-" and "-worker-".  Strip the
+    # complete review-worker suffix before the generic worker case so, for
+    # example, updated-plan-review-worker-scope inherits updated-plan rather
+    # than looking for a nonexistent updated-plan-review config row.
+    if '-review-worker-' in stage:
+        return stage.split('-review-worker-', 1)[0]
     if '-worker-' in stage:
         return stage.split('-worker-', 1)[0]
     if stage.startswith('implementation-step-'):
@@ -248,7 +254,9 @@ def output_token_limit(stage=''):
     # Dynamic workers inherit the parent stage's size class as well as its
     # configured model. This keeps every self-hosted worker consistent with
     # Claude, Cline, Codex, and Kimi through stage-config.sh.
-    if '-worker-' in stage:
+    if '-review-worker-' in stage:
+        stage = stage.split('-review-worker-', 1)[0]
+    elif '-worker-' in stage:
         stage = stage.split('-worker-', 1)[0]
     configured = os.environ.get(OUTPUT_TOKENS_ENV)
     if configured:

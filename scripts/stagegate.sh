@@ -83,6 +83,8 @@ unset UNCLE_NEW_WORKFLOW
 . "$ROOT/scripts/lib/preview-build.sh"
 uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
+. "$ROOT/scripts/lib/plan-scope.sh"
+. "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/state.sh"
 
 STATE_DIR=".uncle/workflow"
@@ -1388,6 +1390,43 @@ run_final_audit_panel() {
     printf '\n## Specialist audit packets\n\nRead available packets in `%s`, verify them, and write the sole canonical final audit and verdict.\n' "$directory" >> "$FINAL_AUDIT_PROMPT"
 }
 
+# Execute plan-declared independent application steps in isolated worktrees.
+# The shared parallel runner verifies each worker's owned-file boundary before
+# merging, so this is enabled only for an explicit Owns:/Depends on schedule.
+run_parallel_application_implementation() {
+    local groups group step prompt result cmd model effort
+    groups="$(parallel_groups UPDATED_PROJECT_PLAN.md "$ROOT/scripts/lib")" || return 2
+    [[ -n "$groups" ]] || return 2
+    uncle_resolve_stage_runner implementation AGENT || return 1
+    cmd="$(stage_agent_cmd implementation)" || return 1
+    model="$(stage_model implementation)"
+    effort="$(stage_effort implementation)"
+    export PARALLEL_AGENT_CMD="$cmd" PARALLEL_AGENT_MODEL="$model"
+    export PARALLEL_AGENT_EFFORT="$effort" PARALLEL_AGENT_TOOLS="$(stage_tools implementation)"
+    mkdir -p "$STATE_DIR/parallel/prompts" "$STATE_DIR/parallel/notes"
+    plan_steps UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-steps.txt"
+    while IFS= read -r group; do
+        [[ -n "$group" ]] || continue
+        echo "Implementation fan-out: isolated parallel steps $group."
+        for step in $group; do
+            prompt="$STATE_DIR/parallel/prompts/step-$step.md"
+            cat "$ROOT/prompts/implement.md" > "$prompt"
+            {
+                echo; echo "## Assigned isolated implementation step $step"
+                sed -n "${step}p" "$STATE_DIR/implement-steps.txt"
+                echo; echo "Work only on this approved step and its declared owned files."
+                echo "Do not edit workflow documents. Run a narrow check and write a concise handoff to .uncle/workflow/parallel/notes/step-$step.md."
+            } >> "$prompt"
+        done
+        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" UPDATED_PROJECT_PLAN.md $group)" || return $?
+        for step in $group; do
+            [[ -s "$STATE_DIR/parallel/notes/step-$step.md" ]] || return 1
+            cat "$STATE_DIR/parallel/notes/step-$step.md" >> IMPLEMENTATION_NOTES.md
+        done
+        echo "Implementation fan-out group $group merged."
+    done <<< "$groups"
+}
+
 # Every stage's actual work, with no state transitions and no approval checks,
 # so a stage can be run either in the foreground or speculatively.
 run_stage() {
@@ -1440,7 +1479,13 @@ run_stage() {
             run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan.md}" updated-plan
             ;;
         IMPLEMENT)
-            run_claude prompts/implement.md implementation
+            parallel_status=0
+            run_parallel_application_implementation || parallel_status=$?
+            if [[ "$parallel_status" != 0 ]]; then
+                [[ "$parallel_status" == 2 ]] || return "$parallel_status"
+                echo "Implementation fan-out unavailable: the approved plan has no independent owned steps; running one implementation agent."
+                run_claude prompts/implement.md implementation
+            fi
             require_artifact IMPLEMENTATION_NOTES.md
             require_artifact AUTOMATED_TEST_REPORT.md
             ;;

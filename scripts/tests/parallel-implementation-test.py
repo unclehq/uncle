@@ -60,6 +60,26 @@ class ParallelImplementationTests(unittest.TestCase):
             self.assertFalse((root / '.uncle/workflow/parallel/step-1').exists())
             self.assertFalse((root / '.uncle/workflow/parallel/step-2').exists())
 
+    def test_unborn_or_plain_project_uses_copy_sandboxes_without_recursion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'a.txt').write_text('base\n')
+            worker = root / 'worker.sh'
+            worker.write_text('#!/usr/bin/env bash\nset -euo pipefail\n'
+                              'printf copied > a.txt\n'
+                              'mkdir -p .uncle/workflow/parallel/notes\n'
+                              'printf handoff > .uncle/workflow/parallel/notes/step-1.md\n')
+            worker.chmod(0o755)
+            request = {'project': str(root), 'owned': {'1': ['a.txt']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                 'command': ['bash', str(worker)]}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / 'a.txt').read_text(), 'copied')
+
 
 if __name__ == '__main__':
     unittest.main()

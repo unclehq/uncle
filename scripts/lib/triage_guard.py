@@ -44,7 +44,12 @@ FORBIDDEN_WORKFLOW_FILES = (
 )
 FORBIDDEN_WORKFLOW_DIRS = ('approvals', 'waivers', 'triage')
 FORBIDDEN_WORKFLOW_PREFIXES = ('green-check.',)
-SANDBOX_EXCLUDES = ('.git', '.uncle/workflow/logs', '.uncle/workflow/triage')
+# Sandboxes live below .uncle/workflow/parallel.  Excluding that directory is
+# essential for copy-mode projects (including unborn Git repositories): without
+# it copytree descends into the sandbox it is creating and never reaches a
+# worker launch.
+SANDBOX_EXCLUDES = ('.git', '.uncle/workflow/logs', '.uncle/workflow/triage',
+                    '.uncle/workflow/parallel')
 INSTALL_PINS = ('uncle_tui.py', 'scripts')
 TSV_HEADER = 'ts\tturn\tproposal\toutcome\tpath\tbefore\tafter\n'
 

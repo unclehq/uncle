@@ -59,7 +59,9 @@ def packet(project, state, stage, family='app'):
         raise ValueError('Evidence state must be inside the project')
     # Driver-owned workers are execution slices, not independently configured
     # workflow stages. Every runner consumes the parent stage's evidence.
-    if '-worker-' in stage:
+    if '-review-worker-' in stage:
+        stage = stage.split('-review-worker-', 1)[0]
+    elif '-worker-' in stage:
         stage = stage.split('-worker-', 1)[0]
     if not re.fullmatch(r'[a-z0-9-]+', stage):
         raise ValueError('Invalid stage name')

@@ -2028,10 +2028,13 @@ run_adversarial_review_panel() {
         "$directory" >> "$ADVERSARIAL_REVIEW_PROMPT"
 }
 
-run_updated_plan_panel() {
+run_updated_change_plan_panel() {
     local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
     local -a pids=()
-    [[ "${WORKFLOW_UPDATED_PLAN_PANEL:-1}" == 1 ]] || return 0
+    # Keep the older knob as a fallback, while allowing the change workflow to
+    # be controlled independently from the new-project updated-plan panel.
+    [[ "${WORKFLOW_UPDATED_CHANGE_PLAN_PANEL:-${WORKFLOW_UPDATED_PLAN_PANEL:-1}}" == 1 ]] || return 0
+    echo "Updated-change-plan review panel: launching 4 workers in parallel."
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     for lens in dispositions ownership verification scope; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
@@ -2040,7 +2043,8 @@ run_updated_plan_panel() {
         ( run_codex "$prompt" "$output" "updated-change-plan-review-worker-$lens" "$CODEX_EFFORT_REVIEW" ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
-    for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan panel worker failed; plan writer will continue.' >&2; done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-change-plan panel worker failed; plan writer will continue.' >&2; done
+    echo "Updated-change-plan review panel: worker packets collected; launching synthesis."
     UPDATED_PLAN_PROMPT="$directory/synthesis.md"
     cp "$ROOT/prompts/change/updated-change-plan.md" "$UPDATED_PLAN_PROMPT"
     printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
@@ -2557,7 +2561,7 @@ while true; do
             # and it keeps the record of what the review actually changed.
             cp CHANGE_PLAN.md "$STATE_DIR/CHANGE_PLAN.pre-review.md"
 
-            run_updated_plan_panel
+            run_updated_change_plan_panel
             run_claude "${UPDATED_PLAN_PROMPT:-prompts/change/updated-change-plan.md}" updated-change-plan \
                 "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \
                 "$BUDGET_UPDATED_PLAN"

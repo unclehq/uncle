@@ -12,6 +12,11 @@ prompt=".uncle/workflow/parallel/prompts/step-$step.md"
 export UNCLE_PROJECT_ROOT="$PWD"
 export UNCLE_CONFIG="$PWD/.uncle/config"
 export UNCLE_RUNNER_REUSE=0
+# Every isolated worker reports itself independently to the TUI.  Without
+# this, the parent scheduler is visibly active but its concurrent children
+# appear to do nothing until the whole group has merged.
+export UNCLE_STATUS_STAGE="implementation-step-$step"
+export UNCLE_STATUS_STAGE_TURNS="${PARALLEL_AGENT_TURNS:-50}"
 args=(-p --max-turns 50 --output-format stream-json --verbose --strict-mcp-config
       --exclude-dynamic-system-prompt-sections --allowedTools "${PARALLEL_AGENT_TOOLS:-}")
 [[ -z "${PARALLEL_AGENT_MODEL:-}" ]] || args+=(--model "$PARALLEL_AGENT_MODEL")

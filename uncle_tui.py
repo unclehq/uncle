@@ -182,9 +182,20 @@ REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi", "self-hosted"]
 DEFAULT_RUNNER = ""
 DEFAULT_EFFORT = "low"
 
-def default_stage_effort(stage):
+def parent_stage(stage):
+    """Return the configured parent for a driver-created stage name."""
+    if "-review-worker-" in stage:
+        return stage.split("-review-worker-", 1)[0]
+    if "-worker-" in stage:
+        return stage.split("-worker-", 1)[0]
     if stage.startswith("implementation-step-"):
-        stage = "implementation"
+        return "implementation"
+    if stage in ("manual-checklist-base", "manual-checklist-delta"):
+        return "manual-checklist"
+    return stage
+
+def default_stage_effort(stage):
+    stage = parent_stage(stage)
     if stage == "plan-executability":
         stage = "adversarial-review"
     return "medium" if stage in ("adversarial-review", "project-plan", "implementation", "repair") else DEFAULT_EFFORT
@@ -2615,10 +2626,7 @@ class UncleTUI:
         stage = getattr(self, 'status_stage', '')
         if not stage:
             return '', '', '', ''
-        if stage.startswith('implementation-step-'):
-            stage = 'implementation'
-        elif stage in ('manual-checklist-base', 'manual-checklist-delta'):
-            stage = 'manual-checklist'
+        stage = parent_stage(stage)
         runner = getattr(self, 'status_runner', '') or self.stage_runner(stage)
         if runner in ('opencode', 'aider'):
             runner = 'self-hosted'

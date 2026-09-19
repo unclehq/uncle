@@ -70,6 +70,80 @@ class SelfHosted(unittest.TestCase):
             if success:
                 self.assertEqual(result.stdout.strip(), 'local/qwen')
 
+    def test_review_workers_inherit_the_parent_stage_configuration(self):
+        parents = ('adversarial-review', 'updated-plan', 'updated-change-plan',
+                   'final-audit', 'manual-checklist')
+        self.config.write_text(''.join('%s.runner self-hosted\n%s.model deepseek\n' % (stage, stage)
+                                       for stage in parents), encoding='utf-8')
+        profile = {'base_url': 'http://localhost:9100/v1', 'api_key': 'deepseek-secret'}
+        save_keys(self.config, {'__opencode_models__': {'deepseek': profile}})
+        with patch.dict(os.environ, {}, clear=True):
+            for parent in parents:
+                # Every review-panel worker must consume the parent stage's
+                # runner/model, never an invented "*-review" config stage.
+                self.assertEqual(settings(self.config, parent + '-review-worker-probe'),
+                                 dict(model='deepseek', **profile))
+
+    def test_shell_runner_mapping_matches_every_worker_family(self):
+        parents = ('adversarial-review', 'updated-plan', 'updated-change-plan',
+                   'final-audit', 'manual-checklist', 'execute-checklist')
+        self.config.write_text(''.join('%s.runner self-hosted\n%s.model local/deepseek-v4-flash\n' % (stage, stage)
+                                       for stage in parents), encoding='utf-8')
+        workers = [parent + '-review-worker-probe' for parent in parents[:-1]]
+        workers.append('execute-checklist-worker-MC-001')
+        script = '''
+source "$ROOT/scripts/lib/stage-config.sh"
+for stage in "$@"; do
+    printf '%s=%s:%s\\n' "$stage" "$(uncle_config_stage "$stage")" "$(uncle_stage_model "$stage")"
+done
+'''
+        result = subprocess.run([bash_executable(), '-c', script, 'workers', *workers],
+                                env=dict(os.environ, ROOT=str(ROOT), UNCLE_CONFIG=str(self.config)),
+                                text=True, encoding='utf-8', capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for worker, parent in zip(workers, parents):
+            self.assertIn('%s=%s:local/deepseek-v4-flash' % (worker, parent), result.stdout)
+
+    def test_every_runner_inherits_every_dynamic_stage_parent(self):
+        script = '''
+source "$ROOT/scripts/lib/stage-config.sh"
+stage="$1"
+printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stage")" "$(uncle_stage_cmd "$stage")"
+'''
+        review_workers = ('adversarial-review-review-worker-probe',
+                          'updated-plan-review-worker-probe',
+                          'updated-change-plan-review-worker-probe',
+                          'final-audit-review-worker-probe',
+                          'manual-checklist-review-worker-probe')
+        dynamic_stages = review_workers + ('execute-checklist-worker-MC-001',
+                                           'implementation-step-3',
+                                           'manual-checklist-base', 'manual-checklist-delta')
+        parents = {
+            **{stage: stage.split('-review-worker-', 1)[0] for stage in review_workers},
+            'execute-checklist-worker-MC-001': 'execute-checklist',
+            'implementation-step-3': 'implementation',
+            'manual-checklist-base': 'manual-checklist',
+            'manual-checklist-delta': 'manual-checklist',
+        }
+        commands = {
+            'reviewer': {'self-hosted': 'reviewer-self-hosted.sh', 'cline': 'reviewer-cline.sh',
+                         'claude': 'reviewer-claude.sh', 'kimi': 'reviewer-kimi.sh', 'codex': 'codex'},
+            'agent': {'self-hosted': 'agent-self-hosted.sh', 'cline': 'agent-cline.sh',
+                      'claude': 'claude', 'kimi': 'agent-kimi.sh', 'codex': 'agent-codex.sh'},
+        }
+        for stage in dynamic_stages:
+            parent = parents[stage]
+            side = 'reviewer' if stage in review_workers or stage.startswith('manual-checklist-') else 'agent'
+            for runner, command in commands[side].items():
+                self.config.write_text('%s.runner %s\n%s.model configured-model\n' % (parent, runner, parent),
+                                       encoding='utf-8')
+                result = subprocess.run([bash_executable(), '-c', script, 'worker', stage],
+                                        env=dict(os.environ, ROOT=str(ROOT), UNCLE_CONFIG=str(self.config)),
+                                        text=True, encoding='utf-8', capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip().split(':')[:2], [runner, side])
+                self.assertTrue(result.stdout.strip().endswith(command), result.stdout)
+
     def test_preview_build_follows_the_first_configured_model_stage(self):
         # The preview is not a Configure row. The shell resolver hands it the
         # first configured model stage's runner and model; reading its own key

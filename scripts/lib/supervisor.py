@@ -1,6 +1,7 @@
-"""Optional event-triggered supervision: detection, journal, validation, delivery.
+"""Event-triggered supervision: detection, journal, validation, delivery.
 
-Nothing here runs unless `supervision.enabled true` is in .uncle/config. The
+Supervision is enabled unless `.uncle/config` explicitly sets
+`supervision.enabled false`. The
 Controller observes the same status events the TUI already reads, fires one
 of four triggers, and asks a tool-free worker for one strict-JSON proposal.
 A proposal never carries instructions: it selects a fixed template, cites
@@ -41,7 +42,7 @@ CORRELATED = ('turn', 'message', 'marker')
 # Typed controls: key -> (kind, default). Every key is documented in
 # .uncle/config.example and README.md; AT-9 checks that list against this one.
 CONTROLS = (
-    ('enabled', 'bool', False),
+    ('enabled', 'bool', True),
     ('runner', 'runner', 'claude'),
     ('model', 'text', 'sonnet'),
     ('effort', 'effort', 'medium'),
@@ -1539,7 +1540,15 @@ class Controller:
 
 def load_contract(root):
     path = Path(root) / 'prompts' / 'supervise.md'
-    return path.read_text(encoding='utf-8')
+    # A copied/minimal project may omit the optional supervisor prompt.  That
+    # must not make a default-on supervisor abort the workflow before it has
+    # even observed an event.  A later diagnosis gets an explicit, bounded
+    # unavailable result from its runner rather than an uncaught startup error.
+    try:
+        return path.read_text(encoding='utf-8')
+    except OSError:
+        return ('Supervisor contract unavailable: the installed prompt is missing. '
+                'Return action none.')
 
 
 class HeadlessHost:

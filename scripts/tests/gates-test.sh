@@ -910,6 +910,13 @@ expect_status 1
 expect_state VALIDATE_TEST_REVIEW
 expect_no_file FINAL_AUDIT.md
 expect_no_file .uncle/workflow/repaired
+expect_file .uncle/workflow/test-review-format-retry.md
+expect_in_file .uncle/workflow/test-review-format-retry.md 'Driver validator errors'
+expect_in_file .uncle/workflow/received-test-review-prompt.md 'Required format retry'
+COUNT=$((COUNT + 1))
+if [[ "$(grep -c '^TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 2 ]]; then
+    fail 'a malformed test review must receive exactly one format retry'
+fi
 
 # Repair goes back through the human diff gate, preserving the original file
 # inventory. Declining that gate must prevent acceptance execution and audit.

@@ -841,7 +841,7 @@ class ConfigTests(unittest.TestCase):
     def test_defaults_and_roundtrip(self):
         config = sv.Config()
         self.assertEqual(config.lines, [
-            'supervision.enabled false', 'supervision.runner claude', 'supervision.model sonnet',
+            'supervision.enabled true', 'supervision.runner claude', 'supervision.model sonnet',
             'supervision.effort medium', 'supervision.max_interventions 2', 'supervision.steering_timeout_seconds 120',
             'supervision.stage_time_seconds 1800', 'supervision.stage_tokens 0', 'supervision.call_timeout_seconds 300',
             'supervision.max_calls_per_run 8', 'supervision.call_max_cost_usd 0.5', 'supervision.delegate_gates none'])

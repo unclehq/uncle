@@ -345,7 +345,7 @@ in [scripts/README.md](scripts/README.md#--worktree---worktree-dir---branch--run
 
 ## Recovery and supervision
 
-Uncle includes interactive triage for failed stages and optional supervision for detecting and correcting problems while work is still running.
+Uncle includes interactive triage for failed stages and supervision for detecting and correcting problems while work is still running.
 
 Supervision is configured with `supervision.enabled`, `supervision.runner`,
 `supervision.model`, `supervision.effort`, `supervision.max_interventions`,
@@ -357,7 +357,7 @@ Supervision is configured with `supervision.enabled`, `supervision.runner`,
 The defaults are:
 
 ```text
-supervision.enabled false
+supervision.enabled true
 supervision.runner claude
 supervision.model sonnet
 supervision.effort medium

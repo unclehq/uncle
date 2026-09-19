@@ -1389,7 +1389,7 @@ run_stage() {
             if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then
                 test_review_prompt="$STATE_DIR/test-review-format-retry-prompt.md"
                 {
-                    cat prompts/test-review.md
+                    cat "$ROOT/prompts/test-review.md"
                     printf '\n\n## Required format retry\n\n'
                     cat "$STATE_DIR/test-review-format-retry.md"
                 } > "$test_review_prompt"

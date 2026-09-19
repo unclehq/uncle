@@ -91,6 +91,40 @@ class ParallelImplementationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((root / 'a.txt').read_text(), 'copied')
 
+    def test_missing_agent_handoff_is_synthesized_without_blocking_merge(self):
+        temp, root, worker = self.fixture()
+        with temp:
+            worker.write_text('#!/usr/bin/env bash\nset -euo pipefail\nprintf changed > 1.txt\n')
+            request = {'project': str(root), 'owned': {'1': ['1.txt']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                 'command': ['bash', str(worker)]}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / '1.txt').read_text(), 'changed')
+            handoff = (root / '.uncle/workflow/parallel/notes/step-1.md').read_text()
+            self.assertIn('synthesized by the driver', handoff)
+
+    def test_worker_exit_is_published_to_the_shared_status_stream(self):
+        temp, root, worker = self.fixture()
+        with temp:
+            status = root / 'status.jsonl'
+            request = {'project': str(root), 'owned': {'1': ['1.txt']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                 'command': ['bash', str(worker), '1']} ]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True,
+                                    env=dict(**__import__('os').environ, UNCLE_STATUS_FILE=str(status)))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            events = [json.loads(line) for line in status.read_text().splitlines()]
+            event = next(item for item in events if item.get('event') == 'end')
+            self.assertEqual((event['stage'], event['process_exit']), ('implementation-step-1', 0))
+            self.assertGreaterEqual(event['elapsed_seconds'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()

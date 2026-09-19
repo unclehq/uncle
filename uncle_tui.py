@@ -1633,6 +1633,29 @@ class UncleTUI:
                 stats["active"].setdefault(stage, time.time())
             elif ev.get("event") == "usage":
                 stats["live"][stage] = ev
+            elif ev.get("event") in ("end", "stage_end"):
+                # Isolated workers complete in sandboxed trees, where their
+                # local metric records are intentionally invisible here.  The
+                # parent scheduler publishes this terminal event instead. Keep
+                # a completed row rather than making a successful worker
+                # disappear from the panel.
+                started = stats["active"].pop(stage, time.time())
+                live = stats["live"].pop(stage, {})
+                ended = time.time()
+                usage = live.get("usage", {}) if isinstance(live, dict) else {}
+                row = {"kind": "agent", "stage": stage, "started_at": started,
+                       "ended_at": ended,
+                       "elapsed_seconds": ev.get("elapsed_seconds", max(0, ended - started)),
+                       "process_exit": ev.get("process_exit", 0),
+                       "runner": ev.get("runner") or live.get("runner", ""),
+                       "model": ev.get("model") or live.get("model", ""),
+                       "effort": ev.get("effort") or live.get("effort", ""),
+                       "input_tokens": usage.get("input_tokens"),
+                       "output_tokens": usage.get("output_tokens"),
+                       "cache_read_tokens": usage.get("cache_read_input_tokens", usage.get("cache_read_tokens")),
+                       "cache_write_tokens": usage.get("cache_creation_input_tokens", usage.get("cache_write_tokens")),
+                       "reported_cost_usd": live.get("total_cost_usd")}
+                stats["records"].append(row)
         if ev.get("event") == "start":
             if ev.get("stage", "") != self.status_stage and self.status_stage:
                 self.previous_stage = self.status_stage

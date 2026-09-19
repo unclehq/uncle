@@ -94,6 +94,16 @@ class Panel(unittest.TestCase):
             self.assertNotIn('implementation',ui.session_stats['active'])
             self.assertEqual(len(ui.session_stats['records']),1)
 
+    def test_parallel_worker_end_event_clears_live_panel_row(self):
+        ui=self.ui()
+        ui._apply_status(json.dumps(dict(event='start',stage='implementation-step-5')))
+        self.assertIn('implementation-step-5',ui.session_stats['active'])
+        ui._apply_status(json.dumps(dict(event='end',stage='implementation-step-5',process_exit=0,elapsed_seconds=12)))
+        self.assertNotIn('implementation-step-5',ui.session_stats['active'])
+        row=ui.session_stats['records'][-1]
+        self.assertEqual((row['stage'],row['process_exit'],row['elapsed_seconds']),('implementation-step-5',0,12))
+        self.assertIn('implementation-step-5','\n'.join(ui._session_panel_lines()))
+
     def test_project_root_event_follows_the_driver_for_the_run(self):
         # from-issue.sh moves the run into a worktree it creates after launch.
         # Start events reach the TUI regardless; completions are metrics files

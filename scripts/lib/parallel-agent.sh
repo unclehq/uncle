@@ -5,7 +5,10 @@
 set -euo pipefail
 
 step="${1:?implementation step number required}"
-prompt=".uncle/workflow/parallel/prompts/step-$step.md"
+# Prompts live in the driver-owned workflow tree, which is intentionally not
+# copied into every sandbox.  An absolute handoff path keeps the worker's
+# instruction immutable and avoids a missing-prompt failure in copy mode.
+prompt="${PARALLEL_PROMPT_DIR:-.uncle/workflow/parallel/prompts}/step-$step.md"
 [[ -s "$prompt" ]] || { echo "parallel worker prompt missing: $prompt" >&2; exit 2; }
 [[ -n "${PARALLEL_AGENT_CMD:-}" ]] || { echo 'parallel worker agent command missing' >&2; exit 2; }
 

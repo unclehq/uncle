@@ -60,6 +60,27 @@ def changed(before, after):
     return {rel for rel, digest in after.items() if before.get(rel) != digest}
 
 
+def publish_worker_end(spec, result):
+    """Tell the shared TUI stream that this isolated worker has exited.
+
+    Worker runners execute in a sandbox, so their local metrics are not a
+    reliable completion signal to the parent TUI.  The scheduler is the one
+    process that observes every runner's exit, independent of runner type.
+    """
+    path = spec['env'].get('UNCLE_STATUS_FILE', '')
+    if not path:
+        return
+    event = {'event': 'end', 'stage': 'implementation-step-%d' % spec['number'],
+             'process_exit': result['exit'], 'elapsed_seconds': result['seconds'],
+             'runner': spec['env'].get('UNCLE_RESOLVED_RUNNER', ''),
+             'model': spec['env'].get('PARALLEL_AGENT_MODEL', '')}
+    try:
+        with open(path, 'a', encoding='utf-8', newline='\n') as stream:
+            stream.write(json.dumps(event) + '\n')
+    except OSError:
+        pass
+
+
 def run_step(spec, results):
     """One step in its own mirror of the tree. Never raises into the caller."""
     number, sandbox = spec['number'], spec['sandbox']
@@ -74,6 +95,7 @@ def run_step(spec, results):
     except (OSError, ValueError) as error:
         results[number] = {'exit': 1, 'seconds': round(time.monotonic() - started, 3),
                            'wrote': [], 'detail': str(error)}
+    publish_worker_end(spec, results[number])
 
 
 def merge(project, steps, results, owned):
@@ -102,20 +124,32 @@ def merge(project, steps, results, owned):
     return {}
 
 
-def capture_notes(project, steps):
-    """Copy each worker's isolated handoff before its worktree is removed."""
-    missing = []
+def capture_notes(project, steps, results):
+    """Copy worker handoffs, synthesizing one when an agent omitted its prose."""
+    synthesized = []
     for step in steps:
         note = step.get('note', '')
+        if not note:
+            continue
         sandbox = Path(project) / '.uncle' / 'workflow' / 'parallel' / ('step-%d' % step['number'])
         source = sandbox / note
         target = Path(project) / note
-        if not note or not source.is_file() or not source.read_text(encoding='utf-8').strip():
-            missing.append(step['number'])
-            continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
-    return missing
+        if source.is_file() and source.read_text(encoding='utf-8').strip():
+            shutil.copy2(source, target)
+            continue
+        result = results.get(step['number'], {})
+        files = sorted(result.get('wrote') or ())
+        target.write_text(
+            '# Implementation step %d handoff\n\n'
+            '- Worker exited successfully.\n'
+            '- Changed files: %s\n'
+            '- Worker log: `%s`\n'
+            '- Agent-authored handoff was unavailable; this record was synthesized by the driver.\n'
+            % (step['number'], ', '.join(files) if files else '(none)', step.get('log', '')),
+            encoding='utf-8')
+        synthesized.append(step['number'])
+    return synthesized
 
 
 def main():
@@ -153,12 +187,10 @@ def main():
         print('Sandboxes kept under %s' % base, file=sys.stderr)
         return 1
 
-    missing_notes = capture_notes(project, steps)
-    if missing_notes:
-        print('Steps did not provide required isolated handoff notes: %s' %
-              ', '.join(str(n) for n in missing_notes), file=sys.stderr)
-        print('Nothing was merged or cleaned up; inspect the sandboxes before retrying.', file=sys.stderr)
-        return 4
+    synthesized_notes = capture_notes(project, steps, results)
+    if synthesized_notes:
+        print('Agent handoff notes were missing for steps %s; driver synthesized them from '
+              'verified worker results.' % ', '.join(str(n) for n in synthesized_notes), file=sys.stderr)
 
     violations = merge(project, numbers, results, owned)
     if violations:

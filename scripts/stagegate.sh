@@ -1404,6 +1404,7 @@ run_parallel_application_implementation() {
     export PARALLEL_AGENT_CMD="$cmd" PARALLEL_AGENT_MODEL="$model"
     export PARALLEL_AGENT_EFFORT="$effort" PARALLEL_AGENT_TOOLS="$(stage_tools implementation)"
     mkdir -p "$STATE_DIR/parallel/prompts" "$STATE_DIR/parallel/notes"
+    export PARALLEL_PROMPT_DIR="$PWD/$STATE_DIR/parallel/prompts"
     plan_steps UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-steps.txt"
     while IFS= read -r group; do
         [[ -n "$group" ]] || continue

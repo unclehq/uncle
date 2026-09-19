@@ -1433,6 +1433,7 @@ run_supervised_parallel_implementation() {
     export PARALLEL_AGENT_TOOLS="$CLAUDE_TOOLS"
 
     mkdir -p "$STATE_DIR/parallel/prompts" "$STATE_DIR/parallel/notes"
+    export PARALLEL_PROMPT_DIR="$PWD/$STATE_DIR/parallel/prompts"
     while IFS= read -r group; do
         [[ -n "$group" ]] || continue
         for step in $group; do

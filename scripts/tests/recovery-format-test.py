@@ -79,5 +79,22 @@ prose before rows
             self.assertTrue(changes)
             self.assertEqual(path.read_text(), valid)
 
+    def test_equivalent_complete_test_reviews_keep_the_final_delivery(self):
+        first = '''# Test review
+
+## Acceptance gate
+
+| ID | Required | Status | Evidence |
+|---|---|---|---|
+| COVERAGE | YES | PASS | first evidence |
+'''
+        final = first.replace('first evidence', 'final evidence')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'TEST_REVIEW.md'
+            path.write_text(first + '\n' + final)
+            changes = format_repair.repair(path)
+            self.assertTrue(changes)
+            self.assertEqual(path.read_text(), final)
+
 if __name__ == '__main__':
     unittest.main()

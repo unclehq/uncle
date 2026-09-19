@@ -81,6 +81,21 @@ def _has_parseable_acceptance_gate(text):
     return rows > 0
 
 
+def _acceptance_signature(text):
+    """The decision-bearing cells; evidence prose may legitimately differ."""
+    gate = _ACCEPTANCE_GATE.search(text)
+    if not gate:
+        return ()
+    signature = []
+    for line in text[gate.end():].splitlines():
+        if not line.lstrip().startswith('|'):
+            continue
+        cells = [part.strip() for part in line.split('|')]
+        if len(cells) == 6 and cells[1] not in ('ID', '---') and not re.fullmatch(r':?-{3,}:?', cells[1]):
+            signature.append(tuple(cells[1:4]))
+    return tuple(signature)
+
+
 def _extract_complete_test_review(text):
     """Discard leaked draft transcripts only when one complete review is clear."""
     starts = list(_TEST_REVIEW.finditer(text))
@@ -92,9 +107,16 @@ def _extract_complete_test_review(text):
         candidate = text[start.start():end].strip() + '\n'
         if _has_parseable_acceptance_gate(candidate):
             candidates.append(candidate)
+    if len(candidates) == 1:
+        return candidates[0], 'discarded leaked draft transcript and retained the one parseable Test review'
+    # Some transports append the final answer after a complete draft. The last
+    # answer is safe to retain only when every candidate carries the exact same
+    # decision-bearing rows; different evidence wording is not a verdict.
+    if len(candidates) > 1 and len({_acceptance_signature(item) for item in candidates}) == 1:
+        return candidates[-1], 'discarded equivalent earlier Test review drafts and retained the final delivery'
     if len(candidates) != 1:
         return text, None
-    return candidates[0], 'discarded leaked draft transcript and retained the one parseable Test review'
+    return text, None
 
 
 def _strip_preamble(text):

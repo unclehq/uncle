@@ -137,6 +137,20 @@ class Panel(unittest.TestCase):
         ui.handle_key(ord('['));self.assertEqual(ui.panel_scroll,ui.panel_visible_offset-5)
         ui.handle_key(ord('\\'));self.assertIsNone(ui.panel_scroll)
 
+    def test_total_time_is_wall_time_not_summed_worker_time(self):
+        ui=self.ui();ui.session_stats['active']={}
+        # These two workers run concurrently for 60 seconds.  The individual
+        # rows remain 60 seconds each, but the human waited 60, not 120.
+        ui.session_stats['records']=[
+            dict(stage='review-worker-a',started_at=100,ended_at=160,elapsed_seconds=60),
+            dict(stage='review-worker-b',started_at=100,ended_at=160,elapsed_seconds=60),
+            # A later sequential stage extends the wall-clock session to 90.
+            dict(stage='synthesis',started_at=160,ended_at=190,elapsed_seconds=30),
+        ]
+        lines=ui._session_panel_lines()
+        total=lines.index('TOTALS')
+        self.assertEqual(lines[total+1], 'Time   0:01:30')
+
     def test_zero_reported_cost_on_a_stage_that_burned_tokens_is_unknown(self):
         # A runner that consumed millions of tokens did not do it for free.
         # Reporting the sum as $0.0000 understated a real session total with a

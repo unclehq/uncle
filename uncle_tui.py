@@ -5087,6 +5087,12 @@ class UncleTUI:
         stats = getattr(self, "session_stats", None)
         if stats is None:
             return []
+        # Individual stage durations deliberately include every attempt and
+        # worker, so they describe consumed worker time.  The session total is
+        # different: it is the elapsed interval a person waited, and parallel
+        # workers must overlap rather than inflate it.
+        wall_started = []
+        wall_ended = []
         def duration(value):
             value = int(value)
             return "%d:%02d:%02d" % (value // 3600, value // 60 % 60, value % 60)
@@ -5113,8 +5119,14 @@ class UncleTUI:
         for row in sorted(stats["records"], key=lambda r: r.get("started_at", 0)):
             stage = row.get("stage", "")
             group = groups.setdefault(stage, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf")})
-            group["started"] = min(group["started"], row.get("started_at", row.get("ended_at", 0) - row.get("elapsed_seconds", 0)))
-            group["seconds"] += row.get("elapsed_seconds", 0)
+            elapsed = max(0, row.get("elapsed_seconds", 0))
+            started = row.get("started_at", row.get("ended_at", 0) - elapsed)
+            ended = row.get("ended_at", started + elapsed)
+            group["started"] = min(group["started"], started)
+            group["seconds"] += elapsed
+            if isinstance(started, (int, float)) and isinstance(ended, (int, float)):
+                wall_started.append(started)
+                wall_ended.append(max(started, ended))
             group["tokens"].append(self._token_total(row))
             cost = row.get("reported_cost_usd")
             # A runner that consumed tokens did not usually do it for nothing:
@@ -5141,7 +5153,11 @@ class UncleTUI:
             group = groups.setdefault(stage, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf")})
             group["started"] = min(group["started"], started)
             event = stats["live"].get(stage, {})
-            group["seconds"] += max(0, stats.get("stopped_at", time.time()) - started)
+            ended = stats.get("stopped_at", time.time())
+            group["seconds"] += max(0, ended - started)
+            if isinstance(started, (int, float)) and isinstance(ended, (int, float)):
+                wall_started.append(started)
+                wall_ended.append(max(started, ended))
             group["tokens"].append(event.get("total_tokens"))
             group["costs"].append(self._live_cost(event) if event else (None, False))
             group["attempts"] += 1
@@ -5172,8 +5188,10 @@ class UncleTUI:
             costs.extend(group["costs"])
         if not groups:
             lines += ["Waiting for stage…", ""]
+        wall_seconds = max(0, max(wall_ended) - min(wall_started)) \
+            if wall_started and wall_ended else 0
         lines += ["TOTALS",
-                  "Time   " + duration(sum(group["seconds"] for group in groups.values())),
+                  "Time   " + duration(wall_seconds),
                   "Tokens " + subtotal(tokens, count),
                   "Cost   " + cost_subtotal(costs), "Reported + projected"]
         return lines

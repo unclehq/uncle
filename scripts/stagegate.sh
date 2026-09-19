@@ -1350,6 +1350,15 @@ run_updated_plan_panel() {
     local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
     local -a pids=()
     [[ "${WORKFLOW_UPDATED_PLAN_PANEL:-1}" == 1 ]] || return 0
+    # UPDATED_PLAN is normally speculated while the acknowledgement gate owns
+    # the terminal.  Panel workers have their own retry/supervision lifecycle;
+    # starting them in that detached job turns a recoverable worker failure
+    # into a wait on an invisible background process.  The speculative writer
+    # remains useful on its own, and a foreground re-run can use the panel.
+    if [[ "${UNCLE_SPECULATIVE:-false}" == true ]]; then
+        echo "Updated-plan panel deferred: speculative UPDATED_PLAN runs without workers."
+        return 0
+    fi
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     for lens in dispositions ownership verification scope; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"

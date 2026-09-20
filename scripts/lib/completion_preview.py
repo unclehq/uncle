@@ -91,20 +91,42 @@ class CompletionPreview:
                 self.reader_thread = threading.Thread(target=self.read, daemon=True)
                 self.reader_thread.start()
             if self.kind == 'webpage':
+                url = spec['url']
                 if self.process:
+                    # loopback_candidates: launch_spec already accepts
+                    # localhost/127.0.0.1/::1 as interchangeable, but a real
+                    # run showed why the readiness check must be too. `npm
+                    # run preview`'s default host is `localhost`, which on a
+                    # machine where that resolves to ::1 only leaves a
+                    # literal `127.0.0.1` in launch.json refused forever --
+                    # the server was ready the whole time, just reachable
+                    # under a different one of the three equivalent names.
                     deadline = time.monotonic() + 30
+                    parsed = urlparse(url)
+                    port_suffix = ':%d' % parsed.port if parsed.port else ''
+                    path_suffix = (parsed.path or '') + (('?' + parsed.query) if parsed.query else '')
+                    candidates = [url] + [
+                        '%s://%s%s%s' % (parsed.scheme, ('[%s]' % host if ':' in host else host),
+                                         port_suffix, path_suffix)
+                        for host in ('127.0.0.1', 'localhost', '::1') if host != parsed.hostname]
                     while not self.cancelled.is_set():
                         if self.process.poll() is not None:
                             raise ValueError('Preview server exited before it was ready')
-                        try:
-                            with urlopen(spec['url'], timeout=1):
-                                break
-                        except OSError:
-                            if time.monotonic() > deadline:
-                                raise ValueError('Preview server did not become ready within 30 seconds')
-                            self.cancelled.wait(.1)
-                if not self.cancelled.is_set() and not webbrowser.open(spec['url']):
-                    raise ValueError('Could not open browser: ' + spec['url'])
+                        ready = False
+                        for candidate in candidates:
+                            try:
+                                with urlopen(candidate, timeout=1):
+                                    url, ready = candidate, True
+                                    break
+                            except OSError:
+                                continue
+                        if ready:
+                            break
+                        if time.monotonic() > deadline:
+                            raise ValueError('Preview server did not become ready within 30 seconds')
+                        self.cancelled.wait(.1)
+                if not self.cancelled.is_set() and not webbrowser.open(url):
+                    raise ValueError('Could not open browser: ' + url)
             elif self.process:
                 self.events.put(('output', 'Running application. Use chat to send input; Esc stops the application.\n'))
                 while self.process.poll() is None and not self.cancelled.wait(.1):

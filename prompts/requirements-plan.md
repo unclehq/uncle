@@ -281,6 +281,8 @@ the plan. Include every entry the chosen stack usually needs: its dependency
 directory (`node_modules/`, `vendor/`, a Python virtualenv), its build/output
 directory (`dist/`, `build/`, `.svelte-kit/`, `out/`, `target/`), its caches
 (`__pycache__/`, `.pytest_cache/`, `*.pyc`), local secrets (`.env`, `.env.*`),
+Playwright's own output whenever a plan uses it for browser checks
+(`test-results/`, `playwright-report/`, `blob-report/`, `.pw-browsers/`),
 editor/OS noise (`.DS_Store`), and anything else that ecosystem's own default
 scaffolding tool (`npm create`, `cargo new`, a framework's own CLI) would put
 there. A real build stalled a parallel merge on exactly this: a step scaffolded

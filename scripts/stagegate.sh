@@ -583,6 +583,15 @@ acceptance_transition() {
         echo "Validator recovered an unambiguous format-only transcript leak in $report; revalidating."
     fi
     python3 "$ROOT/scripts/lib/repair-acceptance.py" "$report" || return 1
+    # A model has repeatedly produced the real, complete acceptance table --
+    # right IDs, right statuses -- under the wrong heading or wrong column
+    # set ("## Summary" with Description instead of Evidence), and repeated
+    # the identical wrong shape on the driver's own format retry: asking
+    # again does not fix a model that believes its shape already satisfies
+    # the requirement. This is deterministic and never invents a status.
+    if python3 "$ROOT/scripts/lib/acceptance_context.py" "$report" >/dev/null 2>&1; then
+        echo "Relocated an unambiguous Acceptance gate table found under the wrong heading/columns in $report; revalidating."
+    fi
     result="$(acceptance_result "$report" "${3:-}")"
     case "$result" in
         REPAIR|BLOCKED-SETUP|BLOCKED-IMPOSSIBLE)
@@ -1294,7 +1303,7 @@ run_codex_review() {
     [[ -z "$model" ]] || echo "Model: $model"
     status_stage_context "$log_name" "${model:-}" review
     local status=0
-    local started retry_answer
+    local started retry_answer empty_retried=""
     while true; do
         started="$SECONDS"
         # stdin is the operator's gate-answer channel, not stage input: codex
@@ -1316,6 +1325,30 @@ run_codex_review() {
             echo
             echo "The reviewer ran out of context/tokens."
             echo "Change the reviewer model (Configure → reviewer) and re-run to resume this stage."
+        fi
+
+        # A reviewer that exits successfully but writes nothing -- a
+        # conversational summary asking for guidance instead of the document
+        # -- is not done, whatever its own transcript claims. Left as a plain
+        # exit-0 with no output, this used to reach a later validation state
+        # that only checks what this stage already produced, with no path
+        # back to re-running it: "resume" alone could never recover. One
+        # bounded, silent retry with the same prompt plus a note of what
+        # happened; a second empty result is treated like any other failure
+        # below (including the panel-worker/non-interactive return path).
+        if [[ "$status" == 0 && ! -s "$output_file" ]]; then
+            if [[ -z "$empty_retried" ]]; then
+                empty_retried=1
+                echo
+                echo "Reviewer $log_name exited successfully but wrote no $output_file; retrying once."
+                {
+                    cat "$prompt_file"
+                    printf '\n\n## Required retry\n\nThe previous attempt ended without writing %s at all -- a status summary or a request for guidance is not a substitute for it. Write the complete document now. This driver is unattended; nobody will answer a question left open.\n' "$output_file"
+                } > "$STATE_DIR/${log_name}-empty-retry-prompt.md"
+                prompt_file="$STATE_DIR/${log_name}-empty-retry-prompt.md"
+                continue
+            fi
+            status=1
         fi
 
         [[ "$status" != 0 ]] || break
@@ -2679,6 +2712,29 @@ while true; do
             check_verification_inputs
             echo "Validating saved checklist reports; checks will not be rerun."
             echo "Correct report errors in place, then resume this validation step."
+            # A stage that reports success but writes neither required report
+            # (a conversational summary asking for guidance instead) cannot be
+            # fixed by "resume": this state only checks what execute-checklist
+            # already produced, so nothing here would ever re-invoke it. One
+            # bounded retry back through EXECUTE_CHECKLIST, sharing the same
+            # per-run marker/budget as a malformed acceptance table, at least
+            # gives the stage one automatic chance before stopping for a human.
+            if [[ ! -s VERIFICATION_REPORT.md || ! -s DEFECTS.md ]] \
+                && [[ ! -e "$STATE_DIR/execute-checklist-format-retry.md" ]]; then
+                {
+                    echo 'The previous execute-checklist pass ended without writing'
+                    echo 'VERIFICATION_REPORT.md and/or DEFECTS.md. These two reports are the'
+                    echo 'stage outputs; a status summary or a request for guidance on how to'
+                    echo 'classify blocked checks is not a substitute for them.'
+                    echo 'Decide it yourself and write both complete reports now: mark a check'
+                    echo 'that cannot run in this environment BLOCKED-SETUP, BLOCKED-HUMAN, or'
+                    echo 'BLOCKED-IMPOSSIBLE (naming the reason), never PASS or a silent omission.'
+                    echo 'This driver is unattended; nobody will answer a question left open.'
+                } > "$STATE_DIR/execute-checklist-format-retry.md"
+                set_state EXECUTE_CHECKLIST
+                echo 'Retrying execute-checklist once: it produced no report to validate.'
+                continue
+            fi
             require_file VERIFICATION_REPORT.md
             require_file DEFECTS.md
             check_document_budget VERIFICATION_REPORT.md || exit 1

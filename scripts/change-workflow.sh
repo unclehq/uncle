@@ -1966,24 +1966,47 @@ run_codex() {
     echo "Launching reviewer ($cmd): $log_name${effort:+  Effort: $effort}${model:+  Model: $model}"
     status_stage_context "$log_name" 0 "${model:-}" review
 
-    local start="$SECONDS"
+    local start="$SECONDS" empty_retried=""
     local status=0
-    # stdin is the operator's gate-answer channel, not stage input: codex
-    # appends a non-TTY stdin to the prompt and would block on it forever.
-    ( "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
-        < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" ) &
-    wait "$!" || status=$?
+    while true; do
+        start="$SECONDS"
+        # stdin is the operator's gate-answer channel, not stage input: codex
+        # appends a non-TTY stdin to the prompt and would block on it forever.
+        ( "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
+            < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" ) &
+        wait "$!" || status=$?
 
-    record_codex_cost "$log_name" "$((SECONDS - start))"
-    perf_record reviewer "$log_name" "$((SECONDS-start))" "$status" \
-        "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
-    supervision_stage_end "$log_name" "$status" "$LOG_DIR/${log_name}.log"
+        record_codex_cost "$log_name" "$((SECONDS - start))"
+        perf_record reviewer "$log_name" "$((SECONDS-start))" "$status" \
+            "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
+        supervision_stage_end "$log_name" "$status" "$LOG_DIR/${log_name}.log"
 
-    if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
-        echo
-        echo "The reviewer ran out of context/tokens."
-        echo "Change the reviewer model (Configure → reviewer) and re-run to resume this stage."
-    fi
+        if [[ "$status" -ne 0 || ! -s "$output_file" ]] && context_exhausted "$LOG_DIR/${log_name}.log"; then
+            echo
+            echo "The reviewer ran out of context/tokens."
+            echo "Change the reviewer model (Configure → reviewer) and re-run to resume this stage."
+        fi
+
+        # A reviewer that exits successfully but writes nothing -- a
+        # conversational summary asking for guidance instead of the document
+        # -- is not done, whatever its own transcript claims. Left alone, this
+        # used to reach a later validation state that only checks what this
+        # stage already produced, with no path back to re-running it: "resume"
+        # alone could never recover. One bounded, silent retry with the same
+        # prompt plus a note of what happened.
+        if [[ "$status" == 0 && ! -s "$output_file" && -z "$empty_retried" ]]; then
+            empty_retried=1
+            echo
+            echo "Reviewer $log_name exited successfully but wrote no $output_file; retrying once."
+            {
+                cat "$prompt_file"
+                printf '\n\n## Required retry\n\nThe previous attempt ended without writing %s at all -- a status summary or a request for guidance is not a substitute for it. Write the complete document now. This driver is unattended; nobody will answer a question left open.\n' "$output_file"
+            } > "$STATE_DIR/${log_name}-empty-retry-prompt.md"
+            prompt_file="$STATE_DIR/${log_name}-empty-retry-prompt.md"
+            continue
+        fi
+        break
+    done
 
     [[ "$status" == 0 ]] || return "$status"
     require_file "$output_file"
@@ -2117,11 +2140,19 @@ cleanup_bg() {
 trap on_exit EXIT
 
 start_codex_bg() {
-    local prompt_file
-    prompt_file="$(resolve_prompt "$1")"
+    # panel_kind/panel_source (args 5/6): when set, arg 1 is ignored and the
+    # panel's own lens-worker fan-out (run_checklist_panel) runs inside this
+    # same background job instead of synchronously before it. Those workers
+    # used to finish, blocking, before this function was even called -- so
+    # "manual-checklist-base" only ever backgrounded its own synthesis pass,
+    # not the specialist packets that pass reads. Implementation and the
+    # checklist-base panel (workers and synthesis alike) now start together.
+    local prompt_file="$1"
     local output_file="$2"
     local log_name="$3"
     local effort="${4:-}"
+    local panel_kind="${5:-}"
+    local panel_source="${6:-}"
     local cmd
     local UNCLE_RESOLVED_RUNNER
     uncle_resolve_stage_runner "$log_name" REVIEWER || return 1
@@ -2141,11 +2172,14 @@ start_codex_bg() {
     model="$(stage_model_for "$log_name" "${CODEX_MODEL:-}")"
     [[ -n "$model" ]] && model_args=(-m "$model")
 
-    require_file "$prompt_file"
-    # The reviewer writes a document a human reads, so it gets the output
-    # rules the same way an agent stage does.
-    if [[ "$log_name" != plan-executability ]]; then
-        prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+    if [[ -z "$panel_kind" ]]; then
+        prompt_file="$(resolve_prompt "$prompt_file")"
+        require_file "$prompt_file"
+        # The reviewer writes a document a human reads, so it gets the output
+        # rules the same way an agent stage does.
+        if [[ "$log_name" != plan-executability ]]; then
+            prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+        fi
     fi
     rm -f "$output_file"
     status_stage_context "$log_name" 0 "${model:-}" review
@@ -2172,6 +2206,12 @@ start_codex_bg() {
         cd "$PROJECT_ROOT"
         local started="$SECONDS" status=0 child=""
         trap 'if [[ -n "$child" ]]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi; exit 130' INT TERM
+        if [[ -n "$panel_kind" ]]; then
+            run_checklist_panel "$panel_kind" "$panel_source"
+            prompt_file="$(resolve_prompt "$CHECKLIST_PANEL_PROMPT")"
+            require_file "$prompt_file"
+            prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+        fi
         "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
             < /dev/null > "$LOG_DIR/${log_name}.log" 2>&1 &
         child=$!
@@ -2643,12 +2683,12 @@ while true; do
             # genuinely depends on the implementation is added by the delta
             # pass in the CHECKLIST state.
             if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
-                run_checklist_panel base prompts/change/manual-checklist-base.md
                 start_codex_bg \
-                    "$CHECKLIST_PANEL_PROMPT" \
+                    "" \
                     "$STATE_DIR/MANUAL_CHECKLIST.base.md" \
                     manual-checklist-base \
-                    "$CODEX_EFFORT_CHECKLIST"
+                    "$CODEX_EFFORT_CHECKLIST" \
+                    base prompts/change/manual-checklist-base.md
             fi
 
             if [[ -s IMPLEMENTATION_NOTES.md ]] && implementation_has_changes && implementation_complete; then

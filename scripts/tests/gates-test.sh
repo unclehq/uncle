@@ -208,6 +208,7 @@ case "$prompt" in
         if [[ -n "${FAKE_REVISE:-}" ]]; then bash -c "$FAKE_REVISE"; fi
         ;;
     *STUB:implement*)
+        : > .uncle/workflow/impl-agent-started
         printf '# Implementation Notes\n\nChanged app/main.sh.\n' \
             > IMPLEMENTATION_NOTES.md
         cat >> IMPLEMENTATION_NOTES.md <<'DELIVERY'
@@ -263,6 +264,7 @@ AGENT
     # audit gate is not what stops these runs.
     cat > "$CASE/bin/fake-reviewer" <<'REV'
 #!/usr/bin/env bash
+sleep "${FAKE_REVIEW_DELAY:-0}"
 out=""
 review_prompt="${!#}"
 while [[ $# -gt 0 ]]; do
@@ -277,6 +279,13 @@ if [[ "$out" == *assessment.json ]]; then
     exit $?
 fi
 printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
+if [[ "$out" == *MANUAL_CHECKLIST.base.md ]]; then
+    # Proof of real overlap, not an inference from timing: if implementation
+    # already wrote its own start marker by the time this synthesis call (the
+    # last step of the checklist-base panel) runs, the two genuinely ran
+    # concurrently rather than the panel finishing first.
+    [[ -e .uncle/workflow/impl-agent-started ]] && printf 'overlap\n' > .uncle/workflow/checklist-overlapped-implementation
+fi
 if [[ "${FAKE_COMPACT_REVIEW:-0}" == 1 && "$out" == *MANUAL_CHECKLIST.base.md ]]; then
     printf 'Repeated background that adds no findings. Repeated background that adds no findings.\n' > "$out"
 else
@@ -372,6 +381,7 @@ EOF
     # and an invocation log so tests can prove stages were not reached.
     cat > "$CASE/bin/fake-reviewer" <<'REV'
 #!/usr/bin/env bash
+sleep "${FAKE_REVIEW_DELAY:-0}"
 out=""
 review_prompt="${!#}"
 while [[ $# -gt 0 ]]; do
@@ -423,7 +433,12 @@ else
     else
         : > "$out"
     fi
-    if [[ "$out" == FINAL_AUDIT.md && "${FAKE_AUDIT:-READY}" == 'NOT READY' ]]; then
+    if [[ "$out" == FINAL_AUDIT.md ]]; then
+        printf 'x\n' >> .uncle/workflow/final-audit-calls
+    fi
+    if [[ "$out" == FINAL_AUDIT.md && "${FAKE_AUDIT:-READY}" == NO_REPORT ]]; then
+        :
+    elif [[ "$out" == FINAL_AUDIT.md && "${FAKE_AUDIT:-READY}" == 'NOT READY' ]]; then
         printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n| FA-1 | Missing review | Review greeting | YES |\n\nNOT READY\n' >> "$out"
     elif [[ "$out" == FINAL_AUDIT.md ]]; then
         printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\n%s\n' "${FAKE_AUDIT:-READY}" >> "$out"
@@ -512,6 +527,9 @@ case "$prompt" in
         if [[ "$status" == MALFORMED ]]; then
             printf '# Verification Report\n\nAll checks ran. No acceptance table this time.\n' > VERIFICATION_REPORT.md
             printf '# Defects\n\nNo unresolved defects in fixture.\n' > DEFECTS.md
+            exit 0
+        fi
+        if [[ "$status" == NO_REPORT ]]; then
             exit 0
         fi
         gate_report VERIFICATION_REPORT.md "$status"
@@ -873,6 +891,25 @@ expect_out "No decision received; audit remains pending."
 expect_not_out "Workflow complete."
 expect_state "WAIT_AUDIT_OVERRIDE"
 
+# A real stuck-run shape: the audit reviewer ends without writing
+# FINAL_AUDIT.md at all. VALIDATE_AUDIT only checks what FINAL_AUDIT already
+# produced, so "resume" alone can never bring the driver back to re-run it.
+new_stagegate_case sg-final-audit-missing-entirely
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate_stdin "$(gate_input y)" \
+    FAKE_AUDIT=NO_REPORT \
+    FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
+expect_status 1
+expect_state FINAL_AUDIT
+expect_out 'exited successfully but wrote no FINAL_AUDIT.md; retrying once'
+expect_file .uncle/workflow/final-audit-empty-retry-prompt.md
+expect_in_file .uncle/workflow/final-audit-empty-retry-prompt.md 'is not a substitute'
+COUNT=$((COUNT + 1))
+if [[ "$(grep -c '^x$' "$REPO/.uncle/workflow/final-audit-calls")" != 2 ]]; then
+    fail 'a missing final audit must receive exactly one internal retry'
+fi
+
 # The probe runs beside implementation by default: an unconfirmed environment
 # is reported at the diff gate, with the code kept, rather than stopping first.
 new_stagegate_case sg-preflight-blocked
@@ -951,6 +988,26 @@ expect_in_file .uncle/workflow/received-execute-checklist-prompt.md 'Required fo
 COUNT=$((COUNT + 1))
 if [[ "$(grep -c '^x$' "$REPO/.uncle/workflow/execute-checklist-calls")" != 2 ]]; then
     fail 'a malformed verification report must receive exactly one format retry'
+fi
+
+# A real stuck run: execute-checklist reported success but wrote neither
+# required report at all (a conversational summary asking for guidance
+# instead). Resuming VALIDATE_CHECKLIST alone can never fix this -- it only
+# checks what execute-checklist already produced -- so it must retry the
+# stage itself once before stopping for a human.
+new_stagegate_case sg-verification-report-missing-entirely
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION=NO_REPORT
+expect_status 1
+expect_state VALIDATE_CHECKLIST
+expect_no_file FINAL_AUDIT.md
+expect_file .uncle/workflow/execute-checklist-format-retry.md
+expect_in_file .uncle/workflow/execute-checklist-format-retry.md 'is not a substitute'
+expect_in_file .uncle/workflow/received-execute-checklist-prompt.md 'Required format retry'
+COUNT=$((COUNT + 1))
+if [[ "$(grep -c '^x$' "$REPO/.uncle/workflow/execute-checklist-calls")" != 2 ]]; then
+    fail 'a missing verification report must receive exactly one format retry'
 fi
 
 # Repair goes back through the human diff gate, preserving the original file
@@ -1389,6 +1446,27 @@ COUNT=$((COUNT + 1))
 printf '## MC-1 Check the greeting.\nExact action: Open the page\nExpected result: Greeting visible\n\nREADY\n' > "$CASE/expected.md"
 COUNT=$((COUNT + 1))
 cmp -s "$CASE/expected.md" "$REPO/.uncle/workflow/MANUAL_CHECKLIST.base.md" || fail 'background exhaustion changed original bytes'
+
+# manual-checklist-base's own lens-worker fan-out used to run to completion,
+# blocking, before implementation was even started -- only its synthesis
+# pass was ever truly backgrounded. Four lens workers (concurrent with each
+# other) then a synthesis call then implementation, run sequentially, would
+# take at least 3 delay-units; overlapped as intended, close to 2.
+new_case change-checklist-panel-overlaps-implementation
+green_baseline 0 'bash app/test.sh'
+printf 'write a base checklist\n' > "$REPO/prompts/change/manual-checklist-base.md"
+set_state IMPLEMENT
+# The lens workers' own small delay gives the concurrently-started
+# implementation stub time to write its start marker before the panel
+# reaches its synthesis call; the marker's presence there is the proof of
+# overlap, not an inference from wall-clock timing.
+run_driver FAKE_REVIEW_DELAY=0.3 \
+    FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" \
+    WORKFLOW_PARALLEL_CHECKLIST=1
+expect_status 0
+expect_state WAIT_IMPLEMENT_APPROVAL
+expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
+expect_file '.uncle/workflow/checklist-overlapped-implementation'
 
 new_case change-budget-step-handoff
 green_baseline 0 'bash app/test.sh'

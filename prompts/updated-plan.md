@@ -253,3 +253,20 @@ A step is not complete without it. Declare honestly rather than optimistically:
 claiming a file the step does not write is worse than claiming none, and a step
 whose files genuinely overlap another's should say so by naming the same file,
 not by omitting the field.
+
+Before finishing this stage, write or update `.gitignore` at the project root
+yourself, now, using the tools available to you -- do not merely describe it in
+the plan. Include every entry the chosen stack usually needs: its dependency
+directory (`node_modules/`, `vendor/`, a Python virtualenv), its build/output
+directory (`dist/`, `build/`, `.svelte-kit/`, `out/`, `target/`), its caches
+(`__pycache__/`, `.pytest_cache/`, `*.pyc`), local secrets (`.env`, `.env.*`),
+editor/OS noise (`.DS_Store`), and anything else that ecosystem's own default
+scaffolding tool (`npm create`, `cargo new`, a framework's own CLI) would put
+there. A real build stalled a parallel merge on exactly this: a step scaffolded
+and built a Svelte app in the same pass, producing a `dist/` directory the plan
+had not gitignored and no step had declared owning, so the driver correctly
+refused to merge anyone's work. Getting this right at the very start, before any
+implementation step runs, means no later step has to discover it by failing.
+Name `.gitignore` in whichever step's `Owns:` covers project scaffolding, the
+same as any other file it writes. If `.gitignore` already covers the chosen
+stack (a revision pass after project-plan already wrote one), leave it alone.

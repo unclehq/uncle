@@ -231,6 +231,38 @@ MODEL_CATALOG_CLINEPASS = [
     ]),
 ]
 
+# Non-cline runners take no billing flag and keep no account state of ours;
+# each catalogue below is that vendor's own ids, grouped like the cline
+# lists. Every id must pass its runner shim's filter: the claude ids match
+# reviewer-claude.sh's allowlist (claude*|opus*|sonnet*|haiku*) and the codex
+# ids are not in agent-codex.sh's blanked-tier set (opus|sonnet|o3|kimi|kimi:*),
+# so the picker never offers an id the shim would silently replace or drop.
+MODEL_CATALOG_CLAUDE = [
+    ("Claude", [
+        ("Claude Opus 5", "claude-opus-5"),
+        ("Claude Sonnet 5", "claude-sonnet-5"),
+        ("Claude Haiku 4.5", "claude-haiku-4-5"),
+    ]),
+]
+
+MODEL_CATALOG_CODEX = [
+    ("Codex", [
+        ("GPT-5.1 Codex", "gpt-5.1-codex"),
+        ("GPT-5.1 Codex Mini", "gpt-5.1-codex-mini"),
+    ]),
+]
+
+# Kimi ids are stored raw; the shell exports them via WORKFLOW_KIMI_MODEL and
+# hands agent-kimi.sh the dispatch token instead (stage-config.sh).
+MODEL_CATALOG_KIMI = [
+    ("Kimi", [
+        ("Kimi K2.7 Code Highspeed", "moonshot-ai/kimi-k2.7-code-highspeed"),
+        ("Kimi K2.6", "moonshot-ai/kimi-k2.6"),
+        # `moonshot-ai/kimi-k3` is already in MODEL_CATALOG_USAGE_PAID; one
+        # id gets one label, so it is not repeated here.
+    ]),
+]
+
 # Usage-based billing is a different catalogue, not a different flag: within
 # cline's default provider the modelType prefix is what selects how the run is
 # paid for, so `cline-pass/kimi-k3` and a vendor-prefixed `kimi-k3` are two
@@ -286,6 +318,19 @@ DEFAULT_MODEL_FOR_BILLING = {
     CLINE_USAGE: "deepseek/deepseek-v4-flash",
 }
 
+# What the other runners run when the stage stores no model. Claude's
+# "opus" is the tier alias the drivers have always defaulted to
+# (stagegate.sh's DEFAULT_MODEL, reviewer-claude.sh's DEFAULT_MODEL);
+# agent-codex.sh blanks it for codex, so it reaches only claude. Codex has
+# no repo-level default: agent-codex.sh omits the flag and the CLI's own
+# configured model applies. Kimi's shim defaults WORKFLOW_KIMI_MODEL to this
+# raw id (agent-kimi.sh).
+DEFAULT_MODEL_FOR_RUNNER = {
+    "claude": "opus",
+    "codex": "codex default",
+    "kimi": "moonshot-ai/kimi-k2.7-code-highspeed",
+}
+
 
 def model_catalog(billing):
     """The picker's groups for one billing choice, free models included."""
@@ -316,13 +361,22 @@ def model_suits_billing(model, billing):
 
 MODEL_CATALOG = MODEL_CATALOG_CLINEPASS + MODEL_CATALOG_USAGE_PAID + MODEL_CATALOG_FREE
 
-# id -> label, for the picker's display column and its filter.
-MODEL_LABELS = {mid: label for _, entries in MODEL_CATALOG for label, mid in entries}
+# id -> label, for the picker's display column and its filter. Ids are unique
+# across all six catalogues, so one flat map covers both cline and the
+# per-runner vendor lists.
+MODEL_LABELS = {mid: label
+                for _, entries in (MODEL_CATALOG + MODEL_CATALOG_CLAUDE
+                                   + MODEL_CATALOG_CODEX + MODEL_CATALOG_KIMI)
+                for label, mid in entries}
 
 
-def valid_model_id(value):
-    """cline model ids are `modelType/model`; an empty value means its default."""
-    return not value or "/" in value
+def valid_model_id(value, runner="cline"):
+    """cline model ids are `modelType/model`; an empty value means its default.
+    Claude, codex, and kimi ids have no separator rule; they only have to name
+    a model."""
+    if runner == "cline":
+        return not value or "/" in value
+    return bool(value)
 
 # Full description for each Configure item. Only the description of the row
 # currently under the cursor is shown, in a panel to the right of the options.
@@ -346,9 +400,9 @@ CONFIG_DESC = {
         "run an agent stage, where they write code; cline, codex, claude, and kimi "
         "can run the read-only reviewer stages. Each stage picks its own, so a cheap model "
         "can transcribe requirements while a strong one plans, and the "
-        "reviewer can be a different program from the implementer. Only cline "
-        "takes a model below: claude, kimi, and codex are given no model flag "
-        "and use their own default."
+        "reviewer can be a different program from the implementer. Every "
+        "runner takes a model below; left empty, the stage uses that "
+        "runner's own default."
     ),
     "field:effort": (
         "Reasoning effort for this stage: high, medium, or low. Higher effort "
@@ -378,11 +432,11 @@ CONFIG_DESC = {
     "field:base_url": "The OpenAI-compatible API root OpenCode should use, for example http://localhost:8000/v1.",
     "field:api_key": "Endpoint credential, hidden while editing and stored separately in .uncle/self-hosted-keys.json. Use a placeholder for a server without authentication.",
     "field:model": (
-        "The cline model this stage runs, as a `modelType/model` id (for "
-        "example cline-pass/kimi-k3). Shown only when the runner is cline, "
-        "because it is the only runner uncle passes a model to. A display "
-        "name such as \"Kimi K3\" is not an id and is refused before the "
-        "stage starts."
+        "The model this stage runs. For cline that is a `modelType/model` "
+        "id (for example cline-pass/kimi-k3); claude, codex, and kimi take "
+        "the vendor's own id and are not held to the `/` form. Left empty, "
+        "the stage uses the runner's default. A display name such as "
+        "\"Kimi K3\" is not an id and is refused before the stage starts."
     ),
     "adversarial-review": (
         "The reviewer stage that attacks the plan before any code is written, "
@@ -927,9 +981,14 @@ class UncleTUI:
 
     def stage_model(self, stage):
         """The model for a stage, or "" when its runner takes none."""
-        if self.stage_runner(stage) == "self-hosted":
+        runner = self.stage_runner(stage)
+        if runner == "self-hosted":
             return self.stage_models.get(stage, "")
-        if self.stage_runner(stage) != "cline":
+        if runner in ("claude", "codex", "kimi"):
+            # Stored id or ""; "" means the runner's own default. Kimi stores
+            # the raw id here; the shell maps it to the dispatch token.
+            return self.stage_models.get(stage, "")
+        if runner != "cline":
             return ""
         model = self.stage_models.get(stage, "")
         if model:
@@ -945,7 +1004,8 @@ class UncleTUI:
         only runner that sandboxes a stage, and so the only one where the
         setting changes anything. Every runner takes an effort: claude, kimi,
         cline, and codex as a reasoning level, self-hosted as the OpenCode
-        model's reasoningEffort option.
+        model's reasoningEffort option. Claude, codex, and kimi take a model
+        from their own catalogue; codex's row order keeps network above model.
         """
         if stage.startswith("@"):
             return ["base_url", "api_key"]
@@ -956,7 +1016,9 @@ class UncleTUI:
             # Billing sits above model because it decides which models exist.
             return ["runner", "effort", "billing", "model"]
         if runner == "codex":
-            return ["runner", "effort", "network"]
+            return ["runner", "effort", "network", "model"]
+        if runner in ("claude", "kimi"):
+            return ["runner", "effort", "model"]
         return ["runner", "effort"]
 
     def _field_value(self, stage, field):
@@ -1009,10 +1071,17 @@ class UncleTUI:
             return "false  (default)"
         if field == "billing":
             return "%s  (default)" % DEFAULT_BILLING
-        fallback = DEFAULT_MODEL_FOR_BILLING.get(self.stage_billing(stage),
-                                                 DEFAULT_CLINE_MODEL)
+        runner = self.stage_runner(stage)
+        if runner == "cline":
+            fallback = DEFAULT_MODEL_FOR_BILLING.get(self.stage_billing(stage),
+                                                     DEFAULT_CLINE_MODEL)
+        else:
+            # claude/codex/kimi name the runner's own default; anything else
+            # takes no useful default from us, so the row stays bare.
+            fallback = DEFAULT_MODEL_FOR_RUNNER.get(runner, "")
         label = MODEL_LABELS.get(fallback, "")
-        return "%s  (default)%s" % (fallback, "  " + label if label else "")
+        text = "%s  (default)" % fallback if fallback else "(default)"
+        return text + ("  " + label if label else "")
 
     def _set_field(self, stage, field, value):
         value = value or ""
@@ -1180,6 +1249,22 @@ class UncleTUI:
         if self.picker_kind == "model" and self.stage_runner(self.picker_target) == "self-hosted":
             return ([("option", name) for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
                     + [("custom", "Custom… (type a model id)")])
+        if self.picker_kind == "model":
+            # Each vendor picker offers only its own catalogue: ids from a
+            # runner the stage does not use would be passed to a shim that
+            # never heard of them.
+            runner = self.stage_runner(self.picker_target)
+            if runner in ("claude", "codex", "kimi"):
+                catalog = {"claude": MODEL_CATALOG_CLAUDE,
+                           "codex": MODEL_CATALOG_CODEX,
+                           "kimi": MODEL_CATALOG_KIMI}[runner]
+                rows = []
+                for group, entries in catalog:
+                    rows.append(("header", group))
+                    for _label, mid in entries:
+                        rows.append(("model", mid))
+                rows.append(("custom", "Custom… (type a model id)"))
+                return rows
         rows = []
         for group, entries in model_catalog(self.stage_billing(self.picker_target)):
             rows.append(("header", group))
@@ -1312,7 +1397,9 @@ class UncleTUI:
     #
     #   <stage>.runner  cline | claude | kimi | codex
     #   <stage>.effort  high | medium | low
-    #   <stage>.model   a cline model id, and only for a cline stage
+    #   <stage>.model   a model id for the stage's runner (cline ids are
+    #                   `modelType/model`; claude, codex, and kimi ids are
+    #                   the vendor's own)
     #   <stage>.network true | false, and only for a codex stage — whether
     #                   its workspace-write sandbox may reach the network,
     #                   which includes binding a loopback port
@@ -6002,9 +6089,13 @@ class UncleTUI:
             self.sel = 0
         elif self.state == "config_edit":
             val = self.input_buf if self.picker_kind == "markdown_viewer" else self.input_buf.strip()
-            if self.picker_kind == "model" and self.stage_runner(self.picker_target) != "self-hosted" and not valid_model_id(val):
+            runner = self.stage_runner(self.picker_target)
+            if self.picker_kind == "model" and runner != "self-hosted" and not valid_model_id(val, runner):
                 # Storing it would only surface as a failed stage later.
-                self.notice = "not a cline model id: %s (expected modelType/model)" % val
+                if runner == "cline":
+                    self.notice = "not a cline model id: %s (expected modelType/model)" % val
+                else:
+                    self.notice = "enter a model id for %s" % runner
                 return
             self.notice = ""
             self._set_field(self.picker_target, self.picker_kind, val)

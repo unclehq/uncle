@@ -239,14 +239,14 @@ run_reread() {
     cat "$ARGV"
 }
 
-printf 'project-plan.runner cline\nproject-plan.model cline-pass/kimi-k3\nproject-plan.effort high\n' \
+printf 'requirements.runner cline\nproject-plan.model cline-pass/kimi-k3\nrequirements.effort high\n' \
     > "$CPROJ2/.uncle/config"
 argv="$(run_reread)"
 check_contains "config: model comes from the file" "--model cline-pass/kimi-k3" "$argv"
 check_contains "config: effort comes from the file" "--effort high" "$argv"
 
 # The same driver, the same command line, a different config file.
-printf 'project-plan.runner cline\nproject-plan.model cline-pass/glm-5.3\nproject-plan.effort low\n' \
+printf 'requirements.runner cline\nproject-plan.model cline-pass/glm-5.3\nrequirements.effort low\n' \
     > "$CPROJ2/.uncle/config"
 argv="$(run_reread)"
 check_contains "config: an edited model is picked up" "--model cline-pass/glm-5.3" "$argv"
@@ -259,7 +259,7 @@ argv="$(run_reread)"
 check_absent "config: a kimi stage gets no --model" "--model" "$argv"
 
 # An explicit variable still outranks the file.
-printf 'project-plan.runner cline\nproject-plan.model cline-pass/kimi-k3\n' \
+printf 'requirements.runner cline\nproject-plan.model cline-pass/kimi-k3\n' \
     > "$CPROJ2/.uncle/config"
 : > "$ARGV"
 rm -rf "$CPROJ2/.uncle/workflow" "$CPROJ2/REQUIREMENTS_INTERPRETATION.md"

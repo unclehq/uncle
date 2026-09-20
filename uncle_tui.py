@@ -1999,8 +1999,12 @@ class UncleTUI:
         """
         if getattr(self, "completion_preview", None) is not None:
             return
-        if getattr(self, "early_preview_shown", False):
-            return
+        # Kept polling even once a page is open: a static preview (the only
+        # option before a React/Svelte project's dependencies exist) can
+        # never run source modules, and _show_early_preview needs to see this
+        # stage's fresh _previewable_page() to notice a dev server became
+        # available and upgrade. It no-ops immediately once the open preview
+        # already matches what this check would pick anyway.
         stage = (getattr(self, "status_stage", "") or "")
         if not any(stage.startswith(name) for name in self._PREVIEW_STAGES):
             return
@@ -2069,14 +2073,28 @@ class UncleTUI:
         end of a run, wrong in the middle of one -- the build is still going, and
         the dialog also burns the once-per-user star prompt.
         """
-        if getattr(self, "early_preview_shown", False):
-            return
         if getattr(self, "completion_preview", None) is not None:
             return
         preview = preview or self._previewable_page()
         if preview is None:
             return
         kind, value = preview
+        if getattr(self, "early_preview_shown", False):
+            # A page already opened. The only disruption worth it now is a
+            # static-to-development upgrade: dependencies that were missing
+            # when the first preview picked a static server (which cannot run
+            # source modules -- a blank page for any React/Svelte project)
+            # have since finished installing, so a real dev server can run
+            # this project for the first time. Anything else leaves the
+            # open tab alone.
+            current = getattr(self, "preview_server", None)
+            if kind != 'development' or isinstance(current, DevelopmentPreview):
+                return
+            if current is not None:
+                current.close()
+            server = DevelopmentPreview(_project_root(), value)
+            self.preview_server = server if server.url is not None else None
+            return
         server = (DevelopmentPreview(_project_root(), value) if kind == 'development'
                   else PreviewServer(_project_root(), value))
         if server.url is None:

@@ -189,6 +189,46 @@ class EarlyPreview(unittest.TestCase):
         self.settle(self.make(root))
         self.assertEqual(self.opened, [])
 
+    def test_static_preview_upgrades_to_development_once_dependencies_exist(self):
+        """A React/Svelte project has no vite binary at the moment the page
+        first goes up, so the first preview is a static server -- which can
+        never run source modules and shows a blank page for the life of the
+        tab. Once `npm install` finishes mid-build, the next check must
+        replace it with a real dev server instead of leaving the dead tab
+        latched in forever."""
+        root = project(**{'index.html': '<script type="module" src="/src/main.jsx"></script>'})
+        screen = self.make(root)
+        self.settle(screen)
+        self.assertEqual(len(self.opened), 1, 'the static fallback opened first')
+        static_server = screen.preview_server
+        self.assertFalse(getattr(static_server, 'closed', False))
+        original_close = static_server.close
+        static_server.close = lambda: (setattr(static_server, 'closed', True), original_close())
+
+        (root / 'package.json').write_text('{"scripts":{"dev":"vite"},"dependencies":{"react":"x"}}')
+        vite = root / 'node_modules' / '.bin' / 'vite'
+        vite.parent.mkdir(parents=True)
+        vite.write_text('')
+
+        opened_dev = []
+        class StubDevelopmentPreview:
+            def __init__(self, root, spec):
+                opened_dev.append(spec)
+                self.url = spec['url']
+            def close(self):
+                pass
+        self.tui.DevelopmentPreview = StubDevelopmentPreview
+
+        self.settle(screen)
+        self.assertTrue(static_server.closed, 'the dead static server is closed')
+        self.assertEqual(len(opened_dev), 1, 'a development preview replaces it')
+        self.assertIsInstance(screen.preview_server, StubDevelopmentPreview)
+        self.assertEqual(len(self.opened), 1, 'no second webbrowser.open for the same-tab upgrade')
+
+        # A second settle with nothing new must not upgrade again.
+        self.settle(screen)
+        self.assertEqual(len(opened_dev), 1)
+
     def test_opens_on_first_sighting_and_corrects_itself(self):
         """A half-written page is opened, not waited out.
 

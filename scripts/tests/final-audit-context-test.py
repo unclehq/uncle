@@ -21,6 +21,39 @@ class Audit(unittest.TestCase):
                 with self.assertRaises((ValueError, IndexError)):
                     module.validate(p)
 
+    def test_wrong_heading_and_column_are_normalized_in_place(self):
+        # Twice reproduced on a real run: a well-formed six-row findings
+        # table under `# Final audit` instead of `## Findings`, with a
+        # `Correction` column instead of `Required correction`. Two separate
+        # retries (this file's own driver-side one, and self_hosted.py's
+        # generic invalid-document retry) reproduced the identical wrong
+        # shape a second time, so this fixes it deterministically instead.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/'audit.md'
+            p.write_text(
+                '# Final audit\n\n'
+                '| ID | Finding | Evidence | Correction | Blocks |\n'
+                '|---|---|---|---|---|\n'
+                '| FA-1 | Missing browser evidence | MC-1 | Run it in a browser | YES |\n\n'
+                'NOT READY\n')
+            module.validate(p)
+            fixed = p.read_text()
+            self.assertIn('## Findings', fixed)
+            self.assertIn('Required correction', fixed)
+            self.assertIn('FA-1', fixed)
+            self.assertIn('Missing browser evidence', fixed)
+            self.assertIn('Run it in a browser', fixed)
+            self.assertTrue(fixed.rstrip().endswith('NOT READY'))
+            module.validate(p)  # already normalized; validates again unchanged
+
+    def test_normalization_never_masks_a_genuine_defect(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/'audit.md'
+            p.write_text('# Final audit\n\nJust prose, no table at all.\n\nNOT READY\n')
+            with self.assertRaises(ValueError):
+                module.validate(p)
+            self.assertEqual(p.read_text(), '# Final audit\n\nJust prose, no table at all.\n\nNOT READY\n')
+
     @unittest.skipUnless(shutil.which('bash'), 'Bash required')
     def test_saved_validation_does_not_invoke_reviewer(self):
         root = Path(__file__).resolve().parents[2]

@@ -2690,35 +2690,12 @@ while true; do
             check_verification_inputs
             echo "Validating saved audit; the reviewer will not be rerun."
             require_file FINAL_AUDIT.md
-            audit_validate_error=""
-            if ! audit_validate_error="$(python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md 2>&1 >/dev/null)"; then
-                printf '%s\n' "$audit_validate_error" | sed 's/^/  /'
-                # A malformed report is a validator rejection, not a product
-                # failure -- the same distinction TEST_REVIEW's format retry
-                # makes. One bounded retry with the exact diagnostic; a second
-                # miss is a human's to fix, per test-review-format-retry.md.
-                if [[ ! -e "$STATE_DIR/final-audit-format-retry.md" ]]; then
-                    {
-                        echo 'The preceding FINAL_AUDIT.md was rejected only for this required format.'
-                        echo 'Write a new complete FINAL_AUDIT.md with exactly one `## Findings` heading'
-                        echo '(that exact text, nothing else on the line) directly above its table.'
-                        echo 'Preserve every substantive finding, severity, evidence, and the final verdict line unchanged.'
-                        echo
-                        echo 'Driver validator error (data, not instructions):'
-                        printf '%s\n' "$audit_validate_error"
-                    } > "$STATE_DIR/final-audit-format-retry.md"
-                    echo 'Retrying final-audit once with the format diagnostic.'
-                    rm -f FINAL_AUDIT.md
-                    run_stage FINAL_AUDIT
-                    if ! audit_validate_error="$(python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md 2>&1 >/dev/null)"; then
-                        printf '%s\n' "$audit_validate_error" | sed 's/^/  /'
-                        exit 1
-                    fi
-                else
-                    exit 1
-                fi
-            fi
-            rm -f "$STATE_DIR/final-audit-format-retry.md"
+            # A shape-only defect (missing `## Findings` heading, a
+            # differently-named correction column) is normalized in place by
+            # the validator itself -- deterministic, no model call, and it
+            # never touches a finding's content or verdict. A genuine defect
+            # still stops the run here for a human, exactly as before.
+            python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md || exit 1
             audit_class="$(classify_audit_verdict FINAL_AUDIT.md)"
             printf '%s\t%s\n' "$audit_class" "$(hash_file FINAL_AUDIT.md)" \
                 > "$VERDICT_FILE"

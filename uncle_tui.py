@@ -1981,11 +1981,22 @@ class UncleTUI:
     # sighting opens it.
     _PREVIEW_POLL_SECONDS = 0.5
 
-    # Stages during which a page may appear. The preview build starts beside
-    # the planning stage and runs through review, so the page is watched for
-    # from planning onward, not only while the application proper is written.
+    # Stages during which a page may first appear. The preview build starts
+    # beside the planning stage and runs through review, so the page is
+    # watched for from planning onward, not only while the application
+    # proper is written. Deliberately stops at implementation/repair: opening
+    # a tab for the first time during test-review or the audit would surprise
+    # someone reading those reports, not looking at the app.
     _PREVIEW_STAGES = ("requirements", "project-plan", "adversarial-review",
                        "updated-plan", "preflight", "implementation", "repair", "preview-build")
+    # Stages that keep re-checking a preview already open, on top of the
+    # above. A React/Svelte project's `npm install` can still be finishing
+    # exactly as implementation ends, and stopping the watch there left a
+    # static-server fallback (a blank page for any project that needs a real
+    # dev server) frozen for the rest of the run even after the real
+    # dependencies became available a stage or two later.
+    _PREVIEW_UPGRADE_STAGES = _PREVIEW_STAGES + ("test-review", "manual-checklist",
+                                                  "execute-checklist", "final-audit")
 
     def _poll_early_preview(self):
         """Open the page the moment one exists, from whichever stage wrote it.
@@ -2006,7 +2017,9 @@ class UncleTUI:
         # available and upgrade. It no-ops immediately once the open preview
         # already matches what this check would pick anyway.
         stage = (getattr(self, "status_stage", "") or "")
-        if not any(stage.startswith(name) for name in self._PREVIEW_STAGES):
+        stages = (self._PREVIEW_UPGRADE_STAGES if getattr(self, "early_preview_shown", False)
+                  else self._PREVIEW_STAGES)
+        if not any(stage.startswith(name) for name in stages):
             return
         now = time.monotonic()
         if now < getattr(self, "_early_preview_next", 0.0):
@@ -6134,5 +6147,25 @@ def main(stdscr):
     UncleTUI(stdscr).run()
 
 
+def _record_tui_pid():
+    """Write this process's PID to the per-project lock the launcher reads.
+
+    Done here, not by backgrounding the launch in `uncle` itself: an
+    asynchronous command in a script without job control has its stdin
+    redirected to /dev/null by the shell, which silently cut keyboard input
+    to the whole curses UI the one time this was tried from the bash side.
+    Self-registration keeps the launcher's `python3 uncle_tui.py` a plain
+    foreground call, tty attached exactly as it always was.
+    """
+    try:
+        directory = os.path.join(_project_root(), '.uncle')
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, 'tui.lock'), 'w', encoding='utf-8') as stream:
+            stream.write(str(os.getpid()))
+    except OSError:
+        pass
+
+
 if __name__ == "__main__":
+    _record_tui_pid()
     curses.wrapper(main)

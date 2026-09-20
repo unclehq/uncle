@@ -117,6 +117,7 @@ class EarlyPreview(unittest.TestCase):
         body['_PREVIEW_POLL_SECONDS'] = 0
         # Which stages are watched; the preview build is one of them.
         body['_PREVIEW_STAGES'] = self.tui.UncleTUI._PREVIEW_STAGES
+        body['_PREVIEW_UPGRADE_STAGES'] = self.tui.UncleTUI._PREVIEW_UPGRADE_STAGES
         body['_completion_dialog'] = lambda _self, value: self.dialogs.append(value)
         screen = type('Screen', (), body)()
         screen.status_stage, screen.completion_preview = stage, None

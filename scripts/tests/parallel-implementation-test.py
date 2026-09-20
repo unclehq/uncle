@@ -236,6 +236,54 @@ class ParallelImplementationTests(unittest.TestCase):
             self.assertEqual(row['reported_total_tokens'], 150)
             self.assertEqual(row['reported_cost_usd'], 0.05)
 
+    def test_step_scaffolding_a_manifest_may_also_write_its_lockfile(self):
+        # A real run: a step declared to own only `package.json` legitimately
+        # ran `npm install`, which also wrote `package-lock.json` -- a
+        # deterministic byproduct of the manifest it already owns, not new
+        # scope. The merge must not abort over it.
+        temp, root, worker = self.fixture()
+        with temp:
+            worker.write_text(
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'printf \'{"name":"app"}\' > package.json\n'
+                'printf \'{"lockfileVersion":3}\' > package-lock.json\n'
+                'mkdir -p .uncle/workflow/parallel/notes\n'
+                'printf handoff > .uncle/workflow/parallel/notes/step-1.md\n')
+            request = {'project': str(root), 'owned': {'1': ['package.json']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                 'command': ['bash', str(worker)]}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(result.stdout)
+            self.assertEqual(summary['merged'], [1])
+            self.assertIn('package-lock.json', summary['files'])
+            self.assertEqual((root / 'package-lock.json').read_text(), '{"lockfileVersion":3}')
+
+    def test_an_undeclared_file_that_is_not_a_lockfile_still_aborts_the_merge(self):
+        # The lockfile inference must stay narrow: a step writing something
+        # the plan never mentioned at all -- not a manifest's own lockfile --
+        # is still a real ownership violation.
+        temp, root, worker = self.fixture()
+        with temp:
+            worker.write_text(
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'printf \'{"name":"app"}\' > package.json\n'
+                'printf "ignored\\n" > .gitignore\n'
+                'mkdir -p .uncle/workflow/parallel/notes\n'
+                'printf handoff > .uncle/workflow/parallel/notes/step-1.md\n')
+            request = {'project': str(root), 'owned': {'1': ['package.json']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                 'command': ['bash', str(worker)]}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 3)
+            self.assertIn('.gitignore', result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

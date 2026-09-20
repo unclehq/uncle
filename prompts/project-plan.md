@@ -174,6 +174,8 @@ step owns a file when it is the only step that writes it. Add
 `Depends on: <step numbers>` when a step needs an earlier one finished first.
 A step that touches everything declares `Owns: *`.
 
+If a step's own description or title names a file it touches (a "scaffold", a ".gitignore update", a config it edits), that file must also appear in its `Owns:` list -- do not describe touching a file without declaring it. This is the single most common real gap: a step that legitimately runs a package manager also writes its lockfile, which needs its own `Owns:` entry beside the manifest.
+
   1. Arithmetic core — Owns: `src/calc.js`, `tests/calc.test.js`
   2. Keypad and display — Owns: `src/ui.js`, `index.html`
   3. Reconcile — Owns: `*` — Depends on: 1, 2

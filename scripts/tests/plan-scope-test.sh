@@ -129,6 +129,47 @@ check_eq "no table: nothing is out of scope" "" \
     "$(plan_out_of_scope "$TMP/bare.md" app/anything.py || true)"
 check_eq "missing file: empty scope" "" "$(plan_scope_files "$TMP/does-not-exist.md")"
 
+# --- plan_step_owns / plan_step_depends key by position, not by the plan's
+# own literal digits --------------------------------------------------------
+#
+# A real run numbered its first step "0." (a prerequisite "Environment
+# check"), which is a step like any other -- not the plan's mistake. Every
+# consumer of these two functions identifies a step by its position in the
+# list (plan_steps' output order; step_groups.py's grouping loop), so keying
+# ownership and dependency edges by the literal "0", "1", "2", ... instead
+# shifted every step's declared files one off from the step that actually
+# owns them: a worker doing exactly its assigned, correctly-described task
+# got checked against a different step's file list and rejected for writing
+# what it was told to.
+ZERO="$TMP/zero-indexed.md"
+cat > "$ZERO" <<'EOF'
+# Plan
+
+## Implementation order
+
+0. Environment check — Owns: `preflight.sh` — Depends on: none
+1. Scaffold — Owns: `package.json`, `index.html` — Depends on: 0
+2. Reducer — Owns: `calc.js`, `calc.test.js` — Depends on: 1
+3. Reconcile — Owns: `*` — Depends on: 1, 2
+EOF
+check_eq "0-indexed: step_steps order unaffected" "Environment check — Owns: \`preflight.sh\` — Depends on: none
+Scaffold — Owns: \`package.json\`, \`index.html\` — Depends on: 0
+Reducer — Owns: \`calc.js\`, \`calc.test.js\` — Depends on: 1
+Reconcile — Owns: \`*\` — Depends on: 1, 2" "$(plan_steps "$ZERO")"
+check_eq "0-indexed: position 1 (literal 0) owns preflight.sh" "1	preflight.sh" \
+    "$(plan_step_owns "$ZERO" | grep preflight.sh)"
+check_eq "0-indexed: position 2 (literal 1, Scaffold) owns package.json+index.html, not Reducer's files" \
+    "2	package.json
+2	index.html" "$(plan_step_owns "$ZERO" | grep '^2	')"
+check_eq "0-indexed: position 3 (literal 2, Reducer) owns calc.js+calc.test.js" \
+    "3	calc.js
+3	calc.test.js" "$(plan_step_owns "$ZERO" | grep '^3	')"
+check_eq "0-indexed: Scaffold (position 2) depends on Environment check (literal 0 -> position 1)" \
+    "2	1" "$(plan_step_depends "$ZERO" | grep '^2	')"
+check_eq "0-indexed: Reconcile (position 4) depends on positions 2 and 3 (literals 1, 2)" \
+    "4	2
+4	3" "$(plan_step_depends "$ZERO" | grep '^4	')"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "plan-scope-test.sh: $FAILED of $COUNT checks failed"
     exit 1

@@ -21,8 +21,6 @@ def normalize_findings_shape(text):
     text unchanged when no recognizable table is found (validate() then
     reports the real problem).
     """
-    if re.search(r'^##\s+Findings\s*$', text, re.M):
-        return text
     lines = text.splitlines()
     table_start = None
     for i in range(len(lines) - 1):
@@ -37,8 +35,16 @@ def normalize_findings_shape(text):
             break
     if table_start is None:
         return text
-    lines[table_start:table_start] = ['## Findings', '']
-    header_index = table_start + 2
+    # Independent of each other: a real audit has shown up missing the
+    # heading with a correct column name, and -- reproduced on a separate
+    # run -- with the heading present and only the column name wrong. An
+    # early return on "heading already there" skipped the column check
+    # entirely that second time and let this exact failure straight through.
+    has_heading = re.search(r'^##\s+Findings\s*$', text, re.M)
+    if not has_heading:
+        lines[table_start:table_start] = ['## Findings', '']
+        table_start += 2
+    header_index = table_start
     cells = lines[header_index][1:-1].split('|')
     for i, cell in enumerate(cells):
         if cell.strip().lower() in ('correction', 'fix', 'required fix', 'suggested correction'):

@@ -46,6 +46,27 @@ class Audit(unittest.TestCase):
             self.assertTrue(fixed.rstrip().endswith('NOT READY'))
             module.validate(p)  # already normalized; validates again unchanged
 
+    def test_wrong_column_alone_is_normalized_even_with_the_heading_already_present(self):
+        # Reproduced on a separate real run from the one above: this time
+        # `## Findings` was already correct, and only the column name was
+        # wrong. The first fix's early return on "heading already there"
+        # skipped the column check entirely and let this exact failure
+        # through a second time.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/'audit.md'
+            p.write_text(
+                '## Findings\n\n'
+                '| ID | Finding | Evidence | Correction | Blocks |\n'
+                '|---|---|---|---|---|\n'
+                '| FA-1 | Missing test coverage | tests/App.test.jsx:8 | Add a test | YES |\n\n'
+                'NOT READY\n')
+            module.validate(p)
+            fixed = p.read_text()
+            self.assertEqual(fixed.count('## Findings'), 1, 'must not duplicate an already-present heading')
+            self.assertIn('Required correction', fixed)
+            self.assertIn('Add a test', fixed)
+            self.assertTrue(fixed.rstrip().endswith('NOT READY'))
+
     def test_normalization_never_masks_a_genuine_defect(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d)/'audit.md'

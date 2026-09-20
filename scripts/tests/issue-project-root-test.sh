@@ -20,7 +20,7 @@ for name in stagegate.sh change-workflow.sh; do
     chmod +x "$TMP/install/scripts/$name"
 done
 UNCLE_PROJECT_ROOT="$TMP/project with spaces" PATH="$TMP/bin:$PATH" CALLS="$TMP/calls" \
-    bash "$TMP/install/scripts/from-issue.sh" https://github.com/example/project/issues/42 --change < /dev/null > "$TMP/output"
+    bash "$TMP/install/scripts/from-issue.sh" https://github.com/example/project/issues/42 --change --no-worktree < /dev/null > "$TMP/output"
 [[ "$(cat "$TMP/calls")" == driver ]]
 rm "$TMP/calls"
 grep -q '^Selected issue$' "$TMP/project with spaces/CHANGE_REQUEST.md"
@@ -52,6 +52,11 @@ def project(name):
     p = tmp / name
     p.mkdir()
     subprocess.run(['git', 'init', '-q', str(p)], check=True)
+    # A worktree (the --change default) needs a real ref to branch from; an
+    # unborn repo with no commits at all cannot provide one.
+    subprocess.run(['git', '-c', 'commit.gpgsign=false', '-C', str(p), 'commit', '-q', '--allow-empty', '--no-gpg-sign', '-m', 'baseline'],
+                   check=True, env=dict(os.environ, GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@example.com',
+                                        GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@example.com'))
     return p
 
 
@@ -125,7 +130,11 @@ for kind in ('request', 'code', 'fresh'):
     elif kind == 'code':
         (p / 'app.py').touch()
         subprocess.run(['git', '-C', str(p), 'add', 'app.py'], check=True)
-    r = run(p)
+    # --no-worktree: this loop tests mode auto-detection and document
+    # seeding in the given project root, not worktree creation -- --change
+    # defaults to a worktree, which would seed the document in a different
+    # (new) directory instead of the one this test just set up and checks.
+    r = run(p, '--no-worktree')
     assert r.returncode == 0, r.stderr
     assert (p / ('REQUIREMENTS.md' if kind == 'fresh' else 'CHANGE_REQUEST.md')).exists()
     # Either mode starts its driver directly once the document is seeded.

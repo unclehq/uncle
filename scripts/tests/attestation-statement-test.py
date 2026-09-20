@@ -259,7 +259,8 @@ class StatementTests(Fixture):
         self.freeze()
         self.ok(self.handoff())
         j = self.journal()
-        other = self.git('commit-tree', j['audited_tree'], '-p', self.original, '-m', 'wrong tree')
+        other = self.git('-c', 'commit.gpgsign=false', 'commit-tree', '--no-gpg-sign',
+                         j['audited_tree'], '-p', self.original, '-m', 'wrong tree')
         (self.state / 'pr/journal.json').write_text(json.dumps(dict(j, intended_head=other), sort_keys=True) + '\n')
         result = self.engine('validate')
         self.assertNotEqual(result.returncode, 0)

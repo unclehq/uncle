@@ -33,7 +33,12 @@ AGENT
     expect_file .uncle/workflow/change-plan.draft-key
     expect_in_file .uncle/workflow/combined-prompt 'CHANGE_SPEC.md: at most'
     expect_in_file .uncle/workflow/combined-prompt 'CHANGE_PLAN.md: at most'
-    expect_in_file .uncle/workflow/combined-prompt 'same model and context'
+    # This scenario's fake-agent matches the spec-and-plan-only prompt (an
+    # already-written BASELINE_REPORT.md), which only claims "the same
+    # context" for spec+plan together -- "the same model and context" is the
+    # with-baseline branch's own wording, for when one pass does all three
+    # documents and model continuity across them is the actual guarantee.
+    expect_in_file .uncle/workflow/combined-prompt 'the same context, write CHANGE_SPEC.md'
     expect_not_out ': change-spec'
     if [[ "$edited" == 1 ]]; then
         printf '\nUser clarification at approval.\n' >> "$REPO/CHANGE_SPEC.md"

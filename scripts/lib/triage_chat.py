@@ -214,8 +214,11 @@ class TriageRequest:
                 raise ValueError('Triage runner reported an error: %s' % error)
             if code:
                 raise ValueError('Triage runner exited with status %s. Log: %s' % (code, self.log_path))
-            if not reply.strip():
-                raise ValueError('Triage runner returned no reply. Log: %s' % self.log_path)
+            # An empty reply is not necessarily nothing: an execute-mode turn
+            # can still have made a real edit the guard's own diff will show,
+            # and this class has no notion of mode to tell those apart. Let
+            # it through as an ordinary (possibly empty) reply and leave that
+            # judgment to the caller, which knows what turn this was.
             self.events.put(('reply', reply))
         except (OSError, ValueError) as exc:
             self.events.put(('error', str(exc)))

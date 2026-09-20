@@ -1,6 +1,7 @@
-"""Optional event-triggered supervision: detection, journal, validation, delivery.
+"""Event-triggered supervision: detection, journal, validation, delivery.
 
-Nothing here runs unless `supervision.enabled true` is in .uncle/config. The
+Supervision is enabled unless `.uncle/config` explicitly sets
+`supervision.enabled false`. The
 Controller observes the same status events the TUI already reads, fires one
 of four triggers, and asks a tool-free worker for one strict-JSON proposal.
 A proposal never carries instructions: it selects a fixed template, cites
@@ -23,7 +24,7 @@ SUBDIR = 'supervision'
 EFFORTS = ('low', 'medium', 'high')
 ACTIONS = ('steer', 'retry', 'ask', 'none')
 TRIGGERS = ('validation', 'recurrence', 'steering', 'overrun')
-SUPPORTED_RUNNERS = ('claude',)
+SUPPORTED_RUNNERS = ('claude', 'cline', 'codex', 'kimi', 'self-hosted')
 PROPOSAL_KEYS = ('schema', 'diagnosis', 'evidence', 'action', 'target_stage', 'attempt',
                  'run_id', 'template_id', 'rationale')
 MAX_DIAGNOSIS = 2000
@@ -41,7 +42,7 @@ CORRELATED = ('turn', 'message', 'marker')
 # Typed controls: key -> (kind, default). Every key is documented in
 # .uncle/config.example and README.md; AT-9 checks that list against this one.
 CONTROLS = (
-    ('enabled', 'bool', False),
+    ('enabled', 'bool', True),
     ('runner', 'runner', 'claude'),
     ('model', 'text', 'sonnet'),
     ('effort', 'effort', 'medium'),
@@ -53,6 +54,7 @@ CONTROLS = (
     ('max_calls_per_run', 'count1', 8),
     ('call_max_cost_usd', 'money', 0.5),
     ('delegate_gates', 'delegate', 'none'),
+    ('files_allowlist', 'filelist', ('package.json', 'package-lock.json', 'vite.config.js')),
 )
 DELEGATIONS = ('none', 'routine')
 DEFAULTS = {key: default for key, _, default in CONTROLS}
@@ -110,6 +112,12 @@ def parse_value(key, raw):
         if text and re.fullmatch(r'[A-Za-z0-9._/:-]+', text):
             return text
         raise ValueError('supervision.%s must be a nonempty token' % key)
+    if kind == 'filelist':
+        items = [item.strip() for item in text.split(',') if item.strip()]
+        for item in items:
+            if not re.fullmatch(r'[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*', item) or '..' in item.split('/'):
+                raise ValueError('supervision.%s must be a comma-separated list of relative paths' % key)
+        return tuple(items)
     if kind in ('count0', 'count1'):
         if not re.fullmatch(r'[0-9]+', text):
             raise ValueError('supervision.%s must be a nonnegative integer' % key)
@@ -133,6 +141,8 @@ def format_value(key, value):
         return 'true' if value else 'false'
     if KINDS.get(key) == 'money':
         return ('%.4f' % value).rstrip('0').rstrip('.')
+    if KINDS.get(key) == 'filelist':
+        return ','.join(value)
     return str(value)
 
 
@@ -309,6 +319,20 @@ def state_digest(state_dir):
 def failure_signature(stage, exit_status, diagnostic, known=()):
     first = (redact(diagnostic or '', known).splitlines() or [''])[0].strip()
     return hashlib.sha256(('%s\0%s\0%s' % (stage, exit_status, first)).encode('utf-8')).hexdigest()
+
+
+# These are provider-side availability limits, not defects a supervisor can
+# correct by telling an agent to retry or revise an artifact.  Treating them
+# as a recurrence consumed the entire supervision budget while the account was
+# still unavailable.  Keep this intentionally narrow: ordinary agent errors
+# and validator failures must retain their normal recovery path.
+_EXTERNAL_CAPACITY = re.compile(
+    r'\b(session limit|rate limit|too many requests|quota|credit(?:s)?(?:\s+(?:is|are))?\s+(?:exhausted|depleted)|'
+    r'billing limit|weekly .*limit|resets?\s+(?:at|in)|http\s*429|status\s*429)\b', re.I)
+
+
+def external_capacity_failure(diagnostic):
+    return bool(_EXTERNAL_CAPACITY.search(str(diagnostic or '')))
 
 
 # --- ownership (D-10) ---------------------------------------------------------
@@ -1037,7 +1061,20 @@ class Controller:
         except (TypeError, ValueError):
             status = 1
         if status:
-            self._failure(self.stage, status, 'exit status %s' % status, 'stage_end', '')
+            diagnostic = 'exit status %s' % status
+            # stage_end carries a path rather than duplicating raw agent output
+            # in the status journal. Read a bounded tail solely to distinguish
+            # a provider/session limit from a retryable workflow failure.
+            log = event.get('log')
+            if log:
+                try:
+                    with open(log, encoding='utf-8', errors='replace') as fh:
+                        tail = fh.read()[-4096:]
+                    if tail:
+                        diagnostic += ': ' + tail
+                except OSError:
+                    pass
+            self._failure(self.stage, status, diagnostic, 'stage_end', '')
             return
         # A successful end cancels overrun and steering triggers that have not
         # launched: there is nothing left to correct (D-15).
@@ -1092,6 +1129,10 @@ class Controller:
         recurrence = (previous and previous['signature'] == signature and previous['digest'] == digest
                       and previous['attempt'] < self.attempt)
         kind = 'recurrence' if recurrence else 'validation'
+        if validator == 'stage_end' and external_capacity_failure(diagnostic):
+            self.host.ask('Stage %s stopped because its provider/session limit was reached; '
+                          'supervision will not spend a diagnosis call. Resume after access is available.' % stage)
+            return
         if validator == 'stage_end' and not recurrence:
             return  # a plain failing exit is triage's territory unless it repeats
         self._fire(Trigger(kind, stage, self.attempt, [evidence_id],
@@ -1539,7 +1580,15 @@ class Controller:
 
 def load_contract(root):
     path = Path(root) / 'prompts' / 'supervise.md'
-    return path.read_text(encoding='utf-8')
+    # A copied/minimal project may omit the optional supervisor prompt.  That
+    # must not make a default-on supervisor abort the workflow before it has
+    # even observed an event.  A later diagnosis gets an explicit, bounded
+    # unavailable result from its runner rather than an uncaught startup error.
+    try:
+        return path.read_text(encoding='utf-8')
+    except OSError:
+        return ('Supervisor contract unavailable: the installed prompt is missing. '
+                'Return action none.')
 
 
 class HeadlessHost:
@@ -1713,13 +1762,16 @@ def supervised_lock_run(run_once, command, state_dir, root, environ=None):
                     thread.join(timeout=5)
                 host.exit_code = rc
                 host.poll()
-                if not host.settle(host.controller.config.call_timeout_seconds + 5):
+                retry = host.settle(host.controller.config.call_timeout_seconds + 5)
+                if not retry:
                     return rc
                 # A validator fails after the driver has durably advanced to a
                 # VALIDATE_* state. Re-enter the stage itself so the retained
                 # correction is included in a fresh model call instead of
                 # merely re-running the same deterministic validator.
                 stage = host.controller.stage
+                if not stage:
+                    return rc
                 request = Path(state_dir) / 'rerun-request.json'
                 atomic_write(request, json.dumps({'stage': stage, 'source': 'supervisor-retry'}) + '\n')
                 host.transcript('Retrying the driver with the retained correction.')

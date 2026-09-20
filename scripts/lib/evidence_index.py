@@ -19,6 +19,12 @@ STAGES = {
     'updated-plan': ['REQUIREMENTS.md', 'REQUIREMENTS_INTERPRETATION.md', 'PROJECT_PLAN.md', 'ADVERSARIAL_REVIEW.md'],
     'updated-change-plan': ['CHANGE_SPEC.md', '@CHANGE_PLAN.pre-review.md', 'ADVERSARIAL_REVIEW.md'],
     'manual-checklist-base': ['CHANGE_SPEC.md', 'CHANGE_PLAN.md'],
+    # Not IMPLEMENTATION_NOTES.md or AUTOMATED_TEST_REPORT.md: those are the
+    # repairing agent's own earlier claims, and quoting their PASS lines back
+    # is how a pass came to report findings fixed without touching a file.
+    'repair': ['UPDATED_PROJECT_PLAN.md', 'TEST_REVIEW.md', 'VERIFICATION_REPORT.md', 'DEFECTS.md',
+               '@green-check.md', '@green-check.tsv', '@TEST_CHANGES.diff', '@verification.manifest',
+               '@REPAIR_BRIEF.md'],
 }
 REPORTS = ['MANUAL_CHECKLIST.md', 'VERIFICATION_REPORT.md', 'DEFECTS.md',
            '@checklist-driver-checks/README.md', '@checklist-driver-checks/results.tsv',
@@ -51,6 +57,12 @@ def packet(project, state, stage, family='app'):
     root, state = Path(project).resolve(), Path(state).resolve()
     if not state.is_relative_to(root):
         raise ValueError('Evidence state must be inside the project')
+    # Driver-owned workers are execution slices, not independently configured
+    # workflow stages. Every runner consumes the parent stage's evidence.
+    if '-review-worker-' in stage:
+        stage = stage.split('-review-worker-', 1)[0]
+    elif '-worker-' in stage:
+        stage = stage.split('-worker-', 1)[0]
     if not re.fullmatch(r'[a-z0-9-]+', stage):
         raise ValueError('Invalid stage name')
     names = list(STAGES.get(stage, ['REQUIREMENTS.md', 'UPDATED_PROJECT_PLAN.md', 'CHANGE_SPEC.md', 'CHANGE_PLAN.md'] + REPORTS))

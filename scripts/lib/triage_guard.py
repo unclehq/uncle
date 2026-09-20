@@ -44,7 +44,13 @@ FORBIDDEN_WORKFLOW_FILES = (
 )
 FORBIDDEN_WORKFLOW_DIRS = ('approvals', 'waivers', 'triage')
 FORBIDDEN_WORKFLOW_PREFIXES = ('green-check.',)
-SANDBOX_EXCLUDES = ('.git', '.uncle/workflow/logs', '.uncle/workflow/triage')
+# Sandboxes live below .uncle/workflow/parallel.  Excluding that directory is
+# essential for copy-mode projects (including unborn Git repositories): without
+# it copytree descends into the sandbox it is creating and never reaches a
+# worker launch.
+SANDBOX_EXCLUDES = ('.git', '.pw-browsers', 'node_modules', '.venv',
+                    '.uncle/workflow-history', '.uncle/workflow/logs',
+                    '.uncle/workflow/triage', '.uncle/workflow/parallel')
 INSTALL_PINS = ('uncle_tui.py', 'scripts')
 TSV_HEADER = 'ts\tturn\tproposal\toutcome\tpath\tbefore\tafter\n'
 
@@ -104,13 +110,13 @@ def walk(base, excludes=()):
         keep = []
         for d in dirnames:
             rel = os.path.join(rel_dir, d) if rel_dir else d
-            if rel in excludes or d == '__pycache__':
+            if rel in excludes or rel.startswith('.uncle/workflow/parallel') or d == '__pycache__':
                 continue
             keep.append(d)
         dirnames[:] = keep
         for name in filenames:
             rel = os.path.join(rel_dir, name) if rel_dir else name
-            if rel in excludes:
+            if rel in excludes or rel.startswith('.uncle/workflow/parallel'):
                 continue
             full = base / rel
             try:
@@ -221,7 +227,7 @@ def make_sandbox(project, sandbox):
                 dst.unlink()
         # Ignored/untracked Markdown is still editable project content.
         # Overlay it before snapshotting so apply-back compares the actual bytes.
-        for rel in walk(project, excludes=SANDBOX_EXCLUDES + ('.uncle/workflow-history', 'node_modules', '.venv')):
+        for rel in walk(project, excludes=SANDBOX_EXCLUDES):
             src = project / rel
             if (rel.lower().endswith('.md') or rel.startswith('.uncle/')) and not src.is_symlink():
                 copy_entry(src, sandbox / rel)
@@ -232,7 +238,7 @@ def make_sandbox(project, sandbox):
         skipped = []
         for name in names:
             rel = os.path.join(rel_dir, name) if rel_dir else name
-            if rel in SANDBOX_EXCLUDES or name == '__pycache__':
+            if rel in SANDBOX_EXCLUDES or rel.startswith('.uncle/workflow/parallel') or name == '__pycache__':
                 skipped.append(name)
         return set(skipped)
     shutil.copytree(project, sandbox, symlinks=True, ignore=ignore)

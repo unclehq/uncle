@@ -9,7 +9,12 @@
       "Bash(./uncle --help)",
       "Bash(ls -la ~/src/unclehq/ | grep uncle-issue)",
       "Read(//Users/brianwoods/src/unclehq/**)",
-      "Bash(git worktree *)"
+      "Bash(git worktree *)",
+      "Bash(cd /Users/brianwoods/src/unclehq/uncle-issue-70 && rm -f CHANGE_PLAN.md CHANGE_SPEC.md && echo \"Deleted old files\")",
+      "Bash(grep -o '\"[^\"]*\"$')",
+      "Bash(awk '/^while true; do/,/^done/' scripts/stagegate.sh)",
+      "Bash(awk '/WAIT_DERIVE_APPROVAL/,/PROJECT_PLAN\\\\\\)/ {print NR\": \"$0}' scripts/stagegate.sh)",
+      "Bash(awk '/^perf_record\\\\\\(\\\\\\)/,/^}/' scripts/lib/performance.sh)"
     ]
   }
 }

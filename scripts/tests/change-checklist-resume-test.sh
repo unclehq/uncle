@@ -18,6 +18,7 @@ plan_delivery_summary() { :; }
 snapshot_checklist_groups() { :; }
 snapshot_checklist_checks() { :; }
 ensure_checklist_runner() { :; }
+run_parallel_checklist_workers() { :; }
 set_state() { echo "$1" > state; }
 require_file() { test -s "$1"; }
 check_document_budget() { test ! -e bad-report; }

@@ -1613,19 +1613,11 @@ run_stepwise_implementation() {
     # never redoes a successfully checkpointed implementation step.
     if [[ ! -f "$report_done_file" ]]; then
         prompt="$STATE_DIR/implement-report.md"
-        compose_implementation_prompt "$base" "$prompt"
-        {
-            echo
-            echo "## Report-only invocation (no code changes)"
-            echo
-            echo "All implementation steps are complete and checkpointed. Do"
-            echo "not inspect unrelated code, change source files, rerun tests,"
-            echo "or review the implementation. Read IMPLEMENTATION_NOTES.md and"
-            echo "the existing targeted-test evidence only. Then replace"
-            echo "CHANGE_TEST_REPORT.md with its required concise, authoritative"
-            echo "whole-change report. Report only checks that actually ran; mark"
-            echo "anything absent as NOT RUN. Finish immediately after writing it."
-        } >> "$prompt"
+        # Do not append a report-only suffix to the implementation prompt.
+        # The old composition gave this cold recovery stage two incompatible
+        # jobs, causing it to resume code work and leave CHANGE_TEST_REPORT.md
+        # absent. Its sole authority is the dedicated report reconciler prompt.
+        cp "$ROOT/prompts/change/implementation-report.md" "$prompt"
 
         echo
         echo "Implementation report: reconciling checkpointed step evidence."

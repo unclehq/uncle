@@ -66,7 +66,11 @@ done
 case "$model" in
     opus|sonnet|kimi|kimi:*) model="" ;;
 esac
-if [[ -n "${UNCLE_CODEX_MODEL:-}" ]]; then
+# A real explicit --model id wins; the env var is only a fallback for when
+# none was given (or the caller only passed a tier name, treated above as
+# none). This used to run unconditionally, so UNCLE_CODEX_MODEL silently
+# overrode a real caller-specified model every time it was set.
+if [[ -z "$model" && -n "${UNCLE_CODEX_MODEL:-}" ]]; then
     model="$UNCLE_CODEX_MODEL"
 fi
 

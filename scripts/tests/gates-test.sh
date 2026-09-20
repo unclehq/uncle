@@ -349,7 +349,7 @@ run_driver_stdin() {
         WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
         WORKFLOW_PARALLEL_CHECKLIST=0 \
         "$@" \
-        bash -c 'cd "$1"; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/change-workflow.sh' _ "$REPO" \
+        bash -c 'cd "$1"; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/change-workflow.sh ${DRIVER_ARGS:-}' _ "$REPO" \
         < "$stdin_file" > "$OUT" 2>&1
     RC=$?
 }
@@ -1248,7 +1248,7 @@ new_case unattended-revised-plan-is-auto-reapproved-before-implementation
 hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
 hash_file "$REPO/ADVERSARIAL_REVIEW.md" > "$REPO/.uncle/workflow/approvals/ADVERSARIAL_REVIEW.sha256"
 set_state UPDATED_PLAN
-run_driver UNATTENDED=1 WORKFLOW_DIFF_GATE=0 \
+run_driver DRIVER_ARGS='--unattended' WORKFLOW_DIFF_GATE=0 \
     FAKE_REVISE="printf '\nRevised unattended after review.\n' >> CHANGE_PLAN.md"
 expect_not_out 'CHANGE_PLAN.md changed after approval'
 expect_not_out 'Reopening WAIT_PLAN_APPROVAL'
@@ -1309,9 +1309,15 @@ printf 'READY\n' > "$REPO/FINAL_AUDIT.md"
 printf 'app/test.sh\n' > "$REPO/.uncle/workflow/verification.paths"
 printf '%s\tapp/test.sh\n' "$(hash_file "$REPO/app/test.sh")" > "$REPO/.uncle/workflow/verification.manifest"
 set_state FINAL_AUDIT
+# FINAL_AUDIT re-checks TEST_REVIEW.md's own acceptance before trusting a
+# stale audit left from a previous run. A malformed TEST_REVIEW.md now gets
+# one automatic format-only retry (sg-test-review-malformed) before this
+# stops for a person, so a reviewer that is malformed every time settles at
+# VALIDATE_TEST_REVIEW -- where that second, final rejection is detected --
+# not back at FINAL_AUDIT where the first one was only ever observed.
 run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=MALFORMED
 expect_status 1
-expect_state FINAL_AUDIT
+expect_state VALIDATE_TEST_REVIEW
 expect_not_out 'Workflow complete.'
 
 # Even a reported PASS is invalid when the verifier weakens a protected test.
@@ -1541,7 +1547,7 @@ expect_out 'Implementation step 8/8'
 expect_state WAIT_IMPLEMENT_APPROVAL
 expect_no_file '.uncle/workflow/implement-step-done'
 expect_in_file '.uncle/workflow/logs/implementation-step-8.gated-prompt.md' \
-    'driver runs the full regression block once'
+    'regression block once after that invocation'
 
 # Overages preserve the producing stage output without a separate model call.
 new_stagegate_case sg-compact-final-audit

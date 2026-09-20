@@ -265,6 +265,19 @@ if [[ "$SEED_ONLY" == 1 && "$MODE" != change ]]; then
     exit 1
 fi
 
+# --new never has a worktree or branch to work on -- it writes REQUIREMENTS.md
+# in place, often in a fresh directory that is not even a git repository yet.
+# Worktrees default on (WORKTREE=1) for the ordinary --change case, and when
+# --new was given explicitly here rather than left for auto-detection further
+# down, that default must not reach the "needs a real git repo" check just
+# below: a real launch failed with "Not a git repository" over exactly this,
+# for a mode that was never going to touch a worktree at all. An explicit
+# --worktree/--worktree-dir alongside --new is still a contradiction and is
+# still caught by the check directly below this one.
+if [[ "$MODE" == new && "$WORKTREE_EXPLICIT" == 0 ]]; then
+    WORKTREE=0
+fi
+
 # An explicit --worktree with an explicit --new is a contradiction and is caught
 # here, where both were stated. The default case cannot be judged yet: MODE is
 # classified further down, and this once ran before it -- so requesting a

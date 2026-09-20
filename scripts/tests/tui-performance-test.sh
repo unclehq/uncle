@@ -23,6 +23,7 @@ class Screen:
 class Quiet(UncleTUI):
     def __init__(self):
         self.stdscr=Screen(); self.state='config'; self._reload_tick=0; self.draws=[]
+        self._startup_action=None; self._startup_injected=False
     def _setup_colors(self): pass
     def poll_status(self): return False
     def maybe_reload(self): return False

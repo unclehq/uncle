@@ -448,15 +448,43 @@ def validate_reviewer_document(output, document):
 def reviewer_document(response):
     """A reviewer's response with any leading think-aloud removed.
 
-    Deliberately narrower than document_response: no fence handling, no title
-    synthesis, no rejection. The reviewer owns this artifact and the validators
-    downstream judge its content; this only drops text above the first heading,
-    which cannot be part of the document. A response with no heading at all is
-    returned unchanged so the stage's own validator reports the real problem.
+    No title synthesis, no rejection: the reviewer owns this artifact and the
+    validators downstream judge its content. This only drops text that cannot
+    be part of the document. A response with no heading at all is returned
+    unchanged so the stage's own validator reports the real problem.
+
+    A fenced block elsewhere in the response is stronger evidence of "the
+    actual document" than an early line that merely matches the heading regex:
+    a stray fragment of prior analysis ("### ~~MC-005~~ [DELETED: ...]") can
+    look exactly like a heading while being nowhere near the real content,
+    which the model then produced, correctly, inside its own fence further
+    down. Once, a corrupted MANUAL_CHECKLIST.md was exactly this: 37 lines of
+    leftover think-aloud starting with a heading-shaped fragment, then the
+    real checklist fenced in full below it -- and the naive first-heading scan
+    published the whole thing, fence markers included, as the document.
     """
     text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
     lines = text.splitlines()
-    start = next((i for i, line in enumerate(lines) if re.match(r'^#{1,6}\s+\S', line)), None)
+
+    def first_heading(candidate):
+        return next((i for i, line in enumerate(candidate) if re.match(r'^#{1,6}\s+\S', line)), None)
+
+    fence_open = re.compile(r'^(`{3,}|~{3,})(?:markdown|md)?\s*$')
+    for index, line in enumerate(lines):
+        match = fence_open.match(line)
+        if not match:
+            continue
+        fence = match[1]
+        closing = next((j for j in range(index + 1, len(lines)) if lines[j].strip() == fence), None)
+        if closing is None:
+            continue
+        inner = lines[index + 1:closing]
+        inner_start = first_heading(inner)
+        if inner_start is not None:
+            return '\n'.join(inner[inner_start:]).strip() + '\n'
+        break
+
+    start = first_heading(lines)
     if start is None:
         # No heading anywhere. One definition of "is this a document" for every
         # runner lives in reviewer_output; see it for why this check exists.

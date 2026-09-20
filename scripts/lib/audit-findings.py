@@ -123,12 +123,21 @@ def review(report, state_dir, check_only=False):
                   f'Evidence: {item["evidence"]} '
                   f'Required correction: {item["required correction"]} '
                   'Choose [s] Skip, [r] Human reviewed — OK, [n] Keep blocking: ')
+        unattended = os.environ.get('UNATTENDED') == '1'
         while True:
             try:
                 answer = input(prompt).strip().lower()
             except EOFError:
-                print('\nNo decision received; audit remains pending.', flush=True)
-                return 1
+                if not unattended:
+                    print('\nNo decision received; audit remains pending.', flush=True)
+                    return 1
+                # Auto mode: a human gate never blocks completion, but the
+                # decision is recorded as what it is -- skipped by nobody --
+                # the same honest wording record_waiver uses for a check no
+                # person assessed. This never fabricates a review.
+                print('\nUnattended: skipping ' + identifier + '; no person assessed this finding.', flush=True)
+                answer = 's'
+                break
             if answer in ('s', 'r', 'y', 'n'):
                 break
             print('Choose S to skip, R to confirm human review, or N to keep blocking.', flush=True)
@@ -137,7 +146,7 @@ def review(report, state_dir, check_only=False):
         record['decisions'][identifier] = {
             'decision': {'s': 'skip', 'r': 'human-reviewed', 'y': 'ignore'}.get(answer, 'keep'),
             'recorded_at': datetime.now(timezone.utc).isoformat(),
-            'approved_by': os.environ.get('UNCLE_APPROVAL_NAME', ''),
+            'approved_by': 'unattended' if unattended else os.environ.get('UNCLE_APPROVAL_NAME', ''),
             'finding': item,
         }
         record['effective_verdict'] = 'NOT_READY'

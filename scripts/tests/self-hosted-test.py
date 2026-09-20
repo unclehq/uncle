@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'scripts/lib'))
-from self_hosted import read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models, parse_arguments
+from self_hosted import read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models, parse_arguments, reviewer_document
 from process_tree import bash_executable
 
 
@@ -339,6 +339,29 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn('not a valid ADVERSARIAL_REVIEW.md', result.stderr)
         self.assertFalse(out.exists(), 'a compaction summary must never become the review')
+
+    def test_reviewer_document_prefers_a_fenced_block_over_a_stray_leading_heading(self):
+        # A real corruption: think-aloud starting with a heading-shaped
+        # fragment ("### ~~MC-005~~ ...") fooled the naive first-heading scan
+        # into publishing the whole response, fence markers included, as the
+        # document. The real checklist was fenced in full further down.
+        response = (
+            '### ~~MC-005~~ [DELETED: no dormancy/owner-tracking exists]\n'
+            '```\n\n'
+            'Let me reconsider the merged checklist once more before finishing.\n\n'
+            '```markdown\n'
+            '# Manual checklist\n\n'
+            '### MC-001 Real check\n'
+            '- Priority: P0\n'
+            '```\n'
+        )
+        document = reviewer_document(response)
+        self.assertEqual(document, '# Manual checklist\n\n### MC-001 Real check\n- Priority: P0\n')
+
+    def test_reviewer_document_unaffected_by_a_stray_fence_with_no_heading_inside(self):
+        response = '```\nsome unrelated code snippet\n```\n\n# Manual checklist\n\nbody\n'
+        document = reviewer_document(response)
+        self.assertEqual(document, '# Manual checklist\n\nbody\n')
 
     def test_exact_usage_sums_messages_without_console_rounding(self):
         from self_hosted import opencode_usage

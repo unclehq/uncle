@@ -355,7 +355,7 @@ class ParallelImplementationTests(unittest.TestCase):
                 'mkdir -p .uncle/workflow/parallel/notes\n'
                 'printf "step %s handoff\\n" "$n" > ".uncle/workflow/parallel/notes/step-${n}.md"\n')
             request = {'project': str(root), 'owned': {'1': ['1.txt'], '2': ['2.txt']},
-                      'files_allowlist': ['package.json', 'package-lock.json'],
+                      'files_allowlist': ['package.json', 'package-lock.json', 'vite.config.js'],
                       'steps': [
                           {'number': 1, 'log': str(root / 'one.log'),
                            'note': '.uncle/workflow/parallel/notes/step-1.md',

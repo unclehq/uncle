@@ -54,7 +54,7 @@ CONTROLS = (
     ('max_calls_per_run', 'count1', 8),
     ('call_max_cost_usd', 'money', 0.5),
     ('delegate_gates', 'delegate', 'none'),
-    ('files_allowlist', 'filelist', ('package.json', 'package-lock.json')),
+    ('files_allowlist', 'filelist', ('package.json', 'package-lock.json', 'vite.config.js')),
 )
 DELEGATIONS = ('none', 'routine')
 DEFAULTS = {key: default for key, _, default in CONTROLS}

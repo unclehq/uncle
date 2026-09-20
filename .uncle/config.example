@@ -136,10 +136,12 @@ triage.effort low
 #
 # Comma-separated repository-relative paths a parallel implementation step
 # may write without the plan declaring it that step's owner -- a merge
-# otherwise refuses the whole group over any undeclared write. These two are
-# the recurring exception: a step's own `npm install` legitimately rewrites
-# them from a step that never scaffolded them.
-# supervision.files_allowlist package.json,package-lock.json
+# otherwise refuses the whole group over any undeclared write. These are the
+# recurring exceptions: a step's own `npm install` legitimately rewrites
+# package.json/package-lock.json, and a step configuring the dev server or
+# test runner legitimately rewrites vite.config.js, from a step that never
+# scaffolded them.
+# supervision.files_allowlist package.json,package-lock.json,vite.config.js
 #
 # Chat: every message typed into the screen's chat goes to the same
 # supervisor model (runner/model/effort above; claude only), in every state.
@@ -186,7 +188,7 @@ triage.effort low
 # supervision.call_timeout_seconds 300
 # supervision.max_calls_per_run 8
 # supervision.call_max_cost_usd 0.5
-# supervision.files_allowlist package.json,package-lock.json
+# supervision.files_allowlist package.json,package-lock.json,vite.config.js
 
 # Self-hosted Aider runner using an OpenAI-compatible endpoint.
 # Configure → Configure Aider / self hosting: enter Base URL and masked API key.

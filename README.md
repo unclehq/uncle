@@ -370,7 +370,7 @@ supervision.call_timeout_seconds 300
 supervision.max_calls_per_run 8
 supervision.call_max_cost_usd 0.5
 supervision.delegate_gates none
-supervision.files_allowlist package.json,package-lock.json
+supervision.files_allowlist package.json,package-lock.json,vite.config.js
 ```
 
 Only `supervision.runner claude` is currently supported. Use `/delegate` for
@@ -382,9 +382,13 @@ paths that a parallel implementation step may write without the plan having
 declared it as that step's owner. Implementation fan-out otherwise refuses to
 merge a whole group when any step touches a file it did not claim, because an
 unclaimed write usually means the plan's ownership partition was wrong. These
-two files are the recurring exception: a step's own setup command (`npm
-install` adding a dev dependency) legitimately rewrites them from whichever
-step happens to need a new package, not only the step that scaffolded them.
+are the recurring exceptions: a step's own setup command (`npm install`
+adding a dev dependency) legitimately rewrites `package.json`/`package-lock.json`
+from whichever step happens to need a new package, not only the step that
+scaffolded them, and a step configuring the dev server or test runner
+(adding a test plugin, an alias, a proxy) legitimately rewrites
+`vite.config.js` from whichever step needs that configuration, not only the
+step that scaffolded the project.
 
 ### Authority boundary
 

@@ -270,8 +270,8 @@ def merge(project, steps, results, owned, allowlist=()):
     merge of a group that contained one bad step is the worst outcome
     available, because the tree then holds half an abandoned change.
 
-    `allowlist` (supervision.files_allowlist, e.g. package.json and
-    package-lock.json) exempts specific paths from the ownership check
+    `allowlist` (supervision.files_allowlist, e.g. package.json,
+    package-lock.json, and vite.config.js) exempts specific paths from the ownership check
     entirely, regardless of which step wrote them or what any step declared.
     Real plans repeatedly under-declared these: one step scaffolds a manifest,
     a later step's own setup command (`npm install` adding a dev dependency)

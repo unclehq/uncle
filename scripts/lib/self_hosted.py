@@ -247,9 +247,12 @@ def output_token_limit(stage=''):
     OpenCode counts reasoning inside its output limit. An implementation or
     checklist-execution agent can complete edits/tests and reports yet overflow
     an 8K/16K final stream, which incorrectly turns completed on-disk work into
-    a failed stage. Keep review and short document defaults compact, but give
-    long-running code, repair, and checklist-execution stages a 32K first
-    attempt; an explicit operator setting always wins.
+    a failed stage. The same is true of manual-checklist synthesis: it reads
+    every specialist packet from the review panel and writes the whole
+    canonical checklist in one response. Keep review and short document
+    defaults compact, but give long-running code, repair, and
+    checklist-writing/execution stages a 32K first attempt; an explicit
+    operator setting always wins.
     """
     # Dynamic workers inherit the parent stage's size class as well as its
     # configured model. This keeps every self-hosted worker consistent with
@@ -261,7 +264,8 @@ def output_token_limit(stage=''):
     configured = os.environ.get(OUTPUT_TOKENS_ENV)
     if configured:
         return int(configured)
-    return 32768 if stage in ('implementation', 'repair', 'execute-checklist') \
+    return 32768 if stage in ('implementation', 'repair', 'execute-checklist',
+                               'manual-checklist', 'manual-checklist-base', 'manual-checklist-delta') \
         or stage.startswith('implementation-step-') else 8192
 
 

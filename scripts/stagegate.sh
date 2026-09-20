@@ -1373,6 +1373,50 @@ run_updated_plan_panel() {
     printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
 }
 
+run_test_review_panel() {
+    local directory="$STATE_DIR/test-review-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_TEST_REVIEW_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in coverage integrity assertions oracle negative; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/test-review-worker.md" "$prompt"
+        printf '\n## Assigned acceptance-gate row\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens" < /dev/null ) \
+            > "$LOG_DIR/test-review-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || echo 'Test-review panel worker failed; primary review will continue.' >&2
+    done
+    TEST_REVIEW_PROMPT="$directory/synthesis.md"
+    cp "$ROOT/prompts/test-review.md" "$TEST_REVIEW_PROMPT"
+    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `TEST_REVIEW.md`.\n' \
+        "$directory" >> "$TEST_REVIEW_PROMPT"
+}
+
+run_manual_checklist_panel() {
+    local directory="$STATE_DIR/manual-checklist-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in coverage invariants resources regressions; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
+        printf '\n## Assigned checklist lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens" < /dev/null ) \
+            > "$LOG_DIR/manual-checklist-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || echo 'Manual-checklist panel worker failed; primary reviewer will continue.' >&2
+    done
+    MANUAL_CHECKLIST_PROMPT="$directory/synthesis.md"
+    cp "$ROOT/prompts/manual-checklist.md" "$MANUAL_CHECKLIST_PROMPT"
+    printf '\n## Specialist checklist packets\n\nRead available packets in `%s`, verify them, and write the sole canonical checklist.\n' \
+        "$directory" >> "$MANUAL_CHECKLIST_PROMPT"
+}
+
 run_final_audit_panel() {
     local directory="$STATE_DIR/final-audit-panel" lens prompt output pid
     local -a pids=()
@@ -1468,6 +1512,97 @@ run_parallel_implementation_report() {
     touch "$report_marker"
 }
 
+# Independent checklist rows fan out through per-run temporary handoffs. The
+# normal execution stage remains the only canonical report writer. Set to 0
+# only to opt out of agent fan-out.
+PARALLEL_CHECKLIST_WORKERS="${WORKFLOW_PARALLEL_CHECKLIST_WORKERS:-1}"
+
+# Run only the rows that the independent checklist reviewer explicitly placed
+# together. Each worker owns a private evidence file; it never writes the
+# canonical reports or product files. Groups remain barriers, so a row that
+# depends on an earlier group cannot start early. A worker failure is evidence
+# for the synthesizer, not a reason to throw away results from its siblings.
+run_parallel_checklist_workers() {
+    local groups="$PWD/$STATE_DIR/checklist-groups/groups.txt"
+    local directory="" group id prompt evidence
+    local worker_count=0 status pid jobs active=0
+    local -a ids pids pid_ids
+
+    [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
+    jobs="${WORKFLOW_VERIFY_JOBS:-4}"
+    [[ "$jobs" =~ ^[1-8]$ ]] || jobs=4
+    while IFS= read -r group; do
+        set -- $group
+        [[ $# -gt 1 ]] && worker_count=$((worker_count + $#))
+    done < "$groups"
+    [[ "$worker_count" -gt 1 ]] || return 0
+
+    directory="$(mktemp -d "${TMPDIR:-/tmp}/uncle-checklist-workers.XXXXXX")" || return 1
+    mkdir -p "$directory/prompts"
+    {
+        echo '# Parallel checklist worker evidence'
+        echo
+        echo 'Only IDs on the same group line were executed concurrently.'
+        echo 'The final execute-checklist stage is the sole writer of canonical reports.'
+        echo
+    } > "$directory/README.md"
+
+    # Materialize every prompt and the full manifest before launching the first
+    # child. Some runner adapters clean transient stage state as they start;
+    # preparing siblings lazily made that cleanup race this driver's writes.
+    while IFS= read -r group; do
+        read -r -a ids <<< "$group"
+        [[ "${#ids[@]}" -gt 1 ]] || continue
+        for id in "${ids[@]}"; do
+            prompt="$directory/prompts/$id.md"
+            evidence="$directory/$id.md"
+            cp "$ROOT/prompts/change/execute-checklist-worker.md" "$prompt"
+            printf '\n## Assigned check\n\nExecute only `%s`. Write the evidence to `%s`.\n' \
+                "$id" "$evidence" >> "$prompt"
+            # Backticks are Markdown here, not shell command substitution.
+            printf '%s\n' "- $id: \`$evidence\`" >> "$directory/README.md"
+        done
+    done < "$groups"
+
+    while IFS= read -r group; do
+        read -r -a ids <<< "$group"
+        [[ "${#ids[@]}" -gt 1 ]] || continue
+        echo "Checklist worker group: $group"
+        pids=()
+        pid_ids=()
+        for id in "${ids[@]}"; do
+            prompt="$directory/prompts/$id.md"
+            ( SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                run_claude "$prompt" "execute-checklist-worker-$id" \
+            ) > "$LOG_DIR/execute-checklist-worker-$id.log" 2>&1 &
+            pids+=("$!")
+            pid_ids+=("$id")
+            active=$((active + 1))
+            # A wide group is safe, but it still must not exhaust the machine
+            # or the configured provider concurrency. Finish this batch before
+            # launching the next workers in the same approved group.
+            if [[ "$active" -ge "$jobs" ]]; then
+                for ((status = 0; status < ${#pids[@]}; status++)); do
+                    pid="${pids[$status]}"
+                    wait "$pid" || echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run that row." >&2
+                done
+                pids=()
+                pid_ids=()
+                active=0
+            fi
+        done
+        for ((status = 0; status < ${#pids[@]}; status++)); do
+            pid="${pids[$status]}"
+            wait "$pid" || echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run that row." >&2
+        done
+    done < "$groups"
+    CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"
+    cp "$ROOT/prompts/execute-checklist.md" "$CHECKLIST_EXECUTE_PROMPT"
+    printf '\n## Parallel worker handoff\n\nRead `%s` and every listed evidence file before reconciling reports.\n' \
+        "$directory/README.md" >> "$CHECKLIST_EXECUTE_PROMPT"
+    return 0
+}
+
 # Every stage's actual work, with no state transitions and no approval checks,
 # so a stage can be run either in the foreground or speculatively.
 run_stage() {
@@ -1548,14 +1683,15 @@ run_stage() {
                 cp TEST_REVIEW.md "$STATE_DIR/previous-test-review.md"
             fi
             rm -f TEST_REVIEW.md
+            run_test_review_panel
             # A malformed acceptance table gets one local, format-only retry
             # even when optional supervision is disabled. The marker remains
             # after delivery so repeated malformed output stops normally.
-            test_review_prompt=prompts/test-review.md
+            test_review_prompt="${TEST_REVIEW_PROMPT:-prompts/test-review.md}"
             if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then
                 test_review_prompt="$STATE_DIR/test-review-format-retry-prompt.md"
                 {
-                    cat "$ROOT/prompts/test-review.md"
+                    cat "${TEST_REVIEW_PROMPT:-$ROOT/prompts/test-review.md}"
                     printf '\n\n## Required format retry\n\n'
                     cat "$STATE_DIR/test-review-format-retry.md"
                 } > "$test_review_prompt"
@@ -1568,8 +1704,9 @@ run_stage() {
             require_artifact AUTOMATED_TEST_REPORT.md
             ;;
         MANUAL_CHECKLIST)
+            run_manual_checklist_panel
             run_codex_review \
-                prompts/manual-checklist.md \
+                "${MANUAL_CHECKLIST_PROMPT:-prompts/manual-checklist.md}" \
                 MANUAL_CHECKLIST.md \
                 manual-checklist
             ;;
@@ -1579,7 +1716,8 @@ run_stage() {
                 exit 1
             fi
             rm -f VERIFICATION_REPORT.md
-            run_claude prompts/execute-checklist.md execute-checklist
+            run_parallel_checklist_workers
+            run_claude "${CHECKLIST_EXECUTE_PROMPT:-prompts/execute-checklist.md}" execute-checklist
             ;;
         FINAL_AUDIT)
             run_final_audit_panel

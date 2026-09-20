@@ -2078,7 +2078,7 @@ run_checklist_panel() {
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
         cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
         printf '\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass.\n' "$lens" "$kind" >> "$prompt"
-        ( run_codex "$prompt" "$output" "manual-checklist-review-worker-$lens" "$CODEX_EFFORT_CHECKLIST" ) > "$LOG_DIR/manual-checklist-$kind-worker-$lens.log" 2>&1 &
+        ( run_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens" "$CODEX_EFFORT_CHECKLIST" ) > "$LOG_DIR/manual-checklist-$kind-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Checklist panel worker failed; checklist reviewer will continue.' >&2; done

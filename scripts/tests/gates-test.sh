@@ -124,6 +124,16 @@ new_case() {
     printf 'write a checklist\n' > "$REPO/prompts/change/manual-checklist.md"
     printf 'audit it\n'          > "$REPO/prompts/change/final-audit.md"
 
+    # Read-only specialist templates the review/checklist panels fan out to.
+    # A missing template aborts the whole driver under set -e, so every panel
+    # this fixture can reach needs its worker file present, even as a stub.
+    printf 'STUB:worker\n' > "$REPO/prompts/change/adversarial-review-worker.md"
+    printf 'STUB:worker\n' > "$REPO/prompts/change/updated-plan-review-worker.md"
+    printf 'STUB:worker\n' > "$REPO/prompts/change/test-review-worker.md"
+    printf 'STUB:worker\n' > "$REPO/prompts/change/manual-checklist-review-worker.md"
+    printf 'STUB:worker\n' > "$REPO/prompts/change/final-audit-review-worker.md"
+    printf 'STUB:worker\n' > "$REPO/prompts/change/execute-checklist-worker.md"
+
     cat > "$REPO/CHANGE_REQUEST.md" <<'EOF'
 # Change Request
 

@@ -34,6 +34,28 @@ from step_groups import covers                                # noqa: E402
 SKIP = ('.uncle/', '.git/')
 
 
+def ignored_prefixes(root):
+    """Directories/files this sandbox's git status reports as ignored.
+
+    A step's own setup command (`npm install`, `pip install -e .`, ...) fills
+    a gitignored directory with files no plan step ever declared ownership
+    of. Left visible to the merge, that always aborts the group -- "the
+    plan's file ownership was wrong" -- for a directory nobody was ever
+    meant to own. Treating it as invisible to ownership tracking matches how
+    the read-only step-groups probe already excludes it, via
+    `git ls-files --exclude-standard` in step_groups.changed_files.
+
+    Empty when the sandbox is not a git repository (the plain-copy fallback
+    for an unborn project); every path is then tracked exactly as before.
+    """
+    try:
+        output = subprocess.run(['git', 'status', '--porcelain', '-z', '--ignored'],
+                                cwd=root, capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return ()
+    return tuple(entry[3:] for entry in output.decode('utf-8', 'replace').split('\0') if entry[:2] == '!!')
+
+
 def snapshot(root):
     """path -> content hash for every file in the sandbox.
 
@@ -43,11 +65,14 @@ def snapshot(root):
     """
     root = Path(root)
     out = {}
+    ignored = ignored_prefixes(root)
     for path in root.rglob('*'):
         if not path.is_file() or path.is_symlink():
             continue
         rel = path.relative_to(root).as_posix()
         if any(rel.startswith(prefix) for prefix in SKIP):
+            continue
+        if any(rel == prefix or rel.startswith(prefix.rstrip('/') + '/') for prefix in ignored):
             continue
         try:
             out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()

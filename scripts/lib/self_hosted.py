@@ -118,40 +118,17 @@ def refresh_models(keys, base_url, api_key):
     return names
 
 
-def config_stage(stage, values):
-    """The stage whose config lines apply, mirroring uncle_config_stage in stage-config.sh.
-
-    The preview build is not a Configure row; the shell resolver hands it the
-    first configured model stage's runner and model. Reading its own key here
-    instead found nothing and refused the very model the driver had chosen.
-    """
-    if stage in ('manual-checklist-base', 'manual-checklist-delta'):
-        return 'manual-checklist'
-    # Review-panel names contain both "-review-" and "-worker-".  Strip the
-    # complete review-worker suffix before the generic worker case so, for
-    # example, updated-plan-review-worker-scope inherits updated-plan rather
-    # than looking for a nonexistent updated-plan-review config row.
-    if '-review-worker-' in stage:
-        return stage.split('-review-worker-', 1)[0]
-    if '-worker-' in stage:
-        return stage.split('-worker-', 1)[0]
-    if stage.startswith('implementation-step-'):
-        return 'implementation'
-    if stage == 'preview-build' and not values.get('preview-build.model'):
-        for key, value in values.items():
-            if key.endswith('.model') and value and key != 'self-hosted.model':
-                return key[:-len('.model')]
-    return stage
-
-
 def settings(config, stage):
+    if stage in ('manual-checklist-base', 'manual-checklist-delta'):
+        stage = 'manual-checklist'
+    if stage.startswith('implementation-step-'):
+        stage = 'implementation'
     values = {}
     if Path(config).exists():
         for line in Path(config).read_text(encoding='utf-8').splitlines():
             parts = line.split('#', 1)[0].split(None, 1)
             if len(parts) == 2:
                 values.setdefault(*parts)
-    stage = config_stage(stage, values)
     result = {}
     for field in ('base_url', 'model'):
         result[field] = os.environ.get('UNCLE_SELF_HOSTED_' + field.upper()) or values.get(stage + '.' + field) or values.get('self-hosted.' + field, '')
@@ -233,62 +210,6 @@ def opencode_events(path):
     return events
 
 
-OUTPUT_TOKENS_ENV = 'WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS'
-CONTEXT_TOKENS_ENV = 'WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS'
-
-
-class OutputTruncated(ValueError):
-    """The model reached the configured output limit: the response is a fragment."""
-
-
-def output_token_limit(stage=''):
-    """Configured output cap, with room for implementation reasoning.
-
-    OpenCode counts reasoning inside its output limit. An implementation or
-    checklist-execution agent can complete edits/tests and reports yet overflow
-    an 8K/16K final stream, which incorrectly turns completed on-disk work into
-    a failed stage. The same is true of manual-checklist synthesis: it reads
-    every specialist packet from the review panel and writes the whole
-    canonical checklist in one response. An updated plan is the same shape
-    again: it must address or explicitly reject every adversarial finding
-    (disposition rows for every F-/OW-/SCOPE-/V-/AR- id) while preserving the
-    full plan, in one response, over a 16K retry cap once truncated once
-    already. Keep review and short document defaults compact, but give
-    long-running code, repair, checklist-writing/execution, and updated-plan
-    synthesis stages a 32K first attempt; an explicit operator setting
-    always wins.
-    """
-    # Dynamic workers inherit the parent stage's size class as well as its
-    # configured model. This keeps every self-hosted worker consistent with
-    # Claude, Cline, Codex, and Kimi through stage-config.sh.
-    if '-review-worker-' in stage:
-        stage = stage.split('-review-worker-', 1)[0]
-    elif '-worker-' in stage:
-        stage = stage.split('-worker-', 1)[0]
-    configured = os.environ.get(OUTPUT_TOKENS_ENV)
-    if configured:
-        return int(configured)
-    return 32768 if stage in ('implementation', 'repair', 'execute-checklist',
-                               'manual-checklist', 'manual-checklist-base', 'manual-checklist-delta',
-                               'updated-plan', 'updated-change-plan') \
-        or stage.startswith('implementation-step-') else 8192
-
-
-def context_token_limit():
-    return int(os.environ.get(CONTEXT_TOKENS_ENV, '65536'))
-
-
-def ensure_output_complete(usage, limit):
-    """A response that used every output token it was allowed is cut off, not
-    finished -- one review came back as three lines after 8,342 tokens of
-    think-aloud, and was reported as success. output_tokens here includes
-    reasoning tokens, which is what the limit governs."""
-    produced = (usage or {}).get('output_tokens')
-    if isinstance(produced, (int, float)) and not isinstance(produced, bool) and limit > 0 and produced >= limit:
-        raise OutputTruncated('OpenCode output reached the configured limit of %d tokens (%d produced), '
-                              'so the response is incomplete' % (limit, produced))
-
-
 def response_from_events(path):
     events = opencode_events(path)
     if any(event.get('type') == 'error' for event in events):
@@ -297,10 +218,7 @@ def response_from_events(path):
     finished = [event for event in events if event.get('type') == 'step_finish']
     if not texts or not texts[-1].strip() or not finished:
         raise ValueError('OpenCode returned no complete final response')
-    reason = finished[-1].get('part', {}).get('reason')
-    if reason in ('length', 'max_tokens', 'max_output_tokens'):
-        raise OutputTruncated('OpenCode stopped at the output token limit (finish reason %s); the response is incomplete' % reason)
-    if reason not in ('stop', 'end_turn'):
+    if finished[-1].get('part', {}).get('reason') not in ('stop', 'end_turn'):
         raise ValueError('OpenCode stopped before completing the response')
     return texts[-1].strip(), len(finished)
 
@@ -312,8 +230,8 @@ def opencode_invocation(side, values, prompt, root, directory, allow_shell=True)
     request_seconds = int(os.environ.get('WORKFLOW_SELF_HOSTED_REQUEST_SECONDS') or os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600'))
     if request_seconds < 1:
         raise ValueError('WORKFLOW_SELF_HOSTED_REQUEST_SECONDS must be positive')
-    context = context_token_limit()
-    output = output_token_limit(os.environ.get('UNCLE_STATUS_STAGE', ''))
+    context = int(os.environ.get('WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS', '65536'))
+    output = int(os.environ.get('WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS', '8192'))
     if not 0 < output < context:
         raise ValueError('Model limits require 0 < output tokens < context tokens')
     permission = {'*': 'deny', 'read': {'*': 'allow', '*.env': 'deny', '*.env.*': 'deny',
@@ -412,112 +330,18 @@ def validate_plan(text, protected=True):
             raise ValueError('Plan requires one complete, nonempty fenced block under ' + required)
 
 
-REVIEW_VALIDATORS = {
-    'ADVERSARIAL_REVIEW.md': 'adversarial-context.py',
-    'FINAL_AUDIT.md': 'final-audit-context.py',
-    'MANUAL_CHECKLIST.md': 'checklist_document.py',
-}
-
-
-class InvalidReviewerDocument(ValueError):
-    """The reviewer's final message is not the document the stage owns."""
-
-
-# Text that can only come from the driver's own terminal/log narration, never
-# from a reviewer's document, whatever its schema. A verbose self-hosted model
-# has echoed a prior turn's tool-log/driver output back inside its own
-# response before, and the fenced-document extraction in reviewer_document()
-# does not defend against garbage placed outside any fence at all. Catching
-# it here, generically, means every reviewer artifact gets this guard, not
-# only the ones with a dedicated per-document format validator below.
-DRIVER_NARRATION_MARKERS = (
-    '{"type": "result"',
-    'Current workflow state:',
-    'System: Workflow stopped',
-    'Recovery: ask about the failure',
-)
-
-
-def validate_reviewer_document(output, document):
-    """Run the artifact's own format validator on the candidate text.
-
-    A reviewer's artifact is its last message, and its last message is not
-    always the review: after OpenCode compacts a full context the model
-    answers the compaction prompt -- "what did we do so far" -- and that
-    summary was written as ADVERSARIAL_REVIEW.md. The agent path already
-    validates a plan before publishing it; the reviewer path published
-    whatever came back.
-    """
-    marker = next((m for m in DRIVER_NARRATION_MARKERS if m in document), None)
-    if marker:
-        raise InvalidReviewerDocument(
-            'Reviewer response is not a valid %s: contains driver narration (%r), not the document itself'
-            % (Path(output).name, marker))
-    validator = REVIEW_VALIDATORS.get(Path(output).name)
-    if not validator:
-        return
-    with tempfile.NamedTemporaryFile('w', suffix='.md', prefix='reviewer-candidate-', delete=False, encoding='utf-8') as handle:
-        handle.write(document)
-        candidate = handle.name
-    try:
-        result = subprocess.run([sys.executable, '-B', str(Path(__file__).parent / validator), '--validate', candidate],
-                                capture_output=True, text=True, timeout=60)
-    finally:
-        os.unlink(candidate)
-    if result.returncode:
-        reason = (result.stderr or result.stdout).strip().splitlines()
-        reason = reason[0] if reason else 'validator rejected the document'
-        reason = reason.split('. Correct the saved')[0]
-        raise InvalidReviewerDocument('Reviewer response is not a valid %s: %s' % (Path(output).name, reason))
-
-
 def reviewer_document(response):
     """A reviewer's response with any leading think-aloud removed.
 
-    No title synthesis, no rejection: the reviewer owns this artifact and the
-    validators downstream judge its content. This only drops text that cannot
-    be part of the document. A response with no heading at all is returned
-    unchanged so the stage's own validator reports the real problem.
-
-    A fenced block elsewhere in the response is stronger evidence of "the
-    actual document" than an early line that merely matches the heading regex:
-    a stray fragment of prior analysis ("### ~~MC-005~~ [DELETED: ...]") can
-    look exactly like a heading while being nowhere near the real content,
-    which the model then produced, correctly, inside its own fence further
-    down. Once, a corrupted MANUAL_CHECKLIST.md was exactly this: 37 lines of
-    leftover think-aloud starting with a heading-shaped fragment, then the
-    real checklist fenced in full below it -- and the naive first-heading scan
-    published the whole thing, fence markers included, as the document.
+    Deliberately narrower than document_response: no fence handling, no title
+    synthesis, no rejection. The reviewer owns this artifact and the validators
+    downstream judge its content; this only drops text above the first heading,
+    which cannot be part of the document. A response with no heading at all is
+    returned unchanged so the stage's own validator reports the real problem.
     """
     text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
     lines = text.splitlines()
-
-    def first_heading(candidate):
-        return next((i for i, line in enumerate(candidate) if re.match(r'^#{1,6}\s+\S', line)), None)
-
-    # Check every closed fence, not just the first: a verbose response can
-    # wrap throwaway commentary, a stub outline, or tool-call narration in an
-    # earlier bare fence before the real document's own fence further down.
-    # Stopping at the first fence that doesn't qualify abandoned fence-scanning
-    # entirely and fell through to the naive whole-response scan below, which
-    # is exactly how a real MANUAL_CHECKLIST.md landed on disk as a stub
-    # table of contents followed by narration and JSON tool-log blobs: the
-    # real, complete, fenced checklist further down was never even looked at.
-    fence_open = re.compile(r'^(`{3,}|~{3,})(?:markdown|md)?\s*$')
-    for index, line in enumerate(lines):
-        match = fence_open.match(line)
-        if not match:
-            continue
-        fence = match[1]
-        closing = next((j for j in range(index + 1, len(lines)) if lines[j].strip() == fence), None)
-        if closing is None:
-            continue
-        inner = lines[index + 1:closing]
-        inner_start = first_heading(inner)
-        if inner_start is not None:
-            return '\n'.join(inner[inner_start:]).strip() + '\n'
-
-    start = first_heading(lines)
+    start = next((i for i, line in enumerate(lines) if re.match(r'^#{1,6}\s+\S', line)), None)
     if start is None:
         # No heading anywhere. One definition of "is this a document" for every
         # runner lives in reviewer_output; see it for why this check exists.
@@ -682,8 +506,6 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
                 native_run(adapter, directory, values=values, root=root, allow_shell=allow_shell)
                 if not adapter.answer.strip():
                     raise ValueError('OpenCode returned no response')
-                ensure_output_complete({'output_tokens': adapter.usage.get('output_tokens')},
-                                       output_token_limit(os.environ.get('UNCLE_STATUS_STAGE', '')))
                 return adapter.final_answer or adapter.answer, 1
             finally:
                 adapter.parent_watch_stop.set()
@@ -734,7 +556,6 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
                 if re.search(r'APITimeoutError|litellm\.Timeout|provider timed out', diagnostic, re.I):
                     raise ValueError('Model API requests timed out without a response; check model-server logs, capacity, and proxy timeouts') from None
                 raise
-            ensure_output_complete(opencode_usage(Path(directory)/'output.log'), output_token_limit())
             return response, turns
         except (ValueError, OSError) as error:
             try:
@@ -751,11 +572,7 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
                     stream.write(str(error) + '\n\n' + (detail or 'OpenCode produced no console output.\n'))
             except OSError:
                 raise error
-            # Keep the type: a truncation must still read as one to the retry in
-            # main(), and an OSError as an OSError to its callers.
-            wrapped = type(error)(str(error) + '; diagnostic log: ' + saved) if isinstance(error, ValueError) \
-                else ValueError(str(error) + '; diagnostic log: ' + saved)
-            raise wrapped from None
+            raise ValueError(str(error) + '; diagnostic log: ' + saved) from None
 
 
 def profile_menu(config, choose=False):
@@ -815,67 +632,11 @@ def main(side, args):
             stream.write(json.dumps({'event':'start','stage':stage,'model':local_model(values['model']),
                                      'mode':'act' if side=='agent' else 'review'})+'\n')
     usage = {}
-    def add_usage(attempt_usage):
-        for key, value in attempt_usage.items():
-            if isinstance(value, (int, float)) and isinstance(usage.get(key, 0), (int, float)):
-                usage[key] = usage.get(key, 0) + value
-            else:
-                usage[key] = value
-    truncation_retried = format_retried = False
-    document = None
-    while True:
-        attempt_usage = {}
-        try:
-            text, turns = run_opencode(side, values, prompt, Path.cwd().resolve(), stage=stage, usage=attempt_usage)
-            add_usage(attempt_usage)
-            if side == 'reviewer' and output:
-                document = reviewer_document(text)
-                validate_reviewer_document(output, document)
-        except OutputTruncated as error:
-            add_usage(attempt_usage)
-            # A fragment reported as success is what the whole stage then
-            # adopts. Once, the cap is doubled and the stage rerun; a second
-            # fragment is the failure it always was.
-            limit = output_token_limit(stage)
-            larger = min(limit * 2, context_token_limit() - 1024)
-            if truncation_retried or larger <= limit:
-                error.opencode_usage = usage
-                raise
-            truncation_retried = True
-            print('Self hosted: %s. Retrying once with an output limit of %d tokens.' % (error, larger), file=sys.stderr)
-            os.environ[OUTPUT_TOKENS_ENV] = str(larger)
-            continue
-        except InvalidReviewerDocument as error:
-            # Not the document: a compaction summary, a findings table with a
-            # "next step" of writing the review, a fragment. Keep it in the
-            # logs as evidence, and ask once more in a fresh session; never
-            # publish it as the reviewer-owned artifact.
-            logs = Path.cwd() / '.uncle/workflow/logs'
-            logs.mkdir(parents=True, exist_ok=True)
-            fd, rejected = tempfile.mkstemp(prefix=Path(output).stem.lower() + '-rejected-', suffix='.md', dir=logs)
-            with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
-                stream.write(text)
-            if format_retried:
-                error.opencode_usage = usage
-                raise InvalidReviewerDocument(str(error) + '; rejected response saved to ' + rejected) from None
-            format_retried = True
-            print('Self hosted: %s. Rejected response saved to %s; retrying once.' % (error, rejected), file=sys.stderr)
-            # Generic on purpose: this path serves every reviewer document
-            # (adversarial review, test review, manual checklist, final audit,
-            # ...), each with its own heading/table schema from the original
-            # prompt. Hardcoding one document's shape here previously sent a
-            # checklist or audit retry the adversarial-review finding format,
-            # steering an already-struggling model further off course.
-            prompt += ('\n\nThe previous response was rejected: ' + str(error) +
-                       '\nReturn only the complete ' + Path(output).name + ' as your final message, in the '
-                       'exact layout already specified above. Do not summarize your work, describe a plan to '
-                       'write it, or promise to produce it later. You have no write or shell tools in this role; '
-                       'the document text you return is the only artifact.')
-            continue
-        except (ValueError, OSError) as error:
-            error.opencode_usage = attempt_usage
-            raise
-        break
+    try:
+        text, turns = run_opencode(side, values, prompt, Path.cwd().resolve(), stage=stage, usage=usage)
+    except (ValueError, OSError) as error:
+        error.opencode_usage = usage
+        raise
     if side == 'reviewer':
         if output:
             # A reviewer's document is its final message, so any think-aloud the
@@ -884,7 +645,7 @@ def main(side, args):
             # and a reviewer-owned artifact is the one thing no later stage may
             # edit. Strip here, and only when a document is actually present --
             # a response with no heading is a real failure, not a preamble.
-            Path(output).write_bytes((document if document is not None else reviewer_document(text)).encode('utf-8'))
+            Path(output).write_bytes(reviewer_document(text).encode('utf-8'))
         print(text)
         if usage:
             print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,

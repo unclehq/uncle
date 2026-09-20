@@ -29,20 +29,6 @@ CHANGE_PLAN.md already tells you which files are expected to change,
 what behavioral differences to expect, and what must stay the same. Write every
 check from that.
 
-## Scope boundary (binding)
-
-Only create checks that trace to a requested behavior, acceptance criterion,
-changed component, or explicitly preserved behavior in the approved change
-documents. Do not add generic repository-health, workflow, supervisor,
-credential, GitHub, publishing, commit, or signing checks merely because those
-topics appear in source or tests. They belong to the operator or Uncle itself,
-not to an unrelated project change, unless the approved documents explicitly
-make one of them in scope.
-
-`claude` being available through its normal web-login session is sufficient.
-Never require `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or another API
-token unless the approved change explicitly requires API-key authentication.
-
 Do not modify any file.
 Do not claim any check passed.
 

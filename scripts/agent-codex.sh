@@ -66,11 +66,7 @@ done
 case "$model" in
     opus|sonnet|kimi|kimi:*) model="" ;;
 esac
-# A real explicit --model id wins; the env var is only a fallback for when
-# none was given (or the caller only passed a tier name, treated above as
-# none). This used to run unconditionally, so UNCLE_CODEX_MODEL silently
-# overrode a real caller-specified model every time it was set.
-if [[ -z "$model" && -n "${UNCLE_CODEX_MODEL:-}" ]]; then
+if [[ -n "${UNCLE_CODEX_MODEL:-}" ]]; then
     model="$UNCLE_CODEX_MODEL"
 fi
 
@@ -80,21 +76,16 @@ if [[ -z "$prompt" ]]; then
     exit 2
 fi
 
-# Implementation defaults to workspace-write. The isolated supervisor reuses
-# this stream adapter with UNCLE_CODEX_SANDBOX=read-only, so it can never turn
-# a diagnostic/chat response into a workspace mutation.
-sandbox="${UNCLE_CODEX_SANDBOX:-workspace-write}"
-case "$sandbox" in
-    workspace-write|read-only) ;;
-    *) echo "agent-codex.sh: unsupported sandbox: $sandbox" >&2; exit 2 ;;
-esac
-args=(exec --json --ephemeral --skip-git-repo-check --sandbox "$sandbox")
+# workspace-write, not read-only: this is an implementing stage. Not
+# --dangerously-bypass-approvals-and-sandbox — the whole point of this
+# workflow is that an agent stays inside a boundary.
+args=(exec --json --ephemeral --skip-git-repo-check --sandbox workspace-write)
 
 # workspace-write denies network access unless codex is configured otherwise,
 # and that denial covers binding a loopback port -- so a stage that has to
 # serve the site it is verifying cannot start its own server. The driver sets
 # this from <stage>.network, which is false unless an operator turned it on.
-if [[ "$sandbox" == "workspace-write" && "${UNCLE_STAGE_NETWORK:-false}" == "true" ]]; then
+if [[ "${UNCLE_STAGE_NETWORK:-false}" == "true" ]]; then
     args+=(-c sandbox_workspace_write.network_access=true)
 fi
 if [[ -n "$model" ]]; then

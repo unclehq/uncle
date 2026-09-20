@@ -23,10 +23,8 @@ What you can do:
 
 ## Reply
 
-Reply with exactly one bare JSON object and nothing else. Begin with `{` and
-end with `}`. Do not wrap it in Markdown under any circumstances: no JSON or
-Swift code fence (including four-backtick fences), prose, explanation, or
-label before or after it. Keys are exactly these; every key must be present:
+Reply with exactly one JSON object and nothing else: no prose before or after
+it, no code fence. Keys are exactly these; every key must be present:
 
 ```
 {

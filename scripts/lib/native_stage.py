@@ -438,16 +438,7 @@ class Stage:
                     completed_usage[key] += (e.get('usage') or {}).get(key,0) or 0
                 live_usage.clear()
                 self.tokens(completed_usage,e.get('total_cost_usd'),inclusive=False)
-                if e.get('is_error'):
-                    # Claude sometimes returns the unusable detail "success"
-                    # for an account/session-limit refusal, while its final
-                    # assistant message contains the actionable reason. Never
-                    # surface that as a mysterious successful implementation
-                    # failure or hand it to the supervisor as such.
-                    detail = e.get('error_detail') or e.get('errors')
-                    if not detail or str(detail).strip().lower() == 'success':
-                        detail = self.final_answer or e.get('subtype')
-                    raise ValueError(str(detail))
+                if e.get('is_error'): raise ValueError(str(e.get('errors') or e.get('subtype')))
                 self.responded(e.get('uuid') or e.get('session_id'))
                 outstanding -= 1
                 return outstanding <= 0 and not self.pending

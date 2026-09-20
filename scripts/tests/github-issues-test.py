@@ -130,39 +130,5 @@ class Issues(unittest.TestCase):
             self.assertIn('Loading',ui.chat_error)
             self.assertFalse(ui.chat.messages)
 
-    def test_slash_command_hash_argument_wins_over_the_issue_picker(self):
-        """A #N in ordinary text opens the picker; the same #N as a slash
-        command's own argument (`/resume #N`, `/clear #N`) must still reach
-        the command, not be swallowed as an issue mention to confirm."""
-        import uncle_tui as tui
-        with tempfile.TemporaryDirectory() as root, patch.object(tui,'_project_root',return_value=root):
-            ui=tui.UncleTUI.__new__(tui.UncleTUI)
-            ui.state='menu';ui.proc=None
-            ui._ensure_chat()
-            ui.issue_picker=issues.IssuePicker(root)
-            ui.issue_picker.load=Mock()
-            ui.issue_picker.items=[{'number':69,'title':'Some issue'}]
-            ui._resume_build=Mock(return_value='resumed!')
-            ui._clear_build=Mock(return_value='cleared!')
-            ui.send_home_chat=Mock()
-            ui.chat_composer='/resume #69'
-            ui._chat_suggestions()
-            self.assertTrue(ui.chat_picker, 'the #N still opens the picker while typing')
-            ui.handle_key(10)
-            ui._resume_build.assert_called_once_with('#69')
-            ui.send_home_chat.assert_not_called()
-            self.assertEqual(ui.chat_composer,'')
-            ui.chat_composer='/clear #69'
-            ui._chat_suggestions()
-            ui.handle_key(10)
-            ui._clear_build.assert_called_once_with('#69')
-            ui.send_home_chat.assert_not_called()
-            # Ordinary text mentioning an issue is unaffected: it still goes
-            # through the picker's own confirm-and-send path.
-            ui.chat_composer='fix #69 please'
-            ui._chat_suggestions()
-            ui.handle_key(10)
-            ui.send_home_chat.assert_called_once_with('fix #69 please')
-
 
 if __name__=='__main__': unittest.main()

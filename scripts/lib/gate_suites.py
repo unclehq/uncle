@@ -12,4 +12,4 @@ if __name__ == '__main__':
              'waiver-integrity', 'driver-syntax']
     commands = {f'gates-{names[group - 1]}': [bash_executable(), sys.argv[1], '--group', str(group)]
                 for group in range(first, 15)}
-    raise SystemExit(run_commands(int(os.environ.get('WORKFLOW_TEST_JOBS', '8')), commands))
+    raise SystemExit(run_commands(int(os.environ.get('WORKFLOW_TEST_JOBS', '4')), commands))

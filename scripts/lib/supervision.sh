@@ -2,8 +2,8 @@
 # Driver-side supervision hooks: status events for validators, and retained
 # corrections appended to a stage prompt on a permitted retry.
 #
-# Everything here is active by default; `supervision.enabled false` in the
-# project's .uncle/config disables it. Events are additive JSON lines on the status
+# Everything here is inert unless `supervision.enabled true` is in the
+# project's .uncle/config. Events are additive JSON lines on the status
 # channel the TUI already reads; with no UNCLE_STATUS_FILE nothing is written.
 # The prompt a stage reads is byte-identical to today's unless supervision is
 # enabled and a note for this exact run and state exists.
@@ -16,22 +16,21 @@ supervision_config_file() {
     printf '%s' "${UNCLE_CONFIG:-${PROJECT_ROOT:-$PWD}/.uncle/config}"
 }
 
-# supervision_enabled -- enabled by default, with an explicit config opt-out.
+# supervision_enabled -- exit 0 when the config says so, without any other lib.
 supervision_enabled() {
     local file line
     file="$(supervision_config_file)"
-    [[ -s "$file" ]] || return 0
+    [[ -s "$file" ]] || return 1
     while IFS= read -r line; do
         line="${line%%#*}"
         line="$(printf '%s' "$line" | tr -s '[:space:]' ' ')"
         line="${line# }"
         line="${line% }"
-        case "$line" in
-            'supervision.enabled false') return 1 ;;
-            'supervision.enabled true') return 0 ;;
-        esac
+        if [[ "$line" == "supervision.enabled true" ]]; then
+            return 0
+        fi
     done < "$file"
-    return 0
+    return 1
 }
 
 # supervision_event <event> [key=value ...] -- one status line; never fails the caller.

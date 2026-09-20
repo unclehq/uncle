@@ -1,7 +1,6 @@
-"""Event-triggered supervision: detection, journal, validation, delivery.
+"""Optional event-triggered supervision: detection, journal, validation, delivery.
 
-Supervision is enabled unless `.uncle/config` explicitly sets
-`supervision.enabled false`. The
+Nothing here runs unless `supervision.enabled true` is in .uncle/config. The
 Controller observes the same status events the TUI already reads, fires one
 of four triggers, and asks a tool-free worker for one strict-JSON proposal.
 A proposal never carries instructions: it selects a fixed template, cites
@@ -24,7 +23,7 @@ SUBDIR = 'supervision'
 EFFORTS = ('low', 'medium', 'high')
 ACTIONS = ('steer', 'retry', 'ask', 'none')
 TRIGGERS = ('validation', 'recurrence', 'steering', 'overrun')
-SUPPORTED_RUNNERS = ('claude', 'cline', 'codex', 'kimi', 'self-hosted')
+SUPPORTED_RUNNERS = ('claude',)
 PROPOSAL_KEYS = ('schema', 'diagnosis', 'evidence', 'action', 'target_stage', 'attempt',
                  'run_id', 'template_id', 'rationale')
 MAX_DIAGNOSIS = 2000
@@ -42,7 +41,7 @@ CORRELATED = ('turn', 'message', 'marker')
 # Typed controls: key -> (kind, default). Every key is documented in
 # .uncle/config.example and README.md; AT-9 checks that list against this one.
 CONTROLS = (
-    ('enabled', 'bool', True),
+    ('enabled', 'bool', False),
     ('runner', 'runner', 'claude'),
     ('model', 'text', 'sonnet'),
     ('effort', 'effort', 'medium'),
@@ -54,7 +53,6 @@ CONTROLS = (
     ('max_calls_per_run', 'count1', 8),
     ('call_max_cost_usd', 'money', 0.5),
     ('delegate_gates', 'delegate', 'none'),
-    ('files_allowlist', 'filelist', ('package.json', 'package-lock.json', 'vite.config.js')),
 )
 DELEGATIONS = ('none', 'routine')
 DEFAULTS = {key: default for key, _, default in CONTROLS}
@@ -112,12 +110,6 @@ def parse_value(key, raw):
         if text and re.fullmatch(r'[A-Za-z0-9._/:-]+', text):
             return text
         raise ValueError('supervision.%s must be a nonempty token' % key)
-    if kind == 'filelist':
-        items = [item.strip() for item in text.split(',') if item.strip()]
-        for item in items:
-            if not re.fullmatch(r'[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*', item) or '..' in item.split('/'):
-                raise ValueError('supervision.%s must be a comma-separated list of relative paths' % key)
-        return tuple(items)
     if kind in ('count0', 'count1'):
         if not re.fullmatch(r'[0-9]+', text):
             raise ValueError('supervision.%s must be a nonnegative integer' % key)
@@ -141,8 +133,6 @@ def format_value(key, value):
         return 'true' if value else 'false'
     if KINDS.get(key) == 'money':
         return ('%.4f' % value).rstrip('0').rstrip('.')
-    if KINDS.get(key) == 'filelist':
-        return ','.join(value)
     return str(value)
 
 
@@ -1549,15 +1539,7 @@ class Controller:
 
 def load_contract(root):
     path = Path(root) / 'prompts' / 'supervise.md'
-    # A copied/minimal project may omit the optional supervisor prompt.  That
-    # must not make a default-on supervisor abort the workflow before it has
-    # even observed an event.  A later diagnosis gets an explicit, bounded
-    # unavailable result from its runner rather than an uncaught startup error.
-    try:
-        return path.read_text(encoding='utf-8')
-    except OSError:
-        return ('Supervisor contract unavailable: the installed prompt is missing. '
-                'Return action none.')
+    return path.read_text(encoding='utf-8')
 
 
 class HeadlessHost:
@@ -1731,16 +1713,13 @@ def supervised_lock_run(run_once, command, state_dir, root, environ=None):
                     thread.join(timeout=5)
                 host.exit_code = rc
                 host.poll()
-                retry = host.settle(host.controller.config.call_timeout_seconds + 5)
-                if not retry:
+                if not host.settle(host.controller.config.call_timeout_seconds + 5):
                     return rc
                 # A validator fails after the driver has durably advanced to a
                 # VALIDATE_* state. Re-enter the stage itself so the retained
                 # correction is included in a fresh model call instead of
                 # merely re-running the same deterministic validator.
                 stage = host.controller.stage
-                if not stage:
-                    return rc
                 request = Path(state_dir) / 'rerun-request.json'
                 atomic_write(request, json.dumps({'stage': stage, 'source': 'supervisor-retry'}) + '\n')
                 host.transcript('Retrying the driver with the retained correction.')

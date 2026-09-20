@@ -39,7 +39,7 @@ except ImportError:  # Windows has no curses in the stdlib
 ROOT = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
 from completion_preview import CompletionPreview, STAR_URL, launch_spec
-from preview_server import DevelopmentPreview, PreviewServer, development_preview
+from preview_server import PreviewServer
 from chat import Conversation, sanitize
 from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
@@ -153,7 +153,6 @@ STAGES = [
     ("updated-change-plan", AGENT),
     ("preflight", AGENT),
     ("implementation", AGENT),
-    ("repair", AGENT),
     ("test-review", REVIEWER),
     ("manual-checklist", REVIEWER),
     ("execute-checklist", AGENT),
@@ -182,23 +181,12 @@ REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi", "self-hosted"]
 DEFAULT_RUNNER = ""
 DEFAULT_EFFORT = "low"
 
-def parent_stage(stage):
-    """Return the configured parent for a driver-created stage name."""
-    if "-review-worker-" in stage:
-        return stage.split("-review-worker-", 1)[0]
-    if "-worker-" in stage:
-        return stage.split("-worker-", 1)[0]
-    if stage.startswith("implementation-step-"):
-        return "implementation"
-    if stage in ("manual-checklist-base", "manual-checklist-delta"):
-        return "manual-checklist"
-    return stage
-
 def default_stage_effort(stage):
-    stage = parent_stage(stage)
+    if stage.startswith("implementation-step-"):
+        stage = "implementation"
     if stage == "plan-executability":
         stage = "adversarial-review"
-    return "medium" if stage in ("adversarial-review", "project-plan", "implementation", "repair") else DEFAULT_EFFORT
+    return "medium" if stage in ("adversarial-review", "project-plan", "implementation") else DEFAULT_EFFORT
 
 DEFAULT_CLINE_MODEL = "cline-pass/deepseek-v4-pro"
 
@@ -228,38 +216,6 @@ MODEL_CATALOG_CLINEPASS = [
         ("MiniMax-M3", "cline-pass/minimax-m3"),
         ("MiMo-V2.5-Pro", "cline-pass/mimo-v2.5-pro"),
         ("MiMo-V2.5", "cline-pass/mimo-v2.5"),
-    ]),
-]
-
-# Non-cline runners take no billing flag and keep no account state of ours;
-# each catalogue below is that vendor's own ids, grouped like the cline
-# lists. Every id must pass its runner shim's filter: the claude ids match
-# reviewer-claude.sh's allowlist (claude*|opus*|sonnet*|haiku*) and the codex
-# ids are not in agent-codex.sh's blanked-tier set (opus|sonnet|o3|kimi|kimi:*),
-# so the picker never offers an id the shim would silently replace or drop.
-MODEL_CATALOG_CLAUDE = [
-    ("Claude", [
-        ("Claude Opus 5", "claude-opus-5"),
-        ("Claude Sonnet 5", "claude-sonnet-5"),
-        ("Claude Haiku 4.5", "claude-haiku-4-5"),
-    ]),
-]
-
-MODEL_CATALOG_CODEX = [
-    ("Codex", [
-        ("GPT-5.1 Codex", "gpt-5.1-codex"),
-        ("GPT-5.1 Codex Mini", "gpt-5.1-codex-mini"),
-    ]),
-]
-
-# Kimi ids are stored raw; the shell exports them via WORKFLOW_KIMI_MODEL and
-# hands agent-kimi.sh the dispatch token instead (stage-config.sh).
-MODEL_CATALOG_KIMI = [
-    ("Kimi", [
-        ("Kimi K2.7 Code Highspeed", "moonshot-ai/kimi-k2.7-code-highspeed"),
-        ("Kimi K2.6", "moonshot-ai/kimi-k2.6"),
-        # `moonshot-ai/kimi-k3` is already in MODEL_CATALOG_USAGE_PAID; one
-        # id gets one label, so it is not repeated here.
     ]),
 ]
 
@@ -318,19 +274,6 @@ DEFAULT_MODEL_FOR_BILLING = {
     CLINE_USAGE: "deepseek/deepseek-v4-flash",
 }
 
-# What the other runners run when the stage stores no model. Claude's
-# "opus" is the tier alias the drivers have always defaulted to
-# (stagegate.sh's DEFAULT_MODEL, reviewer-claude.sh's DEFAULT_MODEL);
-# agent-codex.sh blanks it for codex, so it reaches only claude. Codex has
-# no repo-level default: agent-codex.sh omits the flag and the CLI's own
-# configured model applies. Kimi's shim defaults WORKFLOW_KIMI_MODEL to this
-# raw id (agent-kimi.sh).
-DEFAULT_MODEL_FOR_RUNNER = {
-    "claude": "opus",
-    "codex": "codex default",
-    "kimi": "moonshot-ai/kimi-k2.7-code-highspeed",
-}
-
 
 def model_catalog(billing):
     """The picker's groups for one billing choice, free models included."""
@@ -361,22 +304,13 @@ def model_suits_billing(model, billing):
 
 MODEL_CATALOG = MODEL_CATALOG_CLINEPASS + MODEL_CATALOG_USAGE_PAID + MODEL_CATALOG_FREE
 
-# id -> label, for the picker's display column and its filter. Ids are unique
-# across all six catalogues, so one flat map covers both cline and the
-# per-runner vendor lists.
-MODEL_LABELS = {mid: label
-                for _, entries in (MODEL_CATALOG + MODEL_CATALOG_CLAUDE
-                                   + MODEL_CATALOG_CODEX + MODEL_CATALOG_KIMI)
-                for label, mid in entries}
+# id -> label, for the picker's display column and its filter.
+MODEL_LABELS = {mid: label for _, entries in MODEL_CATALOG for label, mid in entries}
 
 
-def valid_model_id(value, runner="cline"):
-    """cline model ids are `modelType/model`; an empty value means its default.
-    Claude, codex, and kimi ids have no separator rule; they only have to name
-    a model."""
-    if runner == "cline":
-        return not value or "/" in value
-    return bool(value)
+def valid_model_id(value):
+    """cline model ids are `modelType/model`; an empty value means its default."""
+    return not value or "/" in value
 
 # Full description for each Configure item. Only the description of the row
 # currently under the cursor is shown, in a panel to the right of the options.
@@ -400,9 +334,9 @@ CONFIG_DESC = {
         "run an agent stage, where they write code; cline, codex, claude, and kimi "
         "can run the read-only reviewer stages. Each stage picks its own, so a cheap model "
         "can transcribe requirements while a strong one plans, and the "
-        "reviewer can be a different program from the implementer. Every "
-        "runner takes a model below; left empty, the stage uses that "
-        "runner's own default."
+        "reviewer can be a different program from the implementer. Only cline "
+        "takes a model below: claude, kimi, and codex are given no model flag "
+        "and use their own default."
     ),
     "field:effort": (
         "Reasoning effort for this stage: high, medium, or low. Higher effort "
@@ -432,11 +366,11 @@ CONFIG_DESC = {
     "field:base_url": "The OpenAI-compatible API root OpenCode should use, for example http://localhost:8000/v1.",
     "field:api_key": "Endpoint credential, hidden while editing and stored separately in .uncle/self-hosted-keys.json. Use a placeholder for a server without authentication.",
     "field:model": (
-        "The model this stage runs. For cline that is a `modelType/model` "
-        "id (for example cline-pass/kimi-k3); claude, codex, and kimi take "
-        "the vendor's own id and are not held to the `/` form. Left empty, "
-        "the stage uses the runner's default. A display name such as "
-        "\"Kimi K3\" is not an id and is refused before the stage starts."
+        "The cline model this stage runs, as a `modelType/model` id (for "
+        "example cline-pass/kimi-k3). Shown only when the runner is cline, "
+        "because it is the only runner uncle passes a model to. A display "
+        "name such as \"Kimi K3\" is not an id and is refused before the "
+        "stage starts."
     ),
     "adversarial-review": (
         "The reviewer stage that attacks the plan before any code is written, "
@@ -500,12 +434,6 @@ CONFIG_DESC = {
         "correctness and respect for existing conventions matter most. Set a "
         "model you trust for coding, or leave it at (default) to use the "
         "global model."
-    ),
-    "repair": (
-        "Fixes what an independent test review or verification run rejected, "
-        "then goes back through the driver checks, the diff gate and review. "
-        "Judged by the files it changes, not by its report. Leave it at "
-        "(default) to inherit the implementation setting."
     ),
     "execute-checklist": (
         "Runs the manual checklist against the finished implementation and "
@@ -680,7 +608,6 @@ SUPERVISION_DESC = {
     "max_calls_per_run": "Supervisor calls allowed per workflow run, counted before each spawn (default 8).",
     "call_max_cost_usd": "Dollar cap passed to each supervisor call (default 0.50).",
     "delegate_gates": "Standing delegation for routine dialogs (none/routine). With routine, the supervisor answers document approvals, audit findings and press-Enter prompts once each as they open, recorded as supervisor:standing. Signing, publication and waiver gates always need your explicit ask in chat.",
-    "files_allowlist": "Comma-separated repository-relative paths (default package.json,package-lock.json,vite.config.js) that a parallel implementation step may write without declaring ownership. A merge normally refuses a whole group when any step touches a file the plan didn't assign it -- these paths are exempt because tooling like `npm install` legitimately rewrites them from a step the plan never named as their owner.",
 }
 
 
@@ -764,11 +691,7 @@ class TuiSupervisionHost:
     def start_worker(self, prompt, meta):
         command, env, home = supervisor_command(self.controller.config, ROOT)
         log = os.path.join(_project_root(), '.uncle', 'workflow', 'logs', 'supervisor-%d.jsonl' % meta['number'])
-        # Homepage chat and workflow diagnoses share the same tool-free
-        # supervisor conversation.  SupervisorRequest falls back to this
-        # workflow's isolated one-shot command if the session has died.
-        return SupervisorRequest(command, prompt, env, home, log, meta,
-                                 session=self.tui._supervisor_session())
+        return SupervisorRequest(command, prompt, env, home, log, meta)
 
 
 class UncleTUI:
@@ -887,24 +810,8 @@ class UncleTUI:
         self.color["cursor"] = curses.color_pair(idx[0])
 
     # ---- item lists ----
-    def _resume_available(self):
-        """Whether this workspace holds a stopped, resumable workflow."""
-        proc = getattr(self, 'proc', None)
-        if proc is not None and proc.poll() is None:
-            return False
-        try:
-            workflow = Path(_project_root()) / '.uncle' / 'workflow'
-            state = workflow.joinpath('state').read_text().strip().split(':', 1)[-1]
-            family = workflow.joinpath('family').read_text().strip()
-        except OSError:
-            return False
-        return bool(state and state != 'COMPLETE' and family in ('app', 'change'))
-
     def menu_items(self):
-        items = [w[0] for w in WORKFLOWS]
-        if self._resume_available():
-            items.append('Resume stopped build')
-        return items + ["Configure", "Quit"]
+        return [w[0] for w in WORKFLOWS] + ["Configure", "Quit"]
 
     def items(self):
         if self.state == "menu":
@@ -982,14 +889,9 @@ class UncleTUI:
 
     def stage_model(self, stage):
         """The model for a stage, or "" when its runner takes none."""
-        runner = self.stage_runner(stage)
-        if runner == "self-hosted":
+        if self.stage_runner(stage) == "self-hosted":
             return self.stage_models.get(stage, "")
-        if runner in ("claude", "codex", "kimi"):
-            # Stored id or ""; "" means the runner's own default. Kimi stores
-            # the raw id here; the shell maps it to the dispatch token.
-            return self.stage_models.get(stage, "")
-        if runner != "cline":
+        if self.stage_runner(stage) != "cline":
             return ""
         model = self.stage_models.get(stage, "")
         if model:
@@ -1005,8 +907,7 @@ class UncleTUI:
         only runner that sandboxes a stage, and so the only one where the
         setting changes anything. Every runner takes an effort: claude, kimi,
         cline, and codex as a reasoning level, self-hosted as the OpenCode
-        model's reasoningEffort option. Claude, codex, and kimi take a model
-        from their own catalogue; codex's row order keeps network above model.
+        model's reasoningEffort option.
         """
         if stage.startswith("@"):
             return ["base_url", "api_key"]
@@ -1017,9 +918,7 @@ class UncleTUI:
             # Billing sits above model because it decides which models exist.
             return ["runner", "effort", "billing", "model"]
         if runner == "codex":
-            return ["runner", "effort", "network", "model"]
-        if runner in ("claude", "kimi"):
-            return ["runner", "effort", "model"]
+            return ["runner", "effort", "network"]
         return ["runner", "effort"]
 
     def _field_value(self, stage, field):
@@ -1072,17 +971,10 @@ class UncleTUI:
             return "false  (default)"
         if field == "billing":
             return "%s  (default)" % DEFAULT_BILLING
-        runner = self.stage_runner(stage)
-        if runner == "cline":
-            fallback = DEFAULT_MODEL_FOR_BILLING.get(self.stage_billing(stage),
-                                                     DEFAULT_CLINE_MODEL)
-        else:
-            # claude/codex/kimi name the runner's own default; anything else
-            # takes no useful default from us, so the row stays bare.
-            fallback = DEFAULT_MODEL_FOR_RUNNER.get(runner, "")
+        fallback = DEFAULT_MODEL_FOR_BILLING.get(self.stage_billing(stage),
+                                                 DEFAULT_CLINE_MODEL)
         label = MODEL_LABELS.get(fallback, "")
-        text = "%s  (default)" % fallback if fallback else "(default)"
-        return text + ("  " + label if label else "")
+        return "%s  (default)%s" % (fallback, "  " + label if label else "")
 
     def _set_field(self, stage, field, value):
         value = value or ""
@@ -1250,22 +1142,6 @@ class UncleTUI:
         if self.picker_kind == "model" and self.stage_runner(self.picker_target) == "self-hosted":
             return ([("option", name) for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
                     + [("custom", "Custom… (type a model id)")])
-        if self.picker_kind == "model":
-            # Each vendor picker offers only its own catalogue: ids from a
-            # runner the stage does not use would be passed to a shim that
-            # never heard of them.
-            runner = self.stage_runner(self.picker_target)
-            if runner in ("claude", "codex", "kimi"):
-                catalog = {"claude": MODEL_CATALOG_CLAUDE,
-                           "codex": MODEL_CATALOG_CODEX,
-                           "kimi": MODEL_CATALOG_KIMI}[runner]
-                rows = []
-                for group, entries in catalog:
-                    rows.append(("header", group))
-                    for _label, mid in entries:
-                        rows.append(("model", mid))
-                rows.append(("custom", "Custom… (type a model id)"))
-                return rows
         rows = []
         for group, entries in model_catalog(self.stage_billing(self.picker_target)):
             rows.append(("header", group))
@@ -1398,9 +1274,7 @@ class UncleTUI:
     #
     #   <stage>.runner  cline | claude | kimi | codex
     #   <stage>.effort  high | medium | low
-    #   <stage>.model   a model id for the stage's runner (cline ids are
-    #                   `modelType/model`; claude, codex, and kimi ids are
-    #                   the vendor's own)
+    #   <stage>.model   a cline model id, and only for a cline stage
     #   <stage>.network true | false, and only for a codex stage — whether
     #                   its workspace-write sandbox may reach the network,
     #                   which includes binding a loopback port
@@ -1654,9 +1528,6 @@ class UncleTUI:
                     active.discard(identity)
             self.active_test_runs = active
             return
-        if kind == 'project_root':
-            self._follow_project_root(ev.get('path', ''))
-            return
         host = getattr(self, 'supervision_host', None)
         if host is not None:
             try:
@@ -1866,37 +1737,6 @@ class UncleTUI:
         os.environ["UNCLE_PROJECT_ROOT_LOCKED"] = "1"
         self.home_history.append(("system", "Working in " + sanitize(directory)))
 
-    def _follow_project_root(self, path):
-        """Watch the directory the driver moved this run into.
-
-        from-issue.sh creates an issue's worktree only after the fetch names
-        it, so the run's state -- including the metrics records that mark a
-        stage finished -- lands one directory over from where the run was
-        launched. The launch root is remembered rather than replaced: the next
-        run derives its own worktree and branch from it.
-        """
-        if not (isinstance(path, str) and os.path.isabs(path) and os.path.isdir(path)):
-            return
-        if not hasattr(self, "_launch_root"):
-            self._launch_root = os.environ.get("UNCLE_PROJECT_ROOT")
-        os.environ["UNCLE_PROJECT_ROOT"] = path
-        stats = getattr(self, "session_stats", None)
-        if stats is not None:
-            metrics = os.path.join(path, ".uncle", "workflow", "metrics")
-            stats["seen"] = set(os.listdir(metrics)) if os.path.isdir(metrics) else set()
-            self._restore_session_totals()
-        self.home_history.append(("system", "Working in " + sanitize(path)))
-
-    def _restore_launch_root(self):
-        if not hasattr(self, "_launch_root"):
-            return
-        launch = self._launch_root
-        del self._launch_root
-        if launch is None:
-            os.environ.pop("UNCLE_PROJECT_ROOT", None)
-        else:
-            os.environ["UNCLE_PROJECT_ROOT"] = launch
-
     def start_workflow(self):
         fd, self.status_path = tempfile.mkstemp(prefix="uncle-status-", suffix=".jsonl")
         os.close(fd)
@@ -2069,22 +1909,9 @@ class UncleTUI:
     # sighting opens it.
     _PREVIEW_POLL_SECONDS = 0.5
 
-    # Stages during which a page may first appear. The preview build starts
-    # beside the planning stage and runs through review, so the page is
-    # watched for from planning onward, not only while the application
-    # proper is written. Deliberately stops at implementation/repair: opening
-    # a tab for the first time during test-review or the audit would surprise
-    # someone reading those reports, not looking at the app.
-    _PREVIEW_STAGES = ("requirements", "project-plan", "adversarial-review",
-                       "updated-plan", "preflight", "implementation", "repair", "preview-build")
-    # Stages that keep re-checking a preview already open, on top of the
-    # above. A React/Svelte project's `npm install` can still be finishing
-    # exactly as implementation ends, and stopping the watch there left a
-    # static-server fallback (a blank page for any project that needs a real
-    # dev server) frozen for the rest of the run even after the real
-    # dependencies became available a stage or two later.
-    _PREVIEW_UPGRADE_STAGES = _PREVIEW_STAGES + ("test-review", "manual-checklist",
-                                                  "execute-checklist", "final-audit")
+    # Stages that write the application. The preview build exists purely to put
+    # something on screen early, so it is the first place to watch, not the last.
+    _PREVIEW_STAGES = ("implementation", "preview-build")
 
     def _poll_early_preview(self):
         """Open the page the moment one exists, from whichever stage wrote it.
@@ -2098,28 +1925,21 @@ class UncleTUI:
         """
         if getattr(self, "completion_preview", None) is not None:
             return
-        # Kept polling even once a page is open: a static preview (the only
-        # option before a React/Svelte project's dependencies exist) can
-        # never run source modules, and _show_early_preview needs to see this
-        # stage's fresh _previewable_page() to notice a dev server became
-        # available and upgrade. It no-ops immediately once the open preview
-        # already matches what this check would pick anyway.
+        if getattr(self, "early_preview_shown", False):
+            return
         stage = (getattr(self, "status_stage", "") or "")
-        stages = (self._PREVIEW_UPGRADE_STAGES if getattr(self, "early_preview_shown", False)
-                  else self._PREVIEW_STAGES)
-        if not any(stage.startswith(name) for name in stages):
+        if not any(stage.startswith(name) for name in self._PREVIEW_STAGES):
             return
         now = time.monotonic()
         if now < getattr(self, "_early_preview_next", 0.0):
             return
         self._early_preview_next = now + self._PREVIEW_POLL_SECONDS
-        preview = self._previewable_page()
-        if preview is None:
+        if self._previewable_page() is None:
             return
-        self._show_early_preview(preview)
+        self._show_early_preview()
 
     def _previewable_page(self):
-        """A static-page or framework-dev preview specification, or None.
+        """(size, mtime) of a finished-enough page on disk, or None.
 
         Only file-backed pages qualify. A `webpage` spec pointing at a local
         server needs that server running, which during implementation it is
@@ -2127,9 +1947,6 @@ class UncleTUI:
         operator's back. launch_spec falls back to index.html, so an ordinary
         static site needs no configuration.
         """
-        dev = development_preview(_project_root())
-        if dev is not None:
-            return ('development', dev)
         try:
             spec = launch_spec(_project_root())
         except (OSError, ValueError):
@@ -2154,19 +1971,18 @@ class UncleTUI:
         except ValueError:
             return None
         self._preview_page = relative.as_posix()
-        return ('static', self._preview_page)
+        return (info.st_size, info.st_mtime_ns)
 
     def _preview_after_implementation(self, finished_stage):
         """Fallback for a page that only appears as the stage ends."""
         if finished_stage not in ("implementation", "implementation-step"):
             if not finished_stage.startswith("implementation-step-"):
                 return
-        preview = self._previewable_page()
-        if preview is None:
+        if self._previewable_page() is None:
             return
-        self._show_early_preview(preview)
+        self._show_early_preview()
 
-    def _show_early_preview(self, preview=None):
+    def _show_early_preview(self):
         """Open the page in a browser, served so it can refresh itself.
 
         Deliberately not CompletionPreview: that object announces `done` when it
@@ -2174,38 +1990,18 @@ class UncleTUI:
         end of a run, wrong in the middle of one -- the build is still going, and
         the dialog also burns the once-per-user star prompt.
         """
+        if getattr(self, "early_preview_shown", False):
+            return
         if getattr(self, "completion_preview", None) is not None:
             return
-        preview = preview or self._previewable_page()
-        if preview is None:
-            return
-        kind, value = preview
-        if getattr(self, "early_preview_shown", False):
-            # A page already opened. The only disruption worth it now is a
-            # static-to-development upgrade: dependencies that were missing
-            # when the first preview picked a static server (which cannot run
-            # source modules -- a blank page for any React/Svelte project)
-            # have since finished installing, so a real dev server can run
-            # this project for the first time. Anything else leaves the
-            # open tab alone.
-            current = getattr(self, "preview_server", None)
-            if kind != 'development' or isinstance(current, DevelopmentPreview):
-                return
-            if current is not None:
-                current.close()
-            server = DevelopmentPreview(_project_root(), value)
-            self.preview_server = server if server.url is not None else None
-            return
-        server = (DevelopmentPreview(_project_root(), value) if kind == 'development'
-                  else PreviewServer(_project_root(), value))
+        self.early_preview_shown = True
+        server = PreviewServer(_project_root(), self._preview_page)
         if server.url is None:
             return
         self.preview_server = server
-        self.early_preview_shown = True
-        if kind == 'static' and not webbrowser.open(server.url):
+        if not webbrowser.open(server.url):
             server.close()
             self.preview_server = None
-            self.early_preview_shown = False
 
     def _close_early_preview(self):
         server = getattr(self, "preview_server", None)
@@ -2690,48 +2486,9 @@ class UncleTUI:
         self.state = 'running' if self.proc and self.proc.poll() is None else 'chat'
 
     def homepage_model(self):
-        """Use Configure's first persisted model selection on the homepage."""
-        # Stage defaults are useful for running a build, but the homepage
-        # should not silently switch models as those defaults or discovery
-        # change.  Its choice is the first explicitly saved model in Configure
-        # order, paired with the stage's runner and effort.  This keeps the
-        # homepage model stable across launches and configuration reloads.
-        # An explicit supervision.runner is the homepage's own setting and
-        # wins over any stage; it is also what the footer must show, or the
-        # chat runs on one model while the screen names another.
-        supervision = getattr(self, 'supervision', {}) or {}
-        if supervision.get('runner'):
-            effort = supervision.get('effort') or supervision_lib.load_config(CONFIG_PATH).effort
-            return 'supervision', supervision['runner'], supervision.get('model', ''), effort
-        saved_models = getattr(self, 'stage_models', {})
-        saved_runners = getattr(self, 'stage_runners', {})
-        for stage in CONFIG_STAGES:
-            # A configured runner is a complete model selection even when its
-            # CLI has no separate model-id field (Kimi, Claude, Codex).  The
-            # old test required a saved `.model` except for Claude, so an
-            # explicitly selected Kimi stage was skipped and the homepage
-            # incorrectly fell through to a later OpenCode/DeepSeek model.
-            # Preserve the first Configure state exactly as saved, paired with
-            # its own runner and effort.
-            if saved_runners.get(stage) or (saved_models.get(stage) and self.stage_model(stage)):
-                return stage, self.stage_runner(stage), self.stage_model(stage), self.stage_effort(stage)
+        """Use the first stage shown in Configure for homepage inference."""
         stage = CONFIG_STAGES[0]
-        # Lightweight UI fixtures can ask homepage supervision before config
-        # fields have been initialized; production initialization always sets
-        # them.  Empty values leave any explicit supervision settings intact.
-        try:
-            return stage, self.stage_runner(stage), self.stage_model(stage), self.stage_effort(stage)
-        except AttributeError:
-            return stage, '', '', ''
-
-    def homepage_supervision_config(self):
-        config = supervision_lib.load_config(CONFIG_PATH)
-        explicit = dict(supervision_lib.read_config_lines(CONFIG_PATH))
-        stage, runner, model, effort = self.homepage_model()
-        if 'runner' not in explicit: config.values['runner'] = runner
-        if model: config.values['model'] = model
-        if 'effort' not in explicit: config.values['effort'] = effort
-        return config, stage
+        return stage, self.stage_runner(stage), self.stage_model(stage), self.stage_effort(stage)
 
     def test_execution_status(self):
         process = getattr(self, 'proc', None)
@@ -2749,7 +2506,10 @@ class UncleTUI:
         stage = getattr(self, 'status_stage', '')
         if not stage:
             return '', '', '', ''
-        stage = parent_stage(stage)
+        if stage.startswith('implementation-step-'):
+            stage = 'implementation'
+        elif stage in ('manual-checklist-base', 'manual-checklist-delta'):
+            stage = 'manual-checklist'
         runner = getattr(self, 'status_runner', '') or self.stage_runner(stage)
         if runner in ('opencode', 'aider'):
             runner = 'self-hosted'
@@ -2878,7 +2638,7 @@ class UncleTUI:
     def _supervisor_turn(self, message, delegation=None, trigger='chat'):
         """One bounded supervisor call on the isolated worker (D-1, D-9, D-12)."""
         self._ensure_chat()
-        config, homepage_stage = self.homepage_supervision_config()
+        config = supervision_lib.load_config(CONFIG_PATH)
         proc = getattr(self, 'proc', None)
         gate_question = (self.state == 'running' and bool(getattr(self, 'prompt_kind', ''))
                          and proc is not None and proc.poll() is None)
@@ -2894,7 +2654,7 @@ class UncleTUI:
             self._resend_steering()
             return
         try:
-            command, env, home = supervisor_command(config, ROOT, config_path=CONFIG_PATH, stage=homepage_stage)
+            command, env, home = supervisor_command(config, ROOT)
         except (OSError, ValueError) as exc:
             raise ValueError('Supervisor unavailable: %s. Set supervision.runner claude in Configure and retry.'
                              % sanitize(str(exc)))
@@ -2989,10 +2749,8 @@ class UncleTUI:
         if session is not None and session.alive():
             return session
         try:
-            config, homepage_stage = self.homepage_supervision_config()
-            if config.runner != 'claude':
-                return None
-            command, env, home = supervisor_command(config, ROOT, config_path=CONFIG_PATH, stage=homepage_stage)
+            config = supervision_lib.load_config(CONFIG_PATH)
+            command, env, home = supervisor_command(config, ROOT)
             session = supervisor_runner.SupervisorSession(command, env, home)
         except (OSError, ValueError):
             self.supervisor_session = None
@@ -3069,19 +2827,6 @@ class UncleTUI:
         except queue.Empty:
             return False
         self.home_request = None
-        changed = self._apply_home_reply(request, item)
-        text = getattr(request, 'startup_text', None)
-        if isinstance(text, str) and self.state != 'running':
-            self.home_history.append(('system', 'The supervisor did not start the build; '
-                                                'starting from the description as written.'))
-            try:
-                self._startup_direct_action(text, getattr(request, 'startup_kind', 'app'))
-            except (OSError, ValueError) as exc:
-                self.chat_error = sanitize(str(exc))
-                self.home_history.append(('system', self.chat_error))
-        return changed
-
-    def _apply_home_reply(self, request, item):
         # The finished reply replaces the streamed preview.
         self.chat_partial = ''
         self._chat_partial_raw = ''
@@ -3112,28 +2857,6 @@ class UncleTUI:
         try:
             parsed = supervisor_chat.parse_reply(outcome.get('reply', ''))
         except ValueError as exc:
-            # Homepage creation is the one narrow case where a raw model
-            # response can safely be handed to the system's action validator:
-            # some models emit the requested home-action object directly
-            # instead of putting it in the supervisor envelope. It remains
-            # gated by the operator's current build request and by
-            # home_actions.parse_reply's exact schema; it is never a fallback
-            # for a running workflow, a gate answer, or steering.
-            raw_reply = outcome.get('reply', '')
-            proc = getattr(self, 'proc', None)
-            idle = self.state != 'running' and not bool(proc and proc.poll() is None)
-            direct_action = parse_home_action(str(raw_reply)) if idle and getattr(request, 'home_intent', False) else None
-            if direct_action is not None:
-                if direct_action.get('message', '').strip():
-                    self.home_history.append(('supervisor', sanitize(direct_action['message'])))
-                self.home_history.append(('system', 'Recovered a direct homepage action and validated it.'))
-                self.chat_error = ''
-                try:
-                    self._apply_home_action(request, direct_action)
-                except (OSError, ValueError) as action_exc:
-                    self.chat_error = sanitize(str(action_exc))
-                    self.home_history.append(('system', self.chat_error))
-                return True
             self.home_history.append(('supervisor', sanitize(str(outcome.get('reply', '')))[:8000]))
             self.chat_error = 'Supervisor reply did not follow the contract (%s); no action taken.' % sanitize(str(exc))
             self.home_history.append(('system', self.chat_error))
@@ -3285,22 +3008,17 @@ class UncleTUI:
     def _apply_home_action(self, request, action):
         proc = getattr(self, 'proc', None)
         running = self.state == 'running' or bool(proc and proc.poll() is None)
-        if running and action.get('uncle_action') not in ('stop_build', 'clear_build'):
+        if running:
             self.home_history.append(('system', 'Ignored: homepage actions cannot run while a workflow is active.'))
             return
-        # isinstance, not truth: test doubles answer any attribute with a Mock.
-        startup = isinstance(getattr(request, 'startup_text', None), str)
-        if not startup and not getattr(request, 'home_intent', False):
+        if not getattr(request, 'home_intent', False):
             self.home_history.append(('system', 'Recommendation only: the supervisor proposed %s. Ask to build, '
                                                 'draft or start it to run the action.' % sanitize(str(action.get('uncle_action')))))
             return
         parsed = parse_home_action(json.dumps(action))
         if parsed is None:
             raise ValueError('The supervisor proposed an invalid homepage action.')
-        if startup and str(parsed.get('uncle_action', '')).startswith(('create_', 'github_')):
-            # The flag promised a build, not a draft waiting for approval.
-            parsed['start'] = True
-        self._home_action(parsed, replace_approved=startup)
+        self._home_action(parsed)
 
     def poll_delegation(self):
         """SB-7: standing delegation answers a routine, driver-named dialog once as it opens."""
@@ -3339,27 +3057,10 @@ class UncleTUI:
         return True
 
     def _home_action(self, action, replace_approved=False):
-        if action.get('uncle_action') not in ('stop_build', 'clear_build') and (
-                self.state == 'running' or (getattr(self, 'proc', None) and self.proc.poll() is None)):
+        if self.state == 'running' or (getattr(self, 'proc', None) and self.proc.poll() is None):
             raise ValueError('A workflow is already active; the homepage action was not executed.')
         root = _project_root()
         name = action['uncle_action']
-        if name == 'stop_build':
-            self.home_history.append(('system', self._stop_build()))
-            self.chat_error = ''
-            return
-        if name == 'clear_build':
-            issue = action.get('issue')
-            self.home_history.append(('system', self._clear_build('#' + issue if issue else '')))
-            self.chat_error = ''
-            return
-        if name == 'resume_build':
-            issue = action.get('issue')
-            message = self._resume_build('#' + issue if issue else '')
-            if message:
-                self.home_history.append(('system', message))
-            self.chat_error = ''
-            return
         if name == 'github_issue':
             if action['start']:
                 self.workflow_idx = 1
@@ -3437,9 +3138,21 @@ class UncleTUI:
     def _handle_startup_action(self):
         if self.state == 'running' or (getattr(self, 'proc', None) and self.proc.poll() is None):
             raise ValueError('A workflow is already active.')
+        root = _project_root()
         try:
             if self._startup_action == 'create_app':
-                self._startup_brief_turn(self._startup_text)
+                req_path = Path(root) / 'REQUIREMENTS.md'
+                if req_path.exists():
+                    action_type = 'create_change'
+                else:
+                    action_type = 'create_app'
+                action = {
+                    'uncle_action': action_type,
+                    'document': self._startup_text,
+                    'start': True,
+                    'message': 'Starting ' + ('change' if action_type == 'create_change' else 'application') + ' build'
+                }
+                self._home_action(action, replace_approved=True)
             elif self._startup_action == 'github_issue':
                 action = {
                     'uncle_action': 'github_issue',
@@ -3453,35 +3166,6 @@ class UncleTUI:
         finally:
             self._startup_action = None
             self._startup_text = None
-
-    def _startup_brief_turn(self, text):
-        """Hand a launch-flag description to the homepage supervisor, as if typed.
-
-        The supervisor drafts REQUIREMENTS.md from it -- every section, not the
-        description wrapped in a template -- and starts the build. Its reply
-        is taken up in poll_home_chat; anything short of a started build there
-        falls back to the description as written, because a launch flag has
-        nobody behind it to answer a question.
-        """
-        try:
-            self._supervisor_turn(text, trigger='chat')
-        except ValueError as exc:
-            self.home_history.append(('system', sanitize(str(exc)) + ' Starting from the description as written.'))
-            self._startup_direct_action(text, 'app')
-            return
-        request = getattr(self, 'home_request', None)
-        if request is None:
-            self._startup_direct_action(text, 'app')
-            return
-        request.startup_text = text
-        request.startup_kind = 'app'
-
-    def _startup_direct_action(self, text, kind='app'):
-        """Start from the description as written, with no supervisor pass."""
-        action = 'create_change' if kind == 'change' else 'create_app'
-        self._home_action({'uncle_action': action, 'document': text, 'start': True,
-                           'message': 'Starting ' + ('change' if action == 'create_change' else 'application') + ' build'},
-                          replace_approved=True)
 
     # ---- supervision ----
     def _supervision_items(self):
@@ -3544,24 +3228,7 @@ class UncleTUI:
             # the next one over the same journal.
             self.supervision_retry_pending = False
             if not (self.proc and self.proc.poll() is None) and getattr(self, "triage_request", None) is None:
-                stage = host.controller.stage
-                root = Path(_project_root())
-                request = root / '.uncle' / 'workflow' / 'rerun-request.json'
-                try:
-                    from rerun_stage import supports
-                    family = (root / '.uncle' / 'workflow' / 'family').read_text().strip()
-                    if not stage or not supports(stage, family):
-                        raise ValueError('supervisor retry has no resumable stage')
-                    pending = request.with_name(request.name + '.pending')
-                    with pending.open('w') as stream:
-                        json.dump({'stage': stage, 'source': 'supervisor-retry'}, stream)
-                    os.replace(pending, request)
-                except (OSError, ValueError, ImportError) as error:
-                    self.home_history.append(("supervisor", "Supervision retry was not launched: " + sanitize(str(error))))
-                    return True
-                self.resume_workflow_pending = True
-                self.new_workflow_pending = False
-                self.home_history.append(("supervisor", "Retrying " + stage + " from its recorded workflow state."))
+                self.home_history.append(("supervisor", "Relaunching the workflow to apply the retained correction."))
                 self._run()
             return True
         return changed
@@ -3716,15 +3383,6 @@ class UncleTUI:
             raise ValueError('Usage: /do N, where N is a proposal number.')
         chosen = [p for p in self.triage_proposals if p[0] == number]
         if not chosen:
-            if not self.triage_proposals and getattr(self, 'triage_offer_resume', False):
-                # The previous /do already ran to completion (execute turns
-                # never hand back a fresh numbered list, by design) -- this
-                # is not a stale click, it is the operator not yet told the
-                # prior one finished. Say what actually happened instead of
-                # the generic "nothing is selectable".
-                raise ValueError('No proposal %d is selectable: the last one already ran to completion '
-                                  '(see the note above for what it applied). Type /resume to continue, '
-                                  'or ask a follow-up question to get a new proposal.' % number)
             raise ValueError('No proposal %d is selectable. Open triage and read the current reply.' % number)
         if NO_EDIT_PROPOSAL.search(chosen[0][1]):
             self._triage_apply_local(chosen[0])
@@ -3797,23 +3455,10 @@ class UncleTUI:
                        'messages': [str(exc)]}
         if kind == 'reply':
             text = sanitize(value)
-            if text.strip():
-                self.triage_history.append(('master', text))
+            self.triage_history.append(('master', text))
             self.triage_error = ''
             if pending.get('mode') == 'execute':
                 self.triage_offer_resume = True
-                if not text.strip():
-                    # A runner can report success and still hand back no
-                    # final message at all -- seen on kimi-code, which made
-                    # the requested edit (the guard's own diff below proves
-                    # it) but returned nothing for the harness to read as a
-                    # reply. Left silent, a blank turn here reads as if
-                    # nothing happened, and the operator's next move -- /do N
-                    # again -- fails with "no proposal is selectable" and no
-                    # hint that the edit already landed and /resume is next.
-                    self.triage_history.append(('system',
-                        'This turn returned no reply text. See the note below for what it actually '
-                        'changed; there is no new proposal to select. Type /resume to continue.'))
             else:
                 parsed = parse_triage_reply(text)
                 if parsed is None:
@@ -3853,14 +3498,14 @@ class UncleTUI:
         be read as a stage request. Unknown names belong to the supervisor.
         """
         try:
-            from rerun_stage import supports
+            from rerun_stage import APP, CHANGE
             family = (Path(_project_root()) / '.uncle/workflow/family').read_text().strip()
         except (OSError, ImportError, ValueError):
             return False
-        return supports(name, family)
+        return name in (CHANGE if family == 'change' else APP)
 
     def run_named_stage(self, stage):
-        from rerun_stage import APP, CHANGE, supports
+        from rerun_stage import APP, CHANGE
         if getattr(self, 'proc', None) and self.proc.poll() is None:
             raise ValueError('Stop the active workflow before running another stage.')
         if getattr(self, 'home_request', None) or getattr(self, 'triage_request', None):
@@ -3868,11 +3513,10 @@ class UncleTUI:
         root = Path(_project_root())
         directory = root / '.uncle/workflow'
         family = (directory / 'family').read_text().strip()
+        choices = CHANGE if family == 'change' else APP
         stage = stage.strip().lower()
-        if not supports(stage, family):
-            choices = CHANGE if family == 'change' else APP
-            raise ValueError('Usage: /runstage STAGE. Available: ' + ', '.join(choices) +
-                             '; implementation-step-N for a saved plan step.')
+        if stage not in choices:
+            raise ValueError('Usage: /run STAGE. Available: ' + ', '.join(choices))
         if not (directory / 'state').is_file():
             raise ValueError('Start a workflow before selecting a stage.')
         # Replace, do not refuse. This was an exclusive create, so a request the
@@ -3907,253 +3551,14 @@ class UncleTUI:
         if getattr(self, 'workflow_idx', None) is None:
             raise ValueError('No workflow has run in this session; start one from the menu.')
         self.triage_history.append(('system', 'Resuming the workflow from its recorded state.'))
-        self.resume_workflow_pending = True
         self._run()
         if self.state != 'running':
             raise ValueError(self.chat_error or 'The workflow did not start.')
 
-    def _stop_build(self):
-        """Stop the running driver and everything under it; say what happened."""
-        proc = getattr(self, 'proc', None)
-        if proc is None or proc.poll() is not None:
-            return 'No build is running.'
-        stage = getattr(self, 'status_stage', '') or 'its current stage'
-        self.stop_workflow()
-        self.proc_done = True
-        # stop_workflow clears self.proc, so the normal polling path cannot
-        # transition the screen out of ``running`` afterward.  Do that here,
-        # just as the q/Esc cancellation paths do, so a stopped build neither
-        # looks live nor blocks the next workflow.
-        self.state = 'menu'
-        self.sel = 0
-        self.prompt_kind = ''
-        self.prompt_text = ''
-        self.chat_focus = 'chat'
-        return 'Stopped the build at %s. Its state is kept; run it again to resume, or /clear to archive it.' % sanitize(stage)
-
-    def _resume_build(self, target=''):
-        """Resume a build from its recorded state.
-
-        With no target, this is `triage_resume()`'s ordinary continuation of
-        whatever workflow this session already started -- or, before this
-        session has started one, `_resume_app_build()`'s application build
-        in the current directory. With `#N` or a worktree path, it resumes
-        *that* run directly, whether or not this session ever touched it: it
-        reads .uncle/workflow/state and .uncle/workflow/family in the named
-        worktree and relaunches the matching driver there.
-        """
-        target = (target or '').strip()
-        if not target:
-            if getattr(self, 'workflow_idx', None) is None:
-                return self._resume_app_build()
-            self.triage_resume()
-            return ''
-        return self._resume_run_worktree(target)
-
-    def _resume_app_build(self):
-        """Bare /resume before any workflow this session: the application
-        build in the current directory, when its brief is there.
-
-        triage_resume() can only continue a workflow this session already
-        started; before one exists there is nothing to relaunch, but a
-        REQUIREMENTS.md in the project root is an application build waiting
-        to run. The driver continues from whatever state the directory holds
-        -- prepare() archives nothing when there is none -- and runs in that
-        directory itself rather than relocating into a worktree.
-        """
-        if getattr(self, 'triage_request', None) is not None:
-            raise ValueError('A triage turn is still running. Wait for it before resuming.')
-        if self.proc and self.proc.poll() is None:
-            raise ValueError('The workflow is still running; answer its prompt.')
-        if getattr(self, 'triage_tainted', None):
-            raise ValueError(self.triage_tainted)
-        root = Path(_project_root())
-        if not (root / 'REQUIREMENTS.md').is_file():
-            raise ValueError('No workflow has run in this session; start one from the menu.')
-        if self._run_locked(root):
-            raise ValueError('A run holds %s; wait for it to finish.' % sanitize(str(root)))
-        self._restore_launch_root()
-        os.environ['UNCLE_PROJECT_ROOT'] = str(root)
-        os.environ['UNCLE_PROJECT_ROOT_LOCKED'] = '1'
-        self.workflow_idx = 0
-        self.resume_workflow_pending = True
-        self._run()
-        return 'Resuming the application build in %s.' % sanitize(str(root))
-
-    def _resume_run_worktree(self, target):
-        """The `#N`/path branch of _resume_build(): relaunch the named run.
-
-        This does not go through from-issue.sh. That script's own "a normal
-        Start is intentionally not a resume" logic (a63596e9) re-fetches the
-        issue and archives prior workflow state on every ordinary Start --
-        exactly the state a resume must not disturb -- and a worktree that
-        already exists needs neither its network fetch nor its worktree
-        bookkeeping repeated.
-        """
-        if getattr(self, 'triage_request', None) is not None:
-            raise ValueError('A triage turn is still running. Wait for it before resuming.')
-        if self.proc and self.proc.poll() is None:
-            raise ValueError('The workflow is still running; answer its prompt.')
-        root = Path(_project_root())
-        path = self._find_run_worktree(root, target, '/resume')
-        workflow = path / '.uncle' / 'workflow'
-        if not (workflow / 'state').is_file():
-            raise ValueError('No recorded workflow state at %s.' % sanitize(str(path)))
-        if self._run_locked(path):
-            raise ValueError('A run holds %s; wait for it to finish.' % sanitize(str(path)))
-        try:
-            family = (workflow / 'family').read_text().strip()
-        except OSError:
-            family = ''
-        if family not in ('app', 'change'):
-            raise ValueError('%s has no recorded workflow family to resume.' % sanitize(str(path)))
-        self._restore_launch_root()
-        os.environ['UNCLE_PROJECT_ROOT'] = str(path)
-        os.environ['UNCLE_PROJECT_ROOT_LOCKED'] = '1'
-        self.workflow_idx = 2 if family == 'change' else 0
-        self.resume_workflow_pending = True
-        self._run()
-        return 'Resuming the run at %s from its recorded state.' % sanitize(str(path))
-
-    def _run_locked(self, path):
-        """Whether a driver holds the run in `path`: legacy lock directory,
-        the driver.lock flock, or a live recorded process group."""
-        workflow = Path(path) / '.uncle' / 'workflow'
-        if (workflow / 'lock').exists():
-            return True
-        lock = workflow / 'driver.lock'
-        if not lock.is_file():
-            return False
-        try:
-            import fcntl
-            with lock.open('a+') as handle:
-                try:
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError:
-                    return True
-                handle.seek(0)
-                owner = json.loads(handle.read() or '{}')
-        except (OSError, ValueError, ImportError):
-            return False
-        pgid = owner.get('pgid') if isinstance(owner, dict) else None
-        if pgid:
-            try:
-                os.killpg(int(pgid), 0)
-                return True
-            except (OSError, ValueError):
-                pass
-        return False
-
-    def _find_run_worktree(self, root, target, command):
-        """The run worktree `<command> #N` or `<command> <path>` names."""
-        wanted = target.lstrip('#')
-        if wanted.isdigit():
-            for row in worktree_runs.runs(str(root)):
-                if str(row.get('issue')) == wanted:
-                    return Path(row['path'])
-            raise ValueError('No run for #%s among this project\'s worktrees.' % wanted)
-        path = Path(target).expanduser()
-        if not path.is_absolute():
-            path = root / path
-        try:
-            listed = [Path(p).resolve() for p in worktree_runs.worktrees(str(root))]
-        except (OSError, ValueError):
-            listed = []
-        if path.is_dir() and path.resolve() in listed:
-            return path
-        raise ValueError('%s takes #issue, or the path of one of this project\'s worktrees.' % command)
-
-    def _clear_build(self, target=''):
-        """Archive the last build so the next one starts from none of it.
-
-        With `#N` or a worktree path, clears that run's worktree instead of
-        the project root the homepage is in -- which is where an issue's run
-        actually lives.
-
-        Everything moves and nothing is deleted: .uncle/workflow -- state,
-        approvals, envelopes, logs, metrics -- goes to
-        .uncle/workflow-history/<id>/, exactly as a run of the other family
-        archives it, and the build's documents at the project root, the brief
-        included, go beside it under documents/, with .uncle/launch.json. The
-        application's own source is not a build artifact and is left alone.
-        Returns the line to show for it; the callers append it after their
-        own reset, since the homepage /clear also starts a fresh chat.
-        """
-        import contextlib
-        import io
-        import envelope
-        import workflow_family
-        proc = getattr(self, 'proc', None)
-        root = Path(_project_root())
-        target = (target or '').strip()
-        if target:
-            root = self._find_run_worktree(root, target, '/clear')
-            if self._run_locked(root):
-                raise ValueError('A run holds %s; stop it before /clear.' % sanitize(str(root)))
-        elif proc is not None and proc.poll() is None:
-            # /clear during a run cancels the pending reply and resets the
-            # chat (the callers do that); the build itself is not touched.
-            # The build page staying up after the driver exited is not a run.
-            return 'A workflow is running: cancelled the pending reply only. Stop the build before /clear to archive it.'
-        state = root / '.uncle' / 'workflow'
-        try:
-            family = (state / 'family').read_text().strip()
-        except OSError:
-            family = ''
-        # The family marker and the lock inode are not build state; with nothing
-        # else there, prepare() would archive a directory holding only them.
-        leftovers = [p for p in state.iterdir() if p.name not in ('driver.lock', 'driver.guard', 'lock', 'family')] \
-            if state.is_dir() else []
-        archive = None
-        if leftovers:
-            # prepare() reports the archive on stdout, which under curses is the screen.
-            with contextlib.redirect_stdout(io.StringIO()):
-                archive = workflow_family.prepare(root, family if family in ('app', 'change') else 'app', fresh=True)
-        documents = [name for name in envelope.ARTIFACT_EXCLUDES if not name.endswith('/')] + ['REQUIREMENTS.md']
-        # A document the repository tracks is the project's, not the last
-        # build's leftover; the next build rewrites what it needs.
-        try:
-            tracked = set(subprocess.run(['git', '-C', str(root), 'ls-files', '-z', '--', *documents],
-                                         capture_output=True, text=True, timeout=10).stdout.split('\0'))
-        except (OSError, subprocess.SubprocessError):
-            tracked = set()
-        moves = [(root / name, name) for name in documents
-                 if (root / name).is_file() and not (root / name).is_symlink() and name not in tracked]
-        launch = root / '.uncle' / 'launch.json'
-        if launch.is_file() and not launch.is_symlink():
-            moves.append((launch, 'launch.json'))
-        if moves and archive is None:
-            archive = root / '.uncle' / 'workflow-history' / uuid.uuid4().hex
-        if archive is not None:
-            archive = Path(archive)
-            (archive / 'documents').mkdir(parents=True, exist_ok=True)
-            for source, name in moves:
-                source.rename(archive / 'documents' / name)
-        self.status_stage = ''
-        self.home_replace_proposal = None
-        self.new_workflow_pending = False
-        if archive is None:
-            message = 'Nothing to clear: no build state or documents in ' + sanitize(str(root)) + '.'
-        else:
-            message = ('Cleared the last build: %d document%s and the workflow state archived at %s. '
-                       'Source files were left alone.' % (len(moves), '' if len(moves) == 1 else 's', sanitize(str(archive))))
-        # Runs live in their own worktrees; a /clear here does not reach them,
-        # and a stale one is what "build #N" would otherwise trip over.
-        others = []
-        try:
-            for row in worktree_runs.runs(str(Path(_project_root()))):
-                if Path(row['path']).resolve() == root.resolve() or row.get('state') == 'COMPLETE':
-                    continue
-                if str(row.get('issue', '?')).isdigit():
-                    others.append('%s (#%s, %s)' % (row['path'], row['issue'], row['state']))
-                else:
-                    others.append('%s (%s)' % (row['path'], row['state']))
-        except (OSError, ValueError, KeyError):
-            others = []
-        if others:
-            message += (' Runs with state also exist in: ' + '; '.join(sanitize(o) for o in others) +
-                        '. /clear #N clears that issue\'s run; /clear <path> any other.')
-        return message
+    def _clear_workflow_identity(self):
+        directory = Path(_project_root()) / '.uncle' / 'workflow'
+        for name in ('state', 'origin'):
+            (directory / name).unlink(missing_ok=True)
 
     def _triage_command(self, text):
         if not text:
@@ -4166,11 +3571,9 @@ class UncleTUI:
                 if command == '/do':
                     self._triage_do(argument)
                 elif command in ('/resume', '/r'):
-                    message = self._resume_build(argument)
-                    if message:
-                        self.triage_history.append(('system', message))
+                    self.triage_resume()
                 elif command == '/clear':
-                    self.home_history.append(('system', self._clear_build()))
+                    self._clear_workflow_identity()
                     if self.triage_request is not None:
                         self.triage_request.cancel()
                     self.triage_error = ''
@@ -4179,7 +3582,7 @@ class UncleTUI:
                 elif command == '/triage':
                     pass
                 else:
-                    raise ValueError('Commands: /do N  /resume [#N]  /clear  /quit')
+                    raise ValueError('Commands: /do N  /resume  /clear  /quit')
             else:
                 self._triage_turn('diagnosis', followup=text)
             if self.state == 'triage':
@@ -4278,7 +3681,7 @@ class UncleTUI:
         put(h - 4, 0, offer, w, curses.A_BOLD)
         put(h - 3, 0, self.triage_error, w)
         put(h - 2, 0, 'Triage> ' + self.triage_composer[-max(1, w - 10):], w)
-        put(h - 1, 0, '1-3 select proposal | r resume | Esc back | /do N /resume [#N] /clear | text = follow-up question', w)
+        put(h - 1, 0, '1-3 select proposal | r resume | Esc back | /do N /resume /clear | text = follow-up question', w)
         self.stdscr.refresh()
 
     def chat_attr(self, role, base=0):
@@ -4465,15 +3868,7 @@ class UncleTUI:
                                          (1 if k == curses.KEY_DOWN else -1))
                 return True
             return False  # Gate keys use the same approval handler as /approve.
-        # An open issue-mention picker (from typing #N in ordinary text) owns
-        # Enter/arrow keys so a suggestion can be confirmed or browsed. A slash
-        # command wins regardless: `/resume #69` and `/clear #69` need that same
-        # #N to reach the command's own argument parsing, not the mention picker
-        # -- _chat_command still declines (returns False) whatever it does not
-        # itself recognize, so the picker's own handling below is unaffected.
-        picker_owns_key = self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'issue' \
-            and not self.chat_composer.startswith(('/', '\\'))
-        if not self.chat_edit and not picker_owns_key and self._chat_command(k):
+        if not self.chat_edit and not (self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'issue') and self._chat_command(k):
             return True
         try:
             if k == 27:
@@ -4761,7 +4156,7 @@ class UncleTUI:
         return False
 
     def _slash_choices(self):
-        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/stop', '/triage', '/do', '/resume', '/run', '/runstage', '/delegate', '/app-input']
+        commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/triage', '/do', '/resume', '/run', '/delegate', '/app-input']
         text = self.chat_composer.lower()
         return [command for command in commands if command.startswith(text)] if text.startswith('/') and ' ' not in text else []
 
@@ -4779,27 +4174,20 @@ class UncleTUI:
                 return True
         if k not in (10, 13):
             self.slash_pick = 0
-        if k in (10, 13) and self.chat_composer.startswith(('/', '\\')):
+        if k in (10, 13) and self.chat_composer.startswith('/'):
             parts = self.chat_composer.strip().split(maxsplit=1)
             command = parts[0].lower()
-            if command.startswith('\\'):
-                command = '/' + command[1:]
-            if command == '/q':
-                command = '/quit'
             argument = parts[1].strip() if len(parts) > 1 else ''
             commands = {'/new': 0, '/requirements': 0, '/issue': 1,
-                        '/change': 2,
-                        '/configure': self.menu_items().index('Configure'),
-                        '/settings': self.menu_items().index('Configure'),
-                        '/quit': self.menu_items().index('Quit')}
+                        '/change': 2, '/configure': 3, '/settings': 3, '/quit': 4}
             if command in ('/new', '/requirements', '/change', '/issue') and (
                     self.state == 'running' or (self.proc and self.proc.poll() is None)):
                 self.chat_error = 'A workflow is already active. Finish or stop it before starting another.'
                 return True
-            if argument and command not in ('/issue', '/do', '/run', '/runstage', '/delegate', '/app-input', '/clear', '/resume'):
+            if argument and command not in ('/issue', '/do', '/run', '/delegate', '/app-input'):
                 self.chat_error = command + ' does not take arguments'
                 return True
-            if command in ('/run', '/runstage'):
+            if command == '/run':
                 try:
                     self.run_named_stage(argument)
                     self.chat_composer = ''
@@ -4832,21 +4220,12 @@ class UncleTUI:
                     if command == '/triage':
                         self.open_triage()
                     elif command == '/resume':
-                        message = self._resume_build(argument)
-                        if message:
-                            self.home_history.append(('system', message))
+                        self.triage_resume()
                     else:
                         self._triage_init()
                         self._triage_do(argument)
                 except (OSError, ValueError) as exc:
                     self.chat_error = sanitize(str(exc))
-                return True
-            if command == '/stop':
-                self.home_history.append(('system', self._stop_build()))
-                self.chat_composer = ''
-                self.chat_error = ''
-                self.chat_picker = False
-                self.chat_choices = []
                 return True
             if command == '/homepage':
                 # The build page no longer leaves on its own, so leaving is a
@@ -4904,13 +4283,11 @@ class UncleTUI:
                 self.chat_picker_kind = 'file'
                 self.chat_choices = self.chat.refs.browse('')
                 self.chat_pick = 0
-            elif command == '/stop':
-                self.home_history.append(('system', self._stop_build()))
             elif command == '/clear':
                 try:
-                    cleared = self._clear_build(argument)
-                except (OSError, ValueError) as exc:
-                    self.chat_error = 'Could not clear the last build: ' + sanitize(str(exc))
+                    self._clear_workflow_identity()
+                except OSError as exc:
+                    self.chat_error = 'Could not clear workflow state/origin: ' + str(exc)
                     return True
                 if getattr(self, 'triage_request', None):
                     self.triage_request.cancel()
@@ -4921,14 +4298,13 @@ class UncleTUI:
                     self.home_request = None
                 self.chat_picker = False
                 self.home_history.clear()
-                self.home_history.append(('system', cleared))
                 self.home_issue_context = ''
                 self.chat.messages.clear()
                 self.chat_composer = ''
                 self.chat_error = ''
                 self.chat_choices = []
             else:
-                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /stop /triage /do N /resume [#N] /delegate on|off|status /app-input TEXT'
+                self.chat_error = 'Commands: /configure /settings /file /quit /issue # /requirements /change /approve /clear /triage /do N /resume /delegate on|off|status /app-input TEXT'
             return True
         return False
 
@@ -5172,7 +4548,7 @@ class UncleTUI:
         elif self.chat_choices:
             put(feedback_row, 'File: ' + self.chat_choices[self.chat_pick], color.get('accent', 0))
         elif self.chat_composer.startswith('/'):
-            put(feedback_row, '/configure /settings /file /quit /issue # /requirements /change /approve /clear /stop', color.get('muted', curses.A_DIM))
+            put(feedback_row, '/configure /settings /file /quit /issue # /requirements /change /approve /clear', color.get('muted', curses.A_DIM))
 
         self._draw_file_picker(composer_row, left, width)
     def _draw_chat_panel(self, top, bottom, left, width):
@@ -5351,12 +4727,6 @@ class UncleTUI:
         stats = getattr(self, "session_stats", None)
         if stats is None:
             return []
-        # Individual stage durations deliberately include every attempt and
-        # worker, so they describe consumed worker time.  The session total is
-        # different: it is the elapsed interval a person waited, and parallel
-        # workers must overlap rather than inflate it.
-        wall_started = []
-        wall_ended = []
         def duration(value):
             value = int(value)
             return "%d:%02d:%02d" % (value // 3600, value // 60 % 60, value % 60)
@@ -5383,14 +4753,8 @@ class UncleTUI:
         for row in sorted(stats["records"], key=lambda r: r.get("started_at", 0)):
             stage = row.get("stage", "")
             group = groups.setdefault(stage, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf")})
-            elapsed = max(0, row.get("elapsed_seconds", 0))
-            started = row.get("started_at", row.get("ended_at", 0) - elapsed)
-            ended = row.get("ended_at", started + elapsed)
-            group["started"] = min(group["started"], started)
-            group["seconds"] += elapsed
-            if isinstance(started, (int, float)) and isinstance(ended, (int, float)):
-                wall_started.append(started)
-                wall_ended.append(max(started, ended))
+            group["started"] = min(group["started"], row.get("started_at", row.get("ended_at", 0) - row.get("elapsed_seconds", 0)))
+            group["seconds"] += row.get("elapsed_seconds", 0)
             group["tokens"].append(self._token_total(row))
             cost = row.get("reported_cost_usd")
             # A runner that consumed tokens did not usually do it for nothing:
@@ -5417,11 +4781,7 @@ class UncleTUI:
             group = groups.setdefault(stage, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf")})
             group["started"] = min(group["started"], started)
             event = stats["live"].get(stage, {})
-            ended = stats.get("stopped_at", time.time())
-            group["seconds"] += max(0, ended - started)
-            if isinstance(started, (int, float)) and isinstance(ended, (int, float)):
-                wall_started.append(started)
-                wall_ended.append(max(started, ended))
+            group["seconds"] += max(0, stats.get("stopped_at", time.time()) - started)
             group["tokens"].append(event.get("total_tokens"))
             group["costs"].append(self._live_cost(event) if event else (None, False))
             group["attempts"] += 1
@@ -5452,10 +4812,8 @@ class UncleTUI:
             costs.extend(group["costs"])
         if not groups:
             lines += ["Waiting for stage…", ""]
-        wall_seconds = max(0, max(wall_ended) - min(wall_started)) \
-            if wall_started and wall_ended else 0
         lines += ["TOTALS",
-                  "Time   " + duration(wall_seconds),
+                  "Time   " + duration(sum(group["seconds"] for group in groups.values())),
                   "Tokens " + subtotal(tokens, count),
                   "Cost   " + cost_subtotal(costs), "Reported + projected"]
         return lines
@@ -6156,19 +5514,13 @@ class UncleTUI:
 
     def _confirm(self):
         if self.state == "menu":
-            item = self.menu_items()[self.sel]
-            if item == 'Quit':
+            if self.sel == len(WORKFLOWS) + 1:
                 self._quit()
                 return
-            if item == 'Configure':
+            if self.sel == len(WORKFLOWS):
                 self.state = "config"
                 self.config_sel = 0
                 self.sel = 0
-                return
-            if item == 'Resume stopped build':
-                family = (Path(_project_root()) / '.uncle' / 'workflow' / 'family').read_text().strip()
-                self.workflow_idx = 2 if family == 'change' else 0
-                self.triage_resume()
                 return
             self.workflow_idx = self.sel
             if self.workflow_idx == 1:
@@ -6210,13 +5562,9 @@ class UncleTUI:
             self.sel = 0
         elif self.state == "config_edit":
             val = self.input_buf if self.picker_kind == "markdown_viewer" else self.input_buf.strip()
-            runner = self.stage_runner(self.picker_target)
-            if self.picker_kind == "model" and runner != "self-hosted" and not valid_model_id(val, runner):
+            if self.picker_kind == "model" and self.stage_runner(self.picker_target) != "self-hosted" and not valid_model_id(val):
                 # Storing it would only surface as a failed stage later.
-                if runner == "cline":
-                    self.notice = "not a cline model id: %s (expected modelType/model)" % val
-                else:
-                    self.notice = "enter a model id for %s" % runner
+                self.notice = "not a cline model id: %s (expected modelType/model)" % val
                 return
             self.notice = ""
             self._set_field(self.picker_target, self.picker_kind, val)
@@ -6246,14 +5594,6 @@ class UncleTUI:
         # The run reads the file, so make sure we are not about to launch on
         # top of an edit we have not seen.
         self.maybe_reload()
-        # Choosing a workflow is a fresh start, even when it uses a brief or
-        # an issue worktree that already exists.  The driver archives that
-        # workspace's prior workflow state before it begins.  Only recovery's
-        # explicit /resume and a named stage rerun retain state.
-        rerun_pending = self._rerun_pending()
-        resuming = rerun_pending or getattr(self, 'resume_workflow_pending', False)
-        self.new_workflow_pending = not resuming
-        self.resume_workflow_pending = False
         self.direct_issue = ""
         if self.workflow_idx == 2:
             self.direct_issue = _direct_origin_issue()
@@ -6264,8 +5604,7 @@ class UncleTUI:
         # the request in the old project root while the driver started in a new
         # worktree, which never saw it -- so "rerun final-audit" became a fresh
         # build from DERIVE_BRIEF in a directory named after an unrelated brief.
-        self._restore_launch_root()
-        if not rerun_pending:
+        if not self._rerun_pending():
             self._enter_run_worktree()
         self.state = "running"
         self.start_workflow()
@@ -6359,25 +5698,5 @@ def main(stdscr):
     UncleTUI(stdscr).run()
 
 
-def _record_tui_pid():
-    """Write this process's PID to the per-project lock the launcher reads.
-
-    Done here, not by backgrounding the launch in `uncle` itself: an
-    asynchronous command in a script without job control has its stdin
-    redirected to /dev/null by the shell, which silently cut keyboard input
-    to the whole curses UI the one time this was tried from the bash side.
-    Self-registration keeps the launcher's `python3 uncle_tui.py` a plain
-    foreground call, tty attached exactly as it always was.
-    """
-    try:
-        directory = os.path.join(_project_root(), '.uncle')
-        os.makedirs(directory, exist_ok=True)
-        with open(os.path.join(directory, 'tui.lock'), 'w', encoding='utf-8') as stream:
-            stream.write(str(os.getpid()))
-    except OSError:
-        pass
-
-
 if __name__ == "__main__":
-    _record_tui_pid()
     curses.wrapper(main)

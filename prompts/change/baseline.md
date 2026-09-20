@@ -56,12 +56,7 @@ matters most here.
 - Pipe commands whose output is unbounded through `tail`, `wc -l`, or a
   summary flag. `find`, `ls -R`, and full-tree greps need a bound.
 - Use Grep with a targeted pattern in preference to reading a large file end
-  to end. Never read a file longer than about 300 lines end to end: grep for
-  the symbols CHANGE_REQUEST.md names and read the surrounding lines. One
-  whole large module is a third of this stage's context.
-- Write BASELINE_REPORT.md as soon as sections 8 and 9 have their evidence,
-  before any reading for later documents. A report on disk survives a context
-  that runs out; one still in your head does not.
+  to end. Read whole files only when you need the whole file.
 - Cite code by path and line rather than quoting it. The report is read by
   five later stages; quoted source is paid for in each of them.
 - Do not re-read a file you have already read in this stage.

@@ -779,24 +779,8 @@ class WorkerTests(unittest.TestCase):
                 runner.build_command(self.config, ROOT)
             self.assertIn('unavailable', str(caught.exception))
         with self.assertRaises(ValueError) as caught:
-            runner.build_command(sv.Config(dict(runner='unsupported-runner')), ROOT)
+            runner.build_command(sv.Config(dict(runner='codex')), ROOT)
         self.assertIn('not supported', str(caught.exception))
-
-    def test_cline_supervisor_uses_the_configured_provider_model(self):
-        config = sv.Config(dict(runner='cline', model='cline-pass/kimi-k3', effort='low'))
-        argv, _, home = runner.build_command(config, ROOT)
-        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
-        self.assertEqual(argv[:3], [str(ROOT / 'scripts' / 'agent-cline.sh'), '--effort', 'low'])
-        self.assertEqual(argv[3:], ['--model', 'cline-pass/kimi-k3'])
-
-    def test_codex_supervisor_uses_a_read_only_adapter(self):
-        config = sv.Config(dict(runner='codex', model='gpt-5.4-codex', effort='high'))
-        argv, env, home = runner.build_command(config, ROOT)
-        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
-        self.assertEqual(argv[:3], [str(ROOT / 'scripts' / 'agent-codex.sh'), '--effort', 'high'])
-        self.assertEqual(argv[3:], ['--model', 'gpt-5.4-codex'])
-        self.assertEqual(env['UNCLE_CODEX_SANDBOX'], 'read-only')
-        self.assertEqual(env['UNCLE_STAGE_NETWORK'], 'false')
 
     def test_controller_records_worker_failures_once_and_never_recurses(self):
         host = FakeHost()
@@ -841,11 +825,10 @@ class ConfigTests(unittest.TestCase):
     def test_defaults_and_roundtrip(self):
         config = sv.Config()
         self.assertEqual(config.lines, [
-            'supervision.enabled true', 'supervision.runner claude', 'supervision.model sonnet',
+            'supervision.enabled false', 'supervision.runner claude', 'supervision.model sonnet',
             'supervision.effort medium', 'supervision.max_interventions 2', 'supervision.steering_timeout_seconds 120',
             'supervision.stage_time_seconds 1800', 'supervision.stage_tokens 0', 'supervision.call_timeout_seconds 300',
-            'supervision.max_calls_per_run 8', 'supervision.call_max_cost_usd 0.5', 'supervision.delegate_gates none',
-            'supervision.files_allowlist package.json,package-lock.json,vite.config.js'])
+            'supervision.max_calls_per_run 8', 'supervision.call_max_cost_usd 0.5', 'supervision.delegate_gates none'])
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'config'
             path.write_text('implementation.runner claude\nsupervision.enabled true\nsupervision.max_interventions 3\n'
@@ -858,8 +841,7 @@ class ConfigTests(unittest.TestCase):
             for key, value in (('enabled', 'yes'), ('max_interventions', '-1'), ('call_timeout_seconds', '0'),
                                ('max_calls_per_run', '0'), ('call_max_cost_usd', 'inf'), ('call_max_cost_usd', '0'),
                                ('call_max_cost_usd', 'nan'), ('effort', 'max'), ('model', 'two words'), ('bogus', '1'),
-                               ('stage_time_seconds', '1.5'), ('max_interventions', 'true'),
-                               ('files_allowlist', '../etc/passwd')):
+                               ('stage_time_seconds', '1.5'), ('max_interventions', 'true')):
                 path.write_text('supervision.%s %s\n' % (key, value))
                 loaded = sv.load_config(path)
                 self.assertTrue(loaded.errors, (key, value))
@@ -1038,23 +1020,6 @@ class TuiHostTests(unittest.TestCase):
         self.assertEqual(host.controller.journal.ledger_rows()[-1]['outcome'], 'rejected')
         self.assertTrue(any('stale' in t for r, t in ui.home_history if r == 'supervisor'))
         self.assertEqual((self.project / '.uncle' / 'workflow' / 'approvals' / 'CHANGE_PLAN.sha256').read_text(), 'h\n')
-
-    def test_supervision_retry_requests_the_saved_stage_not_a_fresh_workflow(self):
-        ui = self.ui()
-        workflow = self.project / '.uncle' / 'workflow'
-        (workflow / 'family').write_text('app\n')
-        (workflow / 'implement-steps.txt').write_text('step one\nstep two\nstep three\nstep four\nstep five\n')
-        ui.proc.poll.return_value = 1
-        ui.supervision_host.controller.stage = 'implementation-step-5'
-        ui.supervision_host.controller.tick = Mock(return_value=False)
-        ui.supervision_retry_pending = True
-        with patch.object(ui, '_run') as run:
-            ui.poll_supervision()
-        self.assertTrue(ui.resume_workflow_pending)
-        self.assertFalse(ui.new_workflow_pending)
-        self.assertEqual(json.loads((workflow / 'rerun-request.json').read_text()),
-                         {'stage': 'implementation-step-5', 'source': 'supervisor-retry'})
-        run.assert_called_once()
 
     def test_chat_cannot_approve_and_supervisor_never_writes_stdin(self):
         ui = self.ui()

@@ -35,18 +35,8 @@ live = os.environ.get('FAKE_MASTER_LIVE', '')
 install = os.environ.get('FAKE_MASTER_INSTALL', '')
 def say(text):
     print(json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': text}]}}))
-ask = prompt.rsplit('\n---\n', 1)[-1]
-if action == 'edit-plan-empty-reply' and ask.strip().startswith('Execute Proposal'):
-    # A real runner (kimi-code) has reported success and spent real output
-    # tokens making the requested edit, yet returned no reply text at all --
-    # no assistant message with any text, an empty final "result". Skipping
-    # the shared "thinking" narration below is the point: extract_reply()
-    # takes the last non-empty assistant text, so any text at all here would
-    # defeat this fixture.
-    pathlib.Path('CHANGE_PLAN.md').write_text('# plan edited by triage\n')
-    print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': ''}))
-    raise SystemExit(0)
 say('thinking')
+ask = prompt.rsplit('\n---\n', 1)[-1]
 if ask.strip().startswith('Execute Proposal'):
     if action == 'edit-plan':
         pathlib.Path('CHANGE_PLAN.md').write_text('# plan edited by triage\n')
@@ -488,31 +478,6 @@ class TriageTests(unittest.TestCase):
             ui.handle_key(10)
             start.assert_called_once()
         self.assertEqual(ui.state, 'running')
-
-    def test_execute_turn_with_no_reply_text_still_reports_what_it_applied(self):
-        # A real stuck run: kimi-code made the requested edit -- the guard's
-        # own diff proves it -- but returned no reply text at all. Left
-        # silent, that reads as if nothing happened, and a repeated /do N
-        # then fails with the generic "no proposal is selectable", with no
-        # hint the edit already landed and /resume is next.
-        os.environ['FAKE_MASTER_ACTION'] = 'edit-plan-empty-reply'
-        (self.project / 'IMPLEMENTATION_NOTES.md').write_text('# notes\n')
-        (self.project / '.uncle/workflow/logs/execute-checklist.jsonl').write_text('expected 200, got 500 from /health\n')
-        ui = self.ui()
-        ui.open_triage()
-        self.finish_turn(ui)
-        ui._triage_command('/do 2')
-        self.finish_turn(ui)
-        self.assertEqual((self.project / 'CHANGE_PLAN.md').read_text(), '# plan edited by triage\n')
-        self.assertTrue(ui.triage_offer_resume)
-        self.assertTrue(any('Applied: CHANGE_PLAN.md' in text for _, text in ui.triage_history))
-        self.assertTrue(any('no reply text' in text for _, text in ui.triage_history))
-        # No proposals survive an execute turn; the next /do must explain
-        # that the prior one already finished, not just say "not selectable".
-        with self.assertRaises(ValueError) as ctx:
-            ui._triage_do(1)
-        self.assertIn('already ran to completion', str(ctx.exception))
-        self.assertIn('/resume', str(ctx.exception))
 
     def test_resume_refused_while_turn_runs_or_driver_alive(self):
         ui = self.ui()

@@ -106,13 +106,12 @@ final-audit.effort low
 triage.runner claude
 triage.effort low
 
-# --- supervision ------------------------------------------------------------
+# --- supervision (opt-in) ---------------------------------------------------
 
 # Event-triggered diagnosis while a run is in progress: a validator failure,
 # a recurring failure signature, accepted-but-unanswered steering, or a
 # stage over its time/token bound asks a tool-free model for one bounded
-# action. On by default; set `supervision.enabled false` to opt out, in which
-# case no supervisor process starts. Only
+# action. Off by default; off, no supervisor process ever starts. Only
 # `claude` is supported as the runner; other values report unavailable.
 # An invalid value disables corrections and names the key; nothing is
 # substituted. The file is re-read while a run is in progress: setting
@@ -122,7 +121,7 @@ triage.effort low
 # by message id); codex, cline and kimi accept steering without a
 # confirmed answer. See README.md "Supervision" for recovery, including
 # `supervisor.py note-resolve` for an uncertain retained note.
-# supervision.enabled true
+# supervision.enabled false
 # supervision.runner claude
 # supervision.model sonnet
 # supervision.effort medium
@@ -133,15 +132,6 @@ triage.effort low
 # supervision.call_timeout_seconds 300
 # supervision.max_calls_per_run 8
 # supervision.call_max_cost_usd 0.5
-#
-# Comma-separated repository-relative paths a parallel implementation step
-# may write without the plan declaring it that step's owner -- a merge
-# otherwise refuses the whole group over any undeclared write. These are the
-# recurring exceptions: a step's own `npm install` legitimately rewrites
-# package.json/package-lock.json, and a step configuring the dev server or
-# test runner legitimately rewrites vite.config.js, from a step that never
-# scaffolded them.
-# supervision.files_allowlist package.json,package-lock.json,vite.config.js
 #
 # Chat: every message typed into the screen's chat goes to the same
 # supervisor model (runner/model/effort above; claude only), in every state.
@@ -161,13 +151,12 @@ triage.effort low
 # and are not counted against max_calls_per_run; standing answers are.
 # supervision.delegate_gates none
 
-# --- supervision ------------------------------------------------------------
+# --- supervision (opt-in) ---------------------------------------------------
 
 # Event-triggered diagnosis while a run is in progress: a validator failure,
 # a recurring failure signature, accepted-but-unanswered steering, or a
 # stage over its time/token bound asks a tool-free model for one bounded
-# action. On by default; set `supervision.enabled false` to opt out, in which
-# case no supervisor process starts. Only
+# action. Off by default; off, no supervisor process ever starts. Only
 # `claude` is supported as the runner; other values report unavailable.
 # An invalid value disables corrections and names the key; nothing is
 # substituted. The file is re-read while a run is in progress: setting
@@ -177,7 +166,7 @@ triage.effort low
 # by message id); codex, cline and kimi accept steering without a
 # confirmed answer. See README.md "Supervision" for recovery, including
 # `supervisor.py note-resolve` for an uncertain retained note.
-# supervision.enabled true
+# supervision.enabled false
 # supervision.runner claude
 # supervision.model sonnet
 # supervision.effort medium
@@ -188,7 +177,6 @@ triage.effort low
 # supervision.call_timeout_seconds 300
 # supervision.max_calls_per_run 8
 # supervision.call_max_cost_usd 0.5
-# supervision.files_allowlist package.json,package-lock.json,vite.config.js
 
 # Self-hosted Aider runner using an OpenAI-compatible endpoint.
 # Configure → Configure Aider / self hosting: enter Base URL and masked API key.

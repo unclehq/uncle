@@ -123,37 +123,21 @@ def review(report, state_dir, check_only=False):
                   f'Evidence: {item["evidence"]} '
                   f'Required correction: {item["required correction"]} '
                   'Choose [s] Skip, [r] Human reviewed — OK, [n] Keep blocking: ')
-        # UNCLE_UNATTENDED, not UNATTENDED: the driver only exports the
-        # UNCLE_-prefixed name to child processes (scripts/stagegate.sh),
-        # and this runs as one. Checked before input() is ever called, not
-        # inside except EOFError: under the TUI, stdin is a pipe the driver
-        # holds open and never closes on its own, so input() blocks forever
-        # and EOFError never fires -- the prior version of this check was
-        # unreachable in the one place unattended mode actually runs.
-        unattended = os.environ.get('UNCLE_UNATTENDED') == '1'
-        if unattended:
-            # Auto mode: a human gate never blocks completion, but the
-            # decision is recorded as what it is -- skipped by nobody -- the
-            # same honest wording record_waiver uses for a check no person
-            # assessed. This never fabricates a review.
-            print('\nUnattended: skipping ' + identifier + '; no person assessed this finding.', flush=True)
-            answer = 's'
-        else:
-            while True:
-                try:
-                    answer = input(prompt).strip().lower()
-                except EOFError:
-                    print('\nNo decision received; audit remains pending.', flush=True)
-                    return 1
-                if answer in ('s', 'r', 'y', 'n'):
-                    break
-                print('Choose S to skip, R to confirm human review, or N to keep blocking.', flush=True)
+        while True:
+            try:
+                answer = input(prompt).strip().lower()
+            except EOFError:
+                print('\nNo decision received; audit remains pending.', flush=True)
+                return 1
+            if answer in ('s', 'r', 'y', 'n'):
+                break
+            print('Choose S to skip, R to confirm human review, or N to keep blocking.', flush=True)
         if report.read_bytes() != original:
             raise ValueError('Audit changed during review; review the updated report')
         record['decisions'][identifier] = {
             'decision': {'s': 'skip', 'r': 'human-reviewed', 'y': 'ignore'}.get(answer, 'keep'),
             'recorded_at': datetime.now(timezone.utc).isoformat(),
-            'approved_by': 'unattended' if unattended else os.environ.get('UNCLE_APPROVAL_NAME', ''),
+            'approved_by': os.environ.get('UNCLE_APPROVAL_NAME', ''),
             'finding': item,
         }
         record['effective_verdict'] = 'NOT_READY'

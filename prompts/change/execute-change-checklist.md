@@ -11,17 +11,6 @@ Read:
 MANUAL_CHECKLIST.md was written by an independent reviewer and you have not
 seen it. Read it in full from disk before executing anything.
 
-## Worker evidence
-
-If the prompt supplies a `Parallel worker handoff`, read its manifest and every
-listed worker evidence file before executing anything. Those files are fresh,
-isolated results for the IDs assigned to parallel workers. Validate that each
-one actually addresses its checklist row, then use it as the result for that
-ID. Do not rerun a worker's completed check merely to duplicate work. Run only
-IDs with missing, incomplete, or invalid worker evidence, plus every check
-that was deliberately scheduled serially. You remain the sole writer of
-`VERIFICATION_REPORT.md` and `DEFECTS.md`.
-
 Execute every feasible Critical and Important check.
 
 ## Parallel execution

@@ -303,24 +303,8 @@ def source_state():
 
 def delivery_summary(j):
     notes = Path('IMPLEMENTATION_NOTES.md')
-    text = notes.read_text() if notes.exists() else ''
-    if not re.search(r'^##\s+Acceptance delivery\s*$', text, re.M | re.I):
-        # Only prompts/change/implement-change.md (the existing-code change
-        # driver) tells an agent to write this section, with AC-numbered
-        # rows matching CHANGE_SPEC.md. A stagegate.sh (new-application) plan
-        # was never asked for one, so its IMPLEMENTATION_NOTES.md structurally
-        # never has it -- writing a permanently header-only file here is not
-        # "delivery not yet reported", it is evidence this driver never
-        # produces. A real run left that empty file in TEST_REVIEW's evidence
-        # packet, and a reviewer read the header-only file as a live defect
-        # ("still header-only despite three claimed rewrites") that no repair
-        # pass could ever fix, since nothing was ever going to populate it.
-        # Leaving the file absent instead reads as the ordinary "missing or
-        # unreadable" status every other not-yet-applicable file gets.
-        (STATE / 'delivery-summary.tsv').unlink(missing_ok=True)
-        return 0
     rows = []
-    for line in text.splitlines():
+    for line in notes.read_text().splitlines() if notes.exists() else []:
         cells = [x.strip() for x in line.strip().strip('|').split('|')]
         if len(cells) == 4 and re.fullmatch(r'AC-\d+', cells[0]):
             status = 'INCOMPLETE'

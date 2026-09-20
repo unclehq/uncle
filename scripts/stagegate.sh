@@ -1510,8 +1510,15 @@ run_parallel_application_implementation() {
 run_parallel_implementation_report() {
     local complete_marker="$STATE_DIR/parallel-implementation-complete"
     local report_marker="$STATE_DIR/parallel-implementation-report-complete"
-    [[ -s "$complete_marker" ]] || return 1
-    if [[ -s "$report_marker" ]]; then
+    # -e, not -s: both markers are bare `touch`ed signal files, always 0
+    # bytes by design. -s (nonempty) was always false for them, so this
+    # function returned 1 here on every call, on every run, ever -- the
+    # canonical IMPLEMENTATION_NOTES.md/AUTOMATED_TEST_REPORT.md reconciliation
+    # this function exists for never actually happened, silently, until the
+    # later `require_artifact AUTOMATED_TEST_REPORT.md` in the IMPLEMENT
+    # state failed for a completely unrelated-looking reason.
+    [[ -e "$complete_marker" ]] || return 1
+    if [[ -e "$report_marker" ]]; then
         echo 'Parallel implementation report is already reconciled.'
         return 0
     fi

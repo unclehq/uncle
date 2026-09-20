@@ -422,6 +422,8 @@ under "Configuration". The two that decide which external CLI is spawned:
 | Variable | Default | Used by |
 |---|---|---|
 | `WORKFLOW_STEPWISE_IMPLEMENT` | `auto` | `change-workflow.sh` |
+| `WORKFLOW_PARALLEL_IMPLEMENT` | `1` | `change-workflow.sh` |
+| `WORKFLOW_PARALLEL_CHECKLIST_WORKERS` | `1` | `change-workflow.sh` |
 | `WORKFLOW_DIFF_GATE` | `1` | both drivers |
 | `WORKFLOW_GREEN_CHECK` | `1` | both drivers |
 | `WORKFLOW_AUDIT_GATE` | `1` | both drivers |
@@ -538,7 +540,21 @@ The turn cap is divided across the steps rather than multiplied, and
 variable to `1` to force stepwise execution or `0` to keep one context. A step
 boundary in the wrong place costs coherence, which is worth more than tokens.
 
+Parallel implementation is enabled by default: the supervisor schedules
+plan-declared independent step groups in temporary worktrees. Set
+`WORKFLOW_PARALLEL_IMPLEMENT=0` to opt out. It only uses the approved
+sequence's `Owns:` and `Depends on:` fields. The driver
+rejects an out-of-scope write before merging, captures each step's isolated
+handoff, runs the normal merged-tree verification/report stage, and removes
+only successfully merged worktrees. Failed or conflicting worktrees remain
+under `.uncle/workflow/parallel/` for recovery.
+
 Covered by `scripts/tests/plan-scope-test.sh`.
+
+Independent checklist rows fan out by default through per-run temporary
+handoffs, and the final stage reconciles their evidence into the canonical
+reports. Set `WORKFLOW_PARALLEL_CHECKLIST_WORKERS=0` to opt out. The normal
+checklist stage also retains its safe parallel command batch runner.
 
 ### The gates around implementation
 
@@ -674,9 +690,21 @@ config is `STAGE VALUE` lines:
 | `<stage>` | model id for that stage (`WORKFLOW_MODEL_<STAGE>`), in its runner's own form — `modelType/model` for cline, the vendor's own id for claude, codex, or kimi; empty = runner default |
 
 Valid stage keys: `requirements`, `project-plan`, `updated-plan`,
-`preflight`, `implementation`, `execute-checklist`, `baseline`, `change-spec`,
-`change-plan`, `updated-change-plan`, `adversarial-review`, `test-review`,
-`manual-checklist`, `final-audit`. Repairs use the `implementation` settings.
+`preflight`, `implementation`, `repair`, `execute-checklist`, `change-plan`,
+`updated-change-plan`, `adversarial-review`, `test-review`,
+`manual-checklist`, `final-audit`. A `repair` key left unset inherits the
+`implementation` setting, so a repair pass can run on a stronger model than
+bulk implementation without configuring anything else.
+
+A repair pass is judged by the files it changes, not by its reports: the
+driver hashes the files each blocking finding names before the pass and
+compares afterwards. When every blocking finding saw a change the pass goes
+to review. When only some did, the pass keeps its attempt and the driver
+briefs the remaining findings in `.uncle/workflow/REPAIR_BRIEF.md` for the
+next pass instead of spending a review on what the hashes already show;
+`WORKFLOW_MAX_REPAIRS` bounds this and asks a person when reached. A pass that
+changed nothing is not a repair: it is not reviewed, gives its attempt back,
+and is retried once with the brief; a second such pass stops the run.
 
 ### Envelopes and attestation
 

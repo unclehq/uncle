@@ -21,6 +21,60 @@ class Audit(unittest.TestCase):
                 with self.assertRaises((ValueError, IndexError)):
                     module.validate(p)
 
+    def test_wrong_heading_and_column_are_normalized_in_place(self):
+        # Twice reproduced on a real run: a well-formed six-row findings
+        # table under `# Final audit` instead of `## Findings`, with a
+        # `Correction` column instead of `Required correction`. Two separate
+        # retries (this file's own driver-side one, and self_hosted.py's
+        # generic invalid-document retry) reproduced the identical wrong
+        # shape a second time, so this fixes it deterministically instead.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/'audit.md'
+            p.write_text(
+                '# Final audit\n\n'
+                '| ID | Finding | Evidence | Correction | Blocks |\n'
+                '|---|---|---|---|---|\n'
+                '| FA-1 | Missing browser evidence | MC-1 | Run it in a browser | YES |\n\n'
+                'NOT READY\n')
+            module.validate(p)
+            fixed = p.read_text()
+            self.assertIn('## Findings', fixed)
+            self.assertIn('Required correction', fixed)
+            self.assertIn('FA-1', fixed)
+            self.assertIn('Missing browser evidence', fixed)
+            self.assertIn('Run it in a browser', fixed)
+            self.assertTrue(fixed.rstrip().endswith('NOT READY'))
+            module.validate(p)  # already normalized; validates again unchanged
+
+    def test_wrong_column_alone_is_normalized_even_with_the_heading_already_present(self):
+        # Reproduced on a separate real run from the one above: this time
+        # `## Findings` was already correct, and only the column name was
+        # wrong. The first fix's early return on "heading already there"
+        # skipped the column check entirely and let this exact failure
+        # through a second time.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/'audit.md'
+            p.write_text(
+                '## Findings\n\n'
+                '| ID | Finding | Evidence | Correction | Blocks |\n'
+                '|---|---|---|---|---|\n'
+                '| FA-1 | Missing test coverage | tests/App.test.jsx:8 | Add a test | YES |\n\n'
+                'NOT READY\n')
+            module.validate(p)
+            fixed = p.read_text()
+            self.assertEqual(fixed.count('## Findings'), 1, 'must not duplicate an already-present heading')
+            self.assertIn('Required correction', fixed)
+            self.assertIn('Add a test', fixed)
+            self.assertTrue(fixed.rstrip().endswith('NOT READY'))
+
+    def test_normalization_never_masks_a_genuine_defect(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/'audit.md'
+            p.write_text('# Final audit\n\nJust prose, no table at all.\n\nNOT READY\n')
+            with self.assertRaises(ValueError):
+                module.validate(p)
+            self.assertEqual(p.read_text(), '# Final audit\n\nJust prose, no table at all.\n\nNOT READY\n')
+
     @unittest.skipUnless(shutil.which('bash'), 'Bash required')
     def test_saved_validation_does_not_invoke_reviewer(self):
         root = Path(__file__).resolve().parents[2]

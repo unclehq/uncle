@@ -6,8 +6,56 @@ import re
 import sys
 
 
+def normalize_findings_shape(text):
+    """Coerce a close-but-malformed audit into the exact shape `findings()`
+    requires, without touching a finding's content, evidence, or verdict.
+
+    Seen twice on the same real audit: a well-formed table (six rows, real
+    evidence citations) under a `# Final audit` heading instead of the
+    required `## Findings`, and a `Correction` column instead of `Required
+    correction`. Both retries this file already has -- the driver's own
+    one-shot format retry, and self_hosted.py's generic invalid-document
+    retry -- reproduced the identical wrong shape a second time: asking
+    again does not fix a model that believes the top-level heading already
+    satisfies the requirement. Returns the corrected text, or the original
+    text unchanged when no recognizable table is found (validate() then
+    reports the real problem).
+    """
+    lines = text.splitlines()
+    table_start = None
+    for i in range(len(lines) - 1):
+        line = lines[i].strip()
+        if not (line.startswith('|') and line.endswith('|')):
+            continue
+        header = [cell.strip().lower() for cell in line[1:-1].split('|')]
+        if 'id' not in header or not any(cell in ('blocks', 'blocks completion') for cell in header):
+            continue
+        if re.fullmatch(r'\|(?:\s*:?-{3,}:?\s*\|)+', lines[i + 1].strip()):
+            table_start = i
+            break
+    if table_start is None:
+        return text
+    # Independent of each other: a real audit has shown up missing the
+    # heading with a correct column name, and -- reproduced on a separate
+    # run -- with the heading present and only the column name wrong. An
+    # early return on "heading already there" skipped the column check
+    # entirely that second time and let this exact failure straight through.
+    has_heading = re.search(r'^##\s+Findings\s*$', text, re.M)
+    if not has_heading:
+        lines[table_start:table_start] = ['## Findings', '']
+        table_start += 2
+    header_index = table_start
+    cells = lines[header_index][1:-1].split('|')
+    for i, cell in enumerate(cells):
+        if cell.strip().lower() in ('correction', 'fix', 'required fix', 'suggested correction'):
+            cells[i] = ' Required correction '
+    lines[header_index] = '|' + '|'.join(cells) + '|'
+    return '\n'.join(lines) + ('\n' if text.endswith('\n') else '')
+
+
 def validate(path):
-    text = Path(path).read_text(encoding='utf-8')
+    path = Path(path)
+    text = path.read_text(encoding='utf-8')
     last = text.strip().splitlines()[-1].strip().strip('#*_ ')
     last = re.sub(r'^Conclusion:[ \t]*', '', last).strip('*_ ')
     if last not in ('READY', 'READY WITH NON-BLOCKING ISSUES', 'NOT READY'):
@@ -17,7 +65,18 @@ def validate(path):
     spec.loader.exec_module(module)
     # Normalize only the verdict decoration accepted by the driver's classifier.
     body = text.strip().rsplit('\n', 1)[0] + '\n' + last + '\n'
-    blockers = module.findings(body, require_blockers=last == 'NOT READY')
+    try:
+        blockers = module.findings(body, require_blockers=last == 'NOT READY')
+    except ValueError:
+        normalized = normalize_findings_shape(body)
+        if normalized == body:
+            raise
+        blockers = module.findings(normalized, require_blockers=last == 'NOT READY')
+        # Only reached once the normalized shape actually parses: write the
+        # corrected document back so downstream stages read the same text
+        # this validation just accepted, exactly like the manual repair this
+        # replaces.
+        path.write_text(normalized, encoding='utf-8')
     if blockers and last != 'NOT READY':
         raise ValueError('Ready verdict contradicts blocking findings')
 

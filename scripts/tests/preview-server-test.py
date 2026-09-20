@@ -17,7 +17,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/lib'))
-from preview_server import PreviewServer, VERSION_PATH, tree_version
+from preview_server import PreviewServer, VERSION_PATH, development_preview, tree_version
 
 
 def get(url):
@@ -84,6 +84,18 @@ class Server(unittest.TestCase):
     def test_tree_version_survives_a_vanishing_file(self):
         tree_version(self.root)                     # must not raise on churn
 
+    def test_react_and_svelte_use_vite_only_after_dependencies_exist(self):
+        for framework in ('react', 'svelte'):
+            with self.subTest(framework=framework):
+                root = project(**{'package.json': '{"scripts":{"dev":"vite"},"dependencies":{"%s":"x","vite":"x"}}' % framework})
+                self.assertIsNone(development_preview(root))
+                vite = root / 'node_modules' / '.bin' / 'vite'
+                vite.parent.mkdir(parents=True)
+                vite.write_text('')
+                spec = development_preview(root)
+                self.assertEqual(spec['command'][:4], ['npm', 'run', 'dev', '--'])
+                self.assertTrue(spec['url'].startswith('http://127.0.0.1:'))
+
 
 class EarlyPreview(unittest.TestCase):
     """The TUI side: one tab, live, and no end-of-run dialog."""
@@ -105,6 +117,7 @@ class EarlyPreview(unittest.TestCase):
         body['_PREVIEW_POLL_SECONDS'] = 0
         # Which stages are watched; the preview build is one of them.
         body['_PREVIEW_STAGES'] = self.tui.UncleTUI._PREVIEW_STAGES
+        body['_PREVIEW_UPGRADE_STAGES'] = self.tui.UncleTUI._PREVIEW_UPGRADE_STAGES
         body['_completion_dialog'] = lambda _self, value: self.dialogs.append(value)
         screen = type('Screen', (), body)()
         screen.status_stage, screen.completion_preview = stage, None
@@ -156,6 +169,16 @@ class EarlyPreview(unittest.TestCase):
         self.assertTrue(self.opened[0].endswith('public/app.html'))
         self.assertIn('<h1>nested</h1>', get(self.opened[0]))
 
+    def test_planning_stages_open_the_early_page(self):
+        # The preview build runs beside planning and writes the page at the root.
+        for stage in ('requirements', 'project-plan', 'adversarial-review'):
+            self.opened.clear()
+            screen = self.make(project(**{'index.html': '<h1>early</h1>'}), stage)
+            self.settle(screen)
+            self.assertEqual(len(self.opened), 1, stage)
+            self.assertIn('<h1>early</h1>', get(self.opened[0]))
+            screen._close_early_preview()
+
     def test_only_implementation_stages_preview(self):
         for stage in ('change-plan', 'final-audit', 'test-review', 'execute-checklist'):
             self.opened.clear()
@@ -166,6 +189,46 @@ class EarlyPreview(unittest.TestCase):
         root = project(**{'.uncle__launch.json': '{"kind":"command","command":["./run.sh"]}'})
         self.settle(self.make(root))
         self.assertEqual(self.opened, [])
+
+    def test_static_preview_upgrades_to_development_once_dependencies_exist(self):
+        """A React/Svelte project has no vite binary at the moment the page
+        first goes up, so the first preview is a static server -- which can
+        never run source modules and shows a blank page for the life of the
+        tab. Once `npm install` finishes mid-build, the next check must
+        replace it with a real dev server instead of leaving the dead tab
+        latched in forever."""
+        root = project(**{'index.html': '<script type="module" src="/src/main.jsx"></script>'})
+        screen = self.make(root)
+        self.settle(screen)
+        self.assertEqual(len(self.opened), 1, 'the static fallback opened first')
+        static_server = screen.preview_server
+        self.assertFalse(getattr(static_server, 'closed', False))
+        original_close = static_server.close
+        static_server.close = lambda: (setattr(static_server, 'closed', True), original_close())
+
+        (root / 'package.json').write_text('{"scripts":{"dev":"vite"},"dependencies":{"react":"x"}}')
+        vite = root / 'node_modules' / '.bin' / 'vite'
+        vite.parent.mkdir(parents=True)
+        vite.write_text('')
+
+        opened_dev = []
+        class StubDevelopmentPreview:
+            def __init__(self, root, spec):
+                opened_dev.append(spec)
+                self.url = spec['url']
+            def close(self):
+                pass
+        self.tui.DevelopmentPreview = StubDevelopmentPreview
+
+        self.settle(screen)
+        self.assertTrue(static_server.closed, 'the dead static server is closed')
+        self.assertEqual(len(opened_dev), 1, 'a development preview replaces it')
+        self.assertIsInstance(screen.preview_server, StubDevelopmentPreview)
+        self.assertEqual(len(self.opened), 1, 'no second webbrowser.open for the same-tab upgrade')
+
+        # A second settle with nothing new must not upgrade again.
+        self.settle(screen)
+        self.assertEqual(len(opened_dev), 1)
 
     def test_opens_on_first_sighting_and_corrects_itself(self):
         """A half-written page is opened, not waited out.

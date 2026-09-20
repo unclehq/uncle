@@ -121,17 +121,37 @@ run_issue_workflow() {
 
     write_origin
 
-    status=0
-    STAGEGATE_RUN_ID="$run_id" \
-    STAGEGATE_ORIGIN_REPO="$OWNER/$REPO" \
-    STAGEGATE_ORIGIN_ISSUE="$ISSUE_NUM" \
-        uncle_run "$ROOT/scripts/change-workflow.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"} || status=$?
+    local state previous_state="" reentries=0
+    while :; do
+        status=0
+        STAGEGATE_RUN_ID="$run_id" \
+        STAGEGATE_ORIGIN_REPO="$OWNER/$REPO" \
+        STAGEGATE_ORIGIN_ISSUE="$ISSUE_NUM" \
+            uncle_run "$ROOT/scripts/change-workflow.sh" ${ISSUE_WORKFLOW_ARGS[@]+"${ISSUE_WORKFLOW_ARGS[@]}"} || status=$?
 
-    if [[ "$status" -ne 0 ]]; then
+        if [[ "$status" -ne 0 ]]; then
+            echo
+            echo "change-workflow.sh exited $status; $OWNER/$REPO#$ISSUE_NUM remains open."
+            exit "$status"
+        fi
+        state="$(workflow_state)"
+        [[ "$state" != COMPLETE ]] || break
+        # A driver that exits 0 short of COMPLETE has moved the run to a gate it
+        # wants re-entered -- a reopened approval says "re-run the driver". Do
+        # that here rather than call the run finished. It stops once the state
+        # no longer moves, which is a gate the operator declined.
+        if [[ "$state" == WAIT_* && "$state" != "$previous_state" && "$reentries" -lt 3 ]]; then
+            previous_state="$state"
+            reentries=$((reentries + 1))
+            echo
+            echo "The run is waiting at $state; opening that gate now."
+            continue
+        fi
         echo
-        echo "change-workflow.sh exited $status; $OWNER/$REPO#$ISSUE_NUM remains open."
-        exit "$status"
-    fi
+        echo "The change workflow stopped at ${state:-an unrecorded state} for $OWNER/$REPO#$ISSUE_NUM; it has not finished."
+        echo "Run it again to continue from there."
+        return 0
+    done
 
     echo "Change workflow finished. Issues remain open until their PR is merged."
     echo "Making PR, please wait..."
@@ -448,9 +468,24 @@ if [[ "$WORKTREE" == 1 ]]; then
         worktree_create "$WORKTREE_DIR" "$WORKTREE_BRANCH" || exit 1
     fi
     cd "$WORKTREE_DIR"
+    # This worktree exists for one issue -- its name and branch both derive
+    # from the number -- so in-flight state with no recorded owner can only be
+    # an earlier run of the same issue. Archive it and start clean rather than
+    # refuse with a remedy nobody can type from the TUI. A run that is live
+    # still holds the lock, and that is refused below as before.
+    if run_in_flight && [[ ! -s "$ORIGIN_FILE" ]] && ! worktree_run_locked .; then
+        echo "The previous run in this worktree recorded no owner; archiving it and starting $OWNER/$REPO#$ISSUE_NUM fresh."
+        UNCLE_NEW_WORKFLOW=1 python3 "$ROOT/scripts/lib/workflow_family.py" change || exit 1
+    fi
     PROJECT_ROOT="$PWD"
     WORKTREE_DIR="$PWD"
     export UNCLE_PROJECT_ROOT="$PWD"
+    # The TUI computed its project root before this directory existed and
+    # reads stage-completion records from there; tell it where the run went.
+    if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
+        jq -n -c --arg path "$PWD" '{event:"project_root",path:$path}' \
+            >> "$UNCLE_STATUS_FILE" 2>/dev/null || true
+    fi
     echo "Created worktree $WORKTREE_DIR on branch $WORKTREE_BRANCH"
 fi
 
@@ -639,6 +674,21 @@ EOF
 case "$MODE" in
     change)
         check_origin_or_refuse
+        if [[ "${UNCLE_NEW_WORKFLOW:-}" == 1 && "$SEED_ONLY" != 1 ]]; then
+            if worktree_run_locked .; then
+                echo "Refusing to start fresh: this issue worktree has a live workflow." >&2
+                exit 1
+            fi
+            # A normal Start is intentionally not a resume.  This matters for
+            # the stable per-issue worktree: archive its workflow evidence
+            # before reseeding the issue, so seed_is_current cannot retain an
+            # old request.  The live-driver check above prevents moving files
+            # out from under an active process.
+            python3 "$ROOT/scripts/lib/workflow_family.py" change || exit 1
+            # change-workflow.sh must not archive the newly written seed a
+            # second time when it inherits the launch environment.
+            unset UNCLE_NEW_WORKFLOW
+        fi
         if [[ "$SEED_ONLY" == 1 ]]; then
             # Exclusive creation prevents chat imports from replacing a user's brief.
             (set -o noclobber; write_change_request)

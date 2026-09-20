@@ -41,6 +41,13 @@ class Actions(unittest.TestCase):
         self.ui.run_named_stage.assert_called_once_with('adversarial-review')
         self.assertEqual(self.ui.chat_composer, '')
 
+    def test_runstage_accepts_a_numbered_implementation_step(self):
+        self.ui.run_named_stage = Mock()
+        self.ui.chat_composer = '/runstage implementation-step-7'
+        self.assertTrue(self.ui._chat_command(10))
+        self.ui.run_named_stage.assert_called_once_with('implementation-step-7')
+        self.assertEqual(self.ui.chat_composer, '')
+
     def test_run_completion_leaves_room_for_stage(self):
         self.ui.run_named_stage = Mock()
         self.ui.chat_composer = '/ru'
@@ -48,19 +55,202 @@ class Actions(unittest.TestCase):
         self.assertEqual(self.ui.chat_composer, '/run ')
         self.ui.run_named_stage.assert_not_called()
 
-    def test_clear_removes_workflow_identity_only(self):
-        directory = self.root/'.uncle/workflow'
-        directory.mkdir(parents=True)
+    def test_backslash_q_quits_when_resume_item_is_present(self):
+        # Resume is inserted before Configure and Quit, so command dispatch
+        # must not rely on their former fixed menu indices.
+        with patch.object(self.ui, '_resume_available', return_value=True):
+            self.ui.chat_composer = r'\q'
+            self.assertTrue(self.ui._chat_command(10))
+        self.assertEqual(self.ui.state, 'quit')
+
+    def test_clear_archives_the_build_and_leaves_source(self):
+        wf = self.root/'.uncle/workflow'
+        (wf/'approvals').mkdir(parents=True)
         for name in ('state', 'origin', 'keep.txt'):
-            (directory/name).write_text('saved')
-        self.ui.chat_composer = '/clear'
-        self.ui._chat_command(10)
-        self.assertFalse((directory/'state').exists())
-        self.assertFalse((directory/'origin').exists())
-        self.assertEqual((directory/'keep.txt').read_text(), 'saved')
+            (wf/name).write_text('saved')
+        (wf/'approvals/PROJECT_PLAN.sha256').write_text('digest')
+        (self.root/'.uncle/launch.json').write_text('{"kind":"none"}')
+        for doc in ('REQUIREMENTS.md', 'PROJECT_PLAN.md', 'IMPLEMENTATION_NOTES.md'):
+            (self.root/doc).write_text(doc)
+        (self.root/'src').mkdir()
+        (self.root/'src/app.js').write_text('code')
+        (self.root/'index.html').write_text('<h1>app</h1>')
+        # A document the repository tracks belongs to the project and stays.
+        (self.root/'FINAL_AUDIT.md').write_text('committed audit')
+        import subprocess
+        subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
+        subprocess.run(['git', '-C', str(self.root), 'add', 'FINAL_AUDIT.md'], check=True)
         self.ui.chat_composer = '/clear'
         self.ui._chat_command(10)
         self.assertEqual(self.ui.chat_error, '')
+        for doc in ('REQUIREMENTS.md', 'PROJECT_PLAN.md', 'IMPLEMENTATION_NOTES.md'):
+            self.assertFalse((self.root/doc).exists(), doc)
+        self.assertEqual((self.root/'FINAL_AUDIT.md').read_text(), 'committed audit', 'tracked documents stay')
+        self.assertFalse((self.root/'.uncle/launch.json').exists())
+        for name in ('state', 'origin', 'keep.txt', 'approvals'):
+            self.assertFalse((wf/name).exists(), name)
+        self.assertEqual((self.root/'src/app.js').read_text(), 'code', 'source is not a build artifact')
+        self.assertTrue((self.root/'index.html').exists())
+        archives = list((self.root/'.uncle/workflow-history').iterdir())
+        self.assertEqual(len(archives), 1)
+        archive = archives[0]
+        self.assertEqual((archive/'keep.txt').read_text(), 'saved')
+        self.assertTrue((archive/'approvals/PROJECT_PLAN.sha256').exists())
+        self.assertEqual((archive/'documents/PROJECT_PLAN.md').read_text(), 'PROJECT_PLAN.md')
+        self.assertEqual((archive/'documents/REQUIREMENTS.md').read_text(), 'REQUIREMENTS.md')
+        self.assertTrue((archive/'documents/launch.json').exists())
+        self.assertIn('archived', self.ui.home_history[-1][1])
+        self.ui.chat_composer = '/clear'
+        self.ui._chat_command(10)
+        self.assertEqual(self.ui.chat_error, '')
+        self.assertEqual(len(list((self.root/'.uncle/workflow-history').iterdir())), 1, 'nothing left to archive')
+        self.assertIn('Nothing to clear', self.ui.home_history[-1][1])
+
+    def test_clear_targets_a_run_worktree_by_issue(self):
+        other = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(other, ignore_errors=True))
+        (other/'.uncle/workflow').mkdir(parents=True)
+        (other/'.uncle/workflow/state').write_text('70:UPDATED_PLAN\n')
+        (other/'CHANGE_PLAN.md').write_text('plan')
+        (self.root/'PROJECT_PLAN.md').write_text('mine')
+        rows = [dict(path=str(other), issue='70', state='UPDATED_PLAN', locked=False)]
+        with patch.object(tui.worktree_runs, 'runs', return_value=rows), \
+                patch.object(tui.worktree_runs, 'worktrees', return_value=[str(other)]):
+            self.ui.chat_composer = '/clear #70'
+            self.ui._chat_command(10)
+        self.assertEqual(self.ui.chat_error, '')
+        self.assertFalse((other/'.uncle/workflow/state').exists())
+        self.assertFalse((other/'CHANGE_PLAN.md').exists())
+        self.assertTrue((other/'.uncle/workflow-history').is_dir())
+        self.assertTrue((self.root/'PROJECT_PLAN.md').exists(), 'the project the homepage is in is untouched')
+        self.assertIn(str(other), self.ui.home_history[-1][1])
+        with patch.object(tui.worktree_runs, 'runs', return_value=rows):
+            self.ui.chat_composer = '/clear #99'
+            self.ui._chat_command(10)
+        self.assertIn('No run for #99', self.ui.chat_error)
+
+    def test_resume_targets_a_run_worktree_by_issue(self):
+        import shutil
+        other = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(other, ignore_errors=True))
+        (other/'.uncle/workflow').mkdir(parents=True)
+        (other/'.uncle/workflow/state').write_text('70:WAIT_PLAN_APPROVAL\n')
+        (other/'.uncle/workflow/family').write_text('change\n')
+        rows = [dict(path=str(other), issue='70', state='WAIT_PLAN_APPROVAL', locked=False)]
+        with patch.object(tui.worktree_runs, 'runs', return_value=rows), \
+                patch.object(tui.worktree_runs, 'worktrees', return_value=[str(other)]), \
+                patch.dict(os.environ, {}, clear=False):
+            self.ui.chat_composer = '/resume #70'
+            self.ui._chat_command(10)
+            self.assertEqual(os.environ.get('UNCLE_PROJECT_ROOT'), str(other))
+        self.assertEqual(self.ui.chat_error, '')
+        self.ui._run.assert_called_once()
+        self.assertEqual(self.ui.workflow_idx, 2, 'a change-family run resumes as workflow_idx 2')
+        self.assertTrue(self.ui.resume_workflow_pending)
+        self.assertIn(str(other), self.ui.home_history[-1][1])
+        # An app-family run resumes as workflow_idx 0.
+        (other/'.uncle/workflow/family').write_text('app\n')
+        self.ui._run.reset_mock()
+        with patch.object(tui.worktree_runs, 'runs', return_value=rows), \
+                patch.object(tui.worktree_runs, 'worktrees', return_value=[str(other)]), \
+                patch.dict(os.environ, {}, clear=False):
+            self.ui.chat_composer = '/resume #70'
+            self.ui._chat_command(10)
+        self.assertEqual(self.ui.chat_error, '')
+        self.assertEqual(self.ui.workflow_idx, 0, 'an app-family run resumes as workflow_idx 0')
+        self.ui._run.assert_called_once()
+        # No run for that issue.
+        with patch.object(tui.worktree_runs, 'runs', return_value=[]), patch.dict(os.environ, {}, clear=False):
+            self.ui.chat_composer = '/resume #99'
+            self.ui._chat_command(10)
+        self.assertIn('No run for #99', self.ui.chat_error)
+        # A live driver refuses instead of relaunching a second one.
+        with patch.object(tui.worktree_runs, 'runs', return_value=rows), \
+                patch.object(tui.worktree_runs, 'worktrees', return_value=[str(other)]), \
+                patch.object(self.ui, '_run_locked', return_value=True), \
+                patch.dict(os.environ, {}, clear=False):
+            self.ui.chat_composer = '/resume #70'
+            self.ui._chat_command(10)
+        self.assertIn('wait for it to finish', self.ui.chat_error)
+
+    def test_bare_resume_slash_command_is_unchanged(self):
+        self.ui.workflow_idx = 0
+        self.ui.triage_resume = Mock()
+        self.ui.chat_composer = '/resume'
+        self.ui._chat_command(10)
+        self.ui.triage_resume.assert_called_once()
+        self.ui._run.assert_not_called()
+
+    def test_bare_resume_without_a_session_build_runs_the_app_in_place(self):
+        (self.root/'REQUIREMENTS.md').write_text('# Project brief\n\nA grocery list app.\n')
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('UNCLE_PROJECT_ROOT_LOCKED', None)
+            self.ui.chat_composer = '/resume'
+            self.ui._chat_command(10)
+            self.assertEqual(os.environ.get('UNCLE_PROJECT_ROOT'), str(self.root))
+            self.assertEqual(os.environ.get('UNCLE_PROJECT_ROOT_LOCKED'), '1')
+        self.assertEqual(self.ui.chat_error, '')
+        self.assertEqual(self.ui.workflow_idx, 0)
+        self.assertTrue(self.ui.resume_workflow_pending)
+        self.ui._run.assert_called_once()
+        self.assertEqual(self.ui.home_history[-1],
+                         ('system', 'Resuming the application build in %s.' % self.root))
+
+    def test_bare_resume_without_a_session_build_or_brief_still_refuses(self):
+        self.ui.chat_composer = '/resume'
+        self.ui._chat_command(10)
+        self.assertIn('No workflow has run in this session', self.ui.chat_error)
+        self.ui._run.assert_not_called()
+
+    def test_resume_build_action_targets_an_issue(self):
+        self.ui._resume_build = Mock(return_value='resumed')
+        self.reply(uncle_action='resume_build', issue='70')
+        self.ui._resume_build.assert_called_once_with('#70')
+        self.reply(uncle_action='resume_build')
+        self.ui._resume_build.assert_called_with('')
+        self.assertEqual(self.ui.home_history[-1], ('system', 'resumed'))
+
+    def test_stop_command_and_actions(self):
+        self.ui.stop_workflow = Mock()
+        self.ui.chat_composer = '/stop'
+        self.ui._chat_command(10)
+        self.ui.stop_workflow.assert_not_called()
+        self.assertIn('No build is running', self.ui.home_history[-1][1])
+        self.ui.proc = Mock()
+        self.ui.proc.poll.return_value = None
+        self.ui.state = 'running'
+        self.ui.status_stage = 'implementation'
+        self.ui.chat_composer = '/stop'
+        self.ui._chat_command(10)
+        self.ui.stop_workflow.assert_called_once()
+        self.assertIn('Stopped the build at implementation', self.ui.home_history[-1][1])
+        self.assertEqual(self.ui.state, 'menu')
+        self.assertEqual(self.ui.chat_composer, '')
+        # The supervisor can do the same while a build runs.
+        self.ui.stop_workflow.reset_mock()
+        self.ui.proc.poll.return_value = None
+        self.reply(uncle_action='stop_build')
+        self.ui.stop_workflow.assert_called_once()
+        self.assertEqual(self.ui.chat_error, '')
+
+    def test_clear_build_action_targets_an_issue(self):
+        self.ui._clear_build = Mock(return_value='cleared')
+        self.reply(uncle_action='clear_build', issue='70')
+        self.ui._clear_build.assert_called_once_with('#70')
+        self.reply(uncle_action='clear_build')
+        self.ui._clear_build.assert_called_with('')
+        self.assertEqual(self.ui.home_history[-1], ('system', 'cleared'))
+
+    def test_clear_during_a_run_leaves_the_build_alone(self):
+        (self.root/'PROJECT_PLAN.md').write_text('plan')
+        self.ui.proc = Mock()
+        self.ui.proc.poll.return_value = None
+        self.ui.chat_composer = '/clear'
+        self.ui._chat_command(10)
+        self.assertEqual(self.ui.chat_error, '')
+        self.assertIn('A workflow is running', self.ui.home_history[-1][1])
+        self.assertTrue((self.root/'PROJECT_PLAN.md').exists())
+        self.assertFalse((self.root/'.uncle/workflow-history').exists())
 
     def reply(self, **action):
         # TD-4 (Issue 45): the chat worker is the supervisor; a homepage action
@@ -91,6 +281,24 @@ class Actions(unittest.TestCase):
         self.reply(uncle_action='run_app')
         self.ui._run.assert_called_once()
         self.assertEqual(self.ui.workflow_idx, 0)
+
+    def test_start_archives_existing_workflow_but_resume_keeps_it(self):
+        """Only the recovery path is allowed to reuse a workspace's state."""
+        del self.ui._run
+        self.ui.workflow_idx = 0
+        self.ui.maybe_reload = Mock()
+        self.ui._restore_launch_root = Mock()
+        self.ui._rerun_pending = Mock(return_value=False)
+        self.ui._enter_run_worktree = Mock()
+        self.ui.start_workflow = Mock()
+
+        self.ui._run()
+        self.assertTrue(self.ui.new_workflow_pending)
+        self.ui.start_workflow.assert_called_once()
+
+        self.ui.resume_workflow_pending = True
+        self.ui._run()
+        self.assertFalse(self.ui.new_workflow_pending)
 
     def test_issue_build(self):
         self.reply(uncle_action='github_issue', issue='42', start=True)

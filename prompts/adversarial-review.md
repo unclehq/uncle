@@ -9,6 +9,11 @@ Read:
 Do not implement code.
 Do not modify any existing artifact.
 
+Source files already at the repository root may be a throwaway first look
+built from the brief while planning ran. They are not the implementation and
+not part of the plan under review: do not read them or raise findings about
+them.
+
 Challenge the plan rather than summarizing it.
 
 Create findings covering:

@@ -1,6 +1,6 @@
 import os, sys, tempfile, unittest, queue, json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import uncle_tui as tui
 from home_chat import HomeRequest
@@ -49,7 +49,7 @@ class HomeTests(unittest.TestCase):
                 ui.handle_key(10)
                 argv, prompt, env = request.call_args.args[:3]
                 self.assertEqual(argv, ['fake-claude', '--bare'])
-                self.assertEqual(command.call_args.args[0].model, 'sonnet')
+                self.assertEqual(command.call_args.args[0].model, 'cline-pass/test')
                 self.assertEqual(command.call_args.args[0].effort, 'high')
                 self.assertIn('Hello', prompt)
                 self.assertNotIn('UNCLE_CLINE_EFFORT', env)
@@ -83,6 +83,78 @@ class HomeTests(unittest.TestCase):
                 self.assertIn('Hello', prompt)
                 self.assertEqual(env['UNCLE_CLINE_EFFORT'], 'high')
                 self.assertIsNotNone(fixture)
+
+    def test_homepage_model_uses_the_first_persisted_configured_runner(self):
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / 'config'
+            config.write_text('project-plan.runner kimi\n'
+                              'project-plan.effort high\n'
+                              'implementation.runner self-hosted\n'
+                              'implementation.model local/deepseek-v4-flash\n'
+                              'supervision.model ignored-for-homepage\n')
+            with patch.object(tui, '_project_root', return_value=d), \
+                    patch.object(tui, 'CONFIG_PATH', str(config)), \
+                    patch.object(tui, 'list_models', return_value=[]), \
+                    patch.object(tui, 'default_model', return_value=''), \
+                    patch.object(tui, 'read_keys', return_value={}):
+                ui = tui.UncleTUI(None)
+                self.assertEqual(ui.homepage_model()[:3],
+                                 ('project-plan', 'kimi', ''))
+                supervisor, stage = ui.homepage_supervision_config()
+                self.assertEqual((stage, supervisor.runner, supervisor.model, supervisor.effort),
+                                 ('project-plan', 'kimi', 'ignored-for-homepage', 'high'))
+
+    def test_homepage_model_takes_a_saved_claude_stage_before_a_later_model(self):
+        # derive-brief on claude is a complete selection: claude names no model
+        # here, and the homepage must not fall through to change-plan's deepseek.
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / 'config'
+            config.write_text('derive-brief.runner claude\n'
+                              'derive-brief.effort low\n'
+                              'change-plan.runner self-hosted\n'
+                              'change-plan.effort low\n'
+                              'change-plan.model local/deepseek-v4-flash\n')
+            with patch.object(tui, '_project_root', return_value=d), \
+                    patch.object(tui, 'CONFIG_PATH', str(config)), \
+                    patch.object(tui, 'list_models', return_value=[]), \
+                    patch.object(tui, 'default_model', return_value=''), \
+                    patch.object(tui, 'read_keys', return_value={}):
+                ui = tui.UncleTUI(None)
+                self.assertEqual(ui.homepage_model(), ('derive-brief', 'claude', '', 'low'))
+                supervisor, stage = ui.homepage_supervision_config()
+                self.assertEqual((stage, supervisor.runner, supervisor.effort), ('derive-brief', 'claude', 'low'))
+                self.assertNotEqual(supervisor.model, 'local/deepseek-v4-flash')
+
+    def test_explicit_supervision_runner_wins_everywhere(self):
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / 'config'
+            config.write_text('supervision.runner claude\n'
+                              'supervision.effort high\n'
+                              'change-plan.runner self-hosted\n'
+                              'change-plan.model local/deepseek-v4-flash\n')
+            with patch.object(tui, '_project_root', return_value=d), \
+                    patch.object(tui, 'CONFIG_PATH', str(config)), \
+                    patch.object(tui, 'list_models', return_value=[]), \
+                    patch.object(tui, 'default_model', return_value=''), \
+                    patch.object(tui, 'read_keys', return_value={}):
+                ui = tui.UncleTUI(None)
+                self.assertEqual(ui.homepage_model(), ('supervision', 'claude', '', 'high'))
+                supervisor, _ = ui.homepage_supervision_config()
+                self.assertEqual((supervisor.runner, supervisor.effort), ('claude', 'high'))
+
+    def test_workflow_supervision_reuses_the_homepage_session(self):
+        """Diagnostic calls share the persistent homepage worker when live."""
+        session = object()
+        host = tui.TuiSupervisionHost.__new__(tui.TuiSupervisionHost)
+        host.tui = Mock()
+        host.tui._supervisor_session.return_value = session
+        host.controller = Mock(config=object())
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(tui, '_project_root', return_value=d), \
+                patch.object(tui, 'supervisor_command', return_value=(['claude'], {}, d)), \
+                patch.object(tui, 'SupervisorRequest') as request:
+            host.start_worker('diagnose this stage', {'number': 3})
+        self.assertIs(request.call_args.kwargs['session'], session)
 
     def test_running_chat_delivers_only_to_active_stage(self):
         # TD-1 (Issue 45): raw prose no longer reaches a channel from chat; the

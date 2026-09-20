@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'scripts/lib'))
-from self_hosted import read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models, parse_arguments
+from self_hosted import read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models, parse_arguments, reviewer_document
 from process_tree import bash_executable
 
 
@@ -52,7 +52,9 @@ class SelfHosted(unittest.TestCase):
         profiles = {'qwen': {'base_url': 'http://localhost:9100/v1', 'api_key': 'named-secret'}}
         save_keys(self.config, {'__opencode_models__': profiles})
         with patch.dict(os.environ, {}, clear=True):
-            for stage in ('implementation-step-2', 'final-audit'):
+            self.config.write_text(self.config.read_text(encoding='utf-8') +
+                                   'execute-checklist.runner self-hosted\nexecute-checklist.model qwen\n', encoding='utf-8')
+            for stage in ('implementation-step-2', 'execute-checklist-worker-MC-001', 'final-audit'):
                 self.assertEqual(settings(self.config, stage), dict(model='qwen', **profiles['qwen']))
             profiles['qwen']['base_url'] = 'http://localhost:9200/v1'
             save_keys(self.config, {'__opencode_models__': profiles})
@@ -67,6 +69,100 @@ class SelfHosted(unittest.TestCase):
             self.assertNotIn('named-secret', result.stdout + result.stderr)
             if success:
                 self.assertEqual(result.stdout.strip(), 'local/qwen')
+
+    def test_review_workers_inherit_the_parent_stage_configuration(self):
+        parents = ('adversarial-review', 'updated-plan', 'updated-change-plan',
+                   'final-audit', 'manual-checklist')
+        self.config.write_text(''.join('%s.runner self-hosted\n%s.model deepseek\n' % (stage, stage)
+                                       for stage in parents), encoding='utf-8')
+        profile = {'base_url': 'http://localhost:9100/v1', 'api_key': 'deepseek-secret'}
+        save_keys(self.config, {'__opencode_models__': {'deepseek': profile}})
+        with patch.dict(os.environ, {}, clear=True):
+            for parent in parents:
+                # Every review-panel worker must consume the parent stage's
+                # runner/model, never an invented "*-review" config stage.
+                self.assertEqual(settings(self.config, parent + '-review-worker-probe'),
+                                 dict(model='deepseek', **profile))
+
+    def test_shell_runner_mapping_matches_every_worker_family(self):
+        parents = ('adversarial-review', 'updated-plan', 'updated-change-plan',
+                   'final-audit', 'manual-checklist', 'execute-checklist')
+        self.config.write_text(''.join('%s.runner self-hosted\n%s.model local/deepseek-v4-flash\n' % (stage, stage)
+                                       for stage in parents), encoding='utf-8')
+        workers = [parent + '-review-worker-probe' for parent in parents[:-1]]
+        workers.append('execute-checklist-worker-MC-001')
+        script = '''
+source "$ROOT/scripts/lib/stage-config.sh"
+for stage in "$@"; do
+    printf '%s=%s:%s\\n' "$stage" "$(uncle_config_stage "$stage")" "$(uncle_stage_model "$stage")"
+done
+'''
+        result = subprocess.run([bash_executable(), '-c', script, 'workers', *workers],
+                                env=dict(os.environ, ROOT=str(ROOT), UNCLE_CONFIG=str(self.config)),
+                                text=True, encoding='utf-8', capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for worker, parent in zip(workers, parents):
+            self.assertIn('%s=%s:local/deepseek-v4-flash' % (worker, parent), result.stdout)
+
+    def test_every_runner_inherits_every_dynamic_stage_parent(self):
+        script = '''
+source "$ROOT/scripts/lib/stage-config.sh"
+stage="$1"
+printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stage")" "$(uncle_stage_cmd "$stage")"
+'''
+        review_workers = ('adversarial-review-review-worker-probe',
+                          'updated-plan-review-worker-probe',
+                          'updated-change-plan-review-worker-probe',
+                          'final-audit-review-worker-probe',
+                          'manual-checklist-review-worker-probe')
+        dynamic_stages = review_workers + ('execute-checklist-worker-MC-001',
+                                           'implementation-step-3',
+                                           'manual-checklist-base', 'manual-checklist-delta')
+        parents = {
+            **{stage: stage.split('-review-worker-', 1)[0] for stage in review_workers},
+            'execute-checklist-worker-MC-001': 'execute-checklist',
+            'implementation-step-3': 'implementation',
+            'manual-checklist-base': 'manual-checklist',
+            'manual-checklist-delta': 'manual-checklist',
+        }
+        commands = {
+            'reviewer': {'self-hosted': 'reviewer-self-hosted.sh', 'cline': 'reviewer-cline.sh',
+                         'claude': 'reviewer-claude.sh', 'kimi': 'reviewer-kimi.sh', 'codex': 'codex'},
+            'agent': {'self-hosted': 'agent-self-hosted.sh', 'cline': 'agent-cline.sh',
+                      'claude': 'claude', 'kimi': 'agent-kimi.sh', 'codex': 'agent-codex.sh'},
+        }
+        for stage in dynamic_stages:
+            parent = parents[stage]
+            side = 'reviewer' if stage in review_workers or stage.startswith('manual-checklist-') else 'agent'
+            for runner, command in commands[side].items():
+                self.config.write_text('%s.runner %s\n%s.model configured-model\n' % (parent, runner, parent),
+                                       encoding='utf-8')
+                result = subprocess.run([bash_executable(), '-c', script, 'worker', stage],
+                                        env=dict(os.environ, ROOT=str(ROOT), UNCLE_CONFIG=str(self.config)),
+                                        text=True, encoding='utf-8', capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip().split(':')[:2], [runner, side])
+                self.assertTrue(result.stdout.strip().endswith(command), result.stdout)
+
+    def test_preview_build_follows_the_first_configured_model_stage(self):
+        # The preview is not a Configure row. The shell resolver hands it the
+        # first configured model stage's runner and model; reading its own key
+        # here must land on the same profile, not refuse the driver's choice.
+        self.config.write_text('derive-brief.runner claude\nchange-plan.runner self-hosted\n'
+                               'change-plan.model local/deepseek-v4-flash\n'
+                               'implementation.runner self-hosted\nimplementation.model qwen\n', encoding='utf-8')
+        profiles = {'local/deepseek-v4-flash': {'base_url': 'http://localhost:9100/v1', 'api_key': 'deepseek-secret'},
+                    'qwen': {'base_url': 'http://localhost:9200/v1', 'api_key': 'qwen-secret'}}
+        save_keys(self.config, {'__opencode_models__': profiles})
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(settings(self.config, 'preview-build'),
+                             dict(model='deepseek-v4-flash', base_url='http://localhost:9100/v1', api_key='deepseek-secret'))
+            with self.assertRaises(ValueError):
+                settings(self.config, 'requirements')
+        # An explicit preview-build.model still wins.
+        self.config.write_text(self.config.read_text(encoding='utf-8') + 'preview-build.model qwen\n', encoding='utf-8')
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(settings(self.config, 'preview-build')['api_key'], 'qwen-secret')
 
     def test_discovery_and_failed_refresh_preserves_catalog(self):
         import io
@@ -176,6 +272,96 @@ class SelfHosted(unittest.TestCase):
             with self.assertRaises(ValueError):
                 run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-plan')
         self.assertEqual(plan.read_text(encoding='utf-8'), 'Original\n')
+
+    def test_output_at_the_limit_is_a_fragment_not_a_success(self):
+        from self_hosted import ensure_output_complete, OutputTruncated, output_token_limit
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS', None)
+            self.assertEqual(output_token_limit('implementation'), 32768)
+            self.assertEqual(output_token_limit('implementation-step-7'), 32768)
+            self.assertEqual(output_token_limit('execute-checklist'), 32768)
+            self.assertEqual(output_token_limit('execute-checklist-worker-MC-001'), 32768)
+            self.assertEqual(output_token_limit('manual-checklist'), 32768)
+            self.assertEqual(output_token_limit('manual-checklist-base'), 32768)
+            self.assertEqual(output_token_limit('manual-checklist-delta'), 32768)
+            self.assertEqual(output_token_limit('adversarial-review'), 8192)
+        with patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS': '12000'}, clear=False):
+            self.assertEqual(output_token_limit('implementation'), 12000)
+        ensure_output_complete({'output_tokens': 8191}, 8192)
+        ensure_output_complete({}, 8192)
+        with self.assertRaises(OutputTruncated):
+            ensure_output_complete({'output_tokens': 8192}, 8192)
+        with self.assertRaises(OutputTruncated):
+            ensure_output_complete({'output_tokens': 8342}, 8192)
+        path = self.root/'events.jsonl'
+        path.write_text('\n'.join(json.dumps(e) for e in [
+            dict(type='text', part=dict(text='## AR-001\n- Severity: Medium')),
+            dict(type='step_finish', part=dict(reason='length', tokens=dict(input=10, output=8192)))]))
+        with self.assertRaises(OutputTruncated):
+            response_from_events(path)
+
+    def test_truncated_review_is_retried_once_with_a_larger_output_limit(self):
+        env = self.stub_environment()
+        out = self.root/'report.md'
+        command = [bash_executable(), (ROOT/'scripts/reviewer-self-hosted.sh').as_posix(), 'exec', '--output-last-message', str(out), 'Test prompt']
+        result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
+                                env=dict(env, FAKE_OPENCODE_MODE='truncate-once', WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS='8192'))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Retrying once with an output limit of 16384 tokens', result.stderr)
+        self.assertEqual(out.read_bytes(), b'## Findings\n\nNOT READY\n')
+        self.assertIn('"output": 16384', (self.root/'record.config').read_text(encoding='utf-8'), 'the retry ran with the doubled cap')
+        # Always truncated: an error result, and no fragment written as the report.
+        out.unlink()
+        result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
+                                env=dict(env, FAKE_OPENCODE_MODE='truncate', WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS='8192'))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('reached the configured limit', result.stderr)
+        self.assertFalse(out.exists(), 'a fragment must not become the reviewer-owned artifact')
+
+    def test_reviewer_document_is_validated_before_it_is_published(self):
+        env = self.stub_environment()
+        out = self.root/'ADVERSARIAL_REVIEW.md'
+        command = [bash_executable(), (ROOT/'scripts/reviewer-self-hosted.sh').as_posix(), 'exec', '--output-last-message', str(out), 'Test prompt']
+        result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
+                                env=dict(env, FAKE_OPENCODE_MODE='summary-once'))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('not a valid ADVERSARIAL_REVIEW.md', result.stderr)
+        self.assertIn('retrying once', result.stderr)
+        self.assertEqual((self.root/'record.calls').read_text(), '2')
+        self.assertTrue(out.read_text(encoding='utf-8').startswith('## AR-001: Display accepts Infinity'))
+        self.assertIn('## Overall assessment', out.read_text(encoding='utf-8'))
+        self.assertTrue(list((self.root/'.uncle/workflow/logs').glob('adversarial_review-rejected-*.md')), 'the summary is kept as evidence')
+        # Always a summary: an error, and nothing published as the review.
+        out.unlink()
+        (self.root/'record.calls').unlink()
+        result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
+                                env=dict(env, FAKE_OPENCODE_MODE='summary'))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('not a valid ADVERSARIAL_REVIEW.md', result.stderr)
+        self.assertFalse(out.exists(), 'a compaction summary must never become the review')
+
+    def test_reviewer_document_prefers_a_fenced_block_over_a_stray_leading_heading(self):
+        # A real corruption: think-aloud starting with a heading-shaped
+        # fragment ("### ~~MC-005~~ ...") fooled the naive first-heading scan
+        # into publishing the whole response, fence markers included, as the
+        # document. The real checklist was fenced in full further down.
+        response = (
+            '### ~~MC-005~~ [DELETED: no dormancy/owner-tracking exists]\n'
+            '```\n\n'
+            'Let me reconsider the merged checklist once more before finishing.\n\n'
+            '```markdown\n'
+            '# Manual checklist\n\n'
+            '### MC-001 Real check\n'
+            '- Priority: P0\n'
+            '```\n'
+        )
+        document = reviewer_document(response)
+        self.assertEqual(document, '# Manual checklist\n\n### MC-001 Real check\n- Priority: P0\n')
+
+    def test_reviewer_document_unaffected_by_a_stray_fence_with_no_heading_inside(self):
+        response = '```\nsome unrelated code snippet\n```\n\n# Manual checklist\n\nbody\n'
+        document = reviewer_document(response)
+        self.assertEqual(document, '# Manual checklist\n\nbody\n')
 
     def test_exact_usage_sums_messages_without_console_rounding(self):
         from self_hosted import opencode_usage
@@ -305,10 +491,38 @@ config=json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])
 assert config['provider']['local']['options']['baseURL']=='http://localhost:8123/v1'
 assert args[args.index('--model')+1]=='local/local-model:Q4'
 assert 'secret-with-#-characters' not in str(args)
-assert pathlib.Path(args[args.index('--file')+1]).read_text(encoding='utf-8')=='Test prompt'
+assert pathlib.Path(args[args.index('--file')+1]).read_text(encoding='utf-8').startswith('Test prompt')
 pathlib.Path(os.environ['RECORD']).write_text(str(pathlib.Path(os.environ['XDG_CONFIG_HOME']).parent),encoding='utf-8')
-print(json.dumps(dict(type='step_finish', part=dict(reason='stop',tokens=dict(input=1234,output=57)))),flush=True)
 mode=os.environ.get('FAKE_OPENCODE_MODE','ok')
+calls=pathlib.Path(os.environ['RECORD']+'.calls'); n=int(calls.read_text()) if calls.exists() else 0; calls.write_text(str(n+1))
+pathlib.Path(os.environ['RECORD']+'.config').write_text(json.dumps(config),encoding='utf-8')
+def find_output(o):
+    if isinstance(o,dict):
+        if isinstance(o.get('limit'),dict) and 'output' in o['limit']: return o['limit']['output']
+        for v in o.values():
+            r=find_output(v)
+            if r: return r
+    if isinstance(o,list):
+        for v in o:
+            r=find_output(v)
+            if r: return r
+cap=find_output(config) or 8192
+if mode=='summary' or (mode=='summary-once' and n==0):
+    # A model answering OpenCode's compaction prompt instead of reviewing.
+    print(json.dumps(dict(type='text',part=dict(text='## Conversation Summary\\n### Objective\\nReview the plan.\\n### Next Step\\nWrite findings to ADVERSARIAL_REVIEW.md.'))))
+    print(json.dumps(dict(type='step_finish', part=dict(reason='stop',tokens=dict(input=1234,output=57)))),flush=True)
+    sys.exit(0)
+if mode=='summary-once':
+    print(json.dumps(dict(type='text',part=dict(text='## AR-001: Display accepts Infinity\\n\\n- Severity: high\\n- References: I-1\\n- Failure: Infinity is shown\\n- Fix: reject it\\n- Verify: unit test\\n\\n## Overall assessment\\n\\nOne blocking finding.'))))
+    print(json.dumps(dict(type='step_finish', part=dict(reason='stop',tokens=dict(input=1234,output=57)))),flush=True)
+    sys.exit(0)
+if mode=='truncate' or (mode=='truncate-once' and n==0):
+    # A model cut off at whatever output limit it was given: a fragment, and
+    # a token count equal to the cap.
+    print(json.dumps(dict(type='text',part=dict(text='## AR-001\\n- Severity: Medium'))))
+    print(json.dumps(dict(type='step_finish', part=dict(reason='stop',tokens=dict(input=1234,output=cap)))),flush=True)
+    sys.exit(0)
+print(json.dumps(dict(type='step_finish', part=dict(reason='stop',tokens=dict(input=1234,output=57)))),flush=True)
 if mode=='timeout': time.sleep(30)
 if mode=='api-timeout': print('provider timed out')
 if mode not in ('empty','api-timeout'):

@@ -51,10 +51,39 @@ ID = r"[A-Z][A-Z0-9]{0,7}(?:-[A-Z][A-Z0-9]{0,7})*-\d{1,4}"
 HEADING = re.compile(r"^#{1,6}\s+(?:check\s+)?(%s)\b" % ID, re.I)
 CHECK_ID = re.compile(
     r"^\s*(?:[-*+]\s*)?(?:\*\*|__)?check\s*id(?:\*\*|__)?\s*[:|]\s*(%s)\b" % ID, re.I)
+# "Resources" alone is accepted for "Exclusive resources": a real checklist
+# named a per-check `**Resources:** \`tui-interactive\`` field, correctly
+# identifying the shared resource, and every one of its checks still fell
+# back to "declares nothing" (owns everything, conflicts with every other
+# check) because this pattern required the word "exclusive" literally. In
+# a per-check field slot, "resources" has no other plausible meaning here.
 FIELD = re.compile(
     r"^\s*(?:[-*+]\s*)?(?:\*\*|__)?"
-    r"(exclusive\s+resources?|depends\s+on)"
+    r"((?:exclusive\s+)?resources?|depends\s+on)"
     r"(?:\*\*|__)?\s*:\s*(.*?)\s*$", re.I)
+
+# The closing bold marker lands either before or after the colon in the wild
+# ("**Resources:**" vs "**Resources**:"), and FIELD above only anticipated
+# the second. On the first, its own "closing marker" group matches nothing
+# (the next character is the colon, not '*'), so the "**" survives into the
+# captured value and downstream .strip("*_") only removes it from one side,
+# leaving a stray "`" or "*" stuck to the front of a resource/dependency
+# name -- a checklist reviewer wrote a real, correctly identified resource
+# this way and it silently failed to group.
+_BOLD_FIELD_PREFIX = re.compile(
+    r"^(\s*(?:[-*+]\s*)?)"
+    r"(?:\*\*([^*\n:]+?):\*\*|\*\*([^*\n:]+?)\*\*:|__([^_\n:]+?):__|__([^_\n:]+?)__:)")
+
+
+def _unbold_field_label(line):
+    """Normalize a bold-wrapped "**Label:**"/"**Label**:" prefix to "Label:"
+    before FIELD ever sees it, so its own bold-handling never has to guess
+    which side of the colon the closing marker fell on."""
+    m = _BOLD_FIELD_PREFIX.match(line)
+    if not m:
+        return line
+    name = next(g for g in m.groups()[1:] if g is not None)
+    return m.group(1) + name + ':' + line[m.end():]
 
 # A dense checklist is a table, not a list of fields, and the prompt that asks
 # for density gets tables back. The column headers are abbreviated when they are
@@ -141,7 +170,12 @@ def set_resources(check, value):
     if is_none(value) or not value:
         check.resources = set()
     else:
-        check.resources = {r.lower() for r in split_list(value)}
+        # Stripping only the whole declared value's outer backticks leaves
+        # the inner ones on a multi-item list untouched: "`a`, `b`" loses
+        # only the very first and very last backtick, so split_list's own
+        # items still carry a stray "`" wherever a per-resource backtick
+        # bordered a comma. Each item needs the same cleanup individually.
+        check.resources = {r.strip("`").strip("*_").strip().lower() for r in split_list(value)}
 
 
 def set_depends(check, value):
@@ -200,11 +234,11 @@ def parse(text):
             continue
         if current is None:
             continue
-        f = FIELD.match(line)
+        f = FIELD.match(_unbold_field_label(line))
         if not f:
             continue
         name, value = f.group(1).lower(), f.group(2)
-        if name.startswith("exclusive"):
+        if name.startswith("exclusive") or name.startswith("resource"):
             set_resources(current, value)
         else:
             set_depends(current, value)

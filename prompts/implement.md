@@ -18,6 +18,11 @@ ADVERSARIAL_REVIEW.md, so do not read either one. If the updated plan turns out
 to be missing something you need, read the superseded document, and record in
 IMPLEMENTATION_NOTES.md that you had to.
 
+Source files already in the tree may be a first look built from the brief
+before the plan was reviewed. They are not evidence: build the application the
+plan specifies, rewriting them in place where they do not fit it and removing
+what the plan has no use for.
+
 Implement the approved updated plan in this invocation. Deliver working
 application code and feature-specific verification, not only plans or reports.
 Map every required acceptance criterion to an implementation task and a check,

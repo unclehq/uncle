@@ -1,15 +1,36 @@
 #!/usr/bin/env bash
 # Group-at-a-time implementation, when the plan says which files each step owns.
 #
-# Off unless WORKFLOW_PARALLEL_IMPLEMENT=1, and inert whenever the plan does not
-# declare ownership: a plan that says nothing produces one step per group, which
-# is the sequential behaviour the driver already had.
+# On by default whenever the approved plan proves independent ownership. Set
+# WORKFLOW_PARALLEL_IMPLEMENT=0, or `misc.parallel_implement false` in
+# .uncle/config, to opt out for good: a plan whose ownership declarations are
+# wrong repeatedly costs an operator a stopped run and a manual plan edit far
+# more often than a correct partition saves wall clock, and unlike the other
+# knobs here this one is a standing choice about a whole project, not a
+# single run. A plan that does not declare ownership, or has no multi-step
+# group, remains serial anyway because there is no safe parallel schedule to
+# execute.
 #
 # The grouping is the plan's statement, not this code's guess, and a group that
 # writes outside its declaration is refused whole. Both properties live in
 # step_groups.py and parallel_steps.py; this file only decides when to use them.
 
-PARALLEL_IMPLEMENT="${WORKFLOW_PARALLEL_IMPLEMENT:-0}"
+# parallel_implement_enabled — resolved per call, not once at source time:
+# parallel-implement.sh is sourced before stage-config.sh in stagegate.sh, so
+# uncle_config_get would not exist yet if this were a top-level assignment.
+# WORKFLOW_PARALLEL_IMPLEMENT, when set, always wins over the saved config.
+parallel_implement_enabled() {
+    if [[ -n "${WORKFLOW_PARALLEL_IMPLEMENT:-}" ]]; then
+        [[ "$WORKFLOW_PARALLEL_IMPLEMENT" == "1" ]]
+        return
+    fi
+    if declare -f uncle_config_get > /dev/null; then
+        case "$(uncle_config_get misc.parallel_implement)" in
+            false|False|FALSE|0) return 1 ;;
+        esac
+    fi
+    return 0
+}
 
 # parallel_groups <plan> <lib-dir> — one group per line, space-separated step
 # numbers. Prints nothing (and fails) when parallel implementation is off, the
@@ -17,7 +38,7 @@ PARALLEL_IMPLEMENT="${WORKFLOW_PARALLEL_IMPLEMENT:-0}"
 # which the caller should run steps one at a time exactly as before.
 parallel_groups() {
     local plan="$1" lib="$2" out
-    [[ "$PARALLEL_IMPLEMENT" == "1" ]] || return 1
+    parallel_implement_enabled || return 1
     [[ -s "$plan" ]] || return 1
     out="$(UNCLE_LIB="$lib" python3 -B "$lib/step_groups.py" "$plan" "$PWD" 2>/dev/null)" || return 1
     printf '%s' "$out" | python3 -c '
@@ -55,13 +76,14 @@ for line in rows:
 print(json.dumps(owned))' "$lib")"
     steps_json="$(python3 -B -c '
 import json, sys
-logdir, plan = sys.argv[1], sys.argv[2]
+logdir, plan, lib = sys.argv[1], sys.argv[2], sys.argv[3]
 steps = []
-for n in sys.argv[3:]:
+for n in sys.argv[4:]:
     steps.append({"number": int(n),
                   "log": "%s/implementation-step-%s.log" % (logdir, n),
-                  "command": ["bash", "%s/run-step.sh" % logdir, n]})
-print(json.dumps(steps))' "$logdir" "$plan" "$@")"
+                  "note": ".uncle/workflow/parallel/notes/step-%s.md" % n,
+                  "command": ["bash", "%s/parallel-agent.sh" % lib, n]})
+print(json.dumps(steps))' "$logdir" "$plan" "$lib" "$@")"
     printf '{"project": "%s", "owned": %s, "steps": %s}\n' "$PWD" "$owned_json" "$steps_json" > "$request"
     python3 -B "$lib/parallel_steps.py" "$request" || rc=$?
     rm -f "$request"

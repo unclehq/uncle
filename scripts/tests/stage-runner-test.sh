@@ -152,9 +152,9 @@ ARGV="$TMP/sg.argv"
 out="$(cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
     UNCLE_PROJECT_ROOT="$PROJ" \
     WORKFLOW_AGENT_CMD="$TMP/agent-global" \
-    WORKFLOW_AGENT_CMD_REQUIREMENTS="$TMP/agent-stage" \
+    WORKFLOW_AGENT_CMD_PROJECT_PLAN="$TMP/agent-stage" \
     WORKFLOW_MODEL_PROJECT_PLAN= \
-    WORKFLOW_EFFORT_REQUIREMENTS=low \
+    WORKFLOW_EFFORT_PROJECT_PLAN=low \
     WORKFLOW_SPECULATE=0 \
     bash "$ROOT/scripts/stagegate.sh" 2>&1)"
 
@@ -177,7 +177,11 @@ rm -rf "$PROJ/.uncle" "$PROJ/REQUIREMENTS_INTERPRETATION.md"
 check_contains "stagegate: a set model is passed" \
     "--model cline-pass/kimi-k3" "$(cat "$ARGV")"
 
-# --- change-workflow: same two properties ----------------------------------
+# --- change-workflow: planning reaches its configured runner ----------------
+#
+# Green-check baseline commands are run directly by the driver, potentially in
+# the background; they are no longer an agent stage. Keep this fixture focused
+# on the command/model contract of the actual planning agent stage.
 
 if command -v git > /dev/null 2>&1; then
     CPROJ="$TMP/change"
@@ -200,17 +204,13 @@ if command -v git > /dev/null 2>&1; then
     out="$(cd "$CPROJ" && echo n | ARGV_LOG="$ARGV" \
         UNCLE_PROJECT_ROOT="$CPROJ" \
         WORKFLOW_AGENT_CMD="$TMP/agent-global" \
-        WORKFLOW_AGENT_CMD_BASELINE="$TMP/agent-stage" \
-        WORKFLOW_MODEL_BASELINE= \
-        WORKFLOW_EFFORT_BASELINE=high \
         WORKFLOW_MODEL_CHANGE_PLAN=cline-pass/glm-5.3 \
         WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
         bash "$ROOT/scripts/change-workflow.sh" 2>&1)"
 
-    baseline_argv="$(grep '^STAGE ' "$ARGV" || true)"
     spec_argv="$(grep '^GLOBAL ' "$ARGV" || true)"
-    check_contains "change: baseline ran on its own command" "--effort high" "$baseline_argv"
-    check_absent "change: baseline empty model emits no --model" "--model" "$baseline_argv"
+    check_absent "change: driver baseline does not launch a phantom agent stage" \
+        "STAGE " "$(cat "$ARGV")"
     check_contains "change: combined spec+plan stage ran on the global command" \
         "--model cline-pass/glm-5.3" "$spec_argv"
 else
@@ -254,7 +254,7 @@ check_contains "config: an edited effort is picked up" "--effort low" "$argv"
 check_absent "config: the old model is gone" "cline-pass/kimi-k3" "$argv"
 
 # A non-cline runner in the file means no model flag at all.
-printf 'requirements.runner kimi\nrequirements.effort medium\n' > "$CPROJ2/.uncle/config"
+printf 'project-plan.runner kimi\nproject-plan.effort medium\n' > "$CPROJ2/.uncle/config"
 argv="$(run_reread)"
 check_absent "config: a kimi stage gets no --model" "--model" "$argv"
 

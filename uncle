@@ -67,7 +67,10 @@ and per-stage overrides from `.uncle/config` (menu option 4).
 
 Runs with no arguments. -h / --help print this message and exit 0.
 --application TEXT starts a new application build immediately with the given
-description, skipping interactive input. Composes with --unattended.
+description, skipping interactive input. The homepage supervisor drafts
+REQUIREMENTS.md from TEXT, as if it had been typed there, and starts the
+build; without a supervisor the build starts from TEXT as written. Composes
+with --unattended.
 --issue ISSUE starts a GitHub issue build immediately with the given issue
 reference (number, #number, or full https://github.com/... URL), skipping
 interactive input. Composes with --unattended. --application and --issue are
@@ -145,7 +148,21 @@ while [[ $# -gt 0 ]]; do
             UNCLE_STARTUP_TEXT="$issue_ref"
             shift
             ;;
-        *)             printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 1 ;;
+        *)
+            printf 'Unknown argument: %s\n' "$1" >&2
+            # A near miss gets the one flag it was reaching for, not the whole
+            # usage text to search through.
+            hint="$(python3 -c '
+import difflib, sys
+close = difflib.get_close_matches(sys.argv[1], sys.argv[2:], n=1, cutoff=0.6)
+print(close[0] if close else "")' "$1" --help --performance --runs --unattended --application --issue verify 2>/dev/null)"
+            if [[ -n "$hint" ]]; then
+                printf 'Did you mean %s? Run uncle --help for usage.\n' "$hint" >&2
+            else
+                usage >&2
+            fi
+            exit 1
+            ;;
     esac
 done
 
@@ -159,19 +176,58 @@ CL_EFFORT="medium"
 UNCLE_CONFIG="${UNCLE_CONFIG:-$PROJECT_ROOT/.uncle/config}"
 export UNCLE_CONFIG
 export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
-CONFIG_STAGES="requirements change-spec project-plan change-plan adversarial-review updated-plan updated-change-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
+# The TUI reads the launch flags from its environment; unexported, they were
+# parsed and then never seen, and --application opened an idle homepage.
+export UNCLE_STARTUP_ACTION UNCLE_STARTUP_TEXT
+CONFIG_STAGES="requirements change-spec project-plan change-plan adversarial-review updated-plan updated-change-plan preflight implementation repair test-review manual-checklist execute-checklist final-audit"
+
+# A Python process never picks up a rebuilt uncle_tui.py on its own -- it
+# keeps running whatever was loaded at start, silently stale after an update.
+# One lock file per project: starting a new session here always replaces
+# whatever old one was left running for this same project, so a fix landing
+# mid-session cannot be stuck behind a process nobody remembered was alive.
+UNCLE_TUI_LOCK="$PROJECT_ROOT/.uncle/tui.lock"
+uncle_kill_stale_tui() {
+    [[ -s "$UNCLE_TUI_LOCK" ]] || return 0
+    local old_pid
+    old_pid="$(cat "$UNCLE_TUI_LOCK" 2>/dev/null)"
+    [[ "$old_pid" =~ ^[0-9]+$ && "$old_pid" != "$$" ]] || return 0
+    # Never trust a bare PID: it may have been recycled by an unrelated
+    # process since the lock was written. Only kill what still looks like us.
+    case "$(ps -p "$old_pid" -o command= 2>/dev/null)" in
+        *uncle_tui.py*)
+            kill "$old_pid" 2>/dev/null || return 0
+            local waited
+            for waited in 1 2 3 4 5 6 7 8 9 10; do
+                kill -0 "$old_pid" 2>/dev/null || return 0
+                sleep 0.2
+            done
+            kill -9 "$old_pid" 2>/dev/null || true
+            ;;
+    esac
+}
+uncle_run_tui() {
+    # Plain foreground call, exactly as before this lock existed: an
+    # asynchronous command in a script without job control has its stdin
+    # redirected to /dev/null by the shell, which silently cut keyboard
+    # input to the whole curses UI the one time this ran `"$@" &`. The PID
+    # this lock needs is recorded by uncle_tui.py itself at startup instead.
+    mkdir -p "$PROJECT_ROOT/.uncle"
+    uncle_kill_stale_tui
+    "$@"
+}
 
 # Full-screen terminal UI when both stdin and stdout are real terminals; the
 # line-based menu below remains for pipes and scripts. Force TUI with --noinput
 # when startup action is injected to prevent non-TTY fallback to line menu.
 if [[ -t 0 && -t 1 ]] && python3 -c pass >/dev/null 2>&1; then
-    if python3 "$ROOT/uncle_tui.py"; then
+    if uncle_run_tui python3 "$ROOT/uncle_tui.py"; then
         exit 0
     fi
     # TUI failed (e.g. unsupported terminal); fall through to the line menu.
 elif [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
     # Startup action requires TUI even in non-TTY contexts; force with --noinput
-    if python3 "$ROOT/uncle_tui.py" --noinput; then
+    if uncle_run_tui python3 "$ROOT/uncle_tui.py" --noinput; then
         exit 0
     fi
     printf 'Error: TUI failed to start with startup action\n' >&2

@@ -57,4 +57,15 @@ if ensure_repair_capacity 2 <<<'+abc'; then exit 1; fi
 
 printf 'corrupt\n' > "$STATE_DIR/repair-limit"
 if ensure_repair_capacity 2 </dev/null; then exit 1; fi
-echo 'repair-limit-test.sh: approval, decline, EOF, validation, relative bumps, resume, and ceiling passed'
+
+# Unattended: stops pending without ever calling gate_read. A pipe stdin
+# never closes under the TUI, so a check that only escaped on EOF would
+# have hung here instead of failing over.
+rm -f "$STATE_DIR/repair-limit"
+MAX_REPAIRS=2
+gate_read() { echo "FAIL: gate_read must not be called when unattended" >&2; exit 1; }
+UNCLE_UNATTENDED=1
+if ensure_repair_capacity 2 </dev/null; then exit 1; fi
+unset UNCLE_UNATTENDED
+
+echo 'repair-limit-test.sh: approval, decline, EOF, validation, relative bumps, resume, ceiling, and unattended passed'

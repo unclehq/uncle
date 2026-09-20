@@ -222,6 +222,11 @@ stepwise_implementation_enabled() {
 # Set to 0 to fall back to the serial single-shot checklist stage.
 PARALLEL_CHECKLIST="${WORKFLOW_PARALLEL_CHECKLIST:-1}"
 
+# Independent checklist rows fan out through per-run temporary handoffs. The
+# normal execution stage remains the only canonical report writer. Set to 0
+# only to opt out of agent fan-out.
+PARALLEL_CHECKLIST_WORKERS="${WORKFLOW_PARALLEL_CHECKLIST_WORKERS:-1}"
+
 # Stop after implementation and show the operator the actual diff, the green
 # check, and the agent's own notes, before anything downstream reads them.
 #
@@ -391,6 +396,7 @@ legacy_word_notice() {
 . "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/performance.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
+. "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/triage.sh"
 
 # The implementation stage can end with acceptance rows the agent could not
@@ -660,7 +666,14 @@ verify_approval() {
     local approval="$APPROVAL_DIR/${approval_name}.sha256"
 
     require_file "$file"
-    require_file "$approval"
+    if [[ ! -s "$approval" ]]; then
+        # State that presupposes an approval nobody recorded: send the run to
+        # the gate rather than stopping on a file the operator never heard of.
+        echo "$file has no approval on record."
+        echo "Review and approve it."
+        triage_reopen_gate "$approval_name"
+        require_file "$approval"
+    fi
 
     local expected
     local actual
@@ -1107,7 +1120,10 @@ BASELINE_BACKGROUND="${WORKFLOW_BASELINE_BACKGROUND:-1}"
 BASELINE_BG_PID=""
 
 start_green_baseline_bg() {
-    if [[ "$BASELINE_BACKGROUND" != "1" || "$GREEN_CHECK" != "1" ]]; then
+    if [[ "$BASELINE_BACKGROUND" != "1" || "$GREEN_CHECK" != "1" ]] \
+       || [[ -z "$(verify_commands BASELINE_REPORT.md 2>/dev/null)" ]]; then
+        # Nothing to run takes no time to run; with no command block the
+        # warning is the whole result and belongs on screen now.
         capture_green_baseline
         return 0
     fi
@@ -1250,6 +1266,114 @@ wait_green_check_bg() {
     return 0
 }
 
+# Run only the rows that the independent checklist reviewer explicitly placed
+# together.  Each worker owns a private evidence file; it never writes the
+# canonical reports or product files.  Groups remain barriers, so a row that
+# depends on an earlier group cannot start early.  A worker failure is evidence
+# for the synthesizer, not a reason to throw away results from its siblings.
+run_parallel_checklist_workers() {
+    local groups="$PROJECT_ROOT/$STATE_DIR/checklist-groups/groups.txt"
+    # Runner adapters may rebuild .uncle while they start. Worker handoffs are
+    # outside the project entirely, so no workflow cleanup can race them.
+    local directory="" group id prompt evidence
+    local worker_count=0 worker_cap synthesis_cap failed=0 status pid jobs active=0
+    local -a ids pids pid_ids
+
+    [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
+    jobs="${WORKFLOW_VERIFY_JOBS:-4}"
+    [[ "$jobs" =~ ^[1-8]$ ]] || jobs=4
+    while IFS= read -r group; do
+        set -- $group
+        [[ $# -gt 1 ]] && worker_count=$((worker_count + $#))
+    done < "$groups"
+    [[ "$worker_count" -gt 1 ]] || return 0
+
+    # Reserve half of the existing stage cap for reconciliation and split the
+    # other half among workers. This bounds a fan-out to the old stage budget
+    # instead of multiplying it by the number of independent checks.
+    synthesis_cap="$BUDGET_EXECUTE"
+    worker_cap="$BUDGET_EXECUTE"
+    if [[ -n "$BUDGET_EXECUTE" ]]; then
+        synthesis_cap="$(awk -v cap="$BUDGET_EXECUTE" 'BEGIN { printf "%.2f", cap / 2 }')"
+        worker_cap="$(awk -v cap="$BUDGET_EXECUTE" -v n="$worker_count" 'BEGIN { printf "%.2f", cap / (2 * n) }')"
+    fi
+    CHECKLIST_SYNTHESIS_BUDGET="$synthesis_cap"
+
+    directory="$(mktemp -d "${TMPDIR:-/tmp}/uncle-checklist-workers.XXXXXX")" || return 1
+    mkdir -p "$directory/prompts"
+    {
+        echo '# Parallel checklist worker evidence'
+        echo
+        echo 'Only IDs on the same group line were executed concurrently.'
+        echo 'The final execute-checklist stage is the sole writer of canonical reports.'
+        echo
+    } > "$directory/README.md"
+
+    # Materialize every prompt and the full manifest before launching the first
+    # child. Some runner adapters clean transient stage state as they start;
+    # preparing siblings lazily made that cleanup race this driver's writes.
+    while IFS= read -r group; do
+        read -r -a ids <<< "$group"
+        [[ "${#ids[@]}" -gt 1 ]] || continue
+        for id in "${ids[@]}"; do
+            prompt="$directory/prompts/$id.md"
+            evidence="$directory/$id.md"
+            cp "$ROOT/prompts/change/execute-checklist-worker.md" "$prompt"
+            printf '\n## Assigned check\n\nExecute only `%s`. Write the evidence to `%s`.\n' \
+                "$id" "$evidence" >> "$prompt"
+            # Backticks are Markdown here, not shell command substitution.
+            printf '%s\n' "- $id: \`$evidence\`" >> "$directory/README.md"
+        done
+    done < "$groups"
+
+    while IFS= read -r group; do
+        read -r -a ids <<< "$group"
+        [[ "${#ids[@]}" -gt 1 ]] || continue
+        echo "Checklist worker group: $group"
+        pids=()
+        pid_ids=()
+        for id in "${ids[@]}"; do
+            prompt="$directory/prompts/$id.md"
+            (
+                SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                    run_claude "$prompt" "execute-checklist-worker-$id" \
+                        "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 80 "$worker_cap"
+            ) > "$LOG_DIR/execute-checklist-worker-$id.log" 2>&1 &
+            pids+=("$!")
+            pid_ids+=("$id")
+            active=$((active + 1))
+            # A wide group is safe, but it still must not exhaust the machine
+            # or the configured provider concurrency. Finish this batch before
+            # launching the next workers in the same approved group.
+            if [[ "$active" -ge "$jobs" ]]; then
+                for ((status = 0; status < ${#pids[@]}; status++)); do
+                    pid="${pids[$status]}"
+                    if ! wait "$pid"; then
+                        echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run that row." >&2
+                        failed=1
+                    fi
+                done
+                pids=()
+                pid_ids=()
+                active=0
+            fi
+        done
+        for ((status = 0; status < ${#pids[@]}; status++)); do
+            pid="${pids[$status]}"
+            if ! wait "$pid"; then
+                echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run that row." >&2
+                failed=1
+            fi
+        done
+    done < "$groups"
+    [[ "$failed" == 0 ]] || printf '\nSome workers failed; their IDs require reconciliation.\n' >> "$directory/README.md"
+    CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"
+    cp "$ROOT/prompts/change/execute-change-checklist.md" "$CHECKLIST_EXECUTE_PROMPT"
+    printf '\n## Parallel worker handoff\n\nRead `%s` and every listed evidence file before reconciling reports.\n' \
+        "$directory/README.md" >> "$CHECKLIST_EXECUTE_PROMPT"
+    return 0
+}
+
 # --- Post-implementation review document ------------------------------------
 
 # Rebuilt from the working tree every time the gate opens, so the approval
@@ -1290,6 +1414,70 @@ verify_implementation_review() {
     fi
 }
 
+# Run plan-declared independent implementation steps in temporary worktrees.
+# The supervisor's schedule is intentionally mechanical: it may only use the
+# approved plan's Owns:/Depends on: data.  The driver, not the model, creates,
+# merges and removes worktrees.
+run_supervised_parallel_implementation() {
+    local base="$1" groups group step prompt cmd model effort result
+    groups="$(parallel_groups CHANGE_PLAN.md "$ROOT/scripts/lib")" || return 2
+    [[ -n "$groups" ]] || return 2
+    [[ ! -s "$STATE_DIR/implement-step-done" ]] || return 2
+
+    uncle_resolve_stage_runner implementation AGENT || return 1
+    cmd="$(stage_agent_cmd implementation)" || return 1
+    model="$(stage_model_for implementation "$MODEL_IMPLEMENT")"
+    effort="$(stage_effort_for implementation)"
+    export PARALLEL_AGENT_CMD="$cmd" PARALLEL_AGENT_MODEL="$model"
+    export PARALLEL_AGENT_EFFORT="$effort" PARALLEL_AGENT_BUDGET="$BUDGET_IMPLEMENT"
+    export PARALLEL_AGENT_TOOLS="$CLAUDE_TOOLS"
+
+    mkdir -p "$STATE_DIR/parallel/prompts" "$STATE_DIR/parallel/notes"
+    export PARALLEL_PROMPT_DIR="$PWD/$STATE_DIR/parallel/prompts"
+    while IFS= read -r group; do
+        [[ -n "$group" ]] || continue
+        for step in $group; do
+            prompt="$STATE_DIR/parallel/prompts/step-$step.md"
+            compose_implementation_prompt "$base" "$prompt"
+            {
+                echo
+                echo "## Isolated parallel implementation step $step"
+                sed -n "${step}p" "$STATE_DIR/implement-steps.txt"
+                echo
+                echo "Work only on this approved step and its declared owned files."
+                echo "Do not edit workflow documents in the project root. Append a"
+                echo "concise handoff with changed files and exact checks to"
+                echo ".uncle/workflow/parallel/notes/step-$step.md. Do not write"
+                echo "CHANGE_TEST_REPORT.md; the driver reconciles it after merging."
+                echo "Finish in at most 12 tool actions. Read only the named files,"
+                echo "make the smallest edit, run one narrow check, write the handoff,"
+                echo "and stop; do not investigate unrelated failures or repeat probes."
+            } >> "$prompt"
+        done
+        echo "Supervisor schedule: isolated parallel steps $group."
+        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" CHANGE_PLAN.md $group)" || return $?
+        PARALLEL_RESULT="$result" python3 - "$group" <<'PY'
+import json, os, sys
+group = sys.argv[1]
+data = json.loads(os.environ['PARALLEL_RESULT'])
+elapsed = float(data.get('elapsed_seconds', 0))
+total = sum(float(v) for v in (data.get('step_seconds') or {}).values())
+saved = max(0.0, total - elapsed)
+files = len(data.get('files') or [])
+print('Parallel group %s complete: %.1fs wall time; %.1fs worker time; '
+      'estimated %.1fs saved; %d files merged; worktrees %s.' %
+      (group, elapsed, total, saved, files, data.get('worktrees', 'preserved')))
+PY
+        for step in $group; do
+            require_file "$STATE_DIR/parallel/notes/step-$step.md"
+            cat "$STATE_DIR/parallel/notes/step-$step.md" >> IMPLEMENTATION_NOTES.md
+            printf '%s\n' "$step" > "$STATE_DIR/implement-step-done"
+        done
+    done <<< "$groups"
+    rm -rf "$STATE_DIR/parallel"
+    return 0
+}
+
 # One invocation per implementation-sequence step, each starting cold.
 #
 # IMPLEMENTATION_NOTES.md is the handoff: every step appends to it, and the
@@ -1299,6 +1487,7 @@ run_stepwise_implementation() {
     local base="$1"
     local steps_file="$STATE_DIR/implement-steps.txt"
     local done_file="$STATE_DIR/implement-step-done"
+    local report_done_file="$STATE_DIR/implement-report-done"
 
     plan_steps CHANGE_PLAN.md > "$steps_file"
 
@@ -1314,10 +1503,23 @@ run_stepwise_implementation() {
         return 0
     fi
 
+    # Parallel execution is the default and only starts when the approved plan
+    # explicitly partitions ownership. A resume remains serial: preserving a
+    # failed worktree for inspection is safer than recreating it on top of a
+    # partial delivery.
+    if run_supervised_parallel_implementation "$base"; then
+        check_document_budget IMPLEMENTATION_NOTES.md || exit 1
+    else
+        local parallel_status=$?
+        [[ "$parallel_status" == 2 ]] || return "$parallel_status"
+    fi
+
     # Split the single stage's cap across the steps rather than multiplying it.
-    # Reserve more room for the last step because it reconciles acceptance rows
-    # and reports; all earlier contexts get an even share of the remainder.
-    local final_turns=50 turns=50 step_turns
+    # The final code step and its change report are deliberately separate cold
+    # invocations. Some runners cap a session independently of --max-turns;
+    # making a completed implementation also reconcile a whole report can then
+    # turn a successful code change into a failed stage at that runner cap.
+    local report_turns=12 final_turns=38 turns=50 step_turns
     if [[ "$total" -gt 1 ]]; then
         turns=$(( 150 / (total - 1) ))
         [[ "$turns" -lt 8 ]] && turns=8
@@ -1353,16 +1555,27 @@ run_stepwise_implementation() {
             echo "Append your rows to IMPLEMENTATION_NOTES.md; do not rewrite"
             echo "the rows already there. Run the narrowest test target that"
             echo "covers this step."
-            if [[ "$i" -eq "$total" ]]; then
-                echo
-                echo "This is the final step. After it, run the remaining"
-                echo "targeted checks and write"
-                echo "CHANGE_TEST_REPORT.md covering the whole change, not only"
-                echo "this step. The driver runs the full regression block once"
-                echo "after this invocation; do not run that block here."
-            else
+            echo
+            echo "## Runtime completion bound (binding)"
+            echo
+            echo "This runner can end a session after 21 tool iterations. Finish"
+            echo "this step in at most 12 tool actions: read the named files once,"
+            echo "make the smallest edit, run the one named/narrow test, append the"
+            echo "handoff, and stop. Do not investigate unrelated failures, repeat"
+            echo "probes, review earlier steps, or broaden the test run. If a narrow"
+            echo "check exposes an unrelated pre-existing issue, record it in the"
+            echo "handoff and finish this step rather than diagnosing it."
+            if [[ "$i" -ne "$total" ]]; then
                 echo
                 echo "Do not run the full suite; the final step does that once."
+            else
+                echo
+                echo "This is the final code step. Run only the narrow checks"
+                echo "needed for this code and append their result to"
+                echo "IMPLEMENTATION_NOTES.md. Do not write CHANGE_TEST_REPORT.md:"
+                echo "a fresh report-only invocation will reconcile it from the"
+                echo "on-disk notes and evidence. The driver runs the full"
+                echo "regression block once after that invocation."
             fi
         } >> "$prompt"
 
@@ -1375,13 +1588,40 @@ run_stepwise_implementation() {
             "$MODEL_IMPLEMENT" "" "$step_turns" "$BUDGET_IMPLEMENT"
 
         check_document_budget IMPLEMENTATION_NOTES.md || exit 1
-        if [[ "$i" -eq "$total" ]]; then
-            check_document_budget CHANGE_TEST_REPORT.md || exit 1
-        fi
         printf '%s\n' "$i" > "$done_file"
     done < "$steps_file"
 
+    # This is intentionally its own cold stage, rather than a postscript to
+    # the last code step. It is a checkpointed recovery boundary: if report
+    # synthesis hits a runner limit, resume retries only this small stage and
+    # never redoes a successfully checkpointed implementation step.
+    if [[ ! -f "$report_done_file" ]]; then
+        prompt="$STATE_DIR/implement-report.md"
+        compose_implementation_prompt "$base" "$prompt"
+        {
+            echo
+            echo "## Report-only invocation (no code changes)"
+            echo
+            echo "All implementation steps are complete and checkpointed. Do"
+            echo "not inspect unrelated code, change source files, rerun tests,"
+            echo "or review the implementation. Read IMPLEMENTATION_NOTES.md and"
+            echo "the existing targeted-test evidence only. Then replace"
+            echo "CHANGE_TEST_REPORT.md with its required concise, authoritative"
+            echo "whole-change report. Report only checks that actually ran; mark"
+            echo "anything absent as NOT RUN. Finish immediately after writing it."
+        } >> "$prompt"
+
+        echo
+        echo "Implementation report: reconciling checkpointed step evidence."
+        plan_assess || return $?
+        run_claude "$prompt" "implementation-step-report" \
+            "$MODEL_IMPLEMENT" "" "$report_turns" "$BUDGET_IMPLEMENT"
+        check_document_budget CHANGE_TEST_REPORT.md || exit 1
+        touch "$report_done_file"
+    fi
+
     rm -f "$done_file"
+    rm -f "$report_done_file"
 }
 
 # Count checks as they stream past and drive the pinned status line.
@@ -1426,7 +1666,7 @@ progress_tap() {
 # Change-request pipeline stage order, used to report "stage N/M" to the TUI.
 # Dynamic log names (implementation-step-N, manual-checklist-base/delta) are
 # normalized to the base stage before lookup.
-STATUS_STAGE_SEQ="baseline change-spec change-plan adversarial-review updated-change-plan implementation manual-checklist execute-checklist final-audit"
+STATUS_STAGE_SEQ="change-plan adversarial-review updated-change-plan implementation manual-checklist execute-checklist final-audit"
 
 # Report the current stage to the TUI status channel. The exports feed the
 # agent shims' own status writes; the start event written here covers every
@@ -1467,7 +1707,7 @@ run_claude() {
     prompt_file="$(resolve_prompt "$1")"
     local log_name="$2"
     case "$log_name" in
-        requirements|project-plan|baseline|change-spec|change-plan)
+        requirements|project-plan|change-plan)
             python3 "$ROOT/scripts/lib/early-prerequisites.py" "$DOCUMENT_BUDGET_SOURCE" || exit $? ;;
     esac
 
@@ -1760,6 +2000,93 @@ run_codex() {
     save_plan_review "$output_file" "$review_key"
 }
 
+# Focused read-only review workers broaden coverage without granting them the
+# canonical review artifact. Failures are advisory: the primary reviewer still
+# receives the original evidence and produces the only binding verdict.
+run_adversarial_review_panel() {
+    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid status
+    local -a pids=()
+    [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"
+    mkdir -p "$directory/prompts"
+    for lens in requirements regression security testability; do
+        prompt="$directory/prompts/$lens.md"
+        output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
+        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        (
+            run_codex "$prompt" "$output" "adversarial-review-worker-$lens" \
+                "$CODEX_EFFORT_REVIEW"
+        ) > "$LOG_DIR/adversarial-review-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || echo "Adversarial review panel worker failed; primary review will continue." >&2
+    done
+    ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"
+    cp "$ROOT/prompts/change/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
+    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `ADVERSARIAL_REVIEW.md`.\n' \
+        "$directory" >> "$ADVERSARIAL_REVIEW_PROMPT"
+}
+
+run_updated_change_plan_panel() {
+    local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
+    local -a pids=()
+    # Keep the older knob as a fallback, while allowing the change workflow to
+    # be controlled independently from the new-project updated-plan panel.
+    [[ "${WORKFLOW_UPDATED_CHANGE_PLAN_PANEL:-${WORKFLOW_UPDATED_PLAN_PANEL:-1}}" == 1 ]] || return 0
+    echo "Updated-change-plan review panel: launching 4 workers in parallel."
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in dispositions ownership verification scope; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
+        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( run_codex "$prompt" "$output" "updated-change-plan-review-worker-$lens" "$CODEX_EFFORT_REVIEW" ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-change-plan panel worker failed; plan writer will continue.' >&2; done
+    echo "Updated-change-plan review panel: worker packets collected; launching synthesis."
+    UPDATED_PLAN_PROMPT="$directory/synthesis.md"
+    cp "$ROOT/prompts/change/updated-change-plan.md" "$UPDATED_PLAN_PROMPT"
+    printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
+}
+
+run_final_audit_panel() {
+    local directory="$STATE_DIR/final-audit-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_FINAL_AUDIT_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in verification scope regression waivers; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/final-audit-review-worker.md" "$prompt"
+        printf '\n## Assigned audit lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( run_codex "$prompt" "$output" "final-audit-review-worker-$lens" "$CODEX_EFFORT_AUDIT" ) > "$LOG_DIR/final-audit-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit panel worker failed; auditor will continue.' >&2; done
+    FINAL_AUDIT_PROMPT="$directory/synthesis.md"
+    cp "$ROOT/prompts/change/final-audit.md" "$FINAL_AUDIT_PROMPT"
+    printf '\n## Specialist audit packets\n\nRead available packets in `%s`, verify them, and write the sole canonical final audit and verdict.\n' "$directory" >> "$FINAL_AUDIT_PROMPT"
+}
+
+run_checklist_panel() {
+    local kind="$1" source="$2" directory="$STATE_DIR/checklist-$1-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || { CHECKLIST_PANEL_PROMPT="$source"; return 0; }
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in coverage invariants resources regressions; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
+        printf '\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass.\n' "$lens" "$kind" >> "$prompt"
+        ( run_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens" "$CODEX_EFFORT_CHECKLIST" ) > "$LOG_DIR/manual-checklist-$kind-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Checklist panel worker failed; checklist reviewer will continue.' >&2; done
+    CHECKLIST_PANEL_PROMPT="$directory/synthesis.md"
+    cp "$source" "$CHECKLIST_PANEL_PROMPT"
+    printf '\n## Specialist checklist packets\n\nRead available packets in `%s`, verify them, and write the sole canonical checklist.\n' "$directory" >> "$CHECKLIST_PANEL_PROMPT"
+}
+
 BG_PID=""
 BG_LABEL=""
 BG_START=0
@@ -1935,19 +2262,103 @@ change_plan_draft_key() {
     done
 }
 
-run_combined_change_plan() {
+# --- Planning, with documents as checkpoints --------------------------------
+#
+# The combined stage writes BASELINE_REPORT.md, CHANGE_SPEC.md and
+# CHANGE_PLAN.md in one context so the plan is written by the model that did
+# the baseline. On a large repository that context can run out while the agent
+# is still reading: Claude compacts, the model takes the compaction summary for
+# a question, answers "what did we do so far", and the turn ends with nothing
+# on disk. Three such passes cost twenty minutes and 600k tokens on one issue.
+#
+# So the stage is judged by the documents it left, not by its exit. Whatever
+# was written is kept; a second pass writes only what is missing, in a fresh
+# context, with a note saying what happened. Two passes that write nothing
+# stop with the cause, which is the request pointing at too much repository.
+PLANNING_CONTEXT_LIMIT="${WORKFLOW_CONTEXT_EXHAUSTED_TOKENS:-150000}"
+
+planning_context_used() {
+    jq -R -s '[split("\n")[] | fromjson? | select(type == "object" and .type == "result")]
+        | (last // {}) | (.usage // {})
+        | ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))' \
+        "$1" 2>/dev/null || printf 0
+}
+
+planning_documents_complete() {
+    [[ -s BASELINE_REPORT.md && -s CHANGE_SPEC.md && -s CHANGE_PLAN.md ]]
+}
+
+# run_planning_pass with-baseline|spec-and-plan [note-file]
+run_planning_pass() {
     local prompt="$LOG_DIR/change-planning.prompt.md"
     {
-        printf '# Combined change specification and planning\n\n'
-        printf 'In this single stage and the same model and context, first write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+        if [[ "$1" == with-baseline ]]; then
+            printf '# Combined baseline, change specification, and planning\n\n'
+            printf 'In this single stage and the same model and context, first establish the baseline by running verification commands and write BASELINE_REPORT.md, then write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+        else
+            printf '# Combined change specification and planning\n\n'
+            printf 'BASELINE_REPORT.md is already written; read it and do not redo the baseline. In this single stage and the same context, write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+        fi
+        printf 'Write each document to disk the moment its inputs are in hand -- BASELINE_REPORT.md before any reading for the specification, CHANGE_SPEC.md before any reading for the plan. A document on disk survives a context that runs out; work still in progress does not. Grep for the symbols CHANGE_REQUEST.md names and read the surrounding lines; never read a large file end to end.\n\n'
+        if [[ -n "${2:-}" && -s "$2" ]]; then
+            cat "$2"
+            printf '\n\n'
+        fi
+        if [[ "$1" == with-baseline ]]; then
+            cat "$(resolve_prompt prompts/change/baseline.md)"
+            printf '\n\n# Then specify the change\n\n'
+        fi
         cat "$(resolve_prompt prompts/change/change-spec.md)"
         printf '\n\n# Then plan the specified change\n\n'
         cat "$(resolve_prompt prompts/change/change-plan.md)"
     } > "$prompt"
     UNCLE_COMBINED_CHANGE_PLAN=1 run_claude "$prompt" change-plan \
-        "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN" || return $?
-    require_file CHANGE_SPEC.md
-    require_file CHANGE_PLAN.md
+        "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"
+}
+
+run_planning_stage() {
+    local pass used missing f note="$STATE_DIR/planning-context-note.md"
+    rm -f "$note"
+    for pass in 1 2; do
+        if [[ -s BASELINE_REPORT.md ]]; then
+            run_planning_pass spec-and-plan "$note" || return $?
+        else
+            run_planning_pass with-baseline "$note" || return $?
+        fi
+        planning_documents_complete && break
+        missing=""
+        for f in BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md; do
+            [[ -s "$f" ]] || missing="$missing$f "
+        done
+        used="$(planning_context_used "$LOG_DIR/change-plan.jsonl")"
+        case "$used" in ''|*[!0-9]*) used=0 ;; esac
+        echo
+        if [[ "$used" -ge "$PLANNING_CONTEXT_LIMIT" ]]; then
+            echo "The planning stage ran out of context ($used tokens) before writing: $missing"
+            echo "Reading a large repository end to end spends the whole context on exploring."
+        else
+            echo "The planning stage ended without writing: $missing"
+        fi
+        if [[ "$pass" == 1 ]]; then
+            echo "Whatever it wrote is kept; the rest is written in a fresh context."
+            {
+                printf '## Context note from the driver\n\n'
+                printf 'The previous pass of this stage ended after %s tokens without writing: %s\n' "$used" "$missing"
+                printf 'Documents already on disk are kept and are not rewritten; write only the missing ones.\n'
+                printf 'Grep for the symbols CHANGE_REQUEST.md names instead of reading large files end to end,\n'
+                printf 'and write each document as soon as its inputs are in hand.\n'
+            } > "$note"
+        fi
+    done
+    rm -f "$note"
+    if ! planning_documents_complete; then
+        echo "Planning did not complete in two passes. Narrow CHANGE_REQUEST.md, or name the files"
+        echo "the change touches so the baseline can go straight to them, then re-run."
+        supervision_validation_failed change-plan BASELINE_REPORT.md \
+            "planning stage ended twice without completing its documents (context used: $used tokens)" 1 || true
+        return 1
+    fi
+    check_document_budget BASELINE_REPORT.md || return 1
     check_document_budget CHANGE_SPEC.md || return 1
     check_document_budget CHANGE_PLAN.md || return 1
     change_plan_draft_key > "$STATE_DIR/change-plan.draft-key"
@@ -2035,12 +2446,7 @@ while true; do
             # A fresh run legitimately claims this checkout for its issue.
             write_origin
 
-            run_claude prompts/change/baseline.md baseline \
-                "$MODEL_BASELINE" "" 120 "$BUDGET_BASELINE"
-            require_file BASELINE_REPORT.md
-            check_document_budget BASELINE_REPORT.md || exit 1
-
-            run_combined_change_plan || exit 1
+            run_planning_stage || exit 1
 
             set_state WAIT_ANALYSIS_APPROVAL
             ;;
@@ -2078,23 +2484,25 @@ while true; do
                 check_document_budget CHANGE_PLAN.md || exit 1
             fi
 
+            envelope_invalidate CHANGE_PLAN
+            envelope_write --stage plan --result pass \
+                --evidence CHANGE_PLAN.md \
+                --producer-stage change-plan --producer-kind agent
+            set_state ADVERSARIAL_REVIEW
+            ;;
+
+        ADVERSARIAL_REVIEW)
+
             # Written before the reviewer runs: a reviewer that never returns
             # leaves the reason nothing was verified, and blocks release.
             envelope_write --stage review --result unavailable --reason 'reviewer did not complete'
+            run_adversarial_review_panel
             run_codex \
-                prompts/change/adversarial-review.md \
+                "${ADVERSARIAL_REVIEW_PROMPT:-prompts/change/adversarial-review.md}" \
                 ADVERSARIAL_REVIEW.md \
                 adversarial-review \
                 "$CODEX_EFFORT_REVIEW"
 
-            set_state VALIDATE_ADVERSARIAL_REVIEW
-            ;;
-
-        ADVERSARIAL_REVIEW)
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            envelope_write --stage review --result unavailable --reason 'reviewer did not complete'
-            run_codex prompts/change/adversarial-review.md ADVERSARIAL_REVIEW.md adversarial-review "$CODEX_EFFORT_REVIEW"
             set_state VALIDATE_ADVERSARIAL_REVIEW
             ;;
 
@@ -2131,6 +2539,8 @@ while true; do
             ;;
 
         WAIT_PLAN_APPROVAL)
+            # One gate for the plan and the review of it: UPDATED_PLAN verifies
+            # both approvals, and the reopen map sends either document here.
             printf '%s\n' WAIT_PLAN_APPROVAL > "$STATE_DIR/approval-route"
             human_gate ACKNOWLEDGE \
                 CHANGE_PLAN.md CHANGE_PLAN \
@@ -2152,7 +2562,8 @@ while true; do
             # and it keeps the record of what the review actually changed.
             cp CHANGE_PLAN.md "$STATE_DIR/CHANGE_PLAN.pre-review.md"
 
-            run_claude prompts/change/updated-change-plan.md updated-change-plan \
+            run_updated_change_plan_panel
+            run_claude "${UPDATED_PLAN_PROMPT:-prompts/change/updated-change-plan.md}" updated-change-plan \
                 "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \
                 "$BUDGET_UPDATED_PLAN"
             set_state VALIDATE_UPDATED_PLAN
@@ -2180,9 +2591,12 @@ while true; do
             plan_status=0
             plan_assess || plan_status=$?
             case "$plan_status" in 0) ;; 10) continue ;; *) exit 1 ;; esac
-            # Re-approving CHANGE_PLAN overwrites the ACKNOWLEDGE hash taken
-            # before the revision, so the recorded approval always names the
-            # text implementation will run against.
+            # The review response revised CHANGE_PLAN.md in place, so the
+            # ACKNOWLEDGE hash taken at WAIT_PLAN_APPROVAL names text that no
+            # longer exists. Without this gate IMPLEMENT finds the plan
+            # "changed after approval", reopens WAIT_PLAN_APPROVAL, the plan is
+            # revised again, and the run loops. Re-approving here records the
+            # hash of the text implementation will run against.
             # The gate does not open while a blocking review finding has no
             # disposition row in the revised plan.
             envelope_py plan-gate ADVERSARIAL_REVIEW.md CHANGE_PLAN.md || exit 1
@@ -2229,8 +2643,9 @@ while true; do
             # genuinely depends on the implementation is added by the delta
             # pass in the CHECKLIST state.
             if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
+                run_checklist_panel base prompts/change/manual-checklist-base.md
                 start_codex_bg \
-                    prompts/change/manual-checklist-base.md \
+                    "$CHECKLIST_PANEL_PROMPT" \
                     "$STATE_DIR/MANUAL_CHECKLIST.base.md" \
                     manual-checklist-base \
                     "$CODEX_EFFORT_CHECKLIST"
@@ -2434,8 +2849,9 @@ REPAIR
 
             if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
                 require_file "$STATE_DIR/MANUAL_CHECKLIST.base.md"
+                run_checklist_panel delta prompts/change/manual-checklist-delta.md
                 run_codex \
-                    prompts/change/manual-checklist-delta.md \
+                    "$CHECKLIST_PANEL_PROMPT" \
                     MANUAL_CHECKLIST.md \
                     manual-checklist-delta \
                     "$CODEX_EFFORT_CHECKLIST"
@@ -2464,11 +2880,12 @@ REPAIR
             snapshot_checklist_groups
             snapshot_checklist_checks
             ensure_checklist_runner execute-checklist || exit 1
+            run_parallel_checklist_workers
             PROGRESS_TOTAL="$(grep -oE 'MC-[0-9]+' MANUAL_CHECKLIST.md 2>/dev/null \
                 | sort -u | grep -c . || echo 0)"
             PROGRESS_LABEL="checklist"
-            run_claude prompts/change/execute-change-checklist.md execute-checklist \
-                "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 200 "$BUDGET_EXECUTE"
+            run_claude "${CHECKLIST_EXECUTE_PROMPT:-prompts/change/execute-change-checklist.md}" execute-checklist \
+                "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 200 "${CHECKLIST_SYNTHESIS_BUDGET:-$BUDGET_EXECUTE}"
             PROGRESS_TOTAL=0
             wait_green_check_bg || exit $?
             set_state VALIDATE_CHECKLIST
@@ -2492,8 +2909,9 @@ REPAIR
             envelope_write --stage audit --result unavailable --reason 'reviewer did not complete'
             if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine freeze || exit 1; fi
             rm -f FINAL_AUDIT.md
+            run_final_audit_panel
             run_codex \
-                prompts/change/final-audit.md \
+                "${FINAL_AUDIT_PROMPT:-prompts/change/final-audit.md}" \
                 FINAL_AUDIT.md \
                 final-audit \
                 "$CODEX_EFFORT_AUDIT"

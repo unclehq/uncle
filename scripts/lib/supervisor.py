@@ -1,6 +1,7 @@
-"""Optional event-triggered supervision: detection, journal, validation, delivery.
+"""Event-triggered supervision: detection, journal, validation, delivery.
 
-Nothing here runs unless `supervision.enabled true` is in .uncle/config. The
+Supervision is enabled unless `.uncle/config` explicitly sets
+`supervision.enabled false`. The
 Controller observes the same status events the TUI already reads, fires one
 of four triggers, and asks a tool-free worker for one strict-JSON proposal.
 A proposal never carries instructions: it selects a fixed template, cites
@@ -23,7 +24,7 @@ SUBDIR = 'supervision'
 EFFORTS = ('low', 'medium', 'high')
 ACTIONS = ('steer', 'retry', 'ask', 'none')
 TRIGGERS = ('validation', 'recurrence', 'steering', 'overrun')
-SUPPORTED_RUNNERS = ('claude',)
+SUPPORTED_RUNNERS = ('claude', 'cline', 'codex', 'kimi', 'self-hosted')
 PROPOSAL_KEYS = ('schema', 'diagnosis', 'evidence', 'action', 'target_stage', 'attempt',
                  'run_id', 'template_id', 'rationale')
 MAX_DIAGNOSIS = 2000
@@ -41,7 +42,7 @@ CORRELATED = ('turn', 'message', 'marker')
 # Typed controls: key -> (kind, default). Every key is documented in
 # .uncle/config.example and README.md; AT-9 checks that list against this one.
 CONTROLS = (
-    ('enabled', 'bool', False),
+    ('enabled', 'bool', True),
     ('runner', 'runner', 'claude'),
     ('model', 'text', 'sonnet'),
     ('effort', 'effort', 'medium'),
@@ -1539,7 +1540,15 @@ class Controller:
 
 def load_contract(root):
     path = Path(root) / 'prompts' / 'supervise.md'
-    return path.read_text(encoding='utf-8')
+    # A copied/minimal project may omit the optional supervisor prompt.  That
+    # must not make a default-on supervisor abort the workflow before it has
+    # even observed an event.  A later diagnosis gets an explicit, bounded
+    # unavailable result from its runner rather than an uncaught startup error.
+    try:
+        return path.read_text(encoding='utf-8')
+    except OSError:
+        return ('Supervisor contract unavailable: the installed prompt is missing. '
+                'Return action none.')
 
 
 class HeadlessHost:
@@ -1713,13 +1722,16 @@ def supervised_lock_run(run_once, command, state_dir, root, environ=None):
                     thread.join(timeout=5)
                 host.exit_code = rc
                 host.poll()
-                if not host.settle(host.controller.config.call_timeout_seconds + 5):
+                retry = host.settle(host.controller.config.call_timeout_seconds + 5)
+                if not retry:
                     return rc
                 # A validator fails after the driver has durably advanced to a
                 # VALIDATE_* state. Re-enter the stage itself so the retained
                 # correction is included in a fresh model call instead of
                 # merely re-running the same deterministic validator.
                 stage = host.controller.stage
+                if not stage:
+                    return rc
                 request = Path(state_dir) / 'rerun-request.json'
                 atomic_write(request, json.dumps({'stage': stage, 'source': 'supervisor-retry'}) + '\n')
                 host.transcript('Retrying the driver with the retained correction.')

@@ -7,11 +7,9 @@
 #   .runner  cline | claude | kimi | codex | self-hosted for any stage
 #            self-hosted uses OpenCode (opencode is also accepted).
 #   .effort  high | medium | low
-#   .model   a model id compatible with the runner:
-#            - cline model id in modelType/model form (e.g. cline-pass/deepseek-v4-flash)
-#            - claude model id (e.g. claude-opus-5)
-#            - codex model id (e.g. deepseek-v4-flash)
-#            - kimi model id (e.g. moonshot-ai/kimi-k2.7-code-highspeed)
+#   .model   a cline model id in modelType/model form, and only for a cline
+#            stage: claude, kimi, and codex are given no model flag and use
+#            their own default.
 #            For self-hosted stages, select a discovered model in Configure ->
 #            Configure OpenCode / self hosting. API keys are stored separately.
 #   .billing clinepass | cline-usage (default clinepass) -- which cline
@@ -108,12 +106,13 @@ final-audit.effort low
 triage.runner claude
 triage.effort low
 
-# --- supervision (opt-in) ---------------------------------------------------
+# --- supervision ------------------------------------------------------------
 
 # Event-triggered diagnosis while a run is in progress: a validator failure,
 # a recurring failure signature, accepted-but-unanswered steering, or a
 # stage over its time/token bound asks a tool-free model for one bounded
-# action. Off by default; off, no supervisor process ever starts. Only
+# action. On by default; set `supervision.enabled false` to opt out, in which
+# case no supervisor process starts. Only
 # `claude` is supported as the runner; other values report unavailable.
 # An invalid value disables corrections and names the key; nothing is
 # substituted. The file is re-read while a run is in progress: setting
@@ -123,7 +122,7 @@ triage.effort low
 # by message id); codex, cline and kimi accept steering without a
 # confirmed answer. See README.md "Supervision" for recovery, including
 # `supervisor.py note-resolve` for an uncertain retained note.
-# supervision.enabled false
+# supervision.enabled true
 # supervision.runner claude
 # supervision.model sonnet
 # supervision.effort medium
@@ -153,12 +152,13 @@ triage.effort low
 # and are not counted against max_calls_per_run; standing answers are.
 # supervision.delegate_gates none
 
-# --- supervision (opt-in) ---------------------------------------------------
+# --- supervision ------------------------------------------------------------
 
 # Event-triggered diagnosis while a run is in progress: a validator failure,
 # a recurring failure signature, accepted-but-unanswered steering, or a
 # stage over its time/token bound asks a tool-free model for one bounded
-# action. Off by default; off, no supervisor process ever starts. Only
+# action. On by default; set `supervision.enabled false` to opt out, in which
+# case no supervisor process starts. Only
 # `claude` is supported as the runner; other values report unavailable.
 # An invalid value disables corrections and names the key; nothing is
 # substituted. The file is re-read while a run is in progress: setting
@@ -168,7 +168,7 @@ triage.effort low
 # by message id); codex, cline and kimi accept steering without a
 # confirmed answer. See README.md "Supervision" for recovery, including
 # `supervisor.py note-resolve` for an uncertain retained note.
-# supervision.enabled false
+# supervision.enabled true
 # supervision.runner claude
 # supervision.model sonnet
 # supervision.effort medium

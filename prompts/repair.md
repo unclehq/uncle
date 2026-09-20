@@ -4,6 +4,11 @@ This is a focused repair pass, not a new implementation of the approved plan.
 ## Repair context budget
 
 1. Read .uncle/workflow/repair-source to locate the current failure report.
+   If .uncle/workflow/REPAIR_BRIEF.md exists, read it first: the driver wrote
+   it after a repair pass that changed none of the files its findings name,
+   and it lists exactly what is still open. Dispositions already recorded for
+   those IDs in IMPLEMENTATION_NOTES.md and AUTOMATED_TEST_REPORT.md describe
+   work the tree does not contain; they are wrong, not evidence.
    Search that report for failing commands, required FAIL rows, and actionable
    blocking finding IDs. Read those findings and their supporting evidence in
    bounded sections; omit passing checks, resolved findings, and unrelated logs.
@@ -29,6 +34,15 @@ relevant constraint, affected files, and targeted check. Fix every actionable
 blocker in the current failure report within approved scope; avoid unrelated
 features, refactors, formatting, and cleanup. If findings share a root cause,
 repair it once and verify each affected finding.
+
+The driver judges this pass by the files it changed, not by what the reports
+say. A blocking finding counts as repaired only when a file it names -- or a
+file you name in that finding's disposition row -- differs afterwards. A pass
+that changes none of them is not a repair: it is not reviewed, does not count
+against the repair limit, and is retried once with a driver-written brief; a
+second such pass stops the run. If the correct fix lives in a file the review
+did not name, name that file (backticked, repository-relative) in the
+finding's disposition row.
 
 Add meaningful regression checks before fixes where practical. Prove critical
 assertions reject the corresponding defect in an isolated copy or temporary

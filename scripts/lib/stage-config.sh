@@ -53,18 +53,68 @@ uncle_config_get() {
     return 0
 }
 
+# The preview is deliberately not a Configure row: it is an implementation
+# shortcut, not an independently approved stage.  It therefore inherits the
+# first configured model stage, including that stage's runner.  Looking up the
+# model alone is unsafe: `local/foo` belongs to OpenCode, not to Cline.
+uncle_first_configured_model_stage() {
+    local file line key value
+    file="$(uncle_config_file)"
+    [[ -r "$file" ]] || return 0
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(printf '%s' "$line" | tr -s '[:space:]' ' ')"
+        line="${line# }"
+        [[ "${line%% *}" == *.model ]] || continue
+        key="${line%% *}"
+        value="${line#* }"
+        [[ -n "$value" ]] || continue
+        printf '%s' "${key%.model}"
+        return 0
+    done < "$file"
+}
+
 # Base and delta are executions of the configured checklist stage.
 uncle_config_stage() {
     case "$1" in
+        *-review-worker-*) printf '%s' "${1%%-review-worker-*}" ;;
+        preview-build)
+            local first_model_stage
+            first_model_stage="$(uncle_first_configured_model_stage)"
+            [[ -n "$first_model_stage" ]] && printf '%s' "$first_model_stage" || printf '%s' "$1"
+            ;;
         plan-executability) printf 'adversarial-review' ;;
         plan-recovery) printf 'updated-plan' ;;
         manual-checklist-base|manual-checklist-delta) printf 'manual-checklist' ;;
-        implementation-step-*) printf 'implementation' ;;
+        # A driver-owned worker inherits the parent stage's runner, model,
+        # effort, billing, and network policy for every supported runner.
+        *-worker-*) printf '%s' "${1%%-worker-*}" ;;
+        implementation-step-*|implementation-report) printf 'implementation' ;;
         *) printf '%s' "$1" ;;
     esac
 }
 
+# <stage>.<key> from the config. A repair pass has its own key so it can run
+# on a stronger model than bulk implementation; unset, it inherits
+# implementation's setting, which is what it always used.
+uncle_stage_key() {
+    local stage="$1" key="$2" v
+    v="$(uncle_config_get "$stage.$key")"
+    if [[ -z "$v" && "$stage" == repair ]]; then
+        v="$(uncle_config_get "implementation.$key")"
+    fi
+    printf '%s' "$v"
+}
+
 uncle_stage_side() {
+    # Preview inherits a configured stage's runner/model, but it is always an
+    # implementation write stage. If the inherited model comes from a review
+    # stage (for example adversarial-review's self-hosted model), resolving its
+    # side after the alias launches reviewer-self-hosted without --max-turns.
+    # OpenCode then rejects it before it sees the prompt. Keep the inherited
+    # runner/model pairing while preserving preview's agent protocol.
+    [[ "$1" == "preview-build" ]] && { printf '%s' agent; return 0; }
+    [[ "$1" == *-review-worker-* ]] && { printf '%s' reviewer; return 0; }
     local stage
     stage="$(uncle_config_stage "$1")"
     case "$UNCLE_REVIEWER_STAGES" in
@@ -137,7 +187,7 @@ uncle_resolve_stage_runner() {
     UNCLE_RESOLVED_RUNNER=""
     if [[ -n "${!var:-}" || -n "${!global:-}" ]]; then
         stage="$(uncle_config_stage "$stage")"
-        UNCLE_RESOLVED_RUNNER="$(uncle_config_get "$stage.runner")"
+        UNCLE_RESOLVED_RUNNER="$(uncle_stage_key "$stage" runner)"
         [[ -n "$UNCLE_RESOLVED_RUNNER" ]] || UNCLE_RESOLVED_RUNNER="$(uncle_config_get runner)"
         case "$UNCLE_RESOLVED_RUNNER" in opencode|aider) UNCLE_RESOLVED_RUNNER=self-hosted ;; esac
         return 0
@@ -149,7 +199,7 @@ uncle_resolve_stage_runner() {
 uncle_stage_runner() {
     local stage v
     stage="$(uncle_config_stage "$1")"
-    v="$(uncle_config_get "$stage.runner")"
+    v="$(uncle_stage_key "$stage" runner)"
     [[ -n "$v" ]] || v="$(uncle_config_get runner)"
     [[ "$v" != "opencode" && "$v" != "aider" ]] || v=self-hosted
     if [[ -z "$v" ]]; then
@@ -162,12 +212,12 @@ uncle_stage_runner() {
 uncle_stage_effort() {
     local stage v
     stage="$(uncle_config_stage "$1")"
-    case "$stage" in implementation-step-*) stage=implementation ;; esac
-    v="$(uncle_config_get "$stage.effort")"
+    case "$stage" in implementation-step-*|implementation-report) stage=implementation ;; esac
+    v="$(uncle_stage_key "$stage" effort)"
     [[ -n "$v" ]] || v="$(uncle_config_get effort)"
     if [[ -z "$v" ]]; then
         case "$stage" in
-            adversarial-review|project-plan|implementation) v=medium ;;
+            adversarial-review|project-plan|implementation|repair) v=medium ;;
             *) v="$UNCLE_DEFAULT_EFFORT" ;;
         esac
     fi
@@ -181,34 +231,22 @@ uncle_stage_model() {
     stage="$(uncle_config_stage "$1")"
     runner="${2-$(uncle_stage_runner "$stage")}"
     if [[ "$runner" == "self-hosted" ]]; then
-        v="${UNCLE_SELF_HOSTED_MODEL:-$(uncle_config_get "$stage.model")}"
+        v="${UNCLE_SELF_HOSTED_MODEL:-$(uncle_stage_key "$stage" model)}"
         [[ -n "$v" ]] || v="$(uncle_config_get self-hosted.model)"
         printf '%s' "$v"
         return 0
     fi
     if [[ "$runner" == "claude" ]]; then
-        v="$(uncle_config_get "$stage.model")"
-        [[ -n "$v" ]] || v="${WORKFLOW_REVIEWER_CLAUDE_MODEL:-}"
-        printf '%s' "$v"
-        return 0
-    fi
-    if [[ "$runner" == "codex" ]]; then
-        v="$(uncle_config_get "$stage.model")"
-        [[ -n "$v" ]] || v="${UNCLE_CODEX_MODEL:-}"
-        printf '%s' "$v"
-        return 0
-    fi
-    if [[ "$runner" == "kimi" ]]; then
-        v="$(uncle_config_get "$stage.model")"
-        [[ -n "$v" ]] || v="${WORKFLOW_KIMI_MODEL:-}"
-        if [[ -n "$v" ]]; then
-            export WORKFLOW_KIMI_MODEL="$v"
-            printf 'kimi'
-        fi
+        # A claude stage ran on the CLI's default tier with no way to choose
+        # one, even though the config header documents `<stage>.model` and both
+        # claude paths -- the bare CLI for an agent, reviewer-claude.sh for a
+        # reviewer -- already take --model. Empty stays empty, so a stage that
+        # names no model keeps the default it has always had.
+        uncle_stage_key "$stage" model
         return 0
     fi
     [[ "$runner" == "cline" ]] || return 0
-    v="$(uncle_config_get "$stage.model")"
+    v="$(uncle_stage_key "$stage" model)"
     [[ -n "$v" ]] || v="$(uncle_config_get "$stage")"
     if [[ -z "$v" && "$(uncle_stage_side "$stage")" == "reviewer" ]]; then
         v="$(uncle_config_get reviewer)"
@@ -237,7 +275,7 @@ uncle_stage_billing() {
     local stage v model
     stage="$(uncle_config_stage "$1")"
     case "$stage" in implementation-step-*) stage=implementation ;; esac
-    model="$(uncle_config_get "$stage.model")"
+    model="$(uncle_stage_key "$stage" model)"
     [[ -n "$model" ]] || model="$(uncle_config_get "$stage")"
     if [[ -n "$model" ]]; then
         # A free model is not evidence either way: it runs under both.
@@ -252,7 +290,7 @@ uncle_stage_billing() {
         esac
         return 0
     fi
-    v="$(uncle_config_get "$stage.billing")"
+    v="$(uncle_stage_key "$stage" billing)"
     [[ -n "$v" ]] || v="$(uncle_config_get billing)"
     case "$(printf '%s' "${v:-clinepass}" | tr '[:upper:]' '[:lower:]')" in
         cline-usage|usage|usage-based|cline_usage) printf 'cline-usage' ;;
@@ -302,7 +340,7 @@ uncle_stage_network() {
     local stage v
     stage="$(uncle_config_stage "$1")"
     case "$stage" in implementation-step-*) stage=implementation ;; esac
-    v="$(uncle_config_get "$stage.network")"
+    v="$(uncle_stage_key "$stage" network)"
     [[ -n "$v" ]] || v="$(uncle_config_get network)"
     case "$(printf '%s' "${v:-false}" | tr '[:upper:]' '[:lower:]')" in
         1|true|yes|on) printf 'true' ;;

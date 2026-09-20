@@ -4,9 +4,49 @@ import re
 import sys
 from checklist_groups import parse
 
+# A self-hosted reviewer twice wrote a checklist with real, complete content
+# under prose-style bold labels ("**Checks:**", "**Pass condition:**")
+# instead of the required bullet fields -- every check was fully specified,
+# just spelled differently, and got rejected for it. checklist_groups.py's
+# own FIELD regex already tolerates bold markup for "Exclusive resources"/
+# "Depends on"; this extends the same tolerance to the two fields whose
+# absence this file's sanity check treats as "not a checklist at all".
+# Deliberately label-only: no action, expected result, or any other content
+# is invented or altered.
+def _label_pattern(words):
+    # The colon lands either inside or outside the closing bold marker
+    # ("**Checks:**" vs "**Checks**:") in the wild; match both explicitly
+    # rather than guess, so no markup is ever left dangling in the output.
+    return re.compile(
+        r'^(\s*)(?:[-*+]\s*)?'
+        r'(?:\*\*(?:%s):\*\*|\*\*(?:%s)\*\*:|__(?:%s):__|__(?:%s)__:|(?:%s):)'
+        r'\s*' % ((words,) * 5), re.I | re.M)
+
+
+LABEL_SYNONYMS = (
+    (_label_pattern(r'Checks?|Steps?'), r'\g<1>- Exact action: '),
+    (_label_pattern(r'Pass\s+condition'), r'\g<1>- Expected result: '),
+)
+
+
+def normalize_labels(text):
+    for pattern, replacement in LABEL_SYNONYMS:
+        text = pattern.sub(replacement, text)
+    return text
+
 
 def validate(path):
-    return validate_text(Path(path).read_text(encoding='utf-8'))
+    path = Path(path)
+    text = path.read_text(encoding='utf-8')
+    try:
+        return validate_text(text)
+    except ValueError:
+        normalized = normalize_labels(text)
+        if normalized == text:
+            raise
+        checks = validate_text(normalized)
+        path.write_text(normalized, encoding='utf-8')
+        return checks
 
 
 def validate_text(text):

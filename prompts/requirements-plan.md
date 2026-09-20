@@ -24,6 +24,11 @@ needed to resolve a concrete requirement or constraint. Do not recursively brows
 the tree or inspect dependencies for a self-contained request. Batch independent
 reads. Read any truncated part of the brief before interpreting it.
 
+Source files already at the repository root -- a web page and its assets, a
+script -- may be a throwaway first look being built from the brief in parallel
+with this stage. They are not the project being planned and not evidence of
+anything: do not read them, cite them, or plan around them.
+
 Create REQUIREMENTS_INTERPRETATION.md containing:
 
 1. Required functionality
@@ -259,6 +264,8 @@ step owns a file when it is the only step that writes it. Add
 `Depends on: <step numbers>` when a step needs an earlier one finished first.
 A step that touches everything declares `Owns: *`.
 
+If a step's own description or title names a file it touches (a "scaffold", a ".gitignore update", a config it edits), that file must also appear in its `Owns:` list -- do not describe touching a file without declaring it. This is the single most common real gap: a step that legitimately runs a package manager also writes its lockfile, which needs its own `Owns:` entry beside the manifest.
+
   1. Arithmetic core — Owns: `src/calc.js`, `tests/calc.test.js`
   2. Keypad and display — Owns: `src/ui.js`, `index.html`
   3. Reconcile — Owns: `*` — Depends on: 1, 2
@@ -267,3 +274,20 @@ A step is not complete without it. Declare honestly rather than optimistically:
 claiming a file the step does not write is worse than claiming none, and a step
 whose files genuinely overlap another's should say so by naming the same file,
 not by omitting the field.
+
+Before finishing this stage, write or update `.gitignore` at the project root
+yourself, now, using the tools available to you -- do not merely describe it in
+the plan. Include every entry the chosen stack usually needs: its dependency
+directory (`node_modules/`, `vendor/`, a Python virtualenv), its build/output
+directory (`dist/`, `build/`, `.svelte-kit/`, `out/`, `target/`), its caches
+(`__pycache__/`, `.pytest_cache/`, `*.pyc`), local secrets (`.env`, `.env.*`),
+editor/OS noise (`.DS_Store`), and anything else that ecosystem's own default
+scaffolding tool (`npm create`, `cargo new`, a framework's own CLI) would put
+there. A real build stalled a parallel merge on exactly this: a step scaffolded
+and built a Svelte app in the same pass, producing a `dist/` directory the plan
+had not gitignored and no step had declared owning, so the driver correctly
+refused to merge anyone's work. Getting this right at the very start, before any
+implementation step runs, means no later step has to discover it by failing.
+Name `.gitignore` in whichever step's `Owns:` covers project scaffolding, the
+same as any other file it writes. If `.gitignore` already covers the chosen
+stack (a revision pass after project-plan already wrote one), leave it alone.

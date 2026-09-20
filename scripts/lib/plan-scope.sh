@@ -90,6 +90,17 @@ plan_steps() {
 #
 # Silence is not a partition: a step that declares nothing emits nothing, and
 # every caller treats an undeclared step as owning the whole tree.
+#
+# The number emitted here is this step's *position* in the list (1, 2, 3, ...
+# in the order the steps appear) -- never the literal digits the plan wrote
+# before its period. Every caller (plan_steps for task text, step_groups.py
+# for grouping) already identifies a step by that position; a plan is free to
+# start at 0 for a prerequisite step ("0. Environment check"), and one did on
+# a real run. Emitting the literal "0" there shifted every step's ownership
+# and dependency lookups by one against the position every other caller uses,
+# so a worker doing its actually-assigned, correctly-described task got
+# checked against a different step's declared files and was rejected for
+# writing exactly what it was told to.
 plan_step_owns() {
     local plan="$1"
 
@@ -101,6 +112,7 @@ plan_step_owns() {
         !inseq { next }
         /^[0-9]+\./ {
             n = $0; sub(/\..*$/, "", n)
+            position[n] = ++count
             line = $0
             if (match(line, /[Oo]wns:/)) {
                 line = substr(line, RSTART + RLENGTH)
@@ -113,7 +125,7 @@ plan_step_owns() {
                     if (tok == "") continue
                     if (tok ~ /^\//) continue
                     sub(/^\.\//, "", tok)
-                    print n "\t" tok
+                    print position[n] "\t" tok
                 }
             }
         }
@@ -121,6 +133,11 @@ plan_step_owns() {
 }
 
 # plan_step_depends <plan> — "<step>TAB<step it waits for>" per declared edge.
+#
+# Both columns are positions, for the same reason plan_step_owns emits a
+# position: "Depends on: 0" means the step written as "0." in the plan, which
+# a dependency can only ever reference after it has already appeared, so its
+# position is already known by the time a later step's "Depends on" is read.
 plan_step_depends() {
     local plan="$1"
 
@@ -132,11 +149,13 @@ plan_step_depends() {
         !inseq { next }
         /^[0-9]+\./ {
             n = $0; sub(/\..*$/, "", n)
+            position[n] = ++count
             line = $0
             if (match(line, /[Dd]epends[ \t]+on:/)) {
                 line = substr(line, RSTART + RLENGTH)
                 while (match(line, /[0-9]+/)) {
-                    print n "\t" substr(line, RSTART, RLENGTH)
+                    ref = substr(line, RSTART, RLENGTH)
+                    print position[n] "\t" ((ref in position) ? position[ref] : ref)
                     line = substr(line, RSTART + RLENGTH)
                 }
             }

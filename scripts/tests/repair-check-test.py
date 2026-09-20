@@ -98,6 +98,30 @@ class RepairCheck(unittest.TestCase):
         (self.root / 'tests/defects/env.js').write_text('module.exports = {}\n')
         self.assertEqual(self.judge(), (0, []))
 
+    def test_a_decision_id_citation_is_not_mistaken_for_a_file(self):
+        # A real stuck run: INTEGRITY's own evidence only cross-referenced
+        # TR-1's decision/invariant IDs ("DEC-9/I-5"), never repeating TR-1's
+        # actual file paths. "DEC-9/I-5" matches the same word/word shape as a
+        # real repository path, so it must not be tracked as one -- doing so
+        # left INTEGRITY waiting on a file that could never be written, and
+        # the repair agent, reading it from REPAIR_BRIEF.md, spent three
+        # attempts on a nonexistent target instead of the real fix.
+        review = REVIEW.replace(
+            '| COVERAGE | YES | FAIL | TR-1 untested |',
+            '| COVERAGE | YES | FAIL | TR-1 untested |\n'
+            '| INTEGRITY | YES | FAIL | TR-1: `calc()` violates DEC-9/I-5 in an untested branch |')
+        (self.root / 'TEST_REVIEW.md').write_text(review)
+        self.snapshot()
+        import json
+        data = json.loads(self.snap.read_text())
+        self.assertEqual(data['findings']['INTEGRITY']['paths'], [])
+        # A real fix elsewhere in the tree must still satisfy INTEGRITY, via
+        # the pathless tree-wide fallback -- not by writing "DEC-9/I-5".
+        (self.root / 'src/calc.js').write_text('fixed\n')
+        (self.root / 'tests/defects/inject.js').write_text('fixed\n')
+        code, ids = self.judge()
+        self.assertEqual((code, ids), (0, []))
+
     def test_unstructured_report_is_judged_by_the_tree(self):
         (self.root / 'green-check.md').write_text('## Green check\n\nFAIL npm test\n')
         self.snapshot('green-check.md')

@@ -70,8 +70,18 @@ def paths_in(text, root):
             continue
         if token.endswith('/') or '..' in token.split('/'):
             continue
-        # A path that exists, or one the correction says to create.
-        if (root / token).is_file() or '/' in token:
+        # A path that exists, or one the correction says to create -- but a
+        # slash alone does not make something a path. A decision/invariant
+        # citation like "DEC-9/I-5" matches the same shape as a real
+        # repository path and is never a file; tracking it as one leaves a
+        # finding waiting on a file that can never be written, stuck open
+        # forever. Require either the file to already exist, or its last
+        # segment to look file-shaped (has an extension), so a real
+        # not-yet-created file is still tracked while a bare ID
+        # cross-reference is not.
+        last = token.rsplit('/', 1)[-1]
+        file_shaped = '.' in last and not last.startswith('.')
+        if (root / token).is_file() or ('/' in token and file_shaped):
             found.append(token)
     return found
 

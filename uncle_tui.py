@@ -4695,12 +4695,10 @@ class UncleTUI:
             return True
         if choices and k in (10, 13) and self.chat_composer.lower() not in choices:
             self.chat_composer = choices[getattr(self, 'slash_pick', 0) % len(choices)]
-<<<<<<< HEAD
             self.chat_cursor = len(self.chat_composer)
-=======
->>>>>>> 851349e2 (saving ad-hoc work)
             if self.chat_composer in ('/issue', '/run', '/runstage'):
                 self.chat_composer += ' '
+                self.chat_cursor = len(self.chat_composer)
                 return True
         if k not in (10, 13):
             self.slash_pick = 0

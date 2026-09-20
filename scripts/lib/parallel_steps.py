@@ -263,18 +263,28 @@ def run_step(spec, results):
     publish_worker_end(spec, results[number])
 
 
-def merge(project, steps, results, owned):
+def merge(project, steps, results, owned, allowlist=()):
     """Copy each step's owned files back, or refuse the whole group.
 
     Verification happens for every step before any file is copied: a partial
     merge of a group that contained one bad step is the worst outcome
     available, because the tree then holds half an abandoned change.
+
+    `allowlist` (supervision.files_allowlist, e.g. package.json and
+    package-lock.json) exempts specific paths from the ownership check
+    entirely, regardless of which step wrote them or what any step declared.
+    Real plans repeatedly under-declared these: one step scaffolds a manifest,
+    a later step's own setup command (`npm install` adding a dev dependency)
+    rewrites it too, and no step ever claimed that. The merge still applies
+    its ordinary last-writer-wins copy to an allowlisted path -- this only
+    widens what counts as an expected write, it does not add new merge logic.
     """
+    allowlist = set(allowlist)
     violations = {}
     for number in steps:
         claimed = owned.get(number) or set()
         wrote = set(results.get(number, {}).get('wrote') or ())
-        stray = sorted(f for f in wrote if not covers(claimed, f))
+        stray = sorted(f for f in wrote if f not in allowlist and not covers(claimed, f))
         if stray:
             violations[number] = stray
     if violations:
@@ -323,6 +333,7 @@ def main():
     project = request['project']
     steps = request['steps']
     owned = {int(k): set(v) for k, v in request['owned'].items()}
+    allowlist = request.get('files_allowlist') or ()
     base = Path(project) / '.uncle' / 'workflow' / 'parallel'
 
     specs, threads, results = [], [], {}
@@ -357,7 +368,7 @@ def main():
         print('Agent handoff notes were missing for steps %s; driver synthesized them from '
               'verified worker results.' % ', '.join(str(n) for n in synthesized_notes), file=sys.stderr)
 
-    violations = merge(project, numbers, results, owned)
+    violations = merge(project, numbers, results, owned, allowlist)
     if violations:
         for number, stray in sorted(violations.items()):
             print('Step %d wrote files it did not declare: %s'

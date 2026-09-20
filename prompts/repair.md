@@ -30,10 +30,19 @@ This is a focused repair pass, not a new implementation of the approved plan.
 
 Before editing, check version-control status and preserve unrelated user work.
 Build a compact repair checklist: blocking finding ID or failing command,
-relevant constraint, affected files, and targeted check. Fix every actionable
-blocker in the current failure report within approved scope; avoid unrelated
-features, refactors, formatting, and cleanup. If findings share a root cause,
-repair it once and verify each affected finding.
+relevant constraint, affected files, and targeted check. REPAIR ALL ITEMS in
+this checklist during this single pass -- every actionable blocker in the
+current failure report, not only the ones that are quickest or most familiar.
+Work through the full list before finishing; do not stop after fixing some
+findings and leave the rest for a later repair pass. Each additional attempt
+this takes costs against the run's repair limit, so the run only benefits when
+this pass actually closes everything it can. Stay within approved scope; avoid
+unrelated features, refactors, formatting, and cleanup. If findings share a
+root cause, repair it once and verify each affected finding. If a listed
+blocker genuinely cannot be fixed in this pass (missing prerequisite, needs a
+plan change, needs unavailable authority), say so explicitly in its
+disposition row instead of silently omitting it -- silence reads as an
+oversight, not a decision.
 
 The driver judges this pass by the files it changed, not by what the reports
 say. A blocking finding counts as repaired only when a file it names -- or a

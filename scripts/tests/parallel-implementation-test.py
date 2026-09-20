@@ -335,6 +335,69 @@ class ParallelImplementationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 3)
             self.assertIn('.gitignore', result.stderr)
 
+    def test_files_allowlist_exempts_a_manifest_no_step_declared(self):
+        # The real failure this covers: step 1 declared and wrote
+        # package.json/package-lock.json from its scaffold. Step 2 owns
+        # something unrelated but its own `npm install` (adding test
+        # tooling) also rewrote both files, which it never declared. Without
+        # an allowlist that aborts the whole group even though both steps'
+        # work is otherwise sound. supervision.files_allowlist exempts these
+        # specific paths from the ownership check for every step, not just
+        # the one that declared them.
+        temp, root, worker = self.fixture()
+        with temp:
+            worker.write_text(
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'n="$1"\n'
+                'printf \'{"name":"app","step":"%s"}\' "$n" > package.json\n'
+                'printf \'{"lockfileVersion":3,"step":"%s"}\' "$n" > package-lock.json\n'
+                'printf "step-%s\\n" "$n" > "${n}.txt"\n'
+                'mkdir -p .uncle/workflow/parallel/notes\n'
+                'printf "step %s handoff\\n" "$n" > ".uncle/workflow/parallel/notes/step-${n}.md"\n')
+            request = {'project': str(root), 'owned': {'1': ['1.txt'], '2': ['2.txt']},
+                      'files_allowlist': ['package.json', 'package-lock.json'],
+                      'steps': [
+                          {'number': 1, 'log': str(root / 'one.log'),
+                           'note': '.uncle/workflow/parallel/notes/step-1.md',
+                           'command': ['bash', str(worker), '1']},
+                          {'number': 2, 'log': str(root / 'two.log'),
+                           'note': '.uncle/workflow/parallel/notes/step-2.md',
+                           'command': ['bash', str(worker), '2']}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(result.stdout)
+            self.assertEqual(summary['merged'], [1, 2])
+            self.assertIn('package.json', summary['files'])
+            self.assertEqual(json.loads((root / 'package.json').read_text())['step'], '2')
+
+    def test_without_files_allowlist_the_same_collision_still_aborts(self):
+        # The allowlist must be opt-in via config, not automatic: an
+        # otherwise-identical request that omits files_allowlist keeps the
+        # existing protective refusal.
+        temp, root, worker = self.fixture()
+        with temp:
+            worker.write_text(
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'n="$1"\n'
+                'printf \'{"name":"app","step":"%s"}\' "$n" > package.json\n'
+                'printf "step-%s\\n" "$n" > "${n}.txt"\n'
+                'mkdir -p .uncle/workflow/parallel/notes\n'
+                'printf "step %s handoff\\n" "$n" > ".uncle/workflow/parallel/notes/step-${n}.md"\n')
+            request = {'project': str(root), 'owned': {'1': ['1.txt'], '2': ['2.txt']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                 'command': ['bash', str(worker), '1']},
+                {'number': 2, 'log': str(root / 'two.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-2.md',
+                 'command': ['bash', str(worker), '2']}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 3)
+            self.assertIn('package.json', result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

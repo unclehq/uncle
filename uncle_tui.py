@@ -680,6 +680,7 @@ SUPERVISION_DESC = {
     "max_calls_per_run": "Supervisor calls allowed per workflow run, counted before each spawn (default 8).",
     "call_max_cost_usd": "Dollar cap passed to each supervisor call (default 0.50).",
     "delegate_gates": "Standing delegation for routine dialogs (none/routine). With routine, the supervisor answers document approvals, audit findings and press-Enter prompts once each as they open, recorded as supervisor:standing. Signing, publication and waiver gates always need your explicit ask in chat.",
+    "files_allowlist": "Comma-separated repository-relative paths (default package.json,package-lock.json) that a parallel implementation step may write without declaring ownership. A merge normally refuses a whole group when any step touches a file the plan didn't assign it -- these paths are exempt because tooling like `npm install` legitimately rewrites them from a step the plan never named as their owner.",
 }
 
 

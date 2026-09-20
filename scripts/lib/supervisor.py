@@ -54,6 +54,7 @@ CONTROLS = (
     ('max_calls_per_run', 'count1', 8),
     ('call_max_cost_usd', 'money', 0.5),
     ('delegate_gates', 'delegate', 'none'),
+    ('files_allowlist', 'filelist', ('package.json', 'package-lock.json')),
 )
 DELEGATIONS = ('none', 'routine')
 DEFAULTS = {key: default for key, _, default in CONTROLS}
@@ -111,6 +112,12 @@ def parse_value(key, raw):
         if text and re.fullmatch(r'[A-Za-z0-9._/:-]+', text):
             return text
         raise ValueError('supervision.%s must be a nonempty token' % key)
+    if kind == 'filelist':
+        items = [item.strip() for item in text.split(',') if item.strip()]
+        for item in items:
+            if not re.fullmatch(r'[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*', item) or '..' in item.split('/'):
+                raise ValueError('supervision.%s must be a comma-separated list of relative paths' % key)
+        return tuple(items)
     if kind in ('count0', 'count1'):
         if not re.fullmatch(r'[0-9]+', text):
             raise ValueError('supervision.%s must be a nonnegative integer' % key)
@@ -134,6 +141,8 @@ def format_value(key, value):
         return 'true' if value else 'false'
     if KINDS.get(key) == 'money':
         return ('%.4f' % value).rstrip('0').rstrip('.')
+    if KINDS.get(key) == 'filelist':
+        return ','.join(value)
     return str(value)
 
 

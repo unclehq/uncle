@@ -61,7 +61,7 @@ for g in groups:
 # failed or the plan's partition was wrong, and both leave the tree untouched.
 parallel_run_group() {
     local lib="$1" logdir="$2" plan="$3"; shift 3
-    local request steps_json owned_json rc=0
+    local request steps_json owned_json allowlist_json rc=0
     request="$(mktemp)"
     owned_json="$(UNCLE_PLAN="$plan" python3 -B -c '
 import json, os, subprocess, sys
@@ -74,6 +74,11 @@ for line in rows:
         n, path = line.split("\t", 1)
         owned.setdefault(n, []).append(path.strip())
 print(json.dumps(owned))' "$lib")"
+    allowlist_json="$(UNCLE_LIB="$lib" python3 -B -c '
+import json, os, sys
+sys.path.insert(0, os.environ["UNCLE_LIB"])
+import supervisor
+print(json.dumps(list(supervisor.load_config(".uncle/config").files_allowlist)))')"
     steps_json="$(python3 -B -c '
 import json, sys
 logdir, plan, lib = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -84,7 +89,8 @@ for n in sys.argv[4:]:
                   "note": ".uncle/workflow/parallel/notes/step-%s.md" % n,
                   "command": ["bash", "%s/parallel-agent.sh" % lib, n]})
 print(json.dumps(steps))' "$logdir" "$plan" "$lib" "$@")"
-    printf '{"project": "%s", "owned": %s, "steps": %s}\n' "$PWD" "$owned_json" "$steps_json" > "$request"
+    printf '{"project": "%s", "owned": %s, "steps": %s, "files_allowlist": %s}\n' \
+        "$PWD" "$owned_json" "$steps_json" "${allowlist_json:-[]}" > "$request"
     python3 -B "$lib/parallel_steps.py" "$request" || rc=$?
     rm -f "$request"
     return "$rc"

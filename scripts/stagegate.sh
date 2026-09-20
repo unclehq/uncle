@@ -230,7 +230,7 @@ trap on_exit EXIT
 
 # A repair always comes back through the independent checks and human diff
 # gate. Bound retries across restarts so an unfixable defect cannot spin.
-MAX_REPAIRS="${WORKFLOW_MAX_REPAIRS:-2}"
+MAX_REPAIRS="${WORKFLOW_MAX_REPAIRS:-4}"
 case "$MAX_REPAIRS" in
     ''|*[!0-9]*) echo "WORKFLOW_MAX_REPAIRS must be an integer from 0 to 100." >&2; exit 1 ;;
 esac

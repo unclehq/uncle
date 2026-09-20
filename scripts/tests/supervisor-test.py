@@ -844,7 +844,8 @@ class ConfigTests(unittest.TestCase):
             'supervision.enabled true', 'supervision.runner claude', 'supervision.model sonnet',
             'supervision.effort medium', 'supervision.max_interventions 2', 'supervision.steering_timeout_seconds 120',
             'supervision.stage_time_seconds 1800', 'supervision.stage_tokens 0', 'supervision.call_timeout_seconds 300',
-            'supervision.max_calls_per_run 8', 'supervision.call_max_cost_usd 0.5', 'supervision.delegate_gates none'])
+            'supervision.max_calls_per_run 8', 'supervision.call_max_cost_usd 0.5', 'supervision.delegate_gates none',
+            'supervision.files_allowlist package.json,package-lock.json'])
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'config'
             path.write_text('implementation.runner claude\nsupervision.enabled true\nsupervision.max_interventions 3\n'
@@ -857,7 +858,8 @@ class ConfigTests(unittest.TestCase):
             for key, value in (('enabled', 'yes'), ('max_interventions', '-1'), ('call_timeout_seconds', '0'),
                                ('max_calls_per_run', '0'), ('call_max_cost_usd', 'inf'), ('call_max_cost_usd', '0'),
                                ('call_max_cost_usd', 'nan'), ('effort', 'max'), ('model', 'two words'), ('bogus', '1'),
-                               ('stage_time_seconds', '1.5'), ('max_interventions', 'true')):
+                               ('stage_time_seconds', '1.5'), ('max_interventions', 'true'),
+                               ('files_allowlist', '../etc/passwd')):
                 path.write_text('supervision.%s %s\n' % (key, value))
                 loaded = sv.load_config(path)
                 self.assertTrue(loaded.errors, (key, value))

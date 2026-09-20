@@ -106,28 +106,59 @@ plan_step_owns() {
 
     [[ -s "$plan" ]] || return 0
 
+    # A long `Owns:` list -- exactly what a step touching two dozen files
+    # produces -- wraps onto its own following lines, one or more backticked
+    # paths per line, until a blank line or prose ends it. The single-line
+    # extraction below still runs first for whatever tokens share the
+    # numbered heading's own line; `cur`/`owns` continue it across the lines
+    # that follow, so a plan that correctly declared every file it touches
+    # was not read as having declared none of them past the first line.
     awk '
+        function extract(line,    tok) {
+            while (match(line, /`[^`]+`/)) {
+                tok = substr(line, RSTART + 1, RLENGTH - 2)
+                line = substr(line, RSTART + RLENGTH)
+                gsub(/^[ \t]+|[ \t]+$/, "", tok)
+                if (tok == "") continue
+                if (tok ~ /^\//) continue
+                sub(/^\.\//, "", tok)
+                print position[cur] "\t" tok
+            }
+        }
         /^## ([0-9]+\. )?Implementation (sequence|order)/ { inseq = 1; next }
         inseq && /^## / { inseq = 0 }
         !inseq { next }
         /^[0-9]+\./ {
             n = $0; sub(/\..*$/, "", n)
             position[n] = ++count
+            cur = n
+            owns = 0
             line = $0
             if (match(line, /[Oo]wns:/)) {
                 line = substr(line, RSTART + RLENGTH)
                 # Stop at a following field so "Depends on" paths are not owned.
                 if (match(line, /[Dd]epends[ \t]+on:/)) line = substr(line, 1, RSTART - 1)
-                while (match(line, /`[^`]+`/)) {
-                    tok = substr(line, RSTART + 1, RLENGTH - 2)
-                    line = substr(line, RSTART + RLENGTH)
-                    gsub(/^[ \t]+|[ \t]+$/, "", tok)
-                    if (tok == "") continue
-                    if (tok ~ /^\//) continue
-                    sub(/^\.\//, "", tok)
-                    print position[n] "\t" tok
-                }
+                owns = 1
+                extract(line)
             }
+            next
+        }
+        owns {
+            line = $0
+            trimmed = line
+            gsub(/^[ \t]+|[ \t]+$/, "", trimmed)
+            # A real continuation line is nothing but backticked tokens
+            # joined by commas -- never prose that merely mentions a
+            # backticked name, such as a bullet auditing call sites
+            # ("- Audit every occurrence of ... `require_file`, ...", a real
+            # plan). Stripping every backtick span and remaining comma/space
+            # must leave nothing behind, or this is not one of them.
+            check = trimmed
+            gsub(/`[^`]+`/, "", check)
+            gsub(/[ \t,]/, "", check)
+            if (check != "") { owns = 0; next }
+            if (match(line, /[Dd]epends[ \t]+on:/)) { line = substr(line, 1, RSTART - 1); owns = 0 }
+            extract(line)
         }
     ' "$plan"
 }

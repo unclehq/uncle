@@ -1165,6 +1165,7 @@ run_claude() {
     model="$(stage_model "$log_name")"
     effort="$(stage_effort "$log_name")"
     turns="$(stage_turns "$log_name")"
+    local turns_retried=""
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
@@ -1232,6 +1233,22 @@ run_claude() {
                 fi
                 echo
                 triage_stop_reason "$STATE_DIR" human
+            fi
+            # A step whose scope needs more turns than it was allotted is not
+            # stuck or wrong -- it can be mid-way through correctly applying a
+            # diagnosed fix when it hits this. Unlike a model choice, a turn
+            # count is not a decision an operator needs to make; double it
+            # once, unattended or not, the same bounded-retry shape
+            # self_hosted.py already uses for an output-token ceiling.
+            if [[ -z "$turns_retried" ]] && grep -qiE 'maximum number of turns|max.?turns' "$log"; then
+                turns_retried=1
+                local larger_turns=$((turns * 2))
+                [[ "$larger_turns" -le 200 ]] || larger_turns=200
+                if [[ "$larger_turns" -gt "$turns" ]]; then
+                    echo "Stage $log_name reached its turn limit ($turns) mid-task; retrying once with $larger_turns."
+                    turns="$larger_turns"
+                    continue
+                fi
             fi
             echo "Agent ($cmd) exited with status $status."
             echo "Raw event log: $log"
@@ -1589,7 +1606,7 @@ PARALLEL_CHECKLIST_WORKERS="${WORKFLOW_PARALLEL_CHECKLIST_WORKERS:-1}"
 run_parallel_checklist_workers() {
     local groups="$PWD/$STATE_DIR/checklist-groups/groups.txt"
     local directory="" group id prompt evidence
-    local worker_count=0 status pid jobs active=0
+    local worker_count=0 status pid jobs
     local -a ids pids pid_ids
 
     [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
@@ -1611,53 +1628,66 @@ run_parallel_checklist_workers() {
         echo
     } > "$directory/README.md"
 
-    # Materialize every prompt and the full manifest before launching the first
-    # child. Some runner adapters clean transient stage state as they start;
-    # preparing siblings lazily made that cleanup race this driver's writes.
+    # One worker per batch, not one per check: a group of a dozen independent
+    # checks used to launch a dozen full agent sessions, each rereading
+    # MANUAL_CHECKLIST.md and both READMEs from scratch just to execute one
+    # row. The group's own declaration already says these checks share no
+    # exclusive resource, so running several of them one after another inside
+    # a single session is exactly as safe as running them as separate
+    # workers -- it only removes redundant context loads and process
+    # start-up, bounded at `jobs` batches per group the same as before.
+    #
+    # Materialize every prompt and the full manifest before launching the
+    # first child. Some runner adapters clean transient stage state as they
+    # start; preparing siblings lazily made that cleanup race this driver's
+    # writes.
+    local n batches chunk start end i batch_index
     while IFS= read -r group; do
         read -r -a ids <<< "$group"
-        [[ "${#ids[@]}" -gt 1 ]] || continue
-        for id in "${ids[@]}"; do
-            prompt="$directory/prompts/$id.md"
-            evidence="$directory/$id.md"
+        n="${#ids[@]}"
+        [[ "$n" -gt 1 ]] || continue
+        batches=$(( n < jobs ? n : jobs ))
+        chunk=$(( (n + batches - 1) / batches ))
+        i=0
+        batch_index=0
+        while [[ "$i" -lt "$n" ]]; do
+            batch_index=$((batch_index + 1))
+            prompt="$directory/prompts/batch-$batch_index.md"
             cp "$ROOT/prompts/change/execute-checklist-worker.md" "$prompt"
-            printf '\n## Assigned check\n\nExecute only `%s`. Write the evidence to `%s`.\n' \
-                "$id" "$evidence" >> "$prompt"
-            # Backticks are Markdown here, not shell command substitution.
-            printf '%s\n' "- $id: \`$evidence\`" >> "$directory/README.md"
+            printf '\n## Assigned checks\n\n' >> "$prompt"
+            end=$(( i + chunk < n ? i + chunk : n ))
+            for ((start = i; start < end; start++)); do
+                id="${ids[$start]}"
+                evidence="$directory/$id.md"
+                printf -- '- Execute `%s`. Write its evidence to `%s`.\n' "$id" "$evidence" >> "$prompt"
+                # Backticks are Markdown here, not shell command substitution.
+                printf '%s\n' "- $id: \`$evidence\`" >> "$directory/README.md"
+            done
+            i="$end"
         done
     done < "$groups"
 
     while IFS= read -r group; do
         read -r -a ids <<< "$group"
-        [[ "${#ids[@]}" -gt 1 ]] || continue
-        echo "Checklist worker group: $group"
+        n="${#ids[@]}"
+        [[ "$n" -gt 1 ]] || continue
+        batches=$(( n < jobs ? n : jobs ))
+        echo "Checklist worker group: $group ($batches batch(es))"
         pids=()
         pid_ids=()
-        for id in "${ids[@]}"; do
-            prompt="$directory/prompts/$id.md"
+        for ((batch_index = 1; batch_index <= batches; batch_index++)); do
+            prompt="$directory/prompts/batch-$batch_index.md"
             ( SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-                run_claude "$prompt" "execute-checklist-worker-$id" \
-            ) > "$LOG_DIR/execute-checklist-worker-$id.log" 2>&1 &
+                run_claude "$prompt" "execute-checklist-worker-batch-$batch_index" \
+            ) > "$LOG_DIR/execute-checklist-worker-batch-$batch_index.log" 2>&1 &
             pids+=("$!")
-            pid_ids+=("$id")
-            active=$((active + 1))
-            # A wide group is safe, but it still must not exhaust the machine
-            # or the configured provider concurrency. Finish this batch before
-            # launching the next workers in the same approved group.
-            if [[ "$active" -ge "$jobs" ]]; then
-                for ((status = 0; status < ${#pids[@]}; status++)); do
-                    pid="${pids[$status]}"
-                    wait "$pid" || echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run that row." >&2
-                done
-                pids=()
-                pid_ids=()
-                active=0
-            fi
+            pid_ids+=("batch-$batch_index")
         done
+        # Batches per group are already bounded at `jobs`, so every batch in
+        # a group launches together; the barrier is only between groups.
         for ((status = 0; status < ${#pids[@]}; status++)); do
             pid="${pids[$status]}"
-            wait "$pid" || echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run that row." >&2
+            wait "$pid" || echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run its assigned rows." >&2
         done
     done < "$groups"
     CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"

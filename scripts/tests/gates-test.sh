@@ -197,6 +197,16 @@ EOF
     cat > "$CASE/bin/fake-agent" <<'AGENT'
 #!/usr/bin/env bash
 prompt="$(cat)"
+# FAKE_TURNS_LIMIT=1: the first call always reports the runner's own
+# max-turns exhaustion and exits nonzero, whatever the max-turns flag says
+# (the stub does not track it) -- a real run had correctly diagnosed the fix
+# needed and was still applying it when it hit this. The second call (the
+# driver's own bounded retry) behaves normally.
+if [[ "${FAKE_TURNS_LIMIT:-0}" == 1 && ! -e .uncle/workflow/turns-limit-retried ]]; then
+    : > .uncle/workflow/turns-limit-retried
+    printf '{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":1,"duration_ms":5,"total_cost_usd":0,"error_detail":"Reached maximum number of turns (16)"}\n'
+    exit 1
+fi
 case "$prompt" in
     *'Verification-only resume'*)
         if [[ -n "${FAKE_VERIFY_LIVE:-}" ]]; then bash -c "$FAKE_VERIFY_LIVE"; fi
@@ -1467,6 +1477,26 @@ expect_status 0
 expect_state WAIT_IMPLEMENT_APPROVAL
 expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
 expect_file '.uncle/workflow/checklist-overlapped-implementation'
+
+# A real stuck run: an implementation step's automatically divided turn
+# share (150 turns split across the plan's steps, e.g. 16 for a ten-step
+# plan) ran out mid-task, with the runner exiting nonzero -- not the exit-0
+# case the driver otherwise assumes for this class of stop. A step making
+# real, correctly-diagnosed progress must get one automatic retry with a
+# larger turn budget, not an immediate hard stop. A single-step (non-
+# stepwise) plan already runs at the 200-turn ceiling with no headroom to
+# demonstrate this, so this uses the same multi-step stepwise plan shape as
+# change-budget-step-handoff, where the per-step share is well under it.
+new_case change-turns-limit-retries-once
+green_baseline 0 'bash app/test.sh'
+printf '\n## 20. Implementation sequence\n\n1. First step.\n2. Second step.\n' >> "$REPO/CHANGE_PLAN.md"
+hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+set_state IMPLEMENT
+run_driver FAKE_TURNS_LIMIT=1 WORKFLOW_STEPWISE_IMPLEMENT=1 WORKFLOW_DIFF_GATE=0
+expect_out 'reached its turn limit'
+expect_out 'retrying once with'
+expect_not_out 'exited with status 1'
+expect_file IMPLEMENTATION_NOTES.md
 
 new_case change-budget-step-handoff
 green_baseline 0 'bash app/test.sh'

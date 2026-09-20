@@ -170,6 +170,41 @@ check_eq "0-indexed: Reconcile (position 4) depends on positions 2 and 3 (litera
     "4	2
 4	3" "$(plan_step_depends "$ZERO" | grep '^4	')"
 
+# --- a long Owns: list wraps onto its own lines --------------------------
+#
+# A real run: a step touching two dozen files listed them one per line, each
+# correctly backticked, under a bare "Owns:" on the numbered heading's own
+# line. The single-line extraction alone saw zero tokens there and never
+# looked further, so a step that declared every file it touched was merged
+# as though it had declared none of them -- "wrote files it did not
+# declare" for files the plan named explicitly. A neighboring step's prose
+# bullet auditing call sites ("- Audit ... `require_file`, `verify_approval`,
+# ...", also drawn from a real plan) must not be swept in as though those
+# were files too.
+WRAP="$TMP/wrapped-owns.md"
+cat > "$WRAP" <<'EOF'
+# Plan
+
+## Implementation sequence
+
+1. Driver — Owns: `scripts/change-workflow.sh`
+   - Audit every occurrence of bare names: `require_file`, `verify_approval`, `run_codex`.
+   - Depends on: none
+
+2. All prompt templates — Owns:
+   `prompts/adversarial-review.md`,
+   `prompts/change/final-audit.md`,
+   `prompts/implement.md`
+
+   - Depends on: none
+EOF
+check_eq "wrapped Owns: step 1 owns only its declared file, not the audit bullet's names" \
+    "1	scripts/change-workflow.sh" "$(plan_step_owns "$WRAP" | grep '^1	')"
+check_eq "wrapped Owns: step 2 owns every file on its own continuation lines" \
+    "2	prompts/adversarial-review.md
+2	prompts/change/final-audit.md
+2	prompts/implement.md" "$(plan_step_owns "$WRAP" | grep '^2	')"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "plan-scope-test.sh: $FAILED of $COUNT checks failed"
     exit 1

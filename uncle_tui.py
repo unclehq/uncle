@@ -3707,6 +3707,15 @@ class UncleTUI:
             raise ValueError('Usage: /do N, where N is a proposal number.')
         chosen = [p for p in self.triage_proposals if p[0] == number]
         if not chosen:
+            if not self.triage_proposals and getattr(self, 'triage_offer_resume', False):
+                # The previous /do already ran to completion (execute turns
+                # never hand back a fresh numbered list, by design) -- this
+                # is not a stale click, it is the operator not yet told the
+                # prior one finished. Say what actually happened instead of
+                # the generic "nothing is selectable".
+                raise ValueError('No proposal %d is selectable: the last one already ran to completion '
+                                  '(see the note above for what it applied). Type /resume to continue, '
+                                  'or ask a follow-up question to get a new proposal.' % number)
             raise ValueError('No proposal %d is selectable. Open triage and read the current reply.' % number)
         if NO_EDIT_PROPOSAL.search(chosen[0][1]):
             self._triage_apply_local(chosen[0])
@@ -3779,10 +3788,23 @@ class UncleTUI:
                        'messages': [str(exc)]}
         if kind == 'reply':
             text = sanitize(value)
-            self.triage_history.append(('master', text))
+            if text.strip():
+                self.triage_history.append(('master', text))
             self.triage_error = ''
             if pending.get('mode') == 'execute':
                 self.triage_offer_resume = True
+                if not text.strip():
+                    # A runner can report success and still hand back no
+                    # final message at all -- seen on kimi-code, which made
+                    # the requested edit (the guard's own diff below proves
+                    # it) but returned nothing for the harness to read as a
+                    # reply. Left silent, a blank turn here reads as if
+                    # nothing happened, and the operator's next move -- /do N
+                    # again -- fails with "no proposal is selectable" and no
+                    # hint that the edit already landed and /resume is next.
+                    self.triage_history.append(('system',
+                        'This turn returned no reply text. See the note below for what it actually '
+                        'changed; there is no new proposal to select. Type /resume to continue.'))
             else:
                 parsed = parse_triage_reply(text)
                 if parsed is None:

@@ -444,13 +444,13 @@ Every stage can override those two, and its model and effort, on its own:
 by `_`: `REQUIREMENTS`, `PROJECT_PLAN`, `ADVERSARIAL_REVIEW`, `IMPLEMENTATION`,
 `FINAL_AUDIT`, and so on.
 
-The empty-model rule is what lets one run mix runners. cline needs to be told
-which model to use; claude, kimi, and codex have their own defaults, and a
-model uncle invented for them would be wrong more often than right. So a stage
-configured for one of those exports an empty model, and the driver omits
-`--model` entirely rather than substituting its own default. An *unset*
-variable still falls back to the driver's built-in default, which is what keeps
-a driver run directly, with no launcher, behaving as before.
+The empty-model rule is what lets one run mix runners. A stage whose runner
+has no configured model exports an empty model, and the driver omits `--model`
+entirely rather than substituting a default uncle invented — claude, kimi, and
+codex then run with their own CLI's default. A model picked in Configure is
+stored per stage and passed verbatim, whatever the runner. An *unset* variable
+still falls back to the driver's built-in default, which is what keeps a
+driver run directly, with no launcher, behaving as before.
 
 ### Runner shims
 
@@ -668,10 +668,10 @@ config is `STAGE VALUE` lines:
 | Key | Meaning |
 |---|---|
 | `runner` | `cline` (default), `claude`, `kimi`, `codex`, or `self-hosted` (OpenCode) — picks the agent/reviewer commands |
-| `model` | cline model id for agent stages (`UNCLE_CLINE_MODEL`); empty = cline default |
+| `model` | fallback model id for cline agent stages (`UNCLE_CLINE_MODEL`); empty = cline default |
 | `effort` | reasoning effort (`high`/`medium`/`low`) |
-| `reviewer` | cline model id for reviewer stages (`UNCLE_CLINE_REVIEWER_MODEL`) |
-| `<stage>` | cline model id for that stage (`WORKFLOW_MODEL_<STAGE>`) |
+| `reviewer` | fallback model id for cline reviewer stages (`UNCLE_CLINE_REVIEWER_MODEL`) |
+| `<stage>` | model id for that stage (`WORKFLOW_MODEL_<STAGE>`), in its runner's own form — `modelType/model` for cline, the vendor's own id for claude, codex, or kimi; empty = runner default |
 
 Valid stage keys: `requirements`, `project-plan`, `updated-plan`,
 `preflight`, `implementation`, `execute-checklist`, `baseline`, `change-spec`,

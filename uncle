@@ -181,9 +181,10 @@ fi
 
 # Per-stage settings, as the drivers' variables.
 #
-# Every stage is configured on its own: a runner, a reasoning effort, and — for
-# a cline stage only — a model. The other runners are given no model flag and
-# use their own default, so `uncle` never invents one for them.
+# Every stage is configured on its own: a runner, a reasoning effort, and a
+# model in that runner's own id form. A stage with no stored model is given
+# no model flag and its runner uses its own default, so `uncle` never invents
+# one for it.
 CONFIG_STAGE_SIDE_reviewer=" adversarial-review test-review manual-checklist final-audit "
 DEFAULT_EFFORT="medium"
 DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"

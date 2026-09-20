@@ -9,10 +9,11 @@ fi
 # Hermetic: a temp .uncle/config, no curses, no workflow ever started.
 #
 # The screen has one row per stage and no global rows. What each stage stores
-# is a runner, an effort, and — only when the runner is cline — a model. The
-# env it produces is what the drivers read, so that mapping is the contract
-# under test: a non-cline stage must export an *empty* model, which the drivers
-# read as "pass no model flag".
+# is a runner, an effort, and a model (cline's model row is billed; claude,
+# codex, and kimi take a vendor id). The env it produces is what the drivers
+# read, so that mapping is the contract under test: a stage with no model
+# stored must export an *empty* one, which the drivers read as "pass no model
+# flag".
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -82,15 +83,17 @@ with tempfile.TemporaryDirectory() as tmp:
         (bindir / name).write_text("")
         (bindir / name).chmod(0o755)
     os.environ["PATH"] = tmp
-    Path(m.CONFIG_PATH).write_text("requirements.model deepseek/deepseek-v4-flash\nrequirements.billing cline-usage\n")
+    # project-plan, not requirements: requirements is not in STAGES, so
+    # load_config skips its lines and a KeyError would mask this assertion.
+    Path(m.CONFIG_PATH).write_text("project-plan.model deepseek/deepseek-v4-flash\nproject-plan.billing cline-usage\n")
     t.load_config()
-    t.stage_efforts["requirements"] = "high"
+    t.stage_efforts["project-plan"] = "high"
     t.save_config()
     (bindir / "claude").unlink()
     t.load_config()
-    assert t.stage_runner("requirements") == "cline"
-    assert t.stage_models["requirements"] == "deepseek/deepseek-v4-flash"
-    assert t.stage_billings["requirements"] == "cline-usage"
+    assert t.stage_runner("project-plan") == "cline"
+    assert t.stage_models["project-plan"] == "deepseek/deepseek-v4-flash"
+    assert t.stage_billings["project-plan"] == "cline-usage"
     assert not t.stage_runners
 os.environ["PATH"] = original
 print("  discovery: 32 subsets, both sides, shell parity; inferred save passed")
@@ -118,7 +121,9 @@ sys.modules["tui"] = m
 spec.loader.exec_module(m)
 
 failed = []
+checks = [0]
 def check(name, expected, actual):
+    checks[0] += 1
     if expected != actual:
         failed.append("%s — expected %r, got %r" % (name, expected, actual))
 
@@ -143,10 +148,26 @@ check("default cline model", m.DEFAULT_CLINE_MODEL, t.stage_model("requirements"
 # cline is the only runner with a billing field.
 check("cline shows billing and model", ["runner", "effort", "billing", "model"],
       t.stage_fields("requirements"))
+# AC-1: claude and kimi take a model row; codex keeps network above its model
+# row. AC-4: stage_model returns the stored id for those runners, "" with none
+# stored (I-4 RELAXED: a stored model is no longer forced to "").
 t.stage_runners["requirements"] = "claude"
-check("claude hides both", ["runner", "effort"],
+check("claude shows a model row", ["runner", "effort", "model"],
       t.stage_fields("requirements"))
-check("claude resolves to no model", "", t.stage_model("requirements"))
+check("a claude stage with no model stored resolves to empty", "",
+      t.stage_model("requirements"))
+t.stage_models["requirements"] = "claude-opus-5"
+check("claude stage_model returns the stored id", "claude-opus-5",
+      t.stage_model("requirements"))
+del t.stage_models["requirements"]
+
+t.stage_runners["requirements"] = "kimi"
+check("kimi shows a model row", ["runner", "effort", "model"],
+      t.stage_fields("requirements"))
+t.stage_models["requirements"] = "moonshot-ai/kimi-k2.6"
+check("kimi stage_model returns the raw stored id", "moonshot-ai/kimi-k2.6",
+      t.stage_model("requirements"))
+del t.stage_models["requirements"]
 
 # self-hosted takes a model and, like claude or codex, an effort.
 t.stage_runners["requirements"] = "self-hosted"
@@ -171,8 +192,14 @@ t.stage_runners.pop("requirements")
 # network to open. Showing the row anywhere else would offer a setting that
 # changes nothing about how the stage runs.
 t.stage_runners["execute-checklist"] = "codex"
-check("codex shows a network field", ["runner", "effort", "network"],
+check("codex shows a network field", ["runner", "effort", "network", "model"],
       t.stage_fields("execute-checklist"))
+check("a codex stage with no model stored resolves to empty", "",
+      t.stage_model("execute-checklist"))
+t.stage_models["execute-checklist"] = "gpt-5.1-codex"
+check("codex stage_model returns the stored id", "gpt-5.1-codex",
+      t.stage_model("execute-checklist"))
+del t.stage_models["execute-checklist"]
 check("cline has no network field", False,
       "network" in t.stage_fields("project-plan"))
 check("codex has no billing field", False,
@@ -191,6 +218,141 @@ check("the network picker takes no custom value", False,
 check("the network picker knows the current value", "false", t._picker_current())
 t.stage_networks["execute-checklist"] = "true"
 check("the network picker follows the stage", "true", t._picker_current())
+
+# --- vendor model pickers (claude/codex/kimi) --------------------------------
+
+# AC-2: each runner's model picker offers only its own catalogue, Custom last.
+# Self-hosted's picker (above) is untouched: it offers discovered models.
+t.stage_runners["execute-checklist"] = "codex"
+vendor_cases = [
+    ("claude", "requirements", m.MODEL_CATALOG_CLAUDE),
+    ("codex", "execute-checklist", m.MODEL_CATALOG_CODEX),
+    ("kimi", "requirements", m.MODEL_CATALOG_KIMI),
+]
+for runner, stage, catalog in vendor_cases:
+    t.stage_runners.pop("requirements", None)
+    t.stage_runners[stage] = runner
+    t.picker_kind, t.picker_target, t.pick_filter = "model", stage, ""
+    expected_rows = []
+    for group, entries in catalog:
+        expected_rows.append(("header", group))
+        expected_rows.extend(("model", mid) for _label, mid in entries)
+    expected_rows.append(("custom", "Custom… (type a model id)"))
+    check("the %s picker offers its own catalogue" % runner,
+          expected_rows, t._picker_rows())
+    check("the %s picker keeps its Custom row last" % runner, "custom",
+          t._picker_rows()[-1][0])
+    t.pick_filter = catalog[0][1][0][0].split()[0].lower()
+    check("the %s picker filters by label" % runner, True,
+          all(k != "header" for k, _ in t._picker_filtered()))
+    t.pick_filter = ""
+t.stage_models["requirements"] = "moonshot-ai/kimi-k2.6"
+t.picker_target = "requirements"
+check("the kimi picker knows the stored id", "moonshot-ai/kimi-k2.6",
+      t._picker_current())
+del t.stage_models["requirements"]
+
+# AC-3: every offered id must pass its runner shim's filter. The claude
+# allowlist and codex blank set are the literal patterns from
+# reviewer-claude.sh:84 and agent-codex.sh:67; keep them in step with the
+# shims when the catalogues grow.
+CLAUDE_ALLOW = ("claude", "opus", "sonnet", "haiku")
+CODEX_BLANK = {"opus", "sonnet", "o3", "kimi"}
+claude_ids = [mid for _g, entries in m.MODEL_CATALOG_CLAUDE for _l, mid in entries]
+check("every claude id passes the shim allowlist", True,
+      all(any(mid.startswith(p) for p in CLAUDE_ALLOW) for mid in claude_ids))
+codex_ids = [mid for _g, entries in m.MODEL_CATALOG_CODEX for _l, mid in entries]
+check("no codex id is in the shim blank list", True,
+      all(mid not in CODEX_BLANK and not mid.startswith("kimi:")
+          for mid in codex_ids))
+kimi_ids = [mid for _g, entries in m.MODEL_CATALOG_KIMI for _l, mid in entries]
+check("catalogue ids are unique across the vendor lists", True,
+      len(claude_ids + codex_ids + kimi_ids)
+      == len(set(claude_ids + codex_ids + kimi_ids)))
+
+# AC-5: the row names the stored id with its label, and the runner's own
+# default when nothing is stored.
+vendor_displays = [
+    ("claude", "claude-opus-5", "claude-opus-5  Claude Opus 5", "opus  (default)"),
+    ("codex", "gpt-5.1-codex", "gpt-5.1-codex  GPT-5.1 Codex", "codex default  (default)"),
+    ("kimi", "moonshot-ai/kimi-k2.6", "moonshot-ai/kimi-k2.6  Kimi K2.6",
+     "moonshot-ai/kimi-k2.7-code-highspeed  (default)  Kimi K2.7 Code Highspeed"),
+]
+for runner, stored, stored_text, default_text in vendor_displays:
+    t.stage_runners.pop("requirements", None)
+    t.stage_runners["requirements"] = runner
+    check("%s model row reads the runner default" % runner, default_text,
+          t._field_display("requirements", "model"))
+    t.stage_models["requirements"] = stored
+    check("%s model row reads the stored id and label" % runner, stored_text,
+          t._field_display("requirements", "model"))
+    del t.stage_models["requirements"]
+
+# AC-6: Custom validation is runner-aware. cline keeps the modelType/model
+# rule and its message; claude/codex/kimi need only a non-empty id.
+check("a slash-free id is not a cline model", False, m.valid_model_id("opus"))
+check("a slash-free id is a claude model", True, m.valid_model_id("opus", "claude"))
+check("a slash-free id is a codex model", True,
+      m.valid_model_id("gpt-5.1-codex", "codex"))
+check("a raw moonshot id is a kimi model", True,
+      m.valid_model_id("moonshot-ai/kimi-k2.6", "kimi"))
+check("an empty id is rejected for claude", False, m.valid_model_id("", "claude"))
+check("an empty id is rejected for codex", False, m.valid_model_id("", "codex"))
+check("an empty id is rejected for kimi", False, m.valid_model_id("", "kimi"))
+check("cline still accepts empty for its own default", True, m.valid_model_id(""))
+
+# _confirm_text is a key handler: it needs the editing state and a notice.
+t.state, t.stage_sel, t.notice = "config_edit", 0, ""
+t.picker_kind, t.picker_target, t.pick_filter = "model", "requirements", ""
+for runner in ("claude", "codex", "kimi"):
+    t.stage_runners["requirements"] = runner
+    mid = "opus" if runner == "claude" else runner + "-custom-1"
+    t.state, t.input_buf = "config_edit", mid
+    t._confirm_text()
+    check("a slash-free custom id is stored for %s" % runner,
+          mid, t.stage_models.get("requirements"))
+    t.state, t.input_buf = "config_edit", "   "
+    t._confirm_text()
+    check("an empty custom id is rejected for %s" % runner,
+          "enter a model id for %s" % runner, t.notice)
+    del t.stage_models["requirements"]
+t.stage_runners["requirements"] = "cline"
+t.state, t.input_buf = "config_edit", "opus"
+t._confirm_text()
+check("cline keeps its slash rule and message",
+      "not a cline model id: opus (expected modelType/model)", t.notice)
+t.input_buf = ""
+t.notice = ""
+
+# AC-8: switching the runner keeps a stored model dormant, and the row comes
+# back when the runner does (I-6).
+t.stage_runners["requirements"] = "kimi"
+t.stage_models["requirements"] = "moonshot-ai/kimi-k2.6"
+t.stage_runners["requirements"] = "claude"
+check("a kimi model is dormant under claude", "moonshot-ai/kimi-k2.6",
+      t.stage_models["requirements"])
+check("dormant or not, the stored value is kept",
+      "moonshot-ai/kimi-k2.6", t.stage_model("requirements"))
+t.stage_runners["requirements"] = "mystery"
+check("no model row appears for an unknown runner", False,
+      "model" in t.stage_fields("requirements"))
+t.stage_runners["requirements"] = "kimi"
+check("the model row is back with the runner",
+      ["runner", "effort", "model"], t.stage_fields("requirements"))
+check("and the stored id is back on it",
+      "moonshot-ai/kimi-k2.6  Kimi K2.6",
+      t._field_display("requirements", "model"))
+del t.stage_models["requirements"]
+
+# AC-10: the descriptions no longer claim only cline takes a model.
+for key in ("field:runner", "field:model"):
+    check("CONFIG_DESC[%s] drops the cline-only claim" % key, False,
+          "nly cline" in m.CONFIG_DESC[key])
+check("the model description names the vendor runners", True,
+      all(r in m.CONFIG_DESC["field:model"] for r in ("claude", "codex", "kimi")))
+
+t.stage_models.pop("requirements", None)
+t.stage_runners.pop("requirements", None)
 
 # --- billing decides which model list exists ---------------------------------
 # cline takes no billing flag: the modelType prefix is what cline reads, so
@@ -312,7 +474,7 @@ if failed:
     for f in failed:
         print("FAIL: " + f)
     raise SystemExit(1)
-print("  fields/defaults/env: %d checks passed" % 53)
+print("  fields/defaults/env: %d checks passed" % checks[0])
 PY
 
 # --- round trip, and migration off the old global format -------------------
@@ -326,7 +488,9 @@ sys.modules["tui"] = m
 spec.loader.exec_module(m)
 
 failed = []
+checks = [0]
 def check(name, expected, actual):
+    checks[0] += 1
     if expected != actual:
         failed.append("%s — expected %r, got %r" % (name, expected, actual))
 
@@ -340,14 +504,14 @@ def fresh():
 
 # What the screen writes, it reads back.
 t = fresh()
-t._set_field("requirements", "runner", "claude")
+t._set_field("implementation", "runner", "claude")
 t._set_field("project-plan", "model", "cline-pass/kimi-k3")
 t._set_field("project-plan", "effort", "high")
 t._set_field("final-audit", "runner", "codex")
 
 back = fresh()
 back.load_config()
-check("runner round-trips", "claude", back.stage_runners.get("requirements"))
+check("runner round-trips", "claude", back.stage_runners.get("implementation"))
 check("model round-trips", "cline-pass/kimi-k3", back.stage_models.get("project-plan"))
 check("effort round-trips", "high", back.stage_efforts.get("project-plan"))
 check("reviewer runner round-trips", "codex", back.stage_runners.get("final-audit"))
@@ -406,11 +570,11 @@ check("cleared network is not written", False, "execute-checklist.network" in te
 
 # Hand-edited dormant models survive a save for a later runner rollback.
 t = fresh()
-t.stage_models["requirements"] = "cline-pass/glm-5.3"
-t.stage_runners["requirements"] = "kimi"
+t.stage_models["implementation"] = "cline-pass/glm-5.3"
+t.stage_runners["implementation"] = "kimi"
 t.save_config()
 text = open(os.environ["UNCLE_CONFIG"]).read()
-check("dormant model line survives", True, "requirements.model cline-pass/glm-5.3" in text)
+check("dormant model line survives", True, "implementation.model cline-pass/glm-5.3" in text)
 
 # The old global format seeds the stages instead of being dropped.
 with open(os.environ["UNCLE_CONFIG"], "w") as fh:
@@ -443,12 +607,47 @@ check("a display name is rejected", False, m.valid_model_id("Laguna S 2.1"))
 check("an id is accepted", True, m.valid_model_id("cline-pass/kimi-k3"))
 check("empty means the runner's own default", True, m.valid_model_id(""))
 
+# AC-7: a stored vendor model round-trips through the file for
+# claude/codex/kimi. AR-001: for kimi the config content is what round-trips;
+# the shell maps the raw id to the `kimi` dispatch token and exports the raw
+# id as WORKFLOW_KIMI_MODEL (asserted on the bash side below).
+t = fresh()
+t._set_field("implementation", "runner", "claude")
+t._set_field("implementation", "model", "claude-opus-5")
+t._set_field("execute-checklist", "runner", "codex")
+t._set_field("execute-checklist", "model", "gpt-5.1-codex")
+t._set_field("final-audit", "runner", "kimi")
+t._set_field("final-audit", "model", "moonshot-ai/kimi-k2.6")
+back = fresh()
+back.load_config()
+check("a claude stage model round-trips", "claude-opus-5",
+      back.stage_model("implementation"))
+check("a codex stage model round-trips", "gpt-5.1-codex",
+      back.stage_model("execute-checklist"))
+check("a kimi stage raw model id round-trips", "moonshot-ai/kimi-k2.6",
+      back.stage_model("final-audit"))
+check("the file carries the kimi raw id", True,
+      "final-audit.model moonshot-ai/kimi-k2.6\n"
+      in open(os.environ["UNCLE_CONFIG"]).read())
+
 if failed:
     for f in failed:
         print("FAIL: " + f)
     raise SystemExit(1)
-print("  round-trip/migration: %d checks passed" % 27)
+print("  round-trip/migration: %d checks passed" % checks[0])
 PY
+
+# AC-7, kimi shell side (AR-001): a stored raw id prints the dispatch token
+# and exports the raw id as WORKFLOW_KIMI_MODEL.
+kimi_shell="$(UNCLE_CONFIG="$TMP/proj/.uncle/config" ROOT="$ROOT" TMPOUT="$TMP/kimi.out" bash -c '''
+    . "$ROOT/scripts/lib/stage-config.sh"
+    # No command substitution: its subshell would swallow the export.
+    uncle_stage_model final-audit > "$TMPOUT"
+    printf "%s|%s" "$(< "$TMPOUT")" "${WORKFLOW_KIMI_MODEL-}"''')"
+COUNT=$((COUNT + 1))
+if [[ "$kimi_shell" != "kimi|moonshot-ai/kimi-k2.6" ]]; then
+    fail "kimi shell: expected kimi|moonshot-ai/kimi-k2.6, got $kimi_shell"
+fi
 
 # A6: runnerless legacy selections survive Claude saves and a Cline rollback.
 run_case <<'PY' || status=1
@@ -466,14 +665,14 @@ def load():
 
 fixtures = {
     "global": "model poolside/laguna-s-2.1\nbilling cline-usage\n",
-    "bare": "requirements poolside/laguna-s-2.1\nbilling cline-usage\n",
-    "stage": "requirements.model poolside/laguna-s-2.1\nrequirements.billing cline-usage\n",
+    "bare": "implementation poolside/laguna-s-2.1\nbilling cline-usage\n",
+    "stage": "implementation.model poolside/laguna-s-2.1\nimplementation.billing cline-usage\n",
     "precedence": (
         "model poolside/laguna-s-2.1\nbilling cline-usage\n"
         "reviewer cline-pass/glm-5.3\n"
-        "requirements cline-pass/kimi-k3\n"
-        "requirements.model poolside/laguna-s-2.1\n"
-        "requirements.billing clinepass\n"
+        "implementation cline-pass/kimi-k3\n"
+        "implementation.model poolside/laguna-s-2.1\n"
+        "implementation.billing clinepass\n"
     ),
 }
 checks = 0
@@ -485,18 +684,20 @@ for name, config in fixtures.items():
     expected_models = dict(t.stage_models)
     expected_billings = {stage: "cline-usage" for stage in m.CONFIG_STAGES}
     if name == "stage":
-        expected_billings = {"requirements": "cline-usage"}
+        expected_billings = {"implementation": "cline-usage"}
     elif name == "precedence":
-        expected_billings["requirements"] = "clinepass"
-        assert t.stage_models["requirements"] == "poolside/laguna-s-2.1"
+        expected_billings["implementation"] = "clinepass"
+        assert t.stage_models["implementation"] == "poolside/laguna-s-2.1"
         assert t.stage_models["final-audit"] == "cline-pass/glm-5.3"
         checks += 2
     assert t.stage_billings == expected_billings, (name, "legacy billing load")
     checks += 1
     for cycle in range(2):
         assert not t.stage_runners, (name, "runner keys materialized")
-        assert all(t.stage_runner(s) == "claude" and t.stage_model(s) == ""
-                   for s in m.CONFIG_STAGES), (name, "dormant model emitted")
+        # I-4 RELAXED: a stored model is returned for a claude stage, not "".
+        assert all(t.stage_runner(s) == "claude"
+                   and t.stage_model(s) == t.stage_models.get(s, "")
+                   for s in m.CONFIG_STAGES), (name, "stored model not live")
         t.save_config()
         t = load()
         assert t.stage_models == expected_models, (name, "model loss")
@@ -512,17 +713,19 @@ for name, config in fixtures.items():
         assert t.stage_billing(stage) == billing, (name, stage, "rollback billing")
         checks += 1
     checks += 1
-for runner in ("cline", "claude", "kimi", "codex", "self-hosted"):
+# cline runs last: the file left behind feeds the parity check below, and a
+# vendor or self-hosted runner there would not compare equal across the sides.
+for runner in ("claude", "kimi", "codex", "self-hosted", "cline"):
     with open(os.environ["UNCLE_CONFIG"], "w") as fh:
-        fh.write("requirements.runner %s\nrequirements.model poolside/laguna-s-2.1\n"
-                 "requirements.billing cline-usage\n" % runner)
+        fh.write("implementation.runner %s\nimplementation.model poolside/laguna-s-2.1\n"
+                 "implementation.billing cline-usage\n" % runner)
     t = load()
     expected_models = dict(t.stage_models)
     t.save_config()
     t = load()
-    assert t.stage_runner("requirements") == runner
+    assert t.stage_runner("implementation") == runner
     assert t.stage_models == expected_models, (runner, "dormant model loss")
-    assert t.stage_billings == {"requirements": "cline-usage"}, (runner, "billing loss")
+    assert t.stage_billings == {"implementation": "cline-usage"}, (runner, "billing loss")
     checks += 3
 print("  dormant selections/rollback: %d checks passed" % checks)
 PY
@@ -542,8 +745,8 @@ t.stage_runners, t.stage_models, t.stage_efforts = {}, {}, {}
 t.stage_base_urls, t.stage_api_keys = {}, {}
 t.stage_networks, t.stage_billings = {}, {}
 t._config_stamp, t._reload_tick, t.first_run = None, 0, False
-t._set_field("requirements", "runner", "kimi")
-t._set_field("requirements", "effort", "low")
+t._set_field("triage", "runner", "kimi")
+t._set_field("triage", "effort", "low")
 t._set_field("project-plan", "model", "cline-pass/kimi-k3")
 t._set_field("final-audit", "runner", "codex")
 # Written by the screen, read back by the drivers: the setting that decides
@@ -575,13 +778,20 @@ for stage in m.CONFIG_STAGES:
 PY
 )"
 
+# The screen only writes CONFIG_STAGES (requirements/baseline are not in
+# STAGES), so the driver side reads back exactly that list, in the same order.
+stage_list="$(UNCLE_TUI="$ROOT/uncle_tui.py" python3 - <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("tui", os.environ["UNCLE_TUI"])
+m = importlib.util.module_from_spec(spec); sys.modules["tui"] = m
+spec.loader.exec_module(m)
+print(" ".join(m.CONFIG_STAGES))
+PY
+)"
 actual="$(
-    UNCLE_CONFIG="$TMP/proj/.uncle/config" ROOT="$ROOT" bash -c '
+    UNCLE_CONFIG="$TMP/proj/.uncle/config" ROOT="$ROOT" STAGE_LIST="$stage_list" bash -c '
         . "$ROOT/scripts/lib/stage-config.sh"
-        for stage in derive-brief requirements baseline project-plan change-plan \
-                     adversarial-review updated-plan updated-change-plan preflight \
-                     implementation test-review manual-checklist execute-checklist \
-                     final-audit triage; do
+        for stage in $STAGE_LIST; do
             effort="$(uncle_stage_effort "$stage")"
             printf "%s\t%s\t%s\t%s\t%s\n" "$stage" "$(uncle_stage_runner "$stage")" \
                 "$(uncle_stage_model "$stage")" "$effort" \

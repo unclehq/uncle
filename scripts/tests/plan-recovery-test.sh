@@ -200,11 +200,11 @@ set_state IMPLEMENT
 run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL FAKE_IMPL="printf '#!/bin/sh\necho changed\n' > app/main.sh"
 expect_status 1
 expect_state REPAIR
-expect_in_file .uncle/workflow/repair-count 2
+expect_in_file .uncle/workflow/repair-count 4
 run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL
 expect_status 1
 expect_state REPAIR
-expect_in_file .uncle/workflow/repair-count 2
+expect_in_file .uncle/workflow/repair-count 4
 
 new_stagegate_case incomplete-resume-retry
 stagegate_agent

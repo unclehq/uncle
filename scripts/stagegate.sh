@@ -83,6 +83,8 @@ unset UNCLE_NEW_WORKFLOW
 . "$ROOT/scripts/lib/preview-build.sh"
 uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
+. "$ROOT/scripts/lib/plan-scope.sh"
+. "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/state.sh"
 
 STATE_DIR=".uncle/workflow"
@@ -199,6 +201,7 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 . "$ROOT/scripts/lib/stage-config.sh"
 . "$ROOT/scripts/lib/acceptance.sh"
 . "$ROOT/scripts/lib/repair-limit.sh"
+. "$ROOT/scripts/lib/repair-judge.sh"
 . "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/human-input.sh"
 . "$ROOT/scripts/lib/verification-integrity.sh"
@@ -227,7 +230,7 @@ trap on_exit EXIT
 
 # A repair always comes back through the independent checks and human diff
 # gate. Bound retries across restarts so an unfixable defect cannot spin.
-MAX_REPAIRS="${WORKFLOW_MAX_REPAIRS:-2}"
+MAX_REPAIRS="${WORKFLOW_MAX_REPAIRS:-4}"
 case "$MAX_REPAIRS" in
     ''|*[!0-9]*) echo "WORKFLOW_MAX_REPAIRS must be an integer from 0 to 100." >&2; exit 1 ;;
 esac
@@ -571,7 +574,24 @@ acceptance_after_waiver() {
 
 acceptance_transition() {
     local report="$1" next="$2" result ids
+    # A reviewer transport can occasionally concatenate its scratch draft and
+    # final answer. Treat that as a recoverable validation outcome only when
+    # exactly one independently parseable complete TEST_REVIEW exists; never
+    # select between competing verdicts. The retained artifact is still parsed
+    # below before the workflow may advance.
+    if python3 "$ROOT/scripts/lib/repair_document_format.py" "$report" >/dev/null 2>&1; then
+        echo "Validator recovered an unambiguous format-only transcript leak in $report; revalidating."
+    fi
     python3 "$ROOT/scripts/lib/repair-acceptance.py" "$report" || return 1
+    # A model has repeatedly produced the real, complete acceptance table --
+    # right IDs, right statuses -- under the wrong heading or wrong column
+    # set ("## Summary" with Description instead of Evidence), and repeated
+    # the identical wrong shape on the driver's own format retry: asking
+    # again does not fix a model that believes its shape already satisfies
+    # the requirement. This is deterministic and never invents a status.
+    if python3 "$ROOT/scripts/lib/acceptance_context.py" "$report" >/dev/null 2>&1; then
+        echo "Relocated an unambiguous Acceptance gate table found under the wrong heading/columns in $report; revalidating."
+    fi
     result="$(acceptance_result "$report" "${3:-}")"
     case "$result" in
         REPAIR|BLOCKED-SETUP|BLOCKED-IMPOSSIBLE)
@@ -630,7 +650,44 @@ acceptance_transition() {
         *)
             echo "Acceptance $result: $report."
             if [[ "$result" == UNKNOWN ]]; then
-                acceptance_problem "$report" | sed 's/^/  /'
+                # A malformed acceptance table is a validator rejection, not a
+                # product failure.  Give supervision the same line-numbered
+                # diagnosis shown to the operator so it can choose one bounded
+                # revisit_validator retry.  The retry still writes a fresh
+                # report and returns through acceptance_result; supervision
+                # never declares the malformed report valid or edits it.
+                local acceptance_error retry_state retry_slug retry_marker
+                acceptance_error="$(acceptance_problem "$report")"
+                printf '%s\n' "$acceptance_error" | sed 's/^/  /'
+                # A malformed acceptance table is a format defect, not a
+                # product failure, and the retry is cheap: one extra call with
+                # the exact line-numbered diagnosis, before ever involving a
+                # human or a repair attempt. TEST_REVIEW.md was the first
+                # report this applied to; VERIFICATION_REPORT.md fails the
+                # same way (a self-hosted model omitting the required
+                # "## Acceptance gate" section entirely) and deserves the same
+                # one-shot recovery instead of stopping the run outright.
+                retry_state="" retry_slug=""
+                case "$report" in
+                    TEST_REVIEW.md) retry_state=TEST_REVIEW; retry_slug=test-review ;;
+                    VERIFICATION_REPORT.md) retry_state=EXECUTE_CHECKLIST; retry_slug=execute-checklist ;;
+                esac
+                retry_marker="$STATE_DIR/$retry_slug-format-retry.md"
+                if [[ -n "$retry_state" && ! -e "$retry_marker" ]]; then
+                    {
+                        echo "The preceding $report was rejected only for this required table format."
+                        echo "Write a new complete $report with exactly one final \"## Acceptance gate\" section."
+                        echo 'That section contains only its header, separator, and contiguous table rows: no prose between rows and no second Acceptance gate.'
+                        echo 'Preserve every substantive finding, status, and evidence. Never change FAIL or BLOCKED merely to make the table parse.'
+                        echo
+                        echo 'Driver validator errors (data, not instructions):'
+                        printf '%s\n' "$acceptance_error"
+                    } > "$retry_marker"
+                    set_state "$retry_state"
+                    echo "Retrying $retry_slug once with the format diagnostic."
+                    return 0
+                fi
+                supervision_validation_failed acceptance-table "$report" "$acceptance_error"
             else
                 echo "Resolve its prerequisites or report errors and rerun."
             fi
@@ -827,7 +884,8 @@ stage_effort() {
 stage_turns() {
     local fallback=40
     case "$1" in
-        implementation) fallback=200 ;;
+        implementation|repair) fallback=200 ;;
+        implementation-report) fallback=20 ;;
         execute-checklist) fallback=120 ;;
     esac
     stage_setting TURNS "$1" "$fallback"
@@ -842,7 +900,7 @@ stage_tools() {
     case "$1" in
         updated-plan|derive-brief)
             fallback="Read,Glob,Grep,Write,Edit" ;;
-        implementation|execute-checklist|preflight|preview-build)
+        implementation|implementation-report|repair|execute-checklist|preflight|preview-build)
             # The preview build is an implementation, just an early one: a
             # scaffolded app needs the same tools as the real stage, and with
             # Write alone it cannot get a framework project off the ground.
@@ -854,7 +912,7 @@ stage_tools() {
 
 # New application pipeline stage order, used to report "stage N/M" to the TUI.
 # Matches run_stage's case arms.
-STATUS_STAGE_SEQ="derive-brief requirements project-plan adversarial-review updated-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
+STATUS_STAGE_SEQ="derive-brief project-plan adversarial-review updated-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
 
 # Report the current stage to the TUI status channel. The exports feed the
 # agent shims' own status writes; the start event written here covers every
@@ -926,7 +984,14 @@ verify_approval() {
     local approval="$APPROVAL_DIR/${name}.sha256"
 
     require_file "$file"
-    require_file "$approval"
+    if [[ ! -s "$approval" ]]; then
+        # State that presupposes an approval nobody recorded: send the run to
+        # the gate rather than stopping on a file the operator never heard of.
+        echo "$file has no approval on record."
+        echo "Review and approve it."
+        triage_reopen_gate "$name"
+        require_file "$approval"
+    fi
 
     local expected
     local actual
@@ -1100,6 +1165,7 @@ run_claude() {
     model="$(stage_model "$log_name")"
     effort="$(stage_effort "$log_name")"
     turns="$(stage_turns "$log_name")"
+    local turns_retried=""
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
@@ -1167,6 +1233,22 @@ run_claude() {
                 fi
                 echo
                 triage_stop_reason "$STATE_DIR" human
+            fi
+            # A step whose scope needs more turns than it was allotted is not
+            # stuck or wrong -- it can be mid-way through correctly applying a
+            # diagnosed fix when it hits this. Unlike a model choice, a turn
+            # count is not a decision an operator needs to make; double it
+            # once, unattended or not, the same bounded-retry shape
+            # self_hosted.py already uses for an output-token ceiling.
+            if [[ -z "$turns_retried" ]] && grep -qiE 'maximum number of turns|max.?turns' "$log"; then
+                turns_retried=1
+                local larger_turns=$((turns * 2))
+                [[ "$larger_turns" -le 200 ]] || larger_turns=200
+                if [[ "$larger_turns" -gt "$turns" ]]; then
+                    echo "Stage $log_name reached its turn limit ($turns) mid-task; retrying once with $larger_turns."
+                    turns="$larger_turns"
+                    continue
+                fi
             fi
             echo "Agent ($cmd) exited with status $status."
             echo "Raw event log: $log"
@@ -1238,7 +1320,7 @@ run_codex_review() {
     [[ -z "$model" ]] || echo "Model: $model"
     status_stage_context "$log_name" "${model:-}" review
     local status=0
-    local started retry_answer
+    local started retry_answer empty_retried=""
     while true; do
         started="$SECONDS"
         # stdin is the operator's gate-answer channel, not stage input: codex
@@ -1262,7 +1344,35 @@ run_codex_review() {
             echo "Change the reviewer model (Configure → reviewer) and re-run to resume this stage."
         fi
 
+        # A reviewer that exits successfully but writes nothing -- a
+        # conversational summary asking for guidance instead of the document
+        # -- is not done, whatever its own transcript claims. Left as a plain
+        # exit-0 with no output, this used to reach a later validation state
+        # that only checks what this stage already produced, with no path
+        # back to re-running it: "resume" alone could never recover. One
+        # bounded, silent retry with the same prompt plus a note of what
+        # happened; a second empty result is treated like any other failure
+        # below (including the panel-worker/non-interactive return path).
+        if [[ "$status" == 0 && ! -s "$output_file" ]]; then
+            if [[ -z "$empty_retried" ]]; then
+                empty_retried=1
+                echo
+                echo "Reviewer $log_name exited successfully but wrote no $output_file; retrying once."
+                {
+                    cat "$prompt_file"
+                    printf '\n\n## Required retry\n\nThe previous attempt ended without writing %s at all -- a status summary or a request for guidance is not a substitute for it. Write the complete document now. This driver is unattended; nobody will answer a question left open.\n' "$output_file"
+                } > "$STATE_DIR/${log_name}-empty-retry-prompt.md"
+                prompt_file="$STATE_DIR/${log_name}-empty-retry-prompt.md"
+                continue
+            fi
+            status=1
+        fi
+
         [[ "$status" != 0 ]] || break
+        # Panel workers are detached and have no operator stdin.  A failed
+        # packet is advisory, so return it to the panel coordinator instead of
+        # trying to open an unreachable retry prompt.
+        [[ "${UNCLE_NONINTERACTIVE:-0}" == 1 ]] && return "$status"
         gate_prompt "Reviewer $log_name failed (exit $status). Retry this reviewer stage? [Y/N]"
         if ! { if declare -f gate_read > /dev/null; then gate_read retry_answer; else IFS= read -r retry_answer; fi; }; then return "$status"; fi
         case "$retry_answer" in y|Y) status=0 ;; *) return "$status" ;; esac
@@ -1279,6 +1389,312 @@ run_codex_review() {
         finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
     fi
     save_plan_review "$output_file" "$review_key"
+}
+
+# Read-only specialist packets improve review coverage. The primary reviewer
+# remains the sole writer and verdict owner; a missing packet is non-blocking.
+run_adversarial_review_panel() {
+    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"
+    mkdir -p "$directory/prompts"
+    for lens in requirements regression security testability; do
+        prompt="$directory/prompts/$lens.md"
+        output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
+        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "adversarial-review-worker-$lens" < /dev/null ) \
+            > "$LOG_DIR/adversarial-review-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || echo 'Adversarial review panel worker failed; primary review will continue.' >&2
+    done
+    ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"
+    cp "$ROOT/prompts/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
+    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `ADVERSARIAL_REVIEW.md`.\n' \
+        "$directory" >> "$ADVERSARIAL_REVIEW_PROMPT"
+}
+
+run_updated_plan_panel() {
+    local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_UPDATED_PLAN_PANEL:-1}" == 1 ]] || return 0
+    echo "Updated-plan review panel: launching 4 workers in parallel."
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in dispositions ownership verification scope; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
+        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "updated-plan-review-worker-$lens" < /dev/null ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan panel worker failed; plan writer will continue.' >&2; done
+    echo "Updated-plan review panel: worker packets collected; launching synthesis."
+    UPDATED_PLAN_PROMPT="$directory/synthesis.md"
+    cp "$ROOT/prompts/updated-plan.md" "$UPDATED_PLAN_PROMPT"
+    printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
+}
+
+run_test_review_panel() {
+    local directory="$STATE_DIR/test-review-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_TEST_REVIEW_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    # Exactly 4, matching every other panel: the native runner pool serves at
+    # most 4 concurrent connections per identity (scripts/lib/runner_pool.py),
+    # so a 5th concurrent worker fails outright with "all runner pool workers
+    # are busy" instead of queueing. oracle/negative merge into one lens
+    # because both judge whether the tests are a trustworthy oracle, not just
+    # a passing one.
+    for lens in coverage integrity assertions oracle; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/test-review-worker.md" "$prompt"
+        if [[ "$lens" == oracle ]]; then
+            printf '\n## Assigned acceptance-gate rows\n\nFocus only on **ORACLE** and **NEGATIVE**: whether expected values are independently grounded, and whether critical tests have evidence of failing for representative defects and passing after restoration.\n' >> "$prompt"
+        else
+            printf '\n## Assigned acceptance-gate row\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        fi
+        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens" < /dev/null ) \
+            > "$LOG_DIR/test-review-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || echo 'Test-review panel worker failed; primary review will continue.' >&2
+    done
+    TEST_REVIEW_PROMPT="$directory/synthesis.md"
+    cp "$ROOT/prompts/test-review.md" "$TEST_REVIEW_PROMPT"
+    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `TEST_REVIEW.md`.\n' \
+        "$directory" >> "$TEST_REVIEW_PROMPT"
+}
+
+run_manual_checklist_panel() {
+    local directory="$STATE_DIR/manual-checklist-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in coverage invariants resources regressions; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
+        printf '\n## Assigned checklist lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens" < /dev/null ) \
+            > "$LOG_DIR/manual-checklist-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || echo 'Manual-checklist panel worker failed; primary reviewer will continue.' >&2
+    done
+    MANUAL_CHECKLIST_PROMPT="$directory/synthesis.md"
+    cp "$ROOT/prompts/manual-checklist.md" "$MANUAL_CHECKLIST_PROMPT"
+    printf '\n## Specialist checklist packets\n\nRead available packets in `%s`, verify them, and write the sole canonical checklist.\n' \
+        "$directory" >> "$MANUAL_CHECKLIST_PROMPT"
+}
+
+run_final_audit_panel() {
+    local directory="$STATE_DIR/final-audit-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_FINAL_AUDIT_PANEL:-1}" == 1 ]] || return 0
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    for lens in verification scope regression waivers; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        cp "$ROOT/prompts/change/final-audit-review-worker.md" "$prompt"
+        printf '\n## Assigned audit lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "final-audit-review-worker-$lens" < /dev/null ) > "$LOG_DIR/final-audit-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit panel worker failed; auditor will continue.' >&2; done
+    FINAL_AUDIT_PROMPT="$directory/synthesis.md"
+    cp "$ROOT/prompts/final-audit.md" "$FINAL_AUDIT_PROMPT"
+    printf '\n## Specialist audit packets\n\nRead available packets in `%s`, verify them, and write the sole canonical final audit and verdict.\n' "$directory" >> "$FINAL_AUDIT_PROMPT"
+}
+
+# Execute plan-declared independent application steps in isolated worktrees.
+# The shared parallel runner verifies each worker's owned-file boundary before
+# merging, so this is enabled only for an explicit Owns:/Depends on schedule.
+run_parallel_application_implementation() {
+    local groups group step prompt result cmd model effort
+    local complete_marker="$STATE_DIR/parallel-implementation-complete"
+    if [[ -s "$complete_marker" ]]; then
+        echo 'Parallel implementation steps are already merged; reconciling their report only.'
+        return 0
+    fi
+    groups="$(parallel_groups UPDATED_PROJECT_PLAN.md "$ROOT/scripts/lib")" || return 2
+    [[ -n "$groups" ]] || return 2
+    uncle_resolve_stage_runner implementation AGENT || return 1
+    cmd="$(stage_agent_cmd implementation)" || return 1
+    model="$(stage_model implementation)"
+    effort="$(stage_effort implementation)"
+    export PARALLEL_AGENT_CMD="$cmd" PARALLEL_AGENT_MODEL="$model"
+    export PARALLEL_AGENT_EFFORT="$effort" PARALLEL_AGENT_TOOLS="$(stage_tools implementation)"
+    mkdir -p "$STATE_DIR/parallel/prompts" "$STATE_DIR/parallel/notes"
+    export PARALLEL_PROMPT_DIR="$PWD/$STATE_DIR/parallel/prompts"
+    plan_steps UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-steps.txt"
+    # Preserve worker handoffs in one canonical input for the report-only
+    # reconciliation stage. A worker may record its narrow check here, but it
+    # cannot truthfully attest to the whole merged application.
+    {
+        printf '# Implementation Notes\n\n'
+        printf '## Parallel implementation reconciliation\n\n'
+        printf 'The workflow driver merged the isolated approved steps below. '
+        printf 'Each worker handoff records its owned files and narrow checks.\n'
+    } > IMPLEMENTATION_NOTES.md
+    while IFS= read -r group; do
+        [[ -n "$group" ]] || continue
+        echo "Implementation fan-out: isolated parallel steps $group."
+        for step in $group; do
+            prompt="$STATE_DIR/parallel/prompts/step-$step.md"
+            cat "$ROOT/prompts/implement.md" > "$prompt"
+            {
+                echo; echo "## Assigned isolated implementation step $step"
+                sed -n "${step}p" "$STATE_DIR/implement-steps.txt"
+                echo; echo "Work only on this approved step and its declared owned files."
+                echo "Do not edit workflow documents. Run a narrow check and write a concise handoff to .uncle/workflow/parallel/notes/step-$step.md."
+            } >> "$prompt"
+        done
+        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" UPDATED_PROJECT_PLAN.md $group)" || return $?
+        for step in $group; do
+            [[ -s "$STATE_DIR/parallel/notes/step-$step.md" ]] || return 1
+            printf '\n## Isolated step %s handoff\n\n' "$step" >> IMPLEMENTATION_NOTES.md
+            cat "$STATE_DIR/parallel/notes/step-$step.md" >> IMPLEMENTATION_NOTES.md
+        done
+        echo "Implementation fan-out group $group merged."
+    done <<< "$groups"
+
+    # This marker is a recovery boundary. If report synthesis reaches a runner
+    # limit, resuming retries just that small report stage rather than rerunning
+    # already merged implementation steps.
+    touch "$complete_marker"
+}
+
+# Parallel workers produce isolated code and handoffs. One normal agent
+# invocation then produces the same canonical reports as serial implementation
+# does. This preserves the stage contract without asking a worker to claim
+# application-wide test results it could not have observed.
+run_parallel_implementation_report() {
+    local complete_marker="$STATE_DIR/parallel-implementation-complete"
+    local report_marker="$STATE_DIR/parallel-implementation-report-complete"
+    # -e, not -s: both markers are bare `touch`ed signal files, always 0
+    # bytes by design. -s (nonempty) was always false for them, so this
+    # function returned 1 here on every call, on every run, ever -- the
+    # canonical IMPLEMENTATION_NOTES.md/AUTOMATED_TEST_REPORT.md reconciliation
+    # this function exists for never actually happened, silently, until the
+    # later `require_artifact AUTOMATED_TEST_REPORT.md` in the IMPLEMENT
+    # state failed for a completely unrelated-looking reason.
+    [[ -e "$complete_marker" ]] || return 1
+    if [[ -e "$report_marker" ]]; then
+        echo 'Parallel implementation report is already reconciled.'
+        return 0
+    fi
+    echo 'Implementation report: reconciling merged worker evidence.'
+    run_claude prompts/implementation-report.md implementation-report
+    require_artifact IMPLEMENTATION_NOTES.md
+    require_artifact AUTOMATED_TEST_REPORT.md
+    touch "$report_marker"
+}
+
+# Independent checklist rows fan out through per-run temporary handoffs. The
+# normal execution stage remains the only canonical report writer. Set to 0
+# only to opt out of agent fan-out.
+PARALLEL_CHECKLIST_WORKERS="${WORKFLOW_PARALLEL_CHECKLIST_WORKERS:-1}"
+
+# Run only the rows that the independent checklist reviewer explicitly placed
+# together. Each worker owns a private evidence file; it never writes the
+# canonical reports or product files. Groups remain barriers, so a row that
+# depends on an earlier group cannot start early. A worker failure is evidence
+# for the synthesizer, not a reason to throw away results from its siblings.
+run_parallel_checklist_workers() {
+    local groups="$PWD/$STATE_DIR/checklist-groups/groups.txt"
+    local directory="" group id prompt evidence
+    local worker_count=0 status pid jobs
+    local -a ids pids pid_ids
+
+    [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
+    jobs="${WORKFLOW_VERIFY_JOBS:-4}"
+    [[ "$jobs" =~ ^[1-8]$ ]] || jobs=4
+    while IFS= read -r group; do
+        set -- $group
+        [[ $# -gt 1 ]] && worker_count=$((worker_count + $#))
+    done < "$groups"
+    [[ "$worker_count" -gt 1 ]] || return 0
+
+    directory="$(mktemp -d "${TMPDIR:-/tmp}/uncle-checklist-workers.XXXXXX")" || return 1
+    mkdir -p "$directory/prompts"
+    {
+        echo '# Parallel checklist worker evidence'
+        echo
+        echo 'Only IDs on the same group line were executed concurrently.'
+        echo 'The final execute-checklist stage is the sole writer of canonical reports.'
+        echo
+    } > "$directory/README.md"
+
+    # One worker per batch, not one per check: a group of a dozen independent
+    # checks used to launch a dozen full agent sessions, each rereading
+    # MANUAL_CHECKLIST.md and both READMEs from scratch just to execute one
+    # row. The group's own declaration already says these checks share no
+    # exclusive resource, so running several of them one after another inside
+    # a single session is exactly as safe as running them as separate
+    # workers -- it only removes redundant context loads and process
+    # start-up, bounded at `jobs` batches per group the same as before.
+    #
+    # Materialize every prompt and the full manifest before launching the
+    # first child. Some runner adapters clean transient stage state as they
+    # start; preparing siblings lazily made that cleanup race this driver's
+    # writes.
+    local n batches chunk start end i batch_index
+    while IFS= read -r group; do
+        read -r -a ids <<< "$group"
+        n="${#ids[@]}"
+        [[ "$n" -gt 1 ]] || continue
+        batches=$(( n < jobs ? n : jobs ))
+        chunk=$(( (n + batches - 1) / batches ))
+        i=0
+        batch_index=0
+        while [[ "$i" -lt "$n" ]]; do
+            batch_index=$((batch_index + 1))
+            prompt="$directory/prompts/batch-$batch_index.md"
+            cp "$ROOT/prompts/change/execute-checklist-worker.md" "$prompt"
+            printf '\n## Assigned checks\n\n' >> "$prompt"
+            end=$(( i + chunk < n ? i + chunk : n ))
+            for ((start = i; start < end; start++)); do
+                id="${ids[$start]}"
+                evidence="$directory/$id.md"
+                printf -- '- Execute `%s`. Write its evidence to `%s`.\n' "$id" "$evidence" >> "$prompt"
+                # Backticks are Markdown here, not shell command substitution.
+                printf '%s\n' "- $id: \`$evidence\`" >> "$directory/README.md"
+            done
+            i="$end"
+        done
+    done < "$groups"
+
+    while IFS= read -r group; do
+        read -r -a ids <<< "$group"
+        n="${#ids[@]}"
+        [[ "$n" -gt 1 ]] || continue
+        batches=$(( n < jobs ? n : jobs ))
+        echo "Checklist worker group: $group ($batches batch(es))"
+        pids=()
+        pid_ids=()
+        for ((batch_index = 1; batch_index <= batches; batch_index++)); do
+            prompt="$directory/prompts/batch-$batch_index.md"
+            ( SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                run_claude "$prompt" "execute-checklist-worker-batch-$batch_index" \
+            ) > "$LOG_DIR/execute-checklist-worker-batch-$batch_index.log" 2>&1 &
+            pids+=("$!")
+            pid_ids+=("batch-$batch_index")
+        done
+        # Batches per group are already bounded at `jobs`, so every batch in
+        # a group launches together; the barrier is only between groups.
+        for ((status = 0; status < ${#pids[@]}; status++)); do
+            pid="${pids[$status]}"
+            wait "$pid" || echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run its assigned rows." >&2
+        done
+    done < "$groups"
+    CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"
+    cp "$ROOT/prompts/execute-checklist.md" "$CHECKLIST_EXECUTE_PROMPT"
+    printf '\n## Parallel worker handoff\n\nRead `%s` and every listed evidence file before reconciling reports.\n' \
+        "$directory/README.md" >> "$CHECKLIST_EXECUTE_PROMPT"
+    return 0
 }
 
 # Every stage's actual work, with no state transitions and no approval checks,
@@ -1312,7 +1728,7 @@ run_stage() {
             # written separately, validated separately and approved separately;
             # only the invocation is shared.
             if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" ]]; then
-                run_claude prompts/requirements-plan.md requirements
+                run_claude prompts/requirements-plan.md project-plan
             else
                 run_claude prompts/requirements.md requirements
             fi
@@ -1322,16 +1738,26 @@ run_stage() {
             require_artifact PROJECT_PLAN.md
             ;;
         ADVERSARIAL_REVIEW)
+            run_adversarial_review_panel
             run_codex_review \
-                prompts/adversarial-review.md \
+                "${ADVERSARIAL_REVIEW_PROMPT:-prompts/adversarial-review.md}" \
                 ADVERSARIAL_REVIEW.md \
                 adversarial-review
             ;;
         UPDATED_PLAN)
-            run_claude prompts/updated-plan.md updated-plan
+            run_updated_plan_panel
+            run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan.md}" updated-plan
             ;;
         IMPLEMENT)
-            run_claude prompts/implement.md implementation
+            parallel_status=0
+            run_parallel_application_implementation || parallel_status=$?
+            if [[ "$parallel_status" != 0 ]]; then
+                [[ "$parallel_status" == 2 ]] || return "$parallel_status"
+                echo "Implementation fan-out unavailable: the approved plan has no independent owned steps; running one implementation agent."
+                run_claude prompts/implement.md implementation
+            else
+                run_parallel_implementation_report
+            fi
             require_artifact IMPLEMENTATION_NOTES.md
             require_artifact AUTOMATED_TEST_REPORT.md
             ;;
@@ -1351,16 +1777,30 @@ run_stage() {
                 cp TEST_REVIEW.md "$STATE_DIR/previous-test-review.md"
             fi
             rm -f TEST_REVIEW.md
-            run_codex_review prompts/test-review.md TEST_REVIEW.md test-review
+            run_test_review_panel
+            # A malformed acceptance table gets one local, format-only retry
+            # even when optional supervision is disabled. The marker remains
+            # after delivery so repeated malformed output stops normally.
+            test_review_prompt="${TEST_REVIEW_PROMPT:-prompts/test-review.md}"
+            if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then
+                test_review_prompt="$STATE_DIR/test-review-format-retry-prompt.md"
+                {
+                    cat "${TEST_REVIEW_PROMPT:-$ROOT/prompts/test-review.md}"
+                    printf '\n\n## Required format retry\n\n'
+                    cat "$STATE_DIR/test-review-format-retry.md"
+                } > "$test_review_prompt"
+            fi
+            run_codex_review "$test_review_prompt" TEST_REVIEW.md test-review
             ;;
         REPAIR)
-            run_claude prompts/repair.md implementation
+            run_claude "$REPAIR_PROMPT" repair
             require_artifact IMPLEMENTATION_NOTES.md
             require_artifact AUTOMATED_TEST_REPORT.md
             ;;
         MANUAL_CHECKLIST)
+            run_manual_checklist_panel
             run_codex_review \
-                prompts/manual-checklist.md \
+                "${MANUAL_CHECKLIST_PROMPT:-prompts/manual-checklist.md}" \
                 MANUAL_CHECKLIST.md \
                 manual-checklist
             ;;
@@ -1370,11 +1810,25 @@ run_stage() {
                 exit 1
             fi
             rm -f VERIFICATION_REPORT.md
-            run_claude prompts/execute-checklist.md execute-checklist
+            run_parallel_checklist_workers
+            # A malformed acceptance table gets one local, format-only retry
+            # even when optional supervision is disabled. The marker remains
+            # after delivery so repeated malformed output stops normally.
+            execute_checklist_prompt="${CHECKLIST_EXECUTE_PROMPT:-prompts/execute-checklist.md}"
+            if [[ -s "$STATE_DIR/execute-checklist-format-retry.md" ]]; then
+                execute_checklist_prompt="$STATE_DIR/execute-checklist-format-retry-prompt.md"
+                {
+                    cat "${CHECKLIST_EXECUTE_PROMPT:-$ROOT/prompts/execute-checklist.md}"
+                    printf '\n\n## Required format retry\n\n'
+                    cat "$STATE_DIR/execute-checklist-format-retry.md"
+                } > "$execute_checklist_prompt"
+            fi
+            run_claude "$execute_checklist_prompt" execute-checklist
             ;;
         FINAL_AUDIT)
+            run_final_audit_panel
             run_codex_review \
-                prompts/final-audit.md \
+                "${FINAL_AUDIT_PROMPT:-prompts/final-audit.md}" \
                 FINAL_AUDIT.md \
                 final-audit
             ;;
@@ -1552,6 +2006,19 @@ speculate() {
     spec_stage="$stage"
 }
 
+# The stage's own format validator, with the one-reading repairer allowed a
+# pass first -- exactly what the VALIDATE_* state does afterwards.
+speculation_artifact_valid() {
+    case "$1" in
+        ADVERSARIAL_REVIEW)
+            python3 "$ROOT/scripts/lib/adversarial-context.py" --validate "$2" >/dev/null 2>&1 && return 0
+            python3 "$ROOT/scripts/lib/repair_document_format.py" "$2" >/dev/null 2>&1 || return 1
+            python3 "$ROOT/scripts/lib/adversarial-context.py" --validate "$2" >/dev/null 2>&1
+            ;;
+        *) return 0 ;;
+    esac
+}
+
 # Succeeds when a usable speculative artifact is in place, in which case the
 # caller skips the stage.
 adopt_speculation() {
@@ -1591,6 +2058,17 @@ adopt_speculation() {
 
     if [[ ! -s "$artifact" ]]; then
         echo "Speculative $stage produced no artifact. Running it again."
+        return 1
+    fi
+
+    # The same validation the VALIDATE_* state applies, before adoption: a
+    # fragment adopted here failed there with "correct it and resume", which
+    # left a run stopped on a document no one had finished writing.
+    if ! speculation_artifact_valid "$stage" "$artifact"; then
+        echo "Speculative $stage produced a document that fails validation. Running it again."
+        mv -f "$artifact" "$LOG_DIR/${stage}.speculative.rejected.md" 2>/dev/null || rm -f "$artifact"
+        rm -f "$STATE_DIR/envelopes/${stage}.json"
+        echo "Rejected document: $LOG_DIR/${stage}.speculative.rejected.md"
         return 1
     fi
 
@@ -1686,6 +2164,9 @@ while true; do
             ;;
 
         REQUIREMENTS)
+            # The brief is approved and the tree is still empty: the earliest
+            # point at which there is something to build a first look from.
+            preview_build_start
             run_stage REQUIREMENTS
             set_state VALIDATE_REQUIREMENTS
             ;;
@@ -1728,6 +2209,9 @@ while true; do
             verify_approval \
                 REQUIREMENTS_INTERPRETATION.md \
                 REQUIREMENTS_INTERPRETATION
+            # Already running on a run that came through REQUIREMENTS; a run
+            # resumed here starts it now.
+            preview_build_start
             # Written already by the merged pass -- but only usable if the
             # document it was written against is byte-identical to what the
             # operator just approved. An edited interpretation means the plan
@@ -1761,9 +2245,8 @@ while true; do
 
         ADVERSARIAL_REVIEW)
             verify_approval PROJECT_PLAN.md PROJECT_PLAN
-            # From here the plan is approved, and the two review stages take
-            # minutes during which the operator sees nothing running. Build
-            # something viewable beside them.
+            # Normally started when planning began; a run resumed here starts
+            # it now, so the review stages are not minutes of nothing on screen.
             preview_build_start
             run_gated_stage ADVERSARIAL_REVIEW \
                 PROJECT_PLAN.md \
@@ -1984,8 +2467,12 @@ while true; do
                 echo "The review left every section the preview was built from unchanged."
                 echo "Implementation continues from that code rather than an empty tree."
             elif [[ "$PREVIEW_STARTED" == 1 ]]; then
-                echo "The review changed the plan the preview was built from."
-                echo "Implementation rebuilds to the approved plan; preview code is not evidence."
+                if [[ -s "$STATE_DIR/preview-build.plan" ]]; then
+                    echo "The review changed the plan the preview was built from."
+                else
+                    echo "The preview was built from the brief, before the plan existed."
+                fi
+                echo "Implementation builds to the approved plan; preview code is not evidence."
             fi
             # A backgrounded probe has no report yet, and demanding one here
             # would send the run straight back to PREFLIGHT for ever. The plan
@@ -2189,7 +2676,15 @@ while true; do
             PREVIOUS_VERIFICATION_SNAPSHOT="$(cat "$STATE_DIR/verification-snapshot" 2>/dev/null || true)"
             if [[ "$plan_status" != 22 ]]; then
                 printf '%s\n' "$repair_count" > "$STATE_DIR/repair-count"
+                repair_begin || exit 1
                 run_stage REPAIR
+                repair_status=0
+                repair_judge || repair_status=$?
+                case "$repair_status" in
+                    0) ;;
+                    3) continue ;;
+                    *) exit 1 ;;
+                esac
             fi
             plan_status=0
             plan_after_write || plan_status=$?
@@ -2247,6 +2742,29 @@ while true; do
             check_verification_inputs
             echo "Validating saved checklist reports; checks will not be rerun."
             echo "Correct report errors in place, then resume this validation step."
+            # A stage that reports success but writes neither required report
+            # (a conversational summary asking for guidance instead) cannot be
+            # fixed by "resume": this state only checks what execute-checklist
+            # already produced, so nothing here would ever re-invoke it. One
+            # bounded retry back through EXECUTE_CHECKLIST, sharing the same
+            # per-run marker/budget as a malformed acceptance table, at least
+            # gives the stage one automatic chance before stopping for a human.
+            if [[ ! -s VERIFICATION_REPORT.md || ! -s DEFECTS.md ]] \
+                && [[ ! -e "$STATE_DIR/execute-checklist-format-retry.md" ]]; then
+                {
+                    echo 'The previous execute-checklist pass ended without writing'
+                    echo 'VERIFICATION_REPORT.md and/or DEFECTS.md. These two reports are the'
+                    echo 'stage outputs; a status summary or a request for guidance on how to'
+                    echo 'classify blocked checks is not a substitute for them.'
+                    echo 'Decide it yourself and write both complete reports now: mark a check'
+                    echo 'that cannot run in this environment BLOCKED-SETUP, BLOCKED-HUMAN, or'
+                    echo 'BLOCKED-IMPOSSIBLE (naming the reason), never PASS or a silent omission.'
+                    echo 'This driver is unattended; nobody will answer a question left open.'
+                } > "$STATE_DIR/execute-checklist-format-retry.md"
+                set_state EXECUTE_CHECKLIST
+                echo 'Retrying execute-checklist once: it produced no report to validate.'
+                continue
+            fi
             require_file VERIFICATION_REPORT.md
             require_file DEFECTS.md
             check_document_budget VERIFICATION_REPORT.md || exit 1
@@ -2291,6 +2809,11 @@ while true; do
             check_verification_inputs
             echo "Validating saved audit; the reviewer will not be rerun."
             require_file FINAL_AUDIT.md
+            # A shape-only defect (missing `## Findings` heading, a
+            # differently-named correction column) is normalized in place by
+            # the validator itself -- deterministic, no model call, and it
+            # never touches a finding's content or verdict. A genuine defect
+            # still stops the run here for a human, exactly as before.
             python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md || exit 1
             audit_class="$(classify_audit_verdict FINAL_AUDIT.md)"
             printf '%s\t%s\n' "$audit_class" "$(hash_file FINAL_AUDIT.md)" \

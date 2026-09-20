@@ -16,6 +16,19 @@ Read:
 Do not modify source code.
 Do not claim any check passed.
 
+## Scope boundary (binding)
+
+Keep only checks that trace to a requested behavior, acceptance criterion,
+changed component, or explicitly preserved behavior in the approved change
+documents. Remove generic repository-health, workflow, supervisor, credential,
+GitHub, publishing, commit, and signing checks unless those documents explicitly
+place them in scope. They must not block an unrelated project delivery.
+
+Availability of the `claude` command through its normal web-login session is
+sufficient. Do not require `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or
+another API token unless the approved change explicitly requires API-key
+authentication.
+
 Create MANUAL_CHECKLIST.md.
 
 Verify:

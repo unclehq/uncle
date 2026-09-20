@@ -40,6 +40,29 @@ def depends(rows):
     return out
 
 
+# A step that legitimately owns a manifest also owns its lockfile: the
+# lockfile is a deterministic byproduct of installing or updating what that
+# manifest already declares, not new scope the plan failed to name. Real
+# runs repeatedly aborted a merge over exactly this -- a step scaffolding
+# `package.json` also produces `package-lock.json`, and no plan writer
+# reliably remembers to name the lockfile too. This is deliberately narrow:
+# only the paired lockfile of an *already-declared* manifest, in the same
+# directory, never a whole new file the plan never mentioned at all.
+LOCKFILE_OF_MANIFEST = {
+    'package.json': ('package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb'),
+    'Cargo.toml': ('Cargo.lock',),
+    'Gemfile': ('Gemfile.lock',),
+    'composer.json': ('composer.lock',),
+    'pyproject.toml': ('poetry.lock', 'uv.lock', 'Pipfile.lock'),
+    'Pipfile': ('Pipfile.lock',),
+    'go.mod': ('go.sum',),
+}
+
+
+def _dirname(path):
+    return path.rsplit('/', 1)[0] if '/' in path else ''
+
+
 def covers(owned, path):
     """Does a declared token cover this path? Directories cover what is under them."""
     for token in owned:
@@ -50,6 +73,9 @@ def covers(owned, path):
         if token.endswith('/') and path.startswith(token):
             return True
         if path.startswith(token.rstrip('/') + '/'):
+            return True
+        lockfiles = LOCKFILE_OF_MANIFEST.get(token.rsplit('/', 1)[-1])
+        if lockfiles and path.rsplit('/', 1)[-1] in lockfiles and _dirname(token) == _dirname(path):
             return True
     return False
 

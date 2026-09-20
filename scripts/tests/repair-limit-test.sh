@@ -57,4 +57,31 @@ if ensure_repair_capacity 2 <<<'+abc'; then exit 1; fi
 
 printf 'corrupt\n' > "$STATE_DIR/repair-limit"
 if ensure_repair_capacity 2 </dev/null; then exit 1; fi
-echo 'repair-limit-test.sh: approval, decline, EOF, validation, relative bumps, resume, and ceiling passed'
+
+# Unattended: extends to the standing ceiling and continues, without ever
+# calling gate_read. A pipe stdin never closes under the TUI, so a check
+# that only escaped on EOF would have hung here instead of failing over.
+# Auto mode means a human gate does not block progress -- stopping a repair
+# loop pending a human who is not coming was exactly that kind of block.
+rm -f "$STATE_DIR/repair-limit"
+MAX_REPAIRS=2
+gate_read() { echo "FAIL: gate_read must not be called when unattended" >&2; exit 1; }
+UNCLE_UNATTENDED=1
+ensure_repair_capacity 2 </dev/null \
+    || { echo "FAIL: unattended must extend and continue, not stop" >&2; exit 1; }
+[[ "$MAX_REPAIRS" == 100 ]] || { echo "FAIL: unattended must extend to the standing ceiling of 100, got $MAX_REPAIRS" >&2; exit 1; }
+[[ "$(cat "$STATE_DIR/repair-limit")" == 100 ]] || { echo "FAIL: extended limit must be persisted" >&2; exit 1; }
+unset UNCLE_UNATTENDED
+
+# The absolute ceiling still stops even unattended: a true runaway (already
+# at 100) must not be extended further just because nobody is watching.
+rm -f "$STATE_DIR/repair-limit"
+MAX_REPAIRS=2
+UNCLE_UNATTENDED=1
+if ensure_repair_capacity 100 </dev/null; then
+    echo "FAIL: the absolute ceiling must still stop the run, even unattended" >&2
+    exit 1
+fi
+unset UNCLE_UNATTENDED
+
+echo 'repair-limit-test.sh: approval, decline, EOF, validation, relative bumps, resume, ceiling, and unattended passed'

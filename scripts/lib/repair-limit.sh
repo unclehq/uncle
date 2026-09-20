@@ -22,6 +22,25 @@ ensure_repair_capacity() {
         echo 'Maximum of 100 repairs reached. Resolve the findings before resuming.'
         return 1
     fi
+    if [[ "${UNCLE_UNATTENDED:-0}" == 1 ]]; then
+        # Checked before gate_read, not after: under the TUI, stdin is a pipe
+        # the driver holds open, so a prompt waiting on EOF blocks forever
+        # rather than failing over.
+        #
+        # Auto mode means human gates do not block progress, and stopping a
+        # repair loop pending a human who by construction is not coming was
+        # exactly that kind of block -- the operator's own correction after
+        # the first version of this fix. This grants the same ceiling an
+        # attended operator could grant themselves (100, enforced above
+        # regardless of mode), recorded plainly as nobody's decision, so a
+        # true runaway still stops at that absolute limit instead of looping
+        # forever, but a repair that is still making real progress is not
+        # halted merely because nobody was there to type a bigger number.
+        MAX_REPAIRS=100
+        printf '%s' "$MAX_REPAIRS" > "$STATE_DIR/repair-limit"
+        echo "Unattended: repair limit extended to $MAX_REPAIRS; no person authorized this, it is the standing ceiling."
+        return 0
+    fi
     while true; do
         gate_prompt "Repair limit reached: $used of $MAX_REPAIRS attempts used. Enter a new total ($((used + 1))-100), '+N' for N more attempts, or 'stop' to leave this run pending: "
         if ! gate_read answer; then

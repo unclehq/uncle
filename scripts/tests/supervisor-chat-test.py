@@ -82,7 +82,7 @@ class Base(unittest.TestCase):
         FakeChat.calls = []
         for target, value in (('_project_root', lambda: str(self.project)), ('CONFIG_PATH', str(self.config)),
                               ('ChatRequest', FakeChat),
-                              ('supervisor_command', lambda config, root: (['fake-claude', '--bare'], {'PATH': '/bin'}, '/tmp/x'))):
+                              ('supervisor_command', lambda config, root, **kwargs: (['fake-claude', '--bare'], {'PATH': '/bin'}, '/tmp/x'))):
             p = patch.object(tui, target, value)
             p.start()
             self.addCleanup(p.stop)
@@ -203,6 +203,26 @@ class RoutingTests(Base):
                 ui._run.assert_called_once()
                 self.assertEqual(ui.workflow_idx, 0)
 
+    def test_direct_fenced_home_action_is_recovered_only_for_idle_build_request(self):
+        description = 'build a groovy calendar webapp'
+        action = {'uncle_action': 'create_app', 'message': 'Build a groovy calendar webapp',
+                  'document': description, 'start': True}
+        raw = '```swift\n' + json.dumps(action) + '\n```'
+        ui = self.ui('menu')
+        ui._run = Mock()
+        request = self.send(ui, description)
+        request.events.put(dict(outcome(), reply=raw))
+        self.assertTrue(ui.poll_home_chat())
+        self.assertIn('## Summary\n' + description, (self.project / 'REQUIREMENTS.md').read_text())
+        ui._run.assert_called_once()
+        self.assertIn('Recovered a direct homepage action', self.history(ui))
+        # The same bare action must not become a stage action.
+        running = self.ui('running')
+        request = self.send(running, description)
+        request.events.put(dict(outcome(), reply=raw))
+        self.assertTrue(running.poll_home_chat())
+        self.assertIn('did not follow the contract', running.chat_error)
+
     def test_issue_build_phrase_and_home_intent(self):
         ui = self.ui('menu')
         ui._home_action = Mock()
@@ -217,6 +237,16 @@ class RoutingTests(Base):
         request = self.send(ui, 'Run the change request now')
         self.answer(ui, request, 'Running', home_action={'uncle_action': 'run_change', 'message': 'go'})
         self.assertEqual(ui._home_action.call_count, 2)
+
+    def test_resume_phrases_authorize_home_intent(self):
+        from supervisor_chat import home_intent
+        for message in ('resume building #69', 'resume the build for issue 69',
+                        'continue building #69', 'resume issue 69', 'Resume #69'):
+            with self.subTest(message=message):
+                self.assertTrue(home_intent(message))
+        for message in ('should we resume #69?', 'do not resume yet'):
+            with self.subTest(message=message):
+                self.assertFalse(home_intent(message))
 
     def test_direct_homepage_edit_and_document_requests_authorize_action(self):
         from supervisor_chat import home_intent
@@ -502,6 +532,20 @@ class DelegationTests(Base):
                     'Approve it. {"schema":1}', ''):
             with self.subTest(bad=bad[:40]):
                 self.assertRaises(ValueError, sc.parse_reply, bad)
+        # Models occasionally put an otherwise valid envelope in a fence whose
+        # language is unrelated to JSON, or widen it to four backticks because
+        # the payload itself contains Markdown. It is presentation noise, not
+        # an authority change: the unwrapped object still gets the full schema
+        # and action allowlist validation.
+        fenced = '````swift\n' + reply('Building.', home_action={'uncle_action': 'run_app', 'message': 'go',
+                                                                    'document': '# App\n```html\n<body>\n```', 'start': True}) + '\n````'
+        parsed = sc.parse_reply(fenced)
+        self.assertEqual(parsed['reply'], 'Building.')
+        self.assertEqual(parsed['home_action']['uncle_action'], 'run_app')
+        self.assertRaises(ValueError, sc.parse_reply, 'Before\n' + fenced)
+        prefixed = 'I will now produce the required JSON.\n' + reply('Building.')
+        self.assertEqual(sc.parse_reply(prefixed)['reply'], 'Building.')
+        self.assertRaises(ValueError, sc.parse_reply, prefixed + '\nAfter')
         request = self.send(ui, 'answer this one')
         for answer in ('y\nn', 'yes please', 'maybe', 'y; rm -rf /'):
             with self.subTest(answer=answer):

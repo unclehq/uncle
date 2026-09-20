@@ -11,6 +11,41 @@ class Document(unittest.TestCase):
                 with self.assertRaises(ValueError):validate(p)
             p.write_text('## MC-1\nExact action: Open page\nExpected result: Greeting\n')
             self.assertEqual(len(validate(p)),1)
+
+    def test_bold_prose_labels_are_normalized_in_place(self):
+        # A real checklist: complete, correct content under a self-hosted
+        # reviewer's own prose-style labels instead of the required bullet
+        # fields. The content must survive untouched; only the labels change.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / 'checklist'
+            p.write_text(
+                '## MC-1 — Field order\n'
+                '**Checks:** Open an existing stage in the TUI.\n'
+                '**Pass condition:** Field order matches spec.\n'
+                '## MC-2 — Colon outside the bold\n'
+                '**Steps**: Create a new stage.\n'
+                '**Pass condition**: Catalogue is vendor-specific.\n')
+            checks = validate(p)
+            self.assertEqual(len(checks), 2)
+            fixed = p.read_text()
+            self.assertIn('- Exact action: Open an existing stage in the TUI.', fixed)
+            self.assertIn('- Expected result: Field order matches spec.', fixed)
+            self.assertIn('- Exact action: Create a new stage.', fixed)
+            self.assertIn('- Expected result: Catalogue is vendor-specific.', fixed)
+            self.assertNotIn('**', fixed, 'no stray markup should survive the relabel')
+            # Already normalized: a second validate() must be a no-op, not
+            # rewrite the file again or drop content.
+            before = p.read_text()
+            validate(p)
+            self.assertEqual(p.read_text(), before)
+
+    def test_normalization_never_masks_a_genuinely_incomplete_checklist(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / 'checklist'
+            p.write_text('## MC-1 — No content at all\nJust prose, no fields.\n')
+            with self.assertRaises(ValueError):
+                validate(p)
+            self.assertEqual(p.read_text(), '## MC-1 — No content at all\nJust prose, no fields.\n')
     def test_categorized_check_ids_preserve_dependencies(self):
         from checklist_document import validate_text
         rows = validate_text("""# Checklist

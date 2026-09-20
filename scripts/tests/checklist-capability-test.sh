@@ -87,6 +87,17 @@ out="$(ensure_checklist_runner execute-checklist <<< 'run' 2>&1)" && status=0 ||
 [ "$status" = 0 ] || fail "'run' must proceed"
 grep -q 'record BLOCKED' <<< "$out" || fail "'run' must say what it is accepting"
 
+# Unattended: takes the 'run' path itself, before ever calling gate_read. A
+# pipe stdin never closes under the TUI, so a check that only escaped on EOF
+# would have hung here instead of failing over.
+gate_read() { echo "FAIL: gate_read must not be called when unattended" >&2; exit 1; }
+UNCLE_UNATTENDED=1
+out="$(ensure_checklist_runner execute-checklist < /dev/null 2>&1)" && status=0 || status=$?
+unset UNCLE_UNATTENDED
+gate_read() { IFS= read -r "$1"; }
+[ "$status" = 0 ] || fail 'unattended must proceed, not leave the run pending'
+grep -q 'record BLOCKED' <<< "$out" || fail 'unattended must say what it is accepting'
+
 # 're-read' is the path the dialog exists for: the operator changes the runner
 # in another window, and the answer comes from the file, not from this loop.
 cat > "$work/fix.sh" <<'FIX'

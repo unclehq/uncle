@@ -2571,14 +2571,22 @@ while true; do
                 check_document_budget CHANGE_PLAN.md || exit 1
             fi
 
+            set_state WAIT_CHANGE_PLAN_APPROVAL
+            ;;
+
+        WAIT_CHANGE_PLAN_APPROVAL)
+            human_gate APPROVE \
+                CHANGE_PLAN.md CHANGE_PLAN
             envelope_invalidate CHANGE_PLAN
             envelope_write --stage plan --result pass \
                 --evidence CHANGE_PLAN.md \
+                --approval CHANGE_PLAN \
                 --producer-stage change-plan --producer-kind agent
             set_state ADVERSARIAL_REVIEW
             ;;
 
         ADVERSARIAL_REVIEW)
+            verify_approval CHANGE_PLAN.md CHANGE_PLAN
 
             # Written before the reviewer runs: a reviewer that never returns
             # leaves the reason nothing was verified, and blocks release.

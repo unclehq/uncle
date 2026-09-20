@@ -2669,6 +2669,10 @@ class UncleTUI:
             self.home_request = None
             self.home_history = []
             self.home_issue_context = ''
+            self.chat_history = []
+            self.chat_history_index = -1
+            self.chat_saved_draft = ''
+            self.chat_cursor = 0
         # Supervisor chat state (Issue 45): the latest driver-named gate, the
         # session's standing grant, steering delivery records and call counts.
         # Set individually: tests bind `chat` before the first call here.
@@ -2939,6 +2943,11 @@ class UncleTUI:
             lookup = lambda: issue_context(root, message)
         if trigger == 'chat':
             self.chat.send(message)
+            self.chat_history.append(sanitize(message))
+            self.chat_cursor = 0
+            self.chat_history_index = -1
+            self.chat_saved_draft = ''
+            self._evict_chat_history()
         self.home_history = history
         # Use a worker that is already up; never start one here. Standing one
         # up belongs to startup, where it costs nothing anyone is waiting on.
@@ -4361,6 +4370,7 @@ class UncleTUI:
                 return
             item = self.issue_matches[self.chat_pick]
             self.chat_composer = self.chat_composer[:self.chat_ref_start] + '#' + str(item['number']) + ' '
+            self.chat_cursor = len(self.chat_composer)
             self.chat_choices = []
             self.chat_picker = False
             self.chat_error = ''
@@ -4373,14 +4383,56 @@ class UncleTUI:
             choices = self.chat.refs.browse(name)
             reference = '@"' + name if any(c.isspace() for c in name) else '@' + name
             self.chat_composer = self.chat_composer[:self.chat_ref_start] + reference
+            self.chat_cursor = len(self.chat_composer)
             self.chat_choices = choices
             self.chat_pick = 0
         else:
             reference = self.chat.refs.reference(name)
             self.chat_composer = self.chat_composer[:self.chat_ref_start] + reference + ' '
+            self.chat_cursor = len(self.chat_composer)
             self.chat_choices = []
             self.chat_picker = False
         self.chat_error = ''
+
+    def _chat_history_size(self):
+        """Return aggregate byte size of chat_history + chat_composer."""
+        total = 0
+        for msg in getattr(self, 'chat_history', []):
+            total += len(msg.encode('utf-8'))
+        total += len(getattr(self, 'chat_composer', '').encode('utf-8'))
+        return total
+
+    def _evict_chat_history(self):
+        """Drop oldest history entries until total bytes < 1 MiB (1048576)."""
+        limit_bytes = 1048576
+        while self._chat_history_size() >= limit_bytes and self.chat_history:
+            self.chat_history.pop(0)
+
+    def _move_cursor(self, delta):
+        """Move cursor by delta, clamped to bounds."""
+        text = getattr(self, 'chat_composer', '')
+        new_pos = max(0, min(len(text), self.chat_cursor + delta))
+        self.chat_cursor = new_pos
+
+    def _move_by_word(self, forward):
+        """Move cursor to next word boundary. forward=True moves forward, False moves backward."""
+        text = getattr(self, 'chat_composer', '')
+        if not text:
+            return
+        pos = self.chat_cursor
+        if forward:
+            while pos < len(text) and not text[pos].isspace():
+                pos += 1
+            while pos < len(text) and text[pos].isspace():
+                pos += 1
+        else:
+            if pos > 0:
+                pos -= 1
+            while pos > 0 and text[pos].isspace():
+                pos -= 1
+            while pos > 0 and not text[pos - 1].isspace():
+                pos -= 1
+        self.chat_cursor = pos
 
     def _chat_key(self, k):
         if k == 27 and getattr(self, 'recovery_active', False):
@@ -4447,6 +4499,21 @@ class UncleTUI:
             if self.chat_choices and k in (curses.KEY_UP, curses.KEY_DOWN):
                 self.chat_pick = (self.chat_pick + (1 if k == curses.KEY_DOWN else -1)) % len(self.chat_choices)
                 return True
+            if not self.chat_choices and k in (curses.KEY_UP, curses.KEY_DOWN):
+                if self.chat_history:
+                    idx = self.chat_history_index
+                    if k == curses.KEY_UP:
+                        if idx == -1:
+                            self.chat_saved_draft = self.chat_composer
+                            idx = len(self.chat_history) - 1
+                        else:
+                            idx = max(-1, idx - 1)
+                    elif idx != -1:
+                        idx = idx + 1 if idx + 1 <= len(self.chat_history) - 1 else -1
+                    self.chat_history_index = idx
+                    self.chat_composer = self.chat_saved_draft if idx == -1 else self.chat_history[idx]
+                    self.chat_cursor = len(self.chat_composer)
+                return True
             if k in (10, 13):
                 # A complete numeric mention is already usable, even while the
                 # asynchronous picker is loading or has no matching results.
@@ -4460,6 +4527,7 @@ class UncleTUI:
                     self.chat_error = (self.issue_picker.message or 'No matching open issues.') if getattr(self, 'chat_picker_kind', 'file') == 'issue' else 'No matching files. Keep typing or press Esc to close.'
                 elif self.chat_edit:
                     self.chat_composer += '\n'
+                    self.chat_cursor = len(self.chat_composer)
                 else:
                     self.send_home_chat(self.chat_composer)
                     self.chat_composer = ''
@@ -4478,6 +4546,7 @@ class UncleTUI:
                     raise ValueError('Committed seed cannot be edited here')
                 self.chat_edit = True
                 self.chat_composer = self.chat.preview
+                self.chat_cursor = len(self.chat_composer)
                 return True
             if k == curses.KEY_F5:
                 if self.chat_edit:
@@ -4493,11 +4562,28 @@ class UncleTUI:
                 self.config_sel = 0
                 return True
             if k in (curses.KEY_BACKSPACE, 127, 8):
-                self.chat_composer = self.chat_composer[:-1]
+                if self.chat_cursor > 0:
+                    self.chat_composer = self.chat_composer[:self.chat_cursor - 1] + self.chat_composer[self.chat_cursor:]
+                    self.chat_cursor -= 1
+            elif k == curses.KEY_LEFT:
+                self._move_cursor(-1)
+            elif k == curses.KEY_RIGHT:
+                self._move_cursor(1)
+            elif k in (curses.KEY_HOME, 1):  # Ctrl-A
+                self.chat_cursor = 0
+            elif k in (curses.KEY_END, 5):  # Ctrl-E
+                self.chat_cursor = len(self.chat_composer)
+            elif k in (curses.KEY_SLEFT, 2):  # Ctrl-B fallback
+                self._move_by_word(forward=False)
+            elif k in (curses.KEY_SRIGHT, 6):  # Ctrl-F fallback
+                self._move_by_word(forward=True)
             elif 32 <= k <= 0x10ffff and k < curses.KEY_MIN:
                 if len(self.chat_composer.encode('utf-8')) >= 1024 * 1024:
                     raise ValueError('Transcript exceeds 1 MiB limit')
-                self.chat_composer += chr(k)
+                self.chat_history_index = -1
+                char = chr(k)
+                self.chat_composer = self.chat_composer[:self.chat_cursor] + char + self.chat_composer[self.chat_cursor:]
+                self.chat_cursor += 1
             if not self.chat_edit:
                 if self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'file' and not self.chat_composer[self.chat_ref_start:].startswith('@'):
                     self.chat_choices = self.chat.refs.browse(self.chat_composer[self.chat_ref_start:])
@@ -4686,8 +4772,10 @@ class UncleTUI:
             return True
         if choices and k in (10, 13) and self.chat_composer.lower() not in choices:
             self.chat_composer = choices[getattr(self, 'slash_pick', 0) % len(choices)]
+            self.chat_cursor = len(self.chat_composer)
             if self.chat_composer in ('/issue', '/run', '/runstage'):
                 self.chat_composer += ' '
+                self.chat_cursor = len(self.chat_composer)
                 return True
         if k not in (10, 13):
             self.slash_pick = 0
@@ -5018,8 +5106,10 @@ class UncleTUI:
         composer_row = row + (3 if compact else 6)
         wrap_width = max(8, width - 2)
         # The composer grows as the input wraps; long pastes scroll to the tail.
-        chunks = self._wrap_input(text, wrap_width)
-        chunks = chunks[-max(1, min(6, h - composer_row - 3)):]
+        all_chunks = self._wrap_input(text, wrap_width)
+        viewport_n = max(1, min(6, h - composer_row - 3))
+        viewport_start = max(0, len(all_chunks) - viewport_n)
+        chunks = all_chunks[viewport_start:]
         extra = len(chunks) - 1 if text else 0
         if text:
             for i, chunk in enumerate(chunks):
@@ -5028,8 +5118,16 @@ class UncleTUI:
             put(composer_row, '› ' + placeholder, color.get('muted', curses.A_DIM))
         put(composer_row, '›', color.get('warning', curses.A_BOLD))
         if self.chat_focus == 'chat' and (self.state != 'menu' or not getattr(self, 'home_menu_open', False)):
-            cursor_y = composer_row + extra
-            cursor_x = left + 2 + (len(chunks[-1]) if chunks else 0)
+            prefix = sanitize(self.chat_composer[:self.chat_cursor]).replace('\n', ' / ').expandtabs(4).lstrip()
+            prefix_chunks = self._wrap_input(prefix, wrap_width) if prefix else []
+            cursor_chunk_idx = len(prefix_chunks) - 1 if prefix_chunks else 0
+            cursor_col = len(prefix_chunks[-1]) if prefix_chunks else 0
+            if cursor_chunk_idx >= viewport_start:
+                cursor_y = composer_row + (cursor_chunk_idx - viewport_start)
+                cursor_x = left + 2 + cursor_col
+            else:
+                cursor_y = composer_row
+                cursor_x = left + 2
             if cursor_y < h and cursor_x < w - 1:
                 try:
                     self.stdscr.addnstr(cursor_y, min(cursor_x, left + width - 1), ' ' if text else placeholder[0], 1,
@@ -5784,7 +5882,7 @@ class UncleTUI:
                 self.build_scroll = max(0, getattr(self, 'build_scroll', 0) +
                                         (step if k == curses.KEY_PPAGE else -step))
                 return
-            if k == curses.KEY_END:
+            if k == curses.KEY_END and getattr(self, 'chat_focus', '') != 'chat':
                 self.build_scroll = 0
                 return
         preview = getattr(self, 'completion_preview', None)

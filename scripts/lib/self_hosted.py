@@ -249,10 +249,14 @@ def output_token_limit(stage=''):
     an 8K/16K final stream, which incorrectly turns completed on-disk work into
     a failed stage. The same is true of manual-checklist synthesis: it reads
     every specialist packet from the review panel and writes the whole
-    canonical checklist in one response. Keep review and short document
-    defaults compact, but give long-running code, repair, and
-    checklist-writing/execution stages a 32K first attempt; an explicit
-    operator setting always wins.
+    canonical checklist in one response. An updated plan is the same shape
+    again: it must address or explicitly reject every adversarial finding
+    (disposition rows for every F-/OW-/SCOPE-/V-/AR- id) while preserving the
+    full plan, in one response, over a 16K retry cap once truncated once
+    already. Keep review and short document defaults compact, but give
+    long-running code, repair, checklist-writing/execution, and updated-plan
+    synthesis stages a 32K first attempt; an explicit operator setting
+    always wins.
     """
     # Dynamic workers inherit the parent stage's size class as well as its
     # configured model. This keeps every self-hosted worker consistent with
@@ -265,7 +269,8 @@ def output_token_limit(stage=''):
     if configured:
         return int(configured)
     return 32768 if stage in ('implementation', 'repair', 'execute-checklist',
-                               'manual-checklist', 'manual-checklist-base', 'manual-checklist-delta') \
+                               'manual-checklist', 'manual-checklist-base', 'manual-checklist-delta',
+                               'updated-plan', 'updated-change-plan') \
         or stage.startswith('implementation-step-') else 8192
 
 
@@ -410,11 +415,27 @@ def validate_plan(text, protected=True):
 REVIEW_VALIDATORS = {
     'ADVERSARIAL_REVIEW.md': 'adversarial-context.py',
     'FINAL_AUDIT.md': 'final-audit-context.py',
+    'MANUAL_CHECKLIST.md': 'checklist_document.py',
 }
 
 
 class InvalidReviewerDocument(ValueError):
     """The reviewer's final message is not the document the stage owns."""
+
+
+# Text that can only come from the driver's own terminal/log narration, never
+# from a reviewer's document, whatever its schema. A verbose self-hosted model
+# has echoed a prior turn's tool-log/driver output back inside its own
+# response before, and the fenced-document extraction in reviewer_document()
+# does not defend against garbage placed outside any fence at all. Catching
+# it here, generically, means every reviewer artifact gets this guard, not
+# only the ones with a dedicated per-document format validator below.
+DRIVER_NARRATION_MARKERS = (
+    '{"type": "result"',
+    'Current workflow state:',
+    'System: Workflow stopped',
+    'Recovery: ask about the failure',
+)
 
 
 def validate_reviewer_document(output, document):
@@ -427,6 +448,11 @@ def validate_reviewer_document(output, document):
     validates a plan before publishing it; the reviewer path published
     whatever came back.
     """
+    marker = next((m for m in DRIVER_NARRATION_MARKERS if m in document), None)
+    if marker:
+        raise InvalidReviewerDocument(
+            'Reviewer response is not a valid %s: contains driver narration (%r), not the document itself'
+            % (Path(output).name, marker))
     validator = REVIEW_VALIDATORS.get(Path(output).name)
     if not validator:
         return
@@ -469,6 +495,14 @@ def reviewer_document(response):
     def first_heading(candidate):
         return next((i for i, line in enumerate(candidate) if re.match(r'^#{1,6}\s+\S', line)), None)
 
+    # Check every closed fence, not just the first: a verbose response can
+    # wrap throwaway commentary, a stub outline, or tool-call narration in an
+    # earlier bare fence before the real document's own fence further down.
+    # Stopping at the first fence that doesn't qualify abandoned fence-scanning
+    # entirely and fell through to the naive whole-response scan below, which
+    # is exactly how a real MANUAL_CHECKLIST.md landed on disk as a stub
+    # table of contents followed by narration and JSON tool-log blobs: the
+    # real, complete, fenced checklist further down was never even looked at.
     fence_open = re.compile(r'^(`{3,}|~{3,})(?:markdown|md)?\s*$')
     for index, line in enumerate(lines):
         match = fence_open.match(line)
@@ -482,7 +516,6 @@ def reviewer_document(response):
         inner_start = first_heading(inner)
         if inner_start is not None:
             return '\n'.join(inner[inner_start:]).strip() + '\n'
-        break
 
     start = first_heading(lines)
     if start is None:

@@ -502,10 +502,17 @@ case "$prompt" in
         fi
         ;;
     *STUB:execute*)
+        printf 'x\n' >> .uncle/workflow/execute-checklist-calls
+        printf '%s\n' "$prompt" > .uncle/workflow/received-execute-checklist-prompt.md
         status="${FAKE_VERIFICATION:-PASS}"
         if [[ "$status" == FAIL_ONCE ]]; then
             status=PASS
             [[ -e .uncle/workflow/repaired ]] || status=FAIL
+        fi
+        if [[ "$status" == MALFORMED ]]; then
+            printf '# Verification Report\n\nAll checks ran. No acceptance table this time.\n' > VERIFICATION_REPORT.md
+            printf '# Defects\n\nNo unresolved defects in fixture.\n' > DEFECTS.md
+            exit 0
         fi
         gate_report VERIFICATION_REPORT.md "$status"
         printf '# Defects\n\nNo unresolved defects in fixture.\n' > DEFECTS.md
@@ -926,6 +933,24 @@ expect_in_file .uncle/workflow/received-test-review-prompt.md 'Required format r
 COUNT=$((COUNT + 1))
 if [[ "$(grep -c '^TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 2 ]]; then
     fail 'a malformed test review must receive exactly one format retry'
+fi
+
+# A malformed VERIFICATION_REPORT.md (missing "## Acceptance gate" entirely,
+# a real self-hosted-model failure) gets the same one-shot format retry as a
+# malformed TEST_REVIEW.md, instead of stopping the run outright.
+new_stagegate_case sg-verification-report-malformed
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION=MALFORMED
+expect_status 1
+expect_state VALIDATE_CHECKLIST
+expect_no_file FINAL_AUDIT.md
+expect_file .uncle/workflow/execute-checklist-format-retry.md
+expect_in_file .uncle/workflow/execute-checklist-format-retry.md 'Driver validator errors'
+expect_in_file .uncle/workflow/received-execute-checklist-prompt.md 'Required format retry'
+COUNT=$((COUNT + 1))
+if [[ "$(grep -c '^x$' "$REPO/.uncle/workflow/execute-checklist-calls")" != 2 ]]; then
+    fail 'a malformed verification report must receive exactly one format retry'
 fi
 
 # Repair goes back through the human diff gate, preserving the original file

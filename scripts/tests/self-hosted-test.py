@@ -284,6 +284,8 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
             self.assertEqual(output_token_limit('manual-checklist'), 32768)
             self.assertEqual(output_token_limit('manual-checklist-base'), 32768)
             self.assertEqual(output_token_limit('manual-checklist-delta'), 32768)
+            self.assertEqual(output_token_limit('updated-plan'), 32768)
+            self.assertEqual(output_token_limit('updated-change-plan'), 32768)
             self.assertEqual(output_token_limit('adversarial-review'), 8192)
         with patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS': '12000'}, clear=False):
             self.assertEqual(output_token_limit('implementation'), 12000)
@@ -362,6 +364,35 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         response = '```\nsome unrelated code snippet\n```\n\n# Manual checklist\n\nbody\n'
         document = reviewer_document(response)
         self.assertEqual(document, '# Manual checklist\n\nbody\n')
+
+    def test_reviewer_document_keeps_scanning_past_an_earlier_headingless_fence(self):
+        # A real corruption: a stub table-of-contents preview, in its own
+        # closed fence with no heading inside, followed by narration and a
+        # JSON tool-log blob, before the real checklist's own fence further
+        # down. Stopping at the first fence abandoned fence-scanning entirely
+        # and fell through to the naive whole-response scan, which grabbed
+        # the stub's own heading-shaped line and everything after it,
+        # narration and JSON included, as "the document".
+        response = (
+            '```\nSection 1: Smoke checks\nSection 2: ...\n```\n\n'
+            'Let me now write the full checklist.\n\n'
+            '{"type": "result", "subtype": "success"}\n\n'
+            '```markdown\n'
+            '# Manual checklist\n\n'
+            '### MC-001 Real check\n'
+            '- Priority: P0\n'
+            '```\n'
+        )
+        document = reviewer_document(response)
+        self.assertEqual(document, '# Manual checklist\n\n### MC-001 Real check\n- Priority: P0\n')
+
+    def test_driver_narration_in_a_candidate_document_is_rejected(self):
+        from self_hosted import validate_reviewer_document, InvalidReviewerDocument
+        garbage = ('# Manual checklist\n\nSection 1: Smoke checks\n\n'
+                   '{"type": "result", "subtype": "success"}\n\n'
+                   'Current workflow state: VALIDATE_MANUAL_CHECKLIST\n')
+        with self.assertRaises(InvalidReviewerDocument):
+            validate_reviewer_document('MANUAL_CHECKLIST.md', garbage)
 
     def test_exact_usage_sums_messages_without_console_rounding(self):
         from self_hosted import opencode_usage

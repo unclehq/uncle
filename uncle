@@ -183,11 +183,20 @@ CONFIG_STAGES="requirements change-spec project-plan change-plan adversarial-rev
 
 # A Python process never picks up a rebuilt uncle_tui.py on its own -- it
 # keeps running whatever was loaded at start, silently stale after an update.
-# One lock file per project: starting a new session here always replaces
-# whatever old one was left running for this same project, so a fix landing
-# mid-session cannot be stuck behind a process nobody remembered was alive.
+# UNCLE_TUI_REPLACE_STALE=1 opts in to killing whatever old session was left
+# running for this same project, so a fix landing mid-session cannot be stuck
+# behind a process nobody remembered was alive. Off by default: two uncle
+# invocations in the same directory are how concurrent builds (a GitHub
+# workflow launching several at once) are supposed to run side by side, and
+# this used to just work -- the second one killing the first the instant it
+# started was a real regression from making this unconditional. The driver's
+# own flock-based .uncle/workflow/driver.lock already refuses a second
+# concurrent workflow run cleanly ("another workflow holds this checkout"),
+# so nothing here is needed for that safety; this only ever existed to save
+# an uncle developer from hunting down their own stray process by hand.
 UNCLE_TUI_LOCK="$PROJECT_ROOT/.uncle/tui.lock"
 uncle_kill_stale_tui() {
+    [[ "${UNCLE_TUI_REPLACE_STALE:-0}" == 1 ]] || return 0
     [[ -s "$UNCLE_TUI_LOCK" ]] || return 0
     local old_pid
     old_pid="$(cat "$UNCLE_TUI_LOCK" 2>/dev/null)"

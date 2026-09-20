@@ -62,7 +62,10 @@ def validate_text(text):
     return checks
 
 if __name__=='__main__':
-    try:validate(sys.argv[1])
+    args = sys.argv[1:]
+    if args and args[0] == '--validate':
+        args = args[1:]
+    try:validate(args[0])
     except (OSError,ValueError) as error:
         print(f'Checklist artifact invalid: {error}. Correct MANUAL_CHECKLIST.md and resume; resume only revalidates this saved file and does not regenerate it. Execution has not started.',file=sys.stderr)
         raise SystemExit(1)

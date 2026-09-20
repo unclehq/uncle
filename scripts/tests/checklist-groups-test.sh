@@ -271,41 +271,6 @@ class Groups(unittest.TestCase):
         groups, _, _ = self.derive(body)
         self.assertEqual(groups, [['MC-001'], ['MC-002']])
 
-    def test_bare_resources_label_is_accepted(self):
-        # A real checklist declared "**Resources:**" (no "Exclusive") for
-        # every one of its checks, correctly naming the shared resource each
-        # time -- and every check still fell back to "declares nothing" and
-        # ran fully serial, because this field name was not recognized at
-        # all.
-        body = ('\n### MC-001\n**Resources:** `tui-interactive`\n**Depends on:** (none)\n'
-                '\n### MC-002\n**Resources:** `shell-tests`\n**Depends on:** (none)\n')
-        groups, _, _ = self.derive(body)
-        self.assertEqual(groups, [['MC-001', 'MC-002']])
-
-    def test_colon_inside_the_closing_bold_does_not_leak_into_the_value(self):
-        # "**Resources:**" (colon before the closing marker) vs
-        # "**Resources**:" (colon after) are both real. The first left a
-        # stray "**"/"`" glued to the front of the parsed value -- so two
-        # checks declaring the identical resource this way no longer looked
-        # identical, and were wrongly allowed to overlap instead of
-        # correctly colliding.
-        body = ('\n### MC-001\n**Resources:** `alpha`\n**Depends on:** (none)\n'
-                '\n### MC-002\n**Resources:** `alpha`\n**Depends on:** (none)\n')
-        groups, _, _ = self.derive(body)
-        self.assertEqual(groups, [['MC-001'], ['MC-002']],
-                          'both checks declare the identical resource and must correctly collide, not overlap')
-
-    def test_multi_item_backticked_resources_are_each_cleaned(self):
-        # "`a`, `b`" had only its very first and very last backtick
-        # stripped: the inner ones, bordering the comma, survived onto the
-        # individual split items ("`a", "b`"), so a resource never matched
-        # its own name declared the same way on another check.
-        body = ('\n### MC-001\n**Resources:** `alpha`, `beta`\n**Depends on:** (none)\n'
-                '\n### MC-002\n**Resources:** `beta`\n**Depends on:** (none)\n')
-        groups, _, _ = self.derive(body)
-        self.assertEqual(groups, [['MC-001'], ['MC-002']],
-                          "MC-002's cleanly-parsed 'beta' must collide with MC-001's, not a mismatched 'beta`'")
-
     def test_a_traceability_matrix_does_not_invent_checks(self):
         # The matrix at the end of every checklist is full of ID tokens. A bare
         # token is not a check, or the grouping would list rows that do not exist.

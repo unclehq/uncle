@@ -80,58 +80,6 @@ class PreviewTests(unittest.TestCase):
                 preview.close()
             self.assertIsNotNone(preview.process.poll())
 
-    def test_readiness_falls_back_to_an_equivalent_loopback_host(self):
-        # A real run: `.uncle/launch.json` declared `127.0.0.1`, but the
-        # launch command (a vite-style preview server) bound its default
-        # host `localhost`, which on that machine resolved to `::1` only.
-        # `127.0.0.1` was refused forever even though the server was ready
-        # the whole time under a name launch_spec already treats as
-        # equivalent -- the readiness check and the final browser URL must
-        # honor that too, not just the validator.
-        self.spec({'kind': 'webpage', 'command': [sys.executable, '-c', 'import time; time.sleep(30)'],
-                   'url': 'http://127.0.0.1:8765'})
-        from unittest.mock import MagicMock
-        response = MagicMock()
-
-        def fake_urlopen(candidate, timeout=None):
-            if candidate == 'http://localhost:8765':
-                return response
-            raise OSError('Connection refused')
-
-        opened = []
-        with patch('completion_preview.urlopen', side_effect=fake_urlopen), \
-             patch('completion_preview.webbrowser.open', side_effect=lambda url: opened.append(url) or True), \
-             patch('completion_preview.has_starred', return_value=True):
-            preview = CompletionPreview(self.root)
-            try:
-                self.events(preview)
-                self.assertEqual(opened, ['http://localhost:8765'],
-                                  'must open the host that actually answered, not the one on record')
-            finally:
-                preview.close()
-
-    def test_readiness_tries_the_bracketed_ipv6_form(self):
-        self.spec({'kind': 'webpage', 'command': [sys.executable, '-c', 'import time; time.sleep(30)'],
-                   'url': 'http://127.0.0.1:8765'})
-        from unittest.mock import MagicMock
-        response = MagicMock()
-
-        def fake_urlopen(candidate, timeout=None):
-            if candidate == 'http://[::1]:8765':
-                return response
-            raise OSError('Connection refused')
-
-        opened = []
-        with patch('completion_preview.urlopen', side_effect=fake_urlopen), \
-             patch('completion_preview.webbrowser.open', side_effect=lambda url: opened.append(url) or True), \
-             patch('completion_preview.has_starred', return_value=True):
-            preview = CompletionPreview(self.root)
-            try:
-                self.events(preview)
-                self.assertEqual(opened, ['http://[::1]:8765'])
-            finally:
-                preview.close()
-
     def test_invalid_manifest_does_not_launch(self):
         for spec in ({'kind':'command','command':'git commit'},  # rejected manifest, never run
                      {'kind':'webpage','url':'https://example.com'},

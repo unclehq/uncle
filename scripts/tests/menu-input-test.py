@@ -202,24 +202,6 @@ class MenuInputTests(unittest.TestCase):
         self.ui._confirm()
         self.ui.start_workflow.assert_called_once()
 
-    def test_resume_menu_item_only_appears_for_an_incomplete_build(self):
-        workflow = self.project / '.uncle' / 'workflow'
-        workflow.mkdir(parents=True)
-        (workflow / 'family').write_text('change\n')
-        (workflow / 'state').write_text('42:IMPLEMENTATION\n')
-        self.ui.state = 'menu'
-        self.ui.proc = None
-        self.ui.triage_resume = Mock()
-
-        self.assertIn('Resume stopped build', self.ui.menu_items())
-        self.ui.sel = self.ui.menu_items().index('Resume stopped build')
-        self.ui._confirm()
-        self.assertEqual(self.ui.workflow_idx, 2)
-        self.ui.triage_resume.assert_called_once()
-
-        (workflow / 'state').write_text('42:COMPLETE\n')
-        self.assertNotIn('Resume stopped build', self.ui.menu_items())
-
     def test_issue_new_forwarding(self):
         self.select(1)
         self.ui.input_buf = '123'

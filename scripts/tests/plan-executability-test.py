@@ -333,49 +333,6 @@ plan_collect_assessment
 
 
 
-class DeliverySummaryTests(unittest.TestCase):
-    """A real stuck build: stagegate.sh's own prompts never ask an agent to
-    write '## Acceptance delivery' (only prompts/change/implement-change.md
-    does, for the AC-numbered CHANGE_SPEC.md convention), so a greenfield
-    plan's IMPLEMENTATION_NOTES.md never has that section. Manufacturing an
-    always-empty delivery-summary.tsv anyway looked, to a reviewer, like
-    delivery tracking that should have updated and never did."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.old = Path.cwd()
-        os.chdir(self.tmp.name)
-        mod.STATE.mkdir(parents=True)
-        self.addCleanup(self.tmp.cleanup)
-        self.addCleanup(os.chdir, self.old)
-
-    def test_no_acceptance_delivery_section_writes_no_file(self):
-        Path('IMPLEMENTATION_NOTES.md').write_text(
-            '# Notes\n\n| AT-1 | live works | live check |\n')
-        self.assertEqual(mod.delivery_summary({}), 0)
-        self.assertFalse((mod.STATE / 'delivery-summary.tsv').exists())
-
-    def test_missing_notes_file_writes_no_file(self):
-        self.assertEqual(mod.delivery_summary({}), 0)
-        self.assertFalse((mod.STATE / 'delivery-summary.tsv').exists())
-
-    def test_a_real_acceptance_delivery_section_still_writes_rows(self):
-        Path('IMPLEMENTATION_NOTES.md').write_text(
-            '## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n'
-            '|---|---|---|---|\n| AC-1 | IMPLEMENTED | app/main.sh | test passed |\n')
-        self.assertEqual(mod.delivery_summary({}), 0)
-        self.assertIn('AC-1', (mod.STATE / 'delivery-summary.tsv').read_text())
-
-    def test_a_prior_stale_summary_is_removed_once_the_section_disappears(self):
-        # Once a run enters IMPLEMENT and the section is not (yet) written,
-        # a leftover summary from an earlier state must not be read as
-        # current delivery evidence.
-        (mod.STATE / 'delivery-summary.tsv').write_text('ID\tStatus\tEvidence\nAC-1\tIMPLEMENTED\tstale\n')
-        Path('IMPLEMENTATION_NOTES.md').write_text('# Notes\n')
-        self.assertEqual(mod.delivery_summary({}), 0)
-        self.assertFalse((mod.STATE / 'delivery-summary.tsv').exists())
-
-
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] in ('--fixture', '--review'):
         fixture(sys.argv[2], 'seed' if sys.argv[1] == '--fixture' else 'review')

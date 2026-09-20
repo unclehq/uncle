@@ -27,8 +27,6 @@ supervision_validation_failed() { :; }
 verify_implementation_review() { echo approval >> calls; }
 verify_approval() { :; }
 ensure_repair_capacity() { :; }
-plan_executability_enabled() { return 1; }
-repair_begin() { :; }
 check_verification_inputs() {
     echo integrity >> calls
     [[ ! -e invalid-inputs ]] || exit 9
@@ -48,10 +46,7 @@ run_stage() {
         TEST_REVIEW) printf 'Compacting report\n' > TEST_REVIEW.md ;;
         EXECUTE_CHECKLIST)
             # Stop an accidental loop quickly, without calling any real agent.
-            # A malformed VERIFICATION_REPORT.md now gets one automatic
-            # format-only retry (same shape as TEST_REVIEW.md's own), so two
-            # calls in a row is expected; a third would be a real loop.
-            [[ "$(grep -c '^EXECUTE_CHECKLIST$' calls)" -le 2 ]] || exit 8
+            [[ "$(grep -c '^EXECUTE_CHECKLIST$' calls)" == 1 ]] || exit 8
             cp candidate.md VERIFICATION_REPORT.md
             printf 'No defects\n' > DEFECTS.md
             ;;
@@ -85,23 +80,19 @@ count FINAL_AUDIT 1
 count green 1
 
 # Unsupported ID syntax pauses report validation. Multiple
-# resumes and an in-place formatting correction must not rerun any checks
-# beyond the one automatic format-only retry a malformed report now gets
-# (the same shape as TEST_REVIEW.md's own retry) before this pauses for a
-# person: two EXECUTE_CHECKLIST/green calls total for this scenario, not one,
-# and no further ones on a later resume that changes nothing.
+# resumes and an in-place formatting correction must not rerun any checks.
 reset
 report '| REQ-71 `:71` mutation validity | YES | PASS | mutant assertions passed |' candidate.md
 if run; then echo 'Malformed report advanced' >&2; exit 1; fi
 [[ "$(cat workflow/state)" == VALIDATE_CHECKLIST ]]
 grep -q 'not a plain identifier' output
 if run; then echo 'Malformed report advanced on resume' >&2; exit 1; fi
-count EXECUTE_CHECKLIST 2
-count green 2
+count EXECUTE_CHECKLIST 1
+count green 1
 report '| REQ-71 | YES | PASS | mutant assertions passed; :71 mutation validity |' VERIFICATION_REPORT.md
 run
-count EXECUTE_CHECKLIST 2
-count green 2
+count EXECUTE_CHECKLIST 1
+count green 1
 count FINAL_AUDIT 1
 
 # Previously recorded waivers remain effective at the audit re-check too.
@@ -140,19 +131,16 @@ report '| MC-1 | YES | PASS | agent says ok |' candidate.md
 run
 count REPAIR 1
 [[ "$(cat workflow/repair-source)" == workflow/green.md ]]
-# A malformed saved review must not replay the reviewer beyond the one
-# automatic format-only retry it now gets (two TEST_REVIEW calls total for
-# this scenario), and a later resume that changes nothing must not replay it
-# again.
+# A malformed saved review must not replay the reviewer on resume.
 reset
 printf 'TEST_REVIEW\n' > workflow/state
 if run; then echo 'Malformed test review advanced' >&2; exit 1; fi
 [[ "$(cat workflow/state)" == VALIDATE_TEST_REVIEW ]]
-count TEST_REVIEW 2
+count TEST_REVIEW 1
 if run; then echo 'Malformed saved review advanced' >&2; exit 1; fi
-count TEST_REVIEW 2
+count TEST_REVIEW 1
 touch invalid-inputs
 rc=0; run || rc=$?
 [[ "$rc" == 9 ]]
-count TEST_REVIEW 2
+count TEST_REVIEW 1
 echo 'checklist-resume-test.sh: one execution, durable validation, audit, blockers, repair, and integrity passed'

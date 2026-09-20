@@ -152,9 +152,9 @@ ARGV="$TMP/sg.argv"
 out="$(cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
     UNCLE_PROJECT_ROOT="$PROJ" \
     WORKFLOW_AGENT_CMD="$TMP/agent-global" \
-    WORKFLOW_AGENT_CMD_PROJECT_PLAN="$TMP/agent-stage" \
-    WORKFLOW_MODEL_PROJECT_PLAN= \
-    WORKFLOW_EFFORT_PROJECT_PLAN=low \
+    WORKFLOW_AGENT_CMD_REQUIREMENTS="$TMP/agent-stage" \
+    WORKFLOW_MODEL_REQUIREMENTS= \
+    WORKFLOW_EFFORT_REQUIREMENTS=low \
     WORKFLOW_SPECULATE=0 \
     bash "$ROOT/scripts/stagegate.sh" 2>&1)"
 
@@ -171,17 +171,13 @@ rm -rf "$PROJ/.uncle" "$PROJ/REQUIREMENTS_INTERPRETATION.md"
 (cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
     UNCLE_PROJECT_ROOT="$PROJ" \
     WORKFLOW_AGENT_CMD="$TMP/agent-global" \
-    WORKFLOW_MODEL_PROJECT_PLAN=cline-pass/kimi-k3 \
+    WORKFLOW_MODEL_REQUIREMENTS=cline-pass/kimi-k3 \
     WORKFLOW_SPECULATE=0 \
     bash "$ROOT/scripts/stagegate.sh" > /dev/null 2>&1) || true
 check_contains "stagegate: a set model is passed" \
     "--model cline-pass/kimi-k3" "$(cat "$ARGV")"
 
-# --- change-workflow: planning reaches its configured runner ----------------
-#
-# Green-check baseline commands are run directly by the driver, potentially in
-# the background; they are no longer an agent stage. Keep this fixture focused
-# on the command/model contract of the actual planning agent stage.
+# --- change-workflow: same two properties ----------------------------------
 
 if command -v git > /dev/null 2>&1; then
     CPROJ="$TMP/change"
@@ -204,13 +200,17 @@ if command -v git > /dev/null 2>&1; then
     out="$(cd "$CPROJ" && echo n | ARGV_LOG="$ARGV" \
         UNCLE_PROJECT_ROOT="$CPROJ" \
         WORKFLOW_AGENT_CMD="$TMP/agent-global" \
+        WORKFLOW_AGENT_CMD_BASELINE="$TMP/agent-stage" \
+        WORKFLOW_MODEL_BASELINE= \
+        WORKFLOW_EFFORT_BASELINE=high \
         WORKFLOW_MODEL_CHANGE_PLAN=cline-pass/glm-5.3 \
         WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
         bash "$ROOT/scripts/change-workflow.sh" 2>&1)"
 
+    baseline_argv="$(grep '^STAGE ' "$ARGV" || true)"
     spec_argv="$(grep '^GLOBAL ' "$ARGV" || true)"
-    check_absent "change: driver baseline does not launch a phantom agent stage" \
-        "STAGE " "$(cat "$ARGV")"
+    check_contains "change: baseline ran on its own command" "--effort high" "$baseline_argv"
+    check_absent "change: baseline empty model emits no --model" "--model" "$baseline_argv"
     check_contains "change: combined spec+plan stage ran on the global command" \
         "--model cline-pass/glm-5.3" "$spec_argv"
 else
@@ -239,14 +239,14 @@ run_reread() {
     cat "$ARGV"
 }
 
-printf 'requirements.runner cline\nproject-plan.model cline-pass/kimi-k3\nrequirements.effort high\n' \
+printf 'requirements.runner cline\nrequirements.model cline-pass/kimi-k3\nrequirements.effort high\n' \
     > "$CPROJ2/.uncle/config"
 argv="$(run_reread)"
 check_contains "config: model comes from the file" "--model cline-pass/kimi-k3" "$argv"
 check_contains "config: effort comes from the file" "--effort high" "$argv"
 
 # The same driver, the same command line, a different config file.
-printf 'requirements.runner cline\nproject-plan.model cline-pass/glm-5.3\nrequirements.effort low\n' \
+printf 'requirements.runner cline\nrequirements.model cline-pass/glm-5.3\nrequirements.effort low\n' \
     > "$CPROJ2/.uncle/config"
 argv="$(run_reread)"
 check_contains "config: an edited model is picked up" "--model cline-pass/glm-5.3" "$argv"
@@ -254,19 +254,19 @@ check_contains "config: an edited effort is picked up" "--effort low" "$argv"
 check_absent "config: the old model is gone" "cline-pass/kimi-k3" "$argv"
 
 # A non-cline runner in the file means no model flag at all.
-printf 'project-plan.runner kimi\nproject-plan.effort medium\n' > "$CPROJ2/.uncle/config"
+printf 'requirements.runner kimi\nrequirements.effort medium\n' > "$CPROJ2/.uncle/config"
 argv="$(run_reread)"
 check_absent "config: a kimi stage gets no --model" "--model" "$argv"
 
 # An explicit variable still outranks the file.
-printf 'requirements.runner cline\nproject-plan.model cline-pass/kimi-k3\n' \
+printf 'requirements.runner cline\nrequirements.model cline-pass/kimi-k3\n' \
     > "$CPROJ2/.uncle/config"
 : > "$ARGV"
 rm -rf "$CPROJ2/.uncle/workflow" "$CPROJ2/REQUIREMENTS_INTERPRETATION.md"
 (cd "$CPROJ2" && echo n | ARGV_LOG="$ARGV" \
     UNCLE_PROJECT_ROOT="$CPROJ2" UNCLE_CONFIG="$CPROJ2/.uncle/config" \
     WORKFLOW_AGENT_CMD="$TMP/agent-global" \
-    WORKFLOW_MODEL_PROJECT_PLAN=vendor/override \
+    WORKFLOW_MODEL_REQUIREMENTS=vendor/override \
     WORKFLOW_SPECULATE=0 \
     bash "$ROOT/scripts/stagegate.sh" > /dev/null 2>&1) || true
 check_contains "env overrides the config file" "--model vendor/override" "$(cat "$ARGV")"

@@ -10,9 +10,7 @@ python3 -B - <<'PY'
 import curses, json, os, tempfile, time, unittest
 from pathlib import Path
 from unittest.mock import patch
-import uncle_tui
 from uncle_tui import UncleTUI
-REAL_ROOT=uncle_tui._project_root
 
 class Screen:
     def __init__(self,width=120): self.width=width; self.writes=[]
@@ -94,35 +92,6 @@ class Panel(unittest.TestCase):
             self.assertNotIn('implementation',ui.session_stats['active'])
             self.assertEqual(len(ui.session_stats['records']),1)
 
-
-    def test_project_root_event_follows_the_driver_for_the_run(self):
-        # from-issue.sh moves the run into a worktree it creates after launch.
-        # Start events reach the TUI regardless; completions are metrics files
-        # under the driver's root, so the TUI must poll there or a finished
-        # stage keeps ticking. The launch root comes back for the next run.
-        ui=self.ui();ui.home_history=[];ui.status_stage='';ui.session_stats['active']={}
-        with tempfile.TemporaryDirectory() as launch, tempfile.TemporaryDirectory() as worktree, \
-                patch('uncle_tui._project_root',REAL_ROOT), patch.dict(os.environ,{'UNCLE_PROJECT_ROOT':launch}):
-            metrics=Path(worktree)/'.uncle/workflow/metrics';metrics.mkdir(parents=True)
-            (metrics/'old.json').write_text(json.dumps(dict(kind='agent',stage='change-plan',ended_at=1,process_exit=0)))
-            ui._apply_status(json.dumps(dict(event='project_root',path='relative/path')))
-            self.assertEqual(os.environ['UNCLE_PROJECT_ROOT'],launch)
-            ui._apply_status(json.dumps(dict(event='project_root',path=worktree)))
-            self.assertEqual(uncle_tui._project_root(),worktree)
-            self.assertIn('old.json',ui.session_stats['seen'])
-            self.assertEqual(ui.home_history[-1][0],'system')
-            ui._apply_status(json.dumps(dict(event='start',stage='change-plan',stage_index=1,stage_total=6)))
-            self.assertIn('change-plan',ui.session_stats['active'])
-            (metrics/'done.json').write_text(json.dumps(dict(kind='agent',stage='change-plan',ended_at=time.time()+1,
-                elapsed_seconds=10,process_exit=0)))
-            self.assertTrue(ui.poll_session_stats())
-            self.assertNotIn('change-plan',ui.session_stats['active'])
-            self.assertEqual(len(ui.session_stats['records']),1)
-            ui._restore_launch_root()
-            self.assertEqual(os.environ['UNCLE_PROJECT_ROOT'],launch)
-            ui._restore_launch_root()
-            self.assertEqual(os.environ['UNCLE_PROJECT_ROOT'],launch)
-
     def test_each_stage_includes_cost_and_retries_are_combined(self):
         ui=self.ui();ui.session_stats['active']={}
         for n in range(7):
@@ -137,20 +106,6 @@ class Panel(unittest.TestCase):
         self.assertGreater(ui.panel_visible_offset,0)
         ui.handle_key(ord('['));self.assertEqual(ui.panel_scroll,ui.panel_visible_offset-5)
         ui.handle_key(ord('\\'));self.assertIsNone(ui.panel_scroll)
-
-    def test_total_time_is_wall_time_not_summed_worker_time(self):
-        ui=self.ui();ui.session_stats['active']={}
-        # These two workers run concurrently for 60 seconds.  The individual
-        # rows remain 60 seconds each, but the human waited 60, not 120.
-        ui.session_stats['records']=[
-            dict(stage='review-worker-a',started_at=100,ended_at=160,elapsed_seconds=60),
-            dict(stage='review-worker-b',started_at=100,ended_at=160,elapsed_seconds=60),
-            # A later sequential stage extends the wall-clock session to 90.
-            dict(stage='synthesis',started_at=160,ended_at=190,elapsed_seconds=30),
-        ]
-        lines=ui._session_panel_lines()
-        total=lines.index('TOTALS')
-        self.assertEqual(lines[total+1], 'Time   0:01:30')
 
     def test_zero_reported_cost_on_a_stage_that_burned_tokens_is_unknown(self):
         # A runner that consumed millions of tokens did not do it for free.

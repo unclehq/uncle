@@ -297,16 +297,6 @@ ensure_checklist_runner() {
         echo "sandboxed; codex needs \`$stage.network true\` for a port and"
         echo "cannot do GUI work at all."
 
-        if [[ "${UNCLE_UNATTENDED:-0}" == 1 ]]; then
-            # Checked before gate_read, not after: under the TUI, stdin is a
-            # pipe the driver holds open, so a prompt waiting on EOF blocks
-            # forever rather than failing over. "run anyway" is the honest
-            # unattended answer here -- unlike a repair-attempt count, this
-            # never fabricates evidence: the unmet rows record BLOCKED, same
-            # as an attended operator choosing 'run' themselves.
-            echo "Unattended: running $stage on $runner anyway; unmet rows will record BLOCKED."
-            return 0
-        fi
         gate_prompt "Runner cannot execute this checklist: 'r' to re-read the config after changing it, 'run' to run anyway and record BLOCKED rows, or Enter to leave this run pending: "
         if ! gate_read answer; then
             echo

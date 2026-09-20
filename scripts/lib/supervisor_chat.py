@@ -125,8 +125,7 @@ def home_intent(message):
     text = _clean(message)
     # Polite requests are commands even when they end in a question mark.
     request = re.match(r'^(?:(?:can|could|would|will) you\s+)?(?:please\s+)?'
-                       r'(?:build|create|make|implement|start|run|draft|generate|write|change|edit|update|modify|add|remove|fix|'
-                       r'stop|cancel|abort|halt|kill|clear|reset|archive|resume|continue)\b', text, re.I)
+                       r'(?:build|create|make|implement|start|run|draft|generate|write|change|edit|update|modify|add|remove|fix)\b', text, re.I)
     if request and not _NEGATED.search(text):
         return True
     return bool(text) and not _QUESTION.search(text) and not _NEGATED.search(text) and bool(_HOME.search(text))
@@ -142,43 +141,16 @@ def parse_reply(text):
     """The reply dict for a conforming worker reply, or ValueError('malformed: ...').
 
     Exactly the keys of REPLY_KEYS may appear; `reply` is prose; at most one
-    of the action keys may be non-null. A single, whole-response Markdown code
-    fence is unwrapped as transport noise regardless of its language or fence
-    length. Everything inside still has to be the exact JSON envelope.
+    of the action keys may be non-null. A fenced JSON block is accepted.
     """
     candidate = str(text or '').strip()
-    # Some runners label a JSON response as `swift`, and some renderers widen
-    # its fence to four backticks when the payload contains Markdown fences.
-    # Accept one enclosing fence, but never prose around it or an embedded JSON
-    # fragment: that would weaken the reply allowlist rather than repair the
-    # presentation wrapper.
-    fence = re.match(r'^(?P<mark>`{3,}|~{3,})[^\r\n]*[\r\n](?P<body>.*?)[\r\n]?(?P=mark)$', candidate, re.S)
+    fence = re.match(r'^```(?:json)?\s*(.*?)\s*```$', candidate, re.S)
     if fence:
-        candidate = fence.group('body').strip()
+        candidate = fence.group(1).strip()
     try:
         data = json.loads(candidate)
     except ValueError:
-        # Kimi can prefix its otherwise complete reply with a short analysis.
-        # Recover only one JSON object that runs to the physical end of the
-        # response; prose after it, fragments and multiple objects remain
-        # malformed. The recovered object goes through the same strict schema
-        # and action validation below, so this is transport normalization, not
-        # interpretation or new authority.
-        decoder = json.JSONDecoder()
-        data = None
-        for index, char in enumerate(candidate):
-            if char != '{':
-                continue
-            try:
-                value, end = decoder.raw_decode(candidate[index:])
-            except ValueError:
-                continue
-            if candidate[index + end:].strip():
-                continue
-            data = value
-            break
-        if data is None:
-            raise ValueError('malformed: reply is not a JSON object')
+        raise ValueError('malformed: reply is not a JSON object')
     if not isinstance(data, dict):
         raise ValueError('malformed: reply is not a JSON object')
     unknown = sorted(set(data) - set(REPLY_KEYS))

@@ -345,20 +345,19 @@ in [scripts/README.md](scripts/README.md#--worktree---worktree-dir---branch--run
 
 ## Recovery and supervision
 
-Uncle includes interactive triage for failed stages and supervision for detecting and correcting problems while work is still running.
+Uncle includes interactive triage for failed stages and optional supervision for detecting and correcting problems while work is still running.
 
 Supervision is configured with `supervision.enabled`, `supervision.runner`,
 `supervision.model`, `supervision.effort`, `supervision.max_interventions`,
 `supervision.steering_timeout_seconds`, `supervision.stage_time_seconds`,
 `supervision.stage_tokens`, `supervision.call_timeout_seconds`,
-`supervision.max_calls_per_run`, `supervision.call_max_cost_usd`,
-`supervision.delegate_gates`, and `supervision.files_allowlist` in
-`.uncle/config`.
+`supervision.max_calls_per_run`, `supervision.call_max_cost_usd`, and
+`supervision.delegate_gates` in `.uncle/config`.
 
 The defaults are:
 
 ```text
-supervision.enabled true
+supervision.enabled false
 supervision.runner claude
 supervision.model sonnet
 supervision.effort medium
@@ -370,25 +369,11 @@ supervision.call_timeout_seconds 300
 supervision.max_calls_per_run 8
 supervision.call_max_cost_usd 0.5
 supervision.delegate_gates none
-supervision.files_allowlist package.json,package-lock.json,vite.config.js
 ```
 
 Only `supervision.runner claude` is currently supported. Use `/delegate` for
 standing dialog delegation, `/app-input` for application input, and phrases
 such as “answer this one” or “tell it to” for a single explicit action.
-
-`supervision.files_allowlist` is a comma-separated list of repository-relative
-paths that a parallel implementation step may write without the plan having
-declared it as that step's owner. Implementation fan-out otherwise refuses to
-merge a whole group when any step touches a file it did not claim, because an
-unclaimed write usually means the plan's ownership partition was wrong. These
-are the recurring exceptions: a step's own setup command (`npm install`
-adding a dev dependency) legitimately rewrites `package.json`/`package-lock.json`
-from whichever step happens to need a new package, not only the step that
-scaffolded them, and a step configuring the dev server or test runner
-(adding a test plugin, an alias, a proxy) legitimately rewrites
-`vite.config.js` from whichever step needs that configuration, not only the
-step that scaffolded the project.
 
 ### Authority boundary
 

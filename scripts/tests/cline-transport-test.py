@@ -21,7 +21,6 @@ export const ClineCore={async create(){return {
   if(mode==='aborted')return {finishReason:'aborted',text:'ERR_HTTP2_STREAM_ERROR'};
   if(mode==='fatal')return {finishReason:'error',text:'Authentication rejected'};
   if(mode==='tool')return {finishReason:'error',text:'Tests failed'};
-  if(mode==='iteration' && sends===1)return {finishReason:'error',text:'Agent runtime exceeded maxIterations (21)'};
   if(mode==='exhaust'||(mode==='recover' && sends<3))return {finishReason:'error',text:'terminated: NGHTTP2_INTERNAL_ERROR (ERR_HTTP2_STREAM_ERROR)'};
   if(mode==='throw' && sends===1)throw new Error('socket ECONNRESET');
   return {finishReason:'completed',text:JSON.stringify({starts,sends,session:request.sessionId})};
@@ -44,8 +43,7 @@ class ClineTransportTests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr)
             events=[json.loads(line) for line in result.stdout.splitlines()]
             final=next(event['result'] for event in events if event.get('id')=='start')
-            retries=[event for event in events if ('retry ' in event.get('params',{}).get('text','')
-                                                   or 'fresh session' in event.get('params',{}).get('text',''))]
+            retries=[event for event in events if 'retry ' in event.get('params',{}).get('text','')]
             self.assertEqual(sum(event.get('method')=='ready' for event in events),1)
             return final,retries
 
@@ -68,14 +66,6 @@ class ClineTransportTests(unittest.TestCase):
         self.assertEqual(result['finishReason'],'error')
         self.assertEqual(len(retries),2)
         self.assertEqual(result['usage']['inputTokens'],300)
-
-    def test_iteration_limit_gets_one_fresh_session_continuation(self):
-        result,retries=self.run_bridge('iteration')
-        self.assertEqual(result['finishReason'],'completed')
-        self.assertEqual(json.loads(result['text'])['starts'],2)
-        self.assertEqual(json.loads(result['text'])['sends'],2)
-        self.assertTrue(any('fresh session' in event.get('params',{}).get('text','')
-                            for event in retries))
 
     def test_nontransport_errors_do_not_retry(self):
         for mode in ('fatal','tool'):

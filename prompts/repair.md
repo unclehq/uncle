@@ -4,11 +4,6 @@ This is a focused repair pass, not a new implementation of the approved plan.
 ## Repair context budget
 
 1. Read .uncle/workflow/repair-source to locate the current failure report.
-   If .uncle/workflow/REPAIR_BRIEF.md exists, read it first: the driver wrote
-   it after a repair pass that changed none of the files its findings name,
-   and it lists exactly what is still open. Dispositions already recorded for
-   those IDs in IMPLEMENTATION_NOTES.md and AUTOMATED_TEST_REPORT.md describe
-   work the tree does not contain; they are wrong, not evidence.
    Search that report for failing commands, required FAIL rows, and actionable
    blocking finding IDs. Read those findings and their supporting evidence in
    bounded sections; omit passing checks, resolved findings, and unrelated logs.
@@ -30,28 +25,10 @@ This is a focused repair pass, not a new implementation of the approved plan.
 
 Before editing, check version-control status and preserve unrelated user work.
 Build a compact repair checklist: blocking finding ID or failing command,
-relevant constraint, affected files, and targeted check. REPAIR ALL ITEMS in
-this checklist during this single pass -- every actionable blocker in the
-current failure report, not only the ones that are quickest or most familiar.
-Work through the full list before finishing; do not stop after fixing some
-findings and leave the rest for a later repair pass. Each additional attempt
-this takes costs against the run's repair limit, so the run only benefits when
-this pass actually closes everything it can. Stay within approved scope; avoid
-unrelated features, refactors, formatting, and cleanup. If findings share a
-root cause, repair it once and verify each affected finding. If a listed
-blocker genuinely cannot be fixed in this pass (missing prerequisite, needs a
-plan change, needs unavailable authority), say so explicitly in its
-disposition row instead of silently omitting it -- silence reads as an
-oversight, not a decision.
-
-The driver judges this pass by the files it changed, not by what the reports
-say. A blocking finding counts as repaired only when a file it names -- or a
-file you name in that finding's disposition row -- differs afterwards. A pass
-that changes none of them is not a repair: it is not reviewed, does not count
-against the repair limit, and is retried once with a driver-written brief; a
-second such pass stops the run. If the correct fix lives in a file the review
-did not name, name that file (backticked, repository-relative) in the
-finding's disposition row.
+relevant constraint, affected files, and targeted check. Fix every actionable
+blocker in the current failure report within approved scope; avoid unrelated
+features, refactors, formatting, and cleanup. If findings share a root cause,
+repair it once and verify each affected finding.
 
 Add meaningful regression checks before fixes where practical. Prove critical
 assertions reject the corresponding defect in an isolated copy or temporary

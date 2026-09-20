@@ -1590,7 +1590,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
 import io
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-workers = int(os.environ.get('WORKFLOW_TEST_JOBS', '8'))
+workers = int(os.environ.get('WORKFLOW_TEST_JOBS', '4'))
 if not 1 <= workers <= 8:
     raise SystemExit('WORKFLOW_TEST_JOBS must be from 1 to 8')
 def run_case(name):

@@ -34,8 +34,8 @@ class FindingsTests(unittest.TestCase):
         self.report.write_bytes((TABLE).encode("utf-8"))
         self.state = self.work / 'workflow'
 
-    def run_review(self, answers, env=None):
-        return subprocess.run([sys.executable, '-B', str(HELPER), str(self.report), str(self.state)], input=answers, text=True, capture_output=True, timeout=10, env=env)
+    def run_review(self, answers):
+        return subprocess.run([sys.executable, '-B', str(HELPER), str(self.report), str(self.state)], input=answers, text=True, capture_output=True, timeout=10)
 
     def record(self):
         sha = hashlib.sha256(self.report.read_bytes()).hexdigest()
@@ -72,18 +72,6 @@ class FindingsTests(unittest.TestCase):
         result = self.run_review('\n')
         self.assertEqual(result.returncode, 1)
         self.assertFalse((self.state / 'audit-dispositions').exists())
-
-    def test_unattended_eof_skips_instead_of_blocking(self):
-        import os
-        env = dict(os.environ, UNCLE_UNATTENDED='1')
-        result = self.run_review('', env=env)
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn('Unattended: skipping FA-1; no person assessed this finding.', result.stdout)
-        record = self.record()
-        self.assertEqual(record['decisions']['FA-1']['decision'], 'skip')
-        self.assertEqual(record['decisions']['FA-1']['approved_by'], 'unattended')
-        self.assertEqual(record['decisions']['FA-2']['decision'], 'skip')
-        self.assertEqual(record['effective_verdict'], 'READY')
 
     def test_changed_audit_invalidates_ignores(self):
         self.run_review('y\ny\n')

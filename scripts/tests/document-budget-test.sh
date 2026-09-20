@@ -75,7 +75,6 @@ for stage in $DOC_STAGES implementation-step-2; do
     gated_prompt prompt.md "$stage" > resolved
     [[ -n $(stage_documents "$stage") ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     while IFS= read -r file; do
-        grep -qF "Final-response contract for \`$file\`" "$(cat resolved)" || { echo "Missing final-response contract for $file" >&2; exit 1; }
         read -r bytes lines <<< "$(document_budget "$file")"
         grep -qF -- "$file: at most $bytes UTF-8 bytes and $lines lines." "$(cat resolved)"
         printf 'abc\ndef' > "$file"
@@ -101,12 +100,12 @@ done
 [[ $(document_budget FINAL_AUDIT.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 [[ $(document_budget VERIFICATION_REPORT.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 printf 'small change' > CHANGE_REQUEST.md
-[[ $(document_budget CHANGE_SPEC.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
-# Every artifact uses the adversarial-review source, including change documents.
+[[ $(document_budget CHANGE_SPEC.md) == '4000 120' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+# Shared artifacts use workflow context when both authoritative inputs exist.
 [[ $(DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md document_budget FINAL_AUDIT.md) == '4000 120' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 [[ $(DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md document_budget FINAL_AUDIT.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
-[[ $(DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md document_budget CHANGE_PLAN.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
-[[ $(DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md document_budget PROJECT_PLAN.md) == '4000 120' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ $(DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md document_budget CHANGE_PLAN.md) == '4000 120' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+[[ $(DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md document_budget PROJECT_PLAN.md) == '40000 1000' ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Every artifact has bounded, monotonic defaults; generated output has no effect.
 for stage in $DOC_STAGES implementation-step-2; do
     while IFS= read -r file; do
@@ -149,14 +148,6 @@ WORKFLOW_DOC_MAX_BYTES=1 WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=7 \
     gated_prompt prompt.md final-audit reviewer > resolved
 grep -qF 'FINAL_AUDIT.md: at most 7 UTF-8 bytes' "$(cat resolved)"
 grep -q 'Reviewer output' "$(cat resolved)"
-grep -qF 'Use no more than 2,000 output tokens for this entire turn' "$(cat resolved)"
-grep -qF 'Do not narrate your investigation' "$(cat resolved)"
-grep -qF 'Final-response contract for `FINAL_AUDIT.md`' "$(cat resolved)"
-grep -qF 'Return the release audit only.' "$(cat resolved)"
-document_layout_prompt project-plan > resolved
-grep -qF 'Return an executable proposal, not a requirements restatement or review.' resolved
-document_layout_prompt adversarial-review > resolved
-grep -qF 'Return an adversarial assessment of the supplied plan only.' resolved
 if WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=invalid gated_prompt prompt.md final-audit 2>/dev/null; then exit 1; fi
 # Draft targets use the effective override, including leading-zero integers.
 # updated-plan is a compact-first stage: in advisory mode it is held to ZERO

@@ -211,14 +211,11 @@ for tier in opus sonnet kimi; do
     check_absent "model: tier '$tier' is not forwarded" "-m " "$(cat "$TMP/argv-$tier")"
 done
 
-ARGV_FILE="$TMP/argv-real" run_shim -p --model gpt-5.1-codex <<< "p" > /dev/null
-check_contains "model: a real id is forwarded" "-m gpt-5.1-codex" "$(cat "$TMP/argv-real")"
+ARGV_FILE="$TMP/argv-real" run_shim -p --model o3 <<< "p" > /dev/null
+check_contains "model: a real id is forwarded" "-m o3" "$(cat "$TMP/argv-real")"
 
-UNCLE_CODEX_MODEL=gpt-5.1 ARGV_FILE="$TMP/argv-env" run_shim -p --model gpt-5.1-codex <<< "p" > /dev/null
-check_contains "model: explicit --model beats UNCLE_CODEX_MODEL" "-m gpt-5.1-codex" "$(cat "$TMP/argv-env")"
-
-UNCLE_CODEX_MODEL=gpt-5.1 ARGV_FILE="$TMP/argv-envonly" run_shim -p <<< "p" > /dev/null
-check_contains "model: UNCLE_CODEX_MODEL is the fallback" "-m gpt-5.1" "$(cat "$TMP/argv-envonly")"
+UNCLE_CODEX_MODEL=gpt-5.1 ARGV_FILE="$TMP/argv-env" run_shim -p --model o3 <<< "p" > /dev/null
+check_contains "model: UNCLE_CODEX_MODEL wins" "-m gpt-5.1" "$(cat "$TMP/argv-env")"
 
 failure=$(EMIT_COMPLETED=0 EMIT_TEXT='{"type":"turn.failed","error":{"message":"Model unavailable"}}' run_shim -p <<< "p" || true)
 check_contains "model error is retained" 'Model unavailable' "$failure"

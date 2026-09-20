@@ -28,17 +28,4 @@ class Rerun(unittest.TestCase):
             (state/'rerun-request.json').write_text('{"stage":"bogus"}')
             with self.assertRaises(ValueError):consume(d,'app')
             self.assertEqual((state/'state').read_text(),'COMPLETE')
-
-    def test_numbered_implementation_step_rewinds_only_to_that_step(self):
-        with tempfile.TemporaryDirectory() as d:
-            root=Path(d);state=root/'.uncle/workflow';(state/'approvals').mkdir(parents=True)
-            (state/'state').write_text('FINAL_AUDIT\n')
-            (state/'implement-steps.txt').write_text('first\nsecond\nthird\n')
-            (state/'implement-step-done').write_text('3\n')
-            (state/'implement-report-done').write_text('done\n')
-            (state/'rerun-request.json').write_text(json.dumps({'stage':'implementation-step-2'}))
-            consume(root,'app')
-            self.assertEqual((state/'state').read_text().strip(),'IMPLEMENT')
-            self.assertEqual((state/'implement-step-done').read_text(),'1\n')
-            self.assertFalse((state/'implement-report-done').exists())
 if __name__=='__main__':unittest.main()

@@ -102,45 +102,6 @@ worktree_create() {
     return 0
 }
 
-# worktree_run_locked <dir> — true while a driver holds the run in <dir>: the
-# legacy lock directory exists, the driver.lock flock is held, or the process
-# group it records is alive. False for a run that merely stopped mid-way.
-worktree_run_locked() {
-    local dir="$1"
-    [[ -e "$dir/.uncle/workflow/lock" ]] && return 0
-    [[ -f "$dir/.uncle/workflow/driver.lock" ]] || return 1
-    python3 - "$dir/.uncle/workflow/driver.lock" <<'LOCKPROBE'
-import json, os, sys
-try:
-    import fcntl
-except ImportError:
-    fcntl = None
-path = sys.argv[1]
-try:
-    with open(path, 'a+') as lock:
-        if fcntl is not None:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                sys.exit(0)
-        lock.seek(0)
-        try:
-            owner = json.loads(lock.read() or '{}')
-        except ValueError:
-            owner = {}
-except OSError:
-    sys.exit(1)
-pgid = owner.get('pgid') if isinstance(owner, dict) else None
-if pgid:
-    try:
-        os.killpg(int(pgid), 0)
-        sys.exit(0)
-    except (OSError, ValueError):
-        pass
-sys.exit(1)
-LOCKPROBE
-}
-
 # worktree_remove <dir> — remove a finished run's worktree. Refuses while the
 # driver lock exists or the state is not COMPLETE; git refuses a dirty tree.
 # The branch is left in place.

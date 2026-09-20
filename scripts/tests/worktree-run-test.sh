@@ -208,13 +208,9 @@ commit_worktree() {
 # ---------------------------------------------------------------------------
 
 new_case create-seeds-and-runs-in-worktree
-export UNCLE_STATUS_FILE="$CASE/status.jsonl"
 run_issue /dev/null 42 --worktree
-unset UNCLE_STATUS_FILE
 expect_status 0
 WT="$CASE/proj-issue-42"
-check "project_root status event names the worktree" \
-    test "$(jq -r 'select(.event == "project_root") | .path' "$CASE/status.jsonl" | head -n 1)" == "$(driver_field root)"
 check "worktree registered at the default dir" registered "$WT"
 check "branch feat/add-widget-42 exists" branch_exists feat/add-widget-42
 check "worktree is on the branch" test "$(g -C "$WT" branch --show-current)" == feat/add-widget-42
@@ -229,48 +225,6 @@ expect_out "Created worktree"
 expect_out "kept; remove with: scripts/lib/worktrees.sh remove"
 expect_not_out "Remove worktree"
 check "gh label lookup was made" grep -q -- "--json labels" "$GH_LOG"
-
-# In-flight state with no origin in this issue's own worktree is an earlier
-# run of the same issue: it is archived and the seed starts fresh. A run that
-# still holds the lock is refused as before.
-new_case ownerless-state-in-own-worktree-is-archived
-run_issue /dev/null 42 --worktree
-expect_status 0
-WT="$CASE/proj-issue-42"
-printf '42:WAIT_UPDATED_PLAN_APPROVAL\n' > "$WT/.uncle/workflow/state"
-rm -f "$WT/.uncle/workflow/origin"
-run_issue /dev/null 42 --worktree
-expect_status 0
-expect_out "recorded no owner; archiving it and starting"
-check "driver ran in the worktree again"        test "$(driver_field cwd)" == "$(cd "$WT" && pwd -P)"
-check "stale state archived, not deleted"       grep -rq "WAIT_UPDATED_PLAN_APPROVAL" "$WT/.uncle/workflow-history"
-check "fresh run recorded its state"            test "$(cat "$WT/.uncle/workflow/state")" == "42:COMPLETE"
-
-new_case ownerless-state-with-live-lock-is-refused
-run_issue /dev/null 42 --worktree
-expect_status 0
-WT="$CASE/proj-issue-42"
-printf '42:WAIT_UPDATED_PLAN_APPROVAL\n' > "$WT/.uncle/workflow/state"
-rm -f "$WT/.uncle/workflow/origin"
-mkdir "$WT/.uncle/workflow/lock"
-run_issue /dev/null 42 --worktree
-expect_status 1
-expect_out "Refusing to seed"
-expect_not_out "recorded no owner"
-check "nothing archived while the lock is held" test ! -e "$WT/.uncle/workflow-history"
-rmdir "$WT/.uncle/workflow/lock"
-
-# A driver that exits 0 short of COMPLETE has moved the run to a gate it wants
-# re-entered; the seed re-runs it instead of calling the run finished, and
-# stops once the state no longer moves.
-new_case reopened-gate-is-reentered-not-finished
-FAKE_STATE=WAIT_PLAN_APPROVAL run_issue /dev/null 42 --worktree
-expect_status 0
-expect_out "The run is waiting at WAIT_PLAN_APPROVAL; opening that gate now."
-expect_out "stopped at WAIT_PLAN_APPROVAL"
-expect_not_out "Change workflow finished"
-expect_not_out "Making PR"
-check "driver was re-entered exactly once"  test "$(grep -c '^start' "$DRIVER_LOG")" -eq 2
 
 # --branch overrides the derived name; --worktree-dir the directory.
 new_case explicit-branch-and-dir

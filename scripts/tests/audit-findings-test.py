@@ -75,7 +75,7 @@ class FindingsTests(unittest.TestCase):
 
     def test_unattended_eof_skips_instead_of_blocking(self):
         import os
-        env = dict(os.environ, UNATTENDED='1')
+        env = dict(os.environ, UNCLE_UNATTENDED='1')
         result = self.run_review('', env=env)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn('Unattended: skipping FA-1; no person assessed this finding.', result.stdout)

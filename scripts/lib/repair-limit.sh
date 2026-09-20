@@ -22,6 +22,16 @@ ensure_repair_capacity() {
         echo 'Maximum of 100 repairs reached. Resolve the findings before resuming.'
         return 1
     fi
+    if [[ "${UNCLE_UNATTENDED:-0}" == 1 ]]; then
+        # Checked before gate_read, not after: under the TUI, stdin is a pipe
+        # the driver holds open, so a prompt waiting on EOF blocks forever
+        # rather than failing over. There is no honest auto-answer to "how
+        # many more attempts" -- granting an arbitrary number would hide a
+        # defect a human should look at -- so this stops the run pending,
+        # exactly like a declined gate, instead of hanging indefinitely.
+        echo 'Unattended: no additional repairs authorized; run remains pending.'
+        return 1
+    fi
     while true; do
         gate_prompt "Repair limit reached: $used of $MAX_REPAIRS attempts used. Enter a new total ($((used + 1))-100), '+N' for N more attempts, or 'stop' to leave this run pending: "
         if ! gate_read answer; then

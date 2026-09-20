@@ -157,6 +157,40 @@ class ParallelImplementationTests(unittest.TestCase):
             self.assertNotIn('vendor/some-package/file.js', summary['files'])
             self.assertFalse((root / 'vendor').exists(), 'ignored setup output is not copied back')
 
+    def test_gitignored_setup_output_in_an_unborn_repo_does_not_abort_the_merge(self):
+        # A greenfield build's project has a `.git` (from `git init`) but no
+        # commits yet -- `git rev-parse HEAD` fails, so make_sandbox uses a
+        # plain file copy with no `.git` of its own. ignored_prefixes must
+        # fall back to the project's own status in that case, not just
+        # return empty because the sandbox itself isn't a git repository.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+            (root / '.gitignore').write_text('vendor/\n')
+            (root / '1.txt').write_text('base\n')
+            worker = root / 'worker.sh'
+            worker.write_text(
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'printf changed > 1.txt\n'
+                'mkdir -p vendor/some-package\n'
+                'printf "installed\\n" > vendor/some-package/file.js\n'
+                'mkdir -p .uncle/workflow/parallel/notes\n'
+                'printf handoff > .uncle/workflow/parallel/notes/step-1.md\n')
+            worker.chmod(0o755)
+            request = {'project': str(root), 'owned': {'1': ['1.txt']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                 'command': ['bash', str(worker)]}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(result.stdout)
+            self.assertEqual(summary['merged'], [1])
+            self.assertEqual((root / '1.txt').read_text(), 'changed')
+            self.assertNotIn('vendor/some-package/file.js', summary['files'])
+            self.assertFalse((root / 'vendor').exists(), 'ignored setup output is not copied back')
+
     def test_worker_announces_itself_before_running_not_only_after(self):
         # Without a start event a fan-out group looks idle for its whole run:
         # the only signal was the one-shot completion record at the end.

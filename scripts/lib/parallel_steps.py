@@ -34,7 +34,7 @@ from step_groups import covers                                # noqa: E402
 SKIP = ('.uncle/', '.git/')
 
 
-def ignored_prefixes(root):
+def ignored_prefixes(project, sandbox):
     """Directories/files this sandbox's git status reports as ignored.
 
     A step's own setup command (`npm install`, `pip install -e .`, ...) fills
@@ -45,27 +45,70 @@ def ignored_prefixes(root):
     the read-only step-groups probe already excludes it, via
     `git ls-files --exclude-standard` in step_groups.changed_files.
 
-    Empty when the sandbox is not a git repository (the plain-copy fallback
-    for an unborn project); every path is then tracked exactly as before.
+    Tries the sandbox's own git status first, then the project's. Either can
+    resolve to either repository, and that decides what the returned paths
+    are relative to -- not which `cwd` was passed:
+
+    - A worktree sandbox has its own `.git`, is its own repository root, and
+      git reports paths relative to it directly.
+    - A plain-copy sandbox (an unborn repo, or a project with no git at all
+      beyond an empty `.git/`) has no `.git` of its own; it is nested inside
+      the *project's* repository (`.uncle/workflow/parallel/step-N`), so git
+      run there walks up and finds the project's `.git`, succeeds, and
+      reports paths relative to the *project* -- not the sandbox. Stripping
+      by a fixed offset computed from the wrong assumption silently returned
+      unstripped project-relative paths here once already.
+
+    `git rev-parse --show-toplevel` says which root actually applies in
+    either case, so the offset to strip is always `sandbox` relative to
+    *that*, never assumed from which command happened to be tried. Empty
+    only when neither the sandbox nor the project is a usable git
+    repository, in which case every path is tracked exactly as before this
+    existed.
     """
-    try:
-        output = subprocess.run(['git', 'status', '--porcelain', '-z', '--ignored'],
-                                cwd=root, capture_output=True, check=True).stdout
-    except (OSError, subprocess.CalledProcessError):
-        return ()
-    return tuple(entry[3:] for entry in output.decode('utf-8', 'replace').split('\0') if entry[:2] == '!!')
+    sandbox = Path(sandbox)
+    for cwd in (sandbox, project):
+        try:
+            toplevel = subprocess.run(['git', 'rev-parse', '--show-toplevel'], cwd=cwd,
+                                      capture_output=True, check=True, text=True).stdout.strip()
+            output = subprocess.run(['git', 'status', '--porcelain', '-z', '--ignored'],
+                                    cwd=cwd, capture_output=True, check=True).stdout
+            prefix = sandbox.resolve().relative_to(Path(toplevel).resolve()).as_posix()
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            continue
+        prefix = '' if prefix == '.' else prefix + '/'
+        result = []
+        for entry in output.decode('utf-8', 'replace').split('\0'):
+            if entry[:2] != '!!':
+                continue
+            rel = entry[3:]
+            if prefix:
+                if not rel.startswith(prefix):
+                    continue
+                rel = rel[len(prefix):]
+            result.append(rel)
+        return tuple(result)
+    return ()
 
 
-def snapshot(root):
+def snapshot(root, project):
     """path -> content hash for every file in the sandbox.
 
     Not `git diff HEAD`: the sandbox is seeded with the working tree's dirty
     overlay, so everything an earlier group produced is already "changed"
     against HEAD and would be attributed to this step.
+
+    Recomputes ignored_prefixes fresh on every call rather than once up
+    front: `git status --ignored` only reports paths that currently exist,
+    so a directory a setup command creates (e.g. `npm install`'s
+    `node_modules`) is invisible to it before that command has run. Reusing
+    a "before" result for the "after" snapshot missed every file the step's
+    own setup created, defeating the exclusion for exactly the case it
+    exists for.
     """
     root = Path(root)
+    ignored = ignored_prefixes(project, root)
     out = {}
-    ignored = ignored_prefixes(root)
     for path in root.rglob('*'):
         if not path.is_file() or path.is_symlink():
             continue
@@ -179,12 +222,12 @@ def run_step(spec, results):
     started = time.monotonic()
     publish_worker_start(spec)
     try:
-        before = snapshot(sandbox)
+        before = snapshot(sandbox, spec['project'])
         proc = subprocess.run(spec['command'], cwd=sandbox, env=spec['env'],
                               stdout=open(spec['log'], 'wb'), stderr=subprocess.STDOUT)
         results[number] = {'exit': proc.returncode,
                            'seconds': round(time.monotonic() - started, 3),
-                           'wrote': sorted(changed(before, snapshot(sandbox)))}
+                           'wrote': sorted(changed(before, snapshot(sandbox, spec['project'])))}
     except (OSError, ValueError) as error:
         results[number] = {'exit': 1, 'seconds': round(time.monotonic() - started, 3),
                            'wrote': [], 'detail': str(error)}

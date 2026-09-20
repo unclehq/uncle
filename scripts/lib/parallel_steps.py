@@ -34,8 +34,36 @@ from step_groups import covers                                # noqa: E402
 SKIP = ('.uncle/', '.git/')
 
 
+# framework -> its default build-output directory, ignored even before any
+# .gitignore says so. A step that scaffolds *and builds* in the same pass
+# (a real run's "npm create vite@latest -- --template svelte" step, which
+# also ran the build) writes this directory before anyone -- the plan, the
+# agent, or a later step -- has had a chance to gitignore it, so waiting on
+# .gitignore catches it one merge failure too late. Keyed on the actual
+# dependency a project of that framework will have, not a guess from its name.
+FRAMEWORK_BUILD_DIRS = (
+    (('svelte', '@sveltejs/kit'), 'dist/'),
+)
+
+
+def framework_build_dirs(sandbox):
+    try:
+        package = json.loads((Path(sandbox) / 'package.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return ()
+    deps = {}
+    if isinstance(package, dict):
+        for name in ('dependencies', 'devDependencies'):
+            value = package.get(name)
+            if isinstance(value, dict):
+                deps.update(value)
+    return tuple(build_dir for markers, build_dir in FRAMEWORK_BUILD_DIRS if any(m in deps for m in markers))
+
+
 def ignored_prefixes(project, sandbox):
-    """Directories/files this sandbox's git status reports as ignored.
+    """Directories/files this sandbox's git status reports as ignored, plus
+    any framework-specific build output (see framework_build_dirs) that is
+    always treated the same way regardless of what .gitignore says.
 
     A step's own setup command (`npm install`, `pip install -e .`, ...) fills
     a gitignored directory with files no plan step ever declared ownership
@@ -67,6 +95,7 @@ def ignored_prefixes(project, sandbox):
     existed.
     """
     sandbox = Path(sandbox)
+    always = framework_build_dirs(sandbox)
     for cwd in (sandbox, project):
         try:
             toplevel = subprocess.run(['git', 'rev-parse', '--show-toplevel'], cwd=cwd,
@@ -77,7 +106,7 @@ def ignored_prefixes(project, sandbox):
         except (OSError, ValueError, subprocess.CalledProcessError):
             continue
         prefix = '' if prefix == '.' else prefix + '/'
-        result = []
+        result = list(always)
         for entry in output.decode('utf-8', 'replace').split('\0'):
             if entry[:2] != '!!':
                 continue
@@ -88,7 +117,7 @@ def ignored_prefixes(project, sandbox):
                 rel = rel[len(prefix):]
             result.append(rel)
         return tuple(result)
-    return ()
+    return always
 
 
 def snapshot(root, project):

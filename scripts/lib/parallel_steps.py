@@ -61,21 +61,72 @@ def changed(before, after):
     return {rel for rel, digest in after.items() if before.get(rel) != digest}
 
 
+def publish_worker_start(spec):
+    """Tell the TUI a worker began, the same way status_stage_context does for
+    every other stage. Without this the sidepanel has nothing to show until
+    the one-shot completion record below lands, so a whole fan-out group looks
+    idle for its entire run and only appears, already finished, at the end."""
+    path = spec['env'].get('UNCLE_STATUS_FILE')
+    if not path:
+        return
+    stage = 'implementation-step-%d' % spec['number']
+    line = json.dumps({'event': 'start', 'model': spec['env'].get('PARALLEL_AGENT_MODEL', ''),
+                       'mode': 'act', 'stage': stage, 'stage_index': 0, 'stage_total': 0,
+                       'stage_turns': 0}) + '\n'
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, line.encode('utf-8'))
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def extract_usage(log_path):
+    """The same last-`result`-event usage perf_record reads from a stream-json
+    log, so a fanned-out step reports real tokens/cost instead of a permanent
+    'Unavailable' in the session panel."""
+    try:
+        lines = Path(log_path).read_text(encoding='utf-8', errors='replace').splitlines()
+    except OSError:
+        return {}
+    result = {}
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get('type') == 'result':
+            result = event
+    usage = result.get('usage') or {}
+    return {
+        'reported_error': bool(result.get('is_error')) if result else None,
+        'input_tokens': usage.get('input_tokens'),
+        'output_tokens': usage.get('output_tokens'),
+        'reported_total_tokens': usage.get('total_tokens'),
+        'cache_read_tokens': usage.get('cache_read_input_tokens') or usage.get('cached_input_tokens'),
+        'cache_write_tokens': usage.get('cache_creation_input_tokens') or usage.get('cache_write_input_tokens'),
+        'reported_cost_usd': result.get('total_cost_usd'),
+    }
+
+
 def publish_worker_end(spec, result):
     """Publish the same durable completion record used by normal stage runners."""
     ended = time.time()
     stage = 'implementation-step-%d' % spec['number']
     directory = Path(spec['project']) / '.uncle' / 'workflow' / 'metrics'
+    usage = extract_usage(spec['log'])
     row = {'schema': 1, 'kind': 'agent', 'stage': stage,
            'started_at': ended - result['seconds'], 'ended_at': ended,
            'elapsed_seconds': result['seconds'], 'process_exit': result['exit'],
-           'reported_error': result['exit'] != 0,
+           'reported_error': usage.get('reported_error') if usage.get('reported_error') is not None else result['exit'] != 0,
            'runner': spec['env'].get('UNCLE_RESOLVED_RUNNER', ''),
            'model': spec['env'].get('PARALLEL_AGENT_MODEL', ''),
            'effort': spec['env'].get('PARALLEL_AGENT_EFFORT', ''),
-           'input_tokens': None, 'output_tokens': None,
-           'reported_total_tokens': None, 'cache_read_tokens': None,
-           'cache_write_tokens': None, 'reported_cost_usd': None,
+           'input_tokens': usage.get('input_tokens'), 'output_tokens': usage.get('output_tokens'),
+           'reported_total_tokens': usage.get('reported_total_tokens'), 'cache_read_tokens': usage.get('cache_read_tokens'),
+           'cache_write_tokens': usage.get('cache_write_tokens'), 'reported_cost_usd': usage.get('reported_cost_usd'),
            'usage_scope': 'last reported result', 'usage_source': None,
            'input_includes_cache': False,
            'log': spec['log']}
@@ -101,6 +152,7 @@ def run_step(spec, results):
     """One step in its own mirror of the tree. Never raises into the caller."""
     number, sandbox = spec['number'], spec['sandbox']
     started = time.monotonic()
+    publish_worker_start(spec)
     try:
         before = snapshot(sandbox)
         proc = subprocess.run(spec['command'], cwd=sandbox, env=spec['env'],

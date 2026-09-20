@@ -799,11 +799,17 @@ def main(side, args):
                 raise InvalidReviewerDocument(str(error) + '; rejected response saved to ' + rejected) from None
             format_retried = True
             print('Self hosted: %s. Rejected response saved to %s; retrying once.' % (error, rejected), file=sys.stderr)
+            # Generic on purpose: this path serves every reviewer document
+            # (adversarial review, test review, manual checklist, final audit,
+            # ...), each with its own heading/table schema from the original
+            # prompt. Hardcoding one document's shape here previously sent a
+            # checklist or audit retry the adversarial-review finding format,
+            # steering an already-struggling model further off course.
             prompt += ('\n\nThe previous response was rejected: ' + str(error) +
-                       '\nReturn only the complete ' + Path(output).name + ' in the required layout: '
-                       'every finding as a `## AR-NNN: Title` heading with its Severity, References, Failure, Fix and '
-                       'Verify lines, then a `## Overall assessment` heading with body text. No summary of your work, '
-                       'no preamble, no plan to write it later.')
+                       '\nReturn only the complete ' + Path(output).name + ' as your final message, in the '
+                       'exact layout already specified above. Do not summarize your work, describe a plan to '
+                       'write it, or promise to produce it later. You have no write or shell tools in this role; '
+                       'the document text you return is the only artifact.')
             continue
         except (ValueError, OSError) as error:
             error.opencode_usage = attempt_usage

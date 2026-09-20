@@ -1,5 +1,6 @@
 """The supervised parallel executor merges only declared files and cleans success."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -123,6 +124,51 @@ class ParallelImplementationTests(unittest.TestCase):
             row = json.loads(records[0].read_text())
             self.assertEqual((row['stage'], row['process_exit']), ('implementation-step-1', 0))
             self.assertIn(row, json.loads((root / '.uncle/workflow/session-totals.json').read_text())['records'])
+
+    def test_worker_announces_itself_before_running_not_only_after(self):
+        # Without a start event a fan-out group looks idle for its whole run:
+        # the only signal was the one-shot completion record at the end.
+        temp, root, worker = self.fixture()
+        with temp:
+            status_file = root / 'status.jsonl'
+            request = {'project': str(root), 'owned': {'1': ['1.txt']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                 'command': ['bash', str(worker), '1']}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            env = dict(os.environ, UNCLE_STATUS_FILE=str(status_file))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True, env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            events = [json.loads(line) for line in status_file.read_text().splitlines()]
+            starts = [e for e in events if e.get('event') == 'start']
+            self.assertEqual([e['stage'] for e in starts], ['implementation-step-1'])
+
+    def test_worker_completion_reports_real_usage_not_permanently_unavailable(self):
+        temp, root, worker = self.fixture()
+        with temp:
+            worker.write_text(
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'n="$1"\nprintf "step-%s\\n" "$n" > "${n}.txt"\n'
+                'mkdir -p .uncle/workflow/parallel/notes\n'
+                'printf "step %s handoff\\n" "$n" > ".uncle/workflow/parallel/notes/step-${n}.md"\n'
+                'printf \'{"type":"result","is_error":false,"total_cost_usd":0.05,'
+                '"usage":{"input_tokens":100,"output_tokens":50,"total_tokens":150}}\\n\'\n')
+            worker.chmod(0o755)
+            request = {'project': str(root), 'owned': {'1': ['1.txt']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                 'command': ['bash', str(worker), '1']}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            records = list((root / '.uncle/workflow/metrics').glob('parallel-worker-*.json'))
+            row = json.loads(records[0].read_text())
+            self.assertEqual(row['input_tokens'], 100)
+            self.assertEqual(row['output_tokens'], 50)
+            self.assertEqual(row['reported_total_tokens'], 150)
+            self.assertEqual(row['reported_cost_usd'], 0.05)
 
 
 if __name__ == '__main__':

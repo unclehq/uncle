@@ -2180,6 +2180,12 @@ run_final_audit_panel() {
 run_checklist_panel() {
     local kind="$1" source="$2" directory="$STATE_DIR/checklist-$1-panel" lens prompt output pid
     local -a pids=()
+    # A relative "prompts/change/..." template lives in the uncle
+    # installation (ROOT), not in the project under change (PROJECT_ROOT,
+    # this function's cwd). Resolving it here, before either branch below
+    # copies or adopts it, means a caller can keep passing the short relative
+    # name without knowing which directory it will actually run in.
+    source="$(resolve_prompt "$source")"
     [[ "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || { CHECKLIST_PANEL_PROMPT="$source"; return 0; }
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     for lens in coverage invariants resources regressions; do

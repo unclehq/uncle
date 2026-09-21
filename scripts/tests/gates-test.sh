@@ -321,6 +321,22 @@ if [[ "$out" == ADVERSARIAL_REVIEW.md && "${FAKE_AR_FORMAT:-0}" == MISSING_ASSES
     fi
     exit 0
 fi
+if [[ "$out" == MANUAL_CHECKLIST.md && "${FAKE_MC_FORMAT:-0}" == MISSING_FIELDS_ONCE ]]; then
+    if [[ "$review_prompt" == *'Required format retry'* ]]; then
+        printf '## MC-1 Check the greeting.\nExact action: Open the page\nExpected result: Greeting visible\n' >> "$out"
+    else
+        printf 'MC-1: check the greeting somehow.\n' >> "$out"
+    fi
+    exit 0
+fi
+if [[ "$out" == FINAL_AUDIT.md && "${FAKE_AUDIT_FORMAT:-0}" == MISSING_VERDICT_ONCE ]]; then
+    if [[ "$review_prompt" == *'Required format retry'* ]]; then
+        printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nREADY\n' >> "$out"
+    else
+        printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nStill thinking about it.\n' >> "$out"
+    fi
+    exit 0
+fi
 case "$out" in
     ADVERSARIAL_REVIEW.md) printf '## Overall assessment\nNo findings.\n' >> "$out" ;;
     FINAL_AUDIT.md) printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nREADY\n' >> "$out" ;;
@@ -428,6 +444,22 @@ printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
 # leaves behind. The foreground rerun writes the normal review.
 if [[ "$out" == ADVERSARIAL_REVIEW.md && "${FAKE_SPEC_REVIEW:-}" == fragment && "${UNCLE_SPECULATIVE:-}" == true ]]; then
     printf '## AR-001: display does not reject Infinity\n\n- Severity: Medium\n- References: I-1\n' > "$out"
+    exit 0
+fi
+if [[ "$out" == MANUAL_CHECKLIST.md && "${FAKE_MC_FORMAT:-0}" == MISSING_FIELDS_ONCE ]]; then
+    if [[ "$review_prompt" == *'Required format retry'* ]]; then
+        printf '## MC-1 Check the greeting.\nExact action: Open the page\nExpected result: Greeting visible\n\nREADY\n' >> "$out"
+    else
+        printf 'MC-1: check the greeting somehow.\n' >> "$out"
+    fi
+    exit 0
+fi
+if [[ "$out" == FINAL_AUDIT.md && "${FAKE_AUDIT_FORMAT:-0}" == MISSING_VERDICT_ONCE ]]; then
+    if [[ "$review_prompt" == *'Required format retry'* ]]; then
+        printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nREADY\n' >> "$out"
+    else
+        printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nStill thinking about it.\n' >> "$out"
+    fi
     exit 0
 fi
 if [[ "$out" == TEST_REVIEW.md ]]; then
@@ -1076,6 +1108,27 @@ if [[ "$(grep -c '^TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 
     fail 'repair did not repeat independent test review'
 fi
 
+# MANUAL_CHECKLIST.md and FINAL_AUDIT.md get the same one-shot format retry.
+new_stagegate_case sg-checklist-format-retry
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_MC_FORMAT=MISSING_FIELDS_ONCE
+expect_status 0
+expect_state COMPLETE
+expect_out 'Retrying manual-checklist once with the format diagnostic.'
+COUNT=$((COUNT + 1))
+[[ $(grep -c '^MANUAL_CHECKLIST.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'checklist format retry did not re-run the reviewer exactly once'
+
+new_stagegate_case sg-audit-format-retry
+stagegate_agent
+set_state IMPLEMENT
+run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_AUDIT_FORMAT=MISSING_VERDICT_ONCE
+expect_status 0
+expect_state COMPLETE
+expect_out 'Retrying final-audit once with the format diagnostic.'
+COUNT=$((COUNT + 1))
+[[ $(grep -c '^FINAL_AUDIT.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'audit format retry did not re-run the reviewer exactly once'
+
 # A persistent defect is bounded across restarts, not just within one process.
 
 }
@@ -1689,6 +1742,29 @@ expect_out 'Retrying adversarial-review once with the format diagnostic.'
 expect_out 'Missing nonempty Overall assessment section'
 COUNT=$((COUNT + 1))
 [[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'a second malformed review should not trigger a third call'
+
+# The same one-shot format retry for MANUAL_CHECKLIST.md and FINAL_AUDIT.md.
+new_case change-checklist-format-retry
+green_baseline 0 'bash app/test.sh'
+set_state IMPLEMENT
+run_driver_stdin "$(gate_input y)" FAKE_MC_FORMAT=MISSING_FIELDS_ONCE \
+    FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
+expect_status 0
+expect_state COMPLETE
+expect_out 'Retrying manual-checklist once with the format diagnostic.'
+COUNT=$((COUNT + 1))
+[[ $(grep -c '^MANUAL_CHECKLIST.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'checklist format retry did not re-run the reviewer exactly once'
+
+new_case change-audit-format-retry
+green_baseline 0 'bash app/test.sh'
+set_state IMPLEMENT
+run_driver_stdin "$(gate_input y)" FAKE_AUDIT_FORMAT=MISSING_VERDICT_ONCE \
+    FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
+expect_status 0
+expect_state COMPLETE
+expect_out 'Retrying final-audit once with the format diagnostic.'
+COUNT=$((COUNT + 1))
+[[ $(grep -c '^FINAL_AUDIT.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'audit format retry did not re-run the reviewer exactly once'
 
 # Explicit source prerequisites stop both drivers before any planning launch.
 new_stagegate_case sg-early-source

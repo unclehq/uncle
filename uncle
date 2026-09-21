@@ -81,6 +81,7 @@ mutually exclusive.
 `#<issue> <state> <locked|idle> <path>`; `no runs` or `no worktrees` otherwise.
 --unattended is passed to the driver you pick: it runs every human gate
 without a person, records what nobody reviewed, and reports that at the end.
+UNCLE_SKIP_UPGRADE=1 skips the interactive startup upgrade check.
 verify runs the standalone attestation verifier (scripts/uncle-verify.py) in
 the directory you invoked uncle from; exit 0 only for VERIFIED.
 EOF
@@ -88,6 +89,8 @@ EOF
 
 # Collected here and handed to whichever driver the menu picks, so the choice
 # of workflow and the choice to run it unattended stay independent.
+UNCLE_LAUNCHER_PATH="$0"
+UNCLE_ORIGINAL_ARGS=("$@")
 UNCLE_ARGS=()
 UNCLE_STARTUP_ACTION=""
 UNCLE_STARTUP_TEXT=""
@@ -225,6 +228,10 @@ uncle_run_tui() {
     uncle_kill_stale_tui
     "$@"
 }
+
+# Early-exit commands have already left above. Check before either UI starts.
+. "$ROOT/scripts/lib/upgrade-check.sh"
+upgrade_check_and_run
 
 # Full-screen terminal UI when both stdin and stdout are real terminals; the
 # line-based menu below remains for pipes and scripts. Force TUI with --noinput

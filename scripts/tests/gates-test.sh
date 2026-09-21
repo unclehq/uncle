@@ -119,6 +119,12 @@ new_case() {
     printf 'STUB:plan\n'      > "$REPO/prompts/change/change-plan.md"
     printf 'STUB:implement\n' > "$REPO/prompts/change/implement-change.md"
     printf 'STUB:execute\n'   > "$REPO/prompts/change/execute-change-checklist.md"
+    # The stepwise-implementation report reconciler: a cold, separate stage
+    # that runs after every step, reading evidence the step stub already
+    # wrote (IMPLEMENTATION_NOTES.md, CHANGE_TEST_REPORT.md) rather than
+    # writing anything itself, so this fixture needs the file to exist for
+    # the driver's `cp` to find, not a matching stub case.
+    printf 'STUB:report\n'    > "$REPO/prompts/change/implementation-report.md"
     printf 'review the plan\n'   > "$REPO/prompts/change/adversarial-review.md"
     printf '# Adversarial review\n\nNo unresolved findings in this fixture.\n' > "$REPO/ADVERSARIAL_REVIEW.md"
     printf 'write a checklist\n' > "$REPO/prompts/change/manual-checklist.md"
@@ -303,6 +309,17 @@ else
 fi
 if [[ "$out" == ADVERSARIAL_REVIEW.md ]] && grep -q 'R-1' CHANGE_PLAN.md; then
     printf 'AR-001: preserve mediated access; validate isolated context.\n' >> "$out"
+fi
+if [[ "$out" == ADVERSARIAL_REVIEW.md && "${FAKE_AR_FORMAT:-0}" == MISSING_ASSESSMENT_ONCE ]]; then
+    # First call omits the required Overall assessment heading; the
+    # one-shot format retry's prompt names itself, so the retried call
+    # can tell it is the retry and write a document that validates.
+    if [[ "$review_prompt" == *'Required format retry'* ]]; then
+        printf '## Overall assessment\nNo findings.\n' >> "$out"
+    else
+        printf 'No unresolved findings in this fixture.\n' >> "$out"
+    fi
+    exit 0
 fi
 case "$out" in
     ADVERSARIAL_REVIEW.md) printf '## Overall assessment\nNo findings.\n' >> "$out" ;;
@@ -1629,6 +1646,50 @@ for attempt in 1 2; do
 done
 expect_out 'Document budget exceeded'
 
+# A malformed review (missing "## Overall assessment") gets one real re-run
+# with the diagnostic before anyone is asked to look at it; a second
+# malformed review still stops for a human instead of looping.
+new_case change-review-format-retry
+set_state PLAN
+run_driver FAKE_AR_FORMAT=MISSING_ASSESSMENT_ONCE
+expect_status 0
+expect_state WAIT_PLAN_APPROVAL
+expect_out 'Retrying adversarial-review once with the format diagnostic.'
+expect_file .uncle/workflow/adversarial-review-format-retry.md
+expect_in_file .uncle/workflow/adversarial-review-format-retry.md 'Missing nonempty Overall assessment section'
+COUNT=$((COUNT + 1))
+[[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'format retry did not re-run the reviewer exactly once'
+grep -q 'Overall assessment' "$REPO/ADVERSARIAL_REVIEW.md" || fail 'retried review was not adopted'
+
+new_case change-review-format-retry-exhausted
+set_state PLAN
+# A reviewer stub that omits the Overall assessment heading on every call,
+# including the retry -- the format retry gets exactly one chance.
+cat > "$CASE/bin/fake-reviewer" <<'REV'
+#!/usr/bin/env bash
+sleep "${FAKE_REVIEW_DELAY:-0}"
+out=""
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--output-last-message" ]]; then out="$2"; shift; fi
+    shift
+done
+printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
+if [[ "$out" == ADVERSARIAL_REVIEW.md ]]; then
+    printf 'No unresolved findings in this fixture.\n' >> "$out"
+else
+    : > "$out"
+    printf '## MC-1 Check the greeting.\nExact action: Open the page\nExpected result: Greeting visible\n\nREADY\n' >> "$out"
+fi
+REV
+chmod +x "$CASE/bin/fake-reviewer"
+run_driver
+expect_status 1
+expect_state VALIDATE_ADVERSARIAL_REVIEW
+expect_out 'Retrying adversarial-review once with the format diagnostic.'
+expect_out 'Missing nonempty Overall assessment section'
+COUNT=$((COUNT + 1))
+[[ $(grep -c '^ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'a second malformed review should not trigger a third call'
+
 # Explicit source prerequisites stop both drivers before any planning launch.
 new_stagegate_case sg-early-source
 printf 'Use `resume.pdf` as the authoritative source.\n' > "$REPO/REQUIREMENTS.md"
@@ -1751,6 +1812,25 @@ for exhausted in 0 1; do
     expect_out 'Change workflow complete with waived acceptance.'
 
 done
+
+# A broken acceptance-contract layout is not a row-level delivery failure.
+# It must never offer a useless waiver or spend another implementation run;
+# repair returns to specification/plan generation and approval.
+new_case implementation-contract-repair
+green_baseline 0 'bash app/test.sh'
+set_state IMPLEMENT
+printf '# Change Spec\n\n## Acceptance criteria\n\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Greeting | app/test.sh |\n\n## Acceptance criteria\n\nDuplicate heading.\n' > "$REPO/CHANGE_SPEC.md"
+hash_file "$REPO/CHANGE_SPEC.md" > "$REPO/.uncle/workflow/approvals/CHANGE_SPEC.sha256"
+hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/implementation-completion-repair"
+printf '#!/bin/sh\necho goodbye\n' > "$REPO/app/main.sh"
+printf '## Acceptance delivery\n\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | IMPLEMENTED | app/main.sh | app/test.sh PASS |\n' > "$REPO/IMPLEMENTATION_NOTES.md"
+printf 'prior test evidence\n' > "$REPO/CHANGE_TEST_REPORT.md"
+run_driver_stdin "$(gate_input repair)"
+expect_status 0
+expect_state WAIT_ANALYSIS_APPROVAL
+expect_out 'Repairing the acceptance contract before implementation can continue.'
+expect_not_out 'No row ids to waive'
+expect_no_file .uncle/workflow/impl-agent-started
 
 
 }

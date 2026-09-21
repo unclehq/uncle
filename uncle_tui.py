@@ -1968,6 +1968,17 @@ class UncleTUI:
                                          bufsize=0)
         except BaseException:
             self._end_title()
+            # The status file belongs to this launch attempt.  Leaving it
+            # behind after Popen fails makes the next homepage/run attempt
+            # look attached to a dead workflow and leaks a temporary file.
+            path = self.status_path
+            self.status_path = None
+            self.status_pos = 0
+            if path:
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
             raise
         self.new_workflow_pending = False
         threading.Thread(target=self._reader, daemon=True).start()

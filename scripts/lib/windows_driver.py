@@ -110,7 +110,7 @@ def child_valid(owner):
 
 
 def lock_run(command, state):
-    from process_tree import launch_command
+    from process_tree import launch_command, python3_executable
     state.mkdir(parents=True, exist_ok=True)
     # A separate byte-lock file allows children to read the ownership journal.
     with (state/'driver.guard').open('a+b') as guard:
@@ -149,7 +149,7 @@ def lock_run(command, state):
                              ' if time.monotonic()>deadline: sys.exit(125)\n'
                              ' time.sleep(.01)\n'
                              'sys.exit(subprocess.call(sys.argv[2:]))')
-                child = subprocess.Popen([sys.executable, '-c', bootstrap, ready, *launch_command(command)],
+                child = subprocess.Popen([python3_executable(), '-c', bootstrap, ready, *launch_command(command)],
                     env=dict(os.environ, UNCLE_DRIVER_SUPERVISED='1', UNCLE_DRIVER_JOB=name),
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
                 if not kernel.AssignProcessToJobObject(job, int(child._handle)):

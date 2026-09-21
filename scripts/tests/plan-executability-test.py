@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts/lib'))
 spec = importlib.util.spec_from_file_location('executability', ROOT / 'scripts/lib/plan-executability.py')
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)

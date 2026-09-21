@@ -252,9 +252,10 @@ def _lock_run_once(command):
             legacy.unlink()
             legacy.parent.rmdir()
         # The child waits until its identity is durably recorded before executing Bash.
+        from process_tree import python3_executable
         rfd, wfd = os.pipe()
         env = dict(os.environ, UNCLE_DRIVER_SUPERVISED='1')
-        child = subprocess.Popen([sys.executable, '-c',
+        child = subprocess.Popen([python3_executable(), '-c',
             'import os,sys; token=os.read(int(sys.argv[1]),1); token == b"1" or sys.exit(125); os.execvpe(sys.argv[2],sys.argv[2:],os.environ)',
             str(rfd), *command], env=env, pass_fds=(rfd,), process_group=0)
         os.close(rfd)
@@ -447,7 +448,8 @@ def runtime(action, args=()):
             j['completed_subset'] = digest([m['digest'], v['eligible_steps']]); atomic(JOURNAL, j)
             print('Independent subset completed; authority decision remains pending.'); return 20
         if m['plan'] == 'UPDATED_PROJECT_PLAN.md' and a['requirement_ids']:
-            check = subprocess.run([sys.executable, str(Path(__file__).with_name('implementation-completion.py')),
+            from process_tree import python3_executable
+            check = subprocess.run([python3_executable(), str(Path(__file__).with_name('implementation-completion.py')),
                                     'REQUIREMENTS_INTERPRETATION.md', 'IMPLEMENTATION_NOTES.md'], capture_output=True, text=True)
             if check.returncode:
                 print(check.stdout.strip())

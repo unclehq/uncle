@@ -3679,7 +3679,8 @@ class UncleTUI:
         return self.stage_runner('triage'), self.stage_model('triage'), self.stage_effort('triage')
 
     def _triage_guard(self, *args):
-        result = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'lib', 'triage_guard.py')] + list(args),
+        from process_tree import python3_executable
+        result = subprocess.run([python3_executable(), os.path.join(ROOT, 'scripts', 'lib', 'triage_guard.py')] + list(args),
                                 cwd=_project_root(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode:
             raise ValueError('Triage guard failed: ' + sanitize(result.stderr.strip()[-400:] or 'status %d' % result.returncode))

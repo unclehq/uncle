@@ -98,7 +98,8 @@ def start(command, prompt=None, **kwargs):
         # A pipe handshake prevents a fast shell from forking/exiting before
         # assignment. EOF on failed setup exits without executing the command.
         forward = ['--forward-stdin'] if prompt is not None else []
-        child = subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()), *forward, *command],
+        from process_tree import python3_executable
+        child = subprocess.Popen([python3_executable(), '-B', str(Path(__file__).resolve()), *forward, *command],
                                  stdin=subprocess.PIPE, **kwargs)
         job.assign(child)
         child._uncle_job = job

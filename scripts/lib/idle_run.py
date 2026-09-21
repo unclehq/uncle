@@ -9,7 +9,7 @@ import sys
 import tempfile
 import time
 
-from process_tree import start_check, finish_check, kill_tree, launch_command
+from process_tree import start_check, finish_check, kill_tree, launch_command, python3_executable
 
 
 def run(seconds, command, usage_before=None):
@@ -49,7 +49,7 @@ def run(seconds, command, usage_before=None):
                     if usage_before and os.environ.get('UNCLE_STATUS_FILE') and now - last_usage >= 10:
                         last_usage = now
                         try:
-                            result = subprocess.run([sys.executable, str(Path(__file__).with_name('kimi-usage.py')),
+                            result = subprocess.run([python3_executable(), str(Path(__file__).with_name('kimi-usage.py')),
                                                      'collect', usage_before], capture_output=True, timeout=5)
                             usage = json.loads(result.stdout)
                             if usage.get('usage'):

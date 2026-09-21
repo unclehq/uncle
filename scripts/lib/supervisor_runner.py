@@ -17,7 +17,7 @@ import threading
 import time
 from pathlib import Path
 
-from process_tree import launch_command, kill_tree, start_check, KEEP_STDIN
+from process_tree import launch_command, kill_tree, start_check, KEEP_STDIN, python3_executable
 
 MAX_REPLY = 1024 * 1024
 POLL_SECONDS = 0.1
@@ -57,7 +57,7 @@ def build_command(config, root, environ=None, config_path=None, stage=''):
         env = worker_env(environ, home)
         env['UNCLE_CONFIG'] = str(config_path)
         env['UNCLE_STATUS_STAGE'] = str(stage)
-        return [sys.executable, str(Path(root) / 'scripts' / 'lib' / 'self_hosted.py'),
+        return [python3_executable(), str(Path(root) / 'scripts' / 'lib' / 'self_hosted.py'),
                 'agent', '-p', '--effort', config.effort], env, home
     if config.runner == 'kimi':
         home = tempfile.mkdtemp(prefix='uncle-supervisor-')

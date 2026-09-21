@@ -234,7 +234,8 @@ def publish_worker_end(spec, result):
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
             json.dump(row, stream)
         os.replace(temporary, directory / ('parallel-worker-%d-%d.json' % (spec['number'], int(ended * 1000))))
-        subprocess.run([sys.executable, '-B', str(Path(__file__).with_name('session-totals.py')),
+        from process_tree import python3_executable
+        subprocess.run([python3_executable(), '-B', str(Path(__file__).with_name('session-totals.py')),
                         str(Path(spec['project']) / '.uncle' / 'workflow')],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     except OSError:

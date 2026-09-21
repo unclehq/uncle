@@ -460,7 +460,8 @@ def validate_reviewer_document(output, document):
         handle.write(document)
         candidate = handle.name
     try:
-        result = subprocess.run([sys.executable, '-B', str(Path(__file__).parent / validator), '--validate', candidate],
+        from process_tree import python3_executable
+        result = subprocess.run([python3_executable(), '-B', str(Path(__file__).parent / validator), '--validate', candidate],
                                 capture_output=True, text=True, timeout=60)
     finally:
         os.unlink(candidate)

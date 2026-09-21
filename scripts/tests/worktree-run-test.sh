@@ -164,7 +164,11 @@ DRV
     g -C "$PROJ" config user.email fixture@example.test
     g -C "$PROJ" remote add origin https://github.com/owner/repo.git
     echo "hello" > "$PROJ/hello.txt"
-    printf '.uncle/\n' > "$PROJ/.gitignore"
+    # Matches what _ensure_uncle_gitignored (uncle_tui.py) writes on a
+    # project's first run: a generated REQUIREMENTS.md/CHANGE_REQUEST.md
+    # under .uncle/docs stays tracked, so worktree removal's git-native
+    # dirty check still sees an unused one.
+    printf '.uncle/*\n!.uncle/docs/\n' > "$PROJ/.gitignore"
     g -C "$PROJ" add -A
     g -C "$PROJ" commit --no-gpg-sign -q -m "initial"
     printf 'runner claude\neffort high\n' > "$PROJ/.uncle/config"
@@ -218,7 +222,7 @@ check "project_root status event names the worktree" \
 check "worktree registered at the default dir" registered "$WT"
 check "branch feat/add-widget-42 exists" branch_exists feat/add-widget-42
 check "worktree is on the branch" test "$(g -C "$WT" branch --show-current)" == feat/add-widget-42
-check "CHANGE_REQUEST.md seeded in the worktree" test -s "$WT/CHANGE_REQUEST.md"
+check "CHANGE_REQUEST.md seeded in the worktree" test -s "$WT/.uncle/docs/CHANGE_REQUEST.md"
 check "no CHANGE_REQUEST.md in the source project" test ! -e "$PROJ/CHANGE_REQUEST.md"
 check "driver cwd is the worktree" test "$(driver_field cwd)" == "$(cd "$WT" && pwd -P)"
 check "driver UNCLE_PROJECT_ROOT is the worktree" test "$(driver_field root)" == "$(cd "$WT" && pwd -P)"
@@ -344,8 +348,8 @@ check "runs overlapped" bash -c '
     [[ -n "$s43" && -n "$e42" && "$s43" -lt "$e42" ]]' _ "$LOG42" "$LOG43"
 check "source project has no lock/state/approvals/origin" bash -c \
     '[[ ! -e "$1/.uncle/workflow/lock" && ! -e "$1/.uncle/workflow/state" && ! -e "$1/.uncle/workflow/approvals" && ! -e "$1/.uncle/workflow/origin" ]]' _ "$PROJ"
-check "worktree 42 request is not 43's" bash -c '! grep -q "Add widget 43" "$1/CHANGE_REQUEST.md" && grep -q "Add widget 42" "$1/CHANGE_REQUEST.md"' _ "$W42"
-check "worktree 43 request is not 42's" bash -c '! grep -q "Add widget 42" "$1/CHANGE_REQUEST.md" && grep -q "Add widget 43" "$1/CHANGE_REQUEST.md"' _ "$W43"
+check "worktree 42 request is not 43's" bash -c '! grep -q "Add widget 43" "$1/.uncle/docs/CHANGE_REQUEST.md" && grep -q "Add widget 42" "$1/.uncle/docs/CHANGE_REQUEST.md"' _ "$W42"
+check "worktree 43 request is not 42's" bash -c '! grep -q "Add widget 42" "$1/.uncle/docs/CHANGE_REQUEST.md" && grep -q "Add widget 43" "$1/.uncle/docs/CHANGE_REQUEST.md"' _ "$W43"
 
 # ---------------------------------------------------------------------------
 # AC-6: uncle --runs lists both worktrees; lock shows as locked.
@@ -463,7 +467,7 @@ run_issue /dev/null 42 --change --unattended
 expect_status 0
 check "a worktree was created" test "$(g -C "$PROJ" worktree list --porcelain | grep -c '^worktree ')" == 2
 check "driver cwd is the worktree" test "$(driver_field cwd)" != "$(cd "$PROJ" && pwd -P)"
-check "CHANGE_REQUEST.md in the worktree" test ! -s "$PROJ/CHANGE_REQUEST.md"
+check "CHANGE_REQUEST.md in the worktree" test ! -s "$PROJ/.uncle/docs/CHANGE_REQUEST.md"
 check "driver args unchanged" test "$(driver_field args)" == "--unattended"
 
 # --no-worktree is the opt-out, and keeps everything where it was.
@@ -473,7 +477,7 @@ expect_status 0
 check "driver cwd is the project" test "$(driver_field cwd)" == "$(cd "$PROJ" && pwd -P)"
 check "driver root is the project" test "$(driver_field root)" == "$PROJ"
 check "driver args unchanged" test "$(driver_field args)" == "--unattended"
-check "CHANGE_REQUEST.md in the project" test -s "$PROJ/CHANGE_REQUEST.md"
+check "CHANGE_REQUEST.md in the project" test -s "$PROJ/.uncle/docs/CHANGE_REQUEST.md"
 check "state in the project" test -s "$PROJ/.uncle/workflow/state"
 check "no worktree created" test "$(g -C "$PROJ" worktree list --porcelain | grep -c '^worktree ')" == 1
 check "no sibling dir" test ! -e "$CASE/proj-issue-42"

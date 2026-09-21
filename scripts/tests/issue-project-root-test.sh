@@ -23,9 +23,9 @@ UNCLE_PROJECT_ROOT="$TMP/project with spaces" PATH="$TMP/bin:$PATH" CALLS="$TMP/
     bash "$TMP/install/scripts/from-issue.sh" https://github.com/example/project/issues/42 --change --no-worktree < /dev/null > "$TMP/output"
 [[ "$(cat "$TMP/calls")" == driver ]]
 rm "$TMP/calls"
-grep -q '^Selected issue$' "$TMP/project with spaces/CHANGE_REQUEST.md"
-grep -q '^Keep this text\.$' "$TMP/project with spaces/CHANGE_REQUEST.md"
-grep -q 'example/project#42' "$TMP/project with spaces/CHANGE_REQUEST.md"
+grep -q '^Selected issue$' "$TMP/project with spaces/.uncle/docs/CHANGE_REQUEST.md"
+grep -q '^Keep this text\.$' "$TMP/project with spaces/.uncle/docs/CHANGE_REQUEST.md"
+grep -q 'example/project#42' "$TMP/project with spaces/.uncle/docs/CHANGE_REQUEST.md"
 [[ "$(cat "$TMP/install/CHANGE_REQUEST.md")" == 'Installation sentinel' ]]
 [[ ! -e "$TMP/install/.uncle" ]]
 # Exercise new-mode state, refusal, errors, and deterministic creation races.
@@ -68,7 +68,10 @@ def run(p, *args, target=script, extra=None):
 
 
 def no_effects(p, result):
-    assert not (p / '.uncle').exists(), result.stdout
+    # .uncle/docs may already hold a test-placed fixture (a collision
+    # target); .uncle/workflow is the actual driver state, which a refused
+    # run must never create.
+    assert not (p / '.uncle/workflow').exists(), result.stdout
     assert not (tmp / 'calls').exists(), result.stdout
 
 
@@ -83,7 +86,7 @@ p = project('absent')
 (p / 'CHANGE_REQUEST.md').write_text('Change sentinel\n')
 r = run(p, '--new', '--unattended')
 assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
-seed = (p / 'REQUIREMENTS.md').read_text()
+seed = (p / '.uncle/docs/REQUIREMENTS.md').read_text()
 assert seed.startswith('# Project brief\n') and seed.endswith('\n')
 for text in ('Selected issue', 'Exact issue body\n\n## Details\nKeep this text.', url):
     assert text in seed, text
@@ -107,7 +110,8 @@ assert f.read_text() == 'Prefix\n' + seed
 
 for kind in ('markerless', 'directory', 'dangling'):
     p = project(kind)
-    f = p / 'REQUIREMENTS.md'
+    f = p / '.uncle/docs/REQUIREMENTS.md'
+    f.parent.mkdir(parents=True)
     if kind == 'markerless':
         f.write_bytes(b'Keep exact bytes\n')
     elif kind == 'directory':
@@ -136,7 +140,11 @@ for kind in ('request', 'code', 'fresh'):
     # (new) directory instead of the one this test just set up and checks.
     r = run(p, '--no-worktree')
     assert r.returncode == 0, r.stderr
-    assert (p / ('REQUIREMENTS.md' if kind == 'fresh' else 'CHANGE_REQUEST.md')).exists()
+    # 'request' seeds a root-placed CHANGE_REQUEST.md in place (root wins);
+    # 'code' and 'fresh' generate one fresh, which belongs under .uncle/docs.
+    expected = {'request': 'CHANGE_REQUEST.md', 'code': '.uncle/docs/CHANGE_REQUEST.md',
+                'fresh': '.uncle/docs/REQUIREMENTS.md'}[kind]
+    assert (p / expected).exists()
     # Either mode starts its driver directly once the document is seeded.
     assert (tmp / 'calls').read_text() == 'driver\n', r.stdout
     (tmp / 'calls').unlink()
@@ -147,11 +155,12 @@ for kind, body in [('fetch', 'exit 1'), ('parse', "echo '{broken'"), ('empty', "
     p = project(kind + '-error')
     refused(p, run(p, '--new'))
     assert not (p / 'REQUIREMENTS.md').exists()
+    assert not (p / '.uncle/docs/REQUIREMENTS.md').exists()
 (tmp / 'bin/gh').write_text(original_gh)
 
 # A test-only copy pauses inside the absent branch; pipes avoid timing sleeps.
 source = script.read_text()
-anchor = '    if [[ ! -e REQUIREMENTS.md && ! -L REQUIREMENTS.md ]]; then\n'
+anchor = '    if [[ ! -e "$target" && ! -L "$target" ]]; then\n'
 assert source.count(anchor) == 1
 for kind in ('file', 'symlink', 'dangling', 'write-error'):
     p = project('race-' + kind)
@@ -168,7 +177,8 @@ for kind in ('file', 'symlink', 'dangling', 'write-error'):
     try:
         assert select.select([ready_r], [], [], 10)[0], 'absence barrier not reached'
         assert os.read(ready_r, 64) == b'ready\n'
-        f = p / 'REQUIREMENTS.md'
+        f = p / '.uncle/docs/REQUIREMENTS.md'
+        f.parent.mkdir(parents=True)
         sentinel = p / 'sentinel'
         if kind == 'file':
             f.write_bytes(b'Concurrent file\n')

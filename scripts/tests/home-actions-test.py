@@ -263,7 +263,7 @@ class Actions(unittest.TestCase):
 
     def test_create_and_start_app(self):
         self.reply(uncle_action='create_app', document=brief('app'), start=True)
-        self.assertIn('offline support', (self.root/'REQUIREMENTS.md').read_text())
+        self.assertIn('offline support', (self.root/'.uncle/docs/REQUIREMENTS.md').read_text())
         self.ui._run.assert_called_once()
         self.assertEqual(self.ui.workflow_idx, 0)
         self.assertEqual(self.ui.chat_error, '')
@@ -271,7 +271,7 @@ class Actions(unittest.TestCase):
     def test_draft_change_then_run(self):
         self.reply(uncle_action='create_change', document=brief('change'), start=False)
         self.ui._run.assert_not_called()
-        self.assertTrue((self.root/'CHANGE_REQUEST.md').exists())
+        self.assertTrue((self.root/'.uncle/docs/CHANGE_REQUEST.md').exists())
         self.reply(uncle_action='run_change')
         self.ui._run.assert_called_once()
         self.assertEqual(self.ui.workflow_idx, 2)
@@ -397,7 +397,10 @@ class Actions(unittest.TestCase):
         self.assertIn('Waiting for your decision', self.ui.home_history[-1][1])
         self.assertIn('approve replacement', self.ui.home_history[-1][1])
         self.ui.send_home_chat('approve replacement')
-        self.assertIn('## Summary', target.read_text())
+        # The old root copy is archived; the regenerated one belongs under
+        # .uncle/docs (a root copy is only ever a human's own placement).
+        self.assertFalse(target.exists())
+        self.assertIn('## Summary', (self.root/'.uncle/docs/REQUIREMENTS.md').read_text())
         self.ui._run.assert_called_once()
         backups = list((self.root/'.uncle/brief-history').glob('*/REQUIREMENTS.md'))
         self.assertEqual(len(backups), 1)
@@ -463,7 +466,7 @@ class Actions(unittest.TestCase):
         self.ui.home_request = worker
         self.assertTrue(self.ui.poll_home_chat())
         self.ui._run.assert_called_once()
-        self.assertIn('offline support', (self.root/'REQUIREMENTS.md').read_text())
+        self.assertIn('offline support', (self.root/'.uncle/docs/REQUIREMENTS.md').read_text())
 
     def test_actual_seed_only_import_and_exclusive_creation(self):
         bin_dir = self.root/'bin'
@@ -477,7 +480,7 @@ class Actions(unittest.TestCase):
         kind, value = worker.events.get(timeout=15)
         worker.thread.join(5)
         self.assertEqual(kind, 'issue_seeded', value)
-        target = self.root/'CHANGE_REQUEST.md'
+        target = self.root/'.uncle/docs/CHANGE_REQUEST.md'
         original = target.read_bytes()
         self.assertIn(b'Offline lists', original)
         self.assertIn('example/project\t42', (self.root/'.uncle/workflow/origin').read_text())

@@ -73,17 +73,26 @@ class ChatSafetyTests(unittest.TestCase):
     def test_seed_retry_preserves_identity_and_content(self):
         seed = Seed(self.root, "change")
         seed.commit("## Summary\nAdd chat\n")
-        first = (self.root / "CHANGE_REQUEST.md").stat()
+        target = self.root / ".uncle/docs/CHANGE_REQUEST.md"
+        first = target.stat()
         seed.verify()
-        self.assertEqual(first.st_ino, (self.root / "CHANGE_REQUEST.md").stat().st_ino)
-        (self.root / "CHANGE_REQUEST.md").write_text("changed")
+        self.assertEqual(first.st_ino, target.stat().st_ino)
+        target.write_text("changed")
         with self.assertRaises(ValueError):
             seed.verify()
 
     def test_seed_collisions_and_empty_summary(self):
         with self.assertRaises(ValueError):
             Seed(self.root, "app").commit("## Summary\n\n## Goals\nSomething")
-        target = self.root / "REQUIREMENTS.md"
+        # A human-placed root copy is authoritative; generating a new one refuses.
+        (self.root / "REQUIREMENTS.md").write_text("hand-authored")
+        with self.assertRaises(ValueError):
+            Seed(self.root, "app").commit("## Summary\nBuild chat\n")
+        (self.root / "REQUIREMENTS.md").unlink()
+        # A symlink already sitting at the generated destination must not be
+        # silently followed or overwritten.
+        (self.root / ".uncle/docs").mkdir(parents=True)
+        target = self.root / ".uncle/docs/REQUIREMENTS.md"
         target.symlink_to("absent")
         with self.assertRaises((ValueError, FileExistsError)):
             Seed(self.root, "app").commit("## Summary\nBuild chat\n")
@@ -92,19 +101,19 @@ class ChatSafetyTests(unittest.TestCase):
     def test_seed_retry_rejects_replacement_and_symlink(self):
         for replacement in ("file", "symlink"):
             with self.subTest(replacement=replacement):
-                target = self.root / "CHANGE_REQUEST.md"
+                target = self.root / ".uncle/docs/CHANGE_REQUEST.md"
                 target.unlink(missing_ok=True)
                 seed = Seed(self.root, "change")
                 content = "## Summary\nChat\n"
                 seed.commit(content)
-                target.rename(self.root / "old")
+                target.rename(self.root / ".uncle/docs/old")
                 if replacement == "file":
                     target.write_text(content)
                 else:
                     target.symlink_to("old")
                 with self.assertRaises(ValueError):
                     seed.verify()
-                (self.root / "old").unlink()
+                (self.root / ".uncle/docs/old").unlink()
 
 
 
@@ -555,6 +564,7 @@ class ChatInteractionTests(unittest.TestCase):
         self.ui.start_workflow = Mock()
         self.ui.start_chat_workflow()
         self.assertFalse((self.root / 'REQUIREMENTS.md').exists())
+        self.assertFalse((self.root / '.uncle/docs/REQUIREMENTS.md').exists())
         self.ui.start_workflow.assert_not_called()
         self.assertIn('Problem', self.ui.chat_error)
 
@@ -570,7 +580,7 @@ class ChatInteractionTests(unittest.TestCase):
             self.ui.handle_key(tui.curses.KEY_F4)
             self.type(preview)
             self.ui.handle_key(tui.curses.KEY_F5)
-            self.assertEqual((self.root / filename).read_text(), preview)
+            self.assertEqual((self.root / '.uncle/docs' / filename).read_text(), preview)
             self.assertEqual(self.ui.workflow_idx, index)
             self.assertEqual(self.ui.state, 'running')
         self.assertEqual(self.ui.start_workflow.call_count, 2)
@@ -585,8 +595,8 @@ class ChatInteractionTests(unittest.TestCase):
                 self.ui.chat.preview = APP_BRIEF
                 self.ui.state = 'chat'
                 self.ui.start_chat_workflow()
-                target = Path(directory) / 'REQUIREMENTS.md'
-                target.rename(Path(directory) / 'old')
+                target = Path(directory) / '.uncle/docs/REQUIREMENTS.md'
+                target.rename(Path(directory) / '.uncle/docs/old')
                 if kind == 'replacement':
                     target.write_text(APP_BRIEF)
                 else:
@@ -608,7 +618,7 @@ class ChatInteractionTests(unittest.TestCase):
         self.ui.maybe_reload = Mock()
         self.ui.start_workflow = Mock(side_effect=[OSError('launch failed'), None])
         self.ui.start_chat_workflow()
-        target = self.root / 'REQUIREMENTS.md'
+        target = self.root / '.uncle/docs/REQUIREMENTS.md'
         identity = target.stat().st_ino
         self.assertEqual(self.ui.state, 'chat')
         self.ui.start_chat_workflow()
@@ -623,7 +633,7 @@ class ChatInteractionTests(unittest.TestCase):
         self.ui.maybe_reload = Mock()
         self.ui.start_workflow = Mock(side_effect=OSError('launch failed'))
         self.ui.start_chat_workflow()
-        (self.root / 'REQUIREMENTS.md').write_text('changed')
+        (self.root / '.uncle/docs/REQUIREMENTS.md').write_text('changed')
         self.ui.start_chat_workflow()
         self.assertEqual(self.ui.start_workflow.call_count, 1)
         self.assertIn('changed', self.ui.chat_error)
@@ -646,7 +656,7 @@ class ChatInteractionTests(unittest.TestCase):
         attempts = []
 
         def popen(*args, **kwargs):
-            attempts.append((self.root / 'REQUIREMENTS.md').stat().st_ino)
+            attempts.append((self.root / '.uncle/docs/REQUIREMENTS.md').stat().st_ino)
             if len(attempts) == 1:
                 raise OSError('first launch failed')
             return launch(*args, **kwargs)

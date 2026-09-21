@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
 from completion_preview import CompletionPreview, STAR_URL, launch_spec
 from preview_server import DevelopmentPreview, PreviewServer, development_preview
 from chat import Conversation, sanitize
+from generated_input import generated_input_path
 from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
 from triage_chat import (TriageRequest, parse_reply as parse_triage_reply, compose_prompt as triage_prompt,
@@ -139,6 +140,17 @@ def _ensure_uncle_gitignored(project_root):
     already exists: a project with no git repository, or one that manages
     ignores elsewhere (e.g. a global excludesfile), gets no file created on
     its behalf.
+
+    Generated documents (generated_input.py: REQUIREMENTS.md/CHANGE_REQUEST.md,
+    and any workflow output that lands under .uncle/docs) live there instead
+    of the project root specifically so a human-authored file and a generated
+    one are never confused for each other. But git's own worktree-removal
+    dirty check only ever sees tracked content, so a blanket `.uncle/` ignore
+    makes a freshly generated, not-yet-committed document invisible to it --
+    worktree_remove() (scripts/lib/worktrees.sh) would then happily discard a
+    worktree holding one no operator has used yet. `!.uncle/docs/` re-includes
+    the whole directory; nothing re-excludes its contents, so everything
+    under it stays tracked and visible.
     """
     path = os.path.join(project_root, ".gitignore")
     try:
@@ -150,7 +162,8 @@ def _ensure_uncle_gitignored(project_root):
         return
     try:
         with open(path, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(("\n" if existing and not existing.endswith("\n") else "") + ".uncle/\n")
+            fh.write(("\n" if existing and not existing.endswith("\n") else "") +
+                      ".uncle/*\n!.uncle/docs/\n")
     except OSError:
         pass
 
@@ -3405,7 +3418,7 @@ class UncleTUI:
                 self.notice = ''
                 self._run()
             else:
-                if os.path.lexists(os.path.join(root, 'CHANGE_REQUEST.md')):
+                if os.path.lexists(generated_input_path('CHANGE_REQUEST.md', root)):
                     raise ValueError('CHANGE_REQUEST.md already exists. Run it or choose a new project; it was not overwritten.')
                 env = os.environ.copy()
                 env['UNCLE_PROJECT_ROOT'] = root
@@ -3428,7 +3441,7 @@ class UncleTUI:
                         'Not specified in the brief.' if field == 'Open questions' else 'None')
                         for field in Conversation.fields['app'])
                 draft.preview = sanitize(document)
-                target = Path(root) / filename
+                target = Path(generated_input_path(filename, root))
                 backup = None
                 if target.is_symlink() or (target.exists() and not target.is_file()):
                     raise ValueError(filename + ' must be a regular file.')
@@ -3458,8 +3471,19 @@ class UncleTUI:
                 self.home_history.append(('system', 'Created ' + filename + ' from this conversation.'))
                 start = action['start']
             else:
-                # Use the same restricted regular-file reader as explicit attachments.
-                if not self.chat.refs.read(filename).strip():
+                # A generated REQUIREMENTS.md/CHANGE_REQUEST.md lives under
+                # .uncle/docs, which the restricted attachment reader always
+                # excludes (by design, for arbitrary chat @-references); read
+                # the resolved path directly instead, with the same no-follow,
+                # regular-file-only safety property.
+                target = Path(generated_input_path(filename, root))
+                try:
+                    fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+                    with os.fdopen(fd, 'r', encoding='utf-8') as stream:
+                        content = stream.read()
+                except OSError:
+                    raise ValueError(filename + ' is missing or unsafe to read.') from None
+                if not content.strip():
                     raise ValueError(filename + ' is empty.')
                 start = True
             if start:
@@ -4019,7 +4043,7 @@ class UncleTUI:
         if getattr(self, 'triage_tainted', None):
             raise ValueError(self.triage_tainted)
         root = Path(_project_root())
-        if not (root / 'REQUIREMENTS.md').is_file():
+        if not Path(generated_input_path('REQUIREMENTS.md', root)).is_file():
             raise ValueError('No workflow has run in this session; start one from the menu.')
         if self._run_locked(root):
             raise ValueError('A run holds %s; wait for it to finish.' % sanitize(str(root)))
@@ -6158,7 +6182,7 @@ class UncleTUI:
             else:
                 filename = {0: "REQUIREMENTS.md", 2: "CHANGE_REQUEST.md"}[self.workflow_idx]
                 try:
-                    present = os.path.isfile(os.path.join(_project_root(), filename))
+                    present = os.path.isfile(generated_input_path(filename, _project_root()))
                 except OSError:
                     present = False
                 if not present:

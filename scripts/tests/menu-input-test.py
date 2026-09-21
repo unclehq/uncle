@@ -282,7 +282,7 @@ class MenuInputTests(unittest.TestCase):
         for menu in ('tui', 'shell'):
             for existing in (False, True):
                 with self.subTest(menu=menu, existing=existing):
-                    brief = self.project / 'REQUIREMENTS.md'
+                    brief = self.project / '.uncle/docs/REQUIREMENTS.md'
                     brief.unlink(missing_ok=True)
                     request = self.project / 'CHANGE_REQUEST.md'
                     request.unlink(missing_ok=True)

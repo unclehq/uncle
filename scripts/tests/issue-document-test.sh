@@ -23,7 +23,8 @@ def extract(name):
     assert len(matches) == 1, name
     return matches[0]
 
-writers = '\n'.join(extract(n) for n in ('write_change_request', 'write_new_project_brief'))
+writers = ('. "%s/scripts/lib/generated-input.sh"\n' % root +
+           '\n'.join(extract(n) for n in ('write_change_request', 'write_new_project_brief')))
 env = dict(os.environ, OWNER='example', REPO='project', ISSUE_NUM='42',
            URL='https://github.com/example/project/issues/42', TITLE='Fixture title', BODY='Fixture body')
 
@@ -36,8 +37,8 @@ def refused(result):
 
 with tempfile.TemporaryDirectory(prefix='issue-document-') as tmp:
     base = Path(tmp)
-    for function, filename, heading in [('write_change_request', 'CHANGE_REQUEST.md', '# Change Request'),
-                                         ('write_new_project_brief', 'REQUIREMENTS.md', '# Project brief')]:
+    for function, filename, heading in [('write_change_request', '.uncle/docs/CHANGE_REQUEST.md', '# Change Request'),
+                                         ('write_new_project_brief', '.uncle/docs/REQUIREMENTS.md', '# Project brief')]:
         p = base / function
         p.mkdir()
         result = run(p, function)
@@ -47,15 +48,16 @@ with tempfile.TemporaryDirectory(prefix='issue-document-') as tmp:
         assert seed.startswith(heading + '\n\nIssue 42\n'), f'{filename}: missing identity after heading'
         assert seed.splitlines().count('Issue 42') == 1
         assert env['URL'] in seed and env['TITLE'] in seed and env['BODY'] in seed
-        if filename == 'REQUIREMENTS.md':
+        if filename.endswith('REQUIREMENTS.md'):
             f.write_text('Preserved prefix\n' + seed)
         for _ in range(2):
             assert run(p, function).returncode == 0
-            assert f.read_text() == ('Preserved prefix\n' if filename == 'REQUIREMENTS.md' else '') + seed
+            assert f.read_text() == ('Preserved prefix\n' if filename.endswith('REQUIREMENTS.md') else '') + seed
     print('AT-1: exact identities, URLs, creation and repeated replacement passed')
 
     def install(p, kind):
-        f, target = p / 'REQUIREMENTS.md', p / 'referent'
+        f, target = p / '.uncle/docs/REQUIREMENTS.md', p / '.uncle/docs/referent'
+        f.parent.mkdir(parents=True, exist_ok=True)
         if kind in ('file', 'markerless'):
             f.write_bytes(b'Preserve exact bytes\n')
         elif kind == 'directory':
@@ -66,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix='issue-document-') as tmp:
             f.symlink_to(target)
 
     def preserved(p, kind):
-        f, target = p / 'REQUIREMENTS.md', p / 'referent'
+        f, target = p / '.uncle/docs/REQUIREMENTS.md', p / '.uncle/docs/referent'
         if kind in ('file', 'markerless'):
             return f.read_bytes() == b'Preserve exact bytes\n'
         if kind == 'directory':
@@ -80,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix='issue-document-') as tmp:
         install(p, kind)
         assert refused(run(p, 'write_new_project_brief')) and preserved(p, kind), kind
 
-    anchor = '    if [[ ! -e REQUIREMENTS.md && ! -L REQUIREMENTS.md ]]; then\n'
+    anchor = '    if [[ ! -e "$target" && ! -L "$target" ]]; then\n'
     assert writers.count(anchor) == 1
     assert writers.count('set -o noclobber;') == 1
     for mutation in (False, True):

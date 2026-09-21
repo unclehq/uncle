@@ -9,6 +9,8 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 
+from generated_input import generated_input_path, generated_input_write_path
+
 TRANSCRIPT_LIMIT = 1024 * 1024
 REFERENCE_LIMIT = 256 * 1024
 _REFERENCE = re.compile(r'@(?:"([^"\n]+)"|([^\s"@]+))')
@@ -197,7 +199,19 @@ class Seed:
         data = sanitize(preview).encode('utf-8')
         if len(data) > TRANSCRIPT_LIMIT:
             raise ValueError('Brief exceeds 1 MiB limit')
-        fd = self.refs.open(self.name, os.O_RDWR | os.O_CREAT | os.O_EXCL)
+        # A generated brief belongs under .uncle/docs, never the project root
+        # (see generated_input.py) -- but a root copy, if a human already put
+        # one there by hand, is authoritative and this must not shadow it.
+        if (self.refs.root / self.name).exists():
+            raise ValueError('%s already exists at the project root; edit it '
+                              'directly instead of generating a new one' % self.name)
+        directory = generated_input_write_path(self.name, self.refs.root).parent
+        parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            fd = os.open(self.name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        0o600, dir_fd=parent)
+        finally:
+            os.close(parent)
         with os.fdopen(fd, 'w+b') as stream:
             stream.write(data)
             stream.flush()
@@ -207,7 +221,9 @@ class Seed:
 
     def verify(self):
         try:
-            with os.fdopen(self.refs.open(self.name), 'rb') as stream:
+            path = generated_input_path(self.name, self.refs.root)
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, 'rb') as stream:
                 actual = self.fingerprint(stream)
         except OSError:
             raise ValueError('Committed seed was replaced; launch refused') from None

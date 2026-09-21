@@ -29,6 +29,7 @@ MARKER_FILE="$STATE_DIR/issue-closed"
 # .uncle/workflow/state grammar, and the shared INV-3 close gate the driver also uses.
 . "$ROOT/scripts/lib/state.sh"
 . "$ROOT/scripts/lib/issue-close.sh"
+. "$ROOT/scripts/lib/generated-input.sh"
 . "$ROOT/scripts/lib/terminal-title.sh"
 
 workflow_state() {
@@ -415,7 +416,7 @@ if [[ -z "$MODE" ]]; then
     # change workflow. Otherwise, if the repo contains files beyond the workflow
     # scaffolding, default to change; if it looks like a fresh template, default
     # to new.
-    if [[ -s CHANGE_REQUEST.md ]]; then
+    if [[ -s "$(generated_input_path CHANGE_REQUEST.md)" ]]; then
         MODE="change"
     elif git ls-files 2>/dev/null | grep -q -v \
             -e '^README\.md$' \
@@ -534,7 +535,13 @@ fi
 # ---------------------------------------------------------------------------
 
 write_change_request() {
-    cat > CHANGE_REQUEST.md <<EOF
+    # A root copy, if a human placed one, is authoritative -- overwrite it in
+    # place, the same as before this existed. Otherwise a generated copy
+    # belongs under .uncle/docs, not the project's own root.
+    local target
+    target="$(generated_input_path CHANGE_REQUEST.md)"
+    mkdir -p .uncle/docs
+    cat > "$target" <<EOF
 # Change Request
 
 Issue $ISSUE_NUM
@@ -583,7 +590,7 @@ List behavior or components that must not be changed.
 
 Describe the observable evidence that proves the change works.
 EOF
-    echo "Wrote CHANGE_REQUEST.md"
+    echo "Wrote $target"
 }
 
 write_new_project_brief() {
@@ -666,22 +673,28 @@ Anything genuinely undecided.
 EOF
 )"
 
-    if [[ ! -e REQUIREMENTS.md && ! -L REQUIREMENTS.md ]]; then
+    # A root copy, if a human placed one, is authoritative -- update it in
+    # place, the same as before this existed. Otherwise a generated copy
+    # belongs under .uncle/docs, not the project's own root.
+    local target
+    target="$(generated_input_path REQUIREMENTS.md)"
+    if [[ ! -e "$target" && ! -L "$target" ]]; then
+        mkdir -p .uncle/docs
         # Noclobber uses exclusive creation; a concurrent file or link must win.
-        (set -o noclobber; printf '%s\n' "$brief" > REQUIREMENTS.md)
-        echo "Created REQUIREMENTS.md project brief from issue $OWNER/$REPO#$ISSUE_NUM"
+        (set -o noclobber; printf '%s\n' "$brief" > "$target")
+        echo "Created $target project brief from issue $OWNER/$REPO#$ISSUE_NUM"
         return
     fi
 
-    # Replace the project-brief section (from '# Project brief' to EOF) in REQUIREMENTS.md.
-    if ! grep -q '^# Project brief$' REQUIREMENTS.md; then
-        echo "REQUIREMENTS.md does not contain a '# Project brief' section; cannot seed new-app workflow."
+    # Replace the project-brief section (from '# Project brief' to EOF).
+    if ! grep -q '^# Project brief$' "$target"; then
+        echo "$target does not contain a '# Project brief' section; cannot seed new-app workflow."
         exit 1
     fi
     local head
-    head="$(awk '/^# Project brief$/{exit} {print}' REQUIREMENTS.md)"
-    printf '%s\n%s\n' "$head" "$brief" > REQUIREMENTS.md
-    echo "Updated REQUIREMENTS.md project brief from issue $OWNER/$REPO#$ISSUE_NUM"
+    head="$(awk '/^# Project brief$/{exit} {print}' "$target")"
+    printf '%s\n%s\n' "$head" "$brief" > "$target"
+    echo "Updated $target project brief from issue $OWNER/$REPO#$ISSUE_NUM"
 }
 
 case "$MODE" in

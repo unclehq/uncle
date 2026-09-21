@@ -844,7 +844,7 @@ mkdir -p "$GPROJ"
 printf 'node_modules/\n' > "$GPROJ/.gitignore"
 gitignore_load_config "$GPROJ"
 COUNT=$((COUNT + 1))
-[[ "$(cat "$GPROJ/.gitignore")" == $'node_modules/\n.uncle/' ]] \
+[[ "$(cat "$GPROJ/.gitignore")" == $'node_modules/\n.uncle/*\n!.uncle/docs/' ]] \
     || fail "first run did not add .uncle to an existing .gitignore: $(cat "$GPROJ/.gitignore")"
 
 GPROJ2="$TMP/gitignore-none"

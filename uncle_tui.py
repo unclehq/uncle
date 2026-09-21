@@ -5306,7 +5306,9 @@ class UncleTUI:
         groups = {}
         for row in sorted(stats["records"], key=lambda r: r.get("started_at", 0)):
             stage = row.get("stage", "")
-            group = groups.setdefault(stage, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf")})
+            parent = parent_stage(stage)
+            group = groups.setdefault(parent, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf"), "raw_stages": set(), "any_failed": False})
+            group["raw_stages"].add(stage)
             elapsed = max(0, row.get("elapsed_seconds", 0))
             started = row.get("started_at", row.get("ended_at", 0) - elapsed)
             ended = row.get("ended_at", started + elapsed)
@@ -5337,8 +5339,12 @@ class UncleTUI:
                 group["costs"].append((None, False))
             group["attempts"] += 1
             group["last_result"] = row
+            result_exit = row.get("process_exit")
+            group["any_failed"] = group["any_failed"] or result_exit not in (None, 0) or row.get("reported_error") in (True, "true")
         for stage, started in stats["active"].items():
-            group = groups.setdefault(stage, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf")})
+            parent = parent_stage(stage)
+            group = groups.setdefault(parent, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf"), "raw_stages": set(), "any_failed": False})
+            group["raw_stages"].add(stage)
             group["started"] = min(group["started"], started)
             event = stats["live"].get(stage, {})
             ended = stats.get("stopped_at", time.time())
@@ -5353,15 +5359,22 @@ class UncleTUI:
         tokens, costs = [], []
         self._panel_stage_styles = {}
         for stage, group in sorted(groups.items(), key=lambda item: item[1]["started"]):
-            active = stage in stats["active"]
-            title = ("> " if active else "") + stage
-            if group["attempts"] > 1:
-                title += " (%d attempts)" % group["attempts"]
+            raw_stages = group.get("raw_stages", set())
+            is_rollup = len(raw_stages) > 1
+            active = any(raw in stats["active"] for raw in raw_stages) if raw_stages else (stage in stats["active"])
             result = group.get("last_result", {})
-            failed = result.get("process_exit") not in (None, 0) or result.get("reported_error") in (True, "true")
+            if is_rollup:
+                any_failed = group.get("any_failed", False)
+            else:
+                any_failed = result.get("process_exit") not in (None, 0) or result.get("reported_error") in (True, "true")
+            title = ("> " if active else "") + stage
+            if is_rollup:
+                title += " (%d workers)" % len(raw_stages)
+            elif group["attempts"] > 1:
+                title += " (%d attempts)" % group["attempts"]
             if active and "stopped_at" not in stats:
                 style = "title"
-            elif failed:
+            elif any_failed:
                 title += " [failed]"
                 style = "bad"
             elif not active and result.get("process_exit") == 0:

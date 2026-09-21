@@ -243,6 +243,73 @@ class Panel(unittest.TestCase):
             with p.open('a') as f:f.write('"total_tokens":42}\n')
             self.assertTrue(ui.poll_status());self.assertEqual(ui.session_stats['live']['implementation']['total_tokens'],42)
 
+    def test_workers_roll_up_under_parent(self):
+        ui = self.ui()
+        ui.session_stats['active'] = {}
+        ui.session_stats['records'] = [
+            dict(stage='implementation-step-1', started_at=100, elapsed_seconds=30),
+            dict(stage='implementation-step-2', started_at=100, elapsed_seconds=45),
+            dict(stage='validation-worker-1', started_at=200, elapsed_seconds=20),
+            dict(stage='validation-worker-2', started_at=200, elapsed_seconds=20),
+            dict(stage='adversarial-review-worker-1', started_at=300, elapsed_seconds=20),
+            dict(stage='adversarial-review-worker-2', started_at=300, elapsed_seconds=20),
+            dict(stage='manual-checklist-base', started_at=400, elapsed_seconds=20),
+            dict(stage='manual-checklist-delta', started_at=400, elapsed_seconds=20),
+        ]
+        lines = ui._session_panel_lines()
+        text = '\n'.join(lines)
+        self.assertIn('implementation (2 workers)', text)
+        self.assertIn('validation (2 workers)', text)
+        self.assertIn('adversarial (2 workers)', text)
+        self.assertIn('manual-checklist (2 workers)', text)
+        for raw_stage in ('implementation-step-1', 'validation-worker-1',
+                          'adversarial-review-worker-1', 'manual-checklist-base'):
+            self.assertNotIn(raw_stage, text)
+        self.assertEqual(text.count('implementation (2 workers)'), 1)
+        self.assertEqual(text.count('manual-checklist (2 workers)'), 1)
+
+    def test_failed_worker_marks_parent(self):
+        ui = self.ui()
+        ui.session_stats['active'] = {}
+        ui.session_stats['records'] = [
+            dict(stage='implementation-step-1', started_at=100, elapsed_seconds=30, process_exit=2),
+            dict(stage='implementation-step-2', started_at=100, elapsed_seconds=45, process_exit=0),
+        ]
+        lines = ui._session_panel_lines()
+        text = '\n'.join(lines)
+        self.assertIn('implementation (2 workers) [failed]', text)
+
+    def test_active_worker_marks_parent(self):
+        ui = self.ui()
+        ui.session_stats['records'] = [
+            dict(stage='implementation-step-1', started_at=100, elapsed_seconds=30, process_exit=0),
+        ]
+        ui.session_stats['active'] = {'implementation-step-2': time.time() - 30}
+        ui.session_stats['live'] = {}
+        lines = ui._session_panel_lines()
+        text = '\n'.join(lines)
+        self.assertIn('> implementation (2 workers)', text)
+
+    def test_totals_identical_under_rollup(self):
+        ui = self.ui()
+        ui.session_stats['active'] = {}
+        ui.session_stats['records'] = [
+            dict(stage='implementation-step-1', started_at=100, ended_at=130, elapsed_seconds=30,
+                 input_tokens=100, output_tokens=20, cache_read_tokens=0, cache_write_tokens=0,
+                 reported_cost_usd=0.01),
+            dict(stage='implementation-step-2', started_at=100, ended_at=145, elapsed_seconds=45,
+                 input_tokens=200, output_tokens=40, cache_read_tokens=0, cache_write_tokens=0,
+                 reported_cost_usd=0.02),
+            dict(stage='synthesis', started_at=200, ended_at=230, elapsed_seconds=30,
+                 input_tokens=50, output_tokens=10, cache_read_tokens=0, cache_write_tokens=0,
+                 reported_cost_usd=0.005),
+        ]
+        lines = ui._session_panel_lines()
+        total = lines.index('TOTALS')
+        self.assertEqual(lines[total + 1], 'Time   0:02:10')
+        self.assertEqual(lines[total + 2], 'Tokens 420')
+        self.assertEqual(lines[total + 3], 'Cost   $0.0350')
+
     def test_background_usage_keeps_foreground_identity(self):
         ui = self.ui()
         ui.status_model = 'foreground-model'

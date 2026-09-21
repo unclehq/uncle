@@ -302,14 +302,14 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         with self.assertRaises(OutputTruncated):
             response_from_events(path)
 
-    def test_truncated_review_is_retried_once_with_a_larger_output_limit(self):
+    def test_truncated_review_is_retried_with_a_larger_output_limit(self):
         env = self.stub_environment()
         out = self.root/'report.md'
         command = [bash_executable(), (ROOT/'scripts/reviewer-self-hosted.sh').as_posix(), 'exec', '--output-last-message', str(out), 'Test prompt']
         result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
                                 env=dict(env, FAKE_OPENCODE_MODE='truncate-once', WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS='8192'))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('Retrying once with an output limit of 16384 tokens', result.stderr)
+        self.assertIn('Retrying with an output limit of 16384 tokens', result.stderr)
         self.assertEqual(out.read_bytes(), b'## Findings\n\nNOT READY\n')
         self.assertIn('"output": 16384', (self.root/'record.config').read_text(encoding='utf-8'), 'the retry ran with the doubled cap')
         # Always truncated: an error result, and no fragment written as the report.
@@ -319,6 +319,25 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn('reached the configured limit', result.stderr)
         self.assertFalse(out.exists(), 'a fragment must not become the reviewer-owned artifact')
+
+    def test_truncation_keeps_escalating_past_one_retry(self):
+        # Seen live: a self-hosted adversarial-review overflowed the initial
+        # 8192-token cap, then overflowed the doubled 16384-token retry too --
+        # real findings, not padding. The old one-shot retry failed the stage
+        # outright with room left in the context window; doubling should keep
+        # going until either the model finishes or the context ceiling itself
+        # is reached, not stop after an arbitrary single attempt.
+        env = self.stub_environment()
+        out = self.root/'report.md'
+        command = [bash_executable(), (ROOT/'scripts/reviewer-self-hosted.sh').as_posix(), 'exec', '--output-last-message', str(out), 'Test prompt']
+        result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
+                                env=dict(env, FAKE_OPENCODE_MODE='truncate-twice', WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS='8192'))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Retrying with an output limit of 16384 tokens', result.stderr)
+        self.assertIn('Retrying with an output limit of 32768 tokens', result.stderr)
+        self.assertEqual(out.read_bytes(), b'## Findings\n\nNOT READY\n')
+        self.assertIn('"output": 32768', (self.root/'record.config').read_text(encoding='utf-8'), 'the third attempt ran with the twice-doubled cap')
+        self.assertEqual((self.root/'record.calls').read_text(), '3')
 
     def test_reviewer_document_is_validated_before_it_is_published(self):
         env = self.stub_environment()
@@ -547,7 +566,7 @@ if mode=='summary-once':
     print(json.dumps(dict(type='text',part=dict(text='## AR-001: Display accepts Infinity\\n\\n- Severity: high\\n- References: I-1\\n- Failure: Infinity is shown\\n- Fix: reject it\\n- Verify: unit test\\n\\n## Overall assessment\\n\\nOne blocking finding.'))))
     print(json.dumps(dict(type='step_finish', part=dict(reason='stop',tokens=dict(input=1234,output=57)))),flush=True)
     sys.exit(0)
-if mode=='truncate' or (mode=='truncate-once' and n==0):
+if mode=='truncate' or (mode=='truncate-once' and n==0) or (mode=='truncate-twice' and n<2):
     # A model cut off at whatever output limit it was given: a fragment, and
     # a token count equal to the cap.
     print(json.dumps(dict(type='text',part=dict(text='## AR-001\\n- Severity: Medium'))))

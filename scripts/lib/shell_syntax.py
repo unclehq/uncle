@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 
-from process_tree import bash_executable
+from process_tree import bash_executable, python3_executable
 
 
 def syntax_command(command, jobs):
@@ -23,7 +23,7 @@ def syntax_command(command, jobs):
                r'do bash -n "\$f"(?:\s*\|\|\s*exit 1)?;\s*done\s*')
     if not re.fullmatch(pattern, command):
         return None
-    return [sys.executable, str(Path(__file__).resolve()), str(jobs)]
+    return [python3_executable(), str(Path(__file__).resolve()), str(jobs)]
 
 
 def check_files(files, jobs, bash):

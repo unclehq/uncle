@@ -111,9 +111,15 @@ def ignored_prefixes(project, sandbox):
             if entry[:2] != '!!':
                 continue
             rel = entry[3:]
-            if prefix:
-                if not rel.startswith(prefix):
-                    continue
+            # `--porcelain` paths are relative to the invoking cwd -- the
+            # sandbox here -- regardless of where the discovered toplevel
+            # sits; a real run with the sandbox nested inside the project
+            # (a plain-copy sandbox) got zero matches requiring the
+            # project-relative prefix below, silently disabling this
+            # exclusion and flooding the merge with `node_modules/**`.
+            # Stripping stays only for the toplevel-relative form a past
+            # regression here actually produced (see the module docstring).
+            if prefix and rel.startswith(prefix):
                 rel = rel[len(prefix):]
             result.append(rel)
         return tuple(result)
@@ -234,7 +240,8 @@ def publish_worker_end(spec, result):
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
             json.dump(row, stream)
         os.replace(temporary, directory / ('parallel-worker-%d-%d.json' % (spec['number'], int(ended * 1000))))
-        subprocess.run([sys.executable, '-B', str(Path(__file__).with_name('session-totals.py')),
+        from process_tree import python3_executable
+        subprocess.run([python3_executable(), '-B', str(Path(__file__).with_name('session-totals.py')),
                         str(Path(spec['project']) / '.uncle' / 'workflow')],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     except OSError:

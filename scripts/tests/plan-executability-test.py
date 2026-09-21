@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts/lib'))
 spec = importlib.util.spec_from_file_location('executability', ROOT / 'scripts/lib/plan-executability.py')
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
@@ -331,6 +332,96 @@ plan_collect_assessment
             os.killpg(record['pgid'], signal.SIGKILL)
             owner.stderr.close()
 
+
+
+class ScaffoldGeneratorFindingsTests(unittest.TestCase):
+    """A real failure class: `step_groups.py`'s covers()/group() only ever see a
+    step's *declared* Owns tokens, never what a scaffolding generator actually
+    writes. A step that runs `create-vite --overwrite` behind a narrow Owns
+    list looks isolated to the grouper and is only discovered wrong when a
+    parallel merge finds files the step "did not declare"."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old = Path.cwd()
+        os.chdir(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(os.chdir, self.old)
+
+    def test_narrow_owns_with_overwrite_scaffold_is_flagged(self):
+        Path('CHANGE_PLAN.md').write_text(
+            '## Implementation sequence\n\n'
+            '1. Scaffold the frontend — Owns: `app/`, `package.json`\n'
+            '   Run this to generate it:\n'
+            '   `npx create-vite@latest . --template react --overwrite`.\n'
+            '2. Wire the API — Owns: `app/api.py`\n')
+        findings = mod.scaffold_generator_findings('CHANGE_PLAN.md')
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]['step'], 1)
+        self.assertIn('create-vite', findings[0]['tool'])
+        self.assertEqual(findings[0]['owns'], ['app/', 'package.json'])
+
+    def test_whole_directory_owns_is_not_flagged(self):
+        for token in ('`.`', '`*`', '`./`'):
+            with self.subTest(token=token):
+                Path('CHANGE_PLAN.md').write_text(
+                    '## Implementation sequence\n\n'
+                    '1. Scaffold the frontend — Owns: %s\n'
+                    '   Run this to generate it:\n'
+                    '   `npx create-vite@latest . --overwrite`.\n' % token)
+                self.assertEqual(mod.scaffold_generator_findings('CHANGE_PLAN.md'), [])
+
+    def test_step_without_a_scaffold_tool_is_not_flagged(self):
+        Path('CHANGE_PLAN.md').write_text(
+            '## Implementation sequence\n\n'
+            '1. Add the pure predicate — Owns: `app/domain/records.py`\n'
+            '2. Wire the API — Owns: `app/records/api.py`\n')
+        self.assertEqual(mod.scaffold_generator_findings('CHANGE_PLAN.md'), [])
+
+    def test_scaffold_command_on_a_continuation_line_is_still_found(self):
+        # plan_steps() in plan-scope.sh only reads a step's opening line; this
+        # check must read the whole block or a wrapped command is invisible.
+        Path('UPDATED_PROJECT_PLAN.md').write_text(
+            '## Implementation order\n\n'
+            '1. Scaffold the app — Owns: `frontend/`\n'
+            '   Run this to generate it:\n'
+            '   `npm create vite@latest frontend -- --template react`\n')
+        findings = mod.scaffold_generator_findings('UPDATED_PROJECT_PLAN.md')
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]['step'], 1)
+
+    def test_other_known_generators_are_recognised(self):
+        commands = ['ng new my-app', 'rails new blog', 'cargo new my-app',
+                    'django-admin startproject mysite', 'vue create my-app',
+                    'yarn create react-app my-app', 'create-next-app@latest']
+        for command in commands:
+            with self.subTest(command=command):
+                Path('CHANGE_PLAN.md').write_text(
+                    '## Implementation sequence\n\n'
+                    '1. Scaffold — Owns: `app/`\n   Run `%s`.\n' % command)
+                findings = mod.scaffold_generator_findings('CHANGE_PLAN.md')
+                self.assertEqual(len(findings), 1, command)
+
+    def test_missing_plan_returns_no_findings(self):
+        self.assertEqual(mod.scaffold_generator_findings('CHANGE_PLAN.md'), [])
+
+    def test_cli_action_exits_nonzero_on_findings(self):
+        Path('CHANGE_PLAN.md').write_text(
+            '## Implementation sequence\n\n'
+            '1. Scaffold — Owns: `app/`\n   Run this to generate it:\n'
+            '   `npx create-vite@latest . --overwrite`.\n')
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/lib/plan-executability.py'),
+                                 'scaffold-check', 'CHANGE_PLAN.md'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('create-vite', result.stdout)
+
+    def test_cli_action_exits_zero_without_findings(self):
+        Path('CHANGE_PLAN.md').write_text(
+            '## Implementation sequence\n\n1. Add a predicate — Owns: `app/domain.py`\n')
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/lib/plan-executability.py'),
+                                 'scaffold-check', 'CHANGE_PLAN.md'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout), [])
 
 
 class DeliverySummaryTests(unittest.TestCase):

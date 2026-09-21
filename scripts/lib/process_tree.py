@@ -57,6 +57,22 @@ def cleanup_directory(directory, timeout=30):
             time.sleep(0.05)
 
 
+def python3_executable():
+    """The interpreter to launch a NEW python subprocess with, not `sys.executable`.
+
+    CPython resolves symlinks to compute `sys.executable`, which defeats the
+    stable `opt_libexec` symlink a packaged install (e.g. Homebrew) relies on
+    for a long-running process to survive an upgrade: a reinstall mid-run
+    deletes the versioned keg directory `sys.executable` had already resolved
+    to and frozen, so a later `subprocess.run([sys.executable, ...])` fails
+    with ENOENT even though this same process keeps running fine (its own
+    loaded image needs no re-stat). `shutil.which` does a literal PATH-string
+    lookup with no symlink resolution, so it re-resolves through the stable
+    opt-symlink chain fresh on every call.
+    """
+    return shutil.which('python3') or sys.executable
+
+
 def bash_executable():
     # Resolve before CreateProcess: its bare-name search checks System32 (WSL)
     # before PATH, even when Git Bash is first on PATH.
@@ -146,7 +162,7 @@ def start_check(command, prompt=None, **kwargs):
         from windows_job import start
         return track_process(start(command, prompt=prompt, **kwargs, **group_options()), command, started, tick)
     import sys
-    wrapped = [sys.executable, '-B', '-c', _PARENT_WATCH, *command]
+    wrapped = [python3_executable(), '-B', '-c', _PARENT_WATCH, *command]
     if prompt is KEEP_STDIN:
         # A worker that answers many turns is fed over its whole life, so stdin
         # stays open. It keeps the parent watch: the tree still dies with us.

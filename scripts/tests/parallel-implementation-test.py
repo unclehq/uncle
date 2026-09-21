@@ -191,6 +191,44 @@ class ParallelImplementationTests(unittest.TestCase):
             self.assertNotIn('vendor/some-package/file.js', summary['files'])
             self.assertFalse((root / 'vendor').exists(), 'ignored setup output is not copied back')
 
+    def test_gitignoring_uncle_itself_does_not_break_the_ignore_exclusion(self):
+        # A real run: the project's own .gitignore listed `.uncle/` (uncle's
+        # own scratch directory -- reasonable hygiene), and the sandbox is an
+        # unborn-repo plain copy nested inside it (project/.uncle/workflow/
+        # parallel/step-N). Running `git status` from a cwd that is itself
+        # inside an already-ignored directory tree made git report paths
+        # relative to that cwd, not the repo root the code assumed -- so the
+        # required prefix never matched, the exclusion silently did nothing,
+        # and a step's own `npm install` flooded the merge with every path
+        # under `node_modules/` as an "undeclared" write.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+            (root / '.gitignore').write_text('node_modules/\n.uncle/\n.uncle\n')
+            (root / '1.txt').write_text('base\n')
+            worker = root / 'worker.sh'
+            worker.write_text(
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'printf changed > 1.txt\n'
+                'mkdir -p node_modules/some-package\n'
+                'printf "installed\\n" > node_modules/some-package/file.js\n'
+                'mkdir -p .uncle/workflow/parallel/notes\n'
+                'printf handoff > .uncle/workflow/parallel/notes/step-1.md\n')
+            worker.chmod(0o755)
+            request = {'project': str(root), 'owned': {'1': ['1.txt']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                 'command': ['bash', str(worker)]}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(result.stdout)
+            self.assertEqual(summary['merged'], [1])
+            self.assertEqual((root / '1.txt').read_text(), 'changed')
+            self.assertNotIn('node_modules/some-package/file.js', summary['files'])
+            self.assertFalse((root / 'node_modules').exists(), 'ignored setup output is not copied back')
+
     def test_svelte_dist_output_never_aborts_the_merge_even_before_gitignore_says_so(self):
         # A real run: a step scaffolded a Svelte app and built it in the same
         # pass ("npm create vite@latest -- --template svelte" then a build),
@@ -312,6 +350,32 @@ class ParallelImplementationTests(unittest.TestCase):
             self.assertEqual(summary['merged'], [1])
             self.assertIn('package-lock.json', summary['files'])
             self.assertEqual((root / 'package-lock.json').read_text(), '{"lockfileVersion":3}')
+
+    def test_a_glob_owns_token_covers_the_matching_file_it_writes(self):
+        # A real run: CHANGE_PLAN.md declared step 9 as owning
+        # `scripts/tests/*.sh`, and the step wrote
+        # `scripts/tests/checklist-groups-test.sh`. covers() did not
+        # understand glob tokens and rejected the legitimate write as
+        # undeclared, aborting a merge whose partition was actually correct.
+        temp, root, worker = self.fixture()
+        with temp:
+            worker.write_text(
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'mkdir -p scripts/tests\n'
+                'printf \'#!/usr/bin/env bash\\n\' > scripts/tests/checklist-groups-test.sh\n'
+                'mkdir -p .uncle/workflow/parallel/notes\n'
+                'printf handoff > .uncle/workflow/parallel/notes/step-1.md\n')
+            request = {'project': str(root), 'owned': {'1': ['scripts/tests/*.sh']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                 'command': ['bash', str(worker)]}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(result.stdout)
+            self.assertEqual(summary['merged'], [1])
+            self.assertIn('scripts/tests/checklist-groups-test.sh', summary['files'])
 
     def test_an_undeclared_file_that_is_not_a_lockfile_still_aborts_the_merge(self):
         # The lockfile inference must stay narrow: a step writing something

@@ -419,6 +419,21 @@ implementation_incomplete_choice() {
         echo
         echo 'The approved acceptance contract cannot be evaluated; implementation cannot repair it.'
         echo 'Repair rebuilds CHANGE_SPEC.md and CHANGE_PLAN.md from the request and baseline, then asks for approval again.'
+        if [[ "${UNATTENDED:-0}" == 1 ]]; then
+            # Auto mode means human gates do not block progress. Repair is the
+            # corrective action here, not a concession like a waiver -- it
+            # rebuilds the contract and the rebuilt spec/plan still pass
+            # through human_gate's own unattended path, so nothing here skips
+            # review, it just avoids parking the run on a malformed contract
+            # nobody is present to answer for.
+            record_unattended_gate implementation-incomplete "repair the unevaluable acceptance contract without human review"
+            echo "Unattended: repairing the acceptance contract; no person authorized this."
+            rm -f "$APPROVAL_DIR/CHANGE_SPEC.sha256" "$APPROVAL_DIR/CHANGE_PLAN.sha256" \
+                "$STATE_DIR/implementation-completion-repair"
+            envelope_invalidate CHANGE_SPEC
+            set_state ANALYZE
+            return 3
+        fi
         while true; do
             UNCLE_GATE_CLASS="sensitive:waiver"
             gate_prompt "Repair the acceptance contract or stop? [repair/stop]: "
@@ -459,6 +474,22 @@ implementation_incomplete_choice() {
         fi
     fi
     echo
+    if [[ "${UNATTENDED:-0}" == 1 ]]; then
+        # Auto mode means human gates do not block progress. `retry` reruns
+        # the same plan unchanged and this same choice is reached again next
+        # time it is still incomplete -- an unbounded loop with nobody there
+        # to stop it -- so waive is the one terminating, honest option: the
+        # rows stay rejected on the record and the final audit still reads
+        # them, matching how a waiver behaves everywhere else in this driver.
+        record_unattended_gate implementation-incomplete "waive rejected acceptance rows without human review: $ids"
+        echo "Unattended: waiving rejected rows ($ids); no person authorized this. The audit still reads them."
+        # shellcheck disable=SC2086
+        if record_waiver "$completion" $ids; then
+            return 2
+        fi
+        echo "Could not record the waiver; the run remains pending at IMPLEMENT."
+        return 1
+    fi
     while true; do
         UNCLE_GATE_CLASS="sensitive:waiver"
         gate_prompt "Retry the implementation, waive the rows above, or stop? [retry/waive/stop]: "

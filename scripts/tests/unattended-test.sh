@@ -186,6 +186,68 @@ for pair in "SPEC.md:CHANGE_SPEC" "PLAN.md:CHANGE_PLAN"; do
     else bad "cw-ledger-$n" "$n missing from the unattended ledger"; fi
 done
 
+# --- change-workflow implementation_incomplete_choice -----------------------
+# Mid-IMPLEMENT gates, not the well-known start-of-run plan approvals -- the
+# regression this covers had no test at all, so `--unattended` blocked here
+# with stdin closed instead of continuing the run.
+
+ic="$WORK/ic"
+mkdir -p "$ic/.uncle/workflow/approvals"
+extract_fns "$ROOT/scripts/change-workflow.sh" "$ic/fns.sh" \
+    gate_prompt record_unattended_gate implementation_incomplete_choice
+extract_fns "$ROOT/scripts/lib/waivers.sh" "$ic/fns-waivers.sh" \
+    write_waivers record_waiver
+cat "$ic/fns-waivers.sh" >> "$ic/fns.sh"
+cat > "$ic/gate.sh" <<'HARNESS'
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="/nonexistent-so-the-popup-is-skipped"
+STATE_DIR="$PWD/.uncle/workflow"
+APPROVAL_DIR="$STATE_DIR/approvals"
+UNATTENDED_FILE="$STATE_DIR/unattended-gates"
+waive_file() { printf '%s/waivers/%s' "$STATE_DIR" "$1"; }
+envelope_invalidate() { :; }
+set_state() { :; }
+. ./fns.sh
+status=0
+implementation_incomplete_choice || status=$?
+echo "CHOICE_RETURNED $status"
+HARNESS
+
+# Prompt #1: an unevaluable (malformed) acceptance contract. Unattended must
+# repair it (return 3) rather than wait -- the rebuilt spec/plan still pass
+# through human_gate's own unattended path, so nothing here skips review.
+printf 'not a well formed row\n' > "$ic/.uncle/workflow/implementation-completion.txt"
+touch "$ic/.uncle/workflow/approvals/CHANGE_SPEC.sha256" "$ic/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+out="$(cd "$ic" && UNATTENDED=1 bash gate.sh < /dev/null 2>&1)"
+check "ic-malformed-returns" "CHOICE_RETURNED 3" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+if [[ -e "$ic/.uncle/workflow/approvals/CHANGE_SPEC.sha256" ]]; then
+    bad "ic-malformed-clears-approval" "the stale CHANGE_SPEC approval was not cleared"
+else ok; fi
+case "$out" in
+    *"repair"*"the acceptance contract"*"[repair/stop]"*) bad "ic-malformed-no-prompt" "the human prompt was printed anyway" ;;
+    *) ok ;;
+esac
+if grep -q "implementation-incomplete" "$ic/.uncle/workflow/unattended-gates" 2>/dev/null; then ok
+else bad "ic-malformed-ledger" "the repair decision was not written to the unattended ledger"; fi
+
+# Prompt #2: well-formed rows rejected after one automatic repair already ran.
+# Unattended must waive (return 2, terminating) rather than auto-retry, which
+# would hit this same unbounded choice again next time with nobody there.
+rm -f "$ic/.uncle/workflow/unattended-gates"
+printf 'AC-1: requires IMPLEMENTED, changed code, and observed targeted verification; got missing\n' \
+    > "$ic/.uncle/workflow/implementation-completion.txt"
+out="$(cd "$ic" && UNATTENDED=1 bash gate.sh < /dev/null 2>&1)"
+check "ic-rejected-returns" "CHOICE_RETURNED 2" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+case "$out" in
+    *"Retry the implementation, waive"*) bad "ic-rejected-no-prompt" "the human prompt was printed anyway" ;;
+    *) ok ;;
+esac
+w="$ic/.uncle/workflow/waivers/AC-1"
+if [[ -s "$w" ]]; then ok; else bad "ic-waiver-file" "no waiver written for AC-1"; fi
+if grep -q "unattended run" "$w" 2>/dev/null; then ok
+else bad "ic-waiver-reason" "waiver does not say it was unattended"; fi
+
 # --- the issue stays open ---------------------------------------------------
 
 # Closing the originating issue announces outside the repository that this

@@ -176,6 +176,18 @@ class FindingsTests(unittest.TestCase):
                 self.report.write_bytes((bad).encode("utf-8"))
                 self.assertEqual(self.run_review('y\ny\n').returncode, 2)
 
+    def test_annotated_id_and_bold_headers_still_parse(self):
+        # A model echoing the review's own "AR-002 (High)" heading shape into
+        # the ID cell, or bolding the header row, is still naming the same
+        # findings and columns -- not a different, unparseable table.
+        annotated = (TABLE.replace('| FA-1 |', '| FA-1 (High) |')
+                     .replace('| ID | Severity | Evidence | Required correction | Blocks |',
+                              '| **ID** | **Severity** | **Evidence** | **Required correction** | **Blocks** |'))
+        self.report.write_bytes(annotated.encode('utf-8'))
+        result = self.run_review('y\ny\n')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('FA-1', self.record()['decisions'])
+
     def test_driver_gates_both_formats_and_resume(self):
         for driver, prefix, column in [('stagegate.sh', '', 0), ('change-workflow.sh', 'run-123\t', 1)]:
             with self.subTest(driver=driver):

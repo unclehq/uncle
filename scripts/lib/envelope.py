@@ -87,7 +87,11 @@ BLOCKING_SEVERITY = re.compile(r'(?i)^(high|blocking)\b')
 DELEGATED = re.compile(r'^(unattended|supervisor:.*|disabled:.*)$', re.S)
 ABSOLUTE_PATH = re.compile(r'(?<![\w:/.])/(?:[\w.@+-]+/)+[\w.@+-]*')
 # Rows of the revised plan's disposition table: | Finding | Disposition | ... |
-DISPOSITION_ROW = re.compile(r'^\|\s*(AR-[A-Za-z0-9]+)\s*\|\s*([^|]+?)\s*\|', re.M)
+# The finding cell tolerates the same trailing "(severity)" annotation
+# FINDING_HEADING already accepts on the review's own heading -- a model that
+# writes "AR-002 (High)" here, echoing that heading verbatim, is naming the
+# same finding, not a different one the strict id-only match would miss.
+DISPOSITION_ROW = re.compile(r'^\|\s*(AR-[A-Za-z0-9]+)(?:\s*\([^|\n)]+\))?\s*\|\s*([^|]+?)\s*\|', re.M)
 FINDING_HEADING = re.compile(r'^##[ \t]+(AR-[A-Za-z0-9]+)(?:[ \t]+\([^\n)]+\))?[ \t]*(?::|—|–|-)[ \t]+\S[^\n]*$', re.M)
 SEVERITY_FIELD = re.compile(r'^[ \t]*(?:[-*+][ \t]+)?(?:\*\*)?Severity(?:\*\*)?:[ \t]*(?:\*\*)?([^\n*]*)', re.M)
 

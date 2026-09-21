@@ -66,7 +66,10 @@ class MenuInputTests(unittest.TestCase):
     def test_empty_runner_picker_and_denied_path(self):
         self.ui.stage_runners = {}
         self.ui.state = "config"
-        with patch.dict(os.environ, PATH=str(self.base)):
+        # This test is specifically about the "nothing installed at all"
+        # case, which an operator-configured DEFAULT_RUNNER short-circuits.
+        with patch.object(tui, 'DEFAULT_RUNNER', ''), \
+             patch.dict(os.environ, PATH=str(self.base)):
             self.assertEqual(tui.runners_for(tui.AGENT), [])
             self.assertEqual(self.ui.stage_runner("requirements"), "")
             self.ui._open_picker("runner", "requirements")
@@ -83,7 +86,10 @@ class MenuInputTests(unittest.TestCase):
             try:
                 self.assertEqual(tui.runners_for(tui.AGENT), [])
                 result = subprocess.run(["/bin/bash", "-c",
-                    '. "$1/scripts/lib/stage-config.sh"; uncle_stage_cmd requirements',
+                    # Isolated from the operator-configured default the same
+                    # way as tui.DEFAULT_RUNNER above: this checks the "truly
+                    # nothing available" path, not the configured fallback.
+                    '. "$1/scripts/lib/stage-config.sh"; UNCLE_DEFAULT_RUNNER=; uncle_stage_cmd requirements',
                     "test", str(ROOT)], capture_output=True, text=True,
                     env=dict(os.environ, UNCLE_CONFIG="/nonexistent"))
                 self.assertNotEqual(result.returncode, 0)
@@ -105,6 +111,9 @@ class MenuInputTests(unittest.TestCase):
         prefix = source[source.index("CONFIG_STAGE_SIDE_reviewer="):source.index("stage_side()")]
         script = (
             'set -e; . "$ROOT/scripts/lib/stage-config.sh"; '
+            # This test is about OpenCode-discovery inference, which an
+            # operator-configured DEFAULT_RUNNER short-circuits.
+            'UNCLE_DEFAULT_RUNNER=; '
             'C_CYAN= C_BOLD= C_RESET= C_DIM= C_YELLOW=; '
             + prefix + "stage_side() { uncle_stage_side \"$1\"; }\n" + functions +
             '\npython3() { printf "vendor/model\\n"; }\n'

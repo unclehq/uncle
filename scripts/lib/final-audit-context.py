@@ -27,7 +27,7 @@ def normalize_findings_shape(text):
         line = lines[i].strip()
         if not (line.startswith('|') and line.endswith('|')):
             continue
-        header = [cell.strip().lower() for cell in line[1:-1].split('|')]
+        header = [cell.strip('*_ ').lower() for cell in line[1:-1].split('|')]
         if 'id' not in header or not any(cell in ('blocks', 'blocks completion') for cell in header):
             continue
         if re.fullmatch(r'\|(?:\s*:?-{3,}:?\s*\|)+', lines[i + 1].strip()):
@@ -47,7 +47,7 @@ def normalize_findings_shape(text):
     header_index = table_start
     cells = lines[header_index][1:-1].split('|')
     for i, cell in enumerate(cells):
-        if cell.strip().lower() in ('correction', 'fix', 'required fix', 'suggested correction'):
+        if cell.strip('*_ ').lower() in ('correction', 'fix', 'required fix', 'suggested correction'):
             cells[i] = ' Required correction '
     lines[header_index] = '|' + '|'.join(cells) + '|'
     return '\n'.join(lines) + ('\n' if text.endswith('\n') else '')

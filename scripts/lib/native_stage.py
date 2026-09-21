@@ -15,7 +15,7 @@ import uuid
 from runner_timing import RunnerTiming
 from read_cache import ReadCache
 from process_tree import timed_popen
-from process_tree import launch_command, group_options, kill_tree, finish_check
+from process_tree import launch_command, group_options, kill_tree, finish_check, python3_executable
 
 KEYS = ('input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')
 
@@ -183,7 +183,7 @@ class Stage:
         owner = os.environ.get('UNCLE_RUNNER_POOL_OWNER_PID', '')
         if owner and os.environ.get('UNCLE_RUNNER_REUSE', '1') != '0':
             pool = Path(os.getcwd()) / '.uncle' / 'workflow' / 'runner-pool'
-            command = [sys.executable, '-B', str(Path(__file__).with_name('runner_pool.py')),
+            command = [python3_executable(), '-B', str(Path(__file__).with_name('runner_pool.py')),
                        'connect', '--root', str(pool), '--owner', owner,
                        '--runner', self.runner, '--side', self.side, '--', *command]
             self.pooled = True

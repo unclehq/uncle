@@ -46,6 +46,9 @@ import os, sys, tempfile, subprocess
 from pathlib import Path
 sys.path.insert(0, str(Path(os.environ["UNCLE_TUI"]).parent))
 import uncle_tui as m
+# This test is specifically about the PATH-discovery fallback, which an
+# operator-configured DEFAULT_RUNNER short-circuits; isolate it from that.
+m.DEFAULT_RUNNER = ""
 bash = "/bin/bash"
 root = Path(m.ROOT)
 original = os.environ["PATH"]
@@ -70,7 +73,9 @@ with tempfile.TemporaryDirectory() as tmp:
         default = expected[0] if expected else ""
         assert t.stage_runner("derive-brief") == default
         result = subprocess.run([bash, "-c",
-            '. "$1/scripts/lib/stage-config.sh"; uncle_stage_runner derive-brief',
+            # Isolated the same way as m.DEFAULT_RUNNER above: this probe is
+            # about the installed-agent scan, not the operator-configured default.
+            '. "$1/scripts/lib/stage-config.sh"; UNCLE_DEFAULT_RUNNER=; uncle_stage_runner derive-brief',
             "test", str(root)], env=dict(os.environ, UNCLE_CONFIG="/nonexistent"),
             capture_output=True, text=True)
         assert result.stdout == default, (mask, result.stdout)
@@ -104,7 +109,7 @@ mkdir -p "$TMP/bin"
 printf '#!/bin/sh\nexit 97\n' > "$TMP/bin/cline"
 chmod +x "$TMP/bin/cline"
 # Keep utilities available while excluding any installed agents.
-for tool in python3 bash tr rm diff head; do
+for tool in python3 bash tr rm diff head mkdir cat; do
     ln -s "$(command -v "$tool")" "$TMP/bin/$tool"
 done
 TEST_ORIGINAL_PATH="$PATH"
@@ -119,6 +124,10 @@ spec = importlib.util.spec_from_file_location("tui", os.environ["UNCLE_TUI"])
 m = importlib.util.module_from_spec(spec)
 sys.modules["tui"] = m
 spec.loader.exec_module(m)
+# This section is specifically about the "only Cline is installed, nothing
+# configured" discovery scenario, which an operator-configured DEFAULT_RUNNER
+# short-circuits; isolate it from that (see the PYDISC case above).
+m.DEFAULT_RUNNER = ""
 
 failed = []
 checks = [0]
@@ -273,7 +282,8 @@ check("catalogue ids are unique across the vendor lists", True,
 # AC-5: the row names the stored id with its label, and the runner's own
 # default when nothing is stored.
 vendor_displays = [
-    ("claude", "claude-opus-5", "claude-opus-5  Claude Opus 5", "opus  (default)"),
+    ("claude", "claude-opus-5", "claude-opus-5  Claude Opus 5",
+     "claude-sonnet-5  (default)  Claude Sonnet 5"),
     ("codex", "gpt-5.1-codex", "gpt-5.1-codex  GPT-5.1 Codex", "codex default  (default)"),
     ("kimi", "moonshot-ai/kimi-k2.6", "moonshot-ai/kimi-k2.6  Kimi K2.6",
      "moonshot-ai/kimi-k2.7-code-highspeed  (default)  Kimi K2.7 Code Highspeed"),
@@ -812,6 +822,43 @@ if [[ "$expect" != "$actual" ]]; then
     fail "the drivers resolve the config differently from the screen"
     diff <(printf '%s\n' "$expect") <(printf '%s\n' "$actual") | head -20
 fi
+
+# .uncle holds run state, cost logs, and (via self_hosted.py) API keys -- a
+# project's first ever load_config() call, before .uncle/config exists, must
+# make sure an existing .gitignore never lets it slip into a commit. Each of
+# these uses its own project root and .uncle/config, not the shared fixture
+# above run_case always points at -- that config already exists by now.
+gitignore_load_config() {
+    local proj="$1"
+    UNCLE_CONFIG="$proj/.uncle/config" UNCLE_PROJECT_ROOT="$proj" UNCLE_TUI="$ROOT/uncle_tui.py" python3 - <<'PYGIT'
+import os, sys
+sys.path.insert(0, os.path.dirname(os.environ["UNCLE_TUI"]))
+import uncle_tui as m
+t = m.UncleTUI.__new__(m.UncleTUI)
+t.load_config()
+PYGIT
+}
+
+GPROJ="$TMP/gitignore-existing"
+mkdir -p "$GPROJ"
+printf 'node_modules/\n' > "$GPROJ/.gitignore"
+gitignore_load_config "$GPROJ"
+COUNT=$((COUNT + 1))
+[[ "$(cat "$GPROJ/.gitignore")" == $'node_modules/\n.uncle/' ]] \
+    || fail "first run did not add .uncle to an existing .gitignore: $(cat "$GPROJ/.gitignore")"
+
+GPROJ2="$TMP/gitignore-none"
+mkdir -p "$GPROJ2"
+gitignore_load_config "$GPROJ2"
+COUNT=$((COUNT + 1))
+[[ ! -e "$GPROJ2/.gitignore" ]] || fail "first run created a .gitignore where none existed"
+
+GPROJ3="$TMP/gitignore-already-listed"
+mkdir -p "$GPROJ3"
+printf '.uncle/\n' > "$GPROJ3/.gitignore"
+gitignore_load_config "$GPROJ3"
+COUNT=$((COUNT + 1))
+[[ "$(cat "$GPROJ3/.gitignore")" == $'.uncle/' ]] || fail "an already-listed .uncle entry was duplicated"
 
 if [[ "$status" -ne 0 || "$FAILED" -ne 0 ]]; then
     echo "tui-config-test.sh: failed"

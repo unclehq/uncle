@@ -20,7 +20,7 @@ import subprocess
 import sys
 import threading
 import time
-from process_tree import finish_check, group_options, kill_tree
+from process_tree import finish_check, group_options, kill_tree, python3_executable
 
 
 def alive(pid):
@@ -84,7 +84,7 @@ def ensure(root, owner, runner, side, command, slot=0):
         descriptor.unlink(missing_ok=True)
         with open(log, 'ab', buffering=0) as output:
             subprocess.Popen(
-                [sys.executable, '-B', str(Path(__file__).resolve()), 'serve',
+                [python3_executable(), '-B', str(Path(__file__).resolve()), 'serve',
                  '--root', root, '--owner', str(owner), '--runner', runner,
                  '--side', side, '--digest', digest, '--', *command],
                 stdin=subprocess.DEVNULL, stdout=output, stderr=output,

@@ -14,6 +14,7 @@ Grouping follows checklist_groups.py, which solves the same problem for checks:
 consecutive runs that share no declared resource, dependencies respected, and
 any doubt collapsing to one unit per group.
 """
+import fnmatch
 import json
 import subprocess
 import sys
@@ -63,6 +64,17 @@ def _dirname(path):
     return path.rsplit('/', 1)[0] if '/' in path else ''
 
 
+def _glob_matches(token, path):
+    """Match a token with glob metacharacters against a path, one segment at a
+    time -- fnmatch's own '*' crosses '/', which would make a declared
+    `scripts/tests/*.sh` reach into subdirectories no plan writer intended."""
+    token_parts = token.split('/')
+    path_parts = path.split('/')
+    if len(token_parts) != len(path_parts):
+        return False
+    return all(fnmatch.fnmatchcase(p, t) for t, p in zip(token_parts, path_parts))
+
+
 def covers(owned, path):
     """Does a declared token cover this path? Directories cover what is under them."""
     for token in owned:
@@ -73,6 +85,8 @@ def covers(owned, path):
         if token.endswith('/') and path.startswith(token):
             return True
         if path.startswith(token.rstrip('/') + '/'):
+            return True
+        if any(ch in token for ch in '*?[') and _glob_matches(token, path):
             return True
         lockfiles = LOCKFILE_OF_MANIFEST.get(token.rsplit('/', 1)[-1])
         if lockfiles and path.rsplit('/', 1)[-1] in lockfiles and _dirname(token) == _dirname(path):

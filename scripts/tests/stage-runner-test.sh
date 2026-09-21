@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory() as tmp:
     for driver in ("stagegate.sh", "change-workflow.sh"):
         source = (root / "scripts" / driver).read_text()
         names = ("upper", "stage_var", "stage_setting", "stage_setting_opt",
-                 "stage_agent_cmd", "stage_model", "stage_model_for",
+                 "stage_agent_cmd", "stage_command_overridden", "stage_model", "stage_model_for",
                  "stage_effort", "stage_effort_for", "stage_tools", "stage_turns", "run_claude")
         functions = "\n".join(match.group(0) for name in names
             for match in re.finditer(r"^" + name + r"\(\) \{.*?^}", source, re.M | re.S))
@@ -61,7 +61,12 @@ with tempfile.TemporaryDirectory() as tmp:
                 (bindir / binary).chmod(0o755)
             (bindir / "config").write_text(config)
             script = (
-                '. "$ROOT/scripts/lib/stage-config.sh"; ' + functions +
+                # This test is about real PATH-based command resolution and
+                # removal-mid-run behavior, predating and orthogonal to the
+                # operator-configured default runner; isolate from that so
+                # "nothing installed" still resolves to nothing, not a
+                # hardcoded assumption that fails later with a raw shell error.
+                '. "$ROOT/scripts/lib/stage-config.sh"; UNCLE_DEFAULT_RUNNER=; ' + functions +
                 '\nresolve_prompt() { printf "%s" "$1"; }\n'
                 'require_file() { printf "%s|%s" "$cmd" "$model"; exit 0; }\n'
                 # Rename the real resolver, then remove Claude after command selection.

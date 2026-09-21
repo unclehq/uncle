@@ -168,7 +168,7 @@ for bad in gpt-5.6-sol o3-mini codex-1 gemini-2.5-pro some-future-model; do
         > /dev/null 2>&1
     COUNT=$((COUNT + 1))
     case "$(sed -n '1p' "$TMP/argv")" in
-        *"--model opus"*) ;;
+        *"--model claude-sonnet-5"*) ;;
         *) fail "non-Claude model '$bad' was passed to claude instead of falling back" ;;
     esac
 done

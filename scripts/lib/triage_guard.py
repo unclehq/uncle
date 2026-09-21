@@ -242,6 +242,17 @@ def make_sandbox(project, sandbox):
                 skipped.append(name)
         return set(skipped)
     shutil.copytree(project, sandbox, symlinks=True, ignore=ignore)
+    # A copy sandbox lives nested under the project (.uncle/workflow/parallel/
+    # step-N). If the project's own .gitignore lists `.uncle/` -- reasonable
+    # hygiene for uncle's own scratch directory -- git status run from inside
+    # the sandbox walks up, finds the project's .git, and reports the whole
+    # ancestor `.uncle/` as one collapsed ignored entry instead of descending
+    # into it; a step's own `node_modules/` then reads as untracked-and-not-
+    # ignored, and ignored_prefixes silently excludes nothing. Giving the
+    # sandbox its own empty repo makes it its own toplevel, so git evaluates
+    # the copied .gitignore against the sandbox directly, the way a worktree
+    # sandbox already does.
+    subprocess.run(['git', 'init', '-q'], cwd=sandbox, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return 'copy'
 
 

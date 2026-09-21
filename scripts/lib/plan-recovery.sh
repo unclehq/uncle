@@ -132,6 +132,17 @@ plan_revise() {
 plan_decision() {
     local answer
     echo 'Authority decision remains pending; see the exact question and tradeoffs in the assessment.'
+    # No answer to fabricate here -- the whole point of a DECISION verdict is
+    # domain judgment the assessment could not resolve on its own, so an
+    # unattended run leaves it pending exactly as an empty answer already
+    # does, instead of blocking on a prompt nobody is there to read.
+    if [[ "${UNATTENDED:-0}" == 1 ]]; then
+        if declare -f record_unattended_gate >/dev/null; then
+            record_unattended_gate plan-decision "left pending; requires a human authority answer"
+        fi
+        echo 'Unattended: no authority answer to record; the run remains pending.'
+        return 1
+    fi
     if declare -f gate_prompt >/dev/null; then
         gate_prompt 'Record an authority answer, or leave empty to keep pending: '
     else
@@ -191,6 +202,17 @@ plan_before_write() {
     plan_tool dispatch "${1:-implementation}" || status=$?
     if [[ "$status" == 25 ]]; then
         local retry_answer
+        # Retrying an interruption is not a judgment call to fabricate; it
+        # takes a live person's explicit confirmation, so unattended leaves
+        # it pending the same as a declined answer, without waiting on a
+        # prompt nobody is there to read.
+        if [[ "${UNATTENDED:-0}" == 1 ]]; then
+            if declare -f record_unattended_gate >/dev/null; then
+                record_unattended_gate plan-interrupted-retry "left pending; requires human confirmation to retry"
+            fi
+            echo 'Unattended: not retrying an interrupted implementation without confirmation; the run remains pending.'
+            return 25
+        fi
         gate_prompt 'The previous implementation was interrupted. Retry from the current files? [Y/N]: '
         gate_read retry_answer || return 25
         case "$retry_answer" in
@@ -206,6 +228,13 @@ plan_before_write() {
     fi
     if [[ "$status" == 20 ]] && grep -q '"phase": "WAIT_LIVE"' "$STATE_DIR/plan-recovery.json"; then
         local retry_answer
+        if [[ "${UNATTENDED:-0}" == 1 ]]; then
+            if declare -f record_unattended_gate >/dev/null; then
+                record_unattended_gate plan-live-retry "left pending; requires human confirmation to retry live verification"
+            fi
+            echo 'Unattended: not retrying live verification without confirmation; the run remains pending.'
+            return 20
+        fi
         gate_prompt 'Live prerequisites are unchanged. Explicitly retry approved verification? [Y/N]: '
         gate_read retry_answer || return 20
         case "$retry_answer" in
@@ -251,6 +280,13 @@ plan_after_write() {
     plan_tool classify || status=$?
     if [[ "$status" == 24 ]]; then
         local retry_answer
+        if [[ "${UNATTENDED:-0}" == 1 ]]; then
+            if declare -f record_unattended_gate >/dev/null; then
+                record_unattended_gate plan-delivery-retry "left pending; requires human confirmation to retry"
+            fi
+            echo 'Unattended: implementation remains incomplete; not retrying without confirmation. The run remains pending.'
+            return 24
+        fi
         gate_prompt 'Implementation delivery is incomplete. Retry the approved implementation? [Y/N]: '
         gate_read retry_answer || return 24
         case "$retry_answer" in

@@ -111,9 +111,15 @@ def ignored_prefixes(project, sandbox):
             if entry[:2] != '!!':
                 continue
             rel = entry[3:]
-            if prefix:
-                if not rel.startswith(prefix):
-                    continue
+            # `--porcelain` paths are relative to the invoking cwd -- the
+            # sandbox here -- regardless of where the discovered toplevel
+            # sits; a real run with the sandbox nested inside the project
+            # (a plain-copy sandbox) got zero matches requiring the
+            # project-relative prefix below, silently disabling this
+            # exclusion and flooding the merge with `node_modules/**`.
+            # Stripping stays only for the toplevel-relative form a past
+            # regression here actually produced (see the module docstring).
+            if prefix and rel.startswith(prefix):
                 rel = rel[len(prefix):]
             result.append(rel)
         return tuple(result)

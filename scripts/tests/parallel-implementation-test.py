@@ -313,6 +313,32 @@ class ParallelImplementationTests(unittest.TestCase):
             self.assertIn('package-lock.json', summary['files'])
             self.assertEqual((root / 'package-lock.json').read_text(), '{"lockfileVersion":3}')
 
+    def test_a_glob_owns_token_covers_the_matching_file_it_writes(self):
+        # A real run: CHANGE_PLAN.md declared step 9 as owning
+        # `scripts/tests/*.sh`, and the step wrote
+        # `scripts/tests/checklist-groups-test.sh`. covers() did not
+        # understand glob tokens and rejected the legitimate write as
+        # undeclared, aborting a merge whose partition was actually correct.
+        temp, root, worker = self.fixture()
+        with temp:
+            worker.write_text(
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'mkdir -p scripts/tests\n'
+                'printf \'#!/usr/bin/env bash\\n\' > scripts/tests/checklist-groups-test.sh\n'
+                'mkdir -p .uncle/workflow/parallel/notes\n'
+                'printf handoff > .uncle/workflow/parallel/notes/step-1.md\n')
+            request = {'project': str(root), 'owned': {'1': ['scripts/tests/*.sh']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                 'command': ['bash', str(worker)]}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(result.stdout)
+            self.assertEqual(summary['merged'], [1])
+            self.assertIn('scripts/tests/checklist-groups-test.sh', summary['files'])
+
     def test_an_undeclared_file_that_is_not_a_lockfile_still_aborts_the_merge(self):
         # The lockfile inference must stay narrow: a step writing something
         # the plan never mentioned at all -- not a manifest's own lockfile --

@@ -16,6 +16,33 @@ STATE = Path('.uncle/workflow')
 ASSESS = STATE / 'plan-executability'
 JOURNAL = STATE / 'plan-recovery.json'
 
+# A generator invocation names itself, not the tree it will produce: `create-vite
+# --overwrite` writes node_modules/*, src/App.jsx, public/*, and whatever else its
+# template contains, never just the paths a plan author thought to list. group() in
+# step_groups.py has no way to know that -- it only compares declared Owns tokens --
+# so a plan that names one of these tools while declaring a narrow Owns list passes
+# grouping cleanly and is only discovered wrong at merge time, as files a step "did
+# not declare". Matching by name here, before parallel implementation ever runs, is
+# cheaper than a failed merge.
+SCAFFOLD_GENERATOR_PATTERN = re.compile(
+    r'\b(?:'
+    r'npx\s+(?:-y\s+)?create-[\w.@/-]+'
+    r'|(?:npm|yarn|pnpm)\s+create\s+[\w.@/-]+'
+    r'|create-react-app\b'
+    r'|create-next-app\b'
+    r'|ng\s+new\b'
+    r'|vue\s+create\b'
+    r'|rails\s+new\b'
+    r'|django-admin(?:\.py)?\s+startproject\b'
+    r'|cargo\s+new\b'
+    r')', re.I)
+
+# A step whose Owns list names one of these has declared the whole target
+# directory, so whatever a generator writes underneath it was already promised.
+# '' is included because plan_step_owns (plan-scope.sh) strips a leading './'
+# from every token, so a plan that wrote `Owns: ./` arrives here as ''.
+SCAFFOLD_WHOLE_TARGET_TOKENS = {'*', '.', './', ''}
+
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -66,6 +93,99 @@ def manifest(root, plan):
 
 def ids_in(path, prefix):
     return set(re.findall(r'\b' + prefix + r'-\d+\b', Path(path).read_text())) if Path(path).exists() else set()
+
+
+def _implementation_step_blocks(text):
+    """Whole text of each numbered implementation step, not just its own line.
+
+    plan_steps() in plan-scope.sh (which parallel implementation itself reads)
+    prints only a step's opening line, because that is all the grouper needs.
+    A scaffolding command, though, is as likely to be written on a following
+    line -- prose elaboration or a fenced command -- as on the numbered line
+    itself, so this keeps the whole block, up to the next numbered step or the
+    next heading. Positions are assigned in the same order plan_step_owns uses,
+    so a finding's step number lines up with the Owns lookup below.
+    """
+    match = re.search(r'^## (?:\d+\. )?Implementation (?:sequence|order)\s*$', text, re.M)
+    if not match:
+        return []
+    rest = text[match.end():]
+    end = re.search(r'^## ', rest, re.M)
+    section = rest[:end.start()] if end else rest
+    blocks, current = [], None
+    for line in section.splitlines():
+        if re.match(r'^\d+\.', line):
+            if current is not None:
+                blocks.append('\n'.join(current))
+            current = [line]
+        elif current is not None:
+            current.append(line)
+    if current is not None:
+        blocks.append('\n'.join(current))
+    return blocks
+
+
+def _plan_step_owns(plan):
+    """Position -> declared Owns tokens, via plan-scope.sh's own parser.
+
+    Reusing the shared awk implementation (rather than a second, python copy of
+    its continuation-line and Depends-on-stripping rules) guarantees this check
+    sees exactly the same declarations step_groups.py's group() would act on.
+    """
+    lib = Path(__file__).resolve().parent
+    rows = subprocess.run(['bash', '-c', '. "%s/plan-scope.sh"; plan_step_owns "%s"' % (lib, plan)],
+                          capture_output=True, text=True).stdout.splitlines()
+    owned = {}
+    for line in rows:
+        if '\t' not in line:
+            continue
+        step, path = line.split('\t', 1)
+        owned.setdefault(int(step), set()).add(path.strip())
+    return owned
+
+
+def scaffold_generator_findings(plan):
+    """Implementation steps that run a scaffolding generator without declaring
+    ownership of the whole tree it can write.
+
+    This is a static, best-effort scan of the plan's own text: the plan format
+    records a step's Owns list and its prose, never the literal command a
+    worker will run, so a generator invoked only in narrative English ("use
+    Vite to scaffold the app") is invisible to a name-based pattern like this
+    one. It catches the concrete, recurring failure -- an inline `npx
+    create-vite@latest . --overwrite` (or similar) named in the plan text --
+    not every way a plan could under-declare a generator step.
+    """
+    text = Path(plan).read_text() if Path(plan).exists() else ''
+    blocks = _implementation_step_blocks(text)
+    if not blocks:
+        return []
+    owned = _plan_step_owns(plan)
+    findings = []
+    for position, block in enumerate(blocks, start=1):
+        match = SCAFFOLD_GENERATOR_PATTERN.search(block)
+        if not match:
+            continue
+        tokens = owned.get(position, set())
+        # No declaration at all is not this failure: group() in step_groups.py
+        # treats a step that owns nothing as owning everything, which forces it
+        # to run alone rather than being wrongly judged safe alongside another
+        # step's narrower, non-overlapping claim.
+        if not tokens or tokens & SCAFFOLD_WHOLE_TARGET_TOKENS:
+            continue
+        findings.append({
+            'step': position,
+            'tool': match.group(0).strip(),
+            'owns': sorted(tokens),
+            'message': (
+                'step %d runs a scaffolding generator (%s) but its Owns list %s '
+                'does not cover the whole target directory; the generator can '
+                'write far more than those paths, so parallel grouping would '
+                'wrongly treat this step as isolated from others' % (
+                    position, match.group(0).strip(), sorted(tokens) or ['<nothing declared>'])
+            ),
+        })
+    return findings
 
 
 def indexed(rows, label):
@@ -466,7 +586,7 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == 'lock-run':
         return lock_run(sys.argv[2:])
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=['manifest', 'validate', 'render', 'blockers', 'recover', 'launch', 'result', 'lock-run', 'lock-child', 'dispatch', 'snapshot', 'source-check', 'classify', 'summary', 'retry', 'live-retry', 'preflight-check'])
+    p.add_argument('action', choices=['manifest', 'validate', 'render', 'blockers', 'scaffold-check', 'recover', 'launch', 'result', 'lock-run', 'lock-child', 'dispatch', 'snapshot', 'source-check', 'classify', 'summary', 'retry', 'live-retry', 'preflight-check'])
     p.add_argument('args', nargs='*')
     ns = p.parse_args()
     args = ns.args
@@ -504,6 +624,9 @@ def main():
     if ns.action == 'blockers':
         rows = blockers(args[0]); print(json.dumps(rows))
         return 0
+    if ns.action == 'scaffold-check':
+        rows = scaffold_generator_findings(args[0]); print(json.dumps(rows))
+        return 1 if rows else 0
     if ns.action in ('dispatch', 'snapshot', 'source-check', 'classify', 'summary', 'retry', 'live-retry', 'preflight-check'):
         return runtime(ns.action, args)
     j = journal()

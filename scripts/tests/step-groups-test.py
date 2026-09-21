@@ -48,6 +48,15 @@ class CoversTests(unittest.TestCase):
     def test_owning_only_the_lockfile_does_not_cover_the_manifest(self):
         self.assertFalse(covers({'package-lock.json'}, 'package.json'))
 
+    def test_glob_token_covers_matching_files_in_that_directory(self):
+        self.assertTrue(covers({'scripts/tests/*.sh'}, 'scripts/tests/checklist-groups-test.sh'))
+        self.assertFalse(covers({'scripts/tests/*.sh'}, 'scripts/tests/checklist-groups-test.py'),
+                          'the extension must match, not just the directory')
+        self.assertFalse(covers({'scripts/tests/*.sh'}, 'scripts/lib/checklist-groups-test.sh'),
+                          'a glob only reaches into its own directory')
+        self.assertFalse(covers({'scripts/tests/*.sh'}, 'scripts/tests/nested/checklist-groups-test.sh'),
+                          'a single-star glob does not cross a path separator')
+
 
 if __name__ == '__main__':
     unittest.main()

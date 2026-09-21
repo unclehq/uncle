@@ -46,6 +46,9 @@ import os, sys, tempfile, subprocess
 from pathlib import Path
 sys.path.insert(0, str(Path(os.environ["UNCLE_TUI"]).parent))
 import uncle_tui as m
+# This test is specifically about the PATH-discovery fallback, which an
+# operator-configured DEFAULT_RUNNER short-circuits; isolate it from that.
+m.DEFAULT_RUNNER = ""
 bash = "/bin/bash"
 root = Path(m.ROOT)
 original = os.environ["PATH"]
@@ -70,7 +73,9 @@ with tempfile.TemporaryDirectory() as tmp:
         default = expected[0] if expected else ""
         assert t.stage_runner("derive-brief") == default
         result = subprocess.run([bash, "-c",
-            '. "$1/scripts/lib/stage-config.sh"; uncle_stage_runner derive-brief',
+            # Isolated the same way as m.DEFAULT_RUNNER above: this probe is
+            # about the installed-agent scan, not the operator-configured default.
+            '. "$1/scripts/lib/stage-config.sh"; UNCLE_DEFAULT_RUNNER=; uncle_stage_runner derive-brief',
             "test", str(root)], env=dict(os.environ, UNCLE_CONFIG="/nonexistent"),
             capture_output=True, text=True)
         assert result.stdout == default, (mask, result.stdout)
@@ -119,6 +124,10 @@ spec = importlib.util.spec_from_file_location("tui", os.environ["UNCLE_TUI"])
 m = importlib.util.module_from_spec(spec)
 sys.modules["tui"] = m
 spec.loader.exec_module(m)
+# This section is specifically about the "only Cline is installed, nothing
+# configured" discovery scenario, which an operator-configured DEFAULT_RUNNER
+# short-circuits; isolate it from that (see the PYDISC case above).
+m.DEFAULT_RUNNER = ""
 
 failed = []
 checks = [0]
@@ -273,7 +282,8 @@ check("catalogue ids are unique across the vendor lists", True,
 # AC-5: the row names the stored id with its label, and the runner's own
 # default when nothing is stored.
 vendor_displays = [
-    ("claude", "claude-opus-5", "claude-opus-5  Claude Opus 5", "opus  (default)"),
+    ("claude", "claude-opus-5", "claude-opus-5  Claude Opus 5",
+     "claude-sonnet-5  (default)  Claude Sonnet 5"),
     ("codex", "gpt-5.1-codex", "gpt-5.1-codex  GPT-5.1 Codex", "codex default  (default)"),
     ("kimi", "moonshot-ai/kimi-k2.6", "moonshot-ai/kimi-k2.6  Kimi K2.6",
      "moonshot-ai/kimi-k2.7-code-highspeed  (default)  Kimi K2.7 Code Highspeed"),

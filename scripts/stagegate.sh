@@ -154,7 +154,7 @@ REVIEWER_CMD="${WORKFLOW_REVIEWER_CMD:-codex}"
 # execution are closer to transcription, so they do not need the top tier.
 # Override any of these from the environment, e.g.
 #   WORKFLOW_MODEL_REQUIREMENTS=opus WORKFLOW_EFFORT_REQUIREMENTS=high
-DEFAULT_MODEL="opus"
+DEFAULT_MODEL="claude-sonnet-5"
 DEFAULT_EFFORT="medium"
 
 # Stop after implementation and show the operator the actual diff, the green

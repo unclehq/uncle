@@ -201,7 +201,7 @@ AGENT_RUNNERS = ["cline", "claude", "kimi", "codex", "self-hosted"]
 REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi", "self-hosted"]
 
 # Applied to any stage the operator has not configured.
-DEFAULT_RUNNER = ""
+DEFAULT_RUNNER = "claude"
 DEFAULT_EFFORT = "low"
 
 def parent_stage(stage):
@@ -345,7 +345,7 @@ DEFAULT_MODEL_FOR_BILLING = {
 # configured model applies. Kimi's shim defaults WORKFLOW_KIMI_MODEL to this
 # raw id (agent-kimi.sh).
 DEFAULT_MODEL_FOR_RUNNER = {
-    "claude": "opus",
+    "claude": "claude-sonnet-5",
     "codex": "codex default",
     "kimi": "moonshot-ai/kimi-k2.7-code-highspeed",
 }

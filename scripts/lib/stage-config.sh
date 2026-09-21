@@ -21,6 +21,10 @@
 # keeps working until it is next saved.
 
 UNCLE_REVIEWER_STAGES=" adversarial-review test-review manual-checklist final-audit "
+# Applied to any stage the operator has not configured, ahead of the
+# installed-agent scan below. Mirrors uncle_tui.py's DEFAULT_RUNNER so the
+# screen's idea of what a stage will run matches what the driver actually runs.
+UNCLE_DEFAULT_RUNNER="claude"
 UNCLE_DEFAULT_EFFORT="low"
 UNCLE_DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
 UNCLE_DEFAULT_CLINE_USAGE_MODEL="deepseek/deepseek-v4-flash"
@@ -202,6 +206,9 @@ uncle_stage_runner() {
     v="$(uncle_stage_key "$stage" runner)"
     [[ -n "$v" ]] || v="$(uncle_config_get runner)"
     [[ "$v" != "opencode" && "$v" != "aider" ]] || v=self-hosted
+    if [[ -z "$v" ]]; then
+        v="$UNCLE_DEFAULT_RUNNER"
+    fi
     if [[ -z "$v" ]]; then
         v="$(uncle_installed_runners)"
         v="${v%%$'\n'*}"

@@ -37,6 +37,17 @@ class Review(unittest.TestCase):
                 p.write_text(text)
                 with self.assertRaises(ValueError):module.validate(p)
 
+    def test_field_label_synonyms(self):
+        # Same tolerance checklist_document.py's LABEL_SYNONYMS already gives
+        # MANUAL_CHECKLIST.md: a finding fully specified under a synonym
+        # label is still fully specified, not missing a required field.
+        synonym = FINDING.replace('- Failure:', '- Observation:').replace(
+            '- Fix:', '- Remediation:').replace('- Verify:', '- Verification:')
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / 'review'
+            p.write_text(synonym)
+            module.validate(p)
+
     def test_packet_selects_family_and_refreshes(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d)

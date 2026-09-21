@@ -583,7 +583,15 @@ def manual_signed_commit(j, reason=None):
     import shlex
     # Stage the exact reviewed tree, including untracked files, without
     # reapplying clean filters or changing working files. Only the user runs it.
-    command = ('git read-tree ' + shlex.quote(j['commit_tree'])
+    # This project may be a worktree the driver created for the change (e.g.
+    # a --change run's default), a directory the operator's shell is not
+    # already sitting in. A command with no `cd` ran against whatever
+    # repository the operator's other terminal happened to be in, staging
+    # nothing there and leaving this wait for a commit that could never
+    # appear -- an unrecoverable loop indistinguishable from the command
+    # simply not having been run yet.
+    command = ('cd ' + shlex.quote(os.getcwd())
+               + ' && git read-tree ' + shlex.quote(j['commit_tree'])
                + ' && git commit ' + ('-S ' if j.get('requires_signature', True) else '--no-gpg-sign ')
                + '-m ' + shlex.quote(j['title']))
     if os.environ.get('UNCLE_SIGNING_JSON') == '1':

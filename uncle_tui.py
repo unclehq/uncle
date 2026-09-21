@@ -133,6 +133,28 @@ def _default_config_path():
     return os.path.join(_project_root(), ".uncle", "config")
 
 
+def _ensure_uncle_gitignored(project_root):
+    """.uncle holds run state, cost/token logs, and (via self_hosted.py) API
+    keys -- never something to commit. This only edits a .gitignore that
+    already exists: a project with no git repository, or one that manages
+    ignores elsewhere (e.g. a global excludesfile), gets no file created on
+    its behalf.
+    """
+    path = os.path.join(project_root, ".gitignore")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            existing = fh.read()
+    except OSError:
+        return
+    if any(line.strip().strip("/") == ".uncle" for line in existing.splitlines()):
+        return
+    try:
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(("\n" if existing and not existing.endswith("\n") else "") + ".uncle/\n")
+    except OSError:
+        pass
+
+
 CONFIG_PATH = os.environ.get("UNCLE_CONFIG", _default_config_path())
 
 # Every stage is configured on its own: which runner drives it, how much
@@ -1435,6 +1457,7 @@ class UncleTUI:
             # Track missing configuration without redirecting away from home.
             self.first_run = True
             self._config_stamp = None
+            _ensure_uncle_gitignored(_project_root())
             return self.first_run
         self.first_run = False
         legacy = {"runner": "", "model": "", "effort": "", "billing": "", "reviewer": ""}
@@ -3674,6 +3697,18 @@ class UncleTUI:
         runner, model, effort = self._triage_runner()
         if not runner:
             raise ValueError('Choose a runner in Configure first')
+        # Shown before any of the blocking work below (rebuilding the bundle,
+        # the guard subprocess, prompt assembly) so the operator's own action
+        # is on screen immediately -- a slow guard call otherwise left the
+        # terminal looking hung with no sign the keypress registered at all.
+        if followup:
+            self.triage_history.append(('operator', sanitize(followup)))
+        elif mode == 'execute':
+            self.triage_history.append(('operator', '/do %d — %s' % (proposal[0], sanitize(proposal[1]))))
+        try:
+            self.draw()
+        except Exception:
+            pass
         root = _project_root()
         wf = self._workflow_dir()
         bundle_path = os.path.join(wf, 'TRIAGE.md')
@@ -3710,10 +3745,6 @@ class UncleTUI:
             env['UNCLE_CLINE_EFFORT'] = effort
             if model:
                 env['UNCLE_CLINE_MODEL'] = model
-        if followup:
-            self.triage_history.append(('operator', sanitize(followup)))
-        elif mode == 'execute':
-            self.triage_history.append(('operator', '/do %d — %s' % (proposal[0], sanitize(proposal[1]))))
         self.triage_turn = turn
         self.triage_proposals = []
         self.triage_pending = {'mode': mode, 'proposal': proposal, 'digest': info['digest'], 'turn': turn}
@@ -3727,6 +3758,14 @@ class UncleTUI:
             raise ValueError('Usage: /do N, where N is a proposal number.')
         chosen = [p for p in self.triage_proposals if p[0] == number]
         if not chosen:
+            if self.triage_request is not None:
+                # A prior /do already started a turn: it cleared
+                # triage_proposals the moment it began, not when it finishes,
+                # so a second /do sent while that turn is still running hits
+                # the same empty list a genuinely stale click would -- but
+                # here nothing has gone stale, the operator just has not
+                # been told a turn is already in flight.
+                raise ValueError('A triage turn is still running. Wait for it or use /clear to cancel.')
             if not self.triage_proposals and getattr(self, 'triage_offer_resume', False):
                 # The previous /do already ran to completion (execute turns
                 # never hand back a fresh numbered list, by design) -- this
@@ -5069,7 +5108,10 @@ class UncleTUI:
             if getattr(self, 'status_stage_index', 0) and getattr(self, 'status_stage_total', 0):
                 stage_status += ' (%d/%d)' % (self.status_stage_index, self.status_stage_total)
             stage_status += '  ·  '
-        model_status = stage_status + model_label + ('  ·  Recovering…' if getattr(self, 'triage_request', None) else '  ·  Recovery ready' if getattr(self, 'recovery_active', False) else '  ·  Workflow stopped' if self.state == 'running' and getattr(self, 'workflow_exit_reported', False) else '  ·  Thinking…' if getattr(self, 'home_request', None) else '  ·  Chat ready')
+        # "Recovery"/recovery_active is triage mode's own internal name; the
+        # status bar spells out "Triage" so it reads as an unambiguous mode
+        # indicator rather than a vaguer "something happened" note.
+        model_status = stage_status + model_label + ('  ·  Triage: running…' if getattr(self, 'triage_request', None) else '  ·  Triage: ready' if getattr(self, 'recovery_active', False) else '  ·  Workflow stopped' if self.state == 'running' and getattr(self, 'workflow_exit_reported', False) else '  ·  Thinking…' if getattr(self, 'home_request', None) else '  ·  Chat ready')
         project = os.path.basename(_project_root()) or _project_root()
         try:
             with open(os.path.join(_project_root(), '.git', 'HEAD')) as source:

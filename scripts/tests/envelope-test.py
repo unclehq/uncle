@@ -127,6 +127,12 @@ class EnvelopeTests(unittest.TestCase):
         self.assertEqual(envelope.undispositioned(review, plan), ['AR-003'])
         self.assertEqual(envelope.undispositioned(review, plan + '| AR-003 | Deferred | r | c |\n'), [])
         self.assertEqual(envelope.undispositioned('No findings.\n', ''), [])
+        # A model that echoes the review heading's own "(severity)" annotation
+        # into the finding cell -- "AR-002 (High)" rather than a bare id --
+        # still names AR-002, not a different, undispositioned finding.
+        annotated = plan + '| AR-003 (Blocking) | Deferred | r | c |\n'
+        self.assertEqual(envelope.dispositions(annotated)[-1], {'finding': 'AR-003', 'action': 'Deferred'})
+        self.assertEqual(envelope.undispositioned(review, annotated), [])
 
     def test_invalidate_map_and_directory_creation(self):
         for stage in envelope.STAGES:

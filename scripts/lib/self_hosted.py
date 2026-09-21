@@ -827,7 +827,7 @@ def main(side, args):
                 usage[key] = usage.get(key, 0) + value
             else:
                 usage[key] = value
-    truncation_retried = format_retried = False
+    format_retried = False
     document = None
     while True:
         attempt_usage = {}
@@ -840,15 +840,19 @@ def main(side, args):
         except OutputTruncated as error:
             add_usage(attempt_usage)
             # A fragment reported as success is what the whole stage then
-            # adopts. Once, the cap is doubled and the stage rerun; a second
-            # fragment is the failure it always was.
+            # adopts. The cap doubles and the stage reruns; this used to stop
+            # after exactly one retry, so a review verbose enough to overflow
+            # even the doubled cap (real findings, not padding -- seen on a
+            # live adversarial-review run: truncated at 8192, truncated again
+            # at 16384) failed outright with room left in the context window.
+            # Doubling is self-limiting: once the cap reaches the context
+            # ceiling, "larger" stops growing and this raises on its own.
             limit = output_token_limit(stage)
             larger = min(limit * 2, context_token_limit() - 1024)
-            if truncation_retried or larger <= limit:
+            if larger <= limit:
                 error.opencode_usage = usage
                 raise
-            truncation_retried = True
-            print('Self hosted: %s. Retrying once with an output limit of %d tokens.' % (error, larger), file=sys.stderr)
+            print('Self hosted: %s. Retrying with an output limit of %d tokens.' % (error, larger), file=sys.stderr)
             os.environ[OUTPUT_TOKENS_ENV] = str(larger)
             continue
         except InvalidReviewerDocument as error:

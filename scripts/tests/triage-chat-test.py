@@ -532,6 +532,20 @@ class TriageTests(unittest.TestCase):
             start.assert_not_called()
         self.assertIn('answer its prompt', ui.triage_error)
 
+    def test_do_refused_while_a_turn_is_already_running(self):
+        # /do clears triage_proposals the moment a turn STARTS, not when it
+        # finishes -- a second /do sent before that turn completes hits the
+        # same empty list a stale click would, but the actual reason is
+        # "a turn is already in flight," not "nothing was ever offered."
+        ui = self.ui()
+        ui._triage_init()
+        ui.triage_request = Mock()
+        ui.triage_proposals = []
+        ui.triage_offer_resume = False
+        with self.assertRaises(ValueError) as ctx:
+            ui._triage_do(1)
+        self.assertIn('still running', str(ctx.exception))
+
     def test_runner_error_discards_proposals_and_still_guards(self):
         os.environ['FAKE_MASTER_ACTION'] = 'crash'
         ui = self.ui()

@@ -49,7 +49,11 @@ def findings(text, require_blockers=True):
     if len(lines) < 2 or any(not line.startswith('|') or not line.endswith('|') for line in lines):
         raise ValueError('Findings must be a table with ID and Blocks columns')
     rows = [[cell.strip().replace(r'\|', '|') for cell in re.split(r'(?<!\\)\|', line[1:-1])] for line in lines]
-    header = [cell.lower() for cell in rows[0]]
+    # Bold/italic header cells ("**ID**", "__Blocks__") are a recurring model
+    # habit this codebase already tolerates for other table headers
+    # (checklist_document.py's LABEL_SYNONYMS, envelope.py's SEVERITY_FIELD);
+    # matching column names is about their content, not their markup.
+    header = [cell.strip('*_ ').lower() for cell in rows[0]]
     if len(set(header)) != len(header) or 'id' not in header:
         raise ValueError('Missing or duplicate finding columns')
     block_columns = [i for i, cell in enumerate(header) if cell in ('blocks', 'blocks completion')]
@@ -63,8 +67,15 @@ def findings(text, require_blockers=True):
             raise ValueError('Invalid findings row width; escape descriptions without literal pipes')
         item = dict(zip(header, row))
         identifier, blocks = item['id'], row[block_columns[0]].upper()
-        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]*', identifier) or identifier in seen:
+        # A trailing "(High)"/"(Blocking)" annotation echoes the same
+        # severity marker FINDING_HEADING already tolerates on the review's
+        # own heading (envelope.py) -- a model carrying that shape into its
+        # own ID cell here is still naming one finding, not adding noise to
+        # its identity.
+        match = re.fullmatch(r'([A-Za-z0-9][A-Za-z0-9_./-]*)(?:\s*\([^()\n]*\))?', identifier)
+        if not match or match.group(1) in seen:
             raise ValueError('Invalid or duplicate finding ID: ' + identifier)
+        identifier = item['id'] = match.group(1)
         if blocks not in ('YES', 'NO') or not item['evidence'] or not item['required correction']:
             raise ValueError('Missing finding evidence, correction, or YES/NO blocking status')
         seen.add(identifier)

@@ -67,6 +67,24 @@ class Audit(unittest.TestCase):
             self.assertIn('Add a test', fixed)
             self.assertTrue(fixed.rstrip().endswith('NOT READY'))
 
+    def test_bold_header_and_bold_column_are_tolerated(self):
+        # Bolding table headers is a recurring model habit this codebase
+        # already tolerates elsewhere (checklist_document.py's
+        # LABEL_SYNONYMS, envelope.py's SEVERITY_FIELD); matching a column
+        # name is about its content, not its markup.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/'audit.md'
+            p.write_text(
+                '## Findings\n\n'
+                '| **ID** | **Finding** | **Evidence** | **Correction** | **Blocks** |\n'
+                '|---|---|---|---|---|\n'
+                '| FA-1 (High) | Missing test coverage | tests/App.test.jsx:8 | Add a test | YES |\n\n'
+                'NOT READY\n')
+            module.validate(p)
+            fixed = p.read_text()
+            self.assertIn('Required correction', fixed)
+            self.assertIn('Add a test', fixed)
+
     def test_normalization_never_masks_a_genuine_defect(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d)/'audit.md'

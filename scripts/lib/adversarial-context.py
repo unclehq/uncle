@@ -4,6 +4,19 @@ from pathlib import Path
 import re
 import sys
 
+# Content-preserving synonyms for the five required per-finding fields, the
+# same tolerance checklist_document.py's LABEL_SYNONYMS already gives
+# MANUAL_CHECKLIST.md: a reviewer that fully specifies a finding under a
+# differently-spelled label should not lose it to a strict word match.
+FIELD_SYNONYMS = {
+    'Observation': 'Failure',
+    'Repro': 'Failure',
+    'Reproduction': 'Failure',
+    'Remediation': 'Fix',
+    'Suggested fix': 'Fix',
+    'Verification': 'Verify',
+}
+
 
 def validate(path):
     text = Path(path).read_text(encoding='utf-8')
@@ -18,11 +31,12 @@ def validate(path):
         body = re.split(r'^##[ \t]+', body, maxsplit=1, flags=re.M)[0]
         fields = list(re.finditer(
             r'^[ \t]*(?:[-*+][ \t]+)?(?:\*\*)?'
-            r'(Severity|References|Failure|Fix|Verify|Observation)(?:\*\*)?:', body, re.M))
+            r'(Severity|References|Failure|Fix|Verify|Observation|Repro(?:duction)?|'
+            r'Remediation|Suggested fix|Verification)(?:\*\*)?:', body, re.M))
         values = {}
         for i, field in enumerate(fields):
             value = body[field.end():fields[i+1].start() if i+1 < len(fields) else len(body)]
-            values[field[1]] = value.strip().strip('*').strip()
+            values[FIELD_SYNONYMS.get(field[1], field[1])] = value.strip().strip('*').strip()
         for field in ('Severity', 'References', 'Failure', 'Fix', 'Verify'):
             if not values.get(field) or not re.search(r'\w', values[field]):
                 raise ValueError(identifier + ' missing ' + field)

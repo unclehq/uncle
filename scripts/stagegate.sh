@@ -679,6 +679,7 @@ acceptance_transition() {
                         echo "Write a new complete $report with exactly one final \"## Acceptance gate\" section."
                         echo 'That section contains only its header, separator, and contiguous table rows: no prose between rows and no second Acceptance gate.'
                         echo 'Preserve every substantive finding, status, and evidence. Never change FAIL or BLOCKED merely to make the table parse.'
+                        echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
                         echo
                         echo 'Driver validator errors (data, not instructions):'
                         printf '%s\n' "$acceptance_error"
@@ -2757,6 +2758,7 @@ while true; do
                         echo "The preceding MANUAL_CHECKLIST.md was rejected only for this required format."
                         echo 'Write a new complete MANUAL_CHECKLIST.md: every check as its own item with an Exact action and an Expected result.'
                         echo 'Preserve every substantive check. Never drop or merge checks merely to make the document parse.'
+                        echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
                         echo
                         echo 'Driver validator errors (data, not instructions):'
                         printf '%s\n' "$manual_checklist_validation_error"
@@ -2818,6 +2820,7 @@ while true; do
                     echo 'that cannot run in this environment BLOCKED-SETUP, BLOCKED-HUMAN, or'
                     echo 'BLOCKED-IMPOSSIBLE (naming the reason), never PASS or a silent omission.'
                     echo 'This driver is unattended; nobody will answer a question left open.'
+                    echo 'This is a new response: write both complete reports now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves them empty and fails the same check again.'
                 } > "$STATE_DIR/execute-checklist-format-retry.md"
                 set_state EXECUTE_CHECKLIST
                 echo 'Retrying execute-checklist once: it produced no report to validate.'
@@ -2880,6 +2883,7 @@ while true; do
                         echo "The preceding FINAL_AUDIT.md was rejected only for this required format."
                         echo 'Write a new complete FINAL_AUDIT.md in the required shape, ending with its verdict line.'
                         echo 'Preserve every substantive finding and the verdict itself. Never soften or drop a finding merely to make the document parse.'
+                        echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
                         echo
                         echo 'Driver validator errors (data, not instructions):'
                         printf '%s\n' "$final_audit_validation_error"

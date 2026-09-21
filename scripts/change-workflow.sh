@@ -2679,6 +2679,7 @@ while true; do
                         echo "The preceding ADVERSARIAL_REVIEW.md was rejected only for this required format."
                         echo 'Write a new complete ADVERSARIAL_REVIEW.md: every finding as a level-2 "## AR-001: Title" heading with Severity, References, Failure, Fix, and Verify, and a final level-2 "## Overall assessment" heading with a non-empty body.'
                         echo 'Preserve every substantive finding and its severity. Never soften or drop a finding merely to make the document parse.'
+                        echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
                         echo
                         echo 'Driver validator errors (data, not instructions):'
                         printf '%s\n' "$validation_error"
@@ -3059,6 +3060,7 @@ REPAIR
                         echo "The preceding MANUAL_CHECKLIST.md was rejected only for this required format."
                         echo 'Write a new complete MANUAL_CHECKLIST.md: every check as its own item with an Exact action and an Expected result.'
                         echo 'Preserve every substantive check. Never drop or merge checks merely to make the document parse.'
+                        echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
                         echo
                         echo 'Driver validator errors (data, not instructions):'
                         printf '%s\n' "$checklist_validation_error"
@@ -3144,6 +3146,7 @@ REPAIR
                         echo "The preceding FINAL_AUDIT.md was rejected only for this required format."
                         echo 'Write a new complete FINAL_AUDIT.md in the required shape, ending with its verdict line.'
                         echo 'Preserve every substantive finding and the verdict itself. Never soften or drop a finding merely to make the document parse.'
+                        echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
                         echo
                         echo 'Driver validator errors (data, not instructions):'
                         printf '%s\n' "$audit_validation_error"

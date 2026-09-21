@@ -239,27 +239,35 @@ run_reread() {
     cat "$ARGV"
 }
 
-printf 'requirements.runner cline\nproject-plan.model cline-pass/kimi-k3\nrequirements.effort high\n' \
+# This fresh REQUIREMENTS.md-only project always resumes at the "project-plan"
+# stage (stagegate.sh's initial document-writing step); its runner, model, and
+# effort all key off that name in the config file, not "requirements" -- a
+# distinct stage used elsewhere, whose own model-lookup alias to
+# "project-plan" (see stage_model()) runs the opposite direction from what a
+# reader might guess and does not apply here.
+printf 'project-plan.runner cline\nproject-plan.model cline-pass/kimi-k3\nproject-plan.effort high\n' \
     > "$CPROJ2/.uncle/config"
 argv="$(run_reread)"
 check_contains "config: model comes from the file" "--model cline-pass/kimi-k3" "$argv"
 check_contains "config: effort comes from the file" "--effort high" "$argv"
 
 # The same driver, the same command line, a different config file.
-printf 'requirements.runner cline\nproject-plan.model cline-pass/glm-5.3\nrequirements.effort low\n' \
+printf 'project-plan.runner cline\nproject-plan.model cline-pass/glm-5.3\nproject-plan.effort low\n' \
     > "$CPROJ2/.uncle/config"
 argv="$(run_reread)"
 check_contains "config: an edited model is picked up" "--model cline-pass/glm-5.3" "$argv"
 check_contains "config: an edited effort is picked up" "--effort low" "$argv"
 check_absent "config: the old model is gone" "cline-pass/kimi-k3" "$argv"
 
-# A non-cline runner in the file means no model flag at all.
+# A kimi runner still gets an explicit --model: kimi's own shell accepts
+# "kimi" as a dispatch token that carries the real provider id separately
+# (see uncle_stage_model()), so this is not a "no model" case.
 printf 'project-plan.runner kimi\nproject-plan.effort medium\n' > "$CPROJ2/.uncle/config"
 argv="$(run_reread)"
-check_absent "config: a kimi stage gets no --model" "--model" "$argv"
+check_contains "config: a kimi stage gets the dispatch token" "--model kimi" "$argv"
 
 # An explicit variable still outranks the file.
-printf 'requirements.runner cline\nproject-plan.model cline-pass/kimi-k3\n' \
+printf 'project-plan.runner cline\nproject-plan.model cline-pass/kimi-k3\n' \
     > "$CPROJ2/.uncle/config"
 : > "$ARGV"
 rm -rf "$CPROJ2/.uncle/workflow" "$CPROJ2/REQUIREMENTS_INTERPRETATION.md"

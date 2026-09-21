@@ -38,7 +38,7 @@ class References:
         for part in path.parts:
             lower = part.lower()
             if (lower.startswith('.env') or lower in
-                    ('.git', '.uncle', '.ssh', '.aws', '.codex', '.cline', '.kimi',
+                    ('.git', '.uncle', '.ssh', '.aws', '.codex', '.cline', '.kimi', 'node_modules',
                      'credentials', 'credentials.json', 'auth.json', 'providers.json') or
                     lower.startswith(('id_rsa', 'id_ed25519', 'id_ecdsa')) or
                     lower.endswith(('.pem', '.key', '.p12', '.pfx', 'self-hosted-keys.json'))):

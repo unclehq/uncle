@@ -27,13 +27,10 @@ import time
 from urllib.request import urlopen
 import webbrowser
 from process_tree import group_options, kill_tree, launch_command
+from project_paths import project_files
 
 VERSION_PATH = '/__uncle_preview_version'
 POLL_MS = 700
-
-# Directories that never affect what the page looks like, and are big enough
-# that hashing them would make every poll expensive.
-SKIP = {'.git', '.uncle', 'node_modules', '__pycache__', '.venv', 'venv', 'dist', 'build'}
 
 _RELOAD = """
 <script>
@@ -58,16 +55,13 @@ _RELOAD = """
 def tree_version(root):
     """A digest that changes whenever a served file does."""
     digest = hashlib.sha256()
-    for base, dirs, names in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP and not d.startswith('.'))
-        for name in sorted(names):
-            path = Path(base) / name
-            try:
-                info = path.stat()
-            except OSError:
-                continue
-            digest.update(str(path.relative_to(root)).encode('utf-8', 'replace'))
-            digest.update(b'%d:%d' % (info.st_size, info.st_mtime_ns))
+    for rel in sorted(project_files(root)):
+        try:
+            info = (Path(root) / rel).stat()
+        except OSError:
+            continue
+        digest.update(rel.encode('utf-8', 'replace'))
+        digest.update(b'%d:%d' % (info.st_size, info.st_mtime_ns))
     return digest.hexdigest()
 
 

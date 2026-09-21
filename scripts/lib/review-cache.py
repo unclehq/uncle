@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import tempfile
 
+from project_paths import project_files
+
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
@@ -36,23 +38,21 @@ def key(output, prompt, runner, model, effort):
         if head.returncode == 0:
             result.update(head.stdout)
     total = 0
-    for current, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in {'.git', '.uncle', '__pycache__'})
-        for name in sorted(dirs + files):
-            path = Path(current) / name
-            if path.resolve() == excluded or name.endswith('.pyc'):
-                continue
-            if path.is_symlink():
-                raise ValueError('symlink input: cache disabled')
-            if path.is_dir():
-                continue
-            if not path.is_file():
-                raise ValueError('non-file input: cache disabled')
-            total += path.stat().st_size
-            if total > 100_000_000:
-                raise ValueError('input snapshot exceeds 100 MB: cache disabled')
-            result.update(json.dumps(str(path.relative_to(root))).encode())
-            result.update(hashlib.sha256(path.read_bytes()).digest())
+    for rel in sorted(project_files(root)):
+        if rel.endswith('.pyc') or '__pycache__' in Path(rel).parts:
+            continue
+        path = root / rel
+        if path.resolve() == excluded:
+            continue
+        if path.is_symlink():
+            raise ValueError('symlink input: cache disabled')
+        if not path.is_file():
+            raise ValueError('non-file input: cache disabled')
+        total += path.stat().st_size
+        if total > 100_000_000:
+            raise ValueError('input snapshot exceeds 100 MB: cache disabled')
+        result.update(json.dumps(rel).encode())
+        result.update(hashlib.sha256(path.read_bytes()).digest())
     # Runtime state/logs are excluded, but project configuration is an input.
     config = root / '.uncle/config'
     if config.exists():

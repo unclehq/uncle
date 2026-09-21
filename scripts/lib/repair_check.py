@@ -20,18 +20,17 @@ outside the reports and driver state must differ.
 """
 import hashlib
 import json
-import os
 import re
 import sys
 from pathlib import Path
+
+from project_paths import project_files
 
 REPORTS = {'IMPLEMENTATION_NOTES.md', 'AUTOMATED_TEST_REPORT.md', 'CHANGE_TEST_REPORT.md',
            'TEST_REVIEW.md', 'VERIFICATION_REPORT.md', 'MANUAL_CHECKLIST.md', 'DEFECTS.md',
            'FINAL_AUDIT.md', 'PREFLIGHT_REPORT.md', 'REQUIREMENTS.md', 'REQUIREMENTS_INTERPRETATION.md',
            'PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md', 'ADVERSARIAL_REVIEW.md', 'CHANGE_REQUEST.md',
            'CHANGE_SPEC.md', 'CHANGE_PLAN.md', 'BASELINE_REPORT.md'}
-SKIP_DIRS = {'.git', '.uncle', 'node_modules', '__pycache__', '.venv', 'venv', 'dist', 'build',
-             '.pw-browsers', '.pytest_cache'}
 # A repository-relative path: directories and a file, or a bare file with a
 # source-like extension. Optional `:12` / `:12-20` line references are dropped.
 PATH_TOKEN = re.compile(
@@ -50,15 +49,12 @@ def sha(path):
 
 def tree_digest(root):
     digest = hashlib.sha256()
-    for base, dirs, names in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
-        for name in sorted(names):
-            path = Path(base) / name
-            rel = path.relative_to(root).as_posix()
-            if rel in REPORTS or path.is_symlink():
-                continue
-            digest.update(rel.encode('utf-8', 'replace'))
-            digest.update((sha(path) or '').encode())
+    for rel in sorted(project_files(root)):
+        path = Path(root) / rel
+        if rel in REPORTS or path.is_symlink():
+            continue
+        digest.update(rel.encode('utf-8', 'replace'))
+        digest.update((sha(path) or '').encode())
     return digest.hexdigest()
 
 

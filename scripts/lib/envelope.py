@@ -83,7 +83,7 @@ DOWNSTREAM = {
     'FINAL_AUDIT': ('audit', 'release'),
 }
 
-BLOCKING_SEVERITY = re.compile(r'(?i)^(high|blocking)\b')
+BLOCKING_SEVERITY = re.compile(r'(?i)^(critical|high|blocking)\b')
 DELEGATED = re.compile(r'^(unattended|supervisor:.*|disabled:.*)$', re.S)
 ABSOLUTE_PATH = re.compile(r'(?<![\w:/.])/(?:[\w.@+-]+/)+[\w.@+-]*')
 # Rows of the revised plan's disposition table: | Finding | Disposition | ... |

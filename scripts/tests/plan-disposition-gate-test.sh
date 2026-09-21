@@ -77,6 +77,35 @@ PLAN
 check "$(gate)" 0 "dispositioned table exits 0"
 check "$(wc -c < "$TMP/out" | tr -d ' ')" 0 "silent on success"
 
+# A "Critical" severity blocks exactly like "High" or "Blocking" -- a real
+# run had this severity word specifically, and the gate let it through with
+# no disposition because the regex only recognized "high"/"blocking".
+cat > "$TMP/ADVERSARIAL_REVIEW.md" <<'REVIEW'
+# Adversarial review
+
+## AR-001: Critical finding
+
+- Severity: Critical
+- References: none
+- Failure: none
+- Fix: none
+- Verify: none
+
+## Overall assessment
+One finding.
+REVIEW
+printf '# CHANGE_PLAN.md\n\nNo table.\n' > "$TMP/CHANGE_PLAN.md"
+check "$(gate)" 1 "critical severity without disposition exits 1"
+check "$(grep -c 'AR-001' "$TMP/out")" 1 "names the critical finding"
+cat > "$TMP/CHANGE_PLAN.md" <<'PLAN'
+# CHANGE_PLAN.md
+
+| Finding | Disposition | Reason | Exact plan change |
+|---|---|---|---|
+| AR-001 | Accepted | fixed | none |
+PLAN
+check "$(gate)" 0 "dispositioned critical finding exits 0"
+
 # A review with no findings never blocks; a missing review never blocks.
 printf '# Review\n\n## Overall assessment\nNo findings.\n' > "$TMP/ADVERSARIAL_REVIEW.md"
 printf '# plan\n' > "$TMP/CHANGE_PLAN.md"

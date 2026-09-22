@@ -158,7 +158,7 @@ REVIEWER_CMD="${WORKFLOW_REVIEWER_CMD:-codex}"
 # Override any of these from the environment, e.g.
 #   WORKFLOW_MODEL_REQUIREMENTS=opus WORKFLOW_EFFORT_REQUIREMENTS=high
 DEFAULT_MODEL="claude-sonnet-5"
-DEFAULT_EFFORT="none"
+DEFAULT_EFFORT="low"
 
 # Stop after implementation and show the operator the actual diff, the green
 # check, and the agent's own notes, before anything downstream reads them.

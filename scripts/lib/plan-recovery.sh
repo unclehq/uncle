@@ -44,7 +44,7 @@ plan_paths() {
 
 plan_review() {
     if declare -f run_codex >/dev/null; then
-        run_codex "$1" "$2" plan-executability none
+        run_codex "$1" "$2" plan-executability "${CODEX_EFFORT_REVIEW:-low}"
     else
         run_codex_review "$1" "$2" plan-executability
     fi

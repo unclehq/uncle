@@ -44,7 +44,7 @@ class Stage:
         self.parent_watch_stop = threading.Event()
         self.runner, self.side, self.stage, self.args = runner, side, stage, args
         self.model = self.option('--model', '-m') or ''
-        self.effort = self.option('--effort') or os.environ.get('UNCLE_CLINE_EFFORT', 'none')
+        self.effort = self.option('--effort') or os.environ.get('UNCLE_CLINE_EFFORT', 'low')
         for i, arg in enumerate(args[:-1]):
             if arg == '-c' and args[i+1].startswith('model_reasoning_effort='):
                 self.effort = args[i+1].split('=', 1)[1]

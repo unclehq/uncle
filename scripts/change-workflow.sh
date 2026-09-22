@@ -162,9 +162,9 @@ MODEL_UPDATED_PLAN="${WORKFLOW_MODEL_UPDATED_CHANGE_PLAN-${WORKFLOW_MODEL_UPDATE
 MODEL_IMPLEMENT="${WORKFLOW_MODEL_IMPLEMENTATION-${WORKFLOW_MODEL_IMPLEMENT-opus}}"
 MODEL_EXECUTE="${WORKFLOW_MODEL_EXECUTE_CHECKLIST-${WORKFLOW_MODEL_EXECUTE-kimi}}"
 
-EFFORT_CHANGE_SPEC="none"
-EFFORT_UPDATED_PLAN="none"
-EFFORT_EXECUTE="none"
+EFFORT_CHANGE_SPEC="${WORKFLOW_EFFORT_CHANGE_SPEC:-low}"
+EFFORT_UPDATED_PLAN="${WORKFLOW_EFFORT_UPDATED_CHANGE_PLAN:-${WORKFLOW_EFFORT_UPDATED_PLAN:-low}}"
+EFFORT_EXECUTE="${WORKFLOW_EFFORT_EXECUTE_CHECKLIST:-${WORKFLOW_EFFORT_EXECUTE:-low}}"
 
 # Per-stage stop-loss, in dollars. This is a runaway guard, not a target: the
 # cap is checked between turns, so a stage stops shortly after crossing it
@@ -179,9 +179,9 @@ BUDGET_EXECUTE="${WORKFLOW_BUDGET_EXECUTE:-20}"
 
 # Codex reasoning effort. The two judgement stages think; the two checklist
 # stages transcribe an approved specification into checks.
-CODEX_EFFORT_REVIEW="none"
-CODEX_EFFORT_CHECKLIST="none"
-CODEX_EFFORT_AUDIT="none"
+CODEX_EFFORT_REVIEW="${WORKFLOW_CODEX_EFFORT_REVIEW:-low}"
+CODEX_EFFORT_CHECKLIST="${WORKFLOW_CODEX_EFFORT_CHECKLIST:-low}"
+CODEX_EFFORT_AUDIT="${WORKFLOW_CODEX_EFFORT_AUDIT:-low}"
 
 # Carry one forked conversation across the Claude stages. Off by default:
 # a forked stage inherits the entire transcript that produced the upstream

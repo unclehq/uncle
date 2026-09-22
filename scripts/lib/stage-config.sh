@@ -25,7 +25,7 @@ UNCLE_REVIEWER_STAGES=" adversarial-review test-review manual-checklist final-au
 # installed-agent scan below. Mirrors uncle_tui.py's DEFAULT_RUNNER so the
 # screen's idea of what a stage will run matches what the driver actually runs.
 UNCLE_DEFAULT_RUNNER="claude"
-UNCLE_DEFAULT_EFFORT="none"
+UNCLE_DEFAULT_EFFORT="low"
 UNCLE_DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
 UNCLE_DEFAULT_CLINE_USAGE_MODEL="deepseek/deepseek-v4-flash"
 # Free models cost nothing under either billing, so they are offered in both
@@ -217,10 +217,16 @@ uncle_stage_runner() {
 }
 
 uncle_stage_effort() {
-    # Reasoning is deliberately disabled for every workflow request. This is
-    # policy, rather than a configurable default: a stale per-stage/global
-    # setting must not silently re-enable reasoning on a resumed run.
-    printf '%s' none
+    local stage v runner
+    stage="$(uncle_config_stage "$1")"
+    case "$stage" in implementation-step-*|implementation-report) stage=implementation ;; esac
+    v="$(uncle_stage_key "$stage" effort)"
+    [[ -n "$v" ]] || v="$(uncle_config_get effort)"
+    if [[ -z "$v" ]]; then
+        runner="$(uncle_stage_runner "$stage")"
+        [[ "$runner" == self-hosted ]] && v=none || v="$UNCLE_DEFAULT_EFFORT"
+    fi
+    printf '%s' "$v"
 }
 
 # Cline and self-hosted stages use explicit models; other runners have their own default,
@@ -322,10 +328,16 @@ uncle_has_config() {
     [[ -s "$(uncle_config_file)" ]]
 }
 
-# Reasoning is a workflow-wide policy: environment and config values are
-# retained for backward-compatible parsing but never sent to a runner.
+# Explicit per-stage environment settings override config and defaults.
 uncle_effective_stage_effort() {
-    printf '%s' none
+    local stage="$1" var value
+    var="WORKFLOW_EFFORT_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
+    value="${!var:-}"
+    if [[ -z "$value" && "$stage" == implementation-step-* ]]; then
+        value="${WORKFLOW_EFFORT_IMPLEMENTATION:-}"
+    fi
+    [[ -n "$value" ]] || value="$(uncle_stage_effort "$stage")"
+    printf '%s' "$value"
 }
 
 # Whether a stage's sandbox may reach the network. Default false.

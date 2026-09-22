@@ -183,8 +183,8 @@ t.stage_runners["derive-brief"] = "self-hosted"
 check("self-hosted shows effort and model", ["runner", "effort", "model"],
       t.stage_fields("derive-brief"))
 t.picker_kind, t.picker_target, t.pick_filter = "effort", "derive-brief", ""
-check("the effort picker only offers the enforced level",
-      [("option", "none"),
+check("the effort picker offers all supported levels",
+      [("option", "none"), ("option", "low"), ("option", "medium"), ("option", "high"),
        ("custom", "Custom… (type an effort)")], t._picker_rows())
 
 # Its model picker takes custom ids the way cline's does.
@@ -594,7 +594,7 @@ legacy = fresh()
 legacy.load_config()
 check("legacy global runner seeds a stage", "cline",
       legacy.stage_runner("implementation"))
-check("legacy global effort cannot override the enforced level", "none", legacy.stage_effort("implementation"))
+check("legacy global effort seeds a stage", "low", legacy.stage_effort("implementation"))
 check("legacy global model seeds a stage", "poolside/laguna-s-2.1",
       legacy.stage_model("implementation"))
 check("legacy bare stage line is a model", "cline-pass/kimi-k3",

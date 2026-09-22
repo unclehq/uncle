@@ -65,7 +65,7 @@ WORKFLOWS = [
     ("From GitHub issue", [os.path.join(ROOT, "scripts", "from-issue.sh")]),
     ("Change request", [os.path.join(ROOT, "scripts", "change-workflow.sh")]),
 ]
-EFFORTS = ["none"]
+EFFORTS = ["none", "low", "medium", "high"]
 ISSUE_MODES = [("auto", ""), ("change request", "--change"), ("new application", "--new"),
                ("change request in worktree", "--worktree")]
 # A triage proposal that says there is nothing to edit needs no master turn.
@@ -231,7 +231,7 @@ REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi", "self-hosted"]
 
 # Applied to any stage the operator has not configured.
 DEFAULT_RUNNER = "claude"
-DEFAULT_EFFORT = "none"
+DEFAULT_EFFORT = "low"
 
 def parent_stage(stage):
     """Return the configured parent for a driver-created stage name."""
@@ -453,9 +453,8 @@ CONFIG_DESC = {
         "runner's own default."
     ),
     "field:effort": (
-        "Reasoning is disabled for every stage. "
-        "The configured value is retained for compatibility but is not sent "
-        "to a runner."
+        "Reasoning effort for this stage: none, low, medium, or high. "
+        "OpenCode defaults to none; other runners default to low."
     ),
     "field:network": (
         "Whether this stage's sandbox may reach the network. Shown only when "
@@ -517,9 +516,8 @@ CONFIG_DESC = {
         "stages can still override it further down this list."
     ),
     "effort": (
-        "Reasoning is disabled for every stage. "
-        "The configured value is retained for compatibility but is not sent "
-        "to a runner."
+        "The reasoning effort applied to every stage: none, low, medium, or "
+        "high. OpenCode defaults to none; other runners default to low."
     ),
     "derive-brief": (
         "Fills in a brief seeded from a GitHub issue, reading the issue text and "
@@ -1015,7 +1013,10 @@ class UncleTUI:
         return installed[0] if installed else ""
 
     def stage_effort(self, stage):
-        return "none"
+        configured = self._stage_value(stage, self.stage_efforts)
+        if configured:
+            return configured
+        return "none" if self.stage_runner(stage) == "self-hosted" else default_stage_effort(stage)
 
     def stage_network(self, stage):
         """Whether this stage's sandbox may reach the network. Default off."""

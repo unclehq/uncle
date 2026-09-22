@@ -45,7 +45,7 @@ CONTROLS = (
     ('enabled', 'bool', True),
     ('runner', 'runner', 'claude'),
     ('model', 'text', 'sonnet'),
-    ('effort', 'effort', 'none'),
+    ('effort', 'effort', 'low'),
     ('max_interventions', 'count0', 2),
     ('steering_timeout_seconds', 'count1', 120),
     ('stage_time_seconds', 'count0', 1800),

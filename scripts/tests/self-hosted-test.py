@@ -545,6 +545,26 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         with self.assertRaises(ValueError):
             self_hosted.document_response(json.dumps(payload), '.uncle/docs/REQUIREMENTS_INTERPRETATION.md')
 
+    def test_plan_json_response_is_rendered(self):
+        import self_hosted, json
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## Architecture\n\nA plan.',
+                   'verification_commands': 'python3 -m pytest'}
+        rendered = self_hosted.document_response(json.dumps(payload), '.uncle/docs/PROJECT_PLAN.md')
+        self.assertIn('## Architecture', rendered)
+        self.assertIn('## Verification commands', rendered)
+        self.assertIn('python3 -m pytest', rendered)
+        self.assertNotIn('Protected verification paths', rendered)
+
+    def test_updated_plan_json_response_requires_protected_paths(self):
+        import self_hosted, json
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'verification_commands': 'python3 -m pytest'}
+        with self.assertRaises(ValueError):
+            self_hosted.document_response(json.dumps(payload), '.uncle/docs/UPDATED_PROJECT_PLAN.md')
+        payload['protected_verification_paths'] = 'tests/'
+        rendered = self_hosted.document_response(json.dumps(payload), '.uncle/docs/UPDATED_PROJECT_PLAN.md')
+        self.assertIn('## Protected verification paths', rendered)
+        self.assertIn('tests/', rendered)
+
     def values(self):
         return {'api_key':'test-secret','model':'local-model:Q4','base_url':'http://localhost:8123/v1'}
 

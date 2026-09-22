@@ -576,6 +576,21 @@ def document_response(response, artifact):
             return module.render_requirements(payload) + '\n'
         except KeyError as error:
             raise ValueError('Requirements-interpretation JSON missing a required section: %s' % error) from error
+    if Path(artifact).name in ('PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md') and text.startswith('{'):
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise ValueError('Invalid plan JSON response; original preserved') from error
+        if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'plan':
+            raise ValueError('wrong plan JSON schema')
+        try:
+            artifact_json = Path(__file__).with_name('artifact_json.py')
+            spec = importlib.util.spec_from_file_location('artifact_json', artifact_json)
+            module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+            protected = Path(artifact).name == 'UPDATED_PROJECT_PLAN.md'
+            return module.render_plan(payload, protected=protected) + '\n'
+        except ValueError as error:
+            raise ValueError('Plan JSON response: %s; original preserved' % error) from error
     if any(marker in text for marker in ('<<<<<<< SEARCH', '>>>>>>> REPLACE')):
         raise ValueError('Expected Markdown, received edit instructions; original preserved')
     lines = text.splitlines()
@@ -684,7 +699,13 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                 candidate.write_text(document, encoding='utf-8', newline='\n')
                 break
         else:
-            request = prompt + '\nWrite the complete ' + artifact + ', including Verification commands and Protected verification paths fenced blocks.'
+            protected_fields = (', "protected_verification_paths":"..."' if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md' else '')
+            request = (prompt + '\nReturn only one JSON object matching this contract as your final message; '
+                       'do not use file tools and do not return Markdown:\n'
+                       '`{"schema":"uncle.artifact/v1","kind":"plan","narrative":"...",'
+                       '"verification_commands":"..."' + protected_fields + '}`.\n'
+                       '`verification_commands` is the exact shell commands block, as plain text (no fence markers). '
+                       '`narrative` is everything else the plan needs to say, as one Markdown block.')
             turns = 0
             for attempt in range(2):
                 attempt_usage = {}

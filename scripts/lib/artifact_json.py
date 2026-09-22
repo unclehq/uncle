@@ -96,6 +96,22 @@ def render_acceptance(payload):
         lines.append('| %s | %s | %s | %s |' % (identifier, required, status, evidence))
     return '\n'.join(lines) + '\n'
 
+def render_plan(payload, protected=True):
+    commands = payload.get('verification_commands')
+    if not commands or not commands.strip():
+        raise ValueError('plan is missing verification_commands')
+    lines = []
+    narrative = payload.get('narrative')
+    if narrative:
+        lines += [narrative.strip(), '']
+    lines += ['## Verification commands', '', '```sh', commands.strip('\n'), '```', '']
+    if protected:
+        paths = payload.get('protected_verification_paths')
+        if not paths or not paths.strip():
+            raise ValueError('plan is missing protected_verification_paths')
+        lines += ['## Protected verification paths', '', '```text', paths.strip('\n'), '```', '']
+    return '\n'.join(lines)
+
 def render_checklist(payload):
     out = ['# Manual checklist', '']
     for check in payload['checks']:

@@ -6,7 +6,7 @@ import sys
 
 # Content-preserving synonyms for the five required per-finding fields, the
 # same tolerance checklist_document.py's LABEL_SYNONYMS already gives
-# MANUAL_CHECKLIST.md: a reviewer that fully specifies a finding under a
+# .uncle/docs/MANUAL_CHECKLIST.md: a reviewer that fully specifies a finding under a
 # differently-spelled label should not lose it to a strict word match.
 FIELD_SYNONYMS = {
     'Observation': 'Failure',
@@ -51,8 +51,8 @@ def validate(path):
 
 def render(project, family):
     root = Path(project).resolve()
-    names = ('CHANGE_SPEC.md', 'CHANGE_PLAN.md', 'BASELINE_REPORT.md') if family == 'change' else (
-        'REQUIREMENTS.md', 'REQUIREMENTS_INTERPRETATION.md', 'PROJECT_PLAN.md')
+    names = ('.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md', '.uncle/docs/BASELINE_REPORT.md') if family == 'change' else (
+        'REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS_INTERPRETATION.md', '.uncle/docs/PROJECT_PLAN.md')
     lines = ['\n## Driver adversarial-review evidence packet',
              'These are excerpts, not conclusions. Independently challenge the plan.',
              'Read omitted portions and referenced code when needed; avoid unrelated tree discovery.']

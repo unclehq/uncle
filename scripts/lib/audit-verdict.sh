@@ -1,4 +1,4 @@
-# Pure classifier for the FINAL_AUDIT.md verdict.
+# Pure classifier for the .uncle/docs/FINAL_AUDIT.md verdict.
 #
 # Sourcing this file defines functions and nothing else, so both
 # change-workflow.sh and scripts/tests/audit-verdict-test.sh can use it. Not

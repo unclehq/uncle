@@ -37,7 +37,7 @@ def focused_evidence(project, state):
             add(str(path), '[Missing or unreadable; no evidence inferred]')
             return ''
 
-    for name in ('REQUIREMENTS.md', 'UPDATED_PROJECT_PLAN.md'):
+    for name in ('REQUIREMENTS.md', '.uncle/docs/UPDATED_PROJECT_PLAN.md'):
         for number, line in enumerate(read(project / name).splitlines(), 1):
             if re.search(r'\b(?:AC|REQ|FR|MC)-[0-9]+\b', line):
                 if not add(f'{name}:{number}', line):
@@ -87,8 +87,8 @@ def render(project: Path, state: Path) -> str:
         (state / "previous-test-review.md", False),
         (state / "verification.paths", False),
         (state / "verification.manifest", False),
-        (project / "VERIFICATION_REPORT.md", False),
-        (project / "DEFECTS.md", False),
+        (project / ".uncle/docs/VERIFICATION_REPORT.md", False),
+        (project / ".uncle/docs/DEFECTS.md", False),
     ]
     for path, inline in files:
         lines.append(f"\n### {path}")

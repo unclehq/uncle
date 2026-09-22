@@ -4,11 +4,11 @@
 Every runner checked that the model replied: non-empty text, a result event,
 `is_error` false, a clean finish reason. None checked that the reply was a
 document. A model that ends its turn saying "I will now produce
-ADVERSARIAL_REVIEW.md with concrete findings" satisfies all of those, and the
+.uncle/docs/ADVERSARIAL_REVIEW.md with concrete findings" satisfies all of those, and the
 announcement gets written to the artifact as though it were the review.
 
 That happened on unclehq/uncle#59: the reviewer's log ended with a to-do list
-whose last item was "Produce ADVERSARIAL_REVIEW.md with concrete findings", the
+whose last item was "Produce .uncle/docs/ADVERSARIAL_REVIEW.md with concrete findings", the
 runner reported success, and the artifact was a 31-line chat summary with no
 findings. The stage then failed three checks later on a format error, which
 described a symptom and hid what actually went wrong.

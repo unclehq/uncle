@@ -76,8 +76,8 @@ If those commands passed before the change and fail now, the gate says so and
 asks you to *override* rather than approve. The run also stops before
 `COMPLETE` if the final audit did not say the change is ready.
 
-For a new application, inspect `PREFLIGHT_REPORT.md` if prerequisites block
-implementation, and `TEST_REVIEW.md` if tests need correction. Required checks
+For a new application, inspect `.uncle/docs/PREFLIGHT_REPORT.md` if prerequisites block
+implementation, and `.uncle/docs/TEST_REVIEW.md` if tests need correction. Required checks
 marked BLOCKED or NOT RUN pause execution; resolve the missing prerequisite
 and rerun. Failed reviews or checks enter repair and return to the code gate.
 The default limit is two repair attempts across restarts. After inspecting an
@@ -92,11 +92,11 @@ in repair, with a documented reason and renewed review.
 
 When the driver reaches `COMPLETE`, read in this order:
 
-1. `FINAL_AUDIT.md` — ends with `READY`, `READY WITH NON-BLOCKING ISSUES`, or
+1. `.uncle/docs/FINAL_AUDIT.md` — ends with `READY`, `READY WITH NON-BLOCKING ISSUES`, or
    `NOT READY`. Only the first two reach `COMPLETE` on their own; anything else
    needs a recorded human override, which the final summary reports.
-2. `VERIFICATION_REPORT.md` — what was actually run.
-3. Test report (`AUTOMATED_TEST_REPORT.md` or `CHANGE_TEST_REPORT.md`).
+2. `.uncle/docs/VERIFICATION_REPORT.md` — what was actually run.
+3. Test report (`.uncle/docs/AUTOMATED_TEST_REPORT.md` or `.uncle/docs/CHANGE_TEST_REPORT.md`).
 4. The source diff or implementation notes.
 
 ## 5. Resume or reset

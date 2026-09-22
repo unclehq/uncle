@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / 'scripts/lib')]
 import uncle_tui as tui  # noqa: E402
 from chat import Conversation  # noqa: E402
+from generated_input import generated_input_path  # noqa: E402
 
 DESCRIPTION = 'build a groovy calculator webapp with a groovy background'
 
@@ -57,7 +58,7 @@ class StartupAction(unittest.TestCase):
         self.assertTrue(self.ui.poll_home_chat())
 
     def brief(self):
-        return (self.root / 'REQUIREMENTS.md').read_text()
+        return Path(generated_input_path('REQUIREMENTS.md', self.root)).read_text()
 
     def system_lines(self):
         return [line for role, line in self.ui.home_history if role == 'system']
@@ -67,7 +68,7 @@ class StartupAction(unittest.TestCase):
         self.assertIn(DESCRIPTION, self.ChatRequest.call_args.args[1])
         self.assertIn('home_action', self.ChatRequest.call_args.args[1])
         self.assertEqual(self.ui.home_request.startup_text, DESCRIPTION)
-        self.assertFalse((self.root / 'REQUIREMENTS.md').exists(), 'nothing is written before the reply')
+        self.assertFalse(Path(generated_input_path('REQUIREMENTS.md', self.root)).is_file(), 'nothing is written before the reply')
         self.reply({'uncle_action': 'create_app', 'document': drafted_brief(), 'start': False, 'message': 'Drafted.'})
         self.assertIn('## Domain rules and invariants', self.brief())
         self.assertIn('swirling seventies background', self.brief())
@@ -109,8 +110,8 @@ class StartupAction(unittest.TestCase):
             'status': 'reply', 'elapsed': 0, 'exit': 0, 'usage': None, 'cost': None, 'log': '',
             'reply': 'Functional\n- calculator operations, not a reply envelope'})
         self.assertTrue(self.ui.poll_home_chat())
-        self.assertTrue((self.root / 'REQUIREMENTS.md').exists())
-        self.assertFalse((self.root / 'CHANGE_REQUEST.md').exists())
+        self.assertTrue(Path(generated_input_path('REQUIREMENTS.md', self.root)).is_file())
+        self.assertFalse(Path(generated_input_path('CHANGE_REQUEST.md', self.root)).is_file())
         self.assertIn(DESCRIPTION, self.brief())
         self.assertEqual(self.ui.workflow_idx, 0)
         self.assertEqual(self.ui.state, 'running')
@@ -120,7 +121,7 @@ class StartupAction(unittest.TestCase):
         self.ui._startup_action = None
         self.ui.send_home_chat('build ' + DESCRIPTION)
         self.reply({'uncle_action': 'create_app', 'document': drafted_brief(), 'start': False, 'message': 'Drafted.'})
-        self.assertTrue((self.root / 'REQUIREMENTS.md').exists())
+        self.assertTrue(Path(generated_input_path('REQUIREMENTS.md', self.root)).is_file())
         self.assertEqual(self.ui.state, 'menu')
 
 

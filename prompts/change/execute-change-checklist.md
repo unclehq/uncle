@@ -2,13 +2,13 @@ You are the primary verification agent.
 
 Read:
 
-- BASELINE_REPORT.md
-- CHANGE_SPEC.md
-- CHANGE_PLAN.md
-- MANUAL_CHECKLIST.md
-- CHANGE_TEST_REPORT.md
+- .uncle/docs/BASELINE_REPORT.md
+- .uncle/docs/CHANGE_SPEC.md
+- .uncle/docs/CHANGE_PLAN.md
+- .uncle/docs/MANUAL_CHECKLIST.md
+- .uncle/docs/CHANGE_TEST_REPORT.md
 
-MANUAL_CHECKLIST.md was written by an independent reviewer and you have not
+.uncle/docs/MANUAL_CHECKLIST.md was written by an independent reviewer and you have not
 seen it. Read it in full from disk before executing anything.
 
 ## Worker evidence
@@ -20,7 +20,7 @@ one actually addresses its checklist row, then use it as the result for that
 ID. Do not rerun a worker's completed check merely to duplicate work. Run only
 IDs with missing, incomplete, or invalid worker evidence, plus every check
 that was deliberately scheduled serially. You remain the sole writer of
-`VERIFICATION_REPORT.md` and `DEFECTS.md`.
+`.uncle/docs/VERIFICATION_REPORT.md` and `.uncle/docs/DEFECTS.md`.
 
 Execute every feasible Critical and Important check.
 
@@ -46,7 +46,7 @@ Capture each check's output and exit status separately, tied to its checklist
 ID. Wait for every started check to finish before assigning results. A failed
 check must not discard results from other independent checks. Record why any
 dependent check could not run. Collect evidence as checks finish, then write
-VERIFICATION_REPORT.md and DEFECTS.md once after all results are collected; do
+.uncle/docs/VERIFICATION_REPORT.md and .uncle/docs/DEFECTS.md once after all results are collected; do
 not let concurrent checks write to the same report.
 
 ## Fresh driver verification evidence
@@ -67,7 +67,7 @@ real keyboard/zoom interactions, or Brian's required sign-off. Execute remaining
 feasible checks, record genuine failures, and mark unmet human or environmental
 prerequisites BLOCKED or NOT RUN. Never broaden permissions or invent a PASS.
 
-Create VERIFICATION_REPORT.md.
+Create .uncle/docs/VERIFICATION_REPORT.md.
 
 For each check include:
 
@@ -89,10 +89,10 @@ Rules:
 
 1. Never mark an unexecuted check as PASS.
 2. Do not infer runtime behavior from compilation.
-3. Compare preserved behavior against BASELINE_REPORT.md.
+3. Compare preserved behavior against .uncle/docs/BASELINE_REPORT.md.
 4. Distinguish expected behavioral changes from regressions.
 5. Do not silently fix failures during checklist execution.
-6. Record failures in DEFECTS.md.
+6. Record failures in .uncle/docs/DEFECTS.md.
 7. Record environmental blockers separately.
 8. Identify checks requiring a human browser, device, account, or external
    system.
@@ -112,7 +112,7 @@ End with:
 Everything a tool returns stays in context and is re-sent on every later turn.
 
 - Use the fresh checklist-driver-checks evidence for covered automated checks.
-  CHANGE_TEST_REPORT.md is context, not a substitute for current driver evidence.
+  .uncle/docs/CHANGE_TEST_REPORT.md is context, not a substitute for current driver evidence.
 - Use the quietest flag that still reports failures.
 - Pipe unbounded output through `tail` or a summary flag. Capture the evidence
   a check asks for, not the whole transcript.
@@ -127,9 +127,9 @@ Time here belongs to running checks, not to writing about them.
 - One line per field. The report is a table of results, not a narrative.
 - Quote evidence only for FAIL and BLOCKED. For PASS, evidence is the command
   and its exit status.
-- Do not restate the check text from MANUAL_CHECKLIST.md. Cite the check ID.
-- Never compress by dropping a check. Every check ID in MANUAL_CHECKLIST.md
-  appears in VERIFICATION_REPORT.md with a status, including NOT RUN.
+- Do not restate the check text from .uncle/docs/MANUAL_CHECKLIST.md. Cite the check ID.
+- Never compress by dropping a check. Every check ID in .uncle/docs/MANUAL_CHECKLIST.md
+  appears in .uncle/docs/VERIFICATION_REPORT.md with a status, including NOT RUN.
 
 The economy rules govern how you write, never what you run. If shortening the
 report would mean skipping a check, run the check.

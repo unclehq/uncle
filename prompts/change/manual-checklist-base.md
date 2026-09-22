@@ -11,21 +11,21 @@ Read only these. Every one is hash-approved and frozen for the duration of
 your run:
 
 - CHANGE_REQUEST.md
-- BASELINE_REPORT.md
-- CHANGE_SPEC.md
-- CHANGE_PLAN.md
-- ADVERSARIAL_REVIEW.md
+- .uncle/docs/BASELINE_REPORT.md
+- .uncle/docs/CHANGE_SPEC.md
+- .uncle/docs/CHANGE_PLAN.md
+- .uncle/docs/ADVERSARIAL_REVIEW.md
 
 ## Files you must not read
 
-Do not read source code, tests, IMPLEMENTATION_NOTES.md, CHANGE_TEST_REPORT.md,
+Do not read source code, tests, .uncle/docs/IMPLEMENTATION_NOTES.md, .uncle/docs/CHANGE_TEST_REPORT.md,
 or anything under .workflow.
 
 Those files are being written while you run. Reading a half-written file would
 put unreliable content into the checklist, and reading the implementation would
 bias the checklist toward what was built rather than what was specified.
 
-CHANGE_PLAN.md already tells you which files are expected to change,
+.uncle/docs/CHANGE_PLAN.md already tells you which files are expected to change,
 what behavioral differences to expect, and what must stay the same. Write every
 check from that.
 
@@ -144,7 +144,7 @@ needs its own row naming that engine.
 This pipeline has no preflight stage, so nothing has probed the environment on
 your behalf. Before writing a check that needs a capability -- a port, a
 browser, a GUI, an account, a person -- establish whether this machine has it,
-from BASELINE_REPORT.md's recorded commands or by reasoning about the platform.
+from .uncle/docs/BASELINE_REPORT.md's recorded commands or by reasoning about the platform.
 
 A capability that is not available does not mean dropping the check. A
 requirement that cannot be verified must stay visible, and hiding it is the

@@ -240,6 +240,7 @@ class HandoffFixture(unittest.TestCase):
         self.git('push', '-q', 'origin', 'main')
         self.state = self.repo / '.uncle/workflow'
         self.state.mkdir(parents=True)
+        (self.repo / '.uncle/docs').mkdir(parents=True)
         (self.repo / 'source.txt').write_text('audited\n')
 
     def git(self, *args):
@@ -260,8 +261,8 @@ class HandoffFixture(unittest.TestCase):
 
     def freeze(self):
         self.ok(self.engine('freeze'))
-        (self.repo / 'FINAL_AUDIT.md').write_text('READY\n')
-        sha = hashlib.sha256((self.repo / 'FINAL_AUDIT.md').read_bytes()).hexdigest()
+        (self.repo / '.uncle/docs/FINAL_AUDIT.md').write_text('READY\n')
+        sha = hashlib.sha256((self.repo / '.uncle/docs/FINAL_AUDIT.md').read_bytes()).hexdigest()
         (self.state / 'audit-verdict').write_text('-\tREADY\t' + sha + '\n')
         self.ok(self.engine('bind'))
 
@@ -386,8 +387,8 @@ class OriginlessHandoffTests(HandoffFixture):
             self.setUp()
             self.ok(self.engine('freeze'))
             mutate()
-            (self.repo / 'FINAL_AUDIT.md').write_text('READY\n')
-            sha = hashlib.sha256((self.repo / 'FINAL_AUDIT.md').read_bytes()).hexdigest()
+            (self.repo / '.uncle/docs/FINAL_AUDIT.md').write_text('READY\n')
+            sha = hashlib.sha256((self.repo / '.uncle/docs/FINAL_AUDIT.md').read_bytes()).hexdigest()
             (self.state / 'audit-verdict').write_text('-\tREADY\t' + sha + '\n')
             result = self.engine('bind')
             self.assertIn('PR pending: ' + DRIFT, result.stdout)

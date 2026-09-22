@@ -43,21 +43,25 @@ if action == 'edit-plan-empty-reply' and ask.strip().startswith('Execute Proposa
     # the shared "thinking" narration below is the point: extract_reply()
     # takes the last non-empty assistant text, so any text at all here would
     # defeat this fixture.
-    pathlib.Path('CHANGE_PLAN.md').write_text('# plan edited by triage\n')
+    pathlib.Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+    pathlib.Path('.uncle/docs/CHANGE_PLAN.md').write_text('# plan edited by triage\n')
     print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': ''}))
     raise SystemExit(0)
 say('thinking')
 if ask.strip().startswith('Execute Proposal'):
     if action == 'edit-plan':
-        pathlib.Path('CHANGE_PLAN.md').write_text('# plan edited by triage\n')
+        pathlib.Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        pathlib.Path('.uncle/docs/CHANGE_PLAN.md').write_text('# plan edited by triage\n')
     elif action == 'draft-issue':
         pathlib.Path('.uncle/workflow').mkdir(parents=True, exist_ok=True)
         pathlib.Path('.uncle/workflow/triage-issue-1.md').write_text('# jq crash\n\n## Observed\nx\n')
     elif action == 'forbidden':
         pathlib.Path('.uncle/workflow/approvals').mkdir(parents=True, exist_ok=True)
         pathlib.Path('.uncle/workflow/approvals/CHANGE_PLAN.sha256').write_text('forged\n')
-        pathlib.Path('ADVERSARIAL_REVIEW.md').write_text('tampered\n')
-        pathlib.Path(live, 'ADVERSARIAL_REVIEW.md').write_text('tampered\n')
+        pathlib.Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        pathlib.Path('.uncle/docs/ADVERSARIAL_REVIEW.md').write_text('tampered\n')
+        pathlib.Path(live, '.uncle/docs').mkdir(parents=True, exist_ok=True)
+        pathlib.Path(live, '.uncle/docs/ADVERSARIAL_REVIEW.md').write_text('tampered\n')
         pathlib.Path(live, '.uncle/workflow/waivers').mkdir(parents=True, exist_ok=True)
         pathlib.Path(live, '.uncle/workflow/waivers/AC-1').write_text('id: AC-1\n')
         pathlib.Path(live, '.uncle/workflow/state').write_text('COMPLETE\n')
@@ -144,10 +148,11 @@ class TriageTests(unittest.TestCase):
         base = Path(self.tmp.name).resolve()
         self.project = base / 'project'
         (self.project / '.uncle' / 'workflow' / 'logs').mkdir(parents=True)
+        (self.project / '.uncle' / 'docs').mkdir(parents=True)
         (self.project / 'src').mkdir()
         (self.project / 'src' / 'x').write_text('live\n')
-        (self.project / 'CHANGE_PLAN.md').write_text('| AC-1 | plan row |\n')
-        (self.project / 'ADVERSARIAL_REVIEW.md').write_text('review\n')
+        (self.project / '.uncle/docs/CHANGE_PLAN.md').write_text('| AC-1 | plan row |\n')
+        (self.project / '.uncle/docs/ADVERSARIAL_REVIEW.md').write_text('review\n')
         subprocess.run(['git', 'init', '-q', '.'], cwd=self.project, check=True)
         subprocess.run(['git', 'config', 'commit.gpgsign', 'false'], cwd=self.project, check=True)
         subprocess.run(['git', 'config', 'tag.gpgsign', 'false'], cwd=self.project, check=True)
@@ -423,7 +428,7 @@ class TriageTests(unittest.TestCase):
         ui._triage_command('/do 1')
         self.finish_turn(ui)
         self.assertEqual((self.project / '.uncle/workflow/approvals/CHANGE_PLAN.sha256').read_text(), 'forged\n')
-        self.assertEqual((self.project / 'ADVERSARIAL_REVIEW.md').read_text(), 'tampered\n')
+        self.assertEqual((self.project / '.uncle/docs/ADVERSARIAL_REVIEW.md').read_text(), 'tampered\n')
         self.assertTrue((self.project / '.uncle/workflow/waivers/AC-1').exists())
         self.assertEqual((self.project / '.uncle/workflow/state').read_text(), 'COMPLETE\n')
         self.assertEqual((self.install / 'scripts/lib/thing.sh').read_text(), 'installed\n')
@@ -469,17 +474,17 @@ class TriageTests(unittest.TestCase):
 
     def test_accepted_plan_edit_is_applied_and_resume_relaunches(self):
         os.environ['FAKE_MASTER_ACTION'] = 'edit-plan'
-        (self.project / 'IMPLEMENTATION_NOTES.md').write_text('# notes\n')
+        (self.project / '.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('# notes\n')
         (self.project / '.uncle/workflow/logs/execute-checklist.jsonl').write_text('expected 200, got 500 from /health\n')
         ui = self.ui()
         ui.open_triage()
         self.finish_turn(ui)
         ui._triage_command('/do 2')
         self.finish_turn(ui)
-        self.assertEqual((self.project / 'CHANGE_PLAN.md').read_text(), '# plan edited by triage\n')
+        self.assertEqual((self.project / '.uncle/docs/CHANGE_PLAN.md').read_text(), '# plan edited by triage\n')
         tsv = (self.project / '.uncle/workflow/triage-actions.tsv').read_text()
-        self.assertIn('\tAPPLIED\tCHANGE_PLAN.md\t', tsv)
-        self.assertIn('Deviation (triage): `CHANGE_PLAN.md`', (self.project / 'IMPLEMENTATION_NOTES.md').read_text())
+        self.assertIn('\tAPPLIED\t.uncle/docs/CHANGE_PLAN.md\t', tsv)
+        self.assertIn('Deviation (triage): `.uncle/docs/CHANGE_PLAN.md`', (self.project / '.uncle/docs/IMPLEMENTATION_NOTES.md').read_text())
         self.assertFalse((self.project / '.uncle/workflow/triage/sandbox').exists())
         with patch.object(ui, 'start_workflow') as start:
             start.side_effect = lambda: setattr(ui, 'state', 'running')
@@ -496,16 +501,16 @@ class TriageTests(unittest.TestCase):
         # then fails with the generic "no proposal is selectable", with no
         # hint the edit already landed and /resume is next.
         os.environ['FAKE_MASTER_ACTION'] = 'edit-plan-empty-reply'
-        (self.project / 'IMPLEMENTATION_NOTES.md').write_text('# notes\n')
+        (self.project / '.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('# notes\n')
         (self.project / '.uncle/workflow/logs/execute-checklist.jsonl').write_text('expected 200, got 500 from /health\n')
         ui = self.ui()
         ui.open_triage()
         self.finish_turn(ui)
         ui._triage_command('/do 2')
         self.finish_turn(ui)
-        self.assertEqual((self.project / 'CHANGE_PLAN.md').read_text(), '# plan edited by triage\n')
+        self.assertEqual((self.project / '.uncle/docs/CHANGE_PLAN.md').read_text(), '# plan edited by triage\n')
         self.assertTrue(ui.triage_offer_resume)
-        self.assertTrue(any('Applied: CHANGE_PLAN.md' in text for _, text in ui.triage_history))
+        self.assertTrue(any('Applied: .uncle/docs/CHANGE_PLAN.md' in text for _, text in ui.triage_history))
         self.assertTrue(any('no reply text' in text for _, text in ui.triage_history))
         # No proposals survive an execute turn; the next /do must explain
         # that the prior one already finished, not just say "not selectable".

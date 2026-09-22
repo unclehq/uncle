@@ -7,7 +7,7 @@
 # the first look is the tab that shows the real application. It never runs at
 # the same time as implementation (IMPLEMENT joins it first); it does run beside
 # planning, whose prompts say what an unexplained page at the root is.
-# PROJECT_PLAN.md and REQUIREMENTS_INTERPRETATION.md are used when they already
+# .uncle/docs/PROJECT_PLAN.md and .uncle/docs/REQUIREMENTS_INTERPRETATION.md are used when they already
 # exist and skipped when they do not.
 #
 # The operator asked to see the application before the review stages finish,
@@ -70,7 +70,7 @@ preview_build_model() {
 preview_build_start() {
     [[ "$PREVIEW_BUILD" == "1" ]] || return 0
     [[ "$PREVIEW_STARTED" == 0 ]] || return 0
-    [[ -s PROJECT_PLAN.md || -s "${DOCUMENT_BUDGET_SOURCE:-REQUIREMENTS.md}" ]] || return 0
+    [[ -s .uncle/docs/PROJECT_PLAN.md || -s "${DOCUMENT_BUDGET_SOURCE:-REQUIREMENTS.md}" ]] || return 0
 
     # Only a web application or a command line tool has anything to show this
     # early. A library, an API or a daemon would spend an implementation's worth
@@ -97,11 +97,11 @@ preview_build_start() {
     # review changed anything the code depends on. A preview built from the
     # brief alone records nothing, and is never taken as built to the plan.
     rm -f "$STATE_DIR/preview-build.plan"
-    if [[ -s PROJECT_PLAN.md ]]; then
-        plan_material_hash PROJECT_PLAN.md > "$STATE_DIR/preview-build.plan" 2>/dev/null || true
+    if [[ -s .uncle/docs/PROJECT_PLAN.md ]]; then
+        plan_material_hash .uncle/docs/PROJECT_PLAN.md > "$STATE_DIR/preview-build.plan" 2>/dev/null || true
     fi
     echo
-    if [[ -s PROJECT_PLAN.md ]]; then
+    if [[ -s .uncle/docs/PROJECT_PLAN.md ]]; then
         echo "Building a $kind preview from the plan while the review runs."
     else
         echo "Building a $kind preview from the brief while planning runs."
@@ -172,7 +172,7 @@ preview_build_survived() {
     local recorded
     [[ "$PREVIEW_STARTED" == 1 ]] || return 1
     [[ -s "$STATE_DIR/preview-build.plan" ]] || return 1
-    [[ -s UPDATED_PROJECT_PLAN.md ]] || return 1
+    [[ -s .uncle/docs/UPDATED_PROJECT_PLAN.md ]] || return 1
     recorded="$(cat "$STATE_DIR/preview-build.plan")"
-    [[ "$recorded" == "$(plan_material_hash UPDATED_PROJECT_PLAN.md)" ]]
+    [[ "$recorded" == "$(plan_material_hash .uncle/docs/UPDATED_PROJECT_PLAN.md)" ]]
 }

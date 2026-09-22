@@ -6,8 +6,8 @@ for edited in 0 1; do
     new_case "combined-planning-$edited"
     cp "$ROOT/prompts/change/change-spec.md" "$REPO/prompts/change/change-spec.md"
     printf 'STUB:baseline\n' > "$REPO/prompts/change/baseline.md"
-    cp "$REPO/CHANGE_SPEC.md" "$CASE/spec-template"
-    rm "$REPO/CHANGE_SPEC.md" "$REPO/CHANGE_PLAN.md"
+    cp "$REPO/.uncle/docs/CHANGE_SPEC.md" "$CASE/spec-template"
+    rm "$REPO/.uncle/docs/CHANGE_SPEC.md" "$REPO/.uncle/docs/CHANGE_PLAN.md"
     mv "$CASE/bin/fake-agent" "$CASE/bin/original-agent"
     cat > "$CASE/bin/fake-agent" <<'AGENT'
 #!/usr/bin/env bash
@@ -17,7 +17,7 @@ case "$prompt" in
 esac
 case "$prompt" in
     *'Combined change specification and planning'*)
-        cp "$(dirname "$0")/../spec-template" CHANGE_SPEC.md
+        cp "$(dirname "$0")/../spec-template" .uncle/docs/CHANGE_SPEC.md
         printf '%s' "$prompt" > .uncle/workflow/combined-prompt
         ;;
 esac
@@ -28,25 +28,25 @@ AGENT
     run_driver
     expect_status 0
     expect_state WAIT_ANALYSIS_APPROVAL
-    expect_file CHANGE_SPEC.md
-    expect_file CHANGE_PLAN.md
+    expect_file .uncle/docs/CHANGE_SPEC.md
+    expect_file .uncle/docs/CHANGE_PLAN.md
     expect_file .uncle/workflow/change-plan.draft-key
-    expect_in_file .uncle/workflow/combined-prompt 'CHANGE_SPEC.md: at most'
-    expect_in_file .uncle/workflow/combined-prompt 'CHANGE_PLAN.md: at most'
+    expect_in_file .uncle/workflow/combined-prompt '.uncle/docs/CHANGE_SPEC.md: at most'
+    expect_in_file .uncle/workflow/combined-prompt '.uncle/docs/CHANGE_PLAN.md: at most'
     # This scenario's fake-agent matches the spec-and-plan-only prompt (an
-    # already-written BASELINE_REPORT.md), which only claims "the same
+    # already-written .uncle/docs/BASELINE_REPORT.md), which only claims "the same
     # context" for spec+plan together -- "the same model and context" is the
     # with-baseline branch's own wording, for when one pass does all three
     # documents and model continuity across them is the actual guarantee.
-    expect_in_file .uncle/workflow/combined-prompt 'the same context, write CHANGE_SPEC.md'
+    expect_in_file .uncle/workflow/combined-prompt 'the same context, write .uncle/docs/CHANGE_SPEC.md'
     expect_not_out ': change-spec'
     if [[ "$edited" == 1 ]]; then
-        printf '\nUser clarification at approval.\n' >> "$REPO/CHANGE_SPEC.md"
+        printf '\nUser clarification at approval.\n' >> "$REPO/.uncle/docs/CHANGE_SPEC.md"
     fi
     run_driver_stdin "$(gate_input y)"
     expect_status 0
     expect_state WAIT_PLAN_APPROVAL
-    expect_file ADVERSARIAL_REVIEW.md
+    expect_file .uncle/docs/ADVERSARIAL_REVIEW.md
     expect_file .uncle/workflow/approvals/CHANGE_SPEC.sha256
     COUNT=$((COUNT + 1))
     [[ $(wc -l < "$REPO/.uncle/workflow/planning-calls") -eq $((1 + edited)) ]] || fail 'incorrect number of planning sessions'

@@ -4,9 +4,9 @@ to an existing codebase.
 Read:
 
 - CHANGE_REQUEST.md
-- BASELINE_REPORT.md
-- CHANGE_SPEC.md
-- CHANGE_PLAN.md
+- .uncle/docs/BASELINE_REPORT.md
+- .uncle/docs/CHANGE_SPEC.md
+- .uncle/docs/CHANGE_PLAN.md
 - the implementation and tests named in the plan's change-impact table
 
 The plan names the components it intends to touch and the baseline names the

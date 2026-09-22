@@ -11,8 +11,8 @@ trap 'rm -rf "$WORK"' EXIT
 cd "$WORK"
 STATE_DIR="$WORK/.uncle/workflow"
 LOG_DIR="$STATE_DIR/logs"
-mkdir -p "$LOG_DIR"
-touch UPDATED_PROJECT_PLAN.md
+mkdir -p "$LOG_DIR" .uncle/docs
+touch .uncle/docs/UPDATED_PROJECT_PLAN.md
 FUNCTION="$(awk '/^run_parallel_application_implementation\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$ROOT/scripts/stagegate.sh")"
 [[ -n "$FUNCTION" ]] || { echo 'FAIL: implementation fan-out function missing' >&2; exit 1; }
 

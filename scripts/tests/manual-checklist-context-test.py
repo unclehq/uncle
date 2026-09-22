@@ -12,9 +12,10 @@ class Packet(unittest.TestCase):
             root = Path(directory)
             state = root/'.uncle/workflow'
             state.mkdir(parents=True)
-            (root/'CHANGE_SPEC.md').write_text('| AC-1 | required |')
+            (root/'.uncle/docs').mkdir(parents=True)
+            (root/'.uncle/docs/CHANGE_SPEC.md').write_text('| AC-1 | required |')
             (state/'green-check.md').write_text('live implementation result')
-            (root/'IMPLEMENTATION_NOTES.md').write_text('changing implementation')
+            (root/'.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('changing implementation')
             base = packet.render(root, state, 'manual-checklist-base')
             self.assertIn('AC-1', base)
             self.assertNotIn('live implementation result', base)

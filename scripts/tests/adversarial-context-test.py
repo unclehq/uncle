@@ -51,12 +51,13 @@ class Review(unittest.TestCase):
     def test_packet_selects_family_and_refreshes(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d)
-            (root/'PROJECT_PLAN.md').write_text('app plan')
-            (root/'CHANGE_PLAN.md').write_text('change plan')
+            (root/'.uncle/docs').mkdir(parents=True)
+            (root/'.uncle/docs/PROJECT_PLAN.md').write_text('app plan')
+            (root/'.uncle/docs/CHANGE_PLAN.md').write_text('change plan')
             self.assertNotIn('change plan',module.render(root,'app'))
             self.assertIn('change plan',module.render(root,'change'))
             first=module.render(root,'app')
-            (root/'PROJECT_PLAN.md').write_text('changed')
+            (root/'.uncle/docs/PROJECT_PLAN.md').write_text('changed')
             self.assertNotEqual(first,module.render(root,'app'))
 
     @unittest.skipUnless(shutil.which('bash'),'Bash required')
@@ -67,7 +68,8 @@ class Review(unittest.TestCase):
             block=text.split('        VALIDATE_ADVERSARIAL_REVIEW)\n',1)[1].split('        '+nextcase+')',1)[0]
             harness=f'STATE_DIR=.\nsupervision_validation_failed() {{ :; }};\nROOT="{root}"\nverify_approval() {{ :; }}; check_document_budget() {{ :; }}; set_state() {{ echo "$1" > state; }}; run_codex() {{ exit 99; }}; run_stage() {{ exit 99; }}\ncase validate in\nvalidate)\n'+block+'esac\n'
             with tempfile.TemporaryDirectory() as d:
-                p=Path(d)/'ADVERSARIAL_REVIEW.md'
+                (Path(d)/'.uncle/docs').mkdir(parents=True)
+                p=Path(d)/'.uncle/docs/ADVERSARIAL_REVIEW.md'
                 p.write_text('bad')
                 for _ in range(2):
                     self.assertEqual(subprocess.run(['bash','-c',harness],cwd=d,capture_output=True).returncode,1)

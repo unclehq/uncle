@@ -39,9 +39,9 @@ Read these in one parallel batch of tool calls, along with any source files you
 need to inspect:
 
 - REQUIREMENTS.md
-- REQUIREMENTS_INTERPRETATION.md
+- .uncle/docs/REQUIREMENTS_INTERPRETATION.md
 
-Create PROJECT_PLAN.md.
+Create .uncle/docs/PROJECT_PLAN.md.
 
 Include:
 
@@ -98,7 +98,7 @@ concurrency is appropriate; do not weaken checks to make them parallel.
 Write densely. Five later stages read this document, so length here is paid
 for repeatedly:
 
-- reference requirements by their REQUIREMENTS_INTERPRETATION.md identifiers
+- reference requirements by their .uncle/docs/REQUIREMENTS_INTERPRETATION.md identifiers
   instead of restating them;
 - put structured content in the tables and do not repeat it as prose;
 - cover every section, but let a section be one line when that is the honest
@@ -109,7 +109,7 @@ Do not implement code.
 Do not invoke another agent.
 Do not draft the plan in chat before writing it.
 
-Write only PROJECT_PLAN.md, in a single Write call, and stop.
+Write only .uncle/docs/PROJECT_PLAN.md, in a single Write call, and stop.
 
 Use one canonical row per behavior, invariant, and acceptance obligation. Later strategy and implementation sections reference those IDs instead of repeating the rows. Keep rationale only where it explains a decision or constraint.
 

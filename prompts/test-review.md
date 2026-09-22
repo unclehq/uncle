@@ -12,10 +12,10 @@ checks now pass in the driver; retain blockers for checks still failing, missing
 or unsupported by current evidence. Do not treat a reviewer tool restriction
 as a failure of a command that the driver successfully executed.
 
-Read REQUIREMENTS.md, UPDATED_PROJECT_PLAN.md, PREFLIGHT_REPORT.md,
-AUTOMATED_TEST_REPORT.md, and .uncle/workflow/green-check.md. Inspect the
+Read REQUIREMENTS.md, .uncle/docs/UPDATED_PROJECT_PLAN.md, .uncle/docs/PREFLIGHT_REPORT.md,
+.uncle/docs/AUTOMATED_TEST_REPORT.md, and .uncle/workflow/green-check.md. Inspect the
 source and assertions behind their claims. Read .uncle/workflow/previous-test-review.md,
-VERIFICATION_REPORT.md, and DEFECTS.md if present to check previous findings.
+.uncle/docs/VERIFICATION_REPORT.md, and .uncle/docs/DEFECTS.md if present to check previous findings.
 On repair passes, read .uncle/workflow/TEST_CHANGES.diff: it compares captured
 test inputs before and after repair, independently of the implementation notes.
 Check every changed assertion or expectation against the requirement and the
@@ -23,7 +23,7 @@ original defect. Reject weakened coverage even when the current suite passes.
 Do not modify source or run destructive probes. Use existing test results,
 read-only probes, or isolated temporary copies to verify claims.
 
-Create TEST_REVIEW.md with these sections: Summary, Findings, Assumptions,
+Create .uncle/docs/TEST_REVIEW.md with these sections: Summary, Findings, Assumptions,
 Open questions, Acceptance gate. Findings use stable TR IDs, requirement IDs,
 file/symbol evidence, required corrections, and whether they block acceptance.
 
@@ -54,7 +54,7 @@ This gate reviews automated verification before MANUAL_CHECKLIST and
 EXECUTE_CHECKLIST. A final human comparison scheduled for those later stages
 is not a prerequisite for this review. Record it in Findings as pending for
 EXECUTE_CHECKLIST, not as a required row in this stage's Acceptance gate.
-It remains mandatory in VERIFICATION_REPORT.md before final acceptance.
+It remains mandatory in .uncle/docs/VERIFICATION_REPORT.md before final acceptance.
 Earlier prerequisite approvals (such as source/oracle review) are still required.
 
 Add required rows for any other findings blocking this stage. Missing test coverage or
@@ -98,7 +98,7 @@ Do not enumerate clean code as separate findings: concise PASS evidence belongs
 in the six required acceptance rows. Findings are concrete defects or unresolved
 gaps. Keep every required row and real blocker; no extra summary of each PASS.
 
-Return the complete TEST_REVIEW.md as the final response, not a status message
+Return the complete .uncle/docs/TEST_REVIEW.md as the final response, not a status message
 about writing or compacting it. Do not emit a compaction announcement as the final
 answer. A report-size warning alone does not require another model iteration.
 
@@ -119,7 +119,7 @@ to compose the report. Before returning it, reconcile findings, evidence and
 acceptance rows once. Correct actual omissions or contradictions without a
 repeated narrated compliance sweep.
 
-Return the complete TEST_REVIEW.md once. In advisory-budget mode, do ZERO
+Return the complete .uncle/docs/TEST_REVIEW.md once. In advisory-budget mode, do ZERO
 size-only compaction passes: retain required evidence even above the guide.
 Do not count bytes repeatedly, remove Markdown spacing or emit a size report
 instead of the review. The driver measures the artifact. Enforced budgets retain

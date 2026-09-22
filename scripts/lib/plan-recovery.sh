@@ -15,11 +15,11 @@ plan_executability_enabled() {
 plan_check_inputs() {
     local plan command document
     if [[ "${DOCUMENT_BUDGET_SOURCE:-}" == CHANGE_REQUEST.md ]]; then
-        plan=CHANGE_PLAN.md
+        plan=.uncle/docs/CHANGE_PLAN.md
     else
-        plan=UPDATED_PROJECT_PLAN.md
+        plan=.uncle/docs/UPDATED_PROJECT_PLAN.md
     fi
-    for document in "$plan" ADVERSARIAL_REVIEW.md; do
+    for document in "$plan" .uncle/docs/ADVERSARIAL_REVIEW.md; do
         if [[ ! -s "$document" ]]; then
             echo "Missing plan review input: $document" >&2
             return 1
@@ -35,16 +35,16 @@ plan_check_inputs() {
 plan_paths() {
     PLAN_ASSESS_DIR="$STATE_DIR/plan-executability"
     if [[ "${DOCUMENT_BUDGET_SOURCE:-}" == CHANGE_REQUEST.md ]]; then
-        EXEC_PLAN=CHANGE_PLAN.md
+        EXEC_PLAN=.uncle/docs/CHANGE_PLAN.md
     else
-        EXEC_PLAN=UPDATED_PROJECT_PLAN.md
+        EXEC_PLAN=.uncle/docs/UPDATED_PROJECT_PLAN.md
     fi
     mkdir -p "$PLAN_ASSESS_DIR"
 }
 
 plan_review() {
     if declare -f run_codex >/dev/null; then
-        run_codex "$1" "$2" plan-executability "${CODEX_EFFORT_REVIEW:-high}"
+        run_codex "$1" "$2" plan-executability none
     else
         run_codex_review "$1" "$2" plan-executability
     fi
@@ -106,7 +106,7 @@ plan_revise() {
     mkdir -p "$archive"
     [[ ! -d "$LOG_DIR" ]] || cp -R "$LOG_DIR" "$archive/logs"
     local f
-    for f in "$EXEC_PLAN" ADVERSARIAL_REVIEW.md IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md AUTOMATED_TEST_REPORT.md; do
+    for f in "$EXEC_PLAN" .uncle/docs/ADVERSARIAL_REVIEW.md .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/CHANGE_TEST_REPORT.md .uncle/docs/AUTOMATED_TEST_REPORT.md; do
         [[ ! -e "$f" ]] || cp "$f" "$archive/"
     done
     cp "$PLAN_ASSESS_DIR/assessment.json" "$PLAN_ASSESS_DIR/manifest.json" "$archive/"
@@ -115,14 +115,14 @@ plan_revise() {
     # Keep verification baselines, origin, ordinary repair counters, and source intact.
     cat "$(resolve_prompt prompts/plan-recovery.md)" > "$PLAN_ASSESS_DIR/recovery.md"
     printf '\nRevise %s in place. Read %s/assessment.md.\n' "$EXEC_PLAN" "$PLAN_ASSESS_DIR" >> "$PLAN_ASSESS_DIR/recovery.md"
-    if [[ "$EXEC_PLAN" == CHANGE_PLAN.md ]]; then
+    if [[ "$EXEC_PLAN" == .uncle/docs/CHANGE_PLAN.md ]]; then
         run_claude "$PLAN_ASSESS_DIR/recovery.md" updated-change-plan "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN"
         # Reuse the existing review/acknowledgement/reconciliation states.
-        run_codex prompts/change/adversarial-review.md ADVERSARIAL_REVIEW.md adversarial-review "$CODEX_EFFORT_REVIEW"
+        run_codex prompts/change/adversarial-review.md .uncle/docs/ADVERSARIAL_REVIEW.md adversarial-review "$CODEX_EFFORT_REVIEW"
         set_state WAIT_PLAN_APPROVAL
     else
         run_claude "$PLAN_ASSESS_DIR/recovery.md" updated-plan
-        cp UPDATED_PROJECT_PLAN.md PROJECT_PLAN.md
+        cp .uncle/docs/UPDATED_PROJECT_PLAN.md .uncle/docs/PROJECT_PLAN.md
         set_state WAIT_PLAN_APPROVAL
     fi
     return 0
@@ -252,13 +252,13 @@ plan_before_write() {
         cat "$(resolve_prompt prompts/plan-recovery.md)" > "$PLAN_ASSESS_DIR/verify.md"
         cat >> "$PLAN_ASSESS_DIR/verify.md" <<'VERIFY'
 Verification-only resume. Do not revise the plan or edit any source.
-Read .uncle/workflow/plan-executability/assessment.json and IMPLEMENTATION_NOTES.md.
+Read .uncle/workflow/plan-executability/assessment.json and .uncle/docs/IMPLEMENTATION_NOTES.md.
 Probe only recorded LIVE_VERIFICATION prerequisites, then execute only their approved
 check IDs and commands. Update delivery rows only for observed passing checks.
 Preserve all other rows. Keep plan-blockers for every unavailable or failing check.
-Only IMPLEMENTATION_NOTES.md and the existing test report may change.
+Only .uncle/docs/IMPLEMENTATION_NOTES.md and the existing test report may change.
 VERIFY
-        if [[ "$EXEC_PLAN" == CHANGE_PLAN.md ]]; then
+        if [[ "$EXEC_PLAN" == .uncle/docs/CHANGE_PLAN.md ]]; then
             run_claude "$PLAN_ASSESS_DIR/verify.md" implementation "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT" || return 1
         else
             run_claude "$PLAN_ASSESS_DIR/verify.md" implementation || return 1

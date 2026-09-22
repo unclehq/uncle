@@ -20,6 +20,9 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
+# Every workflow-generated document (REQUIREMENTS.md/CHANGE_REQUEST.md
+# excepted -- generated-input.sh) lives here, never the project root.
+mkdir -p .uncle/docs
 export DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md
 
 # Prompt files are named relative to the uncle install, but the cwd is now the
@@ -137,7 +140,7 @@ WORKFLOW_SPECULATE="${WORKFLOW_SPECULATE:-1}"
 # WORKFLOW_PREFLIGHT_BLOCKING=1 restores the gate.
 PREFLIGHT_BLOCKING="${WORKFLOW_PREFLIGHT_BLOCKING:-0}"
 PREFLIGHT_BG_PID=""
-# One pass for REQUIREMENTS_INTERPRETATION.md and PROJECT_PLAN.md.
+# One pass for .uncle/docs/REQUIREMENTS_INTERPRETATION.md and .uncle/docs/PROJECT_PLAN.md.
 # WORKFLOW_MERGE_REQUIREMENTS_PLAN=0 restores two separate stages.
 MERGE_REQUIREMENTS_PLAN="${WORKFLOW_MERGE_REQUIREMENTS_PLAN:-1}"
 
@@ -155,7 +158,7 @@ REVIEWER_CMD="${WORKFLOW_REVIEWER_CMD:-codex}"
 # Override any of these from the environment, e.g.
 #   WORKFLOW_MODEL_REQUIREMENTS=opus WORKFLOW_EFFORT_REQUIREMENTS=high
 DEFAULT_MODEL="claude-sonnet-5"
-DEFAULT_EFFORT="medium"
+DEFAULT_EFFORT="none"
 
 # Stop after implementation and show the operator the actual diff, the green
 # check, and the agent's own notes, before anything downstream reads them.
@@ -170,9 +173,9 @@ DEFAULT_EFFORT="medium"
 DIFF_GATE="${WORKFLOW_DIFF_GATE:-1}"
 
 # Re-run the plan's own verification commands from the driver after
-# implementation. AUTOMATED_TEST_REPORT.md is the implementing agent's account
+# implementation. .uncle/docs/AUTOMATED_TEST_REPORT.md is the implementing agent's account
 # of checks the implementing agent ran; this runs them with no agent in the
-# path. The commands come from UPDATED_PROJECT_PLAN.md, which the operator has
+# path. The commands come from .uncle/docs/UPDATED_PROJECT_PLAN.md, which the operator has
 # already approved.
 #
 # Set to 0 to return to trusting the report.
@@ -184,7 +187,7 @@ GREEN_CHECK="${WORKFLOW_GREEN_CHECK:-1}"
 # Set to 0 to complete on any verdict, as before.
 AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 
-# The FINAL_AUDIT.md verdict classifier, the independent verification run, and
+# The .uncle/docs/FINAL_AUDIT.md verdict classifier, the independent verification run, and
 # the generated document the post-implementation gate shows. Sourced
 # self-relative so the driver still runs from any CWD.
 #
@@ -444,7 +447,7 @@ preflight_acceptable() {
 # The same question, asked after the gate has done something about it.
 #
 # A blocker settled at the gate -- the file handed over, or the check waived --
-# does not change PREFLIGHT_REPORT.md, which is the agent's document and stays
+# does not change .uncle/docs/PREFLIGHT_REPORT.md, which is the agent's document and stays
 # as written. So the report still says BLOCKED-SETUP, and asking it alone would
 # send the run back to re-probe inputs that are already sitting on disk: a full
 # agent stage, minutes and tokens, to rediscover what the operator just typed
@@ -456,7 +459,7 @@ preflight_settled() {
         BLOCKED-SETUP) ;;
         *) return 1 ;;
     esac
-    ids="$(acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-SETUP)"
+    ids="$(acceptance_blocked_ids .uncle/docs/PREFLIGHT_REPORT.md BLOCKED-SETUP)"
     [[ -n "$ids" ]] || return 1
     while IFS= read -r id; do
         [[ -n "$id" ]] || continue
@@ -662,15 +665,15 @@ acceptance_transition() {
                 # A malformed acceptance table is a format defect, not a
                 # product failure, and the retry is cheap: one extra call with
                 # the exact line-numbered diagnosis, before ever involving a
-                # human or a repair attempt. TEST_REVIEW.md was the first
-                # report this applied to; VERIFICATION_REPORT.md fails the
+                # human or a repair attempt. .uncle/docs/TEST_REVIEW.md was the first
+                # report this applied to; .uncle/docs/VERIFICATION_REPORT.md fails the
                 # same way (a self-hosted model omitting the required
                 # "## Acceptance gate" section entirely) and deserves the same
                 # one-shot recovery instead of stopping the run outright.
                 retry_state="" retry_slug=""
                 case "$report" in
-                    TEST_REVIEW.md) retry_state=TEST_REVIEW; retry_slug=test-review ;;
-                    VERIFICATION_REPORT.md) retry_state=EXECUTE_CHECKLIST; retry_slug=execute-checklist ;;
+                    .uncle/docs/TEST_REVIEW.md) retry_state=TEST_REVIEW; retry_slug=test-review ;;
+                    .uncle/docs/VERIFICATION_REPORT.md) retry_state=EXECUTE_CHECKLIST; retry_slug=execute-checklist ;;
                 esac
                 retry_marker="$STATE_DIR/$retry_slug-format-retry.md"
                 if [[ -n "$retry_state" && ! -e "$retry_marker" ]]; then
@@ -704,7 +707,7 @@ verification_integrity_failure() {
         echo
         echo 'Verification changed protected inputs or could not establish their integrity.'
         echo 'Repair the tests or runner explicitly; do not accept regenerated expectations.'
-        echo 'Record each test change and its requirement-based justification in IMPLEMENTATION_NOTES.md.'
+        echo 'Record each test change and its requirement-based justification in .uncle/docs/IMPLEMENTATION_NOTES.md.'
         echo
         echo '```text'
         cat "$STATE_DIR/verification-integrity.log"
@@ -718,7 +721,7 @@ verification_integrity_failure() {
 
 capture_verification_inputs() {
     local snapshot digest file
-    verification_paths UPDATED_PROJECT_PLAN.md > "$STATE_DIR/verification.paths" \
+    verification_paths .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/verification.paths" \
         || { echo 'Missing Protected verification paths in approved plan.' > "$STATE_DIR/verification-integrity.log"; verification_integrity_failure; }
     if ! verification_manifest "$STATE_DIR/verification.paths" \
         > "$STATE_DIR/verification.manifest" 2> "$STATE_DIR/verification-integrity.log"; then
@@ -1414,7 +1417,7 @@ run_adversarial_review_panel() {
     done
     ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"
     cp "$ROOT/prompts/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
-    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `ADVERSARIAL_REVIEW.md`.\n' \
+    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `.uncle/docs/ADVERSARIAL_REVIEW.md`.\n' \
         "$directory" >> "$ADVERSARIAL_REVIEW_PROMPT"
 }
 
@@ -1466,7 +1469,7 @@ run_test_review_panel() {
     done
     TEST_REVIEW_PROMPT="$directory/synthesis.md"
     cp "$ROOT/prompts/test-review.md" "$TEST_REVIEW_PROMPT"
-    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `TEST_REVIEW.md`.\n' \
+    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `.uncle/docs/TEST_REVIEW.md`.\n' \
         "$directory" >> "$TEST_REVIEW_PROMPT"
 }
 
@@ -1523,7 +1526,7 @@ run_parallel_application_implementation() {
         echo 'Parallel implementation steps are already merged; reconciling their report only.'
         return 0
     fi
-    groups="$(parallel_groups UPDATED_PROJECT_PLAN.md "$ROOT/scripts/lib")" || return 2
+    groups="$(parallel_groups .uncle/docs/UPDATED_PROJECT_PLAN.md "$ROOT/scripts/lib")" || return 2
     [[ -n "$groups" ]] || return 2
     uncle_resolve_stage_runner implementation AGENT || return 1
     cmd="$(stage_agent_cmd implementation)" || return 1
@@ -1534,7 +1537,7 @@ run_parallel_application_implementation() {
     checkpoint_dir="$STATE_DIR/parallel-implementation-groups"
     mkdir -p "$STATE_DIR/parallel/prompts" "$STATE_DIR/parallel/notes" "$checkpoint_dir"
     export PARALLEL_PROMPT_DIR="$PWD/$STATE_DIR/parallel/prompts"
-    plan_steps UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-steps.txt"
+    plan_steps .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-steps.txt"
     # Preserve worker handoffs in one canonical input for the report-only
     # reconciliation stage. A worker may record its narrow check here, but it
     # cannot truthfully attest to the whole merged application.
@@ -1547,7 +1550,7 @@ run_parallel_application_implementation() {
         printf '## Parallel implementation reconciliation\n\n'
         printf 'The workflow driver merged the isolated approved steps below. '
         printf 'Each worker handoff records its owned files and narrow checks.\n'
-    } > IMPLEMENTATION_NOTES.md
+    } > .uncle/docs/IMPLEMENTATION_NOTES.md
     fi
     while IFS= read -r group; do
         [[ -n "$group" ]] || continue
@@ -1567,11 +1570,11 @@ run_parallel_application_implementation() {
                 echo "Do not edit workflow documents. Run a narrow check and write a concise handoff to .uncle/workflow/parallel/notes/step-$step.md."
             } >> "$prompt"
         done
-        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" UPDATED_PROJECT_PLAN.md $group)" || return $?
+        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" .uncle/docs/UPDATED_PROJECT_PLAN.md $group)" || return $?
         for step in $group; do
             [[ -s "$STATE_DIR/parallel/notes/step-$step.md" ]] || return 1
-            printf '\n## Isolated step %s handoff\n\n' "$step" >> IMPLEMENTATION_NOTES.md
-            cat "$STATE_DIR/parallel/notes/step-$step.md" >> IMPLEMENTATION_NOTES.md
+            printf '\n## Isolated step %s handoff\n\n' "$step" >> .uncle/docs/IMPLEMENTATION_NOTES.md
+            cat "$STATE_DIR/parallel/notes/step-$step.md" >> .uncle/docs/IMPLEMENTATION_NOTES.md
         done
         echo "Implementation fan-out group $group merged."
         touch "$checkpoint"
@@ -1593,9 +1596,9 @@ run_parallel_implementation_report() {
     # -e, not -s: both markers are bare `touch`ed signal files, always 0
     # bytes by design. -s (nonempty) was always false for them, so this
     # function returned 1 here on every call, on every run, ever -- the
-    # canonical IMPLEMENTATION_NOTES.md/AUTOMATED_TEST_REPORT.md reconciliation
+    # canonical .uncle/docs/IMPLEMENTATION_NOTES.md/AUTOMATED_TEST_REPORT.md reconciliation
     # this function exists for never actually happened, silently, until the
-    # later `require_artifact AUTOMATED_TEST_REPORT.md` in the IMPLEMENT
+    # later `require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md` in the IMPLEMENT
     # state failed for a completely unrelated-looking reason.
     [[ -e "$complete_marker" ]] || return 1
     if [[ -e "$report_marker" ]]; then
@@ -1604,8 +1607,8 @@ run_parallel_implementation_report() {
     fi
     echo 'Implementation report: reconciling merged worker evidence.'
     run_claude prompts/implementation-report.md implementation-report
-    require_artifact IMPLEMENTATION_NOTES.md
-    require_artifact AUTOMATED_TEST_REPORT.md
+    require_artifact .uncle/docs/IMPLEMENTATION_NOTES.md
+    require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
     touch "$report_marker"
 }
 
@@ -1646,7 +1649,7 @@ run_parallel_checklist_workers() {
 
     # One worker per batch, not one per check: a group of a dozen independent
     # checks used to launch a dozen full agent sessions, each rereading
-    # MANUAL_CHECKLIST.md and both READMEs from scratch just to execute one
+    # .uncle/docs/MANUAL_CHECKLIST.md and both READMEs from scratch just to execute one
     # row. The group's own declaration already says these checks share no
     # exclusive resource, so running several of them one after another inside
     # a single session is exactly as safe as running them as separate
@@ -1751,13 +1754,13 @@ run_stage() {
             ;;
         PROJECT_PLAN)
             run_claude prompts/project-plan.md project-plan
-            require_artifact PROJECT_PLAN.md
+            require_artifact .uncle/docs/PROJECT_PLAN.md
             ;;
         ADVERSARIAL_REVIEW)
             run_adversarial_review_panel
             run_codex_review \
                 "${ADVERSARIAL_REVIEW_PROMPT:-prompts/adversarial-review.md}" \
-                ADVERSARIAL_REVIEW.md \
+                .uncle/docs/ADVERSARIAL_REVIEW.md \
                 adversarial-review
             ;;
         UPDATED_PLAN)
@@ -1774,25 +1777,25 @@ run_stage() {
             else
                 run_parallel_implementation_report
             fi
-            require_artifact IMPLEMENTATION_NOTES.md
-            require_artifact AUTOMATED_TEST_REPORT.md
+            require_artifact .uncle/docs/IMPLEMENTATION_NOTES.md
+            require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
             ;;
         PREFLIGHT)
-            rm -f PREFLIGHT_REPORT.md
-            if python3 -B "$ROOT/scripts/lib/preflight.py" "$GREEN_CMDS" PREFLIGHT_REPORT.md; then
+            rm -f .uncle/docs/PREFLIGHT_REPORT.md
+            if python3 -B "$ROOT/scripts/lib/preflight.py" "$GREEN_CMDS" .uncle/docs/PREFLIGHT_REPORT.md; then
                 echo "Preflight: runtime checks passed without a model call."
             else
                 echo "Preflight: requesting model diagnosis of unresolved prerequisites."
                 run_claude prompts/preflight.md preflight
             fi
-            require_artifact PREFLIGHT_REPORT.md
+            require_artifact .uncle/docs/PREFLIGHT_REPORT.md
             ;;
         TEST_REVIEW)
             # Preserve the previous findings for the next review and repairs.
-            if [[ -s TEST_REVIEW.md ]]; then
-                cp TEST_REVIEW.md "$STATE_DIR/previous-test-review.md"
+            if [[ -s .uncle/docs/TEST_REVIEW.md ]]; then
+                cp .uncle/docs/TEST_REVIEW.md "$STATE_DIR/previous-test-review.md"
             fi
-            rm -f TEST_REVIEW.md
+            rm -f .uncle/docs/TEST_REVIEW.md
             run_test_review_panel
             # A malformed acceptance table gets one local, format-only retry
             # even when optional supervision is disabled. The marker remains
@@ -1806,12 +1809,12 @@ run_stage() {
                     cat "$STATE_DIR/test-review-format-retry.md"
                 } > "$test_review_prompt"
             fi
-            run_codex_review "$test_review_prompt" TEST_REVIEW.md test-review
+            run_codex_review "$test_review_prompt" .uncle/docs/TEST_REVIEW.md test-review
             ;;
         REPAIR)
             run_claude "$REPAIR_PROMPT" repair
-            require_artifact IMPLEMENTATION_NOTES.md
-            require_artifact AUTOMATED_TEST_REPORT.md
+            require_artifact .uncle/docs/IMPLEMENTATION_NOTES.md
+            require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
             ;;
         MANUAL_CHECKLIST)
             run_manual_checklist_panel
@@ -1831,15 +1834,15 @@ run_stage() {
             fi
             run_codex_review \
                 "$manual_checklist_prompt" \
-                MANUAL_CHECKLIST.md \
+                .uncle/docs/MANUAL_CHECKLIST.md \
                 manual-checklist
             ;;
         EXECUTE_CHECKLIST)
-            if ! python3 "$ROOT/scripts/lib/checklist_document.py" MANUAL_CHECKLIST.md; then
+            if ! python3 "$ROOT/scripts/lib/checklist_document.py" .uncle/docs/MANUAL_CHECKLIST.md; then
                 set_state VALIDATE_MANUAL_CHECKLIST
                 exit 1
             fi
-            rm -f VERIFICATION_REPORT.md
+            rm -f .uncle/docs/VERIFICATION_REPORT.md
             run_parallel_checklist_workers
             # A malformed acceptance table gets one local, format-only retry
             # even when optional supervision is disabled. The marker remains
@@ -1858,7 +1861,7 @@ run_stage() {
         FINAL_AUDIT)
             run_final_audit_panel
             # A malformed audit gets one local, format-only retry, the same
-            # one-shot recovery MANUAL_CHECKLIST.md and execute-checklist's
+            # one-shot recovery .uncle/docs/MANUAL_CHECKLIST.md and execute-checklist's
             # acceptance table get.
             final_audit_prompt="${FINAL_AUDIT_PROMPT:-prompts/final-audit.md}"
             if [[ -s "$STATE_DIR/final-audit-format-retry.md" ]]; then
@@ -1871,7 +1874,7 @@ run_stage() {
             fi
             run_codex_review \
                 "$final_audit_prompt" \
-                FINAL_AUDIT.md \
+                .uncle/docs/FINAL_AUDIT.md \
                 final-audit
             ;;
         *)
@@ -1884,7 +1887,7 @@ run_stage() {
 # --- Green check ------------------------------------------------------------
 # The driver runs the plan's own verification commands itself.
 #
-# The list comes from UPDATED_PROJECT_PLAN.md and nowhere else: the driver
+# The list comes from .uncle/docs/UPDATED_PROJECT_PLAN.md and nowhere else: the driver
 # executes these with its own privileges, so they have to be commands the
 # operator approved at the updated-plan gate, not commands an agent wrote after
 # it. There is no baseline to compare against — nothing existed before this
@@ -1898,14 +1901,14 @@ run_green_check() {
             echo "## Green check"
             echo
             echo "DISABLED (\`WORKFLOW_GREEN_CHECK=0\`). The driver did not run"
-            echo "the plan's verification commands, so AUTOMATED_TEST_REPORT.md"
+            echo "the plan's verification commands, so .uncle/docs/AUTOMATED_TEST_REPORT.md"
             echo "below is the implementing agent's unverified account of them."
         } > "$GREEN_MD"
         return 0
     fi
 
-    verify_commands UPDATED_PROJECT_PLAN.md > "$GREEN_CMDS"
-    if ! verify_parallel_groups UPDATED_PROJECT_PLAN.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups"; then
+    verify_commands .uncle/docs/UPDATED_PROJECT_PLAN.md > "$GREEN_CMDS"
+    if ! verify_parallel_groups .uncle/docs/UPDATED_PROJECT_PLAN.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups"; then
         echo 'Invalid Parallel verification groups. Amend the plan and renew approval.'
         parallel_groups_format_hint
         exit 1
@@ -1913,10 +1916,10 @@ run_green_check() {
 
     if [[ ! -s "$GREEN_CMDS" ]]; then
         : > "$GREEN_CLASS"
-        green_report "$GREEN_CLASS" "$GREEN_MD" UPDATED_PROJECT_PLAN.md \
+        green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/UPDATED_PROJECT_PLAN.md \
             "$LOG_DIR/green-check.log" 0
         echo
-        echo "Green check NOT RUN: UPDATED_PROJECT_PLAN.md has no fenced block"
+        echo "Green check NOT RUN: .uncle/docs/UPDATED_PROJECT_PLAN.md has no fenced block"
         echo "under a 'Verification commands' heading, so the driver has no"
         echo "approved commands to run."
         return 0
@@ -1932,7 +1935,7 @@ run_green_check() {
     # No baseline file: green_classify treats every failure as a regression,
     # which is the correct reading for a new application.
     green_classify "$STATE_DIR/green-check.no-baseline" "$GREEN_CUR" > "$GREEN_CLASS"
-    green_report "$GREEN_CLASS" "$GREEN_MD" UPDATED_PROJECT_PLAN.md \
+    green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/UPDATED_PROJECT_PLAN.md \
         "$LOG_DIR/green-check.log" 0
 
     local failures
@@ -1964,7 +1967,7 @@ run_green_check() {
 build_implementation_review() {
     write_change_diff "$DIFF_FILE"
     write_implementation_review "$REVIEW_FILE" "$DIFF_FILE" "$GREEN_MD" \
-        IMPLEMENTATION_NOTES.md AUTOMATED_TEST_REPORT.md \
+        .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/AUTOMATED_TEST_REPORT.md \
         "$STATE_DIR/verification.paths" "$STATE_DIR/verification.manifest" \
         "$STATE_DIR/verification-snapshot" "$STATE_DIR/TEST_CHANGES.diff"
     WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" prepare "$STATE_DIR"
@@ -2011,7 +2014,7 @@ verify_implementation_review() {
 # work and the stage replays normally.
 #
 # IMPLEMENT is deliberately never speculated: it writes source code, and
-# CLAUDE.md forbids starting it before UPDATED_PROJECT_PLAN.md is approved.
+# CLAUDE.md forbids starting it before .uncle/docs/UPDATED_PROJECT_PLAN.md is approved.
 
 spec_pid=""
 spec_stage=""
@@ -2137,23 +2140,23 @@ collect_background_preflight() {
     PREFLIGHT_BG_PID=""
     rm -f "$STATE_DIR/preflight-backgrounded"
     [[ -s "$STATE_DIR/preflight-bg.status" ]] && status="$(cat "$STATE_DIR/preflight-bg.status")"
-    [[ -s PREFLIGHT_REPORT.md ]] && result="$(acceptance_result PREFLIGHT_REPORT.md)"
+    [[ -s .uncle/docs/PREFLIGHT_REPORT.md ]] && result="$(acceptance_result .uncle/docs/PREFLIGHT_REPORT.md)"
 
     if [[ "$status" == 0 && "$result" == PASS ]]; then
         echo "Prerequisites confirmed (probed alongside implementation)."
-        snapshot_preflight_capabilities PREFLIGHT_REPORT.md 2>/dev/null || true
+        snapshot_preflight_capabilities .uncle/docs/PREFLIGHT_REPORT.md 2>/dev/null || true
         return 0
     fi
 
     echo
     echo "Prerequisite probe did not confirm this environment: ${result:-no report}."
-    [[ -s PREFLIGHT_REPORT.md ]] && acceptance_problem PREFLIGHT_REPORT.md 2>/dev/null | sed 's/^/  /'
+    [[ -s .uncle/docs/PREFLIGHT_REPORT.md ]] && acceptance_problem .uncle/docs/PREFLIGHT_REPORT.md 2>/dev/null | sed 's/^/  /'
     echo "Implementation ran without waiting for it, so the code exists but the"
     echo "prerequisites behind it were not proved. Weigh this with the diff."
     echo "Log: $LOG_DIR/preflight.background.log"
-    supervision_validation_failed preflight PREFLIGHT_REPORT.md \
+    supervision_validation_failed preflight .uncle/docs/PREFLIGHT_REPORT.md \
         "Prerequisite probe did not confirm the environment: ${result:-no report}." 0 || true
-    snapshot_preflight_capabilities PREFLIGHT_REPORT.md 2>/dev/null || true
+    snapshot_preflight_capabilities .uncle/docs/PREFLIGHT_REPORT.md 2>/dev/null || true
     return 0
 }
 
@@ -2215,10 +2218,10 @@ while true; do
 
         VALIDATE_REQUIREMENTS)
             echo "Validating saved requirements; discovery will not be rerun."
-            require_artifact REQUIREMENTS_INTERPRETATION.md
-            validation_error="$(python3 "$ROOT/scripts/lib/requirements-context.py" --validate REQUIREMENTS_INTERPRETATION.md 2>&1)" || {
+            require_artifact .uncle/docs/REQUIREMENTS_INTERPRETATION.md
+            validation_error="$(python3 "$ROOT/scripts/lib/requirements-context.py" --validate .uncle/docs/REQUIREMENTS_INTERPRETATION.md 2>&1)" || {
                 printf '%s\n' "$validation_error" >&2
-                supervision_validation_failed requirements REQUIREMENTS_INTERPRETATION.md "$validation_error"
+                supervision_validation_failed requirements .uncle/docs/REQUIREMENTS_INTERPRETATION.md "$validation_error"
                 exit 1
             }
             # A plan from the merged pass is a bonus, never a requirement. A
@@ -2226,22 +2229,22 @@ while true; do
             # weak to do both, must fall back to running the plan stage -- not
             # fail a validation of the document it did write.
             rm -f "$STATE_DIR/merged-plan.input"
-            if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" && -s PROJECT_PLAN.md ]]; then
+            if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" && -s .uncle/docs/PROJECT_PLAN.md ]]; then
                 # The interpretation the plan was written against. If the
                 # operator edits it at the gate, the plan beside it is stale and
                 # must be rewritten -- the same rule adoption applies to a
                 # speculative stage.
-                hash_file REQUIREMENTS_INTERPRETATION.md > "$STATE_DIR/merged-plan.input"
+                hash_file .uncle/docs/REQUIREMENTS_INTERPRETATION.md > "$STATE_DIR/merged-plan.input"
             fi
             set_state WAIT_REQUIREMENTS_APPROVAL
             ;;
 
         WAIT_REQUIREMENTS_APPROVAL)
             if [[ "$MERGE_REQUIREMENTS_PLAN" != "1" ]]; then
-                speculate PROJECT_PLAN REQUIREMENTS_INTERPRETATION.md
+                speculate PROJECT_PLAN .uncle/docs/REQUIREMENTS_INTERPRETATION.md
             fi
             review_and_approve \
-                REQUIREMENTS_INTERPRETATION.md \
+                .uncle/docs/REQUIREMENTS_INTERPRETATION.md \
                 REQUIREMENTS_INTERPRETATION \
                 approve
             set_state PROJECT_PLAN
@@ -2249,7 +2252,7 @@ while true; do
 
         PROJECT_PLAN)
             verify_approval \
-                REQUIREMENTS_INTERPRETATION.md \
+                .uncle/docs/REQUIREMENTS_INTERPRETATION.md \
                 REQUIREMENTS_INTERPRETATION
             # Already running on a run that came through REQUIREMENTS; a run
             # resumed here starts it now.
@@ -2259,9 +2262,9 @@ while true; do
             # operator just approved. An edited interpretation means the plan
             # beside it answers a question nobody asked any more.
             merged_plan_usable=0
-            if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" && -s PROJECT_PLAN.md \
+            if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" && -s .uncle/docs/PROJECT_PLAN.md \
                   && -s "$STATE_DIR/merged-plan.input" ]]; then
-                if [[ "$(hash_file REQUIREMENTS_INTERPRETATION.md)" \
+                if [[ "$(hash_file .uncle/docs/REQUIREMENTS_INTERPRETATION.md)" \
                       == "$(cat "$STATE_DIR/merged-plan.input")" ]]; then
                     merged_plan_usable=1
                 else
@@ -2273,75 +2276,75 @@ while true; do
                 echo "Using the plan written with the approved requirements; not rerunning it."
             else
                 run_gated_stage PROJECT_PLAN \
-                    REQUIREMENTS_INTERPRETATION.md \
-                    PROJECT_PLAN.md
+                    .uncle/docs/REQUIREMENTS_INTERPRETATION.md \
+                    .uncle/docs/PROJECT_PLAN.md
             fi
             set_state WAIT_PLAN_APPROVAL
             ;;
 
         WAIT_PLAN_APPROVAL)
-            speculate ADVERSARIAL_REVIEW PROJECT_PLAN.md
-            review_and_approve PROJECT_PLAN.md PROJECT_PLAN approve
+            speculate ADVERSARIAL_REVIEW .uncle/docs/PROJECT_PLAN.md
+            review_and_approve .uncle/docs/PROJECT_PLAN.md PROJECT_PLAN approve
             set_state ADVERSARIAL_REVIEW
             ;;
 
         ADVERSARIAL_REVIEW)
-            verify_approval PROJECT_PLAN.md PROJECT_PLAN
+            verify_approval .uncle/docs/PROJECT_PLAN.md PROJECT_PLAN
             # Normally started when planning began; a run resumed here starts
             # it now, so the review stages are not minutes of nothing on screen.
             preview_build_start
             run_gated_stage ADVERSARIAL_REVIEW \
-                PROJECT_PLAN.md \
-                ADVERSARIAL_REVIEW.md
+                .uncle/docs/PROJECT_PLAN.md \
+                .uncle/docs/ADVERSARIAL_REVIEW.md
             set_state VALIDATE_ADVERSARIAL_REVIEW
             ;;
 
         VALIDATE_ADVERSARIAL_REVIEW)
-            verify_approval PROJECT_PLAN.md PROJECT_PLAN
-            validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md 2>&1)" || {
+            verify_approval .uncle/docs/PROJECT_PLAN.md PROJECT_PLAN
+            validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate .uncle/docs/ADVERSARIAL_REVIEW.md 2>&1)" || {
                 printf '%s\n' "$validation_error" >&2
                 printf '%s\n' "$validation_error" > "$STATE_DIR/validation-error.txt"
                 printf '%s\n' "validation: $validation_error" > "$STATE_DIR/stop-reason"
-                supervision_validation_failed adversarial-review ADVERSARIAL_REVIEW.md "$validation_error"
+                supervision_validation_failed adversarial-review .uncle/docs/ADVERSARIAL_REVIEW.md "$validation_error"
                 exit 1
             }
             rm -f "$STATE_DIR/validation-error.txt"
-            check_document_budget ADVERSARIAL_REVIEW.md || exit 1
+            check_document_budget .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             set_state WAIT_REVIEW_ACKNOWLEDGEMENT
             ;;
 
         WAIT_REVIEW_ACKNOWLEDGEMENT)
-            speculate UPDATED_PLAN ADVERSARIAL_REVIEW.md
+            speculate UPDATED_PLAN .uncle/docs/ADVERSARIAL_REVIEW.md
             review_and_approve \
-                ADVERSARIAL_REVIEW.md \
+                .uncle/docs/ADVERSARIAL_REVIEW.md \
                 ADVERSARIAL_REVIEW \
                 acknowledge
             set_state UPDATED_PLAN
             ;;
 
         UPDATED_PLAN)
-            verify_approval PROJECT_PLAN.md PROJECT_PLAN
+            verify_approval .uncle/docs/PROJECT_PLAN.md PROJECT_PLAN
             verify_approval \
-                ADVERSARIAL_REVIEW.md \
+                .uncle/docs/ADVERSARIAL_REVIEW.md \
                 ADVERSARIAL_REVIEW
             run_gated_stage UPDATED_PLAN \
-                ADVERSARIAL_REVIEW.md \
-                UPDATED_PROJECT_PLAN.md
+                .uncle/docs/ADVERSARIAL_REVIEW.md \
+                .uncle/docs/UPDATED_PROJECT_PLAN.md
             set_state VALIDATE_UPDATED_PLAN
             ;;
 
         VALIDATE_UPDATED_PLAN)
-            # Probe only: would an implementation started from PROJECT_PLAN.md,
+            # Probe only: would an implementation started from .uncle/docs/PROJECT_PLAN.md,
             # running beside the review, have survived it? Records the answer
             # and acts on nothing. Cannot fail the stage.
-            if [[ -s PROJECT_PLAN.md && -s UPDATED_PROJECT_PLAN.md ]]; then
+            if [[ -s .uncle/docs/PROJECT_PLAN.md && -s .uncle/docs/UPDATED_PROJECT_PLAN.md ]]; then
                 python3 -B "$ROOT/scripts/lib/plan_drift.py" \
-                    PROJECT_PLAN.md UPDATED_PROJECT_PLAN.md \
+                    .uncle/docs/PROJECT_PLAN.md .uncle/docs/UPDATED_PROJECT_PLAN.md \
                     "$STATE_DIR/plan-drift.json" 2>/dev/null || true
             fi
-            verify_approval PROJECT_PLAN.md PROJECT_PLAN
-            verify_approval ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
-            require_artifact UPDATED_PROJECT_PLAN.md
+            verify_approval .uncle/docs/PROJECT_PLAN.md PROJECT_PLAN
+            verify_approval .uncle/docs/ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
+            require_artifact .uncle/docs/UPDATED_PROJECT_PLAN.md
             set_state WAIT_UPDATED_PLAN_APPROVAL
             ;;
 
@@ -2349,10 +2352,10 @@ while true; do
             # Reject a structurally incomplete plan before asking anyone to
             # read it. Approving a plan the next state will refuse wastes the
             # one thing this workflow cannot generate more of.
-            plan_problem="$(plan_structure_problem UPDATED_PROJECT_PLAN.md)" && {
+            plan_problem="$(plan_structure_problem .uncle/docs/UPDATED_PROJECT_PLAN.md)" && {
                 echo
-                echo "UPDATED_PROJECT_PLAN.md has $plan_problem."
-                plan_headings UPDATED_PROJECT_PLAN.md
+                echo ".uncle/docs/UPDATED_PROJECT_PLAN.md has $plan_problem."
+                plan_headings .uncle/docs/UPDATED_PROJECT_PLAN.md
                 if [[ "$plan_problem" == 'invalid Parallel verification groups' ]]; then
                     parallel_groups_format_hint
                 elif [[ "$plan_problem" == 'no Protected verification paths block' ]]; then
@@ -2374,29 +2377,29 @@ while true; do
             if [[ "$plan_status" == 10 ]]; then continue; fi
             if [[ "$plan_status" != 0 ]]; then exit 1; fi
             review_and_approve \
-                UPDATED_PROJECT_PLAN.md \
+                .uncle/docs/UPDATED_PROJECT_PLAN.md \
                 UPDATED_PROJECT_PLAN \
                 approve
             set_state PREFLIGHT
             ;;
 
         PREFLIGHT)
-            verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
-            verify_commands UPDATED_PROJECT_PLAN.md > "$GREEN_CMDS"
+            verify_approval .uncle/docs/UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
+            verify_commands .uncle/docs/UPDATED_PROJECT_PLAN.md > "$GREEN_CMDS"
             if [[ ! -s "$GREEN_CMDS" ]]; then
-                echo "No Verification commands in UPDATED_PROJECT_PLAN.md. Amend the plan and renew its approval."
+                echo "No Verification commands in .uncle/docs/UPDATED_PROJECT_PLAN.md. Amend the plan and renew its approval."
                 exit 1
             fi
-            if ! verify_parallel_groups UPDATED_PROJECT_PLAN.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups"; then
+            if ! verify_parallel_groups .uncle/docs/UPDATED_PROJECT_PLAN.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups"; then
                 echo 'Invalid Parallel verification groups. Amend the plan and renew approval.'
                 parallel_groups_format_hint
                 exit 1
             fi
-            if ! verification_paths UPDATED_PROJECT_PLAN.md > /dev/null; then
-                echo "Missing Protected verification paths in UPDATED_PROJECT_PLAN.md."
+            if ! verification_paths .uncle/docs/UPDATED_PROJECT_PLAN.md > /dev/null; then
+                echo "Missing Protected verification paths in .uncle/docs/UPDATED_PROJECT_PLAN.md."
                 echo "The heading needs the words 'protected' and 'paths', followed by"
                 echo "one fenced block of repository-relative paths. Its headings are:"
-                plan_headings UPDATED_PROJECT_PLAN.md
+                plan_headings .uncle/docs/UPDATED_PROJECT_PLAN.md
                 echo "Amend the plan and renew its approval."
                 exit 1
             fi
@@ -2417,7 +2420,7 @@ while true; do
                     printf '%s\n' "$status" > "$STATE_DIR/preflight-bg.status"
                 ) > "$LOG_DIR/preflight.background.log" 2>&1 < /dev/null &
                 PREFLIGHT_BG_PID=$!
-                hash_file UPDATED_PROJECT_PLAN.md > "$STATE_DIR/preflight-plan.sha256"
+                hash_file .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/preflight-plan.sha256"
                 set_state IMPLEMENT
                 continue
             fi
@@ -2426,27 +2429,27 @@ while true; do
             if plan_executability_enabled && [[ -s "$STATE_DIR/plan-executability/assessment.json" ]]; then
                 plan_tool preflight-check || exit 1
             fi
-            preflight_result="$(acceptance_result PREFLIGHT_REPORT.md)"
+            preflight_result="$(acceptance_result .uncle/docs/PREFLIGHT_REPORT.md)"
             case "$preflight_result" in
                 PASS) human_input_reset "$STATE_DIR" ;;
                 BLOCKED-HUMAN)
                     human_input_reset "$STATE_DIR"
                     echo
                     echo "Prerequisites await a person, not an arrangement:"
-                    acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-HUMAN | sed 's/^/  /'
+                    acceptance_blocked_ids .uncle/docs/PREFLIGHT_REPORT.md BLOCKED-HUMAN | sed 's/^/  /'
                     echo "Implementation does not consume a signature, so the run continues."
                     echo "Verification does: these must be signed before the checklist can"
                     echo "pass, and the gates there will say so again."
                     ;;
                 BLOCKED-SETUP)
-                    echo "Prerequisites BLOCKED-SETUP: see PREFLIGHT_REPORT.md."
+                    echo "Prerequisites BLOCKED-SETUP: see .uncle/docs/PREFLIGHT_REPORT.md."
                     echo "Outstanding, one action each:"
-                    acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-SETUP | sed 's/^/  /'
+                    acceptance_blocked_ids .uncle/docs/PREFLIGHT_REPORT.md BLOCKED-SETUP | sed 's/^/  /'
                     # Offer to take them here. A prerequisite that is waiting
                     # on a person is waiting on the person sitting at this
                     # gate, and hand-editing markdown between runs is how its
                     # path ends up spelled two ways.
-                    blocked_ids="$(acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-SETUP)"
+                    blocked_ids="$(acceptance_blocked_ids .uncle/docs/PREFLIGHT_REPORT.md BLOCKED-SETUP)"
                     # Unattended: nobody is sitting at this gate to supply the
                     # prerequisite, so asking is the one thing that cannot
                     # work. Waive them and go on -- the rows stay blocked in
@@ -2456,7 +2459,7 @@ while true; do
                     if [[ "${UNATTENDED:-0}" == 1 ]]; then
                         # shellcheck disable=SC2086
                         if [[ -z "$blocked_ids" ]] \
-                            || ! record_waiver PREFLIGHT_REPORT.md $blocked_ids; then
+                            || ! record_waiver .uncle/docs/PREFLIGHT_REPORT.md $blocked_ids; then
                             echo "Unattended: could not record a waiver; stopping."
                             exit 1
                         fi
@@ -2467,40 +2470,40 @@ while true; do
                         # a signature: review the evidence, provide the input,
                         # skip with one recorded decision, or decline cleanly.
                         # shellcheck disable=SC2086
-                        preflight_blocked_gate PREFLIGHT_REPORT.md BLOCKED-SETUP $blocked_ids
+                        preflight_blocked_gate .uncle/docs/PREFLIGHT_REPORT.md BLOCKED-SETUP $blocked_ids
                     fi
                     ;;
                 *)
-                    echo "Prerequisites $preflight_result: see PREFLIGHT_REPORT.md."
+                    echo "Prerequisites $preflight_result: see .uncle/docs/PREFLIGHT_REPORT.md."
                     if [[ "$preflight_result" == UNKNOWN ]]; then
                         # UNKNOWN means the table did not parse. Name the line:
                         # the verdict alone leaves an operator guessing which of
                         # a dozen rules the report missed.
-                        acceptance_problem PREFLIGHT_REPORT.md | sed 's/^/  /'
+                        acceptance_problem .uncle/docs/PREFLIGHT_REPORT.md | sed 's/^/  /'
                         echo "Resolve and rerun."
                         exit 1
                     fi
                     if [[ "$preflight_result" == BLOCKED-IMPOSSIBLE && "${UNATTENDED:-0}" != 1 ]]; then
-                        impossible_ids="$(acceptance_blocked_ids PREFLIGHT_REPORT.md BLOCKED-IMPOSSIBLE)"
+                        impossible_ids="$(acceptance_blocked_ids .uncle/docs/PREFLIGHT_REPORT.md BLOCKED-IMPOSSIBLE)"
                         if [[ -n "$impossible_ids" ]]; then
                             # Effort will not clear these, but the answer is
                             # still a choice: review, provide out-of-band,
                             # skip on the record, or decline and amend.
                             # shellcheck disable=SC2086
-                            preflight_blocked_gate PREFLIGHT_REPORT.md BLOCKED-IMPOSSIBLE $impossible_ids
+                            preflight_blocked_gate .uncle/docs/PREFLIGHT_REPORT.md BLOCKED-IMPOSSIBLE $impossible_ids
                         fi
                     fi
                     echo "Resolve and rerun."
                     exit 1
                     ;;
             esac
-            hash_file UPDATED_PROJECT_PLAN.md > "$STATE_DIR/preflight-plan.sha256"
+            hash_file .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/preflight-plan.sha256"
             set_state IMPLEMENT
             ;;
 
         IMPLEMENT)
             verify_approval \
-                UPDATED_PROJECT_PLAN.md \
+                .uncle/docs/UPDATED_PROJECT_PLAN.md \
                 UPDATED_PROJECT_PLAN
             # Nothing may read or write the tree while the preview is still
             # writing it -- including the verification baseline captured below.
@@ -2521,9 +2524,9 @@ while true; do
             # hash is still checked: a plan revised since the probe started
             # invalidates it either way.
             if [[ ! -s "$STATE_DIR/preflight-plan.sha256" ]] \
-                || [[ "$(cat "$STATE_DIR/preflight-plan.sha256")" != "$(hash_file UPDATED_PROJECT_PLAN.md)" ]] \
+                || [[ "$(cat "$STATE_DIR/preflight-plan.sha256")" != "$(hash_file .uncle/docs/UPDATED_PROJECT_PLAN.md)" ]] \
                 || { [[ ! -e "$STATE_DIR/preflight-backgrounded" ]] \
-                     && ! preflight_settled "$(acceptance_result PREFLIGHT_REPORT.md)"; }; then
+                     && ! preflight_settled "$(acceptance_result .uncle/docs/PREFLIGHT_REPORT.md)"; }; then
                 set_state PREFLIGHT
                 continue
             fi
@@ -2540,7 +2543,7 @@ while true; do
             plan_status=0
             plan_after_write || plan_status=$?
             case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
-            verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
+            verify_approval .uncle/docs/UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
             PREVIOUS_VERIFICATION_SNAPSHOT=""
             capture_verification_inputs
 
@@ -2554,7 +2557,7 @@ while true; do
             # Probe only: records what a parallel implementation would have
             # done and whether the plan's file ownership matched the tree.
             # Runs nothing in parallel and cannot fail the stage.
-            python3 -B "$ROOT/scripts/lib/step_groups.py" UPDATED_PROJECT_PLAN.md . \
+            python3 -B "$ROOT/scripts/lib/step_groups.py" .uncle/docs/UPDATED_PROJECT_PLAN.md . \
                 > "$STATE_DIR/step-groups.json" 2>/dev/null || true
             plan_delivery_summary
             check_verification_inputs
@@ -2641,14 +2644,14 @@ while true; do
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
-            require_file TEST_REVIEW.md
+            require_file .uncle/docs/TEST_REVIEW.md
             if [[ "$GREEN_CHECK" != 1 || ! -s "$GREEN_CLASS" ]]; then
                 echo "Acceptance BLOCKED: the driver must run the approved verification suite."
                 echo "Enable WORKFLOW_GREEN_CHECK and rerun IMPLEMENT to capture its results."
                 exit 1
             fi
             if [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
-                && [[ "$(acceptance_result TEST_REVIEW.md 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS')" == PASS ]]; then
+                && [[ "$(acceptance_result .uncle/docs/TEST_REVIEW.md 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS')" == PASS ]]; then
                 # Repair is the right answer for a check the code can satisfy.
                 # It is the wrong answer for one the code cannot: the stage runs,
                 # changes nothing that helps, and the run comes straight back
@@ -2663,7 +2666,7 @@ while true; do
                     echo
                     echo "Verification failure waived earlier; continuing."
                     echo "$GREEN_MD still records the failure."
-                    acceptance_transition TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+                    acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
                     continue
                 fi
                 # The first failure goes to repair unasked: most are real and
@@ -2681,19 +2684,19 @@ while true; do
                     echo "still reads it."
                     # shellcheck disable=SC2086
                     if record_waiver "$GREEN_MD" $green_ids; then
-                        acceptance_transition TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+                        acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
                         continue
                     fi
                 fi
                 printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
                 set_state REPAIR
             else
-                acceptance_transition TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+                acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
             fi
             ;;
 
         REPAIR)
-            verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
+            verify_approval .uncle/docs/UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
             require_file "$STATE_DIR/repair-source"
             repair_count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"
             case "$repair_count" in
@@ -2731,7 +2734,7 @@ while true; do
             plan_status=0
             plan_after_write || plan_status=$?
             case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
-            verify_approval UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
+            verify_approval .uncle/docs/UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
             capture_verification_inputs
             run_green_check || true
             plan_delivery_summary
@@ -2751,12 +2754,12 @@ while true; do
             ;;
 
         VALIDATE_MANUAL_CHECKLIST)
-            manual_checklist_validation_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" MANUAL_CHECKLIST.md 2>&1)" || {
+            manual_checklist_validation_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" .uncle/docs/MANUAL_CHECKLIST.md 2>&1)" || {
                 manual_checklist_retry_marker="$STATE_DIR/manual-checklist-format-retry.md"
                 if [[ ! -e "$manual_checklist_retry_marker" ]]; then
                     {
-                        echo "The preceding MANUAL_CHECKLIST.md was rejected only for this required format."
-                        echo 'Write a new complete MANUAL_CHECKLIST.md: every check as its own item with an Exact action and an Expected result.'
+                        echo "The preceding .uncle/docs/MANUAL_CHECKLIST.md was rejected only for this required format."
+                        echo 'Write a new complete .uncle/docs/MANUAL_CHECKLIST.md: every check as its own item with an Exact action and an Expected result.'
                         echo 'Preserve every substantive check. Never drop or merge checks merely to make the document parse.'
                         echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
                         echo
@@ -2809,11 +2812,11 @@ while true; do
             # bounded retry back through EXECUTE_CHECKLIST, sharing the same
             # per-run marker/budget as a malformed acceptance table, at least
             # gives the stage one automatic chance before stopping for a human.
-            if [[ ! -s VERIFICATION_REPORT.md || ! -s DEFECTS.md ]] \
+            if [[ ! -s .uncle/docs/VERIFICATION_REPORT.md || ! -s .uncle/docs/DEFECTS.md ]] \
                 && [[ ! -e "$STATE_DIR/execute-checklist-format-retry.md" ]]; then
                 {
                     echo 'The previous execute-checklist pass ended without writing'
-                    echo 'VERIFICATION_REPORT.md and/or DEFECTS.md. These two reports are the'
+                    echo '.uncle/docs/VERIFICATION_REPORT.md and/or .uncle/docs/DEFECTS.md. These two reports are the'
                     echo 'stage outputs; a status summary or a request for guidance on how to'
                     echo 'classify blocked checks is not a substitute for them.'
                     echo 'Decide it yourself and write both complete reports now: mark a check'
@@ -2826,10 +2829,10 @@ while true; do
                 echo 'Retrying execute-checklist once: it produced no report to validate.'
                 continue
             fi
-            require_file VERIFICATION_REPORT.md
-            require_file DEFECTS.md
-            check_document_budget VERIFICATION_REPORT.md || exit 1
-            check_document_budget DEFECTS.md || exit 1
+            require_file .uncle/docs/VERIFICATION_REPORT.md
+            require_file .uncle/docs/DEFECTS.md
+            check_document_budget .uncle/docs/VERIFICATION_REPORT.md || exit 1
+            check_document_budget .uncle/docs/DEFECTS.md || exit 1
             green_ids="$(green_failed_ids "$GREEN_CLASS" "$GREEN_CMDS")"
             if [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] \
                 && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
@@ -2837,7 +2840,7 @@ while true; do
                 printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
                 set_state REPAIR
             else
-                acceptance_transition VERIFICATION_REPORT.md FINAL_AUDIT
+                acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT
             fi
             ;;
 
@@ -2845,9 +2848,9 @@ while true; do
             # Use the same decisions as the preceding gates: human blockers
             # and recorded waivers reach audit without becoming PASS. Testing
             # only for PASS here sent those reports back around the pipeline.
-            acceptance_transition TEST_REVIEW.md FINAL_AUDIT 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+            acceptance_transition .uncle/docs/TEST_REVIEW.md FINAL_AUDIT 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
             [[ "$(get_state)" == FINAL_AUDIT ]] || continue
-            acceptance_transition VERIFICATION_REPORT.md FINAL_AUDIT
+            acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT
             [[ "$(get_state)" == FINAL_AUDIT ]] || continue
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
@@ -2857,7 +2860,7 @@ while true; do
             check_verification_inputs
             # Removed first so run_codex_review's require_file cannot read a
             # previous run's audit as this one's output.
-            rm -f FINAL_AUDIT.md
+            rm -f .uncle/docs/FINAL_AUDIT.md
             run_stage FINAL_AUDIT
 
             set_state VALIDATE_AUDIT
@@ -2869,19 +2872,19 @@ while true; do
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
             echo "Validating saved audit; the reviewer will not be rerun."
-            require_file FINAL_AUDIT.md
+            require_file .uncle/docs/FINAL_AUDIT.md
             # A shape-only defect (missing `## Findings` heading, a
             # differently-named correction column) is normalized in place by
             # the validator itself -- deterministic, no model call. A defect
             # the normalizer cannot settle gets one real re-run with the exact
-            # diagnosis appended, the same one-shot recovery MANUAL_CHECKLIST.md
+            # diagnosis appended, the same one-shot recovery .uncle/docs/MANUAL_CHECKLIST.md
             # gets above; a second malformed audit still stops for a human.
-            final_audit_validation_error="$(python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md 2>&1)" || {
+            final_audit_validation_error="$(python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate .uncle/docs/FINAL_AUDIT.md 2>&1)" || {
                 final_audit_retry_marker="$STATE_DIR/final-audit-format-retry.md"
                 if [[ ! -e "$final_audit_retry_marker" ]]; then
                     {
-                        echo "The preceding FINAL_AUDIT.md was rejected only for this required format."
-                        echo 'Write a new complete FINAL_AUDIT.md in the required shape, ending with its verdict line.'
+                        echo "The preceding .uncle/docs/FINAL_AUDIT.md was rejected only for this required format."
+                        echo 'Write a new complete .uncle/docs/FINAL_AUDIT.md in the required shape, ending with its verdict line.'
                         echo 'Preserve every substantive finding and the verdict itself. Never soften or drop a finding merely to make the document parse.'
                         echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
                         echo
@@ -2895,8 +2898,8 @@ while true; do
                 printf '%s\n' "$final_audit_validation_error" >&2
                 exit 1
             }
-            audit_class="$(classify_audit_verdict FINAL_AUDIT.md)"
-            printf '%s\t%s\n' "$audit_class" "$(hash_file FINAL_AUDIT.md)" \
+            audit_class="$(classify_audit_verdict .uncle/docs/FINAL_AUDIT.md)"
+            printf '%s\t%s\n' "$audit_class" "$(hash_file .uncle/docs/FINAL_AUDIT.md)" \
                 > "$VERDICT_FILE"
             echo
             echo "Audit verdict: $audit_class"
@@ -2926,23 +2929,23 @@ while true; do
 
             # Recover an interruption after saving READY but before COMPLETE.
             if [[ "$audit_class" == READY ]]; then
-                [[ "$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")" == "$(hash_file FINAL_AUDIT.md)" ]] || exit 1
-                python3 "$ROOT/scripts/lib/audit-findings.py" FINAL_AUDIT.md "$STATE_DIR" --check || exit 1
+                [[ "$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")" == "$(hash_file .uncle/docs/FINAL_AUDIT.md)" ]] || exit 1
+                python3 "$ROOT/scripts/lib/audit-findings.py" .uncle/docs/FINAL_AUDIT.md "$STATE_DIR" --check || exit 1
                 set_state COMPLETE
                 continue
             fi
 
             if [[ "$audit_class" == NOT_READY ]]; then
-                audit_hash="$(hash_file FINAL_AUDIT.md)"
-                if [[ "$(classify_audit_verdict FINAL_AUDIT.md)" != NOT_READY ]] \
+                audit_hash="$(hash_file .uncle/docs/FINAL_AUDIT.md)"
+                if [[ "$(classify_audit_verdict .uncle/docs/FINAL_AUDIT.md)" != NOT_READY ]] \
                     || [[ "$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")" != "$audit_hash" ]]; then
                     echo "The audit changed since its verdict was recorded; rerun FINAL_AUDIT."
                     exit 1
                 fi
                 # Each finding needs an explicit decision, including in an
                 # unattended run. EOF leaves the saved review pending.
-                python3 "$ROOT/scripts/lib/audit-findings.py" FINAL_AUDIT.md "$STATE_DIR" || exit 1
-                [[ "$(hash_file FINAL_AUDIT.md)" == "$audit_hash" ]] || exit 1
+                python3 "$ROOT/scripts/lib/audit-findings.py" .uncle/docs/FINAL_AUDIT.md "$STATE_DIR" || exit 1
+                [[ "$(hash_file .uncle/docs/FINAL_AUDIT.md)" == "$audit_hash" ]] || exit 1
                 cp "$VERDICT_FILE" "$STATE_DIR/audit-verdict.original"
                 printf '%s\t%s\n' "READY" "$audit_hash" > "$VERDICT_FILE"
                 if [[ -f "$AUDIT_OVERRIDE_FILE" ]]; then
@@ -2961,7 +2964,7 @@ while true; do
             if [[ "$audit_class" == "NOT_READY" ]]; then
                 echo "The independent auditor says this build is not ready."
             else
-                echo "FINAL_AUDIT.md does not end in one of the three verdict"
+                echo ".uncle/docs/FINAL_AUDIT.md does not end in one of the three verdict"
                 echo "phrases, so the auditor's conclusion could not be read."
                 echo "An unreadable verdict is not a pass."
             fi
@@ -2976,12 +2979,12 @@ while true; do
             echo "or record an explicit decision to finish anyway. An override"
             echo "is written to $AUDIT_OVERRIDE_FILE and reported at COMPLETE."
 
-            review_and_approve FINAL_AUDIT.md FINAL_AUDIT_OVERRIDE override
+            review_and_approve .uncle/docs/FINAL_AUDIT.md FINAL_AUDIT_OVERRIDE override
 
             printf '%s\t%s\t%s\n' \
                 "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
                 "$audit_class" \
-                "$(hash_file FINAL_AUDIT.md)" \
+                "$(hash_file .uncle/docs/FINAL_AUDIT.md)" \
                 > "$AUDIT_OVERRIDE_FILE"
 
             set_state COMPLETE
@@ -2999,15 +3002,15 @@ while true; do
             fi
             echo
             echo "Artifacts:"
-            echo "  REQUIREMENTS_INTERPRETATION.md"
-            echo "  PROJECT_PLAN.md"
-            echo "  ADVERSARIAL_REVIEW.md"
-            echo "  UPDATED_PROJECT_PLAN.md"
-            echo "  IMPLEMENTATION_NOTES.md"
-            echo "  AUTOMATED_TEST_REPORT.md"
-            echo "  MANUAL_CHECKLIST.md"
-            echo "  VERIFICATION_REPORT.md"
-            echo "  FINAL_AUDIT.md"
+            echo "  .uncle/docs/REQUIREMENTS_INTERPRETATION.md"
+            echo "  .uncle/docs/PROJECT_PLAN.md"
+            echo "  .uncle/docs/ADVERSARIAL_REVIEW.md"
+            echo "  .uncle/docs/UPDATED_PROJECT_PLAN.md"
+            echo "  .uncle/docs/IMPLEMENTATION_NOTES.md"
+            echo "  .uncle/docs/AUTOMATED_TEST_REPORT.md"
+            echo "  .uncle/docs/MANUAL_CHECKLIST.md"
+            echo "  .uncle/docs/VERIFICATION_REPORT.md"
+            echo "  .uncle/docs/FINAL_AUDIT.md"
             echo "  $DIFF_FILE"
 
             # An overridden check is not a passed check. Whatever else this

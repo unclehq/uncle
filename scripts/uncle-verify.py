@@ -255,7 +255,7 @@ def check_3(statement, tree):
         if name not in DOCUMENTS:
             continue
         recorded = entry.get('digest') or ''
-        path = name + '.md'
+        path = '.uncle/docs/' + name + '.md'
         blob = git('rev-parse', '--verify', '-q', tree + ':' + path, check=False).decode().strip()
         if blob:
             actual = hashlib.sha256(git('cat-file', 'blob', blob)).hexdigest()

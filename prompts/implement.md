@@ -3,20 +3,20 @@ You are the primary implementation agent.
 Read these in one parallel batch of tool calls:
 
 - REQUIREMENTS.md
-- REQUIREMENTS_INTERPRETATION.md
-- UPDATED_PROJECT_PLAN.md
-- PREFLIGHT_REPORT.md, if it exists
+- .uncle/docs/REQUIREMENTS_INTERPRETATION.md
+- .uncle/docs/UPDATED_PROJECT_PLAN.md
+- .uncle/docs/PREFLIGHT_REPORT.md, if it exists
 
-That is the whole input set. PREFLIGHT_REPORT.md may legitimately be absent:
+That is the whole input set. .uncle/docs/PREFLIGHT_REPORT.md may legitimately be absent:
 the prerequisite probe now runs alongside this stage instead of in front of it,
 so implementation does not wait on it. Its absence is not an error and not a
 reason to stop or to go looking for one; build from the plan. It also means no
 prerequisite has been confirmed yet, so do not record any capability as
-verified on the strength of a report you did not read. UPDATED_PROJECT_PLAN.md is the approved plan: it
-supersedes PROJECT_PLAN.md and records a disposition for every finding in
-ADVERSARIAL_REVIEW.md, so do not read either one. If the updated plan turns out
+verified on the strength of a report you did not read. .uncle/docs/UPDATED_PROJECT_PLAN.md is the approved plan: it
+supersedes .uncle/docs/PROJECT_PLAN.md and records a disposition for every finding in
+.uncle/docs/ADVERSARIAL_REVIEW.md, so do not read either one. If the updated plan turns out
 to be missing something you need, read the superseded document, and record in
-IMPLEMENTATION_NOTES.md that you had to.
+.uncle/docs/IMPLEMENTATION_NOTES.md that you had to.
 
 Source files already in the tree may be a first look built from the brief
 before the plan was reviewed. They are not evidence: build the application the
@@ -49,7 +49,7 @@ Rules:
 3. Implement high-risk invariants before optional functionality.
 4. Compile and test continuously.
 5. Do not weaken an invariant to make a test pass.
-6. Record deviations in IMPLEMENTATION_NOTES.md.
+6. Record deviations in .uncle/docs/IMPLEMENTATION_NOTES.md.
 7. Add requirement and invariant identifiers to relevant tests.
 8. Do not invoke the reviewer CLI.
 9. Prove critical acceptance tests fail for the representative defects in the
@@ -77,7 +77,7 @@ use:
 - when a command floods the terminal, re-run it filtered to the failures
   rather than reading the whole transcript.
 
-Run applicable targeted checks. The driver owns UPDATED_PROJECT_PLAN.md's full
+Run applicable targeted checks. The driver owns .uncle/docs/UPDATED_PROJECT_PLAN.md's full
 verification block and runs it once immediately after this stage. Do not run a
 full-project regression command or an equivalent loop over every suite here
 unless a narrower target cannot establish a specific acceptance criterion.
@@ -98,7 +98,7 @@ or ports should be launched together, not serially:
 Skip a check only if it does not apply to this repository, and say so
 explicitly in the report.
 
-Create AUTOMATED_TEST_REPORT.md containing:
+Create .uncle/docs/AUTOMATED_TEST_REPORT.md containing:
 
 - exact command;
 - exit status;
@@ -119,10 +119,10 @@ blocker requiring renewed approval.
 
 ## What happens to this work next
 
-The driver re-runs UPDATED_PROJECT_PLAN.md's `## Verification commands` block
+The driver re-runs .uncle/docs/UPDATED_PROJECT_PLAN.md's `## Verification commands` block
 itself, with no agent in the path, and a human then reads the real diff —
 generated from the working tree, including the files you created — next to
-IMPLEMENTATION_NOTES.md and AUTOMATED_TEST_REPORT.md.
+.uncle/docs/IMPLEMENTATION_NOTES.md and .uncle/docs/AUTOMATED_TEST_REPORT.md.
 
 A check you reported as passing but did not run shows up in that comparison.
 Run the checks, and report what actually happened.
@@ -132,7 +132,7 @@ DECISION, implement only the listed executable step IDs and paths; retain all ac
 rows and leave dependent/transitive steps pending. Do not ask again for settled authority.
 Complete independent code and mocked tests before reporting a live-verification blocker.
 Report contradictions in exactly one fenced `plan-blockers` JSON array in
-IMPLEMENTATION_NOTES.md. Each row has id, class (DESIGN/AUTHORITY/LIVE_VERIFICATION/CODING),
+.uncle/docs/IMPLEMENTATION_NOTES.md. Each row has id, class (DESIGN/AUTHORITY/LIVE_VERIFICATION/CODING),
 requirement_ids, restriction_ids, evidence, independent_work. AUTHORITY also requires
 question and alternatives. DESIGN means an unsupported generated mechanism, not an
 ordinary coding defect. LIVE_VERIFICATION means only dependent approved live checks

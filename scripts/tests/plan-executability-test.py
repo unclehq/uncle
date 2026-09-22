@@ -20,13 +20,13 @@ spec.loader.exec_module(mod)
 
 def assessment(m):
     plan = m['plan']
-    requirements = sorted(mod.ids_in('CHANGE_SPEC.md' if plan == 'CHANGE_PLAN.md' else 'REQUIREMENTS_INTERPRETATION.md', 'AC'))
+    requirements = sorted(mod.ids_in('.uncle/docs/CHANGE_SPEC.md' if plan == '.uncle/docs/CHANGE_PLAN.md' else '.uncle/docs/REQUIREMENTS_INTERPRETATION.md', 'AC'))
     evidence = str(Path(os.environ.get('WORKFLOW_AGENT_CMD', 'probe.txt')).resolve())
     status = os.environ.get('FAKE_CAP_STATUS', 'SUPPORTED')
     if 'isolated-context revision' in Path(plan).read_text():
         status = 'SUPPORTED'
     restriction_ids = sorted(mod.ids_in(plan, 'R'))
-    finding_ids = sorted(mod.ids_in('ADVERSARIAL_REVIEW.md', 'AR'))
+    finding_ids = sorted(mod.ids_in('.uncle/docs/ADVERSARIAL_REVIEW.md', 'AR'))
     if finding_ids and not restriction_ids:
         restriction_ids = ['R-1']
     restrictions = [dict(id=r, source_kind='DESIGN', source_location=plan, requirement_ids=requirements,
@@ -58,7 +58,7 @@ def assessment(m):
 
 def fixture(root, mode):
     os.chdir(root)
-    plan = 'UPDATED_PROJECT_PLAN.md' if os.environ.get('FAKE_WORKFLOW') == 'stagegate' else 'CHANGE_PLAN.md'
+    plan = '.uncle/docs/UPDATED_PROJECT_PLAN.md' if os.environ.get('FAKE_WORKFLOW') == 'stagegate' else '.uncle/docs/CHANGE_PLAN.md'
     target = mod.ASSESS / 'manifest.json'
     if mode == 'seed' and (target.exists() or os.environ.get('FAKE_ASSESS_NO_APPROVAL')):
         return
@@ -80,11 +80,12 @@ class ContractTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.old = Path.cwd()
         os.chdir(self.tmp.name)
-        Path('CHANGE_PLAN.md').write_text('R-1')
-        Path('CHANGE_SPEC.md').write_text('AC-1')
-        Path('ADVERSARIAL_REVIEW.md').write_text('AR-001')
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        Path('.uncle/docs/CHANGE_PLAN.md').write_text('R-1')
+        Path('.uncle/docs/CHANGE_SPEC.md').write_text('AC-1')
+        Path('.uncle/docs/ADVERSARIAL_REVIEW.md').write_text('AR-001')
         Path('probe.txt').write_text('isolated context supported by stub')
-        self.m = mod.manifest(ROOT, 'CHANGE_PLAN.md')
+        self.m = mod.manifest(ROOT, '.uncle/docs/CHANGE_PLAN.md')
         self.a = assessment(self.m)
         self.addCleanup(self.tmp.cleanup)
         self.addCleanup(os.chdir, self.old)
@@ -123,6 +124,7 @@ plan_collect_assessment
                               capture_output=True, text=True, timeout=15)
 
     def test_conversational_assessment_retried_without_weakening_verdict(self):
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
         result = self.collect_assessment('retry', 'REVISE')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(Path('calls').read_text(), '2')
@@ -132,7 +134,7 @@ plan_collect_assessment
         self.assertIn('three coding blockers', rejected[0].read_text())
         self.assertFalse((mod.ASSESS/'validated.json').exists())
         self.assertFalse((mod.ASSESS/'assessment.md').exists())
-        self.assertEqual(Path('CHANGE_PLAN.md').read_text(), 'R-1')
+        self.assertEqual(Path('.uncle/docs/CHANGE_PLAN.md').read_text(), 'R-1')
 
     def test_repeated_invalid_assessment_stops_after_two_attempts(self):
         result = self.collect_assessment('invalid')
@@ -202,9 +204,10 @@ plan_collect_assessment
         self.assertEqual(mod.validate(self.a, self.m)['verdict'], 'READY')
 
     def test_malformed_blocker(self):
-        Path('IMPLEMENTATION_NOTES.md').write_text('```plan-blockers\n{}\n```')
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        Path('.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('```plan-blockers\n{}\n```')
         with self.assertRaises(ValueError):
-            mod.blockers('IMPLEMENTATION_NOTES.md')
+            mod.blockers('.uncle/docs/IMPLEMENTATION_NOTES.md')
 
     def test_journal_corruption(self):
         mod.atomic(mod.JOURNAL, {'version': 2})
@@ -218,20 +221,22 @@ plan_collect_assessment
         Path('.gitignore').write_text('.uncle/\n')
 
     def test_launch_intent_blocks_replay(self):
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
         self.prepare_runtime()
         self.assertEqual(mod.runtime('dispatch'), 0)
         self.assertEqual(mod.runtime('dispatch'), 25)
         self.assertEqual(mod.runtime('retry'), 0)
         self.assertEqual(mod.runtime('dispatch'), 0)
-        Path('IMPLEMENTATION_NOTES.md').write_text('delivered')
+        Path('.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('delivered')
         self.assertEqual(mod.runtime('classify'), 0)
         self.assertEqual(mod.runtime('dispatch'), 22)
 
     def test_live_failure_waits_for_changed_evidence(self):
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
         self.a['prerequisites'] = [dict(id='P-1', phase='LIVE_VERIFICATION', status='UNVERIFIED',
             check_ids=['LIVE-1'], commands=['true'], evidence_paths=['auth'])]
         self.prepare_runtime()
-        Path('IMPLEMENTATION_NOTES.md').write_text('```plan-blockers\n' + json.dumps([
+        Path('.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('```plan-blockers\n' + json.dumps([
             dict(id='B-1', **{'class': 'LIVE_VERIFICATION'}, requirement_ids=['AC-1'],
                  restriction_ids=[], evidence='missing auth', independent_work='delivered')]) + '\n```')
         self.assertEqual(mod.runtime('classify'), 20)
@@ -254,13 +259,14 @@ plan_collect_assessment
         self.assertEqual(Path('app.py').read_text(), 'changed')
 
     def test_design_bound_survives_cosmetic_plan_changes(self):
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
         self.prepare_runtime()
         saved = sys.argv
         self.addCleanup(setattr, sys, 'argv', saved)
         sys.argv = ['tool', 'recover']
         self.assertEqual(mod.main(), 0)
-        Path('CHANGE_PLAN.md').write_text('R-1 cosmetic edit')
-        self.m = mod.manifest(ROOT, 'CHANGE_PLAN.md')
+        Path('.uncle/docs/CHANGE_PLAN.md').write_text('R-1 cosmetic edit')
+        self.m = mod.manifest(ROOT, '.uncle/docs/CHANGE_PLAN.md')
         mod.atomic(mod.ASSESS / 'manifest.json', self.m)
         with self.assertRaisesRegex(ValueError, 'same failed mechanism'):
             mod.main()
@@ -273,34 +279,37 @@ plan_collect_assessment
             mod.main()
 
     def test_preflight_rejects_misplaced_live_blocker(self):
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
         self.a['prerequisites'] = [dict(id='P-1', phase='LIVE_VERIFICATION', status='UNVERIFIED',
             check_ids=['LIVE-1'], commands=['true'], evidence_paths=['auth'])]
         self.prepare_runtime()
-        Path('PREFLIGHT_REPORT.md').write_text('## Acceptance gate\n| P-1 | YES | BLOCKED-SETUP | auth |\n')
+        Path('.uncle/docs/PREFLIGHT_REPORT.md').write_text('## Acceptance gate\n| P-1 | YES | BLOCKED-SETUP | auth |\n')
         with self.assertRaisesRegex(ValueError, 'belongs in Findings'):
             mod.runtime('preflight-check')
-        Path('PREFLIGHT_REPORT.md').write_text('## Findings\nP-1 live auth unavailable\n## Acceptance gate\n| CODING | YES | PASS | mocks |\n')
+        Path('.uncle/docs/PREFLIGHT_REPORT.md').write_text('## Findings\nP-1 live auth unavailable\n## Acceptance gate\n| CODING | YES | PASS | mocks |\n')
         self.assertEqual(mod.runtime('preflight-check'), 0)
 
     def test_stagegate_live_success_needs_complete_delivery(self):
-        Path('UPDATED_PROJECT_PLAN.md').write_text('R-1')
-        Path('REQUIREMENTS_INTERPRETATION.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | live works | live check |\n')
-        self.m = mod.manifest(ROOT, 'UPDATED_PROJECT_PLAN.md')
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        Path('.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text('R-1')
+        Path('.uncle/docs/REQUIREMENTS_INTERPRETATION.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | live works | live check |\n')
+        self.m = mod.manifest(ROOT, '.uncle/docs/UPDATED_PROJECT_PLAN.md')
         self.a = assessment(self.m)
         self.prepare_runtime()
         j = mod.journal(); j['phase'] = 'VERIFYING'; mod.atomic(mod.JOURNAL, j)
-        Path('IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | INCOMPLETE | helper.py | missing live evidence |\n')
+        Path('.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | INCOMPLETE | helper.py | missing live evidence |\n')
         self.assertEqual(mod.runtime('classify'), 20)
         self.assertEqual(mod.journal()['phase'], 'WAIT_LIVE')
 
     def test_incomplete_delivery_can_retry_after_resume(self):
-        Path('UPDATED_PROJECT_PLAN.md').write_text('R-1')
-        Path('REQUIREMENTS_INTERPRETATION.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | coding | test |\n')
-        self.m = mod.manifest(ROOT, 'UPDATED_PROJECT_PLAN.md')
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        Path('.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text('R-1')
+        Path('.uncle/docs/REQUIREMENTS_INTERPRETATION.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | coding | test |\n')
+        self.m = mod.manifest(ROOT, '.uncle/docs/UPDATED_PROJECT_PLAN.md')
         self.a = assessment(self.m)
         self.prepare_runtime()
         self.assertEqual(mod.runtime('dispatch'), 0)
-        Path('IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | INCOMPLETE | helper.py | missing test |\n')
+        Path('.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | INCOMPLETE | helper.py | missing test |\n')
         self.assertEqual(mod.runtime('classify'), 24)
         self.assertEqual(mod.runtime('dispatch'), 22)
         self.assertEqual(mod.runtime('classify'), 24)
@@ -349,77 +358,85 @@ class ScaffoldGeneratorFindingsTests(unittest.TestCase):
         self.addCleanup(os.chdir, self.old)
 
     def test_narrow_owns_with_overwrite_scaffold_is_flagged(self):
-        Path('CHANGE_PLAN.md').write_text(
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        Path('.uncle/docs/CHANGE_PLAN.md').write_text(
             '## Implementation sequence\n\n'
             '1. Scaffold the frontend — Owns: `app/`, `package.json`\n'
             '   Run this to generate it:\n'
             '   `npx create-vite@latest . --template react --overwrite`.\n'
             '2. Wire the API — Owns: `app/api.py`\n')
-        findings = mod.scaffold_generator_findings('CHANGE_PLAN.md')
+        findings = mod.scaffold_generator_findings('.uncle/docs/CHANGE_PLAN.md')
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]['step'], 1)
         self.assertIn('create-vite', findings[0]['tool'])
         self.assertEqual(findings[0]['owns'], ['app/', 'package.json'])
 
     def test_whole_directory_owns_is_not_flagged(self):
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
         for token in ('`.`', '`*`', '`./`'):
             with self.subTest(token=token):
-                Path('CHANGE_PLAN.md').write_text(
+                Path('.uncle/docs/CHANGE_PLAN.md').write_text(
                     '## Implementation sequence\n\n'
                     '1. Scaffold the frontend — Owns: %s\n'
                     '   Run this to generate it:\n'
                     '   `npx create-vite@latest . --overwrite`.\n' % token)
-                self.assertEqual(mod.scaffold_generator_findings('CHANGE_PLAN.md'), [])
+                self.assertEqual(mod.scaffold_generator_findings('.uncle/docs/CHANGE_PLAN.md'), [])
 
     def test_step_without_a_scaffold_tool_is_not_flagged(self):
-        Path('CHANGE_PLAN.md').write_text(
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        Path('.uncle/docs/CHANGE_PLAN.md').write_text(
             '## Implementation sequence\n\n'
             '1. Add the pure predicate — Owns: `app/domain/records.py`\n'
             '2. Wire the API — Owns: `app/records/api.py`\n')
-        self.assertEqual(mod.scaffold_generator_findings('CHANGE_PLAN.md'), [])
+        self.assertEqual(mod.scaffold_generator_findings('.uncle/docs/CHANGE_PLAN.md'), [])
 
     def test_scaffold_command_on_a_continuation_line_is_still_found(self):
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
         # plan_steps() in plan-scope.sh only reads a step's opening line; this
         # check must read the whole block or a wrapped command is invisible.
-        Path('UPDATED_PROJECT_PLAN.md').write_text(
+        Path('.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text(
             '## Implementation order\n\n'
             '1. Scaffold the app — Owns: `frontend/`\n'
             '   Run this to generate it:\n'
             '   `npm create vite@latest frontend -- --template react`\n')
-        findings = mod.scaffold_generator_findings('UPDATED_PROJECT_PLAN.md')
+        findings = mod.scaffold_generator_findings('.uncle/docs/UPDATED_PROJECT_PLAN.md')
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]['step'], 1)
 
     def test_other_known_generators_are_recognised(self):
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
         commands = ['ng new my-app', 'rails new blog', 'cargo new my-app',
                     'django-admin startproject mysite', 'vue create my-app',
                     'yarn create react-app my-app', 'create-next-app@latest']
         for command in commands:
             with self.subTest(command=command):
-                Path('CHANGE_PLAN.md').write_text(
+                Path('.uncle/docs/CHANGE_PLAN.md').write_text(
                     '## Implementation sequence\n\n'
                     '1. Scaffold — Owns: `app/`\n   Run `%s`.\n' % command)
-                findings = mod.scaffold_generator_findings('CHANGE_PLAN.md')
+                findings = mod.scaffold_generator_findings('.uncle/docs/CHANGE_PLAN.md')
                 self.assertEqual(len(findings), 1, command)
 
     def test_missing_plan_returns_no_findings(self):
-        self.assertEqual(mod.scaffold_generator_findings('CHANGE_PLAN.md'), [])
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        self.assertEqual(mod.scaffold_generator_findings('.uncle/docs/CHANGE_PLAN.md'), [])
 
     def test_cli_action_exits_nonzero_on_findings(self):
-        Path('CHANGE_PLAN.md').write_text(
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        Path('.uncle/docs/CHANGE_PLAN.md').write_text(
             '## Implementation sequence\n\n'
             '1. Scaffold — Owns: `app/`\n   Run this to generate it:\n'
             '   `npx create-vite@latest . --overwrite`.\n')
         result = subprocess.run([sys.executable, str(ROOT / 'scripts/lib/plan-executability.py'),
-                                 'scaffold-check', 'CHANGE_PLAN.md'], capture_output=True, text=True)
+                                 'scaffold-check', '.uncle/docs/CHANGE_PLAN.md'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertIn('create-vite', result.stdout)
 
     def test_cli_action_exits_zero_without_findings(self):
-        Path('CHANGE_PLAN.md').write_text(
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        Path('.uncle/docs/CHANGE_PLAN.md').write_text(
             '## Implementation sequence\n\n1. Add a predicate — Owns: `app/domain.py`\n')
         result = subprocess.run([sys.executable, str(ROOT / 'scripts/lib/plan-executability.py'),
-                                 'scaffold-check', 'CHANGE_PLAN.md'], capture_output=True, text=True)
+                                 'scaffold-check', '.uncle/docs/CHANGE_PLAN.md'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(json.loads(result.stdout), [])
 
@@ -427,8 +444,8 @@ class ScaffoldGeneratorFindingsTests(unittest.TestCase):
 class DeliverySummaryTests(unittest.TestCase):
     """A real stuck build: stagegate.sh's own prompts never ask an agent to
     write '## Acceptance delivery' (only prompts/change/implement-change.md
-    does, for the AC-numbered CHANGE_SPEC.md convention), so a greenfield
-    plan's IMPLEMENTATION_NOTES.md never has that section. Manufacturing an
+    does, for the AC-numbered .uncle/docs/CHANGE_SPEC.md convention), so a greenfield
+    plan's .uncle/docs/IMPLEMENTATION_NOTES.md never has that section. Manufacturing an
     always-empty delivery-summary.tsv anyway looked, to a reviewer, like
     delivery tracking that should have updated and never did."""
 
@@ -441,7 +458,8 @@ class DeliverySummaryTests(unittest.TestCase):
         self.addCleanup(os.chdir, self.old)
 
     def test_no_acceptance_delivery_section_writes_no_file(self):
-        Path('IMPLEMENTATION_NOTES.md').write_text(
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        Path('.uncle/docs/IMPLEMENTATION_NOTES.md').write_text(
             '# Notes\n\n| AT-1 | live works | live check |\n')
         self.assertEqual(mod.delivery_summary({}), 0)
         self.assertFalse((mod.STATE / 'delivery-summary.tsv').exists())
@@ -451,18 +469,20 @@ class DeliverySummaryTests(unittest.TestCase):
         self.assertFalse((mod.STATE / 'delivery-summary.tsv').exists())
 
     def test_a_real_acceptance_delivery_section_still_writes_rows(self):
-        Path('IMPLEMENTATION_NOTES.md').write_text(
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
+        Path('.uncle/docs/IMPLEMENTATION_NOTES.md').write_text(
             '## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n'
             '|---|---|---|---|\n| AC-1 | IMPLEMENTED | app/main.sh | test passed |\n')
         self.assertEqual(mod.delivery_summary({}), 0)
         self.assertIn('AC-1', (mod.STATE / 'delivery-summary.tsv').read_text())
 
     def test_a_prior_stale_summary_is_removed_once_the_section_disappears(self):
+        Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
         # Once a run enters IMPLEMENT and the section is not (yet) written,
         # a leftover summary from an earlier state must not be read as
         # current delivery evidence.
         (mod.STATE / 'delivery-summary.tsv').write_text('ID\tStatus\tEvidence\nAC-1\tIMPLEMENTED\tstale\n')
-        Path('IMPLEMENTATION_NOTES.md').write_text('# Notes\n')
+        Path('.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('# Notes\n')
         self.assertEqual(mod.delivery_summary({}), 0)
         self.assertFalse((mod.STATE / 'delivery-summary.tsv').exists())
 

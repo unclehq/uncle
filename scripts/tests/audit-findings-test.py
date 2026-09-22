@@ -30,7 +30,8 @@ class FindingsTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.work = Path(self.temp.name)
-        self.report = self.work / 'FINAL_AUDIT.md'
+        (self.work / '.uncle/docs').mkdir(parents=True)
+        self.report = self.work / '.uncle/docs/FINAL_AUDIT.md'
         self.report.write_bytes((TABLE).encode("utf-8"))
         self.state = self.work / 'workflow'
 

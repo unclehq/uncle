@@ -205,7 +205,7 @@ def _verdict_row(path):
 
 def _verdicts(state, journal):
     # Only rows bound to this journal's audit count; a stale `.original` from
-    # an earlier run names a different FINAL_AUDIT.md.
+    # an earlier run names a different .uncle/docs/FINAL_AUDIT.md.
     rows = [_verdict_row(Path(state) / name) for name in ('audit-verdict.original', 'audit-verdict')]
     return [r if r and r[2] == journal.get('audit_hash') else None for r in rows]
 

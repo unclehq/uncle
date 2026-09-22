@@ -1,5 +1,5 @@
 """Deterministic, no-model-call shape repair for the Acceptance gate table
-shared by TEST_REVIEW.md, VERIFICATION_REPORT.md, and PREFLIGHT_REPORT.md.
+shared by .uncle/docs/TEST_REVIEW.md, .uncle/docs/VERIFICATION_REPORT.md, and .uncle/docs/PREFLIGHT_REPORT.md.
 
 acceptance.sh's parser requires a table headed exactly `| ID | Required |
 Status | Evidence |` directly under a literal `## Acceptance gate` heading.

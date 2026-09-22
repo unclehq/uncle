@@ -83,7 +83,7 @@ def validate(path):
 
 def render(project, state):
     project, state = Path(project).resolve(), Path(state).resolve()
-    files = [(project / n, 3000) for n in ('VERIFICATION_REPORT.md', 'DEFECTS.md', 'MANUAL_CHECKLIST.md')]
+    files = [(project / n, 3000) for n in ('.uncle/docs/VERIFICATION_REPORT.md', '.uncle/docs/DEFECTS.md', '.uncle/docs/MANUAL_CHECKLIST.md')]
     files += [(state / n, 3000) for n in ('delivery-summary.tsv', 'implementation-completion.txt', 'checklist-driver-checks/results.tsv')]
     files += [(state / 'change.diff', 0), (state / 'checklist-driver-checks/output.log', 0)]
     files += [(p, 1000) for p in sorted((state / 'waivers').glob('*')) if p.is_file()]
@@ -116,7 +116,7 @@ if __name__ == '__main__':
         try:
             validate(sys.argv[2])
         except (OSError, ValueError, IndexError) as error:
-            print(f'Audit format invalid: {error}. Correct FINAL_AUDIT.md and resume; no checks need rerunning.', file=sys.stderr)
+            print(f'Audit format invalid: {error}. Correct .uncle/docs/FINAL_AUDIT.md and resume; no checks need rerunning.', file=sys.stderr)
             raise SystemExit(1)
     else:
         print(render(*sys.argv[1:3]), end='')

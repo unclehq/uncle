@@ -23,7 +23,7 @@ def checklist_correction(stage, attempts):
     except ValueError as error:
         return (
             'The final response is not a complete checklist: ' + str(error) + '. '
-            'Return the entire MANUAL_CHECKLIST.md document now as your final message, '
+            'Return the entire .uncle/docs/MANUAL_CHECKLIST.md document now as your final message, '
             'using the evidence and checks already developed in this session. '
             'Use a heading for each check (e.g. ## MC-1), with Exact action and '
             'Expected result, and preserve required/optional status, dependencies, '

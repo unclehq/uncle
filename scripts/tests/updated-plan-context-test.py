@@ -12,9 +12,10 @@ class Revision(unittest.TestCase):
     def test_family_snapshot_and_refresh(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); state=root/'.uncle/workflow'; state.mkdir(parents=True)
-            (root/'PROJECT_PLAN.md').write_text('app plan')
+            (root/'.uncle/docs').mkdir(parents=True)
+            (root/'.uncle/docs/PROJECT_PLAN.md').write_text('app plan')
             (state/'CHANGE_PLAN.pre-review.md').write_text('original change plan')
-            review=root/'ADVERSARIAL_REVIEW.md'; review.write_text('AR-1 original finding')
+            review=root/'.uncle/docs/ADVERSARIAL_REVIEW.md'; review.write_text('AR-1 original finding')
             app=module.render(root,state,'app'); change=module.render(root,state,'change')
             self.assertIn('app plan',app)
             self.assertNotIn('original change plan',app)
@@ -31,8 +32,9 @@ class Revision(unittest.TestCase):
             harness='verify_approval() { :; }; require_file() { test -s "$1"; }; check_document_budget() { test ! -e bad; }; require_artifact() { require_file "$1" && check_document_budget "$1" || exit 1; }; set_state() { echo "$1" > state; }; run_stage() { exit 99; }; run_claude() { exit 99; };\ncase validate in\nvalidate)\n'+block+'esac\n'
             with tempfile.TemporaryDirectory() as d:
                 p=Path(d)
-                (p/'CHANGE_PLAN.md').write_text('saved plan')
-                (p/'UPDATED_PROJECT_PLAN.md').write_text('saved plan')
+                (p/'.uncle/docs').mkdir(parents=True)
+                (p/'.uncle/docs/CHANGE_PLAN.md').write_text('saved plan')
+                (p/'.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text('saved plan')
                 (p/'CHANGE_PLAN.pre-review.md').write_text('original')
                 (p/'bad').touch()
                 for _ in range(2):

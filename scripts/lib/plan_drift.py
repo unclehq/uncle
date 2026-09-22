@@ -4,7 +4,7 @@
 A probe. It changes nothing and runs nothing: at the point the updated plan is
 written, it compares the sections that decide whether already-written code is
 still valid, and records what a speculative implementation started from
-PROJECT_PLAN.md would have met.
+.uncle/docs/PROJECT_PLAN.md would have met.
 
 The question is whether the review usually leaves the buildable parts of a plan
 alone. If it does, starting implementation early is mostly free; if it does not,

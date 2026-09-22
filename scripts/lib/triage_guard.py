@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 FORBIDDEN_FILES = (
-    'ADVERSARIAL_REVIEW.md', 'MANUAL_CHECKLIST.md', 'TEST_REVIEW.md', 'FINAL_AUDIT.md',
+    '.uncle/docs/ADVERSARIAL_REVIEW.md', '.uncle/docs/MANUAL_CHECKLIST.md', '.uncle/docs/TEST_REVIEW.md', '.uncle/docs/FINAL_AUDIT.md',
 )
 FORBIDDEN_WORKFLOW_FILES = (
     'unattended-gates', 'repair-limit', 'repair-count', 'state', 'stop-reason',
@@ -325,7 +325,7 @@ def tsv_row(state_dir, turn, proposal, outcome, path='-', before='-', after='-')
 
 
 def note_deviation(project, rel, turn, row):
-    notes = Path(project) / 'IMPLEMENTATION_NOTES.md'
+    notes = Path(project) / '.uncle/docs/IMPLEMENTATION_NOTES.md'
     if not notes.is_file():
         return
     with notes.open('a', encoding='utf-8') as fh:

@@ -26,6 +26,7 @@ import supervisor as sv
 import supervisor_chat as sc
 import gate_answer as ga
 import uncle_tui as tui
+from generated_input import generated_input_path
 
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -190,7 +191,7 @@ class RoutingTests(Base):
                             'build an app with Hello World centered in a large font',
                             'can you build a hello world webapp?'):
             with self.subTest(description=description):
-                target = self.project / 'REQUIREMENTS.md'
+                target = Path(generated_input_path('REQUIREMENTS.md', self.project))
                 target.unlink(missing_ok=True)
                 ui = self.ui('menu')
                 ui._run = Mock()
@@ -213,7 +214,7 @@ class RoutingTests(Base):
         request = self.send(ui, description)
         request.events.put(dict(outcome(), reply=raw))
         self.assertTrue(ui.poll_home_chat())
-        self.assertIn('## Summary\n' + description, (self.project / 'REQUIREMENTS.md').read_text())
+        self.assertIn('## Summary\n' + description, Path(generated_input_path('REQUIREMENTS.md', self.project)).read_text())
         ui._run.assert_called_once()
         self.assertIn('Recovered a direct homepage action', self.history(ui))
         # The same bare action must not become a stage action.

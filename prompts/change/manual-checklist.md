@@ -3,12 +3,12 @@ Act as an independent release-verification engineer.
 Read:
 
 - CHANGE_REQUEST.md
-- BASELINE_REPORT.md
-- CHANGE_SPEC.md
-- ADVERSARIAL_REVIEW.md
-- CHANGE_PLAN.md
-- IMPLEMENTATION_NOTES.md
-- CHANGE_TEST_REPORT.md
+- .uncle/docs/BASELINE_REPORT.md
+- .uncle/docs/CHANGE_SPEC.md
+- .uncle/docs/ADVERSARIAL_REVIEW.md
+- .uncle/docs/CHANGE_PLAN.md
+- .uncle/docs/IMPLEMENTATION_NOTES.md
+- .uncle/docs/CHANGE_TEST_REPORT.md
 - changed source files
 - relevant unchanged source files
 - automated tests
@@ -29,7 +29,7 @@ sufficient. Do not require `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or
 another API token unless the approved change explicitly requires API-key
 authentication.
 
-Create MANUAL_CHECKLIST.md.
+Create .uncle/docs/MANUAL_CHECKLIST.md.
 
 Verify:
 
@@ -127,7 +127,7 @@ needs its own row naming that engine.
 This pipeline has no preflight stage, so nothing has probed the environment on
 your behalf. Before writing a check that needs a capability -- a port, a
 browser, a GUI, an account, a person -- establish whether this machine has it,
-from BASELINE_REPORT.md's recorded commands or by reasoning about the platform.
+from .uncle/docs/BASELINE_REPORT.md's recorded commands or by reasoning about the platform.
 
 A capability that is not available does not mean dropping the check. A
 requirement that cannot be verified must stay visible, and hiding it is the

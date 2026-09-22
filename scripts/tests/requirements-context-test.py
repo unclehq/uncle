@@ -39,7 +39,8 @@ class Requirements(unittest.TestCase):
         root=Path(__file__).resolve().parents[2]
         block=(root/'scripts/stagegate.sh').read_text().split('        VALIDATE_REQUIREMENTS)\n',1)[1].split('        WAIT_REQUIREMENTS_APPROVAL)',1)[0]
         with tempfile.TemporaryDirectory() as d:
-            p=Path(d)/'REQUIREMENTS_INTERPRETATION.md'
+            (Path(d)/'.uncle/docs').mkdir(parents=True)
+            p=Path(d)/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md'
             harness=f'ROOT="{root}"\nrequire_artifact() {{ test -s "$1"; }}; set_state() {{ echo "$1" > state; }}; run_stage() {{ exit 99; }}\ncase validate in\nvalidate)\n'+block+'esac\n'
             p.write_text('bad')
             for _ in range(2):

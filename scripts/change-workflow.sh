@@ -20,6 +20,9 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
+# Every workflow-generated document (REQUIREMENTS.md/CHANGE_REQUEST.md
+# excepted -- generated-input.sh) lives here, never the project root.
+mkdir -p .uncle/docs
 export DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md
 
 # Prompt files are named relative to the uncle install, but the cwd is now the
@@ -159,9 +162,9 @@ MODEL_UPDATED_PLAN="${WORKFLOW_MODEL_UPDATED_CHANGE_PLAN-${WORKFLOW_MODEL_UPDATE
 MODEL_IMPLEMENT="${WORKFLOW_MODEL_IMPLEMENTATION-${WORKFLOW_MODEL_IMPLEMENT-opus}}"
 MODEL_EXECUTE="${WORKFLOW_MODEL_EXECUTE_CHECKLIST-${WORKFLOW_MODEL_EXECUTE-kimi}}"
 
-EFFORT_CHANGE_SPEC="${WORKFLOW_EFFORT_CHANGE_SPEC:-medium}"
-EFFORT_UPDATED_PLAN="${WORKFLOW_EFFORT_UPDATED_CHANGE_PLAN:-${WORKFLOW_EFFORT_UPDATED_PLAN:-medium}}"
-EFFORT_EXECUTE="${WORKFLOW_EFFORT_EXECUTE_CHECKLIST:-${WORKFLOW_EFFORT_EXECUTE:-medium}}"
+EFFORT_CHANGE_SPEC="none"
+EFFORT_UPDATED_PLAN="none"
+EFFORT_EXECUTE="none"
 
 # Per-stage stop-loss, in dollars. This is a runaway guard, not a target: the
 # cap is checked between turns, so a stage stops shortly after crossing it
@@ -176,9 +179,9 @@ BUDGET_EXECUTE="${WORKFLOW_BUDGET_EXECUTE:-20}"
 
 # Codex reasoning effort. The two judgement stages think; the two checklist
 # stages transcribe an approved specification into checks.
-CODEX_EFFORT_REVIEW="${WORKFLOW_CODEX_EFFORT_REVIEW:-high}"
-CODEX_EFFORT_CHECKLIST="${WORKFLOW_CODEX_EFFORT_CHECKLIST:-low}"
-CODEX_EFFORT_AUDIT="${WORKFLOW_CODEX_EFFORT_AUDIT:-high}"
+CODEX_EFFORT_REVIEW="none"
+CODEX_EFFORT_CHECKLIST="none"
+CODEX_EFFORT_AUDIT="none"
 
 # Carry one forked conversation across the Claude stages. Off by default:
 # a forked stage inherits the entire transcript that produced the upstream
@@ -187,7 +190,7 @@ CODEX_EFFORT_AUDIT="${WORKFLOW_CODEX_EFFORT_AUDIT:-high}"
 # to trade the money back for latency.
 SESSION_REUSE="${WORKFLOW_SESSION_REUSE:-0}"
 
-# Run implementation as one invocation per step of CHANGE_PLAN.md's
+# Run implementation as one invocation per step of .uncle/docs/CHANGE_PLAN.md's
 # implementation sequence, each with a fresh context, instead of one long run.
 #
 # Nothing is evicted from a context, so cost is turns x context and the last
@@ -208,7 +211,7 @@ stepwise_implementation_enabled() {
         0|false|no|off) return 1 ;;
         auto)
             local count
-            count="$(plan_steps CHANGE_PLAN.md 2>/dev/null | grep -c . || true)"
+            count="$(plan_steps .uncle/docs/CHANGE_PLAN.md 2>/dev/null | grep -c . || true)"
             [[ "${count:-0}" -ge 8 ]]
             ;;
         *)
@@ -243,7 +246,7 @@ DIFF_GATE="${WORKFLOW_DIFF_GATE:-1}"
 # Re-run the project's own verification commands from the driver, once before
 # implementation and once after, and compare.
 #
-# CHANGE_TEST_REPORT.md is the implementing agent's account of checks the
+# .uncle/docs/CHANGE_TEST_REPORT.md is the implementing agent's account of checks the
 # implementing agent ran. Everything downstream reads that account instead of
 # the checks. This runs them with no agent in the path.
 #
@@ -376,7 +379,7 @@ legacy_word_notice() {
     esac
 }
 
-# Pure FINAL_AUDIT.md verdict classifier, shared with scripts/tests/. Sourced
+# Pure .uncle/docs/FINAL_AUDIT.md verdict classifier, shared with scripts/tests/. Sourced
 # self-relative so the driver still runs from any CWD.
 . "$ROOT/scripts/lib/audit-verdict.sh"
 
@@ -418,7 +421,7 @@ implementation_incomplete_choice() {
     if [[ -s "$completion" ]] && grep -qvE '^AC-[0-9]+: requires IMPLEMENTED,' "$completion"; then
         echo
         echo 'The approved acceptance contract cannot be evaluated; implementation cannot repair it.'
-        echo 'Repair rebuilds CHANGE_SPEC.md and CHANGE_PLAN.md from the request and baseline, then asks for approval again.'
+        echo 'Repair rebuilds .uncle/docs/CHANGE_SPEC.md and .uncle/docs/CHANGE_PLAN.md from the request and baseline, then asks for approval again.'
         if [[ "${UNATTENDED:-0}" == 1 ]]; then
             # Auto mode means human gates do not block progress. Repair is the
             # corrective action here, not a concession like a waiver -- it
@@ -815,7 +818,7 @@ write_verification_envelope() {
     fi
     envelope_write --stage verification --result "$result" --reason "$reason" \
         ${artifact:+--input "artifact=$artifact"} \
-        --evidence "$STATE_DIR/green-check.tsv" CHANGE_TEST_REPORT.md
+        --evidence "$STATE_DIR/green-check.tsv" .uncle/docs/CHANGE_TEST_REPORT.md
 }
 
 write_implementation_envelope() {
@@ -823,15 +826,15 @@ write_implementation_envelope() {
     artifact="$(change_artifact)"
     envelope_write --stage implementation --result "$result" ${reason:+--reason "$reason"} \
         ${artifact:+--artifact "$artifact"} --approval IMPLEMENTATION_REVIEW \
-        --evidence IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md "$REVIEW_FILE" \
+        --evidence .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/CHANGE_TEST_REPORT.md "$REVIEW_FILE" \
         --producer-stage implementation --producer-kind agent
 }
 
 write_review_envelope() {
     local input=()
-    [[ -f CHANGE_PLAN.md ]] && input=(--input "plan=$(hash_file CHANGE_PLAN.md)")
-    envelope_write --stage review --result pass --evidence ADVERSARIAL_REVIEW.md \
-        --findings ADVERSARIAL_REVIEW.md ${input[@]+"${input[@]}"} \
+    [[ -f .uncle/docs/CHANGE_PLAN.md ]] && input=(--input "plan=$(hash_file .uncle/docs/CHANGE_PLAN.md)")
+    envelope_write --stage review --result pass --evidence .uncle/docs/ADVERSARIAL_REVIEW.md \
+        --findings .uncle/docs/ADVERSARIAL_REVIEW.md ${input[@]+"${input[@]}"} \
         --producer-stage adversarial-review --producer-kind reviewer
 }
 
@@ -1043,12 +1046,12 @@ compose_implementation_prompt() {
     local base out="$2"
     base="$(resolve_prompt "$1")"
     local files
-    files="$(plan_scope_files CHANGE_PLAN.md)"
+    files="$(plan_scope_files .uncle/docs/CHANGE_PLAN.md)"
 
     cat "$base" > "$out"
 
     if [[ -z "$files" ]]; then
-        echo "Warning: no change-impact table found in CHANGE_PLAN.md;" \
+        echo "Warning: no change-impact table found in .uncle/docs/CHANGE_PLAN.md;" \
              "implementation runs without a resolved scope." >&2
         return 0
     fi
@@ -1057,7 +1060,7 @@ compose_implementation_prompt() {
         echo
         echo "## Frozen scope"
         echo
-        echo "CHANGE_PLAN.md's change-impact table names these files. This list"
+        echo ".uncle/docs/CHANGE_PLAN.md's change-impact table names these files. This list"
         echo "is generated from it, so it is the plan's own commitment, not a"
         echo "summary of it:"
         echo
@@ -1067,7 +1070,7 @@ compose_implementation_prompt() {
         echo "surface; it is above."
         echo
         echo "Changing a file outside this list is allowed but is a deviation:"
-        echo "name the file and the reason in IMPLEMENTATION_NOTES.md. The"
+        echo "name the file and the reason in .uncle/docs/IMPLEMENTATION_NOTES.md. The"
         echo "driver checks the diff against this list and fails the stage on an"
         echo "unrecorded one."
     } >> "$out"
@@ -1090,31 +1093,31 @@ check_scope_deviations() {
     changed="$(change_diff_files)"
     [[ -n "$changed" ]] || return 0
 
-    if [[ -z "$(plan_scope_files CHANGE_PLAN.md)" ]]; then
+    if [[ -z "$(plan_scope_files .uncle/docs/CHANGE_PLAN.md)" ]]; then
         echo
-        echo "Warning: CHANGE_PLAN.md has no change-impact table, so the diff" \
+        echo "Warning: .uncle/docs/CHANGE_PLAN.md has no change-impact table, so the diff" \
              "could not be checked against a frozen scope."
         return 0
     fi
 
-    extra="$(plan_out_of_scope CHANGE_PLAN.md $changed)"
+    extra="$(plan_out_of_scope .uncle/docs/CHANGE_PLAN.md $changed)"
     [[ -n "$extra" ]] || return 0
 
     local f
     while IFS= read -r f; do
         [[ -n "$f" ]] || continue
-        if ! grep -qF "$f" IMPLEMENTATION_NOTES.md 2>/dev/null; then
+        if ! grep -qF "$f" .uncle/docs/IMPLEMENTATION_NOTES.md 2>/dev/null; then
             missing="$missing$f"$'\n'
         fi
     done <<< "$extra"
 
     echo
-    echo "Files changed outside CHANGE_PLAN.md's change-impact table:"
+    echo "Files changed outside .uncle/docs/CHANGE_PLAN.md's change-impact table:"
     printf '%s\n' "$extra" | sed 's/^/  /'
 
     if [[ -n "$missing" ]]; then
         echo
-        echo "Not recorded as deviations in IMPLEMENTATION_NOTES.md:"
+        echo "Not recorded as deviations in .uncle/docs/IMPLEMENTATION_NOTES.md:"
         printf '%s' "$missing" | sed 's/^/  /'
         echo
         echo "Every file outside the frozen scope must be named there with its"
@@ -1122,13 +1125,13 @@ check_scope_deviations() {
         exit 1
     fi
 
-    echo "  (all recorded in IMPLEMENTATION_NOTES.md)"
+    echo "  (all recorded in .uncle/docs/IMPLEMENTATION_NOTES.md)"
 }
 
 # --- Green check ------------------------------------------------------------
 # The driver runs the project's checks itself, before and after the change.
 #
-# The command list is only ever taken from BASELINE_REPORT.md, and only after
+# The command list is only ever taken from .uncle/docs/BASELINE_REPORT.md, and only after
 # the operator has approved it at the ANALYZE gate: the driver executes these
 # commands with its own privileges, so what it runs has to be something a human
 # signed off on, not something an agent wrote and nobody read.
@@ -1141,18 +1144,18 @@ capture_green_baseline() {
         return 0
     fi
 
-    # Recorded per BASELINE_REPORT.md digest: a resumed run must not re-run the
+    # Recorded per .uncle/docs/BASELINE_REPORT.md digest: a resumed run must not re-run the
     # suite, and an edited baseline report must not silently keep the old one.
     if [[ -s "$GREEN_BASE" && -s "$GREEN_SOURCE" \
-        && "$(cat "$GREEN_SOURCE")" == "$(hash_file BASELINE_REPORT.md)" ]]; then
+        && "$(cat "$GREEN_SOURCE")" == "$(hash_file .uncle/docs/BASELINE_REPORT.md)" ]]; then
         return 0
     fi
 
-    verify_commands BASELINE_REPORT.md > "$GREEN_CMDS"
+    verify_commands .uncle/docs/BASELINE_REPORT.md > "$GREEN_CMDS"
 
     if [[ ! -s "$GREEN_CMDS" ]]; then
         echo
-        echo "Warning: BASELINE_REPORT.md has no fenced command block under its"
+        echo "Warning: .uncle/docs/BASELINE_REPORT.md has no fenced command block under its"
         echo "'build and test commands' section, so the driver cannot re-run"
         echo "this project's checks itself. The implementation stage's own"
         echo "report will be the only evidence that they passed, and the"
@@ -1163,13 +1166,13 @@ capture_green_baseline() {
 
     echo
     echo "Recording the green-check baseline before anything changes."
-    echo "Commands from the BASELINE_REPORT.md you approved:"
+    echo "Commands from the .uncle/docs/BASELINE_REPORT.md you approved:"
     sed 's/^/  /' "$GREEN_CMDS"
     echo
 
-    resolve_baseline_parallel_groups BASELINE_REPORT.md "$GREEN_CMDS" "$STATE_DIR/green-check.groups" || exit $?
+    resolve_baseline_parallel_groups .uncle/docs/BASELINE_REPORT.md "$GREEN_CMDS" "$STATE_DIR/green-check.groups" || exit $?
     green_run "$GREEN_CMDS" "$GREEN_BASE" "$LOG_DIR/green-check-baseline.log" "" "$STATE_DIR/green-check.groups" || exit $?
-    hash_file BASELINE_REPORT.md > "$GREEN_SOURCE"
+    hash_file .uncle/docs/BASELINE_REPORT.md > "$GREEN_SOURCE"
 }
 
 # The baseline suite, run beside the planning stages instead of in front of them.
@@ -1190,7 +1193,7 @@ BASELINE_BG_PID=""
 
 start_green_baseline_bg() {
     if [[ "$BASELINE_BACKGROUND" != "1" || "$GREEN_CHECK" != "1" ]] \
-       || [[ -z "$(verify_commands BASELINE_REPORT.md 2>/dev/null)" ]]; then
+       || [[ -z "$(verify_commands .uncle/docs/BASELINE_REPORT.md 2>/dev/null)" ]]; then
         # Nothing to run takes no time to run; with no command block the
         # warning is the whole result and belongs on screen now.
         capture_green_baseline
@@ -1236,7 +1239,7 @@ run_green_check() {
             echo "## Green check"
             echo
             echo "DISABLED (\`WORKFLOW_GREEN_CHECK=0\`). The driver did not"
-            echo "re-run this project's checks, so CHANGE_TEST_REPORT.md below"
+            echo "re-run this project's checks, so .uncle/docs/CHANGE_TEST_REPORT.md below"
             echo "is the implementing agent's unverified account of them."
         } > "$GREEN_MD"
         return 0
@@ -1244,19 +1247,19 @@ run_green_check() {
 
     if [[ ! -s "$GREEN_CMDS" ]]; then
         : > "$GREEN_CLASS"
-        green_report "$GREEN_CLASS" "$GREEN_MD" BASELINE_REPORT.md \
+        green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/BASELINE_REPORT.md \
             "$LOG_DIR/green-check.log"
         echo
-        echo "Green check NOT RUN: no commands were found in BASELINE_REPORT.md."
+        echo "Green check NOT RUN: no commands were found in .uncle/docs/BASELINE_REPORT.md."
         return 0
     fi
 
     echo
     echo "Re-running this project's checks from the driver:"
-    resolve_baseline_parallel_groups BASELINE_REPORT.md "$GREEN_CMDS" "$STATE_DIR/green-check.groups" || exit $?
+    resolve_baseline_parallel_groups .uncle/docs/BASELINE_REPORT.md "$GREEN_CMDS" "$STATE_DIR/green-check.groups" || exit $?
     green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" "" "$STATE_DIR/green-check.groups" || exit $?
     green_classify "$GREEN_BASE" "$GREEN_CUR" > "$GREEN_CLASS"
-    green_report "$GREEN_CLASS" "$GREEN_MD" BASELINE_REPORT.md \
+    green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/BASELINE_REPORT.md \
         "$LOG_DIR/green-check.log"
 
     local regressions
@@ -1380,7 +1383,7 @@ run_parallel_checklist_workers() {
 
     # One worker per batch, not one per check: a group of a dozen independent
     # checks used to launch a dozen full agent sessions, each rereading
-    # MANUAL_CHECKLIST.md and both READMEs from scratch just to execute one
+    # .uncle/docs/MANUAL_CHECKLIST.md and both READMEs from scratch just to execute one
     # row. The group's own declaration already says these checks share no
     # exclusive resource, so running several of them one after another inside
     # a single session is exactly as safe as running them as separate
@@ -1466,7 +1469,7 @@ run_parallel_checklist_workers() {
 build_implementation_review() {
     write_change_diff "$DIFF_FILE"
     write_implementation_review "$REVIEW_FILE" "$DIFF_FILE" "$GREEN_MD" \
-        IMPLEMENTATION_NOTES.md CHANGE_TEST_REPORT.md
+        .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/CHANGE_TEST_REPORT.md
     WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" prepare "$STATE_DIR"
 
 }
@@ -1505,7 +1508,7 @@ verify_implementation_review() {
 # merges and removes worktrees.
 run_supervised_parallel_implementation() {
     local base="$1" groups group step prompt cmd model effort result
-    groups="$(parallel_groups CHANGE_PLAN.md "$ROOT/scripts/lib")" || return 2
+    groups="$(parallel_groups .uncle/docs/CHANGE_PLAN.md "$ROOT/scripts/lib")" || return 2
     [[ -n "$groups" ]] || return 2
     [[ ! -s "$STATE_DIR/implement-step-done" ]] || return 2
 
@@ -1533,14 +1536,14 @@ run_supervised_parallel_implementation() {
                 echo "Do not edit workflow documents in the project root. Append a"
                 echo "concise handoff with changed files and exact checks to"
                 echo ".uncle/workflow/parallel/notes/step-$step.md. Do not write"
-                echo "CHANGE_TEST_REPORT.md; the driver reconciles it after merging."
+                echo ".uncle/docs/CHANGE_TEST_REPORT.md; the driver reconciles it after merging."
                 echo "Finish in at most 12 tool actions. Read only the named files,"
                 echo "make the smallest edit, run one narrow check, write the handoff,"
                 echo "and stop; do not investigate unrelated failures or repeat probes."
             } >> "$prompt"
         done
         echo "Supervisor schedule: isolated parallel steps $group."
-        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" CHANGE_PLAN.md $group)" || return $?
+        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" .uncle/docs/CHANGE_PLAN.md $group)" || return $?
         PARALLEL_RESULT="$result" python3 - "$group" <<'PY'
 import json, os, sys
 group = sys.argv[1]
@@ -1555,7 +1558,7 @@ print('Parallel group %s complete: %.1fs wall time; %.1fs worker time; '
 PY
         for step in $group; do
             require_file "$STATE_DIR/parallel/notes/step-$step.md"
-            cat "$STATE_DIR/parallel/notes/step-$step.md" >> IMPLEMENTATION_NOTES.md
+            cat "$STATE_DIR/parallel/notes/step-$step.md" >> .uncle/docs/IMPLEMENTATION_NOTES.md
             printf '%s\n' "$step" > "$STATE_DIR/implement-step-done"
         done
     done <<< "$groups"
@@ -1565,7 +1568,7 @@ PY
 
 # One invocation per implementation-sequence step, each starting cold.
 #
-# IMPLEMENTATION_NOTES.md is the handoff: every step appends to it, and the
+# .uncle/docs/IMPLEMENTATION_NOTES.md is the handoff: every step appends to it, and the
 # next step reads it instead of inheriting a transcript. The code already
 # written is on disk, which is the other half of the handoff.
 run_stepwise_implementation() {
@@ -1574,13 +1577,13 @@ run_stepwise_implementation() {
     local done_file="$STATE_DIR/implement-step-done"
     local report_done_file="$STATE_DIR/implement-report-done"
 
-    plan_steps CHANGE_PLAN.md > "$steps_file"
+    plan_steps .uncle/docs/CHANGE_PLAN.md > "$steps_file"
 
     local total
     total="$(grep -c . "$steps_file" || true)"
 
     if [[ "${total:-0}" -lt 2 ]]; then
-        echo "CHANGE_PLAN.md has no usable implementation sequence;" \
+        echo ".uncle/docs/CHANGE_PLAN.md has no usable implementation sequence;" \
              "running implementation as a single stage."
         compose_implementation_prompt "$base" "$STATE_DIR/implement-change.resolved.md"
         run_claude "$STATE_DIR/implement-change.resolved.md" implementation \
@@ -1593,7 +1596,7 @@ run_stepwise_implementation() {
     # failed worktree for inspection is safer than recreating it on top of a
     # partial delivery.
     if run_supervised_parallel_implementation "$base"; then
-        check_document_budget IMPLEMENTATION_NOTES.md || exit 1
+        check_document_budget .uncle/docs/IMPLEMENTATION_NOTES.md || exit 1
     else
         local parallel_status=$?
         [[ "$parallel_status" == 2 ]] || return "$parallel_status"
@@ -1633,11 +1636,11 @@ run_stepwise_implementation() {
             echo "$step"
             echo
             echo "Implement this step only. The earlier steps are already done"
-            echo "and their code is on disk; IMPLEMENTATION_NOTES.md records"
+            echo "and their code is on disk; .uncle/docs/IMPLEMENTATION_NOTES.md records"
             echo "what they changed and why. Read it first. Do not redo, revise"
             echo "or review their work, and do not start a later step."
             echo
-            echo "Append your rows to IMPLEMENTATION_NOTES.md; do not rewrite"
+            echo "Append your rows to .uncle/docs/IMPLEMENTATION_NOTES.md; do not rewrite"
             echo "the rows already there. Run the narrowest test target that"
             echo "covers this step."
             echo
@@ -1657,7 +1660,7 @@ run_stepwise_implementation() {
                 echo
                 echo "This is the final code step. Run only the narrow checks"
                 echo "needed for this code and append their result to"
-                echo "IMPLEMENTATION_NOTES.md. Do not write CHANGE_TEST_REPORT.md:"
+                echo ".uncle/docs/IMPLEMENTATION_NOTES.md. Do not write .uncle/docs/CHANGE_TEST_REPORT.md:"
                 echo "a fresh report-only invocation will reconcile it from the"
                 echo "on-disk notes and evidence. The driver runs the full"
                 echo "regression block once after that invocation."
@@ -1672,7 +1675,7 @@ run_stepwise_implementation() {
         run_claude "$prompt" "implementation-step-$i" \
             "$MODEL_IMPLEMENT" "" "$step_turns" "$BUDGET_IMPLEMENT"
 
-        check_document_budget IMPLEMENTATION_NOTES.md || exit 1
+        check_document_budget .uncle/docs/IMPLEMENTATION_NOTES.md || exit 1
         printf '%s\n' "$i" > "$done_file"
     done < "$steps_file"
 
@@ -1684,7 +1687,7 @@ run_stepwise_implementation() {
         prompt="$STATE_DIR/implement-report.md"
         # Do not append a report-only suffix to the implementation prompt.
         # The old composition gave this cold recovery stage two incompatible
-        # jobs, causing it to resume code work and leave CHANGE_TEST_REPORT.md
+        # jobs, causing it to resume code work and leave .uncle/docs/CHANGE_TEST_REPORT.md
         # absent. Its sole authority is the dedicated report reconciler prompt.
         cp "$ROOT/prompts/change/implementation-report.md" "$prompt"
 
@@ -1693,7 +1696,7 @@ run_stepwise_implementation() {
         plan_assess || return $?
         run_claude "$prompt" "implementation-step-report" \
             "$MODEL_IMPLEMENT" "" "$report_turns" "$BUDGET_IMPLEMENT"
-        check_document_budget CHANGE_TEST_REPORT.md || exit 1
+        check_document_budget .uncle/docs/CHANGE_TEST_REPORT.md || exit 1
         touch "$report_done_file"
     fi
 
@@ -1703,11 +1706,11 @@ run_stepwise_implementation() {
 
 # Count checks as they stream past and drive the pinned status line.
 #
-# The denominator is the distinct MC ids in MANUAL_CHECKLIST.md; the numerator
+# The denominator is the distinct MC ids in .uncle/docs/MANUAL_CHECKLIST.md; the numerator
 # is the distinct ids seen in the stage's own output. That is a progress
 # estimate, not a completion record: an id counts the first time the stage
 # mentions it, which may be when it starts a check rather than when it
-# finishes. VERIFICATION_REPORT.md remains the only authority on what actually
+# finishes. .uncle/docs/VERIFICATION_REPORT.md remains the only authority on what actually
 # ran. Lines pass through untouched, so the log is unchanged.
 progress_tap() {
     local total="$1" label="$2"
@@ -2164,7 +2167,7 @@ run_adversarial_review_panel() {
     done
     ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"
     cp "$ROOT/prompts/change/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
-    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `ADVERSARIAL_REVIEW.md`.\n' \
+    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `.uncle/docs/ADVERSARIAL_REVIEW.md`.\n' \
         "$directory" >> "$ADVERSARIAL_REVIEW_PROMPT"
 }
 
@@ -2418,7 +2421,7 @@ VERDICT_WRITTEN_THIS_RUN=0
 # existing analysis gate. Editing any of them requires a fresh plan afterward.
 change_plan_draft_key() {
     local file
-    for file in CHANGE_REQUEST.md BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md; do
+    for file in CHANGE_REQUEST.md .uncle/docs/BASELINE_REPORT.md .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md; do
         [[ -s "$file" ]] || return 1
         hash_file "$file" || return 1
     done
@@ -2426,8 +2429,8 @@ change_plan_draft_key() {
 
 # --- Planning, with documents as checkpoints --------------------------------
 #
-# The combined stage writes BASELINE_REPORT.md, CHANGE_SPEC.md and
-# CHANGE_PLAN.md in one context so the plan is written by the model that did
+# The combined stage writes .uncle/docs/BASELINE_REPORT.md, .uncle/docs/CHANGE_SPEC.md and
+# .uncle/docs/CHANGE_PLAN.md in one context so the plan is written by the model that did
 # the baseline. On a large repository that context can run out while the agent
 # is still reading: Claude compacts, the model takes the compaction summary for
 # a question, answers "what did we do so far", and the turn ends with nothing
@@ -2447,7 +2450,7 @@ planning_context_used() {
 }
 
 planning_documents_complete() {
-    [[ -s BASELINE_REPORT.md && -s CHANGE_SPEC.md && -s CHANGE_PLAN.md ]]
+    [[ -s .uncle/docs/BASELINE_REPORT.md && -s .uncle/docs/CHANGE_SPEC.md && -s .uncle/docs/CHANGE_PLAN.md ]]
 }
 
 # run_planning_pass with-baseline|spec-and-plan [note-file]
@@ -2456,12 +2459,12 @@ run_planning_pass() {
     {
         if [[ "$1" == with-baseline ]]; then
             printf '# Combined baseline, change specification, and planning\n\n'
-            printf 'In this single stage and the same model and context, first establish the baseline by running verification commands and write BASELINE_REPORT.md, then write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+            printf 'In this single stage and the same model and context, first establish the baseline by running verification commands and write .uncle/docs/BASELINE_REPORT.md, then write .uncle/docs/CHANGE_SPEC.md, then use it to write .uncle/docs/CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
         else
             printf '# Combined change specification and planning\n\n'
-            printf 'BASELINE_REPORT.md is already written; read it and do not redo the baseline. In this single stage and the same context, write CHANGE_SPEC.md, then use it to write CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+            printf '.uncle/docs/BASELINE_REPORT.md is already written; read it and do not redo the baseline. In this single stage and the same context, write .uncle/docs/CHANGE_SPEC.md, then use it to write .uncle/docs/CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
         fi
-        printf 'Write each document to disk the moment its inputs are in hand -- BASELINE_REPORT.md before any reading for the specification, CHANGE_SPEC.md before any reading for the plan. A document on disk survives a context that runs out; work still in progress does not. Grep for the symbols CHANGE_REQUEST.md names and read the surrounding lines; never read a large file end to end.\n\n'
+        printf 'Write each document to disk the moment its inputs are in hand -- .uncle/docs/BASELINE_REPORT.md before any reading for the specification, .uncle/docs/CHANGE_SPEC.md before any reading for the plan. A document on disk survives a context that runs out; work still in progress does not. Grep for the symbols CHANGE_REQUEST.md names and read the surrounding lines; never read a large file end to end.\n\n'
         if [[ -n "${2:-}" && -s "$2" ]]; then
             cat "$2"
             printf '\n\n'
@@ -2482,14 +2485,14 @@ run_planning_stage() {
     local pass used missing f note="$STATE_DIR/planning-context-note.md"
     rm -f "$note"
     for pass in 1 2; do
-        if [[ -s BASELINE_REPORT.md ]]; then
+        if [[ -s .uncle/docs/BASELINE_REPORT.md ]]; then
             run_planning_pass spec-and-plan "$note" || return $?
         else
             run_planning_pass with-baseline "$note" || return $?
         fi
         planning_documents_complete && break
         missing=""
-        for f in BASELINE_REPORT.md CHANGE_SPEC.md CHANGE_PLAN.md; do
+        for f in .uncle/docs/BASELINE_REPORT.md .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md; do
             [[ -s "$f" ]] || missing="$missing$f "
         done
         used="$(planning_context_used "$LOG_DIR/change-plan.jsonl")"
@@ -2516,25 +2519,25 @@ run_planning_stage() {
     if ! planning_documents_complete; then
         echo "Planning did not complete in two passes. Narrow CHANGE_REQUEST.md, or name the files"
         echo "the change touches so the baseline can go straight to them, then re-run."
-        supervision_validation_failed change-plan BASELINE_REPORT.md \
+        supervision_validation_failed change-plan .uncle/docs/BASELINE_REPORT.md \
             "planning stage ended twice without completing its documents (context used: $used tokens)" 1 || true
         return 1
     fi
-    check_document_budget BASELINE_REPORT.md || return 1
-    check_document_budget CHANGE_SPEC.md || return 1
-    check_document_budget CHANGE_PLAN.md || return 1
+    check_document_budget .uncle/docs/BASELINE_REPORT.md || return 1
+    check_document_budget .uncle/docs/CHANGE_SPEC.md || return 1
+    check_document_budget .uncle/docs/CHANGE_PLAN.md || return 1
     change_plan_draft_key > "$STATE_DIR/change-plan.draft-key"
 }
 
 implementation_complete() {
-    verify_approval CHANGE_SPEC.md CHANGE_SPEC
-    verify_approval CHANGE_PLAN.md CHANGE_PLAN
+    verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
+    verify_approval .uncle/docs/CHANGE_PLAN.md CHANGE_PLAN
     local completion="$STATE_DIR/implementation-completion.txt" line id waiver
     if python3 "$ROOT/scripts/lib/implementation-completion.py" \
-        CHANGE_SPEC.md IMPLEMENTATION_NOTES.md > "$completion"; then
+        .uncle/docs/CHANGE_SPEC.md .uncle/docs/IMPLEMENTATION_NOTES.md > "$completion"; then
         return 0
     fi
-    supervision_validation_failed implementation_completion IMPLEMENTATION_NOTES.md \
+    supervision_validation_failed implementation_completion .uncle/docs/IMPLEMENTATION_NOTES.md \
         "$(head -n 3 "$completion" 2>/dev/null | tr '\n' ' ')" 0
     # Keep rejection evidence intact. Only explicitly waived delivery rows may
     # advance; structural errors, missing IDs, and unrelated waivers still fail.
@@ -2615,20 +2618,20 @@ while true; do
 
         WAIT_ANALYSIS_APPROVAL)
             human_gate APPROVE \
-                BASELINE_REPORT.md BASELINE_REPORT \
-                CHANGE_SPEC.md CHANGE_SPEC
+                .uncle/docs/BASELINE_REPORT.md BASELINE_REPORT \
+                .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
             # A newly approved specification starts the evidence chain over.
             envelope_invalidate CHANGE_SPEC
             envelope_write --stage requirements --result pass \
-                --evidence BASELINE_REPORT.md CHANGE_SPEC.md \
+                --evidence .uncle/docs/BASELINE_REPORT.md .uncle/docs/CHANGE_SPEC.md \
                 --approval BASELINE_REPORT CHANGE_SPEC \
                 --producer-stage change-spec --producer-kind agent
             set_state PLAN
             ;;
 
         PLAN)
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
+            verify_approval .uncle/docs/BASELINE_REPORT.md BASELINE_REPORT
+            verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
 
             # First point in the pipeline where the command list has been
             # approved and the tree is still untouched, which is the only
@@ -2642,13 +2645,13 @@ while true; do
                 # Legacy resume, or edits made while approving the specification.
                 run_claude prompts/change/change-plan.md change-plan \
                     "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"
-                require_file CHANGE_PLAN.md
-                check_document_budget CHANGE_PLAN.md || exit 1
+                require_file .uncle/docs/CHANGE_PLAN.md
+                check_document_budget .uncle/docs/CHANGE_PLAN.md || exit 1
             fi
 
             envelope_invalidate CHANGE_PLAN
             envelope_write --stage plan --result pass \
-                --evidence CHANGE_PLAN.md \
+                --evidence .uncle/docs/CHANGE_PLAN.md \
                 --producer-stage change-plan --producer-kind agent
             set_state ADVERSARIAL_REVIEW
             ;;
@@ -2661,8 +2664,8 @@ while true; do
             run_adversarial_review_panel
             adversarial_review_prompt="${ADVERSARIAL_REVIEW_PROMPT:-prompts/change/adversarial-review.md}"
             # A malformed review gets one real re-run with the exact validator
-            # diagnosis appended, the same one-shot recovery TEST_REVIEW.md and
-            # VERIFICATION_REPORT.md already get elsewhere: a deterministic
+            # diagnosis appended, the same one-shot recovery .uncle/docs/TEST_REVIEW.md and
+            # .uncle/docs/VERIFICATION_REPORT.md already get elsewhere: a deterministic
             # local repair (VALIDATE_ADVERSARIAL_REVIEW, below) only fixes
             # shapes with one reading, and a review this far off needs the
             # model to rewrite it, not another local patch. The marker is
@@ -2678,7 +2681,7 @@ while true; do
             fi
             run_codex \
                 "$adversarial_review_prompt" \
-                ADVERSARIAL_REVIEW.md \
+                .uncle/docs/ADVERSARIAL_REVIEW.md \
                 adversarial-review \
                 "$CODEX_EFFORT_REVIEW"
 
@@ -2686,19 +2689,19 @@ while true; do
             ;;
 
         VALIDATE_ADVERSARIAL_REVIEW)
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md 2>&1)" || {
+            verify_approval .uncle/docs/BASELINE_REPORT.md BASELINE_REPORT
+            verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
+            validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate .uncle/docs/ADVERSARIAL_REVIEW.md 2>&1)" || {
                 # A shape the repairer can settle on its own is not worth a
                 # stopped run. It only fixes deviations with one reading -- a
                 # leaked preamble, a bold label that should be a heading -- and
                 # refuses anything needing judgment, so a real defect still
                 # stops here. Re-validate after; the repair is not trusted.
-                if python3 "$ROOT/scripts/lib/repair_document_format.py" ADVERSARIAL_REVIEW.md; then
-                    if validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate ADVERSARIAL_REVIEW.md 2>&1)"; then
+                if python3 "$ROOT/scripts/lib/repair_document_format.py" .uncle/docs/ADVERSARIAL_REVIEW.md; then
+                    if validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate .uncle/docs/ADVERSARIAL_REVIEW.md 2>&1)"; then
                         echo "Repaired the review format; continuing."
                         rm -f "$STATE_DIR/validation-error.txt"
-                        check_document_budget ADVERSARIAL_REVIEW.md || exit 1
+                        check_document_budget .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
                         write_review_envelope
                         set_state WAIT_PLAN_APPROVAL
                         continue
@@ -2707,8 +2710,8 @@ while true; do
                 retry_marker="$STATE_DIR/adversarial-review-format-retry.md"
                 if [[ ! -e "$retry_marker" ]]; then
                     {
-                        echo "The preceding ADVERSARIAL_REVIEW.md was rejected only for this required format."
-                        echo 'Write a new complete ADVERSARIAL_REVIEW.md: every finding as a level-2 "## AR-001: Title" heading with Severity, References, Failure, Fix, and Verify, and a final level-2 "## Overall assessment" heading with a non-empty body.'
+                        echo "The preceding .uncle/docs/ADVERSARIAL_REVIEW.md was rejected only for this required format."
+                        echo 'Write a new complete .uncle/docs/ADVERSARIAL_REVIEW.md: every finding as a level-2 "## AR-001: Title" heading with Severity, References, Failure, Fix, and Verify, and a final level-2 "## Overall assessment" heading with a non-empty body.'
                         echo 'Preserve every substantive finding and its severity. Never soften or drop a finding merely to make the document parse.'
                         echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
                         echo
@@ -2723,11 +2726,11 @@ while true; do
                 printf '%s\n' "$validation_error" >&2
                 printf '%s\n' "$validation_error" > "$STATE_DIR/validation-error.txt"
                 printf '%s\n' "validation: $validation_error" > "$STATE_DIR/stop-reason"
-                supervision_validation_failed adversarial-review ADVERSARIAL_REVIEW.md "$validation_error"
+                supervision_validation_failed adversarial-review .uncle/docs/ADVERSARIAL_REVIEW.md "$validation_error"
                 exit 1
             }
             rm -f "$STATE_DIR/validation-error.txt"
-            check_document_budget ADVERSARIAL_REVIEW.md || exit 1
+            check_document_budget .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             write_review_envelope
             set_state WAIT_PLAN_APPROVAL
             ;;
@@ -2737,24 +2740,24 @@ while true; do
             # both approvals, and the reopen map sends either document here.
             printf '%s\n' WAIT_PLAN_APPROVAL > "$STATE_DIR/approval-route"
             human_gate ACKNOWLEDGE \
-                CHANGE_PLAN.md CHANGE_PLAN \
-                ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
+                .uncle/docs/CHANGE_PLAN.md CHANGE_PLAN \
+                .uncle/docs/ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
             set_state UPDATED_PLAN
             ;;
 
         UPDATED_PLAN)
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            verify_approval CHANGE_PLAN.md CHANGE_PLAN
-            verify_approval ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
+            verify_approval .uncle/docs/BASELINE_REPORT.md BASELINE_REPORT
+            verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
+            verify_approval .uncle/docs/CHANGE_PLAN.md CHANGE_PLAN
+            verify_approval .uncle/docs/ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
 
-            # The review response revises CHANGE_PLAN.md in place rather than
-            # writing a second plan. A separate UPDATED_CHANGE_PLAN.md restated
+            # The review response revises .uncle/docs/CHANGE_PLAN.md in place rather than
+            # writing a second plan. A separate .uncle/docs/UPDATED_CHANGE_PLAN.md restated
             # every section of the plan it superseded, and five later stages
             # then carried the longer copy in context. Snapshot the approved
             # pre-review text first: nothing reads it, so it costs no tokens,
             # and it keeps the record of what the review actually changed.
-            cp CHANGE_PLAN.md "$STATE_DIR/CHANGE_PLAN.pre-review.md"
+            cp .uncle/docs/CHANGE_PLAN.md "$STATE_DIR/CHANGE_PLAN.pre-review.md"
 
             run_updated_change_plan_panel
             run_claude "${UPDATED_PLAN_PROMPT:-prompts/change/updated-change-plan.md}" updated-change-plan \
@@ -2767,16 +2770,16 @@ while true; do
             # Probe only: would code written from the pre-review plan have
             # survived the review? The snapshot above already holds that plan,
             # so this costs a diff. Acts on nothing, cannot fail the stage.
-            if [[ -s "$STATE_DIR/CHANGE_PLAN.pre-review.md" && -s CHANGE_PLAN.md ]]; then
+            if [[ -s "$STATE_DIR/CHANGE_PLAN.pre-review.md" && -s .uncle/docs/CHANGE_PLAN.md ]]; then
                 python3 -B "$ROOT/scripts/lib/plan_drift.py" \
-                    "$STATE_DIR/CHANGE_PLAN.pre-review.md" CHANGE_PLAN.md \
+                    "$STATE_DIR/CHANGE_PLAN.pre-review.md" .uncle/docs/CHANGE_PLAN.md \
                     "$STATE_DIR/plan-drift.json" 2>/dev/null || true
             fi
-            verify_approval BASELINE_REPORT.md BASELINE_REPORT
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
-            verify_approval ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
-            require_file CHANGE_PLAN.md
-            check_document_budget CHANGE_PLAN.md || exit 1
+            verify_approval .uncle/docs/BASELINE_REPORT.md BASELINE_REPORT
+            verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
+            verify_approval .uncle/docs/ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
+            require_file .uncle/docs/CHANGE_PLAN.md
+            check_document_budget .uncle/docs/CHANGE_PLAN.md || exit 1
 
             set_state WAIT_UPDATED_PLAN_APPROVAL
             ;;
@@ -2785,7 +2788,7 @@ while true; do
             plan_status=0
             plan_assess || plan_status=$?
             case "$plan_status" in 0) ;; 10) continue ;; *) exit 1 ;; esac
-            # The review response revised CHANGE_PLAN.md in place, so the
+            # The review response revised .uncle/docs/CHANGE_PLAN.md in place, so the
             # ACKNOWLEDGE hash taken at WAIT_PLAN_APPROVAL names text that no
             # longer exists. Without this gate IMPLEMENT finds the plan
             # "changed after approval", reopens WAIT_PLAN_APPROVAL, the plan is
@@ -2793,15 +2796,15 @@ while true; do
             # hash of the text implementation will run against.
             # The gate does not open while a blocking review finding has no
             # disposition row in the revised plan.
-            envelope_py plan-gate ADVERSARIAL_REVIEW.md CHANGE_PLAN.md || exit 1
+            envelope_py plan-gate .uncle/docs/ADVERSARIAL_REVIEW.md .uncle/docs/CHANGE_PLAN.md || exit 1
             printf '%s\n' WAIT_UPDATED_PLAN_APPROVAL > "$STATE_DIR/approval-route"
             human_gate APPROVE \
-                CHANGE_PLAN.md CHANGE_PLAN
+                .uncle/docs/CHANGE_PLAN.md CHANGE_PLAN
             plan_review_input=()
-            [[ -f ADVERSARIAL_REVIEW.md ]] && plan_review_input=(--input "review=$(hash_file ADVERSARIAL_REVIEW.md)")
+            [[ -f .uncle/docs/ADVERSARIAL_REVIEW.md ]] && plan_review_input=(--input "review=$(hash_file .uncle/docs/ADVERSARIAL_REVIEW.md)")
             envelope_write --stage plan --result pass \
-                --evidence CHANGE_PLAN.md ADVERSARIAL_REVIEW.md \
-                --dispositions CHANGE_PLAN.md ${plan_review_input[@]+"${plan_review_input[@]}"} \
+                --evidence .uncle/docs/CHANGE_PLAN.md .uncle/docs/ADVERSARIAL_REVIEW.md \
+                --dispositions .uncle/docs/CHANGE_PLAN.md ${plan_review_input[@]+"${plan_review_input[@]}"} \
                 --approval CHANGE_PLAN ADVERSARIAL_REVIEW --reapprovals \
                 --producer-stage updated-change-plan --producer-kind agent
             set_state IMPLEMENT
@@ -2811,8 +2814,8 @@ while true; do
             # Before a single line of code is written: the baseline only means
             # anything against the unmodified tree.
             wait_green_baseline_bg
-            verify_approval CHANGE_PLAN.md CHANGE_PLAN
-            verify_approval CHANGE_SPEC.md CHANGE_SPEC
+            verify_approval .uncle/docs/CHANGE_PLAN.md CHANGE_PLAN
+            verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
             plan_status=0
             plan_before_write || plan_status=$?
             case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac
@@ -2845,11 +2848,11 @@ while true; do
                     base prompts/change/manual-checklist-base.md
             fi
 
-            if [[ -s IMPLEMENTATION_NOTES.md ]] && implementation_has_changes && implementation_complete; then
+            if [[ -s .uncle/docs/IMPLEMENTATION_NOTES.md ]] && implementation_has_changes && implementation_complete; then
                 echo "Existing implementation delivery accepted; continuing to verification."
             elif [[ "$plan_status" == 22 ]]; then
                 echo 'Verification-only resume finished; checking delivery.'
-            elif [[ "$(cat "$STATE_DIR/implementation-completion-repair" 2>/dev/null || true)" == "$(hash_file CHANGE_PLAN.md)" ]]; then
+            elif [[ "$(cat "$STATE_DIR/implementation-completion-repair" 2>/dev/null || true)" == "$(hash_file .uncle/docs/CHANGE_PLAN.md)" ]]; then
                 echo 'Implementation remains incomplete; automatic repair already attempted for this plan.'
             elif stepwise_implementation_enabled && { ! plan_executability_enabled || ! grep -q '"verdict": "DECISION"' "$PLAN_ASSESS_DIR/assessment.json"; }; then
                 step_status=0
@@ -2870,16 +2873,16 @@ while true; do
             plan_status=0
             plan_after_write || plan_status=$?
             case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
-            require_file IMPLEMENTATION_NOTES.md
-            require_file CHANGE_TEST_REPORT.md
-            check_document_budget IMPLEMENTATION_NOTES.md || exit 1
-            check_document_budget CHANGE_TEST_REPORT.md || exit 1
+            require_file .uncle/docs/IMPLEMENTATION_NOTES.md
+            require_file .uncle/docs/CHANGE_TEST_REPORT.md
+            check_document_budget .uncle/docs/IMPLEMENTATION_NOTES.md || exit 1
+            check_document_budget .uncle/docs/CHANGE_TEST_REPORT.md || exit 1
 
             if ! implementation_has_changes || ! implementation_complete; then
-                repair_digest="$(hash_file CHANGE_PLAN.md)"
+                repair_digest="$(hash_file .uncle/docs/CHANGE_PLAN.md)"
                 if [[ "$(cat "$STATE_DIR/implementation-completion-repair" 2>/dev/null || true)" == "$repair_digest" ]]; then
                     echo "Implementation remains incomplete; automatic repair already attempted for this plan."
-                    echo "See IMPLEMENTATION_NOTES.md and $STATE_DIR/implementation-completion.txt; resume after resolving the blockers."
+                    echo "See .uncle/docs/IMPLEMENTATION_NOTES.md and $STATE_DIR/implementation-completion.txt; resume after resolving the blockers."
                     choice_status=0
                     implementation_incomplete_choice || choice_status=$?
                     case "$choice_status" in
@@ -2895,7 +2898,7 @@ while true; do
                     cat >> "$STATE_DIR/implementation-repair.md" <<'REPAIR'
 
 The previous implementation did not deliver all required acceptance criteria.
-Read IMPLEMENTATION_NOTES.md and resolve routine implementation choices within
+Read .uncle/docs/IMPLEMENTATION_NOTES.md and resolve routine implementation choices within
 the approved scope, then implement the requested behavior and its tests.
 Do not treat writing reports or rerunning baseline tests as implementation.
 Do not bypass a genuine unresolved approval requirement: explain the precise
@@ -2920,7 +2923,7 @@ REPAIR
                     case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
                     if ! implementation_has_changes || ! implementation_complete; then
                         echo "Implementation remains incomplete: required delivery is missing."
-                        echo "Resolve the blockers in IMPLEMENTATION_NOTES.md and CHANGE_PLAN.md, then resume."
+                        echo "Resolve the blockers in .uncle/docs/IMPLEMENTATION_NOTES.md and .uncle/docs/CHANGE_PLAN.md, then resume."
                         echo "The workflow remains at IMPLEMENT; it cannot advance to final audit."
                         choice_status=0
                         implementation_incomplete_choice || choice_status=$?
@@ -2931,10 +2934,10 @@ REPAIR
                             *) triage_stop_reason "$STATE_DIR" human; exit 1 ;;
                         esac
                     fi
-                    require_file IMPLEMENTATION_NOTES.md
-                    require_file CHANGE_TEST_REPORT.md
-                    check_document_budget IMPLEMENTATION_NOTES.md || exit 1
-                    check_document_budget CHANGE_TEST_REPORT.md || exit 1
+                    require_file .uncle/docs/IMPLEMENTATION_NOTES.md
+                    require_file .uncle/docs/CHANGE_TEST_REPORT.md
+                    check_document_budget .uncle/docs/IMPLEMENTATION_NOTES.md || exit 1
+                    check_document_budget .uncle/docs/CHANGE_TEST_REPORT.md || exit 1
                 fi
             fi
 
@@ -2958,7 +2961,7 @@ REPAIR
             # Probe only: records what a parallel implementation would have
             # done and whether the plan's file ownership matched the tree.
             # Runs nothing in parallel and cannot fail the stage.
-            python3 -B "$ROOT/scripts/lib/step_groups.py" CHANGE_PLAN.md . \
+            python3 -B "$ROOT/scripts/lib/step_groups.py" .uncle/docs/CHANGE_PLAN.md . \
                 > "$STATE_DIR/step-groups.json" 2>/dev/null || true
             write_verification_envelope
             plan_delivery_summary
@@ -3045,7 +3048,7 @@ REPAIR
 
             # A malformed checklist gets one real re-run with the exact
             # validator diagnosis appended, the same one-shot recovery
-            # ADVERSARIAL_REVIEW.md gets: checklist_document.py already
+            # .uncle/docs/ADVERSARIAL_REVIEW.md gets: checklist_document.py already
             # repairs label-only deviations on its own, so a failure this far
             # needs the model to rewrite it, not another local patch.
             checklist_retry_marker="$STATE_DIR/manual-checklist-format-retry.md"
@@ -3064,7 +3067,7 @@ REPAIR
                 fi
                 run_codex \
                     "$checklist_prompt" \
-                    MANUAL_CHECKLIST.md \
+                    .uncle/docs/MANUAL_CHECKLIST.md \
                     manual-checklist-delta \
                     "$CODEX_EFFORT_CHECKLIST"
             else
@@ -3076,7 +3079,7 @@ REPAIR
                 fi
                 run_codex \
                     "$checklist_prompt" \
-                    MANUAL_CHECKLIST.md \
+                    .uncle/docs/MANUAL_CHECKLIST.md \
                     manual-checklist \
                     "$CODEX_EFFORT_CHECKLIST"
             fi
@@ -3084,12 +3087,12 @@ REPAIR
             ;;
 
         VALIDATE_MANUAL_CHECKLIST)
-            checklist_validation_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" MANUAL_CHECKLIST.md 2>&1)" || {
+            checklist_validation_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" .uncle/docs/MANUAL_CHECKLIST.md 2>&1)" || {
                 checklist_retry_marker="$STATE_DIR/manual-checklist-format-retry.md"
                 if [[ ! -e "$checklist_retry_marker" ]]; then
                     {
-                        echo "The preceding MANUAL_CHECKLIST.md was rejected only for this required format."
-                        echo 'Write a new complete MANUAL_CHECKLIST.md: every check as its own item with an Exact action and an Expected result.'
+                        echo "The preceding .uncle/docs/MANUAL_CHECKLIST.md was rejected only for this required format."
+                        echo 'Write a new complete .uncle/docs/MANUAL_CHECKLIST.md: every check as its own item with an Exact action and an Expected result.'
                         echo 'Preserve every substantive check. Never drop or merge checks merely to make the document parse.'
                         echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
                         echo
@@ -3107,7 +3110,7 @@ REPAIR
             ;;
 
         EXECUTE_CHECKLIST)
-            if ! python3 "$ROOT/scripts/lib/checklist_document.py" MANUAL_CHECKLIST.md; then
+            if ! python3 "$ROOT/scripts/lib/checklist_document.py" .uncle/docs/MANUAL_CHECKLIST.md; then
                 set_state VALIDATE_MANUAL_CHECKLIST
                 exit 1
             fi
@@ -3117,7 +3120,7 @@ REPAIR
             snapshot_checklist_checks
             ensure_checklist_runner execute-checklist || exit 1
             run_parallel_checklist_workers
-            PROGRESS_TOTAL="$(grep -oE 'MC-[0-9]+' MANUAL_CHECKLIST.md 2>/dev/null \
+            PROGRESS_TOTAL="$(grep -oE 'MC-[0-9]+' .uncle/docs/MANUAL_CHECKLIST.md 2>/dev/null \
                 | sort -u | grep -c . || echo 0)"
             PROGRESS_LABEL="checklist"
             run_claude "${CHECKLIST_EXECUTE_PROMPT:-prompts/change/execute-change-checklist.md}" execute-checklist \
@@ -3129,10 +3132,10 @@ REPAIR
 
         VALIDATE_CHECKLIST)
             echo "Validating saved checklist reports; checks will not be rerun."
-            require_file VERIFICATION_REPORT.md
-            check_document_budget VERIFICATION_REPORT.md || exit 1
-            if [[ -e DEFECTS.md ]]; then
-                check_document_budget DEFECTS.md || exit 1
+            require_file .uncle/docs/VERIFICATION_REPORT.md
+            check_document_budget .uncle/docs/VERIFICATION_REPORT.md || exit 1
+            if [[ -e .uncle/docs/DEFECTS.md ]]; then
+                check_document_budget .uncle/docs/DEFECTS.md || exit 1
             fi
             set_state FINAL_AUDIT
             ;;
@@ -3144,11 +3147,11 @@ REPAIR
             envelope_invalidate FINAL_AUDIT
             envelope_write --stage audit --result unavailable --reason 'reviewer did not complete'
             if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine freeze || exit 1; fi
-            rm -f FINAL_AUDIT.md
+            rm -f .uncle/docs/FINAL_AUDIT.md
             run_final_audit_panel
             # A malformed audit gets one real re-run with the exact validator
-            # diagnosis appended, the same one-shot recovery ADVERSARIAL_REVIEW.md
-            # and MANUAL_CHECKLIST.md get.
+            # diagnosis appended, the same one-shot recovery .uncle/docs/ADVERSARIAL_REVIEW.md
+            # and .uncle/docs/MANUAL_CHECKLIST.md get.
             audit_prompt="${FINAL_AUDIT_PROMPT:-prompts/change/final-audit.md}"
             if [[ -s "$STATE_DIR/final-audit-format-retry.md" ]]; then
                 audit_prompt="$STATE_DIR/final-audit-format-retry-prompt.md"
@@ -3160,7 +3163,7 @@ REPAIR
             fi
             run_codex \
                 "$audit_prompt" \
-                FINAL_AUDIT.md \
+                .uncle/docs/FINAL_AUDIT.md \
                 final-audit \
                 "$CODEX_EFFORT_AUDIT"
 
@@ -3169,13 +3172,13 @@ REPAIR
 
         VALIDATE_AUDIT)
             echo "Validating saved audit; the reviewer will not be rerun."
-            require_file FINAL_AUDIT.md
-            audit_validation_error="$(python3 "$ROOT/scripts/lib/final-audit-context.py" --validate FINAL_AUDIT.md 2>&1)" || {
+            require_file .uncle/docs/FINAL_AUDIT.md
+            audit_validation_error="$(python3 "$ROOT/scripts/lib/final-audit-context.py" --validate .uncle/docs/FINAL_AUDIT.md 2>&1)" || {
                 audit_retry_marker="$STATE_DIR/final-audit-format-retry.md"
                 if [[ ! -e "$audit_retry_marker" ]]; then
                     {
-                        echo "The preceding FINAL_AUDIT.md was rejected only for this required format."
-                        echo 'Write a new complete FINAL_AUDIT.md in the required shape, ending with its verdict line.'
+                        echo "The preceding .uncle/docs/FINAL_AUDIT.md was rejected only for this required format."
+                        echo 'Write a new complete .uncle/docs/FINAL_AUDIT.md in the required shape, ending with its verdict line.'
                         echo 'Preserve every substantive finding and the verdict itself. Never soften or drop a finding merely to make the document parse.'
                         echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
                         echo
@@ -3190,11 +3193,11 @@ REPAIR
                 envelope_write --stage audit --result fail --reason 'audit format invalid'
                 exit 1
             }
-            audit_class="$(classify_audit_verdict FINAL_AUDIT.md)"
+            audit_class="$(classify_audit_verdict .uncle/docs/FINAL_AUDIT.md)"
             printf '%s\t%s\t%s\n' \
                 "${STAGEGATE_RUN_ID:--}" \
                 "$audit_class" \
-                "$(hash_file FINAL_AUDIT.md)" \
+                "$(hash_file .uncle/docs/FINAL_AUDIT.md)" \
                 > "$VERDICT_FILE"
             if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine bind || exit 1; fi
             # The audit claim: pass only for a READY verdict. An override
@@ -3204,7 +3207,7 @@ REPAIR
             audit_artifact="$(change_artifact)"
             envelope_write --stage audit --result "$audit_result" --reason "$audit_class" \
                 ${audit_artifact:+--input "artifact=$audit_artifact"} \
-                --evidence FINAL_AUDIT.md VERIFICATION_REPORT.md \
+                --evidence .uncle/docs/FINAL_AUDIT.md .uncle/docs/VERIFICATION_REPORT.md \
                 --producer-stage final-audit --producer-kind reviewer
             echo "Audit verdict: $audit_class"
             VERDICT_WRITTEN_THIS_RUN=1
@@ -3235,23 +3238,23 @@ REPAIR
 
             # Recover an interruption after saving READY but before COMPLETE.
             if [[ "$audit_class" == READY ]]; then
-                [[ "$(awk -F'\t' 'NR == 1 {print $3}' "$VERDICT_FILE")" == "$(hash_file FINAL_AUDIT.md)" ]] || exit 1
-                python3 "$ROOT/scripts/lib/audit-findings.py" FINAL_AUDIT.md "$STATE_DIR" --check || exit 1
+                [[ "$(awk -F'\t' 'NR == 1 {print $3}' "$VERDICT_FILE")" == "$(hash_file .uncle/docs/FINAL_AUDIT.md)" ]] || exit 1
+                python3 "$ROOT/scripts/lib/audit-findings.py" .uncle/docs/FINAL_AUDIT.md "$STATE_DIR" --check || exit 1
                 set_state COMPLETE
                 continue
             fi
 
             if [[ "$audit_class" == NOT_READY ]]; then
-                audit_hash="$(hash_file FINAL_AUDIT.md)"
-                if [[ "$(classify_audit_verdict FINAL_AUDIT.md)" != NOT_READY ]] \
+                audit_hash="$(hash_file .uncle/docs/FINAL_AUDIT.md)"
+                if [[ "$(classify_audit_verdict .uncle/docs/FINAL_AUDIT.md)" != NOT_READY ]] \
                     || [[ "$(awk -F'\t' 'NR == 1 {print $3}' "$VERDICT_FILE")" != "$audit_hash" ]]; then
                     echo "The audit changed since its verdict was recorded; rerun FINAL_AUDIT."
                     exit 1
                 fi
                 # Each finding needs an explicit decision, including in an
                 # unattended run. EOF leaves the saved review pending.
-                python3 "$ROOT/scripts/lib/audit-findings.py" FINAL_AUDIT.md "$STATE_DIR" || exit 1
-                [[ "$(hash_file FINAL_AUDIT.md)" == "$audit_hash" ]] || exit 1
+                python3 "$ROOT/scripts/lib/audit-findings.py" .uncle/docs/FINAL_AUDIT.md "$STATE_DIR" || exit 1
+                [[ "$(hash_file .uncle/docs/FINAL_AUDIT.md)" == "$audit_hash" ]] || exit 1
                 cp "$VERDICT_FILE" "$STATE_DIR/audit-verdict.original"
                 printf '%s\t%s\t%s\n' "${STAGEGATE_RUN_ID:--}" "READY" "$audit_hash" > "$VERDICT_FILE"
                 if [[ -f "$AUDIT_OVERRIDE_FILE" ]]; then
@@ -3270,7 +3273,7 @@ REPAIR
             if [[ "$audit_class" == "NOT_READY" ]]; then
                 echo "The independent auditor says this change is not ready."
             else
-                echo "FINAL_AUDIT.md does not end in one of the three verdict"
+                echo ".uncle/docs/FINAL_AUDIT.md does not end in one of the three verdict"
                 echo "phrases, so the auditor's conclusion could not be read."
                 echo "An unreadable verdict is not a pass."
             fi
@@ -3286,12 +3289,12 @@ REPAIR
             echo "is written to $AUDIT_OVERRIDE_FILE, reported at COMPLETE, and"
             echo "never closes the originating issue."
 
-            human_gate OVERRIDE FINAL_AUDIT.md FINAL_AUDIT_OVERRIDE
+            human_gate OVERRIDE .uncle/docs/FINAL_AUDIT.md FINAL_AUDIT_OVERRIDE
 
             printf '%s\t%s\t%s\n' \
                 "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
                 "$audit_class" \
-                "$(hash_file FINAL_AUDIT.md)" \
+                "$(hash_file .uncle/docs/FINAL_AUDIT.md)" \
                 > "$AUDIT_OVERRIDE_FILE"
 
             set_state COMPLETE
@@ -3309,9 +3312,9 @@ REPAIR
             fi
             echo
             echo "Review:"
-            echo "  CHANGE_TEST_REPORT.md"
-            echo "  VERIFICATION_REPORT.md"
-            echo "  FINAL_AUDIT.md"
+            echo "  .uncle/docs/CHANGE_TEST_REPORT.md"
+            echo "  .uncle/docs/VERIFICATION_REPORT.md"
+            echo "  .uncle/docs/FINAL_AUDIT.md"
             echo "  $DIFF_FILE"
 
             # An overridden check is not a passed check. Whatever else this

@@ -21,7 +21,8 @@ class ReviewContextTest(unittest.TestCase):
             state.mkdir(parents=True)
             (state / "green-check.md").write_text("All verification commands passed.")
             (state / "green-check.tsv").write_text("PASS\tbash tests/browser.sh\n")
-            (root / "VERIFICATION_REPORT.md").write_text("Old socket PermissionError")
+            (root / ".uncle/docs").mkdir(parents=True)
+            (root / ".uncle/docs/VERIFICATION_REPORT.md").write_text("Old socket PermissionError")
             (state / "TEST_CHANGES.diff").write_text("large test diff" * 10000)
             output = context.render(root, state)
             self.assertIn("PASS\tbash tests/browser.sh", output)
@@ -41,13 +42,14 @@ class ReviewContextTest(unittest.TestCase):
             state = root / '.uncle/workflow'
             (state / 'logs').mkdir(parents=True)
             (root / 'tests').mkdir()
+            (root / '.uncle/docs').mkdir(parents=True)
             test = root / 'tests/page.js'
             test.write_text("test('centering', () => {\n  expect(center).toBe(50);\n});\n")
-            (root / 'UPDATED_PROJECT_PLAN.md').write_text('| AC-1 | Center text |\n')
+            (root / '.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text('| AC-1 | Center text |\n')
             (state / 'verification.manifest').write_text(hashlib.sha256(test.read_bytes()).hexdigest() + '\ttests/page.js\n')
             (state / 'logs/green-check.log').write_text('not ok 1 centering\n')
             output = context.render(root, state)
-            self.assertIn('UPDATED_PROJECT_PLAN.md:1: | AC-1', output)
+            self.assertIn('.uncle/docs/UPDATED_PROJECT_PLAN.md:1: | AC-1', output)
             self.assertIn('tests/page.js:2:   expect(center)', output)
             self.assertIn('green-check.log:1: not ok 1', output)
             test.write_text('assert(newValue);\n')
@@ -63,7 +65,8 @@ class ReviewContextTest(unittest.TestCase):
             (state / 'verification.manifest').write_text('a' * 64 + '\t../outside.py\n')
             output = context.focused_evidence(root.resolve(), state.resolve())
             self.assertNotIn('private_marker', output)
-            (root / 'UPDATED_PROJECT_PLAN.md').write_text('| AC-1 | ' + 'x' * 500 + '\n' +
+            (root / '.uncle/docs').mkdir(parents=True)
+            (root / '.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text('| AC-1 | ' + 'x' * 500 + '\n' +
                 ('| AC-2 | ' + 'x' * 500 + '\n') * 1000)
             self.assertLess(len(context.focused_evidence(root.resolve(), state.resolve()).encode()), 13000)
 

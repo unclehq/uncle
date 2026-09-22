@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive an approved parallel-execution plan for MANUAL_CHECKLIST.md.
+"""Derive an approved parallel-execution plan for .uncle/docs/MANUAL_CHECKLIST.md.
 
 The checklist stage is told to run independent checks concurrently. Left at
 that, the executing agent has to infer what "independent" means from rows that
@@ -13,7 +13,7 @@ the test review audits their isolation, and parallel_checks.py runs them with a
 barrier between groups. What may overlap is decided by someone other than the
 agent whose results depend on the answer.
 
-This is that design for the checklist. The reviewer who writes MANUAL_CHECKLIST.md
+This is that design for the checklist. The reviewer who writes .uncle/docs/MANUAL_CHECKLIST.md
 declares, per check, the resources it needs exclusively and the checks it
 depends on. Those two facts are the safety-relevant judgment and they stay with
 the independent reviewer. The layering itself is arithmetic, so it is done here
@@ -401,7 +401,7 @@ def render_readme(groups, checks, errors, source):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--checklist", default="MANUAL_CHECKLIST.md")
+    ap.add_argument("--checklist", default=".uncle/docs/MANUAL_CHECKLIST.md")
     ap.add_argument("--out-dir", required=True)
     args = ap.parse_args(argv)
 

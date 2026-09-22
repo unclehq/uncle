@@ -73,7 +73,7 @@ try:
             assert usage == dict(input_tokens=10,output_tokens=5,total_tokens=15), usage
             assert not (root/'.git').exists()
             if stage:
-                assert (root/'UPDATED_PROJECT_PLAN.md').read_text().strip() == response_text.strip()
+                assert (root/'.uncle/docs/UPDATED_PROJECT_PLAN.md').read_text().strip() == response_text.strip()
         phase = 'edit'
         response_text = 'Done.'
         edit_path = str(root/'created.txt')

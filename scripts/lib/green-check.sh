@@ -3,7 +3,7 @@
 # result against the same commands run before anything changed.
 #
 # The stage that writes the code is also the stage that reports whether the
-# code passes. CHANGE_TEST_REPORT.md and AUTOMATED_TEST_REPORT.md are the
+# code passes. .uncle/docs/CHANGE_TEST_REPORT.md and .uncle/docs/AUTOMATED_TEST_REPORT.md are the
 # agent's account of checks the agent ran, and every downstream stage — the
 # checklist, the verification report, the audit — reads that account rather
 # than the checks. Rule 10 of CLAUDE.md ("never claim a check passed unless it
@@ -13,8 +13,8 @@
 # agent in the path, and records the exit statuses.
 #
 # The command list is not invented here. It is read from a document the human
-# has already approved at a gate — BASELINE_REPORT.md for the change pipeline,
-# UPDATED_PROJECT_PLAN.md for the new-application pipeline — so what the driver
+# has already approved at a gate — .uncle/docs/BASELINE_REPORT.md for the change pipeline,
+# .uncle/docs/UPDATED_PROJECT_PLAN.md for the new-application pipeline — so what the driver
 # executes is what the operator signed off on.
 #
 # A repository is rarely all green to begin with: a lint rule that has failed
@@ -122,8 +122,8 @@ PY
 # under the document's verification-command heading.
 #
 # Recognised headings, at any level and with or without a section number:
-#   ## 8. Exact build and test commands executed   (BASELINE_REPORT.md)
-#   ## Verification commands                       (UPDATED_PROJECT_PLAN.md)
+#   ## 8. Exact build and test commands executed   (.uncle/docs/BASELINE_REPORT.md)
+#   ## Verification commands                       (.uncle/docs/UPDATED_PROJECT_PLAN.md)
 #
 # Prose, blank lines, comments, and a shell-prompt "$ " prefix are dropped, so
 # a block written for a human still parses. Nothing outside the block is read:

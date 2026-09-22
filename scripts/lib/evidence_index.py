@@ -13,23 +13,23 @@ import os
 VERSION = 1
 STAGES = {
     'requirements': ['REQUIREMENTS.md'],
-    'project-plan': ['REQUIREMENTS.md', 'REQUIREMENTS_INTERPRETATION.md'],
-    'change-plan': ['CHANGE_SPEC.md', 'BASELINE_REPORT.md'],
-    'adversarial-review': ['REQUIREMENTS.md', 'REQUIREMENTS_INTERPRETATION.md', 'PROJECT_PLAN.md'],
-    'updated-plan': ['REQUIREMENTS.md', 'REQUIREMENTS_INTERPRETATION.md', 'PROJECT_PLAN.md', 'ADVERSARIAL_REVIEW.md'],
-    'updated-change-plan': ['CHANGE_SPEC.md', '@CHANGE_PLAN.pre-review.md', 'ADVERSARIAL_REVIEW.md'],
-    'manual-checklist-base': ['CHANGE_SPEC.md', 'CHANGE_PLAN.md'],
-    # Not IMPLEMENTATION_NOTES.md or AUTOMATED_TEST_REPORT.md: those are the
+    'project-plan': ['REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS_INTERPRETATION.md'],
+    'change-plan': ['.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/BASELINE_REPORT.md'],
+    'adversarial-review': ['REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS_INTERPRETATION.md', '.uncle/docs/PROJECT_PLAN.md'],
+    'updated-plan': ['REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS_INTERPRETATION.md', '.uncle/docs/PROJECT_PLAN.md', '.uncle/docs/ADVERSARIAL_REVIEW.md'],
+    'updated-change-plan': ['.uncle/docs/CHANGE_SPEC.md', '@CHANGE_PLAN.pre-review.md', '.uncle/docs/ADVERSARIAL_REVIEW.md'],
+    'manual-checklist-base': ['.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md'],
+    # Not .uncle/docs/IMPLEMENTATION_NOTES.md or .uncle/docs/AUTOMATED_TEST_REPORT.md: those are the
     # repairing agent's own earlier claims, and quoting their PASS lines back
     # is how a pass came to report findings fixed without touching a file.
-    'repair': ['UPDATED_PROJECT_PLAN.md', 'TEST_REVIEW.md', 'VERIFICATION_REPORT.md', 'DEFECTS.md',
+    'repair': ['.uncle/docs/UPDATED_PROJECT_PLAN.md', '.uncle/docs/TEST_REVIEW.md', '.uncle/docs/VERIFICATION_REPORT.md', '.uncle/docs/DEFECTS.md',
                '@green-check.md', '@green-check.tsv', '@TEST_CHANGES.diff', '@verification.manifest',
                '@REPAIR_BRIEF.md'],
 }
-REPORTS = ['MANUAL_CHECKLIST.md', 'VERIFICATION_REPORT.md', 'DEFECTS.md',
+REPORTS = ['.uncle/docs/MANUAL_CHECKLIST.md', '.uncle/docs/VERIFICATION_REPORT.md', '.uncle/docs/DEFECTS.md',
            '@checklist-driver-checks/README.md', '@checklist-driver-checks/results.tsv',
            '@delivery-summary.tsv', '@verification.manifest', '@TEST_CHANGES.diff', '@green-check.md', '@green-check.tsv',
-           'TEST_REVIEW.md', 'AUTOMATED_TEST_REPORT.md', 'CHANGE_TEST_REPORT.md']
+           '.uncle/docs/TEST_REVIEW.md', '.uncle/docs/AUTOMATED_TEST_REPORT.md', '.uncle/docs/CHANGE_TEST_REPORT.md']
 CONFIG = ['package.json', 'pyproject.toml', 'requirements.txt', 'package-lock.json',
           '@green-check.commands', '@green-check.groups']
 
@@ -65,9 +65,9 @@ def packet(project, state, stage, family='app'):
         stage = stage.split('-worker-', 1)[0]
     if not re.fullmatch(r'[a-z0-9-]+', stage):
         raise ValueError('Invalid stage name')
-    names = list(STAGES.get(stage, ['REQUIREMENTS.md', 'UPDATED_PROJECT_PLAN.md', 'CHANGE_SPEC.md', 'CHANGE_PLAN.md'] + REPORTS))
+    names = list(STAGES.get(stage, ['REQUIREMENTS.md', '.uncle/docs/UPDATED_PROJECT_PLAN.md', '.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md'] + REPORTS))
     if stage == 'adversarial-review' and family == 'change':
-        names = ['CHANGE_SPEC.md', 'CHANGE_PLAN.md', 'BASELINE_REPORT.md']
+        names = ['.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md', '.uncle/docs/BASELINE_REPORT.md']
     if stage != 'manual-checklist-base':
         names += CONFIG
     if stage == 'final-audit':

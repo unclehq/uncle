@@ -46,7 +46,7 @@ def check(spec, notes):
                      ["ID", "Status", "Changed code", "Observed targeted verification"])
     problems = []
     if required.keys() != delivered.keys():
-        problems.append("Acceptance IDs must match CHANGE_SPEC.md exactly")
+        problems.append("Acceptance IDs must match .uncle/docs/CHANGE_SPEC.md exactly")
     for key in required:
         if len(required[key]) != 2 or not all(required[key]):
             problems.append(f"{key}: malformed specification criterion")

@@ -2,20 +2,20 @@ You are the primary implementation agent.
 
 Read:
 
-- CHANGE_PLAN.md
-- CHANGE_SPEC.md
-- BASELINE_REPORT.md
+- .uncle/docs/CHANGE_PLAN.md
+- .uncle/docs/CHANGE_SPEC.md
+- .uncle/docs/BASELINE_REPORT.md
 
-CHANGE_PLAN.md has just passed a human approval gate and may have been
+.uncle/docs/CHANGE_PLAN.md has just passed a human approval gate and may have been
 edited during that review. Read it from disk before you touch any file. It is
 the approved scope; remembered content is not.
 
-You do not need ADVERSARIAL_REVIEW.md. CHANGE_PLAN.md carries a
+You do not need .uncle/docs/ADVERSARIAL_REVIEW.md. .uncle/docs/CHANGE_PLAN.md carries a
 disposition for every finding in it, and those dispositions are what was
-approved. You do not need CHANGE_REQUEST.md; CHANGE_SPEC.md supersedes it.
+approved. You do not need CHANGE_REQUEST.md; .uncle/docs/CHANGE_SPEC.md supersedes it.
 
-From BASELINE_REPORT.md you need the build and test commands and the
-preserved-behavior table. From CHANGE_PLAN.md you need the frozen
+From .uncle/docs/BASELINE_REPORT.md you need the build and test commands and the
+preserved-behavior table. From .uncle/docs/CHANGE_PLAN.md you need the frozen
 scope and the file list. Go straight to the files that list names.
 
 Implement the approved change in this invocation. The deliverable is working
@@ -41,13 +41,13 @@ check, not independent implementation and mocked tests. Complete authorized
 work first, then report the exact missing verification. Do not weaken protected
 tests or silently amend approved artifacts to resolve a plan contradiction.
 
-Include exactly one `## Acceptance delivery` section in IMPLEMENTATION_NOTES.md:
+Include exactly one `## Acceptance delivery` section in .uncle/docs/IMPLEMENTATION_NOTES.md:
 
 | ID | Status | Changed code | Observed targeted verification |
 |---|---|---|---|
 | AC-1 | IMPLEMENTED | path and behavior | command and observed result |
 
-Include every acceptance ID from CHANGE_SPEC.md exactly once, with no extra
+Include every acceptance ID from .uncle/docs/CHANGE_SPEC.md exactly once, with no extra
 IDs. Status is IMPLEMENTED only when the behavior exists and its targeted check
 passes; otherwise use INCOMPLETE or BLOCKED with the missing work and exact
 blocker in the evidence columns. Baseline passes alone do not prove new behavior.
@@ -87,7 +87,7 @@ Implementation rules:
 9. Record every material deviation from the approved plan.
 10. Stop and document the issue if a core assumption is false.
 
-Create IMPLEMENTATION_NOTES.md containing:
+Create .uncle/docs/IMPLEMENTATION_NOTES.md containing:
 
 - files changed
 - purpose of each change
@@ -97,7 +97,7 @@ Create IMPLEMENTATION_NOTES.md containing:
 - unresolved concerns
 
 Run the targeted checks needed to demonstrate the changed behavior and create
-CHANGE_TEST_REPORT.md containing:
+.uncle/docs/CHANGE_TEST_REPORT.md containing:
 
 - baseline result
 - targeted tests
@@ -120,7 +120,7 @@ The driver owns the full regression command block and runs it once immediately
 after this stage. Do not run `scripts/run-shell-tests.sh`, an equivalent loop
 over every test suite, or another full-project regression command here unless a
 specific acceptance criterion cannot be established by a narrower target. Mark
-the full-suite row `DRIVER PENDING` in CHANGE_TEST_REPORT.md. The driver's green
+the full-suite row `DRIVER PENDING` in .uncle/docs/CHANGE_TEST_REPORT.md. The driver's green
 check and implementation review provide the authoritative result. After a
 targeted failure, rerun only that target and its dependents.
 
@@ -140,13 +140,13 @@ You run the most commands of any stage, so this is where it costs most.
 
 ## Output economy
 
-- One line per check in CHANGE_TEST_REPORT.md. Each line is the exact command
+- One line per check in .uncle/docs/CHANGE_TEST_REPORT.md. Each line is the exact command
   followed by its result, or `N/A (<reason>)`, or `NOT RUN (<reason>)`.
 - `N/A` and `NOT RUN` are not interchangeable. `N/A` means the check does not
   apply to this repository or this change. `NOT RUN` means it applies and you
   did not run it. Never delete a line to avoid choosing between them.
 - Quote failing output only. Passing output is a line count, not a transcript.
-- IMPLEMENTATION_NOTES.md is one row per changed file plus the deviations. It
+- .uncle/docs/IMPLEMENTATION_NOTES.md is one row per changed file plus the deviations. It
   is not a narrative of how you worked.
 
 ## What happens to this work next
@@ -154,7 +154,7 @@ You run the most commands of any stage, so this is where it costs most.
 Two things read your output before any other stage does, and neither takes
 your word for anything.
 
-The driver re-runs BASELINE_REPORT.md's command list itself, with no agent in
+The driver re-runs .uncle/docs/BASELINE_REPORT.md's command list itself, with no agent in
 the path, and compares the result against the same commands run before you
 started. A check you reported as passing but did not run shows up here. A
 check that was already failing before you started does not count against you;
@@ -162,14 +162,14 @@ one that was green and is now red stops the pipeline for a human decision. Run
 the checks, and report what actually happened.
 
 Then a human reads the diff — the real one, generated from the working tree,
-including files you created — next to IMPLEMENTATION_NOTES.md and
-CHANGE_TEST_REPORT.md. Write both for that reader: they will be looking at the
+including files you created — next to .uncle/docs/IMPLEMENTATION_NOTES.md and
+.uncle/docs/CHANGE_TEST_REPORT.md. Write both for that reader: they will be looking at the
 same lines you are describing.
 
 Do not invoke the reviewer CLI. An independent reviewer is already running
 against the approved artifacts while you implement.
 
-Do not create or modify MANUAL_CHECKLIST.md, and do not write anything into
+Do not create or modify .uncle/docs/MANUAL_CHECKLIST.md, and do not write anything into
 the .workflow directory.
 
 Read .uncle/workflow/plan-executability/assessment.md when present. If verdict is
@@ -177,7 +177,7 @@ DECISION, implement only the listed executable step IDs and paths; retain all ac
 rows and leave dependent/transitive steps pending. Do not ask again for settled authority.
 Complete independent code and mocked tests before reporting a live-verification blocker.
 Report contradictions in exactly one fenced `plan-blockers` JSON array in
-IMPLEMENTATION_NOTES.md. Each row has id, class (DESIGN/AUTHORITY/LIVE_VERIFICATION/CODING),
+.uncle/docs/IMPLEMENTATION_NOTES.md. Each row has id, class (DESIGN/AUTHORITY/LIVE_VERIFICATION/CODING),
 requirement_ids, restriction_ids, evidence, independent_work. AUTHORITY also requires
 question and alternatives. DESIGN means an unsupported generated mechanism, not an
 ordinary coding defect. LIVE_VERIFICATION means only dependent approved live checks

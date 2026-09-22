@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 cd "$work"
-mkdir -p workflow
+mkdir -p workflow .uncle/docs
 export ROOT
 cat > harness.sh <<'SH'
 set -euo pipefail
@@ -45,15 +45,15 @@ ensure_checklist_runner() { :; }
 run_stage() {
     echo "$1" >> calls
     case "$1" in
-        TEST_REVIEW) printf 'Compacting report\n' > TEST_REVIEW.md ;;
+        TEST_REVIEW) printf 'Compacting report\n' > .uncle/docs/TEST_REVIEW.md ;;
         EXECUTE_CHECKLIST)
             # Stop an accidental loop quickly, without calling any real agent.
             # A malformed VERIFICATION_REPORT.md now gets one automatic
             # format-only retry (same shape as TEST_REVIEW.md's own), so two
             # calls in a row is expected; a third would be a real loop.
             [[ "$(grep -c '^EXECUTE_CHECKLIST$' calls)" -le 2 ]] || exit 8
-            cp candidate.md VERIFICATION_REPORT.md
-            printf 'No defects\n' > DEFECTS.md
+            cp candidate.md .uncle/docs/VERIFICATION_REPORT.md
+            printf 'No defects\n' > .uncle/docs/DEFECTS.md
             ;;
         FINAL_AUDIT|REPAIR) exit 0 ;;
         *) exit 7 ;;
@@ -65,13 +65,13 @@ report() {
     printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n%s\n' "$1" > "$2"
 }
 reset() {
-    printf '## MC-1\nExact action: check\nExpected result: greeting\n' > MANUAL_CHECKLIST.md
+    printf '## MC-1\nExact action: check\nExpected result: greeting\n' > .uncle/docs/MANUAL_CHECKLIST.md
     rm -f calls invalid-inputs
     rm -rf workflow/waivers
     printf 'EXECUTE_CHECKLIST\n' > workflow/state
     printf 'snapshot\n' > workflow/verification.manifest
     printf '0\n' > workflow/green.tsv
-    report $'| COVERAGE | YES | PASS | ok |\n| INTEGRITY | YES | PASS | ok |\n| ASSERTIONS | YES | PASS | ok |\n| ORACLE | YES | PASS | ok |\n| NEGATIVE | YES | PASS | ok |\n| RESULTS | YES | PASS | ok |' TEST_REVIEW.md
+    report $'| COVERAGE | YES | PASS | ok |\n| INTEGRITY | YES | PASS | ok |\n| ASSERTIONS | YES | PASS | ok |\n| ORACLE | YES | PASS | ok |\n| NEGATIVE | YES | PASS | ok |\n| RESULTS | YES | PASS | ok |' .uncle/docs/TEST_REVIEW.md
 }
 run() { local status=0; bash harness.sh > output 2>&1 || status=$?; if [[ "$status" != 0 ]]; then cat output >&2; fi; return "$status"; }
 count() { [[ "$(grep -c "^$1$" calls)" == "$2" ]]; }
@@ -98,7 +98,7 @@ grep -q 'not a plain identifier' output
 if run; then echo 'Malformed report advanced on resume' >&2; exit 1; fi
 count EXECUTE_CHECKLIST 2
 count green 2
-report '| REQ-71 | YES | PASS | mutant assertions passed; :71 mutation validity |' VERIFICATION_REPORT.md
+report '| REQ-71 | YES | PASS | mutant assertions passed; :71 mutation validity |' .uncle/docs/VERIFICATION_REPORT.md
 run
 count EXECUTE_CHECKLIST 2
 count green 2

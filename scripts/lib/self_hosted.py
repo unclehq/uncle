@@ -383,7 +383,7 @@ def opencode_usage(path):
     return totals if found else {}
 
 
-PLAN_ARTIFACTS = {'requirements': 'REQUIREMENTS_INTERPRETATION.md', 'project-plan': 'PROJECT_PLAN.md', 'updated-plan': 'UPDATED_PROJECT_PLAN.md'}
+PLAN_ARTIFACTS = {'requirements': '.uncle/docs/REQUIREMENTS_INTERPRETATION.md', 'project-plan': '.uncle/docs/PROJECT_PLAN.md', 'updated-plan': '.uncle/docs/UPDATED_PROJECT_PLAN.md'}
 
 
 def validate_plan(text, protected=True):
@@ -444,7 +444,7 @@ def validate_reviewer_document(output, document):
     A reviewer's artifact is its last message, and its last message is not
     always the review: after OpenCode compacts a full context the model
     answers the compaction prompt -- "what did we do so far" -- and that
-    summary was written as ADVERSARIAL_REVIEW.md. The agent path already
+    summary was written as .uncle/docs/ADVERSARIAL_REVIEW.md. The agent path already
     validates a plan before publishing it; the reviewer path published
     whatever came back.
     """
@@ -485,7 +485,7 @@ def reviewer_document(response):
     a stray fragment of prior analysis ("### ~~MC-005~~ [DELETED: ...]") can
     look exactly like a heading while being nowhere near the real content,
     which the model then produced, correctly, inside its own fence further
-    down. Once, a corrupted MANUAL_CHECKLIST.md was exactly this: 37 lines of
+    down. Once, a corrupted .uncle/docs/MANUAL_CHECKLIST.md was exactly this: 37 lines of
     leftover think-aloud starting with a heading-shaped fragment, then the
     real checklist fenced in full below it -- and the naive first-heading scan
     published the whole thing, fence markers included, as the document.
@@ -501,7 +501,7 @@ def reviewer_document(response):
     # earlier bare fence before the real document's own fence further down.
     # Stopping at the first fence that doesn't qualify abandoned fence-scanning
     # entirely and fell through to the naive whole-response scan below, which
-    # is exactly how a real MANUAL_CHECKLIST.md landed on disk as a stub
+    # is exactly how a real .uncle/docs/MANUAL_CHECKLIST.md landed on disk as a stub
     # table of contents followed by narration and JSON tool-log blobs: the
     # real, complete, fenced checklist further down was never even looked at.
     fence_open = re.compile(r'^(`{3,}|~{3,})(?:markdown|md)?\s*$')
@@ -577,10 +577,11 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
             return set(excluded(directory, names)) | {name for name in names if (Path(directory)/name).is_symlink()}
         shutil.copytree(root, staged, ignore=ignore)
         candidate = staged / artifact
+        candidate.parent.mkdir(parents=True, exist_ok=True)
         if candidate.exists():
             candidate.unlink()
-        if artifact == 'REQUIREMENTS_INTERPRETATION.md':
-            request = prompt + '\nWrite the complete REQUIREMENTS_INTERPRETATION.md using your file tools, starting with its # heading and including ## 10. Definition of done. If returning the document instead, return complete Markdown, not tool-call markup.'
+        if artifact == '.uncle/docs/REQUIREMENTS_INTERPRETATION.md':
+            request = prompt + '\nWrite the complete .uncle/docs/REQUIREMENTS_INTERPRETATION.md using your file tools, starting with its # heading and including ## 10. Definition of done. If returning the document instead, return complete Markdown, not tool-call markup.'
             turns = 0
             for attempt in range(2):
                 attempt_usage = {}
@@ -630,11 +631,11 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                 try:
                     if not candidate.exists():
                         candidate.write_text(document_response(response, artifact), encoding='utf-8', newline='\n')
-                    validate_plan(candidate.read_text(encoding='utf-8'), protected=artifact == 'UPDATED_PROJECT_PLAN.md')
+                    validate_plan(candidate.read_text(encoding='utf-8'), protected=artifact == '.uncle/docs/UPDATED_PROJECT_PLAN.md')
                 except ValueError as error:
                     logs = root/'.uncle/workflow/logs'
                     logs.mkdir(parents=True, exist_ok=True)
-                    fd, rejected = tempfile.mkstemp(prefix=artifact.removesuffix('.md').lower() + '-rejected-', suffix='.md', dir=logs)
+                    fd, rejected = tempfile.mkstemp(prefix=Path(artifact).name.removesuffix('.md').lower() + '-rejected-', suffix='.md', dir=logs)
                     with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
                         stream.write(response)
                         if candidate.is_file():
@@ -650,13 +651,14 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         if not candidate.is_file() or candidate.is_symlink():
             raise ValueError('OpenCode did not produce a regular ' + artifact + '; original plan preserved')
         contents = candidate.read_bytes()
-        if artifact != 'REQUIREMENTS_INTERPRETATION.md':
-            validate_plan(contents.decode('utf-8'), protected=artifact == 'UPDATED_PROJECT_PLAN.md')
+        if artifact != '.uncle/docs/REQUIREMENTS_INTERPRETATION.md':
+            validate_plan(contents.decode('utf-8'), protected=artifact == '.uncle/docs/UPDATED_PROJECT_PLAN.md')
         else:
             validate_requirements(contents.decode('utf-8'))
         if target.is_symlink() or (target.read_bytes() if target.exists() else None) != original:
             raise ValueError('Plan changed during generation; refusing to overwrite it')
-        fd, pending = tempfile.mkstemp(prefix='.' + artifact + '.', dir=root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, pending = tempfile.mkstemp(prefix='.' + Path(artifact).name + '.', dir=target.parent)
         try:
             with os.fdopen(fd, 'wb') as stream:
                 stream.write(contents)

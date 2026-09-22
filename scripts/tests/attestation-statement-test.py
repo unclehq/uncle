@@ -104,15 +104,16 @@ class Fixture(unittest.TestCase):
         (self.state / 'approvals').mkdir(parents=True)
         (self.state / 'origin').write_text('owner/repo\t59\tgh\n')
         (self.repo / 'source.txt').write_text('audited\n')
+        (self.repo / '.uncle/docs').mkdir(parents=True)
         for name in ('BASELINE_REPORT', 'CHANGE_SPEC', 'ADVERSARIAL_REVIEW', 'CHANGE_PLAN'):
-            (self.repo / (name + '.md')).write_text('# ' + name + '\n\nfixture body\n')
-        (self.repo / 'ADVERSARIAL_REVIEW.md').write_text(
+            (self.repo / '.uncle/docs' / (name + '.md')).write_text('# ' + name + '\n\nfixture body\n')
+        (self.repo / '.uncle/docs/ADVERSARIAL_REVIEW.md').write_text(
             '# Review\n\n## AR-001: High finding\n\n- Severity: High\n- References: x\n- Failure: y\n- Fix: z\n- Verify: w\n\n## Overall assessment\nOne finding.\n')
-        (self.repo / 'CHANGE_PLAN.md').write_text('# Plan\n\n| Finding | Disposition | Reason | Exact plan change |\n|---|---|---|---|\n| AR-001 | Accepted | r | c |\n')
-        (self.repo / 'FINAL_AUDIT.md').write_text(READY_AUDIT)
-        (self.repo / 'VERIFICATION_REPORT.md').write_text('# VR\n')
-        (self.repo / 'IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | IMPLEMENTED | source.txt | Fixture check PASS |\n')
-        (self.repo / 'CHANGE_TEST_REPORT.md').write_text('# report\n')
+        (self.repo / '.uncle/docs/CHANGE_PLAN.md').write_text('# Plan\n\n| Finding | Disposition | Reason | Exact plan change |\n|---|---|---|---|\n| AR-001 | Accepted | r | c |\n')
+        (self.repo / '.uncle/docs/FINAL_AUDIT.md').write_text(READY_AUDIT)
+        (self.repo / '.uncle/docs/VERIFICATION_REPORT.md').write_text('# VR\n')
+        (self.repo / '.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | IMPLEMENTED | source.txt | Fixture check PASS |\n')
+        (self.repo / '.uncle/docs/CHANGE_TEST_REPORT.md').write_text('# report\n')
         (self.state / 'green-check.tsv').write_text('PASS\tcmd1\nPREEXISTING\tcmd2\n')
 
     def git(self, *args, data=None):
@@ -134,7 +135,7 @@ class Fixture(unittest.TestCase):
     def approve(self, name, action='APPROVE', approved_by='Brian', delegated_by='', digest=True):
         approvals = self.state / 'approvals'
         if digest:
-            path = self.repo / (name + '.md')
+            path = self.repo / '.uncle/docs' / (name + '.md')
             (approvals / (name + '.sha256')).write_text(hashlib.sha256(path.read_bytes()).hexdigest() + '\n')
         (approvals / (name + '.gate-action')).write_text(action + '\n')
         (approvals / (name + '.approved-by')).write_text(approved_by + '\n')
@@ -146,24 +147,24 @@ class Fixture(unittest.TestCase):
             self.approve(name)
         self.approve('IMPLEMENTATION_REVIEW', digest=False)
         state, root = self.state, self.repo
-        envelope.write_envelope(state, 'requirements', 'pass', evidence=['BASELINE_REPORT.md', 'CHANGE_SPEC.md'],
+        envelope.write_envelope(state, 'requirements', 'pass', evidence=['.uncle/docs/BASELINE_REPORT.md', '.uncle/docs/CHANGE_SPEC.md'],
                                 root=root, approvals=['BASELINE_REPORT', 'CHANGE_SPEC'])
-        envelope.write_envelope(state, 'review', 'pass', evidence=['ADVERSARIAL_REVIEW.md'], root=root,
-                                findings_path='ADVERSARIAL_REVIEW.md')
-        envelope.write_envelope(state, 'plan', 'pass', evidence=['CHANGE_PLAN.md'], root=root,
-                                dispositions_path='CHANGE_PLAN.md', approvals=['CHANGE_PLAN', 'ADVERSARIAL_REVIEW'],
-                                inputs={'review': hashlib.sha256((root / 'ADVERSARIAL_REVIEW.md').read_bytes()).hexdigest()})
+        envelope.write_envelope(state, 'review', 'pass', evidence=['.uncle/docs/ADVERSARIAL_REVIEW.md'], root=root,
+                                findings_path='.uncle/docs/ADVERSARIAL_REVIEW.md')
+        envelope.write_envelope(state, 'plan', 'pass', evidence=['.uncle/docs/CHANGE_PLAN.md'], root=root,
+                                dispositions_path='.uncle/docs/CHANGE_PLAN.md', approvals=['CHANGE_PLAN', 'ADVERSARIAL_REVIEW'],
+                                inputs={'review': hashlib.sha256((root / '.uncle/docs/ADVERSARIAL_REVIEW.md').read_bytes()).hexdigest()})
         envelope.write_envelope(state, 'implementation', 'pass', artifact=artifact, root=root,
-                                approvals=['IMPLEMENTATION_REVIEW'], evidence=['IMPLEMENTATION_NOTES.md'])
+                                approvals=['IMPLEMENTATION_REVIEW'], evidence=['.uncle/docs/IMPLEMENTATION_NOTES.md'])
         envelope.write_envelope(state, 'verification', verification, reason=reason or '2 commands: 1 pass, 1 pre-existing, 0 regressed',
                                 inputs={'artifact': artifact}, root=root, evidence=['.uncle/workflow/green-check.tsv'])
         envelope.write_envelope(state, 'audit', audit, reason='READY' if audit == 'pass' else 'NOT_READY',
-                                inputs={'artifact': artifact}, root=root, evidence=['FINAL_AUDIT.md'])
+                                inputs={'artifact': artifact}, root=root, evidence=['.uncle/docs/FINAL_AUDIT.md'])
         return artifact
 
     def freeze(self, verdict='READY'):
         self.ok(self.engine('freeze'))
-        sha = hashlib.sha256((self.repo / 'FINAL_AUDIT.md').read_bytes()).hexdigest()
+        sha = hashlib.sha256((self.repo / '.uncle/docs/FINAL_AUDIT.md').read_bytes()).hexdigest()
         (self.state / 'audit-verdict').write_text('run-59\t' + verdict + '\t' + sha + '\n')
         self.ok(self.engine('bind'))
 
@@ -269,7 +270,7 @@ class StatementTests(Fixture):
     def test_not_ready_override_is_recorded_but_does_not_release(self):
         # AC-20 / D-17: the override reaches the handoff, which refuses before
         # any git write; release.json records the reason.
-        (self.repo / 'FINAL_AUDIT.md').write_text(NOT_READY_AUDIT)
+        (self.repo / '.uncle/docs/FINAL_AUDIT.md').write_text(NOT_READY_AUDIT)
         self.seed_envelopes(audit='fail')
         self.freeze('NOT_READY')
         result = self.engine('verdict-override', 'y\n')
@@ -420,7 +421,7 @@ class DriverTests(Fixture):
         artifact = self.seed_envelopes()
         for stage in ('audit',):
             (self.state / 'envelopes' / (stage + '.json')).unlink()
-        (self.repo / 'CHANGE_SPEC.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Fixture behavior | Fixture check |\n')
+        (self.repo / '.uncle/docs/CHANGE_SPEC.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Fixture behavior | Fixture check |\n')
         self.approve('CHANGE_SPEC')
         self.reviewer(READY_AUDIT)
         (self.state / 'state').write_text('59:FINAL_AUDIT\n')
@@ -447,7 +448,7 @@ class DriverTests(Fixture):
     def test_not_ready_audit_with_driver_override_never_publishes(self):
         self.seed_envelopes()
         (self.state / 'envelopes/audit.json').unlink()
-        (self.repo / 'CHANGE_SPEC.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Fixture behavior | Fixture check |\n')
+        (self.repo / '.uncle/docs/CHANGE_SPEC.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Fixture behavior | Fixture check |\n')
         self.approve('CHANGE_SPEC')
         self.reviewer(NOT_READY_AUDIT)
         (self.state / 'state').write_text('59:FINAL_AUDIT\n')

@@ -1,7 +1,7 @@
 You are the primary acceptance-prerequisite verifier.
 
-Read REQUIREMENTS.md, REQUIREMENTS_INTERPRETATION.md, and
-UPDATED_PROJECT_PLAN.md. Create PREFLIGHT_REPORT.md before implementation.
+Read REQUIREMENTS.md, .uncle/docs/REQUIREMENTS_INTERPRETATION.md, and
+.uncle/docs/UPDATED_PROJECT_PLAN.md. Create .uncle/docs/PREFLIGHT_REPORT.md before implementation.
 
 Use these sections, in order: Summary, Findings, Assumptions, Open questions,
 Acceptance gate. In Findings, inventory every mandatory acceptance check and
@@ -95,7 +95,7 @@ the requirement that establishes this. Include at least one required row.
 Do not put literal pipe characters in cells. Missing mandatory prerequisites
 must remain required. The driver will pause until all required rows pass.
 
-Write PREFLIGHT_REPORT.md, and the pre-implementation input files that
+Write .uncle/docs/PREFLIGHT_REPORT.md, and the pre-implementation input files that
 `Files the plan says to create` requires you to derive. Nothing else.
 
 ## Preflight gate scope (binding)

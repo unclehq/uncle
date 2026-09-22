@@ -65,7 +65,7 @@ WORKFLOWS = [
     ("From GitHub issue", [os.path.join(ROOT, "scripts", "from-issue.sh")]),
     ("Change request", [os.path.join(ROOT, "scripts", "change-workflow.sh")]),
 ]
-EFFORTS = ["high", "medium", "low"]
+EFFORTS = ["none"]
 ISSUE_MODES = [("auto", ""), ("change request", "--change"), ("new application", "--new"),
                ("change request in worktree", "--worktree")]
 # A triage proposal that says there is nothing to edit needs no master turn.
@@ -158,7 +158,23 @@ def _ensure_uncle_gitignored(project_root):
             existing = fh.read()
     except OSError:
         return
-    if any(line.strip().strip("/") == ".uncle" for line in existing.splitlines()):
+    lines = existing.splitlines()
+    # A bare `.uncle` or `.uncle/` line -- written by an earlier version of
+    # this function, or by hand -- excludes the whole tree with no exception,
+    # silently breaking the visibility .uncle/docs/ depends on. Upgrade it in
+    # place rather than leaving it, the same repair this repository's own
+    # .gitignore needed. Anything else naming .uncle (a narrower rule someone
+    # wrote on purpose, or the upgraded form already) is left alone.
+    bare = next((i for i, line in enumerate(lines) if line.strip().strip("/") == ".uncle"), None)
+    if bare is not None:
+        lines[bare:bare + 1] = ['.uncle/*', '!.uncle/docs/']
+        try:
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("\n".join(lines) + "\n")
+        except OSError:
+            pass
+        return
+    if any(line.strip() in ('.uncle/*', '!.uncle/docs/') for line in lines):
         return
     try:
         with open(path, "a", encoding="utf-8", newline="\n") as fh:
@@ -215,7 +231,7 @@ REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi", "self-hosted"]
 
 # Applied to any stage the operator has not configured.
 DEFAULT_RUNNER = "claude"
-DEFAULT_EFFORT = "low"
+DEFAULT_EFFORT = "none"
 
 def parent_stage(stage):
     """Return the configured parent for a driver-created stage name."""
@@ -233,7 +249,7 @@ def default_stage_effort(stage):
     stage = parent_stage(stage)
     if stage == "plan-executability":
         stage = "adversarial-review"
-    return "medium" if stage in ("adversarial-review", "project-plan", "implementation", "repair") else DEFAULT_EFFORT
+    return DEFAULT_EFFORT
 
 DEFAULT_CLINE_MODEL = "cline-pass/deepseek-v4-pro"
 
@@ -437,10 +453,9 @@ CONFIG_DESC = {
         "runner's own default."
     ),
     "field:effort": (
-        "Reasoning effort for this stage: high, medium, or low. Higher effort "
-        "usually means more careful work and more tokens. Every runner "
-        "supports it — cline as --thinking, claude as an effort flag, codex as "
-        "model_reasoning_effort."
+        "Reasoning is disabled for every stage. "
+        "The configured value is retained for compatibility but is not sent "
+        "to a runner."
     ),
     "field:network": (
         "Whether this stage's sandbox may reach the network. Shown only when "
@@ -502,12 +517,9 @@ CONFIG_DESC = {
         "stages can still override it further down this list."
     ),
     "effort": (
-        "The reasoning effort applied to every stage, one of high, medium, or "
-        "low. Effort controls how much thought the model invests in each step; "
-        "higher effort usually means more careful planning and reviewing but "
-        "also more tokens. Use medium as a balanced default, high for complex "
-        "changes, and low for quick iterations. You can type your own value in "
-        "the edit screen or cycle it from this row."
+        "Reasoning is disabled for every stage. "
+        "The configured value is retained for compatibility but is not sent "
+        "to a runner."
     ),
     "derive-brief": (
         "Fills in a brief seeded from a GitHub issue, reading the issue text and "
@@ -1003,7 +1015,7 @@ class UncleTUI:
         return installed[0] if installed else ""
 
     def stage_effort(self, stage):
-        return self._stage_value(stage, self.stage_efforts) or default_stage_effort(stage)
+        return "none"
 
     def stage_network(self, stage):
         """Whether this stage's sandbox may reach the network. Default off."""

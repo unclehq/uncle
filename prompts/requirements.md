@@ -10,7 +10,7 @@ script -- may be a throwaway first look being built from the brief in parallel
 with this stage. They are not the project being planned and not evidence of
 anything: do not read them, cite them, or plan around them.
 
-Create REQUIREMENTS_INTERPRETATION.md containing:
+Create .uncle/docs/REQUIREMENTS_INTERPRETATION.md containing:
 
 1. Required functionality
 2. Optional functionality
@@ -41,7 +41,7 @@ Do not design the architecture.
 Do not implement code.
 Do not invoke another agent.
 
-Write only REQUIREMENTS_INTERPRETATION.md and stop.
+Write only .uncle/docs/REQUIREMENTS_INTERPRETATION.md and stop.
 
 This is a companion to REQUIREMENTS.md, not a replacement specification.
 Reference unchanged requirements by stable ID, or source line range when IDs

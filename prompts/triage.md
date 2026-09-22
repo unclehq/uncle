@@ -16,8 +16,8 @@ verification paths are copied into the live tree when the turn ends, and each
 is recorded in `.uncle/workflow/triage-actions.tsv`.
 
 During a selected execute proposal you may edit reviewer reports, including
-`ADVERSARIAL_REVIEW.md`, `MANUAL_CHECKLIST.md`, `TEST_REVIEW.md`, and
-`FINAL_AUDIT.md`, in the sandbox. Repair malformed tables and other report
+`.uncle/docs/ADVERSARIAL_REVIEW.md`, `.uncle/docs/MANUAL_CHECKLIST.md`, `.uncle/docs/TEST_REVIEW.md`, and
+`.uncle/docs/FINAL_AUDIT.md`, in the sandbox. Repair malformed tables and other report
 errors when the selected proposal requires it. Preserve findings, evidence,
 and verdicts unless the proposal explicitly authorizes an evidence-backed
 correction. An edit is not approval or a passing check: identify what must be

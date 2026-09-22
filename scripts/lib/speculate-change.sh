@@ -4,13 +4,13 @@
 # The greenfield driver has had this for a while (stagegate.sh:1504): start the
 # next stage during a gate, keep the result only if the gated bytes are
 # unchanged at approval. The change driver could not reuse it directly, because
-# its updated-change-plan stage revises CHANGE_PLAN.md *in place* -- the very
+# its updated-change-plan stage revises .uncle/docs/CHANGE_PLAN.md *in place* -- the very
 # file the gate is hashing and the operator is reading. Speculating it against
 # the live tree would rewrite a document mid-review and then discard the work.
 #
 # So the speculative run happens in a sandbox: a git worktree mirroring the tree
 # plus its uncommitted overlay, which triage_guard.make_sandbox already builds
-# for recovery. The stage revises CHANGE_PLAN.md there. On adoption the file is
+# for recovery. The stage revises .uncle/docs/CHANGE_PLAN.md there. On adoption the file is
 # copied back, and only when the gate's inputs hash the same as when the run
 # started. If anything changed, the sandbox is dropped and the stage runs
 # normally, exactly as if speculation had never happened.
@@ -122,7 +122,7 @@ adopt_updated_plan() {
         return 1
     fi
 
-    cp "$SPEC_TREE/CHANGE_PLAN.md" CHANGE_PLAN.md || { speculation_drop_tree; return 1; }
+    cp "$SPEC_TREE/CHANGE_PLAN.md" .uncle/docs/CHANGE_PLAN.md || { speculation_drop_tree; return 1; }
     speculation_drop_tree
     echo "Adopted the updated plan drafted during review — inputs unchanged."
     echo "Log: $LOG_DIR/updated-change-plan.speculative.log"

@@ -20,7 +20,7 @@ The user is the approval authority. Never bypass a human review gate.
    - verification methods;
    - assumptions;
    - priorities and omissions.
-4. Do not begin implementation until UPDATED_PROJECT_PLAN.md has a valid
+4. Do not begin implementation until .uncle/docs/UPDATED_PROJECT_PLAN.md has a valid
    approval record.
 5. Do not treat AI-generated output as correct merely because it compiles.
 6. Never mark a check as passed unless it was actually executed or directly
@@ -32,18 +32,18 @@ The user is the approval authority. Never bypass a human review gate.
 
 | Artifact | Owner |
 |---|---|
-| PROJECT_PLAN.md | Primary agent |
-| ADVERSARIAL_REVIEW.md | Reviewer |
-| UPDATED_PROJECT_PLAN.md | Primary agent |
+| .uncle/docs/PROJECT_PLAN.md | Primary agent |
+| .uncle/docs/ADVERSARIAL_REVIEW.md | Reviewer |
+| .uncle/docs/UPDATED_PROJECT_PLAN.md | Primary agent |
 | Source code | Primary agent |
-| MANUAL_CHECKLIST.md | Reviewer |
-| VERIFICATION_REPORT.md | Primary agent |
-| PREFLIGHT_REPORT.md | Primary agent |
-| TEST_REVIEW.md | Reviewer |
+| .uncle/docs/MANUAL_CHECKLIST.md | Reviewer |
+| .uncle/docs/VERIFICATION_REPORT.md | Primary agent |
+| .uncle/docs/PREFLIGHT_REPORT.md | Primary agent |
+| .uncle/docs/TEST_REVIEW.md | Reviewer |
 
 ## Stage 1: Initial project plan
 
-Create PROJECT_PLAN.md.
+Create .uncle/docs/PROJECT_PLAN.md.
 
 It must include:
 
@@ -78,7 +78,7 @@ For each invariant, include:
 - automated test;
 - consequence if violated.
 
-After writing PROJECT_PLAN.md:
+After writing .uncle/docs/PROJECT_PLAN.md:
 
 - do not invoke the reviewer CLI;
 - do not write implementation code;
@@ -86,13 +86,13 @@ After writing PROJECT_PLAN.md:
 
 ## Stage 2: Adversarial review
 
-This stage begins only after PROJECT_PLAN.md has a valid approval record.
+This stage begins only after .uncle/docs/PROJECT_PLAN.md has a valid approval record.
 
 Invoke:
 
 ./scripts/codex-review-plan.sh
 
-After ADVERSARIAL_REVIEW.md is created:
+After .uncle/docs/ADVERSARIAL_REVIEW.md is created:
 
 - do not revise the project plan;
 - do not implement;
@@ -100,21 +100,21 @@ After ADVERSARIAL_REVIEW.md is created:
 
 ## Stage 3: Updated project plan
 
-This stage begins only after ADVERSARIAL_REVIEW.md has a valid approval record.
+This stage begins only after .uncle/docs/ADVERSARIAL_REVIEW.md has a valid approval record.
 
 Read:
 
 - REQUIREMENTS.md
-- PROJECT_PLAN.md
-- ADVERSARIAL_REVIEW.md
+- .uncle/docs/PROJECT_PLAN.md
+- .uncle/docs/ADVERSARIAL_REVIEW.md
 
-Create UPDATED_PROJECT_PLAN.md.
+Create .uncle/docs/UPDATED_PROJECT_PLAN.md.
 
 The updated plan must:
 
 - preserve accepted requirements;
 - address or explicitly reject every adversarial finding;
-- identify all changes from PROJECT_PLAN.md;
+- identify all changes from .uncle/docs/PROJECT_PLAN.md;
 - retain the behavior and invariant tables;
 - add a disposition table for every review finding;
 - provide the final implementation order;
@@ -129,20 +129,20 @@ Do not silently accept every reviewer recommendation. Record one of:
 
 Include the reason for each decision.
 
-After writing UPDATED_PROJECT_PLAN.md:
+After writing .uncle/docs/UPDATED_PROJECT_PLAN.md:
 
 - do not implement;
 - stop and ask the user to review and approve it.
 
 ## Stage 4: Implementation
 
-Implementation begins only after UPDATED_PROJECT_PLAN.md has a valid approval
+Implementation begins only after .uncle/docs/UPDATED_PROJECT_PLAN.md has a valid approval
 record.
 
 Implement according to the approved updated plan.
 
 For the new-application driver, implementation also requires a passing
-PREFLIGHT_REPORT.md: mandatory tools, browser access, input data, and reviewer
+.uncle/docs/PREFLIGHT_REPORT.md: mandatory tools, browser access, input data, and reviewer
 arrangements must be available. The approved plan names the complete automated
 Verification commands and Protected verification paths for tests, oracles,
 helpers, and test configuration.
@@ -153,7 +153,7 @@ During implementation:
 2. Keep core domain behavior in pure functions where practical.
 3. Implement high-risk invariants before optional features.
 4. Compile and run tests frequently.
-5. Record material deviations from the plan in IMPLEMENTATION_NOTES.md.
+5. Record material deviations from the plan in .uncle/docs/IMPLEMENTATION_NOTES.md.
 6. Do not weaken an invariant merely to make a test pass.
 7. Do not change an approved requirement without recording the deviation.
 
@@ -175,7 +175,7 @@ Run every applicable automated check, including:
 - frontend build;
 - backend startup checks.
 
-Save command results in AUTOMATED_TEST_REPORT.md.
+Save command results in .uncle/docs/AUTOMATED_TEST_REPORT.md.
 
 Do not edit tests, fixtures, expected results, or test configuration during
 verification to make a command pass. The new-application driver compares their
@@ -194,7 +194,7 @@ For each check record:
 
 ## Stage 6: Independent manual checklist
 
-In the new-application driver, TEST_REVIEW.md first reviews assertion quality,
+In the new-application driver, .uncle/docs/TEST_REVIEW.md first reviews assertion quality,
 coverage, oracle provenance, protected file scope, and defect-injection evidence.
 Failing review or acceptance rows return to a bounded repair stage. Repairs
 repeat driver checks, human diff approval, independent test review, and checklist
@@ -205,11 +205,11 @@ After implementation and automated checks, invoke:
 ./scripts/codex-create-checklist.sh
 
 The reviewer CLI must inspect the requirements, plans, source code, and
-automated-test report before creating MANUAL_CHECKLIST.md.
+automated-test report before creating .uncle/docs/MANUAL_CHECKLIST.md.
 
 ## Stage 7: Manual verification
 
-Execute every feasible critical item in MANUAL_CHECKLIST.md.
+Execute every feasible critical item in .uncle/docs/MANUAL_CHECKLIST.md.
 
 Checks may be run concurrently, but which checks may overlap is not the
 executing agent's call. The reviewer declares `Exclusive resources` and
@@ -221,7 +221,7 @@ parse, runs one check at a time — never on a grouping the executing agent
 invented, because two checks fighting over a port produce a FAIL that reads
 like a product defect.
 
-Write VERIFICATION_REPORT.md containing:
+Write .uncle/docs/VERIFICATION_REPORT.md containing:
 
 - checklist identifier;
 - action performed;
@@ -292,12 +292,12 @@ The user is the approval authority. Never bypass an approval gate.
 3. Distinguish preserved, modified, added, removed, and experimental behavior.
 4. Minimize the change surface.
 5. Do not make unrelated cleanup changes unless explicitly approved.
-6. Preserve backward compatibility unless `CHANGE_SPEC.md` permits otherwise.
+6. Preserve backward compatibility unless `.uncle/docs/CHANGE_SPEC.md` permits otherwise.
 7. Do not weaken tests to accommodate the implementation.
 8. For reproducible bugs, add a regression test before the fix where practical.
-9. Record every material deviation from the approved `CHANGE_PLAN.md`.
+9. Record every material deviation from the approved `.uncle/docs/CHANGE_PLAN.md`.
 10. Never claim a check passed unless it was executed. The driver re-runs
-    `BASELINE_REPORT.md`'s command list independently and compares it against
+    `.uncle/docs/BASELINE_REPORT.md`'s command list independently and compares it against
     the same list run before the change, so a claim and a result are two
     different things here.
 11. Treat prototypes as isolated experiments.
@@ -334,25 +334,25 @@ Any RELAXED or REMOVED invariant requires explicit human approval.
 In a single runner, establish the baseline and create the change plan.
 
 1. Establish a reproducible baseline: run all verification commands and record
-   results in BASELINE_REPORT.md
+   results in .uncle/docs/BASELINE_REPORT.md
 2. Analyze existing code
-3. Create CHANGE_SPEC.md describing the change
-4. Create CHANGE_PLAN.md with implementation strategy
+3. Create .uncle/docs/CHANGE_SPEC.md describing the change
+4. Create .uncle/docs/CHANGE_PLAN.md with implementation strategy
 
-After CHANGE_PLAN.md is created:
+After .uncle/docs/CHANGE_PLAN.md is created:
 
 - do not implement;
 - stop and ask the user to review and approve the plan.
 
 ### Stage 2: Adversarial review
 
-This stage begins only after CHANGE_PLAN.md has a valid approval record.
+This stage begins only after .uncle/docs/CHANGE_PLAN.md has a valid approval record.
 
 Invoke:
 
 ./scripts/codex-review-plan.sh
 
-After ADVERSARIAL_REVIEW.md is created:
+After .uncle/docs/ADVERSARIAL_REVIEW.md is created:
 
 - do not revise the plan;
 - do not implement;
@@ -360,15 +360,15 @@ After ADVERSARIAL_REVIEW.md is created:
 
 ### Stage 3: Implementation and verification
 
-This stage begins only after ADVERSARIAL_REVIEW.md has a valid approval record.
+This stage begins only after .uncle/docs/ADVERSARIAL_REVIEW.md has a valid approval record.
 
 Read:
 
-- BASELINE_REPORT.md
-- CHANGE_PLAN.md
-- ADVERSARIAL_REVIEW.md
+- .uncle/docs/BASELINE_REPORT.md
+- .uncle/docs/CHANGE_PLAN.md
+- .uncle/docs/ADVERSARIAL_REVIEW.md
 
-Revise CHANGE_PLAN.md in place to address or explicitly reject every review
+Revise .uncle/docs/CHANGE_PLAN.md in place to address or explicitly reject every review
 finding. Record one of: Accepted, Partially accepted, Rejected, Deferred.
 
 Implement according to the approved plan. During implementation:
@@ -376,7 +376,7 @@ Implement according to the approved plan. During implementation:
 1. Build the smallest working vertical slice first.
 2. Keep core domain behavior in pure functions where practical.
 3. Implement high-risk invariants before optional features.
-4. Record material deviations from the plan in IMPLEMENTATION_NOTES.md.
+4. Record material deviations from the plan in .uncle/docs/IMPLEMENTATION_NOTES.md.
 5. Do not weaken an invariant merely to make a test pass.
 6. Do not change an approved requirement without recording the deviation.
 
@@ -389,10 +389,10 @@ After implementation and driver-initiated automated verification, invoke:
 
 ./scripts/codex-create-checklist.sh
 
-The reviewer CLI creates MANUAL_CHECKLIST.md.
+The reviewer CLI creates .uncle/docs/MANUAL_CHECKLIST.md.
 
-Execute every feasible critical item in MANUAL_CHECKLIST.md and write
-VERIFICATION_REPORT.md.
+Execute every feasible critical item in .uncle/docs/MANUAL_CHECKLIST.md and write
+.uncle/docs/VERIFICATION_REPORT.md.
 
 ## Artifact ownership
 
@@ -401,16 +401,16 @@ VERIFICATION_REPORT.md.
 | CHANGE_REQUEST.md | Human |
 | .uncle/workflow/IMPLEMENTATION_REVIEW.md | Driver |
 | .uncle/workflow/green-check.md | Driver |
-| BASELINE_REPORT.md | Primary agent (stage 1) |
-| CHANGE_SPEC.md | Primary agent (stage 1) |
-| CHANGE_PLAN.md | Primary agent (stage 1, revised in stage 3) |
-| ADVERSARIAL_REVIEW.md | Reviewer (stage 2) |
+| .uncle/docs/BASELINE_REPORT.md | Primary agent (stage 1) |
+| .uncle/docs/CHANGE_SPEC.md | Primary agent (stage 1) |
+| .uncle/docs/CHANGE_PLAN.md | Primary agent (stage 1, revised in stage 3) |
+| .uncle/docs/ADVERSARIAL_REVIEW.md | Reviewer (stage 2) |
 | Source changes | Primary agent (stage 3) |
-| IMPLEMENTATION_NOTES.md | Primary agent (stage 3) |
-| CHANGE_TEST_REPORT.md | Primary agent (stage 3) |
-| MANUAL_CHECKLIST.md | Reviewer (stage 4) |
-| VERIFICATION_REPORT.md | Primary agent (stage 4) |
-| FINAL_AUDIT.md | Reviewer (stage 4) |
+| .uncle/docs/IMPLEMENTATION_NOTES.md | Primary agent (stage 3) |
+| .uncle/docs/CHANGE_TEST_REPORT.md | Primary agent (stage 3) |
+| .uncle/docs/MANUAL_CHECKLIST.md | Reviewer (stage 4) |
+| .uncle/docs/VERIFICATION_REPORT.md | Primary agent (stage 4) |
+| .uncle/docs/FINAL_AUDIT.md | Reviewer (stage 4) |
 
 ## Gates around implementation
 

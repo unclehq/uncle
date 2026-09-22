@@ -24,8 +24,8 @@ require_file() { test -s "$1"; }
 check_document_budget() { test ! -e bad-report; }
 run_claude() {
     echo execute >> calls
-    echo report > VERIFICATION_REPORT.md
-    echo defects > DEFECTS.md
+    echo report > .uncle/docs/VERIFICATION_REPORT.md
+    echo defects > .uncle/docs/DEFECTS.md
 }
 while true; do
     state=$(cat state)
@@ -33,7 +33,8 @@ while true; do
     eval "$(sed -n '/^        EXECUTE_CHECKLIST)/,/^        FINAL_AUDIT)/p' "$ROOT/scripts/change-workflow.sh" | sed '$d' | { printf 'case "$state" in\n'; cat; printf 'esac\n'; })"
 done
 EOF
-printf '## MC-001\nExact action: check\nExpected result: greeting\n' > MANUAL_CHECKLIST.md
+mkdir -p .uncle/docs
+printf '## MC-001\nExact action: check\nExpected result: greeting\n' > .uncle/docs/MANUAL_CHECKLIST.md
 echo EXECUTE_CHECKLIST > state
 touch bad-report
 if bash harness.sh; then exit 1; fi

@@ -11,7 +11,7 @@ Read:
 
 Inspect the current repository before changing anything.
 
-Create BASELINE_REPORT.md containing:
+Create .uncle/docs/BASELINE_REPORT.md containing:
 
 1. Change-request summary
 2. Repository architecture
@@ -59,7 +59,7 @@ matters most here.
   to end. Never read a file longer than about 300 lines end to end: grep for
   the symbols CHANGE_REQUEST.md names and read the surrounding lines. One
   whole large module is a third of this stage's context.
-- Write BASELINE_REPORT.md as soon as sections 8 and 9 have their evidence,
+- Write .uncle/docs/BASELINE_REPORT.md as soon as sections 8 and 9 have their evidence,
   before any reading for later documents. A report on disk survives a context
   that runs out; one still in your head does not.
 - Cite code by path and line rather than quoting it. The report is read by
@@ -137,7 +137,7 @@ section.
 The driver uses the approved groups for both baseline and post-change checks;
 do not regroup commands after approval.
 
-Write BASELINE_REPORT.md and stop.
+Write .uncle/docs/BASELINE_REPORT.md and stop.
 
 ## Bounded baseline and compact first draft
 
@@ -167,7 +167,7 @@ without a specific discrepancy. In advisory-budget mode perform ZERO size-only
 compaction passes; mandatory evidence survives above the guide. The driver
 measures the report. Enforced budgets retain the two-pass limit.
 
-Return/write the complete BASELINE_REPORT.md under the runner contract. Steering
+Return/write the complete .uncle/docs/BASELINE_REPORT.md under the runner contract. Steering
 questions do not replace the task: answer them, then finish the baseline. Never
 substitute a conversation summary, filename or progress note for the report.
 Do not modify source code or create project commits.

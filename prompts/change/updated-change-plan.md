@@ -33,19 +33,19 @@ agent to make before it can start. Apply these rules before finalizing:
 Read:
 
 - CHANGE_REQUEST.md
-- CHANGE_PLAN.md
-- ADVERSARIAL_REVIEW.md
-- CHANGE_SPEC.md
+- .uncle/docs/CHANGE_PLAN.md
+- .uncle/docs/ADVERSARIAL_REVIEW.md
+- .uncle/docs/CHANGE_SPEC.md
 
-Both CHANGE_PLAN.md and ADVERSARIAL_REVIEW.md have just passed a human gate and
+Both .uncle/docs/CHANGE_PLAN.md and .uncle/docs/ADVERSARIAL_REVIEW.md have just passed a human gate and
 may have been edited during that review. Read both from disk in full.
 
-CHANGE_SPEC.md is for traceability only; consult its behavior and invariant IDs
+.uncle/docs/CHANGE_SPEC.md is for traceability only; consult its behavior and invariant IDs
 as needed. Read CHANGE_REQUEST.md for source issue identity. You do not need
-BASELINE_REPORT.md unless a specific finding requires evidence absent from
+.uncle/docs/BASELINE_REPORT.md unless a specific finding requires evidence absent from
 the plan and spec.
 
-Carry issue identity from CHANGE_REQUEST.md into CHANGE_PLAN.md:
+Carry issue identity from CHANGE_REQUEST.md into .uncle/docs/CHANGE_PLAN.md:
 
 - Inspect only metadata before the first `##` in CHANGE_REQUEST.md. Use the
   first top-level `Seeded from` link (optionally prefixed with `> `); extract
@@ -61,12 +61,12 @@ Carry issue identity from CHANGE_REQUEST.md into CHANGE_PLAN.md:
 - If neither source supplies an issue number, omit the identity line without
   failing. Preserve any available source seed URL verbatim; never invent a URL.
 
-Revise CHANGE_PLAN.md in place. Do not create a second plan document.
+Revise .uncle/docs/CHANGE_PLAN.md in place. Do not create a second plan document.
 
 Edit sections affected by review findings or by the final executability and
 consistency checks above. Preserve other sections; do not reword or restate
 unaffected content.
-CHANGE_PLAN.md is the sole plan input to every later stage, so what you leave
+.uncle/docs/CHANGE_PLAN.md is the sole plan input to every later stage, so what you leave
 behind is what implementation executes.
 
 Insert directly below the title a disposition for every adversarial finding:
@@ -102,7 +102,7 @@ Do not implement code.
 
 ## Output economy
 
-Length is a cost. The revised CHANGE_PLAN.md is read by five later stages and
+Length is a cost. The revised .uncle/docs/CHANGE_PLAN.md is read by five later stages and
 re-sent on every turn of each of them.
 
 - Use the appended stage budget and enforcement mode; no separate word limit.
@@ -120,7 +120,7 @@ re-sent on every turn of each of them.
 - Never omit a section to avoid resolving something. If a section applies but
   you cannot complete it, keep it and mark it UNRESOLVED with the reason.
 
-Save CHANGE_PLAN.md and stop.
+Save .uncle/docs/CHANGE_PLAN.md and stop.
 
 Every restriction, including carried-forward review mitigations, needs an R- ID,
 source_kind USER/REPOSITORY/PLATFORM/DESIGN, source location, requirement IDs,

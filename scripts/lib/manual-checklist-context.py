@@ -9,8 +9,8 @@ import sys
 def render(project, state, stage):
     project, state = Path(project).resolve(), Path(state).resolve()
     base = stage == 'manual-checklist-base'
-    names = ['CHANGE_SPEC.md', 'CHANGE_PLAN.md'] if base else [
-        'REQUIREMENTS.md', 'UPDATED_PROJECT_PLAN.md', 'CHANGE_SPEC.md', 'CHANGE_PLAN.md']
+    names = ['.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md'] if base else [
+        'REQUIREMENTS.md', '.uncle/docs/UPDATED_PROJECT_PLAN.md', '.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md']
     lines = ['\n## Driver checklist evidence packet',
              'This is input evidence, not a PASS declaration. Keep all required criteria.',
              'Base mode: frozen specification only.' if base else
@@ -34,8 +34,8 @@ def render(project, state, stage):
         context = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(context)
         lines.append(context.render(project, state))
-        for path in (state / 'MANUAL_CHECKLIST.base.md', project / 'IMPLEMENTATION_NOTES.md',
-                     project / 'TEST_REVIEW.md', state / 'change.diff'):
+        for path in (state / 'MANUAL_CHECKLIST.base.md', project / '.uncle/docs/IMPLEMENTATION_NOTES.md',
+                     project / '.uncle/docs/TEST_REVIEW.md', state / 'change.diff'):
             if path.is_file() and path.resolve().is_relative_to(project):
                 data = path.read_bytes()
                 lines.append(f'{path}: {len(data)} bytes; SHA-256 {hashlib.sha256(data).hexdigest()}; read relevant sections directly.')

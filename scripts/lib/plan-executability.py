@@ -71,10 +71,10 @@ def require(condition, message):
 
 
 def manifest(root, plan):
-    change = plan == 'CHANGE_PLAN.md'
-    files = [plan, 'ADVERSARIAL_REVIEW.md',
+    change = os.path.basename(plan) == 'CHANGE_PLAN.md'
+    files = [plan, '.uncle/docs/ADVERSARIAL_REVIEW.md',
              'CHANGE_REQUEST.md' if change else 'REQUIREMENTS.md',
-             'CHANGE_SPEC.md' if change else 'REQUIREMENTS_INTERPRETATION.md',
+             '.uncle/docs/CHANGE_SPEC.md' if change else '.uncle/docs/REQUIREMENTS_INTERPRETATION.md',
              os.environ.get('UNCLE_CONFIG', '.uncle/config'), str(STATE / 'authority-answer.json')]
     adapters = [str(x.relative_to(root)) for x in Path(root).glob('scripts/agent-*.sh')] + ['scripts/lib/native_stage.py',
                 'scripts/lib/stage-config.sh', 'scripts/lib/plan-executability.py', 'scripts/lib/windows_driver.py']
@@ -213,10 +213,10 @@ def validate(a, m):
     steps = indexed(a.get('steps'), 'steps')
     decisions = indexed(a.get('decisions'), 'decisions')
     prereqs = indexed(a.get('prerequisites'), 'prerequisites')
-    spec = 'CHANGE_SPEC.md' if m['plan'] == 'CHANGE_PLAN.md' else 'REQUIREMENTS_INTERPRETATION.md'
+    spec = '.uncle/docs/CHANGE_SPEC.md' if os.path.basename(m['plan']) == 'CHANGE_PLAN.md' else '.uncle/docs/REQUIREMENTS_INTERPRETATION.md'
     requirements = ids_in(spec, 'AC')
     require(set(a.get('requirement_ids', [])) == requirements, 'lost or extra acceptance IDs')
-    require(set(f) == ids_in('ADVERSARIAL_REVIEW.md', 'AR'), 'lost or extra reviewer findings')
+    require(set(f) == ids_in('.uncle/docs/ADVERSARIAL_REVIEW.md', 'AR'), 'lost or extra reviewer findings')
     for archived in ASSESS.glob('archive-*/assessment.json'):
         old = read(archived)
         require({x['id'] for x in old['findings']} <= set(f), 'suppressed historical reviewer finding')
@@ -418,12 +418,12 @@ def _lock_run_once(command):
 
 def source_state():
     paths = subprocess.check_output(['git', 'ls-files', '-co', '--exclude-standard', '-z']).decode().split('\0')
-    reports = {'IMPLEMENTATION_NOTES.md', 'CHANGE_TEST_REPORT.md', 'AUTOMATED_TEST_REPORT.md'}
+    reports = {'.uncle/docs/IMPLEMENTATION_NOTES.md', '.uncle/docs/CHANGE_TEST_REPORT.md', '.uncle/docs/AUTOMATED_TEST_REPORT.md'}
     return {p: file_hash(p) for p in sorted(set(paths)) if p and not p.startswith('.uncle/') and p not in reports}
 
 
 def delivery_summary(j):
-    notes = Path('IMPLEMENTATION_NOTES.md')
+    notes = Path('.uncle/docs/IMPLEMENTATION_NOTES.md')
     text = notes.read_text() if notes.exists() else ''
     if not re.search(r'^##\s+Acceptance delivery\s*$', text, re.M | re.I):
         # Only prompts/change/implement-change.md (the existing-code change
@@ -453,7 +453,7 @@ def delivery_summary(j):
                 green = STATE / 'green-check.current.tsv'
                 if green.exists() and green.read_text().strip() and all(x.startswith('0\t') for x in green.read_text().splitlines()):
                     status = 'VERIFIED'
-            rows.append('\t'.join([cells[0], status, 'IMPLEMENTATION_NOTES.md']))
+            rows.append('\t'.join([cells[0], status, '.uncle/docs/IMPLEMENTATION_NOTES.md']))
     (STATE / 'delivery-summary.tsv').write_text('ID\tStatus\tEvidence\n' + '\n'.join(rows) + '\n')
     if any('\tWAIVED\t' in row for row in rows):
         print('Acceptance includes waivers; waived rows are not verified delivery.')
@@ -477,13 +477,13 @@ def runtime(action, args=()):
     if action == 'retry':
         active = j.get('active_launch')
         if active and j['launches'].get(active, {}).get('status') == 'STARTED':
-            j['launches'][active] = {'status': 'FINISHED', 'interrupted': True, 'notes': file_hash('IMPLEMENTATION_NOTES.md')}
+            j['launches'][active] = {'status': 'FINISHED', 'interrupted': True, 'notes': file_hash('.uncle/docs/IMPLEMENTATION_NOTES.md')}
         j.pop('active_launch', None)
         j['retry'] = j.get('retry', 0) + 1
         atomic(JOURNAL, j)
         return 0
     if action == 'preflight-check':
-        text = Path('PREFLIGHT_REPORT.md').read_text()
+        text = Path('.uncle/docs/PREFLIGHT_REPORT.md').read_text()
         parts = re.split(r'^##\s+(?:\d+\.\s*)?Acceptance gate\s*$', text, flags=re.M | re.I)
         if len(parts) == 2:
             gate = re.split(r'^## ', parts[1], maxsplit=1, flags=re.M)[0]
@@ -491,7 +491,7 @@ def runtime(action, args=()):
             for line in gate.splitlines():
                 cells = [c.strip() for c in line.strip().strip('|').split('|')]
                 if cells and cells[0] in live and any(c.startswith('BLOCKED') for c in cells):
-                    raise ValueError('Correct PREFLIGHT_REPORT.md: live-only ' + cells[0] + ' belongs in Findings, not the coding Acceptance gate')
+                    raise ValueError('Correct .uncle/docs/PREFLIGHT_REPORT.md: live-only ' + cells[0] + ' belongs in Findings, not the coding Acceptance gate')
         return 0
     if action == 'snapshot':
         atomic(ASSESS / 'source-before.json', source_state())
@@ -539,7 +539,7 @@ def runtime(action, args=()):
             if previous['status'] != 'FINISHED':
                 print('Previous source-writing attempt was interrupted; explicit retry required.')
                 return 25
-            require(previous.get('notes') == file_hash('IMPLEMENTATION_NOTES.md'), 'launch result/report changed; explicit reconciliation required')
+            require(previous.get('notes') == file_hash('.uncle/docs/IMPLEMENTATION_NOTES.md'), 'launch result/report changed; explicit reconciliation required')
             return 22
         j['active_launch'] = key
         j['launches'][key] = {'status': 'STARTED'}
@@ -548,9 +548,9 @@ def runtime(action, args=()):
     if action == 'classify':
         key = j.get('active_launch')
         if key:
-            j['launches'][key] = {'status': 'FINISHED', 'notes': file_hash('IMPLEMENTATION_NOTES.md')}
+            j['launches'][key] = {'status': 'FINISHED', 'notes': file_hash('.uncle/docs/IMPLEMENTATION_NOTES.md')}
             atomic(JOURNAL, j)
-        rows = blockers('IMPLEMENTATION_NOTES.md')
+        rows = blockers('.uncle/docs/IMPLEMENTATION_NOTES.md')
         if any(row['class'] == 'DESIGN' for row in rows):
             j['blockers'] = rows; j['phase'] = 'DESIGN'; atomic(JOURNAL, j)
             return 10
@@ -567,10 +567,10 @@ def runtime(action, args=()):
         if a['verdict'] == 'DECISION':
             j['completed_subset'] = digest([m['digest'], v['eligible_steps']]); atomic(JOURNAL, j)
             print('Independent subset completed; authority decision remains pending.'); return 20
-        if m['plan'] == 'UPDATED_PROJECT_PLAN.md' and a['requirement_ids']:
+        if os.path.basename(m['plan']) == 'UPDATED_PROJECT_PLAN.md' and a['requirement_ids']:
             from process_tree import python3_executable
             check = subprocess.run([python3_executable(), str(Path(__file__).with_name('implementation-completion.py')),
-                                    'REQUIREMENTS_INTERPRETATION.md', 'IMPLEMENTATION_NOTES.md'], capture_output=True, text=True)
+                                    '.uncle/docs/REQUIREMENTS_INTERPRETATION.md', '.uncle/docs/IMPLEMENTATION_NOTES.md'], capture_output=True, text=True)
             if check.returncode:
                 print(check.stdout.strip())
                 if j.get('phase') == 'VERIFYING':
@@ -632,7 +632,7 @@ def main():
     j = journal()
     if ns.action == 'recover':
         m = read(ASSESS / 'manifest.json'); a = read(ASSESS / 'assessment.json')
-        identity = digest({k: v for k, v in m['files'].items() if k in ('CHANGE_REQUEST.md', 'CHANGE_SPEC.md', 'REQUIREMENTS.md', 'REQUIREMENTS_INTERPRETATION.md')})
+        identity = digest({k: v for k, v in m['files'].items() if k in ('CHANGE_REQUEST.md', '.uncle/docs/CHANGE_SPEC.md', 'REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS_INTERPRETATION.md')})
         require(j.get('identity', identity) == identity, 'source/spec identity changed; explicit reconciliation required')
         j['identity'] = identity
         failure = digest({'restrictions': a['restrictions'], 'capabilities': [{k: v for k, v in c.items() if k != 'binding'} for c in a['capabilities']]})
@@ -647,7 +647,7 @@ def main():
         j['launches'][key] = {'status': 'STARTED'}
     elif ns.action == 'result':
         require(args[0] in j['launches'], 'missing launch intent')
-        j['launches'][args[0]] = {'status': 'FINISHED', 'notes': file_hash('IMPLEMENTATION_NOTES.md')}
+        j['launches'][args[0]] = {'status': 'FINISHED', 'notes': file_hash('.uncle/docs/IMPLEMENTATION_NOTES.md')}
     atomic(JOURNAL, j)
     return 0
 

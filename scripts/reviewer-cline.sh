@@ -85,7 +85,7 @@ if [[ -n "$model" && "$model" != */* ]]; then
     exit 2
 fi
 if [[ -z "$effort" ]]; then
-    effort="medium"
+    effort="none"
 fi
 
 if [[ -z "$prompt" ]]; then

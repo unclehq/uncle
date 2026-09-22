@@ -67,5 +67,5 @@ if __name__=='__main__':
         args = args[1:]
     try:validate(args[0])
     except (OSError,ValueError) as error:
-        print(f'Checklist artifact invalid: {error}. Correct MANUAL_CHECKLIST.md and resume; resume only revalidates this saved file and does not regenerate it. Execution has not started.',file=sys.stderr)
+        print(f'Checklist artifact invalid: {error}. Correct .uncle/docs/MANUAL_CHECKLIST.md and resume; resume only revalidates this saved file and does not regenerate it. Execution has not started.',file=sys.stderr)
         raise SystemExit(1)

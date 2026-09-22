@@ -3,14 +3,14 @@ Act as an independent release-verification engineer.
 Inspect:
 
 - REQUIREMENTS.md
-- REQUIREMENTS_INTERPRETATION.md
-- UPDATED_PROJECT_PLAN.md
-- IMPLEMENTATION_NOTES.md, if present
-- AUTOMATED_TEST_REPORT.md
-- PREFLIGHT_REPORT.md and TEST_REVIEW.md
+- .uncle/docs/REQUIREMENTS_INTERPRETATION.md
+- .uncle/docs/UPDATED_PROJECT_PLAN.md
+- .uncle/docs/IMPLEMENTATION_NOTES.md, if present
+- .uncle/docs/AUTOMATED_TEST_REPORT.md
+- .uncle/docs/PREFLIGHT_REPORT.md and .uncle/docs/TEST_REVIEW.md
 - the source code and tests
 
-UPDATED_PROJECT_PLAN.md supersedes PROJECT_PLAN.md and carries a disposition
+.uncle/docs/UPDATED_PROJECT_PLAN.md supersedes .uncle/docs/PROJECT_PLAN.md and carries a disposition
 for every adversarial finding, so neither of those needs to be read. Read them
 only if the updated plan is internally inconsistent, and say so if you do.
 
@@ -20,7 +20,7 @@ table and open what the checks actually depend on, rather than the whole tree.
 Do not modify source code.
 Do not claim that any check passed.
 
-Create MANUAL_CHECKLIST.md.
+Create .uncle/docs/MANUAL_CHECKLIST.md.
 
 For every check include:
 

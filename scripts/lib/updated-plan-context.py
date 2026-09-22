@@ -6,11 +6,11 @@ import sys
 
 def render(project, state, family):
     root, state = Path(project).resolve(), Path(state).resolve()
-    paths = [root/'ADVERSARIAL_REVIEW.md']
+    paths = [root/'.uncle/docs/ADVERSARIAL_REVIEW.md']
     if family == 'change':
-        paths += [state/'CHANGE_PLAN.pre-review.md', root/'CHANGE_SPEC.md']
+        paths += [state/'CHANGE_PLAN.pre-review.md', root/'.uncle/docs/CHANGE_SPEC.md']
     else:
-        paths += [root/'PROJECT_PLAN.md', root/'REQUIREMENTS.md', root/'REQUIREMENTS_INTERPRETATION.md']
+        paths += [root/'.uncle/docs/PROJECT_PLAN.md', root/'REQUIREMENTS.md', root/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md']
     lines = ['\n## Driver plan revision packet',
              'Revise the existing plan against the findings. Hashes identify current inputs, not approval or correctness.',
              'Preserve unaffected decisions and IDs; read omitted content before revising.']

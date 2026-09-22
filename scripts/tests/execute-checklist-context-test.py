@@ -15,7 +15,8 @@ class Evidence(unittest.TestCase):
             state = root / '.uncle/workflow'
             checks = state / 'checklist-driver-checks'
             checks.mkdir(parents=True)
-            (root / 'MANUAL_CHECKLIST.md').write_text('MC-1\n' + 'x' * 20000)
+            (root / '.uncle/docs').mkdir(parents=True)
+            (root / '.uncle/docs/MANUAL_CHECKLIST.md').write_text('MC-1\n' + 'x' * 20000)
             (checks / 'results.tsv').write_text('command failed')
             first = context.render(root, state)
             self.assertIn('command failed', first)

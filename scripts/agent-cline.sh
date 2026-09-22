@@ -63,7 +63,7 @@ if [[ -n "${UNCLE_CLINE_EFFORT+x}" ]]; then
     effort="$UNCLE_CLINE_EFFORT"
 fi
 if [[ -z "$effort" ]]; then
-    effort="medium"
+    effort="none"
 fi
 
 # cline requires a model id in `modelType/model` form (e.g. cline-pass/kimi-k3).

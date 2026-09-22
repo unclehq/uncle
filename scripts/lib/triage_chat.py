@@ -119,7 +119,7 @@ def runner_flags(effort, model, tools, turns=40):
     flags = ['-p']
     if model:
         flags += ['--model', model]
-    flags += ['--effort', effort or 'medium', '--strict-mcp-config', '--max-turns', str(turns),
+    flags += ['--effort', effort or 'none', '--strict-mcp-config', '--max-turns', str(turns),
               '--output-format', 'stream-json', '--verbose', '--allowedTools', tools]
     return flags
 

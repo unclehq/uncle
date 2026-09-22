@@ -35,7 +35,8 @@ cat > "$AGENT_PROMPT.$n"
 write="${AGENT_WRITE:-0}"
 [[ "${AGENT_WRITE_ON_CALL:-0}" != "$n" ]] || write=1
 if [[ "$write" == 1 ]]; then
-    cat > REQUIREMENTS_INTERPRETATION.md <<'DOC'
+    mkdir -p .uncle/docs
+    cat > .uncle/docs/REQUIREMENTS_INTERPRETATION.md <<'DOC'
 ## Required functionality
 Required.
 ## Optional functionality
@@ -57,9 +58,9 @@ None.
 ## Definition of done
 Done.
 DOC
-    printf '# baseline\n\n## 8. Verification commands\n\n```sh\ntrue\n```\n' > BASELINE_REPORT.md
-    printf '# spec\n' > CHANGE_SPEC.md
-    printf '# plan\n' > CHANGE_PLAN.md
+    printf '# baseline\n\n## 8. Verification commands\n\n```sh\ntrue\n```\n' > .uncle/docs/BASELINE_REPORT.md
+    printf '# spec\n' > .uncle/docs/CHANGE_SPEC.md
+    printf '# plan\n' > .uncle/docs/CHANGE_PLAN.md
 fi
 echo '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":1,"total_cost_usd":0}'
 EOF
@@ -191,9 +192,9 @@ for driver in stagegate.sh change-workflow.sh; do
     check_eq "$driver failure: one supervisor call" 1 "$(cat "$P/sup.calls" 2>/dev/null || echo 0)"
     check_eq "$driver failure: one agent call (no retry on malformed)" 1 "$(cat "$P/agent.calls")"
     if [[ "$driver" == stagegate.sh ]]; then
-        check_contains "$driver failure: prompt carries the validator diagnostic" "Stage produced no artifact: REQUIREMENTS_INTERPRETATION.md" "$(cat "$P/sup.prompt.1")"
+        check_contains "$driver failure: prompt carries the validator diagnostic" "Stage produced no artifact: .uncle/docs/REQUIREMENTS_INTERPRETATION.md" "$(cat "$P/sup.prompt.1")"
     else
-        check_contains "$driver failure: prompt carries the validator diagnostic" "Required file missing or empty: BASELINE_REPORT.md" "$(cat "$P/sup.prompt.1")"
+        check_contains "$driver failure: prompt carries the validator diagnostic" "Required file missing or empty: .uncle/docs/BASELINE_REPORT.md" "$(cat "$P/sup.prompt.1")"
     fi
     check_contains "$driver failure: ledger records malformed" '"outcome": "malformed"' "$(cat "$P/.uncle/workflow/supervision/ledger.jsonl")"
     check_contains "$driver failure: driver output shows the diagnosis" "[supervision] Supervision malformed" "$(cat "$P/driver.out")"
@@ -265,7 +266,7 @@ mkdir -p "$P/.uncle/workflow/supervision"
 digest="$(cd "$P" && python3 -c "import sys; sys.path.insert(0, '$ROOT/scripts/lib'); import supervisor; print(supervisor.state_digest('.uncle/workflow'))")"
 printf '{"schema":1,"run_id":"r","closed":false,"attempts":{},"consumed":[],"calls":0,"interventions":{},"actions":{},"signatures":{},"cursor":0,"tx":0,"pending_calls":[]}' > "$P/.uncle/workflow/supervision/interventions.json"
 printf '{"schema":1,"run_id":"r","stage":"requirements","source_attempt":1,"target_attempt":2,"action_id":"a1","template":"revisit_validator","evidence":[],"text":"Supervisor note a1: pending","state_digest":"%s","delivery":"pending","created":0}' "$digest" > "$P/.uncle/workflow/supervision/retry-note-requirements.json"
-rm -rf "$P/.uncle/workflow/state" "$P/REQUIREMENTS_INTERPRETATION.md" \
+rm -rf "$P/.uncle/workflow/state" "$P/.uncle/docs/REQUIREMENTS_INTERPRETATION.md" \
     "$P/.uncle/workflow/approvals" "$P/.uncle/workflow/evidence-index"
 rc="$(run_driver stagegate.sh "$P" false 1)"
 check_eq "flag off: prompt bytes identical with a pending note" "$plain" "$(cat "$P/agent.prompt.1")"
@@ -392,7 +393,7 @@ done
 # Reopen after an edit: the stale digest stays, the new approval is the human's.
 P="$(new_project reopen)"
 run_answered stagegate.sh "$P" y match > /dev/null
-printf 'edited\n' >> "$P/REQUIREMENTS_INTERPRETATION.md"
+printf 'edited\n' >> "$P/.uncle/docs/REQUIREMENTS_INTERPRETATION.md"
 rc="$(run_driver stagegate.sh "$P" false 1)"
 check_contains "reopen: edited document reopens its gate" "changed after approval" "$(cat "$P/driver.out")"
 check_eq "reopen: the supervisor attribution is not carried to the new decision" "supervisor:explicit:Brian" "$(cat "$P/.uncle/workflow/approvals/REQUIREMENTS_INTERPRETATION.approved-by")"

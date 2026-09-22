@@ -9,12 +9,12 @@ usage() {
     cat <<'EOF'
 Usage: codex-create-checklist.sh [-h|--help]
 
-Run the reviewer CLI against the approved UPDATED_PROJECT_PLAN.md and the
-automated-test report, and write MANUAL_CHECKLIST.md (Stage 6 of the
+Run the reviewer CLI against the approved .uncle/docs/UPDATED_PROJECT_PLAN.md and the
+automated-test report, and write .uncle/docs/MANUAL_CHECKLIST.md (Stage 6 of the
 new-application workflow).
 
 Takes no positional arguments. Requires REQUIREMENTS.md,
-UPDATED_PROJECT_PLAN.md, AUTOMATED_TEST_REPORT.md, and a matching approval
+.uncle/docs/UPDATED_PROJECT_PLAN.md, .uncle/docs/AUTOMATED_TEST_REPORT.md, and a matching approval
 record in .uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256.
 Configuration is via WORKFLOW_* environment variables (see scripts/README.md).
 EOF
@@ -27,22 +27,22 @@ case "$#:${1:-}" in
 esac
 
 test -s REQUIREMENTS.md
-test -s UPDATED_PROJECT_PLAN.md
-test -s AUTOMATED_TEST_REPORT.md
+test -s .uncle/docs/UPDATED_PROJECT_PLAN.md
+test -s .uncle/docs/AUTOMATED_TEST_REPORT.md
 test -s .uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256
 
 expected="$(cat .uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256)"
 # shasum on macOS, sha256sum on Linux, openssl anywhere else.
 if command -v shasum > /dev/null 2>&1; then
-    actual="$(shasum -a 256 UPDATED_PROJECT_PLAN.md | awk '{print $1}')"
+    actual="$(shasum -a 256 .uncle/docs/UPDATED_PROJECT_PLAN.md | awk '{print $1}')"
 elif command -v sha256sum > /dev/null 2>&1; then
-    actual="$(sha256sum UPDATED_PROJECT_PLAN.md | awk '{print $1}')"
+    actual="$(sha256sum .uncle/docs/UPDATED_PROJECT_PLAN.md | awk '{print $1}')"
 else
-    actual="$(openssl dgst -sha256 UPDATED_PROJECT_PLAN.md | awk '{print $NF}')"
+    actual="$(openssl dgst -sha256 .uncle/docs/UPDATED_PROJECT_PLAN.md | awk '{print $NF}')"
 fi
 
 if [[ "$expected" != "$actual" ]]; then
-    echo "UPDATED_PROJECT_PLAN.md changed after approval."
+    echo ".uncle/docs/UPDATED_PROJECT_PLAN.md changed after approval."
     exit 1
 fi
 
@@ -53,17 +53,17 @@ budget_prompt="$(document_budget_prompt manual-checklist)"
 "$REVIEWER_CMD" exec \
     --ephemeral \
     --sandbox read-only \
-    --output-last-message MANUAL_CHECKLIST.md \
+    --output-last-message .uncle/docs/MANUAL_CHECKLIST.md \
     "$(cat <<'PROMPT'
 Act as an independent release-verification engineer.
 
 Inspect:
 
 - REQUIREMENTS.md
-- PROJECT_PLAN.md
-- ADVERSARIAL_REVIEW.md
-- UPDATED_PROJECT_PLAN.md
-- AUTOMATED_TEST_REPORT.md
+- .uncle/docs/PROJECT_PLAN.md
+- .uncle/docs/ADVERSARIAL_REVIEW.md
+- .uncle/docs/UPDATED_PROJECT_PLAN.md
+- .uncle/docs/AUTOMATED_TEST_REPORT.md
 - implementation source files
 - automated tests
 - startup and build scripts
@@ -72,7 +72,7 @@ Do not modify source code.
 Do not claim any check passed.
 Do not merely repeat automated tests.
 
-Create MANUAL_CHECKLIST.md.
+Create .uncle/docs/MANUAL_CHECKLIST.md.
 
 The checklist must verify:
 
@@ -121,5 +121,5 @@ printf '%s\n' "$budget_prompt"
 
 LOG_DIR="$ROOT/.uncle/workflow/logs"
 mkdir -p "$LOG_DIR"
-finish_review_budget MANUAL_CHECKLIST.md "$REVIEWER_CMD" "" "" manual-checklist
-echo "Created MANUAL_CHECKLIST.md"
+finish_review_budget .uncle/docs/MANUAL_CHECKLIST.md "$REVIEWER_CMD" "" "" manual-checklist
+echo "Created .uncle/docs/MANUAL_CHECKLIST.md"

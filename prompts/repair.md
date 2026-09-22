@@ -7,7 +7,7 @@ This is a focused repair pass, not a new implementation of the approved plan.
    If .uncle/workflow/REPAIR_BRIEF.md exists, read it first: the driver wrote
    it after a repair pass that changed none of the files its findings name,
    and it lists exactly what is still open. Dispositions already recorded for
-   those IDs in IMPLEMENTATION_NOTES.md and AUTOMATED_TEST_REPORT.md describe
+   those IDs in .uncle/docs/IMPLEMENTATION_NOTES.md and .uncle/docs/AUTOMATED_TEST_REPORT.md describe
    work the tree does not contain; they are wrong, not evidence.
    Search that report for failing commands, required FAIL rows, and actionable
    blocking finding IDs. Read those findings and their supporting evidence in
@@ -16,7 +16,7 @@ This is a focused repair pass, not a new implementation of the approved plan.
    read enough surrounding evidence to identify the defect. Do not guess or
    silently drop blockers when the report is ambiguous.
 2. Use the failing command, finding IDs, and referenced paths to locate only
-   the matching requirements, approved UPDATED_PROJECT_PLAN.md rows, and
+   the matching requirements, approved .uncle/docs/UPDATED_PROJECT_PLAN.md rows, and
    relevant implementation dispositions. Search first, then read the matching
    sections. Do not load entire requirements, plans, implementation reports,
    preflight reports, superseded plans, or earlier transcripts by default.
@@ -58,12 +58,12 @@ assertions reject the corresponding defect in an isolated copy or temporary
 test state, then pass after restoration. Never weaken acceptance, silently
 change expected content, or convert missing evidence into a pass.
 
-Do not edit requirements, approved plans, PREFLIGHT_REPORT.md, TEST_REVIEW.md,
-MANUAL_CHECKLIST.md, VERIFICATION_REPORT.md, DEFECTS.md, FINAL_AUDIT.md, or driver
+Do not edit requirements, approved plans, .uncle/docs/PREFLIGHT_REPORT.md, .uncle/docs/TEST_REVIEW.md,
+.uncle/docs/MANUAL_CHECKLIST.md, .uncle/docs/VERIFICATION_REPORT.md, .uncle/docs/DEFECTS.md, .uncle/docs/FINAL_AUDIT.md, or driver
 state. If a fix needs a plan change or an unavailable prerequisite, record it
-as blocked in IMPLEMENTATION_NOTES.md. Do not invent approval or evidence.
+as blocked in .uncle/docs/IMPLEMENTATION_NOTES.md. Do not invent approval or evidence.
 
-Update only relevant rows in IMPLEMENTATION_NOTES.md with a disposition for
+Update only relevant rows in .uncle/docs/IMPLEMENTATION_NOTES.md with a disposition for
 each current finding and changed files, preserving unrelated dispositions.
 Include a Test changes table naming each changed test, fixture, expected
 result, helper, or runner configuration; describe the old and new assertion,
@@ -75,7 +75,7 @@ update-tool checks. Use the narrowest meaningful targets while iterating.
 Do not rerun unrelated checks or the complete suite unless needed to reproduce
 or validate the repair. Capture verbose output in a file and read failure
 excerpts and summaries, not entire transcripts.
-Update AUTOMATED_TEST_REPORT.md with exact commands, statuses, failure evidence,
+Update .uncle/docs/AUTOMATED_TEST_REPORT.md with exact commands, statuses, failure evidence,
 and negative-test results for this repair. Distinguish checks run against the
 repair from earlier results; mark the remaining suite NOT RUN in this pass,
 pending driver verification. Do not present earlier passes as fresh evidence.
@@ -91,7 +91,7 @@ DECISION, implement only the listed executable step IDs and paths; retain all ac
 rows and leave dependent/transitive steps pending. Do not ask again for settled authority.
 Complete independent code and mocked tests before reporting a live-verification blocker.
 Report contradictions in exactly one fenced `plan-blockers` JSON array in
-IMPLEMENTATION_NOTES.md. Each row has id, class (DESIGN/AUTHORITY/LIVE_VERIFICATION/CODING),
+.uncle/docs/IMPLEMENTATION_NOTES.md. Each row has id, class (DESIGN/AUTHORITY/LIVE_VERIFICATION/CODING),
 requirement_ids, restriction_ids, evidence, independent_work. AUTHORITY also requires
 question and alternatives. DESIGN means an unsupported generated mechanism, not an
 ordinary coding defect. LIVE_VERIFICATION means only dependent approved live checks

@@ -101,11 +101,12 @@ class Audit(unittest.TestCase):
             block = source.split('        VALIDATE_AUDIT)\n', 1)[1].split('        WAIT_AUDIT_OVERRIDE)', 1)[0]
             with tempfile.TemporaryDirectory() as d:
                 path = Path(d)
+                (path/'.uncle/docs').mkdir(parents=True)
                 (path/'verification.manifest').write_text('snapshot')
                 preamble = f'ROOT="{root}"\nSTATE_DIR=.\nVERDICT_FILE=verdict\nDIFF_GATE=0\nAUDIT_GATE=1\n'
                 preamble += 'require_file() { test -s "$1"; }; check_verification_inputs() { :; }; hash_file() { echo hash; }; classify_audit_verdict() { echo READY; }; set_state() { echo "$1" > state; }; change_pr_engine() { :; }; git() { return 1; }; run_codex() { exit 99; }; run_stage() { exit 99; };\n'
                 harness = preamble + 'case VALIDATE_AUDIT in\nVALIDATE_AUDIT)\n' + block + 'esac\n'
-                audit = path/'FINAL_AUDIT.md'
+                audit = path/'.uncle/docs/FINAL_AUDIT.md'
                 audit.write_text('malformed')
                 for _ in range(2):
                     result = subprocess.run(['bash', '-c', harness], cwd=d, capture_output=True)
@@ -119,7 +120,8 @@ class Audit(unittest.TestCase):
     def test_packet_refreshes(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d)
-            p=root/'VERIFICATION_REPORT.md'
+            (root/'.uncle/docs').mkdir(parents=True)
+            p=root/'.uncle/docs/VERIFICATION_REPORT.md'
             p.write_text('old evidence')
             first=module.render(root,root/'.uncle/workflow')
             p.write_text('new evidence')

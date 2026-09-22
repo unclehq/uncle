@@ -61,8 +61,9 @@ class Fixture(unittest.TestCase):
         subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-C', 'fixture@example.test', '-f', str(self.key)], check=True)
         (self.repo / '.uncle').mkdir()
         (self.repo / '.uncle/allowed_signers').write_text('fixture@example.test ' + self.key.with_suffix('.pub').read_text())
+        (self.repo / '.uncle/docs').mkdir()
         for name, text in DOCS.items():
-            (self.repo / (name + '.md')).write_text(text)
+            (self.repo / '.uncle/docs' / (name + '.md')).write_text(text)
         fixture_repo.commit(self.repo, 'artifact', env=self.env)
         self.artifact = self.artifact_tree()
         self.statement = self.build_statement()
@@ -83,7 +84,7 @@ class Fixture(unittest.TestCase):
         return subprocess.check_output([fixture_repo.REAL_GIT, 'write-tree'], cwd=self.repo, env=env).decode().strip()
 
     def digest(self, name):
-        return hashlib.sha256((self.repo / (name + '.md')).read_bytes()).hexdigest()
+        return hashlib.sha256((self.repo / '.uncle/docs' / (name + '.md')).read_bytes()).hexdigest()
 
     def build_statement(self, artifact=None, **override):
         artifact = artifact or self.artifact
@@ -91,14 +92,14 @@ class Fixture(unittest.TestCase):
                     producer={'role': 'verifier', 'runner': 'codex', 'model': 'm', 'uncle_version': '0.1.0'}, inputs={})
         envelopes = {
             'requirements': dict(base, stage='requirements', result='pass',
-                                 evidence=[{'path': 'BASELINE_REPORT.md', 'digest': {'sha256': self.digest('BASELINE_REPORT')}},
-                                           {'path': 'CHANGE_SPEC.md', 'digest': {'sha256': self.digest('CHANGE_SPEC')}}]),
+                                 evidence=[{'path': '.uncle/docs/BASELINE_REPORT.md', 'digest': {'sha256': self.digest('BASELINE_REPORT')}},
+                                           {'path': '.uncle/docs/CHANGE_SPEC.md', 'digest': {'sha256': self.digest('CHANGE_SPEC')}}]),
             'review': dict(base, stage='review', result='pass',
                            findings=[{'id': 'AR-001', 'severity': 'blocking', 'evidence': {'sha256': self.digest('ADVERSARIAL_REVIEW')}},
                                      {'id': 'AR-002', 'severity': 'advisory', 'evidence': {'sha256': self.digest('ADVERSARIAL_REVIEW')}}],
-                           evidence=[{'path': 'ADVERSARIAL_REVIEW.md', 'digest': {'sha256': self.digest('ADVERSARIAL_REVIEW')}}]),
+                           evidence=[{'path': '.uncle/docs/ADVERSARIAL_REVIEW.md', 'digest': {'sha256': self.digest('ADVERSARIAL_REVIEW')}}]),
             'plan': dict(base, stage='plan', result='pass', dispositions=[{'finding': 'AR-001', 'action': 'Accepted'}],
-                         evidence=[{'path': 'CHANGE_PLAN.md', 'digest': {'sha256': self.digest('CHANGE_PLAN')}}]),
+                         evidence=[{'path': '.uncle/docs/CHANGE_PLAN.md', 'digest': {'sha256': self.digest('CHANGE_PLAN')}}]),
             'implementation': dict(base, stage='implementation', result='pass', artifact={'digest': {'gitTree': artifact}}, evidence=[]),
             'verification': dict(base, stage='verification', result='pass', inputs={'artifact': {'digest': {'gitTree': artifact}}}, evidence=[]),
             'audit': dict(base, stage='audit', result='pass', reason='READY', inputs={'artifact': {'digest': {'gitTree': artifact}}}, evidence=[]),
@@ -158,7 +159,7 @@ class VerifyTests(Fixture):
         self.assertEqual(sum(1 for line in lines if line.startswith('✓')), 13, result.stdout)
         # The head tree carries files the artifact excludes (AR-001).
         names = self.git('ls-tree', '-r', '--name-only', 'HEAD').split('\n')
-        for name in ('.uncle/attestation.json', '.uncle/allowed_signers', 'CHANGE_PLAN.md'):
+        for name in ('.uncle/attestation.json', '.uncle/allowed_signers', '.uncle/docs/CHANGE_PLAN.md'):
             self.assertIn(name, names)
 
     def test_unsigned_is_integrity_only(self):
@@ -203,14 +204,14 @@ class VerifyTests(Fixture):
         self.assert_not_verified(self.verify(), 'DSSE payload differs from the attestation bytes')
 
     def test_check_3_approved_document_mismatch(self):
-        self.commit_statement(self.statement, extra={'CHANGE_PLAN.md': '# edited after approval\n'})
+        self.commit_statement(self.statement, extra={'.uncle/docs/CHANGE_PLAN.md': '# edited after approval\n'})
         self.assert_not_verified(self.verify(), 'approved CHANGE_PLAN digest mismatch (committed copy)', 'approved:', 'present:')
 
     def test_check_3_embedded_copy_when_document_not_committed(self):
         # The document is gone from the tree; only the envelope's digest remains.
-        (self.repo / 'CHANGE_SPEC.md').unlink()
+        (self.repo / '.uncle/docs/CHANGE_SPEC.md').unlink()
         self.commit_statement(self.statement)
-        self.assertNotIn('CHANGE_SPEC.md', self.git('ls-tree', '-r', '--name-only', 'HEAD'))
+        self.assertNotIn('.uncle/docs/CHANGE_SPEC.md', self.git('ls-tree', '-r', '--name-only', 'HEAD'))
         result = self.verify()
         self.assertEqual(result.returncode, 3, result.stdout)
         self.assertIn('✓ approved change spec', result.stdout)

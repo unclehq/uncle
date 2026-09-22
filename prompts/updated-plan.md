@@ -33,16 +33,16 @@ agent to make before it can start. Apply these rules before finalizing:
 Read these in one parallel batch of tool calls:
 
 - REQUIREMENTS.md
-- REQUIREMENTS_INTERPRETATION.md
-- PROJECT_PLAN.md
-- ADVERSARIAL_REVIEW.md
+- .uncle/docs/REQUIREMENTS_INTERPRETATION.md
+- .uncle/docs/PROJECT_PLAN.md
+- .uncle/docs/ADVERSARIAL_REVIEW.md
 
-Create UPDATED_PROJECT_PLAN.md as a focused revision of PROJECT_PLAN.md.
+Create .uncle/docs/UPDATED_PROJECT_PLAN.md as a focused revision of .uncle/docs/PROJECT_PLAN.md.
 Use the original plan as the base, retaining unaffected normative rows and exact
 commands. Also resolve contradictions found by the final executability check.
 Edit the sections invalidated by findings; do not redesign unaffected
 architecture or repeat repository exploration without a specific unresolved
-finding. If UPDATED_PROJECT_PLAN.md already exists from an interrupted attempt,
+finding. If .uncle/docs/UPDATED_PROJECT_PLAN.md already exists from an interrupted attempt,
 read it and complete the remaining work, validating it against current inputs.
 Do not restart the document from scratch.
 
@@ -71,7 +71,7 @@ Retain and update:
 - implementation order;
 - explicit non-goals.
 
-Clearly identify changes from PROJECT_PLAN.md.
+Clearly identify changes from .uncle/docs/PROJECT_PLAN.md.
 
 Include a section titled exactly:
 
@@ -143,8 +143,8 @@ added, or deleted inputs. Repairs may edit them, but require a fresh diff review
 and independent test review. Explain the scope in the testing strategy.
 
 This document is the sole plan input to implementation, checklist creation, and
-the final audit — none of them will read PROJECT_PLAN.md or
-ADVERSARIAL_REVIEW.md. So it must stand alone. Standing alone means every
+the final audit — none of them will read .uncle/docs/PROJECT_PLAN.md or
+.uncle/docs/ADVERSARIAL_REVIEW.md. So it must stand alone. Standing alone means every
 normative row survives, not every sentence:
 
 - carry forward every behavior, invariant, and traceability row, updated — a
@@ -166,7 +166,7 @@ Do not implement code.
 Do not invoke another agent.
 Do not draft the plan in chat before writing it.
 
-Write only UPDATED_PROJECT_PLAN.md. Preserve a complete standalone plan and stop.
+Write only .uncle/docs/UPDATED_PROJECT_PLAN.md. Preserve a complete standalone plan and stop.
 
 Every restriction, including carried-forward review mitigations, needs an R- ID,
 source_kind USER/REPOSITORY/PLATFORM/DESIGN, source location, requirement IDs,

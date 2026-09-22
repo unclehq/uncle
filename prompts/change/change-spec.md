@@ -3,13 +3,13 @@ You are the primary requirements analyst for a change to an existing system.
 Read:
 
 - CHANGE_REQUEST.md
-- BASELINE_REPORT.md
+- .uncle/docs/BASELINE_REPORT.md
 
-BASELINE_REPORT.md already summarizes the repository and its documentation.
+.uncle/docs/BASELINE_REPORT.md already summarizes the repository and its documentation.
 Do not re-read README.md or the source tree; if the baseline is missing
 something you need, say so rather than rediscovering it here.
 
-Create CHANGE_SPEC.md.
+Create .uncle/docs/CHANGE_SPEC.md.
 
 Use a `## Acceptance criteria` section with a table headed
 `| ID | Criterion | Verification |`. Give every required criterion a unique
@@ -75,7 +75,7 @@ Length is a cost. Write the shortest specification a reviewer can act on.
 - Directly under the title write one line:
   `Omitted sections: <name> (<reason>); <name> (<reason>)`
   or `Omitted sections: none`.
-- Do not restate BASELINE_REPORT.md. Reference its IDs instead of copying rows.
+- Do not restate .uncle/docs/BASELINE_REPORT.md. Reference its IDs instead of copying rows.
 - Prefer tables and short declarative clauses over prose.
 - Never omit a section to avoid resolving something. If a section applies but
   you cannot complete it, keep it and mark it UNRESOLVED with the reason.
@@ -83,4 +83,4 @@ Length is a cost. Write the shortest specification a reviewer can act on.
 The behavior table, the invariant table, and the acceptance criteria are never
 omitted. Everything downstream is traced against them.
 
-Write CHANGE_SPEC.md and stop.
+Write .uncle/docs/CHANGE_SPEC.md and stop.

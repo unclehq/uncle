@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cd "$tmp"
+mkdir -p .uncle/docs
 printf 'abc\ndef' > PROJECT_PLAN.md
 WORKFLOW_DOC_MAX_BYTES=7 WORKFLOW_DOC_MAX_LINES=2 check_document_budget PROJECT_PLAN.md
 if WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_BYTES=6 check_document_budget PROJECT_PLAN.md 2>/dev/null; then exit 1; fi
@@ -151,7 +152,7 @@ grep -qF 'FINAL_AUDIT.md: at most 7 UTF-8 bytes' "$(cat resolved)"
 grep -q 'Reviewer output' "$(cat resolved)"
 grep -qF 'Use no more than 2,000 output tokens for this entire turn' "$(cat resolved)"
 grep -qF 'Do not narrate your investigation' "$(cat resolved)"
-grep -qF 'Final-response contract for `FINAL_AUDIT.md`' "$(cat resolved)"
+grep -qF 'Final-response contract for `.uncle/docs/FINAL_AUDIT.md`' "$(cat resolved)"
 grep -qF 'Return the release audit only.' "$(cat resolved)"
 document_layout_prompt project-plan > resolved
 grep -qF 'Return an executable proposal, not a requirements restatement or review.' resolved
@@ -197,7 +198,7 @@ rm -f advanced
 (WORKFLOW_DOC_MAX_BYTES=7 require_artifact PROJECT_PLAN.md; touch advanced)
 [[ -e advanced ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 # Standalone reviewer entry points also advertise and enforce the same cap.
-mkdir -p standalone/scripts/lib standalone/.uncle/workflow/approvals
+mkdir -p standalone/scripts/lib standalone/.uncle/workflow/approvals standalone/.uncle/docs
 # gates.sh sources document-layout.sh, so a standalone copy needs both.
 cp "$ROOT/scripts/lib/gates.sh" "$ROOT/scripts/lib/document-layout.sh" \
    "$ROOT/scripts/lib/compact-review.py" "$ROOT/scripts/lib/repair-acceptance.py" standalone/scripts/lib/
@@ -217,11 +218,11 @@ chmod +x standalone/reviewer
 (
     cd standalone
     printf 'source' > REQUIREMENTS.md
-    printf 'plan' > PROJECT_PLAN.md
-    printf 'plan' > UPDATED_PROJECT_PLAN.md
-    printf 'tests' > AUTOMATED_TEST_REPORT.md
+    printf 'plan' > .uncle/docs/PROJECT_PLAN.md
+    printf 'plan' > .uncle/docs/UPDATED_PROJECT_PLAN.md
+    printf 'tests' > .uncle/docs/AUTOMATED_TEST_REPORT.md
     for plan in PROJECT_PLAN UPDATED_PROJECT_PLAN; do
-        hash_file "$plan.md" > ".uncle/workflow/approvals/$plan.sha256"
+        hash_file ".uncle/docs/$plan.md" > ".uncle/workflow/approvals/$plan.sha256"
     done
     for script in codex-review-plan.sh codex-create-checklist.sh; do
         if WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_REVIEWER_CMD="$PWD/reviewer" \

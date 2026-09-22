@@ -206,7 +206,7 @@ and restore deliberate negative mutations on disposable copies. Use Bash
 Do not replace reviewer assertions or turn a missing prerequisite into success.
 
 Create `.uncle/workflow/check-commands.json` with this shape:
-{"checklist_sha256":"SHA256 of the current MANUAL_CHECKLIST.md bytes","commands":{"MC-001":["bash",".uncle/workflow/check-scripts/MC-001.sh"]}}
+{"checklist_sha256":"SHA256 of the current .uncle/docs/MANUAL_CHECKLIST.md bytes","commands":{"MC-001":["bash",".uncle/workflow/check-scripts/MC-001.sh"]}}
 Use real checklist IDs and argument arrays, never shell strings. Reuse these
 scripts on repairs after confirming they still implement the current checklist.
 Refresh the mapping when the checklist changes. Reuse code, not prior results.
@@ -218,7 +218,7 @@ evidence. Do not add dummy successful commands to bypass dependencies.
 Invoke the runner above once for all mapped checks, then read results.json and
 relevant logs and report-draft.md in one batch. The draft records command results
 without declaring acceptance: compare assertions and resolve every NOT RUN row
-before using it in VERIFICATION_REPORT.md. It enforces group barriers, separate logs, timeouts,
+before using it in .uncle/docs/VERIFICATION_REPORT.md. It enforces group barriers, separate logs, timeouts,
 and per-check timing. An EXIT_0 is command evidence, not an automatic acceptance
 PASS; verify each expected result. Preserve NOT_RUN and failed-check evidence.
 Avoid per-check tool round trips and repeated command generation. Do not nest
@@ -271,7 +271,7 @@ and protected-test requirements. Identify concrete corrections for coding blocke
 Separate missing live-verification prerequisites from blockers to writing code.
 Put genuine unresolved scope or authority choices in this review for the existing
 human plan gate. Never broaden permissions or silently waive a requirement.
-Reviewers: include these findings in ADVERSARIAL_REVIEW.md's existing finding
+Reviewers: include these findings in .uncle/docs/ADVERSARIAL_REVIEW.md's existing finding
 format. Plan revisers: address them in the revised plan and identify anything
 still unresolved for approval. Do not produce a separate assessment.json or
 request a separate executability approval.
@@ -291,25 +291,25 @@ FEASIBILITY
 # Limits apply to authored documents, never source code or raw execution logs.
 stage_documents() {
     case "$1" in
-        requirements) echo REQUIREMENTS_INTERPRETATION.md ;;
-        project-plan) echo PROJECT_PLAN.md ;;
-        updated-plan) echo UPDATED_PROJECT_PLAN.md ;;
-        baseline) echo BASELINE_REPORT.md ;;
-        change-spec) echo CHANGE_SPEC.md ;;
+        requirements) echo .uncle/docs/REQUIREMENTS_INTERPRETATION.md ;;
+        project-plan) echo .uncle/docs/PROJECT_PLAN.md ;;
+        updated-plan) echo .uncle/docs/UPDATED_PROJECT_PLAN.md ;;
+        baseline) echo .uncle/docs/BASELINE_REPORT.md ;;
+        change-spec) echo .uncle/docs/CHANGE_SPEC.md ;;
         change-plan)
-            echo CHANGE_PLAN.md
-            [[ "${UNCLE_COMBINED_CHANGE_PLAN:-0}" != 1 ]] || echo CHANGE_SPEC.md
+            echo .uncle/docs/CHANGE_PLAN.md
+            [[ "${UNCLE_COMBINED_CHANGE_PLAN:-0}" != 1 ]] || echo .uncle/docs/CHANGE_SPEC.md
             ;;
-        updated-change-plan) echo CHANGE_PLAN.md ;;
-        adversarial-review) echo ADVERSARIAL_REVIEW.md ;;
-        preflight) echo PREFLIGHT_REPORT.md ;;
+        updated-change-plan) echo .uncle/docs/CHANGE_PLAN.md ;;
+        adversarial-review) echo .uncle/docs/ADVERSARIAL_REVIEW.md ;;
+        preflight) echo .uncle/docs/PREFLIGHT_REPORT.md ;;
         implementation|implementation-step-*)
-            printf '%s\n' IMPLEMENTATION_NOTES.md AUTOMATED_TEST_REPORT.md CHANGE_TEST_REPORT.md ;;
-        test-review) echo TEST_REVIEW.md ;;
-        manual-checklist|manual-checklist-delta) echo MANUAL_CHECKLIST.md ;;
+            printf '%s\n' .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/AUTOMATED_TEST_REPORT.md .uncle/docs/CHANGE_TEST_REPORT.md ;;
+        test-review) echo .uncle/docs/TEST_REVIEW.md ;;
+        manual-checklist|manual-checklist-delta) echo .uncle/docs/MANUAL_CHECKLIST.md ;;
         manual-checklist-base) echo MANUAL_CHECKLIST.base.md ;;
-        execute-checklist) printf '%s\n' VERIFICATION_REPORT.md DEFECTS.md ;;
-        final-audit) echo FINAL_AUDIT.md ;;
+        execute-checklist) printf '%s\n' .uncle/docs/VERIFICATION_REPORT.md .uncle/docs/DEFECTS.md ;;
+        final-audit) echo .uncle/docs/FINAL_AUDIT.md ;;
     esac
 }
 
@@ -407,7 +407,7 @@ document_budget() {
 
 requirements_document_max_bytes() {
     local limits
-    limits="$(document_budget REQUIREMENTS_INTERPRETATION.md)" || return 1
+    limits="$(document_budget .uncle/docs/REQUIREMENTS_INTERPRETATION.md)" || return 1
     printf '%s\n' "${limits%% *}"
 }
 
@@ -639,7 +639,7 @@ save_plan_review() {
 # What this machine was proved able to do, published for the stages that write
 # checks against it.
 #
-# PREFLIGHT_REPORT.md already records one row per prerequisite, with evidence.
+# .uncle/docs/PREFLIGHT_REPORT.md already records one row per prerequisite, with evidence.
 # The driver used to read it as a single verdict and throw the rows away -- so
 # the stage that writes the checklist had no list of proven capabilities to
 # check its rows against, and could author a check nothing in this environment
@@ -651,7 +651,7 @@ save_plan_review() {
 # id that proved it.
 snapshot_preflight_capabilities() {
     local directory="$STATE_DIR/preflight-capabilities"
-    local report="${1:-PREFLIGHT_REPORT.md}"
+    local report="${1:-.uncle/docs/PREFLIGHT_REPORT.md}"
     mkdir -p "$directory"
     rm -f "$directory/capabilities.tsv"
     if [[ -s "$report" ]]; then
@@ -724,7 +724,7 @@ snapshot_checklist_groups() {
         return 0
     fi
     python3 -B "$GATES_LIB_DIR/checklist_groups.py" \
-        --checklist MANUAL_CHECKLIST.md --out-dir "$directory" > /dev/null || true
+        --checklist .uncle/docs/MANUAL_CHECKLIST.md --out-dir "$directory" > /dev/null || true
     if [[ -s "$directory/groups.txt" ]]; then
         echo "Checklist grouping: $(wc -l < "$directory/groups.txt" | tr -d ' ') group(s) from the reviewer's declarations."
     else

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read the two machine-usable structures out of CHANGE_PLAN.md.
+# Read the two machine-usable structures out of .uncle/docs/CHANGE_PLAN.md.
 #
 # The plan already states its own change surface twice: the change-impact table
 # names every component it intends to touch, and the implementation sequence

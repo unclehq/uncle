@@ -9,7 +9,7 @@ from review_paths import paths
 def snapshot(state):
     state=Path(state)
     names=set(paths(os.environ.get('WORKFLOW_UNTRACKED_BASELINE')))
-    names.update(n for n in ('REQUIREMENTS.md','UPDATED_PROJECT_PLAN.md','CHANGE_SPEC.md','CHANGE_PLAN.md') if Path(n).exists())
+    names.update(n for n in ('REQUIREMENTS.md','.uncle/docs/UPDATED_PROJECT_PLAN.md','.uncle/docs/CHANGE_SPEC.md','.uncle/docs/CHANGE_PLAN.md') if Path(n).exists())
     names.update(str(state/n) for n in ('verification.paths','verification.manifest','green-check.current.tsv') if (state/n).exists())
     result={}
     for name in sorted(names):

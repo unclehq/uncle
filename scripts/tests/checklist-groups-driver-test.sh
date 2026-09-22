@@ -14,7 +14,7 @@ mkdir -p "$work/proj"
 cd "$work/proj"
 STATE_DIR="workflow"
 DIR="$STATE_DIR/checklist-groups"
-mkdir -p "$STATE_DIR"
+mkdir -p "$STATE_DIR" .uncle/docs
 
 check() {
     printf '\n### %s\n- Priority: Critical\n- Exclusive resources: %s\n- Depends on: %s\n- Exact action: run it\n' \
@@ -28,7 +28,7 @@ check() {
     check MC-002 none none
     check MC-003 port:5173 none
     check MC-004 port:5173 MC-003
-} > MANUAL_CHECKLIST.md
+} > .uncle/docs/MANUAL_CHECKLIST.md
 
 out="$(snapshot_checklist_groups)"
 [[ -s "$DIR/groups.txt" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
@@ -42,7 +42,7 @@ grep -q 'before starting the next' "$DIR/README.md"
 {
     echo '# Manual checklist'
     check MC-001 none MC-404
-} > MANUAL_CHECKLIST.md
+} > .uncle/docs/MANUAL_CHECKLIST.md
 status=0
 out="$(snapshot_checklist_groups)" || status=$?
 [[ "$status" == 0 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
@@ -56,13 +56,13 @@ printf 'MC-900 MC-901\n' > "$DIR/groups.txt"
 {
     echo '# Manual checklist'
     printf '\n### MC-001\n- Exact action: run it\n'
-} > MANUAL_CHECKLIST.md
+} > .uncle/docs/MANUAL_CHECKLIST.md
 snapshot_checklist_groups > /dev/null
 [[ "$(cat "$DIR/groups.txt")" == "MC-001" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 grep -q 'scheduled alone' "$DIR/README.md"
 
 # --- no checklist at all -----------------------------------------------------
-rm -f MANUAL_CHECKLIST.md
+rm -f .uncle/docs/MANUAL_CHECKLIST.md
 printf 'MC-900 MC-901\n' > "$DIR/groups.txt"
 status=0
 snapshot_checklist_groups > /dev/null || status=$?
@@ -79,7 +79,7 @@ grep -q 'NOT DECLARED' "$DIR/README.md"
     echo '# Manual checklist'
     check MC-001 none none
     check MC-002 none none
-} > MANUAL_CHECKLIST.md
+} > .uncle/docs/MANUAL_CHECKLIST.md
 printf 'MC-900 MC-901\n' > "$DIR/groups.txt"
 status=0
 ( GATES_LIB_DIR="$work/nowhere"; snapshot_checklist_groups > /dev/null ) || status=$?

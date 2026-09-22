@@ -19,7 +19,7 @@ case "$#:${1:-}" in
     1:-h|1:--help) usage; exit 0 ;;
 esac
 
-mkdir -p .uncle/workflow/approvals
+mkdir -p .uncle/workflow/approvals .uncle/docs
 
 . "$ROOT/scripts/lib/sha256.sh"
 # Gate identity and supervisor receipts; a fixture copy without the library
@@ -102,17 +102,17 @@ approve_file() {
 
 case "$#:${1:-}" in
     1:approve-plan)
-        approve_file PROJECT_PLAN.md PROJECT_PLAN
+        approve_file .uncle/docs/PROJECT_PLAN.md PROJECT_PLAN
         echo "Next: ask the agent to run Stage 2."
         ;;
 
     1:approve-review)
-        approve_file ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
-        echo "Next: ask the agent to create UPDATED_PROJECT_PLAN.md."
+        approve_file .uncle/docs/ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
+        echo "Next: ask the agent to create .uncle/docs/UPDATED_PROJECT_PLAN.md."
         ;;
 
     1:approve-updated-plan)
-        approve_file UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
+        approve_file .uncle/docs/UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
         echo "Updated plan approved."
         echo "The agent may now build and continue through verification."
         ;;
@@ -121,7 +121,7 @@ case "$#:${1:-}" in
         echo "Approval status:"
         for item in PROJECT_PLAN ADVERSARIAL_REVIEW UPDATED_PROJECT_PLAN; do
             approval=".uncle/workflow/approvals/${item}.sha256"
-            file="${item}.md"
+            file=".uncle/docs/${item}.md"
 
             if [[ -s "$approval" && -s "$file" ]]; then
                 expected="$(cat "$approval")"

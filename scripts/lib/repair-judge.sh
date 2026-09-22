@@ -39,7 +39,7 @@ repair_begin() {
 repair_judge() {
     local report unrepaired status=0 noops count
     report="$(cat "$STATE_DIR/repair-source")"
-    unrepaired="$(python3 -B "$ROOT/scripts/lib/repair_check.py" judge "$STATE_DIR/repair-check.json" IMPLEMENTATION_NOTES.md)" || status=$?
+    unrepaired="$(python3 -B "$ROOT/scripts/lib/repair_check.py" judge "$STATE_DIR/repair-check.json" .uncle/docs/IMPLEMENTATION_NOTES.md)" || status=$?
     if [[ "$status" == 0 ]]; then
         rm -f "$STATE_DIR/repair-retry" "$STATE_DIR/repair-noop-count" "$STATE_DIR/REPAIR_BRIEF.md"
         return 0
@@ -68,7 +68,7 @@ repair_judge() {
     echo "Repair pass changed none of the files these findings name: $(printf '%s' "$unrepaired" | tr '\n' ' ')"
     echo "A report is not a repair. This pass is not reviewed and does not count"
     echo "against the repair limit."
-    supervision_validation_failed repair IMPLEMENTATION_NOTES.md \
+    supervision_validation_failed repair .uncle/docs/IMPLEMENTATION_NOTES.md \
         "Repair changed no file named by: $(printf '%s' "$unrepaired" | tr '\n' ' ')" 0 || true
     count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 1)"
     count=$((10#$count - 1))

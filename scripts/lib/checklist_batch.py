@@ -141,7 +141,7 @@ def run(mapping, checklist, groups_file, output, jobs=4, timeout=300):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mapping')
-    parser.add_argument('--checklist', default='MANUAL_CHECKLIST.md')
+    parser.add_argument('--checklist', default='.uncle/docs/MANUAL_CHECKLIST.md')
     parser.add_argument('--groups', default='.uncle/workflow/checklist-groups/groups.txt')
     parser.add_argument('--output', default='.uncle/workflow/check-runs')
     parser.add_argument('--jobs', type=int, default=int(os.environ.get('WORKFLOW_VERIFY_JOBS', '4')))

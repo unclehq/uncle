@@ -3,7 +3,7 @@ documents. Both are approved separately by the operator afterwards, and both are
 read by later stages, so neither may be folded into the other or abbreviated
 because the other exists.
 
-Write REQUIREMENTS_INTERPRETATION.md completely first, then PROJECT_PLAN.md. The
+Write .uncle/docs/REQUIREMENTS_INTERPRETATION.md completely first, then .uncle/docs/PROJECT_PLAN.md. The
 plan cites the interpretation's identifiers, so the interpretation must be
 settled before the plan is written -- not revised afterwards to match it. If
 writing the plan exposes a problem in the interpretation, fix the interpretation
@@ -14,7 +14,7 @@ documents you already hold. Nothing about the required content of either
 document changes.
 
 ================================================================================
-PART 1 OF 2 -- REQUIREMENTS_INTERPRETATION.md
+PART 1 OF 2 -- .uncle/docs/REQUIREMENTS_INTERPRETATION.md
 ================================================================================
 
 You are the primary requirements analyst.
@@ -29,7 +29,7 @@ script -- may be a throwaway first look being built from the brief in parallel
 with this stage. They are not the project being planned and not evidence of
 anything: do not read them, cite them, or plan around them.
 
-Create REQUIREMENTS_INTERPRETATION.md containing:
+Create .uncle/docs/REQUIREMENTS_INTERPRETATION.md containing:
 
 1. Required functionality
 2. Optional functionality
@@ -60,7 +60,7 @@ Do not design the architecture.
 Do not implement code.
 Do not invoke another agent.
 
-Write only REQUIREMENTS_INTERPRETATION.md and stop.
+Write only .uncle/docs/REQUIREMENTS_INTERPRETATION.md and stop.
 
 This is a companion to REQUIREMENTS.md, not a replacement specification.
 Reference unchanged requirements by stable ID, or source line range when IDs
@@ -92,7 +92,7 @@ IDs before writing the final document once. A format correction should use the
 saved interpretation and original brief, without repeating repository discovery.
 
 ================================================================================
-PART 2 OF 2 -- PROJECT_PLAN.md
+PART 2 OF 2 -- .uncle/docs/PROJECT_PLAN.md
 ================================================================================
 
 You are the primary system architect.
@@ -127,11 +127,11 @@ agent to make before it can start. Apply these rules before finalizing:
   actionable on the current evidence. Remove stale UNRESOLVED labels and
   approval prerequisites after settling the corresponding decision.
 
-You have just written REQUIREMENTS_INTERPRETATION.md in this same turn. Do not
+You have just written .uncle/docs/REQUIREMENTS_INTERPRETATION.md in this same turn. Do not
 re-read it; use what you wrote. Read any source files you still need in one
 parallel batch.
 
-Create PROJECT_PLAN.md.
+Create .uncle/docs/PROJECT_PLAN.md.
 
 Include:
 
@@ -188,7 +188,7 @@ concurrency is appropriate; do not weaken checks to make them parallel.
 Write densely. Five later stages read this document, so length here is paid
 for repeatedly:
 
-- reference requirements by their REQUIREMENTS_INTERPRETATION.md identifiers
+- reference requirements by their .uncle/docs/REQUIREMENTS_INTERPRETATION.md identifiers
   instead of restating them;
 - put structured content in the tables and do not repeat it as prose;
 - cover every section, but let a section be one line when that is the honest
@@ -199,7 +199,7 @@ Do not implement code.
 Do not invoke another agent.
 Do not draft the plan in chat before writing it.
 
-Write only PROJECT_PLAN.md, in a single Write call, and stop.
+Write only .uncle/docs/PROJECT_PLAN.md, in a single Write call, and stop.
 
 Use one canonical row per behavior, invariant, and acceptance obligation. Later strategy and implementation sections reference those IDs instead of repeating the rows. Keep rationale only where it explains a decision or constraint.
 

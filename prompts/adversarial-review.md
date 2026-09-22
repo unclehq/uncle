@@ -3,8 +3,8 @@ Act as an independent adversarial principal engineer.
 Read:
 
 - REQUIREMENTS.md
-- REQUIREMENTS_INTERPRETATION.md
-- PROJECT_PLAN.md
+- .uncle/docs/REQUIREMENTS_INTERPRETATION.md
+- .uncle/docs/PROJECT_PLAN.md
 
 Do not implement code.
 Do not modify any existing artifact.

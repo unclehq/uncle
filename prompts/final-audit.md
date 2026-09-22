@@ -3,13 +3,13 @@ Act as an independent final verification auditor.
 Read:
 
 - REQUIREMENTS.md
-- REQUIREMENTS_INTERPRETATION.md
-- UPDATED_PROJECT_PLAN.md
-- PREFLIGHT_REPORT.md and TEST_REVIEW.md;
-- AUTOMATED_TEST_REPORT.md;
-- MANUAL_CHECKLIST.md;
-- VERIFICATION_REPORT.md;
-- DEFECTS.md, if present;
+- .uncle/docs/REQUIREMENTS_INTERPRETATION.md
+- .uncle/docs/UPDATED_PROJECT_PLAN.md
+- .uncle/docs/PREFLIGHT_REPORT.md and .uncle/docs/TEST_REVIEW.md;
+- .uncle/docs/AUTOMATED_TEST_REPORT.md;
+- .uncle/docs/MANUAL_CHECKLIST.md;
+- .uncle/docs/VERIFICATION_REPORT.md;
+- .uncle/docs/DEFECTS.md, if present;
 - `.uncle/workflow/waivers/`, if present -- see below;
 - the source and tests behind the claims you are auditing.
 

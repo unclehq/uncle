@@ -10,13 +10,13 @@ def render(project, state):
              'Excerpts are navigation aids, not coverage conclusions. Read omitted rows directly.',
              'Use only checklist-driver-checks for fresh driver execution evidence.',
              'Match exact assertions before reusing results; human observations require a human.']
-    files = [(project / 'MANUAL_CHECKLIST.md', 12000),
+    files = [(project / '.uncle/docs/MANUAL_CHECKLIST.md', 12000),
              (state / 'checklist-groups/README.md', 4000),
              (state / 'checklist-groups/groups.txt', 4000),
              (state / 'checklist-driver-checks/README.md', 4000),
              (state / 'checklist-driver-checks/results.tsv', 8000),
              (state / 'checklist-driver-checks/output.log', 0),
-             (project / 'DEFECTS.md', 2000)]
+             (project / '.uncle/docs/DEFECTS.md', 2000)]
     for path, limit in files:
         lines.append('\n### ' + str(path))
         if not path.resolve().is_relative_to(project):

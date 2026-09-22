@@ -30,7 +30,7 @@ Auto/unattended mode and `WORKFLOW_CLOSE_ISSUE=0` disable a new handoff. A previ
 
 ## Signing and recovery
 
-When Git commit signing is enabled, Uncle shows one command block that stages all changes, removes `.uncle/workflow` from the index, includes `FINAL_AUDIT.md` even when ignored, and runs `git commit -S` with the approved title. Review the changes, press **c — Copy command**, and run the block in another terminal in the same project. Copying does not execute it. Return and press **Enter** to validate and resume, or **Esc** to cancel and leave the handoff pending. Uncle verifies the signature, audited tree, and sole parent before publication.
+When Git commit signing is enabled, Uncle shows one command block that stages all changes, removes `.uncle/workflow` from the index, includes `.uncle/docs/FINAL_AUDIT.md` even when ignored, and runs `git commit -S` with the approved title. Review the changes, press **c — Copy command**, and run the block in another terminal in the same project. Copying does not execute it. Return and press **Enter** to validate and resume, or **Esc** to cancel and leave the handoff pending. Uncle verifies the signature, audited tree, and sole parent before publication.
 
 Copy requires `pbcopy` on macOS, `wl-copy` on Wayland, or `xclip` (preferred) / `xsel` on X11. A missing or failing helper leaves the dialog open with an error; terminal selection remains available. The CLI prints the same shell-ready block. Arrow keys scroll long signing instructions in the TUI.
 

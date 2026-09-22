@@ -68,7 +68,7 @@ the human diff gate, `TEST_REVIEW`, `MANUAL_CHECKLIST`, `EXECUTE_CHECKLIST`, and
 `Protected verification paths` block in the approved plan. Automated browsers
 and local test servers belong in the commands when acceptance needs them.
 
-`PREFLIGHT_REPORT.md`, `TEST_REVIEW.md`, and `VERIFICATION_REPORT.md` have an
+`.uncle/docs/PREFLIGHT_REPORT.md`, `.uncle/docs/TEST_REVIEW.md`, and `.uncle/docs/VERIFICATION_REPORT.md` have an
 `Acceptance gate` table with `ID`, `Required`, `Status`, and `Evidence` columns.
 Required rows must all PASS. FAIL routes test review or execution to `REPAIR`;
 BLOCKED/NOT RUN/N/A on a required row pauses the current stage. Malformed or
@@ -144,7 +144,7 @@ Numbers are consecutive, one-based positions in the verification command list.
 Groups must be ordered, disjoint, and in range. Ungrouped commands and boundaries
 between groups remain sequential. Use this only for checks with independent
 ports, outputs, fixtures, and state. New applications read groups from
-`UPDATED_PROJECT_PLAN.md`; changes read them from approved `BASELINE_REPORT.md`,
+`.uncle/docs/UPDATED_PROJECT_PLAN.md`; changes read them from approved `.uncle/docs/BASELINE_REPORT.md`,
 using the same grouping before and after the change. `WORKFLOW_VERIFY_JOBS`
 limits concurrency to 1–8 (default 4). Without Python or a compatible guard,
 execution falls back to sequential checks. Missing dependencies in a check
@@ -337,8 +337,8 @@ State files this contract depends on, all under the gitignored `.uncle/workflow/
 | File | Written by | Meaning |
 |---|---|---|
 | `origin` | `from-issue.sh` on confirmation; `change-workflow.sh` in `ANALYZE` | `<owner/repo>TAB<issue>[TAB<gh\|curl>]` that owns this checkout's in-flight run. The third field records how the issue was fetched; only `gh` may authorize a close, and a two-field file written before this field existed reads as `curl` |
-| `audit-verdict` | `change-workflow.sh` in `FINAL_AUDIT` | `<run-id>TAB<class>TAB<sha256 of FINAL_AUDIT.md>`; `stagegate.sh` writes `<class>TAB<sha256>` |
-| `audit-override` | either driver in `WAIT_AUDIT_OVERRIDE` | `<utc>TAB<class>TAB<sha256 of FINAL_AUDIT.md>`; a human chose to finish over a failing audit, and the issue is never closed |
+| `audit-verdict` | `change-workflow.sh` in `FINAL_AUDIT` | `<run-id>TAB<class>TAB<sha256 of .uncle/docs/FINAL_AUDIT.md>`; `stagegate.sh` writes `<class>TAB<sha256>` |
+| `audit-override` | either driver in `WAIT_AUDIT_OVERRIDE` | `<utc>TAB<class>TAB<sha256 of .uncle/docs/FINAL_AUDIT.md>`; a human chose to finish over a failing audit, and the issue is never closed |
 | `IMPLEMENTATION_REVIEW.md` | either driver, at the implementation gate | the generated document the operator approves: file list, green check, agent notes and test report, and the full diff. Rebuilt from the tree on every gate entry |
 | `green-check.baseline.tsv` | `change-workflow.sh` in `PLAN` | `<exit status>TAB<command>` for the approved command list, run before anything changed |
 | `green-check.tsv` | either driver after implementation | `<PASS\|FIXED\|PREEXISTING\|REGRESSION>TAB<command>` |
@@ -363,8 +363,8 @@ deliberately; neither script ever clears it automatically.
 
 ### `codex-review-plan.sh` — adversarial plan review (Stage 2)
 
-Runs the reviewer CLI against the approved `PROJECT_PLAN.md` and writes
-`ADVERSARIAL_REVIEW.md`.
+Runs the reviewer CLI against the approved `.uncle/docs/PROJECT_PLAN.md` and writes
+`.uncle/docs/ADVERSARIAL_REVIEW.md`.
 
 ```sh
 ./scripts/codex-review-plan.sh
@@ -372,14 +372,14 @@ Runs the reviewer CLI against the approved `PROJECT_PLAN.md` and writes
 ./scripts/codex-review-plan.sh --help
 ```
 
-Takes no positional arguments. Requires `REQUIREMENTS.md`, `PROJECT_PLAN.md`,
+Takes no positional arguments. Requires `REQUIREMENTS.md`, `.uncle/docs/PROJECT_PLAN.md`,
 and a matching approval record in `.uncle/workflow/approvals/PROJECT_PLAN.sha256`.
 Normally invoked by the driver; can be run by hand.
 
 ### `codex-create-checklist.sh` — manual checklist generation (Stage 6)
 
-Runs the reviewer CLI against the approved `UPDATED_PROJECT_PLAN.md` and the
-automated-test report, and writes `MANUAL_CHECKLIST.md`.
+Runs the reviewer CLI against the approved `.uncle/docs/UPDATED_PROJECT_PLAN.md` and the
+automated-test report, and writes `.uncle/docs/MANUAL_CHECKLIST.md`.
 
 ```sh
 ./scripts/codex-create-checklist.sh
@@ -388,7 +388,7 @@ automated-test report, and writes `MANUAL_CHECKLIST.md`.
 ```
 
 Takes no positional arguments. Requires `REQUIREMENTS.md`,
-`UPDATED_PROJECT_PLAN.md`, `AUTOMATED_TEST_REPORT.md`, and a matching approval
+`.uncle/docs/UPDATED_PROJECT_PLAN.md`, `.uncle/docs/AUTOMATED_TEST_REPORT.md`, and a matching approval
 record in `.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256`. Normally invoked
 by the driver; can be run by hand.
 
@@ -498,14 +498,14 @@ checks, evidence, and dispositions must not be dropped to fit.
 ### Frozen scope and stepwise implementation
 
 `scripts/lib/plan-scope.sh` reads the two machine-usable structures out of
-`CHANGE_PLAN.md`: the file list in the change-impact table, and the ordered
+`.uncle/docs/CHANGE_PLAN.md`: the file list in the change-impact table, and the ordered
 steps in the implementation sequence.
 
 The driver uses the file list twice. It appends it to the implementation
 prompt, so the stage opens the named files instead of searching for the change
 surface; and it checks the diff against it afterwards. Changing a file the plan
 did not name is allowed — a review disposition routinely requires it — but it
-must be named in `IMPLEMENTATION_NOTES.md` with a reason, which the workflow
+must be named in `.uncle/docs/IMPLEMENTATION_NOTES.md` with a reason, which the workflow
 already required and did not enforce. An unrecorded one fails the stage.
 
 The check reads the same file set the operator is shown at the implementation
@@ -532,7 +532,7 @@ turns. Nothing is evicted from a context, so cost is turns x context and the
 last turns of a long run are the most expensive tokens in the pipeline.
 Splitting resets the accumulated tool output at each step; the plan is re-read
 per step, so the fixed part is paid N times while the growing part is paid once
-per step. `IMPLEMENTATION_NOTES.md` and the code on disk are the handoff between
+per step. `.uncle/docs/IMPLEMENTATION_NOTES.md` and the code on disk are the handoff between
 steps.
 
 The turn cap is divided across the steps rather than multiplied, and
@@ -558,9 +558,9 @@ checklist stage also retains its safe parallel command batch runner.
 
 ### The gates around implementation
 
-The change driver requires an `Acceptance criteria` table in `CHANGE_SPEC.md`
+The change driver requires an `Acceptance criteria` table in `.uncle/docs/CHANGE_SPEC.md`
 with stable `AC-1`, `AC-2`, … IDs, and an `Acceptance delivery` table in
-`IMPLEMENTATION_NOTES.md` with `ID`, `Status`, `Changed code`, and
+`.uncle/docs/IMPLEMENTATION_NOTES.md` with `ID`, `Status`, `Changed code`, and
 `Observed targeted verification` columns. Every specified ID must appear once.
 Only `IMPLEMENTED` rows with code and verification evidence permit advancement;
 `INCOMPLETE`, `BLOCKED`, missing rows or legacy reports keep implementation pending.
@@ -585,8 +585,8 @@ the two checks that sit between the implementation stage and everything that
 reads its output.
 
 `verify_commands` reads a command list out of a fenced block under a document's
-verification-command heading — section 8 of `BASELINE_REPORT.md`, or
-`## Verification commands` in `UPDATED_PROJECT_PLAN.md`. Nothing outside that
+verification-command heading — section 8 of `.uncle/docs/BASELINE_REPORT.md`, or
+`## Verification commands` in `.uncle/docs/UPDATED_PROJECT_PLAN.md`. Nothing outside that
 block is read, and the block is only taken from a document that has already
 passed a human gate: the driver executes these commands with its own
 privileges, so what it runs has to be something the operator approved.

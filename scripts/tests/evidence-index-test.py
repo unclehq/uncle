@@ -11,7 +11,8 @@ class Index(unittest.TestCase):
     def test_audit_index_refreshes_claims_and_marks_missing_files(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); state=root/'.uncle/workflow';state.mkdir(parents=True)
-            report=root/'VERIFICATION_REPORT.md'
+            (root/'.uncle/docs').mkdir(parents=True, exist_ok=True)
+            report=root/'.uncle/docs/VERIFICATION_REPORT.md'
             report.write_text('| ID | Required | Status | Evidence |\n|---|---|---|---|\n| MC-H-1 | YES | PASS | `tests/page.py:12` |\n')
             (state/'delivery-summary.tsv').write_text('id\tstatus\n')
             for family in ('app','change'):
@@ -49,8 +50,9 @@ class Index(unittest.TestCase):
     def test_base_excludes_implementation_and_configuration(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); state=root/'.uncle/workflow'
-            (root/'CHANGE_SPEC.md').write_text('AC-1 frozen')
-            (root/'VERIFICATION_REPORT.md').write_text('LIVE RESULT')
+            (root/'.uncle/docs').mkdir(parents=True, exist_ok=True)
+            (root/'.uncle/docs/CHANGE_SPEC.md').write_text('AC-1 frozen')
+            (root/'.uncle/docs/VERIFICATION_REPORT.md').write_text('LIVE RESULT')
             (root/'package.json').write_text('LIVE CONFIG')
             text=packet(root,state,'manual-checklist-base','change')
             self.assertIn('frozen',text)

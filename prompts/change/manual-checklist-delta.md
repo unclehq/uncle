@@ -7,10 +7,10 @@ Your job is to reconcile the two and emit the final checklist.
 Read:
 
 - .uncle/workflow/MANUAL_CHECKLIST.base.md
-- CHANGE_SPEC.md
-- CHANGE_PLAN.md
-- IMPLEMENTATION_NOTES.md
-- CHANGE_TEST_REPORT.md
+- .uncle/docs/CHANGE_SPEC.md
+- .uncle/docs/CHANGE_PLAN.md
+- .uncle/docs/IMPLEMENTATION_NOTES.md
+- .uncle/docs/CHANGE_TEST_REPORT.md
 - .uncle/workflow/change.diff
 - changed source files
 - relevant unchanged source files
@@ -24,9 +24,9 @@ Do not claim any check passed.
    with the exact action against the code as built.
 2. Add checks for anything the implementation did that the specification did
    not anticipate: recorded deviations, files changed that
-   CHANGE_PLAN.md did not list, and new failure modes visible in the
+   .uncle/docs/CHANGE_PLAN.md did not list, and new failure modes visible in the
    diff.
-3. Add checks for any gap CHANGE_TEST_REPORT.md leaves open, including every
+3. Add checks for any gap .uncle/docs/CHANGE_TEST_REPORT.md leaves open, including every
    item it marked `NOT RUN`.
 4. Delete checks that the diff makes provably inapplicable. For each deletion,
    record the check ID and the reason in a `Removed checks` section. Never
@@ -45,7 +45,7 @@ IDs may already be referenced.
 ## Output
 
 Emit the complete merged checklist, in the same format as the base, so that
-MANUAL_CHECKLIST.md stands alone. Do not emit a patch.
+.uncle/docs/MANUAL_CHECKLIST.md stands alone. Do not emit a patch.
 
 Directly under the title, write one line:
 
@@ -63,7 +63,7 @@ End with:
 ## Output economy
 
 - One line per field.
-- Do not restate IMPLEMENTATION_NOTES.md or the diff. Cite the file and line.
+- Do not restate .uncle/docs/IMPLEMENTATION_NOTES.md or the diff. Cite the file and line.
 - Merge checks executed by the same action against the same preconditions.
 
 Return only the checklist.

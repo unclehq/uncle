@@ -21,7 +21,7 @@ from pathlib import Path
 
 SCHEMA = 1
 SUBDIR = 'supervision'
-EFFORTS = ('low', 'medium', 'high')
+EFFORTS = ('none', 'low', 'medium', 'high')
 ACTIONS = ('steer', 'retry', 'ask', 'none')
 TRIGGERS = ('validation', 'recurrence', 'steering', 'overrun')
 SUPPORTED_RUNNERS = ('claude', 'cline', 'codex', 'kimi', 'self-hosted')
@@ -45,7 +45,7 @@ CONTROLS = (
     ('enabled', 'bool', True),
     ('runner', 'runner', 'claude'),
     ('model', 'text', 'sonnet'),
-    ('effort', 'effort', 'medium'),
+    ('effort', 'effort', 'none'),
     ('max_interventions', 'count0', 2),
     ('steering_timeout_seconds', 'count1', 120),
     ('stage_time_seconds', 'count0', 1800),

@@ -183,8 +183,8 @@ t.stage_runners["derive-brief"] = "self-hosted"
 check("self-hosted shows effort and model", ["runner", "effort", "model"],
       t.stage_fields("derive-brief"))
 t.picker_kind, t.picker_target, t.pick_filter = "effort", "derive-brief", ""
-check("the effort picker offers the standard levels",
-      [("option", "high"), ("option", "medium"), ("option", "low"),
+check("the effort picker only offers the enforced level",
+      [("option", "none"),
        ("custom", "Custom… (type an effort)")], t._picker_rows())
 
 # Its model picker takes custom ids the way cline's does.
@@ -594,7 +594,7 @@ legacy = fresh()
 legacy.load_config()
 check("legacy global runner seeds a stage", "cline",
       legacy.stage_runner("implementation"))
-check("legacy global effort seeds a stage", "low", legacy.stage_effort("implementation"))
+check("legacy global effort cannot override the enforced level", "none", legacy.stage_effort("implementation"))
 check("legacy global model seeds a stage", "poolside/laguna-s-2.1",
       legacy.stage_model("implementation"))
 check("legacy bare stage line is a model", "cline-pass/kimi-k3",
@@ -855,10 +855,19 @@ COUNT=$((COUNT + 1))
 
 GPROJ3="$TMP/gitignore-already-listed"
 mkdir -p "$GPROJ3"
-printf '.uncle/\n' > "$GPROJ3/.gitignore"
+printf 'dist/\n.uncle/\ncoverage/\n' > "$GPROJ3/.gitignore"
 gitignore_load_config "$GPROJ3"
 COUNT=$((COUNT + 1))
-[[ "$(cat "$GPROJ3/.gitignore")" == $'.uncle/' ]] || fail "an already-listed .uncle entry was duplicated"
+[[ "$(cat "$GPROJ3/.gitignore")" == $'dist/\n.uncle/*\n!.uncle/docs/\ncoverage/' ]] \
+    || fail "a bare .uncle entry was not upgraded in place: $(cat "$GPROJ3/.gitignore")"
+
+GPROJ4="$TMP/gitignore-already-upgraded"
+mkdir -p "$GPROJ4"
+printf '.uncle/*\n!.uncle/docs/\n' > "$GPROJ4/.gitignore"
+gitignore_load_config "$GPROJ4"
+COUNT=$((COUNT + 1))
+[[ "$(cat "$GPROJ4/.gitignore")" == $'.uncle/*\n!.uncle/docs/' ]] \
+    || fail "an already-upgraded .gitignore was changed: $(cat "$GPROJ4/.gitignore")"
 
 if [[ "$status" -ne 0 || "$FAILED" -ne 0 ]]; then
     echo "tui-config-test.sh: failed"

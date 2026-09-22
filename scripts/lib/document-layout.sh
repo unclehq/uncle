@@ -91,7 +91,7 @@ text. Both are headings, not bold labels inside another section: a line reading
 ## AR-001: Plan omits the rollback path
 
 - Severity: high
-- References: CHANGE_PLAN.md:41
+- References: .uncle/docs/CHANGE_PLAN.md:41
 - Failure: a failed migration leaves the schema half-applied
 - Fix: state the rollback step and its verification
 - Verify: run the migration against a copy and roll back
@@ -116,7 +116,7 @@ carrying evidence, a correction, and YES or NO in Blocks:
 
 | ID | Finding | Evidence | Correction | Blocks |
 |---|---|---|---|---|
-| FA-1 | Checklist MC-3 not executed | VERIFICATION_REPORT.md:22 | Run MC-3 | YES |
+| FA-1 | Checklist MC-3 not executed | .uncle/docs/VERIFICATION_REPORT.md:22 | Run MC-3 | YES |
 
 The VERY LAST line of the document is the verdict, alone on its line, exactly
 one of:

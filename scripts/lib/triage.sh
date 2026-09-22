@@ -17,7 +17,7 @@ TRIAGE_FILE_CAP="${TRIAGE_FILE_CAP:-16384}"
 TRIAGE_ROW_CAP="${TRIAGE_ROW_CAP:-60}"
 TRIAGE_TOTAL_CAP="${TRIAGE_TOTAL_CAP:-98304}"
 TRIAGE_ID_PREFIXES='AC|B|I|R|S|D|MC|AR|X|INV'
-TRIAGE_PLAN_FILES='CHANGE_PLAN.md UPDATED_PROJECT_PLAN.md CHANGE_SPEC.md PROJECT_PLAN.md'
+TRIAGE_PLAN_FILES='.uncle/docs/CHANGE_PLAN.md .uncle/docs/UPDATED_PROJECT_PLAN.md .uncle/docs/CHANGE_SPEC.md .uncle/docs/PROJECT_PLAN.md'
 
 # triage_stop_reason <state_dir> <reason> -- record why the driver is about to
 # stop. `human` means a person chose to stop, which is not a failure and must
@@ -67,20 +67,20 @@ triage_stage_log() {
 triage_stage_reports() {
     case "$1" in
         derive-brief) printf '%s\n' CHANGE_REQUEST.md REQUIREMENTS.md ;;
-        requirements) printf '%s\n' REQUIREMENTS_INTERPRETATION.md ;;
-        baseline) printf '%s\n' BASELINE_REPORT.md ;;
-        project-plan) printf '%s\n' PROJECT_PLAN.md ;;
-        change-plan|change-spec) printf '%s\n' CHANGE_SPEC.md CHANGE_PLAN.md ;;
-        adversarial-review|plan-executability) printf '%s\n' ADVERSARIAL_REVIEW.md ;;
-        updated-plan|plan-recovery) printf '%s\n' UPDATED_PROJECT_PLAN.md ;;
-        updated-change-plan) printf '%s\n' CHANGE_PLAN.md ;;
-        preflight) printf '%s\n' PREFLIGHT_REPORT.md ;;
-        implementation*) printf '%s\n' IMPLEMENTATION_NOTES.md AUTOMATED_TEST_REPORT.md CHANGE_TEST_REPORT.md ;;
-        repair*) printf '%s\n' IMPLEMENTATION_NOTES.md ;;
-        test-review) printf '%s\n' TEST_REVIEW.md ;;
-        manual-checklist*) printf '%s\n' MANUAL_CHECKLIST.md ;;
-        execute-checklist) printf '%s\n' VERIFICATION_REPORT.md DEFECTS.md ;;
-        final-audit) printf '%s\n' FINAL_AUDIT.md ;;
+        requirements) printf '%s\n' .uncle/docs/REQUIREMENTS_INTERPRETATION.md ;;
+        baseline) printf '%s\n' .uncle/docs/BASELINE_REPORT.md ;;
+        project-plan) printf '%s\n' .uncle/docs/PROJECT_PLAN.md ;;
+        change-plan|change-spec) printf '%s\n' .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md ;;
+        adversarial-review|plan-executability) printf '%s\n' .uncle/docs/ADVERSARIAL_REVIEW.md ;;
+        updated-plan|plan-recovery) printf '%s\n' .uncle/docs/UPDATED_PROJECT_PLAN.md ;;
+        updated-change-plan) printf '%s\n' .uncle/docs/CHANGE_PLAN.md ;;
+        preflight) printf '%s\n' .uncle/docs/PREFLIGHT_REPORT.md ;;
+        implementation*) printf '%s\n' .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/AUTOMATED_TEST_REPORT.md .uncle/docs/CHANGE_TEST_REPORT.md ;;
+        repair*) printf '%s\n' .uncle/docs/IMPLEMENTATION_NOTES.md ;;
+        test-review) printf '%s\n' .uncle/docs/TEST_REVIEW.md ;;
+        manual-checklist*) printf '%s\n' .uncle/docs/MANUAL_CHECKLIST.md ;;
+        execute-checklist) printf '%s\n' .uncle/docs/VERIFICATION_REPORT.md .uncle/docs/DEFECTS.md ;;
+        final-audit) printf '%s\n' .uncle/docs/FINAL_AUDIT.md ;;
         *) ;;
     esac
 }
@@ -223,8 +223,8 @@ write_triage() {
             done
         fi
         case " ${report_files[*]-} " in
-            *" IMPLEMENTATION_NOTES.md "*) ;;
-            *) triage_embed_file IMPLEMENTATION_NOTES.md ;;
+            *" .uncle/docs/IMPLEMENTATION_NOTES.md "*) ;;
+            *) triage_embed_file .uncle/docs/IMPLEMENTATION_NOTES.md ;;
         esac
         triage_embed_file "$state_dir/green-check.md" "green-check.md"
         if [[ "${#report_files[@]}" -gt 0 ]]; then

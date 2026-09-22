@@ -223,13 +223,14 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
 
     def test_planning_edits_are_validated_before_publication(self):
         import self_hosted
-        plan = self.root/'UPDATED_PROJECT_PLAN.md'
+        plan = self.root/'.uncle/docs/UPDATED_PROJECT_PLAN.md'
+        plan.parent.mkdir(parents=True, exist_ok=True)
         plan.write_text('Original approved content\n')
         valid = '## Verification commands\n```bash\npython3 -m pytest\n```\n## Protected verification paths\n```text\ntests/\n```\n'
         for content in ('## Verification commands\n', '## Verification commands\n```bash\npytest', valid):
             def generate(side, values, prompt, staged, **kwargs):
                 self.assertNotEqual(staged, self.root)
-                (staged/'UPDATED_PROJECT_PLAN.md').write_text(content)
+                (staged/'.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text(content)
                 (staged/'unwanted.py').write_text('incidental edit')
                 return 'response', 1
             with patch.object(self_hosted, '_run_opencode', side_effect=generate):
@@ -256,14 +257,15 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         self.assertEqual(run.call_count, 2)
         self.assertEqual(turns, 2)
         self.assertEqual(usage['total_tokens'], 30)
-        self.assertEqual((self.root/'UPDATED_PROJECT_PLAN.md').read_text(encoding='utf-8'), valid)
+        self.assertEqual((self.root/'.uncle/docs/UPDATED_PROJECT_PLAN.md').read_text(encoding='utf-8'), valid)
         rejected = list((self.root/'.uncle/workflow/logs').glob('updated_project_plan-rejected-*.md'))
         self.assertEqual(len(rejected), 1)
         self.assertEqual(rejected[0].read_text(encoding='utf-8'), invalid)
 
     def test_plan_crash_and_missing_output_preserve_original(self):
         import self_hosted
-        plan = self.root/'UPDATED_PROJECT_PLAN.md'
+        plan = self.root/'.uncle/docs/UPDATED_PROJECT_PLAN.md'
+        plan.parent.mkdir(parents=True, exist_ok=True)
         plan.write_text('Original\n')
         with patch.object(self_hosted, '_run_opencode', side_effect=ValueError('failed')):
             with self.assertRaises(ValueError):
@@ -445,11 +447,11 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         with patch.object(self_hosted, '_run_opencode', return_value=(response, 1)) as run:
             run_opencode('agent', self.values(), 'Interpret', self.root, stage='requirements')
         self.assertEqual(run.call_args.args[0], 'agent')
-        self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
+        self.assertEqual((self.root/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
         with patch.object(self_hosted, '_run_opencode', return_value=('Done!', 1)):
             with self.assertRaises(ValueError):
                 run_opencode('agent', self.values(), 'Interpret', self.root, stage='requirements')
-        self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
+        self.assertEqual((self.root/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
 
     def test_requirements_file_tools_publish_only_valid_document(self):
         import self_hosted
@@ -458,12 +460,12 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
             self.assertEqual(side, 'agent')
             self.assertFalse(kwargs['allow_shell'])
             self.assertNotEqual(staged, self.root)
-            (staged/'REQUIREMENTS_INTERPRETATION.md').write_text(document, encoding='utf-8')
+            (staged/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md').write_text(document, encoding='utf-8')
             (staged/'unwanted.txt').write_text('incidental')
             return 'REQUIREMENTS_INTERPRETATION.md', 1
         with patch.object(self_hosted, '_run_opencode', side_effect=generate):
             run_opencode('agent', self.values(), 'Interpret', self.root, stage='requirements')
-        self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(), document)
+        self.assertEqual((self.root/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md').read_text(), document)
         self.assertFalse((self.root/'unwanted.txt').exists())
 
     def test_document_preamble_and_format_retry(self):
@@ -480,7 +482,7 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
             run_opencode('agent', self.values(), 'Interpret', self.root, stage='requirements', usage=usage)
         self.assertEqual(run.call_count, 2)
         self.assertEqual(usage['total_tokens'], 240)
-        self.assertEqual((self.root/'REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
+        self.assertEqual((self.root/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8'), text)
         rejected = list((self.root/'.uncle/workflow/logs').glob('requirements-rejected-*.md'))
         self.assertEqual(len(rejected), 1)
         self.assertEqual(rejected[0].read_text(encoding='utf-8'), 'Done!')

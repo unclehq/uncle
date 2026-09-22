@@ -77,7 +77,7 @@ change_pr_publish() {
             READY|READY_WITH_NON_BLOCKING_ISSUES)
                 issue_close_eligible "$recorded" \
                     "$(origin_field "$ORIGIN_FILE" 1)" "$(origin_field "$ORIGIN_FILE" 2)" \
-                    "$VERDICT_FILE" "$ORIGIN_FILE" FINAL_AUDIT.md "$MARKER_FILE" \
+                    "$VERDICT_FILE" "$ORIGIN_FILE" .uncle/docs/FINAL_AUDIT.md "$MARKER_FILE" \
                     1 "$ORIGIN_BOUND" 1 "$(origin_fetch_method "$ORIGIN_FILE")" || return 0
                 ;;
             *)
@@ -108,7 +108,7 @@ import uuid
 STATE = Path('.uncle/workflow')
 JOURNAL = STATE / 'pr' / 'journal.json'
 OVERRIDE = STATE / 'pr' / 'verdict-override'
-AUDIT = Path('FINAL_AUDIT.md')
+AUDIT = Path('.uncle/docs/FINAL_AUDIT.md')
 
 
 # Distinct from every other failure so the driver can tell the one case an
@@ -192,7 +192,7 @@ def gate_names():
 def blocking_findings():
     """The audit rows that block release, as short lines. Never raises."""
     try:
-        text = Path('FINAL_AUDIT.md').read_text(errors='replace')
+        text = Path('.uncle/docs/FINAL_AUDIT.md').read_text(errors='replace')
     except OSError:
         return []
     rows = []
@@ -211,7 +211,7 @@ def blocked_gate(reason):
 
     The other blocked gates in this workflow ask rather than announce, and this
     one announced: it printed a line and exited, leaving the operator to open
-    FINAL_AUDIT.md themselves to learn what was wrong.
+    .uncle/docs/FINAL_AUDIT.md themselves to learn what was wrong.
 
     Skipping publishes anyway. It never turns a failing audit into a passing
     one: the release envelope still records `fail` and its reason, the Statement
@@ -235,9 +235,9 @@ def blocked_gate(reason):
                      's').strip().lower()
         if answer in ('r', 'review'):
             try:
-                print(Path('FINAL_AUDIT.md').read_text(errors='replace'), flush=True)
+                print(Path('.uncle/docs/FINAL_AUDIT.md').read_text(errors='replace'), flush=True)
             except OSError as failure:
-                print('Could not read FINAL_AUDIT.md: %s' % failure, flush=True)
+                print('Could not read .uncle/docs/FINAL_AUDIT.md: %s' % failure, flush=True)
             continue
         if answer in ('k', 'skip'):
             # Typed in full: a single keystroke is too small a gesture for
@@ -282,7 +282,7 @@ def release_blocked_reason(j):
         if override:
             extra['override'] = override
         release = env.write_envelope(STATE, 'release', 'fail', reason=reason, artifact=artifact,
-                                     inputs={'artifact': artifact}, evidence=['FINAL_AUDIT.md'],
+                                     inputs={'artifact': artifact}, evidence=['.uncle/docs/FINAL_AUDIT.md'],
                                      extra=extra)
         print('Envelope: release ' + release['result'], flush=True)
     except Exception:
@@ -336,7 +336,7 @@ def attest(j):
     if override:
         extra['override'] = override
     release = env.write_envelope(STATE, 'release', 'fail' if reason else 'pass', reason=reason, artifact=artifact,
-                                 inputs={'artifact': artifact}, evidence=['FINAL_AUDIT.md'], extra=extra)
+                                 inputs={'artifact': artifact}, evidence=['.uncle/docs/FINAL_AUDIT.md'], extra=extra)
     print('Envelope: release ' + release['result'], flush=True)
     if reason and j.get('release_skipped') == reason:
         # The envelope above already says `fail` and why; the Statement carries
@@ -461,12 +461,12 @@ def snapshot(audit=False, excludes=(), attestation=False):
             ['git', 'ls-tree', '-rz', '--name-only', 'HEAD']).split(b'\0'))
         entries = []
         for raw in sorted(paths):
-            if not raw or raw.startswith(b'.uncle/workflow/') or raw == b'FINAL_AUDIT.md':
+            if not raw or raw.startswith(b'.uncle/workflow/') or raw == b'.uncle/docs/FINAL_AUDIT.md':
                 continue
             name = os.fsdecode(raw)
             # The attestation names the tree it is committed into, so the
             # files carrying it are never part of the walk; they are appended
-            # under the `attestation` flag, like FINAL_AUDIT.md under `audit`.
+            # under the `attestation` flag, like .uncle/docs/FINAL_AUDIT.md under `audit`.
             if name in ATTESTATION_FILES:
                 continue
             if any(name.startswith(x) if x.endswith('/') else name == x for x in excludes):
@@ -485,7 +485,7 @@ def snapshot(audit=False, excludes=(), attestation=False):
             entries.append(mode.encode() + b' ' + oid.encode() + b'\t' + raw + b'\0')
         if audit:
             if AUDIT.is_symlink() or not AUDIT.is_file():
-                raise ValueError('FINAL_AUDIT.md must be a regular file.')
+                raise ValueError('.uncle/docs/FINAL_AUDIT.md must be a regular file.')
             oid = git('hash-object', '-w', '--no-filters', '--stdin', data=AUDIT.read_bytes())
             mode = b'100755' if AUDIT.stat().st_mode & 0o100 else b'100644'
             entries.append(mode + b' ' + oid.encode() + b'\tFINAL_AUDIT.md\0')

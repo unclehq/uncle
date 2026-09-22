@@ -6,9 +6,9 @@ import re
 
 def build(root, state, family):
     root, state = Path(root).resolve(), Path(state).resolve()
-    names = ['VERIFICATION_REPORT.md', 'MANUAL_CHECKLIST.md', 'TEST_REVIEW.md',
-             'DEFECTS.md', 'IMPLEMENTATION_NOTES.md',
-             'CHANGE_TEST_REPORT.md' if family == 'change' else 'AUTOMATED_TEST_REPORT.md',
+    names = ['.uncle/docs/VERIFICATION_REPORT.md', '.uncle/docs/MANUAL_CHECKLIST.md', '.uncle/docs/TEST_REVIEW.md',
+             '.uncle/docs/DEFECTS.md', '.uncle/docs/IMPLEMENTATION_NOTES.md',
+             '.uncle/docs/CHANGE_TEST_REPORT.md' if family == 'change' else '.uncle/docs/AUTOMATED_TEST_REPORT.md',
              '@green-check.commands', '@green-check.current.tsv', '@green-check.tsv',
              '@checklist-driver-checks/results.tsv', '@delivery-summary.tsv',
              '@verification.manifest', '@plan-executability/assessment.md', '@plan-recovery.json']

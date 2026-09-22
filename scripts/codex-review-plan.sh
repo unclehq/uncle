@@ -9,10 +9,10 @@ usage() {
     cat <<'EOF'
 Usage: codex-review-plan.sh [-h|--help]
 
-Run the reviewer CLI against the approved PROJECT_PLAN.md and write
-ADVERSARIAL_REVIEW.md (Stage 2 of the new-application workflow).
+Run the reviewer CLI against the approved .uncle/docs/PROJECT_PLAN.md and write
+.uncle/docs/ADVERSARIAL_REVIEW.md (Stage 2 of the new-application workflow).
 
-Takes no positional arguments. Requires REQUIREMENTS.md, PROJECT_PLAN.md, and
+Takes no positional arguments. Requires REQUIREMENTS.md, .uncle/docs/PROJECT_PLAN.md, and
 a matching approval record in .uncle/workflow/approvals/PROJECT_PLAN.sha256.
 Configuration is via WORKFLOW_* environment variables (see scripts/README.md).
 EOF
@@ -25,21 +25,21 @@ case "$#:${1:-}" in
 esac
 
 test -s REQUIREMENTS.md
-test -s PROJECT_PLAN.md
+test -s .uncle/docs/PROJECT_PLAN.md
 test -s .uncle/workflow/approvals/PROJECT_PLAN.sha256
 
 expected="$(cat .uncle/workflow/approvals/PROJECT_PLAN.sha256)"
 # shasum on macOS, sha256sum on Linux, openssl anywhere else.
 if command -v shasum > /dev/null 2>&1; then
-    actual="$(shasum -a 256 PROJECT_PLAN.md | awk '{print $1}')"
+    actual="$(shasum -a 256 .uncle/docs/PROJECT_PLAN.md | awk '{print $1}')"
 elif command -v sha256sum > /dev/null 2>&1; then
-    actual="$(sha256sum PROJECT_PLAN.md | awk '{print $1}')"
+    actual="$(sha256sum .uncle/docs/PROJECT_PLAN.md | awk '{print $1}')"
 else
-    actual="$(openssl dgst -sha256 PROJECT_PLAN.md | awk '{print $NF}')"
+    actual="$(openssl dgst -sha256 .uncle/docs/PROJECT_PLAN.md | awk '{print $NF}')"
 fi
 
 if [[ "$expected" != "$actual" ]]; then
-    echo "PROJECT_PLAN.md changed after approval."
+    echo ".uncle/docs/PROJECT_PLAN.md changed after approval."
     echo "Review and approve it again before continuing."
     exit 1
 fi
@@ -51,14 +51,14 @@ budget_prompt="$(document_budget_prompt adversarial-review)"
 "$REVIEWER_CMD" exec \
     --ephemeral \
     --sandbox read-only \
-    --output-last-message ADVERSARIAL_REVIEW.md \
+    --output-last-message .uncle/docs/ADVERSARIAL_REVIEW.md \
     "$(cat <<'PROMPT'
 Act as an independent adversarial principal engineer.
 
-Read REQUIREMENTS.md and PROJECT_PLAN.md.
+Read REQUIREMENTS.md and .uncle/docs/PROJECT_PLAN.md.
 
 Do not implement the project.
-Do not modify PROJECT_PLAN.md.
+Do not modify .uncle/docs/PROJECT_PLAN.md.
 Do not assume that compilation proves correctness.
 
 Create an adversarial review covering:
@@ -100,6 +100,6 @@ printf '%s\n' "$budget_prompt"
 
 LOG_DIR="$ROOT/.uncle/workflow/logs"
 mkdir -p "$LOG_DIR"
-finish_review_budget ADVERSARIAL_REVIEW.md "$REVIEWER_CMD" "" "" adversarial-review
-echo "Created ADVERSARIAL_REVIEW.md"
+finish_review_budget .uncle/docs/ADVERSARIAL_REVIEW.md "$REVIEWER_CMD" "" "" adversarial-review
+echo "Created .uncle/docs/ADVERSARIAL_REVIEW.md"
 echo "Workflow paused for human review."

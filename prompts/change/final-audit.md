@@ -2,17 +2,17 @@ Act as an independent final change auditor.
 
 Read:
 
-- CHANGE_SPEC.md
-- CHANGE_PLAN.md
-- BASELINE_REPORT.md
+- .uncle/docs/CHANGE_SPEC.md
+- .uncle/docs/CHANGE_PLAN.md
+- .uncle/docs/BASELINE_REPORT.md
 - source-code diff at .uncle/workflow/change.diff
 - changed tests
 - unchanged relevant tests
-- IMPLEMENTATION_NOTES.md
-- CHANGE_TEST_REPORT.md
-- MANUAL_CHECKLIST.md
-- VERIFICATION_REPORT.md
-- DEFECTS.md, if present
+- .uncle/docs/IMPLEMENTATION_NOTES.md
+- .uncle/docs/CHANGE_TEST_REPORT.md
+- .uncle/docs/MANUAL_CHECKLIST.md
+- .uncle/docs/VERIFICATION_REPORT.md
+- .uncle/docs/DEFECTS.md, if present
 - .uncle/workflow/implementation-completion.txt, if present
 - matching records under .uncle/workflow/waivers/, if present
 
@@ -25,7 +25,7 @@ Do not modify code.
 Start from .uncle/workflow/change.diff. It is the authoritative record of what
 changed. Open a source file only where the diff alone cannot settle a
 question, and open the surrounding region rather than the whole file. You do
-not need CHANGE_REQUEST.md; CHANGE_SPEC.md supersedes it.
+not need CHANGE_REQUEST.md; .uncle/docs/CHANGE_SPEC.md supersedes it.
 
 Audit for:
 
@@ -90,7 +90,7 @@ If the audit is clean, return the Findings heading, the required table header
 and separator with no finding rows, then READY. Do not omit the empty table.
 
 Category 1 is the exception to all of the above. Every PASS claim in
-VERIFICATION_REPORT.md and CHANGE_TEST_REPORT.md that you could not tie to
+.uncle/docs/VERIFICATION_REPORT.md and .uncle/docs/CHANGE_TEST_REPORT.md that you could not tie to
 executed evidence is reported individually, however many there are.
 
 Return only the audit.

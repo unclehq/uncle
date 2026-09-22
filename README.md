@@ -8,7 +8,7 @@
 
 </div>
 
-*Give Uncle an issue. Talk to it while it works. Get a verified pull request.**
+**Give Uncle an issue. Talk to it while it works. Get a verified pull request.**
 
 Uncle is a terminal-native supervisor and integrity layer for AI coding agents.
 

@@ -10,6 +10,36 @@ spec.loader.exec_module(module)
 
 
 class AcceptanceContext(unittest.TestCase):
+    def test_json_report_is_ingested_rendered_and_exported(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            report = root/'VERIFICATION_REPORT.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report', 'narrative': 'All checks ran.',
+                       'rows': [{'id': 'MC-1', 'required': True, 'status': 'PASS', 'evidence': 'ran ok'}]}
+            report.write_text(json.dumps(payload))
+            self.assertTrue(module.ingest_json(report, root))
+            text = report.read_text()
+            self.assertIn('## Acceptance gate', text)
+            self.assertIn('| MC-1 | YES | PASS | ran ok |', text)
+            self.assertIn('All checks ran.', text)
+            stored = json.loads((root/'.uncle/workflow/documents/VERIFICATION_REPORT.json').read_text())
+            self.assertEqual(stored['rows'][0]['id'], 'MC-1')
+
+    def test_json_report_rejects_wrong_schema(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            report = Path(d)/'VERIFICATION_REPORT.md'
+            report.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'final-audit'}))
+            with self.assertRaises(ValueError):
+                module.ingest_json(report, Path(d))
+
+    def test_non_json_report_is_not_ingested(self):
+        with tempfile.TemporaryDirectory() as d:
+            report = Path(d)/'VERIFICATION_REPORT.md'
+            report.write_text('## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n| MC-1 | YES | PASS | ok |\n')
+            self.assertFalse(module.ingest_json(report, Path(d)))
+
     def test_a_real_report_shape_is_relocated_and_remapped(self):
         # A real stuck run: the checklist agent wrote the true, complete
         # per-check table under "## Summary" using Check ID/Description/

@@ -2,6 +2,11 @@
 from pathlib import Path
 import re
 import sys
+
+# Loaded both as a normal script (sys.path[0] is this directory already) and
+# via importlib.util.spec_from_file_location (which does not add it), so the
+# sibling import below needs the directory on sys.path explicitly.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from checklist_groups import parse
 
 # A self-hosted reviewer twice wrote a checklist with real, complete content

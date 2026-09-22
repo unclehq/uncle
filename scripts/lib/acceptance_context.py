@@ -183,9 +183,46 @@ def normalize_acceptance_shape(text):
     return '\n'.join(lines) + ('\n' if text.endswith('\n') else '')
 
 
-def main(path):
+def ingest_json(path, project='.'):
+    """If the report is a structured JSON response, validate it, render the
+    canonical Acceptance gate table acceptance.sh already parses, and export
+    the JSON as the workflow's canonical artifact. Returns True when the
+    report was JSON (whether or not it validated -- ValueError propagates so
+    the caller reports the real defect instead of falling through to prose
+    normalization on what was never prose)."""
+    from pathlib import Path
+    import importlib.util
+    import json as _json
+    text = Path(path).read_text(encoding='utf-8')
+    stripped = text.strip()
+    if not stripped.startswith('{'):
+        return False
+    try:
+        payload = _json.loads(stripped)
+    except ValueError as error:
+        raise ValueError('Invalid acceptance-report JSON response: ' + str(error)) from error
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'acceptance-report':
+        raise ValueError('wrong acceptance-report JSON schema')
+    for row in payload.get('rows', []):
+        if not isinstance(row, dict) or 'id' not in row or 'required' not in row or 'status' not in row:
+            raise ValueError('invalid acceptance row: missing id, required, or status')
+    artifact = Path(__file__).with_name('artifact_json.py')
+    spec = importlib.util.spec_from_file_location('artifact_json', artifact)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    rendered = module.render_acceptance(payload)
+    Path(path).write_text(rendered, encoding='utf-8')
+    name = Path(path).stem + '.json'
+    target = Path(project) / '.uncle/workflow/documents' / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_json.dumps(dict(payload, schema='uncle.artifact/v1', kind='acceptance-report'), indent=2) + '\n')
+    return True
+
+
+def main(path, project='.'):
     from pathlib import Path
     p = Path(path)
+    if ingest_json(path, project):
+        return True
     text = p.read_text(encoding='utf-8')
     normalized = normalize_acceptance_shape(text)
     if normalized != text:

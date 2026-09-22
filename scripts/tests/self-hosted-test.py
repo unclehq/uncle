@@ -528,6 +528,23 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         self.assertEqual(len(rejected), 1)
         self.assertEqual(rejected[0].read_text(encoding='utf-8'), 'Done!')
 
+    def test_json_response_is_rendered_to_the_interpretation_document(self):
+        import self_hosted, json
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'requirements-interpretation',
+                   'sections': {name.lower().replace(' ', '_').replace('-', '_'): 'No additional interpretation.'
+                                for name in ('Required functionality', 'Optional functionality', 'Constraints',
+                                             'User-visible behaviors', 'System behaviors', 'Failure behaviors',
+                                             'Ambiguities', 'Assumptions', 'Explicit non-goals', 'Definition of done')}}
+        rendered = self_hosted.document_response(json.dumps(payload), '.uncle/docs/REQUIREMENTS_INTERPRETATION.md')
+        self.assertIn('## 1. Required functionality', rendered)
+        self.assertIn('## 10. Definition of done', rendered)
+
+    def test_json_response_missing_section_is_rejected(self):
+        import self_hosted, json
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'requirements-interpretation', 'sections': {}}
+        with self.assertRaises(ValueError):
+            self_hosted.document_response(json.dumps(payload), '.uncle/docs/REQUIREMENTS_INTERPRETATION.md')
+
     def values(self):
         return {'api_key':'test-secret','model':'local-model:Q4','base_url':'http://localhost:8123/v1'}
 

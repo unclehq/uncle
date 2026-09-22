@@ -95,9 +95,50 @@ def normalize_findings_shape(text):
     return '\n'.join(lines) + ('\n' if text.endswith('\n') else '')
 
 
-def validate(path):
+def export_json(payload, path, project='.'):
+    """Write the reviewer's structured verdict as the canonical artifact and
+    render the deterministic Markdown the rest of the driver still reads."""
+    import json
+    target = Path(project) / '.uncle/workflow/documents/FINAL_AUDIT.json'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(dict(payload, schema='uncle.artifact/v1', kind='final-audit'), indent=2) + '\n')
+    artifact = Path(__file__).with_name('artifact_json.py')
+    spec = importlib.util.spec_from_file_location('artifact_json', artifact)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    Path(path).write_text(module.render_final_audit(payload), encoding='utf-8')
+
+
+def validate(path, project='.'):
     path = Path(path)
     text = path.read_text(encoding='utf-8')
+    stripped = text.strip()
+    if stripped.startswith('{'):
+        # The reviewer returned the structured verdict directly: no prose or
+        # table shape to coerce, because there is no prose or table -- the
+        # normalize_findings_shape() heuristics below exist only to recover
+        # meaning from free text, and a JSON response was never free text.
+        import json as _json
+        try:
+            payload = _json.loads(stripped)
+        except ValueError as error:
+            raise ValueError('Invalid final-audit JSON response: ' + str(error)) from error
+        if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'final-audit':
+            raise ValueError('wrong final-audit JSON schema')
+        required = ('id', 'severity', 'evidence', 'required_correction', 'blocks')
+        for finding in payload.get('findings', []):
+            if not isinstance(finding, dict) or any(not finding.get(key) for key in required):
+                raise ValueError('invalid final-audit finding: missing a required field')
+            if finding['blocks'] not in ('YES', 'NO'):
+                raise ValueError('finding blocks must be YES or NO')
+        if payload.get('verdict') not in ('READY', 'READY WITH NON-BLOCKING ISSUES', 'NOT READY'):
+            raise ValueError('missing or invalid final-audit verdict')
+        blocking = [f for f in payload.get('findings', []) if f['blocks'] == 'YES']
+        if blocking and payload['verdict'] != 'NOT READY':
+            raise ValueError('Ready verdict contradicts blocking findings')
+        if not blocking and payload['verdict'] == 'NOT READY':
+            raise ValueError('NOT READY verdict requires at least one blocking finding')
+        export_json(payload, path, project)
+        return
     last = text.strip().splitlines()[-1].strip().strip('#*_ ')
     last = re.sub(r'^Conclusion:[ \t]*', '', last).strip('*_ ')
     # Normalize a complete prose audit before enforcing the machine verdict.

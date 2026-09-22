@@ -21,6 +21,7 @@ it carries at least one heading or one table row. Judging content is the job of
 the stage validators, which know what each document must contain. This only
 separates "a document" from "a sentence about a document".
 """
+import json
 import re
 import sys
 
@@ -29,7 +30,19 @@ _TABLE_ROW = re.compile(r'^\s*\|.*\|', re.M)
 
 
 def looks_like_document(text):
-    return bool(_HEADING.search(text) or _TABLE_ROW.search(text))
+    if _HEADING.search(text) or _TABLE_ROW.search(text):
+        return True
+    # A structured artifact response (Issue: JSON-first agent output):
+    # the reviewer's whole reply is one JSON object naming its own schema,
+    # never a heading or a table row.
+    stripped = text.strip()
+    if stripped.startswith('{') and stripped.endswith('}'):
+        try:
+            payload = json.loads(stripped)
+        except ValueError:
+            return False
+        return isinstance(payload, dict) and payload.get('schema') == 'uncle.artifact/v1'
+    return False
 
 
 def check(text, runner='reviewer'):

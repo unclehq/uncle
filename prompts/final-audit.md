@@ -87,7 +87,9 @@ End with one conclusion:
 - READY WITH NON-BLOCKING ISSUES
 - NOT READY
 
-Return only the audit.
+Return only one JSON object matching this contract; do not return Markdown:
+`{"schema":"uncle.artifact/v1","kind":"final-audit","findings":[{"id":"FA-1","severity":"...","evidence":"...","affected_requirement":"...","required_correction":"...","blocks":"YES"}],"verdict":"READY"}`.
+`findings` is `[]` for a clean audit. `blocks` is exactly `YES` or `NO`. `verdict` is exactly one of `READY`, `READY WITH NON-BLOCKING ISSUES`, `NOT READY`.
 
 Read .uncle/workflow/plan-executability/assessment.md, plan-recovery.json and
  delivery-summary.tsv under .uncle/workflow when present. Compare archived evidence

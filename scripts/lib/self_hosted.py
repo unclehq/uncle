@@ -1,4 +1,5 @@
 """OpenCode-backed self-hosted runner and private endpoint configuration."""
+import importlib.util
 import json
 from contextlib import contextmanager
 import os
@@ -561,20 +562,20 @@ def reviewer_document(response):
 
 def document_response(response, artifact):
     text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
-    if artifact == 'ADVERSARIAL_REVIEW.md' and text.startswith('{'):
+    if Path(artifact).name == 'REQUIREMENTS_INTERPRETATION.md' and text.startswith('{'):
         try:
             payload = json.loads(text)
-            if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'adversarial-review':
-                raise ValueError('wrong adversarial-review JSON schema')
-            rows = []
-            for finding in payload.get('findings', []):
-                rows += [f"## {finding['id']}: {finding['title']}", '',
-                         f"- Severity: {finding['severity']}", f"- References: {finding['references']}",
-                         f"- Failure: {finding['failure']}", f"- Fix: {finding['fix']}", f"- Verify: {finding['verify']}", '']
-            rows += ['## Overall assessment', '', payload['overall_assessment']]
-            return '\n'.join(rows) + '\n'
-        except (json.JSONDecodeError, KeyError, TypeError) as error:
-            raise ValueError('Invalid adversarial-review JSON response; original preserved') from error
+        except json.JSONDecodeError as error:
+            raise ValueError('Invalid requirements-interpretation JSON response; original preserved') from error
+        if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'requirements-interpretation':
+            raise ValueError('wrong requirements-interpretation JSON schema')
+        try:
+            artifact_json = Path(__file__).with_name('artifact_json.py')
+            spec = importlib.util.spec_from_file_location('artifact_json', artifact_json)
+            module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+            return module.render_requirements(payload) + '\n'
+        except KeyError as error:
+            raise ValueError('Requirements-interpretation JSON missing a required section: %s' % error) from error
     if any(marker in text for marker in ('<<<<<<< SEARCH', '>>>>>>> REPLACE')):
         raise ValueError('Expected Markdown, received edit instructions; original preserved')
     lines = text.splitlines()
@@ -643,7 +644,13 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         if candidate.exists():
             candidate.unlink()
         if artifact == '.uncle/docs/REQUIREMENTS_INTERPRETATION.md':
-            request = prompt + '\nWrite the complete .uncle/docs/REQUIREMENTS_INTERPRETATION.md using your file tools, starting with its # heading and including ## 10. Definition of done. If returning the document instead, return complete Markdown, not tool-call markup.'
+            request = (prompt + '\nReturn only one JSON object matching this contract as your final message; '
+                       'do not use file tools and do not return Markdown:\n'
+                       '`{"schema":"uncle.artifact/v1","kind":"requirements-interpretation","sections":'
+                       '{"required_functionality":"...","optional_functionality":"...","constraints":"...",'
+                       '"user_visible_behaviors":"...","system_behaviors":"...","failure_behaviors":"...",'
+                       '"ambiguities":"...","assumptions":"...","explicit_non_goals":"...","definition_of_done":"..."}}`.\n'
+                       'Every section is a required, nonempty string; use the exact keys above.')
             turns = 0
             for attempt in range(2):
                 attempt_usage = {}

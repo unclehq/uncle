@@ -10,6 +10,54 @@ spec.loader.exec_module(module)
 HEADER = '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n'
 
 class Audit(unittest.TestCase):
+    def test_json_response_is_validated_exported_and_rendered(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            p = root/'audit.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'final-audit',
+                       'findings': [{'id': 'FA-1', 'severity': 'blocking', 'evidence': 'x', 'blocks': 'YES',
+                                     'affected_requirement': 'AC-1', 'required_correction': 'fix it'}],
+                       'verdict': 'NOT READY'}
+            p.write_text(json.dumps(payload))
+            module.validate(p, root)
+            text = p.read_text()
+            self.assertIn('FA-1', text)
+            self.assertIn('AC-1', text)
+            self.assertTrue(text.rstrip().endswith('NOT READY'))
+            stored = json.loads((root/'.uncle/workflow/documents/FINAL_AUDIT.json').read_text())
+            self.assertEqual(stored['findings'][0]['id'], 'FA-1')
+
+    def test_json_response_clean_audit_is_ready(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            p = root/'audit.md'
+            p.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'final-audit', 'findings': [], 'verdict': 'READY'}))
+            module.validate(p, root)
+            self.assertTrue(p.read_text().rstrip().endswith('READY'))
+            self.assertNotIn('NOT READY', p.read_text().rstrip().splitlines()[-1])
+
+    def test_json_response_rejects_ready_with_blocking_finding(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            p = root/'audit.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'final-audit',
+                       'findings': [{'id': 'FA-1', 'severity': 'blocking', 'evidence': 'x', 'blocks': 'YES',
+                                     'required_correction': 'fix it'}], 'verdict': 'READY'}
+            p.write_text(json.dumps(payload))
+            with self.assertRaises(ValueError):
+                module.validate(p, root)
+
+    def test_json_response_wrong_schema_is_rejected(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/'audit.md'
+            p.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review'}))
+            with self.assertRaises(ValueError):
+                module.validate(p, Path(d))
+
     def test_unparseable_response_becomes_a_valid_blocking_audit(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d)/'audit.md'

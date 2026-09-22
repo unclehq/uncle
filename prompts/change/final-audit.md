@@ -93,7 +93,9 @@ Category 1 is the exception to all of the above. Every PASS claim in
 .uncle/docs/VERIFICATION_REPORT.md and .uncle/docs/CHANGE_TEST_REPORT.md that you could not tie to
 executed evidence is reported individually, however many there are.
 
-Return only the audit.
+Return only one JSON object matching this contract; do not return Markdown:
+`{"schema":"uncle.artifact/v1","kind":"final-audit","findings":[{"id":"FA-1","severity":"...","evidence":"...","affected_requirement":"...","required_correction":"...","blocks":"YES"}],"verdict":"READY"}`.
+`findings` is `[]` for a clean audit. `blocks` is exactly `YES` or `NO`. `verdict` is exactly one of `READY`, `READY WITH NON-BLOCKING ISSUES`, `NOT READY`.
 
 Read .uncle/workflow/plan-executability/assessment.md, plan-recovery.json and
  delivery-summary.tsv under .uncle/workflow when present. Compare archived evidence

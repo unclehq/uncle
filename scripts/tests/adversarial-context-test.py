@@ -11,6 +11,36 @@ CLEAN='## Overall assessment\nNo findings.\n'
 FINDING='## AR-001: Missing behavior\n- Severity: High\n- References: REQ-1\n- Failure: Missing output\n- Fix: Add output\n- Verify: Assert output\n'+CLEAN.replace('No findings.','Revision required.')
 
 class Review(unittest.TestCase):
+    def test_direct_json_response_is_validated_exported_and_rendered(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            review = root/'ADVERSARIAL_REVIEW.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review',
+                       'findings': [{'id': 'AR-001', 'title': 'Missing behavior', 'severity': 'High',
+                                     'references': 'REQ-1', 'failure': 'Missing output', 'fix': 'Add output',
+                                     'verify': 'Assert output'}],
+                       'overall_assessment': 'Revision required.'}
+            review.write_text(json.dumps(payload))
+            module.validate(review, root)
+            text = review.read_text()
+            self.assertIn('AR-001: Missing behavior', text)
+            self.assertIn('Revision required.', text)
+            stored = json.loads((root/'.uncle/workflow/documents/ADVERSARIAL_REVIEW.json').read_text())
+            self.assertEqual(stored['findings'][0]['id'], 'AR-001')
+
+    def test_direct_json_response_rejects_missing_field(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            review = Path(d)/'ADVERSARIAL_REVIEW.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review',
+                       'findings': [{'id': 'AR-001', 'title': 'x', 'severity': 'High', 'references': 'REQ-1',
+                                     'failure': '', 'fix': 'y', 'verify': 'z'}],
+                       'overall_assessment': 'Revision required.'}
+            review.write_text(json.dumps(payload))
+            with self.assertRaises(ValueError):
+                module.validate(review, Path(d))
+
     def test_json_export_and_render_round_trip(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); docs=root/'.uncle/docs'; docs.mkdir(parents=True)

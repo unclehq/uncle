@@ -44,6 +44,58 @@ def render_requirements(payload):
         rows += [f'## {index}. {name}', '', sections[key].strip(), '']
     return '\n'.join(rows)
 
+def render_final_audit(payload):
+    findings = payload.get('findings', [])
+    rows = ['## Findings', '']
+    if findings:
+        rows += ['| ID | Severity | Evidence | Affected requirement | Required correction | Blocks |',
+                  '|---|---|---|---|---|---|']
+        esc = lambda value: str(value).replace('|', r'\|').replace('\n', ' ')
+        for finding in findings:
+            rows.append('| %s | %s | %s | %s | %s | %s |' % (
+                finding['id'], finding['severity'], esc(finding['evidence']),
+                finding.get('affected_requirement', 'Not stated'), esc(finding['required_correction']),
+                finding['blocks']))
+        rows.append('')
+    verdict = payload['verdict']
+    if verdict not in ('READY', 'READY WITH NON-BLOCKING ISSUES', 'NOT READY'):
+        raise ValueError('invalid final-audit verdict: ' + repr(verdict))
+    rows.append(verdict)
+    return '\n'.join(rows) + '\n'
+
+def parse_final_audit_response(text):
+    payload = json.loads(text)
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'final-audit':
+        raise ValueError('wrong final-audit JSON schema')
+    return payload
+
+ACCEPTANCE_STATUSES = ('PASS', 'FAIL', 'BLOCKED-SETUP', 'BLOCKED-HUMAN', 'BLOCKED-IMPOSSIBLE', 'NOT RUN', 'N/A')
+
+def render_acceptance(payload):
+    rows = payload['rows']
+    if not rows:
+        raise ValueError('acceptance report has no rows')
+    seen = set()
+    lines = []
+    narrative = payload.get('narrative')
+    if narrative:
+        lines += [narrative.strip(), '']
+    lines += ['## Acceptance gate', '', '| ID | Required | Status | Evidence |', '|---|---|---|---|']
+    for row in rows:
+        identifier = row['id']
+        if identifier in seen:
+            raise ValueError('duplicate acceptance row id: ' + identifier)
+        seen.add(identifier)
+        status = row['status']
+        if status not in ACCEPTANCE_STATUSES:
+            raise ValueError('invalid acceptance status: ' + repr(status))
+        if not row.get('evidence'):
+            raise ValueError(identifier + ' has empty evidence')
+        required = 'YES' if row['required'] else 'NO'
+        evidence = str(row['evidence']).replace('|', r'\|').replace('\n', ' ')
+        lines.append('| %s | %s | %s | %s |' % (identifier, required, status, evidence))
+    return '\n'.join(lines) + '\n'
+
 def render_checklist(payload):
     out = ['# Manual checklist', '']
     for check in payload['checks']:

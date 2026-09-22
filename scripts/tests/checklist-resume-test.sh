@@ -24,6 +24,7 @@ for fn in get_state set_state require_file     acceptance_setup_pause acceptance
     eval "$(awk -v start="^${fn}\\(\\)" '$0 ~ start {active=1} active {print} active && /^}$/ {exit}' "$ROOT/scripts/stagegate.sh")"
 done
 supervision_validation_failed() { :; }
+preserve_requirements_source() { :; }
 verify_implementation_review() { echo approval >> calls; }
 verify_approval() { :; }
 ensure_repair_capacity() { :; }

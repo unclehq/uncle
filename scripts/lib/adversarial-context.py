@@ -19,8 +19,34 @@ FIELD_SYNONYMS = {
 }
 
 
-def validate(path):
+def validate(path, project='.'):
     text = Path(path).read_text(encoding='utf-8')
+    stripped = text.strip()
+    if stripped.startswith('{'):
+        # The reviewer returned its structured findings directly. Every
+        # regex-based table/heading check below exists to recover meaning
+        # from prose; a JSON response was never prose, so validate its
+        # schema instead and render the deterministic Markdown other stages
+        # (and humans in the PR) still read.
+        try:
+            payload = json.loads(stripped)
+        except ValueError as error:
+            raise ValueError('Invalid adversarial-review JSON response: ' + str(error)) from error
+        if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'adversarial-review':
+            raise ValueError('wrong adversarial-review JSON schema')
+        required = ('id', 'title', 'severity', 'references', 'failure', 'fix', 'verify')
+        for finding in payload.get('findings', []):
+            if not isinstance(finding, dict) or any(not finding.get(key) for key in required):
+                raise ValueError('invalid adversarial finding: missing a required field')
+        if not isinstance(payload.get('overall_assessment'), str) or not payload['overall_assessment'].strip():
+            raise ValueError('missing nonempty overall_assessment')
+        artifact = Path(__file__).with_name('artifact_json.py')
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('artifact_json', artifact)
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        module.write(project, 'ADVERSARIAL_REVIEW.md', dict(payload, schema='uncle.artifact/v1', kind='adversarial-review'))
+        Path(path).write_text(module.render_adversarial(payload), encoding='utf-8')
+        return
     matches = list(re.finditer(r'^##[ \t]+(AR-[A-Za-z0-9]+)(?:[ \t]+\([^\n)]+\))?[ \t]*(?::|—|–|-)[ \t]+\S[^\n]*$', text, re.M))
     seen = set()
     for index, match in enumerate(matches):
@@ -48,11 +74,11 @@ def validate(path):
         raise ValueError('Malformed finding heading; use ## AR-001: Title')
     if not matches and not re.search(r'\bno findings\b', text, re.I):
         raise ValueError('Clean review must explicitly state No findings')
+    _export(text, project)
 
 
-def export_json(path, project='.'):
-    """Capture validated review fields as the workflow's structured artifact."""
-    text = Path(path).read_text(encoding='utf-8'); validate(path)
+def _export(text, project='.'):
+    """Capture already-validated review fields as the workflow's structured artifact."""
     findings = []
     matches = list(re.finditer(r'^##[ \t]+(AR-[A-Za-z0-9]+)[ \t]*(?::|—|–|-)[ \t]+(.+)$', text, re.M))
     for index, match in enumerate(matches):
@@ -67,6 +93,11 @@ def export_json(path, project='.'):
         raise ValueError('Missing nonempty Overall assessment section')
     target = Path(project) / '.uncle/workflow/documents/ADVERSARIAL_REVIEW.json'; target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({'schema':'uncle.artifact/v1','kind':'adversarial-review','findings':findings,'overall_assessment':assessment.group(1).strip()}, indent=2) + '\n')
+
+
+def export_json(path, project='.'):
+    """Validate a review, which captures its fields into the canonical JSON artifact as a side effect."""
+    validate(path, project)
 
 
 def render_json(project='.', destination='.uncle/docs/ADVERSARIAL_REVIEW.md'):
@@ -127,7 +158,7 @@ if __name__ == '__main__':
         raise SystemExit(0)
     if sys.argv[1] == '--validate':
         try:
-            validate(sys.argv[2])
+            validate(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else '.')
         except (OSError, ValueError) as error:
             print(f'Review format invalid: {error}. Correct the saved review and resume; investigation will not rerun.', file=sys.stderr)
             raise SystemExit(1)

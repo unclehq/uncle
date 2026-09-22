@@ -22,6 +22,48 @@ def normalize_findings_shape(text):
     reports the real problem).
     """
     lines = text.splitlines()
+    # Self-hosted reviewers commonly return complete F-identified prose
+    # findings instead of the table the driver consumes.  This is structured
+    # enough to render deterministically: retain every stated field, escape
+    # table separators, and never manufacture a finding, correction or block.
+    prose = []
+    current = None
+    for line in lines:
+        found = re.match(r'^###\s+(F[0-9]+)\s*:\s*(.+)$', line)
+        if found:
+            if current: prose.append(current)
+            current = {'id': found.group(1), 'title': found.group(2), 'evidence': '', 'correction': '', 'blocks': ''}
+            continue
+        if current:
+            field = re.match(r'^-\s+\*\*(Evidence|Correction|Blocks)\*\*:\s*(.*)$', line, re.I)
+            if field:
+                key = {'evidence': 'evidence', 'correction': 'correction', 'blocks': 'blocks'}[field.group(1).lower()]
+                value = field.group(2).strip()
+                # `Blocks: YES — reason` is a common prose spelling. The
+                # machine column receives only YES/NO; retain the reason in
+                # evidence so no audit information is lost.
+                if key == 'blocks':
+                    marker = re.match(r'^(YES|NO)\b\s*(?:—|-)?\s*(.*)$', value, re.I)
+                    if marker:
+                        current[key] = marker.group(1).upper()
+                        if marker.group(2):
+                            current['evidence'] += (' ' if current['evidence'] else '') + 'Blocks rationale: ' + marker.group(2)
+                    else:
+                        current[key] = value
+                else:
+                    current[key] = value
+    if current: prose.append(current)
+    if prose and all(item['evidence'] and item['correction'] and item['blocks'].upper() in ('YES', 'NO') for item in prose):
+        verdict = re.search(r'^(?:NOT READY|READY WITH NON-BLOCKING ISSUES|READY)\b', text.strip().splitlines()[-1].strip(), re.I)
+        if verdict:
+            esc = lambda value: value.replace('|', r'\|').replace('\n', ' ')
+            table = ['## Findings', '', '| ID | Severity | Evidence | Affected requirement | Required correction | Blocks |',
+                     '|---|---|---|---|---|---|']
+            for item in prose:
+                table.append('| %s | %s | %s | %s | %s | %s |' %
+                             (item['id'], 'Unspecified', esc(item['evidence']), 'Not stated',
+                              esc(item['correction']), item['blocks'].upper()))
+            return '\n'.join(table + ['', verdict.group(0).upper()]) + '\n'
     table_start = None
     for i in range(len(lines) - 1):
         line = lines[i].strip()
@@ -58,6 +100,13 @@ def validate(path):
     text = path.read_text(encoding='utf-8')
     last = text.strip().splitlines()[-1].strip().strip('#*_ ')
     last = re.sub(r'^Conclusion:[ \t]*', '', last).strip('*_ ')
+    # Normalize a complete prose audit before enforcing the machine verdict.
+    # This is driver-owned rendering, not a second model request.
+    if last not in ('READY', 'READY WITH NON-BLOCKING ISSUES', 'NOT READY'):
+        rendered = normalize_findings_shape(text)
+        if rendered != text:
+            text = rendered
+            last = text.strip().splitlines()[-1].strip()
     if last not in ('READY', 'READY WITH NON-BLOCKING ISSUES', 'NOT READY'):
         raise ValueError('Missing final audit verdict')
     spec = importlib.util.spec_from_file_location('audit_findings', Path(__file__).with_name('audit-findings.py'))
@@ -77,8 +126,21 @@ def validate(path):
         # this validation just accepted, exactly like the manual repair this
         # replaces.
         path.write_text(normalized, encoding='utf-8')
+    else:
+        if text != path.read_text(encoding='utf-8'):
+            path.write_text(text, encoding='utf-8')
     if blockers and last != 'NOT READY':
         raise ValueError('Ready verdict contradicts blocking findings')
+
+
+def fallback(path, reason='reviewer response could not be parsed'):
+    """Persist an unparseable reviewer response as a safe blocking audit."""
+    Path(path).write_text(
+        '# Final audit\n\n## Findings\n\n'
+        '| ID | Severity | Evidence | Affected requirement | Required correction | Blocks |\n'
+        '|---|---|---|---|---|---|\n'
+        f'| AUDIT-FORMAT | Blocking | {reason.replace("|", "/")} | Audit artifact | Produce a complete audit with observed findings and a supported verdict. | YES |\n\n'
+        'NOT READY\n', encoding='utf-8')
 
 
 def render(project, state):
@@ -112,6 +174,9 @@ def render(project, state):
 
 
 if __name__ == '__main__':
+    if sys.argv[1] == '--fallback':
+        fallback(sys.argv[2], ' '.join(sys.argv[3:]) or 'reviewer response could not be parsed')
+        raise SystemExit(0)
     if sys.argv[1] == '--validate':
         try:
             validate(sys.argv[2])

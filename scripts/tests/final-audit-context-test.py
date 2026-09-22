@@ -10,6 +10,14 @@ spec.loader.exec_module(module)
 HEADER = '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n'
 
 class Audit(unittest.TestCase):
+    def test_unparseable_response_becomes_a_valid_blocking_audit(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/'audit.md'
+            module.fallback(p, 'missing verdict')
+            module.validate(p)
+            self.assertIn('AUDIT-FORMAT', p.read_text())
+            self.assertTrue(p.read_text().endswith('NOT READY\n'))
+
     def test_formats(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d)/'audit.md'
@@ -93,6 +101,15 @@ class Audit(unittest.TestCase):
                 module.validate(p)
             self.assertEqual(p.read_text(), '# Final audit\n\nJust prose, no table at all.\n\nNOT READY\n')
 
+    def test_complete_prose_findings_are_rendered_without_a_model_retry(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/'audit.md'
+            p.write_text('## Findings\n\n### F1: stale diff\n- **Evidence**: diff is stale\n- **Correction**: regenerate it\n- **Blocks**: YES — evidence is unreliable\n\n## Verdict\n\nNOT READY — stale evidence\n')
+            module.validate(p)
+            fixed = p.read_text()
+            self.assertIn('| F1 | Unspecified | diff is stale Blocks rationale: evidence is unreliable |', fixed)
+            self.assertTrue(fixed.rstrip().endswith('NOT READY'))
+
     @unittest.skipUnless(shutil.which('bash'), 'Bash required')
     def test_saved_validation_does_not_invoke_reviewer(self):
         root = Path(__file__).resolve().parents[2]
@@ -110,8 +127,10 @@ class Audit(unittest.TestCase):
                 audit.write_text('malformed')
                 for _ in range(2):
                     result = subprocess.run(['bash', '-c', harness], cwd=d, capture_output=True)
-                    self.assertEqual(result.returncode, 1)
-                    self.assertFalse((path/'state').exists())
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    # A malformed saved audit is rendered as a blocking
+                    # driver-owned audit; validation never invokes a model.
+                    self.assertNotIn(b'run_codex', result.stderr)
                 audit.write_text(HEADER+'\nREADY\n')
                 result = subprocess.run(['bash', '-c', harness], cwd=d, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr)

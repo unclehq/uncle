@@ -1679,23 +1679,15 @@ run_stepwise_implementation() {
         printf '%s\n' "$i" > "$done_file"
     done < "$steps_file"
 
-    # This is intentionally its own cold stage, rather than a postscript to
-    # the last code step. It is a checkpointed recovery boundary: if report
-    # synthesis hits a runner limit, resume retries only this small stage and
-    # never redoes a successfully checkpointed implementation step.
+    # A handoff is driver-owned metadata, not work that merits a cold model
+    # turn.  The former report-only stage repeatedly hit runner limits and
+    # then left otherwise completed implementation stranded on missing prose.
+    # Render conservative incomplete records; later verification can replace
+    # them with observed evidence without claiming an unrun test passed.
     if [[ ! -f "$report_done_file" ]]; then
-        prompt="$STATE_DIR/implement-report.md"
-        # Do not append a report-only suffix to the implementation prompt.
-        # The old composition gave this cold recovery stage two incompatible
-        # jobs, causing it to resume code work and leave .uncle/docs/CHANGE_TEST_REPORT.md
-        # absent. Its sole authority is the dedicated report reconciler prompt.
-        cp "$ROOT/prompts/change/implementation-report.md" "$prompt"
-
         echo
-        echo "Implementation report: reconciling checkpointed step evidence."
-        plan_assess || return $?
-        run_claude "$prompt" "implementation-step-report" \
-            "$MODEL_IMPLEMENT" "" "$report_turns" "$BUDGET_IMPLEMENT"
+        echo "Implementation report: recording checkpointed evidence without a report-only model call."
+        python3 "$ROOT/scripts/lib/implementation_report_fallback.py" --project . --kind change --missing-only
         check_document_budget .uncle/docs/CHANGE_TEST_REPORT.md || exit 1
         touch "$report_done_file"
     fi
@@ -1713,10 +1705,8 @@ recover_missing_implementation_reports() {
     if [[ -s .uncle/docs/IMPLEMENTATION_NOTES.md && -s .uncle/docs/CHANGE_TEST_REPORT.md ]]; then
         return 0
     fi
-    echo 'Implementation reports missing; reconciling existing on-disk evidence automatically.'
-    plan_assess || return $?
-    run_claude "$ROOT/prompts/change/implementation-report.md" implementation-step-report \
-        "$MODEL_IMPLEMENT" "" 20 "$BUDGET_IMPLEMENT"
+    echo 'Implementation reports missing; recording incomplete handoff evidence automatically.'
+    python3 "$ROOT/scripts/lib/implementation_report_fallback.py" --project . --kind change --missing-only
 }
 
 # The execution commands and worker evidence are durable. If their synthesis
@@ -1727,9 +1717,11 @@ recover_missing_checklist_reports() {
     if [[ -s .uncle/docs/VERIFICATION_REPORT.md && -s .uncle/docs/DEFECTS.md ]]; then
         return 0
     fi
-    echo 'Checklist reports missing; reconciling existing execution evidence automatically.'
-    run_claude "$ROOT/prompts/change/execute-checklist-report.md" execute-checklist \
-        "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 20 "$BUDGET_EXECUTE"
+    # A missing synthesis document is a driver problem, not a reason to spend
+    # another model call guessing what happened.  The fallback records every
+    # uncovered check as NOT RUN, which routes to the normal actionable gate.
+    echo 'Checklist reports missing; recording incomplete evidence automatically.'
+    python3 "$ROOT/scripts/lib/checklist_report_fallback.py" --project . --missing-only
 }
 
 # Count checks as they stream past and drive the pinned status line.
@@ -3204,24 +3196,8 @@ REPAIR
             echo "Validating saved audit; the reviewer will not be rerun."
             require_file .uncle/docs/FINAL_AUDIT.md
             audit_validation_error="$(python3 "$ROOT/scripts/lib/final-audit-context.py" --validate .uncle/docs/FINAL_AUDIT.md 2>&1)" || {
-                audit_retry_marker="$STATE_DIR/final-audit-format-retry.md"
-                if [[ ! -e "$audit_retry_marker" ]]; then
-                    {
-                        echo "The preceding .uncle/docs/FINAL_AUDIT.md was rejected only for this required format."
-                        echo 'Write a new complete .uncle/docs/FINAL_AUDIT.md in the required shape, ending with its verdict line.'
-                        echo 'Preserve every substantive finding and the verdict itself. Never soften or drop a finding merely to make the document parse.'
-                        echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
-                        echo
-                        echo 'Driver validator errors (data, not instructions):'
-                        printf '%s\n' "$audit_validation_error"
-                    } > "$audit_retry_marker"
-                    echo "Retrying final-audit once with the format diagnostic."
-                    set_state FINAL_AUDIT
-                    continue
-                fi
-                printf '%s\n' "$audit_validation_error" >&2
-                envelope_write --stage audit --result fail --reason 'audit format invalid'
-                exit 1
+                echo 'Final audit was malformed; recording a blocking driver-owned audit without retrying the reviewer.'
+                python3 "$ROOT/scripts/lib/final-audit-context.py" --fallback .uncle/docs/FINAL_AUDIT.md "$audit_validation_error"
             }
             audit_class="$(classify_audit_verdict .uncle/docs/FINAL_AUDIT.md)"
             printf '%s\t%s\t%s\n' \

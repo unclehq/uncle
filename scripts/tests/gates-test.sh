@@ -1050,10 +1050,8 @@ if [[ "$(grep -c '^x$' "$REPO/.uncle/workflow/execute-checklist-calls")" != 2 ]]
 fi
 
 # A real stuck run: execute-checklist reported success but wrote neither
-# required report at all (a conversational summary asking for guidance
-# instead). Resuming VALIDATE_CHECKLIST alone can never fix this -- it only
-# checks what execute-checklist already produced -- so it must retry the
-# stage itself once before stopping for a human.
+# required report at all.  The driver renders an explicit NOT RUN report from
+# the checklist rather than paying for another model turn to guess at results.
 new_stagegate_case sg-verification-report-missing-entirely
 stagegate_agent
 set_state IMPLEMENT
@@ -1061,12 +1059,11 @@ run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION=NO_REPORT
 expect_status 1
 expect_state VALIDATE_CHECKLIST
 expect_no_file .uncle/docs/FINAL_AUDIT.md
-expect_file .uncle/workflow/execute-checklist-format-retry.md
-expect_in_file .uncle/workflow/execute-checklist-format-retry.md 'is not a substitute'
-expect_in_file .uncle/workflow/received-execute-checklist-prompt.md 'Required format retry'
+expect_in_file .uncle/docs/VERIFICATION_REPORT.md '| MC-1 | YES | NOT RUN |'
+expect_in_file .uncle/docs/DEFECTS.md 'CHECKLIST-EVIDENCE-MISSING'
 COUNT=$((COUNT + 1))
-if [[ "$(grep -c '^x$' "$REPO/.uncle/workflow/execute-checklist-calls")" != 2 ]]; then
-    fail 'a missing verification report must receive exactly one format retry'
+if [[ "$(grep -c '^x$' "$REPO/.uncle/workflow/execute-checklist-calls")" != 1 ]]; then
+    fail 'a missing verification report must not receive a model retry'
 fi
 
 # Repair goes back through the human diff gate, preserving the original file

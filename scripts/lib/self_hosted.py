@@ -250,7 +250,7 @@ class OutputTruncated(ValueError):
 
 
 def output_token_limit(stage=''):
-    """Configured output cap, with room for implementation reasoning.
+    """Configured output cap, reserving only protocol headroom by default.
 
     OpenCode counts reasoning inside its output limit. An implementation or
     checklist-execution agent can complete edits/tests and reports yet overflow
@@ -259,12 +259,10 @@ def output_token_limit(stage=''):
     every specialist packet from the review panel and writes the whole
     canonical checklist in one response. An updated plan is the same shape
     again: it must address or explicitly reject every adversarial finding
-    (disposition rows for every F-/OW-/SCOPE-/V-/AR- id) while preserving the
-    full plan, in one response, over a 16K retry cap once truncated once
-    already. Keep review and short document defaults compact, but give
-    long-running code, repair, checklist-writing/execution, and updated-plan
-    synthesis stages a 32K first attempt; an explicit operator setting
-    always wins.
+    while preserving the full plan. An 8K cap for "short" stages merely
+    causes a whole failed request when the provider includes reasoning in the
+    output total. Start every stage with the largest safe output budget; an
+    explicit operator setting still wins.
     """
     # Dynamic workers inherit the parent stage's size class as well as its
     # configured model. This keeps every self-hosted worker consistent with
@@ -276,10 +274,7 @@ def output_token_limit(stage=''):
     configured = os.environ.get(OUTPUT_TOKENS_ENV)
     if configured:
         return int(configured)
-    return 32768 if stage in ('implementation', 'repair', 'execute-checklist',
-                               'manual-checklist', 'manual-checklist-base', 'manual-checklist-delta',
-                               'updated-plan', 'updated-change-plan') \
-        or stage.startswith('implementation-step-') else 8192
+    return max(1, min(64512, context_token_limit() - 1024))
 
 
 def context_token_limit():
@@ -595,6 +590,14 @@ def validate_requirements(text):
 
 
 def run_opencode(side, values, prompt, root, stage=None, usage=None):
+    # The normal OpenCode CLI has no observer attached while it runs.  Supply
+    # validated reads from earlier stages up front, then ingest its canonical
+    # JSON tool events below for the next stage.  Live sessions already do
+    # this through native_stage, so never append the packet twice.
+    from read_cache import ReadCache
+    read_cache = ReadCache(root)
+    if os.environ.get('UNCLE_STEERING') != '1':
+        prompt += read_cache.context(prompt)
     stage_name = stage or os.environ.get('UNCLE_STATUS_STAGE', '')
     artifact = PLAN_ARTIFACTS.get(stage_name) if side == 'agent' else None
     # `requirements-plan.md` deliberately shares the project-plan invocation
@@ -607,7 +610,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
     if stage_name == 'project-plan' and 'You perform two consecutive roles in a single pass' in prompt:
         artifact = PLAN_ARTIFACTS['requirements']
     if not artifact:
-        return _run_opencode(side, values, prompt, root, usage=usage)
+        return _run_opencode(side, values, prompt, root, usage=usage, read_cache=read_cache)
     target = root / artifact
     if target.is_symlink():
         raise ValueError('Refusing to replace a symlinked plan')
@@ -631,7 +634,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
             for attempt in range(2):
                 attempt_usage = {}
                 try:
-                    response, count = _run_opencode('agent', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage)
+                    response, count = _run_opencode('agent', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage, read_cache=read_cache)
                     turns += count
                 finally:
                     if usage is not None:
@@ -665,7 +668,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
             for attempt in range(2):
                 attempt_usage = {}
                 try:
-                    response, count = _run_opencode(side, values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage)
+                    response, count = _run_opencode(side, values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage, read_cache=read_cache)
                     turns += count
                 finally:
                     if usage is not None:
@@ -713,7 +716,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         return response, turns
 
 
-def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diagnostic_root=None, usage_baseline=None):
+def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diagnostic_root=None, usage_baseline=None, read_cache=None):
     from process_tree import start_check, launch_command, kill_tree, finish_check
     seconds = int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600'))
     if seconds < 1:
@@ -782,6 +785,9 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
                 # Do not expose CLI diagnostics that may contain inherited secrets.
                 raise ValueError(f'OpenCode exited with status {status}; check its installation and endpoint configuration')
             try:
+                if read_cache is not None:
+                    for runner_event in opencode_events(Path(directory)/'output.log'):
+                        read_cache.observe(runner_event)
                 response, turns = response_from_events(Path(directory)/'output.log')
             except ValueError:
                 diagnostic = (Path(directory)/'output.log').read_text(encoding='utf-8', errors='replace')
@@ -887,14 +893,14 @@ def main(side, args):
                 validate_reviewer_document(output, document)
         except OutputTruncated as error:
             add_usage(attempt_usage)
-            # A fragment reported as success is what the whole stage then
-            # adopts. The cap doubles and the stage reruns; this used to stop
-            # after exactly one retry, so a review verbose enough to overflow
-            # even the doubled cap (real findings, not padding -- seen on a
-            # live adversarial-review run: truncated at 8192, truncated again
-            # at 16384) failed outright with room left in the context window.
-            # Doubling is self-limiting: once the cap reaches the context
-            # ceiling, "larger" stops growing and this raises on its own.
+            # Retrying repeats the entire request and its tool work.  The
+            # default already reserves nearly all available output space, so a
+            # truncation is a useful failure rather than a reason to silently
+            # spend another full model call.  Retain the old escalation only
+            # as an explicit compatibility escape hatch.
+            if os.environ.get('WORKFLOW_SELF_HOSTED_RETRY_ON_TRUNCATION') != '1':
+                error.opencode_usage = usage
+                raise
             limit = output_token_limit(stage)
             larger = min(limit * 2, context_token_limit() - 1024)
             if larger <= limit:
@@ -913,6 +919,13 @@ def main(side, args):
             fd, rejected = tempfile.mkstemp(prefix=Path(output).stem.lower() + '-rejected-', suffix='.md', dir=logs)
             with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
                 stream.write(text)
+            # A malformed document needs judgment/content the driver cannot
+            # safely synthesize. Repeating the entire reviewer request merely
+            # repeats its reads and failed tool attempts, so leave recovery to
+            # an explicit resume unless an operator opts into legacy behavior.
+            if os.environ.get('WORKFLOW_SELF_HOSTED_RETRY_ON_INVALID_DOCUMENT') != '1':
+                error.opencode_usage = usage
+                raise InvalidReviewerDocument(str(error) + '; rejected response saved to ' + rejected) from None
             if format_retried:
                 error.opencode_usage = usage
                 raise InvalidReviewerDocument(str(error) + '; rejected response saved to ' + rejected) from None

@@ -47,6 +47,15 @@ class Index(unittest.TestCase):
             self.assertNotIn('AC-1 other',text)
             self.assertIn('missing or unreadable',text)
 
+    def test_small_declared_inputs_are_preloaded_for_every_runner(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); state=root/'.uncle/workflow'
+            (root/'REQUIREMENTS.md').write_text('AC-1 static input')
+            text=packet(root,state,'requirements')
+            self.assertIn('Preloaded static stage inputs',text)
+            self.assertIn('Complete static input: REQUIREMENTS.md',text)
+            self.assertIn('do not call Read for that file',text)
+
     def test_base_excludes_implementation_and_configuration(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); state=root/'.uncle/workflow'

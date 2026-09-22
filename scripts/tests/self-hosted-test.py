@@ -291,16 +291,16 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         from self_hosted import ensure_output_complete, OutputTruncated, output_token_limit
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop('WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS', None)
-            self.assertEqual(output_token_limit('implementation'), 32768)
-            self.assertEqual(output_token_limit('implementation-step-7'), 32768)
-            self.assertEqual(output_token_limit('execute-checklist'), 32768)
-            self.assertEqual(output_token_limit('execute-checklist-worker-MC-001'), 32768)
-            self.assertEqual(output_token_limit('manual-checklist'), 32768)
-            self.assertEqual(output_token_limit('manual-checklist-base'), 32768)
-            self.assertEqual(output_token_limit('manual-checklist-delta'), 32768)
-            self.assertEqual(output_token_limit('updated-plan'), 32768)
-            self.assertEqual(output_token_limit('updated-change-plan'), 32768)
-            self.assertEqual(output_token_limit('adversarial-review'), 8192)
+            self.assertEqual(output_token_limit('implementation'), 64512)
+            self.assertEqual(output_token_limit('implementation-step-7'), 64512)
+            self.assertEqual(output_token_limit('execute-checklist'), 64512)
+            self.assertEqual(output_token_limit('execute-checklist-worker-MC-001'), 64512)
+            self.assertEqual(output_token_limit('manual-checklist'), 64512)
+            self.assertEqual(output_token_limit('manual-checklist-base'), 64512)
+            self.assertEqual(output_token_limit('manual-checklist-delta'), 64512)
+            self.assertEqual(output_token_limit('updated-plan'), 64512)
+            self.assertEqual(output_token_limit('updated-change-plan'), 64512)
+            self.assertEqual(output_token_limit('adversarial-review'), 64512)
         with patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS': '12000'}, clear=False):
             self.assertEqual(output_token_limit('implementation'), 12000)
         ensure_output_complete({'output_tokens': 8191}, 8192)
@@ -321,7 +321,7 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         out = self.root/'report.md'
         command = [bash_executable(), (ROOT/'scripts/reviewer-self-hosted.sh').as_posix(), 'exec', '--output-last-message', str(out), 'Test prompt']
         result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
-                                env=dict(env, FAKE_OPENCODE_MODE='truncate-once', WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS='8192'))
+                                env=dict(env, FAKE_OPENCODE_MODE='truncate-once', WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS='8192', WORKFLOW_SELF_HOSTED_RETRY_ON_TRUNCATION='1'))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('Retrying with an output limit of 16384 tokens', result.stderr)
         self.assertEqual(out.read_bytes(), b'## Findings\n\nNOT READY\n')
@@ -345,7 +345,7 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         out = self.root/'report.md'
         command = [bash_executable(), (ROOT/'scripts/reviewer-self-hosted.sh').as_posix(), 'exec', '--output-last-message', str(out), 'Test prompt']
         result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
-                                env=dict(env, FAKE_OPENCODE_MODE='truncate-twice', WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS='8192'))
+                                env=dict(env, FAKE_OPENCODE_MODE='truncate-twice', WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS='8192', WORKFLOW_SELF_HOSTED_RETRY_ON_TRUNCATION='1'))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('Retrying with an output limit of 16384 tokens', result.stderr)
         self.assertIn('Retrying with an output limit of 32768 tokens', result.stderr)
@@ -358,7 +358,7 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         out = self.root/'ADVERSARIAL_REVIEW.md'
         command = [bash_executable(), (ROOT/'scripts/reviewer-self-hosted.sh').as_posix(), 'exec', '--output-last-message', str(out), 'Test prompt']
         result = subprocess.run(command, input='', text=True, encoding='utf-8', capture_output=True, timeout=20, cwd=self.root,
-                                env=dict(env, FAKE_OPENCODE_MODE='summary-once'))
+                                env=dict(env, FAKE_OPENCODE_MODE='summary-once', WORKFLOW_SELF_HOSTED_RETRY_ON_INVALID_DOCUMENT='1'))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('not a valid ADVERSARIAL_REVIEW.md', result.stderr)
         self.assertIn('retrying once', result.stderr)
@@ -374,6 +374,7 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn('not a valid ADVERSARIAL_REVIEW.md', result.stderr)
         self.assertFalse(out.exists(), 'a compaction summary must never become the review')
+        self.assertEqual((self.root/'record.calls').read_text(), '1', 'invalid reviewer output must not retry by default')
 
     def test_reviewer_document_prefers_a_fenced_block_over_a_stray_leading_heading(self):
         # A real corruption: think-aloud starting with a heading-shaped

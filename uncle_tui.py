@@ -1499,11 +1499,15 @@ class UncleTUI:
         self.stage_billings = {}
         self.stage_base_urls = {}
         self.stage_api_keys = read_keys(CONFIG_PATH)
+        # Normalize existing projects too.  Earlier versions performed this
+        # only while creating the first configuration, so a project with an
+        # existing config and a legacy bare `.uncle/` rule kept its generated
+        # review documents ignored forever.
+        _ensure_uncle_gitignored(_project_root())
         if not exists:
             # Track missing configuration without redirecting away from home.
             self.first_run = True
             self._config_stamp = None
-            _ensure_uncle_gitignored(_project_root())
             return self.first_run
         self.first_run = False
         legacy = {"runner": "", "model": "", "effort": "", "billing": "", "reviewer": ""}

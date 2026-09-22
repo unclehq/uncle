@@ -32,7 +32,15 @@ class ReadCache:
         if not path.is_absolute():
             path = self.root / path
         relative = path.relative_to(self.root)
-        if any(part.startswith('.') or part == '..' for part in relative.parts):
+        # Generated workflow documents are project-internal inputs.  They used
+        # to be rejected with all dot paths, which made the cache miss the
+        # documents every later stage reads most often.  Keep every other
+        # hidden path out: .env and runner/config state must never be copied
+        # into a model prompt.
+        generated_doc = (len(relative.parts) == 3 and relative.parts[:2] == ('.uncle', 'docs')
+                         and relative.suffix.lower() == '.md')
+        if any(part == '..' for part in relative.parts) or \
+           (any(part.startswith('.') for part in relative.parts) and not generated_doc):
             raise ValueError('Hidden paths are not cached')
         cursor = self.root
         for part in relative.parts:
@@ -103,7 +111,7 @@ class ReadCache:
                     pass
 
     def observe(self, value):
-        """Claude-compatible tool events; other runner formats are not guessed."""
+        """Record canonical Claude and OpenCode Read completion events."""
         if not self.enabled or not isinstance(value, dict):
             return
         message = value.get('message') or {}
@@ -116,6 +124,24 @@ class ReadCache:
                 self.begin(part.get('id'), part.get('name', ''), part.get('input'))
             elif part.get('type') == 'tool_result':
                 self.end(part.get('tool_use_id'), part.get('content'), part.get('is_error', False))
+        # OpenCode's session API stores tool calls as message parts.  Its
+        # state shape is stable API data, unlike console progress text.
+        params = value.get('params') if value.get('method') == 'http/message' else value
+        if not isinstance(params, dict):
+            return
+        parts = params.get('parts', []) if isinstance(params.get('parts'), list) else []
+        # `opencode run --format json` emits the same canonical part directly,
+        # whereas the server places it in a message's parts array.
+        if not parts and params.get('type') == 'tool':
+            parts = [params.get('part') if isinstance(params.get('part'), dict) else params]
+        for part in parts:
+            if not isinstance(part, dict) or part.get('type') != 'tool':
+                continue
+            state = part.get('state') or {}
+            identity = part.get('callID') or part.get('id')
+            self.begin(identity, part.get('tool', ''), state.get('input'))
+            if state.get('status') in ('completed', 'error'):
+                self.end(identity, state.get('output'), state.get('status') == 'error')
 
     def context(self, prompt):
         if not self.enabled:

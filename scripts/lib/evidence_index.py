@@ -11,6 +11,12 @@ import tempfile
 import os
 
 VERSION = 1
+# Stage contracts are fixed at install time.  Put small declared workflow
+# documents directly in the prompt so every runner can work without spending
+# Read calls on the same requirements and plans.  Source discovery, edits and
+# command results still use tools; large documents remain navigable by excerpt.
+PRELOAD_FILE_LIMIT = 4096
+PRELOAD_CONTEXT_LIMIT = 12288
 STAGES = {
     'requirements': ['REQUIREMENTS.md'],
     'project-plan': ['REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS_INTERPRETATION.md'],
@@ -94,7 +100,7 @@ def packet(project, state, stage, family='app'):
         raise ValueError('Refusing symlinked evidence cache')
     previous = read_json(cache/'stages'/f'{stage}-{family}.json')
     previous_files = previous.get('files', {}) if isinstance(previous, dict) else {}
-    records, excerpts = {}, {}
+    records, excerpts, preloaded = {}, {}, {}
     hits = 0
     for name in dict.fromkeys(names):
         path = state/name[1:] if name.startswith('@') else root/name
@@ -125,6 +131,8 @@ def packet(project, state, stage, family='app'):
                 hits += 1
             records[name] = {'path': str(path), 'sha256': sha, 'bytes': size}
             excerpts[name] = obj['excerpt']
+            if size <= PRELOAD_FILE_LIMIT and len(head) == size:
+                preloaded[name] = head.decode('utf-8', errors='replace')
         except OSError:
             records[name] = {'status': 'missing or unreadable'}
     changed = [name for name, row in records.items() if previous_files.get(name) != row]
@@ -157,6 +165,19 @@ def packet(project, state, stage, family='app'):
              'Read omitted input and exact assertion evidence directly. Missing files do not imply satisfied requirements.',
              'Changes since this stage last prepared inputs: ' + (', '.join(changed + removed) or 'none'),
              'Independent reviewers must challenge conclusions even when input hashes are unchanged.']
+    preload_budget = PRELOAD_CONTEXT_LIMIT
+    preload_lines = []
+    for name, contents in preloaded.items():
+        entry = '\n### Complete static input: ' + name + '\n' + contents
+        size = len(entry.encode('utf-8'))
+        if size > preload_budget:
+            continue
+        preload_lines.append(entry)
+        preload_budget -= size
+    if preload_lines:
+        lines += ['\n## Preloaded static stage inputs',
+                  'Each entry below is the complete current file, rehashed immediately before this request. '
+                  'Use it directly; do not call Read for that file unless it changes during this stage.'] + preload_lines
     budget = 16000
     for name, row in records.items():
         entry = '\n' + name + ': ' + json.dumps(row) + '\n' + excerpts.get(name, '')

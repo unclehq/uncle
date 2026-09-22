@@ -180,6 +180,18 @@ unverified until observed or explicitly waived. If a prior generated obligation
 has no source, identify the conflict and resolve it in the report rather than
 silently treating it as user intent or silently claiming PASS.
 PROVENANCE
+        cat <<'TOOL_ECONOMY'
+
+## Tool-call economy (binding)
+
+Use the driver evidence packet below before calling a tool. Do not read a file
+again merely to confirm text, a hash, or an excerpt already supplied there.
+Read only the omitted exact sections needed for the current decision or edit;
+batch those independent reads once, retain their results for the rest of this
+stage, and never repeat a successful read unless the file changed. A supplied
+excerpt is navigation rather than verification evidence, so obtain the exact
+assertion or command result only when that evidence is actually required.
+TOOL_ECONOMY
         if [[ -f "$GATES_LIB_DIR/evidence_index.py" ]]; then
             local evidence_family=app
             [[ "$prompt_file" != */change/* ]] || evidence_family=change
@@ -279,7 +291,7 @@ FEASIBILITY
                 ;;
         esac
         if [[ "$role" == "reviewer" ]]; then
-            printf '\n\n---\n\n# Reviewer output (binding)\n\nYou run read-only: you cannot write files, so Rule 0 above cannot apply to\nyou. The document the stage asked for is your final assistant message:\nreturn it in full as that message — not a path, not a summary, not a note\nabout a file you could not write.\n\n## Response budget (binding)\n\nUse no more than 2,000 output tokens for this entire turn, including\nreasoning, tool-call narration, and the final document. Work from the\ndriver-supplied evidence first; read only the files needed to substantiate a\nconcrete finding or required gate row. Do not narrate your investigation,\nrepeat clean evidence, re-read the same file, or perform a second review pass.\nKeep the final document dense: IDs and locations instead of quotations, one\nshort sentence per field, and closing sections that reference finding IDs\nrather than summarize them. Preserve every real blocker, but merge duplicate\ncauses and consequences into one canonical finding.\n'
+            printf '\n\n---\n\n# Reviewer output (binding)\n\nYou run read-only: you cannot write files or run shell commands, so Rule 0\ncannot apply to you. Do not attempt Write, Edit, Bash, or any unavailable tool\nand do not narrate a failed attempt. The document the stage asked for is your\nfinal assistant message: return it in full as that message — not a path, not a\nsummary, not a note about a file you could not write. If a needed fact is not\navailable, state that limitation in the required document rather than trying a\nwrite or shell tool.\n\n## Response budget (binding)\n\nUse no more than 2,000 output tokens for this entire turn, including\nreasoning, tool-call narration, and the final document. Work from the\ndriver-supplied evidence first; read only the files needed to substantiate a\nconcrete finding or required gate row. Do not narrate your investigation,\nrepeat clean evidence, re-read the same file, or perform a second review pass.\nKeep the final document dense: IDs and locations instead of quotations, one\nshort sentence per field, and closing sections that reference finding IDs\nrather than summarize them. Preserve every real blocker, but merge duplicate\ncauses and consequences into one canonical finding.\n'
         fi
     } > "$combined"
     [[ -n "$rules" ]] && echo "Output rules: $(output_rules_source) ($rules)" >&2

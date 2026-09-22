@@ -59,6 +59,18 @@ class AcceptanceContext(unittest.TestCase):
         text = '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n'
         self.assertEqual(module.normalize_acceptance_shape(text), text)
 
+    def test_execution_records_repair_a_three_column_summary_gate(self):
+        text = ('# Verification report\n\n'
+                '### MC-1: first\n- **Status:** PASS\n\n'
+                '### MC-2: second\n- **Status:** BLOCKED-SETUP\n\n'
+                '## Acceptance gate\n'
+                '| Gate | Criteria | Status |\n|---|---|---|\n'
+                '| Summary | two checks | PASS |\n')
+        normalized = module.normalize_acceptance_shape(text)
+        self.assertIn('| MC-1 | YES | PASS | Result recorded in MC-1 above. |', normalized)
+        self.assertIn('| MC-2 | YES | BLOCKED-SETUP | Result recorded in MC-2 above. |', normalized)
+        self.assertNotIn('| Gate | Criteria | Status |', normalized)
+
     def test_no_recognizable_table_is_left_alone(self):
         text = '## Summary\n\nEverything passed, trust me.\n'
         self.assertEqual(module.normalize_acceptance_shape(text), text)

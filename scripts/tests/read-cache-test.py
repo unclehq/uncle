@@ -70,6 +70,23 @@ class CacheTests(unittest.TestCase):
         self.read({'file_path': str(hidden)}, 'secret')
         self.assertEqual(self.cache.context('Read PLAN.md and .env'), '')
 
+    def test_generated_documents_and_opencode_parts_are_cached(self):
+        document = self.root / '.uncle/docs/PROJECT_PLAN.md'
+        document.parent.mkdir(parents=True)
+        document.write_text('generated plan')
+        self.cache.observe({'method': 'http/message', 'params': {'parts': [
+            {'type': 'tool', 'callID': 'one', 'tool': 'read',
+             'state': {'status': 'completed', 'input': {'file_path': str(document)},
+                       'output': 'generated plan'}}]}})
+        self.assertIn('generated plan', self.cache.context('Read .uncle/docs/PROJECT_PLAN.md'))
+
+    def test_direct_opencode_cli_tool_part_is_cached(self):
+        self.cache.observe({'type': 'tool', 'part': {
+            'type': 'tool', 'callID': 'one', 'tool': 'Read',
+            'state': {'status': 'completed', 'input': {'file_path': str(self.file)},
+                      'output': 'original plan'}}})
+        self.assertIn('original plan', self.cache.context('Read PLAN.md'))
+
     def test_bounded_context_and_disable(self):
         self.read()
         self.cache.CONTEXT_LIMIT = 1

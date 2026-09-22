@@ -25,6 +25,8 @@ REQUIRED_NAMES = ('required',)
 STATUS_NAMES = ('status', 'result')
 EVIDENCE_NAMES = ('evidence',)
 DESCRIPTION_NAMES = ('description', 'notes', 'summary', 'action')
+_CHECK_HEADING = re.compile(r'^###\s+(MC-[A-Za-z0-9_-]+)\s*:', re.I)
+_CHECK_STATUS = re.compile(r'^\s*-\s+\*\*Status:\*\*\s+(PASS|FAIL|BLOCKED-(?:SETUP|HUMAN|IMPOSSIBLE)|NOT RUN|N/A)\s*$', re.I)
 
 
 def _role(cell, names):
@@ -76,12 +78,68 @@ def _narrative_evidence(text):
     return out
 
 
+def _executed_check_rows(lines):
+    """Rows from the report's own per-check result headings.
+
+    Some checklist agents emit the required `### MC-*` records correctly, then
+    append a three-column executive summary as the acceptance gate.  The
+    summary cannot be parsed safely, but the preceding check records are the
+    authoritative, one-status-per-ID source.  This deliberately declines to
+    repair incomplete, duplicate, or unrecognized status records.
+    """
+    rows = []
+    for index, line in enumerate(lines):
+        match = _CHECK_HEADING.match(line)
+        if not match:
+            continue
+        identifier, status = match.group(1), None
+        for candidate in lines[index + 1:]:
+            if candidate.startswith('#'):
+                break
+            found = _CHECK_STATUS.match(candidate)
+            if found:
+                status = found.group(1).upper()
+                break
+        if status is None or any(identifier == existing[0] for existing in rows):
+            return []
+        rows.append((identifier, status))
+    return rows
+
+
+def _replace_malformed_execution_gate(text):
+    """Normalize a malformed summary gate from complete MC result records."""
+    headings = list(re.finditer(r'^## Acceptance gate[ \t\r]*$', text, re.M))
+    if len(headings) != 1:
+        return text
+    lines = text.splitlines()
+    heading_index = next((i for i, line in enumerate(lines)
+                          if re.fullmatch(r'## Acceptance gate[ \t\r]*', line)), None)
+    if heading_index is None:
+        return text
+    # A valid gate is not ours to change.  Let the normal parser own it.
+    following = lines[heading_index + 1:]
+    if any(line.strip() == '| ID | Required | Status | Evidence |' for line in following[:3]):
+        return text
+    checks = _executed_check_rows(lines[:heading_index])
+    if not checks:
+        return text
+    end = heading_index + 1
+    while end < len(lines) and not (lines[end].startswith('## ') and end > heading_index + 1):
+        end += 1
+    rows = ['## Acceptance gate', '', '| ID | Required | Status | Evidence |',
+            '|---|---|---|---|']
+    rows += ['| %s | YES | %s | Result recorded in %s above. |' % (identifier, status, identifier)
+             for identifier, status in checks]
+    lines[heading_index:end] = rows
+    return '\n'.join(lines) + ('\n' if text.endswith('\n') else '')
+
+
 def normalize_acceptance_shape(text):
     """The corrected text, or the original text unchanged when no single
     unambiguous acceptance-shaped table exists (acceptance_problem then
     reports the real defect)."""
     if re.search(r'^## Acceptance gate[ \t\r]*$', text, re.M):
-        return text
+        return _replace_malformed_execution_gate(text)
     lines = text.splitlines()
     narrative = _narrative_evidence(text)
     candidates = []

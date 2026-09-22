@@ -15,6 +15,19 @@ expect_no_file app/added.sh
 expect_in_file .uncle/workflow/plan-recovery.json '"design_count": 1'
 expect_in_file CHANGE_PLAN.md 'isolated-context revision'
 
+# Generated briefs live under .uncle/docs. Plan recovery must still recognize
+# this as the change workflow and assess CHANGE_PLAN.md, never ask for the
+# app-only UPDATED_PROJECT_PLAN.md.
+new_case generated-change-brief
+mkdir -p "$REPO/.uncle/docs"
+mv "$REPO/CHANGE_REQUEST.md" "$REPO/.uncle/docs/CHANGE_REQUEST.md"
+set_state WAIT_UPDATED_PLAN_APPROVAL
+green_baseline 0 'bash app/test.sh'
+run_driver FAKE_ASSESS_NO_APPROVAL=1 FAKE_CAP_STATUS=UNSUPPORTED FAKE_IMPL='echo unsafe-launch > app/generated-brief.sh'
+expect_no_file app/generated-brief.sh
+expect_not_out 'Missing plan review input: .uncle/docs/UPDATED_PROJECT_PLAN.md'
+expect_in_file .uncle/workflow/plan-recovery.json '"design_count": 1'
+
 
 new_case denial-revised-from-plan
 set_state PLAN

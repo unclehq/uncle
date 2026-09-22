@@ -885,6 +885,18 @@ COUNT=$((COUNT + 1))
 [[ "$(cat "$GPROJ5/.gitignore")" == "$before" ]] \
     || fail "normalizing .uncle rules was not idempotent"
 
+# Existing configurations must normalize legacy ignores too: this is the
+# common upgrade path, and docs must be visible to git before the first new
+# workflow is launched.
+GPROJ6="$TMP/gitignore-existing-config"
+mkdir -p "$GPROJ6/.uncle"
+printf 'implementation.runner self-hosted\n' > "$GPROJ6/.uncle/config"
+printf '.uncle/\n' > "$GPROJ6/.gitignore"
+gitignore_load_config "$GPROJ6"
+COUNT=$((COUNT + 1))
+[[ "$(cat "$GPROJ6/.gitignore")" == $'.uncle/*\n!.uncle/docs/' ]] \
+    || fail "an existing config did not unignore workflow docs: $(cat "$GPROJ6/.gitignore")"
+
 if [[ "$status" -ne 0 || "$FAILED" -ne 0 ]]; then
     echo "tui-config-test.sh: failed"
     exit 1

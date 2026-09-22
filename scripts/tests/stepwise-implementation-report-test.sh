@@ -5,11 +5,12 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 grep -q 'at most 12 tool actions' "$ROOT/scripts/change-workflow.sh"
+grep -q 'recover_missing_implementation_reports' "$ROOT/scripts/change-workflow.sh"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 cd "$work"
 
-mkdir -p state
+mkdir -p state .uncle/docs
 STATE_DIR="$work/state"
 MODEL_IMPLEMENT=fake
 BUDGET_IMPLEMENT=1
@@ -24,9 +25,10 @@ run_claude() {
     printf '%s\n' "$stage" >> calls
     case "$stage" in
         implementation-step-1|implementation-step-2)
-            printf '%s\n' "$stage" >> IMPLEMENTATION_NOTES.md ;;
+            printf '%s\n' "$stage" >> .uncle/docs/IMPLEMENTATION_NOTES.md ;;
         implementation-step-report)
-            printf 'authoritative report\n' > CHANGE_TEST_REPORT.md ;;
+            printf 'reconciled notes\n' > .uncle/docs/IMPLEMENTATION_NOTES.md
+            printf 'authoritative report\n' > .uncle/docs/CHANGE_TEST_REPORT.md ;;
         *) exit 99 ;;
     esac
 }
@@ -39,6 +41,15 @@ expected=$'implementation-step-1\nimplementation-step-2\nimplementation-step-rep
 [[ "$(cat calls)" == "$expected" ]] || { cat calls >&2; exit 1; }
 [[ ! -e "$STATE_DIR/implement-step-done" ]]
 [[ ! -e "$STATE_DIR/implement-report-done" ]]
+
+# A single-agent implementation that omitted both reports receives the same
+# report-only recovery, without repeating either code step.
+rm -f .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/CHANGE_TEST_REPORT.md
+: > calls
+recover_missing_implementation_reports
+[[ "$(cat calls)" == 'implementation-step-report' ]]
+[[ -s .uncle/docs/IMPLEMENTATION_NOTES.md ]]
+[[ -s .uncle/docs/CHANGE_TEST_REPORT.md ]]
 
 # A report failure is retryable without rerunning either checkpointed code step.
 : > calls

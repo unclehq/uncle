@@ -1704,6 +1704,34 @@ run_stepwise_implementation() {
     rm -f "$report_done_file"
 }
 
+# The single-agent path may complete code but omit its required handoff
+# documents. Reuse the report-only recovery boundary rather than making the
+# operator recreate evidence or rerun implementation. The reconciler is not
+# permitted to edit source or execute tests, and records missing observations
+# as incomplete rather than fabricating a pass.
+recover_missing_implementation_reports() {
+    if [[ -s .uncle/docs/IMPLEMENTATION_NOTES.md && -s .uncle/docs/CHANGE_TEST_REPORT.md ]]; then
+        return 0
+    fi
+    echo 'Implementation reports missing; reconciling existing on-disk evidence automatically.'
+    plan_assess || return $?
+    run_claude "$ROOT/prompts/change/implementation-report.md" implementation-step-report \
+        "$MODEL_IMPLEMENT" "" 20 "$BUDGET_IMPLEMENT"
+}
+
+# The execution commands and worker evidence are durable. If their synthesis
+# agent omitted canonical reports, reconcile that evidence in a small,
+# report-only pass instead of replaying checks or asking the operator to
+# manufacture documentation.
+recover_missing_checklist_reports() {
+    if [[ -s .uncle/docs/VERIFICATION_REPORT.md && -s .uncle/docs/DEFECTS.md ]]; then
+        return 0
+    fi
+    echo 'Checklist reports missing; reconciling existing execution evidence automatically.'
+    run_claude "$ROOT/prompts/change/execute-checklist-report.md" execute-checklist \
+        "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 20 "$BUDGET_EXECUTE"
+}
+
 # Count checks as they stream past and drive the pinned status line.
 #
 # The denominator is the distinct MC ids in .uncle/docs/MANUAL_CHECKLIST.md; the numerator
@@ -2873,6 +2901,7 @@ while true; do
             plan_status=0
             plan_after_write || plan_status=$?
             case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
+            recover_missing_implementation_reports || exit $?
             require_file .uncle/docs/IMPLEMENTATION_NOTES.md
             require_file .uncle/docs/CHANGE_TEST_REPORT.md
             check_document_budget .uncle/docs/IMPLEMENTATION_NOTES.md || exit 1
@@ -3132,6 +3161,7 @@ REPAIR
 
         VALIDATE_CHECKLIST)
             echo "Validating saved checklist reports; checks will not be rerun."
+            recover_missing_checklist_reports || exit $?
             require_file .uncle/docs/VERIFICATION_REPORT.md
             check_document_budget .uncle/docs/VERIFICATION_REPORT.md || exit 1
             if [[ -e .uncle/docs/DEFECTS.md ]]; then

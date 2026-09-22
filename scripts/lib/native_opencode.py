@@ -79,6 +79,7 @@ def run(stage, directory, values=None, root=None, allow_shell=True):
             fingerprint=json.dumps(msg,sort_keys=True)
             if timing_seen.get(info.get('id')) != fingerprint:
                 stage.timing.observe({'method':'http/message','params':msg})
+                stage.read_cache.observe({'method':'http/message','params':msg})
                 timing_seen[info.get('id')]=fingerprint
             if info.get('role')!='assistant': continue
             started=True;last=info

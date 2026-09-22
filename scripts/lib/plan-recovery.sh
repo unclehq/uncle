@@ -5,6 +5,7 @@
 if ! declare -f gate_read > /dev/null; then gate_read() { IFS= read -r "$1"; }; fi
 # Shared orchestration; all source-writing calls remain in the existing launchers.
 plan_tool() { python3 "$ROOT/scripts/lib/plan-executability.py" "$@"; }
+is_change_workflow() { [[ "${DOCUMENT_BUDGET_SOURCE##*/}" == CHANGE_REQUEST.md ]]; }
 
 # Normal builds assess feasibility in the existing adversarial plan review.
 # Opt in only when a separate capability assessment is explicitly requested.
@@ -14,7 +15,7 @@ plan_executability_enabled() {
 
 plan_check_inputs() {
     local plan command document
-    if [[ "${DOCUMENT_BUDGET_SOURCE:-}" == CHANGE_REQUEST.md ]]; then
+    if is_change_workflow; then
         plan=.uncle/docs/CHANGE_PLAN.md
     else
         plan=.uncle/docs/UPDATED_PROJECT_PLAN.md
@@ -34,7 +35,7 @@ plan_check_inputs() {
 
 plan_paths() {
     PLAN_ASSESS_DIR="$STATE_DIR/plan-executability"
-    if [[ "${DOCUMENT_BUDGET_SOURCE:-}" == CHANGE_REQUEST.md ]]; then
+    if is_change_workflow; then
         EXEC_PLAN=.uncle/docs/CHANGE_PLAN.md
     else
         EXEC_PLAN=.uncle/docs/UPDATED_PROJECT_PLAN.md

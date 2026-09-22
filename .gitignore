@@ -1,4 +1,5 @@
 .uncle/*
+!.uncle/docs/
 # The change attestation and its trust root are committed on the feature
 # branch; a negation only works under `.uncle/*`, never `.uncle/`.
 !.uncle/attestation.json

@@ -12,6 +12,7 @@ never turns absent evidence into a PASS.
 import argparse
 from pathlib import Path
 import sys
+import json
 
 from checklist_groups import parse
 
@@ -52,6 +53,32 @@ def defects(ids):
             '- **Disposition:** release blocked until required checks have evidence.\n')
 
 
+def render_from_json(project):
+    project = Path(project).resolve(); docs = project/'.uncle/docs'
+    payload = json.loads((project/'.uncle/workflow/documents/EXECUTE_CHECKLIST.json').read_text())
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'execute-checklist':
+        raise ValueError('invalid execute-checklist JSON')
+    rows = payload['results']
+    (docs/'VERIFICATION_REPORT.md').write_text('# Verification report\n\n## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n' + ''.join('| %s | %s | %s | %s |\n' % (r['id'], 'YES' if r['required'] else 'NO', r['status'], r['evidence'].replace('|', '/')) for r in rows), encoding='utf-8')
+    blockers = [r for r in rows if r['status'] != 'PASS']
+    (docs/'DEFECTS.md').write_text('# Defects\n\n' + ('No defects found.\n' if not blockers else '\n'.join('## %s\n\n- **Status:** %s\n- **Evidence:** %s\n' % (r['id'], r['status'], r['evidence']) for r in blockers)), encoding='utf-8')
+
+
+def export_from_markdown(project):
+    project = Path(project).resolve(); text = (project/'.uncle/docs/VERIFICATION_REPORT.md').read_text()
+    rows = []
+    active = False
+    for line in text.splitlines():
+        if line.strip() == '## Acceptance gate': active = True; continue
+        if active and line.startswith('|'):
+            cells = [x.strip() for x in line.strip('|').split('|')]
+            if len(cells) == 4 and cells[0] not in ('ID', '---') and not cells[0].startswith('---'):
+                rows.append({'id': cells[0], 'required': cells[1] == 'YES', 'status': cells[2], 'evidence': cells[3]})
+    if not rows: raise ValueError('verification report has no acceptance rows')
+    target = project/'.uncle/workflow/documents/EXECUTE_CHECKLIST.json'; target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({'schema':'uncle.artifact/v1','kind':'execute-checklist','results':rows}, indent=2)+'\n')
+
+
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('--project', default='.')
@@ -71,6 +98,12 @@ def main(argv):
         report.write_text(verification(ids), encoding='utf-8')
     if not args.missing_only or not defect.is_file() or defect.stat().st_size == 0:
         defect.write_text(defects(ids), encoding='utf-8')
+    artifact = project / '.uncle/workflow/documents/EXECUTE_CHECKLIST.json'
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'execute-checklist',
+                                    'results': [{'id': identifier, 'required': True, 'status': 'NOT RUN',
+                                                 'evidence': 'No check-specific execution evidence was recorded.'}
+                                                for identifier in ids]}, indent=2) + '\n', encoding='utf-8')
     return 0
 
 

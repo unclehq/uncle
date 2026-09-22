@@ -11,6 +11,15 @@ CLEAN='## Overall assessment\nNo findings.\n'
 FINDING='## AR-001: Missing behavior\n- Severity: High\n- References: REQ-1\n- Failure: Missing output\n- Fix: Add output\n- Verify: Assert output\n'+CLEAN.replace('No findings.','Revision required.')
 
 class Review(unittest.TestCase):
+    def test_json_export_and_render_round_trip(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); docs=root/'.uncle/docs'; docs.mkdir(parents=True)
+            review=docs/'ADVERSARIAL_REVIEW.md'; review.write_text(FINDING)
+            module.export_json(review, root)
+            module.render_json(root, review)
+            self.assertTrue((root/'.uncle/workflow/documents/ADVERSARIAL_REVIEW.json').is_file())
+            module.validate(review)
+
     def test_formats(self):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d)/'review'

@@ -7,6 +7,20 @@ packet = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(packet)
 
 class Packet(unittest.TestCase):
+    def test_checklist_json_export_preserves_scheduler_fields(self):
+        import json
+        script = Path(__file__).resolve().parents[1]/'lib/checklist_document.py'
+        spec = importlib.util.spec_from_file_location('checklist_document', script)
+        document = importlib.util.module_from_spec(spec); spec.loader.exec_module(document)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); docs = root/'.uncle/docs'; docs.mkdir(parents=True)
+            checklist = docs/'MANUAL_CHECKLIST.md'
+            checklist.write_text('### MC-1: Smoke\n- Exclusive resources: port:3000\n- Depends on: none\n- Exact action: open app\n- Expected result: app opens\n')
+            document.export_json(checklist, root)
+            payload = json.loads((root/'.uncle/workflow/documents/MANUAL_CHECKLIST.json').read_text())
+            self.assertEqual(payload['checks'][0]['id'], 'MC-1')
+            self.assertEqual(payload['checks'][0]['exclusive_resources'], ['port:3000'])
+
     def test_base_uses_frozen_inputs_only_and_delta_includes_current_results(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

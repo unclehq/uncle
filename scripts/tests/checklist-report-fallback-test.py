@@ -9,6 +9,17 @@ SCRIPT = ROOT / 'scripts/lib/checklist_report_fallback.py'
 
 
 class ChecklistReportFallbackTests(unittest.TestCase):
+    def test_json_renders_verification_and_defects(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); docs = root/'.uncle/docs'; docs.mkdir(parents=True)
+            artifact = root/'.uncle/workflow/documents'; artifact.mkdir(parents=True)
+            (artifact/'EXECUTE_CHECKLIST.json').write_text('{"schema":"uncle.artifact/v1","kind":"execute-checklist","results":[{"id":"MC-1","required":true,"status":"FAIL","evidence":"expected x"}]}')
+            module = __import__('importlib').util
+            spec = module.spec_from_file_location('fallback', SCRIPT); fallback = module.module_from_spec(spec); spec.loader.exec_module(fallback)
+            fallback.render_from_json(root)
+            self.assertIn('| MC-1 | YES | FAIL | expected x |', (docs/'VERIFICATION_REPORT.md').read_text())
+            self.assertIn('## MC-1', (docs/'DEFECTS.md').read_text())
+
     def test_missing_reports_become_explicit_not_run_records(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

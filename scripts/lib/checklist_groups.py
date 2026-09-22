@@ -35,6 +35,7 @@ Conservative in both directions that matter:
 """
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -243,6 +244,17 @@ def parse(text):
         else:
             set_depends(current, value)
     return checks, by_id, warnings
+
+
+def parse_json(path):
+    payload = json.loads(open(path, encoding='utf-8').read())
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'manual-checklist':
+        raise ValueError('invalid manual checklist JSON')
+    checks, by_id = [], {}
+    for item in payload['checks']:
+        check = Check(item['id'], len(checks)); check.resources = set(item.get('exclusive_resources', [])); check.depends = item.get('depends_on', [])
+        checks.append(check); by_id[check.id] = check
+    return checks, by_id, []
 
 
 def validate(checks, by_id):

@@ -61,6 +61,17 @@ def validate_text(text):
         raise ValueError('Checklist lacks actions or expected results')
     return checks
 
+
+def export_json(path, project='.'):
+    import json
+    checks = validate(path)
+    payload = {'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist',
+               'checks': [{'id': check.id, 'exclusive_resources': sorted(check.resources or []),
+                           'depends_on': check.depends} for check in checks]}
+    target = Path(project) / '.uncle/workflow/documents/MANUAL_CHECKLIST.json'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+
 if __name__=='__main__':
     args = sys.argv[1:]
     if args and args[0] == '--validate':

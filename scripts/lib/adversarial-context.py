@@ -3,6 +3,7 @@ import hashlib
 from pathlib import Path
 import re
 import sys
+import json
 
 # Content-preserving synonyms for the five required per-finding fields, the
 # same tolerance checklist_document.py's LABEL_SYNONYMS already gives
@@ -49,6 +50,46 @@ def validate(path):
         raise ValueError('Clean review must explicitly state No findings')
 
 
+def export_json(path, project='.'):
+    """Capture validated review fields as the workflow's structured artifact."""
+    text = Path(path).read_text(encoding='utf-8'); validate(path)
+    findings = []
+    matches = list(re.finditer(r'^##[ \t]+(AR-[A-Za-z0-9]+)[ \t]*(?::|—|–|-)[ \t]+(.+)$', text, re.M))
+    for index, match in enumerate(matches):
+        body = text[match.end():matches[index + 1].start() if index + 1 < len(matches) else len(text)]
+        values = {}
+        for key in ('Severity', 'References', 'Failure', 'Fix', 'Verify'):
+            found = re.search(r'^[ \t]*(?:[-*+]\s+)?(?:\*\*)?' + key + r'(?:\*\*)?:\s*(.+)$', body, re.M)
+            values[key.lower()] = found.group(1).strip() if found else ''
+        findings.append(dict(id=match.group(1), title=match.group(2).strip(), **values))
+    assessment = re.search(r'^##\s+Overall assessment\s*\n+(.+)', text, re.M | re.I)
+    target = Path(project) / '.uncle/workflow/documents/ADVERSARIAL_REVIEW.json'; target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({'schema':'uncle.artifact/v1','kind':'adversarial-review','findings':findings,'overall_assessment':assessment.group(1).strip()}, indent=2) + '\n')
+
+
+def render_json(project='.', destination='.uncle/docs/ADVERSARIAL_REVIEW.md'):
+    artifact = Path(__file__).with_name('artifact_json.py')
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('artifact_json', artifact)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    payload = module.read(project, 'ADVERSARIAL_REVIEW.md')
+    if payload.get('kind') != 'adversarial-review':
+        raise ValueError('wrong artifact kind')
+    required = ('id', 'title', 'severity', 'references', 'failure', 'fix', 'verify')
+    for finding in payload.get('findings', []):
+        if not isinstance(finding, dict) or any(not finding.get(key) for key in required):
+            raise ValueError('invalid adversarial finding')
+    if not isinstance(payload.get('overall_assessment'), str) or not payload['overall_assessment'].strip():
+        raise ValueError('missing overall assessment')
+    Path(destination).write_text(module.render_adversarial(payload), encoding='utf-8')
+
+
+def findings_json(project='.'):
+    """Structured findings for downstream workflow consumers."""
+    from pathlib import Path
+    return json.loads((Path(project)/'.uncle/workflow/documents/ADVERSARIAL_REVIEW.json').read_text(encoding='utf-8'))['findings']
+
+
 def render(project, family):
     root = Path(project).resolve()
     names = ('.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md', '.uncle/docs/BASELINE_REPORT.md') if family == 'change' else (
@@ -76,6 +117,12 @@ def render(project, family):
 
 
 if __name__ == '__main__':
+    if sys.argv[1] == '--export-json':
+        export_json(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else '.')
+        raise SystemExit(0)
+    if sys.argv[1] == '--render-json':
+        render_json(sys.argv[2] if len(sys.argv) > 2 else '.', sys.argv[3] if len(sys.argv) > 3 else '.uncle/docs/ADVERSARIAL_REVIEW.md')
+        raise SystemExit(0)
     if sys.argv[1] == '--validate':
         try:
             validate(sys.argv[2])

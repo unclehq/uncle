@@ -2333,6 +2333,8 @@ while true; do
                 exit 1
             }
             rm -f "$STATE_DIR/validation-error.txt"
+            python3 "$ROOT/scripts/lib/adversarial-context.py" --export-json .uncle/docs/ADVERSARIAL_REVIEW.md . || exit 1
+            python3 "$ROOT/scripts/lib/adversarial-context.py" --render-json . .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             check_document_budget .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             set_state WAIT_REVIEW_ACKNOWLEDGEMENT
             ;;
@@ -2797,6 +2799,7 @@ while true; do
                 printf '%s\n' "$manual_checklist_validation_error" >&2
                 exit 1
             }
+            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('c','$ROOT/scripts/lib/checklist_document.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.export_json('.uncle/docs/MANUAL_CHECKLIST.md')" || exit 1
             set_state EXECUTE_CHECKLIST
             ;;
 
@@ -2833,6 +2836,7 @@ while true; do
                 echo 'Checklist reports missing; recording incomplete evidence automatically.'
                 python3 "$ROOT/scripts/lib/checklist_report_fallback.py" --project . --missing-only || exit 1
             fi
+            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('r','$ROOT/scripts/lib/checklist_report_fallback.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.export_from_markdown('.') ; m.render_from_json('.')" || exit 1
             require_file .uncle/docs/VERIFICATION_REPORT.md
             require_file .uncle/docs/DEFECTS.md
             check_document_budget .uncle/docs/VERIFICATION_REPORT.md || exit 1

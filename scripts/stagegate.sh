@@ -2248,6 +2248,7 @@ while true; do
                 supervision_validation_failed requirements .uncle/docs/REQUIREMENTS_INTERPRETATION.md "$validation_error"
                 exit 1
             }
+            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('c','$ROOT/scripts/lib/requirements-context.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.export_json('.uncle/docs/REQUIREMENTS_INTERPRETATION.md')" || exit 1
             # A plan from the merged pass is a bonus, never a requirement. A
             # model that ran out of turns after the interpretation, or one too
             # weak to do both, must fall back to running the plan stage -- not

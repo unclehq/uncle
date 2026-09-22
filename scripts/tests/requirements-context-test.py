@@ -21,6 +21,25 @@ class Requirements(unittest.TestCase):
                 p.write_text(text)
                 with self.assertRaises(ValueError): module.validate(p)
 
+    def test_json_export_and_render_round_trip(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); docs=root/'.uncle/docs'; docs.mkdir(parents=True)
+            interpretation=docs/'REQUIREMENTS_INTERPRETATION.md'
+            interpretation.write_text(self.document())
+            module.export_json(interpretation, root)
+            self.assertTrue((root/'.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json').is_file())
+            module.render_json(root)
+            module.validate(interpretation)
+
+    def test_json_export_rejects_invalid_document(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); docs=root/'.uncle/docs'; docs.mkdir(parents=True)
+            interpretation=docs/'REQUIREMENTS_INTERPRETATION.md'
+            interpretation.write_text('Compacting report')
+            with self.assertRaises(ValueError):
+                module.export_json(interpretation, root)
+            self.assertFalse((root/'.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json').exists())
+
     def test_packet_is_shallow_and_refreshes(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d)

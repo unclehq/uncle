@@ -1,5 +1,6 @@
 """Focused requirements inputs and deterministic document checks."""
 import hashlib
+import json
 from pathlib import Path
 import re
 import sys
@@ -44,6 +45,41 @@ def validate(path):
     missing = [name for name in SECTIONS if not sections.get(name.lower())]
     if missing:
         raise ValueError('Missing or empty sections: ' + ', '.join(missing))
+
+
+def export_json(path, project='.'):
+    """Capture a validated interpretation's sections as the workflow's structured artifact."""
+    text = Path(path).read_text(encoding='utf-8')
+    validate(path)
+    matches = list(re.finditer(r'^##\s+(?:\d+[.)]\s*)?(.+?)\s*#*$', text, re.M))
+    sections = {}
+    for index, match in enumerate(matches):
+        name = match[1].strip('* ').lower()
+        if name not in (section.lower() for section in SECTIONS):
+            continue
+        body = text[match.end():matches[index + 1].start() if index + 1 < len(matches) else len(text)]
+        key = name.replace(' ', '_').replace('-', '_')
+        sections[key] = body.strip()
+    target = Path(project) / '.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'requirements-interpretation',
+                                  'sections': sections}, indent=2) + '\n')
+
+
+def render_json(project='.', destination=None):
+    artifact = Path(__file__).with_name('artifact_json.py')
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('artifact_json', artifact)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    payload = module.read(project, 'REQUIREMENTS_INTERPRETATION.md')
+    if payload.get('kind') != 'requirements-interpretation':
+        raise ValueError('wrong artifact kind')
+    for name in SECTIONS:
+        key = name.lower().replace(' ', '_').replace('-', '_')
+        if not payload['sections'].get(key, '').strip():
+            raise ValueError('missing or empty section: ' + name)
+    destination = destination or (Path(project) / '.uncle/docs/REQUIREMENTS_INTERPRETATION.md')
+    Path(destination).write_text(module.render_requirements(payload), encoding='utf-8')
 
 
 def render(project):

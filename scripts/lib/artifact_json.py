@@ -32,6 +32,18 @@ def parse_adversarial_response(text):
         raise ValueError('wrong adversarial-review JSON schema')
     return payload
 
+REQUIREMENTS_SECTIONS = ('Required functionality', 'Optional functionality', 'Constraints',
+                          'User-visible behaviors', 'System behaviors', 'Failure behaviors',
+                          'Ambiguities', 'Assumptions', 'Explicit non-goals', 'Definition of done')
+
+def render_requirements(payload):
+    sections = payload['sections']
+    rows = []
+    for index, name in enumerate(REQUIREMENTS_SECTIONS, 1):
+        key = name.lower().replace(' ', '_').replace('-', '_')
+        rows += [f'## {index}. {name}', '', sections[key].strip(), '']
+    return '\n'.join(rows)
+
 def render_checklist(payload):
     out = ['# Manual checklist', '']
     for check in payload['checks']:

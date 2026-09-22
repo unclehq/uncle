@@ -189,6 +189,7 @@ write_cw_harness() {
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail
+ROOT="$ROOT"
 APPROVAL_DIR="\$PWD/.uncle/workflow/approvals"
 show_spend() { :; }
 supervision_validation_failed() { :; }
@@ -206,6 +207,7 @@ write_sg_harness() {
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail
+ROOT="$ROOT"
 APPROVAL_DIR="\$PWD/.uncle/workflow/approvals"
 cancel_speculation() { echo "CANCEL_SPECULATION"; }
 supervision_validation_failed() { :; }

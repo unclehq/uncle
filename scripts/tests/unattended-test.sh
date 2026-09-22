@@ -74,7 +74,7 @@ printf 'plan body\n' > "$sg/PLAN.md"
 
 # Unattended, with stdin closed. Closed stdin is the real unattended
 # condition: if any read survived, this hangs or exits down the decline path.
-out="$(cd "$sg" && UNATTENDED=1 bash gate.sh PLAN.md PROJECT_PLAN approve < /dev/null 2>&1)"
+out="$(cd "$sg" && ROOT="$ROOT" UNATTENDED=1 bash gate.sh PLAN.md PROJECT_PLAN approve < /dev/null 2>&1)"
 case "$out" in
     *GATE_RETURNED*) ok ;;
     *) bad "sg-unattended-returns" "gate did not return: $out" ;;
@@ -98,7 +98,7 @@ esac
 
 # Attended runs are untouched, and write no ledger.
 rm -f "$sg/.uncle/workflow/unattended-gates" "$sg/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
-out="$(cd "$sg" && UNATTENDED=0 bash gate.sh PLAN.md PROJECT_PLAN approve <<< "$(printf '\ny\n')" 2>&1)"
+out="$(cd "$sg" && ROOT="$ROOT" UNATTENDED=0 bash gate.sh PLAN.md PROJECT_PLAN approve <<< "$(printf '\ny\n')" 2>&1)"
 case "$out" in
     *"HUMAN REVIEW REQUIRED"*) ok ;;
     *) bad "sg-attended-prompts" "the human gate did not prompt: $out" ;;
@@ -132,7 +132,7 @@ echo "WAIVER_RETURNED"
 HARNESS
 printf '# report\n' > "$wv/REPORT.md"
 
-out="$(cd "$wv" && UNATTENDED=1 bash gate.sh REPORT.md PR-09 PR-10 < /dev/null 2>&1)"
+out="$(cd "$wv" && ROOT="$ROOT" UNATTENDED=1 bash gate.sh REPORT.md PR-09 PR-10 < /dev/null 2>&1)"
 case "$out" in
     *WAIVER_RETURNED*) ok ;;
     *) bad "wv-returns" "record_waiver did not return: $out" ;;
@@ -172,7 +172,7 @@ HARNESS
 printf 'spec body\n' > "$cw/SPEC.md"
 printf 'plan body\n' > "$cw/PLAN.md"
 
-out="$(cd "$cw" && UNATTENDED=1 bash gate.sh APPROVE SPEC.md CHANGE_SPEC PLAN.md CHANGE_PLAN < /dev/null 2>&1)"
+out="$(cd "$cw" && ROOT="$ROOT" UNATTENDED=1 bash gate.sh APPROVE SPEC.md CHANGE_SPEC PLAN.md CHANGE_PLAN < /dev/null 2>&1)"
 case "$out" in
     *GATE_RETURNED*) ok ;;
     *) bad "cw-returns" "human_gate did not return: $out" ;;
@@ -219,7 +219,7 @@ HARNESS
 # through human_gate's own unattended path, so nothing here skips review.
 printf 'not a well formed row\n' > "$ic/.uncle/workflow/implementation-completion.txt"
 touch "$ic/.uncle/workflow/approvals/CHANGE_SPEC.sha256" "$ic/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
-out="$(cd "$ic" && UNATTENDED=1 bash gate.sh < /dev/null 2>&1)"
+out="$(cd "$ic" && ROOT="$ROOT" UNATTENDED=1 bash gate.sh < /dev/null 2>&1)"
 check "ic-malformed-returns" "CHOICE_RETURNED 3" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
 if [[ -e "$ic/.uncle/workflow/approvals/CHANGE_SPEC.sha256" ]]; then
     bad "ic-malformed-clears-approval" "the stale CHANGE_SPEC approval was not cleared"
@@ -237,7 +237,7 @@ else bad "ic-malformed-ledger" "the repair decision was not written to the unatt
 rm -f "$ic/.uncle/workflow/unattended-gates"
 printf 'AC-1: requires IMPLEMENTED, changed code, and observed targeted verification; got missing\n' \
     > "$ic/.uncle/workflow/implementation-completion.txt"
-out="$(cd "$ic" && UNATTENDED=1 bash gate.sh < /dev/null 2>&1)"
+out="$(cd "$ic" && ROOT="$ROOT" UNATTENDED=1 bash gate.sh < /dev/null 2>&1)"
 check "ic-rejected-returns" "CHOICE_RETURNED 2" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
 case "$out" in
     *"Retry the implementation, waive"*) bad "ic-rejected-no-prompt" "the human prompt was printed anyway" ;;

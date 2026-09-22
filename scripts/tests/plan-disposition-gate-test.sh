@@ -119,7 +119,7 @@ import sys
 text = open(sys.argv[1], encoding='utf-8').read()
 branch = text[text.index('\n        WAIT_UPDATED_PLAN_APPROVAL)\n'):]
 branch = branch[:branch.index('        IMPLEMENT)')]
-gate = branch.index('plan-gate ADVERSARIAL_REVIEW.md CHANGE_PLAN.md || exit 1')
+gate = branch.index('plan-gate .uncle/docs/ADVERSARIAL_REVIEW.md .uncle/docs/CHANGE_PLAN.md || exit 1')
 prompt = branch.index('human_gate APPROVE')
 if not gate < prompt:
     print('FAIL: the plan gate does not precede the approval prompt')

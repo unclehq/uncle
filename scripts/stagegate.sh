@@ -1069,6 +1069,7 @@ review_and_approve() {
         before="$(hash_file "$file")"
         printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
         printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${name}.approved-by"
+        python3 "$ROOT/scripts/lib/approval_export.py" "$name" "$file" . 2>/dev/null || true
         record_unattended_gate "$name" "$wording $file without human review"
         echo "Unattended: recorded $wording of $file with no human review."
         if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
@@ -1131,6 +1132,7 @@ review_and_approve() {
     # landed after the check.
     printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
     printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${name}.approved-by"
+    python3 "$ROOT/scripts/lib/approval_export.py" "$name" "$file" . 2>/dev/null || true
     echo "Recorded approval for $file"
     if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
 }

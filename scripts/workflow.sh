@@ -97,6 +97,7 @@ approve_file() {
 
     printf '%s\n' "$captured" > ".uncle/workflow/approvals/${approval_name}.sha256"
     printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > ".uncle/workflow/approvals/${approval_name}.approved-by"
+    python3 "$ROOT/scripts/lib/approval_export.py" "$approval_name" "$file" . 2>/dev/null || true
     echo "Approved $file"
 }
 

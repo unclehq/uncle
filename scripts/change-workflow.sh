@@ -919,6 +919,7 @@ human_gate() {
                     ;;
             esac
             printf '%s\n' "$action" > "$APPROVAL_DIR/${names[$j]}.gate-action"
+            python3 "$ROOT/scripts/lib/approval_export.py" "${names[$j]}" "${files[$j]}" . 2>/dev/null || true
             record_unattended_gate "${names[$j]}" "$act ${files[$j]} without human review"
         done
         echo "Unattended: recorded $act of ${files[*]} with no human review."
@@ -1007,6 +1008,7 @@ human_gate() {
                 ;;
         esac
         printf '%s\n' "$action" > "$APPROVAL_DIR/${names[$i]}.gate-action"
+        python3 "$ROOT/scripts/lib/approval_export.py" "${names[$i]}" "${files[$i]}" . 2>/dev/null || true
         echo "Recorded approval for ${files[$i]}"
     done
     if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi

@@ -51,12 +51,15 @@ prerequisites BLOCKED or NOT RUN. Never broaden permissions or invent a PASS.
 
 Create .uncle/docs/VERIFICATION_REPORT.md.
 
-For every check record:
+For every check, write a `### <Check ID>` heading in Findings followed by
+these exact bullet labels, one per line, so the driver can read them back
+without guessing at prose:
 
-- Check ID
-- Action actually performed
-- Expected result
-- Actual result
+- `- **Action:**` what was actually performed
+- `- **Expected result:**`
+- `- **Actual result:**`
+- `- **Defects:**` the comma-separated defect IDs this check's failure is
+  filed under in .uncle/docs/DEFECTS.md, or `None`
 - Evidence
 - Status: PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, or
   NOT RUN. A blocked check has to say which kind: one action away

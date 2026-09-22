@@ -218,6 +218,51 @@ def ingest_json(path, project='.'):
     return True
 
 
+def export_json(path, project='.', name=None):
+    """Capture an already-valid Acceptance gate table (and any narrative
+    above it) as the workflow's canonical JSON artifact. The caller is
+    expected to have accepted the report already (acceptance_result != UNKNOWN);
+    this only extracts what that same table format already means."""
+    from pathlib import Path
+    import json as _json
+    text = Path(path).read_text(encoding='utf-8')
+    heading = re.search(r'^## Acceptance gate[ \t\r]*$', text, re.M)
+    if not heading:
+        raise ValueError('no "## Acceptance gate" section to export')
+    narrative = text[:heading.start()].strip()
+    lines = text[heading.end():].splitlines()
+    rows = []
+    header_seen = separator_seen = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if rows or header_seen:
+                continue
+            continue
+        if not stripped.startswith('|') or not stripped.endswith('|'):
+            break
+        cells = [cell.strip() for cell in stripped[1:-1].split('|')]
+        if len(cells) != 4:
+            break
+        if not header_seen:
+            header_seen = True
+            continue
+        if not separator_seen:
+            separator_seen = True
+            continue
+        identifier, required, status, evidence = cells
+        rows.append({'id': identifier, 'required': required == 'YES', 'status': status, 'evidence': evidence})
+    if not rows:
+        raise ValueError('Acceptance gate table has no rows to export')
+    payload = {'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report', 'rows': rows}
+    if narrative:
+        payload['narrative'] = narrative
+    target = Path(project) / '.uncle/workflow/documents' / ((name or Path(path).stem) + '.json')
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_json.dumps(payload, indent=2) + '\n')
+    return payload
+
+
 def main(path, project='.'):
     from pathlib import Path
     p = Path(path)

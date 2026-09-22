@@ -1810,8 +1810,10 @@ run_stage() {
             else
                 echo "Preflight: requesting model diagnosis of unresolved prerequisites."
                 run_claude prompts/preflight.md preflight
+                python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('a','$ROOT/scripts/lib/acceptance_context.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.ingest_json('.uncle/docs/PREFLIGHT_REPORT.md')" || exit 1
             fi
             require_artifact .uncle/docs/PREFLIGHT_REPORT.md
+            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('a','$ROOT/scripts/lib/acceptance_context.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.export_json('.uncle/docs/PREFLIGHT_REPORT.md')" 2>/dev/null || true
             ;;
         TEST_REVIEW)
             # Preserve the previous findings for the next review and repairs.

@@ -34,6 +34,28 @@ class AcceptanceContext(unittest.TestCase):
             with self.assertRaises(ValueError):
                 module.ingest_json(report, Path(d))
 
+    def test_markdown_report_exports_to_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            report = root/'PREFLIGHT_REPORT.md'
+            report.write_text('# Preflight\n\nSome narrative.\n\n## Acceptance gate\n\n'
+                               '| ID | Required | Status | Evidence |\n|---|---|---|---|\n'
+                               '| P-1 | YES | PASS | python3 found |\n| P-2 | NO | N/A | not needed |\n')
+            payload = module.export_json(report, root)
+            self.assertEqual(payload['rows'][0], {'id': 'P-1', 'required': True, 'status': 'PASS', 'evidence': 'python3 found'})
+            self.assertEqual(payload['rows'][1]['required'], False)
+            self.assertIn('Some narrative.', payload['narrative'])
+            import json
+            stored = json.loads((root/'.uncle/workflow/documents/PREFLIGHT_REPORT.json').read_text())
+            self.assertEqual(stored['rows'][0]['id'], 'P-1')
+
+    def test_markdown_report_export_rejects_missing_table(self):
+        with tempfile.TemporaryDirectory() as d:
+            report = Path(d)/'PREFLIGHT_REPORT.md'
+            report.write_text('# Preflight\n\nNo table here.\n')
+            with self.assertRaises(ValueError):
+                module.export_json(report, Path(d))
+
     def test_non_json_report_is_not_ingested(self):
         with tempfile.TemporaryDirectory() as d:
             report = Path(d)/'VERIFICATION_REPORT.md'

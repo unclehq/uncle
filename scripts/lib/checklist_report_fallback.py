@@ -11,6 +11,7 @@ never turns absent evidence into a PASS.
 """
 import argparse
 from pathlib import Path
+import re
 import sys
 import json
 
@@ -57,19 +58,67 @@ def defects(ids):
             '- **Disposition:** release blocked until required checks have evidence.\n')
 
 
+# A per-check Findings block a model writes and this module can extract
+# reliably: one heading per check ID, then the same bullet fields render_from_json
+# would otherwise have to invent. Anything the model omits stays empty rather
+# than guessed -- this only recovers what was actually stated.
+_FINDING_HEADING = re.compile(r'^###\s+(\S+?)\s*(?::.*)?$', re.M)
+_FINDING_FIELD = re.compile(r'^\s*-\s+\*\*(Action|Expected result|Actual result|Defect(?:s)?):\*\*\s*(.*)$', re.M | re.I)
+
+
+def _findings_by_id(text):
+    """{id: {action, expected_result, actual_result, defect_ids}} parsed from
+    a Findings section's per-check blocks, when the model wrote one."""
+    start = text.find('## Findings')
+    end = text.find('## Acceptance gate')
+    if start == -1:
+        return {}
+    text = text[start:end if end != -1 else len(text)]
+    headings = list(_FINDING_HEADING.finditer(text))
+    found = {}
+    for index, match in enumerate(headings):
+        identifier = match.group(1)
+        body = text[match.end():headings[index + 1].start() if index + 1 < len(headings) else len(text)]
+        fields = {'action': '', 'expected_result': '', 'actual_result': '', 'defect_ids': []}
+        for field_match in _FINDING_FIELD.finditer(body):
+            name, value = field_match.group(1).lower(), field_match.group(2).strip()
+            if name == 'action':
+                fields['action'] = value
+            elif name == 'expected result':
+                fields['expected_result'] = value
+            elif name == 'actual result':
+                fields['actual_result'] = value
+            elif name.startswith('defect'):
+                fields['defect_ids'] = [d.strip() for d in re.split(r'[,\s]+', value) if d.strip() and d.strip().lower() != 'none']
+        found[identifier] = fields
+    return found
+
+
 def render_from_json(project):
     project = Path(project).resolve(); docs = project/'.uncle/docs'
     payload = json.loads((project/'.uncle/workflow/documents/EXECUTE_CHECKLIST.json').read_text())
     if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'execute-checklist':
         raise ValueError('invalid execute-checklist JSON')
     rows = payload['results']
-    (docs/'VERIFICATION_REPORT.md').write_text('# Verification report\n\n## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n' + ''.join('| %s | %s | %s | %s |\n' % (r['id'], 'YES' if r['required'] else 'NO', r['status'], r['evidence'].replace('|', '/')) for r in rows), encoding='utf-8')
+    findings = ['### %s\n\n- **Action:** %s\n- **Expected result:** %s\n- **Actual result:** %s\n- **Defects:** %s\n' %
+                (r['id'], r.get('action') or 'Not recorded.', r.get('expected_result') or 'Not recorded.',
+                 r.get('actual_result') or 'Not recorded.', ', '.join(r.get('defect_ids') or []) or 'None')
+                for r in rows]
+    table = ''.join('| %s | %s | %s | %s |\n' % (r['id'], 'YES' if r['required'] else 'NO', r['status'], r['evidence'].replace('|', '/')) for r in rows)
+    (docs/'VERIFICATION_REPORT.md').write_text(
+        '# Verification report\n\n## Findings\n\n' + '\n'.join(findings) +
+        '\n## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n' + table, encoding='utf-8')
     blockers = [r for r in rows if r['status'] != 'PASS']
-    (docs/'DEFECTS.md').write_text('# Defects\n\n' + ('No defects found.\n' if not blockers else '\n'.join('## %s\n\n- **Status:** %s\n- **Evidence:** %s\n' % (r['id'], r['status'], r['evidence']) for r in blockers)), encoding='utf-8')
+    (docs/'DEFECTS.md').write_text('# Defects\n\n' + ('No defects found.\n' if not blockers else '\n'.join(
+        '## %s\n\n- **Status:** %s\n- **Evidence:** %s\n- **Expected result:** %s\n- **Actual result:** %s\n' %
+        (', '.join(r.get('defect_ids') or [r['id']]), r['status'], r['evidence'],
+         r.get('expected_result') or 'Not recorded.', r.get('actual_result') or 'Not recorded.')
+        for r in blockers)), encoding='utf-8')
 
 
 def export_from_markdown(project):
     project = Path(project).resolve(); text = (project/'.uncle/docs/VERIFICATION_REPORT.md').read_text()
+    findings = _findings_by_id(text)
     rows = []
     active = False
     for line in text.splitlines():
@@ -77,7 +126,9 @@ def export_from_markdown(project):
         if active and line.startswith('|'):
             cells = [x.strip() for x in line.strip('|').split('|')]
             if len(cells) == 4 and cells[0] not in ('ID', '---') and not cells[0].startswith('---'):
-                rows.append({'id': cells[0], 'required': cells[1] == 'YES', 'status': cells[2], 'evidence': cells[3]})
+                row = {'id': cells[0], 'required': cells[1] == 'YES', 'status': cells[2], 'evidence': cells[3]}
+                row.update(findings.get(cells[0], {}))
+                rows.append(row)
     if not rows: raise ValueError('verification report has no acceptance rows')
     target = project/'.uncle/workflow/documents/EXECUTE_CHECKLIST.json'; target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({'schema':'uncle.artifact/v1','kind':'execute-checklist','results':rows}, indent=2)+'\n')

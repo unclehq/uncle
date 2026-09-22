@@ -159,22 +159,28 @@ def _ensure_uncle_gitignored(project_root):
     except OSError:
         return
     lines = existing.splitlines()
-    # A bare `.uncle` or `.uncle/` line -- written by an earlier version of
-    # this function, or by hand -- excludes the whole tree with no exception,
-    # silently breaking the visibility .uncle/docs/ depends on. Upgrade it in
-    # place rather than leaving it, the same repair this repository's own
-    # .gitignore needed. Anything else naming .uncle (a narrower rule someone
-    # wrote on purpose, or the upgraded form already) is left alone.
-    bare = next((i for i, line in enumerate(lines) if line.strip().strip("/") == ".uncle"), None)
-    if bare is not None:
-        lines[bare:bare + 1] = ['.uncle/*', '!.uncle/docs/']
+    # Normalize Uncle's own legacy and canonical entries as one block. A
+    # project can have a stale bare `.uncle` after an earlier canonical pair;
+    # replacing just that bare line added another pair on every first-run
+    # refresh. Keep the first occurrence's position and remove every duplicate
+    # or legacy spelling, while leaving unrelated user rules untouched.
+    managed = {'.uncle', '.uncle/', '.uncle/*', '!.uncle/docs/'}
+    positions = [index for index, line in enumerate(lines) if line.strip() in managed]
+    if positions:
+        first = positions[0]
+        normalized = []
+        for index, line in enumerate(lines):
+            if index == first:
+                normalized.extend(['.uncle/*', '!.uncle/docs/'])
+            if line.strip() not in managed:
+                normalized.append(line)
+        if normalized == lines:
+            return
         try:
             with open(path, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write("\n".join(lines) + "\n")
+                fh.write("\n".join(normalized) + "\n")
         except OSError:
             pass
-        return
-    if any(line.strip() in ('.uncle/*', '!.uncle/docs/') for line in lines):
         return
     try:
         with open(path, "a", encoding="utf-8", newline="\n") as fh:
@@ -711,7 +717,7 @@ SUPERVISION_MARKER_RE = re.compile(r'\s*' + re.escape(supervision_lib.MARKER_PRE
 
 SUPERVISION_DESC = {
     "enabled": "Opt in to event-triggered diagnosis (true/false). Off, nothing else here is read and no supervisor process ever starts; turning it off mid-run cancels the pending diagnosis and keeps the counters.",
-    "runner": "The CLI that answers a diagnosis. Only claude is supported; anything else reports unavailable, never falls back. Corrections are fixed templates; the model's wording never reaches a stage.",
+    "runner": "The CLI that answers a diagnosis. Choose an installed supported runner; its model picker updates to that runner's catalog. Corrections are fixed templates; the model's wording never reaches a stage.",
     "model": "Model id passed to the supervisor runner (default sonnet).",
     "effort": "Reasoning effort for the supervisor: low, medium or high.",
     "max_interventions": "Corrections applied per stage per run (default 2; 0 disables corrections). The next trigger asks you instead of calling a model.",
@@ -1294,6 +1300,9 @@ class UncleTUI:
         if self.picker_kind == "effort":
             return [("option", e) for e in EFFORTS] + [("custom", "Custom… (type an effort)")]
         if self.picker_kind == "runner":
+            if self.picker_target == "!supervision":
+                return [("option", runner) for runner in runners_for(AGENT)
+                        if runner in supervision_lib.SUPPORTED_RUNNERS]
             side = STAGE_SIDE.get(self.picker_target, AGENT)
             return [("option", r) for r in runners_for(side)]
         if self.picker_kind == "billing":
@@ -1304,14 +1313,15 @@ class UncleTUI:
             # is not, and a typed value here would read as a setting while
             # meaning nothing to the flag it becomes.
             return [("option", v) for v in NETWORK_CHOICES]
-        if self.picker_kind == "model" and self.stage_runner(self.picker_target) == "self-hosted":
+        runner = (self.supervision.get("runner", supervision_lib.DEFAULTS["runner"])
+                  if self.picker_target == "!supervision" else self.stage_runner(self.picker_target))
+        if self.picker_kind == "model" and runner == "self-hosted":
             return ([("option", name) for name in sorted(self.stage_api_keys.get("__opencode_models__", {}))]
                     + [("custom", "Custom… (type a model id)")])
         if self.picker_kind == "model":
             # Each vendor picker offers only its own catalogue: ids from a
             # runner the stage does not use would be passed to a shim that
             # never heard of them.
-            runner = self.stage_runner(self.picker_target)
             if runner in ("claude", "codex", "kimi"):
                 catalog = {"claude": MODEL_CATALOG_CLAUDE,
                            "codex": MODEL_CATALOG_CODEX,
@@ -1348,6 +1358,9 @@ class UncleTUI:
     def _picker_current(self):
         """The effective value the active picker is choosing on behalf of."""
         stage = self.picker_target
+        if stage == "!supervision":
+            return self._field_value(stage, self.picker_kind) or supervision_lib.format_value(
+                self.picker_kind, supervision_lib.DEFAULTS.get(self.picker_kind, ""))
         if self.picker_kind == "runner":
             return self.stage_runner(stage)
         if self.picker_kind == "effort":
@@ -1364,14 +1377,19 @@ class UncleTUI:
         self.notice = ""
         self.picker_kind = kind
         self.picker_target = target
-        if kind == "runner" and not runners_for(STAGE_SIDE.get(target, AGENT)):
+        available_runners = ([(runner) for runner in runners_for(AGENT)
+                              if runner in supervision_lib.SUPPORTED_RUNNERS]
+                             if target == "!supervision" else runners_for(STAGE_SIDE.get(target, AGENT)))
+        if kind == "runner" and not available_runners:
             self.notice = "No agents installed. Install claude, codex, kimi, cline, or opencode and add its executable to PATH."
             return
-        if kind in ("name", "base_url", "api_key", "approval_name") or target == "!supervision":
+        if kind in ("name", "base_url", "api_key", "approval_name"):
             self.input_buf = self._field_value(target, kind)
             self.state = "config_edit"
             return
-        if kind == "model" and self.stage_runner(target) == "self-hosted" and not self.stage_api_keys.get("__opencode_models__"):
+        runner = (self.supervision.get("runner", supervision_lib.DEFAULTS["runner"])
+                  if target == "!supervision" else self.stage_runner(target))
+        if kind == "model" and runner == "self-hosted" and not self.stage_api_keys.get("__opencode_models__"):
             self.notice = "Set up your endpoint in Configure → Configure OpenCode / self hosting to discover models first."
             return
         self.pick_filter = ""
@@ -1430,9 +1448,11 @@ class UncleTUI:
                 self._set_field(self.picker_target, "model", "")
         self._set_field(self.picker_target, self.picker_kind, text)
         # Choosing a non-cline runner drops the model row out of the popup.
-        self.stage_sel = min(self.stage_sel,
-                             len(self.stage_fields(self.picker_target)) - 1)
-        self.state = "config" if self.picker_target == "!misc" else "stage"
+        if self.picker_target in ("!misc", "!supervision"):
+            self.state = "config"
+            return
+        self.stage_sel = min(self.stage_sel, len(self.stage_fields(self.picker_target)) - 1)
+        self.state = "stage"
 
     @staticmethod
     def _valid_issue(value):

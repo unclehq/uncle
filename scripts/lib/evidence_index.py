@@ -53,19 +53,35 @@ def read_json(path):
         return {}
 
 
+def generated_input_name(root, name):
+    """Resolve generated briefs under .uncle/docs, retaining root inputs.
+
+    A root copy is explicitly user-authored and therefore wins. Otherwise the
+    name denotes Uncle's generated document in its private docs directory.
+    """
+    if name in ('REQUIREMENTS.md', 'CHANGE_REQUEST.md') and not (root / name).exists():
+        return '.uncle/docs/' + name
+    return name
+
+
 def packet(project, state, stage, family='app'):
     root, state = Path(project).resolve(), Path(state).resolve()
     if not state.is_relative_to(root):
         raise ValueError('Evidence state must be inside the project')
     # Driver-owned workers are execution slices, not independently configured
     # workflow stages. Every runner consumes the parent stage's evidence.
-    if '-review-worker-' in stage:
+    if stage.startswith('adversarial-review-worker-'):
+        stage = 'adversarial-review'
+    elif stage.startswith('test-review-worker-'):
+        stage = 'test-review'
+    elif '-review-worker-' in stage:
         stage = stage.split('-review-worker-', 1)[0]
     elif '-worker-' in stage:
         stage = stage.split('-worker-', 1)[0]
     if not re.fullmatch(r'[a-z0-9-]+', stage):
         raise ValueError('Invalid stage name')
     names = list(STAGES.get(stage, ['REQUIREMENTS.md', '.uncle/docs/UPDATED_PROJECT_PLAN.md', '.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md'] + REPORTS))
+    names = [generated_input_name(root, name) for name in names]
     if stage == 'adversarial-review' and family == 'change':
         names = ['.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md', '.uncle/docs/BASELINE_REPORT.md']
     if stage != 'manual-checklist-base':

@@ -85,24 +85,34 @@ class SelfHosted(unittest.TestCase):
                                  dict(model='deepseek', **profile))
 
     def test_shell_runner_mapping_matches_every_worker_family(self):
-        parents = ('adversarial-review', 'updated-plan', 'updated-change-plan',
-                   'final-audit', 'manual-checklist', 'execute-checklist')
+        workers_and_parents = (
+            ('adversarial-review-worker-security', 'adversarial-review'),
+            ('test-review-worker-coverage', 'test-review'),
+            ('updated-plan-review-worker-scope', 'updated-plan'),
+            ('updated-change-plan-review-worker-scope', 'updated-change-plan'),
+            ('manual-checklist-review-worker-base-coverage', 'manual-checklist'),
+            ('final-audit-review-worker-verification', 'final-audit'),
+            ('execute-checklist-worker-batch-1', 'execute-checklist'),
+            ('implementation-step-3', 'implementation'),
+            ('implementation-report', 'implementation'),
+        )
+        parents = tuple(dict.fromkeys(parent for _worker, parent in workers_and_parents))
         self.config.write_text(''.join('%s.runner self-hosted\n%s.model local/deepseek-v4-flash\n' % (stage, stage)
                                        for stage in parents), encoding='utf-8')
-        workers = [parent + '-review-worker-probe' for parent in parents[:-1]]
-        workers.append('execute-checklist-worker-MC-001')
         script = '''
 source "$ROOT/scripts/lib/stage-config.sh"
 for stage in "$@"; do
-    printf '%s=%s:%s\\n' "$stage" "$(uncle_config_stage "$stage")" "$(uncle_stage_model "$stage")"
+    runner="$(uncle_stage_runner "$stage")"
+    printf '%s=%s:%s:%s:%s\\n' "$stage" "$(uncle_config_stage "$stage")" "$runner" \\
+        "$(uncle_stage_model "$stage" "$runner")" "$(uncle_stage_effort "$stage")"
 done
 '''
-        result = subprocess.run([bash_executable(), '-c', script, 'workers', *workers],
+        result = subprocess.run([bash_executable(), '-c', script, 'workers', *(worker for worker, _parent in workers_and_parents)],
                                 env=dict(os.environ, ROOT=str(ROOT), UNCLE_CONFIG=str(self.config)),
                                 text=True, encoding='utf-8', capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        for worker, parent in zip(workers, parents):
-            self.assertIn('%s=%s:local/deepseek-v4-flash' % (worker, parent), result.stdout)
+        for worker, parent in workers_and_parents:
+            self.assertIn('%s=%s:self-hosted:local/deepseek-v4-flash:none' % (worker, parent), result.stdout)
 
     def test_every_runner_inherits_every_dynamic_stage_parent(self):
         script = '''
@@ -110,7 +120,7 @@ source "$ROOT/scripts/lib/stage-config.sh"
 stage="$1"
 printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stage")" "$(uncle_stage_cmd "$stage")"
 '''
-        review_workers = ('adversarial-review-review-worker-probe',
+        review_workers = ('adversarial-review-worker-probe', 'test-review-worker-probe',
                           'updated-plan-review-worker-probe',
                           'updated-change-plan-review-worker-probe',
                           'final-audit-review-worker-probe',
@@ -119,7 +129,9 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
                                            'implementation-step-3',
                                            'manual-checklist-base', 'manual-checklist-delta')
         parents = {
-            **{stage: stage.split('-review-worker-', 1)[0] for stage in review_workers},
+            **{stage: ('adversarial-review' if stage.startswith('adversarial-review-worker-')
+                       else 'test-review' if stage.startswith('test-review-worker-')
+                       else stage.split('-review-worker-', 1)[0]) for stage in review_workers},
             'execute-checklist-worker-MC-001': 'execute-checklist',
             'implementation-step-3': 'implementation',
             'manual-checklist-base': 'manual-checklist',
@@ -439,6 +451,7 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         with tempfile.TemporaryDirectory() as directory:
             command, _ = opencode_invocation('agent', values, 'test', self.root, directory)
         self.assertEqual(command[command.index('--model')+1], 'local/local-model:Q4')
+        self.assertEqual(command[command.index('--variant')+1], 'none')
 
     def test_requirements_chat_response_is_saved_before_success(self):
         import self_hosted
@@ -468,6 +481,33 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         self.assertEqual((self.root/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md').read_text(), document)
         self.assertFalse((self.root/'unwanted.txt').exists())
 
+    def test_combined_requirements_plan_publishes_the_interpretation(self):
+        import self_hosted
+        document = '# Requirements\n\n## 10. Definition of done\nPrint Hello World.\n'
+        def generate(side, values, prompt, staged, **kwargs):
+            (staged/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md').write_text(document, encoding='utf-8')
+            (staged/'.uncle/docs/PROJECT_PLAN.md').write_text('discarded combined-plan draft', encoding='utf-8')
+            return 'Both documents written.', 1
+        with patch.object(self_hosted, '_run_opencode', side_effect=generate):
+            run_opencode('agent', self.values(),
+                         'You perform two consecutive roles in a single pass', self.root,
+                         stage='project-plan')
+        self.assertEqual((self.root/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md').read_text(), document)
+        self.assertFalse((self.root/'.uncle/docs/PROJECT_PLAN.md').exists())
+
+    def test_staged_opencode_can_read_generated_requirements(self):
+        import self_hosted
+        source = self.root/'.uncle/docs/REQUIREMENTS.md'
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text('# Requirements\n\nBuild it.\n', encoding='utf-8')
+        document = '# Requirements\n\n## 10. Definition of done\nBuild it.\n'
+        def generate(side, values, prompt, staged, **kwargs):
+            self.assertEqual((staged/'.uncle/docs/REQUIREMENTS.md').read_text(encoding='utf-8'), source.read_text(encoding='utf-8'))
+            (staged/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md').write_text(document, encoding='utf-8')
+            return 'written', 1
+        with patch.object(self_hosted, '_run_opencode', side_effect=generate):
+            run_opencode('agent', self.values(), 'Interpret', self.root, stage='requirements')
+
     def test_document_preamble_and_format_retry(self):
         import self_hosted
         text = '# REQUIREMENTS_INTERPRETATION.md\n\n## 10. Definition of done\nPrint Hello World.\n'
@@ -496,10 +536,12 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
                 command, env = opencode_invocation(side, self.values(), 'Test prompt', self.root, directory)
                 self.assertEqual(command[1:4], ['run', '--format', 'json'])
                 self.assertEqual(command[command.index('--model')+1], 'local/local-model:Q4')
+                self.assertEqual(command[command.index('--variant')+1], 'none')
                 self.assertEqual(command[command.index('--dir')+1], str(self.root))
                 config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
                 self.assertEqual(config['provider']['local']['options']['baseURL'], self.values()['base_url'])
-                self.assertNotIn('options', config['provider']['local']['models']['local-model:Q4'])
+                self.assertEqual(config['provider']['local']['models']['local-model:Q4']['options'],
+                                 {'reasoningEffort': 'none'})
                 self.assertEqual(env['UNCLE_OPENCODE_API_KEY'], 'test-secret')
                 self.assertNotIn('test-secret', str(command) + env['OPENCODE_CONFIG_CONTENT'])
                 self.assertEqual(config['permission']['edit'], 'allow' if side == 'agent' else 'deny')
@@ -510,8 +552,10 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
 
     def test_effort_reaches_the_opencode_model_options(self):
         with tempfile.TemporaryDirectory() as directory:
-            _, env = opencode_invocation('agent', dict(self.values(), effort='high'), 'Test prompt', self.root, directory)
+            command, env = opencode_invocation('agent', dict(self.values(), effort='high'), 'Test prompt', self.root, directory)
             config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+            self.assertEqual(command[command.index('--model')+1], 'local/local-model:Q4')
+            self.assertEqual(command[command.index('--variant')+1], 'high')
             self.assertEqual(config['provider']['local']['models']['local-model:Q4']['options'],
                              {'reasoningEffort': 'high'})
 
@@ -542,6 +586,7 @@ assert os.environ['UNCLE_OPENCODE_API_KEY']=='secret-with-#-characters'
 config=json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])
 assert config['provider']['local']['options']['baseURL']=='http://localhost:8123/v1'
 assert args[args.index('--model')+1]=='local/local-model:Q4'
+assert args[args.index('--variant')+1]=='none'
 assert 'secret-with-#-characters' not in str(args)
 assert pathlib.Path(args[args.index('--file')+1]).read_text(encoding='utf-8').startswith('Test prompt')
 pathlib.Path(os.environ['RECORD']).write_text(str(pathlib.Path(os.environ['XDG_CONFIG_HOME']).parent),encoding='utf-8')
@@ -709,6 +754,15 @@ sys.exit(7 if mode=='fail' else 0)
             self.assertNotIn('triage', [row.split()[0] for row in ui._config_items()])
             ui.config_section = 'opencode'
             self.assertIn('1 loaded', ui._config_items()[1])
+            ui.config_section = 'supervision'
+            with patch.object(module, 'runners_for', return_value=['claude', 'codex', 'self-hosted']):
+                ui._open_picker('runner', '!supervision')
+                self.assertEqual(ui.state, 'picker')
+                self.assertEqual(ui._picker_rows(), [('option', 'claude'), ('option', 'codex'), ('option', 'self-hosted')])
+            ui._open_picker('effort', '!supervision')
+            self.assertEqual(ui._picker_rows()[:4], [('option', 'none'), ('option', 'low'), ('option', 'medium'), ('option', 'high')])
+            ui._open_picker('model', '!supervision')
+            self.assertIn(('model', 'claude-sonnet-5'), ui._picker_rows())
             self.assertEqual(ui.stage_fields('implementation'),['runner','effort','model'])
             self.assertEqual(ui._field_display('@local/local-model:Q4','api_key'),'********')
             ui.save_config()

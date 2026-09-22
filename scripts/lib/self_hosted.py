@@ -127,11 +127,19 @@ def config_stage(stage, values):
     """
     if stage in ('manual-checklist-base', 'manual-checklist-delta'):
         return 'manual-checklist'
+    if stage.startswith('adversarial-review-worker-'):
+        return 'adversarial-review'
+    if stage.startswith('test-review-worker-'):
+        return 'test-review'
     # Review-panel names contain both "-review-" and "-worker-".  Strip the
     # complete review-worker suffix before the generic worker case so, for
     # example, updated-plan-review-worker-scope inherits updated-plan rather
     # than looking for a nonexistent updated-plan-review config row.
-    if '-review-worker-' in stage:
+    if stage.startswith('adversarial-review-worker-'):
+        stage = 'adversarial-review'
+    elif stage.startswith('test-review-worker-'):
+        stage = 'test-review'
+    elif '-review-worker-' in stage:
         return stage.split('-review-worker-', 1)[0]
     if '-worker-' in stage:
         return stage.split('-worker-', 1)[0]
@@ -321,11 +329,13 @@ def opencode_invocation(side, values, prompt, root, directory, allow_shell=True)
                   'list': 'allow', 'edit': 'allow' if side == 'agent' else 'deny',
                   'bash': 'allow' if side == 'agent' and allow_shell else 'deny',
                   'external_directory': 'deny'}
-    entry = {'name': model, 'tool_call': True, 'limit': {'context': context, 'output': output}}
-    if values.get('effort'):
-        # Passthrough per opencode's model options; the endpoint decides
-        # whether a reasoning effort changes anything.
-        entry['options'] = {'reasoningEffort': values['effort']}
+    # Self-hosted stages intentionally default to no reasoning. Keep that
+    # value in both places OpenCode understands it: the model option is sent
+    # to the OpenAI-compatible endpoint and the selector makes it explicit to
+    # the OpenCode CLI.
+    effort = values.get('effort') or 'none'
+    entry = {'name': model, 'tool_call': True, 'limit': {'context': context, 'output': output},
+             'options': {'reasoningEffort': effort}}
     config = {
         '$schema': 'https://opencode.ai/config.json',
         'enabled_providers': ['local'], 'model': 'local/' + model,
@@ -355,8 +365,13 @@ def opencode_invocation(side, values, prompt, root, directory, allow_shell=True)
         folder = work/leaf
         folder.mkdir()
         env[key] = str(folder)
+    # OpenCode 1.x selects an effort variant with its dedicated flag. A
+    # `provider/model#variant` selector is parsed as a literal model id by
+    # that CLI (for example, `local/foo#none`) and therefore fails lookup.
+    # Keep the model id plain and make the variant explicit.
+    model_ref = 'local/' + model
     command = [os.environ.get('WORKFLOW_OPENCODE_CMD', 'opencode'), 'run', '--format', 'json',
-               '--dir', str(root), '--model', 'local/' + model, '--agent', 'uncle',
+               '--dir', str(root), '--model', model_ref, '--variant', effort, '--agent', 'uncle',
                '--file', str(work/'prompt.txt'), '--', 'Follow the attached workflow instructions.']
     return command, env
 
@@ -384,6 +399,25 @@ def opencode_usage(path):
 
 
 PLAN_ARTIFACTS = {'requirements': '.uncle/docs/REQUIREMENTS_INTERPRETATION.md', 'project-plan': '.uncle/docs/PROJECT_PLAN.md', 'updated-plan': '.uncle/docs/UPDATED_PROJECT_PLAN.md'}
+
+
+def copy_generated_documents(root, staged):
+    """Make workflow documents visible inside OpenCode's isolated project.
+
+    The staging copy deliberately excludes all of `.uncle` because it contains
+    state, logs, and credentials. Generated Markdown lives in `.uncle/docs`,
+    though, and is legitimate stage input. Copy only regular top-level files:
+    no workflow state, credentials, directories, or symlink targets cross the
+    isolation boundary.
+    """
+    source_docs = root / '.uncle' / 'docs'
+    if not source_docs.is_dir() or source_docs.is_symlink():
+        return
+    destination = staged / '.uncle' / 'docs'
+    destination.mkdir(parents=True, exist_ok=True)
+    for source in source_docs.iterdir():
+        if source.suffix == '.md' and source.is_file() and not source.is_symlink():
+            shutil.copy2(source, destination / source.name)
 
 
 def validate_plan(text, protected=True):
@@ -561,7 +595,17 @@ def validate_requirements(text):
 
 
 def run_opencode(side, values, prompt, root, stage=None, usage=None):
-    artifact = PLAN_ARTIFACTS.get(stage or os.environ.get('UNCLE_STATUS_STAGE', '')) if side == 'agent' else None
+    stage_name = stage or os.environ.get('UNCLE_STATUS_STAGE', '')
+    artifact = PLAN_ARTIFACTS.get(stage_name) if side == 'agent' else None
+    # `requirements-plan.md` deliberately shares the project-plan invocation
+    # to avoid a second cold model context.  Its first required artifact is
+    # the interpretation, however.  The isolated OpenCode adapter can safely
+    # publish one artifact per invocation; publish that prerequisite and let
+    # the normal PROJECT_PLAN state create the plan when necessary.  Without
+    # this distinction the interpretation remained in the disposable staged
+    # tree and VALIDATE_REQUIREMENTS inevitably failed.
+    if stage_name == 'project-plan' and 'You perform two consecutive roles in a single pass' in prompt:
+        artifact = PLAN_ARTIFACTS['requirements']
     if not artifact:
         return _run_opencode(side, values, prompt, root, usage=usage)
     target = root / artifact
@@ -576,6 +620,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         def ignore(directory, names):
             return set(excluded(directory, names)) | {name for name in names if (Path(directory)/name).is_symlink()}
         shutil.copytree(root, staged, ignore=ignore)
+        copy_generated_documents(root, staged)
         candidate = staged / artifact
         candidate.parent.mkdir(parents=True, exist_ok=True)
         if candidate.exists():

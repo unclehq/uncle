@@ -81,6 +81,15 @@ uncle_first_configured_model_stage() {
 # Base and delta are executions of the configured checklist stage.
 uncle_config_stage() {
     case "$1" in
+        # The adversarial panel's historical names are
+        # `adversarial-review-worker-<lens>`. Here `review` belongs to the
+        # parent stage, rather than marking a `*-review-worker-*` suffix.
+        # Handle it before the generic form, which would otherwise reduce the
+        # parent to the nonexistent `adversarial` config row.
+        adversarial-review-worker-*) printf 'adversarial-review' ;;
+        # Likewise, `test-review-worker-<lens>` has `review` in the parent
+        # name, not as a separator before `worker`.
+        test-review-worker-*) printf 'test-review' ;;
         *-review-worker-*) printf '%s' "${1%%-review-worker-*}" ;;
         preview-build)
             local first_model_stage

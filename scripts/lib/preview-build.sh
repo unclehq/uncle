@@ -70,7 +70,7 @@ preview_build_model() {
 preview_build_start() {
     [[ "$PREVIEW_BUILD" == "1" ]] || return 0
     [[ "$PREVIEW_STARTED" == 0 ]] || return 0
-    [[ -s .uncle/docs/PROJECT_PLAN.md || -s "${DOCUMENT_BUDGET_SOURCE:-REQUIREMENTS.md}" ]] || return 0
+    [[ -s .uncle/docs/PROJECT_PLAN.md || -s PROJECT_PLAN.md || -s "${DOCUMENT_BUDGET_SOURCE:-.uncle/docs/REQUIREMENTS.md}" || -s .uncle/docs/REQUIREMENTS.md || -s REQUIREMENTS.md ]] || return 0
 
     # Only a web application or a command line tool has anything to show this
     # early. A library, an API or a daemon would spend an implementation's worth
@@ -97,11 +97,13 @@ preview_build_start() {
     # review changed anything the code depends on. A preview built from the
     # brief alone records nothing, and is never taken as built to the plan.
     rm -f "$STATE_DIR/preview-build.plan"
-    if [[ -s .uncle/docs/PROJECT_PLAN.md ]]; then
-        plan_material_hash .uncle/docs/PROJECT_PLAN.md > "$STATE_DIR/preview-build.plan" 2>/dev/null || true
+    if [[ -s .uncle/docs/PROJECT_PLAN.md || -s PROJECT_PLAN.md ]]; then
+        local plan_file=.uncle/docs/PROJECT_PLAN.md
+        [[ -s "$plan_file" ]] || plan_file=PROJECT_PLAN.md
+        plan_material_hash "$plan_file" > "$STATE_DIR/preview-build.plan" 2>/dev/null || true
     fi
     echo
-    if [[ -s .uncle/docs/PROJECT_PLAN.md ]]; then
+    if [[ -s .uncle/docs/PROJECT_PLAN.md || -s PROJECT_PLAN.md ]]; then
         echo "Building a $kind preview from the plan while the review runs."
     else
         echo "Building a $kind preview from the brief while planning runs."

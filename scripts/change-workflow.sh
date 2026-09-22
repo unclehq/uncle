@@ -20,10 +20,10 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
-# Every workflow-generated document (REQUIREMENTS.md/CHANGE_REQUEST.md
-# excepted -- generated-input.sh) lives here, never the project root.
+# Every workflow-generated document lives here, never the project root.
 mkdir -p .uncle/docs
-export DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md
+. "$ROOT/scripts/lib/generated-input.sh"
+export DOCUMENT_BUDGET_SOURCE="$(generated_input_path CHANGE_REQUEST.md)"
 
 # Prompt files are named relative to the uncle install, but the cwd is now the
 # project. Resolve them the way gates are resolved: the project's own copy
@@ -2412,7 +2412,7 @@ if [[ -n "${STAGEGATE_ORIGIN_REPO:-}" && -n "${STAGEGATE_ORIGIN_ISSUE:-}" ]]; th
     ORIGIN_BOUND=1
 fi
 
-python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" CHANGE_REQUEST.md \
+python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" "$DOCUMENT_BUDGET_SOURCE" \
     "${STAGEGATE_ORIGIN_REPO:-}#${STAGEGATE_ORIGIN_ISSUE:-}" || true
 
 VERDICT_WRITTEN_THIS_RUN=0
@@ -2421,7 +2421,7 @@ VERDICT_WRITTEN_THIS_RUN=0
 # existing analysis gate. Editing any of them requires a fresh plan afterward.
 change_plan_draft_key() {
     local file
-    for file in CHANGE_REQUEST.md .uncle/docs/BASELINE_REPORT.md .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md; do
+    for file in "$DOCUMENT_BUDGET_SOURCE" .uncle/docs/BASELINE_REPORT.md .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md; do
         [[ -s "$file" ]] || return 1
         hash_file "$file" || return 1
     done
@@ -2584,7 +2584,7 @@ while true; do
 
     case "$state" in
         DERIVE_BRIEF)
-            require_file CHANGE_REQUEST.md
+            require_file "$DOCUMENT_BUDGET_SOURCE"
             # A request a human wrote is not ours to rewrite. Derivation runs
             # only when the prerequisite check says rows are still unfilled,
             # which is exactly the seeded-from-an-issue case.
@@ -2596,18 +2596,18 @@ while true; do
             fi
             run_claude prompts/derive-brief.md derive-brief \
                 "$MODEL_BASELINE" "" 60 "$BUDGET_CHANGE_SPEC"
-            require_file CHANGE_REQUEST.md
+            require_file "$DOCUMENT_BUDGET_SOURCE"
             set_state WAIT_DERIVE_APPROVAL
             ;;
 
         WAIT_DERIVE_APPROVAL)
             human_gate APPROVE \
-                CHANGE_REQUEST.md DERIVED_BRIEF
+                "$DOCUMENT_BUDGET_SOURCE" DERIVED_BRIEF
             set_state ANALYZE
             ;;
 
         ANALYZE)
-            require_file CHANGE_REQUEST.md
+            require_file "$DOCUMENT_BUDGET_SOURCE"
             # A fresh run legitimately claims this checkout for its issue.
             write_origin
 

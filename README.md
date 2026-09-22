@@ -8,14 +8,13 @@
 
 </div>
 
-**Give Uncle an issue. Talk to it while it works.  Get a verified pull request.**
+*Give Uncle an issue. Talk to it while it works. Get a verified pull request.**
 
+Uncle is a terminal-native supervisor and integrity layer for AI coding agents.
 
-Uncle is a terminal-native agentic software engineer that works inside your repository.
-
-Give it requirements or a GitHub issue. Uncle plans the change, coordinates the coding agents you already use, independently reviews their work, verifies the result, and prepares the pull request with you.
-
-Underneath, Uncle treats every software change as an integrity chain. The agents doing the work are untrusted and replaceable. Uncle establishes what was approved, what was implemented, what was reviewed, what was verified, and exactly what is being published.
+Use Claude, Codex, OpenCode, Cline, Kimi, or the agents you already have.
+Uncle coordinates the change while keeping implementation, independent
+review, verification, human authority, and publication separate.
 
 **Delegate the work, not the responsibility.**
 

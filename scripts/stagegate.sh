@@ -20,10 +20,12 @@ if [[ ! -d "$PROJECT_ROOT" ]]; then
 fi
 cd "$PROJECT_ROOT"
 PROJECT_ROOT="$PWD"
-# Every workflow-generated document (REQUIREMENTS.md/CHANGE_REQUEST.md
-# excepted -- generated-input.sh) lives here, never the project root.
+# Every workflow-generated document lives here, never the project root.
 mkdir -p .uncle/docs
-export DOCUMENT_BUDGET_SOURCE=REQUIREMENTS.md
+. "$ROOT/scripts/lib/generated-input.sh"
+# A generated brief is stored in .uncle/docs; a hand-authored root brief keeps
+# its long-standing precedence through generated_input_path.
+export DOCUMENT_BUDGET_SOURCE="$(generated_input_path REQUIREMENTS.md)"
 
 # Prompt files are named relative to the uncle install, but the cwd is now the
 # project. Resolve them the way gates are resolved: the project's own copy
@@ -95,6 +97,7 @@ APPROVAL_DIR="$STATE_DIR/approvals"
 LOG_DIR="$STATE_DIR/logs"
 SPEC_DIR="$STATE_DIR/speculative"
 STATE_FILE="$STATE_DIR/state"
+BRIEF_SNAPSHOT="$STATE_DIR/REQUIREMENTS.md.source"
 export UNCLE_RUNNER_POOL_OWNER_PID="${UNCLE_RUNNER_POOL_OWNER_PID:-$$}"
 
 # Post-implementation gate: the generated document the operator reads, and the
@@ -125,6 +128,22 @@ UNTRACKED_BASELINE="$STATE_DIR/untracked-before.txt"
 WORKFLOW_UNTRACKED_BASELINE="$UNTRACKED_BASELINE"
 
 mkdir -p "$APPROVAL_DIR" "$LOG_DIR" "$SPEC_DIR"
+
+# The generated brief is an input, not stage output. A preview or an agent may
+# create and remove its own files, but it must never be able to make the
+# approved source brief disappear before the planner reads it. Preserve the
+# first readable copy and restore only when the live input is missing; a human
+# edit remains authoritative and is never overwritten.
+preserve_requirements_source() {
+    if [[ -s "$DOCUMENT_BUDGET_SOURCE" && ! -s "$BRIEF_SNAPSHOT" ]]; then
+        cp "$DOCUMENT_BUDGET_SOURCE" "$BRIEF_SNAPSHOT"
+    elif [[ ! -s "$DOCUMENT_BUDGET_SOURCE" && -s "$BRIEF_SNAPSHOT" ]]; then
+        mkdir -p "$(dirname "$DOCUMENT_BUDGET_SOURCE")"
+        cp "$BRIEF_SNAPSHOT" "$DOCUMENT_BUDGET_SOURCE"
+        echo "Restored missing requirements source: $DOCUMENT_BUDGET_SOURCE"
+    fi
+}
+preserve_requirements_source
 
 # Run the stage that follows a human gate in the background while the human is
 # still reading. Set to 0 to make every stage strictly serial again.
@@ -2170,7 +2189,7 @@ run_gated_stage() {
     run_stage "$stage"
 }
 
-python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" REQUIREMENTS.md \
+python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" "$DOCUMENT_BUDGET_SOURCE" \
     "${STAGEGATE_ORIGIN_REPO:-}#${STAGEGATE_ORIGIN_ISSUE:-}" || true
 
 # A stop reason belongs to the run that recorded it. Left in place, a
@@ -2178,6 +2197,7 @@ python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" REQUIREMENTS.md \
 rm -f "$STATE_DIR/stop-reason"
 
 while true; do
+    preserve_requirements_source
     python3 "$ROOT/scripts/lib/rerun_stage.py" app || exit 1
     state="$(get_state)"
     if declare -f perf_stage >/dev/null; then perf_stage "$state"; fi

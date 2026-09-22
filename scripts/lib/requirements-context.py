@@ -51,7 +51,8 @@ def render(project):
     lines = ['\n## Driver requirements inputs',
              'Start with the brief below and this shallow inventory. No recursive discovery unless a concrete requirement needs it.',
              'This packet is not a substitute for omitted source requirements.']
-    path = root / 'REQUIREMENTS.md'
+    root_copy = root / 'REQUIREMENTS.md'
+    path = root_copy if root_copy.exists() else root / '.uncle' / 'docs' / 'REQUIREMENTS.md'
     if path.resolve().is_relative_to(root) and path.is_file():
         digest = hashlib.sha256()
         with path.open('rb') as stream:
@@ -59,11 +60,11 @@ def render(project):
             digest.update(excerpt)
             while chunk := stream.read(65536):
                 digest.update(chunk)
-        lines += ['REQUIREMENTS.md SHA-256 ' + digest.hexdigest(), excerpt.decode('utf-8', errors='replace')]
+        lines += [str(path.relative_to(root)) + ' SHA-256 ' + digest.hexdigest(), excerpt.decode('utf-8', errors='replace')]
         if path.stat().st_size > len(excerpt):
-            lines.append('[Brief truncated; read remaining REQUIREMENTS.md directly.]')
+            lines.append('[Brief truncated; read the remaining requirements document directly.]')
     else:
-        lines.append('REQUIREMENTS.md unavailable; do not invent its contents.')
+        lines.append('Requirements document unavailable; do not invent its contents.')
     lines.append('\nTop-level entries (at most 80; no directory traversal):')
     for index, item in enumerate(sorted(root.iterdir(), key=lambda p: p.name)):
         if index == 80:

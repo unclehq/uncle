@@ -869,6 +869,22 @@ COUNT=$((COUNT + 1))
 [[ "$(cat "$GPROJ4/.gitignore")" == $'.uncle/*\n!.uncle/docs/' ]] \
     || fail "an already-upgraded .gitignore was changed: $(cat "$GPROJ4/.gitignore")"
 
+# A stale bare entry after prior canonical pairs used to cause every TUI
+# first-run refresh to append one more pair. Repair all existing duplication
+# once, then prove another refresh is byte-for-byte idempotent.
+GPROJ5="$TMP/gitignore-duplicate-legacy"
+mkdir -p "$GPROJ5"
+printf '.uncle/*\n!.uncle/docs/\nnode_modules/\n.uncle/*\n!.uncle/docs/\n.uncle\n' > "$GPROJ5/.gitignore"
+gitignore_load_config "$GPROJ5"
+COUNT=$((COUNT + 1))
+[[ "$(cat "$GPROJ5/.gitignore")" == $'.uncle/*\n!.uncle/docs/\nnode_modules/' ]] \
+    || fail "duplicate .uncle rules were not normalized: $(cat "$GPROJ5/.gitignore")"
+before="$(cat "$GPROJ5/.gitignore")"
+gitignore_load_config "$GPROJ5"
+COUNT=$((COUNT + 1))
+[[ "$(cat "$GPROJ5/.gitignore")" == "$before" ]] \
+    || fail "normalizing .uncle rules was not idempotent"
+
 if [[ "$status" -ne 0 || "$FAILED" -ne 0 ]]; then
     echo "tui-config-test.sh: failed"
     exit 1

@@ -774,7 +774,7 @@ def ask(prompt, default=None):
 
 
 def title_default():
-    text = read(Path('CHANGE_REQUEST.md'))
+    text = read(input_document('CHANGE_REQUEST.md'))
     match = re.search(r'^##\s+(?:\d+\.\s+)?Summary\s*\n(.*?)(?=^##\s|\Z)', text, re.M | re.S | re.I)
     title = match.group(1) if match else ''
     title = ''.join(' ' if unicodedata.category(c).startswith('C') else c for c in title)
@@ -782,13 +782,18 @@ def title_default():
 
 
 def slug_text():
-    path = Path('CHANGE_REQUEST.md')
-    text = read(path if path.exists() else Path('REQUIREMENTS.md'))
+    path = input_document('CHANGE_REQUEST.md')
+    text = read(path if path.exists() else input_document('REQUIREMENTS.md'))
     match = re.search(r'^##\s+(?:\d+\.\s+)?Summary\s*\n(.*?)(?=^##\s|\Z)', text, re.M | re.S | re.I)
     if match:
         return match.group(1)
     match = re.search(r'^# ([^\n]*)', text, re.M)
     return match.group(1) if match else ''
+
+
+def input_document(name):
+    root_copy = Path(name)
+    return root_copy if root_copy.exists() else Path('.uncle/docs') / name
 
 
 def slug(text):

@@ -15,7 +15,11 @@ run_case() {
     local name="$1"; shift
     local dir="$TMP/$name"
     mkdir -p "$dir/.uncle/workflow/logs"
-    while [[ $# -gt 0 ]]; do printf '%s\n' "$2" > "$dir/$1"; shift 2; done
+    while [[ $# -gt 0 ]]; do
+        mkdir -p "$(dirname "$dir/$1")"
+        printf '%s\n' "$2" > "$dir/$1"
+        shift 2
+    done
     (
         cd "$dir"
         ROOT="$ROOT" STATE_DIR=".uncle/workflow" LOG_DIR=".uncle/workflow/logs"
@@ -50,6 +54,9 @@ check "runner was invoked for preview-build"   grep -q "preview-build" "$TMP/bri
 check "no plan hash without a plan"            test ! -e "$TMP/brief-only/.uncle/workflow/preview-build.plan"
 check "brief-only preview never survives"      test "$(cat "$TMP/brief-only/.uncle/workflow/survived")" != 0
 check "says it builds from the brief"          grep -q "preview from the brief" "$TMP/brief-only/.uncle/workflow/out"
+
+run_case generated-brief .uncle/docs/REQUIREMENTS.md "$WEB_BRIEF"
+check "starts from a generated brief"          test "$(cat "$TMP/generated-brief/.uncle/workflow/started")" == 1
 
 run_case with-plan REQUIREMENTS.md "$WEB_BRIEF" PROJECT_PLAN.md "$PLAN"
 check "starts with a plan"                     test "$(cat "$TMP/with-plan/.uncle/workflow/started")" == 1

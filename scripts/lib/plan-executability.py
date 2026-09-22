@@ -72,8 +72,10 @@ def require(condition, message):
 
 def manifest(root, plan):
     change = os.path.basename(plan) == 'CHANGE_PLAN.md'
+    brief = 'CHANGE_REQUEST.md' if change else 'REQUIREMENTS.md'
+    generated_brief = '.uncle/docs/' + brief
     files = [plan, '.uncle/docs/ADVERSARIAL_REVIEW.md',
-             'CHANGE_REQUEST.md' if change else 'REQUIREMENTS.md',
+             brief if Path(brief).exists() else generated_brief,
              '.uncle/docs/CHANGE_SPEC.md' if change else '.uncle/docs/REQUIREMENTS_INTERPRETATION.md',
              os.environ.get('UNCLE_CONFIG', '.uncle/config'), str(STATE / 'authority-answer.json')]
     adapters = [str(x.relative_to(root)) for x in Path(root).glob('scripts/agent-*.sh')] + ['scripts/lib/native_stage.py',

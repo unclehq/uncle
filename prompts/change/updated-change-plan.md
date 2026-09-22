@@ -34,10 +34,10 @@ Read:
 
 - CHANGE_REQUEST.md
 - .uncle/docs/CHANGE_PLAN.md
-- .uncle/docs/ADVERSARIAL_REVIEW.md
+- .uncle/workflow/documents/ADVERSARIAL_REVIEW.json
 - .uncle/docs/CHANGE_SPEC.md
 
-Both .uncle/docs/CHANGE_PLAN.md and .uncle/docs/ADVERSARIAL_REVIEW.md have just passed a human gate and
+Both .uncle/docs/CHANGE_PLAN.md and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json` have just passed a human gate and
 may have been edited during that review. Read both from disk in full.
 
 .uncle/docs/CHANGE_SPEC.md is for traceability only; consult its behavior and invariant IDs

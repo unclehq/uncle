@@ -6,7 +6,7 @@ import sys
 
 def render(project, state, family):
     root, state = Path(project).resolve(), Path(state).resolve()
-    paths = [root/'.uncle/docs/ADVERSARIAL_REVIEW.md']
+    paths = [state/'documents/ADVERSARIAL_REVIEW.json']
     if family == 'change':
         paths += [state/'CHANGE_PLAN.pre-review.md', root/'.uncle/docs/CHANGE_SPEC.md']
     else:

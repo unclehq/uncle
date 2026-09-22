@@ -64,7 +64,8 @@ finding IDs, not restatements. Do not manufacture findings to fill the
 categories above — omit clean categories entirely.
 A short review of genuine defects is worth more than a long one padded out.
 
-Return only the review.
+Return only one JSON object matching this contract; do not return Markdown:
+`{"schema":"uncle.artifact/v1","kind":"adversarial-review","findings":[{"id":"AR-001","title":"...","severity":"...","references":"...","failure":"...","fix":"...","verify":"..."}],"overall_assessment":"..."}`.
 
 Use concise field values and concrete failure examples. Use the compact format above; avoid a paragraph for each field. Do not repeat plan content or summarize findings again in the closing sections.
 

@@ -9,13 +9,23 @@ module=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 class Revision(unittest.TestCase):
+    def test_uses_structured_adversarial_review(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); state=root/'.uncle/workflow'; (state/'documents').mkdir(parents=True)
+            (root/'.uncle/docs').mkdir(parents=True)
+            (state/'documents/ADVERSARIAL_REVIEW.json').write_text('{"kind":"adversarial-review"}')
+            (root/'.uncle/docs/ADVERSARIAL_REVIEW.md').write_text('stale markdown')
+            text=module.render(root, state, 'change')
+            self.assertIn('ADVERSARIAL_REVIEW.json', text)
+            self.assertNotIn('stale markdown', text)
+
     def test_family_snapshot_and_refresh(self):
         with tempfile.TemporaryDirectory() as d:
-            root=Path(d); state=root/'.uncle/workflow'; state.mkdir(parents=True)
+            root=Path(d); state=root/'.uncle/workflow'; (state/'documents').mkdir(parents=True)
             (root/'.uncle/docs').mkdir(parents=True)
             (root/'.uncle/docs/PROJECT_PLAN.md').write_text('app plan')
             (state/'CHANGE_PLAN.pre-review.md').write_text('original change plan')
-            review=root/'.uncle/docs/ADVERSARIAL_REVIEW.md'; review.write_text('AR-1 original finding')
+            review=state/'documents/ADVERSARIAL_REVIEW.json'; review.write_text('AR-1 original finding')
             app=module.render(root,state,'app'); change=module.render(root,state,'change')
             self.assertIn('app plan',app)
             self.assertNotIn('original change plan',app)

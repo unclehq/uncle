@@ -561,6 +561,20 @@ def reviewer_document(response):
 
 def document_response(response, artifact):
     text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    if artifact == 'ADVERSARIAL_REVIEW.md' and text.startswith('{'):
+        try:
+            payload = json.loads(text)
+            if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'adversarial-review':
+                raise ValueError('wrong adversarial-review JSON schema')
+            rows = []
+            for finding in payload.get('findings', []):
+                rows += [f"## {finding['id']}: {finding['title']}", '',
+                         f"- Severity: {finding['severity']}", f"- References: {finding['references']}",
+                         f"- Failure: {finding['failure']}", f"- Fix: {finding['fix']}", f"- Verify: {finding['verify']}", '']
+            rows += ['## Overall assessment', '', payload['overall_assessment']]
+            return '\n'.join(rows) + '\n'
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            raise ValueError('Invalid adversarial-review JSON response; original preserved') from error
     if any(marker in text for marker in ('<<<<<<< SEARCH', '>>>>>>> REPLACE')):
         raise ValueError('Expected Markdown, received edit instructions; original preserved')
     lines = text.splitlines()

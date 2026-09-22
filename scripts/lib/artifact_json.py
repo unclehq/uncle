@@ -26,6 +26,12 @@ def render_adversarial(payload):
     rows += ['## Overall assessment', '', payload['overall_assessment'], '']
     return '\n'.join(rows)
 
+def parse_adversarial_response(text):
+    payload = json.loads(text)
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'adversarial-review':
+        raise ValueError('wrong adversarial-review JSON schema')
+    return payload
+
 def render_checklist(payload):
     out = ['# Manual checklist', '']
     for check in payload['checks']:

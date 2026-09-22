@@ -63,7 +63,7 @@ class Document(unittest.TestCase):
         from types import SimpleNamespace
         from native_kimi import checklist_correction
         stage=SimpleNamespace(side='reviewer',stage='manual-checklist',final_answer='The checklist is written. Key points: MC-1')
-        self.assertIn('entire MANUAL_CHECKLIST.md',checklist_correction(stage,0))
+        self.assertIn('entire .uncle/docs/MANUAL_CHECKLIST.md',checklist_correction(stage,0))
         self.assertEqual(checklist_correction(stage,1),'')
         stage.final_answer='## MC-1\nExact action: Open page\nExpected result: Greeting\n'
         self.assertEqual(checklist_correction(stage,0),'')

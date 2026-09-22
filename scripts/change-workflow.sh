@@ -2555,6 +2555,8 @@ implementation_complete() {
     local completion="$STATE_DIR/implementation-completion.txt" line id waiver
     if python3 "$ROOT/scripts/lib/implementation-completion.py" \
         .uncle/docs/CHANGE_SPEC.md .uncle/docs/IMPLEMENTATION_NOTES.md > "$completion"; then
+        python3 "$ROOT/scripts/lib/implementation-completion.py" --export-json \
+            .uncle/docs/CHANGE_SPEC.md .uncle/docs/IMPLEMENTATION_NOTES.md . 2>/dev/null || true
         return 0
     fi
     supervision_validation_failed implementation_completion .uncle/docs/IMPLEMENTATION_NOTES.md \

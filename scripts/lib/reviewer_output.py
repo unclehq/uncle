@@ -22,11 +22,13 @@ the stage validators, which know what each document must contain. This only
 separates "a document" from "a sentence about a document".
 """
 import json
+from pathlib import Path
 import re
 import sys
 
 _HEADING = re.compile(r'^#{1,6}\s+\S', re.M)
 _TABLE_ROW = re.compile(r'^\s*\|.*\|', re.M)
+_JSON_FENCE = re.compile(r'^```(?:json)?\s*\n(.*)\n```\s*$', re.S)
 
 
 def looks_like_document(text):
@@ -34,8 +36,13 @@ def looks_like_document(text):
         return True
     # A structured artifact response (Issue: JSON-first agent output):
     # the reviewer's whole reply is one JSON object naming its own schema,
-    # never a heading or a table row.
+    # never a heading or a table row. Models fence a bare-JSON response in
+    # ```/```json out of habit as often as not, so that has to come off
+    # before the object shape is even recognizable.
     stripped = text.strip()
+    fenced = _JSON_FENCE.match(stripped)
+    if fenced:
+        stripped = fenced.group(1).strip()
     if stripped.startswith('{') and stripped.endswith('}'):
         try:
             payload = json.loads(stripped)

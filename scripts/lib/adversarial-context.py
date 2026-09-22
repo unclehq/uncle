@@ -21,7 +21,11 @@ FIELD_SYNONYMS = {
 
 def validate(path, project='.'):
     text = Path(path).read_text(encoding='utf-8')
-    stripped = text.strip()
+    artifact = Path(__file__).with_name('artifact_json.py')
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location('artifact_json', artifact)
+    _artifact_json = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_artifact_json)
+    stripped = _artifact_json.unfence_json(text)
     if stripped.startswith('{'):
         # The reviewer returned its structured findings directly. Every
         # regex-based table/heading check below exists to recover meaning
@@ -40,12 +44,8 @@ def validate(path, project='.'):
                 raise ValueError('invalid adversarial finding: missing a required field')
         if not isinstance(payload.get('overall_assessment'), str) or not payload['overall_assessment'].strip():
             raise ValueError('missing nonempty overall_assessment')
-        artifact = Path(__file__).with_name('artifact_json.py')
-        import importlib.util
-        spec = importlib.util.spec_from_file_location('artifact_json', artifact)
-        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-        module.write(project, 'ADVERSARIAL_REVIEW.md', dict(payload, schema='uncle.artifact/v1', kind='adversarial-review'))
-        Path(path).write_text(module.render_adversarial(payload), encoding='utf-8')
+        _artifact_json.write(project, 'ADVERSARIAL_REVIEW.md', dict(payload, schema='uncle.artifact/v1', kind='adversarial-review'))
+        Path(path).write_text(_artifact_json.render_adversarial(payload), encoding='utf-8')
         return
     matches = list(re.finditer(r'^##[ \t]+(AR-[A-Za-z0-9]+)(?:[ \t]+\([^\n)]+\))?[ \t]*(?::|—|–|-)[ \t]+\S[^\n]*$', text, re.M))
     seen = set()

@@ -29,6 +29,17 @@ class Review(unittest.TestCase):
             stored = json.loads((root/'.uncle/workflow/documents/ADVERSARIAL_REVIEW.json').read_text())
             self.assertEqual(stored['findings'][0]['id'], 'AR-001')
 
+    def test_json_response_wrapped_in_a_markdown_fence_still_validates(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            review = root/'ADVERSARIAL_REVIEW.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': [],
+                       'overall_assessment': 'No findings.'}
+            review.write_text('```json\n' + json.dumps(payload) + '\n```')
+            module.validate(review, root)
+            self.assertIn('No findings.', review.read_text())
+
     def test_direct_json_response_rejects_missing_field(self):
         import json
         with tempfile.TemporaryDirectory() as d:

@@ -28,6 +28,16 @@ class Audit(unittest.TestCase):
             stored = json.loads((root/'.uncle/workflow/documents/FINAL_AUDIT.json').read_text())
             self.assertEqual(stored['findings'][0]['id'], 'FA-1')
 
+    def test_json_response_wrapped_in_a_markdown_fence_still_validates(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            p = root/'audit.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'final-audit', 'findings': [], 'verdict': 'READY'}
+            p.write_text('```json\n' + json.dumps(payload) + '\n```')
+            module.validate(p, root)
+            self.assertTrue(p.read_text().rstrip().endswith('READY'))
+
     def test_json_response_clean_audit_is_ready(self):
         import json
         with tempfile.TemporaryDirectory() as d:

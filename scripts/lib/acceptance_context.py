@@ -194,7 +194,10 @@ def ingest_json(path, project='.'):
     import importlib.util
     import json as _json
     text = Path(path).read_text(encoding='utf-8')
-    stripped = text.strip()
+    artifact = Path(__file__).with_name('artifact_json.py')
+    spec = importlib.util.spec_from_file_location('artifact_json', artifact)
+    _early_module = importlib.util.module_from_spec(spec); spec.loader.exec_module(_early_module)
+    stripped = _early_module.unfence_json(text)
     if not stripped.startswith('{'):
         return False
     try:
@@ -206,10 +209,7 @@ def ingest_json(path, project='.'):
     for row in payload.get('rows', []):
         if not isinstance(row, dict) or 'id' not in row or 'required' not in row or 'status' not in row:
             raise ValueError('invalid acceptance row: missing id, required, or status')
-    artifact = Path(__file__).with_name('artifact_json.py')
-    spec = importlib.util.spec_from_file_location('artifact_json', artifact)
-    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-    rendered = module.render_acceptance(payload)
+    rendered = _early_module.render_acceptance(payload)
     Path(path).write_text(rendered, encoding='utf-8')
     name = Path(path).stem + '.json'
     target = Path(project) / '.uncle/workflow/documents' / name

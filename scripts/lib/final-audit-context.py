@@ -111,7 +111,9 @@ def export_json(payload, path, project='.'):
 def validate(path, project='.'):
     path = Path(path)
     text = path.read_text(encoding='utf-8')
-    stripped = text.strip()
+    _spec = importlib.util.spec_from_file_location('artifact_json', Path(__file__).with_name('artifact_json.py'))
+    _artifact_json = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_artifact_json)
+    stripped = _artifact_json.unfence_json(text)
     if stripped.startswith('{'):
         # The reviewer returned the structured verdict directly: no prose or
         # table shape to coerce, because there is no prose or table -- the

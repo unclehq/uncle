@@ -26,6 +26,17 @@ class AcceptanceContext(unittest.TestCase):
             stored = json.loads((root/'.uncle/workflow/documents/VERIFICATION_REPORT.json').read_text())
             self.assertEqual(stored['rows'][0]['id'], 'MC-1')
 
+    def test_fenced_json_report_still_ingests(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            report = root/'TEST_REVIEW.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report',
+                       'rows': [{'id': 'COVERAGE', 'required': True, 'status': 'PASS', 'evidence': 'ok'}]}
+            report.write_text('```json\n' + json.dumps(payload) + '\n```')
+            self.assertTrue(module.ingest_json(report, root))
+            self.assertIn('| COVERAGE | YES | PASS | ok |', report.read_text())
+
     def test_json_report_rejects_wrong_schema(self):
         import json
         with tempfile.TemporaryDirectory() as d:

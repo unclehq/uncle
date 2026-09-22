@@ -2,6 +2,19 @@
 """Authoritative structured workflow artifact storage and Markdown rendering."""
 import json
 from pathlib import Path
+import re
+
+_JSON_FENCE = re.compile(r'^```(?:json)?\s*\n(.*)\n```\s*$', re.S)
+
+def unfence_json(text):
+    """A model asked for a bare JSON object commonly wraps it in a Markdown
+    code fence anyway (the same habit every prompt in this codebase already
+    has to guard against for the documents JSON is replacing). Strip one
+    wrapping ```/```json fence if present; otherwise return the text
+    unchanged, so a genuinely bare object still works."""
+    stripped = text.strip()
+    match = _JSON_FENCE.match(stripped)
+    return match.group(1).strip() if match else stripped
 
 def path(project, name):
     return Path(project) / '.uncle/workflow/documents' / (Path(name).stem + '.json')

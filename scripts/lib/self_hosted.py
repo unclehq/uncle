@@ -562,33 +562,30 @@ def reviewer_document(response):
 
 def document_response(response, artifact):
     text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
-    if Path(artifact).name == 'REQUIREMENTS_INTERPRETATION.md' and text.startswith('{'):
+    _spec = importlib.util.spec_from_file_location('artifact_json', Path(__file__).with_name('artifact_json.py'))
+    _artifact_json = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_artifact_json)
+    unfenced = _artifact_json.unfence_json(text)
+    if Path(artifact).name == 'REQUIREMENTS_INTERPRETATION.md' and unfenced.startswith('{'):
         try:
-            payload = json.loads(text)
+            payload = json.loads(unfenced)
         except json.JSONDecodeError as error:
             raise ValueError('Invalid requirements-interpretation JSON response; original preserved') from error
         if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'requirements-interpretation':
             raise ValueError('wrong requirements-interpretation JSON schema')
         try:
-            artifact_json = Path(__file__).with_name('artifact_json.py')
-            spec = importlib.util.spec_from_file_location('artifact_json', artifact_json)
-            module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-            return module.render_requirements(payload) + '\n'
+            return _artifact_json.render_requirements(payload) + '\n'
         except KeyError as error:
             raise ValueError('Requirements-interpretation JSON missing a required section: %s' % error) from error
-    if Path(artifact).name in ('PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md') and text.startswith('{'):
+    if Path(artifact).name in ('PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md') and unfenced.startswith('{'):
         try:
-            payload = json.loads(text)
+            payload = json.loads(unfenced)
         except json.JSONDecodeError as error:
             raise ValueError('Invalid plan JSON response; original preserved') from error
         if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'plan':
             raise ValueError('wrong plan JSON schema')
         try:
-            artifact_json = Path(__file__).with_name('artifact_json.py')
-            spec = importlib.util.spec_from_file_location('artifact_json', artifact_json)
-            module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
             protected = Path(artifact).name == 'UPDATED_PROJECT_PLAN.md'
-            return module.render_plan(payload, protected=protected) + '\n'
+            return _artifact_json.render_plan(payload, protected=protected) + '\n'
         except ValueError as error:
             raise ValueError('Plan JSON response: %s; original preserved' % error) from error
     if any(marker in text for marker in ('<<<<<<< SEARCH', '>>>>>>> REPLACE')):

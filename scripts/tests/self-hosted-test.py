@@ -539,6 +539,17 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         self.assertIn('## 1. Required functionality', rendered)
         self.assertIn('## 10. Definition of done', rendered)
 
+    def test_fenced_json_response_still_renders(self):
+        import self_hosted, json
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'requirements-interpretation',
+                   'sections': {name.lower().replace(' ', '_').replace('-', '_'): 'No additional interpretation.'
+                                for name in ('Required functionality', 'Optional functionality', 'Constraints',
+                                             'User-visible behaviors', 'System behaviors', 'Failure behaviors',
+                                             'Ambiguities', 'Assumptions', 'Explicit non-goals', 'Definition of done')}}
+        wrapped = '```json\n' + json.dumps(payload) + '\n```'
+        rendered = self_hosted.document_response(wrapped, '.uncle/docs/REQUIREMENTS_INTERPRETATION.md')
+        self.assertIn('## 1. Required functionality', rendered)
+
     def test_json_response_missing_section_is_rejected(self):
         import self_hosted, json
         payload = {'schema': 'uncle.artifact/v1', 'kind': 'requirements-interpretation', 'sections': {}}

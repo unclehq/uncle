@@ -87,7 +87,9 @@ you add needs an identifier of the same shape, such as `TR-1`, with its subject
 in Evidence rather than in the ID cell. A row whose ID contains spaces is not
 parsed, and the driver records no acceptance pass for the stage.
 
-Return the complete review as your final message.
+Return only one JSON object matching this contract as your final message; do not return Markdown:
+`{"schema":"uncle.artifact/v1","kind":"acceptance-report","narrative":"...","rows":[{"id":"COVERAGE","required":true,"status":"PASS","evidence":"..."}]}`.
+`narrative` holds every section above the table (Summary, Findings, Assumptions, Open questions) as one Markdown block; `rows` is exactly the Acceptance gate table, one entry per required row above plus any further TR-N rows. `required` is a JSON boolean. `status` is exactly one of PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, NOT RUN, N/A.
 
 
 ## Review economy and final delivery
@@ -98,7 +100,7 @@ Do not enumerate clean code as separate findings: concise PASS evidence belongs
 in the six required acceptance rows. Findings are concrete defects or unresolved
 gaps. Keep every required row and real blocker; no extra summary of each PASS.
 
-Return the complete .uncle/docs/TEST_REVIEW.md as the final response, not a status message
+Return the complete JSON object as the final response, not a status message
 about writing or compacting it. Do not emit a compaction announcement as the final
 answer. A report-size warning alone does not require another model iteration.
 
@@ -119,7 +121,7 @@ to compose the report. Before returning it, reconcile findings, evidence and
 acceptance rows once. Correct actual omissions or contradictions without a
 repeated narrated compliance sweep.
 
-Return the complete .uncle/docs/TEST_REVIEW.md once. In advisory-budget mode, do ZERO
+Return the complete JSON object once. In advisory-budget mode, do ZERO
 size-only compaction passes: retain required evidence even above the guide.
 Do not count bytes repeatedly, remove Markdown spacing or emit a size report
 instead of the review. The driver measures the artifact. Enforced budgets retain

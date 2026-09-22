@@ -62,7 +62,9 @@ def export_json(path, project='.'):
             found = re.search(r'^[ \t]*(?:[-*+]\s+)?(?:\*\*)?' + key + r'(?:\*\*)?:\s*(.+)$', body, re.M)
             values[key.lower()] = found.group(1).strip() if found else ''
         findings.append(dict(id=match.group(1), title=match.group(2).strip(), **values))
-    assessment = re.search(r'^##\s+Overall assessment\s*\n+(.+)', text, re.M | re.I)
+    assessment = re.search(r'^##[ \t]+(?:\d+[.)][ \t]+)?(?:\*\*)?Overall assessment(?:\*\*)?[ \t]*#*[ \t]*\r?\n(?:[ \t]*\r?\n)*([^\n#][^\n]*)', text, re.M | re.I)
+    if not assessment:
+        raise ValueError('Missing nonempty Overall assessment section')
     target = Path(project) / '.uncle/workflow/documents/ADVERSARIAL_REVIEW.json'; target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({'schema':'uncle.artifact/v1','kind':'adversarial-review','findings':findings,'overall_assessment':assessment.group(1).strip()}, indent=2) + '\n')
 

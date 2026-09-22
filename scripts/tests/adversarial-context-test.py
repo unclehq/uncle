@@ -20,6 +20,14 @@ class Review(unittest.TestCase):
             self.assertTrue((root/'.uncle/workflow/documents/ADVERSARIAL_REVIEW.json').is_file())
             module.validate(review)
 
+    def test_json_export_accepts_numbered_assessment(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); docs=root/'.uncle/docs'; docs.mkdir(parents=True)
+            review=docs/'ADVERSARIAL_REVIEW.md'
+            review.write_text(FINDING.replace('## Overall assessment', '## 5. **Overall assessment**'))
+            module.export_json(review, root)
+            self.assertTrue((root/'.uncle/workflow/documents/ADVERSARIAL_REVIEW.json').is_file())
+
     def test_formats(self):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d)/'review'

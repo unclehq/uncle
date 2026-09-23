@@ -30,6 +30,28 @@ class Index(unittest.TestCase):
             data=json.loads((state/'handoffs/audit-evidence-app.json').read_text())
             self.assertEqual(data['claims'],[])
 
+    def test_updated_plan_investigate_inherits_updated_plans_evidence_list(self):
+        # The investigate/format split added "updated-plan-investigate" as
+        # its own log_name; without a mapping here it silently fell back to
+        # the generic default list (REQUIREMENTS.md, UPDATED_PROJECT_PLAN.md,
+        # CHANGE_SPEC.md, CHANGE_PLAN.md -- the wrong family's documents)
+        # instead of updated-plan's own tailored one (REQUIREMENTS.md,
+        # REQUIREMENTS_INTERPRETATION.md, PROJECT_PLAN.md,
+        # ADVERSARIAL_REVIEW.md), a silent evidence-quality regression rather
+        # than a hard failure. The investigate call, which does all the
+        # reading, must get the same tailored list as updated-plan itself.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); state = root/'.uncle/workflow'
+            (root/'.uncle/docs').mkdir(parents=True, exist_ok=True)
+            (root/'.uncle/docs/PROJECT_PLAN.md').write_text('# Project plan\n')
+            (root/'.uncle/docs/ADVERSARIAL_REVIEW.md').write_text('# Adversarial review\n')
+            updated_plan = packet(root, state, 'updated-plan')
+            investigate = packet(root, state, 'updated-plan-investigate')
+            self.assertIn('PROJECT_PLAN.md', updated_plan)
+            self.assertIn('PROJECT_PLAN.md', investigate)
+            self.assertIn('ADVERSARIAL_REVIEW.md', investigate)
+            self.assertNotIn('CHANGE_SPEC.md', investigate)
+
     def test_refresh_reuse_and_delete(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); state=root/'.uncle/workflow'; brief=root/'REQUIREMENTS.md'

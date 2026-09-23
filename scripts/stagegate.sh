@@ -921,7 +921,7 @@ stage_turns() {
 stage_tools() {
     local fallback="Read,Glob,Grep,Write"
     case "$1" in
-        updated-plan|derive-brief)
+        updated-plan|updated-plan-investigate|derive-brief)
             fallback="Read,Glob,Grep,Write,Edit" ;;
         implementation|implementation-report|repair|execute-checklist|preflight|preview-build)
             # The preview build is an implementation, just an early one: a
@@ -1458,8 +1458,8 @@ run_updated_plan_panel() {
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan panel worker failed; plan writer will continue.' >&2; done
     echo "Updated-plan review panel: worker packets collected; launching synthesis."
     UPDATED_PLAN_PROMPT="$directory/synthesis.md"
-    cp "$ROOT/prompts/updated-plan.md" "$UPDATED_PLAN_PROMPT"
-    printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
+    cp "$ROOT/prompts/updated-plan-investigate.md" "$UPDATED_PLAN_PROMPT"
+    printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the investigation covering the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
 }
 
 run_test_review_panel() {
@@ -1797,7 +1797,25 @@ run_stage() {
             ;;
         UPDATED_PLAN)
             run_updated_plan_panel
-            run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan.md}" updated-plan
+            # Split into two calls, the same fix applied to test-review: a
+            # long, read-heavy investigation with no strict output shape (but
+            # real Write-tool work -- .gitignore -- that belongs here, not in
+            # the formatting pass), then a short, mechanical conversion of
+            # that investigation into the required JSON. A single call asking
+            # a weak model to both explore many documents *and* hit an exact
+            # schema at the end of a long turn kept losing the schema; the
+            # format pass has almost nothing else in its context to lose
+            # track of.
+            updated_plan_investigation=".uncle/workflow/updated-plan-investigation.md"
+            rm -f "$updated_plan_investigation"
+            run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan-investigate.md}" updated-plan-investigate
+            require_file "$updated_plan_investigation"
+            updated_plan_format_prompt="$STATE_DIR/updated-plan-format-prompt.md"
+            {
+                cat "$ROOT/prompts/updated-plan-format.md"
+                cat "$updated_plan_investigation"
+            } > "$updated_plan_format_prompt"
+            run_claude "$updated_plan_format_prompt" updated-plan
             ;;
         IMPLEMENT)
             parallel_status=0

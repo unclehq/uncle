@@ -99,11 +99,12 @@ uncle_config_stage() {
         plan-executability) printf 'adversarial-review' ;;
         plan-recovery) printf 'updated-plan' ;;
         manual-checklist-base|manual-checklist-delta) printf 'manual-checklist' ;;
-        # The test-review investigation and its format-only conversion pass
-        # are two calls of one stage; the second reuses the "test-review"
-        # name itself (it writes the canonical artifact), so only the first
-        # needs a mapping here.
+        # The investigation and its format-only conversion pass are two
+        # calls of one stage; the second reuses the parent's own name (it
+        # writes the canonical artifact), so only the first needs a mapping
+        # here.
         test-review-investigate) printf 'test-review' ;;
+        updated-plan-investigate) printf 'updated-plan' ;;
         # A driver-owned worker inherits the parent stage's runner, model,
         # effort, billing, and network policy for every supported runner.
         *-worker-*) printf '%s' "${1%%-worker-*}" ;;

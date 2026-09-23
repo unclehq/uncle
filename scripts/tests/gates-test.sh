@@ -111,6 +111,11 @@ new_case() {
     cp "$ROOT/prompts/plan-executability.md" "$ROOT/prompts/plan-recovery.md" "$REPO/prompts/"
     printf 'STUB:revise\n' > "$REPO/prompts/change/updated-change-plan.md"
     printf 'STUB:revise\n' > "$REPO/prompts/updated-plan.md"
+    # The investigate/format split reads these two files, not updated-plan.md
+    # above (now unused by the app-family driver, kept only so a stray read
+    # of it doesn't hard-fail).
+    printf 'STUB:plan-investigate\n' > "$REPO/prompts/updated-plan-investigate.md"
+    printf 'STUB:plan-format\n' > "$REPO/prompts/updated-plan-format.md"
 
     # Prompt files the driver reads and pipes to the stub CLIs. Each carries a
     # token the stub agent switches on.
@@ -549,6 +554,11 @@ case "$prompt" in
         printf '\nisolated-context revision\n' >> .uncle/docs/UPDATED_PROJECT_PLAN.md
         ;;
     *STUB:revise*) cp .uncle/docs/PROJECT_PLAN.md .uncle/docs/UPDATED_PROJECT_PLAN.md ;;
+    *STUB:plan-investigate*)
+        mkdir -p .uncle/workflow
+        cp .uncle/docs/PROJECT_PLAN.md .uncle/workflow/updated-plan-investigation.md
+        ;;
+    *STUB:plan-format*) cp .uncle/workflow/updated-plan-investigation.md .uncle/docs/UPDATED_PROJECT_PLAN.md ;;
     *STUB:preflight*)
         gate_report .uncle/docs/PREFLIGHT_REPORT.md "${FAKE_PREFLIGHT:-PASS}"
         ;;

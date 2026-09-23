@@ -84,6 +84,12 @@ def packet(project, state, stage, family='app'):
         stage = stage.split('-review-worker-', 1)[0]
     elif '-worker-' in stage:
         stage = stage.split('-worker-', 1)[0]
+    elif stage == 'updated-plan-investigate':
+        # The investigation call is the one that reads everything; the
+        # format-only pass that follows it keeps the "updated-plan" name and
+        # needs none of this, since its whole input is the investigation
+        # itself, not these documents.
+        stage = 'updated-plan'
     if not re.fullmatch(r'[a-z0-9-]+', stage):
         raise ValueError('Invalid stage name')
     names = list(STAGES.get(stage, ['REQUIREMENTS.md', '.uncle/docs/UPDATED_PROJECT_PLAN.md', '.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md'] + REPORTS))

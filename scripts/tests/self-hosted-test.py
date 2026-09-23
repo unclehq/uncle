@@ -193,6 +193,17 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
             self.assertEqual(settings(self.config, 'test-review'), expected)
             self.assertEqual(settings(self.config, 'test-review-investigate'), expected)
 
+    def test_updated_plan_investigate_inherits_updated_plans_model(self):
+        # Same fix, applied to updated-plan's own investigate/format split.
+        self.config.write_text('updated-plan.runner self-hosted\nupdated-plan.model local/deepseek-v4-flash\n',
+                               encoding='utf-8')
+        profiles = {'local/deepseek-v4-flash': {'base_url': 'http://localhost:9100/v1', 'api_key': 'deepseek-secret'}}
+        save_keys(self.config, {'__opencode_models__': profiles})
+        with patch.dict(os.environ, {}, clear=True):
+            expected = dict(model='deepseek-v4-flash', base_url='http://localhost:9100/v1', api_key='deepseek-secret')
+            self.assertEqual(settings(self.config, 'updated-plan'), expected)
+            self.assertEqual(settings(self.config, 'updated-plan-investigate'), expected)
+
     def test_discovery_and_failed_refresh_preserves_catalog(self):
         import io
         from urllib.error import HTTPError

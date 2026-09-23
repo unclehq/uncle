@@ -1489,8 +1489,8 @@ run_test_review_panel() {
         wait "$pid" || echo 'Test-review panel worker failed; primary review will continue.' >&2
     done
     TEST_REVIEW_PROMPT="$directory/synthesis.md"
-    cp "$ROOT/prompts/test-review.md" "$TEST_REVIEW_PROMPT"
-    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `.uncle/docs/TEST_REVIEW.md`.\n' \
+    cp "$ROOT/prompts/test-review-investigate.md" "$TEST_REVIEW_PROMPT"
+    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the investigation covering the only canonical review.\n' \
         "$directory" >> "$TEST_REVIEW_PROMPT"
 }
 
@@ -1842,20 +1842,34 @@ run_stage() {
                 cp .uncle/docs/TEST_REVIEW.md "$STATE_DIR/previous-test-review.md"
             fi
             rm -f .uncle/docs/TEST_REVIEW.md
-            run_test_review_panel
-            # A malformed acceptance table gets one local, format-only retry
-            # even when optional supervision is disabled. The marker remains
-            # after delivery so repeated malformed output stops normally.
-            test_review_prompt="${TEST_REVIEW_PROMPT:-prompts/test-review.md}"
-            if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then
-                test_review_prompt="$STATE_DIR/test-review-format-retry-prompt.md"
-                {
-                    cat "${TEST_REVIEW_PROMPT:-$ROOT/prompts/test-review.md}"
+            # Split into two calls: a long, read-heavy investigation with no
+            # strict output shape, then a short, mechanical conversion of
+            # that investigation into the required JSON. A single call asking
+            # a weak model to both explore many documents *and* hit an exact
+            # schema at the end of a long turn kept losing the schema -- the
+            # investigation is where the reading and judgment belong; the
+            # second call's only job is formatting, with almost nothing else
+            # in its context to lose track of.
+            test_review_investigation="$STATE_DIR/test-review-investigation.md"
+            if [[ -s "$STATE_DIR/test-review-format-retry.md" && -s "$test_review_investigation" ]]; then
+                # Only the format call failed last time; the investigation
+                # itself was never the problem, so it is not worth redoing.
+                echo "Retrying test-review formatting only; reusing the saved investigation."
+            else
+                rm -f "$STATE_DIR/test-review-format-retry.md"
+                run_test_review_panel
+                run_codex_review "$TEST_REVIEW_PROMPT" "$test_review_investigation" test-review-investigate
+            fi
+            test_review_format_prompt="$STATE_DIR/test-review-format-prompt.md"
+            {
+                cat "$ROOT/prompts/test-review-format.md"
+                cat "$test_review_investigation"
+                if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then
                     printf '\n\n## Required format retry\n\n'
                     cat "$STATE_DIR/test-review-format-retry.md"
-                } > "$test_review_prompt"
-            fi
-            run_codex_review "$test_review_prompt" .uncle/docs/TEST_REVIEW.md test-review
+                fi
+            } > "$test_review_format_prompt"
+            run_codex_review "$test_review_format_prompt" .uncle/docs/TEST_REVIEW.md test-review
             ;;
         REPAIR)
             run_claude "$REPAIR_PROMPT" repair

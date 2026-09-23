@@ -397,6 +397,8 @@ new_stagegate_case() {
     printf 'STUB:preflight\n' > "$REPO/prompts/preflight.md"
     printf 'STUB:repair\n' > "$REPO/prompts/repair.md"
     printf 'review tests\n' > "$REPO/prompts/test-review.md"
+    printf 'investigate tests\n' > "$REPO/prompts/test-review-investigate.md"
+    printf 'format the investigation\n' > "$REPO/prompts/test-review-format.md"
     printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
     printf 'write a checklist\n' > "$REPO/prompts/manual-checklist.md"
     printf 'audit it\n'          > "$REPO/prompts/final-audit.md"

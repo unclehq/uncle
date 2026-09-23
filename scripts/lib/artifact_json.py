@@ -52,6 +52,12 @@ def unfence_json(text):
     stripped = text.strip()
     fenced = _JSON_FENCE.search(stripped)
     candidate = fenced.group(1).strip() if fenced else stripped
+    # A model as often reaches for a single inline-code backtick around the
+    # object (`{...}`) as a triple-backtick block fence; strip that too
+    # before giving up on it looking JSON-shaped.
+    unbacked = candidate.strip('`').strip()
+    if unbacked.startswith('{'):
+        candidate = unbacked
     if not candidate.startswith('{'):
         return stripped
     return _extract_balanced_object(candidate) or candidate

@@ -32,6 +32,20 @@ class UnfenceJson(unittest.TestCase):
         text = "Here's the review:\n```json\n{\"a\": 1}\n```"
         self.assertEqual(module.unfence_json(text), '{"a": 1}')
 
+    def test_single_backtick_inline_code_wrapping_is_stripped(self):
+        # Observed live: the model wrapped its JSON in a single inline-code
+        # backtick ("`{...}`") rather than a triple-backtick block fence.
+        # The response was otherwise perfectly valid JSON and got rejected
+        # anyway because unfence_json only recognized the triple-backtick
+        # case.
+        text = '`{"schema":"uncle.artifact/v1","kind":"adversarial-review","findings":[]}`'
+        self.assertEqual(module.unfence_json(text),
+                          '{"schema":"uncle.artifact/v1","kind":"adversarial-review","findings":[]}')
+
+    def test_single_backtick_with_trailing_narration_is_stripped(self):
+        text = '`{"a": 1}` is the complete review.'
+        self.assertEqual(module.unfence_json(text), '{"a": 1}')
+
     def test_nested_braces_and_string_values_are_handled(self):
         text = '```json\n{"a": {"b": 1}, "c": "a } b { c"}\n```\nDone.'
         self.assertEqual(module.unfence_json(text), '{"a": {"b": 1}, "c": "a } b { c"}')

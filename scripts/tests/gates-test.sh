@@ -672,6 +672,11 @@ expect_out "Gate not accepted."
 expect_state "WAIT_IMPLEMENT_APPROVAL"
 expect_no_file ".uncle/workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
 
+}
+
+# The second half of gate_group_1, split off in the same full rebalance.
+gate_group_20() {
+
 # The approval attests to the tree. Code that moves after it re-opens the gate
 # instead of carrying a stale approval into verification.
 new_case tree-moved-after-approval
@@ -951,6 +956,11 @@ expect_out "Audit verdict: NOT_READY"
 expect_out "No decision received; audit remains pending."
 expect_not_out "Workflow complete."
 expect_state "WAIT_AUDIT_OVERRIDE"
+
+}
+
+# The second half of gate_group_4, split off in the same full rebalance.
+gate_group_22() {
 
 # A real stuck-run shape: the audit reviewer ends without writing
 # .uncle/docs/FINAL_AUDIT.md at all. VALIDATE_AUDIT only checks what FINAL_AUDIT already
@@ -1249,6 +1259,14 @@ if [[ "$(cat "$REPO/.uncle/workflow/state")" == WAIT_PLAN_APPROVAL ]]; then
     fail 'the acknowledged gate did not advance'
 fi
 
+}
+
+# The second half of gate_group_6, split off because a full rebalance found
+# it (and several other groups) sized well past what most groups take, all
+# independently dominating wall-clock when run alongside groups a fraction
+# of their size.
+gate_group_17() {
+
 new_case missing-approval-reopens-gate
 set_state UPDATED_PLAN
 rm -f "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
@@ -1414,6 +1432,11 @@ expect_status 1
 expect_state REPAIR
 expect_no_file .uncle/docs/FINAL_AUDIT.md
 expect_in_file .uncle/workflow/VERIFICATION_INTEGRITY.md app/test.sh
+
+}
+
+# The second half of gate_group_15, split off in the same full rebalance.
+gate_group_18() {
 
 # A test command that updates its own expected result cannot report green.
 new_stagegate_case sg-command-rewrites-test
@@ -1601,6 +1624,11 @@ expect_state WAIT_IMPLEMENT_APPROVAL
 expect_no_file '.uncle/workflow/implement-step-done'
 expect_in_file '.uncle/workflow/logs/implementation-step-1.gated-prompt.md' 'Compact output budgets'
 
+}
+
+# The second half of gate_group_8, split off in the same full rebalance.
+gate_group_21() {
+
 new_case change-stepwise-auto-for-large-plan
 green_baseline 0 'bash app/test.sh'
 cat > "$REPO/.uncle/docs/CHANGE_PLAN.md" <<'EOF'
@@ -1728,6 +1756,11 @@ expect_in_file .uncle/workflow/adversarial-review-format-retry.md 'Missing nonem
 COUNT=$((COUNT + 1))
 [[ $(grep -c '^.uncle/docs/ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'format retry did not re-run the reviewer exactly once'
 grep -q 'Overall assessment' "$REPO/.uncle/docs/ADVERSARIAL_REVIEW.md" || fail 'retried review was not adopted'
+
+}
+
+# The second half of gate_group_9, split off in the same full rebalance.
+gate_group_19() {
 
 new_case change-review-format-retry-exhausted
 set_state PLAN
@@ -1974,7 +2007,7 @@ echo 'gates-test.sh: no `local` in the drivers state machines'
 
 if [[ "${1:-}" == --group ]]; then
     case "${2:-}" in
-        1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16) "gate_group_$2" ;;
+        1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22) "gate_group_$2" ;;
         *) echo 'Invalid gate group' >&2; exit 2 ;;
     esac
     echo "gates group $2: $COUNT checks, $FAILED failures"

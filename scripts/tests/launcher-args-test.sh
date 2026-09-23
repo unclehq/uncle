@@ -35,7 +35,7 @@ cat > "$TMP/bin/python3" <<FAKE
 for a in "\$@"; do
     case "\$a" in
         *uncle_tui.py)
-            printf 'action=%s\ntext=%s\n' "\${UNCLE_STARTUP_ACTION:-}" "\${UNCLE_STARTUP_TEXT:-}" > "$TMP/tui-env"
+            printf 'action=%s\ntext=%s\nunattended=%s\n' "\${UNCLE_STARTUP_ACTION:-}" "\${UNCLE_STARTUP_TEXT:-}" "\${UNCLE_STARTUP_UNATTENDED:-}" > "$TMP/tui-env"
             exit 0 ;;
     esac
 done
@@ -46,6 +46,7 @@ chmod +x "$TMP/bin/python3"
 check "--application launches the TUI"            test "$RC" -eq 0
 check "TUI receives the startup action"           grep -qxF "action=create_app" "$TMP/tui-env"
 check "TUI receives the description"              grep -qxF "text=build a groovy calculator" "$TMP/tui-env"
+check "TUI receives unattended mode"              grep -qxF "unattended=1" "$TMP/tui-env"
 
 if [[ "$fails" -gt 0 ]]; then echo "launcher-args-test.sh: $fails failure(s)"; exit 1; fi
 echo "launcher-args-test.sh: all checks passed"

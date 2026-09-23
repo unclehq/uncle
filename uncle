@@ -94,6 +94,7 @@ UNCLE_ORIGINAL_ARGS=("$@")
 UNCLE_ARGS=()
 UNCLE_STARTUP_ACTION=""
 UNCLE_STARTUP_TEXT=""
+UNCLE_STARTUP_UNATTENDED=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)     usage; exit 0 ;;
@@ -101,7 +102,7 @@ while [[ $# -gt 0 ]]; do
         verify)        shift; cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/uncle-verify.py" "$@" ;;
         --performance) exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
         --runs)        exec python3 "$ROOT/scripts/lib/worktree_runs.py" "$PROJECT_ROOT" ;;
-        --unattended)  UNCLE_ARGS+=(--unattended); shift ;;
+        --unattended)  UNCLE_ARGS+=(--unattended); UNCLE_STARTUP_UNATTENDED=1; shift ;;
         --application)
             if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
                 printf 'Error: --application and --issue are mutually exclusive\n' >&2
@@ -181,7 +182,7 @@ export UNCLE_CONFIG
 export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
 # The TUI reads the launch flags from its environment; unexported, they were
 # parsed and then never seen, and --application opened an idle homepage.
-export UNCLE_STARTUP_ACTION UNCLE_STARTUP_TEXT
+export UNCLE_STARTUP_ACTION UNCLE_STARTUP_TEXT UNCLE_STARTUP_UNATTENDED
 CONFIG_STAGES="requirements change-spec project-plan change-plan adversarial-review updated-plan updated-change-plan preflight implementation repair test-review manual-checklist execute-checklist final-audit"
 
 # A Python process never picks up a rebuilt uncle_tui.py on its own -- it

@@ -893,7 +893,7 @@ class UncleTUI:
         self._startup_unattended = os.environ.get("UNCLE_STARTUP_UNATTENDED") == "1"
         self._startup_injected = False
         if self._startup_unattended:
-            self.misc['auto_mode'] = True
+            self.misc['auto_mode'] = 'true'
         # Bind the homepage composer before the first frame or key event.
         self._ensure_chat()
         self.chat_focus = 'chat'
@@ -1461,7 +1461,7 @@ class UncleTUI:
         return bool(re.fullmatch(r'[1-9][0-9]*|https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?', value))
 
     def cmd_for(self):
-        auto = ["--unattended"] if getattr(self, "misc", {}).get("auto_mode") == "true" else []
+        auto = ["--unattended"] if str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "true" else []
         if self.workflow_idx == 1:
             if not self._valid_issue(self.issue):
                 raise ValueError('Enter a GitHub issue number or https://github.com/owner/repo/issues/123')
@@ -3536,7 +3536,11 @@ class UncleTUI:
             raise ValueError('A workflow is already active.')
         try:
             if self._startup_action == 'create_app':
-                self._startup_brief_turn(self._startup_text)
+                # A CLI launch is an explicit instruction to build now.  Do
+                # not leave it on the homepage while a supervisor drafts a
+                # nicer brief; the direct path writes the supplied brief and
+                # enters the running build view in this first UI frame.
+                self._startup_direct_action(self._startup_text, 'app')
             elif self._startup_action == 'github_issue':
                 action = {
                     'uncle_action': 'github_issue',
@@ -5492,9 +5496,7 @@ class UncleTUI:
             else:
                 any_failed = result.get("process_exit") not in (None, 0) or result.get("reported_error") in (True, "true")
             title = ("> " if active else "") + stage
-            if is_rollup:
-                title += " (%d workers)" % len(raw_stages)
-            elif group["attempts"] > 1:
+            if not is_rollup and group["attempts"] > 1:
                 title += " (%d attempts)" % group["attempts"]
             if is_rollup:
                 statuses = group.get("_worker_statuses", {})

@@ -63,57 +63,28 @@ class StartupAction(unittest.TestCase):
     def system_lines(self):
         return [line for role, line in self.ui.home_history if role == 'system']
 
-    def test_description_is_drafted_by_the_homepage_supervisor(self):
-        self.ui._handle_startup_action()
-        self.assertIn(DESCRIPTION, self.ChatRequest.call_args.args[1])
-        self.assertIn('home_action', self.ChatRequest.call_args.args[1])
-        self.assertEqual(self.ui.home_request.startup_text, DESCRIPTION)
-        self.assertFalse(Path(generated_input_path('REQUIREMENTS.md', self.root)).is_file(), 'nothing is written before the reply')
-        self.reply({'uncle_action': 'create_app', 'document': drafted_brief(), 'start': False, 'message': 'Drafted.'})
-        self.assertIn('## Domain rules and invariants', self.brief())
-        self.assertIn('swirling seventies background', self.brief())
-        self.assertEqual(self.ui.state, 'running', 'a launch flag starts even when the reply only drafted')
-        self.assertEqual(self.ui.workflow_idx, 0)
-        self.assertEqual(self.ui.chat_error, '')
-
-    def test_reply_without_an_action_falls_back_to_the_description(self):
-        self.ui._handle_startup_action()
-        self.reply(None, prose='Which operations should it support?')
-        self.assertIn(DESCRIPTION, self.brief())
-        self.assertIn('## Summary', self.brief())
-        self.assertEqual(self.ui.state, 'running')
-        self.assertTrue(any('starting from the description as written' in line for line in self.system_lines()))
-
-    def test_no_supervisor_falls_back_to_the_description(self):
-        self.command.side_effect = ValueError('no runner configured')
+    def test_description_starts_the_build_immediately(self):
         self.ui._handle_startup_action()
         self.ChatRequest.assert_not_called()
         self.assertIn(DESCRIPTION, self.brief())
         self.assertEqual(self.ui.state, 'running')
-        self.assertTrue(any('no runner configured' in line for line in self.system_lines()))
+        self.assertEqual(self.ui.workflow_idx, 0)
+        self.assertEqual(self.ui.chat_error, '')
+
+    def test_no_supervisor_is_needed_for_a_launch_flag(self):
+        self.command.side_effect = ValueError('no runner configured')
+        self.ui._handle_startup_action()
+        self.assertIn(DESCRIPTION, self.brief())
+        self.assertEqual(self.ui.state, 'running')
+        self.ChatRequest.assert_not_called()
 
     def test_existing_brief_is_replaced_without_a_proposal(self):
         (self.root / 'REQUIREMENTS.md').write_text('Old brief')
         self.ui._handle_startup_action()
-        self.reply({'uncle_action': 'create_app', 'document': drafted_brief(), 'start': True, 'message': 'Drafted.'})
         self.assertIsNone(getattr(self.ui, 'home_replace_proposal', None))
-        self.assertIn('swirling seventies background', self.brief())
+        self.assertIn(DESCRIPTION, self.brief())
         backups = list((self.root / '.uncle/brief-history').glob('*/REQUIREMENTS.md'))
         self.assertEqual([b.read_text() for b in backups], ['Old brief'])
-        self.assertEqual(self.ui.state, 'running')
-
-    def test_malformed_reply_keeps_an_application_launch_an_application(self):
-        """A fallback must not infer change mode merely from an old brief."""
-        (self.root / 'REQUIREMENTS.md').write_text('Old brief')
-        self.ui._handle_startup_action()
-        self.ChatRequest.return_value.events.put({
-            'status': 'reply', 'elapsed': 0, 'exit': 0, 'usage': None, 'cost': None, 'log': '',
-            'reply': 'Functional\n- calculator operations, not a reply envelope'})
-        self.assertTrue(self.ui.poll_home_chat())
-        self.assertTrue(Path(generated_input_path('REQUIREMENTS.md', self.root)).is_file())
-        self.assertFalse(Path(generated_input_path('CHANGE_REQUEST.md', self.root)).is_file())
-        self.assertIn(DESCRIPTION, self.brief())
-        self.assertEqual(self.ui.workflow_idx, 0)
         self.assertEqual(self.ui.state, 'running')
 
     def test_typed_messages_are_unchanged(self):

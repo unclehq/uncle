@@ -128,6 +128,8 @@ def config_stage(stage, values):
     """
     if stage in ('manual-checklist-base', 'manual-checklist-delta'):
         return 'manual-checklist'
+    if stage == 'test-review-investigate':
+        return 'test-review'
     if stage.startswith('adversarial-review-worker-'):
         return 'adversarial-review'
     if stage.startswith('test-review-worker-'):

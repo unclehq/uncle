@@ -176,6 +176,23 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(settings(self.config, 'preview-build')['api_key'], 'qwen-secret')
 
+    def test_test_review_investigate_inherits_test_reviews_model(self):
+        # Live failure: the two-call test-review split (investigate, then
+        # format) added "test-review-investigate" as its own log_name, but
+        # config_stage() -- documented as mirroring uncle_config_stage in
+        # stage-config.sh -- had no mapping for it, so every attempt raised
+        # "Select a configured OpenCode self-hosted model for stage
+        # test-review-investigate" before ever reaching the model. The stage
+        # must resolve to the same profile as "test-review" itself.
+        self.config.write_text('test-review.runner self-hosted\ntest-review.model local/deepseek-v4-flash\n',
+                               encoding='utf-8')
+        profiles = {'local/deepseek-v4-flash': {'base_url': 'http://localhost:9100/v1', 'api_key': 'deepseek-secret'}}
+        save_keys(self.config, {'__opencode_models__': profiles})
+        with patch.dict(os.environ, {}, clear=True):
+            expected = dict(model='deepseek-v4-flash', base_url='http://localhost:9100/v1', api_key='deepseek-secret')
+            self.assertEqual(settings(self.config, 'test-review'), expected)
+            self.assertEqual(settings(self.config, 'test-review-investigate'), expected)
+
     def test_discovery_and_failed_refresh_preserves_catalog(self):
         import io
         from urllib.error import HTTPError

@@ -5379,10 +5379,17 @@ class UncleTUI:
         stats = getattr(self, "session_stats", None)
         if stats is None:
             return []
-        # Individual stage durations deliberately include every attempt and
-        # worker, so they describe consumed worker time.  The session total is
-        # different: it is the elapsed interval a person waited, and parallel
-        # workers must overlap rather than inflate it.
+        # A per-stage "Time" is the same kind of interval the session TOTALS
+        # line already uses: max(ended) - min(started) across every row in
+        # the group, not a sum of each row's own elapsed time. A panel of N
+        # workers running concurrently has one wall-clock span, not N of
+        # them stacked end to end -- summing turned every parallel panel's
+        # displayed time into roughly T * N-workers, which is wrong on its
+        # face (a person did not wait that long) and only gets worse as a
+        # panel gains workers. Wall-clock span is also more honest for a
+        # group of serial retry attempts: it captures any gap between
+        # attempts (a supervision diagnosis, a human wait) that summing each
+        # attempt's own elapsed time silently drops.
         wall_started = []
         wall_ended = []
         def duration(value):
@@ -5411,13 +5418,13 @@ class UncleTUI:
         for row in sorted(stats["records"], key=lambda r: r.get("started_at", 0)):
             stage = row.get("stage", "")
             parent = parent_stage(stage)
-            group = groups.setdefault(parent, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf"), "raw_stages": set(), "any_failed": False})
+            group = groups.setdefault(parent, {"tokens": [], "costs": [], "attempts": 0, "started": float("inf"), "ended": float("-inf"), "raw_stages": set(), "any_failed": False})
             group["raw_stages"].add(stage)
             elapsed = max(0, row.get("elapsed_seconds", 0))
             started = row.get("started_at", row.get("ended_at", 0) - elapsed)
             ended = row.get("ended_at", started + elapsed)
             group["started"] = min(group["started"], started)
-            group["seconds"] += elapsed
+            group["ended"] = max(group["ended"], ended)
             if isinstance(started, (int, float)) and isinstance(ended, (int, float)):
                 wall_started.append(started)
                 wall_ended.append(max(started, ended))
@@ -5447,12 +5454,12 @@ class UncleTUI:
             group["any_failed"] = group["any_failed"] or result_exit not in (None, 0) or row.get("reported_error") in (True, "true")
         for stage, started in stats["active"].items():
             parent = parent_stage(stage)
-            group = groups.setdefault(parent, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf"), "raw_stages": set(), "any_failed": False})
+            group = groups.setdefault(parent, {"tokens": [], "costs": [], "attempts": 0, "started": float("inf"), "ended": float("-inf"), "raw_stages": set(), "any_failed": False})
             group["raw_stages"].add(stage)
             group["started"] = min(group["started"], started)
             event = stats["live"].get(stage, {})
             ended = stats.get("stopped_at", time.time())
-            group["seconds"] += max(0, ended - started)
+            group["ended"] = max(group["ended"], ended)
             if isinstance(started, (int, float)) and isinstance(ended, (int, float)):
                 wall_started.append(started)
                 wall_ended.append(max(started, ended))
@@ -5486,7 +5493,8 @@ class UncleTUI:
             else:
                 style = "warning"
             self._panel_stage_styles[title] = style
-            lines += [title, "Time   " + duration(group["seconds"]),
+            stage_seconds = max(0, group["ended"] - group["started"]) if group["ended"] > float("-inf") else 0
+            lines += [title, "Time   " + duration(stage_seconds),
                       "Tokens " + subtotal(group["tokens"], count),
                       "Cost   " + cost_subtotal(group["costs"]), ""]
             tokens.extend(group["tokens"])

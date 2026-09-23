@@ -53,6 +53,7 @@ _EXPORTERS = {
     'UPDATED_PROJECT_PLAN': ('plan_context.py', 'export_updated_project_plan'),
     'CHANGE_SPEC': ('plan_context.py', 'export_change_spec'),
     'CHANGE_PLAN': ('plan_context.py', 'export_change_plan'),
+    'BASELINE_REPORT': ('plan_context.py', 'export_baseline_report'),
 }
 
 

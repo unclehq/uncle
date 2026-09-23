@@ -114,6 +114,51 @@ class PlanContext(unittest.TestCase):
             with self.assertRaises(ValueError):
                 module.ingest_change_plan(plan, Path(d))
 
+    def test_json_baseline_report_is_ingested_and_exported(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            report = root/'BASELINE_REPORT.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'baseline-report',
+                       'narrative': '## Change-request summary\n\nFix the bug.',
+                       'verification_commands': 'pytest\nnpm test',
+                       'parallel_groups': '1 2'}
+            report.write_text(json.dumps(payload))
+            self.assertTrue(module.ingest_baseline_report(report, root))
+            text = report.read_text()
+            self.assertIn('## Exact build and test commands executed', text)
+            self.assertIn('pytest', text)
+            self.assertIn('## Parallel verification groups', text)
+            self.assertIn('1 2', text)
+            stored = json.loads((root/'.uncle/workflow/documents/BASELINE_REPORT.json').read_text())
+            self.assertEqual(stored['verification_commands'], 'pytest\nnpm test')
+
+    def test_baseline_report_requires_verification_commands(self):
+        with tempfile.TemporaryDirectory() as d:
+            report = Path(d)/'BASELINE_REPORT.md'
+            report.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'baseline-report',
+                                           'narrative': 'x'}))
+            with self.assertRaises(ValueError):
+                module.ingest_baseline_report(report, Path(d))
+
+    def test_markdown_baseline_report_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as d:
+            report = Path(d)/'BASELINE_REPORT.md'
+            report.write_text('# A hand-written baseline\n\nNo JSON here.\n')
+            self.assertFalse(module.ingest_baseline_report(report, Path(d)))
+            self.assertEqual(report.read_text(), '# A hand-written baseline\n\nNo JSON here.\n')
+
+    def test_baseline_report_export_from_rendered_markdown(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            report = root/'BASELINE_REPORT.md'
+            report.write_text('Narrative text.\n\n## Exact build and test commands executed\n\n'
+                               '```sh\npytest\n```\n\n## Parallel verification groups\n\n```text\n1 2\n```\n')
+            payload = module.export_baseline_report(report, root)
+            self.assertEqual(payload['verification_commands'], 'pytest')
+            self.assertEqual(payload['parallel_groups'], '1 2')
+            stored = json.loads((root/'.uncle/workflow/documents/BASELINE_REPORT.json').read_text())
+            self.assertEqual(stored['narrative'], 'Narrative text.')
+
     def test_fenced_json_plan_still_ingests(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

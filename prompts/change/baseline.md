@@ -11,7 +11,12 @@ Read:
 
 Inspect the current repository before changing anything.
 
-Create .uncle/docs/BASELINE_REPORT.md containing:
+Write .uncle/docs/BASELINE_REPORT.md as one JSON object, not Markdown,
+matching this contract:
+
+`{"schema":"uncle.artifact/v1","kind":"baseline-report","narrative":"...","verification_commands":"...","parallel_groups":"..."}`
+
+`narrative` covers, as Markdown sections:
 
 1. Change-request summary
 2. Repository architecture
@@ -20,7 +25,6 @@ Create .uncle/docs/BASELINE_REPORT.md containing:
 5. Existing invariants
 6. Current API, schema, and interface contracts
 7. Existing automated-test coverage
-8. Exact build and test commands executed
 9. Baseline test results
 10. Existing failures, warnings, and flaky behavior
 11. Reproduction result for the reported bug, if applicable
@@ -39,6 +43,11 @@ For each existing invariant include:
 
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
+
+`verification_commands` is section 8, "Exact build and test commands
+executed", as its own field, not inside `narrative` -- see below.
+`parallel_groups` is the optional "Parallel verification groups" content,
+also its own field -- see below.
 
 Do not modify source code.
 Do not fix the issue.
@@ -59,9 +68,10 @@ matters most here.
   to end. Never read a file longer than about 300 lines end to end: grep for
   the symbols CHANGE_REQUEST.md names and read the surrounding lines. One
   whole large module is a third of this stage's context.
-- Write .uncle/docs/BASELINE_REPORT.md as soon as sections 8 and 9 have their evidence,
-  before any reading for later documents. A report on disk survives a context
-  that runs out; one still in your head does not.
+- Write .uncle/docs/BASELINE_REPORT.md as soon as `verification_commands` and
+  section 9 have their evidence, before any reading for later documents. A
+  report on disk survives a context that runs out; one still in your head
+  does not.
 - Cite code by path and line rather than quoting it. The report is read by
   five later stages; quoted source is paid for in each of them.
 - Do not re-read a file you have already read in this stage.
@@ -82,17 +92,17 @@ here is paid for six times over.
 - Never omit a section to avoid resolving something. If a section applies but
   you cannot complete it, keep it and mark it UNRESOLVED with the reason.
 
-Section 8 and section 9 are never omitted: the exact commands you ran and their
-results are the evidence the rest of the workflow depends on.
+`verification_commands` and section 9 are never omitted: the exact commands
+you ran and their results are the evidence the rest of the workflow depends
+on.
 
-## Section 8 is executed, not just read
+## verification_commands is executed, not just read
 
-The driver re-runs section 8 itself — once now, against the unmodified tree,
-and once after the change — and compares the two. That is how the workflow
-knows a check passed, rather than taking the implementation stage's word for
-it. So write section 8 as a command list a shell can run:
+The driver re-runs `verification_commands` itself — once now, against the
+unmodified tree, and once after the change — and compares the two. That is
+how the workflow knows a check passed, rather than taking the implementation
+stage's word for it. So write it as a command list a shell can run:
 
-- one fenced block, immediately under the heading, and nothing else in it;
 - one command per line, exactly as you ran it, from the repository root;
 - no prompt prefixes, no comments, no prose, no placeholders;
 - no command that needs a human, a password, an interactive browser, or a network service
@@ -120,20 +130,20 @@ For other projects, inspect their runner and fixture isolation before choosing
 parallelism; do not assume this Uncle-specific script exists.
 
 Automated browsers and local test servers are permitted when required for
-acceptance. Run independent test suites in parallel by default. Append
-`## Parallel verification groups` for independent suites, holding one
-fenced block and nothing else — bare rows of consecutive, one-based command
-positions, one group per line:
+acceptance. Run independent test suites in parallel by default. Set
+`parallel_groups` for independent suites, holding nothing but bare rows of
+consecutive, one-based command positions (matching `verification_commands`'s
+line order), one group per line:
 
-```text
+```
 2 3
 5 6
 ```
 
 Rows must be ordered and disjoint; no bullets, labels, backticked numbers, or
-prose in the block. Group only commands with independent ports, outputs,
-fixtures, and state, and explain their independence in the test coverage
-section.
+prose. Group only commands with independent ports, outputs, fixtures, and
+state, and explain their independence in the test coverage section of
+`narrative`.
 The driver uses the approved groups for both baseline and post-change checks;
 do not regroup commands after approval.
 

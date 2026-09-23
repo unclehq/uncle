@@ -2573,6 +2573,13 @@ run_planning_stage() {
         return 1
     fi
     local plan_ingest_error
+    if [[ -s .uncle/docs/BASELINE_REPORT.md ]]; then
+        plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" baseline-report .uncle/docs/BASELINE_REPORT.md . 2>&1)" || {
+            printf '%s\n' "$plan_ingest_error" >&2
+            supervision_validation_failed baseline-report .uncle/docs/BASELINE_REPORT.md "$plan_ingest_error"
+            return 1
+        }
+    fi
     if [[ -s .uncle/docs/CHANGE_SPEC.md ]]; then
         plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" change-spec .uncle/docs/CHANGE_SPEC.md . 2>&1)" || {
             printf '%s\n' "$plan_ingest_error" >&2

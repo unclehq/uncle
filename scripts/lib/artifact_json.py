@@ -141,6 +141,26 @@ def render_plan(payload, protected=True):
     return '\n'.join(lines)
 
 
+def render_baseline_report(payload):
+    """BASELINE_REPORT.md's command block must sit under a heading matching
+    'verification commands' or 'build and test commands' (green-check.sh's
+    verify_commands()); the optional parallel-groups block is its own fixed
+    heading. Both are consumed by the driver's own re-execution of the
+    approved commands, not merely read."""
+    commands = payload.get('verification_commands')
+    if not commands or not commands.strip():
+        raise ValueError('baseline report is missing verification_commands')
+    narrative = payload.get('narrative')
+    lines = []
+    if narrative:
+        lines += [narrative.strip(), '']
+    lines += ['## Exact build and test commands executed', '', '```sh', commands.strip('\n'), '```', '']
+    groups = payload.get('parallel_groups')
+    if groups and groups.strip():
+        lines += ['## Parallel verification groups', '', '```text', groups.strip('\n'), '```', '']
+    return '\n'.join(lines)
+
+
 def render_change_plan(payload, require_dispositions=False):
     """CHANGE_PLAN.md has no verification_commands convention of its own --
     change-workflow.sh's Verification commands come from BASELINE_REPORT.md

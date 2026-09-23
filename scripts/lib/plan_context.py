@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """JSON ingestion for the plan family: PROJECT_PLAN.md, UPDATED_PROJECT_PLAN.md,
-CHANGE_SPEC.md, CHANGE_PLAN.md.
+CHANGE_SPEC.md, CHANGE_PLAN.md, BASELINE_REPORT.md.
 
 Unlike the reviewer-authored artifacts (ADVERSARIAL_REVIEW.md, FINAL_AUDIT.md,
 TEST_REVIEW.md), these are written by an agent with Write-tool access and the
@@ -191,6 +191,47 @@ def ingest_change_plan(path, project='.', require_dispositions=False):
     return True
 
 
+def ingest_baseline_report(path, project='.'):
+    """BASELINE_REPORT.md. Same purely-additive contract as ingest_plan()."""
+    import json
+    module = _artifact_json()
+    text = Path(path).read_text(encoding='utf-8')
+    stripped = module.unfence_json(text)
+    if not stripped.startswith('{'):
+        return False
+    try:
+        payload = json.loads(stripped)
+    except ValueError as error:
+        raise ValueError('Invalid baseline-report JSON response: ' + str(error)) from error
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'baseline-report':
+        raise ValueError('wrong baseline-report JSON schema')
+    rendered = module.render_baseline_report(payload)
+    Path(path).write_text(rendered, encoding='utf-8')
+    module.write(project, Path(path).name, dict(payload, schema='uncle.artifact/v1', kind='baseline-report'))
+    return True
+
+
+def export_baseline_report(path, project='.'):
+    """Re-derive BASELINE_REPORT.md's canonical JSON from its current approved
+    bytes, for approval_export.py's gate refresh. Same own-render-format-only
+    contract as export_plan()."""
+    text = Path(path).read_text(encoding='utf-8')
+    module = _artifact_json()
+    marker = '## Exact build and test commands executed'
+    narrative = (text.split(marker, 1)[0] if marker in text else text).strip()
+    commands = _fenced_block('Exact build and test commands executed', 'sh').search(text)
+    if not commands:
+        raise ValueError('missing ## Exact build and test commands executed fenced block')
+    payload = {'schema': 'uncle.artifact/v1', 'kind': 'baseline-report', 'narrative': narrative,
+               'verification_commands': commands.group(1)}
+    groups = _fenced_block('Parallel verification groups', 'text').search(text)
+    if groups:
+        payload['parallel_groups'] = groups.group(1)
+    module.render_baseline_report(payload)
+    module.write(project, Path(path).name, payload)
+    return payload
+
+
 def ingest_change_spec(path, project='.'):
     """CHANGE_SPEC.md. Same purely-additive contract as ingest_plan()."""
     import json
@@ -226,6 +267,8 @@ if __name__ == '__main__':
             ingest_change_plan(path, project, require_dispositions=False)
         elif action == 'updated-change-plan':
             ingest_change_plan(path, project, require_dispositions=True)
+        elif action == 'baseline-report':
+            ingest_baseline_report(path, project)
         else:
             raise SystemExit('unknown action: ' + action)
     except ValueError as error:

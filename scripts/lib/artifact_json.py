@@ -141,6 +141,37 @@ def render_plan(payload, protected=True):
     return '\n'.join(lines)
 
 
+def render_change_plan(payload, require_dispositions=False):
+    """CHANGE_PLAN.md has no verification_commands convention of its own --
+    change-workflow.sh's Verification commands come from BASELINE_REPORT.md
+    (verify_commands() runs against it, not the plan) -- so unlike
+    render_plan() this never requires that field. The only thing CHANGE_PLAN.md
+    structurally owes is the disposition table, and only once a review exists
+    to disposition (require_dispositions=True for the post-review revision)."""
+    narrative = payload.get('narrative')
+    if not narrative or not narrative.strip():
+        raise ValueError('change-plan has no narrative')
+    dispositions = payload.get('dispositions')
+    if require_dispositions and not dispositions:
+        raise ValueError('change-plan is missing dispositions for the adversarial review')
+    lines = [narrative.strip(), '']
+    if dispositions:
+        seen = set()
+        rows = ['## Adversarial review dispositions', '',
+                '| Finding | Disposition | Reason | Exact plan change |', '|---|---|---|---|']
+        for row in dispositions:
+            finding = row['finding']
+            if finding in seen:
+                raise ValueError('duplicate disposition for finding: ' + finding)
+            seen.add(finding)
+            if row['disposition'] not in ('Accepted', 'Partially accepted', 'Rejected', 'Deferred'):
+                raise ValueError('invalid disposition for %s: %r' % (finding, row['disposition']))
+            esc = lambda value: str(value).replace('|', r'\|').replace('\n', ' ')
+            rows.append('| %s | %s | %s | %s |' % (finding, row['disposition'], esc(row['reason']), esc(row['plan_change'])))
+        lines += rows + ['']
+    return '\n'.join(lines)
+
+
 def render_change_spec(payload):
     criteria = payload.get('acceptance_criteria')
     if not criteria:

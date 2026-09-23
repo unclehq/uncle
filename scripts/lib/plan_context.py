@@ -51,6 +51,28 @@ def ingest_plan(path, project='.', protected=True):
     return True
 
 
+def ingest_change_plan(path, project='.', require_dispositions=False):
+    """CHANGE_PLAN.md, both before a review exists (require_dispositions=False,
+    the initial 'change-plan' stage) and after one (require_dispositions=True,
+    'updated-change-plan'). Same purely-additive contract as ingest_plan()."""
+    import json
+    module = _artifact_json()
+    text = Path(path).read_text(encoding='utf-8')
+    stripped = module.unfence_json(text)
+    if not stripped.startswith('{'):
+        return False
+    try:
+        payload = json.loads(stripped)
+    except ValueError as error:
+        raise ValueError('Invalid change-plan JSON response: ' + str(error)) from error
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'change-plan':
+        raise ValueError('wrong change-plan JSON schema')
+    rendered = module.render_change_plan(payload, require_dispositions=require_dispositions)
+    Path(path).write_text(rendered, encoding='utf-8')
+    module.write(project, Path(path).name, dict(payload, schema='uncle.artifact/v1', kind='change-plan'))
+    return True
+
+
 def ingest_change_spec(path, project='.'):
     """CHANGE_SPEC.md. Same purely-additive contract as ingest_plan()."""
     import json
@@ -82,6 +104,10 @@ if __name__ == '__main__':
             ingest_plan(path, project, protected=False)
         elif action == 'change-spec':
             ingest_change_spec(path, project)
+        elif action == 'change-plan':
+            ingest_change_plan(path, project, require_dispositions=False)
+        elif action == 'updated-change-plan':
+            ingest_change_plan(path, project, require_dispositions=True)
         else:
             raise SystemExit('unknown action: ' + action)
     except ValueError as error:

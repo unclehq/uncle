@@ -61,29 +61,24 @@ Carry issue identity from CHANGE_REQUEST.md into .uncle/docs/CHANGE_PLAN.md:
 - If neither source supplies an issue number, omit the identity line without
   failing. Preserve any available source seed URL verbatim; never invent a URL.
 
-Revise .uncle/docs/CHANGE_PLAN.md in place. Do not create a second plan document.
+Revise .uncle/docs/CHANGE_PLAN.md in place. Do not create a second plan
+document. Write it as one JSON object, not Markdown, matching this contract:
+
+`{"schema":"uncle.artifact/v1","kind":"change-plan","narrative":"...","dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}]}`
 
 Edit sections affected by review findings or by the final executability and
 consistency checks above. Preserve other sections; do not reword or restate
-unaffected content.
-.uncle/docs/CHANGE_PLAN.md is the sole plan input to every later stage, so what you leave
-behind is what implementation executes.
+unaffected content. `narrative` is the complete revised plan (real newlines
+in the JSON string) -- .uncle/docs/CHANGE_PLAN.md is the sole plan input to
+every later stage, so what you put there is what implementation executes.
 
-Insert directly below the title a disposition for every adversarial finding:
-
-| Finding | Disposition | Reason | Exact plan change |
-|---|---|---|---|
-
-Allowed dispositions:
-
-- Accepted
-- Partially accepted
-- Rejected
-- Deferred
-
-The `Exact plan change` cell names the section you edited, or `none` for a
-rejected or deferred finding. The disposition table covers every finding. It is
-never omitted and never abbreviated.
+`dispositions` is one entry per adversarial finding: `finding` is its AR-XXX
+ID, `disposition` is exactly one of `Accepted`, `Partially accepted`,
+`Rejected`, `Deferred`, `reason` is a concise sentence, and `plan_change`
+names the section you edited, or `none` for a rejected or deferred finding.
+It covers every finding -- never omitted, never abbreviated. The driver
+renders it as the disposition table below; do not also write that table into
+`narrative`.
 
 Append these sections:
 

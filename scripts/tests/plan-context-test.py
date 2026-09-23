@@ -73,6 +73,47 @@ class PlanContext(unittest.TestCase):
             with self.assertRaises(ValueError):
                 module.ingest_change_spec(spec_doc, Path(d))
 
+    def test_initial_change_plan_needs_no_verification_commands_or_dispositions(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan = root/'CHANGE_PLAN.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'narrative': '## Selected technical approach\n\nDo it.'}
+            plan.write_text(json.dumps(payload))
+            self.assertTrue(module.ingest_change_plan(plan, root, require_dispositions=False))
+            text = plan.read_text()
+            self.assertIn('## Selected technical approach', text)
+            self.assertNotIn('Disposition', text)
+            stored = json.loads((root/'.uncle/workflow/documents/CHANGE_PLAN.json').read_text())
+            self.assertEqual(stored['narrative'], payload['narrative'])
+
+    def test_updated_change_plan_requires_dispositions(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan = root/'CHANGE_PLAN.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'narrative': '## Selected technical approach\n\nDo it.'}
+            plan.write_text(json.dumps(payload))
+            with self.assertRaises(ValueError):
+                module.ingest_change_plan(plan, root, require_dispositions=True)
+
+    def test_updated_change_plan_with_dispositions_renders_the_table(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan = root/'CHANGE_PLAN.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'narrative': '## Selected technical approach\n\nDo it.',
+                       'dispositions': [{'finding': 'AR-001', 'disposition': 'Accepted', 'reason': 'valid gap',
+                                        'plan_change': 'added rollback step'}]}
+            plan.write_text(json.dumps(payload))
+            self.assertTrue(module.ingest_change_plan(plan, root, require_dispositions=True))
+            text = plan.read_text()
+            self.assertIn('| AR-001 | Accepted | valid gap | added rollback step |', text)
+
+    def test_change_plan_wrong_kind_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            plan = Path(d)/'CHANGE_PLAN.md'
+            plan.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': 'x'}))
+            with self.assertRaises(ValueError):
+                module.ingest_change_plan(plan, Path(d))
+
     def test_fenced_json_plan_still_ingests(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

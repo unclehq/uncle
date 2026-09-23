@@ -2554,7 +2554,7 @@ run_planning_stage() {
         }
     fi
     if [[ -s .uncle/docs/CHANGE_PLAN.md ]]; then
-        plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/CHANGE_PLAN.md . 2>&1)" || {
+        plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" change-plan .uncle/docs/CHANGE_PLAN.md . 2>&1)" || {
             printf '%s\n' "$plan_ingest_error" >&2
             supervision_validation_failed change-plan .uncle/docs/CHANGE_PLAN.md "$plan_ingest_error"
             return 1
@@ -2820,7 +2820,7 @@ while true; do
             verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
             verify_approval .uncle/docs/ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
             if [[ -s .uncle/docs/CHANGE_PLAN.md ]]; then
-                plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/CHANGE_PLAN.md . 2>&1)" || {
+                plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" updated-change-plan .uncle/docs/CHANGE_PLAN.md . 2>&1)" || {
                     printf '%s\n' "$plan_ingest_error" >&2
                     supervision_validation_failed updated-change-plan .uncle/docs/CHANGE_PLAN.md "$plan_ingest_error"
                     exit 1

@@ -49,7 +49,17 @@ to those. Do not re-explore the repository or re-read README.md.
 and may have been edited during that review. Re-read both from disk. Do not
 rely on remembered content for either one.
 
-Create .uncle/docs/CHANGE_PLAN.md.
+Write .uncle/docs/CHANGE_PLAN.md as one JSON object, not Markdown, matching
+this contract:
+
+`{"schema":"uncle.artifact/v1","kind":"change-plan","narrative":"..."}`
+
+`narrative` is the entire plan document below as one Markdown block (real
+newlines in the JSON string) -- everything described in this prompt, exactly
+as if you were still writing Markdown directly. Unlike PROJECT_PLAN.md, this
+document has no dedicated verification_commands field: change-workflow's
+automated checks come from .uncle/docs/BASELINE_REPORT.md, not from this
+plan.
 
 Carry issue identity from CHANGE_REQUEST.md into .uncle/docs/CHANGE_PLAN.md:
 

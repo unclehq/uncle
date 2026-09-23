@@ -4,17 +4,57 @@ import json
 from pathlib import Path
 import re
 
-_JSON_FENCE = re.compile(r'^```(?:json)?\s*\n(.*)\n```\s*$', re.S)
+_JSON_FENCE = re.compile(r'```(?:json)?\s*\n(.*?)\n```', re.S)
+
+def _extract_balanced_object(text):
+    """The first {...} object in TEXT, honoring string quoting so a brace
+    inside a JSON string value never miscounts nesting depth. None if TEXT
+    has no top-level object at all."""
+    start = text.find('{')
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == '\\':
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == '{':
+            depth += 1
+        elif char == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    return None
 
 def unfence_json(text):
     """A model asked for a bare JSON object commonly wraps it in a Markdown
     code fence anyway (the same habit every prompt in this codebase already
-    has to guard against for the documents JSON is replacing). Strip one
-    wrapping ```/```json fence if present; otherwise return the text
-    unchanged, so a genuinely bare object still works."""
+    has to guard against for the documents JSON is replacing), and just as
+    commonly adds a sentence of narration before or after it despite being
+    told the object must be its entire reply. Find a fenced block anywhere
+    in the text (not only when the fence is the whole message) and, whether
+    fenced or bare, extract the first balanced {...} object rather than
+    requiring the object to be the only content -- trailing narration after
+    a closing fence or a closing brace must not turn a genuinely valid
+    response into a rejected one. Text that never looks JSON-shaped (no
+    fenced or bare object starting the candidate) is returned unchanged, so
+    a genuinely non-JSON document still falls through to its own parser."""
     stripped = text.strip()
-    match = _JSON_FENCE.match(stripped)
-    return match.group(1).strip() if match else stripped
+    fenced = _JSON_FENCE.search(stripped)
+    candidate = fenced.group(1).strip() if fenced else stripped
+    if not candidate.startswith('{'):
+        return stripped
+    return _extract_balanced_object(candidate) or candidate
 
 def path(project, name):
     return Path(project) / '.uncle/workflow/documents' / (Path(name).stem + '.json')

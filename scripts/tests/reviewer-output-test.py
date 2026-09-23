@@ -28,6 +28,17 @@ class ReviewerOutput(unittest.TestCase):
     def test_json_without_the_schema_key_is_not_a_document(self):
         self.assertFalse(module.looks_like_document('{"reply": "done"}'))
 
+    def test_fenced_json_with_trailing_narration_is_still_a_document(self):
+        # Observed live: the model closes the fence cleanly and then keeps
+        # talking ("All adversarial findings are addressed above."). The
+        # anchored match this used to have rejected that outright, sending a
+        # genuinely valid review to the same failure path as no document at
+        # all.
+        payload = json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review',
+                               'findings': [], 'overall_assessment': 'Clean.'})
+        text = '```json\n' + payload + '\n```\n\nAll adversarial findings are addressed above.'
+        self.assertTrue(module.looks_like_document(text))
+
     def test_check_raises_with_a_preview_for_a_non_document(self):
         with self.assertRaises(ValueError) as ctx:
             module.check('Sure, I will write the review next.', 'kimi')

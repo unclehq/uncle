@@ -911,6 +911,21 @@ stage_turns() {
         implementation-report) fallback=20 ;;
         execute-checklist) fallback=120 ;;
     esac
+    # Self-hosted always takes the investigate/format split for these
+    # stages, and under self-hosted this exact log_name is only ever the
+    # short format pass -- the real reading/coding work happens under the
+    # separate "<stage>-investigate" name instead. A one-document mechanical
+    # conversion has no business near the normal ceiling, and a low cap
+    # closes most of the room for OpenCode's own continuation nudge to
+    # derail the model into a meandering multi-turn conversation that loses
+    # track of the one document it owes -- seen live: a format call burned
+    # 1696s and 30k tokens wandering through a hallucinated "continue or
+    # stop" exchange instead of just answering.
+    case "$1" in
+        updated-plan|project-plan|requirements|preflight|implementation|repair)
+            stage_uses_self_hosted "$1" AGENT && fallback=5
+            ;;
+    esac
     stage_setting TURNS "$1" "$fallback"
 }
 

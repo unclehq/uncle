@@ -661,7 +661,10 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
             'writing to ' + str(root) + ' or anywhere outside this isolated copy -- that '
             'path is denied by design, not by mistake, and asking for permission to use it '
             'wastes the whole turn. A denied write is not a blocker to work around; it is a '
-            'sign you should be answering in text instead.')
+            'sign you should be answering in text instead. Naming the target filename, or '
+            'listing filenames you believe you wrote, is not the deliverable and will be '
+            'rejected -- your final message must be the complete JSON object itself, nothing '
+            'else, whether or not a write attempt happened first.')
         if artifact == '.uncle/docs/REQUIREMENTS_INTERPRETATION.md':
             request = (prompt + '\nReturn only one JSON object matching this contract as your final message; '
                        'do not use file tools and do not return Markdown:\n'

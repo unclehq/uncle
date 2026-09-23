@@ -7,7 +7,7 @@ object, not Markdown, matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"acceptance-report","narrative":"...","rows":[{"id":"G-1","required":true,"status":"PASS","evidence":"..."}]}`
 
-Write it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance.
+Write it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance. If you reconsider your answer partway through, revise silently -- the final reply must contain the object exactly once. Including an earlier draft alongside the final one, or the same content twice, is rejected the same way a missing object is.
 
 `narrative` covers, in order: Summary, Findings, Assumptions, Open questions
 -- everything that is not the acceptance gate table itself, as one Markdown

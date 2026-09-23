@@ -560,10 +560,25 @@ def reviewer_document(response):
     return '\n'.join(lines[start:]).strip() + '\n'
 
 
+def _artifact_json_module():
+    _spec = importlib.util.spec_from_file_location('artifact_json', Path(__file__).with_name('artifact_json.py'))
+    _module = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_module)
+    return _module
+
+
+def is_json_response(text):
+    """True when TEXT (a chat response or a file the model wrote directly)
+    is our JSON contract rather than already-rendered Markdown. A model that
+    writes the file itself, ignoring the 'no file tools' instruction, still
+    writes the same JSON contract into it -- this lets a caller detect that
+    and route it through document_response()'s render step regardless of
+    which of the two the content came from."""
+    return _artifact_json_module().unfence_json(text).startswith('{')
+
+
 def document_response(response, artifact):
     text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
-    _spec = importlib.util.spec_from_file_location('artifact_json', Path(__file__).with_name('artifact_json.py'))
-    _artifact_json = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_artifact_json)
+    _artifact_json = _artifact_json_module()
     unfenced = _artifact_json.unfence_json(text)
     if Path(artifact).name == 'REQUIREMENTS_INTERPRETATION.md' and unfenced.startswith('{'):
         try:
@@ -687,7 +702,11 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                 try:
                     if candidate.is_symlink():
                         raise ValueError('Refusing a symlinked requirements document')
-                    document = candidate.read_text(encoding='utf-8') if candidate.is_file() else document_response(response, artifact)
+                    if candidate.is_file():
+                        file_text = candidate.read_text(encoding='utf-8')
+                        document = document_response(file_text, artifact) if is_json_response(file_text) else file_text
+                    else:
+                        document = document_response(response, artifact)
                     validate_requirements(document)
                 except ValueError as error:
                     logs = root/'.uncle/workflow/logs'
@@ -728,7 +747,11 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                 if candidate.is_symlink():
                     raise ValueError('Refusing a symlinked plan; original preserved')
                 try:
-                    if not candidate.exists():
+                    if candidate.exists():
+                        file_text = candidate.read_text(encoding='utf-8')
+                        if is_json_response(file_text):
+                            candidate.write_text(document_response(file_text, artifact), encoding='utf-8', newline='\n')
+                    else:
                         candidate.write_text(document_response(response, artifact), encoding='utf-8', newline='\n')
                     validate_plan(candidate.read_text(encoding='utf-8'), protected=artifact == '.uncle/docs/UPDATED_PROJECT_PLAN.md')
                 except ValueError as error:

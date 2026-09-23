@@ -274,6 +274,45 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         self.assertEqual(len(rejected), 1)
         self.assertEqual(rejected[0].read_text(encoding='utf-8'), invalid)
 
+    def test_plan_written_as_json_directly_to_file_is_still_rendered(self):
+        # A model that ignores "do not use file tools" and writes the JSON
+        # contract straight into the candidate file must still get the same
+        # render-and-validate treatment as one that returned it in chat text
+        # -- otherwise validate_plan() sees raw JSON where it expects a
+        # '## Verification commands' heading and rejects a genuinely valid
+        # response every time.
+        import self_hosted, json as json_module
+        plan = self.root/'.uncle/docs/UPDATED_PROJECT_PLAN.md'
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text('Original approved content\n')
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## Summary\n\nDo it.',
+                   'verification_commands': 'pytest', 'protected_verification_paths': 'tests/'}
+
+        def generate(side, values, prompt, staged, **kwargs):
+            (staged/'.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text(json_module.dumps(payload))
+            return 'response text is ignored when the file exists', 1
+        with patch.object(self_hosted, '_run_opencode', side_effect=generate):
+            run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+        text = plan.read_text(encoding='utf-8')
+        self.assertIn('## Summary', text)
+        self.assertIn('## Verification commands', text)
+        self.assertIn('pytest', text)
+
+    def test_requirements_written_as_json_directly_to_file_is_still_rendered(self):
+        import self_hosted, json as json_module
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'requirements-interpretation', 'sections': {
+            key: 'x' for key in ('required_functionality', 'optional_functionality', 'constraints',
+                                  'user_visible_behaviors', 'system_behaviors', 'failure_behaviors',
+                                  'ambiguities', 'assumptions', 'explicit_non_goals', 'definition_of_done')}}
+
+        def generate(side, values, prompt, staged, **kwargs):
+            (staged/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md').write_text(json_module.dumps(payload))
+            return 'response text is ignored when the file exists', 1
+        with patch.object(self_hosted, '_run_opencode', side_effect=generate):
+            run_opencode('agent', self.values(), 'Requirements', self.root, stage='requirements')
+        text = (self.root/'.uncle/docs/REQUIREMENTS_INTERPRETATION.md').read_text(encoding='utf-8')
+        self.assertIn('## 10. Definition of done', text)
+
     def test_plan_crash_and_missing_output_preserve_original(self):
         import self_hosted
         plan = self.root/'.uncle/docs/UPDATED_PROJECT_PLAN.md'

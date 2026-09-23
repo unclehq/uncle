@@ -1092,6 +1092,13 @@ expect_in_file .uncle/workflow/received-test-review-prompt.md 'Shared driver evi
 expect_in_file .uncle/workflow/received-test-review-prompt.md 'All verification commands passed.'
 expect_in_file .uncle/workflow/received-test-review-prompt.md "$REPO/.uncle/workflow/TEST_CHANGES.diff"
 
+}
+
+# The second half of what was one long repair group -- independently as slow
+# as verification-integrity was, so splitting only that one left this one as
+# the new co-dominant long pole. Split the same way.
+gate_group_16() {
+
 # A failed acceptance check repairs, reruns driver commands, repeats review,
 # and reaches audit only after a fresh successful verification.
 new_stagegate_case sg-verification-repairs-and-retests
@@ -1331,6 +1338,15 @@ COUNT=$((COUNT + 1))
 case "$(cat "$REPO/.uncle/workflow/state")" in
     UPDATED_PLAN|VALIDATE_UPDATED_PLAN|WAIT_UPDATED_PLAN_APPROVAL|WAIT_PLAN_APPROVAL) fail "unattended run did not get past the revised plan: $(cat "$REPO/.uncle/workflow/state")" ;;
 esac
+
+}
+
+# The second half of what was one long verification-integrity group (19
+# cases, ~90s sequential -- the single slowest group by a wide margin, and
+# thus the group that set gates-test.sh's whole wall-clock floor no matter
+# how many *other* groups also ran alongside it). Split so both halves run
+# concurrently instead of one long chain.
+gate_group_15() {
 
 # A speculative review is validated before it is adopted. A fragment is set
 # aside and the stage rerun, instead of being adopted and then stopping the
@@ -1958,7 +1974,7 @@ echo 'gates-test.sh: no `local` in the drivers state machines'
 
 if [[ "${1:-}" == --group ]]; then
     case "${2:-}" in
-        1|2|3|4|5|6|7|8|9|10|11|12|13|14) "gate_group_$2" ;;
+        1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16) "gate_group_$2" ;;
         *) echo 'Invalid gate group' >&2; exit 2 ;;
     esac
     echo "gates group $2: $COUNT checks, $FAILED failures"

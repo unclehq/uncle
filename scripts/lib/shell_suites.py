@@ -41,9 +41,19 @@ def isolate_git():
 
 
 def run_commands(jobs, commands):
-    """Execute named isolated commands with shared progress and cleanup."""
-    if not 1 <= jobs <= 8:
-        raise ValueError('Worker count must be from 1 to 8')
+    """Execute named isolated commands with shared progress and cleanup.
+
+    The 1-8 range on run()'s own --jobs flag is a deliberate cap on the full
+    ~70-file regression, so a developer's default run never oversubscribes
+    their machine. A caller with a smaller, already-bounded set of
+    independent work units -- gate_suites.py's 14 gate groups, one process
+    each -- isn't asking for the same thing: it knows exactly how much
+    genuinely independent work exists and wants to run it in one wave rather
+    than an arbitrary two, so this only bounds jobs by the actual work and a
+    generous ceiling against a mistyped huge number, not by the unrelated
+    CLI's own limit."""
+    if not 1 <= jobs <= max(8, len(commands)):
+        raise ValueError(f'Worker count must be from 1 to {max(8, len(commands))}')
     timeout = check_timeout('WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS', 600)
     files = list(commands)
     active, lock, stopped = set(), threading.Lock(), threading.Event()

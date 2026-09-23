@@ -22,9 +22,10 @@ run_parallel_checklist_workers() { :; }
 set_state() { echo "$1" > state; }
 require_file() { test -s "$1"; }
 check_document_budget() { test ! -e bad-report; }
+recover_missing_checklist_reports() { :; }
 run_claude() {
     echo execute >> calls
-    echo report > .uncle/docs/VERIFICATION_REPORT.md
+    printf '# Verification report\n\n## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n| MC-001 | YES | PASS | greeting shown |\n' > .uncle/docs/VERIFICATION_REPORT.md
     echo defects > .uncle/docs/DEFECTS.md
 }
 while true; do

@@ -249,6 +249,12 @@ def parent_stage(stage):
         return "implementation"
     if stage in ("manual-checklist-base", "manual-checklist-delta"):
         return "manual-checklist"
+    # The investigate/format split's first call always names itself
+    # "<parent>-investigate" (test-review-investigate, updated-plan-investigate,
+    # ...); fold it back into the parent's own rollup row instead of showing
+    # it as an unrelated top-level stage next to the parent it belongs to.
+    if stage.endswith("-investigate"):
+        return stage[: -len("-investigate")]
     return stage
 
 def default_stage_effort(stage):

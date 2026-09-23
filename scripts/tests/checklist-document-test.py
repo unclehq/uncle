@@ -46,6 +46,71 @@ class Document(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate(p)
             self.assertEqual(p.read_text(), '## MC-1 — No content at all\nJust prose, no fields.\n')
+    def test_json_response_is_validated_rendered_and_exported(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            p = root/'MANUAL_CHECKLIST.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist',
+                       'checks': [{'id': 'MC-1', 'priority': 'Critical', 'required': True,
+                                   'related_requirement': 'AC-1', 'related_behavior': 'B-1',
+                                   'related_invariant': 'none', 'prerequisites': 'none',
+                                   'exclusive_resources': ['port:5173'], 'depends_on': [],
+                                   'exact_action': 'Open the app', 'expected_result': 'Loads without error',
+                                   'evidence_to_capture': 'Screenshot'}]}
+            p.write_text(json.dumps(payload))
+            checks = validate(p, root)
+            self.assertEqual(len(checks), 1)
+            self.assertEqual(checks[0].resources, {'port:5173'})
+            text = p.read_text()
+            self.assertIn('### MC-1', text)
+            self.assertIn('- Exact action: Open the app', text)
+            stored = json.loads((root/'.uncle/workflow/documents/MANUAL_CHECKLIST.json').read_text())
+            self.assertEqual(stored['checks'][0]['id'], 'MC-1')
+
+    def test_json_response_blocked_status_is_allowed_at_creation(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            p = root/'MANUAL_CHECKLIST.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist',
+                       'checks': [{'id': 'MC-1', 'exact_action': 'Open the app', 'expected_result': 'Loads',
+                                   'status': 'BLOCKED-SETUP', 'evidence_of_unavailability': 'no display'}]}
+            p.write_text(json.dumps(payload))
+            validate(p, root)
+            text = p.read_text()
+            self.assertIn('- Status: BLOCKED-SETUP', text)
+            self.assertIn('- Actual result: no display', text)
+
+    def test_json_response_rejects_a_pass_fail_status_at_creation(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/'MANUAL_CHECKLIST.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist',
+                       'checks': [{'id': 'MC-1', 'exact_action': 'x', 'expected_result': 'y', 'status': 'PASS'}]}
+            p.write_text(json.dumps(payload))
+            with self.assertRaises(ValueError):
+                validate(p, Path(d))
+
+    def test_json_response_missing_id_is_rejected(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/'MANUAL_CHECKLIST.md'
+            p.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist', 'checks': [{}]}))
+            with self.assertRaises(ValueError):
+                validate(p, Path(d))
+
+    def test_fenced_json_response_still_validates(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            p = root/'MANUAL_CHECKLIST.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist',
+                       'checks': [{'id': 'MC-1', 'exact_action': 'Open the app', 'expected_result': 'Loads'}]}
+            p.write_text('```json\n' + json.dumps(payload) + '\n```')
+            validate(p, root)
+            self.assertIn('### MC-1', p.read_text())
+
     def test_categorized_check_ids_preserve_dependencies(self):
         from checklist_document import validate_text
         rows = validate_text("""# Checklist

@@ -20,51 +20,45 @@ table and open what the checks actually depend on, rather than the whole tree.
 Do not modify source code.
 Do not claim that any check passed.
 
-Create .uncle/docs/MANUAL_CHECKLIST.md.
+Write .uncle/docs/MANUAL_CHECKLIST.md as one JSON object, not Markdown,
+matching this contract:
 
-For every check include:
+`{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","section":"...","priority":"...","required":true,"related_requirement":"...","related_behavior":"...","related_invariant":"...","prerequisites":"...","needs":"PF-7","exclusive_resources":["port:5173"],"depends_on":[],"exact_action":"...","expected_result":"...","evidence_to_capture":"..."}],"traceability":"..."}`
 
-- Check ID
-- Priority
-- Required for acceptance: YES or NO, justified from requirements rather than
-  inferred from priority
-- Related requirement
-- Related behavior
-- Related invariant
-- Prerequisites
-- Exclusive resources
-- Depends on
-- Exact action
-- Expected result
-- Evidence to capture
-- Actual result: blank
-- Status: NOT RUN
+Give every check a stable unique MC ID. `required` is a JSON boolean:
+justify it from requirements rather than inferring it from priority. Leave a
+field `null` or omit it only when it genuinely does not apply (for example
+`related_invariant` when no invariant covers the check); `exact_action` and
+`expected_result` are always required. Omit `status` (the driver writes
+`NOT RUN`) unless this environment already cannot perform the check's
+action -- then set `status` to `BLOCKED-SETUP`, `BLOCKED-HUMAN`, or
+`BLOCKED-IMPOSSIBLE` per the rules below, and put the explanation in
+`evidence_of_unavailability`. Never set `status` to anything else; execution
+has not happened yet. `traceability` is the closing traceability matrix, as
+one Markdown block.
 
 ## Parallel execution declarations
 
-Two fields on every check decide whether it may run alongside another, and they
-are yours because you are the one who knows what each check touches:
+`exclusive_resources` and `depends_on` on every check decide whether it may
+run alongside another, and they are yours because you are the one who knows
+what each check touches:
 
-- `Exclusive resources`: what the check needs to itself while it runs — a port
+- `exclusive_resources`: what the check needs to itself while it runs — a port
   (`port:5173`), a browser session, a database, a user account, a build output
-  directory, a fixture it mutates. Comma-separated, lower case. Write `none`
+  directory, a fixture it mutates. An array of lower-case strings. Use `[]`
   when the check only reads and can safely overlap with anything.
-- `Depends on`: the check IDs that must finish before this one starts, or
-  `none`. Ordering, not topic: a check that merely covers related behavior does
-  not depend on it.
+- `depends_on`: the check IDs that must finish before this one starts, as an
+  array (`[]` for none). Ordering, not topic: a check that merely covers
+  related behavior does not depend on it.
 
 Declare both on every check. The driver derives the execution groups from these
 two fields alone and hands them to the stage that runs the checklist, so this is
 where the question gets decided — not later, by the agent whose results depend
-on the answer. A check with no `Exclusive resources` line is scheduled alone, so
-an omission costs wall-clock rather than correctness.
+on the answer. An empty `exclusive_resources` array is scheduled alone, so an
+omission costs wall-clock rather than correctness.
 
 Two checks that would fight over the same port must name the same token, spelled
 the same way. A resource token is only as good as that agreement.
-
-If the checklist is a table, head those two columns `Excl` and `Deps`. Both
-spellings are read, but a column headed something else is not read at all, and
-an unread declaration silently costs the concurrency it was written to enable.
 
 For a browser or desktop resource, declare the system default browser
 (`browser:system`) unless the requirements name a specific one, in which case
@@ -91,8 +85,9 @@ per prerequisite that was probed before implementation, with its status and the
 observed evidence.
 
 Every check that needs a capability -- a port, a browser, a GUI, an account, a
-person -- must cite the preflight id that proved it, as `Needs: PF-7`. A check
-that needs nothing beyond the repository and its test tools cites nothing.
+person -- must cite the preflight id that proved it, in `needs` (for example
+`"PF-7"`). A check that needs nothing beyond the repository and its test
+tools leaves `needs` empty.
 
 If the cited id is not PASS, the capability was not available here, and the
 check cannot pass. Write the check anyway -- a requirement that cannot be
@@ -114,7 +109,7 @@ BLOCKED-IMPOSSIBLE, say so in Open questions and name what would have to change
 is a decision for a human at a gate, not something to bury in a check that
 will never run.
 
-Include sections for:
+Set each check's `section` to one of:
 
 1. Smoke checks
 2. User-visible behaviors
@@ -127,7 +122,7 @@ Include sections for:
 9. Requirements not covered by automated tests
 10. Regression checks
 
-End with a traceability matrix.
+`traceability` is the closing traceability matrix.
 Cover every mandatory acceptance criterion, even if its prerequisites are
 unavailable. Identify any remaining test-review findings and their regression
 checks. Do not substitute DOM presence for visibility, emulation for required
@@ -137,9 +132,10 @@ Keep it dense. Reference requirements, behaviors, and invariants by identifier
 instead of restating them — this checklist is read by two later stages, so
 every line you duplicate is paid for repeatedly. One check per real risk; do
 not pad a section to make it look complete. If a section has no meaningful
-check for this project, write "none applicable" and why.
+check for this project, include one check in it whose `exact_action` states
+"none applicable" and why, rather than omitting the section.
 
-Return only the checklist.
+Return only the JSON object.
 
 ## Efficient checklist delivery
 

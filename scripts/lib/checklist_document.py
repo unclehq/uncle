@@ -40,9 +40,28 @@ def normalize_labels(text):
     return text
 
 
-def validate(path):
+def validate(path, project='.'):
     path = Path(path)
     text = path.read_text(encoding='utf-8')
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location('artifact_json', Path(__file__).with_name('artifact_json.py'))
+    _artifact_json = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_artifact_json)
+    stripped = _artifact_json.unfence_json(text)
+    if stripped.startswith('{'):
+        import json
+        try:
+            payload = json.loads(stripped)
+        except ValueError as error:
+            raise ValueError('Invalid manual-checklist JSON response: ' + str(error)) from error
+        if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'manual-checklist':
+            raise ValueError('wrong manual-checklist JSON schema')
+        for check in payload.get('checks', []):
+            if not check.get('id'):
+                raise ValueError('a checklist entry is missing id')
+        rendered = _artifact_json.render_checklist(payload)
+        path.write_text(rendered, encoding='utf-8')
+        _artifact_json.write(project, 'MANUAL_CHECKLIST.md', dict(payload, schema='uncle.artifact/v1', kind='manual-checklist'))
+        return validate_text(rendered)
     try:
         return validate_text(text)
     except ValueError:

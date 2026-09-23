@@ -31,7 +31,7 @@ authentication.
 
 Create .uncle/docs/MANUAL_CHECKLIST.md.
 
-Verify:
+Set each check's `section` to whichever of these it verifies:
 
 1. Requested behavior
 2. All MODIFY behaviors
@@ -54,23 +54,19 @@ Verify:
 19. Regression-sensitive paths
 20. Requirements not covered by automated tests
 
-Each check must contain:
+Write .uncle/docs/MANUAL_CHECKLIST.md as one JSON object, not Markdown,
+matching this contract:
 
-- Check ID
-- Priority
-- Behavior classification
-- Related behavior
-- Related invariant
-- Preconditions
-- Exclusive resources
-- Depends on
-- Exact action
-- Expected result
-- Evidence to capture
-- Actual result: blank
-- Status: NOT RUN
+`{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","section":"...","priority":"...","behavior_classification":"...","related_behavior":"...","related_invariant":"...","preconditions":"...","exclusive_resources":["port:5173"],"depends_on":[],"exact_action":"...","expected_result":"...","evidence_to_capture":"..."}],"traceability":"..."}`
 
-End with:
+Give every check a stable unique MC ID. Omit `status` (the driver writes
+`NOT RUN`) unless this environment already cannot perform the check's
+action -- then set `status` to `BLOCKED-SETUP`, `BLOCKED-HUMAN`, or
+`BLOCKED-IMPOSSIBLE`, and put the explanation in
+`evidence_of_unavailability`. Never set `status` to anything else; execution
+has not happened yet.
+
+`traceability` covers, as one Markdown block:
 
 - acceptance-criteria traceability
 - preserved-behavior coverage
@@ -80,29 +76,26 @@ End with:
 
 ## Parallel execution declarations
 
-Two fields on every check decide whether it may run alongside another, and they
-are yours because you are the one who knows what each check touches:
+`exclusive_resources` and `depends_on` on every check decide whether it may
+run alongside another, and they are yours because you are the one who knows
+what each check touches:
 
-- `Exclusive resources`: what the check needs to itself while it runs — a port
+- `exclusive_resources`: what the check needs to itself while it runs — a port
   (`port:5173`), a browser session, a database, a user account, a build output
-  directory, a fixture it mutates. Comma-separated, lower case. Write `none`
+  directory, a fixture it mutates. An array of lower-case strings. Use `[]`
   when the check only reads and can safely overlap with anything.
-- `Depends on`: the check IDs that must finish before this one starts, or
-  `none`. Ordering, not topic: a check that merely covers related behavior does
-  not depend on it.
+- `depends_on`: the check IDs that must finish before this one starts, as an
+  array (`[]` for none). Ordering, not topic: a check that merely covers
+  related behavior does not depend on it.
 
 Declare both on every check. The driver derives the execution groups from these
 two fields alone and hands them to the stage that runs the checklist, so this is
 where the question gets decided — not later, by the agent whose results depend
-on the answer. A check with no `Exclusive resources` line is scheduled alone, so
-an omission costs wall-clock rather than correctness.
+on the answer. An empty `exclusive_resources` array is scheduled alone, so an
+omission costs wall-clock rather than correctness.
 
 Two checks that would fight over the same port must name the same token, spelled
 the same way. A resource token is only as good as that agreement.
-
-If the checklist is a table, head those two columns `Excl` and `Deps`. Both
-spellings are read, but a column headed something else is not read at all, and
-an unread declaration silently costs the concurrency it was written to enable.
 
 For a browser or desktop resource, declare the system default browser
 (`browser:system`) unless the requirements name a specific one, in which case
@@ -160,7 +153,7 @@ The twenty categories above are search directions, not an output template.
   preconditions. Do not split one action into five near-identical rows.
 - Use check IDs MC-001 upward.
 
-Return only the checklist.
+Return only the JSON object.
 
 ## Efficient checklist delivery
 

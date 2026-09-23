@@ -194,12 +194,68 @@ def render_change_spec(payload):
     lines.append('')
     return '\n'.join(lines)
 
+# (JSON key, rendered label). Both the app-workflow and change-workflow
+# checklists share this schema; a field neither variant's prompt asked the
+# model to fill in is simply absent from the check dict and its bullet line
+# is skipped, rather than forced to a literal "none" -- only exact_action and
+# expected_result are ever mandatory.
+_CHECKLIST_FIELDS = (
+    ('priority', 'Priority'),
+    ('required', 'Required for acceptance'),
+    ('behavior_classification', 'Behavior classification'),
+    ('related_requirement', 'Related requirement'),
+    ('related_behavior', 'Related behavior'),
+    ('related_invariant', 'Related invariant'),
+    ('prerequisites', 'Prerequisites'),
+    ('preconditions', 'Preconditions'),
+    ('needs', 'Needs'),
+    ('exclusive_resources', 'Exclusive resources'),
+    ('depends_on', 'Depends on'),
+    ('exact_action', 'Exact action'),
+    ('expected_result', 'Expected result'),
+    ('evidence_to_capture', 'Evidence to capture'),
+)
+_CHECKLIST_LIST_FIELDS = ('exclusive_resources', 'depends_on')
+
 def render_checklist(payload):
+    checks = payload.get('checks')
+    if not checks:
+        raise ValueError('manual checklist has no checks')
+    seen = set()
     out = ['# Manual checklist', '']
-    for check in payload['checks']:
-        out += [f"### {check['id']}: {check['title']}"]
-        out += [f"- {key}: {check.get(key.lower().replace(' ', '_'), '')}" for key in ('Exact action', 'Expected result', 'Evidence to capture', 'Status')]
-        out.append('')
+    section = None
+    for check in checks:
+        identifier = check['id']
+        if identifier in seen:
+            raise ValueError('duplicate checklist id: ' + identifier)
+        seen.add(identifier)
+        if not check.get('exact_action') or not check.get('expected_result'):
+            raise ValueError(identifier + ' is missing exact_action or expected_result')
+        if check.get('section') and check['section'] != section:
+            section = check['section']
+            out += [f"## {section}", '']
+        out.append(f"### {identifier}")
+        for key, label in _CHECKLIST_FIELDS:
+            if key in _CHECKLIST_LIST_FIELDS:
+                if key not in check:
+                    continue
+                value = ', '.join(check[key]) if check[key] else 'none'
+            elif key == 'required':
+                if key not in check:
+                    continue
+                value = 'YES' if check[key] else 'NO'
+            else:
+                value = check.get(key)
+                if value in (None, ''):
+                    continue
+            out.append(f"- {label}: {value}")
+        status = check.get('status') or 'NOT RUN'
+        if status not in ('NOT RUN', 'BLOCKED-SETUP', 'BLOCKED-HUMAN', 'BLOCKED-IMPOSSIBLE'):
+            raise ValueError(identifier + ': a checklist entry may only start NOT RUN or BLOCKED-*, not ' + repr(status))
+        out += ['- Actual result: ' + (check.get('evidence_of_unavailability') or ''), f'- Status: {status}', '']
+    traceability = payload.get('traceability')
+    if traceability and traceability.strip():
+        out += ['## Traceability', '', traceability.strip(), '']
     return '\n'.join(out)
 
 def write_checklist(project, checks):

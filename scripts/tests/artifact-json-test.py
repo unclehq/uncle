@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 
@@ -61,6 +62,36 @@ class UnfenceJson(unittest.TestCase):
     def test_bare_filenames_with_no_json_are_unchanged(self):
         text = '.uncle/docs/REQUIREMENTS_INTERPRETATION.md\n.uncle/docs/PROJECT_PLAN.md'
         self.assertEqual(module.unfence_json(text), text)
+
+    def test_final_answer_after_an_earlier_decoy_schema_example_wins(self):
+        # Observed live, final-audit stage: the model narrated its reasoning
+        # at length, quoting the schema contract itself as a reminder --
+        # with placeholder/example values, self-contradictory on its own
+        # ("blocks":"YES" alongside verdict "READY") -- before giving its
+        # real, complete, self-consistent answer as the very last line,
+        # wrapped in a single backtick. The real answer must win, not the
+        # earlier in-narration example.
+        decoy = ('Let me think this through.\n\n'
+                 'The schema requires:\n'
+                 '```json\n'
+                 '{\n'
+                 '  "schema": "uncle.artifact/v1",\n'
+                 '  "kind": "final-audit",\n'
+                 '  "findings": [{"id": "FA-1", "blocks": "YES"}],\n'
+                 '  "verdict": "READY"\n'
+                 '}\n'
+                 '```\n\n'
+                 'Now let me verify the evidence carefully...\n\n'
+                 'Confirmed. Here is the final audit:\n\n')
+        real_answer = ('`{"schema":"uncle.artifact/v1","kind":"final-audit","findings":'
+                        '[{"id":"FA-1","severity":"Medium","evidence":"...",'
+                        '"affected_requirement":"AC-4","required_correction":"...","blocks":"NO"}],'
+                        '"verdict":"READY WITH NON-BLOCKING ISSUES"}`')
+        text = decoy + real_answer
+        result = module.unfence_json(text)
+        payload = json.loads(result)
+        self.assertEqual(payload['verdict'], 'READY WITH NON-BLOCKING ISSUES')
+        self.assertEqual(payload['findings'][0]['blocks'], 'NO')
 
     def test_stray_brace_inside_otherwise_normal_prose_is_not_mistaken_for_json(self):
         # A legacy Markdown document that happens to mention a JS object

@@ -7,60 +7,100 @@ import re
 _JSON_FENCE = re.compile(r'```(?:json)?\s*\n(.*?)\n```', re.S)
 
 def _extract_balanced_object(text):
-    """The first {...} object in TEXT, honoring string quoting so a brace
-    inside a JSON string value never miscounts nesting depth. None if TEXT
-    has no top-level object at all."""
-    start = text.find('{')
-    if start == -1:
-        return None
-    depth = 0
-    in_string = False
-    escape = False
-    for index in range(start, len(text)):
-        char = text[index]
-        if in_string:
-            if escape:
-                escape = False
-            elif char == '\\':
-                escape = True
-            elif char == '"':
-                in_string = False
-            continue
-        if char == '"':
-            in_string = True
-        elif char == '{':
-            depth += 1
-        elif char == '}':
-            depth -= 1
-            if depth == 0:
-                return text[start:index + 1]
-    return None
+    """The LAST top-level {...} object in TEXT, honoring string quoting so a
+    brace inside a JSON string value never miscounts nesting depth. None if
+    TEXT has no top-level object at all.
+
+    Last, not first: a model that narrates its reasoning before answering
+    commonly echoes the schema contract itself as a reminder partway through
+    -- often with placeholder or example field values -- before giving its
+    real, complete answer at the end. Observed live: a response whose final
+    answer was fully valid and self-consistent (six findings, all
+    non-blocking, verdict READY WITH NON-BLOCKING ISSUES) got rejected
+    because an earlier in-narration schema example ({"...","blocks":"YES"},
+    verdict "READY") was extracted instead -- self-contradictory only
+    because it was never meant to be read as an answer."""
+    best = None
+    position = 0
+    length = len(text)
+    while position < length:
+        start = text.find('{', position)
+        if start == -1:
+            break
+        depth = 0
+        in_string = False
+        escape = False
+        end = None
+        for index in range(start, length):
+            char = text[index]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == '\\':
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    end = index
+                    break
+        if end is None:
+            break
+        best = text[start:end + 1]
+        position = end + 1
+    return best
+
+_TRAILING_BACKTICK_SPAN = re.compile(r'`([^`]*)`\s*$', re.S)
 
 def unfence_json(text):
     """A model asked for a bare JSON object commonly wraps it in a Markdown
     code fence anyway (the same habit every prompt in this codebase already
     has to guard against for the documents JSON is replacing), and just as
-    commonly adds a sentence of narration before or after it despite being
-    told the object must be its entire reply. Find a fenced block anywhere
-    in the text (not only when the fence is the whole message) and, whether
-    fenced or bare, extract the first balanced {...} object rather than
-    requiring the object to be the only content -- trailing narration after
-    a closing fence or a closing brace must not turn a genuinely valid
-    response into a rejected one. Text that never looks JSON-shaped (no
-    fenced or bare object starting the candidate) is returned unchanged, so
-    a genuinely non-JSON document still falls through to its own parser."""
+    commonly adds narration before or after it -- sometimes a lot of it --
+    despite being told the object must be its entire reply. Observed live: a
+    long response that narrated its reasoning at length, echoed the schema
+    contract itself as a reminder partway through (its own decoy JSON-shaped
+    example), and only gave the real, complete, self-consistent answer --
+    wrapped in a single backtick -- as its very last line.
+
+    A single fence-search-then-extract pass cannot handle that: whichever
+    fenced or backtick-wrapped region it finds first may not be the answer
+    at all. So build an ordered list of candidates, most-specific/rightmost
+    first, and use the first one that is actually JSON-shaped:
+
+    1. a backtick-wrapped span anchored at the end of the message (the
+       common shape for "here is my final answer: `{...}`");
+    2. each triple-backtick fenced block, most recent first;
+    3. the whole message with one leading/trailing backtick stripped (a
+       short response consisting of little but the wrapped object);
+    4. the whole message as-is (an unwrapped bare object).
+
+    Each candidate is accepted only if it starts with '{' -- a document
+    that never looks JSON-shaped anywhere is returned unchanged, so a
+    genuinely non-JSON response still falls through to its own parser, and
+    an incidental brace inside ordinary prose (a code example mentioning a
+    JS object literal, say) is never mistaken for an attempted answer."""
     stripped = text.strip()
-    fenced = _JSON_FENCE.search(stripped)
-    candidate = fenced.group(1).strip() if fenced else stripped
-    # A model as often reaches for a single inline-code backtick around the
-    # object (`{...}`) as a triple-backtick block fence; strip that too
-    # before giving up on it looking JSON-shaped.
-    unbacked = candidate.strip('`').strip()
-    if unbacked.startswith('{'):
-        candidate = unbacked
-    if not candidate.startswith('{'):
-        return stripped
-    return _extract_balanced_object(candidate) or candidate
+    candidates = []
+    trailing = _TRAILING_BACKTICK_SPAN.search(stripped)
+    if trailing:
+        candidates.append(trailing.group(1).strip())
+    for match in reversed(list(_JSON_FENCE.finditer(stripped))):
+        candidates.append(match.group(1).strip())
+    candidates.append(stripped.strip('`').strip())
+    candidates.append(stripped)
+    for candidate in candidates:
+        if candidate.startswith('{'):
+            obj = _extract_balanced_object(candidate)
+            if obj:
+                return obj
+    return stripped
 
 def path(project, name):
     return Path(project) / '.uncle/workflow/documents' / (Path(name).stem + '.json')

@@ -15,6 +15,8 @@ write it as one JSON object, not Markdown, matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"requirements-interpretation","sections":{"required_functionality":"...","optional_functionality":"...","constraints":"...","user_visible_behaviors":"...","system_behaviors":"...","failure_behaviors":"...","ambiguities":"...","assumptions":"...","explicit_non_goals":"...","definition_of_done":"..."}}`
 
+Write it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance.
+
 Every key under `sections` is required and must be a nonempty string, even
 when a section has nothing to add (see below for what to put there). Each
 value is exactly what would otherwise have gone under that section's

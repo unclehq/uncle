@@ -25,6 +25,8 @@ matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","section":"...","priority":"...","required":true,"related_requirement":"...","related_behavior":"...","related_invariant":"...","prerequisites":"...","needs":"PF-7","exclusive_resources":["port:5173"],"depends_on":[],"exact_action":"...","expected_result":"...","evidence_to_capture":"..."}],"traceability":"..."}`
 
+Write it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance.
+
 Give every check a stable unique MC ID. `required` is a JSON boolean:
 justify it from requirements rather than inferring it from priority. Leave a
 field `null` or omit it only when it genuinely does not apply (for example

@@ -46,6 +46,8 @@ matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"implementation-notes","changed_files":[{"path":"...","purpose":"...","plan_step":"...","behavior_or_invariant":"..."}],"deviations":[{"file":"...","reason":"..."}],"unresolved_concerns":["..."],"deliveries":[{"id":"AC-1","status":"IMPLEMENTED","changed_code":"path and behavior","observed_verification":"command and observed result"}]}`
 
+Write it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance.
+
 Include every acceptance ID from .uncle/docs/CHANGE_SPEC.md exactly once in
 `deliveries`, with no extra IDs. `status` is IMPLEMENTED only when the behavior
 exists and its targeted check passes; otherwise use INCOMPLETE or BLOCKED with

@@ -89,6 +89,8 @@ parsed, and the driver records no acceptance pass for the stage.
 
 Return only one JSON object matching this contract as your final message; do not return Markdown:
 `{"schema":"uncle.artifact/v1","kind":"acceptance-report","narrative":"...","rows":[{"id":"COVERAGE","required":true,"status":"PASS","evidence":"..."}]}`.
+
+Write it directly and correctly the first time. Do not try to validate the JSON beforehand with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance.
 `narrative` holds every section above the table (Summary, Findings, Assumptions, Open questions) as one Markdown block; `rows` is exactly the Acceptance gate table, one entry per required row above plus any further TR-N rows. `required` is a JSON boolean. `status` is exactly one of PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, NOT RUN, N/A.
 
 

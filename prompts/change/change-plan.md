@@ -54,6 +54,8 @@ this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"change-plan","narrative":"..."}`
 
+Write it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance.
+
 `narrative` is the entire plan document below as one Markdown block (real
 newlines in the JSON string) -- everything described in this prompt, exactly
 as if you were still writing Markdown directly. Unlike PROJECT_PLAN.md, this

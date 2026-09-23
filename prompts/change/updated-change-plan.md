@@ -66,6 +66,8 @@ document. Write it as one JSON object, not Markdown, matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"change-plan","narrative":"...","dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}]}`
 
+Write it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance.
+
 Edit sections affected by review findings or by the final executability and
 consistency checks above. Preserve other sections; do not reword or restate
 unaffected content. `narrative` is the complete revised plan (real newlines

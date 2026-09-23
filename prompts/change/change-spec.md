@@ -14,6 +14,8 @@ this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"change-spec","narrative":"...","acceptance_criteria":[{"id":"AC-1","criterion":"...","verification":"..."}]}`
 
+Write it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance.
+
 `acceptance_criteria` is the driver's implementation handoff contract, not
 optional examples: give every required criterion a unique stable AC-number ID
 (AC-1, AC-2, ...) and include all required behavior. The driver renders it as

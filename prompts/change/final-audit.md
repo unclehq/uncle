@@ -95,6 +95,8 @@ executed evidence is reported individually, however many there are.
 
 Return only one JSON object matching this contract; do not return Markdown:
 `{"schema":"uncle.artifact/v1","kind":"final-audit","findings":[{"id":"FA-1","severity":"...","evidence":"...","affected_requirement":"...","required_correction":"...","blocks":"YES"}],"verdict":"READY"}`.
+
+Write it directly and correctly the first time. Do not try to validate the JSON beforehand with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance.
 `findings` is `[]` for a clean audit. `blocks` is exactly `YES` or `NO`. `verdict` is exactly one of `READY`, `READY WITH NON-BLOCKING ISSUES`, `NOT READY`.
 
 Read .uncle/workflow/plan-executability/assessment.md, plan-recovery.json and

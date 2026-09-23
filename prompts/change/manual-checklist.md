@@ -59,6 +59,8 @@ matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","section":"...","priority":"...","behavior_classification":"...","related_behavior":"...","related_invariant":"...","preconditions":"...","exclusive_resources":["port:5173"],"depends_on":[],"exact_action":"...","expected_result":"...","evidence_to_capture":"..."}],"traceability":"..."}`
 
+Write it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance.
+
 Give every check a stable unique MC ID. Omit `status` (the driver writes
 `NOT RUN`) unless this environment already cannot perform the check's
 action -- then set `status` to `BLOCKED-SETUP`, `BLOCKED-HUMAN`, or

@@ -10,7 +10,12 @@ import re
 import tempfile
 import os
 
-VERSION = 1
+# Bump on any change to how an excerpt is built (not just its data), so every
+# stale cached excerpt is rebuilt rather than silently kept. Bumped for the
+# single-line-document truncation fix below: excerpts built under VERSION 1
+# for a single-line JSON artifact (every doc these stages migrated to JSON
+# is stored as one line) were capped at 250 characters instead of 1800.
+VERSION = 2
 # Stage contracts are fixed at install time.  Put small declared workflow
 # documents directly in the prompt so every runner can work without spending
 # Read calls on the same requirements and plans.  Source discovery, edits and
@@ -134,10 +139,20 @@ def packet(project, state, stage, family='app'):
             obj = read_json(objpath)
             if not isinstance(obj, dict) or obj.get('sha256') != sha or obj.get('version') != VERSION:
                 text = head.decode('utf-8', errors='replace')
+                lines = text.splitlines()
                 selected = []
-                for number, line in enumerate(text.splitlines(), 1):
-                    if re.search(r'\b(?:REQ|AC|FR|AR|MC|D|S|I)-\d+\b|^#{1,4} |PASS|FAIL|BLOCKED|NOT RUN', line, re.I):
-                        selected.append(f'{number}: {line[:250]}')
+                # Per-matched-line truncation (250 chars) assumes a document
+                # is naturally broken into many short lines, as Markdown is.
+                # A single-line JSON artifact (the canonical form these
+                # generated docs are stored in) is its own entire "line 1";
+                # applying the per-line cap there throws away nearly all of
+                # a multi-KB document down to 250 chars, every time, no
+                # matter how a stage re-reads it. Skip line-selection for a
+                # one-line file and fall back to the whole-text cap instead.
+                if len(lines) > 1:
+                    for number, line in enumerate(lines, 1):
+                        if re.search(r'\b(?:REQ|AC|FR|AR|MC|D|S|I)-\d+\b|^#{1,4} |PASS|FAIL|BLOCKED|NOT RUN', line, re.I):
+                            selected.append(f'{number}: {line[:250]}')
                 obj = {'version': VERSION, 'sha256': sha,
                        'excerpt': ('\n'.join(selected) if selected else text)[:1800]}
                 save(objpath, obj)

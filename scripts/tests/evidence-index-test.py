@@ -69,6 +69,27 @@ class Index(unittest.TestCase):
             self.assertNotIn('AC-1 other',text)
             self.assertIn('missing or unreadable',text)
 
+    def test_single_line_document_excerpt_is_not_truncated_to_250_chars(self):
+        # Every JSON-migrated doc (PROJECT_PLAN.md, UPDATED_PROJECT_PLAN.md,
+        # REQUIREMENTS_INTERPRETATION.md, ...) is stored as one line. The
+        # per-matched-line excerpt cap (250 chars) was written for ordinary
+        # multi-line Markdown, where a matched line is naturally short; for a
+        # single-line document the entire multi-KB file IS that one matched
+        # line, so it was silently cut to 250 chars on every read.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); state = root/'.uncle/workflow'
+            (root/'.uncle/docs').mkdir(parents=True, exist_ok=True)
+            # One line, comfortably over PRELOAD_FILE_LIMIT so this exercises
+            # the excerpt path rather than the complete-file preload path.
+            # An AC-1 marker near the start makes the line match the
+            # excerpt-selection regex; MARK_1000 sits well past the old
+            # 250-char cutoff but inside the 1800-char whole-text fallback.
+            line = 'AC-1 start ' + ('x' * 980) + ' MARK_1000 ' + ('y' * 4000)
+            self.assertGreater(len(line), 4096)
+            (root/'.uncle/docs/PROJECT_PLAN.md').write_text(line)
+            text = packet(root, state, 'adversarial-review')
+            self.assertIn('MARK_1000', text)
+
     def test_small_declared_inputs_are_preloaded_for_every_runner(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); state=root/'.uncle/workflow'

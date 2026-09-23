@@ -522,6 +522,31 @@ def validate_reviewer_document(output, document):
         raise InvalidReviewerDocument('Reviewer response is not a valid %s: %s' % (Path(output).name, reason))
 
 
+def reviewer_packet(response, output):
+    """Return a strict JSON worker packet without Markdown document extraction."""
+    text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    payload_text = _artifact_json_module().unfence_json(text)
+    try:
+        payload = json.loads(payload_text)
+    except json.JSONDecodeError as error:
+        raise InvalidReviewerDocument('Reviewer response is not valid JSON for %s: %s' % (Path(output).name, error))
+    if (not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1'
+            or not str(payload.get('kind', '')).endswith('-worker-packet')):
+        raise InvalidReviewerDocument('Reviewer response is not a worker packet for %s' % Path(output).name)
+    findings = payload.get('findings')
+    if not isinstance(findings, list):
+        raise InvalidReviewerDocument('Reviewer packet findings must be an array for %s' % Path(output).name)
+    required = ('id', 'gap', 'evidence', 'risk', 'required_correction') if payload.get('kind') == 'updated-plan-worker-packet' else ('id', 'summary')
+    seen = set()
+    for index, finding in enumerate(findings, 1):
+        if not isinstance(finding, dict) or any(not isinstance(finding.get(key), str) or not finding[key].strip() for key in required):
+            raise InvalidReviewerDocument('Reviewer packet finding %d is missing a required nonempty field for %s' % (index, Path(output).name))
+        if finding['id'] in seen:
+            raise InvalidReviewerDocument('Reviewer packet has duplicate stable finding ID %s for %s' % (finding['id'], Path(output).name))
+        seen.add(finding['id'])
+    return json.dumps(payload, indent=2, sort_keys=True) + '\n'
+
+
 def reviewer_document(response):
     """A reviewer's response with any leading think-aloud removed.
 
@@ -983,8 +1008,11 @@ def main(side, args):
             text, turns = run_opencode(side, values, prompt, Path.cwd().resolve(), stage=stage, usage=attempt_usage)
             add_usage(attempt_usage)
             if side == 'reviewer' and output:
-                document = reviewer_document(text)
-                validate_reviewer_document(output, document)
+                if Path(output).suffix == '.json':
+                    document = reviewer_packet(text, output)
+                else:
+                    document = reviewer_document(text)
+                    validate_reviewer_document(output, document)
         except OutputTruncated as error:
             add_usage(attempt_usage)
             # Retrying repeats the entire request and its tool work.  The
@@ -1010,7 +1038,7 @@ def main(side, args):
             # publish it as the reviewer-owned artifact.
             logs = Path.cwd() / '.uncle/workflow/logs'
             logs.mkdir(parents=True, exist_ok=True)
-            fd, rejected = tempfile.mkstemp(prefix=Path(output).stem.lower() + '-rejected-', suffix='.md', dir=logs)
+            fd, rejected = tempfile.mkstemp(prefix=Path(output).stem.lower() + '-rejected-', suffix=Path(output).suffix or '.md', dir=logs)
             with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
                 stream.write(text)
             # A malformed document needs judgment/content the driver cannot
@@ -1032,10 +1060,8 @@ def main(side, args):
             # checklist or audit retry the adversarial-review finding format,
             # steering an already-struggling model further off course.
             prompt += ('\n\nThe previous response was rejected: ' + str(error) +
-                       '\nReturn only the complete ' + Path(output).name + ' as your final message, in the '
-                       'exact layout already specified above. Do not summarize your work, describe a plan to '
-                       'write it, or promise to produce it later. You have no write or shell tools in this role; '
-                       'the document text you return is the only artifact.')
+                       ('\nReturn only one valid JSON worker packet as your final message.' if Path(output).suffix == '.json' else
+                        '\nReturn only the complete ' + Path(output).name + ' as your final message, in the exact layout already specified above. Do not summarize your work, describe a plan to write it, or promise to produce it later. You have no write or shell tools in this role; the document text you return is the only artifact.'))
             continue
         except (ValueError, OSError) as error:
             error.opencode_usage = attempt_usage
@@ -1049,7 +1075,7 @@ def main(side, args):
             # and a reviewer-owned artifact is the one thing no later stage may
             # edit. Strip here, and only when a document is actually present --
             # a response with no heading is a real failure, not a preamble.
-            Path(output).write_bytes((document if document is not None else reviewer_document(text)).encode('utf-8'))
+            Path(output).write_bytes((document if document is not None else (reviewer_packet(text, output) if Path(output).suffix == '.json' else reviewer_document(text))).encode('utf-8'))
         print(text)
         if usage:
             print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,

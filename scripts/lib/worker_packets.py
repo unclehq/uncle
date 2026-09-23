@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Strict, compact transport for all read-only specialist worker panels."""
+import argparse, json, sys
+from pathlib import Path
+
+SCHEMA='uncle.artifact/v1'
+class PacketError(ValueError): pass
+
+def load(path, kind):
+    name=Path(path).name
+    try: value=json.loads(Path(path).read_text(encoding='utf-8'))
+    except FileNotFoundError: raise PacketError('%s: worker packet is missing' % name)
+    except (OSError,json.JSONDecodeError) as e: raise PacketError('%s: invalid JSON worker packet: %s' % (name,e))
+    if not isinstance(value,dict) or value.get('schema') != SCHEMA or not str(value.get('kind','')).endswith('-worker-packet'):
+        raise PacketError('%s: expected schema %s and a worker-packet kind' % (name,SCHEMA))
+    items=value.get('findings')
+    if not isinstance(items,list): raise PacketError('%s: findings must be an array' % name)
+    seen=set(); out=[]
+    for i,item in enumerate(items,1):
+        if not isinstance(item,dict) or not isinstance(item.get('id'),str) or not item['id'].strip() or not isinstance(item.get('summary'),str) or not item['summary'].strip():
+            raise PacketError('%s: finding %d requires nonempty id and summary' % (name,i))
+        if item['id'] in seen: raise PacketError('%s: duplicate finding ID %s' % (name,item['id']))
+        seen.add(item['id']); out.append({'id':item['id'].strip(),'summary':item['summary'].strip(), 'evidence':str(item.get('evidence','')).strip()})
+    return out
+
+def collate(directory, output, kind, expected):
+    merged={}; workers=[]
+    for source in expected:
+        findings=load(Path(directory)/(source+'.json'),kind); workers.append({'source':source,'status':'ok','finding_count':len(findings)})
+        for item in findings:
+            target=merged.setdefault(item['id'],{'id':item['id'],'summaries':[],'evidence':[],'sources':[]})
+            for key,value in (('summaries',item['summary']),('evidence',item['evidence'])):
+                if value and value not in target[key]: target[key].append(value)
+            target['sources'].append(source)
+    payload={'schema':SCHEMA,'kind':kind+'s','workers':workers,'findings':[merged[k] for k in sorted(merged)]}
+    Path(output).parent.mkdir(parents=True,exist_ok=True); Path(output).write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n',encoding='utf-8')
+
+def main():
+    p=argparse.ArgumentParser(); p.add_argument('directory');p.add_argument('output');p.add_argument('--kind',required=True);p.add_argument('--expected',nargs='+',required=True);a=p.parse_args()
+    try: collate(a.directory,a.output,a.kind,a.expected)
+    except PacketError as e: print('worker packets: '+str(e),file=sys.stderr);return 1
+    return 0
+if __name__=='__main__': raise SystemExit(main())

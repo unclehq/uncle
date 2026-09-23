@@ -4,11 +4,7 @@ review. Read REQUIREMENTS.md, .uncle/docs/UPDATED_PROJECT_PLAN.md (or .uncle/doc
 only the assigned acceptance-gate row below. Do not modify source, tests, or
 `.uncle/docs/TEST_REVIEW.md`, and do not run destructive probes.
 
-Write a compact packet to the output file supplied by the runner. Begin it
-with a Markdown heading -- `## <lens> findings` or `## No finding` -- even
-when you have nothing to report: a packet with no heading or table row
-anywhere in it is rejected as not a document at all, regardless of whether
-its content is otherwise correct.
+Return exactly one JSON object: `{"schema":"uncle.artifact/v1","kind":"test-review-worker-packet","findings":[{"id":"TR-001","summary":"...","evidence":"..."}]}`. Use an empty array when clean; no Markdown or prose.
 
 - Finding ID or `No finding` (use `TR-` only if a separate reviewer will keep
   your ID; otherwise describe the defect and let the reviewer assign one)

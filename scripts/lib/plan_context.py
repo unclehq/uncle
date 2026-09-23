@@ -191,6 +191,22 @@ def ingest_change_plan(path, project='.', require_dispositions=False):
     return True
 
 
+def render_canonical(path, project='.', protected=True, change=False):
+    """Regenerate human-facing plan Markdown from its authoritative JSON."""
+    module = _artifact_json()
+    json_path = module.path(project, Path(path).name)
+    if not json_path.exists():
+        return False
+    payload = module.read(project, Path(path).name)
+    expected = 'change-plan' if change else 'plan'
+    if payload.get('kind') != expected:
+        raise ValueError('canonical artifact has wrong kind: ' + str(payload.get('kind')))
+    rendered = (module.render_change_plan(payload, require_dispositions=change)
+                if change else module.render_plan(payload, protected=protected))
+    Path(path).write_text(rendered, encoding='utf-8')
+    return True
+
+
 def ingest_baseline_report(path, project='.'):
     """BASELINE_REPORT.md. Same purely-additive contract as ingest_plan()."""
     import json
@@ -267,6 +283,10 @@ if __name__ == '__main__':
             ingest_change_plan(path, project, require_dispositions=False)
         elif action == 'updated-change-plan':
             ingest_change_plan(path, project, require_dispositions=True)
+        elif action == 'render-plan':
+            render_canonical(path, project, protected=True)
+        elif action == 'render-change-plan':
+            render_canonical(path, project, change=True)
         elif action == 'baseline-report':
             ingest_baseline_report(path, project)
         else:

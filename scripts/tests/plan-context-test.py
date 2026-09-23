@@ -107,6 +107,18 @@ class PlanContext(unittest.TestCase):
             text = plan.read_text()
             self.assertIn('| AR-001 | Accepted | valid gap | added rollback step |', text)
 
+    def test_rendered_markdown_cannot_change_canonical_updated_plan(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); plan = root/'UPDATED_PROJECT_PLAN.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## Architecture\n\nCanonical.',
+                       'verification_commands': 'pytest', 'protected_verification_paths': 'tests'}
+            plan.write_text(json.dumps(payload))
+            module.ingest_plan(plan, root, protected=True)
+            expected = plan.read_text()
+            plan.write_text('malicious rendered markdown edit', encoding='utf-8')
+            self.assertTrue(module.render_canonical(plan, root, protected=True))
+            self.assertEqual(plan.read_text(), expected)
+
     def test_change_plan_wrong_kind_is_rejected(self):
         with tempfile.TemporaryDirectory() as d:
             plan = Path(d)/'CHANGE_PLAN.md'

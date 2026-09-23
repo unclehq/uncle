@@ -66,6 +66,9 @@ PY
 # two-pass text rather than joining it; asserting both would require the prompt
 # to contradict itself. The advisory policies are checked separately below.
 for stage in $DOC_STAGES implementation-step-2; do
+    # Investigation passes are intentionally intermediate-only; they do not
+    # own a final artifact for stage_documents() to advertise.
+    case "$stage" in *-investigate) continue ;; esac
     budget_prompt="$(WORKFLOW_DOC_BUDGET_ENFORCE=1 document_budget_prompt "$stage")"
     for rule in 'at most TWO passes total' 'including a "final trim"' \
                 'those do not reset it' 'After pass 2, stop size-only edits' \
@@ -91,6 +94,7 @@ done
 # never merely fall silent about it. Zero-pass and two-pass are both valid; an
 # empty policy is not.
 for stage in $DOC_STAGES implementation-step-2; do
+    case "$stage" in *-investigate) continue ;; esac
     advisory_prompt="$(document_budget_prompt "$stage")"
     case "$advisory_prompt" in
         *'do ZERO size-only compaction passes'*|*'at most TWO passes total'*) ;;

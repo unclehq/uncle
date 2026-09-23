@@ -208,6 +208,22 @@ EOF
     cat > "$CASE/bin/fake-agent" <<'AGENT'
 #!/usr/bin/env bash
 prompt="$(cat)"
+[[ -n "$prompt" ]] || prompt="${!#}"
+out=""
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+    [[ "${args[$i]}" == --output-last-message ]] && out="${args[$((i+1))]}"
+done
+case "$prompt" in
+    *'adversarial-review-worker-packet'*) kind=adversarial-review-worker-packet ;;
+    *'test-review-worker-packet'*) kind=test-review-worker-packet ;;
+    *'manual-checklist-worker-packet'*) kind=manual-checklist-worker-packet ;;
+    *'final-audit-worker-packet'*) kind=final-audit-worker-packet ;;
+    *) kind="" ;;
+esac
+if [[ -n "$kind" && -n "$out" ]]; then
+    printf '{"schema":"uncle.artifact/v1","kind":"%s","findings":[]}\n' "$kind" > "$out"
+fi
 # FAKE_TURNS_LIMIT=1: the first call always reports the runner's own
 # max-turns exhaustion and exits nonzero, whatever the max-turns flag says
 # (the stub does not track it) -- a real run had correctly diagnosed the fix
@@ -300,6 +316,21 @@ if [[ "$out" == *assessment.json ]]; then
     exit $?
 fi
 printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
+if [[ "$out" == *.json ]]; then
+    case "$review_prompt" in
+        *'adversarial-review-worker-packet'*) kind=adversarial-review-worker-packet ;;
+        *'test-review-worker-packet'*) kind=test-review-worker-packet ;;
+        *'manual-checklist-worker-packet'*) kind=manual-checklist-worker-packet ;;
+        *'final-audit-worker-packet'*) kind=final-audit-worker-packet ;;
+        *) kind=updated-plan-worker-packet ;;
+    esac
+    if [[ "$kind" == updated-plan-worker-packet ]]; then
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"updated-plan-worker-packet","findings":[]}' > "$out"
+    else
+        printf '{"schema":"uncle.artifact/v1","kind":"%s","findings":[]}\n' "$kind" > "$out"
+    fi
+    exit 0
+fi
 if [[ "$out" == *MANUAL_CHECKLIST.base.md ]]; then
     # Proof of real overlap, not an inference from timing: if implementation
     # already wrote its own start marker by the time this synthesis call (the

@@ -132,7 +132,7 @@ class Panel(unittest.TestCase):
         lines=ui._session_panel_lines();text='\n'.join(lines)
         for n in range(7): self.assertIn('stage-%d'%n,text)
         start=lines.index('stage-0 (2 attempts)')
-        self.assertEqual(lines[start+1:start+4],['Time   0:00:20','Tokens 240','Cost   $0.0200'])
+        self.assertEqual(lines[start+1:start+4],['Time   0:00:10','Tokens 240','Cost   $0.0200'])
         ui._draw_session_stats(30,120,34)
         self.assertGreater(ui.panel_visible_offset,0)
         ui.handle_key(ord('['));self.assertEqual(ui.panel_scroll,ui.panel_visible_offset-5)
@@ -258,15 +258,15 @@ class Panel(unittest.TestCase):
         ]
         lines = ui._session_panel_lines()
         text = '\n'.join(lines)
-        self.assertIn('implementation (2 workers)', text)
-        self.assertIn('validation (2 workers)', text)
-        self.assertIn('adversarial (2 workers)', text)
-        self.assertIn('manual-checklist (2 workers)', text)
+        self.assertIn('implementation  ··', text)
+        self.assertIn('validation  ··', text)
+        self.assertIn('adversarial  ··', text)
+        self.assertIn('manual-checklist  ··', text)
         for raw_stage in ('implementation-step-1', 'validation-worker-1',
                           'adversarial-review-worker-1', 'manual-checklist-base'):
             self.assertNotIn(raw_stage, text)
-        self.assertEqual(text.count('implementation (2 workers)'), 1)
-        self.assertEqual(text.count('manual-checklist (2 workers)'), 1)
+        self.assertEqual(text.count('implementation  ··'), 1)
+        self.assertEqual(text.count('manual-checklist  ··'), 1)
 
     def test_failed_worker_marks_parent(self):
         ui = self.ui()
@@ -277,7 +277,7 @@ class Panel(unittest.TestCase):
         ]
         lines = ui._session_panel_lines()
         text = '\n'.join(lines)
-        self.assertIn('implementation (2 workers)  \u00b7\u00b7', text)
+        self.assertIn('implementation  \u00b7\u00b7', text)
 
     def test_active_worker_marks_parent(self):
         ui = self.ui()
@@ -288,7 +288,7 @@ class Panel(unittest.TestCase):
         ui.session_stats['live'] = {}
         lines = ui._session_panel_lines()
         text = '\n'.join(lines)
-        self.assertIn('> implementation (2 workers)', text)
+        self.assertIn('> implementation  \u00b7', text)
 
     def test_totals_identical_under_rollup(self):
         ui = self.ui()
@@ -330,9 +330,9 @@ class Panel(unittest.TestCase):
             dict(stage='implementation-step-2', started_at=100, elapsed_seconds=45, process_exit=0),
         ]
         text = '\n'.join(ui._session_panel_lines())
-        self.assertIn('implementation (2 workers)  \u00b7\u00b7', text)
+        self.assertIn('implementation  \u00b7\u00b7', text)
         self.assertNotIn('[failed]', text)
-        self.assertEqual(ui._session_panel_attr('implementation (2 workers)  \u00b7\u00b7'), 12)
+        self.assertEqual(ui._session_panel_attr('implementation  \u00b7\u00b7'), 12)
 
     def test_per_worker_dots_one_fail(self):
         ui = self.ui()
@@ -343,9 +343,9 @@ class Panel(unittest.TestCase):
             dict(stage='implementation-step-2', started_at=100, elapsed_seconds=45, process_exit=0),
         ]
         text = '\n'.join(ui._session_panel_lines())
-        self.assertIn('implementation (2 workers)  \u00b7\u00b7', text)
+        self.assertIn('implementation  \u00b7\u00b7', text)
         self.assertNotIn('[failed]', text)
-        self.assertEqual(ui._session_panel_attr('implementation (2 workers)  \u00b7\u00b7'), 13)
+        self.assertEqual(ui._session_panel_attr('implementation  \u00b7\u00b7'), 13)
 
     def test_per_worker_dots_running(self):
         ui = self.ui()
@@ -356,7 +356,7 @@ class Panel(unittest.TestCase):
         ui.session_stats['active'] = {'implementation-step-2': time.time() - 30}
         ui.session_stats['live'] = {}
         text = '\n'.join(ui._session_panel_lines())
-        self.assertIn('implementation (2 workers)  ', text)
+        self.assertIn('> implementation  \u00b7', text)
         self.assertNotIn('[failed]', text)
         line_attr = ui._session_panel_attr(text.split('\n')[3]) if len(text) else 0
         self.assertEqual(line_attr, 11)

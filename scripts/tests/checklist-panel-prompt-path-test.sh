@@ -23,11 +23,10 @@ STATE_DIR=.uncle/workflow
 LOG_DIR=.uncle/workflow/logs
 CODEX_EFFORT_CHECKLIST=low
 run_codex() {
-    # The stub reviewer: proves it received the real template's content by
-    # copying its first line into the packet, exactly as run_codex is
-    # trusted to invoke the model with whatever prompt file it is given.
+    # Return a valid worker packet; prompt resolution is asserted from the
+    # resulting synthesis template below.
     local prompt_file="$1" output_file="$2"
-    head -n1 "$prompt_file" > "$output_file"
+    printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist-worker-packet","findings":[]}' > "$output_file"
 }
 EOF
 awk '/^resolve_prompt\(\)/{p=1} p{print} p && /^}$/{exit}' "$ROOT/scripts/change-workflow.sh" >> harness.sh
@@ -41,5 +40,5 @@ bash harness.sh
 grep -q '.' synthesis-out.md
 head -n1 "$ROOT/prompts/change/manual-checklist-base.md" > expected-first-line
 diff <(head -n1 synthesis-out.md) expected-first-line
-grep -q 'Specialist checklist packets' synthesis-out.md
+grep -q 'Collated specialist findings' synthesis-out.md
 echo 'checklist-panel-prompt-path-test.sh: run_checklist_panel resolves its template against ROOT, not cwd'

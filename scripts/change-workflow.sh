@@ -737,6 +737,9 @@ verify_approval() {
     local approval_name="$2"
     local approval="$APPROVAL_DIR/${approval_name}.sha256"
 
+    case "$approval_name" in
+        CHANGE_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-change-plan "$file" . || return 1 ;;
+    esac
     require_file "$file"
     if [[ ! -s "$approval" ]]; then
         # State that presupposes an approval nobody recorded: send the run to
@@ -889,6 +892,9 @@ human_gate() {
     local gate_by
 
     while [[ "$#" -gt 0 ]]; do
+        case "$2" in
+            CHANGE_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-change-plan "$1" . || return 1 ;;
+        esac
         require_file "$1"
         files+=("$1")
         names+=("$2")
@@ -2197,12 +2203,13 @@ run_codex() {
 run_adversarial_review_panel() {
     local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid status
     local -a pids=()
+    [[ "${UNCLE_TEST_FIXTURES_ONLY:-0}" != 1 ]] || return 0
     [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
     rm -rf "$directory"
     mkdir -p "$directory/prompts"
     for lens in requirements regression security testability; do
         prompt="$directory/prompts/$lens.md"
-        output="$directory/$lens.md"
+        output="$directory/$lens.json"
         cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
         printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
         (
@@ -2214,10 +2221,10 @@ run_adversarial_review_panel() {
     for pid in "${pids[@]}"; do
         wait "$pid" || echo "Adversarial review panel worker failed; primary review will continue." >&2
     done
+    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
     ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"
     cp "$ROOT/prompts/change/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
-    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `.uncle/docs/ADVERSARIAL_REVIEW.md`.\n' \
-        "$directory" >> "$ADVERSARIAL_REVIEW_PROMPT"
+    printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/ADVERSARIAL_REVIEW_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$ADVERSARIAL_REVIEW_PROMPT"
 }
 
 run_updated_change_plan_panel() {
@@ -2229,17 +2236,19 @@ run_updated_change_plan_panel() {
     echo "Updated-change-plan review panel: launching 4 workers in parallel."
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     for lens in dispositions ownership verification scope; do
-        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
         printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
         ( run_codex "$prompt" "$output" "updated-change-plan-review-worker-$lens" "$CODEX_EFFORT_REVIEW" ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-change-plan panel worker failed; plan writer will continue.' >&2; done
+    python3 "$ROOT/scripts/lib/updated_plan_worker_packets.py" "$directory" "$STATE_DIR/documents/UPDATED_CHANGE_PLAN_WORKERS.json" \
+        --expected dispositions ownership verification scope || return 1
     echo "Updated-change-plan review panel: worker packets collected; launching synthesis."
     UPDATED_PLAN_PROMPT="$directory/synthesis.md"
     cp "$ROOT/prompts/change/updated-change-plan.md" "$UPDATED_PLAN_PROMPT"
-    printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
+    printf '\n## Collated worker findings (binding)\n\nRead only `%s/documents/UPDATED_CHANGE_PLAN_WORKERS.json` for specialist findings. Do not read the worker directory or individual worker prompts/packets. It is complete, deduplicated, ordered, and records conflicts explicitly.\n' "$STATE_DIR" >> "$UPDATED_PLAN_PROMPT"
 }
 
 run_final_audit_panel() {
@@ -2248,16 +2257,17 @@ run_final_audit_panel() {
     [[ "${WORKFLOW_FINAL_AUDIT_PANEL:-1}" == 1 ]] || return 0
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     for lens in verification scope regression waivers; do
-        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/final-audit-review-worker.md" "$prompt"
         printf '\n## Assigned audit lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
         ( run_codex "$prompt" "$output" "final-audit-review-worker-$lens" "$CODEX_EFFORT_AUDIT" ) > "$LOG_DIR/final-audit-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit panel worker failed; auditor will continue.' >&2; done
+    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json" --kind final-audit-worker-packet --expected verification scope regression waivers || return 1
     FINAL_AUDIT_PROMPT="$directory/synthesis.md"
     cp "$ROOT/prompts/change/final-audit.md" "$FINAL_AUDIT_PROMPT"
-    printf '\n## Specialist audit packets\n\nRead available packets in `%s`, verify them, and write the sole canonical final audit and verdict.\n' "$directory" >> "$FINAL_AUDIT_PROMPT"
+    printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/FINAL_AUDIT_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$FINAL_AUDIT_PROMPT"
 }
 
 run_checklist_panel() {
@@ -2272,16 +2282,17 @@ run_checklist_panel() {
     [[ "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || { CHECKLIST_PANEL_PROMPT="$source"; return 0; }
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     for lens in coverage invariants resources regressions; do
-        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.md"
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
         printf '\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass.\n' "$lens" "$kind" >> "$prompt"
         ( run_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens" "$CODEX_EFFORT_CHECKLIST" ) > "$LOG_DIR/manual-checklist-$kind-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Checklist panel worker failed; checklist reviewer will continue.' >&2; done
+    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json" --kind manual-checklist-worker-packet --expected coverage invariants resources regressions || return 1
     CHECKLIST_PANEL_PROMPT="$directory/synthesis.md"
     cp "$source" "$CHECKLIST_PANEL_PROMPT"
-    printf '\n## Specialist checklist packets\n\nRead available packets in `%s`, verify them, and write the sole canonical checklist.\n' "$directory" >> "$CHECKLIST_PANEL_PROMPT"
+    printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/MANUAL_CHECKLIST_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$CHECKLIST_PANEL_PROMPT"
 }
 
 BG_PID=""

@@ -61,6 +61,16 @@ def refresh(name, path, project='.'):
     """Best-effort: re-export NAME's canonical JSON from PATH's approved
     bytes. Returns True if an export ran (regardless of whether it changed
     anything), False if this name has no exporter or the export failed."""
+    # A plan stage's JSON output is authoritative. The adjacent Markdown is a
+    # rendered approval view, not a second source to reverse-parse after an
+    # operator or tool edits it.
+    if name in ('UPDATED_PROJECT_PLAN', 'CHANGE_PLAN'):
+        try:
+            artifact = _load('artifact_json.py')
+            if artifact.path(project, Path(path).name).exists():
+                return True
+        except Exception:
+            pass
     entry = _EXPORTERS.get(name)
     if entry is None:
         return False

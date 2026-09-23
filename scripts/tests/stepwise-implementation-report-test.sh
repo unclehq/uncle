@@ -41,7 +41,7 @@ eval "$(sed -n '/^run_stepwise_implementation() {/,/^# Count checks as they stre
     "$ROOT/scripts/change-workflow.sh" | sed '$d')"
 
 run_stepwise_implementation base
-expected=$'implementation-step-1\nimplementation-step-2\nimplementation-step-report'
+expected=$'implementation-step-1\nimplementation-step-2'
 [[ "$(cat calls)" == "$expected" ]] || { cat calls >&2; exit 1; }
 [[ ! -e "$STATE_DIR/implement-step-done" ]]
 [[ ! -e "$STATE_DIR/implement-report-done" ]]

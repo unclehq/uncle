@@ -90,6 +90,24 @@ class Index(unittest.TestCase):
             text = packet(root, state, 'adversarial-review')
             self.assertIn('MARK_1000', text)
 
+    def test_single_line_document_over_preload_limit_is_still_preloaded_whole(self):
+        # A single-line document has no usable partial view: the model's own
+        # Read tool truncates by line, and the excerpt cache's whole-text
+        # fallback is capped at 1800 chars. Preloading the complete file
+        # (bypassing PRELOAD_FILE_LIMIT for single-line files specifically)
+        # is the only way a stage sees content past that point.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); state = root/'.uncle/workflow'
+            (root/'.uncle/docs').mkdir(parents=True, exist_ok=True)
+            from evidence_index import PRELOAD_FILE_LIMIT
+            tail_marker = 'MARK_TAIL_' + ('z' * 100)
+            line = 'AC-1 ' + ('x' * (PRELOAD_FILE_LIMIT + 2000)) + ' ' + tail_marker
+            self.assertGreater(len(line), PRELOAD_FILE_LIMIT)
+            (root/'.uncle/docs/PROJECT_PLAN.md').write_text(line)
+            text = packet(root, state, 'adversarial-review')
+            self.assertIn('### Complete static input:', text)
+            self.assertIn(tail_marker, text)
+
     def test_small_declared_inputs_are_preloaded_for_every_runner(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); state=root/'.uncle/workflow'

@@ -15,7 +15,11 @@ import os
 # single-line-document truncation fix below: excerpts built under VERSION 1
 # for a single-line JSON artifact (every doc these stages migrated to JSON
 # is stored as one line) were capped at 250 characters instead of 1800.
-VERSION = 2
+# Bumped again to add the cached 'single_line' flag: without it, a cache hit
+# under VERSION 2 has no way to know whether the file qualifies for full
+# preload (bypassing the model's own Read tool, which truncates by line and
+# so cannot return a single-line document past its first ~2000 characters).
+VERSION = 3
 # Stage contracts are fixed at install time.  Put small declared workflow
 # documents directly in the prompt so every runner can work without spending
 # Read calls on the same requirements and plans.  Source discovery, edits and
@@ -153,14 +157,21 @@ def packet(project, state, stage, family='app'):
                     for number, line in enumerate(lines, 1):
                         if re.search(r'\b(?:REQ|AC|FR|AR|MC|D|S|I)-\d+\b|^#{1,4} |PASS|FAIL|BLOCKED|NOT RUN', line, re.I):
                             selected.append(f'{number}: {line[:250]}')
-                obj = {'version': VERSION, 'sha256': sha,
+                obj = {'version': VERSION, 'sha256': sha, 'single_line': len(lines) <= 1,
                        'excerpt': ('\n'.join(selected) if selected else text)[:1800]}
                 save(objpath, obj)
             else:
                 hits += 1
             records[name] = {'path': str(path), 'sha256': sha, 'bytes': size}
             excerpts[name] = obj['excerpt']
-            if size <= PRELOAD_FILE_LIMIT and len(head) == size:
+            # A single-line file (the canonical form for a generated JSON
+            # document) has no usable partial view: the model's own Read
+            # tool truncates by line, and the whole document is one line, so
+            # any byte short of the complete file is a read that cannot be
+            # continued. Preload it whole regardless of PRELOAD_FILE_LIMIT;
+            # the preload budget below still caps how much of it survives
+            # into the prompt if it is large.
+            if (size <= PRELOAD_FILE_LIMIT or obj.get('single_line')) and len(head) == size:
                 preloaded[name] = head.decode('utf-8', errors='replace')
         except OSError:
             records[name] = {'status': 'missing or unreadable'}

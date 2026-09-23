@@ -86,7 +86,7 @@ steps = []
 for n in sys.argv[4:]:
     steps.append({"number": int(n),
                   "log": "%s/implementation-step-%s.log" % (logdir, n),
-                  "note": ".uncle/workflow/parallel/notes/step-%s.md" % n,
+                  "note": ".uncle/workflow/parallel/notes/step-%s.json" % n,
                   "command": ["bash", "%s/parallel-agent.sh" % lib, n]})
 print(json.dumps(steps))' "$logdir" "$plan" "$lib" "$@")"
     printf '{"project": "%s", "owned": %s, "steps": %s, "files_allowlist": %s}\n' \

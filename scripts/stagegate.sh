@@ -1566,12 +1566,8 @@ run_parallel_application_implementation() {
     # group can fail for a transient runner reason; its resume must continue
     # at that group, not ask completed workers to reapply their changes.
     if ! find "$checkpoint_dir" -type f -print -quit 2>/dev/null | grep -q .; then
-    {
-        printf '# Implementation Notes\n\n'
-        printf '## Parallel implementation reconciliation\n\n'
-        printf 'The workflow driver merged the isolated approved steps below. '
-        printf 'Each worker handoff records its owned files and narrow checks.\n'
-    } > .uncle/docs/IMPLEMENTATION_NOTES.md
+        python3 "$ROOT/scripts/lib/implementation_notes.py" reset .
+        rm -f .uncle/docs/IMPLEMENTATION_NOTES.md
     fi
     while IFS= read -r group; do
         [[ -n "$group" ]] || continue
@@ -1588,14 +1584,22 @@ run_parallel_application_implementation() {
                 echo; echo "## Assigned isolated implementation step $step"
                 sed -n "${step}p" "$STATE_DIR/implement-steps.txt"
                 echo; echo "Work only on this approved step and its declared owned files."
-                echo "Do not edit workflow documents. Run a narrow check and write a concise handoff to .uncle/workflow/parallel/notes/step-$step.md."
+                echo "Do not edit workflow documents. Run a narrow check and write this"
+                echo "step's implementation-notes fragment, as one JSON object matching"
+                echo "the contract given earlier in this prompt, to"
+                echo ".uncle/workflow/parallel/notes/step-$step.json."
             } >> "$prompt"
         done
         result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" .uncle/docs/UPDATED_PROJECT_PLAN.md $group)" || return $?
         for step in $group; do
-            [[ -s "$STATE_DIR/parallel/notes/step-$step.md" ]] || return 1
-            printf '\n## Isolated step %s handoff\n\n' "$step" >> .uncle/docs/IMPLEMENTATION_NOTES.md
-            cat "$STATE_DIR/parallel/notes/step-$step.md" >> .uncle/docs/IMPLEMENTATION_NOTES.md
+            [[ -s "$STATE_DIR/parallel/notes/step-$step.json" ]] || return 1
+            python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
+                "$STATE_DIR/parallel/notes/step-$step.json" .uncle/docs/IMPLEMENTATION_NOTES.md \
+                "Isolated step $step" || {
+                supervision_validation_failed implementation-notes \
+                    .uncle/docs/IMPLEMENTATION_NOTES.md "malformed fragment for step $step"
+                return 1
+            }
         done
         echo "Implementation fan-out group $group merged."
         touch "$checkpoint"
@@ -1802,6 +1806,14 @@ run_stage() {
                 [[ "$parallel_status" == 2 ]] || return "$parallel_status"
                 echo "Implementation fan-out unavailable: the approved plan has no independent owned steps; running one implementation agent."
                 run_claude prompts/implement.md implementation
+                local notes_ingest_error
+                notes_ingest_error="$(python3 "$ROOT/scripts/lib/implementation_notes.py" validate . \
+                    .uncle/docs/IMPLEMENTATION_NOTES.md 2>&1)" || {
+                    echo "$notes_ingest_error"
+                    supervision_validation_failed implementation-notes \
+                        .uncle/docs/IMPLEMENTATION_NOTES.md "$notes_ingest_error"
+                    return 1
+                }
             else
                 run_parallel_implementation_report
             fi

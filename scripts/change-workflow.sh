@@ -1535,12 +1535,14 @@ run_supervised_parallel_implementation() {
                 sed -n "${step}p" "$STATE_DIR/implement-steps.txt"
                 echo
                 echo "Work only on this approved step and its declared owned files."
-                echo "Do not edit workflow documents in the project root. Append a"
-                echo "concise handoff with changed files and exact checks to"
-                echo ".uncle/workflow/parallel/notes/step-$step.md. Do not write"
-                echo ".uncle/docs/CHANGE_TEST_REPORT.md; the driver reconciles it after merging."
+                echo "Do not edit workflow documents in the project root. Write this"
+                echo "step's implementation-notes fragment, as one JSON object matching"
+                echo "the contract given earlier in this prompt, to"
+                echo ".uncle/workflow/parallel/notes/step-$step.json. Do not write"
+                echo ".uncle/docs/IMPLEMENTATION_NOTES.md or .uncle/docs/CHANGE_TEST_REPORT.md;"
+                echo "the driver merges the fragment and reconciles the test report after merging."
                 echo "Finish in at most 12 tool actions. Read only the named files,"
-                echo "make the smallest edit, run one narrow check, write the handoff,"
+                echo "make the smallest edit, run one narrow check, write the fragment,"
                 echo "and stop; do not investigate unrelated failures or repeat probes."
             } >> "$prompt"
         done
@@ -1559,8 +1561,14 @@ print('Parallel group %s complete: %.1fs wall time; %.1fs worker time; '
       (group, elapsed, total, saved, files, data.get('worktrees', 'preserved')))
 PY
         for step in $group; do
-            require_file "$STATE_DIR/parallel/notes/step-$step.md"
-            cat "$STATE_DIR/parallel/notes/step-$step.md" >> .uncle/docs/IMPLEMENTATION_NOTES.md
+            require_file "$STATE_DIR/parallel/notes/step-$step.json"
+            python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
+                "$STATE_DIR/parallel/notes/step-$step.json" .uncle/docs/IMPLEMENTATION_NOTES.md \
+                "Step $step" || {
+                supervision_validation_failed implementation-notes \
+                    .uncle/docs/IMPLEMENTATION_NOTES.md "malformed fragment for step $step"
+                return 1
+            }
             printf '%s\n' "$step" > "$STATE_DIR/implement-step-done"
         done
     done <<< "$groups"
@@ -1590,6 +1598,14 @@ run_stepwise_implementation() {
         compose_implementation_prompt "$base" "$STATE_DIR/implement-change.resolved.md"
         run_claude "$STATE_DIR/implement-change.resolved.md" implementation \
             "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
+        local notes_ingest_error
+        notes_ingest_error="$(python3 "$ROOT/scripts/lib/implementation_notes.py" validate . \
+            .uncle/docs/IMPLEMENTATION_NOTES.md 2>&1)" || {
+            echo "$notes_ingest_error"
+            supervision_validation_failed implementation-notes \
+                .uncle/docs/IMPLEMENTATION_NOTES.md "$notes_ingest_error"
+            return 1
+        }
         return 0
     fi
 
@@ -1630,6 +1646,7 @@ run_stepwise_implementation() {
 
         prompt="$STATE_DIR/implement-step-$i.md"
         compose_implementation_prompt "$base" "$prompt"
+        local notes_frag="$STATE_DIR/implement-step-$i-notes.json"
 
         {
             echo
@@ -1642,27 +1659,30 @@ run_stepwise_implementation() {
             echo "what they changed and why. Read it first. Do not redo, revise"
             echo "or review their work, and do not start a later step."
             echo
-            echo "Append your rows to .uncle/docs/IMPLEMENTATION_NOTES.md; do not rewrite"
-            echo "the rows already there. Run the narrowest test target that"
-            echo "covers this step."
+            echo "Write this step's implementation-notes fragment, as one JSON"
+            echo "object matching the contract given earlier in this prompt, to"
+            echo "$notes_frag. Do not write .uncle/docs/IMPLEMENTATION_NOTES.md"
+            echo "directly; the driver merges your fragment into it after this"
+            echo "invocation ends. Run the narrowest test target that covers"
+            echo "this step."
             echo
             echo "## Runtime completion bound (binding)"
             echo
             echo "This runner can end a session after 21 tool iterations. Finish"
             echo "this step in at most 12 tool actions: read the named files once,"
-            echo "make the smallest edit, run the one named/narrow test, append the"
-            echo "handoff, and stop. Do not investigate unrelated failures, repeat"
+            echo "make the smallest edit, run the one named/narrow test, write the"
+            echo "fragment, and stop. Do not investigate unrelated failures, repeat"
             echo "probes, review earlier steps, or broaden the test run. If a narrow"
             echo "check exposes an unrelated pre-existing issue, record it in the"
-            echo "handoff and finish this step rather than diagnosing it."
+            echo "fragment and finish this step rather than diagnosing it."
             if [[ "$i" -ne "$total" ]]; then
                 echo
                 echo "Do not run the full suite; the final step does that once."
             else
                 echo
                 echo "This is the final code step. Run only the narrow checks"
-                echo "needed for this code and append their result to"
-                echo ".uncle/docs/IMPLEMENTATION_NOTES.md. Do not write .uncle/docs/CHANGE_TEST_REPORT.md:"
+                echo "needed for this code and write their result into the"
+                echo "fragment above. Do not write .uncle/docs/CHANGE_TEST_REPORT.md:"
                 echo "a fresh report-only invocation will reconcile it from the"
                 echo "on-disk notes and evidence. The driver runs the full"
                 echo "regression block once after that invocation."
@@ -1677,6 +1697,13 @@ run_stepwise_implementation() {
         run_claude "$prompt" "implementation-step-$i" \
             "$MODEL_IMPLEMENT" "" "$step_turns" "$BUDGET_IMPLEMENT"
 
+        require_file "$notes_frag"
+        python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
+            "$notes_frag" .uncle/docs/IMPLEMENTATION_NOTES.md "Step $i" || {
+            supervision_validation_failed implementation-notes \
+                .uncle/docs/IMPLEMENTATION_NOTES.md "malformed fragment for step $i"
+            return 1
+        }
         check_document_budget .uncle/docs/IMPLEMENTATION_NOTES.md || exit 1
         printf '%s\n' "$i" > "$done_file"
     done < "$steps_file"
@@ -2572,8 +2599,6 @@ implementation_complete() {
     local completion="$STATE_DIR/implementation-completion.txt" line id waiver
     if python3 "$ROOT/scripts/lib/implementation-completion.py" \
         .uncle/docs/CHANGE_SPEC.md .uncle/docs/IMPLEMENTATION_NOTES.md > "$completion"; then
-        python3 "$ROOT/scripts/lib/implementation-completion.py" --export-json \
-            .uncle/docs/CHANGE_SPEC.md .uncle/docs/IMPLEMENTATION_NOTES.md . 2>/dev/null || true
         return 0
     fi
     supervision_validation_failed implementation_completion .uncle/docs/IMPLEMENTATION_NOTES.md \

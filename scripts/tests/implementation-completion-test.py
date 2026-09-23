@@ -54,17 +54,6 @@ class CompletionTests(unittest.TestCase):
             completion.check(SPEC, NOTES.replace("| ID | Status", "| Wrong | Status"))
         self.assertTrue(completion.check(SPEC.replace("Chat composer", ""), NOTES))
 
-    def test_export_json_captures_the_delivery_table(self):
-        import json, tempfile
-        with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
-            payload = completion.export_json(SPEC, NOTES, root)
-            self.assertEqual(payload['deliveries'][0],
-                             {'id': 'AC-1', 'status': 'IMPLEMENTED', 'changed_code': 'ui.py composer',
-                              'observed_verification': 'UI check PASS'})
-            stored = json.loads((root/'.uncle/workflow/documents/IMPLEMENTATION_NOTES.json').read_text())
-            self.assertEqual(len(stored['deliveries']), 2)
-
 
 if __name__ == "__main__":
     unittest.main()

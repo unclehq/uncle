@@ -56,27 +56,7 @@ def check(spec, notes):
     return problems
 
 
-def export_json(spec, notes, project='.'):
-    """Capture an already-accepted Acceptance delivery table as the
-    workflow's canonical artifact. Only called once check() above has
-    already found the delivery complete for every acceptance ID."""
-    import json
-    delivered = rows(section(notes, "Acceptance delivery"),
-                     ["ID", "Status", "Changed code", "Observed targeted verification"])
-    payload = {'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
-               'deliveries': [{'id': identifier, 'status': row[0], 'changed_code': row[1],
-                               'observed_verification': row[2]}
-                              for identifier, row in delivered.items()]}
-    target = Path(project) / '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json'
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, indent=2) + '\n')
-    return payload
-
-
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == '--export-json':
-        export_json(Path(sys.argv[2]).read_text(), Path(sys.argv[3]).read_text(), sys.argv[4] if len(sys.argv) > 4 else '.')
-        raise SystemExit(0)
     try:
         problems = check(Path(sys.argv[1]).read_text(), Path(sys.argv[2]).read_text())
     except (OSError, ValueError) as exc:

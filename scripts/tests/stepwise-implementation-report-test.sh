@@ -20,12 +20,16 @@ run_supervised_parallel_implementation() { return 2; }
 compose_implementation_prompt() { : > "$2"; }
 plan_assess() { :; }
 check_document_budget() { test -s "$1"; }
+require_file() { [[ -s "$1" ]] || { echo "missing: $1" >&2; return 1; }; }
+supervision_validation_failed() { :; }
 run_claude() {
     local _prompt="$1" stage="$2"
     printf '%s\n' "$stage" >> calls
     case "$stage" in
         implementation-step-1|implementation-step-2)
-            printf '%s\n' "$stage" >> .uncle/docs/IMPLEMENTATION_NOTES.md ;;
+            local n="${stage##*-}"
+            printf '{"schema":"uncle.artifact/v1","kind":"implementation-notes","changed_files":[{"path":"file%s.py"}]}\n' \
+                "$n" > "$STATE_DIR/implement-step-$n-notes.json" ;;
         implementation-step-report)
             printf 'reconciled notes\n' > .uncle/docs/IMPLEMENTATION_NOTES.md
             printf 'authoritative report\n' > .uncle/docs/CHANGE_TEST_REPORT.md ;;

@@ -41,18 +41,19 @@ check, not independent implementation and mocked tests. Complete authorized
 work first, then report the exact missing verification. Do not weaken protected
 tests or silently amend approved artifacts to resolve a plan contradiction.
 
-Include exactly one `## Acceptance delivery` section in .uncle/docs/IMPLEMENTATION_NOTES.md:
+Write .uncle/docs/IMPLEMENTATION_NOTES.md as one JSON object, not Markdown,
+matching this contract:
 
-| ID | Status | Changed code | Observed targeted verification |
-|---|---|---|---|
-| AC-1 | IMPLEMENTED | path and behavior | command and observed result |
+`{"schema":"uncle.artifact/v1","kind":"implementation-notes","changed_files":[{"path":"...","purpose":"...","plan_step":"...","behavior_or_invariant":"..."}],"deviations":[{"file":"...","reason":"..."}],"unresolved_concerns":["..."],"deliveries":[{"id":"AC-1","status":"IMPLEMENTED","changed_code":"path and behavior","observed_verification":"command and observed result"}]}`
 
-Include every acceptance ID from .uncle/docs/CHANGE_SPEC.md exactly once, with no extra
-IDs. Status is IMPLEMENTED only when the behavior exists and its targeted check
-passes; otherwise use INCOMPLETE or BLOCKED with the missing work and exact
-blocker in the evidence columns. Baseline passes alone do not prove new behavior.
-The driver rejects missing/malformed tables and any status other than IMPLEMENTED,
-then attempts bounded repair. This table supplements the required report sections.
+Include every acceptance ID from .uncle/docs/CHANGE_SPEC.md exactly once in
+`deliveries`, with no extra IDs. `status` is IMPLEMENTED only when the behavior
+exists and its targeted check passes; otherwise use INCOMPLETE or BLOCKED with
+the missing work and exact blocker in `changed_code`/`observed_verification`.
+Baseline passes alone do not prove new behavior. The driver rejects a missing
+or malformed `deliveries` entry and any status other than IMPLEMENTED, then
+attempts bounded repair. `deliveries` supplements the rest of this document; it
+does not replace it.
 
 Before writing the final reports:
 
@@ -87,14 +88,12 @@ Implementation rules:
 9. Record every material deviation from the approved plan.
 10. Stop and document the issue if a core assumption is false.
 
-Create .uncle/docs/IMPLEMENTATION_NOTES.md containing:
+The JSON object's other fields cover:
 
-- files changed
-- purpose of each change
-- approved-plan step
-- behavior or invariant affected
-- deviations
-- unresolved concerns
+- `changed_files`: files changed, purpose of each change, approved-plan step,
+  behavior or invariant affected
+- `deviations`: file and reason, for every file outside the frozen scope
+- `unresolved_concerns`: anything left open
 
 Run the targeted checks needed to demonstrate the changed behavior and create
 .uncle/docs/CHANGE_TEST_REPORT.md containing:
@@ -146,8 +145,8 @@ You run the most commands of any stage, so this is where it costs most.
   apply to this repository or this change. `NOT RUN` means it applies and you
   did not run it. Never delete a line to avoid choosing between them.
 - Quote failing output only. Passing output is a line count, not a transcript.
-- .uncle/docs/IMPLEMENTATION_NOTES.md is one row per changed file plus the deviations. It
-  is not a narrative of how you worked.
+- `changed_files` is one entry per changed file plus `deviations`. It is not a
+  narrative of how you worked.
 
 ## What happens to this work next
 
@@ -169,19 +168,19 @@ same lines you are describing.
 Do not invoke the reviewer CLI. An independent reviewer is already running
 against the approved artifacts while you implement.
 
-Do not create or modify .uncle/docs/MANUAL_CHECKLIST.md, and do not write anything into
-the .workflow directory.
+Do not create or modify .uncle/docs/MANUAL_CHECKLIST.md, and do not write anything
+into the .workflow directory except a fragment path this invocation names below.
 
 Read .uncle/workflow/plan-executability/assessment.md when present. If verdict is
 DECISION, implement only the listed executable step IDs and paths; retain all acceptance
 rows and leave dependent/transitive steps pending. Do not ask again for settled authority.
 Complete independent code and mocked tests before reporting a live-verification blocker.
-Report contradictions in exactly one fenced `plan-blockers` JSON array in
-.uncle/docs/IMPLEMENTATION_NOTES.md. Each row has id, class (DESIGN/AUTHORITY/LIVE_VERIFICATION/CODING),
-requirement_ids, restriction_ids, evidence, independent_work. AUTHORITY also requires
-question and alternatives. DESIGN means an unsupported generated mechanism, not an
-ordinary coding defect. LIVE_VERIFICATION means only dependent approved live checks
-remain unavailable or failing; preserve INCOMPLETE/BLOCKED delivery rows until they pass.
+Report contradictions as a `plan_blockers` array in the JSON object above. Each
+entry has id, class (DESIGN/AUTHORITY/LIVE_VERIFICATION/CODING), requirement_ids,
+restriction_ids, evidence, independent_work. AUTHORITY also requires question and
+alternatives. DESIGN means an unsupported generated mechanism, not an ordinary
+coding defect. LIVE_VERIFICATION means only dependent approved live checks remain
+unavailable or failing; preserve INCOMPLETE/BLOCKED delivery entries until they pass.
 Never remove acceptance IDs, weaken protected tests, suppress findings, or auto-waive.
 
 ## Avoid repeated setup and model round trips

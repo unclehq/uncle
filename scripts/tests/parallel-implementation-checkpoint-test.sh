@@ -23,11 +23,14 @@ stage_model() { :; }
 stage_effort() { printf low; }
 stage_tools() { printf Read; }
 plan_steps() { printf 'one\ntwo\n'; }
+supervision_validation_failed() { :; }
 parallel_run_group() {
     local _lib="$1" _logs="$2" _plan="$3" group="$4"
     printf '%s\n' "$group" >> "$WORK/calls"
     if [[ "$group" == 2 && "${FAIL_SECOND:-0}" == 1 ]]; then return 1; fi
-    printf 'handoff %s\n' "$group" > "$STATE_DIR/parallel/notes/step-$group.md"
+    mkdir -p "$STATE_DIR/parallel/notes"
+    printf '{"schema":"uncle.artifact/v1","kind":"implementation-notes","changed_files":[{"path":"handoff-%s.py"}]}\n' \
+        "$group" > "$STATE_DIR/parallel/notes/step-$group.json"
     printf '{"elapsed_seconds":0}'
 }
 eval "$FUNCTION"

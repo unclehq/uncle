@@ -42,6 +42,11 @@ and observed verification result. Passing baseline checks or creating reports
 does not prove a feature was built. Implement missing items before ending;
 never describe partial or blocked work as a completed application.
 
+Write .uncle/docs/IMPLEMENTATION_NOTES.md as one JSON object, not Markdown,
+matching this contract:
+
+`{"schema":"uncle.artifact/v1","kind":"implementation-notes","changed_files":[{"path":"...","purpose":"...","plan_step":"...","behavior_or_invariant":"..."}],"deviations":[{"file":"...","reason":"..."}],"unresolved_concerns":["..."]}`
+
 Rules:
 
 1. Build the smallest working vertical slice first.
@@ -49,7 +54,7 @@ Rules:
 3. Implement high-risk invariants before optional functionality.
 4. Compile and test continuously.
 5. Do not weaken an invariant to make a test pass.
-6. Record deviations in .uncle/docs/IMPLEMENTATION_NOTES.md.
+6. Record every material deviation as a `deviations` entry.
 7. Add requirement and invariant identifiers to relevant tests.
 8. Do not invoke the reviewer CLI.
 9. Prove critical acceptance tests fail for the representative defects in the
@@ -131,12 +136,12 @@ Read .uncle/workflow/plan-executability/assessment.md when present. If verdict i
 DECISION, implement only the listed executable step IDs and paths; retain all acceptance
 rows and leave dependent/transitive steps pending. Do not ask again for settled authority.
 Complete independent code and mocked tests before reporting a live-verification blocker.
-Report contradictions in exactly one fenced `plan-blockers` JSON array in
-.uncle/docs/IMPLEMENTATION_NOTES.md. Each row has id, class (DESIGN/AUTHORITY/LIVE_VERIFICATION/CODING),
-requirement_ids, restriction_ids, evidence, independent_work. AUTHORITY also requires
-question and alternatives. DESIGN means an unsupported generated mechanism, not an
-ordinary coding defect. LIVE_VERIFICATION means only dependent approved live checks
-remain unavailable or failing; preserve INCOMPLETE/BLOCKED delivery rows until they pass.
+Report contradictions as a `plan_blockers` array in the JSON object above. Each
+entry has id, class (DESIGN/AUTHORITY/LIVE_VERIFICATION/CODING), requirement_ids,
+restriction_ids, evidence, independent_work. AUTHORITY also requires question and
+alternatives. DESIGN means an unsupported generated mechanism, not an ordinary
+coding defect. LIVE_VERIFICATION means only dependent approved live checks remain
+unavailable or failing; preserve INCOMPLETE/BLOCKED delivery entries until they pass.
 Never remove acceptance IDs, weaken protected tests, suppress findings, or auto-waive.
 
 ## Avoid repeated setup and model round trips

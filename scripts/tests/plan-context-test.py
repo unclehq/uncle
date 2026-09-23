@@ -95,6 +95,17 @@ class PlanContext(unittest.TestCase):
             with self.assertRaises(ValueError):
                 module.ingest_change_plan(plan, root, require_dispositions=True)
 
+    def test_unreviewed_change_plan_renders_from_canonical_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); plan = root/'CHANGE_PLAN.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan',
+                       'narrative': '## Scope\n\nBefore review.'}
+            plan.write_text(json.dumps(payload))
+            module.ingest_change_plan(plan, root, require_dispositions=False)
+            plan.write_text('edited render only')
+            self.assertTrue(module.render_canonical(plan, root, change=True, require_dispositions=False))
+            self.assertIn('Before review.', plan.read_text())
+
     def test_updated_change_plan_with_dispositions_renders_the_table(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

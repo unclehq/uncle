@@ -738,7 +738,7 @@ verify_approval() {
     local approval="$APPROVAL_DIR/${approval_name}.sha256"
 
     case "$approval_name" in
-        CHANGE_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-change-plan "$file" . || return 1 ;;
+        CHANGE_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-change-plan-unreviewed "$file" . || return 1 ;;
     esac
     require_file "$file"
     if [[ ! -s "$approval" ]]; then
@@ -893,7 +893,7 @@ human_gate() {
 
     while [[ "$#" -gt 0 ]]; do
         case "$2" in
-            CHANGE_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-change-plan "$1" . || return 1 ;;
+            CHANGE_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-change-plan-unreviewed "$1" . || return 1 ;;
         esac
         require_file "$1"
         files+=("$1")

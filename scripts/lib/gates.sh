@@ -267,6 +267,21 @@ TIMING
             document_layout_prompt "$log_name" || return 1
             document_budget_prompt "$log_name" || return 1
         fi
+        cat <<'JSON_INPUTS'
+
+---
+
+# Canonical workflow inputs (binding)
+
+Workflow artifacts are JSON-authoritative. For every prior-stage artifact
+named in this prompt as `.uncle/docs/NAME.md`, first read
+`.uncle/workflow/documents/NAME.json` when it exists. Use that JSON as the
+source of truth; the Markdown file is only its rendered approval/review view.
+Do not use differences in rendered Markdown as new requirements, findings,
+plan rows, checklist rows, or verification evidence. If the JSON is absent,
+the artifact predates the JSON migration and the Markdown is the compatibility
+input for this run. Never write, repair, or infer a replacement JSON input.
+JSON_INPUTS
         case "$log_name" in
             adversarial-review|updated-plan|updated-change-plan)
                 cat <<'FEASIBILITY'

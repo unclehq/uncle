@@ -191,7 +191,7 @@ def ingest_change_plan(path, project='.', require_dispositions=False):
     return True
 
 
-def render_canonical(path, project='.', protected=True, change=False):
+def render_canonical(path, project='.', protected=True, change=False, require_dispositions=False):
     """Regenerate human-facing plan Markdown from its authoritative JSON."""
     module = _artifact_json()
     json_path = module.path(project, Path(path).name)
@@ -201,7 +201,7 @@ def render_canonical(path, project='.', protected=True, change=False):
     expected = 'change-plan' if change else 'plan'
     if payload.get('kind') != expected:
         raise ValueError('canonical artifact has wrong kind: ' + str(payload.get('kind')))
-    rendered = (module.render_change_plan(payload, require_dispositions=change)
+    rendered = (module.render_change_plan(payload, require_dispositions=require_dispositions)
                 if change else module.render_plan(payload, protected=protected))
     Path(path).write_text(rendered, encoding='utf-8')
     return True
@@ -287,6 +287,8 @@ if __name__ == '__main__':
             render_canonical(path, project, protected=True)
         elif action == 'render-change-plan':
             render_canonical(path, project, change=True)
+        elif action == 'render-change-plan-unreviewed':
+            render_canonical(path, project, change=True, require_dispositions=False)
         elif action == 'baseline-report':
             ingest_baseline_report(path, project)
         else:

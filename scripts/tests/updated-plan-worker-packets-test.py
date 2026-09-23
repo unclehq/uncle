@@ -95,6 +95,16 @@ class WorkerPackets(unittest.TestCase):
             with self.assertRaisesRegex(WORKERS.PacketError, 'regression.json: worker packet is missing'):
                 WORKERS.collate(directory, output, kind, ('requirements', 'regression'))
 
+    def test_generic_packets_repair_only_the_known_transport_quote_suffix(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp); kind = 'adversarial-review-worker-packet'
+            raw = '{"schema":"uncle.artifact/v1","kind":"adversarial-review-worker-packet","findings":[{"id":"AR-001","summary":"gap","evidence":"proof","}]}'
+            # OpenCode's observed stream corruption: a dangling quote follows
+            # an otherwise complete field/object delimiter.
+            (directory/'requirements.json').write_text(raw)
+            WORKERS.collate(directory, directory/'out.json', kind, ('requirements',))
+            self.assertEqual(json.loads((directory/'out.json').read_text())['findings'][0]['id'], 'AR-001')
+
     def test_every_migrated_panel_uses_json_and_binding_collation(self):
         contracts = {
             'scripts/stagegate.sh': (
@@ -121,6 +131,12 @@ class WorkerPackets(unittest.TestCase):
             text = (ROOT/'prompts/change'/prompt).read_text()
             self.assertIn('"kind":"' + kind + '"', text)
             self.assertIn('empty array when clean', text)
+
+    def test_every_gated_stage_prefers_previous_canonical_json(self):
+        gates = (ROOT/'scripts/lib/gates.sh').read_text()
+        self.assertIn('# Canonical workflow inputs (binding)', gates)
+        self.assertIn('.uncle/workflow/documents/NAME.json', gates)
+        self.assertIn('Markdown file is only its rendered approval/review view', gates)
 
 
 if __name__ == '__main__':

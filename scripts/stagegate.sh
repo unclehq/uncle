@@ -1775,6 +1775,7 @@ run_stage() {
             ;;
         PROJECT_PLAN)
             run_claude prompts/project-plan.md project-plan
+            [[ ! -s .uncle/docs/PROJECT_PLAN.md ]] || python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/PROJECT_PLAN.md . 2>/dev/null || true
             require_artifact .uncle/docs/PROJECT_PLAN.md
             ;;
         ADVERSARIAL_REVIEW)
@@ -2361,6 +2362,7 @@ while true; do
             run_gated_stage UPDATED_PLAN \
                 .uncle/docs/ADVERSARIAL_REVIEW.md \
                 .uncle/docs/UPDATED_PROJECT_PLAN.md
+            [[ ! -s .uncle/docs/UPDATED_PROJECT_PLAN.md ]] || python3 "$ROOT/scripts/lib/plan_context.py" plan .uncle/docs/UPDATED_PROJECT_PLAN.md . 2>/dev/null || true
             set_state VALIDATE_UPDATED_PLAN
             ;;
 

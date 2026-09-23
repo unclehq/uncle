@@ -2545,6 +2545,8 @@ run_planning_stage() {
             "planning stage ended twice without completing its documents (context used: $used tokens)" 1 || true
         return 1
     fi
+    python3 "$ROOT/scripts/lib/plan_context.py" change-spec .uncle/docs/CHANGE_SPEC.md . 2>/dev/null || true
+    python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/CHANGE_PLAN.md . 2>/dev/null || true
     check_document_budget .uncle/docs/BASELINE_REPORT.md || return 1
     check_document_budget .uncle/docs/CHANGE_SPEC.md || return 1
     check_document_budget .uncle/docs/CHANGE_PLAN.md || return 1
@@ -2804,6 +2806,7 @@ while true; do
             verify_approval .uncle/docs/BASELINE_REPORT.md BASELINE_REPORT
             verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
             verify_approval .uncle/docs/ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
+            [[ ! -s .uncle/docs/CHANGE_PLAN.md ]] || python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/CHANGE_PLAN.md . 2>/dev/null || true
             require_file .uncle/docs/CHANGE_PLAN.md
             check_document_budget .uncle/docs/CHANGE_PLAN.md || exit 1
 

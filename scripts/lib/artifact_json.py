@@ -123,6 +123,44 @@ def render_plan(payload, protected=True):
         if not paths or not paths.strip():
             raise ValueError('plan is missing protected_verification_paths')
         lines += ['## Protected verification paths', '', '```text', paths.strip('\n'), '```', '']
+    dispositions = payload.get('dispositions')
+    if dispositions:
+        seen = set()
+        lines += ['## Adversarial review dispositions', '',
+                  '| Finding | Disposition | Reason | Exact plan change |', '|---|---|---|---|']
+        for row in dispositions:
+            finding = row['finding']
+            if finding in seen:
+                raise ValueError('duplicate disposition for finding: ' + finding)
+            seen.add(finding)
+            if row['disposition'] not in ('Accepted', 'Partially accepted', 'Rejected', 'Deferred'):
+                raise ValueError('invalid disposition for %s: %r' % (finding, row['disposition']))
+            esc = lambda value: str(value).replace('|', r'\|').replace('\n', ' ')
+            lines.append('| %s | %s | %s | %s |' % (finding, row['disposition'], esc(row['reason']), esc(row['plan_change'])))
+        lines.append('')
+    return '\n'.join(lines)
+
+
+def render_change_spec(payload):
+    criteria = payload.get('acceptance_criteria')
+    if not criteria:
+        raise ValueError('change-spec has no acceptance_criteria')
+    seen = set()
+    lines = []
+    narrative = payload.get('narrative')
+    if narrative:
+        lines += [narrative.strip(), '']
+    lines += ['## Acceptance criteria', '', '| ID | Criterion | Verification |', '|---|---|---|']
+    for row in criteria:
+        identifier = row['id']
+        if identifier in seen:
+            raise ValueError('duplicate acceptance criterion id: ' + identifier)
+        seen.add(identifier)
+        if not row.get('criterion') or not row.get('verification'):
+            raise ValueError(identifier + ' is missing criterion or verification')
+        esc = lambda value: str(value).replace('|', r'\|').replace('\n', ' ')
+        lines.append('| %s | %s | %s |' % (identifier, esc(row['criterion']), esc(row['verification'])))
+    lines.append('')
     return '\n'.join(lines)
 
 def render_checklist(payload):

@@ -363,6 +363,8 @@ MODEL_CATALOG_FREE = [
 FREE_MODEL_IDS = frozenset(mid for _, entries in MODEL_CATALOG_FREE
                            for _label, mid in entries)
 
+SPINNER = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
+
 CLINEPASS, CLINE_USAGE = "clinepass", "cline-usage"
 BILLING_CHOICES = [CLINEPASS, CLINE_USAGE]
 DEFAULT_BILLING = CLINEPASS
@@ -5372,6 +5374,7 @@ class UncleTUI:
         return (estimate, True) if estimate is not None else (None, False)
 
     def _session_panel_lines(self):
+        self._spinner_count = getattr(self, "_spinner_count", 0) + 1
         stats = getattr(self, "session_stats", None)
         if stats is None:
             return []
@@ -5441,6 +5444,10 @@ class UncleTUI:
             group["last_result"] = row
             result_exit = row.get("process_exit")
             group["any_failed"] = group["any_failed"] or result_exit not in (None, 0) or row.get("reported_error") in (True, "true")
+            group.setdefault("_worker_statuses", {})[stage] = {
+                "active": False,
+                "failed": result_exit not in (None, 0) or row.get("reported_error") in (True, "true"),
+            }
         for stage, started in stats["active"].items():
             parent = parent_stage(stage)
             group = groups.setdefault(parent, {"seconds": 0, "tokens": [], "costs": [], "attempts": 0, "started": float("inf"), "raw_stages": set(), "any_failed": False})
@@ -5455,9 +5462,15 @@ class UncleTUI:
             group["tokens"].append(event.get("total_tokens"))
             group["costs"].append(self._live_cost(event) if event else (None, False))
             group["attempts"] += 1
+            group.setdefault("_worker_statuses", {})[stage] = {
+                "active": True,
+                "failed": False,
+            }
         lines = ["STAGE", "Cost of usage so far", ""]
         tokens, costs = [], []
         self._panel_stage_styles = {}
+        self._panel_indicator_styles = {}
+        self._panel_indicator_prefix = {}
         for stage, group in sorted(groups.items(), key=lambda item: item[1]["started"]):
             raw_stages = group.get("raw_stages", set())
             is_rollup = len(raw_stages) > 1
@@ -5472,10 +5485,29 @@ class UncleTUI:
                 title += " (%d workers)" % len(raw_stages)
             elif group["attempts"] > 1:
                 title += " (%d attempts)" % group["attempts"]
+            if is_rollup:
+                statuses = group.get("_worker_statuses", {})
+                indicator_styles = []
+                indicator_chars = []
+                for raw in sorted(raw_stages):
+                    ws = statuses.get(raw, {})
+                    if ws.get("active"):
+                        indicator_chars.append(SPINNER[
+                            getattr(self, "_spinner_count", 0) % len(SPINNER)])
+                        indicator_styles.append("title")
+                    elif ws.get("failed"):
+                        indicator_chars.append("\u00b7")
+                        indicator_styles.append("bad")
+                    else:
+                        indicator_chars.append("\u00b7")
+                        indicator_styles.append("good")
+                title_with_dots = title + "  " + "".join(indicator_chars)
+                self._panel_indicator_styles[title_with_dots] = indicator_styles
+                self._panel_indicator_prefix[title_with_dots] = title
+                title = title_with_dots
             if active and "stopped_at" not in stats:
                 style = "title"
             elif any_failed:
-                title += " [failed]"
                 style = "bad"
             elif not active and result.get("process_exit") == 0:
                 style = "good"
@@ -5530,10 +5562,26 @@ class UncleTUI:
         offset = max(0, min(offset, max(0, len(lines) - body)))
         self.panel_visible_offset = offset
         for y, line in enumerate(lines[offset:offset + body]):
-            try:
-                self.stdscr.addnstr(y, left + 2, line, panel - 3, self._session_panel_attr(line))
-            except curses.error:
-                pass
+            indicator_styles = getattr(self, "_panel_indicator_styles", {}).get(line)
+            if indicator_styles:
+                prefix = getattr(self, "_panel_indicator_prefix", {}).get(line, "")
+                palette = getattr(self, "color", {})
+                try:
+                    self.stdscr.addnstr(y, left + 2, prefix, panel - 3, self._session_panel_attr(line))
+                except curses.error:
+                    pass
+                palette = getattr(self, "color", {})
+                for i, style in enumerate(indicator_styles):
+                    ch = line[len(prefix) + i]
+                    try:
+                        self.stdscr.addch(y, left + 2 + len(prefix) + i, ch, palette.get(style, 0))
+                    except curses.error:
+                        pass
+            else:
+                try:
+                    self.stdscr.addnstr(y, left + 2, line, panel - 3, self._session_panel_attr(line))
+                except curses.error:
+                    pass
 
     def _title(self):
         if self.state == "picker":

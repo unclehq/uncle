@@ -105,6 +105,10 @@ uncle_config_stage() {
         # here.
         test-review-investigate) printf 'test-review' ;;
         updated-plan-investigate) printf 'updated-plan' ;;
+        adversarial-review-investigate) printf 'adversarial-review' ;;
+        manual-checklist-investigate) printf 'manual-checklist' ;;
+        final-audit-investigate) printf 'final-audit' ;;
+        project-plan-investigate) printf 'project-plan' ;;
         # A driver-owned worker inherits the parent stage's runner, model,
         # effort, billing, and network policy for every supported runner.
         *-worker-*) printf '%s' "${1%%-worker-*}" ;;

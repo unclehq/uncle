@@ -122,14 +122,14 @@ output_rules_source() {
 
 # Stages that write a markdown document for a human to read. Every one of them
 # gets the output rules; the plan stages additionally get the plan template.
-DOC_STAGES=" requirements project-plan updated-plan updated-plan-investigate preflight implementation execute-checklist change-plan updated-change-plan adversarial-review test-review test-review-investigate manual-checklist manual-checklist-base manual-checklist-delta final-audit "
+DOC_STAGES=" requirements project-plan project-plan-investigate updated-plan updated-plan-investigate preflight implementation execute-checklist change-plan updated-change-plan adversarial-review adversarial-review-investigate test-review test-review-investigate manual-checklist manual-checklist-investigate manual-checklist-base manual-checklist-delta final-audit final-audit-investigate "
 
 # Stages that write a plan must satisfy the output gates. The gates file is
 # resolved local-first (project GATES.md, then .uncle/gates/GATES.md) and
 # falls back to the gates installed with uncle (lib/gates/GATES.md). The
 # gates content is appended to the prompt sent to the agent, never to the
 # prompt file on disk. Requires LOG_DIR (set by the calling driver).
-PLAN_STAGES=" project-plan updated-plan updated-plan-investigate change-plan updated-change-plan "
+PLAN_STAGES=" project-plan project-plan-investigate updated-plan updated-plan-investigate change-plan updated-change-plan "
 
 # Echo the prompt path the stage should read: the original prompt file for
 # stages with nothing to append, or a temp copy with the output rules (and the

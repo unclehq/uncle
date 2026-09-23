@@ -405,8 +405,14 @@ new_stagegate_case() {
     printf 'investigate tests\n' > "$REPO/prompts/test-review-investigate.md"
     printf 'format the investigation\n' > "$REPO/prompts/test-review-format.md"
     printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
+    printf 'investigate the plan\n' > "$REPO/prompts/adversarial-review-investigate.md"
+    printf 'format the investigation\n' > "$REPO/prompts/adversarial-review-format.md"
     printf 'write a checklist\n' > "$REPO/prompts/manual-checklist.md"
+    printf 'investigate the checklist\n' > "$REPO/prompts/manual-checklist-investigate.md"
+    printf 'format the investigation\n' > "$REPO/prompts/manual-checklist-format.md"
     printf 'audit it\n'          > "$REPO/prompts/final-audit.md"
+    printf 'investigate the audit\n' > "$REPO/prompts/final-audit-investigate.md"
+    printf 'format the investigation\n' > "$REPO/prompts/final-audit-format.md"
 
     cat > "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md" <<'EOF'
 # Updated Project Plan

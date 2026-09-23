@@ -1169,6 +1169,18 @@ format_claude_stream() {
 # Never use --dangerously-skip-permissions (CLAUDE.md rule 8).
 # Pass a third argument to run_claude to override the grant for one stage.
 
+# The investigate/format split (test-review, updated-plan) exists for weak
+# self-hosted models that lose an exact JSON schema over a long, read-heavy
+# turn. Proprietary models (claude, codex, ...) do not show that failure, and
+# the split only adds an extra call and an extra place to fail, so it is
+# gated on the stage's actually-configured runner rather than applied
+# unconditionally.
+stage_uses_self_hosted() {
+    local stage="$1" side="$2" UNCLE_RESOLVED_RUNNER
+    uncle_resolve_stage_runner "$stage" "$side" 2>/dev/null || true
+    [[ "$UNCLE_RESOLVED_RUNNER" == self-hosted ]]
+}
+
 run_claude() {
     local prompt_file
     prompt_file="$(resolve_prompt "$1")"
@@ -1333,7 +1345,7 @@ run_codex_review() {
     local review_key
     review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"
     if restore_plan_review "$output_file" "$review_key"; then
-        if [[ "$log_name" != adversarial-review ]]; then
+        if [[ "$log_name" != adversarial-review && "$log_name" != adversarial-review-investigate ]]; then
         finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
     fi
         save_plan_review "$output_file" "$review_key"
@@ -1410,7 +1422,7 @@ run_codex_review() {
     else
         review_key=""
     fi
-    if [[ "$log_name" != adversarial-review ]]; then
+    if [[ "$log_name" != adversarial-review && "$log_name" != adversarial-review-investigate ]]; then
         finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
     fi
     save_plan_review "$output_file" "$review_key"
@@ -1437,9 +1449,15 @@ run_adversarial_review_panel() {
         wait "$pid" || echo 'Adversarial review panel worker failed; primary review will continue.' >&2
     done
     ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"
-    cp "$ROOT/prompts/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
-    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `.uncle/docs/ADVERSARIAL_REVIEW.md`.\n' \
-        "$directory" >> "$ADVERSARIAL_REVIEW_PROMPT"
+    if stage_uses_self_hosted adversarial-review REVIEWER; then
+        cp "$ROOT/prompts/adversarial-review-investigate.md" "$ADVERSARIAL_REVIEW_PROMPT"
+        printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the investigation covering the only canonical adversarial review.\n' \
+            "$directory" >> "$ADVERSARIAL_REVIEW_PROMPT"
+    else
+        cp "$ROOT/prompts/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
+        printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `.uncle/docs/ADVERSARIAL_REVIEW.md`.\n' \
+            "$directory" >> "$ADVERSARIAL_REVIEW_PROMPT"
+    fi
 }
 
 run_updated_plan_panel() {
@@ -1458,8 +1476,13 @@ run_updated_plan_panel() {
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan panel worker failed; plan writer will continue.' >&2; done
     echo "Updated-plan review panel: worker packets collected; launching synthesis."
     UPDATED_PLAN_PROMPT="$directory/synthesis.md"
-    cp "$ROOT/prompts/updated-plan-investigate.md" "$UPDATED_PLAN_PROMPT"
-    printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the investigation covering the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
+    if stage_uses_self_hosted updated-plan AGENT; then
+        cp "$ROOT/prompts/updated-plan-investigate.md" "$UPDATED_PLAN_PROMPT"
+        printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the investigation covering the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
+    else
+        cp "$ROOT/prompts/updated-plan.md" "$UPDATED_PLAN_PROMPT"
+        printf '\n## Specialist plan-review packets\n\nRead available packets in `%s`, verify them, and write the sole canonical revised plan.\n' "$directory" >> "$UPDATED_PLAN_PROMPT"
+    fi
 }
 
 run_test_review_panel() {
@@ -1489,9 +1512,15 @@ run_test_review_panel() {
         wait "$pid" || echo 'Test-review panel worker failed; primary review will continue.' >&2
     done
     TEST_REVIEW_PROMPT="$directory/synthesis.md"
-    cp "$ROOT/prompts/test-review-investigate.md" "$TEST_REVIEW_PROMPT"
-    printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the investigation covering the only canonical review.\n' \
-        "$directory" >> "$TEST_REVIEW_PROMPT"
+    if stage_uses_self_hosted test-review REVIEWER; then
+        cp "$ROOT/prompts/test-review-investigate.md" "$TEST_REVIEW_PROMPT"
+        printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the investigation covering the only canonical review.\n' \
+            "$directory" >> "$TEST_REVIEW_PROMPT"
+    else
+        cp "$ROOT/prompts/test-review.md" "$TEST_REVIEW_PROMPT"
+        printf '\n## Specialist review packets\n\nRead every available packet in `%s`. Treat them as leads, verify their evidence yourself, and write the only canonical `.uncle/docs/TEST_REVIEW.md`.\n' \
+            "$directory" >> "$TEST_REVIEW_PROMPT"
+    fi
 }
 
 run_manual_checklist_panel() {
@@ -1511,9 +1540,15 @@ run_manual_checklist_panel() {
         wait "$pid" || echo 'Manual-checklist panel worker failed; primary reviewer will continue.' >&2
     done
     MANUAL_CHECKLIST_PROMPT="$directory/synthesis.md"
-    cp "$ROOT/prompts/manual-checklist.md" "$MANUAL_CHECKLIST_PROMPT"
-    printf '\n## Specialist checklist packets\n\nRead available packets in `%s`, verify them, and write the sole canonical checklist.\n' \
-        "$directory" >> "$MANUAL_CHECKLIST_PROMPT"
+    if stage_uses_self_hosted manual-checklist REVIEWER; then
+        cp "$ROOT/prompts/manual-checklist-investigate.md" "$MANUAL_CHECKLIST_PROMPT"
+        printf '\n## Specialist checklist packets\n\nRead available packets in `%s`, verify them, and write the investigation covering the sole canonical checklist.\n' \
+            "$directory" >> "$MANUAL_CHECKLIST_PROMPT"
+    else
+        cp "$ROOT/prompts/manual-checklist.md" "$MANUAL_CHECKLIST_PROMPT"
+        printf '\n## Specialist checklist packets\n\nRead available packets in `%s`, verify them, and write the sole canonical checklist.\n' \
+            "$directory" >> "$MANUAL_CHECKLIST_PROMPT"
+    fi
 }
 
 run_final_audit_panel() {
@@ -1530,8 +1565,13 @@ run_final_audit_panel() {
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit panel worker failed; auditor will continue.' >&2; done
     FINAL_AUDIT_PROMPT="$directory/synthesis.md"
-    cp "$ROOT/prompts/final-audit.md" "$FINAL_AUDIT_PROMPT"
-    printf '\n## Specialist audit packets\n\nRead available packets in `%s`, verify them, and write the sole canonical final audit and verdict.\n' "$directory" >> "$FINAL_AUDIT_PROMPT"
+    if stage_uses_self_hosted final-audit REVIEWER; then
+        cp "$ROOT/prompts/final-audit-investigate.md" "$FINAL_AUDIT_PROMPT"
+        printf '\n## Specialist audit packets\n\nRead available packets in `%s`, verify them, and write the investigation covering the sole canonical final audit and verdict.\n' "$directory" >> "$FINAL_AUDIT_PROMPT"
+    else
+        cp "$ROOT/prompts/final-audit.md" "$FINAL_AUDIT_PROMPT"
+        printf '\n## Specialist audit packets\n\nRead available packets in `%s`, verify them, and write the sole canonical final audit and verdict.\n' "$directory" >> "$FINAL_AUDIT_PROMPT"
+    fi
 }
 
 # Execute plan-declared independent application steps in isolated worktrees.
@@ -1778,7 +1818,20 @@ run_stage() {
             fi
             ;;
         PROJECT_PLAN)
-            run_claude prompts/project-plan.md project-plan
+            if stage_uses_self_hosted project-plan AGENT; then
+                project_plan_investigation=".uncle/workflow/project-plan-investigation.md"
+                rm -f "$project_plan_investigation"
+                run_claude prompts/project-plan-investigate.md project-plan-investigate
+                require_file "$project_plan_investigation"
+                project_plan_format_prompt="$STATE_DIR/project-plan-format-prompt.md"
+                {
+                    cat "$ROOT/prompts/project-plan-format.md"
+                    cat "$project_plan_investigation"
+                } > "$project_plan_format_prompt"
+                run_claude "$project_plan_format_prompt" project-plan
+            else
+                run_claude prompts/project-plan.md project-plan
+            fi
             if [[ -s .uncle/docs/PROJECT_PLAN.md ]]; then
                 plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/PROJECT_PLAN.md . 2>&1)" || {
                     printf '%s\n' "$plan_ingest_error" >&2
@@ -1790,32 +1843,53 @@ run_stage() {
             ;;
         ADVERSARIAL_REVIEW)
             run_adversarial_review_panel
-            run_codex_review \
-                "${ADVERSARIAL_REVIEW_PROMPT:-prompts/adversarial-review.md}" \
-                .uncle/docs/ADVERSARIAL_REVIEW.md \
-                adversarial-review
+            if stage_uses_self_hosted adversarial-review REVIEWER; then
+                adversarial_review_investigation=".uncle/workflow/adversarial-review-investigation.md"
+                rm -f "$adversarial_review_investigation"
+                run_codex_review \
+                    "${ADVERSARIAL_REVIEW_PROMPT:-prompts/adversarial-review-investigate.md}" \
+                    "$adversarial_review_investigation" \
+                    adversarial-review-investigate
+                adversarial_review_format_prompt="$STATE_DIR/adversarial-review-format-prompt.md"
+                {
+                    cat "$ROOT/prompts/adversarial-review-format.md"
+                    cat "$adversarial_review_investigation"
+                } > "$adversarial_review_format_prompt"
+                run_codex_review "$adversarial_review_format_prompt" .uncle/docs/ADVERSARIAL_REVIEW.md adversarial-review
+            else
+                run_codex_review \
+                    "${ADVERSARIAL_REVIEW_PROMPT:-prompts/adversarial-review.md}" \
+                    .uncle/docs/ADVERSARIAL_REVIEW.md \
+                    adversarial-review
+            fi
             ;;
         UPDATED_PLAN)
             run_updated_plan_panel
-            # Split into two calls, the same fix applied to test-review: a
-            # long, read-heavy investigation with no strict output shape (but
-            # real Write-tool work -- .gitignore -- that belongs here, not in
-            # the formatting pass), then a short, mechanical conversion of
-            # that investigation into the required JSON. A single call asking
-            # a weak model to both explore many documents *and* hit an exact
-            # schema at the end of a long turn kept losing the schema; the
-            # format pass has almost nothing else in its context to lose
-            # track of.
-            updated_plan_investigation=".uncle/workflow/updated-plan-investigation.md"
-            rm -f "$updated_plan_investigation"
-            run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan-investigate.md}" updated-plan-investigate
-            require_file "$updated_plan_investigation"
-            updated_plan_format_prompt="$STATE_DIR/updated-plan-format-prompt.md"
-            {
-                cat "$ROOT/prompts/updated-plan-format.md"
-                cat "$updated_plan_investigation"
-            } > "$updated_plan_format_prompt"
-            run_claude "$updated_plan_format_prompt" updated-plan
+            if stage_uses_self_hosted updated-plan AGENT; then
+                # Split into two calls, the same fix applied to test-review:
+                # a long, read-heavy investigation with no strict output
+                # shape (but real Write-tool work -- .gitignore -- that
+                # belongs here, not in the formatting pass), then a short,
+                # mechanical conversion of that investigation into the
+                # required JSON. A single call asking a weak self-hosted
+                # model to both explore many documents *and* hit an exact
+                # schema at the end of a long turn kept losing the schema;
+                # the format pass has almost nothing else in its context to
+                # lose track of. Proprietary models do not show this
+                # failure, so they skip straight to the single call below.
+                updated_plan_investigation=".uncle/workflow/updated-plan-investigation.md"
+                rm -f "$updated_plan_investigation"
+                run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan-investigate.md}" updated-plan-investigate
+                require_file "$updated_plan_investigation"
+                updated_plan_format_prompt="$STATE_DIR/updated-plan-format-prompt.md"
+                {
+                    cat "$ROOT/prompts/updated-plan-format.md"
+                    cat "$updated_plan_investigation"
+                } > "$updated_plan_format_prompt"
+                run_claude "$updated_plan_format_prompt" updated-plan
+            else
+                run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan.md}" updated-plan
+            fi
             ;;
         IMPLEMENT)
             parallel_status=0
@@ -1860,34 +1934,54 @@ run_stage() {
                 cp .uncle/docs/TEST_REVIEW.md "$STATE_DIR/previous-test-review.md"
             fi
             rm -f .uncle/docs/TEST_REVIEW.md
-            # Split into two calls: a long, read-heavy investigation with no
-            # strict output shape, then a short, mechanical conversion of
-            # that investigation into the required JSON. A single call asking
-            # a weak model to both explore many documents *and* hit an exact
-            # schema at the end of a long turn kept losing the schema -- the
-            # investigation is where the reading and judgment belong; the
-            # second call's only job is formatting, with almost nothing else
-            # in its context to lose track of.
-            test_review_investigation="$STATE_DIR/test-review-investigation.md"
-            if [[ -s "$STATE_DIR/test-review-format-retry.md" && -s "$test_review_investigation" ]]; then
-                # Only the format call failed last time; the investigation
-                # itself was never the problem, so it is not worth redoing.
-                echo "Retrying test-review formatting only; reusing the saved investigation."
-            else
-                rm -f "$STATE_DIR/test-review-format-retry.md"
-                run_test_review_panel
-                run_codex_review "$TEST_REVIEW_PROMPT" "$test_review_investigation" test-review-investigate
-            fi
-            test_review_format_prompt="$STATE_DIR/test-review-format-prompt.md"
-            {
-                cat "$ROOT/prompts/test-review-format.md"
-                cat "$test_review_investigation"
-                if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then
-                    printf '\n\n## Required format retry\n\n'
-                    cat "$STATE_DIR/test-review-format-retry.md"
+            if stage_uses_self_hosted test-review REVIEWER; then
+                # Split into two calls: a long, read-heavy investigation with
+                # no strict output shape, then a short, mechanical conversion
+                # of that investigation into the required JSON. A single
+                # call asking a weak self-hosted model to both explore many
+                # documents *and* hit an exact schema at the end of a long
+                # turn kept losing the schema -- the investigation is where
+                # the reading and judgment belong; the second call's only
+                # job is formatting, with almost nothing else in its context
+                # to lose track of. Proprietary models do not show this
+                # failure, so they skip straight to the single call below.
+                test_review_investigation="$STATE_DIR/test-review-investigation.md"
+                if [[ -s "$STATE_DIR/test-review-format-retry.md" && -s "$test_review_investigation" ]]; then
+                    # Only the format call failed last time; the investigation
+                    # itself was never the problem, so it is not worth redoing.
+                    echo "Retrying test-review formatting only; reusing the saved investigation."
+                else
+                    rm -f "$STATE_DIR/test-review-format-retry.md"
+                    run_test_review_panel
+                    run_codex_review "$TEST_REVIEW_PROMPT" "$test_review_investigation" test-review-investigate
                 fi
-            } > "$test_review_format_prompt"
-            run_codex_review "$test_review_format_prompt" .uncle/docs/TEST_REVIEW.md test-review
+                test_review_format_prompt="$STATE_DIR/test-review-format-prompt.md"
+                {
+                    cat "$ROOT/prompts/test-review-format.md"
+                    cat "$test_review_investigation"
+                    if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then
+                        printf '\n\n## Required format retry\n\n'
+                        cat "$STATE_DIR/test-review-format-retry.md"
+                    fi
+                } > "$test_review_format_prompt"
+                run_codex_review "$test_review_format_prompt" .uncle/docs/TEST_REVIEW.md test-review
+            else
+                run_test_review_panel
+                # A malformed acceptance table gets one local, format-only
+                # retry even when optional supervision is disabled. The
+                # marker remains after delivery so repeated malformed output
+                # stops normally.
+                test_review_prompt="${TEST_REVIEW_PROMPT:-prompts/test-review.md}"
+                if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then
+                    test_review_prompt="$STATE_DIR/test-review-format-retry-prompt.md"
+                    {
+                        cat "${TEST_REVIEW_PROMPT:-$ROOT/prompts/test-review.md}"
+                        printf '\n\n## Required format retry\n\n'
+                        cat "$STATE_DIR/test-review-format-retry.md"
+                    } > "$test_review_prompt"
+                fi
+                run_codex_review "$test_review_prompt" .uncle/docs/TEST_REVIEW.md test-review
+            fi
             ;;
         REPAIR)
             run_claude "$REPAIR_PROMPT" repair
@@ -1901,19 +1995,42 @@ run_stage() {
             # gets below: checklist_document.py already repairs label-only
             # deviations on its own, so a failure this far needs the model to
             # rewrite it, not another local patch.
-            manual_checklist_prompt="${MANUAL_CHECKLIST_PROMPT:-prompts/manual-checklist.md}"
-            if [[ -s "$STATE_DIR/manual-checklist-format-retry.md" ]]; then
-                manual_checklist_prompt="$STATE_DIR/manual-checklist-format-retry-prompt.md"
+            if stage_uses_self_hosted manual-checklist REVIEWER; then
+                manual_checklist_investigation=".uncle/workflow/manual-checklist-investigation.md"
+                if [[ -s "$STATE_DIR/manual-checklist-format-retry.md" && -s "$manual_checklist_investigation" ]]; then
+                    echo "Retrying manual-checklist formatting only; reusing the saved investigation."
+                else
+                    rm -f "$STATE_DIR/manual-checklist-format-retry.md" "$manual_checklist_investigation"
+                    run_codex_review \
+                        "${MANUAL_CHECKLIST_PROMPT:-prompts/manual-checklist-investigate.md}" \
+                        "$manual_checklist_investigation" \
+                        manual-checklist-investigate
+                fi
+                manual_checklist_format_prompt="$STATE_DIR/manual-checklist-format-prompt.md"
                 {
-                    cat "${MANUAL_CHECKLIST_PROMPT:-$ROOT/prompts/manual-checklist.md}"
-                    printf '\n\n## Required format retry\n\n'
-                    cat "$STATE_DIR/manual-checklist-format-retry.md"
-                } > "$manual_checklist_prompt"
+                    cat "$ROOT/prompts/manual-checklist-format.md"
+                    cat "$manual_checklist_investigation"
+                    if [[ -s "$STATE_DIR/manual-checklist-format-retry.md" ]]; then
+                        printf '\n\n## Required format retry\n\n'
+                        cat "$STATE_DIR/manual-checklist-format-retry.md"
+                    fi
+                } > "$manual_checklist_format_prompt"
+                run_codex_review "$manual_checklist_format_prompt" .uncle/docs/MANUAL_CHECKLIST.md manual-checklist
+            else
+                manual_checklist_prompt="${MANUAL_CHECKLIST_PROMPT:-prompts/manual-checklist.md}"
+                if [[ -s "$STATE_DIR/manual-checklist-format-retry.md" ]]; then
+                    manual_checklist_prompt="$STATE_DIR/manual-checklist-format-retry-prompt.md"
+                    {
+                        cat "${MANUAL_CHECKLIST_PROMPT:-$ROOT/prompts/manual-checklist.md}"
+                        printf '\n\n## Required format retry\n\n'
+                        cat "$STATE_DIR/manual-checklist-format-retry.md"
+                    } > "$manual_checklist_prompt"
+                fi
+                run_codex_review \
+                    "$manual_checklist_prompt" \
+                    .uncle/docs/MANUAL_CHECKLIST.md \
+                    manual-checklist
             fi
-            run_codex_review \
-                "$manual_checklist_prompt" \
-                .uncle/docs/MANUAL_CHECKLIST.md \
-                manual-checklist
             ;;
         EXECUTE_CHECKLIST)
             if ! python3 "$ROOT/scripts/lib/checklist_document.py" .uncle/docs/MANUAL_CHECKLIST.md; then
@@ -1941,19 +2058,42 @@ run_stage() {
             # A malformed audit gets one local, format-only retry, the same
             # one-shot recovery .uncle/docs/MANUAL_CHECKLIST.md and execute-checklist's
             # acceptance table get.
-            final_audit_prompt="${FINAL_AUDIT_PROMPT:-prompts/final-audit.md}"
-            if [[ -s "$STATE_DIR/final-audit-format-retry.md" ]]; then
-                final_audit_prompt="$STATE_DIR/final-audit-format-retry-prompt.md"
+            if stage_uses_self_hosted final-audit REVIEWER; then
+                final_audit_investigation=".uncle/workflow/final-audit-investigation.md"
+                if [[ -s "$STATE_DIR/final-audit-format-retry.md" && -s "$final_audit_investigation" ]]; then
+                    echo "Retrying final-audit formatting only; reusing the saved investigation."
+                else
+                    rm -f "$STATE_DIR/final-audit-format-retry.md" "$final_audit_investigation"
+                    run_codex_review \
+                        "${FINAL_AUDIT_PROMPT:-prompts/final-audit-investigate.md}" \
+                        "$final_audit_investigation" \
+                        final-audit-investigate
+                fi
+                final_audit_format_prompt="$STATE_DIR/final-audit-format-prompt.md"
                 {
-                    cat "${FINAL_AUDIT_PROMPT:-$ROOT/prompts/final-audit.md}"
-                    printf '\n\n## Required format retry\n\n'
-                    cat "$STATE_DIR/final-audit-format-retry.md"
-                } > "$final_audit_prompt"
+                    cat "$ROOT/prompts/final-audit-format.md"
+                    cat "$final_audit_investigation"
+                    if [[ -s "$STATE_DIR/final-audit-format-retry.md" ]]; then
+                        printf '\n\n## Required format retry\n\n'
+                        cat "$STATE_DIR/final-audit-format-retry.md"
+                    fi
+                } > "$final_audit_format_prompt"
+                run_codex_review "$final_audit_format_prompt" .uncle/docs/FINAL_AUDIT.md final-audit
+            else
+                final_audit_prompt="${FINAL_AUDIT_PROMPT:-prompts/final-audit.md}"
+                if [[ -s "$STATE_DIR/final-audit-format-retry.md" ]]; then
+                    final_audit_prompt="$STATE_DIR/final-audit-format-retry-prompt.md"
+                    {
+                        cat "${FINAL_AUDIT_PROMPT:-$ROOT/prompts/final-audit.md}"
+                        printf '\n\n## Required format retry\n\n'
+                        cat "$STATE_DIR/final-audit-format-retry.md"
+                    } > "$final_audit_prompt"
+                fi
+                run_codex_review \
+                    "$final_audit_prompt" \
+                    .uncle/docs/FINAL_AUDIT.md \
+                    final-audit
             fi
-            run_codex_review \
-                "$final_audit_prompt" \
-                .uncle/docs/FINAL_AUDIT.md \
-                final-audit
             ;;
         *)
             echo "run_stage: unknown stage: $1"

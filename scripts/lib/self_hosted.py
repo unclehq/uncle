@@ -132,6 +132,14 @@ def config_stage(stage, values):
         return 'test-review'
     if stage == 'updated-plan-investigate':
         return 'updated-plan'
+    if stage == 'adversarial-review-investigate':
+        return 'adversarial-review'
+    if stage == 'manual-checklist-investigate':
+        return 'manual-checklist'
+    if stage == 'final-audit-investigate':
+        return 'final-audit'
+    if stage == 'project-plan-investigate':
+        return 'project-plan'
     if stage.startswith('adversarial-review-worker-'):
         return 'adversarial-review'
     if stage.startswith('test-review-worker-'):

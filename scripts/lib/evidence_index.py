@@ -90,6 +90,10 @@ def packet(project, state, stage, family='app'):
         # needs none of this, since its whole input is the investigation
         # itself, not these documents.
         stage = 'updated-plan'
+    elif stage == 'adversarial-review-investigate':
+        stage = 'adversarial-review'
+    elif stage == 'project-plan-investigate':
+        stage = 'project-plan'
     if not re.fullmatch(r'[a-z0-9-]+', stage):
         raise ValueError('Invalid stage name')
     names = list(STAGES.get(stage, ['REQUIREMENTS.md', '.uncle/docs/UPDATED_PROJECT_PLAN.md', '.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md'] + REPORTS))
@@ -98,7 +102,7 @@ def packet(project, state, stage, family='app'):
         names = ['.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md', '.uncle/docs/BASELINE_REPORT.md']
     if stage != 'manual-checklist-base':
         names += CONFIG
-    if stage == 'final-audit':
+    if stage in ('final-audit', 'final-audit-investigate'):
         names += ['@change.diff', '@implementation-completion.txt']
         names += ['@waivers/' + p.name for p in sorted((state/'waivers').glob('*')) if p.is_file()]
     cache = state/'evidence-index'
@@ -153,7 +157,7 @@ def packet(project, state, stage, family='app'):
     save(state/'handoffs'/f'{stage}-{family}.json', handoff)
 
     audit_note = ''
-    if stage == 'final-audit':
+    if stage in ('final-audit', 'final-audit-investigate'):
         from audit_evidence import build
         audit = build(root, state, family)
         audit_path = state/'handoffs'/f'audit-evidence-{family}.json'

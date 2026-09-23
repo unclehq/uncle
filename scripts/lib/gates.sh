@@ -122,7 +122,7 @@ output_rules_source() {
 
 # Stages that write a markdown document for a human to read. Every one of them
 # gets the output rules; the plan stages additionally get the plan template.
-DOC_STAGES=" requirements project-plan project-plan-investigate updated-plan updated-plan-investigate preflight implementation execute-checklist change-plan updated-change-plan adversarial-review adversarial-review-investigate test-review test-review-investigate manual-checklist manual-checklist-investigate manual-checklist-base manual-checklist-delta final-audit final-audit-investigate "
+DOC_STAGES=" requirements requirements-investigate project-plan project-plan-investigate updated-plan updated-plan-investigate preflight preflight-investigate implementation implementation-investigate execute-checklist change-plan updated-change-plan adversarial-review adversarial-review-investigate test-review test-review-investigate manual-checklist manual-checklist-investigate manual-checklist-base manual-checklist-delta final-audit final-audit-investigate "
 
 # Stages that write a plan must satisfy the output gates. The gates file is
 # resolved local-first (project GATES.md, then .uncle/gates/GATES.md) and
@@ -317,6 +317,8 @@ stage_documents() {
         preflight) echo .uncle/docs/PREFLIGHT_REPORT.md ;;
         implementation|implementation-step-*)
             printf '%s\n' .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/AUTOMATED_TEST_REPORT.md .uncle/docs/CHANGE_TEST_REPORT.md ;;
+        implementation-investigate)
+            printf '%s\n' .uncle/docs/AUTOMATED_TEST_REPORT.md .uncle/docs/CHANGE_TEST_REPORT.md ;;
         test-review) echo .uncle/docs/TEST_REVIEW.md ;;
         manual-checklist|manual-checklist-delta) echo .uncle/docs/MANUAL_CHECKLIST.md ;;
         manual-checklist-base) echo MANUAL_CHECKLIST.base.md ;;

@@ -94,6 +94,10 @@ def packet(project, state, stage, family='app'):
         stage = 'adversarial-review'
     elif stage == 'project-plan-investigate':
         stage = 'project-plan'
+    elif stage == 'requirements-investigate':
+        stage = 'requirements'
+    elif stage == 'repair-investigate':
+        stage = 'repair'
     if not re.fullmatch(r'[a-z0-9-]+', stage):
         raise ValueError('Invalid stage name')
     names = list(STAGES.get(stage, ['REQUIREMENTS.md', '.uncle/docs/UPDATED_PROJECT_PLAN.md', '.uncle/docs/CHANGE_SPEC.md', '.uncle/docs/CHANGE_PLAN.md'] + REPORTS))

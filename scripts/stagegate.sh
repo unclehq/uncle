@@ -923,7 +923,7 @@ stage_tools() {
     case "$1" in
         updated-plan|updated-plan-investigate|derive-brief)
             fallback="Read,Glob,Grep,Write,Edit" ;;
-        implementation|implementation-report|repair|execute-checklist|preflight|preview-build)
+        implementation|implementation-investigate|implementation-report|repair|repair-investigate|execute-checklist|preflight|preflight-investigate|preview-build)
             # The preview build is an implementation, just an early one: a
             # scaffolded app needs the same tools as the real stage, and with
             # Write alone it cannot get a framework project off the ground.
@@ -1813,6 +1813,17 @@ run_stage() {
             # only the invocation is shared.
             if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" ]]; then
                 run_claude prompts/requirements-plan.md project-plan
+            elif stage_uses_self_hosted requirements AGENT; then
+                requirements_investigation=".uncle/workflow/requirements-investigation.md"
+                rm -f "$requirements_investigation"
+                run_claude prompts/requirements-investigate.md requirements-investigate
+                require_file "$requirements_investigation"
+                requirements_format_prompt="$STATE_DIR/requirements-format-prompt.md"
+                {
+                    cat "$ROOT/prompts/requirements-format.md"
+                    cat "$requirements_investigation"
+                } > "$requirements_format_prompt"
+                run_claude "$requirements_format_prompt" requirements
             else
                 run_claude prompts/requirements.md requirements
             fi
@@ -1897,7 +1908,28 @@ run_stage() {
             if [[ "$parallel_status" != 0 ]]; then
                 [[ "$parallel_status" == 2 ]] || return "$parallel_status"
                 echo "Implementation fan-out unavailable: the approved plan has no independent owned steps; running one implementation agent."
-                run_claude prompts/implement.md implementation
+                if stage_uses_self_hosted implementation AGENT; then
+                    # Same split, different shape: the coding pass does the
+                    # real Write/Edit/Bash work and writes AUTOMATED_TEST_REPORT.md
+                    # (already plain Markdown) directly, but drafts its
+                    # implementation notes as Markdown too, instead of the
+                    # required JSON -- a long coding session that also has to
+                    # land an exact schema at the very end kept losing the
+                    # schema. The short format pass never looks at the code;
+                    # it only converts the notes draft.
+                    implementation_notes_investigation=".uncle/workflow/implementation-notes-investigation.md"
+                    rm -f "$implementation_notes_investigation"
+                    run_claude prompts/implement-investigate.md implementation-investigate
+                    require_file "$implementation_notes_investigation"
+                    implementation_notes_format_prompt="$STATE_DIR/implementation-notes-format-prompt.md"
+                    {
+                        cat "$ROOT/prompts/implement-format.md"
+                        cat "$implementation_notes_investigation"
+                    } > "$implementation_notes_format_prompt"
+                    run_claude "$implementation_notes_format_prompt" implementation
+                else
+                    run_claude prompts/implement.md implementation
+                fi
                 local notes_ingest_error
                 notes_ingest_error="$(python3 "$ROOT/scripts/lib/implementation_notes.py" validate . \
                     .uncle/docs/IMPLEMENTATION_NOTES.md 2>&1)" || {
@@ -1922,7 +1954,20 @@ run_stage() {
                 echo "Preflight: runtime checks passed without a model call."
             else
                 echo "Preflight: requesting model diagnosis of unresolved prerequisites."
-                run_claude prompts/preflight.md preflight
+                if stage_uses_self_hosted preflight AGENT; then
+                    preflight_investigation=".uncle/workflow/preflight-investigation.md"
+                    rm -f "$preflight_investigation"
+                    run_claude prompts/preflight-investigate.md preflight-investigate
+                    require_file "$preflight_investigation"
+                    preflight_format_prompt="$STATE_DIR/preflight-format-prompt.md"
+                    {
+                        cat "$ROOT/prompts/preflight-format.md"
+                        cat "$preflight_investigation"
+                    } > "$preflight_format_prompt"
+                    run_claude "$preflight_format_prompt" preflight
+                else
+                    run_claude prompts/preflight.md preflight
+                fi
                 python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('a','$ROOT/scripts/lib/acceptance_context.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.ingest_json('.uncle/docs/PREFLIGHT_REPORT.md')" || exit 1
             fi
             require_artifact .uncle/docs/PREFLIGHT_REPORT.md
@@ -1984,7 +2029,26 @@ run_stage() {
             fi
             ;;
         REPAIR)
-            run_claude "$REPAIR_PROMPT" repair
+            if stage_uses_self_hosted repair AGENT; then
+                # Same split as implementation, with a twist: the format pass
+                # cannot just emit a fresh document -- a repair only touches
+                # some findings, and everything else's disposition from
+                # earlier passes has to survive untouched. So the format
+                # pass reads the current IMPLEMENTATION_NOTES.md itself and
+                # merges the repair notes into it, rather than starting over.
+                repair_notes_investigation=".uncle/workflow/repair-notes-investigation.md"
+                rm -f "$repair_notes_investigation"
+                run_claude "$REPAIR_PROMPT" repair-investigate
+                require_file "$repair_notes_investigation"
+                repair_notes_format_prompt="$STATE_DIR/repair-notes-format-prompt.md"
+                {
+                    cat "$ROOT/prompts/repair-format.md"
+                    cat "$repair_notes_investigation"
+                } > "$repair_notes_format_prompt"
+                run_claude "$repair_notes_format_prompt" repair
+            else
+                run_claude "$REPAIR_PROMPT" repair
+            fi
             require_artifact .uncle/docs/IMPLEMENTATION_NOTES.md
             require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
             ;;

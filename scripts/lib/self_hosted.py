@@ -140,6 +140,14 @@ def config_stage(stage, values):
         return 'final-audit'
     if stage == 'project-plan-investigate':
         return 'project-plan'
+    if stage == 'requirements-investigate':
+        return 'requirements'
+    if stage == 'preflight-investigate':
+        return 'preflight'
+    if stage == 'implementation-investigate':
+        return 'implementation'
+    if stage == 'repair-investigate':
+        return 'repair'
     if stage.startswith('adversarial-review-worker-'):
         return 'adversarial-review'
     if stage.startswith('test-review-worker-'):

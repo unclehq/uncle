@@ -17,13 +17,21 @@
 REPAIR_PROMPT="prompts/repair.md"
 
 repair_begin() {
-    local report
+    local report base
     report="$(cat "$STATE_DIR/repair-source")"
     python3 -B "$ROOT/scripts/lib/repair_check.py" snapshot "$report" "$STATE_DIR/repair-check.json" || return 1
-    REPAIR_PROMPT="prompts/repair.md"
+    # Self-hosted models get the investigate/format split's base prompt here;
+    # a proprietary model gets the original single-pass prompt. Either way,
+    # a driver-written retry brief appends on top of whichever base applies.
+    if stage_uses_self_hosted repair AGENT; then
+        base="prompts/repair-investigate.md"
+    else
+        base="prompts/repair.md"
+    fi
+    REPAIR_PROMPT="$base"
     if [[ -e "$STATE_DIR/repair-retry" && -s "$STATE_DIR/REPAIR_BRIEF.md" ]]; then
         {
-            cat "$(resolve_prompt prompts/repair.md)"
+            cat "$(resolve_prompt "$base")"
             printf '\n\n## Repair brief (written by the driver)\n\n'
             cat "$STATE_DIR/REPAIR_BRIEF.md"
         } > "$LOG_DIR/repair-retry.prompt.md"

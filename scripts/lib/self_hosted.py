@@ -744,7 +744,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                     if candidate.exists():
                         candidate.unlink()
                     print('Plan response format rejected; retrying once. Response saved to ' + rejected, file=sys.stderr)
-                    request += '\nThe previous response was rejected: ' + str(error) + '\nWrite the complete document again. Close every Markdown fence, including any outer document wrapper. Include all required sections.'
+                    request += '\nThe previous response was rejected: ' + str(error) + '\nReturn the complete JSON object again, exactly matching the contract above, as your final message. Do not use file tools and do not return Markdown.'
                     continue
                 break
         if not candidate.is_file() or candidate.is_symlink():

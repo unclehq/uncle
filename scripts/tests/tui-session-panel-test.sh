@@ -223,8 +223,8 @@ class Panel(unittest.TestCase):
         lines=ui._session_panel_lines()
         self.assertEqual(ui._session_panel_attr('> implementation'),11)
         self.assertEqual(ui._session_panel_attr('completed'),12)
-        self.assertIn('failed [failed]',lines)
-        self.assertEqual(ui._session_panel_attr('failed [failed]'),13)
+        self.assertIn('failed',lines)
+        self.assertEqual(ui._session_panel_attr('failed'),13)
         self.assertEqual(ui._session_panel_attr('recovered (2 attempts)'),12)
         self.assertEqual(ui._session_panel_attr('Tokens Unavailable'),14)
         self.assertEqual(ui._session_panel_attr('Cost   $0.0100 (partial)'),14)
@@ -232,7 +232,7 @@ class Panel(unittest.TestCase):
         self.assertEqual(ui._session_panel_attr('Cost   $0.0100 est'),14)
         self.assertEqual(ui._session_panel_attr('Reported + projected'),16)
         ui.color={}
-        self.assertEqual(ui._session_panel_attr('failed [failed]'),0)
+        self.assertEqual(ui._session_panel_attr('failed'),0)
 
     def test_partial_status_event_is_not_lost(self):
         ui=self.ui()
@@ -277,7 +277,7 @@ class Panel(unittest.TestCase):
         ]
         lines = ui._session_panel_lines()
         text = '\n'.join(lines)
-        self.assertIn('implementation (2 workers) [failed]', text)
+        self.assertIn('implementation (2 workers)  \u00b7\u00b7', text)
 
     def test_active_worker_marks_parent(self):
         ui = self.ui()
@@ -320,6 +320,81 @@ class Panel(unittest.TestCase):
         self.assertEqual(ui.status_model, 'foreground-model')
         self.assertEqual(ui.status_mode, 'act')
         self.assertEqual(ui.session_stats['live']['manual-checklist-base']['total_tokens'], 99)
+
+    def test_per_worker_dots_all_pass(self):
+        ui = self.ui()
+        ui.color = dict(title=11, good=12, bad=13, warning=14)
+        ui.session_stats['active'] = {}
+        ui.session_stats['records'] = [
+            dict(stage='implementation-step-1', started_at=100, elapsed_seconds=30, process_exit=0),
+            dict(stage='implementation-step-2', started_at=100, elapsed_seconds=45, process_exit=0),
+        ]
+        text = '\n'.join(ui._session_panel_lines())
+        self.assertIn('implementation (2 workers)  \u00b7\u00b7', text)
+        self.assertNotIn('[failed]', text)
+        self.assertEqual(ui._session_panel_attr('implementation (2 workers)  \u00b7\u00b7'), 12)
+
+    def test_per_worker_dots_one_fail(self):
+        ui = self.ui()
+        ui.color = dict(title=11, good=12, bad=13, warning=14)
+        ui.session_stats['active'] = {}
+        ui.session_stats['records'] = [
+            dict(stage='implementation-step-1', started_at=100, elapsed_seconds=30, process_exit=2),
+            dict(stage='implementation-step-2', started_at=100, elapsed_seconds=45, process_exit=0),
+        ]
+        text = '\n'.join(ui._session_panel_lines())
+        self.assertIn('implementation (2 workers)  \u00b7\u00b7', text)
+        self.assertNotIn('[failed]', text)
+        self.assertEqual(ui._session_panel_attr('implementation (2 workers)  \u00b7\u00b7'), 13)
+
+    def test_per_worker_dots_running(self):
+        ui = self.ui()
+        ui.color = dict(title=11, good=12, bad=13, warning=14)
+        ui.session_stats['records'] = [
+            dict(stage='implementation-step-1', started_at=100, elapsed_seconds=30, process_exit=0),
+        ]
+        ui.session_stats['active'] = {'implementation-step-2': time.time() - 30}
+        ui.session_stats['live'] = {}
+        text = '\n'.join(ui._session_panel_lines())
+        self.assertIn('implementation (2 workers)  ', text)
+        self.assertNotIn('[failed]', text)
+        line_attr = ui._session_panel_attr(text.split('\n')[3]) if len(text) else 0
+        self.assertEqual(line_attr, 11)
+
+    def test_non_worker_unaffected(self):
+        ui = self.ui()
+        ui.session_stats['active'] = {}
+        ui.session_stats['records'] = [
+            dict(stage='synthesis', started_at=100, elapsed_seconds=30, process_exit=0),
+        ]
+        text = '\n'.join(ui._session_panel_lines())
+        self.assertIn('\nsynthesis\n', text)
+        self.assertNotIn('\u00b7', text)
+
+    def test_spinner_cycles(self):
+        ui = self.ui()
+        ui.session_stats['records'] = []
+        ui.session_stats['active'] = {'implementation-step-1': time.time() - 30}
+        ui.session_stats['live'] = {}
+        lines_a = ui._session_panel_lines()
+        lines_b = ui._session_panel_lines()
+        lines_c = ui._session_panel_lines()
+        lines_d = ui._session_panel_lines()
+        self.assertEqual(type(lines_a), list)
+        self.assertEqual(type(lines_b), list)
+        self.assertEqual(type(lines_c), list)
+        self.assertEqual(type(lines_d), list)
+
+    def test_failed_worker_color(self):
+        ui = self.ui()
+        ui.color = dict(title=11, good=12, bad=13, warning=14)
+        ui.session_stats['active'] = {}
+        ui.session_stats['records'] = [
+            dict(stage='implementation-step-1', started_at=100, elapsed_seconds=30, process_exit=2),
+            dict(stage='implementation-step-2', started_at=100, elapsed_seconds=45, process_exit=0),
+        ]
+        lines = ui._session_panel_lines()
+        self.assertEqual(ui._session_panel_attr(lines[3]), 13)
 
 class IssueLaunch(unittest.TestCase):
     def test_invalid_issue_arguments_never_launch(self):

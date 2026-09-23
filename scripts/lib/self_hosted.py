@@ -655,6 +655,13 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         candidate.parent.mkdir(parents=True, exist_ok=True)
         if candidate.exists():
             candidate.unlink()
+        no_write_notice = (
+            '\nThis call needs no file write at all: put the entire object in your reply '
+            'text and stop there. Do not call a write or edit tool for it, and do not try '
+            'writing to ' + str(root) + ' or anywhere outside this isolated copy -- that '
+            'path is denied by design, not by mistake, and asking for permission to use it '
+            'wastes the whole turn. A denied write is not a blocker to work around; it is a '
+            'sign you should be answering in text instead.')
         if artifact == '.uncle/docs/REQUIREMENTS_INTERPRETATION.md':
             request = (prompt + '\nReturn only one JSON object matching this contract as your final message; '
                        'do not use file tools and do not return Markdown:\n'
@@ -662,7 +669,8 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                        '{"required_functionality":"...","optional_functionality":"...","constraints":"...",'
                        '"user_visible_behaviors":"...","system_behaviors":"...","failure_behaviors":"...",'
                        '"ambiguities":"...","assumptions":"...","explicit_non_goals":"...","definition_of_done":"..."}}`.\n'
-                       'Every section is a required, nonempty string; use the exact keys above.')
+                       'Every section is a required, nonempty string; use the exact keys above.'
+                       + no_write_notice)
             turns = 0
             for attempt in range(2):
                 attempt_usage = {}
@@ -702,7 +710,8 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                        '`{"schema":"uncle.artifact/v1","kind":"plan","narrative":"...",'
                        '"verification_commands":"..."' + protected_fields + '}`.\n'
                        '`verification_commands` is the exact shell commands block, as plain text (no fence markers). '
-                       '`narrative` is everything else the plan needs to say, as one Markdown block.')
+                       '`narrative` is everything else the plan needs to say, as one Markdown block.'
+                       + no_write_notice)
             turns = 0
             for attempt in range(2):
                 attempt_usage = {}

@@ -9,31 +9,35 @@ Read:
 Do not re-read README.md or the source tree; if the baseline is missing
 something you need, say so rather than rediscovering it here.
 
-Create .uncle/docs/CHANGE_SPEC.md.
+Write .uncle/docs/CHANGE_SPEC.md as one JSON object, not Markdown, matching
+this contract:
 
-Use a `## Acceptance criteria` section with a table headed
-`| ID | Criterion | Verification |`. Give every required criterion a unique
-stable AC-number ID (AC-1, AC-2, ...). Include all required behavior; these IDs
-are the driver's implementation handoff contract, not optional examples.
+`{"schema":"uncle.artifact/v1","kind":"change-spec","narrative":"...","acceptance_criteria":[{"id":"AC-1","criterion":"...","verification":"..."}]}`
 
-Include:
+`acceptance_criteria` is the driver's implementation handoff contract, not
+optional examples: give every required criterion a unique stable AC-number ID
+(AC-1, AC-2, ...) and include all required behavior. The driver renders it as
+the `## Acceptance criteria` table below; do not also write that table into
+`narrative`.
+
+`narrative` is everything else, as one Markdown block (real newlines in the
+JSON string), covering:
 
 1. Change type
 2. Problem statement
 3. Current behavior
 4. Desired behavior
-5. Acceptance criteria
-6. Observable behavior table
-7. Invariant table
-8. Compatibility requirements
-9. Error and failure behavior
-10. Performance requirements
-11. Security requirements
-12. Migration requirements
-13. Rollback expectations
-14. Prototype-isolation requirements, if applicable
-15. Explicit non-goals
-16. Assumptions and unresolved questions
+5. Observable behavior table
+6. Invariant table
+7. Compatibility requirements
+8. Error and failure behavior
+9. Performance requirements
+10. Security requirements
+11. Migration requirements
+12. Rollback expectations
+13. Prototype-isolation requirements, if applicable
+14. Explicit non-goals
+15. Assumptions and unresolved questions
 
 Behavior table:
 

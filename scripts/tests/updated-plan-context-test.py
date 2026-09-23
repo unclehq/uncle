@@ -39,7 +39,7 @@ class Revision(unittest.TestCase):
         for script in ('stagegate.sh','change-workflow.sh'):
             source=(root/'scripts'/script).read_text()
             block=source.split('        VALIDATE_UPDATED_PLAN)\n',1)[1].split('        WAIT_UPDATED_PLAN_APPROVAL)',1)[0]
-            harness='verify_approval() { :; }; require_file() { test -s "$1"; }; check_document_budget() { test ! -e bad; }; require_artifact() { require_file "$1" && check_document_budget "$1" || exit 1; }; set_state() { echo "$1" > state; }; run_stage() { exit 99; }; run_claude() { exit 99; };\ncase validate in\nvalidate)\n'+block+'esac\n'
+            harness=f'ROOT="{root}"\nverify_approval() {{ :; }}; require_file() {{ test -s "$1"; }}; check_document_budget() {{ test ! -e bad; }}; require_artifact() {{ require_file "$1" && check_document_budget "$1" || exit 1; }}; set_state() {{ echo "$1" > state; }}; run_stage() {{ exit 99; }}; run_claude() {{ exit 99; }}; supervision_validation_failed() {{ :; }};\ncase validate in\nvalidate)\n'+block+'esac\n'
             with tempfile.TemporaryDirectory() as d:
                 p=Path(d)
                 (p/'.uncle/docs').mkdir(parents=True)

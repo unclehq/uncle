@@ -75,11 +75,15 @@ if __name__ == '__main__':
     import sys
     action, path = sys.argv[1], sys.argv[2]
     project = sys.argv[3] if len(sys.argv) > 3 else '.'
-    if action == 'plan':
-        ingest_plan(path, project, protected=True)
-    elif action == 'plan-unprotected':
-        ingest_plan(path, project, protected=False)
-    elif action == 'change-spec':
-        ingest_change_spec(path, project)
-    else:
-        raise SystemExit('unknown action: ' + action)
+    try:
+        if action == 'plan':
+            ingest_plan(path, project, protected=True)
+        elif action == 'plan-unprotected':
+            ingest_plan(path, project, protected=False)
+        elif action == 'change-spec':
+            ingest_change_spec(path, project)
+        else:
+            raise SystemExit('unknown action: ' + action)
+    except ValueError as error:
+        print(f'{path}: {error}. Correct the saved document and resume.', file=sys.stderr)
+        raise SystemExit(1)

@@ -41,9 +41,23 @@ need to inspect:
 - REQUIREMENTS.md
 - .uncle/docs/REQUIREMENTS_INTERPRETATION.md
 
-Create .uncle/docs/PROJECT_PLAN.md.
+Write .uncle/docs/PROJECT_PLAN.md as one JSON object, not Markdown, matching
+this contract:
 
-Include:
+`{"schema":"uncle.artifact/v1","kind":"plan","narrative":"...","verification_commands":"..."}`
+
+`narrative` is the entire plan document below as one Markdown block (real
+newlines in the JSON string), everything described in this prompt: the
+numbered sections, both tables, the implementation steps with their `Owns:`/
+`Depends on:` fields -- all of it, exactly as if you were still writing
+Markdown directly, just carried as one JSON string value instead of the file
+itself. `verification_commands` is the exact shell commands from the
+Verification commands block, as plain text with no fence markers and no
+surrounding heading -- the driver renders that heading and fence back in.
+Do not put a `## Verification commands` heading inside `narrative`; the field
+itself is that section.
+
+`narrative` must cover:
 
 1. Architecture
 2. Authoritative state
@@ -54,8 +68,7 @@ Include:
 7. Domain invariants
 8. Failure handling
 9. Concurrency model
-10. Automated-test strategy, ending in a `## Verification commands` block:
-    one fenced block, one runnable command per line, from the repository root
+10. Automated-test strategy
 11. Manual-test strategy
 12. Implementation order
 13. Requirement traceability

@@ -21,6 +21,41 @@ class Requirements(unittest.TestCase):
                 p.write_text(text)
                 with self.assertRaises(ValueError): module.validate(p)
 
+    def test_direct_json_response_is_validated_exported_and_rendered(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            interp=root/'REQUIREMENTS_INTERPRETATION.md'
+            payload={'schema':'uncle.artifact/v1','kind':'requirements-interpretation',
+                     'sections':{name.lower().replace(' ','_').replace('-','_'):'No additional interpretation.'
+                                 for name in module.SECTIONS}}
+            import json
+            interp.write_text(json.dumps(payload))
+            module.validate(interp, root)
+            text=interp.read_text()
+            self.assertIn('## 1. Required functionality', text)
+            stored=json.loads((root/'.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json').read_text())
+            self.assertIn('required_functionality', stored['sections'])
+
+    def test_direct_json_response_missing_section_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            interp=Path(d)/'REQUIREMENTS_INTERPRETATION.md'
+            import json
+            interp.write_text(json.dumps({'schema':'uncle.artifact/v1','kind':'requirements-interpretation','sections':{}}))
+            with self.assertRaises(ValueError):
+                module.validate(interp, Path(d))
+
+    def test_fenced_json_response_still_validates(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            interp=root/'REQUIREMENTS_INTERPRETATION.md'
+            payload={'schema':'uncle.artifact/v1','kind':'requirements-interpretation',
+                     'sections':{name.lower().replace(' ','_').replace('-','_'):'No additional interpretation.'
+                                 for name in module.SECTIONS}}
+            import json
+            interp.write_text('```json\n'+json.dumps(payload)+'\n```')
+            module.validate(interp, root)
+            self.assertIn('## 1. Required functionality', interp.read_text())
+
     def test_json_export_and_render_round_trip(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); docs=root/'.uncle/docs'; docs.mkdir(parents=True)

@@ -2545,8 +2545,21 @@ run_planning_stage() {
             "planning stage ended twice without completing its documents (context used: $used tokens)" 1 || true
         return 1
     fi
-    python3 "$ROOT/scripts/lib/plan_context.py" change-spec .uncle/docs/CHANGE_SPEC.md . 2>/dev/null || true
-    python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/CHANGE_PLAN.md . 2>/dev/null || true
+    local plan_ingest_error
+    if [[ -s .uncle/docs/CHANGE_SPEC.md ]]; then
+        plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" change-spec .uncle/docs/CHANGE_SPEC.md . 2>&1)" || {
+            printf '%s\n' "$plan_ingest_error" >&2
+            supervision_validation_failed change-spec .uncle/docs/CHANGE_SPEC.md "$plan_ingest_error"
+            return 1
+        }
+    fi
+    if [[ -s .uncle/docs/CHANGE_PLAN.md ]]; then
+        plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/CHANGE_PLAN.md . 2>&1)" || {
+            printf '%s\n' "$plan_ingest_error" >&2
+            supervision_validation_failed change-plan .uncle/docs/CHANGE_PLAN.md "$plan_ingest_error"
+            return 1
+        }
+    fi
     check_document_budget .uncle/docs/BASELINE_REPORT.md || return 1
     check_document_budget .uncle/docs/CHANGE_SPEC.md || return 1
     check_document_budget .uncle/docs/CHANGE_PLAN.md || return 1
@@ -2806,7 +2819,13 @@ while true; do
             verify_approval .uncle/docs/BASELINE_REPORT.md BASELINE_REPORT
             verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
             verify_approval .uncle/docs/ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
-            [[ ! -s .uncle/docs/CHANGE_PLAN.md ]] || python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/CHANGE_PLAN.md . 2>/dev/null || true
+            if [[ -s .uncle/docs/CHANGE_PLAN.md ]]; then
+                plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/CHANGE_PLAN.md . 2>&1)" || {
+                    printf '%s\n' "$plan_ingest_error" >&2
+                    supervision_validation_failed updated-change-plan .uncle/docs/CHANGE_PLAN.md "$plan_ingest_error"
+                    exit 1
+                }
+            fi
             require_file .uncle/docs/CHANGE_PLAN.md
             check_document_budget .uncle/docs/CHANGE_PLAN.md || exit 1
 

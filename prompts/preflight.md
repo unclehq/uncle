@@ -1,15 +1,21 @@
 You are the primary acceptance-prerequisite verifier.
 
 Read REQUIREMENTS.md, .uncle/docs/REQUIREMENTS_INTERPRETATION.md, and
-.uncle/docs/UPDATED_PROJECT_PLAN.md. Create .uncle/docs/PREFLIGHT_REPORT.md before implementation.
+.uncle/docs/UPDATED_PROJECT_PLAN.md. Investigate freely with your tools, then
+write .uncle/docs/PREFLIGHT_REPORT.md, before implementation, as one JSON
+object, not Markdown, matching this contract:
 
-Use these sections, in order: Summary, Findings, Assumptions, Open questions,
-Acceptance gate. In Findings, inventory every mandatory acceptance check and
-its prerequisites: commands and dependencies, browser binaries and interaction
-access, source rendering, credentials or services, representative input data,
-and independent reviewers where required. Probe available capabilities and
-record exact commands and results. Do not run future implementation commands
-whose files do not exist yet; check that their execution environment exists.
+`{"schema":"uncle.artifact/v1","kind":"acceptance-report","narrative":"...","rows":[{"id":"G-1","required":true,"status":"PASS","evidence":"..."}]}`
+
+`narrative` covers, in order: Summary, Findings, Assumptions, Open questions
+-- everything that is not the acceptance gate table itself, as one Markdown
+block (real newlines in the JSON string). In Findings, inventory every
+mandatory acceptance check and its prerequisites: commands and dependencies,
+browser binaries and interaction access, source rendering, credentials or
+services, representative input data, and independent reviewers where
+required. Probe available capabilities and record exact commands and
+results. Do not run future implementation commands whose files do not exist
+yet; check that their execution environment exists.
 
 A manual or independent review need not happen before there is a product, but
 its execution path must be confirmed: who or what will perform it, with what
@@ -21,14 +27,12 @@ dependencies, alter requirements, or implement the application in this stage.
 Creating the pre-implementation inputs the plan names is not implementing it;
 see `Files the plan says to create`.
 
-End with exactly one `## Acceptance gate` section containing only this table:
-
-| ID | Required | Status | Evidence |
-|---|---|---|---|
-
-IDs must be plain identifiers such as G-1, with the label in Evidence, not
-in the ID cell. Required must be YES or NO. Do not put literal pipe
-characters inside cells.
+`rows` is the acceptance gate, one entry per prerequisite. IDs must be plain
+identifiers such as `G-1`, with the label in `evidence`, not in the ID.
+`required` is a JSON boolean. `status` is exactly one of `PASS`, `FAIL`,
+`BLOCKED-SETUP`, `BLOCKED-HUMAN`, `BLOCKED-IMPOSSIBLE`, `NOT RUN`, `N/A`. The
+driver renders `rows` as the Acceptance gate table below; do not also write
+that table into `narrative`.
 
 ## Probe the capability, not its installation (binding)
 

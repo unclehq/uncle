@@ -29,32 +29,31 @@ script -- may be a throwaway first look being built from the brief in parallel
 with this stage. They are not the project being planned and not evidence of
 anything: do not read them, cite them, or plan around them.
 
-Create .uncle/docs/REQUIREMENTS_INTERPRETATION.md containing:
+Write .uncle/docs/REQUIREMENTS_INTERPRETATION.md in a single Write call, and
+write it as one JSON object, not Markdown, matching this contract:
 
-1. Required functionality
-2. Optional functionality
-3. Constraints
-4. User-visible behaviors
-5. System behaviors
-6. Failure behaviors
-7. Ambiguities
-8. Assumptions
-9. Explicit non-goals
-10. Definition of done
+`{"schema":"uncle.artifact/v1","kind":"requirements-interpretation","sections":{"required_functionality":"...","optional_functionality":"...","constraints":"...","user_visible_behaviors":"...","system_behaviors":"...","failure_behaviors":"...","ambiguities":"...","assumptions":"...","explicit_non_goals":"...","definition_of_done":"..."}}`
 
-In Definition of done, map every mandatory acceptance criterion to its
+Every key under `sections` is required and must be a nonempty string, even
+when a section has nothing to add (see below for what to put there). Each
+value is exactly what would otherwise have gone under that section's
+Markdown heading -- multi-line prose, bullet lists, and Markdown tables all
+belong there as plain text with real newlines in the JSON string; the driver
+renders it back to Markdown for human review.
+
+In `definition_of_done`, map every mandatory acceptance criterion to its
 observable result, verification method, and prerequisite. Identify browser or
 GUI access, source rendering, representative data, external services, and
 independent reviewers where needed. Label availability as observed or unknown;
 do not assume tools or people will be available later. Preserve required
 checks even when the current environment cannot execute them.
 
-Use a behavior table:
+Use a behavior table inside `user_visible_behaviors`:
 
 | ID | Trigger | Expected result | Failure behavior | Verification |
 |---|---|---|---|---|
 
-Write the document in a single Write call. Do not draft it in chat first.
+Do not draft it in chat first.
 
 Do not design the architecture.
 Do not implement code.
@@ -82,7 +81,7 @@ Preserve the source's modality: "prefer" and "not required" do not mean
 
 ## Proportional interpretation
 
-Use the ten section names above as level-two headings. Keep each section brief;
+Keep each section brief;
 for a simple app, use a sentence or source reference when sufficient. Preserve
 all mandatory criteria without expanding the scope. Do not select frameworks,
 design architecture, install dependencies, or run tests during requirements.
@@ -131,9 +130,23 @@ You have just written .uncle/docs/REQUIREMENTS_INTERPRETATION.md in this same tu
 re-read it; use what you wrote. Read any source files you still need in one
 parallel batch.
 
-Create .uncle/docs/PROJECT_PLAN.md.
+Write .uncle/docs/PROJECT_PLAN.md as one JSON object, not Markdown, matching
+this contract:
 
-Include:
+`{"schema":"uncle.artifact/v1","kind":"plan","narrative":"...","verification_commands":"..."}`
+
+`narrative` is the entire plan document below as one Markdown block (real
+newlines in the JSON string), everything described in this prompt: the
+numbered sections, both tables, the implementation steps with their `Owns:`/
+`Depends on:` fields -- all of it, exactly as if you were still writing
+Markdown directly, just carried as one JSON string value instead of the file
+itself. `verification_commands` is the exact shell commands from the
+Verification commands block, as plain text with no fence markers and no
+surrounding heading -- the driver renders that heading and fence back in.
+Do not put a `## Verification commands` heading inside `narrative`; the field
+itself is that section.
+
+`narrative` must cover:
 
 1. Architecture
 2. Authoritative state
@@ -144,8 +157,7 @@ Include:
 7. Domain invariants
 8. Failure handling
 9. Concurrency model
-10. Automated-test strategy, ending in a `## Verification commands` block:
-    one fenced block, one runnable command per line, from the repository root
+10. Automated-test strategy
 11. Manual-test strategy
 12. Implementation order
 13. Requirement traceability

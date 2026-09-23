@@ -37,28 +37,27 @@ Read these in one parallel batch of tool calls:
 - .uncle/docs/PROJECT_PLAN.md
 - .uncle/docs/ADVERSARIAL_REVIEW.md
 
-Create .uncle/docs/UPDATED_PROJECT_PLAN.md as a focused revision of .uncle/docs/PROJECT_PLAN.md.
-Use the original plan as the base, retaining unaffected normative rows and exact
-commands. Also resolve contradictions found by the final executability check.
-Edit the sections invalidated by findings; do not redesign unaffected
-architecture or repeat repository exploration without a specific unresolved
-finding. If .uncle/docs/UPDATED_PROJECT_PLAN.md already exists from an interrupted attempt,
-read it and complete the remaining work, validating it against current inputs.
-Do not restart the document from scratch.
+Write .uncle/docs/UPDATED_PROJECT_PLAN.md as one JSON object, not Markdown,
+matching this contract:
 
-For every adversarial finding, record:
+`{"schema":"uncle.artifact/v1","kind":"plan","narrative":"...","verification_commands":"...","protected_verification_paths":"...","dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}]}`
 
-| Finding | Disposition | Reason | Plan change |
-|---|---|---|---|
+It is a focused revision of .uncle/docs/PROJECT_PLAN.md. Use the original
+plan as the base, retaining unaffected normative rows and exact commands.
+Also resolve contradictions found by the final executability check. Edit the
+sections invalidated by findings; do not redesign unaffected architecture or
+repeat repository exploration without a specific unresolved finding. If
+.uncle/docs/UPDATED_PROJECT_PLAN.md already exists from an interrupted
+attempt, read it (it is rendered Markdown even though you write JSON) and
+complete the remaining work, validating it against current inputs. Do not
+restart the document from scratch.
 
-Allowed dispositions:
-
-- Accepted
-- Partially accepted
-- Rejected
-- Deferred
-
-Do not blindly accept every recommendation.
+`dispositions` is one entry per adversarial finding: `finding` is its AR-XXX
+ID, `disposition` is exactly one of `Accepted`, `Partially accepted`,
+`Rejected`, `Deferred`, `reason` is a concise sentence, `plan_change` names
+the affected section/row (or states none was needed for a Rejected finding).
+Do not blindly accept every recommendation. The driver renders this as the
+disposition table below; do not also write that table into `narrative`.
 
 Retain and update:
 
@@ -73,13 +72,10 @@ Retain and update:
 
 Clearly identify changes from .uncle/docs/PROJECT_PLAN.md.
 
-Include a section titled exactly:
-
-## Verification commands
-
-Under it, one fenced block and nothing else, holding the commands that
-demonstrate the build is working — formatter, type checker, linter, tests,
-build, startup smoke — one per line, run from the repository root.
+Put in `verification_commands`, as plain text with no fence markers and no
+heading (the driver renders both), the commands that demonstrate the build is
+working — formatter, type checker, linter, tests, build, startup smoke — one
+per line, run from the repository root.
 
 The driver runs this block itself after implementation, and the operator sees
 the result next to the diff before anything downstream reads either. It is the
@@ -104,10 +100,13 @@ capabilities remain blockers rather than becoming optional checks.
 Approving this plan approves those commands.
 
 Run independent test suites in parallel. Add `## Parallel verification groups`
-for all checks proven independent: no shared ports, writable fixtures, outputs, or prerequisite
-ordering. The section holds one fenced block and nothing else — bare rows of
-one-based positions from the Verification commands block, one group per line,
-each row at least two consecutive numbers, rows ordered and disjoint:
+inside `narrative` (this one section stays Markdown text within the JSON
+string, since the driver does not give it a dedicated field yet) for all
+checks proven independent: no shared ports, writable fixtures, outputs, or
+prerequisite ordering. The section holds one fenced block and nothing else —
+bare rows of one-based positions from the Verification commands block (the
+numbering of the lines you put in `verification_commands`), one group per
+line, each row at least two consecutive numbers, rows ordered and disjoint:
 
 ```text
 2 3 4
@@ -120,10 +119,10 @@ limits concurrency with WORKFLOW_VERIFY_JOBS (default 4, maximum 8), preserves
 per-command outcomes and integrity checks, and runs unlisted commands
 sequentially. Omit this section when none qualify.
 
-Include `## Protected verification paths` -- the heading is matched on the
-words "protected" and "paths", so a shortened one is read, but write it in
-full -- with one fenced block and nothing else in it: literal
-repository-relative file or directory paths, one per line:
+Put in `protected_verification_paths`, as plain text with no fence markers
+and no heading (the driver renders both; the heading is matched on the words
+"protected" and "paths"): literal repository-relative file or directory
+paths, one per line:
 
 ```text
 tests

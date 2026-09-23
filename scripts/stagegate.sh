@@ -1775,7 +1775,13 @@ run_stage() {
             ;;
         PROJECT_PLAN)
             run_claude prompts/project-plan.md project-plan
-            [[ ! -s .uncle/docs/PROJECT_PLAN.md ]] || python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/PROJECT_PLAN.md . 2>/dev/null || true
+            if [[ -s .uncle/docs/PROJECT_PLAN.md ]]; then
+                plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/PROJECT_PLAN.md . 2>&1)" || {
+                    printf '%s\n' "$plan_ingest_error" >&2
+                    supervision_validation_failed project-plan .uncle/docs/PROJECT_PLAN.md "$plan_ingest_error"
+                    exit 1
+                }
+            fi
             require_artifact .uncle/docs/PROJECT_PLAN.md
             ;;
         ADVERSARIAL_REVIEW)
@@ -2362,7 +2368,13 @@ while true; do
             run_gated_stage UPDATED_PLAN \
                 .uncle/docs/ADVERSARIAL_REVIEW.md \
                 .uncle/docs/UPDATED_PROJECT_PLAN.md
-            [[ ! -s .uncle/docs/UPDATED_PROJECT_PLAN.md ]] || python3 "$ROOT/scripts/lib/plan_context.py" plan .uncle/docs/UPDATED_PROJECT_PLAN.md . 2>/dev/null || true
+            if [[ -s .uncle/docs/UPDATED_PROJECT_PLAN.md ]]; then
+                plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" plan .uncle/docs/UPDATED_PROJECT_PLAN.md . 2>&1)" || {
+                    printf '%s\n' "$plan_ingest_error" >&2
+                    supervision_validation_failed updated-plan .uncle/docs/UPDATED_PROJECT_PLAN.md "$plan_ingest_error"
+                    exit 1
+                }
+            fi
             set_state VALIDATE_UPDATED_PLAN
             ;;
 

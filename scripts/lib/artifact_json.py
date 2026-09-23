@@ -195,6 +195,39 @@ def render_acceptance(payload):
         lines.append('| %s | %s | %s | %s |' % (identifier, required, status, evidence))
     return '\n'.join(lines) + '\n'
 
+def _render_dispositions_table(dispositions):
+    """Build the '## Adversarial review dispositions' table lines, shared by
+    render_plan() and render_change_plan(). Every field access is checked and
+    raises a clear ValueError naming the finding and field, rather than
+    crashing with an unhandled KeyError -- seen live when a model wrote
+    disposition objects keyed "id"/"status"/"rationale" instead of
+    "finding"/"disposition"/"reason"/"plan_change": the bare `row['finding']`
+    lookup took down the whole driver process instead of failing the
+    document validation the way every other malformed-field case here does."""
+    seen = set()
+    lines = ['## Adversarial review dispositions', '',
+             '| Finding | Disposition | Reason | Exact plan change |', '|---|---|---|---|']
+    esc = lambda value: str(value).replace('|', r'\|').replace('\n', ' ')
+    for index, row in enumerate(dispositions):
+        if not isinstance(row, dict):
+            raise ValueError('disposition entry %d is not an object' % index)
+        finding = row.get('finding')
+        if not finding:
+            raise ValueError('disposition entry %d is missing "finding"' % index)
+        if finding in seen:
+            raise ValueError('duplicate disposition for finding: ' + finding)
+        seen.add(finding)
+        disposition = row.get('disposition')
+        if disposition not in ('Accepted', 'Partially accepted', 'Rejected', 'Deferred'):
+            raise ValueError('invalid disposition for %s: %r' % (finding, disposition))
+        for field in ('reason', 'plan_change'):
+            if field not in row:
+                raise ValueError('disposition for %s is missing "%s"' % (finding, field))
+        lines.append('| %s | %s | %s | %s |' % (finding, disposition, esc(row['reason']), esc(row['plan_change'])))
+    lines.append('')
+    return lines
+
+
 def render_plan(payload, protected=True):
     commands = payload.get('verification_commands')
     if not commands or not commands.strip():
@@ -211,19 +244,7 @@ def render_plan(payload, protected=True):
         lines += ['## Protected verification paths', '', '```text', paths.strip('\n'), '```', '']
     dispositions = payload.get('dispositions')
     if dispositions:
-        seen = set()
-        lines += ['## Adversarial review dispositions', '',
-                  '| Finding | Disposition | Reason | Exact plan change |', '|---|---|---|---|']
-        for row in dispositions:
-            finding = row['finding']
-            if finding in seen:
-                raise ValueError('duplicate disposition for finding: ' + finding)
-            seen.add(finding)
-            if row['disposition'] not in ('Accepted', 'Partially accepted', 'Rejected', 'Deferred'):
-                raise ValueError('invalid disposition for %s: %r' % (finding, row['disposition']))
-            esc = lambda value: str(value).replace('|', r'\|').replace('\n', ' ')
-            lines.append('| %s | %s | %s | %s |' % (finding, row['disposition'], esc(row['reason']), esc(row['plan_change'])))
-        lines.append('')
+        lines += _render_dispositions_table(dispositions)
     return '\n'.join(lines)
 
 
@@ -258,23 +279,16 @@ def render_change_plan(payload, require_dispositions=False):
     if not narrative or not narrative.strip():
         raise ValueError('change-plan has no narrative')
     dispositions = payload.get('dispositions')
-    if require_dispositions and not dispositions:
+    # An explicit empty list is the correct, deliberate answer when the
+    # adversarial review had zero findings -- there is nothing to
+    # disposition. Only an omitted key (None) is the actual contract
+    # violation this guards against. `not dispositions` used to reject both
+    # the same way, failing a plan that had faithfully reported no findings.
+    if require_dispositions and dispositions is None:
         raise ValueError('change-plan is missing dispositions for the adversarial review')
     lines = [narrative.strip(), '']
     if dispositions:
-        seen = set()
-        rows = ['## Adversarial review dispositions', '',
-                '| Finding | Disposition | Reason | Exact plan change |', '|---|---|---|---|']
-        for row in dispositions:
-            finding = row['finding']
-            if finding in seen:
-                raise ValueError('duplicate disposition for finding: ' + finding)
-            seen.add(finding)
-            if row['disposition'] not in ('Accepted', 'Partially accepted', 'Rejected', 'Deferred'):
-                raise ValueError('invalid disposition for %s: %r' % (finding, row['disposition']))
-            esc = lambda value: str(value).replace('|', r'\|').replace('\n', ' ')
-            rows.append('| %s | %s | %s | %s |' % (finding, row['disposition'], esc(row['reason']), esc(row['plan_change'])))
-        lines += rows + ['']
+        lines += _render_dispositions_table(dispositions)
     return '\n'.join(lines)
 
 

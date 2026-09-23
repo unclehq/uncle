@@ -101,5 +101,59 @@ class UnfenceJson(unittest.TestCase):
         self.assertEqual(module.unfence_json(text), text.strip())
 
 
+class RenderChangePlan(unittest.TestCase):
+    def test_explicit_empty_dispositions_is_valid_when_review_had_no_findings(self):
+        # A model that correctly reasoned "zero adversarial findings, so
+        # zero dispositions" writes dispositions: [] deliberately -- that is
+        # the right answer, not a missing field. `not []` is True in Python,
+        # so a plain truthiness check rejected this exact correct response
+        # live: a real adversarial review with no findings produced
+        # `{"dispositions": []}`, and the validator called it "missing
+        # dispositions for the adversarial review."
+        payload = {'narrative': '# Plan\n', 'dispositions': []}
+        rendered = module.render_change_plan(payload, require_dispositions=True)
+        self.assertIn('# Plan', rendered)
+        self.assertNotIn('Adversarial review dispositions', rendered)
+
+    def test_omitted_dispositions_key_still_rejected(self):
+        # The actual contract violation this guards against: the model
+        # dropped the field entirely rather than reasoning about it.
+        payload = {'narrative': '# Plan\n'}
+        with self.assertRaises(ValueError):
+            module.render_change_plan(payload, require_dispositions=True)
+
+    def test_populated_dispositions_still_render_the_table(self):
+        payload = {'narrative': '# Plan\n', 'dispositions': [
+            {'finding': 'AR-001', 'disposition': 'Accepted', 'reason': 'fixed', 'plan_change': 'none'},
+        ]}
+        rendered = module.render_change_plan(payload, require_dispositions=True)
+        self.assertIn('Adversarial review dispositions', rendered)
+        self.assertIn('AR-001', rendered)
+
+    def test_disposition_with_wrong_field_names_is_a_clean_validation_error(self):
+        # Seen live: a model wrote disposition objects keyed "id"/"status"/
+        # "rationale" instead of "finding"/"disposition"/"reason"/
+        # "plan_change". The bare `row['finding']` lookup raised an
+        # unhandled KeyError that crashed the whole driver process instead
+        # of failing this document's validation the way every other
+        # malformed-field case here does.
+        payload = {'narrative': '# Plan\n', 'dispositions': [
+            {'id': 'AR-001', 'status': 'Accepted', 'rationale': 'fixed'},
+        ]}
+        with self.assertRaises(ValueError):
+            module.render_change_plan(payload, require_dispositions=True)
+
+    def test_same_wrong_field_names_also_rejected_in_render_plan(self):
+        # render_plan() (UPDATED_PROJECT_PLAN.md) shares the same
+        # dispositions table logic as render_change_plan() (CHANGE_PLAN.md);
+        # confirm the fix covers both instead of just the one hit live.
+        payload = {
+            'verification_commands': 'true',
+            'dispositions': [{'id': 'AR-001', 'status': 'Accepted', 'rationale': 'fixed'}],
+        }
+        with self.assertRaises(ValueError):
+            module.render_plan(payload, protected=False)
+
+
 if __name__ == '__main__':
     unittest.main()

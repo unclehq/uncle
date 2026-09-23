@@ -16,6 +16,7 @@ text (the self-hosted fallback path, or any runner a future prompt points at
 this contract) takes the JSON route.
 """
 import importlib.util
+import re
 from pathlib import Path
 
 _LIB = Path(__file__).resolve().parent
@@ -26,6 +27,123 @@ def _artifact_json():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _fenced_block(heading, lang):
+    return re.compile(r'^## ' + re.escape(heading) + r'\s*\n+```' + lang + r'\n(.*?)\n```', re.M | re.S)
+
+
+_VERIFICATION_COMMANDS_RE = _fenced_block('Verification commands', 'sh')
+_PROTECTED_PATHS_RE = _fenced_block('Protected verification paths', 'text')
+_DISPOSITIONS_TABLE_RE = re.compile(
+    r'^## Adversarial review dispositions\s*\n\n\|.*\|\n\|[-| ]+\|\n((?:\|.*\|\n?)*)', re.M)
+_ACCEPTANCE_CRITERIA_TABLE_RE = re.compile(
+    r'^## Acceptance criteria\s*\n\n\|.*\|\n\|[-| ]+\|\n((?:\|.*\|\n?)*)', re.M)
+
+
+def _table_rows(match, width):
+    if not match:
+        return None
+    rows = []
+    for line in match.group(1).splitlines():
+        line = line.strip()
+        if not line.startswith('|'):
+            continue
+        cells = [cell.strip().replace(r'\|', '|') for cell in re.split(r'(?<!\\)\|', line.strip('|'))]
+        if len(cells) == width:
+            rows.append(cells)
+    return rows or None
+
+
+def _parse_dispositions(text):
+    rows = _table_rows(_DISPOSITIONS_TABLE_RE.search(text), 4)
+    if not rows:
+        return None
+    return [{'finding': f, 'disposition': d, 'reason': r, 'plan_change': p} for f, d, r, p in rows]
+
+
+def _parse_acceptance_criteria(text):
+    rows = _table_rows(_ACCEPTANCE_CRITERIA_TABLE_RE.search(text), 3)
+    if not rows:
+        return None
+    return [{'id': i, 'criterion': c, 'verification': v} for i, c, v in rows]
+
+
+def export_plan(path, project='.', protected=True):
+    """Re-derive PROJECT_PLAN.md / UPDATED_PROJECT_PLAN.md's canonical JSON
+    from its current approved bytes, for approval_export.py's gate refresh.
+
+    This only succeeds on our own render_plan() output: narrative, then a
+    fixed sequence of '## Verification commands' / '## Protected
+    verification paths' / '## Adversarial review dispositions' headings, in
+    that order. A plan an agent wrote directly as Markdown (never JSON) will
+    not match and raises, which the caller treats as a silent no-op -- there
+    is no reverse-parser for arbitrary prose, by the same reasoning
+    ingest_plan() above stays purely additive on generation."""
+    text = Path(path).read_text(encoding='utf-8')
+    module = _artifact_json()
+    narrative = text.split('## Verification commands', 1)[0].strip()
+    commands = _VERIFICATION_COMMANDS_RE.search(text)
+    if not commands:
+        raise ValueError('missing ## Verification commands fenced block')
+    payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': narrative,
+               'verification_commands': commands.group(1)}
+    if protected:
+        paths = _PROTECTED_PATHS_RE.search(text)
+        if not paths:
+            raise ValueError('missing ## Protected verification paths fenced block')
+        payload['protected_verification_paths'] = paths.group(1)
+    dispositions = _parse_dispositions(text)
+    if dispositions:
+        payload['dispositions'] = dispositions
+    module.render_plan(payload, protected=protected)  # raises on a malformed table before anything is written
+    module.write(project, Path(path).name, payload)
+    return payload
+
+
+def export_project_plan(path, project='.'):
+    return export_plan(path, project, protected=False)
+
+
+def export_updated_project_plan(path, project='.'):
+    return export_plan(path, project, protected=True)
+
+
+def export_change_plan(path, project='.', require_dispositions=False):
+    """Re-derive CHANGE_PLAN.md's canonical JSON from its current approved
+    bytes. Same purely-additive, own-render-format-only contract as
+    export_plan()."""
+    text = Path(path).read_text(encoding='utf-8')
+    module = _artifact_json()
+    marker = '## Adversarial review dispositions'
+    narrative = (text.split(marker, 1)[0] if marker in text else text).strip()
+    if not narrative:
+        raise ValueError('change-plan has no narrative')
+    payload = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'narrative': narrative}
+    dispositions = _parse_dispositions(text)
+    if dispositions:
+        payload['dispositions'] = dispositions
+    module.render_change_plan(payload, require_dispositions=require_dispositions)
+    module.write(project, Path(path).name, payload)
+    return payload
+
+
+def export_change_spec(path, project='.'):
+    """Re-derive CHANGE_SPEC.md's canonical JSON from its current approved
+    bytes. Same purely-additive, own-render-format-only contract as
+    export_plan()."""
+    text = Path(path).read_text(encoding='utf-8')
+    module = _artifact_json()
+    marker = '## Acceptance criteria'
+    narrative = (text.split(marker, 1)[0] if marker in text else text).strip()
+    criteria = _parse_acceptance_criteria(text)
+    if not criteria:
+        raise ValueError('missing ## Acceptance criteria table')
+    payload = {'schema': 'uncle.artifact/v1', 'kind': 'change-spec', 'narrative': narrative,
+               'acceptance_criteria': criteria}
+    module.render_change_spec(payload)
+    module.write(project, Path(path).name, payload)
+    return payload
 
 
 def ingest_plan(path, project='.', protected=True):

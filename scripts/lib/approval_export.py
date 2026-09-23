@@ -33,14 +33,26 @@ def _load(name):
 
 # approval name -> (module filename, export function name). Only artifacts
 # with a canonical JSON schema appear here; approving anything else (a diff
-# review, an override decision, a plan family without a schema yet) is a
+# review, an override decision, an artifact without a schema yet) is a
 # deliberate no-op until that artifact gets one.
+#
+# The plan-family entries (PROJECT_PLAN, UPDATED_PROJECT_PLAN, CHANGE_SPEC,
+# CHANGE_PLAN) only succeed when the approved document still matches our own
+# render_plan()/render_change_plan()/render_change_spec() output exactly --
+# see plan_context.py's export_plan()/export_change_plan()/export_change_spec()
+# docstrings. A plan an agent wrote directly as Markdown, or a human edit that
+# breaks the section structure, fails closed into the same silent no-op this
+# module already gives an artifact with no schema at all.
 _EXPORTERS = {
     'ADVERSARIAL_REVIEW': ('adversarial-context.py', 'export_json'),
     'REQUIREMENTS_INTERPRETATION': ('requirements-context.py', 'export_json'),
     'MANUAL_CHECKLIST': ('checklist_document.py', 'export_json'),
     'TEST_REVIEW': ('acceptance_context.py', 'export_json'),
     'PREFLIGHT_REPORT': ('acceptance_context.py', 'export_json'),
+    'PROJECT_PLAN': ('plan_context.py', 'export_project_plan'),
+    'UPDATED_PROJECT_PLAN': ('plan_context.py', 'export_updated_project_plan'),
+    'CHANGE_SPEC': ('plan_context.py', 'export_change_spec'),
+    'CHANGE_PLAN': ('plan_context.py', 'export_change_plan'),
 }
 
 

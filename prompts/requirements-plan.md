@@ -150,6 +150,17 @@ surrounding heading -- the driver renders that heading and fence back in.
 Do not put a `## Verification commands` heading inside `narrative`; the field
 itself is that section.
 
+The driver runs `verification_commands` twice -- once now, against the
+unmodified tree, and once after the change -- and compares the two results.
+Write each command so the second run is cheap when nothing relevant changed:
+prefer a check like `npm ls --depth=0 >/dev/null 2>&1 || npm ci` over a bare
+`npm ci`, which unconditionally deletes and reinstalls every dependency on
+every run regardless of whether anything changed. Skip an install flag meant
+for a different platform (`playwright install --with-deps` is for Linux CI's
+apt packages, not macOS) unless this environment actually needs it. A
+conditional command must still perform the real install when its check fails;
+it must never skip verification itself, only skip work that is already done.
+
 `narrative` must cover:
 
 1. Architecture

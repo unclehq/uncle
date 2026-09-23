@@ -90,6 +90,17 @@ one part of this plan that is executed rather than read, so:
   prerequisite and failure behavior are explicitly documented;
 - nothing that only the implementing agent's machine could run.
 
+This block also runs once before implementation, as the pre-change baseline,
+so write each command so the second run is cheap when nothing relevant
+changed: prefer a check like `npm ls --depth=0 >/dev/null 2>&1 || npm ci`
+over a bare `npm ci`, which unconditionally deletes and reinstalls every
+dependency on every run regardless of whether anything changed. Skip an
+install flag meant for a different platform (`playwright install
+--with-deps` is for Linux CI's apt packages, not macOS) unless this
+environment actually needs it. A conditional command must still perform the
+real install when its check fails; it must never skip verification itself,
+only skip work that is already done.
+
 In the testing strategy, map every mandatory automated acceptance check to a
 command in this block. Include browser checks and delivered update-tool
 failure paths where applicable; do not substitute compilation or source

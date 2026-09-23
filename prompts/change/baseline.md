@@ -112,6 +112,16 @@ stage's word for it. So write it as a command list a shell can run:
 - no command that changes the repository. These run twice, and the first run
   must leave the tree exactly as it found it.
 
+Running twice also makes install commands worth writing carefully: prefer a
+check like `npm ls --depth=0 >/dev/null 2>&1 || npm ci` over a bare `npm ci`,
+which unconditionally deletes and reinstalls every dependency on every run
+regardless of whether anything changed. Skip an install flag meant for a
+different platform (`playwright install --with-deps` is for Linux CI's apt
+packages, not macOS) unless this environment actually needs it. A
+conditional command must still perform the real install when its check
+fails; it must never skip verification itself, only skip work that is
+already done.
+
 A check that is already failing is still listed. The driver records that it
 failed before the change, so it will not be blamed on the change; omitting it
 only hides it.

@@ -3114,6 +3114,17 @@ while true; do
             ;;
 
         REPAIR)
+            # A run that reached REPAIR before the current test-review JSON
+            # was ingested should recover on resume as well.  The fallback
+            # report is an implementation-owned documentation gap, so no
+            # source repair can make this acceptance result pass.
+            if [[ ! -e "$STATE_DIR/test-evidence-handoff-attempted" ]] \
+                && python3 -B "$ROOT/scripts/lib/test_review_route.py" "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/AUTOMATED_TEST_REPORT.md; then
+                touch "$STATE_DIR/test-evidence-handoff-attempted" "$STATE_DIR/test-evidence-reconcile"
+                echo 'Repair reclassified as incomplete test-evidence handoff; returning to implementation-owned report reconciliation.'
+                set_state IMPLEMENT
+                continue
+            fi
             verify_approval .uncle/docs/UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
             require_file "$STATE_DIR/repair-source"
             repair_count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"

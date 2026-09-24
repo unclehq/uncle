@@ -20,4 +20,10 @@ class TestReviewRoute(unittest.TestCase):
         self.assertIn('acceptance_context.py" .uncle/docs/TEST_REVIEW.md', block)
         self.assertLess(block.index('acceptance_context.py" .uncle/docs/TEST_REVIEW.md'),
                         block.index('test_review_route.py'))
+    def test_stale_repair_is_reclassified_as_evidence_reconciliation(self):
+        driver = (ROOT / 'scripts/stagegate.sh').read_text()
+        start = driver.index('        REPAIR)\n            # A run that reached REPAIR')
+        block = driver[start:driver.index('            verify_approval', start)]
+        self.assertIn('Repair reclassified as incomplete test-evidence handoff', block)
+        self.assertIn('set_state IMPLEMENT', block)
 if __name__ == '__main__': unittest.main()

@@ -25,11 +25,30 @@ def report_stale(report):
     return (any(isinstance(row, dict) and row.get('status') in ('NOT RUN', 'DRIVER PENDING') for row in commands)
             and 'implementation stage omitted its required test handoff' in text)
 
+def mutation_evidence_gap(payload):
+    """A bounded evidence task, not a source-code repair.
+
+    Return true only when the driver suite passed and the review explicitly
+    says representative defect mutation proof is missing.  A functional FAIL
+    remains a normal stopped failure.
+    """
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'acceptance-report':
+        return False
+    rows = [row for row in payload.get('rows', []) if isinstance(row, dict) and row.get('required')]
+    if not rows or any(row.get('id') == 'RESULTS' and row.get('status') != 'PASS' for row in rows):
+        return False
+    failing = [str(row.get('evidence', '')).lower() for row in rows if row.get('status') == 'FAIL']
+    return bool(failing) and all(('mutation' in text or 'defect-injection' in text) and
+                                 ('proof' in text or 'fail' in text) for text in failing)
+
 if __name__ == '__main__':
     try:
         if sys.argv[1] == '--report-stale':
             report = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
             raise SystemExit(0 if report_stale(report) else 1)
+        if sys.argv[1] == '--mutation-evidence-gap':
+            payload = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+            raise SystemExit(0 if mutation_evidence_gap(payload) else 1)
         payload = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
         report = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
         raise SystemExit(0 if evidence_handoff_only(payload, report) else 1)

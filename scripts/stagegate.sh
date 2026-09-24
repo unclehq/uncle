@@ -80,9 +80,11 @@ while [[ $# -gt 0 ]]; do
 done
 export UNCLE_UNATTENDED="$UNATTENDED"
 # A repair is a new implementation attempt, not a harmless validator retry.
-# The sole automatic case is one driver-green-check source/test repair; report
-# and checklist findings stop for an explicit owner decision.
+# Verification failures are evidence, not a reason to discard an otherwise
+# complete build.  Keep going by default and give the final audit the complete
+# record; set this to 0 for the older stop-and-decide behaviour.
 WORKFLOW_AUTO_REPAIR="${WORKFLOW_AUTO_REPAIR:-1}"
+WORKFLOW_CONTINUE_ON_TEST_FAILURE="${WORKFLOW_CONTINUE_ON_TEST_FAILURE:-1}"
 
 # Serialize both workflow families before mutable initialization.
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
@@ -208,11 +210,11 @@ DIFF_GATE="${WORKFLOW_DIFF_GATE:-1}"
 # Set to 0 to return to trusting the report.
 GREEN_CHECK="${WORKFLOW_GREEN_CHECK:-1}"
 
-# Refuse to reach COMPLETE on an audit that did not say the build is ready.
-# Finishing anyway takes an explicit, recorded human override.
-#
-# Set to 0 to complete on any verdict, as before.
-AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
+# Final audit reports residual risk; it does not turn a useful delivered build
+# into a stalled workflow merely because every possible concern is not closed.
+# Set to 1 only for a release process that explicitly requires a human override
+# for a NOT READY verdict.
+AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-0}"
 
 # The .uncle/docs/FINAL_AUDIT.md verdict classifier, the independent verification run, and
 # the generated document the post-implementation gate shows. Sourced
@@ -330,6 +332,24 @@ record_gate_decision() {
     mkdir -p "$STATE_DIR" 2>/dev/null || true
     printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$what" "$detail" \
         >> "$STATE_DIR/gate-decisions" 2>/dev/null || true
+}
+
+# Preserve the distinction between a passing build and one that deliberately
+# continued despite failed verification.  This is driver-owned evidence, not a
+# waiver and never rewrites a test or acceptance result to PASS.  Final audit
+# prompts already receive the workflow directory, so it can assess this ledger
+# alongside green-check.tsv and the canonical report JSON.
+record_nonblocking_failure() {
+    local source="$1" detail="$2"
+    mkdir -p "$STATE_DIR"
+    printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$source" "$detail" \
+        >> "$STATE_DIR/nonblocking-test-failures.tsv"
+}
+
+record_test_failure_disposition() {
+    local review_json="$STATE_DIR/documents/TEST_REVIEW.json"
+    python3 -B "$ROOT/scripts/lib/test_failure_disposition.py" \
+        "$GREEN_CLASS" "$review_json" "$STATE_DIR/documents/TEST_FAILURES.json"
 }
 
 # The blocker rows with their evidence, at the gate. The report already says
@@ -755,7 +775,11 @@ capture_verification_inputs() {
     [[ -n "$EXPECTED_VERIFICATION" ]] || verification_integrity_failure
     # Keep actual earlier assertions, not just their hashes or the repair
     # agent's description. New snapshots never overwrite prior evidence.
-    snapshot="$(mktemp -d "$STATE_DIR/verification-snapshot.XXXXXX")"
+    # Snapshot evidence is workflow state, not project source. Keeping it
+    # under the project lets broad discovery (`vitest run`, pytest, etc.) run
+    # copied tests and report false failures. Store it outside the tree while
+    # preserving the absolute path in workflow state for later comparisons.
+    snapshot="$(mktemp -d "${TMPDIR:-/tmp}/uncle-verification-snapshot.XXXXXX")"
     while IFS=$'\t' read -r digest file; do
         [[ "$digest" != DIRECTORY ]] || continue
         mkdir -p "$snapshot/$(dirname "$file")"
@@ -2420,6 +2444,19 @@ run_green_check() {
 
     echo
     echo "Re-running the plan's verification commands from the driver:"
+    # Migrate snapshots left by older Uncle versions before invoking project
+    # commands. They are copies for integrity comparison, never inputs to
+    # the application's test runner.
+    local legacy_snapshot legacy_destination
+    for legacy_snapshot in "$STATE_DIR"/verification-snapshot.*; do
+        [[ -d "$legacy_snapshot" ]] || continue
+        legacy_destination="$(mktemp -d "${TMPDIR:-/tmp}/uncle-verification-snapshot.XXXXXX")"
+        rmdir "$legacy_destination"
+        mv "$legacy_snapshot" "$legacy_destination"
+        if [[ "$(cat "$STATE_DIR/verification-snapshot" 2>/dev/null || true)" == "$legacy_snapshot" ]]; then
+            printf '%s\n' "$legacy_destination" > "$STATE_DIR/verification-snapshot"
+        fi
+    done
     local execution_status=0
     green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" \
         check_verification_inputs "$STATE_DIR/green-check.groups" || execution_status=$?
@@ -3094,12 +3131,22 @@ while true; do
 
             if [[ "$DIFF_GATE" != "1" ]]; then
                 if [[ "$green_failed" -gt 0 ]]; then
-                    echo
-                    echo "Refusing to continue: $green_failed verification"
-                    echo "check(s) failed, and WORKFLOW_DIFF_GATE=0 leaves no"
-                    echo "human gate to weigh that against the diff."
-                    echo "Fix the failure, or re-enable the gate."
-                    exit 1
+                    if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]]; then
+                        echo "Continuing with $green_failed failed verification check(s); final audit will assess them."
+                        record_nonblocking_failure green-check "$green_failed failed verification check(s); diff gate disabled"
+                        record_test_failure_disposition
+                        printf '%s\t%s\n' \
+                            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                            "$green_failed failing check(s) continued automatically" \
+                            > "$GREEN_OVERRIDE_FILE"
+                    else
+                        echo
+                        echo "Refusing to continue: $green_failed verification"
+                        echo "check(s) failed, and WORKFLOW_DIFF_GATE=0 leaves no"
+                        echo "human gate to weigh that against the diff."
+                        echo "Fix the failure, or re-enable the gate."
+                        exit 1
+                    fi
                 fi
                 echo
                 echo "Implementation gate disabled (WORKFLOW_DIFF_GATE=0);" \
@@ -3186,8 +3233,26 @@ while true; do
                 set_state IMPLEMENT
                 continue
             fi
+            if [[ ! -e "$STATE_DIR/test-mutation-evidence-attempted" ]] \
+                && python3 -B "$ROOT/scripts/lib/test_review_route.py" --mutation-evidence-gap "$STATE_DIR/documents/TEST_REVIEW.json"; then
+                touch "$STATE_DIR/test-mutation-evidence-attempted" "$STATE_DIR/test-evidence-reconcile"
+                echo 'Test review found missing mutation evidence; running one implementation-owned evidence reconciliation before re-review.'
+                set_state IMPLEMENT
+                continue
+            fi
             if [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
                 && [[ "$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS)" == PASS ]]; then
+                if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]]; then
+                    echo 'Test review is otherwise complete; continuing despite failed driver verification.'
+                    record_nonblocking_failure green-check 'TEST_REVIEW passed while one or more driver verification commands failed'
+                    record_test_failure_disposition
+                    printf '%s\t%s\n' \
+                        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                        "$(green_regressions "$GREEN_CLASS") failing check(s) continued automatically" \
+                        > "$GREEN_OVERRIDE_FILE"
+                    acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+                    continue
+                fi
                 # Repair is the right answer for a check the code can satisfy.
                 # It is the wrong answer for one the code cannot: the stage runs,
                 # changes nothing that helps, and the run comes straight back
@@ -3235,6 +3300,14 @@ while true; do
             repair_source="$(cat "$STATE_DIR/repair-source" 2>/dev/null || true)"
             repair_count_existing="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"
             if [[ "$WORKFLOW_AUTO_REPAIR" != 1 || "$repair_source" != "$GREEN_MD" || "$repair_count_existing" -ge 1 ]]; then
+                if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] \
+                    && [[ "$repair_source" == "$GREEN_MD" || "$repair_source" == .uncle/docs/TEST_REVIEW.md ]]; then
+                    echo 'A verification finding is not eligible for another automatic repair; continuing it to final audit as unresolved evidence.'
+                    record_nonblocking_failure "$(basename "$repair_source")" 'automatic repair not run; canonical finding remains unresolved'
+                    record_test_failure_disposition
+                    set_state MANUAL_CHECKLIST
+                    continue
+                fi
                 echo 'Automatic repair is not eligible for this failure.'
                 echo 'Only one driver green-check source/test repair is automatic. Checklist, test-review, and other canonical report failures remain stopped for an explicit owner decision.'
                 exit 1
@@ -3247,6 +3320,13 @@ while true; do
                 && python3 -B "$ROOT/scripts/lib/test_review_route.py" "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/AUTOMATED_TEST_REPORT.json"; then
                 touch "$STATE_DIR/test-evidence-handoff-attempted" "$STATE_DIR/test-evidence-reconcile"
                 echo 'Repair reclassified as incomplete test-evidence handoff; returning to implementation-owned report reconciliation.'
+                set_state IMPLEMENT
+                continue
+            fi
+            if [[ ! -e "$STATE_DIR/test-mutation-evidence-attempted" ]] \
+                && python3 -B "$ROOT/scripts/lib/test_review_route.py" --mutation-evidence-gap "$STATE_DIR/documents/TEST_REVIEW.json"; then
+                touch "$STATE_DIR/test-mutation-evidence-attempted" "$STATE_DIR/test-evidence-reconcile"
+                echo 'Repair reclassified as missing mutation evidence; running one implementation-owned evidence reconciliation.'
                 set_state IMPLEMENT
                 continue
             fi

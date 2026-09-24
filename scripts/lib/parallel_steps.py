@@ -258,7 +258,11 @@ def run_step(spec, results):
     started = time.monotonic()
     publish_worker_start(spec)
     try:
-        before = snapshot(sandbox, spec['project'])
+        # Captured by the coordinator immediately after this sandbox was
+        # created, before *any* worker starts.  Do not derive a baseline in a
+        # worker thread: inherited dirty files from an earlier merged group
+        # are valid input, never writes by this step.
+        before = spec['baseline']
         proc = subprocess.run(spec['command'], cwd=sandbox, env=spec['env'],
                               stdout=open(spec['log'], 'wb'), stderr=subprocess.STDOUT)
         results[number] = {'exit': proc.returncode,
@@ -354,7 +358,8 @@ def main():
             return 2
         specs.append({'number': number, 'project': project, 'sandbox': str(sandbox),
                       'command': step['command'], 'log': step['log'],
-                      'env': dict(os.environ, **step.get('env', {}))})
+                      'env': dict(os.environ, **step.get('env', {})),
+                      'baseline': snapshot(sandbox, project)})
 
     for spec in specs:
         thread = threading.Thread(target=run_step, args=(spec, results))

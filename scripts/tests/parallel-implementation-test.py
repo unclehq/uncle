@@ -108,6 +108,30 @@ class ParallelImplementationTests(unittest.TestCase):
             handoff = (root / '.uncle/workflow/parallel/notes/step-1.md').read_text()
             self.assertIn('synthesized by the driver', handoff)
 
+    def test_inherited_dirty_gitignore_is_not_a_later_step_write(self):
+        """A prior merged step may leave an uncommitted .gitignore behind.
+        The next sandbox inherits it, but ownership checking must compare to
+        its own pre-worker snapshot rather than Git HEAD or another step."""
+        temp, root, worker = self.fixture()
+        with temp:
+            (root / '.gitignore').write_text('dist/\n')
+            worker.write_text(
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'printf changed > 2.txt\n'
+                'mkdir -p .uncle/workflow/parallel/notes\n'
+                'printf handoff > .uncle/workflow/parallel/notes/step-2.md\n')
+            worker.chmod(0o755)
+            request = {'project': str(root), 'owned': {'2': ['2.txt']}, 'steps': [
+                {'number': 2, 'log': str(root / 'two.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-2.md',
+                 'command': ['bash', str(worker)]}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / '2.txt').read_text(), 'changed')
+            self.assertNotIn('.gitignore', json.loads(result.stdout)['files'])
+
     def test_worker_completion_uses_the_normal_persisted_metrics_path(self):
         temp, root, worker = self.fixture()
         with temp:

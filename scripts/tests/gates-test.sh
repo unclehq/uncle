@@ -875,15 +875,18 @@ expect_state "WAIT_IMPLEMENT_APPROVAL"
 # The kill switches
 # ---------------------------------------------------------------------------
 
-# Turning the human gate off does not turn the machine check off: with no
-# human left to weigh a regression, the run stops instead.
-new_case no-gate-and-a-regression-stops
+# Turning the human gate off does not discard a completed build when a machine
+# check fails. The failure is recorded for final audit and the workflow reaches
+# delivery without pretending that the command passed.
+new_case no-gate-and-a-regression-continues-to-audit
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
 run_driver WORKFLOW_DIFF_GATE=0 FAKE_IMPL="printf 'exit 1\n' > app/test.sh"
-expect_status 1
-expect_out "Refusing to continue: 1 verification"
-expect_state "WAIT_IMPLEMENT_APPROVAL"
+expect_status 0
+expect_out "Continuing with 1 failed verification check(s); final audit will assess them."
+expect_file ".uncle/workflow/nonblocking-test-failures.tsv"
+expect_in_file ".uncle/workflow/nonblocking-test-failures.tsv" "green-check"
+expect_state "COMPLETE"
 
 # Turned off with everything green, the pipeline runs as it did before.
 new_case no-gate-and-green-continues

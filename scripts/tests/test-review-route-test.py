@@ -35,4 +35,21 @@ class TestReviewRoute(unittest.TestCase):
     def test_stale_report_is_detected_without_a_repair(self):
         self.assertTrue(ROUTE.report_stale(self.fallback))
         self.assertFalse(ROUTE.report_stale({'schema':'uncle.artifact/v1','kind':'automated-test-report','commands':[{'status':'FAIL','output':'actual failure'}]}))
+    def test_mutation_evidence_gap_routes_without_source_repair(self):
+        packet = {'schema':'uncle.artifact/v1','kind':'acceptance-report','rows':[
+            {'id':'RESULTS','required':True,'status':'PASS','evidence':'green check passed'},
+            {'id':'NEGATIVE','required':True,'status':'FAIL','evidence':'Mutation proof is missing for I-1.'}]}
+        self.assertTrue(ROUTE.mutation_evidence_gap(packet))
+        packet['rows'][1]['evidence'] = 'Calculator returns an incorrect result.'
+        self.assertFalse(ROUTE.mutation_evidence_gap(packet))
+    def test_failed_driver_checks_continue_to_audit_by_default(self):
+        driver = (ROOT / 'scripts/stagegate.sh').read_text()
+        self.assertIn('WORKFLOW_CONTINUE_ON_TEST_FAILURE="${WORKFLOW_CONTINUE_ON_TEST_FAILURE:-1}"', driver)
+        start = driver.index('        VALIDATE_TEST_REVIEW)')
+        block = driver[start:driver.index('\n        REPAIR)', start)]
+        self.assertIn('continuing despite failed driver verification', block)
+        self.assertIn('record_nonblocking_failure green-check', block)
+        self.assertIn('acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST', block)
+        audit = (ROOT / 'prompts/final-audit.md').read_text()
+        self.assertIn('nonblocking-test-failures.tsv', audit)
 if __name__ == '__main__': unittest.main()

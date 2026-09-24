@@ -11,6 +11,13 @@ Read:
 - .uncle/docs/VERIFICATION_REPORT.md;
 - .uncle/docs/DEFECTS.md, if present;
 - `.uncle/workflow/waivers/`, if present -- see below;
+- `.uncle/workflow/nonblocking-test-failures.tsv`, if present. Each row means
+  the workflow deliberately continued after a failed driver check; it is never
+  a pass or a waiver. Verify the failure against `green-check.tsv` and decide
+  whether it blocks delivery;
+- `.uncle/workflow/documents/TEST_FAILURES.json`, if present. This is the
+  canonical disposition of failed commands and the independent functional
+  evidence used to continue. It never overrides those command failures;
 - the source and tests behind the claims you are auditing.
 
 Read the reports first and let them direct you into the code: open the test a

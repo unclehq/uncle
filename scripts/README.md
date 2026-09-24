@@ -426,7 +426,8 @@ under "Configuration". The two that decide which external CLI is spawned:
 | `WORKFLOW_PARALLEL_CHECKLIST_WORKERS` | `1` | `change-workflow.sh` |
 | `WORKFLOW_DIFF_GATE` | `1` | both drivers |
 | `WORKFLOW_GREEN_CHECK` | `1` | both drivers |
-| `WORKFLOW_AUDIT_GATE` | `1` | both drivers |
+| `WORKFLOW_CONTINUE_ON_TEST_FAILURE` | `1` | both drivers |
+| `WORKFLOW_AUDIT_GATE` | `0` | both drivers |
 | `WORKFLOW_AGENT_CMD` | `scripts/agent-kimi.sh` | `stagegate.sh`, `change-workflow.sh` |
 | `WORKFLOW_REVIEWER_CMD` | `codex` | both drivers and both `codex-*` helpers |
 
@@ -612,10 +613,15 @@ the approval digest into a check on the tree. The stage after the gate rebuilds
 it and compares; a mismatch re-opens the gate on the current tree instead of
 carrying a stale approval forward.
 
-A failing check does not end the run. It changes the gate's wording from
-approve to override and records the override, which keeps the decision with the
-operator. With `WORKFLOW_DIFF_GATE=0` there is no operator in the path, so the
-driver refuses to continue past a regression instead.
+A failing check does not end the run by default. It is recorded in
+`.uncle/workflow/nonblocking-test-failures.tsv`, remains failed in the canonical
+green-check evidence, and is assessed by final audit; neither driver rewrites it
+to PASS. When present, the canonical
+`.uncle/workflow/documents/TEST_FAILURES.json` distinguishes failures with
+independent functional evidence from unverified failures. This lets unattended
+builds reach delivery even when a non-critical test is flaky or
+environment-specific. Set `WORKFLOW_CONTINUE_ON_TEST_FAILURE=0` to restore the
+old stop-at-the-gate behaviour.
 
 Covered by `scripts/tests/green-check-test.sh`,
 `scripts/tests/implementation-review-test.sh`, and

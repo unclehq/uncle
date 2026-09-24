@@ -15,6 +15,12 @@ Read:
 - .uncle/docs/DEFECTS.md, if present
 - .uncle/workflow/implementation-completion.txt, if present
 - matching records under .uncle/workflow/waivers/, if present
+- `.uncle/workflow/nonblocking-test-failures.tsv`, if present. These are
+  driver-recorded failed checks that the workflow continued past, not passes
+  or waivers; assess them against `green-check.tsv`.
+- `.uncle/workflow/documents/TEST_FAILURES.json`, if present. It records the
+  failed commands and whether independent functional evidence supports
+  continuation; it never turns failures into PASS.
 
 Waivers permit review of partial delivery; they do not implement missing behavior
 or make a check pass. Identify waived acceptance rows and the operator's reasons

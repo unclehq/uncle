@@ -122,7 +122,15 @@ def validate_json(project='.'):
     import importlib.util
     spec = importlib.util.spec_from_file_location('artifact_json', artifact)
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-    payload = module.read(project, 'ADVERSARIAL_REVIEW.md')
+    target = module.path(project, 'ADVERSARIAL_REVIEW.md')
+    # Reviewer transports may wrap an otherwise valid final object in a JSON
+    # fence. Normalize that transport detail at the canonical boundary; the
+    # Markdown *view* is never read or used here.
+    raw = module.unfence_json(target.read_text(encoding='utf-8'))
+    payload = json.loads(raw)
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    if payload.get('schema') != 'uncle.artifact/v1':
+        raise ValueError('invalid workflow artifact schema')
     required = ('id', 'title', 'severity', 'references', 'failure', 'fix', 'verify')
     if payload.get('kind') != 'adversarial-review' or not isinstance(payload.get('overall_assessment'), str) or not payload['overall_assessment'].strip():
         raise ValueError('invalid adversarial-review JSON')

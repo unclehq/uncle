@@ -1020,9 +1020,10 @@ ensure_project_plan_json() {
     local source=".uncle/docs/PROJECT_PLAN.md"
     local canonical="$STATE_DIR/documents/PROJECT_PLAN.json"
     [[ -s "$canonical" ]] && return 0
-    # A plan author writes JSON to the approval-view path first; ingest it
-    # before considering the legacy Markdown bridge below.
-    python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected "$source" . || return 1
+    # A pre-render JSON plan may already have a human approval hash. Mirror it
+    # without rewriting the approval-view bytes, then fall back to a legacy
+    # Markdown export only when it was never JSON.
+    python3 "$ROOT/scripts/lib/plan_context.py" canonicalize-project-plan "$source" . || return 1
     [[ -s "$canonical" ]] && return 0
     # Compatibility bridge for a pre-JSON plan that reached an approval gate
     # before this migration.  This is deterministic parsing at the boundary,
@@ -1882,6 +1883,7 @@ run_stage() {
             require_artifact .uncle/docs/PROJECT_PLAN.md
             ;;
         ADVERSARIAL_REVIEW)
+            ensure_project_plan_json || exit 1
             run_adversarial_review_panel
             if stage_uses_self_hosted adversarial-review REVIEWER; then
                 adversarial_review_investigation=".uncle/workflow/adversarial-review-investigation.md"

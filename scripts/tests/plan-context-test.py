@@ -25,6 +25,16 @@ class PlanContext(unittest.TestCase):
             stored = json.loads((root/'.uncle/workflow/documents/PROJECT_PLAN.json').read_text())
             self.assertEqual(stored['verification_commands'], 'python3 -m pytest')
 
+    def test_raw_approved_json_plan_can_be_mirrored_without_rewriting_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); plan = root/'PROJECT_PLAN.md'
+            raw = json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'plan',
+                              'narrative': '## Architecture\n\nStable.', 'verification_commands': 'pytest'})
+            plan.write_text(raw)
+            self.assertTrue(module.canonicalize_json_plan(plan, root, protected=False))
+            self.assertEqual(plan.read_text(), raw)
+            self.assertTrue((root/'.uncle/workflow/documents/PROJECT_PLAN.json').is_file())
+
     def test_markdown_plan_is_left_alone(self):
         with tempfile.TemporaryDirectory() as d:
             plan = Path(d)/'PROJECT_PLAN.md'

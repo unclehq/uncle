@@ -169,6 +169,27 @@ def ingest_plan(path, project='.', protected=True):
     return True
 
 
+def canonicalize_json_plan(path, project='.', protected=True):
+    """Write a canonical mirror for a raw JSON plan without rewriting its
+    approval-view file.  This migrates an already-approved pre-render plan
+    safely: changing that file would invalidate the human approval hash."""
+    import json
+    module = _artifact_json()
+    text = Path(path).read_text(encoding='utf-8')
+    stripped = module.unfence_json(text)
+    if not stripped.startswith('{'):
+        return False
+    try:
+        payload = json.loads(stripped)
+    except ValueError as error:
+        raise ValueError('Invalid plan JSON response: ' + str(error)) from error
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'plan':
+        raise ValueError('wrong plan JSON schema')
+    module.render_plan(payload, protected=protected)
+    module.write(project, Path(path).name, dict(payload, schema='uncle.artifact/v1', kind='plan'))
+    return True
+
+
 def ingest_change_plan(path, project='.', require_dispositions=False):
     """CHANGE_PLAN.md, both before a review exists (require_dispositions=False,
     the initial 'change-plan' stage) and after one (require_dispositions=True,
@@ -277,6 +298,8 @@ if __name__ == '__main__':
             ingest_plan(path, project, protected=True)
         elif action == 'plan-unprotected':
             ingest_plan(path, project, protected=False)
+        elif action == 'canonicalize-project-plan':
+            canonicalize_json_plan(path, project, protected=False)
         elif action == 'export-project-plan':
             export_project_plan(path, project)
         elif action == 'change-spec':

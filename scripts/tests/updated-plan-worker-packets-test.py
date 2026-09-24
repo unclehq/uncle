@@ -162,7 +162,9 @@ class WorkerPackets(unittest.TestCase):
         stagegate = (ROOT / 'scripts/stagegate.sh').read_text()
         change = (ROOT / 'scripts/change-workflow.sh').read_text()
         self.assertIn('ensure_project_plan_json', stagegate)
-        self.assertIn('plan-unprotected "$source" .', stagegate)
+        self.assertIn('canonicalize-project-plan "$source" .', stagegate)
+        adversarial = stagegate[stagegate.index('        ADVERSARIAL_REVIEW)'):stagegate.index('        UPDATED_PLAN)')]
+        self.assertIn('ensure_project_plan_json || exit 1', adversarial)
         self.assertIn('require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"', stagegate)
         self.assertIn('require_file "$STATE_DIR/documents/CHANGE_PLAN.json"', change)
         self.assertIn('require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"', change)

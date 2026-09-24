@@ -38,14 +38,16 @@ def load_packet(path):
     findings = value.get('findings')
     if not isinstance(findings, list):
         raise PacketError('%s: findings must be an array' % source)
-    normalized, ids = [], set()
+    normalized = []
     for index, finding in enumerate(findings, 1):
         if not isinstance(finding, dict):
             raise PacketError('%s: finding %d is not an object' % (source, index))
         item = {field: _text(finding.get(field), field, source, index) for field in REQUIRED}
-        if item['id'] in ids:
-            raise PacketError('%s: duplicate stable finding ID %s' % (source, item['id']))
-        ids.add(item['id'])
+        # A weak reviewer can accidentally reuse an otherwise valid stable ID
+        # for two observations.  The collator owns identity resolution, so do
+        # not discard either observation or turn it into a panel failure here.
+        # It will retain each gap/evidence/correction under that ID and mark
+        # conflicting corrections for the parent to resolve.
         normalized.append(item)
     return normalized
 

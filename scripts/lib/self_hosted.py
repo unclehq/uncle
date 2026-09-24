@@ -564,7 +564,6 @@ def reviewer_packet(response, output):
     if not isinstance(findings, list):
         raise InvalidReviewerDocument('Reviewer packet findings must be an array for %s' % Path(output).name)
     required = ('id', 'gap', 'evidence', 'risk', 'required_correction') if payload.get('kind') == 'updated-plan-worker-packet' else ('id', 'summary')
-    seen = set()
     for index, finding in enumerate(findings, 1):
         if not isinstance(finding, dict) or any(not isinstance(finding.get(key), str) or not finding[key].strip() for key in required):
             raise InvalidReviewerDocument('Reviewer packet finding %d is missing a required nonempty field for %s' % (index, Path(output).name))
@@ -572,9 +571,9 @@ def reviewer_packet(response, output):
         if PLACEHOLDER_PACKET_ID.match(identifier):
             raise InvalidReviewerDocument('Reviewer packet finding %d needs a stable finding ID, not placeholder %r for %s'
                                           % (index, identifier, Path(output).name))
-        if identifier in seen:
-            raise InvalidReviewerDocument('Reviewer packet has duplicate stable finding ID %s for %s' % (identifier, Path(output).name))
-        seen.add(identifier)
+        # The shared panel collator merges duplicate observations by stable
+        # ID, retaining every evidence and correction value.  Do not reject a
+        # valid packet solely because a self-hosted model reused an ID.
     return json.dumps(payload, indent=2, sort_keys=True) + '\n'
 
 

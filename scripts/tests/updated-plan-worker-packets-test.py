@@ -55,6 +55,21 @@ class WorkerPackets(unittest.TestCase):
             self.assertEqual(finding['evidence'], ['scope proof', 'test proof'])
             self.assertTrue(finding['conflicting_corrections'])
 
+    def test_duplicate_id_within_one_packet_preserves_both_observations(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            body = packet('AR-001', 'first proof', 'first correction')
+            body['findings'].append({
+                'id': 'AR-001', 'gap': 'second gap', 'evidence': 'second proof',
+                'risk': 'second risk', 'required_correction': 'second correction'})
+            self.write(directory, 'verification', body)
+            result = PACKETS.collate(directory, directory / 'out.json', ('verification',))
+            finding = result['findings'][0]
+            self.assertEqual(finding['sources'], ['verification'])
+            self.assertEqual(finding['evidence'], ['first proof', 'second proof'])
+            self.assertEqual(finding['gaps'], ['gap', 'second gap'])
+            self.assertTrue(finding['conflicting_corrections'])
+
     def test_missing_and_malformed_packets_name_the_worker(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
@@ -111,6 +126,20 @@ class WorkerPackets(unittest.TestCase):
             self.assertEqual(payload['findings'][0]['evidence'], ['a.py:1', 'b.py:2'])
             with self.assertRaisesRegex(WORKERS.PacketError, 'regression.json: worker packet is missing'):
                 WORKERS.collate(directory, output, kind, ('requirements', 'regression'))
+
+    def test_generic_panel_merges_duplicate_ids_from_one_worker(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp); kind = 'adversarial-review-worker-packet'
+            body = {'schema': 'uncle.artifact/v1', 'kind': kind, 'findings': [
+                {'id': 'AR-001', 'summary': 'first gap', 'evidence': 'first proof'},
+                {'id': 'AR-001', 'summary': 'second gap', 'evidence': 'second proof'}]}
+            self.write(directory, 'security', body)
+            output = directory / 'combined.json'
+            WORKERS.collate(directory, output, kind, ('security',))
+            finding = json.loads(output.read_text())['findings'][0]
+            self.assertEqual(finding['sources'], ['security'])
+            self.assertEqual(finding['summaries'], ['first gap', 'second gap'])
+            self.assertEqual(finding['evidence'], ['first proof', 'second proof'])
 
     def test_worker_packets_reject_placeholder_ids_at_every_runner_boundary(self):
         body = {'schema': 'uncle.artifact/v1', 'kind': 'test-review-worker-packet',

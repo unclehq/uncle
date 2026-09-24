@@ -28,15 +28,18 @@ def load(path, kind):
         raise PacketError('%s: expected schema %s and a worker-packet kind' % (name,SCHEMA))
     items=value.get('findings')
     if not isinstance(items,list): raise PacketError('%s: findings must be an array' % name)
-    seen=set(); out=[]
+    out=[]
     for i,item in enumerate(items,1):
         if not isinstance(item,dict) or not isinstance(item.get('id'),str) or not item['id'].strip() or not isinstance(item.get('summary'),str) or not item['summary'].strip():
             raise PacketError('%s: finding %d requires nonempty id and summary' % (name,i))
         identifier=item['id'].strip()
         if PLACEHOLDER_ID.match(identifier):
             raise PacketError('%s: finding %d needs a stable finding ID, not placeholder %r' % (name,i,identifier))
-        if identifier in seen: raise PacketError('%s: duplicate finding ID %s' % (name,identifier))
-        seen.add(identifier); out.append({'id':identifier,'summary':item['summary'].strip(), 'evidence':str(item.get('evidence','')).strip()})
+        # Findings are merged by stable ID below.  Keep duplicate observations
+        # from one worker too: rejecting them loses evidence merely because a
+        # model reused an ID.  This is intentionally different from checklist
+        # check IDs, where a duplicate would mean two executions of one row.
+        out.append({'id':identifier,'summary':item['summary'].strip(), 'evidence':str(item.get('evidence','')).strip()})
     return out
 
 def collate(directory, output, kind, expected):
@@ -47,7 +50,8 @@ def collate(directory, output, kind, expected):
             target=merged.setdefault(item['id'],{'id':item['id'],'summaries':[],'evidence':[],'sources':[]})
             for key,value in (('summaries',item['summary']),('evidence',item['evidence'])):
                 if value and value not in target[key]: target[key].append(value)
-            target['sources'].append(source)
+            if source not in target['sources']:
+                target['sources'].append(source)
     payload={'schema':SCHEMA,'kind':kind+'s','workers':workers,'findings':[merged[k] for k in sorted(merged)]}
     Path(output).parent.mkdir(parents=True,exist_ok=True); Path(output).write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n',encoding='utf-8')
 

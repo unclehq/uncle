@@ -39,6 +39,13 @@ class ReviewerOutput(unittest.TestCase):
         text = '```json\n' + payload + '\n```\n\nAll adversarial findings are addressed above.'
         self.assertTrue(module.looks_like_document(text))
 
+    def test_narrated_worker_packet_is_returned_as_canonical_json(self):
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review-worker-packet',
+                  'findings': []}
+        response = 'No regression findings were found. ' + json.dumps(packet)
+        self.assertEqual(json.loads(module.check(response, 'codex')), packet)
+        self.assertEqual(json.loads(module.worker_packet(response, 'codex')), packet)
+
     def test_check_raises_with_a_preview_for_a_non_document(self):
         with self.assertRaises(ValueError) as ctx:
             module.check('Sure, I will write the review next.', 'kimi')

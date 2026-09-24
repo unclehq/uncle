@@ -2078,6 +2078,17 @@ record_codex_cost() {
     fi
 }
 
+normalize_reviewer_packet() {
+    local output_file="$1" runner="$2" normalized
+    [[ "$output_file" == *.json && -s "$output_file" ]] || return 0
+    normalized="$(mktemp "$STATE_DIR/.reviewer-packet.XXXXXX")" || return 1
+    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --packet "$runner" < "$output_file" > "$normalized"; then
+        rm -f "$normalized"
+        return 1
+    fi
+    mv "$normalized" "$output_file"
+}
+
 run_codex() {
     local prompt_file
     prompt_file="$(resolve_prompt "$1")"
@@ -2153,6 +2164,9 @@ run_codex() {
         ( "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
             < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" ) &
         wait "$!" || status=$?
+        if [[ "$status" == 0 ]] && ! normalize_reviewer_packet "$output_file" "$cmd"; then
+            status=1
+        fi
 
         record_codex_cost "$log_name" "$((SECONDS - start))"
         perf_record reviewer "$log_name" "$((SECONDS-start))" "$status" \

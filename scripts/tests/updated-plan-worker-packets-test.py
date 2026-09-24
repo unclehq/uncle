@@ -69,6 +69,8 @@ class WorkerPackets(unittest.TestCase):
         self.assertEqual(json.loads(SELF_HOSTED.reviewer_packet(body, 'packet.json'))['kind'], 'updated-plan-worker-packet')
         for runner in ('reviewer-claude.sh', 'reviewer-kimi.sh', 'reviewer-cline.sh'):
             self.assertIn('reviewer_output.py', (ROOT / 'scripts' / runner).read_text())
+        for driver in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
+            self.assertIn('reviewer_output.py" --packet', (ROOT / driver).read_text())
 
     def test_self_hosted_reviewer_recovers_unfenced_packet_after_narration(self):
         response = 'The dispositions are complete. ' + json.dumps(packet())

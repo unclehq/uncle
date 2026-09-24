@@ -2344,10 +2344,12 @@ run_checklist_panel() {
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Checklist worker failed; canonical packet validation will stop the panel.' >&2; done
-    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json" --kind manual-checklist-worker-packet --expected coverage invariants resources regressions || return 1
-    CHECKLIST_PANEL_PROMPT="$directory/synthesis.md"
-    cp "$source" "$CHECKLIST_PANEL_PROMPT"
-    printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/MANUAL_CHECKLIST_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$CHECKLIST_PANEL_PROMPT"
+    local target=".uncle/docs/MANUAL_CHECKLIST.md"
+    [[ "$kind" == base ]] && target="$STATE_DIR/MANUAL_CHECKLIST.base.md"
+    python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$target" coverage invariants resources regressions || return 1
+    cp "$target" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
+    CHECKLIST_PANEL_PROMPT="$target"
+    CHECKLIST_PANEL_DIRECT=1
 }
 
 BG_PID=""
@@ -2448,6 +2450,9 @@ start_codex_bg() {
         trap 'if [[ -n "$child" ]]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; fi; exit 130' INT TERM
         if [[ -n "$panel_kind" ]]; then
             run_checklist_panel "$panel_kind" "$panel_source"
+            if [[ "${CHECKLIST_PANEL_DIRECT:-0}" == 1 ]]; then
+                exit 0
+            fi
             prompt_file="$(resolve_prompt "$CHECKLIST_PANEL_PROMPT")"
             require_file "$prompt_file"
             prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
@@ -3214,6 +3219,11 @@ REPAIR
             if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
                 require_file "$STATE_DIR/MANUAL_CHECKLIST.base.md"
                 run_checklist_panel delta prompts/change/manual-checklist-delta.md
+                if [[ "${CHECKLIST_PANEL_DIRECT:-0}" == 1 ]]; then
+                    echo 'Manual-checklist delta fast path: merged authoritative worker packets without parent synthesis.'
+                    set_state VALIDATE_CHECKLIST
+                    continue
+                fi
                 checklist_prompt="$CHECKLIST_PANEL_PROMPT"
                 if [[ -n "$checklist_retry_suffix" ]]; then
                     checklist_prompt="$STATE_DIR/manual-checklist-format-retry-prompt.md"

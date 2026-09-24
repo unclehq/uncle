@@ -72,7 +72,11 @@ class WorkerPackets(unittest.TestCase):
         for runner in ('reviewer-claude.sh', 'reviewer-kimi.sh', 'reviewer-cline.sh'):
             self.assertIn('reviewer_output.py', (ROOT / 'scripts' / runner).read_text())
         for driver in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
-            self.assertIn('reviewer_output.py" --packet', (ROOT / driver).read_text())
+            text = (ROOT / driver).read_text()
+            self.assertIn('reviewer_output.py" --packet', text)
+            # Parent artifacts are JSON too.  Packet normalization must be
+            # scoped to panel output rather than every JSON filename.
+            self.assertIn('[[ "$output_file" == *-panel/*.json && -s "$output_file" ]] || return 0', text)
 
     def test_self_hosted_reviewer_recovers_unfenced_packet_after_narration(self):
         response = 'The dispositions are complete. ' + json.dumps(packet())

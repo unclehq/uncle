@@ -184,7 +184,7 @@ WORKER_PACKET
     # artifact. Keep parent input to the canonical plan/review packets and its
     # own contract; deterministic validators still enforce each stage's rules.
     case "$log_name" in
-        updated-plan|updated-change-plan|adversarial-review|test-review|manual-checklist|final-audit)
+        project-plan|change-plan|updated-plan|updated-change-plan|adversarial-review|test-review|manual-checklist|final-audit)
             local synthesis_prompt="$LOG_DIR/${log_name}.gated-prompt.md"
             {
                 cat "$prompt_file"
@@ -192,16 +192,49 @@ WORKER_PACKET
 
 ## Compact canonical synthesis contract (binding)
 
-Read only the canonical JSON artifacts named by the stage prompt, especially
-the collated worker packet and the prior plan/review JSON. Do not read
-rendered Markdown views, worker directories, logs, output rules, gates, or
-the repository unless a JSON field names a missing source path. Make one
-revision from those inputs; do not conduct a second investigation pass.
+Read only the compact inputs embedded or named by the stage prompt. For
+project-plan, the completed investigation and REQUIREMENTS_INTERPRETATION JSON
+are sufficient: do not reopen the repository or debate tooling alternatives.
+For change-plan, use the approved BASELINE_REPORT and CHANGE_SPEC plus only
+the file-and-line change surface named by the baseline; do not re-explore the
+repository or repeat baseline discovery.
+For review parents, use the collated worker packet and prior plan/review JSON.
+Do not read rendered Markdown views, worker directories, logs, output rules,
+gates, or the repository unless a JSON field names a missing source path. Make
+one revision from those inputs; do not conduct a second investigation pass.
 Return/write the one authoritative artifact requested by the stage prompt.
 The driver performs structural validation, rendering, approval, and gates.
 SYNTHESIS_JSON
             } > "$synthesis_prompt"
             printf '%s\n' "$synthesis_prompt"
+            return 0
+            ;;
+    esac
+
+    # Self-hosted planning uses a short investigation pass followed by the
+    # JSON formatter above. The investigator needs only the requirements, not
+    # the generic evidence index and every output/gate rule; appending those
+    # caused it to spend turns debating package-manager and browser-install
+    # variants instead of producing its bounded handoff.
+    case "$log_name" in
+        project-plan-investigate)
+            local investigation_prompt="$LOG_DIR/${log_name}.gated-prompt.md"
+            {
+                cat "$prompt_file"
+                cat <<'COMPACT_INVESTIGATION'
+
+## Compact planning investigation (binding)
+
+Read only REQUIREMENTS.md and the canonical
+`.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json` (or its rendered
+view only when that JSON does not exist). Do not inspect project source,
+dependency caches, output rules, gates, logs, or tool configuration. Resolve
+ordinary implementation choices once; do not narrate alternatives or revisit
+an already-made choice. Write the requested investigation handoff directly,
+then stop. The following project-plan formatter owns the final JSON artifact.
+COMPACT_INVESTIGATION
+            } > "$investigation_prompt"
+            printf '%s\n' "$investigation_prompt"
             return 0
             ;;
     esac

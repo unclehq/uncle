@@ -20,6 +20,17 @@ class ReviewerOutput(unittest.TestCase):
         payload = json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'final-audit', 'findings': [], 'verdict': 'READY'})
         self.assertTrue(module.looks_like_document(payload))
 
+    def test_every_parent_artifact_family_is_accepted_by_shared_runner_normalization(self):
+        # Claude, Kimi, Cline, and native Codex all call check() before the
+        # driver receives a reviewer response.  Parent artifacts must be
+        # accepted as canonical JSON here; only a panel path gets --packet.
+        for kind in ('adversarial-review', 'updated-project-plan',
+                     'updated-change-plan', 'test-review', 'manual-checklist',
+                     'verification-report', 'final-audit'):
+            with self.subTest(kind=kind):
+                payload = json.dumps({'schema': 'uncle.artifact/v1', 'kind': kind})
+                self.assertEqual(json.loads(module.check(payload, 'shared-runner')), json.loads(payload))
+
     def test_fenced_json_object_is_a_document(self):
         payload = json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'final-audit', 'findings': [], 'verdict': 'READY'})
         self.assertTrue(module.looks_like_document('```json\n' + payload + '\n```'))

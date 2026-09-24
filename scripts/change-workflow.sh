@@ -2331,7 +2331,7 @@ run_adversarial_review_panel() {
         prompt="$directory/prompts/$lens.md"
         output="$directory/$lens.json"
         cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
-        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        printf '\n## Canonical inputs (binding)\n\nRead only `.uncle/workflow/documents/CHANGE_PLAN.json` and `.uncle/workflow/documents/CHANGE_SPEC.json` when it exists. Use the baseline only through facts embedded in those artifacts; do not inspect the repository.\n\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
         (
             run_codex "$prompt" "$output" "adversarial-review-worker-$lens" \
                 "$CODEX_EFFORT_REVIEW"

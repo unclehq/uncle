@@ -566,6 +566,32 @@ def reviewer_packet(response, output):
     return json.dumps(payload, indent=2, sort_keys=True) + '\n'
 
 
+def reviewer_json_artifact(response, output):
+    """Return a canonical parent-review JSON artifact without worker coercion.
+
+    Both worker packets and parent artifacts now use ``.json`` paths.  A
+    filename suffix therefore cannot decide their schema: adversarial-review
+    emits ``kind: adversarial-review``, while only panel specialists emit a
+    ``*-worker-packet`` kind.  The stage driver owns kind-specific validation
+    after this boundary; here we only reject prose or an invalid envelope.
+    """
+    text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    payload_text = _artifact_json_module().unfence_json(text)
+    try:
+        payload = json.loads(payload_text)
+    except json.JSONDecodeError as error:
+        raise InvalidReviewerDocument('Reviewer response is not valid JSON for %s: %s' % (Path(output).name, error))
+    if (not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1'
+            or not isinstance(payload.get('kind'), str) or payload['kind'].endswith('-worker-packet')):
+        raise InvalidReviewerDocument('Reviewer response is not a canonical JSON artifact for %s' % Path(output).name)
+    return json.dumps(payload, indent=2, sort_keys=True) + '\n'
+
+
+def reviewer_expects_worker_packet(stage, output):
+    """Whether this reviewer invocation owns a specialist panel packet."""
+    return '-worker-' in (stage or '') or '-panel' in Path(output).parent.name
+
+
 def reviewer_document(response):
     """A reviewer's response with any leading think-aloud removed.
 
@@ -1028,7 +1054,9 @@ def main(side, args):
             add_usage(attempt_usage)
             if side == 'reviewer' and output:
                 if Path(output).suffix == '.json':
-                    document = reviewer_packet(text, output)
+                    document = (reviewer_packet(text, output)
+                                if reviewer_expects_worker_packet(stage, output)
+                                else reviewer_json_artifact(text, output))
                 else:
                     document = reviewer_document(text)
                     validate_reviewer_document(output, document)
@@ -1079,7 +1107,8 @@ def main(side, args):
             # checklist or audit retry the adversarial-review finding format,
             # steering an already-struggling model further off course.
             prompt += ('\n\nThe previous response was rejected: ' + str(error) +
-                       ('\nReturn only one valid JSON worker packet as your final message.' if Path(output).suffix == '.json' else
+                       ('\nReturn only one valid JSON worker packet as your final message.' if reviewer_expects_worker_packet(stage, output) else
+                        '\nReturn only one valid canonical JSON artifact as your final message.' if Path(output).suffix == '.json' else
                         '\nReturn only the complete ' + Path(output).name + ' as your final message, in the exact layout already specified above. Do not summarize your work, describe a plan to write it, or promise to produce it later. You have no write or shell tools in this role; the document text you return is the only artifact.'))
             continue
         except (ValueError, OSError) as error:
@@ -1094,7 +1123,20 @@ def main(side, args):
             # and a reviewer-owned artifact is the one thing no later stage may
             # edit. Strip here, and only when a document is actually present --
             # a response with no heading is a real failure, not a preamble.
-            Path(output).write_bytes((document if document is not None else (reviewer_packet(text, output) if Path(output).suffix == '.json' else reviewer_document(text))).encode('utf-8'))
+            # Keep this fallback on the same routing rule as the normal
+            # reviewer path above.  Parent artifacts and worker packets both
+            # use .json paths; choosing by suffix would turn a valid parent
+            # artifact (for example ADVERSARIAL_REVIEW.json) into a rejected
+            # worker packet when a caller reaches this defensive path.
+            if document is None:
+                document = (
+                    reviewer_packet(text, output)
+                    if reviewer_expects_worker_packet(stage, output)
+                    else reviewer_json_artifact(text, output)
+                    if Path(output).suffix == '.json'
+                    else reviewer_document(text)
+                )
+            Path(output).write_bytes(document.encode('utf-8'))
         print(text)
         if usage:
             print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,

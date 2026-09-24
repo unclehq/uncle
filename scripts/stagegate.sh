@@ -1568,13 +1568,14 @@ run_adversarial_review_panel() {
     local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid
     local -a pids=()
     [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
+    ensure_project_plan_json || return 1
     rm -rf "$directory"
     mkdir -p "$directory/prompts"
     for lens in requirements regression security testability; do
         prompt="$directory/prompts/$lens.md"
         output="$directory/$lens.json"
         cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
-        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        printf '\n## Canonical inputs (binding)\n\nRead only `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json` and `.uncle/workflow/documents/PROJECT_PLAN.json`.\n\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
         ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "adversarial-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/adversarial-review-worker-$lens.log" 2>&1 &
         pids+=("$!")

@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'scripts/lib'))
-from self_hosted import read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models, parse_arguments, reviewer_document
+from self_hosted import read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models, parse_arguments, reviewer_document, reviewer_packet, reviewer_json_artifact, reviewer_expects_worker_packet, InvalidReviewerDocument
 from process_tree import bash_executable
 
 
@@ -83,6 +83,50 @@ class SelfHosted(unittest.TestCase):
                 # runner/model, never an invented "*-review" config stage.
                 self.assertEqual(settings(self.config, parent + '-review-worker-probe'),
                                  dict(model='deepseek', **profile))
+
+    def test_parent_json_artifacts_are_not_misclassified_as_worker_packets(self):
+        parent = '{"schema":"uncle.artifact/v1","kind":"adversarial-review","findings":[],"overall_assessment":"Clean."}'
+        worker = '{"schema":"uncle.artifact/v1","kind":"adversarial-review-worker-packet","findings":[]}'
+        self.assertFalse(reviewer_expects_worker_packet('adversarial-review', self.root/'ADVERSARIAL_REVIEW.json'))
+        self.assertTrue(reviewer_expects_worker_packet('adversarial-review-worker-security', self.root/'panel/security.json'))
+        self.assertIn('"kind": "adversarial-review"', reviewer_json_artifact(parent, self.root/'ADVERSARIAL_REVIEW.json'))
+        self.assertIn('worker-packet', reviewer_packet(worker, self.root/'panel/security.json'))
+        with self.assertRaises(InvalidReviewerDocument):
+            reviewer_packet(parent, self.root/'ADVERSARIAL_REVIEW.json')
+
+    def test_every_parent_json_family_bypasses_worker_packet_validation(self):
+        # A .json suffix is shared by parent-stage artifacts and panel
+        # packets.  Exercise every current parent/worker family so a new
+        # runner adapter cannot reintroduce suffix-based routing.
+        parents = (
+            ('adversarial-review', 'ADVERSARIAL_REVIEW.json', 'adversarial-review'),
+            ('updated-plan', 'UPDATED_PROJECT_PLAN.json', 'updated-project-plan'),
+            ('updated-change-plan', 'UPDATED_CHANGE_PLAN.json', 'updated-change-plan'),
+            ('test-review', 'TEST_REVIEW.json', 'test-review'),
+            ('manual-checklist', 'MANUAL_CHECKLIST.json', 'manual-checklist'),
+            ('execute-checklist', 'VERIFICATION_REPORT.json', 'verification-report'),
+            ('final-audit', 'FINAL_AUDIT.json', 'final-audit'),
+        )
+        for stage, filename, kind in parents:
+            output = self.root / filename
+            response = json.dumps({'schema': 'uncle.artifact/v1', 'kind': kind})
+            self.assertFalse(reviewer_expects_worker_packet(stage, output), stage)
+            rendered = reviewer_json_artifact(response, output)
+            self.assertIn('"kind": "' + kind + '"', rendered)
+            with self.assertRaises(InvalidReviewerDocument, msg=stage):
+                reviewer_packet(response, output)
+
+        workers = (
+            'adversarial-review-worker-security',
+            'updated-plan-review-worker-scope',
+            'updated-change-plan-review-worker-scope',
+            'test-review-worker-oracle',
+            'manual-checklist-review-worker-coverage',
+            'execute-checklist-worker-group-1-batch-1',
+            'final-audit-review-worker-regression',
+        )
+        for stage in workers:
+            self.assertTrue(reviewer_expects_worker_packet(stage, self.root/'worker-panel/result.json'), stage)
 
     def test_shell_runner_mapping_matches_every_worker_family(self):
         workers_and_parents = (

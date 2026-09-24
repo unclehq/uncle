@@ -539,6 +539,11 @@ def reviewer_packet(response, output):
         if not isinstance(rows, list) or any(not isinstance(row, dict) or not isinstance(row.get('id'), str) or not isinstance(row.get('status'), str) or not isinstance(row.get('evidence'), str) for row in rows):
             raise InvalidReviewerDocument('Reviewer test-review packet rows must be an array for %s' % Path(output).name)
         return json.dumps(payload, indent=2, sort_keys=True) + '\n'
+    if payload.get('kind') == 'manual-checklist-worker-packet':
+        checks = payload.get('checks')
+        if not isinstance(checks, list) or any(not isinstance(check, dict) or not isinstance(check.get('id'), str) or not isinstance(check.get('exact_action'), str) or not isinstance(check.get('expected_result'), str) for check in checks):
+            raise InvalidReviewerDocument('Reviewer manual-checklist packet checks must be an array for %s' % Path(output).name)
+        return json.dumps(payload, indent=2, sort_keys=True) + '\n'
     findings = payload.get('findings')
     if not isinstance(findings, list):
         raise InvalidReviewerDocument('Reviewer packet findings must be an array for %s' % Path(output).name)

@@ -99,6 +99,11 @@ def worker_packet(text, runner='reviewer'):
         if not isinstance(rows, list) or any(not isinstance(row, dict) or not isinstance(row.get('id'), str) or not isinstance(row.get('status'), str) or not isinstance(row.get('evidence'), str) for row in rows):
             raise ValueError('%s JSON test-review worker packet rows must be an array of id/status/evidence objects' % runner)
         return json.dumps(payload, indent=2, sort_keys=True) + '\n'
+    if payload.get('kind') == 'manual-checklist-worker-packet':
+        checks = payload.get('checks')
+        if not isinstance(checks, list) or any(not isinstance(check, dict) or not isinstance(check.get('id'), str) or not isinstance(check.get('exact_action'), str) or not isinstance(check.get('expected_result'), str) for check in checks):
+            raise ValueError('%s JSON manual-checklist worker packet checks must be an array of id/exact_action/expected_result objects' % runner)
+        return json.dumps(payload, indent=2, sort_keys=True) + '\n'
     if not isinstance(payload.get('findings'), list):
         raise ValueError('%s JSON worker packet findings must be an array' % runner)
     required = ('id', 'gap', 'evidence', 'risk', 'required_correction') \

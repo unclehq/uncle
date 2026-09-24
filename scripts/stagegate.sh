@@ -1744,9 +1744,9 @@ PARALLEL_CHECKLIST_WORKERS="${WORKFLOW_PARALLEL_CHECKLIST_WORKERS:-1}"
 # for the synthesizer, not a reason to throw away results from its siblings.
 run_parallel_checklist_workers() {
     local groups="$PWD/$STATE_DIR/checklist-groups/groups.txt"
-    local directory="" group id prompt evidence
+    local directory="" group id prompt packet batch_label
     local worker_count=0 status pid jobs
-    local -a ids pids pid_ids
+    local -a ids pids pid_ids packet_names
 
     [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
     jobs="${WORKFLOW_VERIFY_JOBS:-4}"
@@ -1780,9 +1780,10 @@ run_parallel_checklist_workers() {
     # first child. Some runner adapters clean transient stage state as they
     # start; preparing siblings lazily made that cleanup race this driver's
     # writes.
-    local n batches chunk start end i batch_index
+    local n batches chunk start end i batch_index group_index=0
     while IFS= read -r group; do
         read -r -a ids <<< "$group"
+        group_index=$((group_index + 1))
         n="${#ids[@]}"
         [[ "$n" -gt 1 ]] || continue
         batches=$(( n < jobs ? n : jobs ))
@@ -1791,23 +1792,26 @@ run_parallel_checklist_workers() {
         batch_index=0
         while [[ "$i" -lt "$n" ]]; do
             batch_index=$((batch_index + 1))
-            prompt="$directory/prompts/batch-$batch_index.md"
+            batch_label="group-$group_index-batch-$batch_index"
+            prompt="$directory/prompts/$batch_label.md"
+            packet="$directory/$batch_label.json"
             cp "$ROOT/prompts/change/execute-checklist-worker.md" "$prompt"
             printf '\n## Assigned checks\n\n' >> "$prompt"
             end=$(( i + chunk < n ? i + chunk : n ))
             for ((start = i; start < end; start++)); do
                 id="${ids[$start]}"
-                evidence="$directory/$id.md"
-                printf -- '- Execute `%s`. Write its evidence to `%s`.\n' "$id" "$evidence" >> "$prompt"
-                # Backticks are Markdown here, not shell command substitution.
-                printf '%s\n' "- $id: \`$evidence\`" >> "$directory/README.md"
+                printf -- '- Execute `%s`.\n' "$id" >> "$prompt"
             done
+            printf '\n## Required result packet\n\nWrite the complete JSON packet to `%s`.\n' "$packet" >> "$prompt"
+            packet_names+=("$batch_label")
             i="$end"
         done
     done < "$groups"
 
+    group_index=0
     while IFS= read -r group; do
         read -r -a ids <<< "$group"
+        group_index=$((group_index + 1))
         n="${#ids[@]}"
         [[ "$n" -gt 1 ]] || continue
         batches=$(( n < jobs ? n : jobs ))
@@ -1815,12 +1819,13 @@ run_parallel_checklist_workers() {
         pids=()
         pid_ids=()
         for ((batch_index = 1; batch_index <= batches; batch_index++)); do
-            prompt="$directory/prompts/batch-$batch_index.md"
+            batch_label="group-$group_index-batch-$batch_index"
+            prompt="$directory/prompts/$batch_label.md"
             ( SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-                run_claude "$prompt" "execute-checklist-worker-batch-$batch_index" \
-            ) > "$LOG_DIR/execute-checklist-worker-batch-$batch_index.log" 2>&1 &
+                run_claude "$prompt" "execute-checklist-worker-$batch_label" \
+            ) > "$LOG_DIR/execute-checklist-worker-$batch_label.log" 2>&1 &
             pids+=("$!")
-            pid_ids+=("batch-$batch_index")
+            pid_ids+=("$batch_label")
         done
         # Batches per group are already bounded at `jobs`, so every batch in
         # a group launches together; the barrier is only between groups.
@@ -1829,10 +1834,12 @@ run_parallel_checklist_workers() {
             wait "$pid" || echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run its assigned rows." >&2
         done
     done < "$groups"
+    python3 "$ROOT/scripts/lib/checklist_worker_packets.py" "$directory" \
+        "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" --expected "${packet_names[@]}" || return 1
     CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"
     cp "$ROOT/prompts/execute-checklist.md" "$CHECKLIST_EXECUTE_PROMPT"
-    printf '\n## Parallel worker handoff\n\nRead `%s` and every listed evidence file before reconciling reports.\n' \
-        "$directory/README.md" >> "$CHECKLIST_EXECUTE_PROMPT"
+    printf '\n## Collated worker results (binding)\n\nRead only `%s/documents/EXECUTE_CHECKLIST_WORKERS.json` for worker execution results. Do not read the worker directory, README, individual worker prompts, or raw worker output. It is complete, validated, ordered, and is the authoritative worker handoff. Do not rerun checks already represented there merely to compose reports.\n' \
+        "$STATE_DIR" >> "$CHECKLIST_EXECUTE_PROMPT"
     return 0
 }
 

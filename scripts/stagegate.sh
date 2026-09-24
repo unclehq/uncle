@@ -1606,9 +1606,8 @@ run_test_review_panel() {
     for pid in "${pids[@]}"; do
         wait "$pid" || echo 'Test-review worker failed; canonical packet validation will stop the panel.' >&2
     done
-    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json" --kind test-review-worker-packet --expected coverage integrity assertions oracle || return 1
-    TEST_REVIEW_PROMPT="$directory/synthesis.md"; cp "$ROOT/prompts/test-review.md" "$TEST_REVIEW_PROMPT"
-    printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/TEST_REVIEW_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$TEST_REVIEW_PROMPT"
+    python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" .uncle/docs/TEST_REVIEW.md coverage integrity assertions oracle || return 1
+    cp .uncle/docs/TEST_REVIEW.md "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
 }
 
 run_manual_checklist_panel() {
@@ -2052,6 +2051,11 @@ run_stage() {
                 cp .uncle/docs/TEST_REVIEW.md "$STATE_DIR/previous-test-review.md"
             fi
             rm -f .uncle/docs/TEST_REVIEW.md
+            run_test_review_panel
+            if [[ -s .uncle/docs/TEST_REVIEW.md ]]; then
+                echo 'Test-review fast path: merged authoritative worker rows without parent synthesis.'
+                return 0
+            fi
             if stage_uses_self_hosted test-review REVIEWER; then
                 # Split into two calls: a long, read-heavy investigation with
                 # no strict output shape, then a short, mechanical conversion

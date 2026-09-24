@@ -191,6 +191,12 @@ def render_acceptance(payload):
     seen = set()
     lines = []
     narrative = payload.get('narrative')
+    # Rows are the sole authoritative representation of the acceptance gate.
+    # Some models redundantly paste a complete Markdown gate into `narrative`;
+    # retaining it would render two gates and make an otherwise valid JSON
+    # artifact fail its presentation-only validator.
+    if narrative:
+        narrative = re.split(r'^## Acceptance gate[ \t\r]*$', narrative, maxsplit=1, flags=re.M)[0].rstrip()
     if narrative:
         lines += [narrative.strip(), '']
     lines += ['## Acceptance gate', '', '| ID | Required | Status | Evidence |', '|---|---|---|---|']

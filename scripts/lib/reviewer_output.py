@@ -94,6 +94,11 @@ def worker_packet(text, runner='reviewer'):
     if (not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1'
             or not str(payload.get('kind', '')).endswith('-worker-packet')):
         raise ValueError('%s response is not an uncle JSON worker packet' % runner)
+    if payload.get('kind') == 'test-review-worker-packet':
+        rows = payload.get('rows')
+        if not isinstance(rows, list) or any(not isinstance(row, dict) or not isinstance(row.get('id'), str) or not isinstance(row.get('status'), str) or not isinstance(row.get('evidence'), str) for row in rows):
+            raise ValueError('%s JSON test-review worker packet rows must be an array of id/status/evidence objects' % runner)
+        return json.dumps(payload, indent=2, sort_keys=True) + '\n'
     if not isinstance(payload.get('findings'), list):
         raise ValueError('%s JSON worker packet findings must be an array' % runner)
     required = ('id', 'gap', 'evidence', 'risk', 'required_correction') \

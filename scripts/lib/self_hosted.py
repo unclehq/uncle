@@ -534,6 +534,11 @@ def reviewer_packet(response, output):
     if (not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1'
             or not str(payload.get('kind', '')).endswith('-worker-packet')):
         raise InvalidReviewerDocument('Reviewer response is not a worker packet for %s' % Path(output).name)
+    if payload.get('kind') == 'test-review-worker-packet':
+        rows = payload.get('rows')
+        if not isinstance(rows, list) or any(not isinstance(row, dict) or not isinstance(row.get('id'), str) or not isinstance(row.get('status'), str) or not isinstance(row.get('evidence'), str) for row in rows):
+            raise InvalidReviewerDocument('Reviewer test-review packet rows must be an array for %s' % Path(output).name)
+        return json.dumps(payload, indent=2, sort_keys=True) + '\n'
     findings = payload.get('findings')
     if not isinstance(findings, list):
         raise InvalidReviewerDocument('Reviewer packet findings must be an array for %s' % Path(output).name)

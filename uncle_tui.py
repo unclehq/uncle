@@ -5498,7 +5498,10 @@ class UncleTUI:
             active = any(raw in stats["active"] for raw in raw_stages) if raw_stages else (stage in stats["active"])
             result = group.get("last_result", {})
             if is_rollup:
-                any_failed = group.get("any_failed", False)
+                # A retried worker can fail once and later succeed. Use the
+                # latest status for each raw stage, not a sticky history.
+                any_failed = any(status.get("failed")
+                                 for status in group.get("_worker_statuses", {}).values())
             else:
                 any_failed = result.get("process_exit") not in (None, 0) or result.get("reported_error") in (True, "true")
             title = ("> " if active else "") + stage

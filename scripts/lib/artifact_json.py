@@ -100,6 +100,20 @@ def unfence_json(text):
             obj = _extract_balanced_object(candidate)
             if obj:
                 return obj
+
+    # A few self-hosted review models narrate their conclusion and then append
+    # the requested bare JSON object on the same response, without a fence or
+    # backticks.  That is still recoverable when the embedded object is real
+    # JSON.  Require a successful parse here so ordinary Markdown that happens
+    # to mention a JavaScript-looking `{foo: 1}` remains ordinary Markdown.
+    embedded = _extract_balanced_object(stripped)
+    if embedded:
+        try:
+            json.loads(embedded)
+        except json.JSONDecodeError:
+            pass
+        else:
+            return embedded
     return stripped
 
 def path(project, name):

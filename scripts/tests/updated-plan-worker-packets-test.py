@@ -70,6 +70,11 @@ class WorkerPackets(unittest.TestCase):
         for runner in ('reviewer-claude.sh', 'reviewer-kimi.sh', 'reviewer-cline.sh'):
             self.assertIn('reviewer_output.py', (ROOT / 'scripts' / runner).read_text())
 
+    def test_self_hosted_reviewer_recovers_unfenced_packet_after_narration(self):
+        response = 'The dispositions are complete. ' + json.dumps(packet())
+        result = json.loads(SELF_HOSTED.reviewer_packet(response, 'packet.json'))
+        self.assertEqual(result['kind'], 'updated-plan-worker-packet')
+
     def test_parents_only_receive_collated_packet(self):
         for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
             text = (ROOT / source).read_text()

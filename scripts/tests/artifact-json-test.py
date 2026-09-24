@@ -33,6 +33,17 @@ class UnfenceJson(unittest.TestCase):
         text = "Here's the review:\n```json\n{\"a\": 1}\n```"
         self.assertEqual(module.unfence_json(text), '{"a": 1}')
 
+    def test_leading_narration_before_an_unfenced_final_object_is_dropped(self):
+        # Live updated-plan worker output: the model explained that the lens
+        # was clean, then appended the exact requested packet unwrapped.
+        text = ('The review is complete; no corrections are needed. '
+                '{"schema":"uncle.artifact/v1",'
+                '"kind":"updated-plan-worker-packet","findings":[]}')
+        self.assertEqual(
+            module.unfence_json(text),
+            '{"schema":"uncle.artifact/v1","kind":"updated-plan-worker-packet","findings":[]}',
+        )
+
     def test_single_backtick_inline_code_wrapping_is_stripped(self):
         # Observed live: the model wrapped its JSON in a single inline-code
         # backtick ("`{...}`") rather than a triple-backtick block fence.

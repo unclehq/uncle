@@ -46,6 +46,13 @@ class Document(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate(p)
             self.assertEqual(p.read_text(), '## MC-1 — No content at all\nJust prose, no fields.\n')
+
+    def test_rejects_commit_history_as_a_checklist_prerequisite(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / 'checklist'
+            p.write_text('## MC-403\nExact action: Diff current calc.js against the versions referenced in AUTOMATED_TEST_REPORT.md\nExpected result: No drift\n')
+            with self.assertRaisesRegex(ValueError, 'Git history or a prior committed version'):
+                validate(p)
     def test_json_response_is_validated_rendered_and_exported(self):
         import json
         with tempfile.TemporaryDirectory() as d:

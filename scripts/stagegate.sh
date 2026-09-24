@@ -3200,6 +3200,15 @@ while true; do
             run_green_check || true
             plan_delivery_summary
             check_verification_inputs
+            # New applications may have no commits. A historical-baseline
+            # checklist row is an invalid contract, so regenerate it rather
+            # than misclassifying that normal state as blocked setup.
+            if ! python3 "$ROOT/scripts/lib/checklist_document.py" .uncle/docs/MANUAL_CHECKLIST.md >/dev/null 2>&1; then
+                echo 'Checklist contract requires unavailable commit history; regenerating it from current-tree evidence.'
+                rm -f "$STATE_DIR/manual-checklist-format-retry.md"
+                set_state MANUAL_CHECKLIST
+                continue
+            fi
             snapshot_checklist_checks
             snapshot_checklist_groups
             ensure_checklist_runner execute-checklist || exit 1

@@ -33,6 +33,13 @@ LABEL_SYNONYMS = (
     (_label_pattern(r'Pass\s+condition'), r'\g<1>- Expected result: '),
 )
 
+# Workflows complete before a project makes its first commit. A checklist
+# action requiring history is an invalid contract, not an environment setup
+# task: current-tree workflow snapshots are the supported evidence source.
+COMMIT_BASELINE_ACTION = re.compile(
+    r'\b(?:git\s+(?:history|log|diff)|prior\s+(?:checked[ -]in|committed)\s+(?:version|revision)|'
+    r'diff\s+current\b[^\n]{0,180}\bversions?\s+referenced)\b', re.I)
+
 
 def normalize_labels(text):
     for pattern, replacement in LABEL_SYNONYMS:
@@ -83,6 +90,8 @@ def validate_text(text):
     # Resource/dependency errors continue to use the existing serial fallback.
     if not re.search(r'\b(?:exact action|action|steps)\b',text,re.I) or not re.search(r'\bexpected(?: result)?\b',text,re.I):
         raise ValueError('Checklist lacks actions or expected results')
+    if COMMIT_BASELINE_ACTION.search(text):
+        raise ValueError('Checklist requires Git history or a prior committed version; use current-tree workflow snapshots instead')
     return checks
 
 

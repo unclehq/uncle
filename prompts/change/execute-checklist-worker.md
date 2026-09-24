@@ -24,6 +24,11 @@ below (never write separate evidence files), using exactly:
 - Status: PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, or NOT RUN
 - Defect reference
 
+A project is allowed to have zero Git commits and entirely untracked files.
+Do not require a commit, Git history, or a prior checked-in version as setup.
+Use current approved files and driver/workflow snapshots as evidence; an
+initial snapshot with no predecessor is normal, not a `BLOCKED-SETUP` result.
+
 Never mark an unexecuted check PASS. A blocked result must name the missing
 setup, person, or environmental limit. Finish every assigned ID before
 ending; a worker that stops early leaves the rest to the driver's

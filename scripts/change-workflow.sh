@@ -2320,6 +2320,7 @@ run_final_audit_panel() {
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit worker failed; canonical packet validation will stop the panel.' >&2; done
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json" --kind final-audit-worker-packet --expected verification scope regression waivers || return 1
+    python3 -B "$ROOT/scripts/lib/final_audit_packets.py" . || return 1
     FINAL_AUDIT_PROMPT="$directory/synthesis.md"
     cp "$ROOT/prompts/change/final-audit.md" "$FINAL_AUDIT_PROMPT"
     printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/FINAL_AUDIT_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$FINAL_AUDIT_PROMPT"
@@ -3286,6 +3287,14 @@ REPAIR
             snapshot_checklist_checks
             ensure_checklist_runner execute-checklist || exit 1
             run_parallel_checklist_workers
+            if [[ -s "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" ]]; then
+                python3 -B "$ROOT/scripts/lib/execute_checklist_reports.py" . || exit 1
+                echo 'Execute-checklist fast path: rendered authoritative worker results without parent synthesis.'
+                PROGRESS_TOTAL=0
+                wait_green_check_bg || exit $?
+                set_state VALIDATE_CHECKLIST
+                continue
+            fi
             PROGRESS_TOTAL="$(grep -oE 'MC-[0-9]+' .uncle/docs/MANUAL_CHECKLIST.md 2>/dev/null \
                 | sort -u | grep -c . || echo 0)"
             PROGRESS_LABEL="checklist"
@@ -3317,6 +3326,11 @@ REPAIR
             if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine freeze || exit 1; fi
             rm -f .uncle/docs/FINAL_AUDIT.md
             run_final_audit_panel
+            if [[ -s .uncle/docs/FINAL_AUDIT.md ]]; then
+                echo 'Final-audit fast path: rendered authoritative worker findings without parent synthesis.'
+                set_state VALIDATE_AUDIT
+                continue
+            fi
             # A malformed audit gets one real re-run with the exact validator
             # diagnosis appended, the same one-shot recovery .uncle/docs/ADVERSARIAL_REVIEW.md
             # and .uncle/docs/MANUAL_CHECKLIST.md get.

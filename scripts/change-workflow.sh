@@ -2294,6 +2294,18 @@ run_updated_change_plan_panel() {
     printf '\n## Collated worker findings (binding)\n\nRead only `%s/documents/UPDATED_CHANGE_PLAN_WORKERS.json` for specialist findings. Do not read the worker directory or individual worker prompts/packets. It is complete, deduplicated, ordered, and records conflicts explicitly.\n' "$STATE_DIR" >> "$UPDATED_PLAN_PROMPT"
 }
 
+run_updated_change_plan_fast_path() {
+    require_file "$STATE_DIR/documents/CHANGE_PLAN.json" || return 1
+    require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" || return 1
+    # A clean review has no correction, ownership, verification, or scope
+    # decision to make.  Preserve the canonical change plan and explicitly
+    # record its empty disposition set; validation below renders it to Markdown.
+    python3 -B "$ROOT/scripts/lib/updated_plan_fast_path.py" --change \
+        "$STATE_DIR/documents/CHANGE_PLAN.json" \
+        "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
+        .uncle/docs/CHANGE_PLAN.md
+}
+
 run_final_audit_panel() {
     local directory="$STATE_DIR/final-audit-panel" lens prompt output pid
     local -a pids=()
@@ -2886,6 +2898,14 @@ while true; do
             # and it keeps the record of what the review actually changed.
             cp .uncle/docs/CHANGE_PLAN.md "$STATE_DIR/CHANGE_PLAN.pre-review.md"
 
+            # A clean adversarial review needs no specialist packets or parent
+            # synthesis.  The fast path still takes the normal JSON ingestion,
+            # validation, rendering, and approval route below.
+            if run_updated_change_plan_fast_path; then
+                echo 'Updated-change-plan fast path: no adversarial findings; copied canonical change plan without model synthesis.'
+                set_state VALIDATE_UPDATED_PLAN
+                continue
+            fi
             run_updated_change_plan_panel
             run_claude "${UPDATED_PLAN_PROMPT:-prompts/change/updated-change-plan.md}" updated-change-plan \
                 "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \

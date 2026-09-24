@@ -25,12 +25,32 @@ def build(project_plan, review, output):
     return True
 
 
+def build_change(change_plan, review, output):
+    """Carry a clean change plan through its post-review revision locally.
+
+    CHANGE_PLAN.md is rendered from this JSON by the normal ingest step.  The
+    explicit empty dispositions list is meaningful: it records that the
+    adversarial review had nothing to disposition, rather than omitting the
+    post-review contract altogether.
+    """
+    plan = read(change_plan, 'change-plan')
+    assessment = read(review, 'adversarial-review')
+    if assessment.get('findings'):
+        return False
+    result = dict(plan, dispositions=[])
+    Path(output).write_text(json.dumps(result, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    return True
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('--change', action='store_true',
+                        help='copy a change-plan instead of an application plan')
     parser.add_argument('project_plan'); parser.add_argument('review'); parser.add_argument('output')
     args = parser.parse_args()
     try:
-        raise SystemExit(0 if build(args.project_plan, args.review, args.output) else 1)
+        handler = build_change if args.change else build
+        raise SystemExit(0 if handler(args.project_plan, args.review, args.output) else 1)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print('updated-plan fast path: ' + str(error))
         raise SystemExit(1)

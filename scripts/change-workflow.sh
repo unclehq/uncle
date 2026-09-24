@@ -2341,7 +2341,9 @@ run_checklist_panel() {
     for lens in coverage invariants resources regressions; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
-        printf '\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass.\n' "$lens" "$kind" >> "$prompt"
+        local range
+        case "$lens" in coverage) range='MC-100 through MC-199';; invariants) range='MC-200 through MC-299';; resources) range='MC-300 through MC-399';; regressions) range='MC-400 through MC-499';; esac
+        printf '\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass. Use IDs only in %s; no other worker owns that range.\n' "$lens" "$kind" "$range" >> "$prompt"
         ( run_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens" "$CODEX_EFFORT_CHECKLIST" ) > "$LOG_DIR/manual-checklist-$kind-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done

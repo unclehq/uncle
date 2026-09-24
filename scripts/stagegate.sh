@@ -1020,6 +1020,10 @@ ensure_project_plan_json() {
     local source=".uncle/docs/PROJECT_PLAN.md"
     local canonical="$STATE_DIR/documents/PROJECT_PLAN.json"
     [[ -s "$canonical" ]] && return 0
+    # A plan author writes JSON to the approval-view path first; ingest it
+    # before considering the legacy Markdown bridge below.
+    python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected "$source" . || return 1
+    [[ -s "$canonical" ]] && return 0
     # Compatibility bridge for a pre-JSON plan that reached an approval gate
     # before this migration.  This is deterministic parsing at the boundary,
     # not a downstream Markdown input: after export, every later stage reads

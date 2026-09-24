@@ -32,7 +32,7 @@ export DOCUMENT_BUDGET_SOURCE="$(generated_input_path CHANGE_REQUEST.md)"
 # composed prompts under .uncle/workflow working.
 resolve_prompt() {
     local p="$1"
-    if [[ -e "$p" ]]; then
+    if [[ "$p" == /* || -e "$p" ]]; then
         printf '%s' "$p"
     else
         printf '%s' "$ROOT/$p"
@@ -1920,8 +1920,13 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
-        supervision_prompt "$effective_prompt" "$log_name" "$LOG_DIR/${log_name}.jsonl"
-        effective_prompt="$SUPERVISION_PROMPT"
+        case "$log_name" in
+            *-worker-*) ;;
+            *)
+                supervision_prompt "$effective_prompt" "$log_name" "$LOG_DIR/${log_name}.jsonl"
+                effective_prompt="$SUPERVISION_PROMPT"
+                ;;
+        esac
         ( "${client_cmd[@]}" "${flags[@]}" \
             < "$effective_prompt" \
             2>&1 \

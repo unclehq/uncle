@@ -171,6 +171,15 @@ class WorkerPackets(unittest.TestCase):
         for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
             self.assertIn('validate_reviewer_artifact', (ROOT/source).read_text())
 
+    def test_worker_prompts_preserve_absolute_paths_and_bypass_supervision(self):
+        for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
+            text = (ROOT/source).read_text()
+            self.assertIn('[[ "$p" == /* || -e "$p" ]]', text)
+            start = text.index('effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"')
+            block = text[start:start + 500]
+            self.assertIn('*-worker-*) ;;', block)
+            self.assertIn('supervision_prompt "$effective_prompt"', block)
+
     def test_every_gated_stage_prefers_previous_canonical_json(self):
         gates = (ROOT/'scripts/lib/gates.sh').read_text()
         self.assertIn('# Canonical workflow inputs (binding)', gates)

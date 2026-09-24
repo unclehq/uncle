@@ -34,7 +34,11 @@ export DOCUMENT_BUDGET_SOURCE="$(generated_input_path REQUIREMENTS.md)"
 # composed prompts under .uncle/workflow working.
 resolve_prompt() {
     local p="$1"
-    if [[ -e "$p" ]]; then
+    # A caller can materialize a temporary absolute prompt immediately before
+    # invoking us. Preserve that identity even if another process has removed
+    # it by the time this check runs: prefixing it with ROOT turns
+    # /var/.../batch-4.md into an impossible Cellar-relative pathname.
+    if [[ "$p" == /* || -e "$p" ]]; then
         printf '%s' "$p"
     else
         printf '%s' "$ROOT/$p"
@@ -1274,8 +1278,16 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
-        supervision_prompt "$effective_prompt" "$log_name" "$LOG_DIR/${log_name}.jsonl"
-        effective_prompt="$SUPERVISION_PROMPT"
+        # Worker fan-out has no decision authority and already receives a
+        # compact, schema-bound prompt. Supervising every batch wastes calls
+        # and can mistake a transient prompt path for a parent-stage failure.
+        case "$log_name" in
+            *-worker-*) ;;
+            *)
+                supervision_prompt "$effective_prompt" "$log_name" "$LOG_DIR/${log_name}.jsonl"
+                effective_prompt="$SUPERVISION_PROMPT"
+                ;;
+        esac
         local -a model_args=()
         [[ -n "$model" ]] && model_args=(--model "$model")
         local started="$SECONDS"

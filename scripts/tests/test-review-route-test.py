@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+import importlib.util
+from pathlib import Path
+import unittest
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location('route', ROOT / 'scripts/lib/test_review_route.py')
+ROUTE = importlib.util.module_from_spec(spec); spec.loader.exec_module(ROUTE)
+def report(results='PASS', marker='incomplete-handoff placeholder'):
+    return {'schema':'uncle.artifact/v1','kind':'acceptance-report','narrative':marker,'rows':[{'id':'RESULTS','required':True,'status':results},{'id':'COVERAGE','required':True,'status':'FAIL','evidence':marker}]}
+class TestReviewRoute(unittest.TestCase):
+    fallback = 'The implementation stage omitted its required test handoff.'
+    def test_routes_passing_driver_fallback(self): self.assertTrue(ROUTE.evidence_handoff_only(report(), self.fallback))
+    def test_failing_driver_does_not_route(self): self.assertFalse(ROUTE.evidence_handoff_only(report('FAIL'), self.fallback))
+    def test_code_failure_does_not_route(self): self.assertFalse(ROUTE.evidence_handoff_only(report(marker='calculator result is wrong'), self.fallback))
+if __name__ == '__main__': unittest.main()

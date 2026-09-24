@@ -400,6 +400,7 @@ stage_documents() {
         implementation-investigate)
             printf '%s\n' .uncle/docs/AUTOMATED_TEST_REPORT.md .uncle/docs/CHANGE_TEST_REPORT.md ;;
         test-review) echo .uncle/docs/TEST_REVIEW.md ;;
+        test-evidence-handoff) printf '%s\n' .uncle/docs/AUTOMATED_TEST_REPORT.md .uncle/docs/IMPLEMENTATION_NOTES.md ;;
         manual-checklist|manual-checklist-delta) echo .uncle/docs/MANUAL_CHECKLIST.md ;;
         manual-checklist-base) echo MANUAL_CHECKLIST.base.md ;;
         execute-checklist) printf '%s\n' .uncle/docs/VERIFICATION_REPORT.md .uncle/docs/DEFECTS.md ;;

@@ -1627,9 +1627,8 @@ run_manual_checklist_panel() {
     for pid in "${pids[@]}"; do
         wait "$pid" || echo 'Manual-checklist worker failed; canonical packet validation will stop the panel.' >&2
     done
-    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json" --kind manual-checklist-worker-packet --expected coverage invariants resources regressions || return 1
-    MANUAL_CHECKLIST_PROMPT="$directory/synthesis.md"; cp "$ROOT/prompts/manual-checklist.md" "$MANUAL_CHECKLIST_PROMPT"
-    printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/MANUAL_CHECKLIST_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$MANUAL_CHECKLIST_PROMPT"
+    python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" .uncle/docs/MANUAL_CHECKLIST.md coverage invariants resources regressions || return 1
+    cp .uncle/docs/MANUAL_CHECKLIST.md "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
 }
 
 run_final_audit_panel() {
@@ -2141,6 +2140,10 @@ run_stage() {
             ;;
         MANUAL_CHECKLIST)
             run_manual_checklist_panel
+            if [[ -s .uncle/docs/MANUAL_CHECKLIST.md ]]; then
+                echo 'Manual-checklist fast path: merged authoritative worker packets without parent synthesis.'
+                return 0
+            fi
             # A malformed checklist gets one local, format-only retry, the
             # same one-shot recovery execute-checklist's acceptance table
             # gets below: checklist_document.py already repairs label-only

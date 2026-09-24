@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 
-MARKERS = ('incomplete-handoff placeholder', 'unpopulated fallback', 'no command result or requirement coverage is inferred by this fallback')
+MARKERS = ('incomplete-handoff placeholder', 'unpopulated fallback', 'implementation stage omitted its required test handoff', 'no command result or requirement coverage is inferred by this fallback')
 
 def evidence_handoff_only(payload, automated_report=''):
     if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'acceptance-report': return False

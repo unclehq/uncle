@@ -12,4 +12,5 @@ class TestReviewRoute(unittest.TestCase):
     def test_routes_passing_driver_fallback(self): self.assertTrue(ROUTE.evidence_handoff_only(report(), self.fallback))
     def test_failing_driver_does_not_route(self): self.assertFalse(ROUTE.evidence_handoff_only(report('FAIL'), self.fallback))
     def test_code_failure_does_not_route(self): self.assertFalse(ROUTE.evidence_handoff_only(report(marker='calculator result is wrong'), self.fallback))
+    def test_driver_owned_fallback_wording_routes(self): self.assertTrue(ROUTE.evidence_handoff_only(report(marker='Driver-owned incomplete test evidence: implementation stage omitted its required test handoff'), self.fallback))
 if __name__ == '__main__': unittest.main()

@@ -2263,6 +2263,7 @@ run_adversarial_review_panel() {
         wait "$pid" || echo "Adversarial-review worker failed; canonical packet validation will stop the panel." >&2
     done
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
+    python3 -B "$ROOT/scripts/lib/adversarial_packets.py" . || return 1
     ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"
     cp "$ROOT/prompts/change/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
     printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/ADVERSARIAL_REVIEW_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$ADVERSARIAL_REVIEW_PROMPT"
@@ -2805,6 +2806,11 @@ while true; do
             # leaves the reason nothing was verified, and blocks release.
             envelope_write --stage review --result unavailable --reason 'reviewer did not complete'
             run_adversarial_review_panel
+            if [[ -s .uncle/docs/ADVERSARIAL_REVIEW.md ]]; then
+                echo 'Adversarial-review fast path: rendered authoritative worker findings without parent synthesis.'
+                set_state VALIDATE_ADVERSARIAL_REVIEW
+                continue
+            fi
             adversarial_review_prompt="${ADVERSARIAL_REVIEW_PROMPT:-prompts/change/adversarial-review.md}"
             # A malformed review gets one real re-run with the exact validator
             # diagnosis appended, the same one-shot recovery .uncle/docs/TEST_REVIEW.md and

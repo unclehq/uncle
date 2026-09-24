@@ -25,6 +25,26 @@ class UpdatedPlanFastPath(unittest.TestCase):
             self.assertEqual(result['narrative'].splitlines()[0], '# Updated project plan')
             self.assertEqual(result['dispositions'], [])
 
+    def test_fast_path_writes_json_before_rendering_markdown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            plan = self.write(directory, 'plan.json', {'schema':'uncle.artifact/v1','kind':'plan','narrative':'# Project plan\n\nKeep it','verification_commands':'test -f app','protected_verification_paths':'tests'})
+            review = self.write(directory, 'review.json', {'schema':'uncle.artifact/v1','kind':'adversarial-review','findings':[]})
+            canonical, view = directory / 'UPDATED_PROJECT_PLAN.json', directory / 'UPDATED_PROJECT_PLAN.md'
+            self.assertTrue(FAST.build(plan, review, canonical, view))
+            self.assertEqual(json.loads(canonical.read_text())['kind'], 'plan')
+            self.assertIn('## Protected verification paths', view.read_text())
+            self.assertFalse(view.read_text().lstrip().startswith('{'))
+
+    def test_fast_path_derives_protected_paths_from_legacy_frozen_comment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            plan = self.write(directory, 'plan.json', {'schema':'uncle.artifact/v1','kind':'plan','narrative':'# Project plan','verification_commands':'# Frozen verification paths: src/core.js tests/core.test.js\ntest -f src/core.js'})
+            review = self.write(directory, 'review.json', {'schema':'uncle.artifact/v1','kind':'adversarial-review','findings':[]})
+            output = directory / 'updated.json'
+            self.assertTrue(FAST.build(plan, review, output))
+            self.assertEqual(json.loads(output.read_text())['protected_verification_paths'], 'src/core.js tests/core.test.js')
+
     def test_any_finding_requires_parent_judgment(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)

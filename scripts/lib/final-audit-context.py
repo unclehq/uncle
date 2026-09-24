@@ -121,7 +121,7 @@ def validate(path, project='.'):
         # meaning from free text, and a JSON response was never free text.
         import json as _json
         try:
-            payload = _json.loads(stripped)
+            payload = _artifact_json.loads_response_json(text)
         except ValueError as error:
             raise ValueError('Invalid final-audit JSON response: ' + str(error)) from error
         if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'final-audit':

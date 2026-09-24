@@ -50,6 +50,31 @@ class ReviewerOutput(unittest.TestCase):
         text = '```json\n' + payload + '\n```\n\nAll adversarial findings are addressed above.'
         self.assertTrue(module.looks_like_document(text))
 
+    def test_streamed_assistant_envelope_is_unwrapped_before_json_validation(self):
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'updated-project-plan',
+                   'narrative': '## Architecture\n\nPlan.', 'verification_commands': 'pytest'}
+        envelope = json.dumps({'type': 'assistant', 'message': {'content': [
+            {'type': 'text', 'text': '```json\n' + json.dumps(payload) + '\n```'}]}})
+        self.assertEqual(json.loads(module.check(envelope, 'stream-runner')), payload)
+
+    def test_streamed_result_envelope_is_unwrapped_before_json_validation(self):
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'final-audit',
+                   'findings': [], 'verdict': 'READY'}
+        envelope = json.dumps({'type': 'result', 'result': json.dumps(payload)})
+        self.assertEqual(json.loads(module.check(envelope, 'stream-runner')), payload)
+
+    def test_unescaped_quotes_inside_worker_evidence_are_repaired_before_validation(self):
+        text = ('{"schema":"uncle.artifact/v1","kind":"adversarial-review-worker-packet",'
+                '"findings":[{"id":"AR-SEC-001","summary":"Quote test",'
+                '"evidence":"A crafted input like "1+alert(1)" is rejected.",'
+                '"risk":"XSS","required_correction":"Avoid eval"}]}')
+        packet = module.worker_packet(text, 'local')
+        self.assertIn('1+alert(1)', packet)
+
+    def test_bare_object_keys_and_trailing_comma_are_repaired_before_validation(self):
+        text = '{ schema: "uncle.artifact/v1", kind: "final-audit", findings: [], verdict: "READY", }'
+        self.assertEqual(json.loads(module.check(text, 'local'))['verdict'], 'READY')
+
     def test_narrated_worker_packet_is_returned_as_canonical_json(self):
         packet = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review-worker-packet',
                   'findings': []}

@@ -57,7 +57,7 @@ def validate(path, project='.'):
     if stripped.startswith('{'):
         import json
         try:
-            payload = json.loads(stripped)
+            payload = _artifact_json.loads_response_json(text)
         except ValueError as error:
             raise ValueError('Invalid manual-checklist JSON response: ' + str(error)) from error
         if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'manual-checklist':

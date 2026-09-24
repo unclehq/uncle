@@ -33,7 +33,7 @@ def validate(path, project='.'):
         # schema instead and render the deterministic Markdown other stages
         # (and humans in the PR) still read.
         try:
-            payload = json.loads(stripped)
+            payload = _artifact_json.loads_response_json(text)
         except ValueError as error:
             raise ValueError('Invalid adversarial-review JSON response: ' + str(error)) from error
         if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'adversarial-review':

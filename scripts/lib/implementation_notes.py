@@ -43,7 +43,7 @@ def _load_fragment(path):
     text = Path(path).read_text(encoding='utf-8')
     stripped = _artifact_json().unfence_json(text)
     try:
-        payload = json.loads(stripped)
+        payload = _artifact_json().loads_response_json(text)
     except ValueError:
         return {'raw_markdown': text}
     if not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1' \

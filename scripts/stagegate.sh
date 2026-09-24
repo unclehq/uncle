@@ -881,7 +881,7 @@ stage_model() {
     local lookup_stage="$1"
     local fallback="$DEFAULT_MODEL"
     case "$1" in
-        requirements) lookup_stage="project-plan" ;;
+        requirements|requirements-investigate) lookup_stage="project-plan" ;;
         execute-checklist) fallback="kimi" ;;
     esac
     if uncle_has_config || [[ -n "${UNCLE_RESOLVED_RUNNER:-}" ]]; then
@@ -925,7 +925,7 @@ stage_command_overridden() {
 }
 
 stage_effort() {
-    uncle_effective_stage_effort "$1"
+    uncle_effective_stage_effort "$(stage_runner_config_name "$1")"
 }
 
 # Turn caps bound the worst case — a stage looping on a broken command — and
@@ -940,21 +940,11 @@ stage_turns() {
         implementation-report) fallback=20 ;;
         execute-checklist) fallback=120 ;;
     esac
-    # Self-hosted always takes the investigate/format split for these
-    # stages, and under self-hosted this exact log_name is only ever the
-    # short format pass -- the real reading/coding work happens under the
-    # separate "<stage>-investigate" name instead. A one-document mechanical
-    # conversion has no business near the normal ceiling, and a low cap
-    # closes most of the room for OpenCode's own continuation nudge to
-    # derail the model into a meandering multi-turn conversation that loses
-    # track of the one document it owes -- seen live: a format call burned
-    # 1696s and 30k tokens wandering through a hallucinated "continue or
-    # stop" exchange instead of just answering.
-    case "$1" in
-        updated-plan|project-plan|requirements|preflight|implementation|repair)
-            stage_uses_self_hosted "$1" AGENT && fallback=5
-            ;;
-    esac
+    # All normal document stages, including OpenCode-backed ones, receive the
+    # same 40-step default.  A compact prompt makes a healthy stage finish far
+    # below that ceiling; a five-step special case instead turns one ordinary
+    # exploratory read or write retry into OpenCode's terminal "maximum steps"
+    # failure.  Operators may still override any stage with WORKFLOW_TURNS_*.
     stage_setting TURNS "$1" "$fallback"
 }
 
@@ -1261,8 +1251,20 @@ format_claude_stream() {
 # the split only adds an extra call and an extra place to fail, so it is
 # gated on the stage's actually-configured runner rather than applied
 # unconditionally.
+# Requirements intentionally inherit the project-plan configuration so users
+# configure this coupled early-planning pair once.  Keep runner lookup aligned
+# with the existing model lookup; otherwise a local model reaches the default
+# Claude command after the self-hosted paths are split.
+stage_runner_config_name() {
+    case "$1" in
+        requirements|requirements-investigate) printf '%s\n' project-plan ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
 stage_uses_self_hosted() {
     local stage="$1" side="$2" UNCLE_RESOLVED_RUNNER
+    stage="$(stage_runner_config_name "$stage")"
     uncle_resolve_stage_runner "$stage" "$side" 2>/dev/null || true
     [[ "$UNCLE_RESOLVED_RUNNER" == self-hosted ]]
 }
@@ -1326,10 +1328,11 @@ run_claude() {
     local effort
     local turns
     local cmd
-    local UNCLE_RESOLVED_RUNNER
-    uncle_resolve_stage_runner "$log_name" AGENT || return 1
+    local UNCLE_RESOLVED_RUNNER runner_stage
+    runner_stage="$(stage_runner_config_name "$log_name")"
+    uncle_resolve_stage_runner "$runner_stage" AGENT || return 1
 
-    cmd="$(stage_agent_cmd "$log_name")" || return 1
+    cmd="$(stage_agent_cmd "$runner_stage")" || return 1
     model="$(stage_model "$log_name")"
     effort="$(stage_effort "$log_name")"
     turns="$(stage_turns "$log_name")"
@@ -1377,6 +1380,10 @@ run_claude() {
                 supervision_prompt "$effective_prompt" "$log_name" "$LOG_DIR/${log_name}.jsonl"
                 effective_prompt="$SUPERVISION_PROMPT"
                 ;;
+        esac
+        case "$log_name" in
+            requirements|project-plan|updated-plan)
+                effective_prompt+=$'\n\n## Canonical artifact contract (binding)\nReturn exactly one complete `uncle.artifact/v1` JSON object as your final response. Do not write the Markdown view or any artifact file: the driver validates and publishes canonical JSON first, then renders Markdown for people.\n' ;;
         esac
         local -a model_args=()
         [[ -n "$model" ]] && model_args=(--model "$model")
@@ -1432,6 +1439,10 @@ run_claude() {
             exit "$status"
         fi
 
+        case "$log_name" in
+            requirements|project-plan|updated-plan)
+                python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$LOG_DIR/${log_name}.jsonl" . || exit 1 ;;
+        esac
         break
     done
 }
@@ -1643,8 +1654,8 @@ run_updated_plan_panel() {
     local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
     local -a pids=()
     [[ "${WORKFLOW_UPDATED_PLAN_PANEL:-1}" == 1 ]] || return 0
-    ensure_project_plan_json
-    require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"
+    ensure_project_plan_json || return 1
+    require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" || return 1
     echo "Updated-plan review panel: launching 4 workers in parallel."
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     for lens in dispositions ownership verification scope; do
@@ -1657,13 +1668,16 @@ run_updated_plan_panel() {
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan worker failed; canonical packet validation will stop the panel.' >&2; done
     python3 "$ROOT/scripts/lib/updated_plan_worker_packets.py" "$directory" "$STATE_DIR/documents/UPDATED_PLAN_WORKERS.json" \
         --expected dispositions ownership verification scope || return 1
-    echo "Updated-plan review panel: worker packets collected; launching synthesis."
+    # The parent receives a sealed input file, not paths it must rediscover.
+    # In particular, do not let a missing/partial worker output degrade into a
+    # broad agent search that burns its turn budget without writing a plan.
+    echo "Updated-plan review panel: worker packets collected; preparing sealed synthesis input."
     UPDATED_PLAN_PROMPT="$directory/synthesis.md"
-    cp "$ROOT/prompts/updated-plan.md" "$UPDATED_PLAN_PROMPT"
-    printf '\n## Collated worker findings (binding)\n\nRead only `%s/documents/UPDATED_PLAN_WORKERS.json` for specialist findings. Do not read the worker directory or individual worker prompts/packets. It is complete, deduplicated, ordered, and records conflicts explicitly.\n' "$STATE_DIR" >> "$UPDATED_PLAN_PROMPT"
-    if [[ -s "$STATE_DIR/documents/REPAIR_PLAN_BLOCKERS.json" ]]; then
-        printf '\n## Plan-revision blocker (binding)\n\nRead `%s/documents/REPAIR_PLAN_BLOCKERS.json`. It records a verification command that cannot be fixed in source and must be resolved in this revised plan.\n' "$STATE_DIR" >> "$UPDATED_PLAN_PROMPT"
-    fi
+    python3 -B "$ROOT/scripts/lib/updated_plan_synthesis_prompt.py" \
+        "$STATE_DIR/documents/PROJECT_PLAN.json" \
+        "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
+        "$STATE_DIR/documents/UPDATED_PLAN_WORKERS.json" \
+        "$UPDATED_PLAN_PROMPT" || return 1
 }
 
 run_updated_plan_fast_path() {
@@ -1675,7 +1689,8 @@ run_updated_plan_fast_path() {
     python3 -B "$ROOT/scripts/lib/updated_plan_fast_path.py" \
         "$STATE_DIR/documents/PROJECT_PLAN.json" \
         "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
-        .uncle/docs/UPDATED_PROJECT_PLAN.md
+        "$STATE_DIR/documents/UPDATED_PROJECT_PLAN.json" \
+        --render .uncle/docs/UPDATED_PROJECT_PLAN.md
 }
 
 run_test_review_panel() {
@@ -2140,15 +2155,14 @@ run_stage() {
                 echo 'Updated-plan fast path: no adversarial findings; copied canonical plan without model synthesis.'
                 return 0
             fi
-            run_updated_plan_panel
+            # A non-empty review needs the panel.  Never continue into the
+            # parent call if collation failed: the collated JSON is its only
+            # specialist input and a clear packet error is actionable.
+            run_updated_plan_panel || return 1
             # The panel has already collated every specialist finding into
-            # canonical JSON.  Every runner consumes that packet directly and
-            # writes the canonical plan in one call.  The former self-hosted
-            # Markdown investigation/format split was slower, reintroduced a
-            # non-authoritative Markdown handoff, and could stop after a
-            # successful plan write merely because the disposable draft was
-            # absent.
-            run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan.md}" updated-plan
+            # canonical JSON. Every runner gets the sealed compact prompt;
+            # there is no repository-discovery fallback or Markdown handoff.
+            run_claude "$UPDATED_PLAN_PROMPT" updated-plan
             ;;
         IMPLEMENT)
             parallel_status=0
@@ -2578,7 +2592,12 @@ speculate() {
     [[ -z "$spec_pid" ]] || return 0
     [[ -s "$gate_file" ]] || return 0
 
-    hash_file "$gate_file" > "$SPEC_DIR/${stage}.input"
+    # A speculative stage may clean its own state after an unsuccessful
+    # attempt.  Recreate this driver-owned directory at the write boundary so
+    # that cleanup cannot turn an otherwise successful approval gate into a
+    # shell redirection failure.
+    mkdir -p "$SPEC_DIR" || return 1
+    hash_file "$gate_file" > "$SPEC_DIR/${stage}.input" || return 1
 
     echo "Starting $stage in the background while you review."
     echo "Its output is only used if $gate_file is unchanged at approval."
@@ -2803,7 +2822,7 @@ while true; do
             # operator just approved. An edited interpretation means the plan
             # beside it answers a question nobody asked any more.
             merged_plan_usable=0
-            if merged_requirements_plan_enabled && -s .uncle/docs/PROJECT_PLAN.md \
+            if [[ merged_requirements_plan_enabled && -s .uncle/docs/PROJECT_PLAN.md \
                   && -s "$STATE_DIR/merged-plan.input" ]]; then
                 if [[ "$(hash_file .uncle/docs/REQUIREMENTS_INTERPRETATION.md)" \
                       == "$(cat "$STATE_DIR/merged-plan.input")" ]]; then

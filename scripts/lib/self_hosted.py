@@ -140,8 +140,12 @@ def config_stage(stage, values):
         return 'final-audit'
     if stage == 'project-plan-investigate':
         return 'project-plan'
-    if stage == 'requirements-investigate':
-        return 'requirements'
+    if stage in ('requirements', 'requirements-investigate'):
+        # New-app requirements deliberately inherit the project-plan picker.
+        # The driver already resolves runner/model/effort that way; the
+        # adapter must use the same profile lookup or it rejects a configured
+        # local model before making any request.
+        return 'project-plan'
     if stage == 'preflight-investigate':
         return 'preflight'
     if stage == 'implementation-investigate':
@@ -414,7 +418,14 @@ def opencode_usage(path):
     return totals if found else {}
 
 
-PLAN_ARTIFACTS = {'requirements': '.uncle/docs/REQUIREMENTS_INTERPRETATION.md', 'project-plan': '.uncle/docs/PROJECT_PLAN.md', 'updated-plan': '.uncle/docs/UPDATED_PROJECT_PLAN.md'}
+PLAN_ARTIFACTS = {
+    'requirements': '.uncle/docs/REQUIREMENTS_INTERPRETATION.md',
+    'project-plan': '.uncle/docs/PROJECT_PLAN.md',
+    'updated-plan': '.uncle/docs/UPDATED_PROJECT_PLAN.md',
+    # The change workflow revises CHANGE_PLAN in place.  It has a distinct
+    # JSON schema, but follows the same source-JSON then rendered-view rule.
+    'updated-change-plan': '.uncle/docs/CHANGE_PLAN.md',
+}
 
 
 def copy_generated_documents(root, staged):
@@ -526,9 +537,10 @@ def validate_reviewer_document(output, document):
 def reviewer_packet(response, output):
     """Return a strict JSON worker packet without Markdown document extraction."""
     text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
-    payload_text = _artifact_json_module().unfence_json(text)
+    artifact_json = _artifact_json_module()
+    payload_text = artifact_json.unfence_json(text)
     try:
-        payload = json.loads(payload_text)
+        payload = artifact_json.loads_response_json(text)
     except json.JSONDecodeError as error:
         raise InvalidReviewerDocument('Reviewer response is not valid JSON for %s: %s' % (Path(output).name, error))
     if (not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1'
@@ -576,9 +588,10 @@ def reviewer_json_artifact(response, output):
     after this boundary; here we only reject prose or an invalid envelope.
     """
     text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
-    payload_text = _artifact_json_module().unfence_json(text)
+    artifact_json = _artifact_json_module()
+    payload_text = artifact_json.unfence_json(text)
     try:
-        payload = json.loads(payload_text)
+        payload = artifact_json.loads_response_json(text)
     except json.JSONDecodeError as error:
         raise InvalidReviewerDocument('Reviewer response is not valid JSON for %s: %s' % (Path(output).name, error))
     if (not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1'
@@ -666,7 +679,7 @@ def is_json_response(text):
     return _artifact_json_module().unfence_json(text).startswith('{')
 
 
-def document_response(response, artifact):
+def document_response(response, artifact, expected_kind='plan', require_dispositions=False):
     text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
     _artifact_json = _artifact_json_module()
     unfenced = _artifact_json.unfence_json(text)
@@ -681,14 +694,16 @@ def document_response(response, artifact):
             return _artifact_json.render_requirements(payload) + '\n'
         except KeyError as error:
             raise ValueError('Requirements-interpretation JSON missing a required section: %s' % error) from error
-    if Path(artifact).name in ('PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md') and unfenced.startswith('{'):
+    if Path(artifact).name in ('PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md', 'CHANGE_PLAN.md') and unfenced.startswith('{'):
         try:
             payload = json.loads(unfenced)
         except json.JSONDecodeError as error:
             raise ValueError('Invalid plan JSON response; original preserved') from error
-        if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'plan':
+        if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != expected_kind:
             raise ValueError('wrong plan JSON schema')
         try:
+            if expected_kind == 'change-plan':
+                return _artifact_json.render_change_plan(payload, require_dispositions=require_dispositions) + '\n'
             protected = Path(artifact).name == 'UPDATED_PROJECT_PLAN.md'
             return _artifact_json.render_plan(payload, protected=protected) + '\n'
         except ValueError as error:
@@ -715,6 +730,64 @@ def document_response(response, artifact):
     return text + '\n'
 
 
+def preserve_updated_plan_contract(response, root):
+    """Preserve an omitted protected path list from the approved plan.
+
+    Omission is not a requested plan change.  Avoid a second model turn when
+    a self-hosted model returns an otherwise valid updated plan without this
+    long, unchanged required field.
+    """
+    text = _artifact_json_module().unfence_json(response)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return response
+    if not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'plan':
+        return response
+    paths = payload.get('protected_verification_paths')
+    if isinstance(paths, str) and paths.strip():
+        return response
+    if isinstance(paths, list) and paths and all(isinstance(path, str) and path.strip() for path in paths):
+        # The prompt uses a string because the Markdown renderer consumes a
+        # newline-delimited block, but models naturally emit a JSON list.
+        # This is an unambiguous representation, so canonicalize it here.
+        payload['protected_verification_paths'] = '\n'.join(paths)
+        return json.dumps(payload, ensure_ascii=False)
+    base = Path(root) / '.uncle/workflow/documents/PROJECT_PLAN.json'
+    try:
+        approved = json.loads(base.read_text(encoding='utf-8'))
+        paths = approved['protected_verification_paths']
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return response
+    if not isinstance(paths, str) or not paths.strip():
+        return response
+    payload['protected_verification_paths'] = paths
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def publish_plan_json(response, artifact, root, expected_kind='plan', require_dispositions=False):
+    """Publish the validated JSON source alongside its rendered Markdown view.
+
+    The adapter renders plans for human approval, but the workflow consumes
+    only canonical JSON.  Never reconstruct that packet from the rendered
+    view: publish the already-validated response while it is still available.
+    """
+    module = _artifact_json_module()
+    try:
+        payload = module.loads_response_json(response)
+    except ValueError:
+        return False
+    if (not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1'
+            or payload.get('kind') != expected_kind):
+        return False
+    if expected_kind == 'change-plan':
+        module.render_change_plan(payload, require_dispositions=require_dispositions)
+    else:
+        module.render_plan(payload, protected=Path(artifact).name == 'UPDATED_PROJECT_PLAN.md')
+    module.write(root, Path(artifact).name, payload)
+    return True
+
+
 def validate_requirements(text):
     if not re.search(r'^##\s+(?:10[.)]\s*)?(?:\*\*)?Definition of done(?:\*\*)?\s*#*\s*$', text, re.M | re.I):
         raise ValueError('Requirements interpretation lacks Definition of done; original preserved')
@@ -732,6 +805,8 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         prompt += read_cache.context(prompt)
     stage_name = stage or os.environ.get('UNCLE_STATUS_STAGE', '')
     artifact = PLAN_ARTIFACTS.get(stage_name) if side == 'agent' else None
+    expected_kind = 'change-plan' if stage_name == 'updated-change-plan' else 'plan'
+    require_dispositions = stage_name == 'updated-change-plan'
     # `requirements-plan.md` deliberately shares the project-plan invocation
     # to avoid a second cold model context.  Its first required artifact is
     # the interpretation, however.  The isolated OpenCode adapter can safely
@@ -782,6 +857,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
             turns = 0
             for attempt in range(2):
                 attempt_usage = {}
+                canonical_response = None
                 try:
                     response, count = _run_opencode('agent', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage, read_cache=read_cache)
                     turns += count
@@ -794,8 +870,10 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                         raise ValueError('Refusing a symlinked requirements document')
                     if candidate.is_file():
                         file_text = candidate.read_text(encoding='utf-8')
+                        canonical_response = file_text
                         document = document_response(file_text, artifact) if is_json_response(file_text) else file_text
                     else:
+                        canonical_response = response
                         document = document_response(response, artifact)
                     validate_requirements(document)
                 except ValueError as error:
@@ -814,19 +892,25 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                     request += '\nThe previous response was rejected: ' + str(error) + '\nReturn only the full document, with no introductory text or edit instructions.'
                     continue
                 candidate.write_text(document, encoding='utf-8', newline='\n')
+                if is_json_response(canonical_response):
+                    raw = canonical_response
+                    payload = _artifact_json_module().loads_response_json(raw)
+                    _artifact_json_module().write(root, Path(artifact).name, payload)
                 break
         else:
             protected_fields = (', "protected_verification_paths":"..."' if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md' else '')
+            kind_fields = ('"kind":"change-plan","narrative":"...","dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}]'
+                           if expected_kind == 'change-plan' else '"kind":"plan","narrative":"...","verification_commands":"..."' + protected_fields)
             request = (prompt + '\nReturn only one JSON object matching this contract as your final message; '
                        'do not use file tools and do not return Markdown:\n'
-                       '`{"schema":"uncle.artifact/v1","kind":"plan","narrative":"...",'
-                       '"verification_commands":"..."' + protected_fields + '}`.\n'
+                       '`{"schema":"uncle.artifact/v1",' + kind_fields + '}`.\n'
                        '`verification_commands` is the exact shell commands block, as plain text (no fence markers). '
                        '`narrative` is everything else the plan needs to say, as one Markdown block.'
                        + no_write_notice)
             turns = 0
             for attempt in range(2):
                 attempt_usage = {}
+                canonical_response = None
                 try:
                     response, count = _run_opencode(side, values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage, read_cache=read_cache)
                     turns += count
@@ -840,10 +924,20 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                     if candidate.exists():
                         file_text = candidate.read_text(encoding='utf-8')
                         if is_json_response(file_text):
-                            candidate.write_text(document_response(file_text, artifact), encoding='utf-8', newline='\n')
+                            if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md':
+                                file_text = preserve_updated_plan_contract(file_text, root)
+                            canonical_response = file_text
+                            candidate.write_text(document_response(file_text, artifact, expected_kind, require_dispositions), encoding='utf-8', newline='\n')
                     else:
-                        candidate.write_text(document_response(response, artifact), encoding='utf-8', newline='\n')
-                    validate_plan(candidate.read_text(encoding='utf-8'), protected=artifact == '.uncle/docs/UPDATED_PROJECT_PLAN.md')
+                        if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md':
+                            response = preserve_updated_plan_contract(response, root)
+                        canonical_response = response
+                        candidate.write_text(document_response(response, artifact, expected_kind, require_dispositions), encoding='utf-8', newline='\n')
+                    if expected_kind == 'plan':
+                        validate_plan(candidate.read_text(encoding='utf-8'), protected=artifact == '.uncle/docs/UPDATED_PROJECT_PLAN.md')
+                    if (canonical_response is not None and is_json_response(canonical_response)
+                            and not publish_plan_json(canonical_response, artifact, root, expected_kind, require_dispositions)):
+                        raise ValueError('Plan JSON response could not be published canonically; original preserved')
                 except ValueError as error:
                     logs = root/'.uncle/workflow/logs'
                     logs.mkdir(parents=True, exist_ok=True)
@@ -863,10 +957,10 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         if not candidate.is_file() or candidate.is_symlink():
             raise ValueError('OpenCode did not produce a regular ' + artifact + '; original plan preserved')
         contents = candidate.read_bytes()
-        if artifact != '.uncle/docs/REQUIREMENTS_INTERPRETATION.md':
-            validate_plan(contents.decode('utf-8'), protected=artifact == '.uncle/docs/UPDATED_PROJECT_PLAN.md')
-        else:
+        if artifact == '.uncle/docs/REQUIREMENTS_INTERPRETATION.md':
             validate_requirements(contents.decode('utf-8'))
+        elif expected_kind == 'plan':
+            validate_plan(contents.decode('utf-8'), protected=artifact == '.uncle/docs/UPDATED_PROJECT_PLAN.md')
         if target.is_symlink() or (target.read_bytes() if target.exists() else None) != original:
             raise ValueError('Plan changed during generation; refusing to overwrite it')
         target.parent.mkdir(parents=True, exist_ok=True)

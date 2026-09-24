@@ -19,7 +19,7 @@ def validate(path, project='.'):
     stripped = _artifact_json.unfence_json(text)
     if stripped.startswith('{'):
         try:
-            payload = json.loads(stripped)
+            payload = _artifact_json.loads_response_json(text)
         except ValueError as error:
             raise ValueError('Invalid requirements-interpretation JSON response: ' + str(error)) from error
         if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'requirements-interpretation':

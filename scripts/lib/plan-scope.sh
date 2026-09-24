@@ -175,22 +175,30 @@ plan_step_depends() {
     [[ -s "$plan" ]] || return 0
 
     awk '
+        # Rendered plans normally put this field on the following bullet
+        # (`- Depends on: 2`), rather than on the numbered heading.  Retain
+        # the current step until the next heading so either layout has the
+        # same scheduling semantics.
+        function emit_dependencies(line,    ref) {
+            if (!match(line, /[Dd]epends[ \t]+on:/)) return
+            line = substr(line, RSTART + RLENGTH)
+            while (match(line, /[0-9]+/)) {
+                ref = substr(line, RSTART, RLENGTH)
+                print current "\t" ((ref in position) ? position[ref] : ref)
+                line = substr(line, RSTART + RLENGTH)
+            }
+        }
         /^## ([0-9]+\. )?Implementation (sequence|order)/ { inseq = 1; next }
         inseq && /^## / { inseq = 0 }
         !inseq { next }
         /^[0-9]+\./ {
             n = $0; sub(/\..*$/, "", n)
             position[n] = ++count
-            line = $0
-            if (match(line, /[Dd]epends[ \t]+on:/)) {
-                line = substr(line, RSTART + RLENGTH)
-                while (match(line, /[0-9]+/)) {
-                    ref = substr(line, RSTART, RLENGTH)
-                    print position[n] "\t" ((ref in position) ? position[ref] : ref)
-                    line = substr(line, RSTART + RLENGTH)
-                }
-            }
+            current = position[n]
+            emit_dependencies($0)
+            next
         }
+        current { emit_dependencies($0) }
     ' "$plan"
 }
 

@@ -170,6 +170,23 @@ check_eq "0-indexed: Reconcile (position 4) depends on positions 2 and 3 (litera
     "4	2
 4	3" "$(plan_step_depends "$ZERO" | grep '^4	')"
 
+# The document renderer places dependency metadata on a following bullet.
+# Those edges must not be lost, or an entirely serial chain becomes one unsafe
+# parallel group.
+MULTILINE="$TMP/multiline-depends.md"
+cat > "$MULTILINE" <<'EOF'
+## Implementation order
+
+1. Scaffold — Owns: `package.json`
+   - Depends on: none
+2. Core — Owns: `src/core.js`
+   - Depends on: 1
+3. UI — Owns: `src/App.jsx`
+   - Depends on: 2
+EOF
+check_eq "multiline Depends on metadata is extracted" "2	1
+3	2" "$(plan_step_depends "$MULTILINE")"
+
 # --- a long Owns: list wraps onto its own lines --------------------------
 #
 # A real run: a step touching two dozen files listed them one per line, each

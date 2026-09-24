@@ -3,8 +3,8 @@ You are the primary implementation agent, building an early preview.
 Read these in one parallel batch of tool calls:
 
 - REQUIREMENTS.md
-- .uncle/docs/REQUIREMENTS_INTERPRETATION.md, if it exists
-- .uncle/docs/PROJECT_PLAN.md, if it exists
+- .uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json, if it exists
+- .uncle/workflow/documents/PROJECT_PLAN.json, if it exists
 
 That is the whole input set. The interpretation and the plan are being written
 right now, beside you, and are often not there yet; when one is missing, build
@@ -42,6 +42,6 @@ length, enumerate alternatives, or re-read what you have written. Decide the
 shortest thing that runs, write it, and stop. One file is ideal where the
 application allows it.
 
-Touch only source files. Do not edit REQUIREMENTS.md,
-.uncle/docs/REQUIREMENTS_INTERPRETATION.md, .uncle/docs/PROJECT_PLAN.md, or anything under `.uncle/`,
+Touch only source files. Do not edit REQUIREMENTS.md, canonical workflow JSON,
+rendered approval Markdown, or anything under `.uncle/`,
 and do not write `.uncle/launch.json`: the page is found on its own.

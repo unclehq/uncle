@@ -21,6 +21,7 @@ WORKERS = load('worker_packets.py')
 OUTPUT = load('reviewer_output.py')
 SELF_HOSTED = load('self_hosted.py')
 TEST_REVIEW = load('test_review_packets.py')
+SYNTHESIS = load('updated_plan_synthesis_prompt.py')
 
 
 def packet(identifier='AR-001', evidence='evidence', correction='correct it'):
@@ -89,7 +90,10 @@ class WorkerPackets(unittest.TestCase):
             start = text.index('run_updated_plan_panel()' if source.endswith('stagegate.sh') else 'run_updated_change_plan_panel()')
             block = text[start:text.index('\n}\n', start) + 2]
             self.assertIn('UPDATED_PLAN_WORKERS.json' if source.endswith('stagegate.sh') else 'UPDATED_CHANGE_PLAN_WORKERS.json', block)
-            self.assertIn('Do not read the worker directory', block)
+            self.assertTrue(
+                'Do not read the worker directory' in block
+                or 'sealed input file, not paths it must rediscover' in block
+                or 'preparing sealed synthesis input' in block)
 
     def test_generic_panel_packets_are_deduplicated_and_worker_specific(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -234,7 +238,7 @@ class WorkerPackets(unittest.TestCase):
             text = (ROOT/source).read_text()
             self.assertIn('[[ "$p" == /* || -e "$p" ]]', text)
             start = text.index('effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"')
-            block = text[start:start + 500]
+            block = text[start:start + 900]
             self.assertIn('*-worker-*) ;;', block)
             self.assertIn('supervision_prompt "$effective_prompt"', block)
 
@@ -256,6 +260,13 @@ class WorkerPackets(unittest.TestCase):
         for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
             text = (ROOT/source).read_text()
             self.assertIn('case "$log_name" in *-worker-*|', text)
+
+    def test_compact_worker_prompt_does_not_execute_markdown_backticks(self):
+        gates = (ROOT/'scripts/lib/gates.sh').read_text()
+        start = gates.index('## Compact worker contract')
+        block = gates[start:gates.index('} > "$worker_prompt"', start)]
+        self.assertNotIn('cat <<WORKER_PACKET', block)
+        self.assertIn('Do not enumerate `.uncle/workflow/documents/`', block)
 
     def test_updated_plan_panels_require_their_canonical_inputs_before_fanout(self):
         stagegate = (ROOT / 'scripts/stagegate.sh').read_text()
@@ -285,6 +296,44 @@ class WorkerPackets(unittest.TestCase):
             (ROOT/'scripts/stagegate.sh').read_text(),
         )
 
+    def test_updated_plan_parent_gets_a_sealed_json_input(self):
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': 'base',
+                'verification_commands': 'true', 'protected_verification_paths': 'tests'}
+        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review',
+                  'findings': [{'id': 'AR-001'}]}
+        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets',
+                   'workers': [{'source': 'scope', 'status': 'ok'}],
+                   'findings': [{'id': 'AR-001', 'sources': ['scope']}]}
+        prompt = SYNTHESIS.prompt(plan, review, workers)
+        self.assertIn('Do not read files, enumerate directories, inspect the repository', prompt)
+        self.assertIn('## Base project plan JSON', prompt)
+        self.assertIn('## Collated specialist findings JSON', prompt)
+        with self.assertRaisesRegex(ValueError, 'expected collated'):
+            SYNTHESIS.prompt(plan, review, {'schema': 'uncle.artifact/v1', 'kind': 'wrong'})
+        stagegate = (ROOT / 'scripts/stagegate.sh').read_text()
+        start = stagegate.index('        UPDATED_PLAN)')
+        block = stagegate[start:stagegate.index('        IMPLEMENT)', start)]
+        self.assertIn('run_updated_plan_panel || return 1', block)
+        self.assertIn('run_claude "$UPDATED_PLAN_PROMPT" updated-plan', block)
+        self.assertNotIn('prompts/updated-plan.md', block)
+
+    def test_updated_change_plan_parent_uses_the_same_sealed_input(self):
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'narrative': 'base'}
+        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}
+        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets',
+                   'workers': [], 'findings': []}
+        prompt = SYNTHESIS.prompt(plan, review, workers, change=True)
+        self.assertIn('`.uncle/docs/CHANGE_PLAN.md`', prompt)
+        self.assertIn('kind `change-plan`', prompt)
+        change = (ROOT / 'scripts/change-workflow.sh').read_text()
+        start = change.index('run_updated_change_plan_panel()')
+        panel = change[start:change.index('\n}\n', start) + 2]
+        self.assertIn('updated_plan_synthesis_prompt.py" --change', panel)
+        state_start = change.index('        UPDATED_PLAN)')
+        state = change[state_start:change.index('        VALIDATE_UPDATED_PLAN)', state_start)]
+        self.assertIn('run_updated_change_plan_panel || exit 1', state)
+        self.assertIn('run_claude "$UPDATED_PLAN_PROMPT" updated-change-plan', state)
+
     def test_test_review_format_retry_reuses_collated_workers(self):
         source = (ROOT / 'scripts/stagegate.sh').read_text()
         start = source.index('        TEST_REVIEW)')
@@ -301,10 +350,24 @@ class WorkerPackets(unittest.TestCase):
         start = stagegate.index('        UPDATED_PLAN)')
         end = stagegate.index('        IMPLEMENT)', start)
         block = stagegate[start:end]
-        self.assertIn('run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan.md}" updated-plan', block)
+        self.assertIn('run_claude "$UPDATED_PLAN_PROMPT" updated-plan', block)
         self.assertNotIn('updated-plan-investigate', block)
         self.assertNotIn('updated-plan-investigation.md', block)
         self.assertNotIn('updated-plan-format', block)
+
+    def test_updated_plan_keeps_the_standard_forty_turn_default_for_opencode(self):
+        source = (ROOT / 'scripts/stagegate.sh').read_text()
+        start = source.index('stage_turns() {')
+        block = source[start:source.index('\n}\n', start) + 2]
+        self.assertIn('local fallback=40', block)
+        self.assertNotIn('fallback=5', block)
+
+    def test_speculation_recreates_its_driver_owned_directory(self):
+        source = (ROOT / 'scripts/stagegate.sh').read_text()
+        start = source.index('speculate() {')
+        block = source[start:source.index('\n}\n', start) + 2]
+        self.assertIn('mkdir -p "$SPEC_DIR" || return 1', block)
+        self.assertIn('hash_file "$gate_file" > "$SPEC_DIR/${stage}.input" || return 1', block)
 
     def test_plan_review_parents_name_canonical_json_not_markdown_inputs(self):
         updated = (ROOT / 'prompts/updated-plan.md').read_text()

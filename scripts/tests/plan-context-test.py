@@ -59,6 +59,23 @@ class PlanContext(unittest.TestCase):
             self.assertEqual(payload['verification_commands'], 'pytest')
             self.assertTrue((root/'.uncle/workflow/documents/PROJECT_PLAN.json').is_file())
 
+    def test_project_plan_export_accepts_nested_verification_commands_block_heading(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); plan = root/'PROJECT_PLAN.md'
+            plan.write_text('## 15. Risks\n\nNone.\n\n### Verification commands block\n\n```sh\npytest -q\n```\n')
+            payload = module.export_project_plan(plan, root)
+            self.assertEqual(payload['verification_commands'], 'pytest -q')
+            self.assertEqual(payload['narrative'], '## 15. Risks\n\nNone.')
+
+    def test_json_like_plan_with_bare_keys_is_ingested(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); plan = root/'PROJECT_PLAN.md'
+            plan.write_text('{ schema: "uncle.artifact/v1", kind: "plan", '
+                            'narrative: "## Architecture\\n\\nPlan.", verification_commands: "pytest", }')
+            self.assertTrue(module.ingest_plan(plan, root, protected=False))
+            stored = json.loads((root/'.uncle/workflow/documents/PROJECT_PLAN.json').read_text())
+            self.assertEqual(stored['kind'], 'plan')
+
     def test_investigation_is_deterministically_materialized_as_project_plan_json(self):
         # The self-hosted planner writes this Markdown investigation once.
         # Its final JSON is mechanical: preserve every non-command section

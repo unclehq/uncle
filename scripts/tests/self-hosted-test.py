@@ -37,6 +37,16 @@ class SelfHosted(unittest.TestCase):
             self.assertEqual((self.config.parent/'self-hosted-keys.json').stat().st_mode & 0o777, 0o600)
         self.assertEqual(values['base_url'], 'http://localhost:8123/v1')
 
+    def test_requirements_investigation_inherits_project_plan_connection(self):
+        self.config.write_text('project-plan.runner self-hosted\n'
+                               'project-plan.model local-model:Q4\n'
+                               'project-plan.base_url http://localhost:8123/v1\n', encoding='utf-8')
+        save_keys(self.config, {'project-plan': 'requirements-secret'})
+        with patch.dict(os.environ, {}, clear=True):
+            expected = settings(self.config, 'project-plan')
+            self.assertEqual(settings(self.config, 'requirements'), expected)
+            self.assertEqual(settings(self.config, 'requirements-investigate'), expected)
+
     def test_env_overrides_and_validation(self):
         with patch.dict(os.environ, {'UNCLE_SELF_HOSTED_API_KEY':'env-key', 'UNCLE_SELF_HOSTED_MODEL':'other',
                                      'UNCLE_SELF_HOSTED_BASE_URL':'https://example.test/api/v1'}):
@@ -370,6 +380,63 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         self.assertIn('## Verification commands', text)
         self.assertIn('pytest', text)
 
+    def test_updated_plan_omitting_protected_paths_preserves_approved_paths(self):
+        import self_hosted, json as json_module
+        documents = self.root/'.uncle/workflow/documents'
+        documents.mkdir(parents=True)
+        (documents/'PROJECT_PLAN.json').write_text(json_module.dumps({
+            'schema': 'uncle.artifact/v1', 'kind': 'plan',
+            'protected_verification_paths': 'src/\ntests/'
+        }), encoding='utf-8')
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan',
+                   'narrative': '## Revised\n\nDo it.', 'verification_commands': 'pytest'}
+
+        def generate(side, values, prompt, staged, **kwargs):
+            return json_module.dumps(payload), 1
+        with patch.object(self_hosted, '_run_opencode', side_effect=generate) as run:
+            run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+        self.assertEqual(run.call_count, 1)
+        rendered = (self.root/'.uncle/docs/UPDATED_PROJECT_PLAN.md').read_text(encoding='utf-8')
+        self.assertIn('## Protected verification paths', rendered)
+        self.assertIn('src/\ntests/', rendered)
+        canonical = json_module.loads((self.root/'.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json').read_text(encoding='utf-8'))
+        self.assertEqual(canonical['protected_verification_paths'], 'src/\ntests/')
+
+    def test_updated_plan_normalizes_a_structured_protected_path_list(self):
+        import self_hosted, json as json_module
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan',
+                   'narrative': '## Revised\n\nDo it.', 'verification_commands': 'pytest',
+                   'protected_verification_paths': ['src/', 'tests/']}
+
+        def generate(side, values, prompt, staged, **kwargs):
+            return json_module.dumps(payload), 1
+        with patch.object(self_hosted, '_run_opencode', side_effect=generate) as run:
+            run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+        self.assertEqual(run.call_count, 1)
+        rendered = (self.root/'.uncle/docs/UPDATED_PROJECT_PLAN.md').read_text(encoding='utf-8')
+        self.assertIn('src/\ntests/', rendered)
+        canonical = json_module.loads((self.root/'.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json').read_text(encoding='utf-8'))
+        self.assertEqual(canonical['protected_verification_paths'], 'src/\ntests/')
+
+    def test_updated_change_plan_publishes_canonical_json_before_its_markdown_view(self):
+        import self_hosted, json as json_module
+        payload = {
+            'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'narrative': '# Change plan\n\nRevise it.',
+            'dispositions': [{'finding': 'AR-001', 'disposition': 'Accepted',
+                              'reason': 'Required.', 'plan_change': 'Add the test.'}]
+        }
+
+        def generate(side, values, prompt, staged, **kwargs):
+            return json_module.dumps(payload), 1
+        with patch.object(self_hosted, '_run_opencode', side_effect=generate) as run:
+            run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-change-plan')
+        self.assertEqual(run.call_count, 1)
+        canonical = json_module.loads((self.root/'.uncle/workflow/documents/CHANGE_PLAN.json').read_text(encoding='utf-8'))
+        self.assertEqual(canonical['kind'], 'change-plan')
+        self.assertEqual(canonical['dispositions'][0]['finding'], 'AR-001')
+        rendered = (self.root/'.uncle/docs/CHANGE_PLAN.md').read_text(encoding='utf-8')
+        self.assertIn('## Adversarial review dispositions', rendered)
+
     def test_requirements_written_as_json_directly_to_file_is_still_rendered(self):
         import self_hosted, json as json_module
         payload = {'schema': 'uncle.artifact/v1', 'kind': 'requirements-interpretation', 'sections': {
@@ -660,6 +727,15 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         wrapped = '```json\n' + json.dumps(payload) + '\n```'
         rendered = self_hosted.document_response(wrapped, '.uncle/docs/REQUIREMENTS_INTERPRETATION.md')
         self.assertIn('## 1. Required functionality', rendered)
+
+    def test_streamed_assistant_envelope_json_response_renders(self):
+        import self_hosted, json
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan',
+                   'narrative': '## Architecture\n\nA plan.', 'verification_commands': 'pytest'}
+        envelope = json.dumps({'type': 'assistant', 'message': {'content': [
+            {'type': 'text', 'text': json.dumps(payload)}]}})
+        rendered = self_hosted.document_response(envelope, '.uncle/docs/PROJECT_PLAN.md')
+        self.assertIn('## Verification commands', rendered)
 
     def test_json_response_missing_section_is_rejected(self):
         import self_hosted, json

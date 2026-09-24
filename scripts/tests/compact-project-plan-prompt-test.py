@@ -15,6 +15,14 @@ class CompactProjectPlanPrompt(unittest.TestCase):
         run_stage = stagegate.index('run_stage()')
         requirements = stagegate[stagegate.index('        REQUIREMENTS)', run_stage):stagegate.index('        PROJECT_PLAN)', run_stage)]
         self.assertIn('if merged_requirements_plan_enabled; then', requirements)
+
+    def test_requirements_runner_inherits_project_plan_runner_with_its_model(self):
+        stagegate = (ROOT / 'scripts/stagegate.sh').read_text(encoding='utf-8')
+        self.assertIn('requirements|requirements-investigate) printf', stagegate)
+        self.assertIn('requirements|requirements-investigate) lookup_stage="project-plan"', stagegate)
+        self.assertIn('uncle_effective_stage_effort "$(stage_runner_config_name "$1")"', stagegate)
+        self.assertIn('runner_stage="$(stage_runner_config_name "$log_name")"', stagegate)
+        self.assertIn('uncle_resolve_stage_runner "$runner_stage" AGENT', stagegate)
     def test_requirements_prompts_embed_the_selected_brief(self):
         stagegate = (ROOT / 'scripts/stagegate.sh').read_text(encoding='utf-8')
         start = stagegate.index('bind_requirements_source()')

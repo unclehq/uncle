@@ -57,6 +57,36 @@ def _extract_balanced_object(text):
     return best
 
 _TRAILING_BACKTICK_SPAN = re.compile(r'`([^`]*)`\s*$', re.S)
+_BARE_OBJECT_KEY = re.compile(r'([,{]\s*)([A-Za-z_$][A-Za-z0-9_$-]*)(\s*:)')
+_TRAILING_COMMA = re.compile(r',\s*([}\]])')
+
+
+def _stream_envelope_text(candidate):
+    """Return a model reply carried by a standard streamed-event envelope.
+
+    Native clients and OpenCode may preserve their final assistant event as a
+    JSON object whose actual reply is ``message.content[].text`` (or as a
+    ``result`` string).  That envelope is transport, never an Uncle artifact;
+    callers should validate the contained JSON instead of rejecting an
+    otherwise complete plan/report merely because it was streamed.
+    """
+    try:
+        event = json.loads(candidate)
+    except (TypeError, ValueError):
+        return candidate
+    if not isinstance(event, dict):
+        return candidate
+    if event.get('type') == 'assistant':
+        content = (event.get('message') or {}).get('content')
+        if isinstance(content, list):
+            texts = [part.get('text', '') for part in content
+                     if isinstance(part, dict) and part.get('type') == 'text'
+                     and isinstance(part.get('text'), str)]
+            if texts:
+                return '\n'.join(texts).strip()
+    if event.get('type') == 'result' and isinstance(event.get('result'), str):
+        return event['result'].strip()
+    return candidate
 
 def unfence_json(text):
     """A model asked for a bare JSON object commonly wraps it in a Markdown
@@ -96,6 +126,12 @@ def unfence_json(text):
     candidates.append(stripped.strip('`').strip())
     candidates.append(stripped)
     for candidate in candidates:
+        unwrapped = _stream_envelope_text(candidate)
+        if unwrapped != candidate:
+            # The event payload can be a fence, a narrated object, or bare
+            # JSON; run the same candidate selection on its actual text.
+            return unfence_json(unwrapped)
+        candidate = unwrapped
         if candidate.startswith('{'):
             obj = _extract_balanced_object(candidate)
             if obj:
@@ -115,6 +151,60 @@ def unfence_json(text):
         else:
             return embedded
     return stripped
+
+
+def loads_response_json(text):
+    """Parse a model JSON reply, repairing only unambiguous inner quotes.
+
+    Some local models emit valid structure but forget to escape quotation marks
+    in prose evidence (for example, ``input like "1+alert(1)"``).  A quote
+    inside a JSON string is unambiguously not its terminator when the next
+    non-whitespace character is not a JSON structural delimiter.  Escape only
+    that narrow case, then let normal JSON/schema validation decide validity.
+    """
+    candidate = unfence_json(text)
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError as original:
+        out, in_string, escaped = [], False, False
+        length = len(candidate)
+        changed = False
+        for index, char in enumerate(candidate):
+            if not in_string:
+                out.append(char)
+                if char == '"':
+                    in_string = True
+                continue
+            if escaped:
+                out.append(char); escaped = False; continue
+            if char == '\\':
+                out.append(char); escaped = True; continue
+            if char != '"':
+                out.append(char); continue
+            next_index = index + 1
+            while next_index < length and candidate[next_index].isspace():
+                next_index += 1
+            next_char = candidate[next_index] if next_index < length else ''
+            if next_char in ',}]:':
+                out.append(char); in_string = False
+            else:
+                out.append('\\"'); changed = True
+        repaired = ''.join(out) if changed else candidate
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            # A few models emit a JavaScript-object-looking response:
+            # `{ schema: "...", kind: "...", }`.  Quoting only identifier
+            # keys and dropping a comma immediately before ] or } is
+            # unambiguous.  Do not attempt broader syntax recovery: malformed
+            # strings, truncated arrays, and prose still fail closed below.
+            structural = _TRAILING_COMMA.sub(r'\1', _BARE_OBJECT_KEY.sub(r'\1"\2"\3', repaired))
+            if structural == repaired:
+                raise original
+            try:
+                return json.loads(structural)
+            except json.JSONDecodeError:
+                raise original
 
 def path(project, name):
     return Path(project) / '.uncle/workflow/documents' / (Path(name).stem + '.json')

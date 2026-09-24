@@ -2038,6 +2038,10 @@ run_claude() {
                 effective_prompt="$SUPERVISION_PROMPT"
                 ;;
         esac
+        case "$log_name" in
+            updated-change-plan)
+                effective_prompt+=$'\n\n## Canonical artifact contract (binding)\nReturn exactly one complete `uncle.artifact/v1` JSON object as your final response. Do not write the Markdown view or any artifact file: the driver validates and publishes canonical JSON first, then renders Markdown for people.\n' ;;
+        esac
         ( "${client_cmd[@]}" "${flags[@]}" \
             < "$effective_prompt" \
             2>&1 \
@@ -2153,6 +2157,10 @@ run_claude() {
             exit 1
         fi
 
+        case "$log_name" in
+            updated-change-plan)
+                python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$log" . || exit 1 ;;
+        esac
         show_spend
         break
     done
@@ -2387,8 +2395,8 @@ run_updated_change_plan_panel() {
     # Keep the older knob as a fallback, while allowing the change workflow to
     # be controlled independently from the new-project updated-plan panel.
     [[ "${WORKFLOW_UPDATED_CHANGE_PLAN_PANEL:-${WORKFLOW_UPDATED_PLAN_PANEL:-1}}" == 1 ]] || return 0
-    require_file "$STATE_DIR/documents/CHANGE_PLAN.json"
-    require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"
+    require_file "$STATE_DIR/documents/CHANGE_PLAN.json" || return 1
+    require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" || return 1
     echo "Updated-change-plan review panel: launching 4 workers in parallel."
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     for lens in dispositions ownership verification scope; do
@@ -2401,10 +2409,13 @@ run_updated_change_plan_panel() {
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-change-plan worker failed; canonical packet validation will stop the panel.' >&2; done
     python3 "$ROOT/scripts/lib/updated_plan_worker_packets.py" "$directory" "$STATE_DIR/documents/UPDATED_CHANGE_PLAN_WORKERS.json" \
         --expected dispositions ownership verification scope || return 1
-    echo "Updated-change-plan review panel: worker packets collected; launching synthesis."
+    echo "Updated-change-plan review panel: worker packets collected; preparing sealed synthesis input."
     UPDATED_PLAN_PROMPT="$directory/synthesis.md"
-    cp "$ROOT/prompts/change/updated-change-plan.md" "$UPDATED_PLAN_PROMPT"
-    printf '\n## Collated worker findings (binding)\n\nRead only `%s/documents/UPDATED_CHANGE_PLAN_WORKERS.json` for specialist findings. Do not read the worker directory or individual worker prompts/packets. It is complete, deduplicated, ordered, and records conflicts explicitly.\n' "$STATE_DIR" >> "$UPDATED_PLAN_PROMPT"
+    python3 -B "$ROOT/scripts/lib/updated_plan_synthesis_prompt.py" --change \
+        "$STATE_DIR/documents/CHANGE_PLAN.json" \
+        "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
+        "$STATE_DIR/documents/UPDATED_CHANGE_PLAN_WORKERS.json" \
+        "$UPDATED_PLAN_PROMPT" || return 1
 }
 
 run_updated_change_plan_fast_path() {
@@ -2416,7 +2427,8 @@ run_updated_change_plan_fast_path() {
     python3 -B "$ROOT/scripts/lib/updated_plan_fast_path.py" --change \
         "$STATE_DIR/documents/CHANGE_PLAN.json" \
         "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
-        .uncle/docs/CHANGE_PLAN.md
+        "$STATE_DIR/documents/CHANGE_PLAN.json" \
+        --render .uncle/docs/CHANGE_PLAN.md
 }
 
 run_final_audit_panel() {
@@ -3035,8 +3047,8 @@ while true; do
                 set_state VALIDATE_UPDATED_PLAN
                 continue
             fi
-            run_updated_change_plan_panel
-            run_claude "${UPDATED_PLAN_PROMPT:-prompts/change/updated-change-plan.md}" updated-change-plan \
+            run_updated_change_plan_panel || exit 1
+            run_claude "$UPDATED_PLAN_PROMPT" updated-change-plan \
                 "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \
                 "$BUDGET_UPDATED_PLAN"
             set_state VALIDATE_UPDATED_PLAN

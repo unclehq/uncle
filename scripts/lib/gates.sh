@@ -160,17 +160,18 @@ gated_prompt() {
             esac
             {
                 cat "$prompt_file"
-                cat <<WORKER_PACKET
-
-## Compact worker contract (binding)
-
-Read only $worker_inputs. Do not enumerate `.uncle/workflow/documents/`,
-inspect the repository, or make exploratory tool calls. Do not read rendered
-Markdown approvals, worker directories, output rules, or gates.
-Return exactly the one JSON worker packet requested by the prompt, with no
-analysis, Markdown fence, or duplicate draft. The parent stage collates and
-validates all evidence, dispositions, and final documents.
-WORKER_PACKET
+                # Do not use an expanding here-document: the literal backticks
+                # in the Markdown path would be treated as shell command
+                # substitution, producing a misleading "is a directory"
+                # error in every compact worker log.
+                printf '%s\n' '' \
+                    '## Compact worker contract (binding)' '' \
+                    'Read only '"$worker_inputs"'. Do not enumerate `.uncle/workflow/documents/`,' \
+                    'inspect the repository, or make exploratory tool calls. Do not read rendered' \
+                    'Markdown approvals, worker directories, output rules, or gates.' \
+                    'Return exactly the one JSON worker packet requested by the prompt, with no' \
+                    'analysis, Markdown fence, or duplicate draft. The parent stage collates and' \
+                    'validates all evidence, dispositions, and final documents.'
             } > "$worker_prompt"
             printf '%s\n' "$worker_prompt"
             return 0

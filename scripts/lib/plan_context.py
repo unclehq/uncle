@@ -35,7 +35,7 @@ def _fenced_block(heading, lang):
 
 _VERIFICATION_COMMANDS_RE = _fenced_block('Verification commands', 'sh')
 _PROJECT_VERIFICATION_COMMANDS_RE = re.compile(
-    r'^#{1,2} Verification commands\s*\n+```sh\n(.*?)\n```', re.M | re.S)
+    r'^#{1,6}\s+(?:Exact\s+)?Verification commands(?:\s+block)?\s*\n+```sh\n(.*?)\n```', re.M | re.S | re.I)
 _PROTECTED_PATHS_RE = _fenced_block('Protected verification paths', 'text')
 _DISPOSITIONS_TABLE_RE = re.compile(
     r'^## Adversarial review dispositions\s*\n\n\|.*\|\n\|[-| ]+\|\n((?:\|.*\|\n?)*)', re.M)
@@ -111,8 +111,8 @@ def export_project_plan(path, project='.'):
     commands = _PROJECT_VERIFICATION_COMMANDS_RE.search(text)
     if not commands:
         raise ValueError('missing Verification commands fenced block')
-    narrative = re.split(r'^#{1,2} Verification commands\s*$', text, maxsplit=1,
-                         flags=re.M)[0].strip()
+    narrative = re.split(r'^#{1,6}\s+(?:Exact\s+)?Verification commands(?:\s+block)?\s*$',
+                         text, maxsplit=1, flags=re.M | re.I)[0].strip()
     payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': narrative,
                'verification_commands': commands.group(1)}
     _artifact_json().render_plan(payload, protected=False)
@@ -173,7 +173,7 @@ def ingest_plan(path, project='.', protected=True):
     if not stripped.startswith('{'):
         return False
     try:
-        payload = json.loads(stripped)
+        payload = module.loads_response_json(text)
     except ValueError as error:
         raise ValueError('Invalid plan JSON response: ' + str(error)) from error
     if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'plan':
@@ -195,7 +195,7 @@ def canonicalize_json_plan(path, project='.', protected=True):
     if not stripped.startswith('{'):
         return False
     try:
-        payload = json.loads(stripped)
+        payload = module.loads_response_json(text)
     except ValueError as error:
         raise ValueError('Invalid plan JSON response: ' + str(error)) from error
     if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'plan':
@@ -216,7 +216,7 @@ def ingest_change_plan(path, project='.', require_dispositions=False):
     if not stripped.startswith('{'):
         return False
     try:
-        payload = json.loads(stripped)
+        payload = module.loads_response_json(text)
     except ValueError as error:
         raise ValueError('Invalid change-plan JSON response: ' + str(error)) from error
     if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'change-plan':

@@ -39,6 +39,13 @@ def _unfence_json():
     return module.unfence_json
 
 
+def _loads_response_json(text):
+    spec = importlib.util.spec_from_file_location('artifact_json', Path(__file__).with_name('artifact_json.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.loads_response_json(text)
+
+
 def looks_like_document(text):
     if _HEADING.search(text) or _TABLE_ROW.search(text):
         return True
@@ -62,7 +69,7 @@ def looks_like_document(text):
 def _validate_manual_checklist_json(text, runner):
     """Reject a status update before it can masquerade as a checklist artifact."""
     try:
-        payload = json.loads(_unfence_json()(text))
+        payload = _loads_response_json(text)
     except ValueError as error:
         raise ValueError('%s did not return a manual-checklist JSON object: %s' % (runner, error))
     if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'manual-checklist':
@@ -88,7 +95,7 @@ def worker_packet(text, runner='reviewer'):
     """
     payload_text = _unfence_json()(text)
     try:
-        payload = json.loads(payload_text)
+        payload = _loads_response_json(text)
     except ValueError as error:
         raise ValueError('%s response is not a valid JSON worker packet: %s' % (runner, error))
     if (not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1'
@@ -130,11 +137,15 @@ def check(text, runner='reviewer', artifact=None):
     extracted = _unfence_json()(text)
     if extracted.startswith('{'):
         try:
-            payload = json.loads(extracted)
+            payload = _loads_response_json(text)
         except ValueError:
             payload = None
         if isinstance(payload, dict) and str(payload.get('kind', '')).endswith('-worker-packet'):
             return worker_packet(text, runner)
+        if isinstance(payload, dict) and payload.get('schema') == 'uncle.artifact/v1':
+            # Stream clients can wrap the actual reply in an assistant event.
+            # Persist the normalized artifact, never the transport envelope.
+            return json.dumps(payload, indent=2, sort_keys=True) + '\n'
     if looks_like_document(text):
         return text
     preview = ' '.join(text.split())[:120]

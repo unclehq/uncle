@@ -379,7 +379,7 @@ def _lock_run_once(command):
         env = dict(os.environ, UNCLE_DRIVER_SUPERVISED='1')
         child = subprocess.Popen([python3_executable(), '-c',
             'import os,sys; token=os.read(int(sys.argv[1]),1); token == b"1" or sys.exit(125); os.execvpe(sys.argv[2],sys.argv[2:],os.environ)',
-            str(rfd), *command], env=env, pass_fds=(rfd,), process_group=0)
+            str(rfd), *command], env=env, pass_fds=(rfd,), start_new_session=True)
         os.close(rfd)
         owner = {'supervisor': os.getpid(), 'pid': child.pid, 'pgid': child.pid,
                  'start': {'created_ns': time.time_ns(), 'nonce': os.urandom(16).hex()}}

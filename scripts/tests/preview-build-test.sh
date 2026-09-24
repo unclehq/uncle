@@ -9,6 +9,13 @@ trap 'rm -rf "$TMP"' EXIT
 fails=0
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
 
+# The preview may start before planning completes, but when planning artifacts
+# exist it must consume their canonical JSON rather than a rendered Markdown
+# approval view.
+check "preview prompt names canonical interpretation JSON" grep -qF '.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json' "$ROOT/prompts/preview-build.md"
+check "preview prompt names canonical plan JSON" grep -qF '.uncle/workflow/documents/PROJECT_PLAN.json' "$ROOT/prompts/preview-build.md"
+check "preview prompt does not read rendered plan markdown" bash -c '! grep -qF ".uncle/docs/PROJECT_PLAN.md, if it exists" "$1"' _ "$ROOT/prompts/preview-build.md"
+
 # case <name> <files...>: a fresh project with the named fixtures, the lib
 # sourced with a stub runner, one start attempt, then the background job joined.
 run_case() {

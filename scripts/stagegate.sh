@@ -600,6 +600,12 @@ acceptance_after_waiver() {
 
 acceptance_transition() {
     local report="$1" next="$2" result ids
+    # JSON is authoritative. Convert it to its one deterministic Markdown
+    # review view before any legacy Markdown recovery sees heading-like text
+    # inside a JSON narrative or an accidentally fenced response.
+    if python3 "$ROOT/scripts/lib/acceptance_context.py" "$report" >/dev/null 2>&1; then
+        echo "Rendered canonical acceptance JSON for $report; validating its Markdown view."
+    fi
     # A reviewer transport can occasionally concatenate its scratch draft and
     # final answer. Treat that as a recoverable validation outcome only when
     # exactly one independently parseable complete TEST_REVIEW exists; never

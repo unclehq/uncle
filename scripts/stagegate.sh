@@ -2114,11 +2114,6 @@ run_stage() {
                 run_codex_review "$test_review_prompt" .uncle/docs/TEST_REVIEW.md test-review
             fi
             ;;
-        TEST_EVIDENCE_HANDOFF)
-            run_claude prompts/test-evidence-handoff.md test-evidence-handoff
-            require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
-            require_artifact .uncle/docs/IMPLEMENTATION_NOTES.md
-            ;;
         REPAIR)
             if stage_uses_self_hosted repair AGENT; then
                 # Same split as implementation, with a twist: the format pass
@@ -2902,6 +2897,15 @@ while true; do
             verify_approval \
                 .uncle/docs/UPDATED_PROJECT_PLAN.md \
                 UPDATED_PROJECT_PLAN
+            if [[ -e "$STATE_DIR/test-evidence-reconcile" ]]; then
+                rm -f "$STATE_DIR/test-evidence-reconcile"
+                echo 'Implementation report reconciliation: preserving source and regenerating implementation-owned evidence.'
+                run_claude prompts/test-evidence-handoff.md implementation
+                require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
+                require_artifact .uncle/docs/IMPLEMENTATION_NOTES.md
+                set_state TEST_REVIEW
+                continue
+            fi
             # Nothing may read or write the tree while the preview is still
             # writing it -- including the verification baseline captured below.
             preview_build_wait
@@ -3051,9 +3055,9 @@ while true; do
             # report needs evidence reconciliation, never a source-code repair.
             if [[ ! -e "$STATE_DIR/test-evidence-handoff-attempted" ]] \
                 && python3 -B "$ROOT/scripts/lib/test_review_route.py" "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/AUTOMATED_TEST_REPORT.md; then
-                touch "$STATE_DIR/test-evidence-handoff-attempted"
-                echo 'Test review found an incomplete evidence handoff after a passing driver suite; reconciling reports without a code repair.'
-                set_state TEST_EVIDENCE_HANDOFF
+                touch "$STATE_DIR/test-evidence-handoff-attempted" "$STATE_DIR/test-evidence-reconcile"
+                echo 'Test review found an incomplete evidence handoff after a passing driver suite; returning to implementation-owned report reconciliation.'
+                set_state IMPLEMENT
                 continue
             fi
             if [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
@@ -3099,11 +3103,6 @@ while true; do
             else
                 acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
             fi
-            ;;
-
-        TEST_EVIDENCE_HANDOFF)
-            run_stage TEST_EVIDENCE_HANDOFF
-            set_state TEST_REVIEW
             ;;
 
         REPAIR)

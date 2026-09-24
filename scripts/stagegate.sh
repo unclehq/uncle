@@ -3054,6 +3054,11 @@ while true; do
                 echo "Enable WORKFLOW_GREEN_CHECK and rerun IMPLEMENT to capture its results."
                 exit 1
             fi
+            # The direct worker fast path leaves the current acceptance report
+            # as JSON until acceptance_transition runs.  Reconcile it before
+            # routing so test_review_route reads this attempt's canonical
+            # packet, never a previous TEST_REVIEW.json from the workflow.
+            python3 "$ROOT/scripts/lib/acceptance_context.py" .uncle/docs/TEST_REVIEW.md >/dev/null 2>&1 || true
             # Passing driver verification plus only an incomplete fallback
             # report needs evidence reconciliation, never a source-code repair.
             if [[ ! -e "$STATE_DIR/test-evidence-handoff-attempted" ]] \

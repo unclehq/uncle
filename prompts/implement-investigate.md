@@ -98,7 +98,11 @@ or ports should be launched together, not serially:
 Skip a check only if it does not apply to this repository, and say so
 explicitly in the report.
 
-Create .uncle/docs/AUTOMATED_TEST_REPORT.md containing:
+Write `.uncle/docs/AUTOMATED_TEST_REPORT.md` as JSON only:
+
+`{"schema":"uncle.artifact/v1","kind":"automated-test-report","commands":[{"command":"...","status":"PASS|FAIL|BLOCKED|NOT RUN|DRIVER PENDING","output":"...","requirements":["..."]}],"coverage_gaps":["..."],"next_action":"..."}`
+
+For its command records include:
 
 - exact command;
 - exit status;
@@ -182,9 +186,8 @@ current evidence.
 
 A second, separate pass converts your implementation notes into the required
 JSON document; your only job here is to build the application correctly and
-get the notes' content right. `.uncle/docs/AUTOMATED_TEST_REPORT.md` is
-already plain Markdown -- write it exactly as described above, in its final
-form, directly. Your implementation notes are different: write them as plain
+get the notes' content right. `.uncle/docs/AUTOMATED_TEST_REPORT.md` is also
+JSON-first; write the JSON object described above directly. Your implementation notes are different: write them as plain
 Markdown -- not JSON -- to `.uncle/workflow/implementation-notes-investigation.md`,
 using these exact sections:
 

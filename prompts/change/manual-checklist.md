@@ -33,7 +33,7 @@ sufficient. Do not require `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or
 another API token unless the approved change explicitly requires API-key
 authentication.
 
-Create .uncle/docs/MANUAL_CHECKLIST.md.
+Create `.uncle/workflow/documents/MANUAL_CHECKLIST.json`; the driver renders the Markdown view.
 
 Set each check's `section` to whichever of these it verifies:
 
@@ -58,7 +58,7 @@ Set each check's `section` to whichever of these it verifies:
 19. Regression-sensitive paths
 20. Requirements not covered by automated tests
 
-Your final response itself becomes `.uncle/docs/MANUAL_CHECKLIST.md`. Return exactly one JSON object, not Markdown and not a statement that you wrote a file,
+Your final response itself becomes `.uncle/workflow/documents/MANUAL_CHECKLIST.json`. Return exactly one JSON object, not Markdown and not a statement that you wrote a file,
 matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","section":"...","priority":"...","behavior_classification":"...","related_behavior":"...","related_invariant":"...","preconditions":"...","exclusive_resources":["port:5173"],"depends_on":[],"exact_action":"...","expected_result":"...","evidence_to_capture":"..."}],"traceability":"..."}`

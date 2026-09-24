@@ -159,6 +159,14 @@ def main(argv):
                                     'results': [{'id': identifier, 'required': True, 'status': 'NOT RUN',
                                                  'evidence': 'No check-specific execution evidence was recorded.'}
                                                 for identifier in ids]}, indent=2) + '\n', encoding='utf-8')
+    state = project / '.uncle/workflow/documents'
+    (state / 'VERIFICATION_REPORT.json').write_text(json.dumps(
+        {'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report',
+         'rows': [{'id': identifier, 'required': True, 'status': 'NOT RUN',
+                   'evidence': 'No check-specific execution evidence was recorded.'} for identifier in ids]},
+        indent=2) + '\n', encoding='utf-8')
+    (state / 'DEFECTS.json').write_text(json.dumps(
+        {'schema': 'uncle.artifact/v1', 'kind': 'defects', 'defects': []}, indent=2) + '\n', encoding='utf-8')
     return 0
 
 

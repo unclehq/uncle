@@ -75,6 +75,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 export UNCLE_UNATTENDED="$UNATTENDED"
+# Kept for shared configuration; report/checklist failures are never routed
+# into an automatic repair in this driver.
+WORKFLOW_AUTO_REPAIR="${WORKFLOW_AUTO_REPAIR:-1}"
 
 # Serialize both workflow families before mutable initialization.
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
@@ -533,11 +536,23 @@ implementation_incomplete_choice() {
 
 
 require_file() {
-    if [[ ! -s "$1" ]]; then
-        supervision_validation_failed require_file "$1" "Required file missing or empty: $1"
-        echo "Required file missing or empty: $1"
+    local requested="$1" canonical
+    canonical="$(canonical_artifact_path "$requested")"
+    if [[ ! -s "$canonical" ]]; then
+        supervision_validation_failed require_file "$canonical" "Required file missing or empty: $canonical"
+        echo "Required file missing or empty: $canonical"
         exit 1
     fi
+}
+
+canonical_artifact_path() {
+    local path="$1" stem
+    case "$path" in
+        .uncle/docs/CHANGE_TEST_REPORT.md|.uncle/docs/IMPLEMENTATION_NOTES.md|.uncle/docs/MANUAL_CHECKLIST.md|.uncle/docs/VERIFICATION_REPORT.md|.uncle/docs/DEFECTS.md|.uncle/docs/FINAL_AUDIT.md|.uncle/docs/CHANGE_PLAN.md|.uncle/docs/ADVERSARIAL_REVIEW.md)
+            stem="${path##*/}"; stem="${stem%.md}"
+            printf '%s/documents/%s.json\n' "$STATE_DIR" "$stem" ;;
+        *) printf '%s\n' "$path" ;;
+    esac
 }
 
 # The issue number written into .uncle/workflow/state is informational only;
@@ -1355,13 +1370,24 @@ run_parallel_checklist_workers() {
     local groups="$PROJECT_ROOT/$STATE_DIR/checklist-groups/groups.txt"
     # Runner adapters may rebuild .uncle while they start. Worker handoffs are
     # outside the project entirely, so no workflow cleanup can race them.
-    local directory="" group id prompt packet batch_label
+    local directory="" group id prompt packet batch_label compact_groups
     local worker_count=0 worker_cap synthesis_cap failed=0 status pid jobs
     local -a ids pids pid_ids packet_names
 
     [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
     jobs="${WORKFLOW_VERIFY_JOBS:-4}"
     [[ "$jobs" =~ ^[1-8]$ ]] || jobs=4
+    if [[ "${WORKFLOW_EXECUTE_CHECKLIST_COMPACT:-1}" == 1 ]]; then
+        compact_groups="$STATE_DIR/checklist-groups/compact-all.txt"
+        python3 - "$STATE_DIR/documents/MANUAL_CHECKLIST.json" > "$compact_groups" <<'PY'
+import json, sys
+payload=json.load(open(sys.argv[1]))
+print(' '.join(c['id'] for c in payload.get('checks', []) if c.get('required', True)))
+PY
+        groups="$PROJECT_ROOT/$compact_groups"
+        jobs=1
+        echo 'Checklist compact mode: one shared evidence worker; automated rows cite driver green-check evidence.'
+    fi
     while IFS= read -r group; do
         set -- $group
         [[ $# -gt 1 ]] && worker_count=$((worker_count + $#))
@@ -1629,14 +1655,18 @@ run_stepwise_implementation() {
         compose_implementation_prompt "$base" "$STATE_DIR/implement-change.resolved.md"
         run_claude "$STATE_DIR/implement-change.resolved.md" implementation \
             "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
+        if [[ ! -s .uncle/docs/IMPLEMENTATION_NOTES.md || ! -s .uncle/docs/CHANGE_TEST_REPORT.md ]]; then
+            python3 "$ROOT/scripts/lib/implementation_report_fallback.py" --project . --kind change --missing-only
+        fi
         local notes_ingest_error
         notes_ingest_error="$(python3 "$ROOT/scripts/lib/implementation_notes.py" validate . \
-            .uncle/docs/IMPLEMENTATION_NOTES.md 2>&1)" || {
+            .uncle/docs/IMPLEMENTATION_NOTES.md --require-json 2>&1)" || {
             echo "$notes_ingest_error"
             supervision_validation_failed implementation-notes \
                 .uncle/docs/IMPLEMENTATION_NOTES.md "$notes_ingest_error"
             return 1
         }
+        python3 "$ROOT/scripts/lib/test_report.py" validate . change .uncle/workflow/documents/CHANGE_TEST_REPORT.json
         return 0
     fi
 
@@ -1762,11 +1792,15 @@ run_stepwise_implementation() {
 # permitted to edit source or execute tests, and records missing observations
 # as incomplete rather than fabricating a pass.
 recover_missing_implementation_reports() {
-    if [[ -s .uncle/docs/IMPLEMENTATION_NOTES.md && -s .uncle/docs/CHANGE_TEST_REPORT.md ]]; then
+    if [[ -s .uncle/workflow/documents/IMPLEMENTATION_NOTES.json && -s .uncle/workflow/documents/CHANGE_TEST_REPORT.json ]]; then
+        python3 "$ROOT/scripts/lib/implementation_notes.py" validate . .uncle/workflow/documents/IMPLEMENTATION_NOTES.json --require-json
+        python3 "$ROOT/scripts/lib/test_report.py" validate . change .uncle/workflow/documents/CHANGE_TEST_REPORT.json
         return 0
     fi
     echo 'Implementation reports missing; recording incomplete handoff evidence automatically.'
     python3 "$ROOT/scripts/lib/implementation_report_fallback.py" --project . --kind change --missing-only
+    python3 "$ROOT/scripts/lib/implementation_notes.py" validate . .uncle/workflow/documents/IMPLEMENTATION_NOTES.json --require-json
+    python3 "$ROOT/scripts/lib/test_report.py" validate . change .uncle/workflow/documents/CHANGE_TEST_REPORT.json
 }
 
 # The execution commands and worker evidence are durable. If their synthesis
@@ -2110,7 +2144,9 @@ record_codex_cost() {
 
 normalize_reviewer_packet() {
     local output_file="$1" runner="$2" normalized
-    [[ "$output_file" == *.json && -s "$output_file" ]] || return 0
+    # Only specialist panel responses use the worker-packet envelope. Parent
+    # stage artifacts are canonical JSON with their own schemas.
+    [[ "$output_file" == *-panel/*.json && -s "$output_file" ]] || return 0
     normalized="$(mktemp "$STATE_DIR/.reviewer-packet.XXXXXX")" || return 1
     if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --packet "$runner" < "$output_file" > "$normalized"; then
         rm -f "$normalized"
@@ -2171,11 +2207,16 @@ run_codex() {
     local review_key
     review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"
     if restore_plan_review "$output_file" "$review_key"; then
+        if [[ "$log_name" == adversarial-review ]] && ! python3 "$ROOT/scripts/lib/adversarial-context.py" --validate-json . >/dev/null 2>&1; then
+            echo 'Discarding cached adversarial review: canonical JSON is missing or invalid.'
+            rm -f "$output_file"
+        else
         if [[ "$log_name" != adversarial-review ]]; then
         finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
     fi
         save_plan_review "$output_file" "$review_key"
         return 0
+        fi
     fi
 
     local -a flags=(
@@ -2366,9 +2407,11 @@ run_checklist_panel() {
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Checklist worker failed; canonical packet validation will stop the panel.' >&2; done
-    local target=".uncle/docs/MANUAL_CHECKLIST.md"
-    [[ "$kind" == base ]] && target="$STATE_DIR/MANUAL_CHECKLIST.base.md"
+    local target="$STATE_DIR/documents/MANUAL_CHECKLIST.json"
+    [[ "$kind" == base ]] && target="$STATE_DIR/documents/MANUAL_CHECKLIST.base.json"
     python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$target" coverage invariants resources regressions || return 1
+    python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$target" || return 1
+    [[ "$kind" == base ]] || python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$target" .uncle/docs/MANUAL_CHECKLIST.md || return 1
     cp "$target" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
     CHECKLIST_PANEL_PROMPT="$target"
     CHECKLIST_PANEL_DIRECT=1
@@ -3259,7 +3302,7 @@ REPAIR
                 fi
                 run_codex \
                     "$checklist_prompt" \
-                    .uncle/docs/MANUAL_CHECKLIST.md \
+                    "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
                     manual-checklist-delta \
                     "$CODEX_EFFORT_CHECKLIST"
             else
@@ -3279,7 +3322,7 @@ REPAIR
             ;;
 
         VALIDATE_MANUAL_CHECKLIST)
-            checklist_validation_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" .uncle/docs/MANUAL_CHECKLIST.md 2>&1)" || {
+            checklist_validation_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" 2>&1)" || {
                 checklist_retry_marker="$STATE_DIR/manual-checklist-format-retry.md"
                 if [[ ! -e "$checklist_retry_marker" ]]; then
                     {
@@ -3298,12 +3341,12 @@ REPAIR
                 printf '%s\n' "$checklist_validation_error" >&2
                 exit 1
             }
-            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('c','$ROOT/scripts/lib/checklist_document.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.export_json('.uncle/docs/MANUAL_CHECKLIST.md')" || exit 1
+            python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" .uncle/docs/MANUAL_CHECKLIST.md || exit 1
             set_state EXECUTE_CHECKLIST
             ;;
 
         EXECUTE_CHECKLIST)
-            if ! python3 "$ROOT/scripts/lib/checklist_document.py" .uncle/docs/MANUAL_CHECKLIST.md; then
+            if ! python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json"; then
                 # A zero-commit project is valid. Regenerate a delta checklist
                 # that incorrectly made historical Git state a prerequisite.
                 echo 'Checklist contract requires unavailable commit history; regenerating the delta checklist from current-tree evidence.'
@@ -3338,12 +3381,8 @@ REPAIR
         VALIDATE_CHECKLIST)
             echo "Validating saved checklist reports; checks will not be rerun."
             recover_missing_checklist_reports || exit $?
-            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('r','$ROOT/scripts/lib/checklist_report_fallback.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.export_from_markdown('.') ; m.render_from_json('.')" || exit 1
-            require_file .uncle/docs/VERIFICATION_REPORT.md
-            check_document_budget .uncle/docs/VERIFICATION_REPORT.md || exit 1
-            if [[ -e .uncle/docs/DEFECTS.md ]]; then
-                check_document_budget .uncle/docs/DEFECTS.md || exit 1
-            fi
+            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('r','$ROOT/scripts/lib/checklist_report_fallback.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.render_from_json('.')" || exit 1
+            require_file "$STATE_DIR/documents/EXECUTE_CHECKLIST.json"
             set_state FINAL_AUDIT
             ;;
 

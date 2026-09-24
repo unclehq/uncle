@@ -83,6 +83,8 @@ def main():
         cache = args.cache_dir / (args.key + '.json')
         if args.action == 'save':
             content = args.output.read_text()
+            if not content.strip():
+                return 1
             record = {'key': args.key, 'content': content, 'sha256': digest(content.encode())}
             args.cache_dir.mkdir(parents=True, exist_ok=True)
             fd, name = tempfile.mkstemp(dir=args.cache_dir)
@@ -92,6 +94,8 @@ def main():
         else:
             record = json.loads(cache.read_text())
             if record['key'] != args.key or digest(record['content'].encode()) != record['sha256']:
+                return 1
+            if not record['content'].strip():
                 return 1
             if args.output.exists() and digest(args.output.read_bytes()) != record['sha256']:
                 return 1

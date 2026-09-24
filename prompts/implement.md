@@ -42,7 +42,7 @@ and observed verification result. Passing baseline checks or creating reports
 does not prove a feature was built. Implement missing items before ending;
 never describe partial or blocked work as a completed application.
 
-Write .uncle/docs/IMPLEMENTATION_NOTES.md as one JSON object, not Markdown,
+Write `.uncle/workflow/documents/IMPLEMENTATION_NOTES.json` as one JSON object, not Markdown,
 matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"implementation-notes","changed_files":[{"path":"...","purpose":"...","plan_step":"...","behavior_or_invariant":"..."}],"deviations":[{"file":"...","reason":"..."}],"unresolved_concerns":["..."]}`
@@ -92,6 +92,12 @@ Record the full block as `DRIVER PENDING`; the subsequent green check is the
 authoritative result. Checks that do not contend for the same build artifacts
 or ports should be launched together, not serially:
 
+A plan step labelled `Reconcile` is not an exception to this boundary. In this
+stage it means reconcile the implementation's code and narrowly scoped evidence;
+it never authorizes installing browsers or dependencies, running the plan's
+whole Verification commands block, or waiting for a full-suite background job.
+The driver performs that block once after this handoff.
+
 - formatting;
 - compilation;
 - linting;
@@ -105,14 +111,18 @@ or ports should be launched together, not serially:
 Skip a check only if it does not apply to this repository, and say so
 explicitly in the report.
 
-Create .uncle/docs/AUTOMATED_TEST_REPORT.md containing:
+Write `.uncle/workflow/documents/AUTOMATED_TEST_REPORT.json` as one JSON object, not Markdown,
+matching this contract (the driver stores it canonically as
+`.uncle/workflow/documents/AUTOMATED_TEST_REPORT.json` and renders its Markdown
+review view):
 
-- exact command;
-- exit status;
-- meaningful output;
-- PASS, FAIL, BLOCKED, or NOT RUN;
-- unresolved warnings;
-- untested requirements.
+`{"schema":"uncle.artifact/v1","kind":"automated-test-report","commands":[{"command":"...","status":"PASS|FAIL|BLOCKED|NOT RUN|DRIVER PENDING","output":"...","requirements":["..."]}],"coverage_gaps":["..."],"next_action":"..."}`
+
+For every command result include:
+
+- exact command and status;
+- meaningful output and requirement IDs;
+- unresolved warnings and untested requirements in `coverage_gaps`.
 
 Under "meaningful output", excerpt the lines that carry the result — the
 summary line, and the failures in full. Do not paste whole test transcripts:

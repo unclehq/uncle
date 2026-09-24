@@ -116,6 +116,20 @@ def render_json(project='.', destination='.uncle/docs/ADVERSARIAL_REVIEW.md'):
         raise ValueError('missing overall assessment')
     Path(destination).write_text(module.render_adversarial(payload), encoding='utf-8')
 
+def validate_json(project='.'):
+    """Validate canonical review JSON without parsing the Markdown view."""
+    artifact = Path(__file__).with_name('artifact_json.py')
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('artifact_json', artifact)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    payload = module.read(project, 'ADVERSARIAL_REVIEW.md')
+    required = ('id', 'title', 'severity', 'references', 'failure', 'fix', 'verify')
+    if payload.get('kind') != 'adversarial-review' or not isinstance(payload.get('overall_assessment'), str) or not payload['overall_assessment'].strip():
+        raise ValueError('invalid adversarial-review JSON')
+    for finding in payload.get('findings', []):
+        if not isinstance(finding, dict) or any(not finding.get(key) for key in required):
+            raise ValueError('invalid adversarial finding')
+
 
 def findings_json(project='.'):
     """Structured findings for downstream workflow consumers."""
@@ -155,6 +169,9 @@ if __name__ == '__main__':
         raise SystemExit(0)
     if sys.argv[1] == '--render-json':
         render_json(sys.argv[2] if len(sys.argv) > 2 else '.', sys.argv[3] if len(sys.argv) > 3 else '.uncle/docs/ADVERSARIAL_REVIEW.md')
+        raise SystemExit(0)
+    if sys.argv[1] == '--validate-json':
+        validate_json(sys.argv[2] if len(sys.argv) > 2 else '.')
         raise SystemExit(0)
     if sys.argv[1] == '--validate':
         try:

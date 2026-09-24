@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""Create conservative implementation handoff artifacts without an LLM retry.
-
-An implementation turn that edits code but forgets its Markdown handoff must
-not be repeated merely to obtain prose.  These records describe only durable
-driver evidence and deliberately leave test/requirement coverage unresolved.
-"""
+"""Create conservative JSON-first implementation handoffs without an LLM retry."""
 import argparse
+import json
 import subprocess
 from pathlib import Path
 
@@ -20,25 +16,21 @@ def changed_files(project):
 
 
 def notes(files):
-    lines = ['# Implementation notes', '', '## Driver-owned handoff', '',
-             'The implementation stage did not provide its required handoff. This fallback records durable working-tree evidence only.', '',
-             '## Changed files observed', '']
-    lines += [f'- `{name}`' for name in files]
-    lines += ['', '## Requirement and test traceability', '',
-              '- Not established: the missing agent handoff did not cite plan rows or check-specific evidence.', '',
-              '## Unresolved blockers', '',
-              '- Review the changed files and replace this fallback with a complete implementation record before relying on it for release.']
-    return '\n'.join(lines) + '\n'
+    return {'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
+            'changed_files': [{'path': name, 'purpose': 'Observed by driver fallback; implementation handoff was missing.',
+                               'plan_step': '', 'behavior_or_invariant': ''} for name in files],
+            'deviations': [],
+            'unresolved_concerns': ['Requirement and test traceability were not established by the missing implementation handoff.']}
 
 
 def tests(kind):
-    title = '# Change test report' if kind == 'change' else '# Automated test report'
-    return (title + '\n\n## Driver-owned incomplete test evidence\n\n'
-            'The implementation stage omitted its required test handoff. No command result or requirement coverage is inferred by this fallback.\n\n'
-            '## Coverage gaps\n\n'
-            '- All changed behavior requires review against the approved plan and fresh observed test evidence.\n\n'
-            '## Next action\n\n'
-            '- Run the approved verification commands and replace this incomplete record with their actual results.\n')
+    return {'schema': 'uncle.artifact/v1',
+            'kind': 'change-test-report' if kind == 'change' else 'automated-test-report',
+            'commands': [{'command': 'Implementation handoff', 'status': 'NOT RUN',
+                          'output': 'The implementation stage omitted its required test handoff; no command result is inferred.',
+                          'requirements': []}],
+            'coverage_gaps': ['All changed behavior requires review against the approved plan and fresh observed test evidence.'],
+            'next_action': 'Run the approved verification commands and replace this incomplete record with actual results.'}
 
 
 def main():
@@ -49,11 +41,21 @@ def main():
     args = parser.parse_args()
     project = Path(args.project).resolve(); docs = project / '.uncle/docs'; docs.mkdir(parents=True, exist_ok=True)
     test_name = 'CHANGE_TEST_REPORT.md' if args.kind == 'change' else 'AUTOMATED_TEST_REPORT.md'
-    outputs = ((docs / 'IMPLEMENTATION_NOTES.md', notes(changed_files(project))),
-               (docs / test_name, tests(args.kind)))
+    canonical_notes = project / '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json'
+    canonical_notes.parent.mkdir(parents=True, exist_ok=True)
+    canonical_tests = project / '.uncle/workflow/documents' / test_name.replace('.md', '.json')
+    outputs = ((canonical_notes, notes(changed_files(project))),
+               (canonical_tests, tests(args.kind)))
     for path, content in outputs:
         if not args.missing_only or not path.is_file() or path.stat().st_size == 0:
-            path.write_text(content, encoding='utf-8')
+            path.write_text(json.dumps(content) + '\n', encoding='utf-8')
+    root = Path(__file__).resolve().parent
+    subprocess.run(['python3', str(root / 'implementation_notes.py'), 'validate', str(project),
+                    '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json', '--require-json'], check=True)
+    subprocess.run(['python3', str(root / 'implementation_notes.py'), 'render', str(project),
+                    '.uncle/docs/IMPLEMENTATION_NOTES.md'], check=True)
+    subprocess.run(['python3', str(root / 'test_report.py'), 'validate', str(project), args.kind,
+                    '.uncle/workflow/documents/' + test_name.replace('.md', '.json')], check=True)
 
 
 if __name__ == '__main__':

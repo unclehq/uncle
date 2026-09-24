@@ -41,7 +41,7 @@ check, not independent implementation and mocked tests. Complete authorized
 work first, then report the exact missing verification. Do not weaken protected
 tests or silently amend approved artifacts to resolve a plan contradiction.
 
-Write .uncle/docs/IMPLEMENTATION_NOTES.md as one JSON object, not Markdown,
+Write `.uncle/workflow/documents/IMPLEMENTATION_NOTES.json` as one JSON object, not Markdown,
 matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"implementation-notes","changed_files":[{"path":"...","purpose":"...","plan_step":"...","behavior_or_invariant":"..."}],"deviations":[{"file":"...","reason":"..."}],"unresolved_concerns":["..."],"deliveries":[{"id":"AC-1","status":"IMPLEMENTED","changed_code":"path and behavior","observed_verification":"command and observed result"}]}`
@@ -97,8 +97,13 @@ The JSON object's other fields cover:
 - `deviations`: file and reason, for every file outside the frozen scope
 - `unresolved_concerns`: anything left open
 
-Run the targeted checks needed to demonstrate the changed behavior and create
-.uncle/docs/CHANGE_TEST_REPORT.md containing:
+Run the targeted checks needed to demonstrate the changed behavior and write
+`.uncle/workflow/documents/CHANGE_TEST_REPORT.json` as one JSON object, not Markdown:
+
+`{"schema":"uncle.artifact/v1","kind":"change-test-report","commands":[{"command":"...","status":"PASS|FAIL|BLOCKED|NOT RUN|DRIVER PENDING","output":"...","requirements":["..."]}],"coverage_gaps":["..."],"next_action":"..."}`
+
+The driver validates it, saves canonical JSON, and renders the Markdown review
+view. Its command results must cover:
 
 - baseline result
 - targeted tests

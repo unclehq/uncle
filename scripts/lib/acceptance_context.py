@@ -263,6 +263,31 @@ def export_json(path, project='.', name=None):
     return payload
 
 
+def validate_canonical(path):
+    """Validate an already-written canonical acceptance artifact."""
+    import json as _json
+    from pathlib import Path
+    payload = _json.loads(Path(path).read_text(encoding='utf-8'))
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'acceptance-report':
+        raise ValueError('wrong acceptance-report JSON schema')
+    # Rendering performs the complete row/status/evidence validation.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('artifact_json', Path(__file__).with_name('artifact_json.py'))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    module.render_acceptance(payload)
+    return payload
+
+
+def render_canonical(path, view):
+    payload = validate_canonical(path)
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location('artifact_json', Path(__file__).with_name('artifact_json.py'))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    target = Path(view); target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(module.render_acceptance(payload), encoding='utf-8')
+
+
 def main(path, project='.'):
     from pathlib import Path
     p = Path(path)
@@ -278,4 +303,10 @@ def main(path, project='.'):
 
 if __name__ == '__main__':
     import sys
+    if len(sys.argv) == 4 and sys.argv[1] == '--render':
+        render_canonical(sys.argv[2], sys.argv[3])
+        sys.exit(0)
+    if len(sys.argv) == 3 and sys.argv[1] == '--validate-json':
+        validate_canonical(sys.argv[2])
+        sys.exit(0)
     sys.exit(0 if main(sys.argv[1]) else 1)

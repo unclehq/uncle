@@ -79,6 +79,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 export UNCLE_UNATTENDED="$UNATTENDED"
+# A repair is a new implementation attempt, not a harmless validator retry.
+# The sole automatic case is one driver-green-check source/test repair; report
+# and checklist findings stop for an explicit owner decision.
+WORKFLOW_AUTO_REPAIR="${WORKFLOW_AUTO_REPAIR:-1}"
 
 # Serialize both workflow families before mutable initialization.
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
@@ -557,12 +561,18 @@ plan_structure_problem() {
     return 1
 }
 
+acceptance_json_ids() {
+    local report="$1" status="$2" canonical
+    canonical="$STATE_DIR/documents/$(basename "${report%.md}").json"
+    python3 -B "$ROOT/scripts/lib/acceptance_json.py" --ids "$canonical" "$status"
+}
+
 acceptance_setup_pause() {
     local report="$1"
     echo
     echo "Acceptance BLOCKED-SETUP: $report."
     echo "Outstanding setup, one action each:"
-    acceptance_blocked_ids "$report" BLOCKED-SETUP | sed 's/^/  /'
+    acceptance_json_ids "$report" BLOCKED-SETUP | sed 's/^/  /'
     echo "Do them and rerun; each is doable in this environment."
     echo "The current stage remains pending; no acceptance pass was recorded."
 }
@@ -574,7 +584,7 @@ acceptance_human_continue() {
     local report="$1" next="$2"
     echo
     echo "Awaiting human sign-off in $report:"
-    acceptance_blocked_ids "$report" BLOCKED-HUMAN | sed 's/^/  /'
+    acceptance_json_ids "$report" BLOCKED-HUMAN | sed 's/^/  /'
     echo "Nothing else is outstanding. Continuing to $next, which reads the"
     echo "report and judges it; the run cannot complete on an unsigned"
     echo "required check."
@@ -587,11 +597,11 @@ acceptance_human_continue() {
 # after one commit.
 acceptance_after_waiver() {
     local report="$1" next="$2"
-    if [[ -n "$(acceptance_blocked_ids "$report" BLOCKED-SETUP)" ]]; then
+    if [[ -n "$(acceptance_json_ids "$report" BLOCKED-SETUP)" ]]; then
         acceptance_setup_pause "$report"
         exit 1
     fi
-    if [[ -n "$(acceptance_blocked_ids "$report" BLOCKED-HUMAN)" ]]; then
+    if [[ -n "$(acceptance_json_ids "$report" BLOCKED-HUMAN)" ]]; then
         acceptance_human_continue "$report" "$next"
         return 0
     fi
@@ -599,35 +609,20 @@ acceptance_after_waiver() {
 }
 
 acceptance_transition() {
-    local report="$1" next="$2" result ids
-    # JSON is authoritative. Convert it to its one deterministic Markdown
-    # review view before any legacy Markdown recovery sees heading-like text
-    # inside a JSON narrative or an accidentally fenced response.
-    if python3 "$ROOT/scripts/lib/acceptance_context.py" "$report" >/dev/null 2>&1; then
-        echo "Rendered canonical acceptance JSON for $report; validating its Markdown view."
+    local report="$1" next="$2" result ids canonical supervision_artifact
+    canonical="$STATE_DIR/documents/$(basename "${report%.md}").json"
+    # Workflow control is JSON-only.  The Markdown path is an intentionally
+    # disposable human view: never parse, repair, require, or hash it here.
+    if [[ ! -s "$canonical" ]]; then
+        supervision_validation_failed acceptance "$canonical" "Canonical acceptance JSON is missing: $canonical"
+        echo "Canonical acceptance JSON is missing: $canonical"
+        return 1
     fi
-    # A reviewer transport can occasionally concatenate its scratch draft and
-    # final answer. Treat that as a recoverable validation outcome only when
-    # exactly one independently parseable complete TEST_REVIEW exists; never
-    # select between competing verdicts. The retained artifact is still parsed
-    # below before the workflow may advance.
-    if python3 "$ROOT/scripts/lib/repair_document_format.py" "$report" >/dev/null 2>&1; then
-        echo "Validator recovered an unambiguous format-only transcript leak in $report; revalidating."
-    fi
-    python3 "$ROOT/scripts/lib/repair-acceptance.py" "$report" || return 1
-    # A model has repeatedly produced the real, complete acceptance table --
-    # right IDs, right statuses -- under the wrong heading or wrong column
-    # set ("## Summary" with Description instead of Evidence), and repeated
-    # the identical wrong shape on the driver's own format retry: asking
-    # again does not fix a model that believes its shape already satisfies
-    # the requirement. This is deterministic and never invents a status.
-    if python3 "$ROOT/scripts/lib/acceptance_context.py" "$report" >/dev/null 2>&1; then
-        echo "Relocated an unambiguous Acceptance gate table found under the wrong heading/columns in $report; revalidating."
-    fi
-    result="$(acceptance_result "$report" "${3:-}")"
+    result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$canonical" ${3:-})"
+    supervision_artifact="$canonical"
     case "$result" in
         REPAIR|BLOCKED-SETUP|BLOCKED-IMPOSSIBLE)
-            supervision_validation_failed acceptance "$report" "Acceptance $result: $report" 0 ;;
+            supervision_validation_failed acceptance "$supervision_artifact" "Acceptance $result: $supervision_artifact" 0 ;;
     esac
     case "$result" in
         PASS) set_state "$next" ;;
@@ -643,13 +638,13 @@ acceptance_transition() {
             # someone never arrives, so the choice is a waiver or a run that
             # never ends -- and a waiver at least says what went unchecked.
             if [[ "${UNATTENDED:-0}" == 1 ]]; then
-                ids="$(acceptance_blocked_ids "$report" BLOCKED-SETUP)"
+                ids="$(acceptance_json_ids "$report" BLOCKED-SETUP)"
                 # Not acceptance_after_waiver: that re-reads the report, which
                 # still says BLOCKED-SETUP for the rows just waived, and would
                 # pause on them again. A waiver settles the row, not the file.
                 # shellcheck disable=SC2086
                 if [[ -n "$ids" ]] && record_waiver "$report" $ids; then
-                    if [[ -n "$(acceptance_blocked_ids "$report" BLOCKED-HUMAN)" ]]; then
+                    if [[ -n "$(acceptance_json_ids "$report" BLOCKED-HUMAN)" ]]; then
                         acceptance_human_continue "$report" "$next"
                     else
                         set_state "$next"
@@ -661,7 +656,7 @@ acceptance_transition() {
             exit 1
             ;;
         BLOCKED-IMPOSSIBLE)
-            ids="$(acceptance_blocked_ids "$report" BLOCKED-IMPOSSIBLE)"
+            ids="$(acceptance_json_ids "$report" BLOCKED-IMPOSSIBLE)"
             if [[ -z "$ids" ]]; then
                 echo "Acceptance $result: $report, but no required check names itself impossible."
                 echo "The current stage remains pending; no acceptance pass was recorded."
@@ -1003,9 +998,11 @@ get_state() {
 }
 
 require_file() {
-    if [[ ! -s "$1" ]]; then
-        supervision_validation_failed require_file "$1" "Required file is missing or empty: $1"
-        echo "Required file is missing or empty: $1"
+    local requested="$1" canonical
+    canonical="$(canonical_artifact_path "$requested")"
+    if [[ ! -s "$canonical" ]]; then
+        supervision_validation_failed require_file "$canonical" "Required file is missing or empty: $canonical"
+        echo "Required file is missing or empty: $canonical"
         exit 1
     fi
 }
@@ -1013,17 +1010,34 @@ require_file() {
 # Used after an agent stage: a missing artifact here usually means a denied
 # tool, not a refusal to work.
 require_artifact() {
-    if [[ ! -s "$1" ]]; then
-        supervision_validation_failed require_artifact "$1" "Stage produced no artifact: $1"
+    local requested="$1" canonical
+    canonical="$(canonical_artifact_path "$requested")"
+    if [[ ! -s "$canonical" ]]; then
+        supervision_validation_failed require_artifact "$canonical" "Stage produced no artifact: $canonical"
         echo
-        echo "Stage produced no artifact: $1"
+        echo "Stage produced no artifact: $canonical"
         echo "Check the log for '[tool ERROR]' lines — a denied Write is the"
         echo "most common cause. A '[done] error_max_turns' line means the"
         echo "turn cap was too low; raise it with WORKFLOW_TURNS_<STAGE>."
         echo "State has not advanced, so the stage replays cleanly."
         exit 1
     fi
-    check_document_budget "$1" || exit 1
+    # Rendered Markdown is deliberately outside the operational contract.
+    # A presentation budget warning must never fail an otherwise valid JSON
+    # artifact or send the workflow into repair.
+    [[ "$requested" == "$canonical" ]] && check_document_budget "$requested" || true
+}
+
+# Only workflow artifacts are mapped.  Prompts, source requirements, and
+# ordinary project Markdown retain their literal paths.
+canonical_artifact_path() {
+    local path="$1" stem
+    case "$path" in
+        .uncle/docs/PREFLIGHT_REPORT.md|.uncle/docs/TEST_REVIEW.md|.uncle/docs/VERIFICATION_REPORT.md|.uncle/docs/DEFECTS.md|.uncle/docs/MANUAL_CHECKLIST.md|.uncle/docs/FINAL_AUDIT.md|.uncle/docs/IMPLEMENTATION_NOTES.md|.uncle/docs/AUTOMATED_TEST_REPORT.md|.uncle/docs/PROJECT_PLAN.md|.uncle/docs/UPDATED_PROJECT_PLAN.md|.uncle/docs/ADVERSARIAL_REVIEW.md)
+            stem="${path##*/}"; stem="${stem%.md}"
+            printf '%s/documents/%s.json\n' "$STATE_DIR" "$stem" ;;
+        *) printf '%s\n' "$path" ;;
+    esac
 }
 
 ensure_project_plan_json() {
@@ -1354,7 +1368,10 @@ run_claude() {
 
 normalize_reviewer_packet() {
     local output_file="$1" runner="$2" normalized
-    [[ "$output_file" == *.json && -s "$output_file" ]] || return 0
+    # Only specialist panel responses use the worker-packet envelope. Stage
+    # artifacts are also JSON now, but have their own schemas (for example
+    # `adversarial-review`) and must not be forced through that envelope.
+    [[ "$output_file" == *-panel/*.json && -s "$output_file" ]] || return 0
     normalized="$(mktemp "$STATE_DIR/.reviewer-packet.XXXXXX")" || return 1
     if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --packet "$runner" < "$output_file" > "$normalized"; then
         rm -f "$normalized"
@@ -1430,11 +1447,16 @@ run_codex_review() {
     local review_key
     review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"
     if restore_plan_review "$output_file" "$review_key"; then
+        if [[ "$log_name" == adversarial-review ]] && ! python3 "$ROOT/scripts/lib/adversarial-context.py" --validate-json . >/dev/null 2>&1; then
+            echo 'Discarding cached adversarial review: canonical JSON is missing or invalid.'
+            rm -f "$output_file"
+        else
         if [[ "$log_name" != adversarial-review && "$log_name" != adversarial-review-investigate ]]; then
         finish_review_budget "$output_file" "$cmd" "$model" "$effort" "$log_name" || exit 1
     fi
         save_plan_review "$output_file" "$review_key"
         return 0
+        fi
     fi
 
     echo
@@ -1604,8 +1626,20 @@ run_test_review_panel() {
     for pid in "${pids[@]}"; do
         wait "$pid" || echo 'Test-review worker failed; canonical packet validation will stop the panel.' >&2
     done
-    python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" .uncle/docs/TEST_REVIEW.md coverage assertions oracle || return 1
-    cp .uncle/docs/TEST_REVIEW.md "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
+    # A bad response is isolated to its lens. Retry that one compact worker
+    # once; never discard its healthy siblings or restart the whole panel.
+    for lens in coverage assertions oracle; do
+        output="$directory/$lens.json"; prompt="$directory/prompts/$lens.md"
+        if ! python3 -B "$ROOT/scripts/lib/test_review_packets.py" validate "$output" "$lens"; then
+            echo "Test-review worker $lens returned an invalid packet; retrying that worker once."
+            rm -f "$output"
+            UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens-retry" < /dev/null || true
+        fi
+    done
+    python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" "$STATE_DIR/documents/TEST_REVIEW.json" coverage assertions oracle || return 1
+    python3 "$ROOT/scripts/lib/acceptance_context.py" --validate-json "$STATE_DIR/documents/TEST_REVIEW.json" || return 1
+    python3 "$ROOT/scripts/lib/acceptance_context.py" --render "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/TEST_REVIEW.md || return 1
+    cp "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
 }
 
 run_manual_checklist_panel() {
@@ -1626,8 +1660,10 @@ run_manual_checklist_panel() {
     for pid in "${pids[@]}"; do
         wait "$pid" || echo 'Manual-checklist worker failed; canonical packet validation will stop the panel.' >&2
     done
-    python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" .uncle/docs/MANUAL_CHECKLIST.md coverage invariants resources regressions || return 1
-    cp .uncle/docs/MANUAL_CHECKLIST.md "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
+    python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$STATE_DIR/documents/MANUAL_CHECKLIST.json" coverage invariants resources regressions || return 1
+    python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" || return 1
+    python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" .uncle/docs/MANUAL_CHECKLIST.md || return 1
+    cp "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
 }
 
 run_final_audit_panel() {
@@ -1704,6 +1740,19 @@ run_parallel_application_implementation() {
                 echo "step's implementation-notes fragment, as one JSON object matching"
                 echo "the contract given earlier in this prompt, to"
                 echo ".uncle/workflow/parallel/notes/step-$step.json."
+                if [[ ! "$step_line" =~ Owns:[[:space:]]*\* ]]; then
+                    cat <<'EOF'
+
+## Isolated ownership boundary (binding)
+
+You have a narrow file partition. Do not invoke a framework generator or
+scaffolder (`npm create`, `npx create-*`, `create-vite`, `vite --template`,
+or equivalent), because those tools write undeclared default files. Do not
+create, delete, or modify any file outside this step's `Owns:` list. If a
+framework scaffold is necessary, stop before creating it and record that the
+approved plan must assign a whole-tree scaffold step; never guess its files.
+EOF
+                fi
                 if [[ "$step_line" =~ ^[[:space:]]*[Rr]econcile:|Owns:[[:space:]]*\* ]]; then
                     cat <<'EOF'
 
@@ -1786,13 +1835,28 @@ PARALLEL_CHECKLIST_WORKERS="${WORKFLOW_PARALLEL_CHECKLIST_WORKERS:-1}"
 # for the synthesizer, not a reason to throw away results from its siblings.
 run_parallel_checklist_workers() {
     local groups="$PWD/$STATE_DIR/checklist-groups/groups.txt"
-    local directory="" group id prompt packet batch_label
+    local directory="" group id prompt packet batch_label compact_groups
     local worker_count=0 status pid jobs
     local -a ids pids pid_ids packet_names
 
     [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
     jobs="${WORKFLOW_VERIFY_JOBS:-4}"
     [[ "$jobs" =~ ^[1-8]$ ]] || jobs=4
+    # A checklist should not multiply model sessions or runtime setup. One
+    # worker shares whatever evidence environment this project needs (browser,
+    # service, CLI, database, or filesystem); driver green-check remains the
+    # binding evidence for automated rows.
+    if [[ "${WORKFLOW_EXECUTE_CHECKLIST_COMPACT:-1}" == 1 ]]; then
+        compact_groups="$STATE_DIR/checklist-groups/compact-all.txt"
+        python3 - "$STATE_DIR/documents/MANUAL_CHECKLIST.json" > "$compact_groups" <<'PY'
+import json, sys
+payload=json.load(open(sys.argv[1]))
+print(' '.join(c['id'] for c in payload.get('checks', []) if c.get('required', True)))
+PY
+        groups="$PWD/$compact_groups"
+        jobs=1
+        echo 'Checklist compact mode: one shared evidence worker; automated rows cite driver green-check evidence.'
+    fi
     while IFS= read -r group; do
         set -- $group
         [[ $# -gt 1 ]] && worker_count=$((worker_count + $#))
@@ -1972,13 +2036,15 @@ run_stage() {
                     cat "$ROOT/prompts/adversarial-review-format.md"
                     cat "$adversarial_review_investigation"
                 } > "$adversarial_review_format_prompt"
-                run_codex_review "$adversarial_review_format_prompt" .uncle/docs/ADVERSARIAL_REVIEW.md adversarial-review
+                run_codex_review "$adversarial_review_format_prompt" "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" adversarial-review
             else
                 run_codex_review \
                     "${ADVERSARIAL_REVIEW_PROMPT:-prompts/adversarial-review.md}" \
-                    .uncle/docs/ADVERSARIAL_REVIEW.md \
+                    "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
                     adversarial-review
             fi
+            python3 "$ROOT/scripts/lib/adversarial-context.py" --validate-json . || exit 1
+            python3 "$ROOT/scripts/lib/adversarial-context.py" --render-json . .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             ;;
         UPDATED_PLAN)
             # A review with findings falls through to the normal collated
@@ -2025,12 +2091,31 @@ run_stage() {
                 else
                     run_claude prompts/implement.md implementation
                 fi
+                # A serial implementation agent can finish its coding turn
+                # without writing one of its two handoff artifacts.  Do not
+                # reject it before the existing report-only reconciler gets a
+                # chance to record the evidence: that formerly made the
+                # fallback below unreachable and sent a completed tree into a
+                # costly repair loop.
+                if [[ ! -s .uncle/docs/IMPLEMENTATION_NOTES.md || ! -s .uncle/docs/AUTOMATED_TEST_REPORT.md ]]; then
+                    echo 'Implementation omitted a required handoff; reconciling reports without rerunning source.'
+                    run_claude prompts/test-evidence-handoff.md implementation-report 'Read,Glob,Grep,Write,Bash'
+                fi
                 local notes_ingest_error
                 notes_ingest_error="$(python3 "$ROOT/scripts/lib/implementation_notes.py" validate . \
-                    .uncle/docs/IMPLEMENTATION_NOTES.md 2>&1)" || {
+                    .uncle/workflow/documents/IMPLEMENTATION_NOTES.json --require-json 2>&1)" || {
                     echo "$notes_ingest_error"
                     supervision_validation_failed implementation-notes \
-                        .uncle/docs/IMPLEMENTATION_NOTES.md "$notes_ingest_error"
+                        .uncle/workflow/documents/IMPLEMENTATION_NOTES.json "$notes_ingest_error"
+                    return 1
+                }
+                python3 "$ROOT/scripts/lib/implementation_notes.py" render . .uncle/docs/IMPLEMENTATION_NOTES.md
+                local test_report_ingest_error
+                test_report_ingest_error="$(python3 "$ROOT/scripts/lib/test_report.py" validate . application \
+                    .uncle/workflow/documents/AUTOMATED_TEST_REPORT.json 2>&1)" || {
+                    echo "$test_report_ingest_error"
+                    supervision_validation_failed automated-test-report \
+                        .uncle/workflow/documents/AUTOMATED_TEST_REPORT.json "$test_report_ingest_error"
                     return 1
                 }
             else
@@ -2044,8 +2129,8 @@ run_stage() {
             require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
             ;;
         PREFLIGHT)
-            rm -f .uncle/docs/PREFLIGHT_REPORT.md
-            if python3 -B "$ROOT/scripts/lib/preflight.py" "$GREEN_CMDS" .uncle/docs/PREFLIGHT_REPORT.md; then
+            rm -f "$STATE_DIR/documents/PREFLIGHT_REPORT.json" .uncle/docs/PREFLIGHT_REPORT.md
+            if python3 -B "$ROOT/scripts/lib/preflight.py" "$GREEN_CMDS" "$STATE_DIR/documents/PREFLIGHT_REPORT.json"; then
                 echo "Preflight: runtime checks passed without a model call."
             else
                 echo "Preflight: requesting model diagnosis of unresolved prerequisites."
@@ -2063,10 +2148,12 @@ run_stage() {
                 else
                     run_claude prompts/preflight.md preflight
                 fi
-                python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('a','$ROOT/scripts/lib/acceptance_context.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.ingest_json('.uncle/docs/PREFLIGHT_REPORT.md')" || exit 1
+                # A diagnosing reviewer writes the canonical packet directly.
+                # Markdown is rendered only after JSON validation below.
             fi
-            require_artifact .uncle/docs/PREFLIGHT_REPORT.md
-            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('a','$ROOT/scripts/lib/acceptance_context.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.export_json('.uncle/docs/PREFLIGHT_REPORT.md')" 2>/dev/null || true
+            python3 "$ROOT/scripts/lib/acceptance_context.py" --validate-json "$STATE_DIR/documents/PREFLIGHT_REPORT.json" || exit 1
+            python3 "$ROOT/scripts/lib/acceptance_context.py" --render "$STATE_DIR/documents/PREFLIGHT_REPORT.json" .uncle/docs/PREFLIGHT_REPORT.md || exit 1
+            require_artifact "$STATE_DIR/documents/PREFLIGHT_REPORT.json"
             ;;
         TEST_REVIEW)
             # Preserve the previous findings for the next review and repairs.
@@ -2162,7 +2249,10 @@ run_stage() {
             ;;
         MANUAL_CHECKLIST)
             run_manual_checklist_panel
-            if [[ -s .uncle/docs/MANUAL_CHECKLIST.md ]]; then
+            # Only the canonical packet proves a panel completed. A rendered
+            # view can survive a prior run or a user edit and is never an
+            # execution input.
+            if [[ -s "$STATE_DIR/documents/MANUAL_CHECKLIST.json" ]]; then
                 echo 'Manual-checklist fast path: merged authoritative worker packets without parent synthesis.'
                 return 0
             fi
@@ -2191,7 +2281,7 @@ run_stage() {
                         cat "$STATE_DIR/manual-checklist-format-retry.md"
                     fi
                 } > "$manual_checklist_format_prompt"
-                run_codex_review "$manual_checklist_format_prompt" .uncle/docs/MANUAL_CHECKLIST.md manual-checklist
+                run_codex_review "$manual_checklist_format_prompt" "$STATE_DIR/documents/MANUAL_CHECKLIST.json" manual-checklist
             else
                 manual_checklist_prompt="${MANUAL_CHECKLIST_PROMPT:-prompts/manual-checklist.md}"
                 if [[ -s "$STATE_DIR/manual-checklist-format-retry.md" ]]; then
@@ -2204,7 +2294,7 @@ run_stage() {
                 fi
                 run_codex_review \
                     "$manual_checklist_prompt" \
-                    .uncle/docs/MANUAL_CHECKLIST.md \
+                    "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
                     manual-checklist
             fi
             ;;
@@ -2543,7 +2633,7 @@ collect_background_preflight() {
     PREFLIGHT_BG_PID=""
     rm -f "$STATE_DIR/preflight-backgrounded"
     [[ -s "$STATE_DIR/preflight-bg.status" ]] && status="$(cat "$STATE_DIR/preflight-bg.status")"
-    [[ -s .uncle/docs/PREFLIGHT_REPORT.md ]] && result="$(acceptance_result .uncle/docs/PREFLIGHT_REPORT.md)"
+    [[ -s "$STATE_DIR/documents/PREFLIGHT_REPORT.json" ]] && result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/PREFLIGHT_REPORT.json")"
 
     if [[ "$status" == 0 && "$result" == PASS ]]; then
         echo "Prerequisites confirmed (probed alongside implementation)."
@@ -2684,6 +2774,10 @@ while true; do
                     .uncle/docs/REQUIREMENTS_INTERPRETATION.md \
                     .uncle/docs/PROJECT_PLAN.md
             fi
+            # Reused merged plans predate (or can outlive) their canonical
+            # packet.  Hydrate it before opening the approval gate: the
+            # speculative adversarial review consumes only this JSON file.
+            ensure_project_plan_json || exit 1
             set_state WAIT_PLAN_APPROVAL
             ;;
 
@@ -2706,7 +2800,7 @@ while true; do
 
         VALIDATE_ADVERSARIAL_REVIEW)
             verify_approval .uncle/docs/PROJECT_PLAN.md PROJECT_PLAN
-            validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate .uncle/docs/ADVERSARIAL_REVIEW.md 2>&1)" || {
+            validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate-json . 2>&1)" || {
                 printf '%s\n' "$validation_error" >&2
                 printf '%s\n' "$validation_error" > "$STATE_DIR/validation-error.txt"
                 printf '%s\n' "validation: $validation_error" > "$STATE_DIR/stop-reason"
@@ -2714,7 +2808,6 @@ while true; do
                 exit 1
             }
             rm -f "$STATE_DIR/validation-error.txt"
-            python3 "$ROOT/scripts/lib/adversarial-context.py" --export-json .uncle/docs/ADVERSARIAL_REVIEW.md . || exit 1
             python3 "$ROOT/scripts/lib/adversarial-context.py" --render-json . .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             check_document_budget .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             set_state WAIT_REVIEW_ACKNOWLEDGEMENT
@@ -2843,7 +2936,7 @@ while true; do
             if plan_executability_enabled && [[ -s "$STATE_DIR/plan-executability/assessment.json" ]]; then
                 plan_tool preflight-check || exit 1
             fi
-            preflight_result="$(acceptance_result .uncle/docs/PREFLIGHT_REPORT.md)"
+            preflight_result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/PREFLIGHT_REPORT.json")"
             case "$preflight_result" in
                 PASS) human_input_reset "$STATE_DIR" ;;
                 BLOCKED-HUMAN)
@@ -2925,6 +3018,11 @@ while true; do
                 # report-only mode: it may inspect/run checks and write its
                 # reports, but cannot call Edit on application source/tests.
                 run_claude prompts/test-evidence-handoff.md implementation 'Read,Glob,Grep,Write,Bash'
+                python3 "$ROOT/scripts/lib/implementation_notes.py" validate . \
+                    .uncle/workflow/documents/IMPLEMENTATION_NOTES.json --require-json
+                python3 "$ROOT/scripts/lib/implementation_notes.py" render . .uncle/docs/IMPLEMENTATION_NOTES.md
+                python3 "$ROOT/scripts/lib/test_report.py" validate . application \
+                    .uncle/workflow/documents/AUTOMATED_TEST_REPORT.json
                 require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
                 require_artifact .uncle/docs/IMPLEMENTATION_NOTES.md
                 rm -f "$STATE_DIR/test-evidence-reconcile"
@@ -2952,7 +3050,7 @@ while true; do
             if [[ ! -s "$STATE_DIR/preflight-plan.sha256" ]] \
                 || [[ "$(cat "$STATE_DIR/preflight-plan.sha256")" != "$(hash_file .uncle/docs/UPDATED_PROJECT_PLAN.md)" ]] \
                 || { [[ ! -e "$STATE_DIR/preflight-backgrounded" ]] \
-                     && ! preflight_settled "$(acceptance_result .uncle/docs/PREFLIGHT_REPORT.md)"; }; then
+                     && ! preflight_settled "$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/PREFLIGHT_REPORT.json")"; }; then
                 set_state PREFLIGHT
                 continue
             fi
@@ -3077,21 +3175,19 @@ while true; do
                 exit 1
             fi
             # The direct worker fast path leaves the current acceptance report
-            # as JSON until acceptance_transition runs.  Reconcile it before
-            # routing so test_review_route reads this attempt's canonical
-            # packet, never a previous TEST_REVIEW.json from the workflow.
-            python3 "$ROOT/scripts/lib/acceptance_context.py" .uncle/docs/TEST_REVIEW.md >/dev/null 2>&1 || true
+            # TEST_REVIEW.json is produced and validated before this state;
+            # its Markdown rendering is never ingested as workflow input.
             # Passing driver verification plus only an incomplete fallback
             # report needs evidence reconciliation, never a source-code repair.
             if [[ ! -e "$STATE_DIR/test-evidence-handoff-attempted" ]] \
-                && python3 -B "$ROOT/scripts/lib/test_review_route.py" "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/AUTOMATED_TEST_REPORT.md; then
+                && python3 -B "$ROOT/scripts/lib/test_review_route.py" "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/AUTOMATED_TEST_REPORT.json"; then
                 touch "$STATE_DIR/test-evidence-handoff-attempted" "$STATE_DIR/test-evidence-reconcile"
                 echo 'Test review found an incomplete evidence handoff after a passing driver suite; returning to implementation-owned report reconciliation.'
                 set_state IMPLEMENT
                 continue
             fi
             if [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
-                && [[ "$(acceptance_result .uncle/docs/TEST_REVIEW.md 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS')" == PASS ]]; then
+                && [[ "$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS)" == PASS ]]; then
                 # Repair is the right answer for a check the code can satisfy.
                 # It is the wrong answer for one the code cannot: the stage runs,
                 # changes nothing that helps, and the run comes straight back
@@ -3136,12 +3232,19 @@ while true; do
             ;;
 
         REPAIR)
+            repair_source="$(cat "$STATE_DIR/repair-source" 2>/dev/null || true)"
+            repair_count_existing="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"
+            if [[ "$WORKFLOW_AUTO_REPAIR" != 1 || "$repair_source" != "$GREEN_MD" || "$repair_count_existing" -ge 1 ]]; then
+                echo 'Automatic repair is not eligible for this failure.'
+                echo 'Only one driver green-check source/test repair is automatic. Checklist, test-review, and other canonical report failures remain stopped for an explicit owner decision.'
+                exit 1
+            fi
             # A run that reached REPAIR before the current test-review JSON
             # was ingested should recover on resume as well.  The fallback
             # report is an implementation-owned documentation gap, so no
             # source repair can make this acceptance result pass.
             if [[ ! -e "$STATE_DIR/test-evidence-handoff-attempted" ]] \
-                && python3 -B "$ROOT/scripts/lib/test_review_route.py" "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/AUTOMATED_TEST_REPORT.md; then
+                && python3 -B "$ROOT/scripts/lib/test_review_route.py" "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/AUTOMATED_TEST_REPORT.json"; then
                 touch "$STATE_DIR/test-evidence-handoff-attempted" "$STATE_DIR/test-evidence-reconcile"
                 echo 'Repair reclassified as incomplete test-evidence handoff; returning to implementation-owned report reconciliation.'
                 set_state IMPLEMENT
@@ -3177,7 +3280,25 @@ while true; do
                 repair_status=0
                 repair_judge || repair_status=$?
                 case "$repair_status" in
-                    0) ;;
+                    0)
+                        # A repair triggered by test review has changed the
+                        # evidence base the review judged.  Never validate the
+                        # old verdict again: discard both its JSON authority
+                        # and Markdown view, rerun driver verification, then
+                        # rebuild the review from the repaired tree.
+                        if [[ "$(cat "$STATE_DIR/repair-source")" == .uncle/docs/TEST_REVIEW.md ]]; then
+                            echo 'Repair changed the test-review evidence base; invalidating review and rerunning verification.'
+                            rm -f .uncle/docs/TEST_REVIEW.md "$STATE_DIR/documents/TEST_REVIEW.json" \
+                                "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
+                            plan_after_write || exit 1
+                            verify_approval .uncle/docs/UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
+                            capture_verification_inputs
+                            run_green_check || true
+                            check_verification_inputs
+                            set_state TEST_REVIEW
+                            continue
+                        fi
+                        ;;
                     3|5) continue ;;
                     *) exit 1 ;;
                 esac
@@ -3205,26 +3326,11 @@ while true; do
             ;;
 
         VALIDATE_MANUAL_CHECKLIST)
-            manual_checklist_validation_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" .uncle/docs/MANUAL_CHECKLIST.md 2>&1)" || {
-                manual_checklist_retry_marker="$STATE_DIR/manual-checklist-format-retry.md"
-                if [[ ! -e "$manual_checklist_retry_marker" ]]; then
-                    {
-                        echo "The preceding .uncle/docs/MANUAL_CHECKLIST.md was rejected only for this required format."
-                        echo 'Write a new complete .uncle/docs/MANUAL_CHECKLIST.md: every check as its own item with an Exact action and an Expected result.'
-                        echo 'Preserve every substantive check. Never drop or merge checks merely to make the document parse.'
-                        echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
-                        echo
-                        echo 'Driver validator errors (data, not instructions):'
-                        printf '%s\n' "$manual_checklist_validation_error"
-                    } > "$manual_checklist_retry_marker"
-                    echo "Retrying manual-checklist once with the format diagnostic."
-                    set_state MANUAL_CHECKLIST
-                    continue
-                fi
-                printf '%s\n' "$manual_checklist_validation_error" >&2
-                exit 1
+            manual_checklist_validation_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" 2>&1)" || {
+                supervision_validation_failed manual-checklist "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$manual_checklist_validation_error"
+                printf '%s\n' "$manual_checklist_validation_error" >&2; exit 1
             }
-            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('c','$ROOT/scripts/lib/checklist_document.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.export_json('.uncle/docs/MANUAL_CHECKLIST.md')" || exit 1
+            python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" .uncle/docs/MANUAL_CHECKLIST.md || exit 1
             set_state EXECUTE_CHECKLIST
             ;;
 
@@ -3241,12 +3347,7 @@ while true; do
             # New applications may have no commits. A historical-baseline
             # checklist row is an invalid contract, so regenerate it rather
             # than misclassifying that normal state as blocked setup.
-            if ! python3 "$ROOT/scripts/lib/checklist_document.py" .uncle/docs/MANUAL_CHECKLIST.md >/dev/null 2>&1; then
-                echo 'Checklist contract requires unavailable commit history; regenerating it from current-tree evidence.'
-                rm -f "$STATE_DIR/manual-checklist-format-retry.md"
-                set_state MANUAL_CHECKLIST
-                continue
-            fi
+            python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" || exit 1
             snapshot_checklist_checks
             snapshot_checklist_groups
             ensure_checklist_runner execute-checklist || exit 1
@@ -3266,15 +3367,25 @@ while true; do
             check_verification_inputs
             echo "Validating saved checklist reports; checks will not be rerun."
             echo "Correct report errors in place, then resume this validation step."
-            if [[ ! -s .uncle/docs/VERIFICATION_REPORT.md || ! -s .uncle/docs/DEFECTS.md ]]; then
+            if [[ ! -s "$STATE_DIR/documents/EXECUTE_CHECKLIST.json" ]]; then
                 echo 'Checklist reports missing; recording incomplete evidence automatically.'
                 python3 "$ROOT/scripts/lib/checklist_report_fallback.py" --project . --missing-only || exit 1
             fi
-            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('r','$ROOT/scripts/lib/checklist_report_fallback.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.export_from_markdown('.') ; m.render_from_json('.')" || exit 1
-            require_file .uncle/docs/VERIFICATION_REPORT.md
-            require_file .uncle/docs/DEFECTS.md
-            check_document_budget .uncle/docs/VERIFICATION_REPORT.md || exit 1
-            check_document_budget .uncle/docs/DEFECTS.md || exit 1
+            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('r','$ROOT/scripts/lib/checklist_report_fallback.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.render_from_json('.')" || exit 1
+            require_file "$STATE_DIR/documents/EXECUTE_CHECKLIST.json"
+            # A checklist may expose the implementation fallback after a
+            # passing driver suite. That is stale evidence, not a code defect
+            # and never belongs in REPAIR. Reconcile the implementation-owned
+            # JSON once, then rerun the checklist against the fresh handoff.
+            if [[ ! -e "$STATE_DIR/checklist-evidence-handoff-attempted" ]] \
+               && [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] \
+               && python3 -B "$ROOT/scripts/lib/test_review_route.py" --report-stale \
+                    "$STATE_DIR/documents/AUTOMATED_TEST_REPORT.json"; then
+                touch "$STATE_DIR/checklist-evidence-handoff-attempted" "$STATE_DIR/test-evidence-reconcile"
+                echo 'Checklist found a stale implementation test handoff after a passing green check; reconciling reports before rerunning checklist.'
+                set_state IMPLEMENT
+                continue
+            fi
             green_ids="$(green_failed_ids "$GREEN_CLASS" "$GREEN_CMDS")"
             if [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] \
                 && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \

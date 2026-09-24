@@ -47,26 +47,28 @@ repair_begin() {
 repair_judge() {
     local report unrepaired status=0 noops count
     report="$(cat "$STATE_DIR/repair-source")"
-    unrepaired="$(python3 -B "$ROOT/scripts/lib/repair_check.py" judge "$STATE_DIR/repair-check.json" .uncle/docs/IMPLEMENTATION_NOTES.md)" || status=$?
+    # Repair dispositions are canonical JSON. Markdown notes are a human view
+    # and must not decide whether a source repair happened.
+    unrepaired="$(python3 -B "$ROOT/scripts/lib/repair_check.py" judge "$STATE_DIR/repair-check.json" "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json")" || status=$?
     if [[ "$status" == 0 ]]; then
         rm -f "$STATE_DIR/repair-retry" "$STATE_DIR/repair-noop-count" "$STATE_DIR/REPAIR_BRIEF.md"
         return 0
     fi
     if [[ "$status" == 4 ]]; then
-        # Real work, but not on everything the review blocked on. A review now
-        # would only re-state what the hashes already show, so the pass keeps
-        # its attempt and the remaining findings are briefed for the next one.
-        # WORKFLOW_MAX_REPAIRS bounds this, and reaching it asks a person.
+        # Real work occurred. Do not demand a second repair merely because a
+        # remaining finding names a file that was already fixed in an earlier
+        # pass, or because the correct proof is a transient mutation that was
+        # deliberately restored. Both are common for ASSERTIONS/NEGATIVE.
+        # The only honest arbiter now is a fresh driver green check and fresh
+        # canonical test review, which the caller runs after a successful
+        # return. A still-failing row will then open one new repair with fresh
+        # evidence rather than looping on stale snapshot paths.
         echo
         echo "Repair pass changed files for some findings but none for: $(printf '%s' "$unrepaired" | tr '\n' ' ')"
-        echo "Continuing the repair on what is still open before any review."
+        echo "Refreshing verification and canonical review before considering another repair."
         rm -f "$STATE_DIR/repair-noop-count"
-        # shellcheck disable=SC2086
-        python3 -B "$ROOT/scripts/lib/repair_check.py" brief "$report" "$STATE_DIR/repair-check.json" \
-            "$STATE_DIR/REPAIR_BRIEF.md" $unrepaired || return 1
-        : > "$STATE_DIR/repair-retry"
-        echo "  $STATE_DIR/REPAIR_BRIEF.md"
-        return 3
+        rm -f "$STATE_DIR/repair-retry" "$STATE_DIR/REPAIR_BRIEF.md"
+        return 0
     fi
     if [[ "$status" != 1 ]]; then
         echo "Could not judge the repair pass (repair_check.py exited $status)."
@@ -93,7 +95,7 @@ repair_judge() {
     echo "Repair pass changed none of the files these findings name: $(printf '%s' "$unrepaired" | tr '\n' ' ')"
     echo "A report is not a repair. This pass is not reviewed and does not count"
     echo "against the repair limit."
-    supervision_validation_failed repair .uncle/docs/IMPLEMENTATION_NOTES.md \
+    supervision_validation_failed repair "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" \
         "Repair changed no file named by: $(printf '%s' "$unrepaired" | tr '\n' ' ')" 0 || true
     count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 1)"
     count=$((10#$count - 1))

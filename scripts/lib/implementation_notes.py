@@ -161,7 +161,7 @@ def append(project, fragment_path, target='.uncle/docs/IMPLEMENTATION_NOTES.md',
     return rendered
 
 
-def validate(project, path='.uncle/docs/IMPLEMENTATION_NOTES.md'):
+def validate(project, path='.uncle/docs/IMPLEMENTATION_NOTES.md', require_json=False):
     """Single-invocation ingestion: the whole document is one model turn's
     output, so it is exactly one fragment. Returns True and rewrites the file
     in canonical rendered form when the response was JSON; returns False,
@@ -170,13 +170,34 @@ def validate(project, path='.uncle/docs/IMPLEMENTATION_NOTES.md'):
     text = full_path.read_text(encoding='utf-8')
     stripped = _artifact_json().unfence_json(text)
     if not stripped.startswith('{'):
+        if require_json:
+            # A prior JSON ingestion has already rendered this file into its
+            # human review view.  Its canonical source remains authoritative;
+            # do not mistake that generated Markdown for a fresh model reply.
+            canonical = _accumulator_path(project)
+            if canonical.is_file():
+                _load_accumulator(project)
+                return True
+            raise ValueError('IMPLEMENTATION_NOTES.md must be JSON; Markdown is a rendered view only')
         return False
     payload = json.loads(stripped)
     if not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'implementation-notes':
         raise ValueError('wrong implementation-notes JSON schema')
     _write_accumulator(project, [payload])
-    full_path.write_text(merge_and_render([payload]), encoding='utf-8')
+    # A model writes the canonical packet. Never overwrite that transport
+    # with the Markdown review view.
+    if full_path.resolve() != _accumulator_path(project).resolve():
+        full_path.write_text(merge_and_render([payload]), encoding='utf-8')
     return True
+
+
+def render(project, target='.uncle/docs/IMPLEMENTATION_NOTES.md'):
+    fragments = _load_accumulator(project)
+    if not fragments:
+        raise ValueError('canonical implementation-notes JSON is missing')
+    path = Path(project) / target
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(merge_and_render(fragments), encoding='utf-8')
 
 
 if __name__ == '__main__':
@@ -190,9 +211,11 @@ if __name__ == '__main__':
         elif action == 'validate':
             project = sys.argv[2]
             path = sys.argv[3] if len(sys.argv) > 3 else '.uncle/docs/IMPLEMENTATION_NOTES.md'
-            validate(project, path)
+            validate(project, path, '--require-json' in sys.argv[4:])
         elif action == 'reset':
             reset(sys.argv[2])
+        elif action == 'render':
+            render(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else '.uncle/docs/IMPLEMENTATION_NOTES.md')
         else:
             raise ValueError('unknown action: ' + action)
     except (OSError, ValueError, KeyError) as error:

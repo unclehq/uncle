@@ -15,6 +15,8 @@ mkdir -p "$LOG_DIR" .uncle/docs
 touch .uncle/docs/UPDATED_PROJECT_PLAN.md
 FUNCTION="$(awk '/^run_parallel_application_implementation\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$ROOT/scripts/stagegate.sh")"
 [[ -n "$FUNCTION" ]] || { echo 'FAIL: implementation fan-out function missing' >&2; exit 1; }
+grep -Fq '## Isolated ownership boundary (binding)' "$ROOT/scripts/stagegate.sh" || { echo 'FAIL: isolated workers may scaffold outside ownership' >&2; exit 1; }
+grep -Fq 'Do not invoke a framework generator or' "$ROOT/scripts/stagegate.sh" || { echo 'FAIL: scaffold generator ban missing' >&2; exit 1; }
 
 parallel_groups() { printf '1\n2\n'; }
 uncle_resolve_stage_runner() { :; }

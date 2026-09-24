@@ -10,6 +10,23 @@ invocations rereading the same checklist and READMEs, not a change in what
 may overlap. Execute only these assigned IDs. Do not infer results for any
 other check and do not run a dependency that is not assigned to you.
 
+## Compact execution policy
+
+`.uncle/workflow/green-check.tsv` is binding driver evidence for dependency
+installation, type checks, unit tests, builds, and automated Playwright tests.
+For a checklist row covered by those commands, cite the matching PASS evidence
+from that file and do **not** rerun it. Do not install dependencies, probe
+ports, start a second test runner, or launch a separate browser for such rows.
+
+Only perform a live action when a row requires a fact that green-check cannot
+establish: for example a human-visible UI observation, API/service behavior,
+database state, CLI interaction, or filesystem side effect. Reuse the same
+started service, browser, database connection, fixture, or CLI setup for all
+assigned rows. Start each expensive runtime at most once unless a checklist
+row explicitly requires isolation. Defect-injection evidence belongs to the
+implementation/test-review reports; cite it when relevant and never repeat
+mutations here.
+
 You may run narrow checks and inspect evidence needed for your assigned IDs.
 Do not edit product source, tests, configuration, `.uncle/docs/MANUAL_CHECKLIST.md`,
 `.uncle/docs/VERIFICATION_REPORT.md`, or `.uncle/docs/DEFECTS.md`. Do not start another agent. For

@@ -21,7 +21,6 @@ FUNCTION="$(awk '/^run_parallel_implementation_report\(\) \{/{p=1} p{print} p&&/
 [[ -n "$FUNCTION" ]] || { echo "FAIL: could not extract run_parallel_implementation_report from stagegate.sh" >&2; exit 1; }
 
 RUN_CLAUDE_CALLS=0
-run_claude() { RUN_CLAUDE_CALLS=$((RUN_CLAUDE_CALLS + 1)); echo notes > IMPLEMENTATION_NOTES.md; echo report > AUTOMATED_TEST_REPORT.md; }
 require_artifact() { [[ -s "$1" ]] || { echo "missing artifact: $1" >&2; return 1; }; }
 eval "$FUNCTION"
 
@@ -42,18 +41,18 @@ fi
 
 # The real marker: a bare touch, 0 bytes -- exactly what the driver writes.
 : > "$STATE_DIR/parallel-implementation-complete"
-if ! run_parallel_implementation_report; then
-    fail "0-byte completion marker: expected success (this is the bug: -s treated this as absent)"
-fi
-[[ "$RUN_CLAUDE_CALLS" == 1 ]] || fail "0-byte completion marker: run_claude must be called exactly once, got $RUN_CLAUDE_CALLS"
+# Do not wrap this invocation in `if !`: some shells isolate negated
+# compound commands, which would discard the deliberately created reports.
+run_parallel_implementation_report || fail "0-byte completion marker: expected success (this is the bug: -s treated this as absent)"
+[[ "$RUN_CLAUDE_CALLS" == 0 ]] || fail "parallel reconciliation must not call a model, got $RUN_CLAUDE_CALLS"
 [[ -e "$STATE_DIR/parallel-implementation-report-complete" ]] || fail "report-complete marker was not written"
-[[ -s IMPLEMENTATION_NOTES.md ]] || fail "IMPLEMENTATION_NOTES.md was not produced"
-[[ -s AUTOMATED_TEST_REPORT.md ]] || fail "AUTOMATED_TEST_REPORT.md was not produced"
+[[ -s .uncle/docs/IMPLEMENTATION_NOTES.md ]] || fail "IMPLEMENTATION_NOTES.md was not produced"
+[[ -s .uncle/docs/AUTOMATED_TEST_REPORT.md ]] || fail "AUTOMATED_TEST_REPORT.md was not produced"
 
 # Calling it again (a resume) must recognize the 0-byte report marker as
 # "already done" and skip re-invoking the reviewer entirely.
 OUT="$(run_parallel_implementation_report)"
-[[ "$RUN_CLAUDE_CALLS" == 1 ]] || fail "already-reconciled resume: run_claude must not be called again, got $RUN_CLAUDE_CALLS calls total"
+[[ "$RUN_CLAUDE_CALLS" == 0 ]] || fail "already-reconciled resume: reconciliation called a model"
 grep -q 'already reconciled' <<< "$OUT" || fail "already-reconciled resume: expected the skip message"
 
 if [[ "$FAILED" -ne 0 ]]; then

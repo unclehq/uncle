@@ -4,7 +4,7 @@ required JSON object -- not to re-implement anything, not to change a file
 list, a deviation, or a blocker. Formatting is the entire task. Do not read
 or inspect the application code; the notes already say everything you need.
 
-Write .uncle/docs/IMPLEMENTATION_NOTES.md as one JSON object, not Markdown,
+Write `.uncle/workflow/documents/IMPLEMENTATION_NOTES.json` as one JSON object, not Markdown,
 matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"implementation-notes","changed_files":[{"path":"...","purpose":"...","plan_step":"...","behavior_or_invariant":"..."}],"deviations":[{"file":"...","reason":"..."}],"unresolved_concerns":["..."],"plan_blockers":[{"id":"...","class":"...","requirement_ids":["..."],"restriction_ids":["..."],"evidence":"...","independent_work":"...","question":"...","alternatives":"..."}]}`

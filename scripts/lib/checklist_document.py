@@ -105,8 +105,39 @@ def export_json(path, project='.'):
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
 
+
+def validate_canonical(path):
+    import json
+    payload = json.loads(Path(path).read_text(encoding='utf-8'))
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'manual-checklist':
+        raise ValueError('wrong manual-checklist JSON schema')
+    checks = payload.get('checks')
+    if not isinstance(checks, list) or not checks:
+        raise ValueError('manual checklist has no checks')
+    seen = set()
+    for check in checks:
+        if not isinstance(check, dict) or not check.get('id') or not check.get('exact_action') or not check.get('expected_result'):
+            raise ValueError('every checklist entry needs id, exact_action, and expected_result')
+        if check['id'] in seen:
+            raise ValueError('Duplicate checklist IDs')
+        seen.add(check['id'])
+    return payload
+
+
+def render_canonical(path, view):
+    payload = validate_canonical(path)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('artifact_json', Path(__file__).with_name('artifact_json.py'))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    target = Path(view); target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(module.render_checklist(payload), encoding='utf-8')
+
 if __name__=='__main__':
     args = sys.argv[1:]
+    if len(args) == 2 and args[0] == '--validate-json':
+        validate_canonical(args[1]); raise SystemExit(0)
+    if len(args) == 3 and args[0] == '--render-json':
+        render_canonical(args[1], args[2]); raise SystemExit(0)
     if args and args[0] == '--validate':
         args = args[1:]
     try:validate(args[0])

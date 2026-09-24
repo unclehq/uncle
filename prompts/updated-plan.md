@@ -258,6 +258,17 @@ step owns a file when it is the only step that writes it. Add
 `Depends on: <step numbers>` when a step needs an earlier one finished first.
 A step that touches everything declares `Owns: *`.
 
+When a project needs a framework scaffold, make it an explicit first step
+with `Owns: *` (or list every generated path), including the manifest,
+lockfile, entry points, public assets, README, and `.gitignore`. A later,
+narrow isolated implementation step must never be asked to bootstrap a
+framework.
+
+A final `Reconcile` step may resolve integration between owned code paths, but
+must never instruct the implementation agent to run the `Verification commands`
+block. That block is driver-owned and runs once after implementation; keep it
+only in its dedicated section, not in any implementation-step description.
+
 If a step's own description or title names a file it touches (a "scaffold", a ".gitignore update", a config it edits), that file must also appear in its `Owns:` list -- do not describe touching a file without declaring it. This is the single most common real gap: a step that legitimately runs a package manager also writes its lockfile, which needs its own `Owns:` entry beside the manifest.
 
   1. Arithmetic core — Owns: `src/calc.js`, `tests/calc.test.js`

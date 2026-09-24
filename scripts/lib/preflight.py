@@ -101,31 +101,19 @@ def run(commands, report):
     names = prerequisites(Path(commands).read_text())
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(probe, names))
-    body = '''# Preflight report
-
-## Summary
-Deterministic runtime probes completed. Approved commands were not executed.
-
-## Findings
-'''
-    body += '\n'.join('- ' + result for result in results) or '- No external runtime required by the command list.'
-    body += '''
-
-## Assumptions
-Dependency installation and application-specific browser, service, credential,
-and human checks remain subject to implementation and checklist verification.
-Runtime availability does not establish that those capabilities work.
-
-## Open questions
-None about runtime startup. This report makes no application acceptance claims.
-
-## Acceptance gate
-
-| ID | Required | Status | Evidence |
-|---|---|---|---|
-| PF-RUNTIME | YES | PASS | Recognized verification runtimes started successfully; shell command structure was inspected |
-'''
-    Path(report).write_text(body, encoding='utf-8')
+    # This is an authoritative workflow artifact, not Markdown that happens
+    # to contain a table.  The driver renders its review view separately.
+    import json
+    payload = {
+        'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report',
+        'narrative': ('Deterministic runtime probes completed. Approved commands were not executed.\n\n'
+                      'Dependency installation and application-specific browser, service, credential, and human checks remain subject to implementation and checklist verification.\n\n'
+                      'Findings: ' + ('; '.join(results) or 'No external runtime required by the command list.')),
+        'rows': [{'id': 'PF-RUNTIME', 'required': True, 'status': 'PASS',
+                  'evidence': 'Recognized verification runtimes started successfully; shell command structure was inspected'}]
+    }
+    Path(report).parent.mkdir(parents=True, exist_ok=True)
+    Path(report).write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
 
 
 if __name__ == '__main__':

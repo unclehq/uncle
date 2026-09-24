@@ -20,7 +20,7 @@ table and open what the checks actually depend on, rather than the whole tree.
 Do not modify source code.
 Do not claim that any check passed.
 
-Your final response itself becomes `.uncle/docs/MANUAL_CHECKLIST.md`. Return
+Your final response itself becomes `.uncle/workflow/documents/MANUAL_CHECKLIST.json`. Return
 exactly one JSON object, not Markdown and not a statement that you wrote a
 file, matching this contract:
 

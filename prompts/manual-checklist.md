@@ -20,12 +20,13 @@ table and open what the checks actually depend on, rather than the whole tree.
 Do not modify source code.
 Do not claim that any check passed.
 
-Write .uncle/docs/MANUAL_CHECKLIST.md as one JSON object, not Markdown,
-matching this contract:
+Your final response itself becomes `.uncle/docs/MANUAL_CHECKLIST.md`. Return
+exactly one JSON object, not Markdown and not a statement that you wrote a
+file, matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","section":"...","priority":"...","required":true,"related_requirement":"...","related_behavior":"...","related_invariant":"...","prerequisites":"...","needs":"PF-7","exclusive_resources":["port:5173"],"depends_on":[],"exact_action":"...","expected_result":"...","evidence_to_capture":"..."}],"traceability":"..."}`
 
-Write it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance. If you reconsider your answer partway through, revise silently -- the final reply must contain the object exactly once. Including an earlier draft alongside the final one, or the same content twice, is rejected the same way a missing object is.
+Return it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance. If you reconsider your answer partway through, revise silently -- the final reply must contain the object exactly once. Including an earlier draft alongside the final one, or the same content twice, is rejected the same way a missing object is.
 
 Give every check a stable unique MC ID. `required` is a JSON boolean:
 justify it from requirements rather than inferring it from priority. Leave a

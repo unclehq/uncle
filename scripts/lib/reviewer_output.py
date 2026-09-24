@@ -29,6 +29,7 @@ import sys
 
 _HEADING = re.compile(r'^#{1,6}\s+\S', re.M)
 _TABLE_ROW = re.compile(r'^\s*\|.*\|', re.M)
+_PLACEHOLDER_ID = re.compile(r'^\s*(?:no\s+finding|none|n/?a|tbd)(?:\s|$|[-_:])', re.I)
 
 
 def _unfence_json():
@@ -58,6 +59,26 @@ def looks_like_document(text):
     return False
 
 
+def _validate_manual_checklist_json(text, runner):
+    """Reject a status update before it can masquerade as a checklist artifact."""
+    try:
+        payload = json.loads(_unfence_json()(text))
+    except ValueError as error:
+        raise ValueError('%s did not return a manual-checklist JSON object: %s' % (runner, error))
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'manual-checklist':
+        raise ValueError('%s returned the wrong manual-checklist JSON schema' % runner)
+    checks = payload.get('checks')
+    if not isinstance(checks, list) or not checks:
+        raise ValueError('%s manual-checklist JSON requires a nonempty checks array' % runner)
+    for index, check in enumerate(checks, 1):
+        if (not isinstance(check, dict) or not isinstance(check.get('id'), str) or not check['id'].strip()
+                or not isinstance(check.get('exact_action'), str) or not check['exact_action'].strip()
+                or not isinstance(check.get('expected_result'), str) or not check['expected_result'].strip()):
+            raise ValueError('%s manual-checklist check %d requires id, exact_action, and expected_result'
+                             % (runner, index))
+    return json.dumps(payload, indent=2, sort_keys=True) + '\n'
+
+
 def worker_packet(text, runner='reviewer'):
     """Extract and canonicalize one JSON worker packet from a reviewer reply.
 
@@ -75,11 +96,23 @@ def worker_packet(text, runner='reviewer'):
         raise ValueError('%s response is not an uncle JSON worker packet' % runner)
     if not isinstance(payload.get('findings'), list):
         raise ValueError('%s JSON worker packet findings must be an array' % runner)
+    required = ('id', 'gap', 'evidence', 'risk', 'required_correction') \
+        if payload.get('kind') == 'updated-plan-worker-packet' else ('id', 'summary')
+    for index, finding in enumerate(payload['findings'], 1):
+        if (not isinstance(finding, dict) or any(not isinstance(finding.get(field), str)
+                or not finding[field].strip() for field in required)):
+            raise ValueError('%s JSON worker packet finding %d requires nonempty %s' %
+                             (runner, index, ' and '.join(required)))
+        if _PLACEHOLDER_ID.match(finding['id']):
+            raise ValueError('%s JSON worker packet finding %d needs a stable finding ID, not placeholder %r'
+                             % (runner, index, finding['id'].strip()))
     return json.dumps(payload, indent=2, sort_keys=True) + '\n'
 
 
-def check(text, runner='reviewer'):
+def check(text, runner='reviewer', artifact=None):
     """Return the text, or raise ValueError naming the real failure."""
+    if artifact and Path(artifact).name == 'MANUAL_CHECKLIST.md':
+        return _validate_manual_checklist_json(text, runner)
     extracted = _unfence_json()(text)
     if extracted.startswith('{'):
         try:
@@ -101,13 +134,23 @@ def check(text, runner='reviewer'):
 if __name__ == '__main__':
     # Filter: document on stdin, same document on stdout, or exit 1 with the
     # reason on stderr so the shim can fail before writing the artifact.
+    packet = '--packet' in sys.argv[1:]
     args = [arg for arg in sys.argv[1:] if arg != '--packet']
+    artifact = None
+    if '--artifact' in args:
+        position = args.index('--artifact')
+        try:
+            artifact = args[position + 1]
+        except IndexError:
+            print('--artifact requires a path', file=sys.stderr)
+            raise SystemExit(2)
+        del args[position:position + 2]
     runner = args[0] if args else 'reviewer'
     # Windows text mode would translate LF to CRLF on the way to the artifact.
     sys.stdout.reconfigure(newline='\n')
     body = sys.stdin.read()
     try:
-        sys.stdout.write(worker_packet(body, runner) if '--packet' in sys.argv[1:] else check(body, runner))
+        sys.stdout.write(worker_packet(body, runner) if packet else check(body, runner, artifact))
     except ValueError as error:
         print(str(error), file=sys.stderr)
         raise SystemExit(1)

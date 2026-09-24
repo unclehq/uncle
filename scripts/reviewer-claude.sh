@@ -163,7 +163,7 @@ fi
 # Only written on success: the drivers `require_file` this afterwards, so a
 # failed review must not leave a file behind for the next run to mistake for a
 # fresh one.
-review="$(printf '%s' "$review" | python3 "$ROOT/scripts/lib/reviewer_output.py" claude)" || exit 1
+review="$(printf '%s' "$review" | python3 "$ROOT/scripts/lib/reviewer_output.py" --artifact "$output_file" claude)" || exit 1
 if [[ -n "$output_file" ]]; then
     printf '%s\n' "$review" > "$output_file"
 fi

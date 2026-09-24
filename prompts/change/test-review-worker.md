@@ -4,10 +4,8 @@ review. Read REQUIREMENTS.md, .uncle/docs/UPDATED_PROJECT_PLAN.md (or .uncle/doc
 only the assigned acceptance-gate row below. Do not modify source, tests, or
 `.uncle/docs/TEST_REVIEW.md`, and do not run destructive probes.
 
-Return exactly one JSON object: `{"schema":"uncle.artifact/v1","kind":"test-review-worker-packet","findings":[{"id":"TR-001","summary":"...","evidence":"..."}]}`. Use an empty array when clean; no Markdown or prose.
+Return exactly one JSON object: `{"schema":"uncle.artifact/v1","kind":"test-review-worker-packet","findings":[{"id":"TR-001","summary":"...","evidence":"..."}]}`. Use an empty array when clean; no Markdown or prose. Every finding MUST have a stable, specific ID such as `TR-001` (or the existing requirement/finding ID when it identifies the same defect). Never use a placeholder such as `No finding`, `TBD`, or `N/A`; a clean review uses `"findings":[]`.
 
-- Finding ID or `No finding` (use `TR-` only if a separate reviewer will keep
-  your ID; otherwise describe the defect and let the reviewer assign one)
 - Exact evidence: file/symbol, requirement ID, or command output
 - Whether the assigned row should be PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN,
   BLOCKED-IMPOSSIBLE, or NOT RUN, and why

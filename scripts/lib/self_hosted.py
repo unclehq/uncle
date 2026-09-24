@@ -486,6 +486,7 @@ DRIVER_NARRATION_MARKERS = (
     'System: Workflow stopped',
     'Recovery: ask about the failure',
 )
+PLACEHOLDER_PACKET_ID = re.compile(r'^\s*(?:no\s+finding|none|n/?a|tbd)(?:\s|$|[-_:])', re.I)
 
 
 def validate_reviewer_document(output, document):
@@ -541,9 +542,13 @@ def reviewer_packet(response, output):
     for index, finding in enumerate(findings, 1):
         if not isinstance(finding, dict) or any(not isinstance(finding.get(key), str) or not finding[key].strip() for key in required):
             raise InvalidReviewerDocument('Reviewer packet finding %d is missing a required nonempty field for %s' % (index, Path(output).name))
-        if finding['id'] in seen:
-            raise InvalidReviewerDocument('Reviewer packet has duplicate stable finding ID %s for %s' % (finding['id'], Path(output).name))
-        seen.add(finding['id'])
+        identifier = finding['id'].strip()
+        if PLACEHOLDER_PACKET_ID.match(identifier):
+            raise InvalidReviewerDocument('Reviewer packet finding %d needs a stable finding ID, not placeholder %r for %s'
+                                          % (index, identifier, Path(output).name))
+        if identifier in seen:
+            raise InvalidReviewerDocument('Reviewer packet has duplicate stable finding ID %s for %s' % (identifier, Path(output).name))
+        seen.add(identifier)
     return json.dumps(payload, indent=2, sort_keys=True) + '\n'
 
 

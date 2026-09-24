@@ -102,6 +102,30 @@ class WorkerPackets(unittest.TestCase):
             with self.assertRaisesRegex(WORKERS.PacketError, 'regression.json: worker packet is missing'):
                 WORKERS.collate(directory, output, kind, ('requirements', 'regression'))
 
+    def test_worker_packets_reject_placeholder_ids_at_every_runner_boundary(self):
+        body = {'schema': 'uncle.artifact/v1', 'kind': 'test-review-worker-packet',
+                'findings': [{'id': 'No finding — reviewer to assign ID',
+                              'summary': 'The report is incomplete', 'evidence': 'report.md'}]}
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'assertions.json'; path.write_text(json.dumps(body), encoding='utf-8')
+            with self.assertRaisesRegex(WORKERS.PacketError, 'stable finding ID, not placeholder'):
+                WORKERS.load(path, 'test-review-worker-packet')
+        serialized = json.dumps(body)
+        with self.assertRaisesRegex(ValueError, 'stable finding ID, not placeholder'):
+            OUTPUT.worker_packet(serialized, 'claude')
+        with self.assertRaisesRegex(SELF_HOSTED.InvalidReviewerDocument, 'stable finding ID, not placeholder'):
+            SELF_HOSTED.reviewer_packet(serialized, 'assertions.json')
+
+    def test_manual_checklist_requires_real_json_checks_at_runner_boundary(self):
+        narrative = 'I rewrote .uncle/docs/MANUAL_CHECKLIST.md with 13 checks.'
+        with self.assertRaisesRegex(ValueError, 'did not return a manual-checklist JSON object'):
+            OUTPUT.check(narrative, 'claude', 'MANUAL_CHECKLIST.md')
+        body = {'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist', 'checks': []}
+        with self.assertRaisesRegex(ValueError, 'requires a nonempty checks array'):
+            OUTPUT.check(json.dumps(body), 'claude', 'MANUAL_CHECKLIST.md')
+        body['checks'] = [{'id': 'MC-001', 'exact_action': 'Open the page', 'expected_result': 'Calculator loads'}]
+        self.assertEqual(json.loads(OUTPUT.check(json.dumps(body), 'claude', 'MANUAL_CHECKLIST.md'))['checks'][0]['id'], 'MC-001')
+
     def test_generic_packets_repair_only_the_known_transport_quote_suffix(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp); kind = 'adversarial-review-worker-packet'
@@ -138,6 +162,14 @@ class WorkerPackets(unittest.TestCase):
             text = (ROOT/'prompts/change'/prompt).read_text()
             self.assertIn('"kind":"' + kind + '"', text)
             self.assertIn('empty array when clean', text)
+        test_worker = (ROOT/'prompts/change/test-review-worker.md').read_text()
+        self.assertIn('Every finding MUST have a stable, specific ID', test_worker)
+        self.assertNotIn('let the reviewer assign one', test_worker)
+        for prompt in ('manual-checklist.md', 'change/manual-checklist.md', 'change/manual-checklist-base.md'):
+            text = (ROOT/'prompts'/prompt).read_text()
+            self.assertIn('not a statement that you wrote', text)
+        for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
+            self.assertIn('validate_reviewer_artifact', (ROOT/source).read_text())
 
     def test_every_gated_stage_prefers_previous_canonical_json(self):
         gates = (ROOT/'scripts/lib/gates.sh').read_text()

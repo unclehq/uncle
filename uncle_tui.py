@@ -5592,9 +5592,14 @@ class UncleTUI:
                     pass
                 palette = getattr(self, "color", {})
                 for i, style in enumerate(indicator_styles):
-                    ch = line[len(prefix) + i]
+                    # ``title_with_dots`` deliberately separates its title and
+                    # worker indicators with two spaces.  The previous offset
+                    # started at the title's end, so the first two draw calls
+                    # painted those spaces and a four-worker stage visibly had
+                    # only two indicators.
+                    ch = line[len(prefix) + 2 + i]
                     try:
-                        self.stdscr.addch(y, left + 2 + len(prefix) + i, ch, palette.get(style, 0))
+                        self.stdscr.addch(y, left + 2 + len(prefix) + 2 + i, ch, palette.get(style, 0))
                     except curses.error:
                         pass
             else:

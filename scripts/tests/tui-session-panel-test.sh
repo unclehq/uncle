@@ -20,6 +20,7 @@ class Screen:
     def erase(self): pass
     def refresh(self): pass
     def addnstr(self,y,x,text,n,*args): self.writes.append((y,x,text,n))
+    def addch(self,y,x,ch,*args): self.writes.append((y,x,ch,1))
 
 class Panel(unittest.TestCase):
     def setUp(self):
@@ -360,6 +361,21 @@ class Panel(unittest.TestCase):
         self.assertNotIn('[failed]', text)
         line_attr = ui._session_panel_attr(text.split('\n')[3]) if len(text) else 0
         self.assertEqual(line_attr, 11)
+
+    def test_draws_one_indicator_for_each_of_four_workers(self):
+        ui=self.ui()
+        ui.color = dict(title=11, good=12, bad=13, warning=14, muted=15, accent=16)
+        ui.session_stats['active'] = {
+            'test-worker-1': time.time() - 30,
+            'test-worker-2': time.time() - 30,
+            'test-worker-3': time.time() - 30,
+            'test-worker-4': time.time() - 30,
+        }
+        ui.session_stats['live'] = {}
+        ui._draw_session_stats(30,120,34)
+        glyphs = [text for _y, _x, text, _n in ui.stdscr.writes
+                  if len(text) == 1 and text in uncle_tui.SPINNER]
+        self.assertEqual(len(glyphs), 4)
 
     def test_non_worker_unaffected(self):
         ui = self.ui()

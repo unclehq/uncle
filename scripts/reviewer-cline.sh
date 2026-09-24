@@ -176,7 +176,7 @@ if [[ -z "$review" ]]; then
     exit 1
 fi
 
-review="$(printf '%s' "$review" | python3 "$ROOT/scripts/lib/reviewer_output.py" cline)" || exit 1
+review="$(printf '%s' "$review" | python3 "$ROOT/scripts/lib/reviewer_output.py" --artifact "$output_file" cline)" || exit 1
 if [[ -n "$output_file" ]]; then
     printf '%s\n' "$review" > "$output_file"
 fi

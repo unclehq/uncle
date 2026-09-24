@@ -1345,6 +1345,20 @@ normalize_reviewer_packet() {
     mv "$normalized" "$output_file"
 }
 
+validate_reviewer_artifact() {
+    local output_file="$1" runner="$2" normalized
+    # MANUAL_CHECKLIST is JSON-authoritative. Validate its actual semantic
+    # minimum at the runner boundary so a conversational "I wrote it" reply
+    # never reaches the later execution gate as a successful artifact.
+    [[ "${output_file##*/}" == MANUAL_CHECKLIST.md && -s "$output_file" ]] || return 0
+    normalized="$(mktemp "$STATE_DIR/.reviewer-artifact.XXXXXX")" || return 1
+    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --artifact "$output_file" "$runner" < "$output_file" > "$normalized"; then
+        rm -f "$normalized"
+        return 1
+    fi
+    mv "$normalized" "$output_file"
+}
+
 run_codex_review() {
     local prompt_file
     prompt_file="$(resolve_prompt "$1")"
@@ -1424,7 +1438,7 @@ run_codex_review() {
             --output-last-message "$output_file" \
             "$(cat "$prompt_file")" \
             < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" || status=$?
-        if [[ "$status" == 0 ]] && ! normalize_reviewer_packet "$output_file" "$cmd"; then
+        if [[ "$status" == 0 ]] && { ! normalize_reviewer_packet "$output_file" "$cmd" || ! validate_reviewer_artifact "$output_file" "$cmd"; }; then
             status=1
         fi
         perf_record reviewer "$log_name" "$((SECONDS-started))" "$status" \

@@ -4,6 +4,7 @@ import argparse, json, re, sys
 from pathlib import Path
 
 SCHEMA='uncle.artifact/v1'
+PLACEHOLDER_ID=re.compile(r'^\s*(?:no\s+finding|none|n/?a|tbd)(?:\s|$|[-_:])', re.I)
 class PacketError(ValueError): pass
 
 def load(path, kind):
@@ -31,8 +32,11 @@ def load(path, kind):
     for i,item in enumerate(items,1):
         if not isinstance(item,dict) or not isinstance(item.get('id'),str) or not item['id'].strip() or not isinstance(item.get('summary'),str) or not item['summary'].strip():
             raise PacketError('%s: finding %d requires nonempty id and summary' % (name,i))
-        if item['id'] in seen: raise PacketError('%s: duplicate finding ID %s' % (name,item['id']))
-        seen.add(item['id']); out.append({'id':item['id'].strip(),'summary':item['summary'].strip(), 'evidence':str(item.get('evidence','')).strip()})
+        identifier=item['id'].strip()
+        if PLACEHOLDER_ID.match(identifier):
+            raise PacketError('%s: finding %d needs a stable finding ID, not placeholder %r' % (name,i,identifier))
+        if identifier in seen: raise PacketError('%s: duplicate finding ID %s' % (name,identifier))
+        seen.add(identifier); out.append({'id':identifier,'summary':item['summary'].strip(), 'evidence':str(item.get('evidence','')).strip()})
     return out
 
 def collate(directory, output, kind, expected):

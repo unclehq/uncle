@@ -2089,6 +2089,17 @@ normalize_reviewer_packet() {
     mv "$normalized" "$output_file"
 }
 
+validate_reviewer_artifact() {
+    local output_file="$1" runner="$2" normalized
+    [[ "${output_file##*/}" == MANUAL_CHECKLIST.md && -s "$output_file" ]] || return 0
+    normalized="$(mktemp "$STATE_DIR/.reviewer-artifact.XXXXXX")" || return 1
+    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --artifact "$output_file" "$runner" < "$output_file" > "$normalized"; then
+        rm -f "$normalized"
+        return 1
+    fi
+    mv "$normalized" "$output_file"
+}
+
 run_codex() {
     local prompt_file
     prompt_file="$(resolve_prompt "$1")"
@@ -2164,7 +2175,7 @@ run_codex() {
         ( "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
             < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" ) &
         wait "$!" || status=$?
-        if [[ "$status" == 0 ]] && ! normalize_reviewer_packet "$output_file" "$cmd"; then
+        if [[ "$status" == 0 ]] && { ! normalize_reviewer_packet "$output_file" "$cmd" || ! validate_reviewer_artifact "$output_file" "$cmd"; }; then
             status=1
         fi
 

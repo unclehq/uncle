@@ -152,6 +152,7 @@ class Server:
         self.token = secrets.token_urlsafe(32)
         self.active = None
         self.active_lock = threading.Lock()
+        self.active_done = threading.Event()
         self.stop = threading.Event()
         self.initialized = None
         self.initializing = None
@@ -169,6 +170,20 @@ class Server:
             except OSError:
                 pass
 
+    def release_active(self, connection=None):
+        """Release the slot only after a Claude response has terminated.
+
+        A `claude -p` caller closes stdin immediately after supplying its
+        prompt, while its result is still streaming on stdout.  Releasing the
+        slot on that input EOF let the next reviewer attach to the same Claude
+        process and interleave two JSON streams.  Native RPC runners retain
+        their original EOF-based release semantics below.
+        """
+        with self.active_lock:
+            if connection is None or self.active is connection:
+                self.active = None
+                self.active_done.set()
+
     def child_output(self):
         for line in self.child.stdout:
             try:
@@ -182,7 +197,13 @@ class Server:
             if isinstance(value, dict) and value.get('type') == 'system' and value.get('session_id'):
                 self.session_id = value['session_id']
             self.send_active(line.encode())
+            # Claude's terminal event is the response boundary. Its prompt
+            # stream normally closed much earlier, so it is unsafe to reuse
+            # the child before this point.
+            if self.args.runner == 'claude' and isinstance(value, dict) and value.get('type') == 'result':
+                self.release_active()
         self.stop.set()
+        self.release_active()
         with self.active_lock:
             active = self.active
         if active is not None:
@@ -234,6 +255,7 @@ class Server:
                 connection.sendall(b'{"ok":false,"error":"busy"}\n')
                 return
             self.active = connection
+            self.active_done.clear()
         reused = self.connections > 0
         self.connections += 1
         connection.sendall((json.dumps({'ok': True, 'reused': reused}) + '\n').encode())
@@ -243,9 +265,23 @@ class Server:
         except (BrokenPipeError, OSError, ValueError):
             pass
         finally:
-            with self.active_lock:
-                if self.active is connection:
-                    self.active = None
+            # A Claude CLI prompt closes its input before it emits its final
+            # result. Keep that connection reserved until child_output sees
+            # the result above; other native runners use a persistent RPC
+            # stream and retain the historical EOF release behavior.
+            if self.args.runner != 'claude':
+                self.release_active(connection)
+            else:
+                # `claude -p` has finished sending input but is still reading
+                # its streamed response.  Do not return from this handler
+                # (whose caller closes the socket) until child_output forwards
+                # the terminal result and releases this exact slot.
+                while not self.stop.is_set():
+                    with self.active_lock:
+                        still_active = self.active is connection
+                    if not still_active:
+                        break
+                    self.active_done.wait(.1)
 
     def run(self):
         listener = socket.socket()

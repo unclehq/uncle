@@ -2898,11 +2898,14 @@ while true; do
                 .uncle/docs/UPDATED_PROJECT_PLAN.md \
                 UPDATED_PROJECT_PLAN
             if [[ -e "$STATE_DIR/test-evidence-reconcile" ]]; then
-                rm -f "$STATE_DIR/test-evidence-reconcile"
                 echo 'Implementation report reconciliation: preserving source and regenerating implementation-owned evidence.'
-                run_claude prompts/test-evidence-handoff.md implementation
+                # This is the existing implementation stage in a narrow
+                # report-only mode: it may inspect/run checks and write its
+                # reports, but cannot call Edit on application source/tests.
+                run_claude prompts/test-evidence-handoff.md implementation 'Read,Glob,Grep,Write,Bash'
                 require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
                 require_artifact .uncle/docs/IMPLEMENTATION_NOTES.md
+                rm -f "$STATE_DIR/test-evidence-reconcile"
                 set_state TEST_REVIEW
                 continue
             fi

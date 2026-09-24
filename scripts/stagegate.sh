@@ -2079,19 +2079,27 @@ run_stage() {
                 } > "$test_review_format_prompt"
                 run_codex_review "$test_review_format_prompt" .uncle/docs/TEST_REVIEW.md test-review
             else
-                run_test_review_panel
                 # A malformed acceptance table gets one local, format-only
-                # retry even when optional supervision is disabled. The
-                # marker remains after delivery so repeated malformed output
-                # stops normally.
-                test_review_prompt="${TEST_REVIEW_PROMPT:-prompts/test-review.md}"
+                # retry even when optional supervision is disabled. Reuse the
+                # saved synthesis prompt and its collated JSON; re-running
+                # the four specialists cannot fix a parent table-format error.
+                # The marker remains after delivery so repeated malformed
+                # output stops normally.
                 if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then
+                    echo "Retrying test-review formatting only; reusing the saved collated worker packet."
                     test_review_prompt="$STATE_DIR/test-review-format-retry-prompt.md"
                     {
-                        cat "${TEST_REVIEW_PROMPT:-$ROOT/prompts/test-review.md}"
+                        if [[ -s "$STATE_DIR/test-review-panel/synthesis.md" ]]; then
+                            cat "$STATE_DIR/test-review-panel/synthesis.md"
+                        else
+                            cat "${TEST_REVIEW_PROMPT:-$ROOT/prompts/test-review.md}"
+                        fi
                         printf '\n\n## Required format retry\n\n'
                         cat "$STATE_DIR/test-review-format-retry.md"
                     } > "$test_review_prompt"
+                else
+                    run_test_review_panel
+                    test_review_prompt="${TEST_REVIEW_PROMPT:-prompts/test-review.md}"
                 fi
                 run_codex_review "$test_review_prompt" .uncle/docs/TEST_REVIEW.md test-review
             fi

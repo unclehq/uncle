@@ -227,6 +227,17 @@ class WorkerPackets(unittest.TestCase):
             (ROOT/'scripts/stagegate.sh').read_text(),
         )
 
+    def test_test_review_format_retry_reuses_collated_workers(self):
+        source = (ROOT / 'scripts/stagegate.sh').read_text()
+        start = source.index('        TEST_REVIEW)')
+        block = source[start:source.index('        REPAIR)', start)]
+        retry = block[block.index('if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then',
+                                  block.index('else\n                # A malformed acceptance table')):]
+        retry = retry[:retry.index('else\n                    run_test_review_panel')]
+        self.assertNotIn('run_test_review_panel', retry)
+        self.assertIn('test-review-panel/synthesis.md', retry)
+        self.assertIn('Retrying test-review formatting only', retry)
+
     def test_updated_plan_has_no_self_hosted_markdown_investigation_fallback(self):
         stagegate = (ROOT / 'scripts/stagegate.sh').read_text()
         start = stagegate.index('        UPDATED_PLAN)')

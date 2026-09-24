@@ -34,6 +34,12 @@ class CompactProjectPlanPrompt(unittest.TestCase):
         self.assertIn('Interpret this brief, not the workflow prompt', binding)
         self.assertIn('bind_requirements_source "$effective_prompt" "$log_name" "$prompt_file"', stagegate)
 
+    def test_json_contract_is_appended_to_the_prompt_file_not_the_path_variable(self):
+        for name in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
+            source = (ROOT / name).read_text(encoding='utf-8')
+            self.assertIn('cat >> "$effective_prompt" <<\'CANONICAL_ARTIFACT_CONTRACT\'', source)
+            self.assertNotIn('effective_prompt+=', source)
+
     def test_project_plan_bypasses_generic_gates_and_evidence_index(self):
         source = (ROOT / 'scripts/lib/gates.sh').read_text()
         start = source.index('    # Review-parent synthesis')

@@ -1383,7 +1383,15 @@ run_claude() {
         esac
         case "$log_name" in
             requirements|project-plan|updated-plan)
-                effective_prompt+=$'\n\n## Canonical artifact contract (binding)\nReturn exactly one complete `uncle.artifact/v1` JSON object as your final response. Do not write the Markdown view or any artifact file: the driver validates and publishes canonical JSON first, then renders Markdown for people.\n' ;;
+                cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
+
+## Canonical artifact contract (binding)
+
+Return exactly one complete `uncle.artifact/v1` JSON object as your final
+response. Do not write the Markdown view or any artifact file: the driver
+validates and publishes canonical JSON first, then renders Markdown for people.
+CANONICAL_ARTIFACT_CONTRACT
+                ;;
         esac
         local -a model_args=()
         [[ -n "$model" ]] && model_args=(--model "$model")

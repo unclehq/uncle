@@ -168,6 +168,35 @@ WORKER_PACKET
             ;;
     esac
 
+    # Review-parent synthesis has a deliberately complete, stage-owned JSON
+    # contract in its source prompt. Appending the generic evidence index,
+    # document rules and full gate corpus caused local models to repeatedly
+    # ingest hundreds of thousands of tokens before resolving one canonical
+    # artifact. Keep parent input to the canonical plan/review packets and its
+    # own contract; deterministic validators still enforce each stage's rules.
+    case "$log_name" in
+        updated-plan|updated-change-plan|adversarial-review|test-review|manual-checklist|final-audit)
+            local synthesis_prompt="$LOG_DIR/${log_name}.gated-prompt.md"
+            {
+                cat "$prompt_file"
+                cat <<'SYNTHESIS_JSON'
+
+## Compact canonical synthesis contract (binding)
+
+Read only the canonical JSON artifacts named by the stage prompt, especially
+the collated worker packet and the prior plan/review JSON. Do not read
+rendered Markdown views, worker directories, logs, output rules, gates, or
+the repository unless a JSON field names a missing source path. Make one
+revision from those inputs; do not conduct a second investigation pass.
+Return/write the one authoritative artifact requested by the stage prompt.
+The driver performs structural validation, rendering, approval, and gates.
+SYNTHESIS_JSON
+            } > "$synthesis_prompt"
+            printf '%s\n' "$synthesis_prompt"
+            return 0
+            ;;
+    esac
+
     local is_plan=0 is_doc=0
     case "$PLAN_STAGES" in
         *" $log_name "*) is_plan=1 ;;

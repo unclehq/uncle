@@ -2108,7 +2108,9 @@ run_codex() {
     # rules the same way an agent stage does.
     if [[ "$log_name" != plan-executability ]]; then
         prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
-        case "$log_name" in *-worker-*) ;; *)
+        case "$log_name" in *-worker-*|updated-change-plan|adversarial-review|final-audit|manual-checklist)
+            ;;
+        *)
             supervision_prompt "$prompt_file" "$log_name" "$LOG_DIR/${log_name}.log"
             prompt_file="$SUPERVISION_PROMPT"
         esac

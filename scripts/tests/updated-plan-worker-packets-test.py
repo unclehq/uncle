@@ -145,7 +145,24 @@ class WorkerPackets(unittest.TestCase):
         self.assertIn('Do not read\nrendered Markdown approvals', gates)
         for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
             text = (ROOT/source).read_text()
-            self.assertIn('case "$log_name" in *-worker-*) ;; *)', text)
+            self.assertIn('case "$log_name" in *-worker-*|', text)
+
+    def test_review_parent_synthesis_uses_compact_canonical_path(self):
+        gates = (ROOT/'scripts/lib/gates.sh').read_text()
+        self.assertIn(
+            'updated-plan|updated-change-plan|adversarial-review|test-review|manual-checklist|final-audit)',
+            gates,
+        )
+        self.assertIn('# Compact canonical synthesis contract (binding)', gates)
+        self.assertIn('do not conduct a second investigation pass', gates)
+        self.assertIn(
+            '*-worker-*|updated-change-plan|adversarial-review|final-audit|manual-checklist)',
+            (ROOT/'scripts/change-workflow.sh').read_text(),
+        )
+        self.assertIn(
+            '*-worker-*|updated-plan|adversarial-review|test-review|manual-checklist|final-audit)',
+            (ROOT/'scripts/stagegate.sh').read_text(),
+        )
 
 
 if __name__ == '__main__':

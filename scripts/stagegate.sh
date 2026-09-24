@@ -1653,7 +1653,7 @@ run_final_audit_panel() {
 # The shared parallel runner verifies each worker's owned-file boundary before
 # merging, so this is enabled only for an explicit Owns:/Depends on schedule.
 run_parallel_application_implementation() {
-    local groups group step prompt result cmd model effort checkpoint_dir checkpoint
+    local groups group step prompt result cmd model effort checkpoint_dir checkpoint step_line
     local complete_marker="$STATE_DIR/parallel-implementation-complete"
     # Completion markers are deliberately empty `touch` files.  Existence is
     # the contract; testing size makes every completed fan-out look unfinished
@@ -1697,12 +1697,34 @@ run_parallel_application_implementation() {
             cat "$ROOT/prompts/implement.md" > "$prompt"
             {
                 echo; echo "## Assigned isolated implementation step $step"
-                sed -n "${step}p" "$STATE_DIR/implement-steps.txt"
+                step_line="$(sed -n "${step}p" "$STATE_DIR/implement-steps.txt")"
+                printf '%s\n' "$step_line"
                 echo; echo "Work only on this approved step and its declared owned files."
                 echo "Do not edit workflow documents. Run a narrow check and write this"
                 echo "step's implementation-notes fragment, as one JSON object matching"
                 echo "the contract given earlier in this prompt, to"
                 echo ".uncle/workflow/parallel/notes/step-$step.json."
+                if [[ "$step_line" =~ ^[[:space:]]*[Rr]econcile:|Owns:[[:space:]]*\* ]]; then
+                    cat <<'EOF'
+
+## Reconciliation execution boundary (binding)
+
+This is a reconciliation step, not a second full verification stage. The
+driver alone runs the approved `Verification commands` block after every
+implementation step has merged. Do not run that block, an equivalent whole
+suite, dependency installation, browser installation, or an end-to-end
+regression sweep here. Do not write an application-wide test report from this
+isolated worktree: it is not the canonical project tree and the driver cannot
+adopt that report.
+
+Inspect and fix only a concrete cross-step integration issue. Run at most one
+narrow targeted smoke check for a changed integration point. Preserve required
+defect-injection evidence only when it specifically covers an integration
+invariant not already owned by an earlier step, using a disposable copy; do
+not repeat the baseline suite after it. In the fragment, record the targeted
+check or `DRIVER PENDING` for full verification.
+EOF
+                fi
             } >> "$prompt"
         done
         result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" .uncle/docs/UPDATED_PROJECT_PLAN.md $group)" || return $?

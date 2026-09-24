@@ -1522,7 +1522,7 @@ verify_implementation_review() {
 # approved plan's Owns:/Depends on: data.  The driver, not the model, creates,
 # merges and removes worktrees.
 run_supervised_parallel_implementation() {
-    local base="$1" groups group step prompt cmd model effort result
+    local base="$1" groups group step prompt cmd model effort result step_line
     groups="$(parallel_groups .uncle/docs/CHANGE_PLAN.md "$ROOT/scripts/lib")" || return 2
     [[ -n "$groups" ]] || return 2
     [[ ! -s "$STATE_DIR/implement-step-done" ]] || return 2
@@ -1545,7 +1545,8 @@ run_supervised_parallel_implementation() {
             {
                 echo
                 echo "## Isolated parallel implementation step $step"
-                sed -n "${step}p" "$STATE_DIR/implement-steps.txt"
+                step_line="$(sed -n "${step}p" "$STATE_DIR/implement-steps.txt")"
+                printf '%s\n' "$step_line"
                 echo
                 echo "Work only on this approved step and its declared owned files."
                 echo "Do not edit workflow documents in the project root. Write this"
@@ -1557,6 +1558,23 @@ run_supervised_parallel_implementation() {
                 echo "Finish in at most 12 tool actions. Read only the named files,"
                 echo "make the smallest edit, run one narrow check, write the fragment,"
                 echo "and stop; do not investigate unrelated failures or repeat probes."
+                if [[ "$step_line" =~ ^[[:space:]]*[Rr]econcile:|Owns:[[:space:]]*\* ]]; then
+                    cat <<'EOF'
+
+## Reconciliation execution boundary (binding)
+
+This step does not own the approved full verification block. The driver runs
+that block once after merged implementation. Do not run its commands, an
+equivalent whole suite, dependency/browser installation, or a broad regression
+sweep from this isolated worktree. Do not write a canonical change-test report
+here: the driver cannot adopt reports created in a worker worktree.
+
+Fix only a concrete cross-step integration issue and run at most one narrow
+targeted smoke check. Perform an isolated defect injection only for a newly
+introduced integration invariant not covered by its owning step. Record that
+narrow evidence, or `DRIVER PENDING` for full verification, in your fragment.
+EOF
+                fi
             } >> "$prompt"
         done
         echo "Supervisor schedule: isolated parallel steps $group."

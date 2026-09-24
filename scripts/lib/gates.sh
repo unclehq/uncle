@@ -149,15 +149,24 @@ gated_prompt() {
     case "$log_name" in
         *-worker-*)
             local worker_prompt="$LOG_DIR/${log_name}.gated-prompt.md"
+            local worker_inputs='the canonical JSON prerequisite artifacts named in your assigned prompt'
+            case "$log_name" in
+                updated-plan-review-worker-*)
+                    worker_inputs='`.uncle/workflow/documents/PROJECT_PLAN.json` and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
+                    ;;
+                updated-change-plan-review-worker-*)
+                    worker_inputs='`.uncle/workflow/documents/CHANGE_PLAN.json` and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
+                    ;;
+            esac
             {
                 cat "$prompt_file"
-                cat <<'WORKER_PACKET'
+                cat <<WORKER_PACKET
 
 ## Compact worker contract (binding)
 
-Read only the canonical JSON prerequisite artifacts under
-`.uncle/workflow/documents/` needed for your assigned lens. Do not read
-rendered Markdown approvals, worker directories, output rules, or gates.
+Read only $worker_inputs. Do not enumerate `.uncle/workflow/documents/`,
+inspect the repository, or make exploratory tool calls. Do not read rendered
+Markdown approvals, worker directories, output rules, or gates.
 Return exactly the one JSON worker packet requested by the prompt, with no
 analysis, Markdown fence, or duplicate draft. The parent stage collates and
 validates all evidence, dispositions, and final documents.

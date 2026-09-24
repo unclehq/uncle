@@ -1471,7 +1471,7 @@ run_adversarial_review_panel() {
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do
-        wait "$pid" || echo 'Adversarial review panel worker failed; primary review will continue.' >&2
+        wait "$pid" || echo 'Adversarial-review worker failed; canonical packet validation will stop the panel.' >&2
     done
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
     ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"; cp "$ROOT/prompts/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
@@ -1482,6 +1482,8 @@ run_updated_plan_panel() {
     local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
     local -a pids=()
     [[ "${WORKFLOW_UPDATED_PLAN_PANEL:-1}" == 1 ]] || return 0
+    require_file "$STATE_DIR/documents/PROJECT_PLAN.json"
+    require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"
     echo "Updated-plan review panel: launching 4 workers in parallel."
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     for lens in dispositions ownership verification scope; do
@@ -1491,7 +1493,7 @@ run_updated_plan_panel() {
         ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "updated-plan-review-worker-$lens" < /dev/null ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
-    for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan panel worker failed; plan writer will continue.' >&2; done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan worker failed; canonical packet validation will stop the panel.' >&2; done
     python3 "$ROOT/scripts/lib/updated_plan_worker_packets.py" "$directory" "$STATE_DIR/documents/UPDATED_PLAN_WORKERS.json" \
         --expected dispositions ownership verification scope || return 1
     echo "Updated-plan review panel: worker packets collected; launching synthesis."
@@ -1524,7 +1526,7 @@ run_test_review_panel() {
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do
-        wait "$pid" || echo 'Test-review panel worker failed; primary review will continue.' >&2
+        wait "$pid" || echo 'Test-review worker failed; canonical packet validation will stop the panel.' >&2
     done
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json" --kind test-review-worker-packet --expected coverage integrity assertions oracle || return 1
     TEST_REVIEW_PROMPT="$directory/synthesis.md"; cp "$ROOT/prompts/test-review.md" "$TEST_REVIEW_PROMPT"
@@ -1545,7 +1547,7 @@ run_manual_checklist_panel() {
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do
-        wait "$pid" || echo 'Manual-checklist panel worker failed; primary reviewer will continue.' >&2
+        wait "$pid" || echo 'Manual-checklist worker failed; canonical packet validation will stop the panel.' >&2
     done
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json" --kind manual-checklist-worker-packet --expected coverage invariants resources regressions || return 1
     MANUAL_CHECKLIST_PROMPT="$directory/synthesis.md"; cp "$ROOT/prompts/manual-checklist.md" "$MANUAL_CHECKLIST_PROMPT"
@@ -1564,7 +1566,7 @@ run_final_audit_panel() {
         ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "final-audit-review-worker-$lens" < /dev/null ) > "$LOG_DIR/final-audit-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
-    for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit panel worker failed; auditor will continue.' >&2; done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit worker failed; canonical packet validation will stop the panel.' >&2; done
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json" --kind final-audit-worker-packet --expected verification scope regression waivers || return 1
     FINAL_AUDIT_PROMPT="$directory/synthesis.md"; cp "$ROOT/prompts/final-audit.md" "$FINAL_AUDIT_PROMPT"
     printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/FINAL_AUDIT_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$FINAL_AUDIT_PROMPT"
@@ -1872,31 +1874,14 @@ run_stage() {
             ;;
         UPDATED_PLAN)
             run_updated_plan_panel
-            if stage_uses_self_hosted updated-plan AGENT; then
-                # Split into two calls, the same fix applied to test-review:
-                # a long, read-heavy investigation with no strict output
-                # shape (but real Write-tool work -- .gitignore -- that
-                # belongs here, not in the formatting pass), then a short,
-                # mechanical conversion of that investigation into the
-                # required JSON. A single call asking a weak self-hosted
-                # model to both explore many documents *and* hit an exact
-                # schema at the end of a long turn kept losing the schema;
-                # the format pass has almost nothing else in its context to
-                # lose track of. Proprietary models do not show this
-                # failure, so they skip straight to the single call below.
-                updated_plan_investigation=".uncle/workflow/updated-plan-investigation.md"
-                rm -f "$updated_plan_investigation"
-                run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan-investigate.md}" updated-plan-investigate
-                require_file "$updated_plan_investigation"
-                updated_plan_format_prompt="$STATE_DIR/updated-plan-format-prompt.md"
-                {
-                    cat "$ROOT/prompts/updated-plan-format.md"
-                    cat "$updated_plan_investigation"
-                } > "$updated_plan_format_prompt"
-                run_claude "$updated_plan_format_prompt" updated-plan
-            else
-                run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan.md}" updated-plan
-            fi
+            # The panel has already collated every specialist finding into
+            # canonical JSON.  Every runner consumes that packet directly and
+            # writes the canonical plan in one call.  The former self-hosted
+            # Markdown investigation/format split was slower, reintroduced a
+            # non-authoritative Markdown handoff, and could stop after a
+            # successful plan write merely because the disposable draft was
+            # absent.
+            run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan.md}" updated-plan
             ;;
         IMPLEMENT)
             parallel_status=0

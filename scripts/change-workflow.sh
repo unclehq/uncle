@@ -2223,7 +2223,7 @@ run_adversarial_review_panel() {
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do
-        wait "$pid" || echo "Adversarial review panel worker failed; primary review will continue." >&2
+        wait "$pid" || echo "Adversarial-review worker failed; canonical packet validation will stop the panel." >&2
     done
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
     ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"
@@ -2237,6 +2237,8 @@ run_updated_change_plan_panel() {
     # Keep the older knob as a fallback, while allowing the change workflow to
     # be controlled independently from the new-project updated-plan panel.
     [[ "${WORKFLOW_UPDATED_CHANGE_PLAN_PANEL:-${WORKFLOW_UPDATED_PLAN_PANEL:-1}}" == 1 ]] || return 0
+    require_file "$STATE_DIR/documents/CHANGE_PLAN.json"
+    require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"
     echo "Updated-change-plan review panel: launching 4 workers in parallel."
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     for lens in dispositions ownership verification scope; do
@@ -2246,7 +2248,7 @@ run_updated_change_plan_panel() {
         ( run_codex "$prompt" "$output" "updated-change-plan-review-worker-$lens" "$CODEX_EFFORT_REVIEW" ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
-    for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-change-plan panel worker failed; plan writer will continue.' >&2; done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-change-plan worker failed; canonical packet validation will stop the panel.' >&2; done
     python3 "$ROOT/scripts/lib/updated_plan_worker_packets.py" "$directory" "$STATE_DIR/documents/UPDATED_CHANGE_PLAN_WORKERS.json" \
         --expected dispositions ownership verification scope || return 1
     echo "Updated-change-plan review panel: worker packets collected; launching synthesis."
@@ -2267,7 +2269,7 @@ run_final_audit_panel() {
         ( run_codex "$prompt" "$output" "final-audit-review-worker-$lens" "$CODEX_EFFORT_AUDIT" ) > "$LOG_DIR/final-audit-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
-    for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit panel worker failed; auditor will continue.' >&2; done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit worker failed; canonical packet validation will stop the panel.' >&2; done
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json" --kind final-audit-worker-packet --expected verification scope regression waivers || return 1
     FINAL_AUDIT_PROMPT="$directory/synthesis.md"
     cp "$ROOT/prompts/change/final-audit.md" "$FINAL_AUDIT_PROMPT"
@@ -2292,7 +2294,7 @@ run_checklist_panel() {
         ( run_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens" "$CODEX_EFFORT_CHECKLIST" ) > "$LOG_DIR/manual-checklist-$kind-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
-    for pid in "${pids[@]}"; do wait "$pid" || echo 'Checklist panel worker failed; checklist reviewer will continue.' >&2; done
+    for pid in "${pids[@]}"; do wait "$pid" || echo 'Checklist worker failed; canonical packet validation will stop the panel.' >&2; done
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json" --kind manual-checklist-worker-packet --expected coverage invariants resources regressions || return 1
     CHECKLIST_PANEL_PROMPT="$directory/synthesis.md"
     cp "$source" "$CHECKLIST_PANEL_PROMPT"

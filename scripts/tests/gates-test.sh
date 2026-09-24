@@ -482,6 +482,17 @@ if [[ "$out" == *assessment.json ]]; then
     python3 -B scripts/tests/plan-executability-test.py --review "$PWD"
     exit $?
 fi
+# Stagegate's review panels write strict worker packets before the primary
+# document reviewer runs.  Model that protocol so unrelated end-to-end cases
+# exercise the stage they were written for.
+if [[ "$out" == *.json ]]; then
+    if [[ "$out" == *updated-plan-panel/*.json ]]; then
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"updated-plan-worker-packet","findings":[]}' > "$out"
+    else
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"review-worker-packet","findings":[]}' > "$out"
+    fi
+    exit 0
+fi
 printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
 # A speculative review that came back as a fragment: heading, severity,
 # references, and nothing else -- what a model cut off at its output limit

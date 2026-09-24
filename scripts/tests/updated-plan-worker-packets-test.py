@@ -147,10 +147,22 @@ class WorkerPackets(unittest.TestCase):
         gates = (ROOT/'scripts/lib/gates.sh').read_text()
         self.assertIn('*-worker-*)', gates)
         self.assertIn('# Compact worker contract (binding)', gates)
-        self.assertIn('Do not read\nrendered Markdown approvals', gates)
+        self.assertIn('Do not enumerate `.uncle/workflow/documents/`', gates)
+        self.assertIn('updated-plan-review-worker-*', gates)
+        self.assertIn('updated-change-plan-review-worker-*', gates)
+        self.assertIn('PROJECT_PLAN.json` and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json', gates)
+        self.assertIn('CHANGE_PLAN.json` and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json', gates)
         for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
             text = (ROOT/source).read_text()
             self.assertIn('case "$log_name" in *-worker-*|', text)
+
+    def test_updated_plan_panels_require_their_canonical_inputs_before_fanout(self):
+        stagegate = (ROOT / 'scripts/stagegate.sh').read_text()
+        change = (ROOT / 'scripts/change-workflow.sh').read_text()
+        self.assertIn('require_file "$STATE_DIR/documents/PROJECT_PLAN.json"', stagegate)
+        self.assertIn('require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"', stagegate)
+        self.assertIn('require_file "$STATE_DIR/documents/CHANGE_PLAN.json"', change)
+        self.assertIn('require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"', change)
 
     def test_review_parent_synthesis_uses_compact_canonical_path(self):
         gates = (ROOT/'scripts/lib/gates.sh').read_text()
@@ -168,6 +180,16 @@ class WorkerPackets(unittest.TestCase):
             '*-worker-*|updated-plan|adversarial-review|test-review|manual-checklist|final-audit)',
             (ROOT/'scripts/stagegate.sh').read_text(),
         )
+
+    def test_updated_plan_has_no_self_hosted_markdown_investigation_fallback(self):
+        stagegate = (ROOT / 'scripts/stagegate.sh').read_text()
+        start = stagegate.index('        UPDATED_PLAN)')
+        end = stagegate.index('        IMPLEMENT)', start)
+        block = stagegate[start:end]
+        self.assertIn('run_claude "${UPDATED_PLAN_PROMPT:-prompts/updated-plan.md}" updated-plan', block)
+        self.assertNotIn('updated-plan-investigate', block)
+        self.assertNotIn('updated-plan-investigation.md', block)
+        self.assertNotIn('updated-plan-format', block)
 
 
 if __name__ == '__main__':

@@ -1585,13 +1585,11 @@ run_test_review_panel() {
     local -a pids=()
     [[ "${WORKFLOW_TEST_REVIEW_PANEL:-1}" == 1 ]] || return 0
     rm -rf "$directory"; mkdir -p "$directory/prompts"
-    # Exactly 4, matching every other panel: the native runner pool serves at
-    # most 4 concurrent connections per identity (scripts/lib/runner_pool.py),
-    # so a 5th concurrent worker fails outright with "all runner pool workers
-    # are busy" instead of queueing. oracle/negative merge into one lens
-    # because both judge whether the tests are a trustworthy oracle, not just
-    # a passing one.
-    for lens in coverage integrity assertions oracle; do
+    # INTEGRITY is a driver-owned fact: the green-check TSV is the canonical
+    # execution record, so asking a reviewer to rediscover it is both slower
+    # and less reliable.  The remaining three lenses are judgement calls.
+    # oracle/negative merge because both judge whether tests are trustworthy.
+    for lens in coverage assertions oracle; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/test-review-worker.md" "$prompt"
         if [[ "$lens" == oracle ]]; then
@@ -1606,7 +1604,7 @@ run_test_review_panel() {
     for pid in "${pids[@]}"; do
         wait "$pid" || echo 'Test-review worker failed; canonical packet validation will stop the panel.' >&2
     done
-    python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" .uncle/docs/TEST_REVIEW.md coverage integrity assertions oracle || return 1
+    python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" .uncle/docs/TEST_REVIEW.md coverage assertions oracle || return 1
     cp .uncle/docs/TEST_REVIEW.md "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
 }
 

@@ -2,6 +2,17 @@
 import json,sys
 from pathlib import Path
 STAT={'PASS','FAIL','BLOCKED-SETUP','BLOCKED-HUMAN','BLOCKED-IMPOSSIBLE','NOT RUN'}
+
+def integrity_row():
+ path=Path('.uncle/workflow/green-check.tsv')
+ try:
+  records=[line.split('\t',1) for line in path.read_text().splitlines() if line.strip()]
+ except OSError as e:
+  return {'id':'INTEGRITY','required':True,'status':'BLOCKED-SETUP','evidence':'Driver green-check record is unavailable: %s.'%e}
+ if not records or any(len(record)!=2 or record[0]!='PASS' for record in records):
+  return {'id':'INTEGRITY','required':True,'status':'BLOCKED-SETUP','evidence':'Driver green-check has missing or non-passing command records; see .uncle/workflow/green-check.tsv.'}
+ return {'id':'INTEGRITY','required':True,'status':'PASS','evidence':'Driver green-check recorded %d passing verification command(s); see .uncle/workflow/green-check.tsv.'%len(records)}
+
 def main(directory,out,*names):
  rows={}
  for n in names:
@@ -12,6 +23,7 @@ def main(directory,out,*names):
    if not isinstance(r,dict) or not r.get('id') or r.get('status') not in STAT or not r.get('evidence'): raise ValueError('%s.json: invalid acceptance row'%n)
    if r['id'] in rows: raise ValueError('%s.json: duplicate row %s'%(n,r['id']))
    rows[r['id']]={'id':r['id'],'required':True,'status':r['status'],'evidence':r['evidence']}
+ rows['INTEGRITY']=integrity_row()
  rows['RESULTS']={'id':'RESULTS','required':True,'status':'PASS','evidence':'Driver green-check completed; see .uncle/workflow/green-check.md.'}
  result={'schema':'uncle.artifact/v1','kind':'acceptance-report','rows':[rows[k] for k in sorted(rows)]}
  Path(out).write_text(json.dumps(result,indent=2)+'\n')

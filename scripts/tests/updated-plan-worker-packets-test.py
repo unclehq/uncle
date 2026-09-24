@@ -2,6 +2,7 @@
 """Regression coverage for the JSON-only updated-plan worker boundary."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,6 +20,7 @@ PACKETS = load('updated_plan_worker_packets.py')
 WORKERS = load('worker_packets.py')
 OUTPUT = load('reviewer_output.py')
 SELF_HOSTED = load('self_hosted.py')
+TEST_REVIEW = load('test_review_packets.py')
 
 
 def packet(identifier='AR-001', evidence='evidence', correction='correct it'):
@@ -187,6 +189,30 @@ class WorkerPackets(unittest.TestCase):
             text = (ROOT/source).read_text()
             for range_clause in expected:
                 self.assertIn(range_clause, text)
+
+    def test_test_review_derives_integrity_from_driver_green_check(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); workers = root/'workers'; workers.mkdir()
+            (root/'.uncle/workflow').mkdir(parents=True)
+            (root/'.uncle/workflow/green-check.tsv').write_text('PASS\tnode --test\nPASS\tnpx playwright test\n')
+            for name, rows in {
+                'coverage': [{'id':'COVERAGE','status':'PASS','evidence':'coverage'}],
+                'assertions': [{'id':'ASSERTIONS','status':'PASS','evidence':'assertions'}],
+                'oracle': [{'id':'ORACLE','status':'PASS','evidence':'oracle'}, {'id':'NEGATIVE','status':'PASS','evidence':'negative'}],
+            }.items():
+                self.write(workers, name, {'schema':'uncle.artifact/v1', 'kind':'test-review-worker-packet', 'rows':rows})
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                TEST_REVIEW.main(workers, root/'review.json', 'coverage', 'assertions', 'oracle')
+            finally:
+                os.chdir(previous)
+            rows = {row['id']: row for row in json.loads((root/'review.json').read_text())['rows']}
+            self.assertEqual(rows['INTEGRITY']['status'], 'PASS')
+            self.assertIn('2 passing verification command', rows['INTEGRITY']['evidence'])
+        stagegate = (ROOT/'scripts/stagegate.sh').read_text()
+        self.assertIn('for lens in coverage assertions oracle; do', stagegate)
+        self.assertNotIn('for lens in coverage integrity assertions oracle; do', stagegate)
 
     def test_worker_prompts_preserve_absolute_paths_and_bypass_supervision(self):
         for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):

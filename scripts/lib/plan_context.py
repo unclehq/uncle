@@ -277,6 +277,8 @@ if __name__ == '__main__':
             ingest_plan(path, project, protected=True)
         elif action == 'plan-unprotected':
             ingest_plan(path, project, protected=False)
+        elif action == 'export-project-plan':
+            export_project_plan(path, project)
         elif action == 'change-spec':
             ingest_change_spec(path, project)
         elif action == 'change-plan':

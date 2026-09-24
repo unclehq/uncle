@@ -1016,6 +1016,18 @@ require_artifact() {
     check_document_budget "$1" || exit 1
 }
 
+ensure_project_plan_json() {
+    local source=".uncle/docs/PROJECT_PLAN.md"
+    local canonical="$STATE_DIR/documents/PROJECT_PLAN.json"
+    [[ -s "$canonical" ]] && return 0
+    # Compatibility bridge for a pre-JSON plan that reached an approval gate
+    # before this migration.  This is deterministic parsing at the boundary,
+    # not a downstream Markdown input: after export, every later stage reads
+    # only the canonical packet.
+    python3 "$ROOT/scripts/lib/plan_context.py" export-project-plan "$source" . || return 1
+    require_file "$canonical"
+}
+
 verify_approval() {
     local file="$1"
     local name="$2"
@@ -1496,7 +1508,7 @@ run_updated_plan_panel() {
     local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
     local -a pids=()
     [[ "${WORKFLOW_UPDATED_PLAN_PANEL:-1}" == 1 ]] || return 0
-    require_file "$STATE_DIR/documents/PROJECT_PLAN.json"
+    ensure_project_plan_json
     require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"
     echo "Updated-plan review panel: launching 4 workers in parallel."
     rm -rf "$directory"; mkdir -p "$directory/prompts"
@@ -1861,6 +1873,7 @@ run_stage() {
                     supervision_validation_failed project-plan .uncle/docs/PROJECT_PLAN.md "$plan_ingest_error"
                     exit 1
                 }
+                ensure_project_plan_json || exit 1
             fi
             require_artifact .uncle/docs/PROJECT_PLAN.md
             ;;

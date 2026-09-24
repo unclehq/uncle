@@ -161,7 +161,7 @@ class WorkerPackets(unittest.TestCase):
     def test_updated_plan_panels_require_their_canonical_inputs_before_fanout(self):
         stagegate = (ROOT / 'scripts/stagegate.sh').read_text()
         change = (ROOT / 'scripts/change-workflow.sh').read_text()
-        self.assertIn('require_file "$STATE_DIR/documents/PROJECT_PLAN.json"', stagegate)
+        self.assertIn('ensure_project_plan_json', stagegate)
         self.assertIn('require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"', stagegate)
         self.assertIn('require_file "$STATE_DIR/documents/CHANGE_PLAN.json"', change)
         self.assertIn('require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"', change)

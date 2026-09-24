@@ -32,6 +32,15 @@ class PlanContext(unittest.TestCase):
             self.assertFalse(module.ingest_plan(plan, Path(d), protected=False))
             self.assertEqual(plan.read_text(), '# A hand-written plan\n\nNo JSON here.\n')
 
+    def test_approved_markdown_project_plan_exports_before_json_only_handoff(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); plan = root/'PROJECT_PLAN.md'
+            plan.write_text('## Architecture\n\nStatic app.\n\n## Verification commands\n\n```sh\npytest\n```\n')
+            payload = module.export_project_plan(plan, root)
+            self.assertEqual(payload['verification_commands'], 'pytest')
+            canonical = json.loads((root/'.uncle/workflow/documents/PROJECT_PLAN.json').read_text())
+            self.assertEqual(canonical['narrative'], '## Architecture\n\nStatic app.')
+
     def test_updated_plan_requires_protected_paths(self):
         with tempfile.TemporaryDirectory() as d:
             plan = Path(d)/'UPDATED_PROJECT_PLAN.md'

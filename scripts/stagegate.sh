@@ -2193,6 +2193,11 @@ run_stage() {
             fi
             rm -f .uncle/docs/VERIFICATION_REPORT.md
             run_parallel_checklist_workers
+            if [[ -s "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" ]]; then
+                python3 -B "$ROOT/scripts/lib/execute_checklist_reports.py" . || exit 1
+                echo 'Execute-checklist fast path: rendered authoritative worker results without parent synthesis.'
+                return 0
+            fi
             # A malformed acceptance table gets one local, format-only retry
             # even when optional supervision is disabled. The marker remains
             # after delivery so repeated malformed output stops normally.

@@ -39,6 +39,10 @@ topics appear in source or tests. They belong to the operator or Uncle itself,
 not to an unrelated project change, unless the approved documents explicitly
 make one of them in scope.
 
+Every check must be executable before the project has its first commit. Never
+require Git history, a committed baseline, or a diff against an unspecified
+historical version; use approved current-tree evidence and workflow snapshots.
+
 `claude` being available through its normal web-login session is sufficient.
 Never require `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or another API
 token unless the approved change explicitly requires API-key authentication.

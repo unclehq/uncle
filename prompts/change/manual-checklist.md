@@ -24,6 +24,10 @@ documents. Remove generic repository-health, workflow, supervisor, credential,
 GitHub, publishing, commit, and signing checks unless those documents explicitly
 place them in scope. They must not block an unrelated project delivery.
 
+Every check must be executable before the project has its first commit. Never
+require Git history, a committed baseline, or a diff against an unspecified
+historical version; use approved current-tree evidence and workflow snapshots.
+
 Availability of the `claude` command through its normal web-login session is
 sufficient. Do not require `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or
 another API token unless the approved change explicitly requires API-key

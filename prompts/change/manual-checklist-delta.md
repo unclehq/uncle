@@ -18,6 +18,11 @@ Read:
 Do not modify source code.
 Do not claim any check passed.
 
+Every retained or added check must be executable before the project has its
+first commit. Never require Git history, a committed baseline, or a diff
+against an unspecified historical version; use approved current-tree evidence
+and workflow snapshots instead.
+
 ## What to do
 
 1. Resolve every check marked `NEEDS-DETAIL`. Replace the placeholder action

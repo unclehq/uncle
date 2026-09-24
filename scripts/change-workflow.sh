@@ -3286,8 +3286,12 @@ REPAIR
 
         EXECUTE_CHECKLIST)
             if ! python3 "$ROOT/scripts/lib/checklist_document.py" .uncle/docs/MANUAL_CHECKLIST.md; then
-                set_state VALIDATE_MANUAL_CHECKLIST
-                exit 1
+                # A zero-commit project is valid. Regenerate a delta checklist
+                # that incorrectly made historical Git state a prerequisite.
+                echo 'Checklist contract requires unavailable commit history; regenerating the delta checklist from current-tree evidence.'
+                rm -f "$STATE_DIR/manual-checklist-format-retry.md"
+                set_state CHECKLIST
+                continue
             fi
             start_green_check_bg
             plan_delivery_summary

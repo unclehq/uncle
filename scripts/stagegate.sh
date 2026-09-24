@@ -1557,6 +1557,9 @@ run_updated_plan_panel() {
     UPDATED_PLAN_PROMPT="$directory/synthesis.md"
     cp "$ROOT/prompts/updated-plan.md" "$UPDATED_PLAN_PROMPT"
     printf '\n## Collated worker findings (binding)\n\nRead only `%s/documents/UPDATED_PLAN_WORKERS.json` for specialist findings. Do not read the worker directory or individual worker prompts/packets. It is complete, deduplicated, ordered, and records conflicts explicitly.\n' "$STATE_DIR" >> "$UPDATED_PLAN_PROMPT"
+    if [[ -s "$STATE_DIR/documents/REPAIR_PLAN_BLOCKERS.json" ]]; then
+        printf '\n## Plan-revision blocker (binding)\n\nRead `%s/documents/REPAIR_PLAN_BLOCKERS.json`. It records a verification command that cannot be fixed in source and must be resolved in this revised plan.\n' "$STATE_DIR" >> "$UPDATED_PLAN_PROMPT"
+    fi
 }
 
 run_test_review_panel() {
@@ -3067,7 +3070,7 @@ while true; do
                 repair_judge || repair_status=$?
                 case "$repair_status" in
                     0) ;;
-                    3) continue ;;
+                    3|5) continue ;;
                     *) exit 1 ;;
                 esac
             fi

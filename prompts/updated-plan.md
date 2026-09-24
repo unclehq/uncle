@@ -36,6 +36,7 @@ Read these in one parallel batch of tool calls:
 - .uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json
 - .uncle/workflow/documents/PROJECT_PLAN.json
 - .uncle/workflow/documents/ADVERSARIAL_REVIEW.json
+- .uncle/workflow/documents/REPAIR_PLAN_BLOCKERS.json, if present
 
 These JSON artifacts are authoritative. Do not read their rendered
 `.uncle/docs/*.md` approval views.

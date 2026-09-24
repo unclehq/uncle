@@ -72,6 +72,23 @@ repair_judge() {
         echo "Could not judge the repair pass (repair_check.py exited $status)."
         return 1
     fi
+    # A protected plan command can fail even when the product tree is already
+    # correct.  A non-CODING plan-blockers entry is the repair agent's
+    # structured proof of that condition. Source repair cannot amend an
+    # approved plan, so return the canonical blocker packet to UPDATED_PLAN.
+    if [[ "$report" == "$STATE_DIR/green-check.md" ]] \
+        && python3 -B "$ROOT/scripts/lib/repair_plan_route.py" \
+            .uncle/docs/IMPLEMENTATION_NOTES.md "$STATE_DIR/green-check.tsv" \
+            "$STATE_DIR/documents/REPAIR_PLAN_BLOCKERS.json"; then
+        echo 'Repair found a plan-owned verification blocker; returning to UPDATED_PLAN instead of retrying source repair.'
+        count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 1)"
+        case "$count" in ''|*[!0-9]*) count=1 ;; esac
+        count=$((10#$count - 1)); [[ "$count" -ge 0 ]] || count=0
+        printf '%s\n' "$count" > "$STATE_DIR/repair-count"
+        rm -f "$STATE_DIR/repair-retry" "$STATE_DIR/repair-noop-count" "$STATE_DIR/REPAIR_BRIEF.md"
+        set_state UPDATED_PLAN
+        return 5
+    fi
     echo
     echo "Repair pass changed none of the files these findings name: $(printf '%s' "$unrepaired" | tr '\n' ' ')"
     echo "A report is not a repair. This pass is not reviewed and does not count"

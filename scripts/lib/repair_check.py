@@ -174,6 +174,11 @@ def judge(snapshot_path, notes):
 
 def brief(report, snapshot_path, out, ids):
     data = json.loads(Path(snapshot_path).read_text())
+    # Never generate an empty retry brief. A synthetic tree-level finding is
+    # possible when a report has no parseable findings table; preserve it so
+    # the operator and repair agent see why the pass was rejected.
+    if not ids:
+        ids = list(data.get('findings', {}))
     text = Path(report).read_text(errors='replace') if Path(report).is_file() else ''
     lines = ['# Repair brief', '',
              'Written by the driver after a repair pass that changed none of the files the',

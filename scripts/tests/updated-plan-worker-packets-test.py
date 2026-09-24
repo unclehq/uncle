@@ -104,12 +104,8 @@ class WorkerPackets(unittest.TestCase):
 
     def test_worker_packets_reject_placeholder_ids_at_every_runner_boundary(self):
         body = {'schema': 'uncle.artifact/v1', 'kind': 'test-review-worker-packet',
-                'findings': [{'id': 'No finding — reviewer to assign ID',
-                              'summary': 'The report is incomplete', 'evidence': 'report.md'}]}
-        with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / 'assertions.json'; path.write_text(json.dumps(body), encoding='utf-8')
-            with self.assertRaisesRegex(WORKERS.PacketError, 'stable finding ID, not placeholder'):
-                WORKERS.load(path, 'test-review-worker-packet')
+                'rows': [{'id': 'No finding — reviewer to assign ID',
+                          'status': 'FAIL', 'evidence': 'report.md'}]}
         serialized = json.dumps(body)
         with self.assertRaisesRegex(ValueError, 'stable finding ID, not placeholder'):
             OUTPUT.worker_packet(serialized, 'claude')
@@ -140,12 +136,9 @@ class WorkerPackets(unittest.TestCase):
         contracts = {
             'scripts/stagegate.sh': (
                 ('ADVERSARIAL_REVIEW_WORKERS.json', 'adversarial-review-worker-packet'),
-                ('TEST_REVIEW_WORKERS.json', 'test-review-worker-packet'),
-                ('MANUAL_CHECKLIST_WORKERS.json', 'manual-checklist-worker-packet'),
                 ('FINAL_AUDIT_WORKERS.json', 'final-audit-worker-packet')),
             'scripts/change-workflow.sh': (
                 ('ADVERSARIAL_REVIEW_WORKERS.json', 'adversarial-review-worker-packet'),
-                ('MANUAL_CHECKLIST_WORKERS.json', 'manual-checklist-worker-packet'),
                 ('FINAL_AUDIT_WORKERS.json', 'final-audit-worker-packet')),
         }
         for source, panels in contracts.items():
@@ -154,6 +147,13 @@ class WorkerPackets(unittest.TestCase):
                 self.assertIn(artifact, text)
                 self.assertIn('--kind ' + kind, text)
             self.assertGreaterEqual(text.lower().count('do not read the worker directory'), len(panels))
+        test_review = (ROOT/'scripts/stagegate.sh').read_text()
+        self.assertIn('TEST_REVIEW_WORKERS.json', test_review)
+        self.assertIn('test_review_packets.py', test_review)
+        for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
+            text = (ROOT/source).read_text()
+            self.assertIn('MANUAL_CHECKLIST_WORKERS.json', text)
+            self.assertIn('manual_checklist_packets.py', text)
         for prompt, kind in (
             ('adversarial-review-worker.md', 'adversarial-review-worker-packet'),
             ('test-review-worker.md', 'test-review-worker-packet'),
@@ -161,15 +161,32 @@ class WorkerPackets(unittest.TestCase):
             ('final-audit-review-worker.md', 'final-audit-worker-packet')):
             text = (ROOT/'prompts/change'/prompt).read_text()
             self.assertIn('"kind":"' + kind + '"', text)
-            self.assertIn('empty array when clean', text)
+            if prompt == 'test-review-worker.md':
+                self.assertIn('Return every assigned acceptance row', text)
+            elif prompt in ('adversarial-review-worker.md', 'final-audit-review-worker.md'):
+                self.assertIn('empty array when clean', text)
+            else:
+                self.assertIn('include every required field', text)
         test_worker = (ROOT/'prompts/change/test-review-worker.md').read_text()
-        self.assertIn('Every finding MUST have a stable, specific ID', test_worker)
-        self.assertNotIn('let the reviewer assign one', test_worker)
+        self.assertIn('Return every assigned acceptance row', test_worker)
+        self.assertIn('"id":"COVERAGE"', test_worker)
         for prompt in ('manual-checklist.md', 'change/manual-checklist.md', 'change/manual-checklist-base.md'):
             text = (ROOT/'prompts'/prompt).read_text()
             self.assertIn('not a statement that you wrote', text)
         for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
             self.assertIn('validate_reviewer_artifact', (ROOT/source).read_text())
+
+    def test_manual_checklist_lenses_have_non_overlapping_id_ranges(self):
+        expected = (
+            "coverage) range='MC-100 through MC-199'",
+            "invariants) range='MC-200 through MC-299'",
+            "resources) range='MC-300 through MC-399'",
+            "regressions) range='MC-400 through MC-499'",
+        )
+        for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
+            text = (ROOT/source).read_text()
+            for range_clause in expected:
+                self.assertIn(range_clause, text)
 
     def test_worker_prompts_preserve_absolute_paths_and_bypass_supervision(self):
         for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):

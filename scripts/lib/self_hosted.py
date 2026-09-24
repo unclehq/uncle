@@ -538,6 +538,10 @@ def reviewer_packet(response, output):
         rows = payload.get('rows')
         if not isinstance(rows, list) or any(not isinstance(row, dict) or not isinstance(row.get('id'), str) or not isinstance(row.get('status'), str) or not isinstance(row.get('evidence'), str) for row in rows):
             raise InvalidReviewerDocument('Reviewer test-review packet rows must be an array for %s' % Path(output).name)
+        for index, row in enumerate(rows, 1):
+            if PLACEHOLDER_PACKET_ID.match(row['id'].strip()):
+                raise InvalidReviewerDocument('Reviewer test-review row %d needs a stable finding ID, not placeholder %r for %s'
+                                              % (index, row['id'].strip(), Path(output).name))
         return json.dumps(payload, indent=2, sort_keys=True) + '\n'
     if payload.get('kind') == 'manual-checklist-worker-packet':
         checks = payload.get('checks')

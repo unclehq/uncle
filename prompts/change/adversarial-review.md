@@ -5,9 +5,12 @@ Read:
 
 - CHANGE_REQUEST.md
 - .uncle/docs/BASELINE_REPORT.md
-- .uncle/docs/CHANGE_SPEC.md
-- .uncle/docs/CHANGE_PLAN.md
+- .uncle/workflow/documents/CHANGE_SPEC.json
+- .uncle/workflow/documents/CHANGE_PLAN.json
 - the implementation and tests named in the plan's change-impact table
+
+The CHANGE_SPEC and CHANGE_PLAN JSON artifacts are authoritative. Do not read
+their rendered `.uncle/docs/*.md` approval views.
 
 The plan names the components it intends to touch and the baseline names the
 relevant code paths by line. Start there. Widen the search only where you

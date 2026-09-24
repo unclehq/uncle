@@ -33,9 +33,12 @@ agent to make before it can start. Apply these rules before finalizing:
 Read these in one parallel batch of tool calls:
 
 - REQUIREMENTS.md
-- .uncle/docs/REQUIREMENTS_INTERPRETATION.md
-- .uncle/docs/PROJECT_PLAN.md
-- .uncle/docs/ADVERSARIAL_REVIEW.md
+- .uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json
+- .uncle/workflow/documents/PROJECT_PLAN.json
+- .uncle/workflow/documents/ADVERSARIAL_REVIEW.json
+
+These JSON artifacts are authoritative. Do not read their rendered
+`.uncle/docs/*.md` approval views.
 
 Write .uncle/docs/UPDATED_PROJECT_PLAN.md as one JSON object, not Markdown,
 matching this contract:
@@ -44,7 +47,7 @@ matching this contract:
 
 Write it directly and correctly the first time. Do not try to validate the JSON afterward with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance. If you reconsider your answer partway through, revise silently -- the final reply must contain the object exactly once. Including an earlier draft alongside the final one, or the same content twice, is rejected the same way a missing object is.
 
-It is a focused revision of .uncle/docs/PROJECT_PLAN.md. Use the original
+It is a focused revision of `.uncle/workflow/documents/PROJECT_PLAN.json`. Use the original
 plan as the base, retaining unaffected normative rows and exact commands.
 Also resolve contradictions found by the final executability check. Edit the
 sections invalidated by findings; do not redesign unaffected architecture or
@@ -72,7 +75,7 @@ Retain and update:
 - implementation order;
 - explicit non-goals.
 
-Clearly identify changes from .uncle/docs/PROJECT_PLAN.md.
+Clearly identify changes from canonical PROJECT_PLAN JSON.
 
 Put in `verification_commands`, as plain text with no fence markers and no
 heading (the driver renders both), the commands that demonstrate the build is
@@ -155,8 +158,7 @@ added, or deleted inputs. Repairs may edit them, but require a fresh diff review
 and independent test review. Explain the scope in the testing strategy.
 
 This document is the sole plan input to implementation, checklist creation, and
-the final audit — none of them will read .uncle/docs/PROJECT_PLAN.md or
-.uncle/docs/ADVERSARIAL_REVIEW.md. So it must stand alone. Standing alone means every
+the final audit — none of them will read the old plan or review Markdown views. So it must stand alone. Standing alone means every
 normative row survives, not every sentence:
 
 - carry forward every behavior, invariant, and traceability row, updated — a

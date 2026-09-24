@@ -3,8 +3,11 @@ Act as an independent adversarial principal engineer.
 Read:
 
 - REQUIREMENTS.md
-- .uncle/docs/REQUIREMENTS_INTERPRETATION.md
-- .uncle/docs/PROJECT_PLAN.md
+- .uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json
+- .uncle/workflow/documents/PROJECT_PLAN.json
+
+These JSON artifacts are authoritative. Do not read their rendered
+`.uncle/docs/*.md` approval views.
 
 Do not implement code.
 Do not modify any existing artifact.

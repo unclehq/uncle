@@ -194,6 +194,19 @@ class WorkerPackets(unittest.TestCase):
         self.assertNotIn('updated-plan-investigation.md', block)
         self.assertNotIn('updated-plan-format', block)
 
+    def test_plan_review_parents_name_canonical_json_not_markdown_inputs(self):
+        updated = (ROOT / 'prompts/updated-plan.md').read_text()
+        changed = (ROOT / 'prompts/change/updated-change-plan.md').read_text()
+        review = (ROOT / 'prompts/adversarial-review.md').read_text()
+        self.assertIn('.uncle/workflow/documents/PROJECT_PLAN.json', updated)
+        self.assertIn('.uncle/workflow/documents/ADVERSARIAL_REVIEW.json', updated)
+        self.assertNotIn('- .uncle/docs/PROJECT_PLAN.md', updated)
+        self.assertIn('.uncle/workflow/documents/CHANGE_PLAN.json', changed)
+        self.assertIn('.uncle/workflow/documents/CHANGE_SPEC.json', changed)
+        self.assertNotIn('- .uncle/docs/CHANGE_PLAN.md', changed)
+        self.assertIn('.uncle/workflow/documents/PROJECT_PLAN.json', review)
+        self.assertNotIn('- .uncle/docs/PROJECT_PLAN.md', review)
+
 
 if __name__ == '__main__':
     unittest.main()

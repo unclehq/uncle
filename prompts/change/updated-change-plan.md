@@ -33,14 +33,14 @@ agent to make before it can start. Apply these rules before finalizing:
 Read:
 
 - CHANGE_REQUEST.md
-- .uncle/docs/CHANGE_PLAN.md
+- .uncle/workflow/documents/CHANGE_PLAN.json
 - .uncle/workflow/documents/ADVERSARIAL_REVIEW.json
-- .uncle/docs/CHANGE_SPEC.md
+- .uncle/workflow/documents/CHANGE_SPEC.json
 
-Both .uncle/docs/CHANGE_PLAN.md and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json` have just passed a human gate and
+Both `.uncle/workflow/documents/CHANGE_PLAN.json` and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json` have just passed a human gate and
 may have been edited during that review. Read both from disk in full.
 
-.uncle/docs/CHANGE_SPEC.md is for traceability only; consult its behavior and invariant IDs
+`.uncle/workflow/documents/CHANGE_SPEC.json` is for traceability only; consult its behavior and invariant IDs
 as needed. Read CHANGE_REQUEST.md for source issue identity. You do not need
 .uncle/docs/BASELINE_REPORT.md unless a specific finding requires evidence absent from
 the plan and spec.
@@ -71,7 +71,7 @@ Write it directly and correctly the first time. Do not try to validate the JSON 
 Edit sections affected by review findings or by the final executability and
 consistency checks above. Preserve other sections; do not reword or restate
 unaffected content. `narrative` is the complete revised plan (real newlines
-in the JSON string) -- .uncle/docs/CHANGE_PLAN.md is the sole plan input to
+in the JSON string) -- `.uncle/workflow/documents/CHANGE_PLAN.json` is the sole plan input to
 every later stage, so what you put there is what implementation executes.
 
 `dispositions` is one entry per adversarial finding: `finding` is its AR-XXX
@@ -99,7 +99,7 @@ Do not implement code.
 
 ## Output economy
 
-Length is a cost. The revised .uncle/docs/CHANGE_PLAN.md is read by five later stages and
+Length is a cost. The revised canonical CHANGE_PLAN JSON is read by five later stages and
 re-sent on every turn of each of them.
 
 - Use the appended stage budget and enforcement mode; no separate word limit.

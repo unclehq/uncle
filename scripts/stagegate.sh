@@ -1562,6 +1562,18 @@ run_updated_plan_panel() {
     fi
 }
 
+run_updated_plan_fast_path() {
+    ensure_project_plan_json || return 1
+    require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" || return 1
+    # An empty adversarial review has no dispositions or plan edits to decide.
+    # Avoid launching four empty specialists and a parent that can only copy
+    # the approved plan; plan ingestion below still renders and validates it.
+    python3 -B "$ROOT/scripts/lib/updated_plan_fast_path.py" \
+        "$STATE_DIR/documents/PROJECT_PLAN.json" \
+        "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
+        .uncle/docs/UPDATED_PROJECT_PLAN.md
+}
+
 run_test_review_panel() {
     local directory="$STATE_DIR/test-review-panel" lens prompt output pid
     local -a pids=()
@@ -1942,6 +1954,12 @@ run_stage() {
             fi
             ;;
         UPDATED_PLAN)
+            # A review with findings falls through to the normal collated
+            # worker panel; a clean review needs no worker calls at all.
+            if run_updated_plan_fast_path; then
+                echo 'Updated-plan fast path: no adversarial findings; copied canonical plan without model synthesis.'
+                return 0
+            fi
             run_updated_plan_panel
             # The panel has already collated every specialist finding into
             # canonical JSON.  Every runner consumes that packet directly and

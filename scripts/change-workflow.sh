@@ -1916,6 +1916,37 @@ status_stage_context() {
     fi
 }
 
+# Change stages must receive the exact driver-selected request, not merely an
+# instruction to find CHANGE_REQUEST.md.  In particular self-hosted/OpenCode
+# calls do not receive the driver's hidden packet, and a root file may be stale
+# when a generated request under .uncle/docs is selected.
+bind_change_request_source() {
+    local prompt_file="$1" log_name="$2"
+    case "$log_name" in
+        baseline|change-spec|change-plan|updated-change-plan|adversarial-review|manual-checklist|manual-checklist-base|manual-checklist-delta) ;;
+        *) printf '%s\n' "$prompt_file"; return 0 ;;
+    esac
+    [[ -s "$DOCUMENT_BUDGET_SOURCE" ]] || { printf '%s\n' "$prompt_file"; return 0; }
+
+    local bound_prompt="$LOG_DIR/${log_name}.change-request-bound-prompt.md"
+    {
+        cat "$prompt_file"
+        cat <<'CHANGE_REQUEST_SOURCE'
+
+## Binding change request (highest priority)
+
+The exact selected change request follows. Use it as the source request; do
+not substitute a root-level file, a workflow prompt, or a generated report.
+The later canonical baseline/spec/plan artifacts may refine this request, but
+they do not replace its issue identity or requested outcome.
+
+CHANGE_REQUEST_SOURCE
+        printf 'Selected path: %s\n\n' "$DOCUMENT_BUDGET_SOURCE"
+        cat "$DOCUMENT_BUDGET_SOURCE"
+    } > "$bound_prompt"
+    printf '%s\n' "$bound_prompt"
+}
+
 run_claude() {
     local prompt_file
     prompt_file="$(resolve_prompt "$1")"
@@ -1999,6 +2030,7 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
+        effective_prompt="$(bind_change_request_source "$effective_prompt" "$log_name")"
         case "$log_name" in
             *-worker-*) ;;
             *)
@@ -2216,6 +2248,7 @@ run_codex() {
     # rules the same way an agent stage does.
     if [[ "$log_name" != plan-executability ]]; then
         prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+        prompt_file="$(bind_change_request_source "$prompt_file" "$log_name")"
         case "$log_name" in *-worker-*|updated-change-plan|adversarial-review|final-audit|manual-checklist)
             ;;
         *)
@@ -2506,6 +2539,7 @@ start_codex_bg() {
         # rules the same way an agent stage does.
         if [[ "$log_name" != plan-executability ]]; then
             prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
+            prompt_file="$(bind_change_request_source "$prompt_file" "$log_name")"
         fi
     fi
     rm -f "$output_file"

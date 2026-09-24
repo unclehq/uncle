@@ -1267,6 +1267,51 @@ stage_uses_self_hosted() {
     [[ "$UNCLE_RESOLVED_RUNNER" == self-hosted ]]
 }
 
+# A native model can reliably write the two independent artifacts in one turn.
+# For self-hosted/OpenCode, that merged contract can return a perfectly valid
+# requirements object where the `project-plan` output slot expects a plan. Run
+# the deterministic one-artifact fast paths instead; this also means an old
+# plan cannot be mistaken for output from the current requirements pass.
+merged_requirements_plan_enabled() {
+    [[ "$MERGE_REQUIREMENTS_PLAN" == "1" ]] \
+        && ! stage_uses_self_hosted requirements AGENT \
+        && ! stage_uses_self_hosted project-plan AGENT
+}
+
+# Requirements agents must see the selected brief as literal prompt content.
+# Self-hosted runners do not inherit the driver's internal "packet" in the
+# way native clients do.  A prompt which merely says "read the document named
+# in the driver packet" therefore leads them to interpret the workflow prompt
+# itself as the requirements.  Bind the exact selected source for the three
+# prompts that create an interpretation; later planning stages intentionally
+# consume the canonical interpretation JSON instead.
+bind_requirements_source() {
+    local prompt_file="$1" log_name="$2" source_prompt="$3"
+    case "${source_prompt##*/}" in
+        requirements.md|requirements-plan.md|requirements-investigate.md) ;;
+        *) printf '%s\n' "$prompt_file"; return 0 ;;
+    esac
+
+    local bound_prompt="$LOG_DIR/${log_name}.requirements-bound-prompt.md"
+    {
+        cat "$prompt_file"
+        cat <<'REQUIREMENTS_SOURCE'
+
+## Binding requirements source (highest priority)
+
+The exact project brief follows. Interpret this brief, not the workflow prompt,
+output rules, a driver-packet description, or any generated document. If the
+brief conflicts with an earlier generated interpretation, the brief is the
+source of truth for this requirements stage. Do not claim that the brief was
+omitted: its contents are included below.
+
+REQUIREMENTS_SOURCE
+        python3 "$ROOT/scripts/lib/requirements-context.py" --brief \
+            "${DOCUMENT_BUDGET_SOURCE:-REQUIREMENTS.md}" .
+    } > "$bound_prompt"
+    printf '%s\n' "$bound_prompt"
+}
+
 run_claude() {
     local prompt_file
     prompt_file="$(resolve_prompt "$1")"
@@ -1322,6 +1367,7 @@ run_claude() {
         local status=0
         local effective_prompt
         effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"
+        effective_prompt="$(bind_requirements_source "$effective_prompt" "$log_name" "$prompt_file")"
         # Worker fan-out has no decision authority and already receives a
         # compact, schema-bound prompt. Supervising every batch wastes calls
         # and can mistake a transient prompt path for a parent-stage failure.
@@ -1584,8 +1630,13 @@ run_adversarial_review_panel() {
         wait "$pid" || echo 'Adversarial-review worker failed; canonical packet validation will stop the panel.' >&2
     done
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
-    ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"; cp "$ROOT/prompts/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
-    printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/ADVERSARIAL_REVIEW_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$ADVERSARIAL_REVIEW_PROMPT"
+    # Worker packets are already validated, complete, and deduplicated by
+    # stable finding ID.  Rendering them directly makes the collated JSON the
+    # sole authoritative review and avoids asking a weak parent model to
+    # restate the same evidence as a Markdown investigation followed by a
+    # second formatting pass.  This also lets a speculative review succeed
+    # without a parent response that can be merely narration.
+    python3 -B "$ROOT/scripts/lib/adversarial_packets.py" . || return 1
 }
 
 run_updated_plan_panel() {
@@ -2004,19 +2055,19 @@ run_stage() {
             # a second read of files already in hand. Both documents are still
             # written separately, validated separately and approved separately;
             # only the invocation is shared.
-            if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" ]]; then
+            if merged_requirements_plan_enabled; then
                 run_claude prompts/requirements-plan.md project-plan
             elif stage_uses_self_hosted requirements AGENT; then
                 requirements_investigation=".uncle/workflow/requirements-investigation.md"
                 rm -f "$requirements_investigation"
                 run_claude prompts/requirements-investigate.md requirements-investigate
                 require_file "$requirements_investigation"
-                requirements_format_prompt="$STATE_DIR/requirements-format-prompt.md"
-                {
-                    cat "$ROOT/prompts/requirements-format.md"
-                    cat "$requirements_investigation"
-                } > "$requirements_format_prompt"
-                run_claude "$requirements_format_prompt" requirements
+                cp "$requirements_investigation" .uncle/docs/REQUIREMENTS_INTERPRETATION.md
+                python3 "$ROOT/scripts/lib/requirements-context.py" --export-json \
+                    .uncle/docs/REQUIREMENTS_INTERPRETATION.md . || exit 1
+                python3 "$ROOT/scripts/lib/requirements-context.py" --render-json \
+                    . .uncle/docs/REQUIREMENTS_INTERPRETATION.md || exit 1
+                echo 'Requirements fast path: deterministically rendered canonical JSON from the completed investigation.'
             else
                 run_claude prompts/requirements.md requirements
             fi
@@ -2027,12 +2078,17 @@ run_stage() {
                 rm -f "$project_plan_investigation"
                 run_claude prompts/project-plan-investigate.md project-plan-investigate
                 require_file "$project_plan_investigation"
-                project_plan_format_prompt="$STATE_DIR/project-plan-format-prompt.md"
-                {
-                    cat "$ROOT/prompts/project-plan-format.md"
-                    cat "$project_plan_investigation"
-                } > "$project_plan_format_prompt"
-                run_claude "$project_plan_format_prompt" project-plan
+                # The investigation has a deliberately mechanical boundary:
+                # all prose becomes `narrative` and the one fenced
+                # Verification commands block becomes `verification_commands`.
+                # Do that conversion in the driver rather than spending a
+                # second self-hosted model call copying a large plan into JSON.
+                cp "$project_plan_investigation" .uncle/docs/PROJECT_PLAN.md
+                python3 "$ROOT/scripts/lib/plan_context.py" export-project-plan \
+                    .uncle/docs/PROJECT_PLAN.md . || exit 1
+                python3 "$ROOT/scripts/lib/plan_context.py" render-project-plan \
+                    .uncle/docs/PROJECT_PLAN.md . || exit 1
+                echo 'Project-plan fast path: deterministically rendered canonical JSON from the completed investigation.'
             else
                 run_claude prompts/project-plan.md project-plan
             fi
@@ -2049,6 +2105,12 @@ run_stage() {
         ADVERSARIAL_REVIEW)
             ensure_project_plan_json || exit 1
             run_adversarial_review_panel
+            if [[ -s "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" ]]; then
+                echo 'Adversarial-review fast path: rendered authoritative worker findings without parent synthesis.'
+                python3 "$ROOT/scripts/lib/adversarial-context.py" --validate-json . || exit 1
+                python3 "$ROOT/scripts/lib/adversarial-context.py" --render-json . .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
+                return 0
+            fi
             if stage_uses_self_hosted adversarial-review REVIEWER; then
                 adversarial_review_investigation=".uncle/workflow/adversarial-review-investigation.md"
                 rm -f "$adversarial_review_investigation"
@@ -2056,12 +2118,12 @@ run_stage() {
                     "${ADVERSARIAL_REVIEW_PROMPT:-prompts/adversarial-review-investigate.md}" \
                     "$adversarial_review_investigation" \
                     adversarial-review-investigate
-                adversarial_review_format_prompt="$STATE_DIR/adversarial-review-format-prompt.md"
-                {
-                    cat "$ROOT/prompts/adversarial-review-format.md"
-                    cat "$adversarial_review_investigation"
-                } > "$adversarial_review_format_prompt"
-                run_codex_review "$adversarial_review_format_prompt" "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" adversarial-review
+                cp "$adversarial_review_investigation" .uncle/docs/ADVERSARIAL_REVIEW.md
+                python3 "$ROOT/scripts/lib/adversarial-context.py" --export-json \
+                    .uncle/docs/ADVERSARIAL_REVIEW.md . || exit 1
+                python3 "$ROOT/scripts/lib/adversarial-context.py" --render-json \
+                    . .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
+                echo 'Adversarial-review fallback: deterministically rendered canonical JSON from the completed investigation.'
             else
                 run_codex_review \
                     "${ADVERSARIAL_REVIEW_PROMPT:-prompts/adversarial-review.md}" \
@@ -2107,12 +2169,10 @@ run_stage() {
                     rm -f "$implementation_notes_investigation"
                     run_claude prompts/implement-investigate.md implementation-investigate
                     require_file "$implementation_notes_investigation"
-                    implementation_notes_format_prompt="$STATE_DIR/implementation-notes-format-prompt.md"
-                    {
-                        cat "$ROOT/prompts/implement-format.md"
-                        cat "$implementation_notes_investigation"
-                    } > "$implementation_notes_format_prompt"
-                    run_claude "$implementation_notes_format_prompt" implementation
+                    python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
+                        "$implementation_notes_investigation" \
+                        .uncle/docs/IMPLEMENTATION_NOTES.md Implementation || return 1
+                    echo 'Implementation-notes fast path: preserved the completed investigation as a canonical fragment.'
                 else
                     run_claude prompts/implement.md implementation
                 fi
@@ -2164,12 +2224,13 @@ run_stage() {
                     rm -f "$preflight_investigation"
                     run_claude prompts/preflight-investigate.md preflight-investigate
                     require_file "$preflight_investigation"
-                    preflight_format_prompt="$STATE_DIR/preflight-format-prompt.md"
-                    {
-                        cat "$ROOT/prompts/preflight-format.md"
-                        cat "$preflight_investigation"
-                    } > "$preflight_format_prompt"
-                    run_claude "$preflight_format_prompt" preflight
+                    cp "$preflight_investigation" .uncle/docs/PREFLIGHT_REPORT.md
+                    python3 "$ROOT/scripts/lib/acceptance_context.py" --export-json \
+                        .uncle/docs/PREFLIGHT_REPORT.md . PREFLIGHT_REPORT || exit 1
+                    python3 "$ROOT/scripts/lib/acceptance_context.py" --render \
+                        "$STATE_DIR/documents/PREFLIGHT_REPORT.json" \
+                        .uncle/docs/PREFLIGHT_REPORT.md || exit 1
+                    echo 'Preflight fast path: deterministically rendered canonical JSON from the completed investigation.'
                 else
                     run_claude prompts/preflight.md preflight
                 fi
@@ -2202,26 +2263,11 @@ run_stage() {
                 # job is formatting, with almost nothing else in its context
                 # to lose track of. Proprietary models do not show this
                 # failure, so they skip straight to the single call below.
-                test_review_investigation="$STATE_DIR/test-review-investigation.md"
-                if [[ -s "$STATE_DIR/test-review-format-retry.md" && -s "$test_review_investigation" ]]; then
-                    # Only the format call failed last time; the investigation
-                    # itself was never the problem, so it is not worth redoing.
-                    echo "Retrying test-review formatting only; reusing the saved investigation."
-                else
-                    rm -f "$STATE_DIR/test-review-format-retry.md"
-                    run_test_review_panel
-                    run_codex_review "$TEST_REVIEW_PROMPT" "$test_review_investigation" test-review-investigate
-                fi
-                test_review_format_prompt="$STATE_DIR/test-review-format-prompt.md"
-                {
-                    cat "$ROOT/prompts/test-review-format.md"
-                    cat "$test_review_investigation"
-                    if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then
-                        printf '\n\n## Required format retry\n\n'
-                        cat "$STATE_DIR/test-review-format-retry.md"
-                    fi
-                } > "$test_review_format_prompt"
-                run_codex_review "$test_review_format_prompt" .uncle/docs/TEST_REVIEW.md test-review
+                # The panel is the normal no-model-synthesis path. If it is
+                # unavailable, use one canonical review call rather than an
+                # investigation followed by a second formatting-only call.
+                run_codex_review "${TEST_REVIEW_PROMPT:-prompts/test-review.md}" \
+                    .uncle/docs/TEST_REVIEW.md test-review
             else
                 # A malformed acceptance table gets one local, format-only
                 # retry even when optional supervision is disabled. Reuse the
@@ -2260,12 +2306,10 @@ run_stage() {
                 rm -f "$repair_notes_investigation"
                 run_claude "$REPAIR_PROMPT" repair-investigate
                 require_file "$repair_notes_investigation"
-                repair_notes_format_prompt="$STATE_DIR/repair-notes-format-prompt.md"
-                {
-                    cat "$ROOT/prompts/repair-format.md"
-                    cat "$repair_notes_investigation"
-                } > "$repair_notes_format_prompt"
-                run_claude "$repair_notes_format_prompt" repair
+                python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
+                    "$repair_notes_investigation" \
+                    .uncle/docs/IMPLEMENTATION_NOTES.md Repair || return 1
+                echo 'Repair-notes fast path: merged the completed investigation as a canonical fragment.'
             else
                 run_claude "$REPAIR_PROMPT" repair
             fi
@@ -2287,26 +2331,8 @@ run_stage() {
             # deviations on its own, so a failure this far needs the model to
             # rewrite it, not another local patch.
             if stage_uses_self_hosted manual-checklist REVIEWER; then
-                manual_checklist_investigation=".uncle/workflow/manual-checklist-investigation.md"
-                if [[ -s "$STATE_DIR/manual-checklist-format-retry.md" && -s "$manual_checklist_investigation" ]]; then
-                    echo "Retrying manual-checklist formatting only; reusing the saved investigation."
-                else
-                    rm -f "$STATE_DIR/manual-checklist-format-retry.md" "$manual_checklist_investigation"
-                    run_codex_review \
-                        "${MANUAL_CHECKLIST_PROMPT:-prompts/manual-checklist-investigate.md}" \
-                        "$manual_checklist_investigation" \
-                        manual-checklist-investigate
-                fi
-                manual_checklist_format_prompt="$STATE_DIR/manual-checklist-format-prompt.md"
-                {
-                    cat "$ROOT/prompts/manual-checklist-format.md"
-                    cat "$manual_checklist_investigation"
-                    if [[ -s "$STATE_DIR/manual-checklist-format-retry.md" ]]; then
-                        printf '\n\n## Required format retry\n\n'
-                        cat "$STATE_DIR/manual-checklist-format-retry.md"
-                    fi
-                } > "$manual_checklist_format_prompt"
-                run_codex_review "$manual_checklist_format_prompt" "$STATE_DIR/documents/MANUAL_CHECKLIST.json" manual-checklist
+                run_codex_review "${MANUAL_CHECKLIST_PROMPT:-prompts/manual-checklist.md}" \
+                    "$STATE_DIR/documents/MANUAL_CHECKLIST.json" manual-checklist
             else
                 manual_checklist_prompt="${MANUAL_CHECKLIST_PROMPT:-prompts/manual-checklist.md}"
                 if [[ -s "$STATE_DIR/manual-checklist-format-retry.md" ]]; then
@@ -2359,26 +2385,8 @@ run_stage() {
             # one-shot recovery .uncle/docs/MANUAL_CHECKLIST.md and execute-checklist's
             # acceptance table get.
             if stage_uses_self_hosted final-audit REVIEWER; then
-                final_audit_investigation=".uncle/workflow/final-audit-investigation.md"
-                if [[ -s "$STATE_DIR/final-audit-format-retry.md" && -s "$final_audit_investigation" ]]; then
-                    echo "Retrying final-audit formatting only; reusing the saved investigation."
-                else
-                    rm -f "$STATE_DIR/final-audit-format-retry.md" "$final_audit_investigation"
-                    run_codex_review \
-                        "${FINAL_AUDIT_PROMPT:-prompts/final-audit-investigate.md}" \
-                        "$final_audit_investigation" \
-                        final-audit-investigate
-                fi
-                final_audit_format_prompt="$STATE_DIR/final-audit-format-prompt.md"
-                {
-                    cat "$ROOT/prompts/final-audit-format.md"
-                    cat "$final_audit_investigation"
-                    if [[ -s "$STATE_DIR/final-audit-format-retry.md" ]]; then
-                        printf '\n\n## Required format retry\n\n'
-                        cat "$STATE_DIR/final-audit-format-retry.md"
-                    fi
-                } > "$final_audit_format_prompt"
-                run_codex_review "$final_audit_format_prompt" .uncle/docs/FINAL_AUDIT.md final-audit
+                run_codex_review "${FINAL_AUDIT_PROMPT:-prompts/final-audit.md}" \
+                    .uncle/docs/FINAL_AUDIT.md final-audit
             else
                 final_audit_prompt="${FINAL_AUDIT_PROMPT:-prompts/final-audit.md}"
                 if [[ -s "$STATE_DIR/final-audit-format-retry.md" ]]; then
@@ -2762,7 +2770,7 @@ while true; do
             # weak to do both, must fall back to running the plan stage -- not
             # fail a validation of the document it did write.
             rm -f "$STATE_DIR/merged-plan.input"
-            if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" && -s .uncle/docs/PROJECT_PLAN.md ]]; then
+            if merged_requirements_plan_enabled && -s .uncle/docs/PROJECT_PLAN.md; then
                 # The interpretation the plan was written against. If the
                 # operator edits it at the gate, the plan beside it is stale and
                 # must be rewritten -- the same rule adoption applies to a
@@ -2773,7 +2781,7 @@ while true; do
             ;;
 
         WAIT_REQUIREMENTS_APPROVAL)
-            if [[ "$MERGE_REQUIREMENTS_PLAN" != "1" ]]; then
+            if ! merged_requirements_plan_enabled; then
                 speculate PROJECT_PLAN .uncle/docs/REQUIREMENTS_INTERPRETATION.md
             fi
             review_and_approve \
@@ -2795,7 +2803,7 @@ while true; do
             # operator just approved. An edited interpretation means the plan
             # beside it answers a question nobody asked any more.
             merged_plan_usable=0
-            if [[ "$MERGE_REQUIREMENTS_PLAN" == "1" && -s .uncle/docs/PROJECT_PLAN.md \
+            if merged_requirements_plan_enabled && -s .uncle/docs/PROJECT_PLAN.md \
                   && -s "$STATE_DIR/merged-plan.input" ]]; then
                 if [[ "$(hash_file .uncle/docs/REQUIREMENTS_INTERPRETATION.md)" \
                       == "$(cat "$STATE_DIR/merged-plan.input")" ]]; then

@@ -34,6 +34,8 @@ def _fenced_block(heading, lang):
 
 
 _VERIFICATION_COMMANDS_RE = _fenced_block('Verification commands', 'sh')
+_PROJECT_VERIFICATION_COMMANDS_RE = re.compile(
+    r'^#{1,2} Verification commands\s*\n+```sh\n(.*?)\n```', re.M | re.S)
 _PROTECTED_PATHS_RE = _fenced_block('Protected verification paths', 'text')
 _DISPOSITIONS_TABLE_RE = re.compile(
     r'^## Adversarial review dispositions\s*\n\n\|.*\|\n\|[-| ]+\|\n((?:\|.*\|\n?)*)', re.M)
@@ -102,7 +104,20 @@ def export_plan(path, project='.', protected=True):
 
 
 def export_project_plan(path, project='.'):
-    return export_plan(path, project, protected=False)
+    # The self-hosted investigation is valid Markdown with either top-level
+    # heading style. Normalize it when rendering instead of rejecting a plan
+    # solely because it used `#` rather than `##` for this final section.
+    text = Path(path).read_text(encoding='utf-8')
+    commands = _PROJECT_VERIFICATION_COMMANDS_RE.search(text)
+    if not commands:
+        raise ValueError('missing Verification commands fenced block')
+    narrative = re.split(r'^#{1,2} Verification commands\s*$', text, maxsplit=1,
+                         flags=re.M)[0].strip()
+    payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': narrative,
+               'verification_commands': commands.group(1)}
+    _artifact_json().render_plan(payload, protected=False)
+    _artifact_json().write(project, Path(path).name, payload)
+    return payload
 
 
 def export_updated_project_plan(path, project='.'):
@@ -310,6 +325,8 @@ if __name__ == '__main__':
             ingest_change_plan(path, project, require_dispositions=True)
         elif action == 'render-plan':
             render_canonical(path, project, protected=True)
+        elif action == 'render-project-plan':
+            render_canonical(path, project, protected=False)
         elif action == 'render-change-plan':
             render_canonical(path, project, change=True)
         elif action == 'render-change-plan-unreviewed':

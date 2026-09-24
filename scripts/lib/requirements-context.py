@@ -102,13 +102,17 @@ def render_json(project='.', destination=None):
     Path(destination).write_text(module.render_requirements(payload), encoding='utf-8')
 
 
-def render(project):
+def render(project, brief_path=None):
     root = Path(project).resolve()
     lines = ['\n## Driver requirements inputs',
              'Start with the brief below and this shallow inventory. No recursive discovery unless a concrete requirement needs it.',
              'This packet is not a substitute for omitted source requirements.']
-    root_copy = root / 'REQUIREMENTS.md'
-    path = root_copy if root_copy.exists() else root / '.uncle' / 'docs' / 'REQUIREMENTS.md'
+    if brief_path:
+        candidate = Path(brief_path)
+        path = candidate if candidate.is_absolute() else root / candidate
+    else:
+        root_copy = root / 'REQUIREMENTS.md'
+        path = root_copy if root_copy.exists() else root / '.uncle' / 'docs' / 'REQUIREMENTS.md'
     if path.resolve().is_relative_to(root) and path.is_file():
         digest = hashlib.sha256()
         with path.open('rb') as stream:
@@ -137,5 +141,12 @@ if __name__ == '__main__':
         except (OSError, ValueError) as error:
             print(f'Requirements format invalid: {error}. Correct the saved interpretation and resume.', file=sys.stderr)
             raise SystemExit(1)
+    elif sys.argv[1] == '--export-json':
+        export_json(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else '.')
+    elif sys.argv[1] == '--render-json':
+        render_json(sys.argv[2] if len(sys.argv) > 2 else '.',
+                    sys.argv[3] if len(sys.argv) > 3 else None)
+    elif sys.argv[1] == '--brief':
+        print(render(sys.argv[3] if len(sys.argv) > 3 else '.', sys.argv[2]), end='')
     else:
         print(render(sys.argv[1]), end='')

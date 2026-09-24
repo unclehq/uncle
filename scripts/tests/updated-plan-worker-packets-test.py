@@ -153,6 +153,17 @@ class WorkerPackets(unittest.TestCase):
                 self.assertIn(artifact, text)
                 self.assertIn('--kind ' + kind, text)
             self.assertGreaterEqual(text.lower().count('do not read the worker directory'), len(panels))
+        # New-app adversarial review is fully JSON-native too: after worker
+        # collation it renders directly instead of asking a parent reviewer to
+        # repeat worker evidence as an investigation/format pair.
+        stagegate = (ROOT/'scripts/stagegate.sh').read_text()
+        adversarial_start = stagegate.index('run_adversarial_review_panel()')
+        adversarial = stagegate[adversarial_start:stagegate.index('\n}\n', adversarial_start) + 2]
+        self.assertIn('adversarial_packets.py', adversarial)
+        state_start = stagegate.index('        ADVERSARIAL_REVIEW)')
+        state_block = stagegate[state_start:stagegate.index('        UPDATED_PLAN)', state_start)]
+        self.assertIn('Adversarial-review fast path: rendered authoritative worker findings', state_block)
+        self.assertIn('ADVERSARIAL_REVIEW.json', state_block)
         test_review = (ROOT/'scripts/stagegate.sh').read_text()
         self.assertIn('TEST_REVIEW_WORKERS.json', test_review)
         self.assertIn('test_review_packets.py', test_review)

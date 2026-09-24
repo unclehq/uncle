@@ -51,6 +51,30 @@ class PlanContext(unittest.TestCase):
             canonical = json.loads((root/'.uncle/workflow/documents/PROJECT_PLAN.json').read_text())
             self.assertEqual(canonical['narrative'], '## Architecture\n\nStatic app.')
 
+    def test_project_plan_export_accepts_top_level_verification_heading(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); plan = root/'PROJECT_PLAN.md'
+            plan.write_text('# Architecture\n\nStatic app.\n\n# Verification commands\n\n```sh\npytest\n```\n')
+            payload = module.export_project_plan(plan, root)
+            self.assertEqual(payload['verification_commands'], 'pytest')
+            self.assertTrue((root/'.uncle/workflow/documents/PROJECT_PLAN.json').is_file())
+
+    def test_investigation_is_deterministically_materialized_as_project_plan_json(self):
+        # The self-hosted planner writes this Markdown investigation once.
+        # Its final JSON is mechanical: preserve every non-command section
+        # and lift the exact fenced command block, without another model turn.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); plan = root/'PROJECT_PLAN.md'
+            plan.write_text('# Project plan investigation\n\n## Architecture\n\nStatic app.\n\n'
+                            '## Verification commands\n\n```sh\npytest -q\n```\n', encoding='utf-8')
+            payload = module.export_project_plan(plan, root)
+            self.assertEqual(payload['verification_commands'], 'pytest -q')
+            self.assertEqual(payload['narrative'], '# Project plan investigation\n\n## Architecture\n\nStatic app.')
+            module.render_canonical(plan, root, protected=False)
+            rendered = plan.read_text(encoding='utf-8')
+            self.assertIn('## Architecture', rendered)
+            self.assertIn('```sh\npytest -q\n```', rendered)
+
     def test_updated_plan_requires_protected_paths(self):
         with tempfile.TemporaryDirectory() as d:
             plan = Path(d)/'UPDATED_PROJECT_PLAN.md'

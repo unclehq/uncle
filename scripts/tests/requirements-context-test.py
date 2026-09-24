@@ -88,6 +88,17 @@ class Requirements(unittest.TestCase):
             brief.write_text('Changed brief')
             self.assertNotEqual(first,module.render(root))
 
+    def test_packet_uses_explicit_selected_brief_over_root_copy(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root/'REQUIREMENTS.md').write_text('stale root brief')
+            selected = root/'.uncle/docs/REQUIREMENTS.md'
+            selected.parent.mkdir(parents=True)
+            selected.write_text('selected generated brief')
+            packet = module.render(root, '.uncle/docs/REQUIREMENTS.md')
+            self.assertIn('selected generated brief', packet)
+            self.assertNotIn('stale root brief', packet)
+
     @unittest.skipUnless(shutil.which('bash'), 'Bash required')
     def test_resume_validates_without_generation(self):
         root=Path(__file__).resolve().parents[2]

@@ -309,4 +309,8 @@ if __name__ == '__main__':
     if len(sys.argv) == 3 and sys.argv[1] == '--validate-json':
         validate_canonical(sys.argv[2])
         sys.exit(0)
+    if len(sys.argv) in (3, 4, 5) and sys.argv[1] == '--export-json':
+        export_json(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else '.',
+                    sys.argv[4] if len(sys.argv) > 4 else None)
+        sys.exit(0)
     sys.exit(0 if main(sys.argv[1]) else 1)

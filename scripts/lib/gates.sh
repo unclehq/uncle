@@ -141,6 +141,33 @@ gated_prompt() {
     local log_name="$2"
     local role="${3:-agent}"
 
+    # Specialist workers return a tiny machine-validated packet. Giving each
+    # one the full document rules, output gates, evidence index and supervisor
+    # prompt can add >100k input tokens while contributing nothing to its
+    # single-lens decision. Keep their transport contract compact and JSON
+    # native; the parent stage owns all document/gate validation.
+    case "$log_name" in
+        *-worker-*)
+            local worker_prompt="$LOG_DIR/${log_name}.gated-prompt.md"
+            {
+                cat "$prompt_file"
+                cat <<'WORKER_PACKET'
+
+## Compact worker contract (binding)
+
+Read only the canonical JSON prerequisite artifacts under
+`.uncle/workflow/documents/` needed for your assigned lens. Do not read
+rendered Markdown approvals, worker directories, output rules, or gates.
+Return exactly the one JSON worker packet requested by the prompt, with no
+analysis, Markdown fence, or duplicate draft. The parent stage collates and
+validates all evidence, dispositions, and final documents.
+WORKER_PACKET
+            } > "$worker_prompt"
+            printf '%s\n' "$worker_prompt"
+            return 0
+            ;;
+    esac
+
     local is_plan=0 is_doc=0
     case "$PLAN_STAGES" in
         *" $log_name "*) is_plan=1 ;;

@@ -138,6 +138,15 @@ class WorkerPackets(unittest.TestCase):
         self.assertIn('.uncle/workflow/documents/NAME.json', gates)
         self.assertIn('Markdown file is only its rendered approval/review view', gates)
 
+    def test_workers_use_the_compact_json_prompt_path(self):
+        gates = (ROOT/'scripts/lib/gates.sh').read_text()
+        self.assertIn('*-worker-*)', gates)
+        self.assertIn('# Compact worker contract (binding)', gates)
+        self.assertIn('Do not read\nrendered Markdown approvals', gates)
+        for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
+            text = (ROOT/source).read_text()
+            self.assertIn('case "$log_name" in *-worker-*) ;; *)', text)
+
 
 if __name__ == '__main__':
     unittest.main()

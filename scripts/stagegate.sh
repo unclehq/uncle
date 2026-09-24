@@ -1359,8 +1359,10 @@ run_codex_review() {
         prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
     fi
     if [[ "$log_name" != plan-executability ]]; then
-        supervision_prompt "$prompt_file" "$log_name" "$LOG_DIR/${log_name}.log"
-        prompt_file="$SUPERVISION_PROMPT"
+        case "$log_name" in *-worker-*) ;; *)
+            supervision_prompt "$prompt_file" "$log_name" "$LOG_DIR/${log_name}.log"
+            prompt_file="$SUPERVISION_PROMPT"
+        esac
     fi
 
     local review_key

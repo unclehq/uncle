@@ -1644,6 +1644,7 @@ run_final_audit_panel() {
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Final-audit worker failed; canonical packet validation will stop the panel.' >&2; done
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json" --kind final-audit-worker-packet --expected verification scope regression waivers || return 1
+    python3 -B "$ROOT/scripts/lib/final_audit_packets.py" . || return 1
     FINAL_AUDIT_PROMPT="$directory/synthesis.md"; cp "$ROOT/prompts/final-audit.md" "$FINAL_AUDIT_PROMPT"
     printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/FINAL_AUDIT_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$FINAL_AUDIT_PROMPT"
 }
@@ -2218,6 +2219,10 @@ run_stage() {
             ;;
         FINAL_AUDIT)
             run_final_audit_panel
+            if [[ -s .uncle/docs/FINAL_AUDIT.md ]]; then
+                echo 'Final-audit fast path: rendered authoritative worker findings without parent synthesis.'
+                return 0
+            fi
             # A malformed audit gets one local, format-only retry, the same
             # one-shot recovery .uncle/docs/MANUAL_CHECKLIST.md and execute-checklist's
             # acceptance table get.

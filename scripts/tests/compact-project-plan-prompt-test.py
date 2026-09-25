@@ -10,9 +10,8 @@ class CompactProjectPlanPrompt(unittest.TestCase):
     def test_self_hosted_requirements_does_not_use_the_merged_two_artifact_prompt(self):
         stagegate = (ROOT / 'scripts/stagegate.sh').read_text(encoding='utf-8')
         self.assertIn('merged_requirements_plan_enabled()', stagegate)
-        self.assertIn('"$runner" != self-hosted && "$runner" != codex', stagegate)
-        self.assertIn('! stage_uses_self_hosted requirements AGENT', stagegate)
-        self.assertIn('! stage_uses_self_hosted project-plan AGENT', stagegate)
+        self.assertIn('MERGE_REQUIREMENTS_PLAN="${WORKFLOW_MERGE_REQUIREMENTS_PLAN:-0}"', stagegate)
+        self.assertIn('"$runner" == multi-artifact', stagegate)
         run_stage = stagegate.index('run_stage()')
         requirements = stagegate[stagegate.index('        REQUIREMENTS)', run_stage):stagegate.index('        PROJECT_PLAN)', run_stage)]
         self.assertIn('if merged_requirements_plan_enabled; then', requirements)

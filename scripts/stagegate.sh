@@ -173,9 +173,12 @@ WORKFLOW_SPECULATE="${WORKFLOW_SPECULATE:-1}"
 # WORKFLOW_PREFLIGHT_BLOCKING=1 restores the gate.
 PREFLIGHT_BLOCKING="${WORKFLOW_PREFLIGHT_BLOCKING:-0}"
 PREFLIGHT_BG_PID=""
-# One pass for .uncle/docs/REQUIREMENTS_INTERPRETATION.md and .uncle/docs/PROJECT_PLAN.md.
-# WORKFLOW_MERGE_REQUIREMENTS_PLAN=0 restores two separate stages.
-MERGE_REQUIREMENTS_PLAN="${WORKFLOW_MERGE_REQUIREMENTS_PLAN:-1}"
+# Requirements and the plan are distinct canonical artifacts. A runner has a
+# single file-backed delivery slot, so merging them lets it successfully write
+# one packet while silently omitting the other (calculator4 hit exactly that
+# failure). Keep the stages separate by default; the old optimization is now
+# opt-in only for a runner explicitly known to publish both artifacts.
+MERGE_REQUIREMENTS_PLAN="${WORKFLOW_MERGE_REQUIREMENTS_PLAN:-0}"
 
 # Agent/reviewer CLI commands. Defaults are `claude` and `codex`. Swap either
 # for a compatible CLI or a wrapper script. The agent CLI must accept the same
@@ -1321,19 +1324,15 @@ stage_uses_self_hosted() {
     [[ "$UNCLE_RESOLVED_RUNNER" == self-hosted ]]
 }
 
-# A merged pass has two operational outputs but every JSON-authoritative
-# native runner has one final-response artifact slot. Codex consequently
-# returns a valid plan packet while leaving the required interpretation
-# unpublishable. Keep its two small canonical stages separate. Self-hosted has
-# its own deterministic one-artifact fast paths for the same reason.
+# A merged pass has two operational outputs but the JSON delivery contract has
+# one output path. It is therefore disabled by default. Explicit opt-in stays
+# available only for bespoke runners which really do publish both packets.
 merged_requirements_plan_enabled() {
     local runner
     uncle_resolve_stage_runner "$(stage_runner_config_name requirements)" AGENT 2>/dev/null || return 1
     runner="$UNCLE_RESOLVED_RUNNER"
     [[ "$MERGE_REQUIREMENTS_PLAN" == "1" ]] \
-        && ! stage_uses_self_hosted requirements AGENT \
-        && ! stage_uses_self_hosted project-plan AGENT \
-        && [[ "$runner" != self-hosted && "$runner" != codex ]]
+        && [[ "$runner" == multi-artifact ]]
 }
 
 # Requirements agents must see the selected brief as literal prompt content.

@@ -786,6 +786,14 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
                 self.assertFalse(config['snapshot'])
                 self.assertFalse((self.root/'.git').exists())
 
+    def test_file_backed_reviewer_delivery_grants_write_only_for_that_packet(self):
+        delivery = self.root/'.uncle/workflow/panel/security.json.delivery.json'
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'UNCLE_ARTIFACT_DELIVERY': str(delivery)}):
+            _, env = opencode_invocation('reviewer', self.values(), 'Write the packet', self.root, directory)
+        config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+        self.assertEqual(config['permission']['edit'], 'allow')
+        self.assertEqual(config['permission']['bash'], 'deny')
+
     def test_effort_reaches_the_opencode_model_options(self):
         with tempfile.TemporaryDirectory() as directory:
             command, env = opencode_invocation('agent', dict(self.values(), effort='high'), 'Test prompt', self.root, directory)

@@ -379,9 +379,13 @@ def opencode_invocation(side, values, prompt, root, directory, allow_shell=True)
     output = output_token_limit(os.environ.get('UNCLE_STATUS_STAGE', ''))
     if not 0 < output < context:
         raise ValueError('Model limits require 0 < output tokens < context tokens')
+    # JSON reviewer packets are file-backed.  Grant the reviewer Write only
+    # for that delivery mode; ordinary reviews remain read-only.
+    delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
+    may_write = side == 'agent' or bool(delivery)
     permission = {'*': 'deny', 'read': {'*': 'allow', '*.env': 'deny', '*.env.*': 'deny',
                   '*self-hosted-keys.json': 'deny'}, 'glob': 'allow', 'grep': 'allow',
-                  'list': 'allow', 'edit': 'allow' if side == 'agent' else 'deny',
+                  'list': 'allow', 'edit': 'allow' if may_write else 'deny',
                   'bash': 'allow' if side == 'agent' and allow_shell else 'deny',
                   'external_directory': 'deny'}
     # Self-hosted stages intentionally default to no reasoning. Keep that
@@ -1179,13 +1183,26 @@ def main(side, args):
                 usage[key] = value
     format_retried = False
     document = None
+    delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
     while True:
         attempt_usage = {}
         try:
             text, turns = run_opencode(side, values, prompt, Path.cwd().resolve(), stage=stage, usage=attempt_usage)
             add_usage(attempt_usage)
             if side == 'reviewer' and output:
-                if Path(output).suffix == '.json':
+                if delivery:
+                    path = Path(delivery)
+                    if not path.is_file() or path.is_symlink():
+                        raise InvalidReviewerDocument(
+                            'Reviewer did not write required canonical JSON delivery: ' + delivery)
+                    document = path.read_text(encoding='utf-8')
+                    if Path(output).suffix == '.json':
+                        document = (reviewer_packet(document, output)
+                                    if reviewer_expects_worker_packet(stage, output)
+                                    else reviewer_json_artifact(document, output))
+                    else:
+                        raise InvalidReviewerDocument('file-backed reviewer delivery requires a JSON output path')
+                elif Path(output).suffix == '.json':
                     document = (reviewer_packet(text, output)
                                 if reviewer_expects_worker_packet(stage, output)
                                 else reviewer_json_artifact(text, output))
@@ -1224,7 +1241,11 @@ def main(side, args):
             # safely synthesize. Repeating the entire reviewer request merely
             # repeats its reads and failed tool attempts, so leave recovery to
             # an explicit resume unless an operator opts into legacy behavior.
-            if os.environ.get('WORKFLOW_SELF_HOSTED_RETRY_ON_INVALID_DOCUMENT') != '1':
+            # A file-backed packet has a precise, cheap retry: only the
+            # worker that omitted or malformed its delivery runs again, with
+            # the exact validator error. This is not the old speculative
+            # Markdown-format retry.
+            if not delivery and os.environ.get('WORKFLOW_SELF_HOSTED_RETRY_ON_INVALID_DOCUMENT') != '1':
                 error.opencode_usage = usage
                 raise InvalidReviewerDocument(str(error) + '; rejected response saved to ' + rejected) from None
             if format_retried:
@@ -1238,8 +1259,10 @@ def main(side, args):
             # prompt. Hardcoding one document's shape here previously sent a
             # checklist or audit retry the adversarial-review finding format,
             # steering an already-struggling model further off course.
-            prompt += ('\n\nThe previous response was rejected: ' + str(error) +
-                       ('\nReturn only one valid JSON worker packet as your final message.' if reviewer_expects_worker_packet(stage, output) else
+            prompt += ('\n\nThe previous delivery was rejected: ' + str(error) +
+                       ('\nUse Write to replace ' + delivery + ' with exactly one valid JSON worker packet.' if delivery and reviewer_expects_worker_packet(stage, output) else
+                        '\nUse Write to replace ' + delivery + ' with exactly one valid canonical JSON artifact.' if delivery else
+                        '\nReturn only one valid JSON worker packet as your final message.' if reviewer_expects_worker_packet(stage, output) else
                         '\nReturn only one valid canonical JSON artifact as your final message.' if Path(output).suffix == '.json' else
                         '\nReturn only the complete ' + Path(output).name + ' as your final message, in the exact layout already specified above. Do not summarize your work, describe a plan to write it, or promise to produce it later. You have no write or shell tools in this role; the document text you return is the only artifact.'))
             continue
@@ -1268,7 +1291,10 @@ def main(side, args):
                     if Path(output).suffix == '.json'
                     else reviewer_document(text)
                 )
-            Path(output).write_bytes(document.encode('utf-8'))
+            # The driver copies this delivery into its worker packet path
+            # after this process exits. Never make chat/output-last-message
+            # authoritative when a delivery path was supplied.
+            Path(delivery or output).write_bytes(document.encode('utf-8'))
         print(text)
         if usage:
             print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,

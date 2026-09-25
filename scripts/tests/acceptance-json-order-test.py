@@ -28,9 +28,11 @@ class AcceptanceJsonOrder(unittest.TestCase):
             self.assertEqual(rendered.count('## Acceptance gate'), 1)
             self.assertNotIn('stale | table', rendered)
 
-    def test_transition_ingests_json_before_markdown_repair(self):
+    def test_transition_is_json_only(self):
         source = (ROOT/'scripts/stagegate.sh').read_text()
         block = source[source.index('acceptance_transition() {'):source.index('\n}', source.index('acceptance_transition() {'))]
-        self.assertLess(block.index('acceptance_context.py'), block.index('repair_document_format.py'))
+        self.assertIn('acceptance_json.py', block)
+        self.assertNotIn('repair_document_format.py', block)
+        self.assertNotIn('acceptance_context.py', block)
 
 if __name__ == '__main__': unittest.main()

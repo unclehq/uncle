@@ -1059,7 +1059,12 @@ require_file() {
 # tool, not a refusal to work.
 require_artifact() {
     local requested="$1" canonical
-    canonical="$(canonical_artifact_path "$requested")"
+    if declare -f canonical_artifact_path >/dev/null; then
+        canonical="$(canonical_artifact_path "$requested")"
+    else
+        # Minimal test harnesses source this helper independently.
+        canonical="$requested"
+    fi
     if [[ ! -s "$canonical" ]]; then
         supervision_validation_failed require_artifact "$canonical" "Stage produced no artifact: $canonical"
         echo
@@ -1081,11 +1086,19 @@ require_artifact() {
 canonical_artifact_path() {
     local path="$1" stem
     case "$path" in
-        .uncle/docs/PREFLIGHT_REPORT.md|.uncle/docs/TEST_REVIEW.md|.uncle/docs/VERIFICATION_REPORT.md|.uncle/docs/DEFECTS.md|.uncle/docs/MANUAL_CHECKLIST.md|.uncle/docs/FINAL_AUDIT.md|.uncle/docs/IMPLEMENTATION_NOTES.md|.uncle/docs/AUTOMATED_TEST_REPORT.md|.uncle/docs/PROJECT_PLAN.md|.uncle/docs/UPDATED_PROJECT_PLAN.md|.uncle/docs/ADVERSARIAL_REVIEW.md)
+        .uncle/docs/REQUIREMENTS_INTERPRETATION.md|.uncle/docs/PREFLIGHT_REPORT.md|.uncle/docs/TEST_REVIEW.md|.uncle/docs/VERIFICATION_REPORT.md|.uncle/docs/DEFECTS.md|.uncle/docs/MANUAL_CHECKLIST.md|.uncle/docs/FINAL_AUDIT.md|.uncle/docs/IMPLEMENTATION_NOTES.md|.uncle/docs/AUTOMATED_TEST_REPORT.md|.uncle/docs/PROJECT_PLAN.md|.uncle/docs/UPDATED_PROJECT_PLAN.md|.uncle/docs/ADVERSARIAL_REVIEW.md)
             stem="${path##*/}"; stem="${stem%.md}"
-            printf '%s/documents/%s.json\n' "$STATE_DIR" "$stem" ;;
+            printf '%s/documents/%s.json\n' "${STATE_DIR:-.uncle/workflow}" "$stem" ;;
         *) printf '%s\n' "$path" ;;
     esac
+}
+
+# A persisted Markdown-only run predates the JSON migration. Keep it
+# resumable, but never choose Markdown when the canonical artifact exists.
+approval_artifact_path() {
+    local view="$1" canonical
+    canonical="$(canonical_artifact_path "$view")"
+    [[ -s "$canonical" ]] && printf '%s\n' "$canonical" || printf '%s\n' "$view"
 }
 
 ensure_project_plan_json() {
@@ -1106,18 +1119,20 @@ ensure_project_plan_json() {
 }
 
 verify_approval() {
-    local file="$1"
+    local view="$1" file
     local name="$2"
     local approval="$APPROVAL_DIR/${name}.sha256"
 
+    file="$(approval_artifact_path "$view")"
+
     case "$name" in
-        UPDATED_PROJECT_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-plan "$file" . || return 1 ;;
+        UPDATED_PROJECT_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-plan "$view" . || return 1 ;;
     esac
-    require_file "$file"
+    [[ -s "$file" ]] || { echo "Required approval artifact missing: $file"; exit 1; }
     if [[ ! -s "$approval" ]]; then
         # State that presupposes an approval nobody recorded: send the run to
         # the gate rather than stopping on a file the operator never heard of.
-        echo "$file has no approval on record."
+        echo "$view has no approval on record."
         echo "Review and approve it."
         triage_reopen_gate "$name"
         require_file "$approval"
@@ -1130,7 +1145,7 @@ verify_approval() {
     actual="$(hash_file "$file")"
 
     if [[ "$expected" != "$actual" ]]; then
-        echo "$file changed after approval."
+        echo "$view's canonical JSON changed after approval."
         echo "Review and approve it again."
         triage_reopen_gate "$name"
         exit 1
@@ -1158,15 +1173,16 @@ triage_reopen_gate() {
 
 review_and_approve() {
     local gate_start="$SECONDS"
-    local file="$1"
+    local view="$1" file
     local name="$2"
     local wording
     wording="$(lower "${3:-approve}")"
 
     case "$name" in
-        UPDATED_PROJECT_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-plan "$file" . || return 1 ;;
+        UPDATED_PROJECT_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-plan "$view" . || return 1 ;;
     esac
-    require_file "$file"
+    file="$(approval_artifact_path "$view")"
+    [[ -s "$file" ]] || { echo "Required approval artifact missing: $file"; exit 1; }
 
     local before
     local response
@@ -1179,9 +1195,10 @@ review_and_approve() {
         before="$(hash_file "$file")"
         printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
         printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${name}.approved-by"
-        python3 "$ROOT/scripts/lib/approval_export.py" "$name" "$file" . 2>/dev/null || true
-        record_unattended_gate "$name" "$wording $file without human review"
-        echo "Unattended: recorded $wording of $file with no human review."
+        # The canonical packet was the item approved; never reverse-parse the
+        # rendered view after recording that approval.
+        record_unattended_gate "$name" "$wording $view without human review"
+        echo "Unattended: recorded $wording of $view with no human review."
         if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
         return 0
     fi
@@ -1191,20 +1208,20 @@ review_and_approve() {
 
         echo
         echo "=================================================="
-        echo "HUMAN REVIEW REQUIRED: $file"
+        echo "HUMAN REVIEW REQUIRED: $view"
         echo "=================================================="
         echo
         echo "Review in another terminal with:"
         echo
-        echo "  less $file"
+        echo "  less $view"
         echo
         echo "or:"
         echo
-        echo "  code $file"
+        echo "  code $view"
         echo
 
-        UNCLE_GATE_FILE="$file"
-        gate_prompt "Ready to $wording $file? [Y/N] "
+        UNCLE_GATE_FILE="$view"
+        gate_prompt "Ready to $wording $view? [Y/N] "
         UNCLE_GATE_FILE=""
         # IFS= keeps surrounding whitespace, so " y" is not an approval.
         # `|| true` keeps EOF from tripping `set -e` before the decline path
@@ -1232,7 +1249,7 @@ review_and_approve() {
         fi
 
         echo
-        echo "$file changed while you were reviewing it."
+        echo "$view's canonical JSON changed while you were reviewing it."
         echo "Re-opening the gate so the approval covers what you read."
         cancel_speculation
     done
@@ -1242,7 +1259,8 @@ review_and_approve() {
     # landed after the check.
     printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
     printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${name}.approved-by"
-    python3 "$ROOT/scripts/lib/approval_export.py" "$name" "$file" . 2>/dev/null || true
+    # Markdown is a rendered view.  An edit to it cannot silently rewrite the
+    # authoritative packet after the human has approved that packet.
     echo "Recorded approval for $file"
     if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
 }
@@ -2740,7 +2758,8 @@ trap on_exit EXIT
 
 speculate() {
     local stage="$1"
-    local gate_file="$2"
+    local view="$2" gate_file
+    gate_file="$(canonical_artifact_path "$view")"
 
     [[ "$WORKFLOW_SPECULATE" == "1" ]] || return 0
     [[ -z "$spec_pid" ]] || return 0
@@ -2754,7 +2773,7 @@ speculate() {
     hash_file "$gate_file" > "$SPEC_DIR/${stage}.input" || return 1
 
     echo "Starting $stage in the background while you review."
-    echo "Its output is only used if $gate_file is unchanged at approval."
+    echo "Its output is only used if the canonical JSON behind $view is unchanged at approval."
 
     # Fully detached from this terminal: the gate prompt owns stdin, and stage
     # output would otherwise interleave with it.
@@ -2768,9 +2787,7 @@ speculate() {
 speculation_artifact_valid() {
     case "$1" in
         ADVERSARIAL_REVIEW)
-            python3 "$ROOT/scripts/lib/adversarial-context.py" --validate "$2" >/dev/null 2>&1 && return 0
-            python3 "$ROOT/scripts/lib/repair_document_format.py" "$2" >/dev/null 2>&1 || return 1
-            python3 "$ROOT/scripts/lib/adversarial-context.py" --validate "$2" >/dev/null 2>&1
+            python3 "$ROOT/scripts/lib/adversarial-context.py" --validate-json . >/dev/null 2>&1
             ;;
         *) return 0 ;;
     esac
@@ -2780,8 +2797,9 @@ speculation_artifact_valid() {
 # caller skips the stage.
 adopt_speculation() {
     local stage="$1"
-    local gate_file="$2"
-    local artifact="$3"
+    local view="$2" artifact_view="$3" gate_file artifact
+    gate_file="$(canonical_artifact_path "$view")"
+    artifact="$(canonical_artifact_path "$artifact_view")"
     local status=0
 
     [[ "$spec_stage" == "$stage" ]] || return 1
@@ -2806,8 +2824,8 @@ adopt_speculation() {
     fi
 
     if [[ "$(cat "$SPEC_DIR/${stage}.input")" != "$(hash_file "$gate_file")" ]]; then
-        echo "$gate_file changed during review. Discarding speculative $stage."
-        rm -f "$artifact"
+        echo "The canonical JSON behind $view changed during review. Discarding speculative $stage."
+        rm -f "$artifact" "$artifact_view"
         # A discarded stage leaves no claim behind either (Issue 59).
         rm -f "$STATE_DIR/envelopes/${stage}.json"
         return 1
@@ -2823,9 +2841,9 @@ adopt_speculation() {
     # left a run stopped on a document no one had finished writing.
     if ! speculation_artifact_valid "$stage" "$artifact"; then
         echo "Speculative $stage produced a document that fails validation. Running it again."
-        mv -f "$artifact" "$LOG_DIR/${stage}.speculative.rejected.md" 2>/dev/null || rm -f "$artifact"
+        mv -f "$artifact" "$LOG_DIR/${stage}.speculative.rejected.json" 2>/dev/null || rm -f "$artifact"
         rm -f "$STATE_DIR/envelopes/${stage}.json"
-        echo "Rejected document: $LOG_DIR/${stage}.speculative.rejected.md"
+        echo "Rejected packet: $LOG_DIR/${stage}.speculative.rejected.json"
         return 1
     fi
 
@@ -2932,12 +2950,12 @@ while true; do
         VALIDATE_REQUIREMENTS)
             echo "Validating saved requirements; discovery will not be rerun."
             require_artifact .uncle/docs/REQUIREMENTS_INTERPRETATION.md
-            validation_error="$(python3 "$ROOT/scripts/lib/requirements-context.py" --validate .uncle/docs/REQUIREMENTS_INTERPRETATION.md 2>&1)" || {
+            validation_error="$(python3 "$ROOT/scripts/lib/requirements-context.py" --validate-json . 2>&1)" || {
                 printf '%s\n' "$validation_error" >&2
-                supervision_validation_failed requirements .uncle/docs/REQUIREMENTS_INTERPRETATION.md "$validation_error"
+                supervision_validation_failed requirements "$STATE_DIR/documents/REQUIREMENTS_INTERPRETATION.json" "$validation_error"
                 exit 1
             }
-            python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('c','$ROOT/scripts/lib/requirements-context.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.export_json('.uncle/docs/REQUIREMENTS_INTERPRETATION.md')" || exit 1
+            python3 "$ROOT/scripts/lib/requirements-context.py" --render-json . .uncle/docs/REQUIREMENTS_INTERPRETATION.md || exit 1
             # A plan from the merged pass is a bonus, never a requirement. A
             # model that ran out of turns after the interpretation, or one too
             # weak to do both, must fall back to running the plan stage -- not
@@ -2948,7 +2966,7 @@ while true; do
                 # operator edits it at the gate, the plan beside it is stale and
                 # must be rewritten -- the same rule adoption applies to a
                 # speculative stage.
-                hash_file .uncle/docs/REQUIREMENTS_INTERPRETATION.md > "$STATE_DIR/merged-plan.input"
+                hash_file "$STATE_DIR/documents/REQUIREMENTS_INTERPRETATION.json" > "$STATE_DIR/merged-plan.input"
             fi
             set_state WAIT_REQUIREMENTS_APPROVAL
             ;;
@@ -2978,7 +2996,7 @@ while true; do
             merged_plan_usable=0
             if [[ merged_requirements_plan_enabled && -s .uncle/docs/PROJECT_PLAN.md \
                   && -s "$STATE_DIR/merged-plan.input" ]]; then
-                if [[ "$(hash_file .uncle/docs/REQUIREMENTS_INTERPRETATION.md)" \
+                if [[ "$(hash_file "$STATE_DIR/documents/REQUIREMENTS_INTERPRETATION.json")" \
                       == "$(cat "$STATE_DIR/merged-plan.input")" ]]; then
                     merged_plan_usable=1
                 else
@@ -3724,19 +3742,19 @@ while true; do
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
             echo "Validating saved audit; the reviewer will not be rerun."
-            require_file .uncle/docs/FINAL_AUDIT.md
+            require_artifact .uncle/docs/FINAL_AUDIT.md
             # A shape-only defect (missing `## Findings` heading, a
             # differently-named correction column) is normalized in place by
             # the validator itself -- deterministic, no model call. A defect
             # the normalizer cannot settle gets one real re-run with the exact
             # diagnosis appended, the same one-shot recovery .uncle/docs/MANUAL_CHECKLIST.md
             # gets above; a second malformed audit still stops for a human.
-            final_audit_validation_error="$(python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate .uncle/docs/FINAL_AUDIT.md 2>&1)" || {
+            final_audit_validation_error="$(python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate-json . 2>&1)" || {
                 echo 'Final audit was malformed; recording a blocking driver-owned audit without retrying the reviewer.'
                 python3 -B "$ROOT/scripts/lib/final-audit-context.py" --fallback .uncle/docs/FINAL_AUDIT.md "$final_audit_validation_error"
             }
-            audit_class="$(classify_audit_verdict .uncle/docs/FINAL_AUDIT.md)"
-            printf '%s\t%s\n' "$audit_class" "$(hash_file .uncle/docs/FINAL_AUDIT.md)" \
+            audit_class="$(classify_audit_verdict "$STATE_DIR/documents/FINAL_AUDIT.json")"
+            printf '%s\t%s\n' "$audit_class" "$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")" \
                 > "$VERDICT_FILE"
             echo
             echo "Audit verdict: $audit_class"

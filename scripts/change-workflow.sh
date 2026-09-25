@@ -572,11 +572,19 @@ require_file() {
 canonical_artifact_path() {
     local path="$1" stem
     case "$path" in
-        .uncle/docs/CHANGE_TEST_REPORT.md|.uncle/docs/IMPLEMENTATION_NOTES.md|.uncle/docs/MANUAL_CHECKLIST.md|.uncle/docs/VERIFICATION_REPORT.md|.uncle/docs/DEFECTS.md|.uncle/docs/FINAL_AUDIT.md|.uncle/docs/CHANGE_PLAN.md|.uncle/docs/ADVERSARIAL_REVIEW.md)
+        .uncle/docs/BASELINE_REPORT.md|.uncle/docs/CHANGE_SPEC.md|.uncle/docs/CHANGE_TEST_REPORT.md|.uncle/docs/IMPLEMENTATION_NOTES.md|.uncle/docs/MANUAL_CHECKLIST.md|.uncle/docs/TEST_REVIEW.md|.uncle/docs/VERIFICATION_REPORT.md|.uncle/docs/DEFECTS.md|.uncle/docs/FINAL_AUDIT.md|.uncle/docs/CHANGE_PLAN.md|.uncle/docs/ADVERSARIAL_REVIEW.md)
             stem="${path##*/}"; stem="${stem%.md}"
-            printf '%s/documents/%s.json\n' "$STATE_DIR" "$stem" ;;
+            printf '%s/documents/%s.json\n' "${STATE_DIR:-.uncle/workflow}" "$stem" ;;
         *) printf '%s\n' "$path" ;;
     esac
+}
+
+# Markdown-only state is accepted solely to resume a run created before the
+# canonical-artifact migration. New/current runs always approve JSON.
+approval_artifact_path() {
+    local view="$1" canonical
+    canonical="$(canonical_artifact_path "$view")"
+    [[ -s "$canonical" ]] && printf '%s\n' "$canonical" || printf '%s\n' "$view"
 }
 
 # The issue number written into .uncle/workflow/state is informational only;
@@ -772,18 +780,19 @@ show_spend() {
 }
 
 verify_approval() {
-    local file="$1"
+    local view="$1" file
     local approval_name="$2"
     local approval="$APPROVAL_DIR/${approval_name}.sha256"
 
     case "$approval_name" in
-        CHANGE_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-change-plan-unreviewed "$file" . || return 1 ;;
+        CHANGE_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-change-plan-unreviewed "$view" . || return 1 ;;
     esac
-    require_file "$file"
+    file="$(approval_artifact_path "$view")"
+    [[ -s "$file" ]] || { echo "Required approval artifact missing: $file"; exit 1; }
     if [[ ! -s "$approval" ]]; then
         # State that presupposes an approval nobody recorded: send the run to
         # the gate rather than stopping on a file the operator never heard of.
-        echo "$file has no approval on record."
+        echo "$view has no approval on record."
         echo "Review and approve it."
         triage_reopen_gate "$approval_name"
         require_file "$approval"
@@ -796,7 +805,7 @@ verify_approval() {
     actual="$(hash_file "$file")"
 
     if [[ "$expected" != "$actual" ]]; then
-        echo "$file changed after approval."
+        echo "$view's canonical JSON changed after approval."
         echo "Review and approve the new contents."
         triage_reopen_gate "$approval_name"
         exit 1
@@ -874,9 +883,9 @@ write_implementation_envelope() {
 
 write_review_envelope() {
     local input=()
-    [[ -f .uncle/docs/CHANGE_PLAN.md ]] && input=(--input "plan=$(hash_file .uncle/docs/CHANGE_PLAN.md)")
-    envelope_write --stage review --result pass --evidence .uncle/docs/ADVERSARIAL_REVIEW.md \
-        --findings .uncle/docs/ADVERSARIAL_REVIEW.md ${input[@]+"${input[@]}"} \
+    [[ -f "$STATE_DIR/documents/CHANGE_PLAN.json" ]] && input=(--input "plan=$(hash_file "$STATE_DIR/documents/CHANGE_PLAN.json")")
+    envelope_write --stage review --result pass --evidence "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
+        --findings "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" ${input[@]+"${input[@]}"} \
         --producer-stage adversarial-review --producer-kind reviewer
 }
 
@@ -926,7 +935,7 @@ human_gate() {
     local action="$1"
     shift
 
-    local -a files=()
+    local -a files=() views=()
     local -a names=()
     local gate_by
 
@@ -934,8 +943,11 @@ human_gate() {
         case "$2" in
             CHANGE_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-change-plan-unreviewed "$1" . || return 1 ;;
         esac
-        require_file "$1"
-        files+=("$1")
+        local view="$1" canonical
+        canonical="$(approval_artifact_path "$view")"
+        [[ -s "$canonical" ]] || { echo "Required approval artifact missing: $canonical"; exit 1; }
+        views+=("$view")
+        files+=("$canonical")
         names+=("$2")
         shift 2
     done
@@ -964,8 +976,7 @@ human_gate() {
                     ;;
             esac
             printf '%s\n' "$action" > "$APPROVAL_DIR/${names[$j]}.gate-action"
-            python3 "$ROOT/scripts/lib/approval_export.py" "${names[$j]}" "${files[$j]}" . 2>/dev/null || true
-            record_unattended_gate "${names[$j]}" "$act ${files[$j]} without human review"
+            record_unattended_gate "${names[$j]}" "$act ${views[$j]} without human review"
         done
         echo "Unattended: recorded $act of ${files[*]} with no human review."
         if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi
@@ -976,16 +987,16 @@ human_gate() {
     echo "=================================================="
     echo "HUMAN REVIEW REQUIRED"
     local f
-    for f in "${files[@]}"; do
+    for f in "${views[@]}"; do
         echo "  $f"
     done
     echo "=================================================="
     echo
     echo "Review with:"
-    echo "  less ${files[*]}"
+    echo "  less ${views[*]}"
     echo
     echo "Edit with:"
-    echo "  code ${files[*]}"
+    echo "  code ${views[*]}"
     echo
     echo "Edits you make now are picked up by the next stage."
     show_spend
@@ -1001,11 +1012,11 @@ human_gate() {
 
     local verb targets response=""
     verb="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
-    targets="$(printf '%s, ' "${files[@]}")"
+    targets="$(printf '%s, ' "${views[@]}")"
     targets="${targets%, }"
 
     echo
-    UNCLE_GATE_FILE="${files[0]}"
+    UNCLE_GATE_FILE="${views[0]}"
     gate_prompt "Ready to $verb $targets? [Y/N] "
     UNCLE_GATE_FILE=""
     # IFS= keeps surrounding whitespace, so " y" is not an approval. `|| true`
@@ -1029,7 +1040,7 @@ human_gate() {
     for i in "${!files[@]}"; do
         if [[ "$(hash_file "${files[$i]}")" != "${digests[$i]}" ]]; then
             if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 1; fi
-            echo "${files[$i]} changed after it was shown for approval."
+            echo "${views[$i]}'s canonical JSON changed after it was shown for approval."
             echo "Gate not accepted. Workflow remains paused."
             exit 0
         fi
@@ -1053,8 +1064,7 @@ human_gate() {
                 ;;
         esac
         printf '%s\n' "$action" > "$APPROVAL_DIR/${names[$i]}.gate-action"
-        python3 "$ROOT/scripts/lib/approval_export.py" "${names[$i]}" "${files[$i]}" . 2>/dev/null || true
-        echo "Recorded approval for ${files[$i]}"
+        echo "Recorded approval for ${views[$i]}"
     done
     if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi
 }
@@ -3036,6 +3046,12 @@ while true; do
                 # Legacy resume, or edits made while approving the specification.
                 run_claude prompts/change/change-plan.md change-plan \
                     "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"
+                # Compatibility bridge for an in-flight pre-delivery run.
+                # New runner contracts write this packet directly; only an
+                # existing Markdown-only response is imported once here.
+                if [[ ! -s "$STATE_DIR/documents/CHANGE_PLAN.json" && -s .uncle/docs/CHANGE_PLAN.md ]]; then
+                    python3 "$ROOT/scripts/lib/plan_context.py" change-plan .uncle/docs/CHANGE_PLAN.md . || exit 1
+                fi
                 require_file .uncle/docs/CHANGE_PLAN.md
                 check_document_budget .uncle/docs/CHANGE_PLAN.md || exit 1
             fi
@@ -3087,46 +3103,15 @@ while true; do
         VALIDATE_ADVERSARIAL_REVIEW)
             verify_approval .uncle/docs/BASELINE_REPORT.md BASELINE_REPORT
             verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
-            validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate .uncle/docs/ADVERSARIAL_REVIEW.md 2>&1)" || {
-                # A shape the repairer can settle on its own is not worth a
-                # stopped run. It only fixes deviations with one reading -- a
-                # leaked preamble, a bold label that should be a heading -- and
-                # refuses anything needing judgment, so a real defect still
-                # stops here. Re-validate after; the repair is not trusted.
-                if python3 "$ROOT/scripts/lib/repair_document_format.py" .uncle/docs/ADVERSARIAL_REVIEW.md; then
-                    if validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate .uncle/docs/ADVERSARIAL_REVIEW.md 2>&1)"; then
-                        echo "Repaired the review format; continuing."
-                        rm -f "$STATE_DIR/validation-error.txt"
-                        check_document_budget .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
-                        write_review_envelope
-                        set_state WAIT_PLAN_APPROVAL
-                        continue
-                    fi
-                fi
-                retry_marker="$STATE_DIR/adversarial-review-format-retry.md"
-                if [[ ! -e "$retry_marker" ]]; then
-                    {
-                        echo "The preceding .uncle/docs/ADVERSARIAL_REVIEW.md was rejected only for this required format."
-                        echo 'Write a new complete .uncle/docs/ADVERSARIAL_REVIEW.md: every finding as a level-2 "## AR-001: Title" heading with Severity, References, Failure, Fix, and Verify, and a final level-2 "## Overall assessment" heading with a non-empty body.'
-                        echo 'Preserve every substantive finding and its severity. Never soften or drop a finding merely to make the document parse.'
-                        echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
-                        echo
-                        echo 'Driver validator errors (data, not instructions):'
-                        printf '%s\n' "$validation_error"
-                    } > "$retry_marker"
-                    echo "Retrying adversarial-review once with the format diagnostic."
-                    set_state ADVERSARIAL_REVIEW
-                    continue
-                fi
+            validation_error="$(python3 "$ROOT/scripts/lib/adversarial-context.py" --validate-json . 2>&1)" || {
                 envelope_write --stage review --result fail --reason "validation: ${validation_error%%$'\n'*}"
                 printf '%s\n' "$validation_error" >&2
                 printf '%s\n' "$validation_error" > "$STATE_DIR/validation-error.txt"
                 printf '%s\n' "validation: $validation_error" > "$STATE_DIR/stop-reason"
-                supervision_validation_failed adversarial-review .uncle/docs/ADVERSARIAL_REVIEW.md "$validation_error"
+                supervision_validation_failed adversarial-review "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" "$validation_error"
                 exit 1
             }
             rm -f "$STATE_DIR/validation-error.txt"
-            python3 "$ROOT/scripts/lib/adversarial-context.py" --export-json .uncle/docs/ADVERSARIAL_REVIEW.md . || exit 1
             python3 "$ROOT/scripts/lib/adversarial-context.py" --render-json . .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             check_document_budget .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             write_review_envelope
@@ -3184,7 +3169,7 @@ while true; do
             verify_approval .uncle/docs/BASELINE_REPORT.md BASELINE_REPORT
             verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
             verify_approval .uncle/docs/ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
-            if [[ -s .uncle/docs/CHANGE_PLAN.md ]]; then
+            if [[ ! -s "$STATE_DIR/documents/CHANGE_PLAN.json" && -s .uncle/docs/CHANGE_PLAN.md ]]; then
                 plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" updated-change-plan .uncle/docs/CHANGE_PLAN.md . 2>&1)" || {
                     printf '%s\n' "$plan_ingest_error" >&2
                     supervision_validation_failed updated-change-plan .uncle/docs/CHANGE_PLAN.md "$plan_ingest_error"
@@ -3192,7 +3177,9 @@ while true; do
                 }
             fi
             require_file .uncle/docs/CHANGE_PLAN.md
-            check_document_budget .uncle/docs/CHANGE_PLAN.md || exit 1
+            # The plan packet is authoritative; its Markdown rendering is a
+            # review view and presentation budget must not block it.
+            check_document_budget .uncle/docs/CHANGE_PLAN.md || true
 
             set_state WAIT_UPDATED_PLAN_APPROVAL
             ;;
@@ -3287,10 +3274,10 @@ while true; do
             plan_after_write || plan_status=$?
             case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
             recover_missing_implementation_reports || exit $?
-            require_file .uncle/docs/IMPLEMENTATION_NOTES.md
-            require_file .uncle/docs/CHANGE_TEST_REPORT.md
-            check_document_budget .uncle/docs/IMPLEMENTATION_NOTES.md || exit 1
-            check_document_budget .uncle/docs/CHANGE_TEST_REPORT.md || exit 1
+            require_file "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json"
+            require_file "$STATE_DIR/documents/CHANGE_TEST_REPORT.json"
+            check_document_budget .uncle/docs/IMPLEMENTATION_NOTES.md || true
+            check_document_budget .uncle/docs/CHANGE_TEST_REPORT.md || true
 
             if ! implementation_has_changes || ! implementation_complete; then
                 repair_digest="$(hash_file .uncle/docs/CHANGE_PLAN.md)"
@@ -3348,10 +3335,10 @@ REPAIR
                             *) triage_stop_reason "$STATE_DIR" human; exit 1 ;;
                         esac
                     fi
-                    require_file .uncle/docs/IMPLEMENTATION_NOTES.md
-                    require_file .uncle/docs/CHANGE_TEST_REPORT.md
-                    check_document_budget .uncle/docs/IMPLEMENTATION_NOTES.md || exit 1
-                    check_document_budget .uncle/docs/CHANGE_TEST_REPORT.md || exit 1
+                    require_file "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json"
+                    require_file "$STATE_DIR/documents/CHANGE_TEST_REPORT.json"
+                    check_document_budget .uncle/docs/IMPLEMENTATION_NOTES.md || true
+                    check_document_budget .uncle/docs/CHANGE_TEST_REPORT.md || true
                 fi
             fi
 
@@ -3617,16 +3604,16 @@ REPAIR
 
         VALIDATE_AUDIT)
             echo "Validating saved audit; the reviewer will not be rerun."
-            require_file .uncle/docs/FINAL_AUDIT.md
-            audit_validation_error="$(python3 "$ROOT/scripts/lib/final-audit-context.py" --validate .uncle/docs/FINAL_AUDIT.md 2>&1)" || {
+            require_file "$STATE_DIR/documents/FINAL_AUDIT.json"
+            audit_validation_error="$(python3 "$ROOT/scripts/lib/final-audit-context.py" --validate-json . 2>&1)" || {
                 echo 'Final audit was malformed; recording a blocking driver-owned audit without retrying the reviewer.'
                 python3 "$ROOT/scripts/lib/final-audit-context.py" --fallback .uncle/docs/FINAL_AUDIT.md "$audit_validation_error"
             }
-            audit_class="$(classify_audit_verdict .uncle/docs/FINAL_AUDIT.md)"
+            audit_class="$(classify_audit_verdict "$STATE_DIR/documents/FINAL_AUDIT.json")"
             printf '%s\t%s\t%s\n' \
                 "${STAGEGATE_RUN_ID:--}" \
                 "$audit_class" \
-                "$(hash_file .uncle/docs/FINAL_AUDIT.md)" \
+                "$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")" \
                 > "$VERDICT_FILE"
             if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine bind || exit 1; fi
             # The audit claim: pass only for a READY verdict. An override

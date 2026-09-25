@@ -10,6 +10,24 @@ SECTIONS = ('Required functionality', 'Optional functionality', 'Constraints',
             'Ambiguities', 'Assumptions', 'Explicit non-goals', 'Definition of done')
 
 
+def validate_payload(payload):
+    """Validate the canonical artifact, without ever consulting its Markdown view."""
+    if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'requirements-interpretation':
+        raise ValueError('wrong requirements-interpretation JSON schema')
+    for name in SECTIONS:
+        key = name.lower().replace(' ', '_').replace('-', '_')
+        if not payload.get('sections', {}).get(key, '').strip():
+            raise ValueError('missing or empty section: ' + name)
+
+
+def validate_json(project='.'):
+    artifact = Path(__file__).with_name('artifact_json.py')
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('artifact_json', artifact)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    validate_payload(module.read(project, 'REQUIREMENTS_INTERPRETATION.md'))
+
+
 def validate(path, project='.'):
     text = Path(path).read_text(encoding='utf-8')
     artifact = Path(__file__).with_name('artifact_json.py')
@@ -22,12 +40,7 @@ def validate(path, project='.'):
             payload = _artifact_json.loads_response_json(text)
         except ValueError as error:
             raise ValueError('Invalid requirements-interpretation JSON response: ' + str(error)) from error
-        if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'requirements-interpretation':
-            raise ValueError('wrong requirements-interpretation JSON schema')
-        for name in SECTIONS:
-            key = name.lower().replace(' ', '_').replace('-', '_')
-            if not payload.get('sections', {}).get(key, '').strip():
-                raise ValueError('missing or empty section: ' + name)
+        validate_payload(payload)
         rendered = _artifact_json.render_requirements(payload)
         Path(path).write_text(rendered, encoding='utf-8')
         _artifact_json.write(project, 'REQUIREMENTS_INTERPRETATION.md', dict(payload, schema='uncle.artifact/v1', kind='requirements-interpretation'))
@@ -143,6 +156,12 @@ if __name__ == '__main__':
             raise SystemExit(1)
     elif sys.argv[1] == '--export-json':
         export_json(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else '.')
+    elif sys.argv[1] == '--validate-json':
+        try:
+            validate_json(sys.argv[2] if len(sys.argv) > 2 else '.')
+        except (OSError, ValueError) as error:
+            print(f'Requirements JSON invalid: {error}', file=sys.stderr)
+            raise SystemExit(1)
     elif sys.argv[1] == '--render-json':
         render_json(sys.argv[2] if len(sys.argv) > 2 else '.',
                     sys.argv[3] if len(sys.argv) > 3 else None)

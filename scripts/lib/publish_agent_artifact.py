@@ -23,6 +23,7 @@ def module(name):
 ARTIFACT = {
     'requirements': ('REQUIREMENTS_INTERPRETATION.md', 'requirements-interpretation'),
     'project-plan': ('PROJECT_PLAN.md', 'plan'),
+    'change-plan': ('CHANGE_PLAN.md', 'change-plan'),
     'updated-plan': ('UPDATED_PROJECT_PLAN.md', 'plan'),
     'updated-change-plan': ('CHANGE_PLAN.md', 'change-plan'),
 }
@@ -115,7 +116,7 @@ def publish(stage, log, project, delivery=None):
     project = Path(project)
     if stage == 'requirements':
         rendered = artifact_json.render_requirements(payload)
-    elif stage == 'updated-change-plan':
+    elif stage in ('change-plan', 'updated-change-plan'):
         rendered = artifact_json.render_change_plan(payload, require_dispositions=True)
     else:
         rendered = artifact_json.render_plan(payload, protected=stage == 'updated-plan')

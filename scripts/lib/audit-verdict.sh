@@ -1,4 +1,5 @@
-# Pure classifier for the .uncle/docs/FINAL_AUDIT.md verdict.
+# Pure classifier for either the canonical final-audit JSON or its Markdown
+# presentation.  Drivers pass JSON; Markdown support is a legacy UI helper.
 #
 # Sourcing this file defines functions and nothing else, so both
 # change-workflow.sh and scripts/tests/audit-verdict-test.sh can use it. Not
@@ -19,6 +20,25 @@ classify_audit_verdict() {
 
     if [[ -z "$file" || ! -s "$file" ]]; then
         printf '%s\n' UNKNOWN
+        return 0
+    fi
+
+    if [[ "$file" == *.json ]]; then
+        local verdict
+        verdict="$(python3 - "$file" <<'PY'
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get('verdict', ''))
+except Exception:
+    pass
+PY
+)"
+        case "$verdict" in
+            "READY") printf '%s\n' READY ;;
+            "READY WITH NON-BLOCKING ISSUES") printf '%s\n' READY_WITH_NON_BLOCKING_ISSUES ;;
+            "NOT READY") printf '%s\n' NOT_READY ;;
+            *) printf '%s\n' UNKNOWN ;;
+        esac
         return 0
     fi
 

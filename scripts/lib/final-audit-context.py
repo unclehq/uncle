@@ -176,14 +176,32 @@ def validate(path, project='.'):
         raise ValueError('Ready verdict contradicts blocking findings')
 
 
-def fallback(path, reason='reviewer response could not be parsed'):
+def validate_json(project='.'):
+    """Validate the persisted audit packet without reading its Markdown view."""
+    artifact = Path(__file__).with_name('artifact_json.py')
+    spec = importlib.util.spec_from_file_location('artifact_json', artifact)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    payload = module.read(project, 'FINAL_AUDIT.md')
+    # Reuse the JSON branch above through a disposable JSON source: this keeps
+    # one schema contract for direct reviewer delivery and resumed validation.
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.json') as stream:
+        import json
+        json.dump(payload, stream)
+        stream.flush()
+        validate(stream.name, project)
+
+
+def fallback(path, reason='reviewer response could not be parsed', project='.'):
     """Persist an unparseable reviewer response as a safe blocking audit."""
-    Path(path).write_text(
-        '# Final audit\n\n## Findings\n\n'
-        '| ID | Severity | Evidence | Affected requirement | Required correction | Blocks |\n'
-        '|---|---|---|---|---|---|\n'
-        f'| AUDIT-FORMAT | Blocking | {reason.replace("|", "/")} | Audit artifact | Produce a complete audit with observed findings and a supported verdict. | YES |\n\n'
-        'NOT READY\n', encoding='utf-8')
+    payload = {
+        'schema': 'uncle.artifact/v1', 'kind': 'final-audit',
+        'findings': [{'id': 'AUDIT-FORMAT', 'severity': 'Blocking',
+                      'evidence': reason.replace('|', '/'), 'affected_requirement': 'Audit artifact',
+                      'required_correction': 'Produce a complete audit with observed findings and a supported verdict.',
+                      'blocks': 'YES'}],
+        'verdict': 'NOT READY'}
+    export_json(payload, path, project)
 
 
 def render(project, state):
@@ -225,6 +243,12 @@ if __name__ == '__main__':
             validate(sys.argv[2])
         except (OSError, ValueError, IndexError) as error:
             print(f'Audit format invalid: {error}. Correct .uncle/docs/FINAL_AUDIT.md and resume; no checks need rerunning.', file=sys.stderr)
+            raise SystemExit(1)
+    elif sys.argv[1] == '--validate-json':
+        try:
+            validate_json(sys.argv[2] if len(sys.argv) > 2 else '.')
+        except (OSError, ValueError, IndexError) as error:
+            print(f'Canonical audit JSON invalid: {error}', file=sys.stderr)
             raise SystemExit(1)
     else:
         print(render(*sys.argv[1:3]), end='')

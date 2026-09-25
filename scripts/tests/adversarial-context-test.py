@@ -132,20 +132,15 @@ class Review(unittest.TestCase):
                 p.write_text('bad')
                 for _ in range(2):
                     self.assertEqual(subprocess.run(['bash','-c',harness],cwd=d,capture_output=True).returncode,1)
-                if script == 'stagegate.sh':
-                    # The new-app driver validates the canonical artifact;
-                    # Markdown is merely rendered for people. A resumed
-                    # validation must not regenerate a review from its view.
-                    documents = Path(d)/'.uncle/workflow/documents'
-                    documents.mkdir(parents=True)
-                    (documents/'ADVERSARIAL_REVIEW.json').write_text(json.dumps({
-                        'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review',
-                        'findings': [], 'overall_assessment': 'No findings.'
-                    }))
-                else:
-                    # The change driver remains on its compatibility
-                    # Markdown validator until that stage's migration lands.
-                    p.write_text(CLEAN)
+                # Both drivers validate the canonical artifact; Markdown is
+                # rendered only after that succeeds and is never re-ingested
+                # on a resumed validation.
+                documents = Path(d)/'.uncle/workflow/documents'
+                documents.mkdir(parents=True)
+                (documents/'ADVERSARIAL_REVIEW.json').write_text(json.dumps({
+                    'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review',
+                    'findings': [], 'overall_assessment': 'No findings.'
+                }))
                 self.assertEqual(subprocess.run(['bash','-c',harness],cwd=d,capture_output=True).returncode,0)
                 self.assertEqual((Path(d)/'state').read_text().strip(),target)
 

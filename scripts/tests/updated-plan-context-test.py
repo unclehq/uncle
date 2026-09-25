@@ -39,16 +39,20 @@ class Revision(unittest.TestCase):
         for script in ('stagegate.sh','change-workflow.sh'):
             source=(root/'scripts'/script).read_text()
             block=source.split('        VALIDATE_UPDATED_PLAN)\n',1)[1].split('        WAIT_UPDATED_PLAN_APPROVAL)',1)[0]
-            harness=f'ROOT="{root}"\nverify_approval() {{ :; }}; require_file() {{ test -s "$1"; }}; check_document_budget() {{ test ! -e bad; }}; require_artifact() {{ require_file "$1" && check_document_budget "$1" || exit 1; }}; set_state() {{ echo "$1" > state; }}; run_stage() {{ exit 99; }}; run_claude() {{ exit 99; }}; supervision_validation_failed() {{ :; }};\ncase validate in\nvalidate)\n'+block+'esac\n'
+            harness=f'ROOT="{root}"\nSTATE_DIR=.uncle/workflow\nverify_approval() {{ :; }}; require_file() {{ test -s "$1"; }}; check_document_budget() {{ test ! -e bad; }}; require_artifact() {{ require_file "$1" || exit 1; }}; set_state() {{ echo "$1" > state; }}; run_stage() {{ exit 99; }}; run_claude() {{ exit 99; }}; supervision_validation_failed() {{ :; }};\ncase validate in\nvalidate)\n'+block+'esac\n'
             with tempfile.TemporaryDirectory() as d:
                 p=Path(d)
                 (p/'.uncle/docs').mkdir(parents=True)
+                (p/'.uncle/workflow/documents').mkdir(parents=True)
                 (p/'.uncle/docs/CHANGE_PLAN.md').write_text('saved plan')
                 (p/'.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text('saved plan')
+                (p/'.uncle/workflow/documents/CHANGE_PLAN.json').write_text('{"schema":"uncle.artifact/v1","kind":"change-plan","narrative":"saved plan","dispositions":[]}')
                 (p/'CHANGE_PLAN.pre-review.md').write_text('original')
+                # Rendered Markdown budgets are presentation-only.  They must
+                # not block a canonical plan already accepted by the driver.
                 (p/'bad').touch()
                 for _ in range(2):
-                    self.assertEqual(subprocess.run(['bash','-c',harness],cwd=d,capture_output=True).returncode,1)
+                    self.assertEqual(subprocess.run(['bash','-c',harness],cwd=d,capture_output=True).returncode,0)
                 (p/'bad').unlink()
                 self.assertEqual(subprocess.run(['bash','-c',harness],cwd=d,capture_output=True).returncode,0)
                 self.assertEqual((p/'state').read_text().strip(),'WAIT_UPDATED_PLAN_APPROVAL')

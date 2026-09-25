@@ -99,7 +99,14 @@ unset UNCLE_NEW_WORKFLOW
 uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
 
-STATE_DIR=".uncle/workflow"
+# Absolute, not "$PROJECT_ROOT"-relative: this value is embedded verbatim
+# into agent- and reviewer-facing prompts ("write your canonical JSON to
+# `%s`"). An agent's own shell keeps cwd across its tool calls for the whole
+# session, so a stage that `cd`s into a subdirectory (e.g. to build or test)
+# leaves later writes of a relative path nested under that subdirectory
+# instead of at the project root, and the driver then reports the delivery
+# as missing.
+STATE_DIR="$PROJECT_ROOT/.uncle/workflow"
 export UNCLE_RUNNER_POOL_OWNER_PID="${UNCLE_RUNNER_POOL_OWNER_PID:-$$}"
 APPROVAL_DIR="$STATE_DIR/approvals"
 # Every gate an unattended run passed without a person, dated. The whole cost
@@ -1410,7 +1417,7 @@ wait_green_check_bg() {
 # depends on an earlier group cannot start early.  A worker failure is evidence
 # for the synthesizer, not a reason to throw away results from its siblings.
 run_parallel_checklist_workers() {
-    local groups="$PROJECT_ROOT/$STATE_DIR/checklist-groups/groups.txt"
+    local groups="$STATE_DIR/checklist-groups/groups.txt"
     # Packets must live inside the workspace because runner Write tools are
     # intentionally sandboxed there.  The directory is uniquely named and
     # created before any worker starts, so sibling workers cannot collide.

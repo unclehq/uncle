@@ -106,7 +106,14 @@ uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/state.sh"
 
-STATE_DIR=".uncle/workflow"
+# Absolute, not "$PROJECT_ROOT"-relative: this value is embedded verbatim
+# into agent- and reviewer-facing prompts ("write your canonical JSON to
+# `%s`"). An agent's own shell keeps cwd across its tool calls for the whole
+# session, so a stage that `cd`s into a subdirectory (e.g. to build or test)
+# leaves later writes of a relative path nested under that subdirectory
+# instead of at the project root, and the driver then reports the delivery
+# as missing.
+STATE_DIR="$PROJECT_ROOT/.uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
 LOG_DIR="$STATE_DIR/logs"
 SPEC_DIR="$STATE_DIR/speculative"

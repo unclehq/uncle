@@ -49,6 +49,10 @@ class Stage:
             if arg == '-c' and args[i+1].startswith('model_reasoning_effort='):
                 self.effort = args[i+1].split('=', 1)[1]
         self.output = self.option('--output-last-message', '-o')
+        # JSON packet stages use a driver-owned delivery file.  The prompt
+        # names the sole writable path; native runners must receive matching
+        # write capability rather than their legacy read-only reviewer mode.
+        self.delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
         self.prompt = prompt if prompt is not None else (sys.stdin.read() if side == 'agent' else args[-1])
         self.read_cache = ReadCache(os.getcwd())
         self.prompt += self.read_cache.context(self.prompt)
@@ -322,7 +326,7 @@ class Stage:
         self.wait(self.rpc('initialize', {'clientInfo':{'name':'uncle','version':'1.0'}}))
         self.send({'method':'initialized'})
         params = {'cwd':os.getcwd(), 'approvalPolicy':'never',
-                  'sandbox':'workspace-write' if self.side=='agent' else 'read-only', 'ephemeral':True}
+                  'sandbox':'workspace-write' if self.side=='agent' or self.delivery else 'read-only', 'ephemeral':True}
         if self.model: params['model']=self.model
         result=self.wait(self.rpc('thread/start',params))
         self.session=result['thread']['id']
@@ -363,7 +367,7 @@ class Stage:
         elif model=='kimi': model=os.environ.get('WORKFLOW_KIMI_MODEL','moonshot-ai/kimi-k2.7-code-highspeed')
         command=[os.environ.get('WORKFLOW_KIMI_CMD','kimi'),'--wire','--yolo']
         if model: command+=['--model',model]
-        if self.side=='reviewer':
+        if self.side=='reviewer' and not self.delivery:
             command+=['--agent-file',str(Path(__file__).resolve().parents[2]/'lib/kimi/reviewer.md')]
         self.spawn(command)
         self.wait(self.rpc('initialize',{'protocol_version':'1.4','client':{'name':'uncle'}}))
@@ -397,7 +401,8 @@ class Stage:
         args=list(self.args)
         # Existing driver flags, including budgets, tools and session reuse, stay intact.
         if self.side=='reviewer':
-            args=['-p','--output-format','stream-json','--verbose','--allowedTools','Read,Glob,Grep',
+            tools='Read,Glob,Grep,Write' if self.delivery else 'Read,Glob,Grep'
+            args=['-p','--output-format','stream-json','--verbose','--allowedTools',tools,
                   '--strict-mcp-config']
             if self.model: args+=['--model',self.model]
             if self.effort: args+=['--effort',self.effort]
@@ -462,7 +467,7 @@ class Stage:
         if sdk is None: raise ValueError('Installed Cline SDK not found; install the current npm Cline package')
         self.spawn([shutil.which('node') or 'node',str(Path(__file__).with_name('cline-native.mjs')),str(sdk)])
         self.rpc('start',{'prompt':self.prompt,'model':self.model,'effort':self.effort,'cwd':os.getcwd(),
-                          'mode':'act' if self.side=='agent' else 'plan',
+                          'mode':'act' if self.side=='agent' or self.delivery else 'plan',
                           'turns':int(self.option('--max-turns') or 80)},'start')
         def steer(text,id):
             self.pending[id]=True

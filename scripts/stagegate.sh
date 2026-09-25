@@ -1429,13 +1429,17 @@ run_claude() {
         esac
         case "$log_name" in
             requirements|project-plan|updated-plan)
-                cat >> "$effective_prompt" <<CANONICAL_ARTIFACT_CONTRACT
+                cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
 
 ## Canonical artifact contract (binding)
 
 Use your Write tool to create exactly one complete `uncle.artifact/v1` JSON
-object at `$agent_delivery`. This file is the only authoritative handoff; chat
-text is diagnostics only. Do not write a Markdown view or modify another file.
+object at `
+CANONICAL_ARTIFACT_CONTRACT
+                printf '%s' "$agent_delivery" >> "$effective_prompt"
+                cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
+`. This file is the only authoritative handoff; chat text is diagnostics only.
+Do not write a Markdown view or modify another file.
 CANONICAL_ARTIFACT_CONTRACT
                 ;;
         esac

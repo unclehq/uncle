@@ -99,7 +99,65 @@ worktree_create() {
             return 1
         fi
     fi
+
+    worktree_copy_venvs "$root" "$abs"
     return 0
+}
+
+# worktree_copy_venvs <src_root> <dst_root> — carry any already-populated
+# Python virtualenv (".venv" at the project root or one level down, e.g.
+# "server/.venv") into the new worktree, instead of leaving it to whatever
+# tool first touches the tree there.
+#
+# `git worktree add` shares history, not installed dependencies: a fresh
+# worktree's own ".venv" does not exist until something creates one, and
+# nothing here guarantees that first thing installs the project's full
+# dependency set. Observed on canopy issue #4: the implementing agent's own
+# baseline picked `uv run pytest`, which is not what the project documents
+# (`.venv/bin/python`, per its README and Makefile) and auto-created a second,
+# base-dependencies-only venv that never got the `[dev]` extras -- so the
+# agent's every subsequent test run failed with a plain `ModuleNotFoundError`,
+# read as an environment defect rather than what it was: a worktree that
+# never had a real environment to begin with. Copying the source project's
+# own, already-verified environment sidesteps that regardless of which tool
+# an agent reaches for, and is far cheaper than reinstalling a dependency set
+# that can include multi-hundred-megabyte packages (torch, playwright's
+# browser).
+#
+# A copy is not portable on its own: activation scripts, editable-install
+# finders, and interpreter shebangs all embed the source's absolute path.
+# Every text file under the copy has that path rewritten to the new
+# worktree's, so the environment resolves as if built there directly.
+worktree_copy_venvs() {
+    local src="$1" dst="$2" venv rel
+    while IFS= read -r -d '' venv; do
+        rel="${venv#"$src"/}"
+        [[ "$rel" != "$venv" ]] || continue
+        echo "Copying $rel into $dst (carrying its installed dependencies)..."
+        if ! cp -R "$venv" "$dst/$rel" 2>/dev/null; then
+            echo "Warning: could not copy $rel into the new worktree; set it up there manually." >&2
+            continue
+        fi
+        python3 -c "
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+old, new = sys.argv[2].encode(), sys.argv[3].encode()
+for path in root.rglob('*'):
+    if not path.is_file() or path.is_symlink():
+        continue
+    try:
+        data = path.read_bytes()
+    except OSError:
+        continue
+    if old not in data:
+        continue
+    try:
+        path.write_bytes(data.replace(old, new))
+    except OSError:
+        pass
+" "$dst/$rel" "$src" "$dst" \
+            || echo "Warning: could not relocate absolute paths inside $rel; it may still point at $src." >&2
+    done < <(find "$src" -maxdepth 2 -type d -name ".venv" -print0 2>/dev/null)
 }
 
 # worktree_run_locked <dir> — true while a driver holds the run in <dir>: the

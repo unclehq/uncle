@@ -21,7 +21,18 @@ def _esc(value):
 def _validate(payload, kind):
     expected = 'change-test-report' if kind == 'change' else 'automated-test-report'
     if not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != expected:
-        raise ValueError('wrong %s JSON schema' % expected)
+        # Observed (canopy issue #4): the agent delivered a well-formed JSON
+        # object shaped like a different artifact entirely (a checklist-style
+        # {title, checks, regressions_or_gaps, required_follow_up}), not this
+        # one's {schema, kind, commands}. A bare "wrong schema" gave it
+        # nothing to fix from; naming the required kind/schema pair and what
+        # was actually found lets a retry correct the one thing that matters.
+        found_kind = payload.get('kind') if isinstance(payload, dict) else None
+        found_keys = ', '.join(sorted(payload.keys())) if isinstance(payload, dict) else 'not an object'
+        raise ValueError(
+            'wrong %s JSON schema: need {"schema":"uncle.artifact/v1","kind":"%s",...}; '
+            'found kind=%r, top-level keys: %s' % (expected, expected, found_kind, found_keys)
+        )
     commands = payload.get('commands')
     if not isinstance(commands, list) or not commands:
         raise ValueError('%s requires at least one command result' % expected)

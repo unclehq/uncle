@@ -41,8 +41,10 @@ below. Do not read files, enumerate directories, inspect the repository, run
 commands, or read worker packets. Do not investigate again. Resolve only the
 listed findings and preserve every unaffected normative plan row exactly.
 
-Return exactly one JSON object as your final response. Do not use tools or
-write any file. The driver will publish it as `.uncle/docs/%s`. It must have
+Produce exactly one JSON object. Do not read files, enumerate directories, run
+commands, or write any file except the one canonical delivery path supplied by
+the driver. Your final chat response is diagnostics only; the driver publishes
+that file as `.uncle/docs/%s`. It must have
 schema `uncle.artifact/v1`, kind `%s`, %s, and
 one disposition for every AR finding. For an implementation plan,
 `narrative`, `verification_commands`, and `protected_verification_paths` are

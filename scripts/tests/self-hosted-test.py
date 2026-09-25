@@ -380,6 +380,42 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         self.assertIn('## Verification commands', text)
         self.assertIn('pytest', text)
 
+    def test_updated_plan_file_delivery_is_published_for_the_driver(self):
+        import self_hosted, json as json_module
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan',
+                   'narrative': '## Summary\n\nDo it.',
+                   'verification_commands': 'pytest',
+                   'protected_verification_paths': 'tests/'}
+
+        def generate(side, values, prompt, staged, **kwargs):
+            path = staged/'.uncle/docs/UPDATED_PROJECT_PLAN.md'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json_module.dumps(payload), encoding='utf-8')
+            return 'diagnostics only', 1
+
+        delivery = '.uncle/workflow/artifact-delivery/updated-plan.json'
+        with patch.dict(os.environ, {'UNCLE_ARTIFACT_DELIVERY': delivery}):
+            with patch.object(self_hosted, '_run_opencode', side_effect=generate):
+                run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+        self.assertEqual(json_module.loads((self.root/delivery).read_text(encoding='utf-8')), payload)
+
+    def test_initial_change_plan_file_delivery_is_published_for_the_driver(self):
+        import self_hosted, json as json_module
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan',
+                   'narrative': '# Change\n\nMake it.'}
+
+        def generate(side, values, prompt, staged, **kwargs):
+            path = staged/'.uncle/docs/CHANGE_PLAN.md'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json_module.dumps(payload), encoding='utf-8')
+            return 'diagnostics only', 1
+
+        delivery = '.uncle/workflow/artifact-delivery/change-plan.json'
+        with patch.dict(os.environ, {'UNCLE_ARTIFACT_DELIVERY': delivery}):
+            with patch.object(self_hosted, '_run_opencode', side_effect=generate):
+                run_opencode('agent', self.values(), 'Plan', self.root, stage='change-plan')
+        self.assertEqual(json_module.loads((self.root/delivery).read_text(encoding='utf-8')), payload)
+
     def test_updated_plan_omitting_protected_paths_preserves_approved_paths(self):
         import self_hosted, json as json_module
         documents = self.root/'.uncle/workflow/documents'

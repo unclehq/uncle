@@ -9,7 +9,36 @@ VERIFICATION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # match cost a run and a human approval when a plan said "## Protected paths"
 # -- the block was there, correct, and unreadable for one missing word.
 verification_paths() {
-    local line rest token candidate emitted raw
+    local line rest token candidate emitted raw json_path json_name
+    # Plans are JSON-authoritative.  Rendering is for approval/review only;
+    # never parse a rendered view when the canonical plan exists.
+    json_name="$(basename "$1" .md).json"
+    json_path="${STATE_DIR:-.uncle/workflow}/documents/$json_name"
+    if [[ -f "$json_path" ]]; then
+        python3 - "$json_path" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    payload = json.load(open(path, encoding='utf-8'))
+    paths = payload['protected_verification_paths']
+except (OSError, ValueError, KeyError, TypeError) as error:
+    raise SystemExit('Invalid canonical protected verification paths: %s' % error)
+if not isinstance(paths, str) or not paths.strip():
+    raise SystemExit('Invalid canonical protected verification paths: expected a nonempty string')
+for value in paths.splitlines():
+    value = value.strip()
+    normalized = value[:-1] if value.endswith('/') else value
+    if (not value or ',' in value or value.startswith(('/', '-')) or '//' in value
+            or '\\' in value or any(part in ('', '.', '..') for part in normalized.split('/'))
+            or normalized == '.git' or normalized.startswith('.git/')
+            or normalized == '.uncle' or normalized.startswith('.uncle/')):
+        raise SystemExit('Invalid canonical protected verification path: %s' % value)
+    print(value)
+PY
+        return $?
+    fi
     raw="$(awk '
         /^#+[ \t]/ {
             h = tolower($0)

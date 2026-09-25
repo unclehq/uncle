@@ -49,14 +49,13 @@ initial snapshot with no predecessor is normal, not a `BLOCKED-SETUP` result.
 Never mark an unexecuted check PASS. A blocked result must name the missing
 setup, person, or environmental limit. Finish every assigned ID before
 ending; a worker that stops early leaves the rest to the driver's
-reconciliation with no evidence at all, which reads as NOT RUN. Return exactly
-one object as your final response. Do not write it to a temporary path: the
-driver extracts and validates your final response into its private packet store:
+reconciliation with no evidence at all, which reads as NOT RUN. Write exactly
+one object to the private packet path supplied by the driver. That file, not
+chat text, is the authoritative handoff; chat text is diagnostics only:
 
 `{"schema":"uncle.artifact/v1","kind":"checklist-execution-worker-packet","results":[{"id":"MC-1","action":"...","expected_result":"...","actual_result":"...","evidence":"...","status":"PASS","defect_reference":"None"}]}`
 
 Include one result for every assigned ID; `status` is exactly PASS, FAIL,
-BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, or NOT RUN. Your final
-message must be the JSON object itself, with no Markdown fence or prose. The
-driver has a separate single writer that consumes the collated JSON and writes
-canonical reports.
+BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, or NOT RUN. Do not place the
+packet in a Markdown fence. The driver has a separate single writer that
+consumes the collated JSON and writes canonical reports.

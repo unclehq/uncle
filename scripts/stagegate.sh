@@ -1392,6 +1392,8 @@ run_claude() {
     effort="$(stage_effort "$log_name")"
     turns="$(stage_turns "$log_name")"
     local turns_retried=""
+    local artifact_retried=""
+    local artifact_error=""
     local agent_delivery=""
     case "$log_name" in
         requirements|project-plan|updated-plan)
@@ -1458,6 +1460,9 @@ CANONICAL_ARTIFACT_CONTRACT
 `. This file is the only authoritative handoff; chat text is diagnostics only.
 Do not write a Markdown view or modify another file.
 CANONICAL_ARTIFACT_CONTRACT
+                if [[ -n "$artifact_error" ]]; then
+                    printf '\nThe previous canonical delivery was rejected: %s\nUse Write to replace the same delivery file with a complete corrected JSON object.\n' "$artifact_error" >> "$effective_prompt"
+                fi
                 ;;
         esac
         local -a model_args=()
@@ -1516,7 +1521,18 @@ CANONICAL_ARTIFACT_CONTRACT
 
         case "$log_name" in
             requirements|project-plan|updated-plan)
-                python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$LOG_DIR/${log_name}.jsonl" . "$agent_delivery" || exit 1 ;;
+                if ! artifact_error="$(python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$LOG_DIR/${log_name}.jsonl" . "$agent_delivery" 2>&1)"; then
+                    if [[ -z "$artifact_retried" ]]; then
+                        artifact_retried=1
+                        rm -f "$agent_delivery"
+                        echo "Canonical artifact rejected; retrying $log_name once with the exact schema error."
+                        printf '%s\n' "$artifact_error"
+                        continue
+                    fi
+                    printf '%s\n' "$artifact_error" >&2
+                    exit 1
+                fi
+                ;;
         esac
         break
     done
@@ -3499,6 +3515,20 @@ while true; do
         REPAIR)
             repair_source="$(cat "$STATE_DIR/repair-source" 2>/dev/null || true)"
             repair_count_existing="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"
+            # A malformed protected-path field is a plan contract error, not
+            # a source/test defect.  Sending it to REPAIR used to invite an
+            # agent to edit product code while the driver was treating a
+            # prose sentence as a path. Rebuild the canonical updated plan
+            # instead; its file-backed delivery retry receives the exact
+            # schema diagnostic.
+            if [[ "$repair_source" == "$STATE_DIR/VERIFICATION_INTEGRITY.md" ]] \
+                && grep -qE '^Invalid (canonical )?protected verification path' "$STATE_DIR/verification-integrity.log" 2>/dev/null; then
+                echo 'Protected verification paths are malformed; returning to UPDATED_PLAN for a canonical plan correction.'
+                rm -f "$STATE_DIR/verification.manifest" "$STATE_DIR/verification.paths" \
+                    "$STATE_DIR/verification-snapshot" "$STATE_DIR/verification-integrity.log"
+                set_state UPDATED_PLAN
+                continue
+            fi
             # Older runs can already be parked in REPAIR because their first
             # post-implementation snapshot rejected a source/test input that
             # the approved plan introduced but the implementation did not create.

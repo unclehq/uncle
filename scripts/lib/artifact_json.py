@@ -61,6 +61,27 @@ _BARE_OBJECT_KEY = re.compile(r'([,{]\s*)([A-Za-z_$][A-Za-z0-9_$-]*)(\s*:)')
 _TRAILING_COMMA = re.compile(r',\s*([}\]])')
 
 
+def validate_protected_verification_paths(paths):
+    """Validate the executable plan field, not its rendered Markdown view.
+
+    This field is consumed as one repository-relative path per line by the
+    verification-integrity guard.  Accepting prose here delayed a plan error
+    until after implementation, where a whole sentence was treated as a path
+    and incorrectly sent the run into REPAIR.
+    """
+    if not isinstance(paths, str) or not paths.strip():
+        raise ValueError('plan is missing protected_verification_paths')
+    for path in paths.splitlines():
+        path = path.strip()
+        normalized = path[:-1] if path.endswith('/') else path
+        if (not path or ',' in path or path.startswith(('/', '-'))
+                or '//' in path or '\\' in path
+                or any(part in ('', '.', '..') for part in normalized.split('/'))
+                or normalized == '.git' or normalized.startswith('.git/')
+                or normalized == '.uncle' or normalized.startswith('.uncle/')):
+            raise ValueError('protected_verification_paths must contain one valid repository-relative path per line: ' + path)
+
+
 def _stream_envelope_text(candidate):
     """Return a model reply carried by a standard streamed-event envelope.
 
@@ -349,8 +370,7 @@ def render_plan(payload, protected=True):
     lines += ['## Verification commands', '', '```sh', commands.strip('\n'), '```', '']
     if protected:
         paths = payload.get('protected_verification_paths')
-        if not paths or not paths.strip():
-            raise ValueError('plan is missing protected_verification_paths')
+        validate_protected_verification_paths(paths)
         lines += ['## Protected verification paths', '', '```text', paths.strip('\n'), '```', '']
     dispositions = payload.get('dispositions')
     if dispositions:

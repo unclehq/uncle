@@ -1402,8 +1402,9 @@ wait_green_check_bg() {
 # for the synthesizer, not a reason to throw away results from its siblings.
 run_parallel_checklist_workers() {
     local groups="$PROJECT_ROOT/$STATE_DIR/checklist-groups/groups.txt"
-    # Runner adapters may rebuild .uncle while they start. Worker handoffs are
-    # outside the project entirely, so no workflow cleanup can race them.
+    # Packets must live inside the workspace because runner Write tools are
+    # intentionally sandboxed there.  The directory is uniquely named and
+    # created before any worker starts, so sibling workers cannot collide.
     local directory="" group id prompt packet batch_label compact_groups compact_batch_size
     local worker_count=0 worker_cap synthesis_cap failed=0 status pid jobs
     local -a ids pids pid_ids packet_names
@@ -1441,7 +1442,7 @@ PY
     fi
     CHECKLIST_SYNTHESIS_BUDGET="$synthesis_cap"
 
-    directory="$(mktemp -d "${TMPDIR:-/tmp}/uncle-checklist-workers.XXXXXX")" || return 1
+    directory="$(mktemp -d "$STATE_DIR/checklist-workers.XXXXXX")" || return 1
     mkdir -p "$directory/prompts"
     {
         echo '# Parallel checklist worker evidence'
@@ -1490,7 +1491,7 @@ PY
                 id="${ids[$start]}"
                 printf -- '- Execute `%s`.\n' "$id" >> "$prompt"
             done
-            printf '\n## Required result packet\n\nReturn the complete JSON packet as your final response. The driver, not the worker, writes the private packet file.\n' >> "$prompt"
+            printf '\n## Required result packet\n\nWrite the complete JSON packet to the private delivery path supplied by the driver. Chat text is diagnostics only.\n' >> "$prompt"
             packet_names+=("$batch_label")
             i="$end"
         done
@@ -1519,10 +1520,20 @@ PY
             batch_label="group-$group_index-batch-$batch_index"
             prompt="$directory/prompts/$batch_label.md"
             (
-                SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                local_worker_budget="$(awk -v cap="$worker_cap" -v n="$batch_size" 'BEGIN { printf "%.2f", cap * n }')"
+                local_worker_packet="$directory/$batch_label.json"
+                SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$local_worker_packet" \
                     run_claude "$prompt" "execute-checklist-worker-$batch_label" \
                         "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 80 \
-                        "$(awk -v cap="$worker_cap" -v n="$batch_size" 'BEGIN { printf "%.2f", cap * n }')"
+                        "$local_worker_budget"
+                if ! local_worker_error="$(python3 "$ROOT/scripts/lib/checklist_worker_packets.py" --expected placeholder --validate "$local_worker_packet" 2>&1)"; then
+                    rm -f "$local_worker_packet"
+                    echo "Worker $batch_label packet rejected; retrying once with the exact schema error." >&2
+                    SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$local_worker_packet" UNCLE_WORKER_PACKET_ERROR="$local_worker_error" \
+                        run_claude "$prompt" "execute-checklist-worker-$batch_label" \
+                            "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 80 "$local_worker_budget"
+                    python3 "$ROOT/scripts/lib/checklist_worker_packets.py" --expected placeholder --validate "$local_worker_packet"
+                fi
             ) > "$LOG_DIR/execute-checklist-worker-$batch_label.log" 2>&1 &
             pids+=("$!")
             pid_ids+=("$batch_label")
@@ -1536,12 +1547,8 @@ PY
                 failed=1
             fi
             packet="$directory/${pid_ids[$status]}.json"
-            if [[ ! -s "$packet" ]] && ! python3 "$ROOT/scripts/lib/recover_worker_packet.py" \
-                "$LOG_DIR/execute-checklist-worker-${pid_ids[$status]}.jsonl" "$packet" \
-                --kind checklist-execution-worker-packet \
-                --checklist "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
-                --prompt "$directory/prompts/${pid_ids[$status]}.md"; then
-                echo "Worker ${pid_ids[$status]} returned no valid result packet." >&2
+            if [[ ! -s "$packet" ]]; then
+                echo "Worker ${pid_ids[$status]} did not write its required canonical result packet." >&2
                 failed=1
             fi
         done
@@ -2031,8 +2038,16 @@ run_claude() {
     require_file "$prompt_file"
 
     local turns_retried=""
+    local artifact_retried=""
+    local artifact_error=""
     local agent_delivery=""
-    if [[ "$log_name" == updated-change-plan ]]; then
+    # Checklist workers are handed a unique packet path by their parent.
+    # Their streamed chat is never an artifact: small local models commonly
+    # surround or truncate JSON there.
+    if [[ -n "${UNCLE_WORKER_PACKET_PATH:-}" ]]; then
+        agent_delivery="$UNCLE_WORKER_PACKET_PATH"
+        rm -f "$agent_delivery"
+    elif [[ "$log_name" == change-plan || "$log_name" == updated-change-plan ]]; then
         mkdir -p "$STATE_DIR/artifact-delivery"
         agent_delivery="$STATE_DIR/artifact-delivery/${log_name}.json"
         rm -f "$agent_delivery"
@@ -2095,7 +2110,25 @@ run_claude() {
                 ;;
         esac
         case "$log_name" in
-            updated-change-plan)
+            *-worker-*)
+                if [[ -n "$agent_delivery" ]]; then
+                    cat >> "$effective_prompt" <<'CANONICAL_WORKER_PACKET_CONTRACT'
+
+## Canonical worker-packet delivery (binding)
+
+Use your Write tool to create exactly one complete JSON object at `
+CANONICAL_WORKER_PACKET_CONTRACT
+                    printf '%s' "$agent_delivery" >> "$effective_prompt"
+                    cat >> "$effective_prompt" <<'CANONICAL_WORKER_PACKET_CONTRACT'
+`. This private packet file is the only worker handoff the driver reads.
+Do not write another file. Chat text is diagnostics only.
+CANONICAL_WORKER_PACKET_CONTRACT
+                    if [[ -n "${UNCLE_WORKER_PACKET_ERROR:-}" ]]; then
+                        printf '\nThe previous packet was rejected: %s\nUse Write to replace the same packet file with corrected JSON.\n' "$UNCLE_WORKER_PACKET_ERROR" >> "$effective_prompt"
+                    fi
+                fi
+                ;;
+            change-plan|updated-change-plan)
                 cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
 
 ## Canonical artifact contract (binding)
@@ -2108,6 +2141,9 @@ CANONICAL_ARTIFACT_CONTRACT
 `. This file is the only authoritative handoff; chat text is diagnostics only.
 Do not write a Markdown view or modify another file.
 CANONICAL_ARTIFACT_CONTRACT
+                if [[ -n "$artifact_error" ]]; then
+                    printf '\nThe previous canonical delivery was rejected: %s\nUse Write to replace the same delivery file with a complete corrected JSON object.\n' "$artifact_error" >> "$effective_prompt"
+                fi
                 ;;
         esac
         ( env UNCLE_ARTIFACT_DELIVERY="$agent_delivery" "${client_cmd[@]}" "${flags[@]}" \
@@ -2226,8 +2262,25 @@ CANONICAL_ARTIFACT_CONTRACT
         fi
 
         case "$log_name" in
-            updated-change-plan)
-                python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$log" . "$agent_delivery" || exit 1 ;;
+            *-worker-*)
+                if [[ -n "$agent_delivery" && ! -s "$agent_delivery" ]]; then
+                    echo "Worker $log_name did not write its required canonical JSON packet: $agent_delivery" >&2
+                    exit 1
+                fi
+                ;;
+            change-plan|updated-change-plan)
+                if ! artifact_error="$(python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$log" . "$agent_delivery" 2>&1)"; then
+                    if [[ -z "$artifact_retried" ]]; then
+                        artifact_retried=1
+                        rm -f "$agent_delivery"
+                        echo "Canonical artifact rejected; retrying $log_name once with the exact schema error."
+                        printf '%s\n' "$artifact_error"
+                        continue
+                    fi
+                    printf '%s\n' "$artifact_error" >&2
+                    exit 1
+                fi
+                ;;
         esac
         show_spend
         break

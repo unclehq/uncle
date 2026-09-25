@@ -117,7 +117,10 @@ def publish(stage, log, project, delivery=None):
     if stage == 'requirements':
         rendered = artifact_json.render_requirements(payload)
     elif stage in ('change-plan', 'updated-change-plan'):
-        rendered = artifact_json.render_change_plan(payload, require_dispositions=True)
+        # Initial planning precedes adversarial review, so dispositions are
+        # required only for the revised plan.  Requiring them here made a
+        # perfectly valid first change plan impossible to publish.
+        rendered = artifact_json.render_change_plan(payload, require_dispositions=stage == 'updated-change-plan')
     else:
         rendered = artifact_json.render_plan(payload, protected=stage == 'updated-plan')
     artifact_json.write(project, name, payload)

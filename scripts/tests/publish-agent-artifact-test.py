@@ -16,6 +16,9 @@ class Publisher(unittest.TestCase):
             'requirements': {'schema':'uncle.artifact/v1','kind':'requirements-interpretation','sections': {
                 key:'x' for key in ('required_functionality','optional_functionality','constraints','user_visible_behaviors','system_behaviors','failure_behaviors','ambiguities','assumptions','explicit_non_goals','definition_of_done')}},
             'project-plan': {'schema':'uncle.artifact/v1','kind':'plan','narrative':'# Plan','verification_commands':'true'},
+            # The initial change plan has no adversarial findings to dispose
+            # of yet; requiring dispositions here would reject valid output.
+            'change-plan': {'schema':'uncle.artifact/v1','kind':'change-plan','narrative':'# Change'},
             'updated-plan': {'schema':'uncle.artifact/v1','kind':'plan','narrative':'# Plan','verification_commands':'true','protected_verification_paths':'tests/'},
             'updated-change-plan': {'schema':'uncle.artifact/v1','kind':'change-plan','narrative':'# Change','dispositions':[{'finding':'AR-001','disposition':'Accepted','reason':'x','plan_change':'x'}]},
         }

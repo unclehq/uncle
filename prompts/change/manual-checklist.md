@@ -58,7 +58,7 @@ Set each check's `section` to whichever of these it verifies:
 19. Regression-sensitive paths
 20. Requirements not covered by automated tests
 
-Your final response itself becomes `.uncle/workflow/documents/MANUAL_CHECKLIST.json`. Return exactly one JSON object, not Markdown and not a statement that you wrote a file,
+Write exactly one JSON object to the private delivery path supplied by the driver. That file becomes `.uncle/workflow/documents/MANUAL_CHECKLIST.json`; chat text is diagnostics only, not a statement that you wrote a file,
 matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","section":"...","priority":"...","behavior_classification":"...","related_behavior":"...","related_invariant":"...","preconditions":"...","exclusive_resources":["port:5173"],"depends_on":[],"exact_action":"...","expected_result":"...","evidence_to_capture":"..."}],"traceability":"..."}`

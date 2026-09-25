@@ -460,6 +460,11 @@ def opencode_usage(path):
 PLAN_ARTIFACTS = {
     'requirements': '.uncle/docs/REQUIREMENTS_INTERPRETATION.md',
     'project-plan': '.uncle/docs/PROJECT_PLAN.md',
+    # Initial change planning is also a canonical change-plan artifact.  Keep
+    # it in the isolated staging tree until its JSON has passed validation;
+    # otherwise weaker local models frequently leave prose in the chat stream
+    # and the live workflow has no trustworthy handoff.
+    'change-plan': '.uncle/docs/CHANGE_PLAN.md',
     'updated-plan': '.uncle/docs/UPDATED_PROJECT_PLAN.md',
     # The change workflow revises CHANGE_PLAN in place.  It has a distinct
     # JSON schema, but follows the same source-JSON then rendered-view rule.
@@ -831,6 +836,40 @@ def validate_requirements(text):
         raise ValueError('Requirements interpretation lacks Definition of done; original preserved')
 
 
+def publish_file_delivery(root, raw, expected_kind):
+    """Publish a validated isolated agent artifact to the driver's handoff.
+
+    Self-hosted agents run in a disposable copy of the project.  The model must
+    write there so no planning attempt can touch the live tree; the driver,
+    however, consumes ``UNCLE_ARTIFACT_DELIVERY`` in the live workflow tree.
+    Previously we validated the isolated file and rendered its Markdown view,
+    but omitted this one transfer.  Parent stages then reported a missing
+    delivery even after a successful self-hosted run.
+    """
+    delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
+    if not delivery:
+        return
+    path = Path(delivery)
+    if path.is_absolute() or '..' in path.parts:
+        raise ValueError('Refusing unsafe canonical artifact delivery path: ' + delivery)
+    payload = _artifact_json_module().loads_response_json(raw)
+    if (not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1'
+            or payload.get('kind') != expected_kind):
+        raise ValueError('Refusing invalid canonical %s delivery' % expected_kind)
+    target = root / path
+    if target.is_symlink():
+        raise ValueError('Refusing symlinked canonical artifact delivery: ' + str(target))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, pending = tempfile.mkstemp(prefix='.' + target.name + '.', dir=target.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+            stream.write(raw.rstrip() + '\n')
+        os.replace(pending, target)
+    finally:
+        if os.path.exists(pending):
+            os.unlink(pending)
+
+
 
 def run_opencode(side, values, prompt, root, stage=None, usage=None):
     # The normal OpenCode CLI has no observer attached while it runs.  Supply
@@ -844,7 +883,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
     stage_name = stage or os.environ.get('UNCLE_STATUS_STAGE', '')
     artifact = PLAN_ARTIFACTS.get(stage_name) if side == 'agent' else None
     require_file_delivery = bool(os.environ.get('UNCLE_ARTIFACT_DELIVERY'))
-    expected_kind = 'change-plan' if stage_name == 'updated-change-plan' else 'plan'
+    expected_kind = 'change-plan' if stage_name in ('change-plan', 'updated-change-plan') else 'plan'
     require_dispositions = stage_name == 'updated-change-plan'
     # `requirements-plan.md` deliberately shares the project-plan invocation
     # to avoid a second cold model context.  Its first required artifact is
@@ -932,6 +971,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                     raw = canonical_response
                     payload = _artifact_json_module().loads_response_json(raw)
                     _artifact_json_module().write(root, Path(artifact).name, payload)
+                    publish_file_delivery(root, raw, 'requirements-interpretation')
                 break
         else:
             protected_fields = (', "protected_verification_paths":"..."' if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md' else '')
@@ -976,6 +1016,8 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                     if (canonical_response is not None and is_json_response(canonical_response)
                             and not publish_plan_json(canonical_response, artifact, root, expected_kind, require_dispositions)):
                         raise ValueError('Plan JSON response could not be published canonically; original preserved')
+                    if canonical_response is not None and is_json_response(canonical_response):
+                        publish_file_delivery(root, canonical_response, expected_kind)
                 except ValueError as error:
                     logs = root/'.uncle/workflow/logs'
                     logs.mkdir(parents=True, exist_ok=True)
@@ -989,7 +1031,8 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                     if candidate.exists():
                         candidate.unlink()
                     print('Plan response format rejected; retrying once. Response saved to ' + rejected, file=sys.stderr)
-                    request += '\nThe previous response was rejected: ' + str(error) + '\nReturn the complete JSON object again, exactly matching the contract above, as your final message. Do not use file tools and do not return Markdown.'
+                    request += ('\nThe previous response was rejected: ' + str(error) +
+                                '\nUse Write to replace the required isolated delivery file with the complete JSON object again, exactly matching the contract above. Do not write Markdown or any other file.')
                     continue
                 break
         if not candidate.is_file() or candidate.is_symlink():

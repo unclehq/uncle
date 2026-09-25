@@ -165,6 +165,14 @@ class RenderChangePlan(unittest.TestCase):
         with self.assertRaises(ValueError):
             module.render_plan(payload, protected=False)
 
+    def test_protected_verification_paths_rejects_prose(self):
+        payload = {
+            'verification_commands': 'true',
+            'protected_verification_paths': 'src/, tests/, and generated outputs are excluded.',
+        }
+        with self.assertRaisesRegex(ValueError, 'one valid repository-relative path per line'):
+            module.render_plan(payload, protected=True)
+
 
 if __name__ == '__main__':
     unittest.main()

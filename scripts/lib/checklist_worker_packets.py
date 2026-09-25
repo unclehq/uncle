@@ -66,12 +66,19 @@ def collate(directory, output, expected):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('directory')
-    parser.add_argument('output')
+    parser.add_argument('directory', nargs='?')
+    parser.add_argument('output', nargs='?')
     parser.add_argument('--expected', nargs='+', required=True)
+    parser.add_argument('--validate', metavar='PACKET',
+                        help='validate one worker packet without collating it')
     args = parser.parse_args()
     try:
-        collate(args.directory, args.output, args.expected)
+        if args.validate:
+            load(args.validate)
+        else:
+            if not args.directory or not args.output:
+                parser.error('directory and output are required unless --validate is used')
+            collate(args.directory, args.output, args.expected)
     except PacketError as error:
         print('checklist worker packets: ' + str(error), flush=True)
         return 1

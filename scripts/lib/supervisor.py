@@ -700,11 +700,19 @@ def validate_proposal(text, stage, attempt, run_id, evidence_ids, descriptions=N
         return None, 'stale: run_id does not match this run'
     template = value['template_id']
     prose = value['diagnosis'] + '\n' + value['rationale']
-    if _TOOL_REQUEST.search(prose) or _ABSOLUTE_PATH.search(prose):
-        return None, 'authority: proposal text carries a tool request or absolute path'
     if _AUTHORITY_REQUEST.search(prose):
         return None, 'authority: proposal text requests approval, waiver, test, permission or publication authority'
     if value['action'] in ('steer', 'retry'):
+        # Only steer/retry prose ever reaches a live agent turn, so only
+        # there can a smuggled tool request or path do anything; 'ask'/'none'
+        # take no autonomous action, and their freeform diagnosis routinely
+        # quotes the failing artifact's path (D-11's own templates below
+        # generate exactly that sentence). Rejecting 'ask' proposals for
+        # quoting a path silently discarded every "this needs a person" verdict
+        # a repair judge produced and let the driver fall through to another
+        # automatic retry or a full re-plan instead of actually stopping.
+        if _TOOL_REQUEST.search(prose) or _ABSOLUTE_PATH.search(prose):
+            return None, 'authority: proposal text carries a tool request or absolute path'
         if template not in TEMPLATES:
             return None, 'unsupported template: %r' % (template,)
         kind = TEMPLATE_EVIDENCE[template]

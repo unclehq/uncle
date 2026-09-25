@@ -3189,7 +3189,7 @@ while true; do
             fi
             run_codex \
                 "$adversarial_review_prompt" \
-                .uncle/docs/ADVERSARIAL_REVIEW.md \
+                "$PROJECT_ROOT/.uncle/docs/ADVERSARIAL_REVIEW.md" \
                 adversarial-review \
                 "$CODEX_EFFORT_REVIEW"
 
@@ -3584,7 +3584,7 @@ REPAIR
                 fi
                 run_codex \
                     "$checklist_prompt" \
-                    .uncle/docs/MANUAL_CHECKLIST.md \
+                    "$PROJECT_ROOT/.uncle/docs/MANUAL_CHECKLIST.md" \
                     manual-checklist \
                     "$CODEX_EFFORT_CHECKLIST"
             fi
@@ -3684,7 +3684,7 @@ REPAIR
             fi
             run_codex \
                 "$audit_prompt" \
-                .uncle/docs/FINAL_AUDIT.md \
+                "$PROJECT_ROOT/.uncle/docs/FINAL_AUDIT.md" \
                 final-audit \
                 "$CODEX_EFFORT_AUDIT"
 

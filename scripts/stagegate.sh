@@ -2530,7 +2530,7 @@ run_stage() {
                 # unavailable, use one canonical review call rather than an
                 # investigation followed by a second formatting-only call.
                 run_codex_review "${TEST_REVIEW_PROMPT:-prompts/test-review.md}" \
-                    .uncle/docs/TEST_REVIEW.md test-review
+                    "$PROJECT_ROOT/.uncle/docs/TEST_REVIEW.md" test-review
             else
                 # A malformed acceptance table gets one local, format-only
                 # retry even when optional supervision is disabled. Reuse the
@@ -2554,7 +2554,7 @@ run_stage() {
                     run_test_review_panel
                     test_review_prompt="${TEST_REVIEW_PROMPT:-prompts/test-review.md}"
                 fi
-                run_codex_review "$test_review_prompt" .uncle/docs/TEST_REVIEW.md test-review
+                run_codex_review "$test_review_prompt" "$PROJECT_ROOT/.uncle/docs/TEST_REVIEW.md" test-review
             fi
             ;;
         REPAIR)
@@ -2651,7 +2651,7 @@ run_stage() {
             # acceptance table get.
             if stage_uses_self_hosted final-audit REVIEWER; then
                 run_codex_review "${FINAL_AUDIT_PROMPT:-prompts/final-audit.md}" \
-                    .uncle/docs/FINAL_AUDIT.md final-audit
+                    "$PROJECT_ROOT/.uncle/docs/FINAL_AUDIT.md" final-audit
             else
                 final_audit_prompt="${FINAL_AUDIT_PROMPT:-prompts/final-audit.md}"
                 if [[ -s "$STATE_DIR/final-audit-format-retry.md" ]]; then
@@ -2664,7 +2664,7 @@ run_stage() {
                 fi
                 run_codex_review \
                     "$final_audit_prompt" \
-                    .uncle/docs/FINAL_AUDIT.md \
+                    "$PROJECT_ROOT/.uncle/docs/FINAL_AUDIT.md" \
                     final-audit
             fi
             ;;

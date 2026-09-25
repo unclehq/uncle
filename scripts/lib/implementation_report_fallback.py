@@ -17,6 +17,12 @@ def changed_files(project):
 
 def notes(files):
     return {'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
+            # Driver-synthesized, not agent-authored: it can never carry an
+            # acceptance-delivery table (there is no agent claim to report),
+            # so implementation_complete() would otherwise retry or escalate
+            # forever on a document that structurally can never pass. This
+            # marker lets callers recognize that and stop instead.
+            'driver_fallback': True,
             'changed_files': [{'path': name, 'purpose': 'Observed by driver fallback; implementation handoff was missing.',
                                'plan_step': '', 'behavior_or_invariant': ''} for name in files],
             'deviations': [],

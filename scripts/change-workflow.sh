@@ -3040,6 +3040,36 @@ implementation_complete() {
         "$spec" "$notes" > "$completion"; then
         return 0
     fi
+    # A driver-synthesized fallback (implementation_report_fallback.py) can
+    # never carry acceptance-delivery rows -- there is no agent claim behind
+    # it to report. Retrying implementation or replanning cannot fix that, so
+    # an unattended run stops here instead of cycling forever between
+    # IMPLEMENT and a fresh plan. Interactive runs still go through
+    # supervision below, where a person watching can already see the ask.
+    if [[ "$UNATTENDED" == 1 ]] && python3 -c '
+import json, sys
+try:
+    payload = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    sys.exit(1)
+if not isinstance(payload, dict):
+    sys.exit(1)
+# implementation_notes.py wraps multi-step content in "fragments"; a plain,
+# unwrapped document is its own sole fragment. Only stop when *every*
+# fragment is driver-synthesized -- a mix still has real agent content
+# worth retrying against.
+fragments = payload.get("fragments")
+items = fragments if isinstance(fragments, list) and fragments else [payload]
+sys.exit(0 if all(isinstance(f, dict) and f.get("driver_fallback") is True for f in items) else 1)
+' "$notes" 2>/dev/null; then
+        echo
+        echo "$notes is the driver's own fallback placeholder -- the implementation stage never" \
+             "wrote a real handoff, so it can never carry the acceptance-delivery rows this check" \
+             "requires. Retrying implementation or drafting a new plan cannot fix that."
+        echo "Stopping the unattended run here instead of cycling; resolve why implementation did" \
+             "not complete (turn budget, a stuck agent, etc.) and rerun."
+        exit 1
+    fi
     supervision_validation_failed implementation_completion "$notes" \
         "$(head -n 3 "$completion" 2>/dev/null | tr '\n' ' ')" 0
     # Keep rejection evidence intact. Only explicitly waived delivery rows may

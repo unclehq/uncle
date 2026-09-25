@@ -106,8 +106,9 @@ Keep the required nonempty Overall assessment: briefly state whether the plan
 is executable and the remaining blockers. Before returning the document, check
 finding uniqueness, required fields and closing sections once. Correct real
 omissions; do not narrate repeated section-by-section compliance checks.
-Return the entire review as the final response, never a filename, progress
-message or summary claiming the review was written elsewhere.
+Write the entire JSON review to the private delivery path supplied by the
+driver. That file is authoritative; chat text is diagnostics only. Never write
+a filename, progress message, or summary in place of the delivery.
 
 Do not repeatedly estimate byte counts or request unavailable tools to measure
 size. The driver measures the response. In advisory-budget mode, do ZERO

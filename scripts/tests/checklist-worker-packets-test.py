@@ -124,15 +124,12 @@ class ChecklistWorkerPackets(unittest.TestCase):
             block = text[start:end]
             self.assertIn('group-$group_index-batch-$batch_index', block)
             self.assertIn('checklist_worker_packets.py', block)
-            if source.endswith('change-workflow.sh'):
-                # Chat is diagnostics only.  Each worker writes its assigned
-                # JSON file and an invalid packet is retried with its schema
-                # error.
-                self.assertIn('UNCLE_WORKER_PACKET_PATH', block)
-                self.assertIn('--validate "$local_worker_packet"', block)
-                self.assertNotIn('recover_worker_packet.py', block)
-            else:
-                self.assertIn('recover_worker_packet.py', block)
+            # Chat is diagnostics only. Each worker writes its assigned JSON
+            # file and an invalid packet is retried with its schema error in
+            # both workflow drivers.
+            self.assertIn('UNCLE_WORKER_PACKET_PATH', block)
+            self.assertIn('--validate "$local_worker_packet"', block)
+            self.assertNotIn('recover_worker_packet.py', block)
             self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE', block)
             self.assertIn('EXECUTE_CHECKLIST_WORKERS.json', block)
             self.assertIn('Do not read the worker directory', block)

@@ -94,10 +94,11 @@ End with one conclusion:
 - READY WITH NON-BLOCKING ISSUES
 - NOT READY
 
-Return only one JSON object matching this contract; do not return Markdown:
+Write only one JSON object matching this contract to the private delivery path
+supplied by the driver; do not return Markdown in chat:
 `{"schema":"uncle.artifact/v1","kind":"final-audit","findings":[{"id":"FA-1","severity":"...","evidence":"...","affected_requirement":"...","required_correction":"...","blocks":"YES"}],"verdict":"READY"}`.
 
-Write it directly and correctly the first time. Do not try to validate the JSON beforehand with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance. If you reconsider your answer partway through, revise silently -- the final reply must contain the object exactly once. Including an earlier draft alongside the final one, or the same content twice, is rejected the same way a missing object is. Do not narrate your plan for it, name the file it covers, or summarize what you are about to write -- any of that as your final message is treated as no document at all and rejected. Skip straight to the JSON object; it is the only acceptable reply.
+Write it directly and correctly the first time. Do not try to validate the JSON beforehand with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance. If you reconsider your answer partway through, revise silently -- replace the delivery file with one complete object. Do not narrate your plan for it, name the file it covers, or summarize what you are about to write in place of the delivery.
 `findings` is `[]` for a clean audit. `blocks` is exactly `YES` or `NO`. `verdict` is exactly one of `READY`, `READY WITH NON-BLOCKING ISSUES`, `NOT READY`.
 
 Read .uncle/workflow/plan-executability/assessment.md, plan-recovery.json and

@@ -1395,13 +1395,21 @@ run_claude() {
     local artifact_retried=""
     local artifact_error=""
     local agent_delivery=""
-    case "$log_name" in
-        requirements|project-plan|updated-plan)
-            mkdir -p "$STATE_DIR/artifact-delivery"
-            agent_delivery="$STATE_DIR/artifact-delivery/${log_name}.json"
-            rm -f "$agent_delivery"
-            ;;
-    esac
+    # Packet-producing workers get a private, workspace-local delivery file.
+    # Never infer this data from streamed chat: local models commonly wrap or
+    # truncate otherwise valid JSON there.
+    if [[ -n "${UNCLE_WORKER_PACKET_PATH:-}" ]]; then
+        agent_delivery="$UNCLE_WORKER_PACKET_PATH"
+        rm -f "$agent_delivery"
+    else
+        case "$log_name" in
+            requirements|project-plan|updated-plan)
+                mkdir -p "$STATE_DIR/artifact-delivery"
+                agent_delivery="$STATE_DIR/artifact-delivery/${log_name}.json"
+                rm -f "$agent_delivery"
+                ;;
+        esac
+    fi
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
@@ -1447,6 +1455,24 @@ run_claude() {
                 ;;
         esac
         case "$log_name" in
+            *-worker-*)
+                if [[ -n "$agent_delivery" ]]; then
+                    cat >> "$effective_prompt" <<'CANONICAL_WORKER_PACKET_CONTRACT'
+
+## Canonical worker-packet delivery (binding)
+
+Use your Write tool to create exactly one complete JSON object at `
+CANONICAL_WORKER_PACKET_CONTRACT
+                    printf '%s' "$agent_delivery" >> "$effective_prompt"
+                    cat >> "$effective_prompt" <<'CANONICAL_WORKER_PACKET_CONTRACT'
+`. This private packet file is the only worker handoff the driver reads.
+Do not write another file. Chat text is diagnostics only.
+CANONICAL_WORKER_PACKET_CONTRACT
+                    if [[ -n "${UNCLE_WORKER_PACKET_ERROR:-}" ]]; then
+                        printf '\nThe previous packet was rejected: %s\nUse Write to replace the same packet file with corrected JSON.\n' "$UNCLE_WORKER_PACKET_ERROR" >> "$effective_prompt"
+                    fi
+                fi
+                ;;
             requirements|project-plan|updated-plan)
                 cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
 
@@ -1520,6 +1546,12 @@ CANONICAL_ARTIFACT_CONTRACT
         fi
 
         case "$log_name" in
+            *-worker-*)
+                if [[ -n "$agent_delivery" && ! -s "$agent_delivery" ]]; then
+                    echo "Worker $log_name did not write its required canonical JSON packet: $agent_delivery" >&2
+                    exit 1
+                fi
+                ;;
             requirements|project-plan|updated-plan)
                 if ! artifact_error="$(python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$LOG_DIR/${log_name}.jsonl" . "$agent_delivery" 2>&1)"; then
                     if [[ -z "$artifact_retried" ]]; then
@@ -2098,7 +2130,9 @@ PY
     done < "$groups"
     [[ "$worker_count" -gt 1 ]] || return 0
 
-    directory="$(mktemp -d "${TMPDIR:-/tmp}/uncle-checklist-workers.XXXXXX")" || return 1
+    # Runner Write tools are sandboxed to the workspace, so packets must be
+    # created under workflow state rather than in an external temporary dir.
+    directory="$(mktemp -d "$STATE_DIR/checklist-workers.XXXXXX")" || return 1
     mkdir -p "$directory/prompts"
     {
         echo '# Parallel checklist worker evidence'
@@ -2147,7 +2181,7 @@ PY
                 id="${ids[$start]}"
                 printf -- '- Execute `%s`.\n' "$id" >> "$prompt"
             done
-            printf '\n## Required result packet\n\nReturn the complete JSON packet as your final response. The driver, not the worker, writes the private packet file.\n' >> "$prompt"
+            printf '\n## Required result packet\n\nWrite the complete JSON packet to the private delivery path supplied by the driver. Chat text is diagnostics only.\n' >> "$prompt"
             packet_names+=("$batch_label")
             i="$end"
         done
@@ -2170,8 +2204,17 @@ PY
         for ((batch_index = 1; batch_index <= batches; batch_index++)); do
             batch_label="group-$group_index-batch-$batch_index"
             prompt="$directory/prompts/$batch_label.md"
-            ( SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-                run_claude "$prompt" "execute-checklist-worker-$batch_label" \
+            (
+                local_worker_packet="$directory/$batch_label.json"
+                SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$local_worker_packet" \
+                    run_claude "$prompt" "execute-checklist-worker-$batch_label"
+                if ! local_worker_error="$(python3 "$ROOT/scripts/lib/checklist_worker_packets.py" --expected placeholder --validate "$local_worker_packet" 2>&1)"; then
+                    rm -f "$local_worker_packet"
+                    echo "Worker $batch_label packet rejected; retrying once with the exact schema error." >&2
+                    SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$local_worker_packet" UNCLE_WORKER_PACKET_ERROR="$local_worker_error" \
+                        run_claude "$prompt" "execute-checklist-worker-$batch_label"
+                    python3 "$ROOT/scripts/lib/checklist_worker_packets.py" --expected placeholder --validate "$local_worker_packet"
+                fi
             ) > "$LOG_DIR/execute-checklist-worker-$batch_label.log" 2>&1 &
             pids+=("$!")
             pid_ids+=("$batch_label")
@@ -2180,14 +2223,10 @@ PY
         # a group launches together; the barrier is only between groups.
         for ((status = 0; status < ${#pids[@]}; status++)); do
             pid="${pids[$status]}"
-            wait "$pid" || echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run its assigned rows." >&2
+            wait "$pid" || echo "Worker ${pid_ids[$status]} did not complete; its packet is unavailable." >&2
             packet="$directory/${pid_ids[$status]}.json"
-            if [[ ! -s "$packet" ]] && ! python3 "$ROOT/scripts/lib/recover_worker_packet.py" \
-                "$LOG_DIR/execute-checklist-worker-${pid_ids[$status]}.jsonl" "$packet" \
-                --kind checklist-execution-worker-packet \
-                --checklist "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
-                --prompt "$directory/prompts/${pid_ids[$status]}.md"; then
-                echo "Worker ${pid_ids[$status]} returned no valid result packet." >&2
+            if [[ ! -s "$packet" ]]; then
+                echo "Worker ${pid_ids[$status]} did not write its required canonical result packet." >&2
             fi
         done
     done < "$groups"

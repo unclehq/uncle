@@ -87,7 +87,8 @@ you add needs an identifier of the same shape, such as `TR-1`, with its subject
 in Evidence rather than in the ID cell. A row whose ID contains spaces is not
 parsed, and the driver records no acceptance pass for the stage.
 
-Return only one JSON object matching this contract as your final message; do not return Markdown:
+Write only one JSON object matching this contract to the private delivery path
+supplied by the driver; do not return Markdown in chat:
 `{"schema":"uncle.artifact/v1","kind":"acceptance-report","narrative":"...","rows":[{"id":"COVERAGE","required":true,"status":"PASS","evidence":"..."}]}`.
 
 Write it directly and correctly the first time. Do not try to validate the JSON beforehand with a shell command, a linter, node, jq, or any other tool -- most stages do not have one available, and hunting for one wastes turns. A syntax mistake is the driver's problem to catch and ask you to correct, not yours to verify in advance. If you reconsider your answer partway through, revise silently -- the final reply must contain the object exactly once. Including an earlier draft alongside the final one, or the same content twice, is rejected the same way a missing object is. Do not narrate your plan for it, name the file it covers, or summarize what you are about to write -- any of that as your final message is treated as no document at all and rejected. Skip straight to the JSON object; it is the only acceptable reply.
@@ -102,7 +103,7 @@ Do not enumerate clean code as separate findings: concise PASS evidence belongs
 in the six required acceptance rows. Findings are concrete defects or unresolved
 gaps. Keep every required row and real blocker; no extra summary of each PASS.
 
-Return the complete JSON object as the final response, not a status message
+Write the complete JSON object to the delivery path, not a status message
 about writing or compacting it. Do not emit a compaction announcement as the final
 answer. A report-size warning alone does not require another model iteration.
 

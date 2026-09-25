@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Acceptance handoffs must not turn partial delivery into stage success."""
 import importlib.util
+import json
 from pathlib import Path
+import tempfile
 import unittest
 
 module = importlib.util.spec_from_file_location(
@@ -53,6 +55,34 @@ class CompletionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             completion.check(SPEC, NOTES.replace("| ID | Status", "| Wrong | Status"))
         self.assertTrue(completion.check(SPEC.replace("Chat composer", ""), NOTES))
+
+    def test_canonical_json_is_authoritative_over_rendered_markdown(self):
+        spec = {"schema": "uncle.artifact/v1", "kind": "change-spec",
+                "acceptance_criteria": [
+                    {"id": "AC-1", "criterion": "Chat composer", "verification": "UI check"},
+                    {"id": "AC-2", "criterion": "File picker", "verification": "Picker check"},
+                ]}
+        notes = {"schema": "uncle.artifact/v1", "kind": "implementation-notes", "fragments": [
+            {"schema": "uncle.artifact/v1", "kind": "implementation-notes", "deliveries": [
+                {"id": "AC-1", "status": "IMPLEMENTED", "changed_code": "ui.py", "observed_verification": "PASS"},
+                {"id": "AC-2", "status": "IMPLEMENTED", "changed_code": "picker.py", "observed_verification": "PASS"},
+            ]}
+        ]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spec_path, notes_path = root / 'CHANGE_SPEC.json', root / 'IMPLEMENTATION_NOTES.json'
+            spec_path.write_text(json.dumps(spec)); notes_path.write_text(json.dumps(notes))
+            required, delivered = completion.canonical_rows(spec_path, notes_path)
+        self.assertEqual(completion.check_rows(required, delivered), [])
+
+    def test_nested_legacy_accumulator_is_flattened(self):
+        leaf = {"schema": "uncle.artifact/v1", "kind": "implementation-notes", "deliveries": [
+            {"id": "AC-1", "status": "IMPLEMENTED", "changed_code": "ui.py", "observed_verification": "PASS"}
+        ]}
+        payload = {"schema": "uncle.artifact/v1", "kind": "implementation-notes", "fragments": [
+            {"schema": "uncle.artifact/v1", "kind": "implementation-notes", "fragments": [leaf]}
+        ]}
+        self.assertEqual(completion.json_delivered(payload)['AC-1'][0], 'IMPLEMENTED')
 
 
 if __name__ == "__main__":

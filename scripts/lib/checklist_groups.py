@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive an approved parallel-execution plan for .uncle/docs/MANUAL_CHECKLIST.md.
+"""Derive an approved parallel-execution plan for canonical checklist JSON.
 
 The checklist stage is told to run independent checks concurrently. Left at
 that, the executing agent has to infer what "independent" means from rows that
@@ -13,7 +13,8 @@ the test review audits their isolation, and parallel_checks.py runs them with a
 barrier between groups. What may overlap is decided by someone other than the
 agent whose results depend on the answer.
 
-This is that design for the checklist. The reviewer who writes .uncle/docs/MANUAL_CHECKLIST.md
+This is that design for the checklist. The reviewer who writes the canonical
+``MANUAL_CHECKLIST.json`` packet
 declares, per check, the resources it needs exclusively and the checks it
 depends on. Those two facts are the safety-relevant judgment and they stay with
 the independent reviewer. The layering itself is arithmetic, so it is done here
@@ -413,17 +414,21 @@ def render_readme(groups, checks, errors, source):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--checklist", default=".uncle/docs/MANUAL_CHECKLIST.md")
+    ap.add_argument("--checklist", default=".uncle/docs/MANUAL_CHECKLIST.md",
+                    help="legacy rendered Markdown view")
+    ap.add_argument("--checklist-json", help="authoritative manual-checklist JSON packet")
     ap.add_argument("--out-dir", required=True)
     args = ap.parse_args(argv)
 
     try:
-        with open(args.checklist, encoding="utf-8") as fh:
-            text = fh.read()
-    except IOError:
-        text = ""
-
-    checks, by_id, _ = parse(text)
+        if args.checklist_json:
+            checks, by_id, _ = parse_json(args.checklist_json)
+        else:
+            with open(args.checklist, encoding="utf-8") as fh:
+                text = fh.read()
+            checks, by_id, _ = parse(text)
+    except (IOError, ValueError, KeyError, TypeError):
+        checks, by_id = [], {}
     errors = validate(checks, by_id)
     groups = []
     if checks and not errors:

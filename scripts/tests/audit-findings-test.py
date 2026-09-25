@@ -74,17 +74,23 @@ class FindingsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertFalse((self.state / 'audit-dispositions').exists())
 
-    def test_unattended_eof_skips_instead_of_blocking(self):
+    def test_unattended_eof_keeps_final_review_pending(self):
         import os
         env = dict(os.environ, UNCLE_UNATTENDED='1')
         result = self.run_review('', env=env)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('No decision received; audit remains pending.', result.stdout)
+        self.assertFalse((self.state / 'audit-dispositions').exists())
+
+    def test_unattended_user_can_explicitly_skip_final_findings(self):
+        import os
+        env = dict(os.environ, UNCLE_UNATTENDED='1', UNCLE_APPROVAL_NAME='owner')
+        result = self.run_review('s\nr\n', env=env)
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn('Unattended: skipping FA-1; no person assessed this finding.', result.stdout)
         record = self.record()
         self.assertEqual(record['decisions']['FA-1']['decision'], 'skip')
-        self.assertEqual(record['decisions']['FA-1']['approved_by'], 'unattended')
-        self.assertEqual(record['decisions']['FA-2']['decision'], 'skip')
-        self.assertEqual(record['effective_verdict'], 'READY')
+        self.assertEqual(record['decisions']['FA-2']['decision'], 'human-reviewed')
+        self.assertEqual(record['decisions']['FA-1']['approved_by'], 'owner')
 
     def test_changed_audit_invalidates_ignores(self):
         self.run_review('y\ny\n')
@@ -218,7 +224,18 @@ for turn in 1 2; do
 done
 '''
                 self.state.mkdir(exist_ok=True)
-                sha = hashlib.sha256(self.report.read_bytes()).hexdigest()
+                canonical = self.state / 'documents' / 'FINAL_AUDIT.json'
+                canonical.parent.mkdir(exist_ok=True)
+                canonical.write_text(json.dumps({
+                    'schema': 'uncle.artifact/v1', 'kind': 'final-audit',
+                    'findings': [
+                        {'id': 'FA-1', 'severity': 'blocking', 'evidence': 'Missing browser evidence',
+                         'required_correction': 'Run browser checks', 'blocks': 'YES'},
+                        {'id': 'FA-2', 'severity': 'blocking', 'evidence': 'Missing comparison',
+                         'required_correction': 'Compare HTML to PDF', 'blocks': 'YES'},
+                    ], 'verdict': 'NOT READY',
+                }))
+                sha = hashlib.sha256(canonical.read_bytes()).hexdigest()
                 (self.state / 'audit-verdict').write_bytes((prefix + 'NOT_READY\t' + sha + '\n').encode("utf-8"))
                 (self.state / 'state').write_bytes(('WAIT_AUDIT_OVERRIDE\n').encode("utf-8"))
                 (self.work / 'harness.sh').write_bytes((harness).encode("utf-8"))
@@ -236,11 +253,17 @@ done
                 result = subprocess.run([bash_executable(), 'harness.sh'], cwd=self.work, input='', text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                 # A revised audit must never inherit the effective READY.
-                self.report.write_bytes((TABLE + '\n').encode("utf-8"))
+                canonical.write_text(canonical.read_text() + '\n')
                 (self.state / 'state').write_bytes(('WAIT_AUDIT_OVERRIDE\n').encode("utf-8"))
                 result = subprocess.run([bash_executable(), 'harness.sh'], cwd=self.work, input='', text=True, capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
-                self.report.write_bytes((TABLE).encode("utf-8"))
+                canonical.write_text(canonical.read_text().rstrip() + '\n')
+
+    def test_both_drivers_require_final_audit_gate_by_default(self):
+        for driver in ('stagegate.sh', 'change-workflow.sh'):
+            with self.subTest(driver=driver):
+                source = (ROOT / 'scripts' / driver).read_text(encoding='utf-8')
+                self.assertIn('AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"', source)
 
     def test_modal_labels_and_long_finding_fit(self):
         import sys

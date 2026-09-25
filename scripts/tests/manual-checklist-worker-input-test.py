@@ -33,6 +33,8 @@ class ManualChecklistWorkerInputs(unittest.TestCase):
         self.assertIn('if [[ "$kind" == base ]]', block)
         self.assertIn('Checklist worker $lens returned an invalid packet; retrying that worker once.', block)
         self.assertIn('manual_checklist_packets.py" validate', block)
+        self.assertIn('self-hosted runner detected; running lens workers serially', block)
+        self.assertIn('[[ "$(uncle_stage_runner manual-checklist)" == self-hosted ]]', block)
 
     def test_compact_gate_never_describes_unnamed_manual_inputs(self):
         text = (ROOT / 'scripts/lib/gates.sh').read_text()

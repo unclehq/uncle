@@ -489,6 +489,17 @@ def copy_generated_documents(root, staged):
     for source in source_docs.iterdir():
         if source.suffix == '.md' and source.is_file() and not source.is_symlink():
             shutil.copy2(source, destination / source.name)
+    # Canonical packets are the actual inter-stage input.  They are copied
+    # separately from workflow state/logs so an isolated model can read an
+    # approved baseline without treating its rendered Markdown view as data.
+    source_packets = root / '.uncle' / 'workflow' / 'documents'
+    if not source_packets.is_dir() or source_packets.is_symlink():
+        return
+    packet_destination = staged / '.uncle' / 'workflow' / 'documents'
+    packet_destination.mkdir(parents=True, exist_ok=True)
+    for source in source_packets.iterdir():
+        if source.suffix == '.json' and source.is_file() and not source.is_symlink():
+            shutil.copy2(source, packet_destination / source.name)
 
 
 def validate_plan(text, protected=True):
@@ -726,6 +737,14 @@ def document_response(response, artifact, expected_kind='plan', require_disposit
     text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
     _artifact_json = _artifact_json_module()
     unfenced = _artifact_json.unfence_json(text)
+    if expected_kind == 'change-planning-bundle' and unfenced.startswith('{'):
+        try:
+            payload = _artifact_json.loads_response_json(text)
+        except ValueError as error:
+            raise ValueError('Invalid change-planning-bundle JSON response') from error
+        if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'change-planning-bundle':
+            raise ValueError('wrong change-planning-bundle JSON schema')
+        return json.dumps(payload, ensure_ascii=False) + '\n'
     if Path(artifact).name == 'REQUIREMENTS_INTERPRETATION.md' and unfenced.startswith('{'):
         try:
             payload = json.loads(unfenced)
@@ -885,6 +904,12 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
     require_file_delivery = bool(os.environ.get('UNCLE_ARTIFACT_DELIVERY'))
     expected_kind = 'change-plan' if stage_name in ('change-plan', 'updated-change-plan') else 'plan'
     require_dispositions = stage_name == 'updated-change-plan'
+    if side == 'agent' and os.environ.get('UNCLE_COMBINED_CHANGE_PLAN') == '1':
+        # The driver publishes this one bundle into its three canonical
+        # documents after validating every child packet. Keeping it outside
+        # docs prevents a staged Markdown view from becoming a handoff.
+        artifact = '.uncle/workflow/artifact-delivery/change-planning-bundle.json'
+        expected_kind = 'change-planning-bundle'
     # `requirements-plan.md` deliberately shares the project-plan invocation
     # to avoid a second cold model context.  Its first required artifact is
     # the interpretation, however.  The isolated OpenCode adapter can safely
@@ -975,8 +1000,13 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                 break
         else:
             protected_fields = (', "protected_verification_paths":"..."' if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md' else '')
-            kind_fields = ('"kind":"change-plan","narrative":"...","dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}]'
-                           if expected_kind == 'change-plan' else '"kind":"plan","narrative":"...","verification_commands":"..."' + protected_fields)
+            if expected_kind == 'change-planning-bundle':
+                kind_fields = ('"kind":"change-planning-bundle","baseline_report":{"schema":"uncle.artifact/v1","kind":"baseline-report","narrative":"...","verification_commands":"..."},'
+                               '"change_spec":{"schema":"uncle.artifact/v1","kind":"change-spec","narrative":"...","acceptance_criteria":[{"id":"AC-1","criterion":"...","verification":"..."}]},'
+                               '"change_plan":{"schema":"uncle.artifact/v1","kind":"change-plan","narrative":"..."}')
+            else:
+                kind_fields = ('"kind":"change-plan","narrative":"...","dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}]'
+                               if expected_kind == 'change-plan' else '"kind":"plan","narrative":"...","verification_commands":"..."' + protected_fields)
             request = (prompt + '\nCreate one JSON object matching this contract; do not return Markdown:\n'
                        '`{"schema":"uncle.artifact/v1",' + kind_fields + '}`.\n'
                        '`verification_commands` is the exact shell commands block, as plain text (no fence markers). '
@@ -1014,6 +1044,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                     if expected_kind == 'plan':
                         validate_plan(candidate.read_text(encoding='utf-8'), protected=artifact == '.uncle/docs/UPDATED_PROJECT_PLAN.md')
                     if (canonical_response is not None and is_json_response(canonical_response)
+                            and expected_kind != 'change-planning-bundle'
                             and not publish_plan_json(canonical_response, artifact, root, expected_kind, require_dispositions)):
                         raise ValueError('Plan JSON response could not be published canonically; original preserved')
                     if canonical_response is not None and is_json_response(canonical_response):

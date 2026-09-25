@@ -48,8 +48,50 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+_CANONICAL_DOCUMENTS = {
+    'BASELINE_REPORT.md', 'CHANGE_SPEC.md', 'CHANGE_PLAN.md', 'ADVERSARIAL_REVIEW.md',
+    'REQUIREMENTS_INTERPRETATION.md', 'PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md',
+    'IMPLEMENTATION_NOTES.md', 'CHANGE_TEST_REPORT.md', 'AUTOMATED_TEST_REPORT.md',
+    'PREFLIGHT_REPORT.md', 'TEST_REVIEW.md', 'MANUAL_CHECKLIST.md',
+    'VERIFICATION_REPORT.md', 'DEFECTS.md', 'FINAL_AUDIT.md',
+}
+
+
+def canonical_path(path):
+    """Resolve a generated document to its authoritative JSON packet."""
+    source = Path(path)
+    if source.name in _CANONICAL_DOCUMENTS:
+        return STATE / 'documents' / (source.stem + '.json')
+    return source
+
+
+def artifact_payload(path):
+    target = canonical_path(path)
+    if target.suffix != '.json':
+        return None
+    if not target.exists():
+        # A unit/legacy fixture predating JSON packets has no documents
+        # directory at all. Real drivers create it before the first stage and
+        # must never fall back to a rendered view.
+        if not (STATE / 'documents').exists():
+            return None
+        raise ValueError('canonical artifact missing: ' + str(target))
+    return read(target)
+
+
+def artifact_text(path):
+    payload = artifact_payload(path)
+    if payload is None:
+        return Path(path).read_text() if Path(path).exists() else ''
+    # IDs can live in structured lists while plans carry their detailed text
+    # in ``narrative``.  Joining both makes the old generic scanners JSON-only
+    # without treating a rendered view as input.
+    narrative = payload.get('narrative', '') if isinstance(payload, dict) else ''
+    return str(narrative) + '\n' + json.dumps(payload, sort_keys=True)
+
+
 def file_hash(path):
-    p = Path(path)
+    p = canonical_path(path)
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
 
 
@@ -94,7 +136,7 @@ def manifest(root, plan):
 
 
 def ids_in(path, prefix):
-    return set(re.findall(r'\b' + prefix + r'-\d+\b', Path(path).read_text())) if Path(path).exists() else set()
+    return set(re.findall(r'\b' + prefix + r'-\d+\b', artifact_text(path)))
 
 
 def _implementation_step_blocks(text):
@@ -158,7 +200,7 @@ def scaffold_generator_findings(plan):
     create-vite@latest . --overwrite` (or similar) named in the plan text --
     not every way a plan could under-declare a generator step.
     """
-    text = Path(plan).read_text() if Path(plan).exists() else ''
+    text = artifact_text(plan)
     blocks = _implementation_step_blocks(text)
     if not blocks:
         return []
@@ -300,7 +342,35 @@ def journal():
 
 
 def blockers(path):
-    text = Path(path).read_text() if Path(path).exists() else ''
+    target = Path(path)
+    if target.suffix == '.json':
+        if not target.exists():
+            return []
+        payload = read(target)
+
+        def fragments(item):
+            require(isinstance(item, dict) and item.get('schema') == 'uncle.artifact/v1'
+                    and item.get('kind') == 'implementation-notes',
+                    'wrong implementation-notes JSON schema')
+            nested = item.get('fragments')
+            if nested is None:
+                return [item]
+            require(isinstance(nested, list), 'implementation-notes fragments must be an array')
+            result = []
+            for child in nested:
+                result.extend(fragments(child))
+            return result
+
+        entries = [entry for fragment in fragments(payload)
+                   for entry in fragment.get('plan_blockers') or []]
+        rows = indexed(entries, 'blockers') if entries else {}
+        for row in rows.values():
+            fields(row, 'class requirement_ids restriction_ids evidence independent_work')
+            require(row['class'] in ('DESIGN', 'AUTHORITY', 'LIVE_VERIFICATION', 'CODING'), 'invalid blocker class')
+            if row['class'] == 'AUTHORITY':
+                fields(row, 'question alternatives')
+        return list(rows.values())
+    text = target.read_text() if target.exists() else ''
     blocks = re.findall(r'```plan-blockers\s*\n(.*?)\n```', text, re.S)
     require(len(blocks) <= 1, 'duplicate blocker blocks')
     require('```plan-blockers' not in text or blocks, 'malformed blocker fence')
@@ -425,37 +495,55 @@ def source_state():
 
 
 def delivery_summary(j):
-    notes = Path('.uncle/docs/IMPLEMENTATION_NOTES.md')
-    text = notes.read_text() if notes.exists() else ''
-    if not re.search(r'^##\s+Acceptance delivery\s*$', text, re.M | re.I):
-        # Only prompts/change/implement-change.md (the existing-code change
-        # driver) tells an agent to write this section, with AC-numbered
-        # rows matching CHANGE_SPEC.md. A stagegate.sh (new-application) plan
-        # was never asked for one, so its IMPLEMENTATION_NOTES.md structurally
-        # never has it -- writing a permanently header-only file here is not
-        # "delivery not yet reported", it is evidence this driver never
-        # produces. A real run left that empty file in TEST_REVIEW's evidence
-        # packet, and a reviewer read the header-only file as a live defect
-        # ("still header-only despite three claimed rewrites") that no repair
-        # pass could ever fix, since nothing was ever going to populate it.
-        # Leaving the file absent instead reads as the ordinary "missing or
-        # unreadable" status every other not-yet-applicable file gets.
+    notes = STATE / 'documents' / 'IMPLEMENTATION_NOTES.json'
+    try:
+        payload = read(notes)
+    except (OSError, ValueError, json.JSONDecodeError):
+        (STATE / 'delivery-summary.tsv').unlink(missing_ok=True)
+        return 0
+
+    def fragments(item):
+        if not isinstance(item, dict) or item.get('schema') != 'uncle.artifact/v1' \
+                or item.get('kind') != 'implementation-notes':
+            raise ValueError('wrong implementation-notes JSON schema')
+        nested = item.get('fragments')
+        if nested is None:
+            return [item]
+        if not isinstance(nested, list):
+            raise ValueError('implementation-notes fragments must be an array')
+        result = []
+        for child in nested:
+            result.extend(fragments(child))
+        return result
+
+    try:
+        deliveries = [row for fragment in fragments(payload)
+                      for row in fragment.get('deliveries') or []]
+    except ValueError:
+        (STATE / 'delivery-summary.tsv').unlink(missing_ok=True)
+        return 0
+    if not deliveries:
         (STATE / 'delivery-summary.tsv').unlink(missing_ok=True)
         return 0
     rows = []
-    for line in text.splitlines():
-        cells = [x.strip() for x in line.strip().strip('|').split('|')]
-        if len(cells) == 4 and re.fullmatch(r'AC-\d+', cells[0]):
-            status = 'INCOMPLETE'
-            # Waivers are validated by the unchanged completion/waiver gate.
-            waiver = STATE / 'waivers' / cells[0]
-            if waiver.exists() and cells[1] != 'IMPLEMENTED':
-                status = 'WAIVED'
-            elif cells[1] == 'IMPLEMENTED' and j.get('phase') not in ('WAIT_LIVE', 'VERIFYING'):
-                green = STATE / 'green-check.current.tsv'
-                if green.exists() and green.read_text().strip() and all(x.startswith('0\t') for x in green.read_text().splitlines()):
-                    status = 'VERIFIED'
-            rows.append('\t'.join([cells[0], status, '.uncle/docs/IMPLEMENTATION_NOTES.md']))
+    seen = set()
+    for delivery in deliveries:
+        if not isinstance(delivery, dict) or not re.fullmatch(r'AC-\d+', str(delivery.get('id', ''))):
+            continue
+        identifier = delivery['id']
+        if identifier in seen:
+            continue
+        seen.add(identifier)
+        status = 'INCOMPLETE'
+        # Waivers are validated by the unchanged completion/waiver gate.
+        waiver = STATE / 'waivers' / identifier
+        if waiver.exists() and delivery.get('status') != 'IMPLEMENTED':
+            status = 'WAIVED'
+        elif delivery.get('status') == 'IMPLEMENTED' and j.get('phase') not in ('WAIT_LIVE', 'VERIFYING'):
+            green = STATE / 'green-check.current.tsv'
+            if green.exists() and green.read_text().strip() and all(x.startswith('0\t') for x in green.read_text().splitlines()):
+                status = 'VERIFIED'
+        rows.append('\t'.join([identifier, status, str(notes)]))
     (STATE / 'delivery-summary.tsv').write_text('ID\tStatus\tEvidence\n' + '\n'.join(rows) + '\n')
     if any('\tWAIVED\t' in row for row in rows):
         print('Acceptance includes waivers; waived rows are not verified delivery.')
@@ -479,21 +567,23 @@ def runtime(action, args=()):
     if action == 'retry':
         active = j.get('active_launch')
         if active and j['launches'].get(active, {}).get('status') == 'STARTED':
-            j['launches'][active] = {'status': 'FINISHED', 'interrupted': True, 'notes': file_hash('.uncle/docs/IMPLEMENTATION_NOTES.md')}
+            j['launches'][active] = {'status': 'FINISHED', 'interrupted': True,
+                                     'notes': file_hash(STATE / 'documents' / 'IMPLEMENTATION_NOTES.json')}
         j.pop('active_launch', None)
         j['retry'] = j.get('retry', 0) + 1
         atomic(JOURNAL, j)
         return 0
     if action == 'preflight-check':
-        text = Path('.uncle/docs/PREFLIGHT_REPORT.md').read_text()
-        parts = re.split(r'^##\s+(?:\d+\.\s*)?Acceptance gate\s*$', text, flags=re.M | re.I)
-        if len(parts) == 2:
-            gate = re.split(r'^## ', parts[1], maxsplit=1, flags=re.M)[0]
-            live = {x for item in a['prerequisites'] if item['phase'] == 'LIVE_VERIFICATION' for x in [item['id'], *item['check_ids']]}
-            for line in gate.splitlines():
-                cells = [c.strip() for c in line.strip().strip('|').split('|')]
-                if cells and cells[0] in live and any(c.startswith('BLOCKED') for c in cells):
-                    raise ValueError('Correct .uncle/docs/PREFLIGHT_REPORT.md: live-only ' + cells[0] + ' belongs in Findings, not the coding Acceptance gate')
+        payload = artifact_payload('.uncle/docs/PREFLIGHT_REPORT.md')
+        if payload is None:
+            return 0
+        require(payload.get('schema') == 'uncle.artifact/v1' and payload.get('kind') == 'acceptance-report',
+                'wrong preflight JSON schema')
+        live = {x for item in a['prerequisites'] if item['phase'] == 'LIVE_VERIFICATION'
+                for x in [item['id'], *item['check_ids']]}
+        for row in payload.get('rows', []):
+            if row.get('id') in live and str(row.get('status', '')).startswith('BLOCKED'):
+                raise ValueError('Canonical PREFLIGHT_REPORT.json puts live-only ' + row['id'] + ' in its acceptance rows')
         return 0
     if action == 'snapshot':
         atomic(ASSESS / 'source-before.json', source_state())
@@ -541,7 +631,7 @@ def runtime(action, args=()):
             if previous['status'] != 'FINISHED':
                 print('Previous source-writing attempt was interrupted; explicit retry required.')
                 return 25
-            require(previous.get('notes') == file_hash('.uncle/docs/IMPLEMENTATION_NOTES.md'), 'launch result/report changed; explicit reconciliation required')
+            require(previous.get('notes') == file_hash(STATE / 'documents' / 'IMPLEMENTATION_NOTES.json'), 'launch result/report changed; explicit reconciliation required')
             return 22
         j['active_launch'] = key
         j['launches'][key] = {'status': 'STARTED'}
@@ -550,9 +640,9 @@ def runtime(action, args=()):
     if action == 'classify':
         key = j.get('active_launch')
         if key:
-            j['launches'][key] = {'status': 'FINISHED', 'notes': file_hash('.uncle/docs/IMPLEMENTATION_NOTES.md')}
+            j['launches'][key] = {'status': 'FINISHED', 'notes': file_hash(STATE / 'documents' / 'IMPLEMENTATION_NOTES.json')}
             atomic(JOURNAL, j)
-        rows = blockers('.uncle/docs/IMPLEMENTATION_NOTES.md')
+        rows = blockers(STATE / 'documents' / 'IMPLEMENTATION_NOTES.json')
         if any(row['class'] == 'DESIGN' for row in rows):
             j['blockers'] = rows; j['phase'] = 'DESIGN'; atomic(JOURNAL, j)
             return 10
@@ -569,16 +659,11 @@ def runtime(action, args=()):
         if a['verdict'] == 'DECISION':
             j['completed_subset'] = digest([m['digest'], v['eligible_steps']]); atomic(JOURNAL, j)
             print('Independent subset completed; authority decision remains pending.'); return 20
-        if os.path.basename(m['plan']) == 'UPDATED_PROJECT_PLAN.md' and a['requirement_ids']:
-            from process_tree import python3_executable
-            check = subprocess.run([python3_executable(), str(Path(__file__).with_name('implementation-completion.py')),
-                                    '.uncle/docs/REQUIREMENTS_INTERPRETATION.md', '.uncle/docs/IMPLEMENTATION_NOTES.md'], capture_output=True, text=True)
-            if check.returncode:
-                print(check.stdout.strip())
-                if j.get('phase') == 'VERIFYING':
-                    j['phase'] = 'WAIT_LIVE'; atomic(JOURNAL, j)
-                    return 20
-                return 24
+        # Application plans have no change-spec acceptance-delivery contract.
+        # The former Markdown-table check here attempted to infer one from a
+        # rendered requirements view and could send a completed build back to
+        # implementation or plan revision. Change workflow delivery is checked
+        # by ``implementation-completion.py`` against CHANGE_SPEC.json above.
         if j.get('phase') == 'VERIFYING':
             j['phase'] = 'VERIFIED'; atomic(JOURNAL, j)
         return 0
@@ -649,7 +734,8 @@ def main():
         j['launches'][key] = {'status': 'STARTED'}
     elif ns.action == 'result':
         require(args[0] in j['launches'], 'missing launch intent')
-        j['launches'][args[0]] = {'status': 'FINISHED', 'notes': file_hash('.uncle/docs/IMPLEMENTATION_NOTES.md')}
+        j['launches'][args[0]] = {'status': 'FINISHED',
+                                  'notes': file_hash(STATE / 'documents' / 'IMPLEMENTATION_NOTES.json')}
     atomic(JOURNAL, j)
     return 0
 

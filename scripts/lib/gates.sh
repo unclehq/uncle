@@ -785,20 +785,22 @@ save_plan_review() {
 # id that proved it.
 snapshot_preflight_capabilities() {
     local directory="$STATE_DIR/preflight-capabilities"
-    local report="${1:-.uncle/docs/PREFLIGHT_REPORT.md}"
+    local report="${1:-$STATE_DIR/documents/PREFLIGHT_REPORT.json}"
     mkdir -p "$directory"
     rm -f "$directory/capabilities.tsv"
     if [[ -s "$report" ]]; then
-        awk -F '|' '
-            function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
-            /^## Acceptance gate[ \t\r]*$/ { active=1; next }
-            active && NF == 6 {
-                id=trim($2); required=trim($3); status=trim($4); evidence=trim($5)
-                if (id == "ID" || id ~ /^:?-{3,}:?$/) next
-                if (id == "") next
-                printf "%s\t%s\t%s\t%s\n", id, required, status, evidence
-            }
-        ' "$report" > "$directory/capabilities.tsv"
+        python3 - "$report" > "$directory/capabilities.tsv" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1], encoding='utf-8'))
+if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'acceptance-report':
+    raise SystemExit('wrong preflight JSON schema')
+for row in payload.get('rows', []):
+    if not isinstance(row, dict) or not row.get('id'):
+        continue
+    required = 'YES' if row.get('required') else 'NO'
+    evidence = str(row.get('evidence', '')).replace('\t', ' ').replace('\n', ' ')
+    print('%s\t%s\t%s\t%s' % (row['id'], required, row.get('status', ''), evidence))
+PY
     fi
     {
         echo '# Capabilities proved before implementation'
@@ -857,8 +859,15 @@ snapshot_checklist_groups() {
         } > "$directory/README.md"
         return 0
     fi
+    local -a checklist_input=(--checklist-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json")
+    # The rendered checklist is for human review only.  Scheduling from it
+    # lets an edit to Markdown silently change the executable test plan.
+    if [[ ! -s "$STATE_DIR/documents/MANUAL_CHECKLIST.json" ]]; then
+        echo 'Checklist grouping: canonical MANUAL_CHECKLIST.json is missing; no worker schedule was derived.'
+        return 0
+    fi
     python3 -B "$GATES_LIB_DIR/checklist_groups.py" \
-        --checklist .uncle/docs/MANUAL_CHECKLIST.md --out-dir "$directory" > /dev/null || true
+        "${checklist_input[@]}" --out-dir "$directory" > /dev/null || true
     if [[ -s "$directory/groups.txt" ]]; then
         echo "Checklist grouping: $(wc -l < "$directory/groups.txt" | tr -d ' ') group(s) from the reviewer's declarations."
     else

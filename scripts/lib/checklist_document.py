@@ -39,6 +39,23 @@ LABEL_SYNONYMS = (
 COMMIT_BASELINE_ACTION = re.compile(
     r'\b(?:git\s+(?:history|log|diff)|prior\s+(?:checked[ -]in|committed)\s+(?:version|revision)|'
     r'diff\s+current\b[^\n]{0,180}\bversions?\s+referenced)\b', re.I)
+COMMIT_BASELINE_EXEMPTION = re.compile(
+    r'\b(?:no|not|without(?:\s+needing)?|never)\s+(?:any\s+)?(?:a\s+)?(?:git\s+(?:history|log|diff)|'
+    r'prior\s+(?:checked[ -]in|committed)\s+(?:version|revision)|commit(?:ted)?\s+(?:version|revision))\b|'
+    r'\brather\s+than\s+(?:a\s+)?prior\s+commit\b|\bno\s+commit\s+required\b', re.I)
+
+
+def requires_commit_baseline(text):
+    """Detect an actual history prerequisite, not an explicit rejection of one.
+
+    A checklist may correctly say that a current-tree hash is used *instead
+    of* a prior commit.  The former regex treated that safety statement as a
+    prerequisite and stopped calculator4 after all workers had succeeded.
+    Evaluate one Markdown line at a time so an exemption never masks a
+    separate check which really does demand repository history.
+    """
+    return any(COMMIT_BASELINE_ACTION.search(line) and not COMMIT_BASELINE_EXEMPTION.search(line)
+               for line in text.splitlines())
 
 
 def normalize_labels(text):
@@ -90,7 +107,7 @@ def validate_text(text):
     # Resource/dependency errors continue to use the existing serial fallback.
     if not re.search(r'\b(?:exact action|action|steps)\b',text,re.I) or not re.search(r'\bexpected(?: result)?\b',text,re.I):
         raise ValueError('Checklist lacks actions or expected results')
-    if COMMIT_BASELINE_ACTION.search(text):
+    if requires_commit_baseline(text):
         raise ValueError('Checklist requires Git history or a prior committed version; use current-tree workflow snapshots instead')
     return checks
 

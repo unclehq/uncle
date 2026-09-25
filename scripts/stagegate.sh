@@ -221,7 +221,10 @@ GREEN_CHECK="${WORKFLOW_GREEN_CHECK:-1}"
 # into a stalled workflow merely because every possible concern is not closed.
 # Set to 1 only for a release process that explicitly requires a human override
 # for a NOT READY verdict.
-AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-0}"
+# `--unattended` automates the build, not the final owner decision.  A final
+# NOT_READY verdict is the one point where a user may deliberately accept
+# unperformed human work, so it must open the review dialog by default.
+AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 
 # The .uncle/docs/FINAL_AUDIT.md verdict classifier, the independent verification run, and
 # the generated document the post-implementation gate shows. Sourced
@@ -351,6 +354,14 @@ record_nonblocking_failure() {
     mkdir -p "$STATE_DIR"
     printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$source" "$detail" \
         >> "$STATE_DIR/nonblocking-test-failures.tsv"
+}
+
+# A nonblocking disposition is durable workflow state.  Later gates must not
+# re-open the same canonical report and send it back through REPAIR forever.
+has_nonblocking_failure() {
+    local source="$1" ledger="$STATE_DIR/nonblocking-test-failures.tsv"
+    [[ -s "$ledger" ]] || return 1
+    awk -F'\t' -v source="$source" '$2 == source { found=1 } END { exit !found }' "$ledger"
 }
 
 record_test_failure_disposition() {
@@ -791,8 +802,13 @@ verification_integrity_failure() {
 
 capture_verification_inputs() {
     local snapshot digest file absent_paths scope
+    # Preserve the canonical-path parser's actual diagnostic.  REPAIR uses it
+    # to distinguish a malformed plan field (return to UPDATED_PLAN) from a
+    # genuine protected-input change.  Replacing it with a generic “missing”
+    # message stranded calculator4 in code repair for a planning error.
     verification_paths .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/verification.paths" \
-        || { echo 'Missing Protected verification paths in approved plan.' > "$STATE_DIR/verification-integrity.log"; verification_integrity_failure; }
+        2> "$STATE_DIR/verification-integrity.log" \
+        || verification_integrity_failure
     absent_paths="$STATE_DIR/verification.absent-paths"
     : > "$absent_paths"
     # Only the first snapshot may record plan-owned inputs that do not exist
@@ -1885,7 +1901,7 @@ run_manual_checklist_panel() {
         cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
         local range
         case "$lens" in coverage) range='MC-100 through MC-199';; invariants) range='MC-200 through MC-299';; resources) range='MC-300 through MC-399';; regressions) range='MC-400 through MC-499';; esac
-        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`, `.uncle/workflow/documents/PROJECT_PLAN.json`, `.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json`, `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`, and `.uncle/workflow/documents/TEST_REVIEW.json`. Do not inspect any rendered Markdown view or enumerate directories.\n\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$lens" "$range" >> "$prompt"
+        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`, `.uncle/workflow/documents/PROJECT_PLAN.json`, `.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json`, `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`, and `.uncle/workflow/documents/TEST_REVIEW.json`. Do not inspect any rendered Markdown view or enumerate directories.\n\nUse current-tree snapshots, file hashes, and `.uncle/workflow/green-check.tsv` for regression evidence. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$lens" "$range" >> "$prompt"
         ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/manual-checklist-worker-$lens.log" 2>&1 &
         pids+=("$!")
@@ -2590,7 +2606,9 @@ run_stage() {
             fi
             ;;
         EXECUTE_CHECKLIST)
-            if ! python3 "$ROOT/scripts/lib/checklist_document.py" .uncle/docs/MANUAL_CHECKLIST.md; then
+            # The rendered checklist is for a reviewer to read. Execution
+            # must be driven only by the collated canonical packet.
+            if ! python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json"; then
                 set_state VALIDATE_MANUAL_CHECKLIST
                 exit 1
             fi
@@ -2617,7 +2635,7 @@ run_stage() {
             ;;
         FINAL_AUDIT)
             run_final_audit_panel
-            if [[ -s .uncle/docs/FINAL_AUDIT.md ]]; then
+            if [[ -s "$STATE_DIR/documents/FINAL_AUDIT.json" ]]; then
                 echo 'Final-audit fast path: rendered authoritative worker findings without parent synthesis.'
                 return 0
             fi
@@ -2928,7 +2946,7 @@ collect_background_preflight() {
 
     if [[ "$status" == 0 && "$result" == PASS ]]; then
         echo "Prerequisites confirmed (probed alongside implementation)."
-        snapshot_preflight_capabilities .uncle/docs/PREFLIGHT_REPORT.md 2>/dev/null || true
+        snapshot_preflight_capabilities "$STATE_DIR/documents/PREFLIGHT_REPORT.json" 2>/dev/null || true
         return 0
     fi
 
@@ -2940,7 +2958,7 @@ collect_background_preflight() {
     echo "Log: $LOG_DIR/preflight.background.log"
     supervision_validation_failed preflight .uncle/docs/PREFLIGHT_REPORT.md \
         "Prerequisite probe did not confirm the environment: ${result:-no report}." 0 || true
-    snapshot_preflight_capabilities .uncle/docs/PREFLIGHT_REPORT.md 2>/dev/null || true
+    snapshot_preflight_capabilities "$STATE_DIR/documents/PREFLIGHT_REPORT.json" 2>/dev/null || true
     return 0
 }
 
@@ -3554,6 +3572,25 @@ while true; do
         REPAIR)
             repair_source="$(cat "$STATE_DIR/repair-source" 2>/dev/null || true)"
             repair_count_existing="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"
+            # Older installed drivers could route a checklist-only finding to
+            # REPAIR before the nonblocking checklist continuation existed.
+            # Do not ask a coding agent to "repair" a plan/report mismatch
+            # after the driver has already proved the executable suite green.
+            # Preserve the canonical finding for FINAL_AUDIT instead, so a
+            # resumed run such as calculator4 advances without hiding the
+            # nonexistent protected path or rewriting product source.
+            if [[ "$repair_source" == .uncle/docs/VERIFICATION_REPORT.md ]] \
+                && [[ "$GREEN_CHECK" == 1 ]] \
+                && [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] \
+                && [[ -s "$STATE_DIR/documents/VERIFICATION_REPORT.json" ]]; then
+                checklist_acceptance="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/VERIFICATION_REPORT.json")"
+                if [[ "$checklist_acceptance" != PASS ]]; then
+                    echo 'Resuming a checklist-only finding after a passing driver green check; carrying it to final audit as nonblocking evidence.'
+                    record_nonblocking_failure VERIFICATION_REPORT.json "resumed checklist acceptance $checklist_acceptance after passing driver green check"
+                    set_state FINAL_AUDIT
+                    continue
+                fi
+            fi
             # A malformed protected-path field is a plan contract error, not
             # a source/test defect.  Sending it to REPAIR used to invite an
             # agent to edit product code while the driver was treating a
@@ -3788,7 +3825,11 @@ while true; do
             continue_nonblocking_test_review FINAL_AUDIT || \
                 acceptance_transition .uncle/docs/TEST_REVIEW.md FINAL_AUDIT 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
             [[ "$(get_state)" == FINAL_AUDIT ]] || continue
-            acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT
+            if has_nonblocking_failure VERIFICATION_REPORT.json; then
+                echo 'Checklist finding was already recorded as nonblocking evidence; final audit will assess the canonical report without reopening repair.'
+            else
+                acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT
+            fi
             [[ "$(get_state)" == FINAL_AUDIT ]] || continue
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
@@ -3852,23 +3893,23 @@ while true; do
 
             # Recover an interruption after saving READY but before COMPLETE.
             if [[ "$audit_class" == READY ]]; then
-                [[ "$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")" == "$(hash_file .uncle/docs/FINAL_AUDIT.md)" ]] || exit 1
-                python3 "$ROOT/scripts/lib/audit-findings.py" .uncle/docs/FINAL_AUDIT.md "$STATE_DIR" --check || exit 1
+                [[ "$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")" == "$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")" ]] || exit 1
+                python3 "$ROOT/scripts/lib/audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" --check || exit 1
                 set_state COMPLETE
                 continue
             fi
 
             if [[ "$audit_class" == NOT_READY ]]; then
-                audit_hash="$(hash_file .uncle/docs/FINAL_AUDIT.md)"
-                if [[ "$(classify_audit_verdict .uncle/docs/FINAL_AUDIT.md)" != NOT_READY ]] \
+                audit_hash="$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")"
+                if [[ "$(classify_audit_verdict "$STATE_DIR/documents/FINAL_AUDIT.json")" != NOT_READY ]] \
                     || [[ "$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")" != "$audit_hash" ]]; then
                     echo "The audit changed since its verdict was recorded; rerun FINAL_AUDIT."
                     exit 1
                 fi
                 # Each finding needs an explicit decision, including in an
                 # unattended run. EOF leaves the saved review pending.
-                python3 "$ROOT/scripts/lib/audit-findings.py" .uncle/docs/FINAL_AUDIT.md "$STATE_DIR" || exit 1
-                [[ "$(hash_file .uncle/docs/FINAL_AUDIT.md)" == "$audit_hash" ]] || exit 1
+                python3 "$ROOT/scripts/lib/audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" || exit 1
+                [[ "$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")" == "$audit_hash" ]] || exit 1
                 cp "$VERDICT_FILE" "$STATE_DIR/audit-verdict.original"
                 printf '%s\t%s\n' "READY" "$audit_hash" > "$VERDICT_FILE"
                 if [[ -f "$AUDIT_OVERRIDE_FILE" ]]; then

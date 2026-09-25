@@ -84,6 +84,15 @@ class ContractTests(unittest.TestCase):
         Path('.uncle/docs/CHANGE_PLAN.md').write_text('R-1')
         Path('.uncle/docs/CHANGE_SPEC.md').write_text('AC-1')
         Path('.uncle/docs/ADVERSARIAL_REVIEW.md').write_text('AR-001')
+        canonical = Path('.uncle/workflow/documents'); canonical.mkdir(parents=True)
+        (canonical / 'CHANGE_PLAN.json').write_text(json.dumps(
+            {'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'narrative': 'R-1'}))
+        (canonical / 'CHANGE_SPEC.json').write_text(json.dumps(
+            {'schema': 'uncle.artifact/v1', 'kind': 'change-spec',
+             'acceptance_criteria': [{'id': 'AC-1', 'criterion': 'criterion', 'verification': 'test'}]}))
+        (canonical / 'ADVERSARIAL_REVIEW.json').write_text(json.dumps(
+            {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review',
+             'findings': [{'id': 'AR-001'}], 'overall_assessment': 'reviewed'}))
         Path('probe.txt').write_text('isolated context supported by stub')
         self.m = mod.manifest(ROOT, '.uncle/docs/CHANGE_PLAN.md')
         self.a = assessment(self.m)
@@ -236,9 +245,11 @@ plan_collect_assessment
         self.a['prerequisites'] = [dict(id='P-1', phase='LIVE_VERIFICATION', status='UNVERIFIED',
             check_ids=['LIVE-1'], commands=['true'], evidence_paths=['auth'])]
         self.prepare_runtime()
-        Path('.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('```plan-blockers\n' + json.dumps([
-            dict(id='B-1', **{'class': 'LIVE_VERIFICATION'}, requirement_ids=['AC-1'],
-                 restriction_ids=[], evidence='missing auth', independent_work='delivered')]) + '\n```')
+        notes = mod.STATE / 'documents' / 'IMPLEMENTATION_NOTES.json'; notes.parent.mkdir(parents=True, exist_ok=True)
+        notes.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes', 'fragments': [
+            {'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes', 'plan_blockers': [
+                dict(id='B-1', **{'class': 'LIVE_VERIFICATION'}, requirement_ids=['AC-1'],
+                     restriction_ids=[], evidence='missing auth', independent_work='delivered')]}]}))
         self.assertEqual(mod.runtime('classify'), 20)
         self.assertEqual(mod.runtime('dispatch'), 20)
         Path('auth').write_text('ready')
@@ -283,38 +294,52 @@ plan_collect_assessment
         self.a['prerequisites'] = [dict(id='P-1', phase='LIVE_VERIFICATION', status='UNVERIFIED',
             check_ids=['LIVE-1'], commands=['true'], evidence_paths=['auth'])]
         self.prepare_runtime()
-        Path('.uncle/docs/PREFLIGHT_REPORT.md').write_text('## Acceptance gate\n| P-1 | YES | BLOCKED-SETUP | auth |\n')
-        with self.assertRaisesRegex(ValueError, 'belongs in Findings'):
+        canonical = Path('.uncle/workflow/documents'); canonical.mkdir(parents=True, exist_ok=True)
+        (canonical / 'PREFLIGHT_REPORT.json').write_text(json.dumps(
+            {'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report',
+             'rows': [{'id': 'P-1', 'required': True, 'status': 'BLOCKED-SETUP', 'evidence': 'auth'}]}))
+        with self.assertRaisesRegex(ValueError, 'acceptance rows'):
             mod.runtime('preflight-check')
-        Path('.uncle/docs/PREFLIGHT_REPORT.md').write_text('## Findings\nP-1 live auth unavailable\n## Acceptance gate\n| CODING | YES | PASS | mocks |\n')
+        (canonical / 'PREFLIGHT_REPORT.json').write_text(json.dumps(
+            {'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report',
+             'rows': [{'id': 'CODING', 'required': True, 'status': 'PASS', 'evidence': 'mocks'}]}))
         self.assertEqual(mod.runtime('preflight-check'), 0)
 
     def test_stagegate_live_success_needs_complete_delivery(self):
         Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
         Path('.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text('R-1')
+        (Path('.uncle/workflow/documents') / 'UPDATED_PROJECT_PLAN.json').write_text(json.dumps(
+            {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': 'R-1', 'verification_commands': 'true'}))
         Path('.uncle/docs/REQUIREMENTS_INTERPRETATION.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | live works | live check |\n')
+        (Path('.uncle/workflow/documents') / 'REQUIREMENTS_INTERPRETATION.json').write_text(json.dumps(
+            {'schema': 'uncle.artifact/v1', 'kind': 'requirements-interpretation',
+             'sections': {'definition_of_done': 'AC-1 live works'}}))
         self.m = mod.manifest(ROOT, '.uncle/docs/UPDATED_PROJECT_PLAN.md')
         self.a = assessment(self.m)
         self.prepare_runtime()
         j = mod.journal(); j['phase'] = 'VERIFYING'; mod.atomic(mod.JOURNAL, j)
         Path('.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | INCOMPLETE | helper.py | missing live evidence |\n')
-        self.assertEqual(mod.runtime('classify'), 20)
-        self.assertEqual(mod.journal()['phase'], 'WAIT_LIVE')
+        # Application workflow has no change-spec acceptance-delivery
+        # contract. Markdown implementation notes must not create one.
+        self.assertEqual(mod.runtime('classify'), 0)
 
     def test_incomplete_delivery_can_retry_after_resume(self):
         Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
         Path('.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text('R-1')
+        (Path('.uncle/workflow/documents') / 'UPDATED_PROJECT_PLAN.json').write_text(json.dumps(
+            {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': 'R-1', 'verification_commands': 'true'}))
         Path('.uncle/docs/REQUIREMENTS_INTERPRETATION.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | coding | test |\n')
+        (Path('.uncle/workflow/documents') / 'REQUIREMENTS_INTERPRETATION.json').write_text(json.dumps(
+            {'schema': 'uncle.artifact/v1', 'kind': 'requirements-interpretation',
+             'sections': {'definition_of_done': 'AC-1 coding'}}))
         self.m = mod.manifest(ROOT, '.uncle/docs/UPDATED_PROJECT_PLAN.md')
         self.a = assessment(self.m)
         self.prepare_runtime()
         self.assertEqual(mod.runtime('dispatch'), 0)
         Path('.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | INCOMPLETE | helper.py | missing test |\n')
-        self.assertEqual(mod.runtime('classify'), 24)
-        self.assertEqual(mod.runtime('dispatch'), 22)
-        self.assertEqual(mod.runtime('classify'), 24)
-        self.assertEqual(mod.runtime('retry'), 0)
-        self.assertEqual(mod.runtime('dispatch'), 0)
+        # As above, a rendered Markdown table cannot force an application
+        # workflow into a retry/revision path.
+        self.assertEqual(mod.runtime('classify'), 0)
 
     @unittest.skipIf(os.name == 'nt', 'POSIX orphan process groups; Windows has Job Object tests')
     def test_lock_exclusion_and_orphan_group(self):
@@ -442,12 +467,7 @@ class ScaffoldGeneratorFindingsTests(unittest.TestCase):
 
 
 class DeliverySummaryTests(unittest.TestCase):
-    """A real stuck build: stagegate.sh's own prompts never ask an agent to
-    write '## Acceptance delivery' (only prompts/change/implement-change.md
-    does, for the AC-numbered .uncle/docs/CHANGE_SPEC.md convention), so a greenfield
-    plan's .uncle/docs/IMPLEMENTATION_NOTES.md never has that section. Manufacturing an
-    always-empty delivery-summary.tsv anyway looked, to a reviewer, like
-    delivery tracking that should have updated and never did."""
+    """Delivery state is read from canonical JSON, never its Markdown view."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -469,12 +489,22 @@ class DeliverySummaryTests(unittest.TestCase):
         self.assertFalse((mod.STATE / 'delivery-summary.tsv').exists())
 
     def test_a_real_acceptance_delivery_section_still_writes_rows(self):
+        path = mod.STATE / 'documents' / 'IMPLEMENTATION_NOTES.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
+            'fragments': [{'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes', 'deliveries': [
+                {'id': 'AC-1', 'status': 'IMPLEMENTED', 'changed_code': 'app/main.sh',
+                 'observed_verification': 'test passed'}]}]}))
+        self.assertEqual(mod.delivery_summary({}), 0)
+        self.assertIn('AC-1', (mod.STATE / 'delivery-summary.tsv').read_text())
+
+    def test_markdown_delivery_does_not_create_a_summary(self):
         Path('.uncle/docs').mkdir(parents=True, exist_ok=True)
         Path('.uncle/docs/IMPLEMENTATION_NOTES.md').write_text(
             '## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n'
             '|---|---|---|---|\n| AC-1 | IMPLEMENTED | app/main.sh | test passed |\n')
         self.assertEqual(mod.delivery_summary({}), 0)
-        self.assertIn('AC-1', (mod.STATE / 'delivery-summary.tsv').read_text())
+        self.assertFalse((mod.STATE / 'delivery-summary.tsv').exists())
 
     def test_a_prior_stale_summary_is_removed_once_the_section_disappears(self):
         Path('.uncle/docs').mkdir(parents=True, exist_ok=True)

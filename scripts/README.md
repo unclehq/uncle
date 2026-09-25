@@ -427,7 +427,7 @@ under "Configuration". The two that decide which external CLI is spawned:
 | `WORKFLOW_DIFF_GATE` | `1` | both drivers |
 | `WORKFLOW_GREEN_CHECK` | `1` | both drivers |
 | `WORKFLOW_CONTINUE_ON_TEST_FAILURE` | `1` | both drivers |
-| `WORKFLOW_AUDIT_GATE` | `0` | both drivers |
+| `WORKFLOW_AUDIT_GATE` | `1` | both drivers; set `0` only to explicitly bypass the final human review decision |
 | `WORKFLOW_AGENT_CMD` | `scripts/agent-kimi.sh` | `stagegate.sh`, `change-workflow.sh` |
 | `WORKFLOW_REVIEWER_CMD` | `codex` | both drivers and both `codex-*` helpers |
 

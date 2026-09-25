@@ -40,6 +40,38 @@ class Validate(unittest.TestCase):
             with self.assertRaises(ValueError):
                 notes.validate(root, 'IMPLEMENTATION_NOTES.md')
 
+    def test_validating_an_existing_accumulator_does_not_nest_fragments(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path = root / '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json'
+            path.parent.mkdir(parents=True)
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes', 'fragments': [
+                {'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
+                 'deliveries': [{'id': 'AC-1', 'status': 'IMPLEMENTED',
+                                 'changed_code': 'a.py', 'observed_verification': 'pytest ok'}]}
+            ]}
+            path.write_text(json.dumps(payload))
+            self.assertTrue(notes.validate(root, '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json', require_json=True))
+            stored = json.loads(path.read_text())
+            self.assertEqual(len(stored['fragments']), 1)
+            self.assertNotIn('fragments', stored['fragments'][0])
+
+    def test_legacy_nested_accumulator_is_flattened_before_completion_consumes_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path = root / '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json'
+            path.parent.mkdir(parents=True)
+            leaf = {'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
+                    'deliveries': [{'id': 'AC-1', 'status': 'IMPLEMENTED',
+                                    'changed_code': 'a.py', 'observed_verification': 'pytest ok'}]}
+            nested = {'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
+                      'fragments': [{'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
+                                     'fragments': [leaf]}]}
+            path.write_text(json.dumps(nested))
+            self.assertTrue(notes.validate(root, '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json', require_json=True))
+            stored = json.loads(path.read_text())
+            self.assertEqual(stored['fragments'], [leaf])
+
 
 class Append(unittest.TestCase):
     def test_fragments_merge_across_steps_with_one_deliveries_table(self):

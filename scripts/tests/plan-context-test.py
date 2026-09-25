@@ -42,6 +42,17 @@ class PlanContext(unittest.TestCase):
             self.assertFalse(module.ingest_plan(plan, Path(d), protected=False))
             self.assertEqual(plan.read_text(), '# A hand-written plan\n\nNo JSON here.\n')
 
+    def test_markdown_plan_with_inline_json_metadata_is_left_alone(self):
+        # calculator4's plan documents launch metadata as a legitimate JSON
+        # example. It cannot be mistaken for the authoritative plan packet.
+        with tempfile.TemporaryDirectory() as d:
+            plan = Path(d) / 'PROJECT_PLAN.md'
+            text = ('# Plan\n\nLaunch metadata: '
+                    '`{"kind":"webpage","url":"http://localhost:5173"}`\n')
+            plan.write_text(text)
+            self.assertFalse(module.ingest_plan(plan, Path(d), protected=False))
+            self.assertEqual(plan.read_text(), text)
+
     def test_approved_markdown_project_plan_exports_before_json_only_handoff(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d); plan = root/'PROJECT_PLAN.md'

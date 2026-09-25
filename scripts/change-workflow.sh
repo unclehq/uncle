@@ -288,7 +288,10 @@ GREEN_CHECK="${WORKFLOW_GREEN_CHECK:-1}"
 # An audit is the final assessment, not a demand for a perfect change. Keep
 # its findings in the delivery record and complete by default; release teams
 # that require an explicit override can opt into the gate.
-AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-0}"
+# `--unattended` automates the build, not the final owner decision.  A final
+# NOT_READY verdict is the one point where a user may deliberately accept
+# unperformed human work, so it must open the review dialog by default.
+AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 
 # Agent/reviewer CLI commands. Defaults are `claude` and `codex`. Swap either
 # for a compatible CLI or a wrapper script. The agent CLI must accept the same
@@ -869,7 +872,7 @@ write_verification_envelope() {
     fi
     envelope_write --stage verification --result "$result" --reason "$reason" \
         ${artifact:+--input "artifact=$artifact"} \
-        --evidence "$STATE_DIR/green-check.tsv" .uncle/docs/CHANGE_TEST_REPORT.md
+        --evidence "$STATE_DIR/green-check.tsv" "$STATE_DIR/documents/CHANGE_TEST_REPORT.json"
 }
 
 write_implementation_envelope() {
@@ -877,7 +880,7 @@ write_implementation_envelope() {
     artifact="$(change_artifact)"
     envelope_write --stage implementation --result "$result" ${reason:+--reason "$reason"} \
         ${artifact:+--artifact "$artifact"} --approval IMPLEMENTATION_REVIEW \
-        --evidence .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/CHANGE_TEST_REPORT.md "$REVIEW_FILE" \
+        --evidence "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" "$STATE_DIR/documents/CHANGE_TEST_REPORT.json" "$REVIEW_FILE" \
         --producer-stage implementation --producer-kind agent
 }
 
@@ -1141,7 +1144,7 @@ compose_implementation_prompt() {
 # Going outside the plan is legitimate — a review disposition routinely
 # requires it. Doing so without writing it down is not.
 check_scope_deviations() {
-    local changed extra missing=""
+    local changed extra missing="" deviations
 
     # The same file set the operator is shown at the implementation gate:
     # staged, unstaged, and files the agent created. `git diff` alone reports
@@ -1160,10 +1163,14 @@ check_scope_deviations() {
     extra="$(plan_out_of_scope .uncle/docs/CHANGE_PLAN.md $changed)"
     [[ -n "$extra" ]] || return 0
 
+    deviations="$(python3 "$ROOT/scripts/lib/implementation_notes.py" deviation-paths .)" || {
+        echo 'Canonical implementation-notes JSON is unavailable; cannot verify scope deviations.' >&2
+        return 1
+    }
     local f
     while IFS= read -r f; do
         [[ -n "$f" ]] || continue
-        if ! grep -qF "$f" .uncle/docs/IMPLEMENTATION_NOTES.md 2>/dev/null; then
+        if ! printf '%s\n' "$deviations" | grep -qxF "$f"; then
             missing="$missing$f"$'\n'
         fi
     done <<< "$extra"
@@ -1174,7 +1181,7 @@ check_scope_deviations() {
 
     if [[ -n "$missing" ]]; then
         echo
-        echo "Not recorded as deviations in .uncle/docs/IMPLEMENTATION_NOTES.md:"
+        echo "Not recorded as deviations in canonical IMPLEMENTATION_NOTES.json:"
         printf '%s' "$missing" | sed 's/^/  /'
         echo
         echo "Every file outside the frozen scope must be named there with its"
@@ -1182,7 +1189,7 @@ check_scope_deviations() {
         exit 1
     fi
 
-    echo "  (all recorded in .uncle/docs/IMPLEMENTATION_NOTES.md)"
+    echo "  (all recorded in canonical IMPLEMENTATION_NOTES.json)"
 }
 
 # --- Green check ------------------------------------------------------------
@@ -1197,14 +1204,16 @@ check_scope_deviations() {
 # already failing here is this repository's problem, not this change's, and is
 # not allowed to block the gate later.
 capture_green_baseline() {
+    local baseline_json="$STATE_DIR/documents/BASELINE_REPORT.json"
     if [[ "$GREEN_CHECK" != "1" ]]; then
         return 0
     fi
+    require_file "$baseline_json"
 
     # Recorded per .uncle/docs/BASELINE_REPORT.md digest: a resumed run must not re-run the
     # suite, and an edited baseline report must not silently keep the old one.
     if [[ -s "$GREEN_BASE" && -s "$GREEN_SOURCE" \
-        && "$(cat "$GREEN_SOURCE")" == "$(hash_file .uncle/docs/BASELINE_REPORT.md)" ]]; then
+        && "$(cat "$GREEN_SOURCE")" == "$(hash_file "$baseline_json")" ]]; then
         return 0
     fi
 
@@ -1229,7 +1238,7 @@ capture_green_baseline() {
 
     resolve_baseline_parallel_groups .uncle/docs/BASELINE_REPORT.md "$GREEN_CMDS" "$STATE_DIR/green-check.groups" || exit $?
     green_run "$GREEN_CMDS" "$GREEN_BASE" "$LOG_DIR/green-check-baseline.log" "" "$STATE_DIR/green-check.groups" || exit $?
-    hash_file .uncle/docs/BASELINE_REPORT.md > "$GREEN_SOURCE"
+    hash_file "$baseline_json" > "$GREEN_SOURCE"
 }
 
 # The baseline suite, run beside the planning stages instead of in front of them.
@@ -1732,15 +1741,15 @@ run_stepwise_implementation() {
         compose_implementation_prompt "$base" "$STATE_DIR/implement-change.resolved.md"
         run_claude "$STATE_DIR/implement-change.resolved.md" implementation \
             "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
-        if [[ ! -s .uncle/docs/IMPLEMENTATION_NOTES.md || ! -s .uncle/docs/CHANGE_TEST_REPORT.md ]]; then
+        if [[ ! -s "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" || ! -s "$STATE_DIR/documents/CHANGE_TEST_REPORT.json" ]]; then
             python3 "$ROOT/scripts/lib/implementation_report_fallback.py" --project . --kind change --missing-only
         fi
         local notes_ingest_error
         notes_ingest_error="$(python3 "$ROOT/scripts/lib/implementation_notes.py" validate . \
-            .uncle/docs/IMPLEMENTATION_NOTES.md --require-json 2>&1)" || {
+            "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" --require-json 2>&1)" || {
             echo "$notes_ingest_error"
             supervision_validation_failed implementation-notes \
-                .uncle/docs/IMPLEMENTATION_NOTES.md "$notes_ingest_error"
+                "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" "$notes_ingest_error"
             return 1
         }
         python3 "$ROOT/scripts/lib/test_report.py" validate . change .uncle/workflow/documents/CHANGE_TEST_REPORT.json
@@ -1885,7 +1894,7 @@ recover_missing_implementation_reports() {
 # report-only pass instead of replaying checks or asking the operator to
 # manufacture documentation.
 recover_missing_checklist_reports() {
-    if [[ -s .uncle/docs/VERIFICATION_REPORT.md && -s .uncle/docs/DEFECTS.md ]]; then
+    if [[ -s "$STATE_DIR/documents/VERIFICATION_REPORT.json" && -s "$STATE_DIR/documents/DEFECTS.json" ]]; then
         return 0
     fi
     # A missing synthesis document is a driver problem, not a reason to spend
@@ -2047,6 +2056,10 @@ run_claude() {
     if [[ -n "${UNCLE_WORKER_PACKET_PATH:-}" ]]; then
         agent_delivery="$UNCLE_WORKER_PACKET_PATH"
         rm -f "$agent_delivery"
+    elif [[ "${UNCLE_COMBINED_CHANGE_PLAN:-0}" == 1 ]]; then
+        mkdir -p "$STATE_DIR/artifact-delivery"
+        agent_delivery="$STATE_DIR/artifact-delivery/change-planning-bundle.json"
+        rm -f "$agent_delivery"
     elif [[ "$log_name" == change-plan || "$log_name" == updated-change-plan ]]; then
         mkdir -p "$STATE_DIR/artifact-delivery"
         agent_delivery="$STATE_DIR/artifact-delivery/${log_name}.json"
@@ -2129,20 +2142,41 @@ CANONICAL_WORKER_PACKET_CONTRACT
                 fi
                 ;;
             change-plan|updated-change-plan)
-                cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
+                if [[ "${UNCLE_COMBINED_CHANGE_PLAN:-0}" == 1 ]]; then
+                    cat >> "$effective_prompt" <<'CANONICAL_PLANNING_BUNDLE_CONTRACT'
+
+## Canonical combined planning delivery (binding)
+
+Use your Write tool to create exactly one JSON object at `
+CANONICAL_PLANNING_BUNDLE_CONTRACT
+                    printf '%s' "$agent_delivery" >> "$effective_prompt"
+                    cat >> "$effective_prompt" <<'CANONICAL_PLANNING_BUNDLE_CONTRACT'
+`. It must be:
+`{"schema":"uncle.artifact/v1","kind":"change-planning-bundle","baseline_report":{"schema":"uncle.artifact/v1","kind":"baseline-report","narrative":"...","verification_commands":"..."},"change_spec":{"schema":"uncle.artifact/v1","kind":"change-spec","narrative":"...","acceptance_criteria":[{"id":"AC-1","criterion":"...","verification":"..."}]},"change_plan":{"schema":"uncle.artifact/v1","kind":"change-plan","narrative":"..."}}`.
+
+This file is the only authoritative handoff. Do not write or read generated
+Markdown views; the driver validates the three packets and renders those views
+afterward. Chat text is diagnostics only.
+CANONICAL_PLANNING_BUNDLE_CONTRACT
+                    if [[ -n "$artifact_error" ]]; then
+                        printf '\nThe previous canonical delivery was rejected: %s\nUse Write to replace the same delivery file with a complete corrected JSON bundle.\n' "$artifact_error" >> "$effective_prompt"
+                    fi
+                else
+                    cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
 
 ## Canonical artifact contract (binding)
 
 Use your Write tool to create exactly one complete `uncle.artifact/v1` JSON
 object at `
 CANONICAL_ARTIFACT_CONTRACT
-                printf '%s' "$agent_delivery" >> "$effective_prompt"
-                cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
+                    printf '%s' "$agent_delivery" >> "$effective_prompt"
+                    cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
 `. This file is the only authoritative handoff; chat text is diagnostics only.
 Do not write a Markdown view or modify another file.
 CANONICAL_ARTIFACT_CONTRACT
-                if [[ -n "$artifact_error" ]]; then
-                    printf '\nThe previous canonical delivery was rejected: %s\nUse Write to replace the same delivery file with a complete corrected JSON object.\n' "$artifact_error" >> "$effective_prompt"
+                    if [[ -n "$artifact_error" ]]; then
+                        printf '\nThe previous canonical delivery was rejected: %s\nUse Write to replace the same delivery file with a complete corrected JSON object.\n' "$artifact_error" >> "$effective_prompt"
+                    fi
                 fi
                 ;;
         esac
@@ -2269,7 +2303,19 @@ CANONICAL_ARTIFACT_CONTRACT
                 fi
                 ;;
             change-plan|updated-change-plan)
-                if ! artifact_error="$(python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$log" . "$agent_delivery" 2>&1)"; then
+                if [[ "${UNCLE_COMBINED_CHANGE_PLAN:-0}" == 1 ]]; then
+                    if ! artifact_error="$(python3 "$ROOT/scripts/lib/publish_change_planning_bundle.py" . "$agent_delivery" 2>&1)"; then
+                        if [[ -z "$artifact_retried" ]]; then
+                            artifact_retried=1
+                            rm -f "$agent_delivery"
+                            echo "Canonical planning bundle rejected; retrying $log_name once with the exact schema error."
+                            printf '%s\n' "$artifact_error"
+                            continue
+                        fi
+                        printf '%s\n' "$artifact_error" >&2
+                        exit 1
+                    fi
+                elif ! artifact_error="$(python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$log" . "$agent_delivery" 2>&1)"; then
                     if [[ -z "$artifact_retried" ]]; then
                         artifact_retried=1
                         rm -f "$agent_delivery"
@@ -2600,6 +2646,7 @@ run_final_audit_panel() {
 
 run_checklist_panel() {
     local kind="$1" source="$2" directory="$STATE_DIR/checklist-$1-panel" lens prompt output pid
+    local serial_workers=0
     local -a pids=()
     # A relative "prompts/change/..." template lives in the uncle
     # installation (ROOT), not in the project under change (PROJECT_ROOT,
@@ -2608,6 +2655,13 @@ run_checklist_panel() {
     # name without knowing which directory it will actually run in.
     source="$(resolve_prompt "$source")"
     [[ "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || { CHECKLIST_PANEL_PROMPT="$source"; return 0; }
+    # A self-hosted/OpenCode endpoint is commonly a single weak local model.
+    # Four simultaneous checklist sessions compete for that one endpoint,
+    # causing its adapter to time out/terminate every sibling before any
+    # packet is written (uncle-issue-66).  Preserve lens isolation but run the
+    # small packets serially; hosted runners retain the faster fan-out.
+    [[ "$(uncle_stage_runner manual-checklist)" == self-hosted ]] && serial_workers=1
+    [[ "$serial_workers" == 0 ]] || echo 'Manual-checklist panel: self-hosted runner detected; running lens workers serially.'
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     for lens in coverage invariants resources regressions; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
@@ -2620,9 +2674,15 @@ run_checklist_panel() {
         else
             inputs='`.uncle/workflow/documents/BASELINE_REPORT.json`, `.uncle/workflow/documents/CHANGE_SPEC.json`, `.uncle/workflow/documents/CHANGE_PLAN.json`, `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`, `.uncle/workflow/documents/IMPLEMENTATION_NOTES.json`, `.uncle/workflow/documents/CHANGE_TEST_REPORT.json`, and `.uncle/workflow/documents/TEST_REVIEW.json`'
         fi
-        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: %s. Do not inspect any rendered Markdown view or enumerate directories.\n\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$kind" "$range" >> "$prompt"
-        ( run_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens" "$CODEX_EFFORT_CHECKLIST" ) > "$LOG_DIR/manual-checklist-$kind-worker-$lens.log" 2>&1 &
-        pids+=("$!")
+        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: %s. Do not inspect any rendered Markdown view or enumerate directories.\n\nUse current-tree snapshots, file hashes, and `.uncle/workflow/green-check.tsv` for regression evidence. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$kind" "$range" >> "$prompt"
+        if [[ "$serial_workers" == 1 ]]; then
+            ( run_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens" "$CODEX_EFFORT_CHECKLIST" ) \
+                > "$LOG_DIR/manual-checklist-$kind-worker-$lens.log" 2>&1 \
+                || echo 'Checklist worker failed; canonical packet validation will stop the panel.' >&2
+        else
+            ( run_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens" "$CODEX_EFFORT_CHECKLIST" ) > "$LOG_DIR/manual-checklist-$kind-worker-$lens.log" 2>&1 &
+            pids+=("$!")
+        fi
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Checklist worker failed; canonical packet validation will stop the panel.' >&2; done
     # Repair only the malformed worker packet.  A stale rendered checklist can
@@ -2853,7 +2913,7 @@ VERDICT_WRITTEN_THIS_RUN=0
 # existing analysis gate. Editing any of them requires a fresh plan afterward.
 change_plan_draft_key() {
     local file
-    for file in "$DOCUMENT_BUDGET_SOURCE" .uncle/docs/BASELINE_REPORT.md .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md; do
+    for file in "$DOCUMENT_BUDGET_SOURCE" "$STATE_DIR/documents/BASELINE_REPORT.json" "$STATE_DIR/documents/CHANGE_SPEC.json" "$STATE_DIR/documents/CHANGE_PLAN.json"; do
         [[ -s "$file" ]] || return 1
         hash_file "$file" || return 1
     done
@@ -2882,7 +2942,7 @@ planning_context_used() {
 }
 
 planning_documents_complete() {
-    [[ -s .uncle/docs/BASELINE_REPORT.md && -s .uncle/docs/CHANGE_SPEC.md && -s .uncle/docs/CHANGE_PLAN.md ]]
+    [[ -s "$STATE_DIR/documents/BASELINE_REPORT.json" && -s "$STATE_DIR/documents/CHANGE_SPEC.json" && -s "$STATE_DIR/documents/CHANGE_PLAN.json" ]]
 }
 
 # run_planning_pass with-baseline|spec-and-plan [note-file]
@@ -2891,12 +2951,12 @@ run_planning_pass() {
     {
         if [[ "$1" == with-baseline ]]; then
             printf '# Combined baseline, change specification, and planning\n\n'
-            printf 'In this single stage and the same model and context, first establish the baseline by running verification commands and write .uncle/docs/BASELINE_REPORT.md, then write .uncle/docs/CHANGE_SPEC.md, then use it to write .uncle/docs/CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+            printf 'In this single stage and the same model and context, establish the baseline, specify the change, and plan it. Your only generated artifact is the canonical JSON bundle specified by the driver. It contains baseline_report, change_spec, and change_plan packets. Do not write generated Markdown or implement source changes.\n\n'
         else
             printf '# Combined change specification and planning\n\n'
-            printf '.uncle/docs/BASELINE_REPORT.md is already written; read it and do not redo the baseline. In this single stage and the same context, write .uncle/docs/CHANGE_SPEC.md, then use it to write .uncle/docs/CHANGE_PLAN.md. These are drafts for the existing approval gates. Do not implement source changes.\n\n'
+            printf '.uncle/workflow/documents/BASELINE_REPORT.json is already written; read that canonical packet and do not redo the baseline. In this single stage and the same context, provide a complete replacement canonical bundle containing the unchanged baseline_report plus the new change_spec and change_plan. Do not read generated Markdown or implement source changes.\n\n'
         fi
-        printf 'Write each document to disk the moment its inputs are in hand -- .uncle/docs/BASELINE_REPORT.md before any reading for the specification, .uncle/docs/CHANGE_SPEC.md before any reading for the plan. A document on disk survives a context that runs out; work still in progress does not. Grep for the symbols CHANGE_REQUEST.md names and read the surrounding lines; never read a large file end to end.\n\n'
+        printf 'Write the complete JSON bundle to the supplied delivery path once all three packets are valid. Grep for the symbols CHANGE_REQUEST.md names and read the surrounding lines; never read a large file end to end.\n\n'
         if [[ -n "${2:-}" && -s "$2" ]]; then
             cat "$2"
             printf '\n\n'
@@ -2917,14 +2977,14 @@ run_planning_stage() {
     local pass used missing f note="$STATE_DIR/planning-context-note.md"
     rm -f "$note"
     for pass in 1 2; do
-        if [[ -s .uncle/docs/BASELINE_REPORT.md ]]; then
+        if [[ -s "$STATE_DIR/documents/BASELINE_REPORT.json" ]]; then
             run_planning_pass spec-and-plan "$note" || return $?
         else
             run_planning_pass with-baseline "$note" || return $?
         fi
         planning_documents_complete && break
         missing=""
-        for f in .uncle/docs/BASELINE_REPORT.md .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md; do
+        for f in "$STATE_DIR/documents/BASELINE_REPORT.json" "$STATE_DIR/documents/CHANGE_SPEC.json" "$STATE_DIR/documents/CHANGE_PLAN.json"; do
             [[ -s "$f" ]] || missing="$missing$f "
         done
         used="$(planning_context_used "$LOG_DIR/change-plan.jsonl")"
@@ -2951,32 +3011,12 @@ run_planning_stage() {
     if ! planning_documents_complete; then
         echo "Planning did not complete in two passes. Narrow CHANGE_REQUEST.md, or name the files"
         echo "the change touches so the baseline can go straight to them, then re-run."
-        supervision_validation_failed change-plan .uncle/docs/BASELINE_REPORT.md \
+        supervision_validation_failed change-plan "$STATE_DIR/documents/BASELINE_REPORT.json" \
             "planning stage ended twice without completing its documents (context used: $used tokens)" 1 || true
         return 1
     fi
-    local plan_ingest_error
-    if [[ -s .uncle/docs/BASELINE_REPORT.md ]]; then
-        plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" baseline-report .uncle/docs/BASELINE_REPORT.md . 2>&1)" || {
-            printf '%s\n' "$plan_ingest_error" >&2
-            supervision_validation_failed baseline-report .uncle/docs/BASELINE_REPORT.md "$plan_ingest_error"
-            return 1
-        }
-    fi
-    if [[ -s .uncle/docs/CHANGE_SPEC.md ]]; then
-        plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" change-spec .uncle/docs/CHANGE_SPEC.md . 2>&1)" || {
-            printf '%s\n' "$plan_ingest_error" >&2
-            supervision_validation_failed change-spec .uncle/docs/CHANGE_SPEC.md "$plan_ingest_error"
-            return 1
-        }
-    fi
-    if [[ -s .uncle/docs/CHANGE_PLAN.md ]]; then
-        plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" change-plan .uncle/docs/CHANGE_PLAN.md . 2>&1)" || {
-            printf '%s\n' "$plan_ingest_error" >&2
-            supervision_validation_failed change-plan .uncle/docs/CHANGE_PLAN.md "$plan_ingest_error"
-            return 1
-        }
-    fi
+    # The bundle publisher already schema-validates all packets before writing
+    # either canonical JSON or the human Markdown views. Never re-ingest views.
     check_document_budget .uncle/docs/BASELINE_REPORT.md || return 1
     check_document_budget .uncle/docs/CHANGE_SPEC.md || return 1
     check_document_budget .uncle/docs/CHANGE_PLAN.md || return 1
@@ -2987,11 +3027,13 @@ implementation_complete() {
     verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
     verify_approval .uncle/docs/CHANGE_PLAN.md CHANGE_PLAN
     local completion="$STATE_DIR/implementation-completion.txt" line id waiver
+    local spec="$STATE_DIR/documents/CHANGE_SPEC.json"
+    local notes="$STATE_DIR/documents/IMPLEMENTATION_NOTES.json"
     if python3 "$ROOT/scripts/lib/implementation-completion.py" \
-        .uncle/docs/CHANGE_SPEC.md .uncle/docs/IMPLEMENTATION_NOTES.md > "$completion"; then
+        "$spec" "$notes" > "$completion"; then
         return 0
     fi
-    supervision_validation_failed implementation_completion .uncle/docs/IMPLEMENTATION_NOTES.md \
+    supervision_validation_failed implementation_completion "$notes" \
         "$(head -n 3 "$completion" 2>/dev/null | tr '\n' ' ')" 0
     # Keep rejection evidence intact. Only explicitly waived delivery rows may
     # advance; structural errors, missing IDs, and unrelated waivers still fail.
@@ -3099,12 +3141,6 @@ while true; do
                 # Legacy resume, or edits made while approving the specification.
                 run_claude prompts/change/change-plan.md change-plan \
                     "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"
-                # Compatibility bridge for an in-flight pre-delivery run.
-                # New runner contracts write this packet directly; only an
-                # existing Markdown-only response is imported once here.
-                if [[ ! -s "$STATE_DIR/documents/CHANGE_PLAN.json" && -s .uncle/docs/CHANGE_PLAN.md ]]; then
-                    python3 "$ROOT/scripts/lib/plan_context.py" change-plan .uncle/docs/CHANGE_PLAN.md . || exit 1
-                fi
                 require_file .uncle/docs/CHANGE_PLAN.md
                 check_document_budget .uncle/docs/CHANGE_PLAN.md || exit 1
             fi
@@ -3122,7 +3158,7 @@ while true; do
             # leaves the reason nothing was verified, and blocks release.
             envelope_write --stage review --result unavailable --reason 'reviewer did not complete'
             run_adversarial_review_panel
-            if [[ -s .uncle/docs/ADVERSARIAL_REVIEW.md ]]; then
+            if [[ -s "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" ]]; then
                 echo 'Adversarial-review fast path: rendered authoritative worker findings without parent synthesis.'
                 set_state VALIDATE_ADVERSARIAL_REVIEW
                 continue
@@ -3193,7 +3229,7 @@ while true; do
             # then carried the longer copy in context. Snapshot the approved
             # pre-review text first: nothing reads it, so it costs no tokens,
             # and it keeps the record of what the review actually changed.
-            cp .uncle/docs/CHANGE_PLAN.md "$STATE_DIR/CHANGE_PLAN.pre-review.md"
+            cp "$STATE_DIR/documents/CHANGE_PLAN.json" "$STATE_DIR/CHANGE_PLAN.pre-review.json"
 
             # A clean adversarial review needs no specialist packets or parent
             # synthesis.  The fast path still takes the normal JSON ingestion,
@@ -3214,21 +3250,14 @@ while true; do
             # Probe only: would code written from the pre-review plan have
             # survived the review? The snapshot above already holds that plan,
             # so this costs a diff. Acts on nothing, cannot fail the stage.
-            if [[ -s "$STATE_DIR/CHANGE_PLAN.pre-review.md" && -s .uncle/docs/CHANGE_PLAN.md ]]; then
+            if [[ -s "$STATE_DIR/CHANGE_PLAN.pre-review.json" && -s "$STATE_DIR/documents/CHANGE_PLAN.json" ]]; then
                 python3 -B "$ROOT/scripts/lib/plan_drift.py" \
-                    "$STATE_DIR/CHANGE_PLAN.pre-review.md" .uncle/docs/CHANGE_PLAN.md \
+                    "$STATE_DIR/CHANGE_PLAN.pre-review.json" "$STATE_DIR/documents/CHANGE_PLAN.json" \
                     "$STATE_DIR/plan-drift.json" 2>/dev/null || true
             fi
             verify_approval .uncle/docs/BASELINE_REPORT.md BASELINE_REPORT
             verify_approval .uncle/docs/CHANGE_SPEC.md CHANGE_SPEC
             verify_approval .uncle/docs/ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
-            if [[ ! -s "$STATE_DIR/documents/CHANGE_PLAN.json" && -s .uncle/docs/CHANGE_PLAN.md ]]; then
-                plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" updated-change-plan .uncle/docs/CHANGE_PLAN.md . 2>&1)" || {
-                    printf '%s\n' "$plan_ingest_error" >&2
-                    supervision_validation_failed updated-change-plan .uncle/docs/CHANGE_PLAN.md "$plan_ingest_error"
-                    exit 1
-                }
-            fi
             require_file .uncle/docs/CHANGE_PLAN.md
             # The plan packet is authoritative; its Markdown rendering is a
             # review view and presentation budget must not block it.
@@ -3254,7 +3283,7 @@ while true; do
             human_gate APPROVE \
                 .uncle/docs/CHANGE_PLAN.md CHANGE_PLAN
             plan_review_input=()
-            [[ -f .uncle/docs/ADVERSARIAL_REVIEW.md ]] && plan_review_input=(--input "review=$(hash_file .uncle/docs/ADVERSARIAL_REVIEW.md)")
+            [[ -f "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" ]] && plan_review_input=(--input "review=$(hash_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json")")
             envelope_write --stage plan --result pass \
                 --evidence .uncle/docs/CHANGE_PLAN.md .uncle/docs/ADVERSARIAL_REVIEW.md \
                 --dispositions .uncle/docs/CHANGE_PLAN.md ${plan_review_input[@]+"${plan_review_input[@]}"} \
@@ -3301,11 +3330,11 @@ while true; do
                     base prompts/change/manual-checklist-base.md
             fi
 
-            if [[ -s .uncle/docs/IMPLEMENTATION_NOTES.md ]] && implementation_has_changes && implementation_complete; then
+            if [[ -s "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" ]] && implementation_has_changes && implementation_complete; then
                 echo "Existing implementation delivery accepted; continuing to verification."
             elif [[ "$plan_status" == 22 ]]; then
                 echo 'Verification-only resume finished; checking delivery.'
-            elif [[ "$(cat "$STATE_DIR/implementation-completion-repair" 2>/dev/null || true)" == "$(hash_file .uncle/docs/CHANGE_PLAN.md)" ]]; then
+            elif [[ "$(cat "$STATE_DIR/implementation-completion-repair" 2>/dev/null || true)" == "$(hash_file "$STATE_DIR/documents/CHANGE_PLAN.json")" ]]; then
                 echo 'Implementation remains incomplete; automatic repair already attempted for this plan.'
             elif stepwise_implementation_enabled && { ! plan_executability_enabled || ! grep -q '"verdict": "DECISION"' "$PLAN_ASSESS_DIR/assessment.json"; }; then
                 step_status=0
@@ -3333,7 +3362,7 @@ while true; do
             check_document_budget .uncle/docs/CHANGE_TEST_REPORT.md || true
 
             if ! implementation_has_changes || ! implementation_complete; then
-                repair_digest="$(hash_file .uncle/docs/CHANGE_PLAN.md)"
+                repair_digest="$(hash_file "$STATE_DIR/documents/CHANGE_PLAN.json")"
                 if [[ "$(cat "$STATE_DIR/implementation-completion-repair" 2>/dev/null || true)" == "$repair_digest" ]]; then
                     echo "Implementation remains incomplete; automatic repair already attempted for this plan."
                     echo "See .uncle/docs/IMPLEMENTATION_NOTES.md and $STATE_DIR/implementation-completion.txt; resume after resolving the blockers."
@@ -3602,7 +3631,7 @@ REPAIR
                 set_state VALIDATE_CHECKLIST
                 continue
             fi
-            PROGRESS_TOTAL="$(grep -oE 'MC-[0-9]+' .uncle/docs/MANUAL_CHECKLIST.md 2>/dev/null \
+            PROGRESS_TOTAL="$(jq -r '.checks[]?.id // empty' "$STATE_DIR/documents/MANUAL_CHECKLIST.json" 2>/dev/null \
                 | sort -u | grep -c . || echo 0)"
             PROGRESS_LABEL="checklist"
             run_claude "${CHECKLIST_EXECUTE_PROMPT:-prompts/change/execute-change-checklist.md}" execute-checklist \
@@ -3629,7 +3658,7 @@ REPAIR
             if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine freeze || exit 1; fi
             rm -f .uncle/docs/FINAL_AUDIT.md
             run_final_audit_panel
-            if [[ -s .uncle/docs/FINAL_AUDIT.md ]]; then
+            if [[ -s "$STATE_DIR/documents/FINAL_AUDIT.json" ]]; then
                 echo 'Final-audit fast path: rendered authoritative worker findings without parent synthesis.'
                 set_state VALIDATE_AUDIT
                 continue
@@ -3707,23 +3736,23 @@ REPAIR
 
             # Recover an interruption after saving READY but before COMPLETE.
             if [[ "$audit_class" == READY ]]; then
-                [[ "$(awk -F'\t' 'NR == 1 {print $3}' "$VERDICT_FILE")" == "$(hash_file .uncle/docs/FINAL_AUDIT.md)" ]] || exit 1
-                python3 "$ROOT/scripts/lib/audit-findings.py" .uncle/docs/FINAL_AUDIT.md "$STATE_DIR" --check || exit 1
+                [[ "$(awk -F'\t' 'NR == 1 {print $3}' "$VERDICT_FILE")" == "$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")" ]] || exit 1
+                python3 "$ROOT/scripts/lib/audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" --check || exit 1
                 set_state COMPLETE
                 continue
             fi
 
             if [[ "$audit_class" == NOT_READY ]]; then
-                audit_hash="$(hash_file .uncle/docs/FINAL_AUDIT.md)"
-                if [[ "$(classify_audit_verdict .uncle/docs/FINAL_AUDIT.md)" != NOT_READY ]] \
+                audit_hash="$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")"
+                if [[ "$(classify_audit_verdict "$STATE_DIR/documents/FINAL_AUDIT.json")" != NOT_READY ]] \
                     || [[ "$(awk -F'\t' 'NR == 1 {print $3}' "$VERDICT_FILE")" != "$audit_hash" ]]; then
                     echo "The audit changed since its verdict was recorded; rerun FINAL_AUDIT."
                     exit 1
                 fi
                 # Each finding needs an explicit decision, including in an
                 # unattended run. EOF leaves the saved review pending.
-                python3 "$ROOT/scripts/lib/audit-findings.py" .uncle/docs/FINAL_AUDIT.md "$STATE_DIR" || exit 1
-                [[ "$(hash_file .uncle/docs/FINAL_AUDIT.md)" == "$audit_hash" ]] || exit 1
+                python3 "$ROOT/scripts/lib/audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" || exit 1
+                [[ "$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")" == "$audit_hash" ]] || exit 1
                 cp "$VERDICT_FILE" "$STATE_DIR/audit-verdict.original"
                 printf '%s\t%s\t%s\n' "${STAGEGATE_RUN_ID:--}" "READY" "$audit_hash" > "$VERDICT_FILE"
                 if [[ -f "$AUDIT_OVERRIDE_FILE" ]]; then

@@ -132,7 +132,7 @@ def _load_accumulator(project):
         except ValueError:
             return []
         if isinstance(data, dict) and isinstance(data.get('fragments'), list):
-            return data['fragments']
+            return _flatten_fragments(data['fragments'])
     return []
 
 
@@ -141,6 +141,46 @@ def _write_accumulator(project, fragments):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
                                  'fragments': fragments}, indent=2) + '\n', encoding='utf-8')
+
+
+def _validate_fragments(payload):
+    """Return the accumulator fragments in a canonical delivery.
+
+    ``IMPLEMENTATION_NOTES.json`` is an accumulator, not a single fragment.
+    Treating the accumulator as one more fragment wraps it every time a
+    fallback validates an existing delivery.  Apart from growing without
+    bound, that hides ``deliveries`` from JSON-native consumers.
+    """
+    if not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1' \
+            or payload.get('kind') != 'implementation-notes':
+        raise ValueError('wrong implementation-notes JSON schema')
+    fragments = payload.get('fragments')
+    if fragments is None:
+        return [payload]
+    if not isinstance(fragments, list) or not all(isinstance(item, dict) for item in fragments):
+        raise ValueError('implementation-notes fragments must be an array of objects')
+    return _flatten_fragments(fragments)
+
+
+def _flatten_fragments(fragments):
+    """Flatten legacy accumulator-in-accumulator corruption.
+
+    Earlier fallback validation treated an existing accumulator as one
+    fragment. Each retry therefore wrapped the previous delivery another
+    level deep. Consumers intentionally read only direct fragments, so the
+    acceptance handoff became invisible and the workflow retried indefinitely.
+    Canonicalize that old shape at the boundary; ordinary fragments retain
+    their labels and content unchanged.
+    """
+    flattened = []
+    for item in fragments:
+        nested = item.get('fragments') if isinstance(item, dict) else None
+        if (isinstance(item, dict) and item.get('schema') == 'uncle.artifact/v1'
+                and item.get('kind') == 'implementation-notes' and isinstance(nested, list)):
+            flattened.extend(_flatten_fragments(nested))
+        else:
+            flattened.append(item)
+    return flattened
 
 
 def reset(project):
@@ -181,13 +221,12 @@ def validate(project, path='.uncle/docs/IMPLEMENTATION_NOTES.md', require_json=F
             raise ValueError('IMPLEMENTATION_NOTES.md must be JSON; Markdown is a rendered view only')
         return False
     payload = json.loads(stripped)
-    if not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'implementation-notes':
-        raise ValueError('wrong implementation-notes JSON schema')
-    _write_accumulator(project, [payload])
+    fragments = _validate_fragments(payload)
+    _write_accumulator(project, fragments)
     # A model writes the canonical packet. Never overwrite that transport
     # with the Markdown review view.
     if full_path.resolve() != _accumulator_path(project).resolve():
-        full_path.write_text(merge_and_render([payload]), encoding='utf-8')
+        full_path.write_text(merge_and_render(fragments), encoding='utf-8')
     return True
 
 
@@ -198,6 +237,35 @@ def render(project, target='.uncle/docs/IMPLEMENTATION_NOTES.md'):
     path = Path(project) / target
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(merge_and_render(fragments), encoding='utf-8')
+
+
+def deviation_paths(project):
+    """Print paths explicitly recorded as implementation deviations.
+
+    Scope enforcement must inspect the canonical handoff, never search its
+    rendered Markdown wording.  A changed-file entry can also record a
+    deviation, so retain both representations during the fragment migration.
+    """
+    def flatten(items):
+        for item in items:
+            nested = item.get('fragments') if isinstance(item, dict) else None
+            if isinstance(nested, list):
+                yield from flatten(nested)
+            elif isinstance(item, dict):
+                yield item
+
+    seen = set()
+    for fragment in flatten(_load_accumulator(project)):
+        for entry in fragment.get('deviations') or []:
+            path = entry.get('file') if isinstance(entry, dict) else ''
+            if isinstance(path, str) and path and path not in seen:
+                seen.add(path); print(path)
+        for entry in fragment.get('changed_files') or []:
+            if not isinstance(entry, dict) or not entry.get('deviation'):
+                continue
+            path = entry.get('path')
+            if isinstance(path, str) and path and path not in seen:
+                seen.add(path); print(path)
 
 
 if __name__ == '__main__':
@@ -216,6 +284,8 @@ if __name__ == '__main__':
             reset(sys.argv[2])
         elif action == 'render':
             render(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else '.uncle/docs/IMPLEMENTATION_NOTES.md')
+        elif action == 'deviation-paths':
+            deviation_paths(sys.argv[2])
         else:
             raise ValueError('unknown action: ' + action)
     except (OSError, ValueError, KeyError) as error:

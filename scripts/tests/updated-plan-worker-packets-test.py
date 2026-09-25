@@ -395,6 +395,15 @@ class WorkerPackets(unittest.TestCase):
         self.assertIn('local fallback=40', block)
         self.assertNotIn('fallback=5', block)
 
+    def test_malformed_protected_paths_return_to_planning_not_code_repair(self):
+        source = (ROOT / 'scripts/stagegate.sh').read_text()
+        capture_start = source.index('capture_verification_inputs()')
+        capture = source[capture_start:source.index('\n}\n', capture_start) + 2]
+        self.assertIn('2> "$STATE_DIR/verification-integrity.log"', capture)
+        self.assertNotIn("Missing Protected verification paths in approved plan.", capture)
+        self.assertIn('Invalid (canonical )?protected verification path', source)
+        self.assertIn("'Protected verification paths are malformed; returning to UPDATED_PLAN", source)
+
     def test_speculation_recreates_its_driver_owned_directory(self):
         source = (ROOT / 'scripts/stagegate.sh').read_text()
         start = source.index('speculate() {')

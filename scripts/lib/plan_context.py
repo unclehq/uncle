@@ -169,8 +169,8 @@ def ingest_plan(path, project='.', protected=True):
     import json
     module = _artifact_json()
     text = Path(path).read_text(encoding='utf-8')
-    stripped = module.unfence_json(text)
-    if not stripped.startswith('{'):
+    stripped = module.standalone_json_document(text)
+    if stripped is None:
         return False
     try:
         payload = module.loads_response_json(text)
@@ -191,8 +191,8 @@ def canonicalize_json_plan(path, project='.', protected=True):
     import json
     module = _artifact_json()
     text = Path(path).read_text(encoding='utf-8')
-    stripped = module.unfence_json(text)
-    if not stripped.startswith('{'):
+    stripped = module.standalone_json_document(text)
+    if stripped is None:
         return False
     try:
         payload = module.loads_response_json(text)
@@ -212,8 +212,8 @@ def ingest_change_plan(path, project='.', require_dispositions=False):
     import json
     module = _artifact_json()
     text = Path(path).read_text(encoding='utf-8')
-    stripped = module.unfence_json(text)
-    if not stripped.startswith('{'):
+    stripped = module.standalone_json_document(text)
+    if stripped is None:
         return False
     try:
         payload = module.loads_response_json(text)
@@ -248,8 +248,8 @@ def ingest_baseline_report(path, project='.'):
     import json
     module = _artifact_json()
     text = Path(path).read_text(encoding='utf-8')
-    stripped = module.unfence_json(text)
-    if not stripped.startswith('{'):
+    stripped = module.standalone_json_document(text)
+    if stripped is None:
         return False
     try:
         payload = json.loads(stripped)
@@ -289,8 +289,8 @@ def ingest_change_spec(path, project='.'):
     import json
     module = _artifact_json()
     text = Path(path).read_text(encoding='utf-8')
-    stripped = module.unfence_json(text)
-    if not stripped.startswith('{'):
+    stripped = module.standalone_json_document(text)
+    if stripped is None:
         return False
     try:
         payload = json.loads(stripped)

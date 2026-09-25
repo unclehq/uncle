@@ -15,6 +15,34 @@
 # artifacts is committed in a target repository, so `git diff` never named one.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workflow-artifacts.sh"
 
+# Plan packets retain their narrative for human rendering, but that narrative
+# is carried by canonical JSON.  Scope/step extraction must consume that
+# packet, never the rendered approval view.  Markdown remains only as a
+# compatibility fallback for runs paused before canonical plan publication.
+plan_text() {
+    local plan="$1" stem candidate
+    case "$plan" in
+        .uncle/docs/PROJECT_PLAN.md|.uncle/docs/UPDATED_PROJECT_PLAN.md|.uncle/docs/CHANGE_PLAN.md)
+            stem="${plan##*/}"; stem="${stem%.md}"
+            candidate="${STATE_DIR:-.uncle/workflow}/documents/$stem.json"
+            [[ -s "$candidate" ]] && plan="$candidate"
+            ;;
+    esac
+    if [[ "$plan" == *.json ]]; then
+        python3 - "$plan" <<'PY'
+import json, sys
+try:
+    value = json.load(open(sys.argv[1], encoding='utf-8')).get('narrative', '')
+    if not isinstance(value, str): raise ValueError()
+    print(value)
+except Exception:
+    raise SystemExit(1)
+PY
+    else
+        cat "$plan"
+    fi
+}
+
 # plan_scope_files <plan> — repo-relative paths from the change-impact table,
 # one per line, unique, sorted.
 #
@@ -29,7 +57,7 @@ plan_scope_files() {
 
     [[ -s "$plan" ]] || return 0
 
-    awk '
+    plan_text "$plan" | awk '
         /^## Change-impact table/ { intable = 1; next }
         intable && /^## / { intable = 0 }
         !intable { next }
@@ -50,7 +78,7 @@ plan_scope_files() {
                 if (tok ~ /\//  || tok ~ /\.[A-Za-z0-9]+$/) print tok
             }
         }
-    ' "$plan" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d' | sort -u
+    ' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d' | sort -u
 }
 
 # The heading is numbered in a change plan ("## 20. Implementation sequence")
@@ -66,7 +94,7 @@ plan_steps() {
 
     [[ -s "$plan" ]] || return 0
 
-    awk '
+    plan_text "$plan" | awk '
         # Greenfield plans head this "Implementation order"; change plans say
         # "Implementation sequence". Matching only the latter meant stepwise
         # implementation could never engage on a greenfield plan at all.
@@ -77,7 +105,7 @@ plan_steps() {
             sub(/^[0-9]+\.[[:space:]]*/, "")
             print
         }
-    ' "$plan"
+    '
 }
 
 # plan_step_owns <plan> — "<step number>TAB<path>" for every path a step claims.
@@ -113,7 +141,7 @@ plan_step_owns() {
     # numbered heading's own line; `cur`/`owns` continue it across the lines
     # that follow, so a plan that correctly declared every file it touches
     # was not read as having declared none of them past the first line.
-    awk '
+    plan_text "$plan" | awk '
         function extract(line,    tok) {
             while (match(line, /`[^`]+`/)) {
                 tok = substr(line, RSTART + 1, RLENGTH - 2)
@@ -160,7 +188,7 @@ plan_step_owns() {
             if (match(line, /[Dd]epends[ \t]+on:/)) { line = substr(line, 1, RSTART - 1); owns = 0 }
             extract(line)
         }
-    ' "$plan"
+    '
 }
 
 # plan_step_depends <plan> — "<step>TAB<step it waits for>" per declared edge.
@@ -250,7 +278,7 @@ plan_material_sections() {
 
     [[ -s "$plan" ]] || return 0
 
-    awk -v want="$PLAN_MATERIAL_SECTIONS" '
+    plan_text "$plan" | awk -v want="$PLAN_MATERIAL_SECTIONS" '
         /^#{2,3} / {
             title = $0
             sub(/^#{2,3} +/, "", title)
@@ -264,7 +292,7 @@ plan_material_sections() {
             gsub(/[ \t]+$/, "", line)
             if (line != "") print line
         }
-    ' "$plan"
+    '
 }
 
 # plan_material_hash <plan> — one digest over those sections.

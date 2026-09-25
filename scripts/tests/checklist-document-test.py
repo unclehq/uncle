@@ -53,6 +53,44 @@ class Document(unittest.TestCase):
             p.write_text('## MC-403\nExact action: Diff current calc.js against the versions referenced in AUTOMATED_TEST_REPORT.md\nExpected result: No drift\n')
             with self.assertRaisesRegex(ValueError, 'Git history or a prior committed version'):
                 validate(p)
+
+    def test_accepts_current_tree_evidence_that_explicitly_rejects_history(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / 'checklist'
+            p.write_text(
+                '## MC-400\n'
+                'Exact action: Re-run the test suite against the current tree.\n'
+                'Expected result: Tests pass.\n'
+                'Evidence: Compare output to green-check.tsv; no prior committed revision is required.\n')
+            self.assertEqual(len(validate(p)), 1)
+
+    def test_accepts_current_tree_runtime_without_git_history(self):
+        # Calculator4 was stopped after a worker correctly stated that a dev
+        # server serves untracked files without needing history.  This is an
+        # exemption, not a request to establish a commit baseline.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / 'checklist'
+            p.write_text(
+                '## MC-301\n'
+                'Exact action: Start the current-tree package script.\n'
+                'Expected result: The server serves the current working-tree source '
+                'without needing any Git history or prior committed revision.\n')
+            self.assertEqual(len(validate(p)), 1)
+
+    def test_grouping_reads_canonical_json_not_rendered_markdown(self):
+        import json, subprocess
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); packet = root / 'MANUAL_CHECKLIST.json'; output = root / 'groups'
+            packet.write_text(json.dumps({
+                'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist',
+                'checks': [
+                    {'id': 'MC-1', 'exclusive_resources': ['browser:system'], 'depends_on': []},
+                    {'id': 'MC-2', 'exclusive_resources': ['browser:system'], 'depends_on': []},
+                ],
+            }))
+            subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / 'lib' / 'checklist_groups.py'),
+                            '--checklist-json', str(packet), '--out-dir', str(output)], check=True)
+            self.assertEqual((output / 'groups.txt').read_text().splitlines(), ['MC-1', 'MC-2'])
     def test_json_response_is_validated_rendered_and_exported(self):
         import json
         with tempfile.TemporaryDirectory() as d:

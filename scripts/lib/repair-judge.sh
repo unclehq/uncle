@@ -80,7 +80,7 @@ repair_judge() {
     # approved plan, so return the canonical blocker packet to UPDATED_PLAN.
     if [[ "$report" == "$STATE_DIR/green-check.md" ]] \
         && python3 -B "$ROOT/scripts/lib/repair_plan_route.py" \
-            .uncle/docs/IMPLEMENTATION_NOTES.md "$STATE_DIR/green-check.tsv" \
+            "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" "$STATE_DIR/green-check.tsv" \
             "$STATE_DIR/documents/REPAIR_PLAN_BLOCKERS.json"; then
         echo 'Repair found a plan-owned verification blocker; returning to UPDATED_PLAN instead of retrying source repair.'
         count="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 1)"

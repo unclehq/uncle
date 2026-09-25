@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 import re
 
-_JSON_FENCE = re.compile(r'```(?:json)?\s*\n(.*?)\n```', re.S)
+_JSON_FENCE = re.compile(r'```(?:json)?\s*\n(.*?)\n```', re.S | re.I)
+_WHOLE_JSON_FENCE = re.compile(r'^```(?:json)?\s*\n(.*?)\n```\s*$', re.S | re.I)
 
 def _extract_balanced_object(text):
     """The LAST top-level {...} object in TEXT, honoring string quoting so a
@@ -172,6 +173,28 @@ def unfence_json(text):
         else:
             return embedded
     return stripped
+
+
+def standalone_json_document(text):
+    """Return JSON only when the entire file is one JSON document.
+
+    ``unfence_json`` intentionally recovers an object embedded in an LLM chat
+    reply.  That behavior is wrong for a rendered Markdown artifact: plans
+    may legitimately include a JSON launch-metadata example.  File-backed
+    handoffs accept bare JSON or one complete JSON fence only; Markdown with
+    an inline object stays Markdown.
+    """
+    candidate = text.strip()
+    fence = _WHOLE_JSON_FENCE.match(candidate)
+    if fence:
+        candidate = fence.group(1).strip()
+    if not candidate.startswith('{'):
+        return None
+    extracted = unfence_json(candidate)
+    # Do not silently discard diagnostic prose after an apparent object.
+    # Invalid JSON itself remains eligible so the caller can report the real
+    # syntax error rather than treating it as Markdown.
+    return extracted if extracted == candidate else None
 
 
 def loads_response_json(text):

@@ -14,15 +14,16 @@ plan_executability_enabled() {
 }
 
 plan_check_inputs() {
-    local plan command document
+    local plan command document canonical
     if is_change_workflow; then
         plan=.uncle/docs/CHANGE_PLAN.md
     else
         plan=.uncle/docs/UPDATED_PROJECT_PLAN.md
     fi
     for document in "$plan" .uncle/docs/ADVERSARIAL_REVIEW.md; do
-        if [[ ! -s "$document" ]]; then
-            echo "Missing plan review input: $document" >&2
+        canonical="$(canonical_artifact_path "$document")"
+        if [[ ! -s "$canonical" ]]; then
+            echo "Missing canonical plan review input: $canonical" >&2
             return 1
         fi
     done
@@ -108,6 +109,7 @@ plan_revise() {
     [[ ! -d "$LOG_DIR" ]] || cp -R "$LOG_DIR" "$archive/logs"
     local f
     for f in "$EXEC_PLAN" .uncle/docs/ADVERSARIAL_REVIEW.md .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/CHANGE_TEST_REPORT.md .uncle/docs/AUTOMATED_TEST_REPORT.md; do
+        f="$(canonical_artifact_path "$f")"
         [[ ! -e "$f" ]] || cp "$f" "$archive/"
     done
     cp "$PLAN_ASSESS_DIR/assessment.json" "$PLAN_ASSESS_DIR/manifest.json" "$archive/"
@@ -115,7 +117,7 @@ plan_revise() {
     rm -f "$STATE_DIR/implement-step-done" "$STATE_DIR/implement-steps.txt" "$STATE_DIR/MANUAL_CHECKLIST.base.md"
     # Keep verification baselines, origin, ordinary repair counters, and source intact.
     cat "$(resolve_prompt prompts/plan-recovery.md)" > "$PLAN_ASSESS_DIR/recovery.md"
-    printf '\nRevise %s in place. Read %s/assessment.md.\n' "$EXEC_PLAN" "$PLAN_ASSESS_DIR" >> "$PLAN_ASSESS_DIR/recovery.md"
+    printf '\nRevise the canonical plan packet for this workflow. Read %s/assessment.json; its Markdown view is for human review only.\n' "$PLAN_ASSESS_DIR" >> "$PLAN_ASSESS_DIR/recovery.md"
     if [[ "$EXEC_PLAN" == .uncle/docs/CHANGE_PLAN.md ]]; then
         run_claude "$PLAN_ASSESS_DIR/recovery.md" updated-change-plan "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN"
         # Reuse the existing review/acknowledgement/reconciliation states.
@@ -123,7 +125,8 @@ plan_revise() {
         set_state WAIT_PLAN_APPROVAL
     else
         run_claude "$PLAN_ASSESS_DIR/recovery.md" updated-plan
-        cp .uncle/docs/UPDATED_PROJECT_PLAN.md .uncle/docs/PROJECT_PLAN.md
+        cp "$STATE_DIR/documents/UPDATED_PROJECT_PLAN.json" "$STATE_DIR/documents/PROJECT_PLAN.json"
+        python3 "$ROOT/scripts/lib/plan_context.py" render-project-plan .uncle/docs/PROJECT_PLAN.md . || return 1
         set_state WAIT_PLAN_APPROVAL
     fi
     return 0
@@ -253,11 +256,14 @@ plan_before_write() {
         cat "$(resolve_prompt prompts/plan-recovery.md)" > "$PLAN_ASSESS_DIR/verify.md"
         cat >> "$PLAN_ASSESS_DIR/verify.md" <<'VERIFY'
 Verification-only resume. Do not revise the plan or edit any source.
-Read .uncle/workflow/plan-executability/assessment.json and .uncle/docs/IMPLEMENTATION_NOTES.md.
+Read .uncle/workflow/plan-executability/assessment.json and
+.uncle/workflow/documents/IMPLEMENTATION_NOTES.json. The Markdown notes are
+rendered for humans and must not be used as input.
 Probe only recorded LIVE_VERIFICATION prerequisites, then execute only their approved
 check IDs and commands. Update delivery rows only for observed passing checks.
 Preserve all other rows. Keep plan-blockers for every unavailable or failing check.
-Only .uncle/docs/IMPLEMENTATION_NOTES.md and the existing test report may change.
+Only canonical IMPLEMENTATION_NOTES.json and the canonical test report may
+change; the driver renders Markdown views afterward.
 VERIFY
         if [[ "$EXEC_PLAN" == .uncle/docs/CHANGE_PLAN.md ]]; then
             run_claude "$PLAN_ASSESS_DIR/verify.md" implementation "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT" || return 1

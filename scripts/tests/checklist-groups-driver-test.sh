@@ -14,11 +14,29 @@ mkdir -p "$work/proj"
 cd "$work/proj"
 STATE_DIR="workflow"
 DIR="$STATE_DIR/checklist-groups"
-mkdir -p "$STATE_DIR" .uncle/docs
+mkdir -p "$STATE_DIR/documents" .uncle/docs
 
 check() {
     printf '\n### %s\n- Priority: Critical\n- Exclusive resources: %s\n- Depends on: %s\n- Exact action: run it\n' \
         "$1" "$2" "$3"
+}
+
+# The scheduler consumes this packet, never the rendered checklist. Keep the
+# Markdown snippets below only as a human-view fixture for compatibility with
+# old prompts; each scheduling assertion supplies its canonical source.
+packet() {
+    python3 - "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$@" <<'PY'
+import json, sys
+target, rows = sys.argv[1], sys.argv[2:]
+checks = []
+for row in rows:
+    ident, resources, deps = row.split(':', 2)
+    checks.append({'id': ident,
+                   'exclusive_resources': [] if resources == 'none' else resources.split(','),
+                   'depends_on': [] if deps == 'none' else deps.split(',')})
+with open(target, 'w', encoding='utf-8') as stream:
+    json.dump({'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist', 'checks': checks}, stream)
+PY
 }
 
 # --- a checklist that declared its resources ---------------------------------
@@ -29,6 +47,7 @@ check() {
     check MC-003 port:5173 none
     check MC-004 port:5173 MC-003
 } > .uncle/docs/MANUAL_CHECKLIST.md
+packet MC-001:none:none MC-002:none:none MC-003:port5173:none MC-004:port5173:MC-003
 
 out="$(snapshot_checklist_groups)"
 [[ -s "$DIR/groups.txt" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
@@ -43,6 +62,7 @@ grep -q 'before starting the next' "$DIR/README.md"
     echo '# Manual checklist'
     check MC-001 none MC-404
 } > .uncle/docs/MANUAL_CHECKLIST.md
+packet MC-001:none:MC-404
 status=0
 out="$(snapshot_checklist_groups)" || status=$?
 [[ "$status" == 0 ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
@@ -57,12 +77,14 @@ printf 'MC-900 MC-901\n' > "$DIR/groups.txt"
     echo '# Manual checklist'
     printf '\n### MC-001\n- Exact action: run it\n'
 } > .uncle/docs/MANUAL_CHECKLIST.md
+packet MC-001:none:none
 snapshot_checklist_groups > /dev/null
 [[ "$(cat "$DIR/groups.txt")" == "MC-001" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 grep -q 'scheduled alone' "$DIR/README.md"
 
 # --- no checklist at all -----------------------------------------------------
 rm -f .uncle/docs/MANUAL_CHECKLIST.md
+rm -f "$STATE_DIR/documents/MANUAL_CHECKLIST.json"
 printf 'MC-900 MC-901\n' > "$DIR/groups.txt"
 status=0
 snapshot_checklist_groups > /dev/null || status=$?
@@ -80,6 +102,7 @@ grep -q 'NOT DECLARED' "$DIR/README.md"
     check MC-001 none none
     check MC-002 none none
 } > .uncle/docs/MANUAL_CHECKLIST.md
+packet MC-001:none:none MC-002:none:none
 printf 'MC-900 MC-901\n' > "$DIR/groups.txt"
 status=0
 ( GATES_LIB_DIR="$work/nowhere"; snapshot_checklist_groups > /dev/null ) || status=$?

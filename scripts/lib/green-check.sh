@@ -30,6 +30,18 @@ GREEN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Absence preserves sequential execution. Bad declarations fail before tests.
 verify_parallel_groups() {
     local plan="$1" commands="$2"
+    case "$plan" in
+        .uncle/docs/UPDATED_PROJECT_PLAN.md|.uncle/docs/PROJECT_PLAN.md|.uncle/docs/BASELINE_REPORT.md)
+            local stem="${plan##*/}"; stem="${stem%.md}"
+            [[ -s "${STATE_DIR:-.uncle/workflow}/documents/$stem.json" ]] \
+                && plan="${STATE_DIR:-.uncle/workflow}/documents/$stem.json"
+            ;;
+    esac
+    # Parallel groups are an optional optimization. Canonical plan packets do
+    # not yet model them separately, so JSON plans run their authoritative
+    # command list sequentially rather than parsing the rendered approval
+    # view for scheduling prose.
+    [[ "$plan" == *.json ]] && return 0
     awk -v count="$(wc -l < "$commands" | tr -d ' ')" '
         /^## Parallel verification groups[ \t\r]*$/ { active=1; sections++; next }
         active && /^```/ { if (opened) { closed=1; active=0 } else opened=1; next }
@@ -131,7 +143,33 @@ PY
 verify_commands() {
     local file="$1"
 
+    # The plan/report JSON is the operational source. Keep the old Markdown
+    # argument surface for callers paused before migration, but prefer its
+    # canonical sibling whenever it exists.
+    case "$file" in
+        .uncle/docs/UPDATED_PROJECT_PLAN.md|.uncle/docs/PROJECT_PLAN.md|.uncle/docs/BASELINE_REPORT.md)
+            local stem="${file##*/}"; stem="${stem%.md}"
+            [[ -s "${STATE_DIR:-.uncle/workflow}/documents/$stem.json" ]] \
+                && file="${STATE_DIR:-.uncle/workflow}/documents/$stem.json"
+            ;;
+    esac
+
     [[ -s "$file" ]] || return 0
+
+    if [[ "$file" == *.json ]]; then
+        python3 - "$file" <<'PY' || return 0
+import json, sys
+try:
+    payload = json.load(open(sys.argv[1], encoding='utf-8'))
+    commands = payload.get('verification_commands', '')
+    if not isinstance(commands, str):
+        raise ValueError('verification_commands is not a string')
+    print(commands.rstrip())
+except Exception:
+    raise SystemExit(1)
+PY
+        return 0
+    fi
 
     awk '
         # Fences are only meaningful inside the section, and the first block

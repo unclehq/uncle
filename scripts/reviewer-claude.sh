@@ -37,6 +37,9 @@ CLAUDE_CMD="${WORKFLOW_REVIEWER_CLAUDE_CMD:-claude}"
 DEFAULT_MODEL="${WORKFLOW_REVIEWER_CLAUDE_MODEL:-claude-sonnet-5}"
 MAX_TURNS="${WORKFLOW_REVIEWER_CLAUDE_TURNS:-80}"
 TOOLS="${WORKFLOW_REVIEWER_CLAUDE_TOOLS:-Read,Glob,Grep}"
+if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" ]]; then
+    TOOLS="$TOOLS,Write"
+fi
 
 model="$DEFAULT_MODEL"
 effort=""
@@ -157,7 +160,11 @@ if [[ "$(printf '%s' "$result" | jq ${jq_output_flags[@]+"${jq_output_flags[@]}"
     exit 1
 fi
 
-review="$(printf '%s' "$result" | jq ${jq_output_flags[@]+"${jq_output_flags[@]}"} -r '.result // empty')"
+if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" && -s "$UNCLE_ARTIFACT_DELIVERY" ]]; then
+    review="$(cat "$UNCLE_ARTIFACT_DELIVERY")"
+else
+    review="$(printf '%s' "$result" | jq ${jq_output_flags[@]+"${jq_output_flags[@]}"} -r '.result // empty')"
+fi
 
 if [[ -z "$review" ]]; then
     echo "reviewer-claude.sh: the review produced no final message" >&2

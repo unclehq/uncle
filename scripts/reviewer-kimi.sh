@@ -24,14 +24,27 @@ done
 rm -f -- "$output_file"
 case "$model" in kimi|kimi:*) ;; *) model="kimi:$model" ;; esac
 stream=$(mktemp)
-trap 'rm -f "$stream"' EXIT
-# The fixed tool allowlist grants no shell, writes, delegation, or inherited tools.
+agent_file="$ROOT/lib/kimi/reviewer.md"
+delivery_profile=""
+if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" ]]; then
+    delivery_profile=$(mktemp)
+    # Only this profile exception grants Write, and the driver prompt names
+    # the sole allowed target.  Human Markdown reviews remain read-only.
+    sed '/  - Grep/a\  - Write' "$agent_file" > "$delivery_profile"
+    agent_file="$delivery_profile"
+fi
+trap 'rm -f "$stream" "$delivery_profile"' EXIT
+# Legacy human reviews use the fixed read-only profile. JSON packets receive
+# the short-lived profile above solely to create their delivery file.
 printf '%s' "$prompt" | "$ROOT/scripts/agent-kimi.sh" --model "$model" \
-    --agent-file "$ROOT/lib/kimi/reviewer.md" | tee "$stream"
+    --agent-file "$agent_file" | tee "$stream"
 # Use the last assistant text, not intermediate reasoning or tool-call messages.
 review=$(jq -rs '[.[] | select(.type == "assistant") |
     [.message.content[]? | select(.type == "text") | .text] | join("") |
     select(length > 0)] | last // empty' "$stream")
+if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" && -s "$UNCLE_ARTIFACT_DELIVERY" ]]; then
+    review="$(cat "$UNCLE_ARTIFACT_DELIVERY")"
+fi
 [[ -n "$review" ]] || { echo "Kimi produced no review." >&2; exit 1; }
 # Non-empty is not the same as a document: a model can end its turn having only
 # announced the work. Fail here, where the reason is still visible.

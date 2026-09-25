@@ -97,7 +97,13 @@ if [[ -z "$prompt" ]]; then
     exit 2
 fi
 
-args=(--json -p)
+# A canonical JSON worker has one narrowly named driver-owned delivery path.
+# It must run in act mode to use Write; legacy human-review documents stay in
+# Cline's read-only plan mode.
+args=(--json)
+if [[ -z "${UNCLE_ARTIFACT_DELIVERY:-}" ]]; then
+    args+=(-p)
+fi
 if [[ -n "$model" ]]; then
     args+=(-m "$model")
 fi
@@ -173,6 +179,10 @@ jq -R -s -c --arg model "$model" '
 if [[ "$status" -ne 0 ]]; then
     echo "reviewer-cline.sh: $CLINE_CMD exited with status $status" >&2
     exit "$status"
+fi
+
+if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" && -s "$UNCLE_ARTIFACT_DELIVERY" ]]; then
+    review="$(cat "$UNCLE_ARTIFACT_DELIVERY")"
 fi
 
 if [[ -z "$review" ]]; then

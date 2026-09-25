@@ -1375,6 +1375,14 @@ run_claude() {
     effort="$(stage_effort "$log_name")"
     turns="$(stage_turns "$log_name")"
     local turns_retried=""
+    local agent_delivery=""
+    case "$log_name" in
+        requirements|project-plan|updated-plan)
+            mkdir -p "$STATE_DIR/artifact-delivery"
+            agent_delivery="$STATE_DIR/artifact-delivery/${log_name}.json"
+            rm -f "$agent_delivery"
+            ;;
+    esac
     local -a client_cmd=("$cmd")
     case "${cmd##*/}" in
         claude|codex) client_cmd=(env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "$cmd") ;;
@@ -1421,20 +1429,20 @@ run_claude() {
         esac
         case "$log_name" in
             requirements|project-plan|updated-plan)
-                cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
+                cat >> "$effective_prompt" <<CANONICAL_ARTIFACT_CONTRACT
 
 ## Canonical artifact contract (binding)
 
-Return exactly one complete `uncle.artifact/v1` JSON object as your final
-response. Do not write the Markdown view or any artifact file: the driver
-validates and publishes canonical JSON first, then renders Markdown for people.
+Use your Write tool to create exactly one complete `uncle.artifact/v1` JSON
+object at `$agent_delivery`. This file is the only authoritative handoff; chat
+text is diagnostics only. Do not write a Markdown view or modify another file.
 CANONICAL_ARTIFACT_CONTRACT
                 ;;
         esac
         local -a model_args=()
         [[ -n "$model" ]] && model_args=(--model "$model")
         local started="$SECONDS"
-        "${client_cmd[@]}" -p \
+        env UNCLE_ARTIFACT_DELIVERY="$agent_delivery" "${client_cmd[@]}" -p \
             "${model_args[@]+"${model_args[@]}"}" \
             --effort "$effort" \
             --strict-mcp-config \
@@ -1487,7 +1495,7 @@ CANONICAL_ARTIFACT_CONTRACT
 
         case "$log_name" in
             requirements|project-plan|updated-plan)
-                python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$LOG_DIR/${log_name}.jsonl" . || exit 1 ;;
+                python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$LOG_DIR/${log_name}.jsonl" . "$agent_delivery" || exit 1 ;;
         esac
         break
     done
@@ -1571,6 +1579,17 @@ run_codex_review() {
         esac
     fi
 
+    # Canonical JSON is file-backed workflow data, never a final chat reply.
+    local delivery_file="" reviewer_sandbox="read-only"
+    if [[ "$output_file" == *.json ]]; then
+        mkdir -p "$STATE_DIR/artifact-delivery"
+        delivery_file="${output_file}.delivery.json"
+        rm -f "$delivery_file"
+        { cat "$prompt_file"; printf '\n## Canonical JSON delivery (binding)\n\nUse your Write tool to create exactly one JSON object at `%s`. This is the only artifact the driver reads. Do not write or modify any other file. Chat text is diagnostics only.\n' "$delivery_file"; } > "$STATE_DIR/${log_name}-delivery-prompt.md"
+        prompt_file="$STATE_DIR/${log_name}-delivery-prompt.md"
+        reviewer_sandbox="workspace-write"
+    fi
+
     local review_key
     review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"
     if restore_plan_review "$output_file" "$review_key"; then
@@ -1597,14 +1616,22 @@ run_codex_review() {
         # stdin is the operator's gate-answer channel, not stage input: codex
         # appends a non-TTY stdin to the prompt and would block on it forever.
         # Project dirs need not be git repos; the read-only sandbox is the boundary.
-        "${client_cmd[@]}" exec \
+        env UNCLE_ARTIFACT_DELIVERY="$delivery_file" "${client_cmd[@]}" exec \
             --ephemeral \
             --skip-git-repo-check \
-            --sandbox read-only \
+            --sandbox "$reviewer_sandbox" \
             "${model_args[@]+"${model_args[@]}"}" \
             --output-last-message "$output_file" \
             "$(cat "$prompt_file")" \
             < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" || status=$?
+        if [[ -n "$delivery_file" ]]; then
+            if [[ -s "$delivery_file" ]]; then
+                cp "$delivery_file" "$output_file"
+            else
+                echo "Reviewer $log_name did not write its required canonical JSON delivery: $delivery_file" >&2
+                status=1
+            fi
+        fi
         if [[ "$status" == 0 ]] && { ! normalize_reviewer_packet "$output_file" "$cmd" || ! validate_reviewer_artifact "$output_file" "$cmd"; }; then
             status=1
         fi

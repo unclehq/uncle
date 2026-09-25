@@ -86,13 +86,27 @@ def legacy_raw_document(project, name, kind):
     return payload
 
 
-def publish(stage, log, project):
+def delivered(path, kind):
+    """Read the sole authoritative agent handoff, never conversational text."""
+    artifact_json = module('artifact_json')
+    try:
+        payload = artifact_json.loads_response_json(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError) as error:
+        raise ValueError('canonical %s JSON delivery is missing or invalid at %s: %s' % (kind, path, error)) from error
+    if not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != kind:
+        raise ValueError('canonical %s JSON delivery has the wrong schema at %s' % (kind, path))
+    return payload
+
+
+def publish(stage, log, project, delivery=None):
     if stage not in ARTIFACT:
         return False
     name, kind = ARTIFACT[stage]
     try:
-        payload = response(log, kind)
+        payload = delivered(delivery, kind) if delivery else response(log, kind)
     except ValueError:
+        if delivery:
+            raise
         # Compatibility only.  Once published below, the view is immediately
         # overwritten with a deterministic rendering and cannot remain an
         # operational JSON input.
@@ -114,8 +128,8 @@ def publish(stage, log, project):
 
 if __name__ == '__main__':
     try:
-        if len(sys.argv) != 4:
-            raise ValueError('usage: STAGE EVENT_LOG PROJECT')
+        if len(sys.argv) not in (4, 5):
+            raise ValueError('usage: STAGE EVENT_LOG PROJECT [DELIVERY_JSON]')
         publish(*sys.argv[1:])
     except (OSError, ValueError) as error:
         print('canonical agent artifact: ' + str(error), file=sys.stderr)

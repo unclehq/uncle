@@ -839,6 +839,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         prompt += read_cache.context(prompt)
     stage_name = stage or os.environ.get('UNCLE_STATUS_STAGE', '')
     artifact = PLAN_ARTIFACTS.get(stage_name) if side == 'agent' else None
+    require_file_delivery = bool(os.environ.get('UNCLE_ARTIFACT_DELIVERY'))
     expected_kind = 'change-plan' if stage_name == 'updated-change-plan' else 'plan'
     require_dispositions = stage_name == 'updated-change-plan'
     # `requirements-plan.md` deliberately shares the project-plan invocation
@@ -869,25 +870,19 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         candidate.parent.mkdir(parents=True, exist_ok=True)
         if candidate.exists():
             candidate.unlink()
-        no_write_notice = (
-            '\nThis call needs no file write at all: put the entire object in your reply '
-            'text and stop there. Do not call a write or edit tool for it, and do not try '
-            'writing to ' + str(root) + ' or anywhere outside this isolated copy -- that '
-            'path is denied by design, not by mistake, and asking for permission to use it '
-            'wastes the whole turn. A denied write is not a blocker to work around; it is a '
-            'sign you should be answering in text instead. Naming the target filename, or '
-            'listing filenames you believe you wrote, is not the deliverable and will be '
-            'rejected -- your final message must be the complete JSON object itself, nothing '
-            'else, whether or not a write attempt happened first.')
+        delivery_notice = (
+            '\nUse your Write tool to create the complete JSON object at ' + str(candidate) +
+            '. This isolated delivery file is the only authoritative handoff. Do not write '
+            'any other file. Your final chat response is diagnostics only and is ignored.')
         if artifact == '.uncle/docs/REQUIREMENTS_INTERPRETATION.md':
             request = (prompt + '\nReturn only one JSON object matching this contract as your final message; '
-                       'do not use file tools and do not return Markdown:\n'
+                       'do not return Markdown:\n'
                        '`{"schema":"uncle.artifact/v1","kind":"requirements-interpretation","sections":'
                        '{"required_functionality":"...","optional_functionality":"...","constraints":"...",'
                        '"user_visible_behaviors":"...","system_behaviors":"...","failure_behaviors":"...",'
                        '"ambiguities":"...","assumptions":"...","explicit_non_goals":"...","definition_of_done":"..."}}`.\n'
                        'Every section is a required, nonempty string; use the exact keys above.'
-                       + no_write_notice)
+                       + delivery_notice)
             turns = 0
             for attempt in range(2):
                 attempt_usage = {}
@@ -907,7 +902,9 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                         file_text = candidate.read_text(encoding='utf-8')
                         canonical_response = file_text
                         document = document_response(file_text, artifact) if is_json_response(file_text) else file_text
-                    else:
+                    elif require_file_delivery:
+                        raise ValueError('requirements agent did not write canonical JSON delivery: ' + str(candidate))
+                    else:  # compatibility for direct shim callers predating the file contract
                         canonical_response = response
                         document = document_response(response, artifact)
                     validate_requirements(document)
@@ -936,12 +933,11 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
             protected_fields = (', "protected_verification_paths":"..."' if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md' else '')
             kind_fields = ('"kind":"change-plan","narrative":"...","dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}]'
                            if expected_kind == 'change-plan' else '"kind":"plan","narrative":"...","verification_commands":"..."' + protected_fields)
-            request = (prompt + '\nReturn only one JSON object matching this contract as your final message; '
-                       'do not use file tools and do not return Markdown:\n'
+            request = (prompt + '\nCreate one JSON object matching this contract; do not return Markdown:\n'
                        '`{"schema":"uncle.artifact/v1",' + kind_fields + '}`.\n'
                        '`verification_commands` is the exact shell commands block, as plain text (no fence markers). '
                        '`narrative` is everything else the plan needs to say, as one Markdown block.'
-                       + no_write_notice)
+                       + delivery_notice)
             turns = 0
             for attempt in range(2):
                 attempt_usage = {}
@@ -964,7 +960,9 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                                 file_text = preserve_updated_plan_contract(file_text, root)
                             canonical_response = file_text
                             candidate.write_text(document_response(file_text, artifact, expected_kind, require_dispositions), encoding='utf-8', newline='\n')
-                    else:
+                    elif require_file_delivery:
+                        raise ValueError('plan agent did not write canonical JSON delivery: ' + str(candidate))
+                    else:  # compatibility for direct shim callers predating the file contract
                         if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md':
                             response = preserve_updated_plan_contract(response, root)
                         canonical_response = response

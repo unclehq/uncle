@@ -2021,6 +2021,12 @@ run_claude() {
     require_file "$prompt_file"
 
     local turns_retried=""
+    local agent_delivery=""
+    if [[ "$log_name" == updated-change-plan ]]; then
+        mkdir -p "$STATE_DIR/artifact-delivery"
+        agent_delivery="$STATE_DIR/artifact-delivery/${log_name}.json"
+        rm -f "$agent_delivery"
+    fi
     while true; do
         status_stage_context "$log_name" "$max_turns" "${model:-}" act
         local -a flags=(
@@ -2080,17 +2086,17 @@ run_claude() {
         esac
         case "$log_name" in
             updated-change-plan)
-                cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
+                cat >> "$effective_prompt" <<CANONICAL_ARTIFACT_CONTRACT
 
 ## Canonical artifact contract (binding)
 
-Return exactly one complete `uncle.artifact/v1` JSON object as your final
-response. Do not write the Markdown view or any artifact file: the driver
-validates and publishes canonical JSON first, then renders Markdown for people.
+Use your Write tool to create exactly one complete `uncle.artifact/v1` JSON
+object at `$agent_delivery`. This file is the only authoritative handoff; chat
+text is diagnostics only. Do not write a Markdown view or modify another file.
 CANONICAL_ARTIFACT_CONTRACT
                 ;;
         esac
-        ( "${client_cmd[@]}" "${flags[@]}" \
+        ( env UNCLE_ARTIFACT_DELIVERY="$agent_delivery" "${client_cmd[@]}" "${flags[@]}" \
             < "$effective_prompt" \
             2>&1 \
             | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.jsonl" \
@@ -2207,7 +2213,7 @@ CANONICAL_ARTIFACT_CONTRACT
 
         case "$log_name" in
             updated-change-plan)
-                python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$log" . || exit 1 ;;
+                python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$log" . "$agent_delivery" || exit 1 ;;
         esac
         show_spend
         break
@@ -2313,6 +2319,17 @@ run_codex() {
         esac
     fi
 
+    # Canonical JSON is file-backed workflow data, never a final chat reply.
+    local delivery_file="" reviewer_sandbox="read-only"
+    if [[ "$output_file" == *.json ]]; then
+        mkdir -p "$STATE_DIR/artifact-delivery"
+        delivery_file="${output_file}.delivery.json"
+        rm -f "$delivery_file"
+        { cat "$prompt_file"; printf '\n## Canonical JSON delivery (binding)\n\nUse your Write tool to create exactly one JSON object at `%s`. This is the only artifact the driver reads. Do not write or modify any other file. Chat text is diagnostics only.\n' "$delivery_file"; } > "$STATE_DIR/${log_name}-delivery-prompt.md"
+        prompt_file="$STATE_DIR/${log_name}-delivery-prompt.md"
+        reviewer_sandbox="workspace-write"
+    fi
+
     local review_key
     review_key="$(review_input_key "$output_file" "$prompt_file" "$cmd" "$model" "$effort" "$log_name")"
     if restore_plan_review "$output_file" "$review_key"; then
@@ -2333,7 +2350,7 @@ run_codex() {
         --ephemeral
         # Project dirs need not be git repos; the read-only sandbox is the boundary.
         --skip-git-repo-check
-        --sandbox read-only
+        --sandbox "$reviewer_sandbox"
         "${model_args[@]+"${model_args[@]}"}"
         --output-last-message "$output_file"
     )
@@ -2352,9 +2369,17 @@ run_codex() {
         start="$SECONDS"
         # stdin is the operator's gate-answer channel, not stage input: codex
         # appends a non-TTY stdin to the prompt and would block on it forever.
-        ( "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
+        ( env UNCLE_ARTIFACT_DELIVERY="$delivery_file" "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
             < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" ) &
         wait "$!" || status=$?
+        if [[ -n "$delivery_file" ]]; then
+            if [[ -s "$delivery_file" ]]; then
+                cp "$delivery_file" "$output_file"
+            else
+                echo "Reviewer $log_name did not write its required canonical JSON delivery: $delivery_file" >&2
+                status=1
+            fi
+        fi
         if [[ "$status" == 0 ]] && { ! normalize_reviewer_packet "$output_file" "$cmd" || ! validate_reviewer_artifact "$output_file" "$cmd"; }; then
             status=1
         fi
@@ -2392,6 +2417,13 @@ run_codex() {
     done
 
     [[ "$status" == 0 ]] || return "$status"
+    if [[ "$output_file" == *.json ]]; then
+        local delivery_file="${output_file}.delivery.json"
+        require_file "$delivery_file"
+        cp "$delivery_file" "$output_file"
+        normalize_reviewer_packet "$output_file" "$cmd" || exit 1
+        validate_reviewer_artifact "$output_file" "$cmd" || exit 1
+    fi
     require_file "$output_file"
     [[ "$log_name" != plan-executability ]] || return 0
     # Do not reuse results if inputs changed while the reviewer was reading them.
@@ -2620,6 +2652,15 @@ start_codex_bg() {
             prompt_file="$(bind_change_request_source "$prompt_file" "$log_name")"
         fi
     fi
+    local delivery_file="" reviewer_sandbox="read-only"
+    if [[ "$output_file" == *.json ]]; then
+        mkdir -p "$STATE_DIR/artifact-delivery"
+        delivery_file="${output_file}.delivery.json"
+        rm -f "$delivery_file"
+        { cat "$prompt_file"; printf '\n## Canonical JSON delivery (binding)\n\nUse your Write tool to create exactly one JSON object at `%s`. This is the only artifact the driver reads. Do not write or modify any other file. Chat text is diagnostics only.\n' "$delivery_file"; } > "$STATE_DIR/${log_name}-delivery-prompt.md"
+        prompt_file="$STATE_DIR/${log_name}-delivery-prompt.md"
+        reviewer_sandbox="workspace-write"
+    fi
     rm -f "$output_file"
     status_stage_context "$log_name" 0 "${model:-}" review
 
@@ -2628,7 +2669,7 @@ start_codex_bg() {
         --ephemeral
         # Project dirs need not be git repos; the read-only sandbox is the boundary.
         --skip-git-repo-check
-        --sandbox read-only
+        --sandbox "$reviewer_sandbox"
         "${model_args[@]+"${model_args[@]}"}"
         --output-last-message "$output_file"
     )
@@ -2654,7 +2695,7 @@ start_codex_bg() {
             require_file "$prompt_file"
             prompt_file="$(gated_prompt "$prompt_file" "$log_name" reviewer)"
         fi
-        "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
+        env UNCLE_ARTIFACT_DELIVERY="$delivery_file" "${client_cmd[@]}" "${flags[@]}" "$(cat "$prompt_file")" \
             < /dev/null > "$LOG_DIR/${log_name}.log" 2>&1 &
         child=$!
         wait "$child" || status=$?
@@ -2701,6 +2742,13 @@ wait_codex_bg() {
         exit "$status"
     fi
 
+    if [[ "$output_file" == *.json ]]; then
+        local delivery_file="${output_file}.delivery.json"
+        require_file "$delivery_file"
+        cp "$delivery_file" "$output_file"
+        normalize_reviewer_packet "$output_file" "$BG_CMD" || exit 1
+        validate_reviewer_artifact "$output_file" "$BG_CMD" || exit 1
+    fi
     require_file "$output_file"
     finish_review_budget "$output_file" "$BG_CMD" "$BG_MODEL" "$BG_EFFORT" "$label" || exit 1
     echo "Background Codex stage complete: $label"

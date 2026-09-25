@@ -1117,6 +1117,33 @@ compose_implementation_prompt() {
 
     cat "$base" > "$out"
 
+    # Observed failure (triage, canopy issue #4): the agent finished real
+    # implementation work, then closed its turn by *naming* the two handoff
+    # files in a chat message instead of calling its Write tool on them. The
+    # driver only reads the files on disk, so that reads as no handoff at
+    # all, and its own placeholder fallback can never carry acceptance rows
+    # (implementation_report_fallback.py). Say the requirement in terms of
+    # an action the driver can observe, with the exact absolute paths, so
+    # there is no room to satisfy it by description.
+    {
+        echo
+        echo "## Required handoff (binding)"
+        echo
+        echo "Before ending your turn, use your Write tool -- not a text"
+        echo "description -- to create both of these files:"
+        echo
+        echo "- \`$STATE_DIR/documents/IMPLEMENTATION_NOTES.json\`"
+        echo "- \`$STATE_DIR/documents/CHANGE_TEST_REPORT.json\`"
+        echo
+        echo "Naming these files, or describing what they would contain, is"
+        echo "not a handoff. The driver reads only what is on disk at those"
+        echo "paths; a turn that ends without writing them is recorded as no"
+        echo "handoff at all, and the driver's own placeholder fallback that"
+        echo "follows can never satisfy the acceptance-delivery check this"
+        echo "change is held to. If the actual code change is already done"
+        echo "and only these two documents remain, write them now."
+    } >> "$out"
+
     if [[ -z "$files" ]]; then
         echo "Warning: no change-impact table found in .uncle/docs/CHANGE_PLAN.md;" \
              "implementation runs without a resolved scope." >&2

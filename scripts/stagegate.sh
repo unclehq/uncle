@@ -356,6 +356,25 @@ record_test_failure_disposition() {
         "$GREEN_CLASS" "$review_json" "$STATE_DIR/documents/TEST_FAILURES.json"
 }
 
+# A report-level test-review finding is evidence for the final audit, not
+# automatically proof that source repair will help.  When the driver has
+# already run every approved command successfully, continue in the same
+# explicit, auditable mode used for failed green-check commands.  This avoids
+# a coverage/packet-format finding bouncing FINAL_AUDIT back to REPAIR forever.
+continue_nonblocking_test_review() {
+    local next="$1" result
+    [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] || return 1
+    [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] || return 1
+    [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] || return 1
+    result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" \
+        "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS)"
+    [[ "$result" != PASS ]] || return 1
+    echo 'Test-review findings are recorded as nonblocking evidence after a passing driver green check.'
+    record_nonblocking_failure TEST_REVIEW.json "canonical test-review acceptance $result after passing driver green check"
+    set_state "$next"
+    return 0
+}
+
 # The blocker rows with their evidence, at the gate. The report already says
 # why each prerequisite is blocked and what would settle it; making the
 # operator open the file to learn that is how review gets skipped.
@@ -2088,6 +2107,12 @@ run_stage() {
                 requirements_investigation=".uncle/workflow/requirements-investigation.md"
                 rm -f "$requirements_investigation"
                 run_claude prompts/requirements-investigate.md requirements-investigate
+                if [[ ! -s "$requirements_investigation" ]]; then
+                    python3 "$ROOT/scripts/lib/recover_investigation.py" \
+                        "$LOG_DIR/requirements-investigate.jsonl" "$requirements_investigation" \
+                        --heading '## Required functionality' \
+                        && echo 'Requirements investigation recovered from final runner output.'
+                fi
                 require_file "$requirements_investigation"
                 cp "$requirements_investigation" .uncle/docs/REQUIREMENTS_INTERPRETATION.md
                 python3 "$ROOT/scripts/lib/requirements-context.py" --export-json \
@@ -2104,6 +2129,12 @@ run_stage() {
                 project_plan_investigation=".uncle/workflow/project-plan-investigation.md"
                 rm -f "$project_plan_investigation"
                 run_claude prompts/project-plan-investigate.md project-plan-investigate
+                if [[ ! -s "$project_plan_investigation" ]]; then
+                    python3 "$ROOT/scripts/lib/recover_investigation.py" \
+                        "$LOG_DIR/project-plan-investigate.jsonl" "$project_plan_investigation" \
+                        --heading '# Project plan' \
+                        && echo 'Project-plan investigation recovered from final runner output.'
+                fi
                 require_file "$project_plan_investigation"
                 # The investigation has a deliberately mechanical boundary:
                 # all prose becomes `narrative` and the one fenced
@@ -3332,7 +3363,8 @@ while true; do
                 printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
                 set_state REPAIR
             else
-                acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+                continue_nonblocking_test_review MANUAL_CHECKLIST || \
+                    acceptance_transition .uncle/docs/TEST_REVIEW.md MANUAL_CHECKLIST 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
             fi
             ;;
 
@@ -3513,7 +3545,24 @@ while true; do
                 printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
                 set_state REPAIR
             else
-                acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT
+                checklist_acceptance="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/VERIFICATION_REPORT.json")"
+                # A checklist can report a missing human-only observation or
+                # an evidence/coverage concern after the driver has already
+                # proven the executable verification suite passes.  Repairing
+                # source for that does not make a browser-only observation
+                # available and creates an expensive loop.  Preserve every
+                # failing row for final audit, but continue in the same mode
+                # that already permits a failing green-check to be delivered
+                # with an explicit disposition.
+                if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] \
+                    && [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] \
+                    && [[ "$checklist_acceptance" != PASS ]]; then
+                    echo 'Checklist findings are recorded as nonblocking evidence; continuing to final audit.'
+                    record_nonblocking_failure VERIFICATION_REPORT.json "checklist acceptance $checklist_acceptance after passing driver green check"
+                    set_state FINAL_AUDIT
+                else
+                    acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT
+                fi
             fi
             ;;
 
@@ -3521,7 +3570,8 @@ while true; do
             # Use the same decisions as the preceding gates: human blockers
             # and recorded waivers reach audit without becoming PASS. Testing
             # only for PASS here sent those reports back around the pipeline.
-            acceptance_transition .uncle/docs/TEST_REVIEW.md FINAL_AUDIT 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+            continue_nonblocking_test_review FINAL_AUDIT || \
+                acceptance_transition .uncle/docs/TEST_REVIEW.md FINAL_AUDIT 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
             [[ "$(get_state)" == FINAL_AUDIT ]] || continue
             acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT
             [[ "$(get_state)" == FINAL_AUDIT ]] || continue

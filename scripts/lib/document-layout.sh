@@ -185,6 +185,25 @@ document_layout() {
 # narrative, filename, or prose summary for the requested document.
 document_final_response_contract() {
     local file="$1"
+    case "${file##*/}" in
+        # These three migrated to canonical-JSON delivery (implement-change.md
+        # gives their exact {schema,kind,...} contract directly), but this
+        # function kept emitting its pre-migration prose contract for them
+        # unconditionally -- e.g. CHANGE_TEST_REPORT.md's telling the agent to
+        # "Start with `# Change test report`; then give only: ...the exact
+        # checks run..., regressions or gaps, and required follow-up" in the
+        # very same prompt that elsewhere requires a JSON object shaped
+        # {schema, kind, commands}. Observed (canopy issue #4): the agent
+        # followed *this* contract's vocabulary -- title/checks/
+        # regressions_or_gaps/required_follow_up -- for its one JSON object,
+        # deterministically, on every run, because both instructions were
+        # equally "(binding)" and this one is worded as prose to write, not
+        # a schema to match. Silent here, the same as document_layout() is
+        # for a document no parser constrains: the JSON contract already
+        # given is the actual, driver-enforced one, and repeating a
+        # conflicting one in different words no longer helps.
+        IMPLEMENTATION_NOTES.md|AUTOMATED_TEST_REPORT.md|CHANGE_TEST_REPORT.md) return 0 ;;
+    esac
     printf 'Final-response contract for `%s` (binding):\n\n' "$file"
     case "${file##*/}" in
         REQUIREMENTS_INTERPRETATION.md)
@@ -228,21 +247,6 @@ CONTRACT
         PREFLIGHT_REPORT.md)
             cat <<'CONTRACT'
 Return a preflight readiness report, not a plan or final audit. Start with `# Preflight report`; then give only: checked prerequisites/environment, the approved-plan verification commands and outcomes, blockers with recovery actions, and exactly one final `## Acceptance gate` table. Do not modify scope, invent execution evidence, or issue a release verdict.
-CONTRACT
-            ;;
-        IMPLEMENTATION_NOTES.md)
-            cat <<'CONTRACT'
-Return an implementation record, not a plan or test report. Start with `# Implementation notes`; then give only: completed changes by file, requirement/plan-step traceability, intentional deviations with reasons, unresolved blockers, and handoff notes. Distinguish completed work from proposed work; do not duplicate raw test output or declare the release ready.
-CONTRACT
-            ;;
-        AUTOMATED_TEST_REPORT.md)
-            cat <<'CONTRACT'
-Return automated-test evidence only. Start with `# Automated test report`; then give only: environment, each command actually executed, result/status, concise failure evidence or output location, coverage gaps, and next action for non-passes. Do not describe implementation decisions, propose a plan, or use a final audit verdict.
-CONTRACT
-            ;;
-        CHANGE_TEST_REPORT.md)
-            cat <<'CONTRACT'
-Return change-specific test evidence only. Start with `# Change test report`; then give only: changed requirement/behavior IDs, the exact checks run for each, actual result/evidence, regressions or gaps, and required follow-up. Do not repeat implementation notes, restate the whole baseline, or issue a release verdict.
 CONTRACT
             ;;
         TEST_REVIEW.md)

@@ -438,7 +438,19 @@ def render_change_plan(payload, require_dispositions=False):
     # violation this guards against. `not dispositions` used to reject both
     # the same way, failing a plan that had faithfully reported no findings.
     if require_dispositions and dispositions is None:
-        raise ValueError('change-plan is missing dispositions for the adversarial review')
+        # Observed (canopy issue #4): an agent wrote a complete, correctly
+        # structured disposition table under a plausible but wrong key
+        # (`disposition_table`) and got this same generic message back on
+        # retry. Nothing in it said *which* key was wrong, so it read as "add
+        # more content" rather than "rename the field", and the retry failed
+        # identically. Naming the exact required key and what was actually
+        # found lets the agent fix the one thing that matters in one turn.
+        found = ', '.join(sorted(payload.keys())) if isinstance(payload, dict) else 'not an object'
+        raise ValueError(
+            'change-plan is missing dispositions for the adversarial review: '
+            'the JSON key must be exactly "dispositions" (a list); this payload\'s '
+            'top-level keys are: %s' % found
+        )
     lines = [narrative.strip(), '']
     if dispositions:
         lines += _render_dispositions_table(dispositions)

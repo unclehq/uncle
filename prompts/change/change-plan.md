@@ -105,7 +105,25 @@ Include:
 21. Scope cuts under time pressure
 22. Risks and unresolved questions
 
+Two of the above are read by the driver, not only by a person, so their
+heading is a literal string it matches, not free wording you may paraphrase:
+
+- Item 20 must appear as a Markdown heading starting with exactly
+  `## Implementation sequence` (a leading `## <number>. ` is also accepted;
+  a plain sentence like "Implementation sequence: ..." is not read as this
+  section at all, and the implementation stage then proceeds with no
+  ordered steps).
+- The change-impact table below must appear under a heading starting with
+  exactly `## Change-impact table` (no numbering, no rewording). This is
+  the only source the driver has for which files are in scope: the
+  implementation stage is only handed the files this table names, and a
+  diff that touches anything else is flagged as an unrecorded deviation.
+  Without this exact heading present, implementation runs with no scope
+  restriction and nothing is checked against it at all.
+
 Include a change-impact table:
+
+## Change-impact table
 
 | Component | Planned change | Reason | Regression risk | Test coverage |
 |---|---|---|---|---|

@@ -94,9 +94,17 @@ here is paid for six times over.
 - Never omit a section to avoid resolving something. If a section applies but
   you cannot complete it, keep it and mark it UNRESOLVED with the reason.
 
-`verification_commands` and section 9 are never omitted: the exact commands
-you ran and their results are the evidence the rest of the workflow depends
-on.
+`verification_commands` and section 9 are never omitted, and they are not
+the same content in two places: `verification_commands` is the bare command
+list alone (see below -- nothing else belongs on those lines, not even on
+the same line as a command), and section 9, in `narrative`, is where you
+report what each one produced. Together they are the evidence the rest of
+the workflow depends on, but the driver runs `verification_commands` as
+written, verbatim, as shell input (see below) -- a result appended to a
+command line (e.g. "pytest -q  => 28 passed") is not a comment there, it is
+part of the command, and running it fails with a shell syntax error every
+time the driver re-executes it, silently turning off regression detection
+for that command instead of reporting one.
 
 ## verification_commands is executed, not just read
 

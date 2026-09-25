@@ -410,6 +410,23 @@ def render_baseline_report(payload):
     commands = payload.get('verification_commands')
     if not commands or not commands.strip():
         raise ValueError('baseline report is missing verification_commands')
+    # The driver runs this field verbatim as shell input (verify_commands()),
+    # never just reads it. Observed (canopy issue #4): a line written as
+    # "pytest -q  => 28 passed" -- command and claimed result on one line --
+    # is not a comment to a shell; it is a syntax error, so the driver's own
+    # re-run of that line fails every time while the line's own trailing text
+    # still looks like a passing result to anyone reading it, which is a
+    # regression check silently turned off, not a loud one. `=>` has no
+    # meaning in sh/bash, so its presence on a command line is unambiguous.
+    bad = [line for line in commands.splitlines() if '=>' in line]
+    if bad:
+        raise ValueError(
+            'verification_commands has a result appended to a command line '
+            '(contains "=>"), which the driver would run verbatim and fail '
+            'on every re-execution -- put only the bare command on each '
+            'line and report what it produced in section 9 instead: '
+            + '; '.join(bad)
+        )
     narrative = payload.get('narrative')
     lines = []
     if narrative:

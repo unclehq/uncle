@@ -62,7 +62,14 @@ Carry issue identity from CHANGE_REQUEST.md into .uncle/docs/CHANGE_PLAN.md:
   failing. Preserve any available source seed URL verbatim; never invent a URL.
 
 Revise .uncle/docs/CHANGE_PLAN.md in place. Do not create a second plan
-document. Write it as one JSON object, not Markdown, matching this contract:
+document. Preserve, or add if missing, its two driver-read headings inside
+`narrative` verbatim: a line starting with exactly `## Change-impact table`
+above the change-impact table (the only source of the implementation
+stage's file scope -- its absence means no scope is enforced at all) and one
+starting with exactly `## Implementation sequence` (a leading `## <number>. `
+is also accepted) above the implementation sequence. A paraphrase like
+"Change-impact table:" as plain prose is not read as either section. Write
+it as one JSON object, not Markdown, matching this contract:
 
 `{"schema":"uncle.artifact/v1","kind":"change-plan","narrative":"...","dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}]}`
 

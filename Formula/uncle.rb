@@ -62,7 +62,8 @@ class Uncle < Formula
     # a live driver, which then failed on files that no longer existed. The opt
     # symlink always resolves to the installed version instead.
     (bin/"uncle").write_env_script opt_libexec/"uncle",
-                                  PATH: "#{opt_libexec}/venv/bin:$PATH"
+                                  PATH: "#{opt_libexec}/venv/bin:$PATH",
+                                  UNCLE_RUNTIME_ROOT: opt_libexec.to_s
   end
 
   def caveats

@@ -12,7 +12,11 @@ set -euo pipefail
 # which is the checkout it lives in.
 # Conflating the two writes a project's state into the install directory and
 # reads the wrong .uncle/config.
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -n "${UNCLE_RUNTIME_ROOT:-}" && -d "$UNCLE_RUNTIME_ROOT/scripts" ]]; then
+    ROOT="$(cd -L "$UNCLE_RUNTIME_ROOT" && pwd -L)"
+else
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 PROJECT_ROOT="${UNCLE_PROJECT_ROOT:-$ROOT}"
 if [[ ! -d "$PROJECT_ROOT" ]]; then
     echo "Project root does not exist: $PROJECT_ROOT" >&2

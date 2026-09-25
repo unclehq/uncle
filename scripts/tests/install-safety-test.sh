@@ -14,8 +14,16 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 # --- the launcher must not resolve through the versioned keg ----------------
 grep -q 'write_env_script opt_libexec/"uncle"' "$ROOT/Formula/uncle.rb" \
     || fail "the launcher must exec through opt_libexec, not the versioned keg"
+grep -q 'UNCLE_RUNTIME_ROOT: opt_libexec.to_s' "$ROOT/Formula/uncle.rb" \
+    || fail "the launcher must pass the stable libexec root to child drivers"
 grep -q 'write_env_script libexec/"uncle"' "$ROOT/Formula/uncle.rb" \
     && fail "the versioned keg path is back in the launcher"
+for runtime in uncle scripts/stagegate.sh scripts/change-workflow.sh scripts/from-issue.sh \
+               scripts/agent-self-hosted.sh scripts/reviewer-self-hosted.sh \
+               scripts/reviewer-claude.sh scripts/reviewer-cline.sh scripts/reviewer-kimi.sh; do
+    grep -q 'UNCLE_RUNTIME_ROOT' "$ROOT/$runtime" \
+        || fail "$runtime must preserve the stable runtime root"
+done
 
 # The installed formula is generated from this template, so one check covers
 # both the repository copy and what an install writes.

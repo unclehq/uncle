@@ -14,7 +14,11 @@
 # Read-only is enforced by plan mode, not by a tool allowlist: a reviewer that
 # could edit the plan it is reviewing would not be an independent check.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ -n "${UNCLE_RUNTIME_ROOT:-}" && -d "$UNCLE_RUNTIME_ROOT/scripts" ]]; then
+    ROOT="$(cd -L "$UNCLE_RUNTIME_ROOT" && pwd -L)"
+else
+    ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+fi
 
 CLINE_CMD="${WORKFLOW_CLINE_CMD:-cline}"
 

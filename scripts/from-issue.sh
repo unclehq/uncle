@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -n "${UNCLE_RUNTIME_ROOT:-}" && -d "$UNCLE_RUNTIME_ROOT/scripts" ]]; then
+    ROOT="$(cd -L "$UNCLE_RUNTIME_ROOT" && pwd -L)"
+else
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 # Keep installed code separate from the project selected by the launcher.
 PROJECT_ROOT="${UNCLE_PROJECT_ROOT:-$ROOT}"
 if [[ ! -d "$PROJECT_ROOT" ]]; then

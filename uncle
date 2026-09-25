@@ -10,16 +10,24 @@ PROJECT_ROOT="$PWD"
 # puts the payload in libexec and links bin/uncle to it) reaches us through one
 # or more symlinks, and BASH_SOURCE reports the link, not its target, so walk
 # the chain by hand. macOS ships BSD readlink, which has no -f.
-uncle_self="${BASH_SOURCE[0]}"
-while [[ -L "$uncle_self" ]]; do
-    uncle_link="$(readlink "$uncle_self")"
-    case "$uncle_link" in
-        /*) uncle_self="$uncle_link" ;;
-        *)  uncle_self="$(cd "$(dirname "$uncle_self")" && pwd)/$uncle_link" ;;
-    esac
-done
-ROOT="$(cd "$(dirname "$uncle_self")" && pwd)"
-unset uncle_self uncle_link
+# Homebrew's launcher provides its stable `opt` libexec location.  Preserve
+# that logical path: resolving it to a versioned Cellar keg lets `brew
+# reinstall --force-live` delete a live workflow's helpers mid-run.
+if [[ -n "${UNCLE_RUNTIME_ROOT:-}" && -f "$UNCLE_RUNTIME_ROOT/uncle_tui.py" && -d "$UNCLE_RUNTIME_ROOT/scripts" ]]; then
+    ROOT="$(cd -L "$UNCLE_RUNTIME_ROOT" && pwd -L)"
+else
+    uncle_self="${BASH_SOURCE[0]}"
+    while [[ -L "$uncle_self" ]]; do
+        uncle_link="$(readlink "$uncle_self")"
+        case "$uncle_link" in
+            /*) uncle_self="$uncle_link" ;;
+            *)  uncle_self="$(cd "$(dirname "$uncle_self")" && pwd)/$uncle_link" ;;
+        esac
+    done
+    ROOT="$(cd "$(dirname "$uncle_self")" && pwd)"
+    unset uncle_self uncle_link
+fi
+export UNCLE_RUNTIME_ROOT="$ROOT"
 case "${OSTYPE:-}" in
     msys*|cygwin*|win32*)
         export UNCLE_WINDOWS_BASH="$(cygpath -w "$BASH")"

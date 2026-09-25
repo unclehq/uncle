@@ -20,7 +20,11 @@
 #
 # bash 3.2 compatible: no associative arrays, no ${var^^}.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ -n "${UNCLE_RUNTIME_ROOT:-}" && -d "$UNCLE_RUNTIME_ROOT/scripts" ]]; then
+    ROOT="$(cd -L "$UNCLE_RUNTIME_ROOT" && pwd -L)"
+else
+    ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+fi
 
 # Native jq otherwise translates LF to CRLF, including inside raw review
 # text and scalar values used by Bash comparisons. Keep POSIX jq compatible.

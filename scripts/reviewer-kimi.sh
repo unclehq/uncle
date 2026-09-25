@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Translate the driver's Codex reviewer contract to Kimi's custom read-only agent.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ -n "${UNCLE_RUNTIME_ROOT:-}" && -d "$UNCLE_RUNTIME_ROOT/scripts" ]]; then
+    ROOT="$(cd -L "$UNCLE_RUNTIME_ROOT" && pwd -L)"
+else
+    ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+fi
 model=kimi
 output_file=""
 prompt=""

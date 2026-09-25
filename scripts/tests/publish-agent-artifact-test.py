@@ -29,6 +29,26 @@ class Publisher(unittest.TestCase):
                 self.assertEqual(json.loads((root/'.uncle/workflow/documents'/name.replace('.md','.json')).read_text())['kind'], payload['kind'])
                 self.assertTrue((root/'.uncle/docs'/name).is_file())
 
+    def test_recovers_only_schema_valid_json_mistakenly_written_to_human_view(self):
+        payload = {'schema':'uncle.artifact/v1','kind':'plan','narrative':'# Plan','verification_commands':'true'}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            view = root/'.uncle/docs/PROJECT_PLAN.md'; view.parent.mkdir(parents=True)
+            view.write_text(json.dumps(payload), encoding='utf-8')
+            log = root/'project-plan.jsonl'; log.write_text('{"type":"assistant","message":{"content":[{"text":"I wrote the plan."}]}}\n')
+            self.assertTrue(publisher.publish('project-plan', log, root))
+            self.assertEqual(json.loads((root/'.uncle/workflow/documents/PROJECT_PLAN.json').read_text())['kind'], 'plan')
+            self.assertTrue(view.read_text().startswith('# Plan'))
+
+    def test_never_treats_rendered_markdown_as_a_canonical_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            view = root/'.uncle/docs/PROJECT_PLAN.md'; view.parent.mkdir(parents=True)
+            view.write_text('# Plan\n', encoding='utf-8')
+            log = root/'project-plan.jsonl'; log.write_text('{"type":"assistant","message":{"content":[{"text":"I wrote the plan."}]}}\n')
+            with self.assertRaisesRegex(ValueError, 'rendered Markdown view'):
+                publisher.publish('project-plan', log, root)
+
 
 if __name__ == '__main__':
     unittest.main()

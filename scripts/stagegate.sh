@@ -787,10 +787,21 @@ verification_integrity_failure() {
 }
 
 capture_verification_inputs() {
-    local snapshot digest file
+    local snapshot digest file absent_paths scope
     verification_paths .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/verification.paths" \
         || { echo 'Missing Protected verification paths in approved plan.' > "$STATE_DIR/verification-integrity.log"; verification_integrity_failure; }
-    if ! verification_manifest "$STATE_DIR/verification.paths" \
+    absent_paths="$STATE_DIR/verification.absent-paths"
+    : > "$absent_paths"
+    # Only the first snapshot may record plan-owned inputs that do not exist
+    # before implementation.  This includes files in greenfield builds, not
+    # just test directories. Later missing paths remain integrity failures, so
+    # a repair cannot hide a deleted source file or test suite.
+    if [[ ! -e "$STATE_DIR/verification-snapshot" ]]; then
+        while IFS= read -r scope; do
+            [[ ! -e "${scope%/}" ]] && printf '%s\n' "$scope" >> "$absent_paths"
+        done < "$STATE_DIR/verification.paths"
+    fi
+    if ! WORKFLOW_ALLOW_ABSENT_PROTECTED_DIRECTORIES="$absent_paths" verification_manifest "$STATE_DIR/verification.paths" \
         > "$STATE_DIR/verification.manifest" 2> "$STATE_DIR/verification-integrity.log"; then
         verification_integrity_failure
     fi
@@ -804,7 +815,7 @@ capture_verification_inputs() {
     # preserving the absolute path in workflow state for later comparisons.
     snapshot="$(mktemp -d "${TMPDIR:-/tmp}/uncle-verification-snapshot.XXXXXX")"
     while IFS=$'\t' read -r digest file; do
-        [[ "$digest" != DIRECTORY ]] || continue
+        [[ "$digest" != DIRECTORY && "$digest" != ABSENT ]] || continue
         mkdir -p "$snapshot/$(dirname "$file")"
         cp "$file" "$snapshot/$file"
     done < "$STATE_DIR/verification.manifest"
@@ -822,8 +833,8 @@ capture_verification_inputs() {
 }
 
 check_verification_inputs() {
-    local actual started="$SECONDS"
-    if ! actual="$(verification_manifest "$STATE_DIR/verification.paths" 2> "$STATE_DIR/verification-integrity.log")"; then
+    local actual started="$SECONDS" absent_paths="$STATE_DIR/verification.absent-paths"
+    if ! actual="$(WORKFLOW_ALLOW_ABSENT_PROTECTED_DIRECTORIES="$absent_paths" verification_manifest "$STATE_DIR/verification.paths" 2> "$STATE_DIR/verification-integrity.log")"; then
         verification_integrity_failure
     fi
     if [[ "$actual" != "$EXPECTED_VERIFICATION" ]]; then
@@ -1292,15 +1303,19 @@ stage_uses_self_hosted() {
     [[ "$UNCLE_RESOLVED_RUNNER" == self-hosted ]]
 }
 
-# A native model can reliably write the two independent artifacts in one turn.
-# For self-hosted/OpenCode, that merged contract can return a perfectly valid
-# requirements object where the `project-plan` output slot expects a plan. Run
-# the deterministic one-artifact fast paths instead; this also means an old
-# plan cannot be mistaken for output from the current requirements pass.
+# A merged pass has two operational outputs but every JSON-authoritative
+# native runner has one final-response artifact slot. Codex consequently
+# returns a valid plan packet while leaving the required interpretation
+# unpublishable. Keep its two small canonical stages separate. Self-hosted has
+# its own deterministic one-artifact fast paths for the same reason.
 merged_requirements_plan_enabled() {
+    local runner
+    uncle_resolve_stage_runner "$(stage_runner_config_name requirements)" AGENT 2>/dev/null || return 1
+    runner="$UNCLE_RESOLVED_RUNNER"
     [[ "$MERGE_REQUIREMENTS_PLAN" == "1" ]] \
         && ! stage_uses_self_hosted requirements AGENT \
-        && ! stage_uses_self_hosted project-plan AGENT
+        && ! stage_uses_self_hosted project-plan AGENT \
+        && [[ "$runner" != self-hosted && "$runner" != codex ]]
 }
 
 # Requirements agents must see the selected brief as literal prompt content.
@@ -1774,13 +1789,26 @@ run_manual_checklist_panel() {
         cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
         local range
         case "$lens" in coverage) range='MC-100 through MC-199';; invariants) range='MC-200 through MC-299';; resources) range='MC-300 through MC-399';; regressions) range='MC-400 through MC-499';; esac
-        printf '\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$lens" "$range" >> "$prompt"
+        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`, `.uncle/workflow/documents/PROJECT_PLAN.json`, `.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json`, `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`, and `.uncle/workflow/documents/TEST_REVIEW.json`. Do not inspect any rendered Markdown view or enumerate directories.\n\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$lens" "$range" >> "$prompt"
         ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/manual-checklist-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do
         wait "$pid" || echo 'Manual-checklist worker failed; canonical packet validation will stop the panel.' >&2
+    done
+    # Self-hosted models occasionally answer a checklist worker with a prose
+    # question after seeing a stale rendered checklist.  Validate each compact
+    # packet independently and give only that worker one explicit correction;
+    # healthy packets stay intact and the full panel is never needlessly rerun.
+    for lens in coverage invariants resources regressions; do
+        output="$directory/$lens.json"; prompt="$directory/prompts/$lens.md"
+        if ! python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" validate "$output"; then
+            echo "Manual-checklist worker $lens returned an invalid packet; retrying that worker once."
+            printf '\n## Required retry\n\nYour preceding response was rejected because it was not one complete `manual-checklist-worker-packet` JSON object. Do not ask a question, discuss prior checklist documents, or return Markdown/prose. Produce the assigned lens packet now, even if its checks overlap a prior rendered report.\n' >> "$prompt"
+            rm -f "$output"
+            UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens-retry" < /dev/null || true
+        fi
     done
     python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$STATE_DIR/documents/MANUAL_CHECKLIST.json" coverage invariants resources regressions || return 1
     python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" || return 1
@@ -1813,12 +1841,17 @@ run_final_audit_panel() {
 run_parallel_application_implementation() {
     local groups group step prompt result cmd model effort checkpoint_dir checkpoint step_line
     local complete_marker="$STATE_DIR/parallel-implementation-complete"
+    local serial_fallback_marker="$STATE_DIR/parallel-implementation-serial-fallback"
     # Completion markers are deliberately empty `touch` files.  Existence is
     # the contract; testing size makes every completed fan-out look unfinished
     # after a resume and reruns already merged code.
     if [[ -e "$complete_marker" ]]; then
         echo 'Parallel implementation steps are already merged; reconciling their report only.'
         return 0
+    fi
+    if [[ -e "$serial_fallback_marker" ]]; then
+        echo 'Parallel implementation was previously rejected for this plan; using serial implementation.'
+        return 2
     fi
     groups="$(parallel_groups .uncle/docs/UPDATED_PROJECT_PLAN.md "$ROOT/scripts/lib")" || return 2
     [[ -n "$groups" ]] || return 2
@@ -1898,7 +1931,21 @@ EOF
                 fi
             } >> "$prompt"
         done
-        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" .uncle/docs/UPDATED_PROJECT_PLAN.md $group)" || return $?
+        # A boundary violation is safe to recover from: parallel_steps.py
+        # leaves the project untouched when it returns 3, so abandon only the
+        # speculative fan-out and let the normal serial implementation stage
+        # own the whole tree.  Stopping here made a model's harmless
+        # integration edit (for example wiring an entry point) strand an
+        # otherwise buildable project behind a plan-edit ceremony.
+        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" .uncle/docs/UPDATED_PROJECT_PLAN.md $group)" || {
+            parallel_status=$?
+            if [[ "$parallel_status" == 3 ]]; then
+                touch "$serial_fallback_marker"
+                echo 'Implementation fan-out ownership mismatch; no worker changes were merged. Falling back to one serial implementation pass.'
+                return 2
+            fi
+            return "$parallel_status"
+        }
         for step in $group; do
             [[ -s "$STATE_DIR/parallel/notes/step-$step.json" ]] || return 1
             python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
@@ -1957,7 +2004,7 @@ PARALLEL_CHECKLIST_WORKERS="${WORKFLOW_PARALLEL_CHECKLIST_WORKERS:-1}"
 # for the synthesizer, not a reason to throw away results from its siblings.
 run_parallel_checklist_workers() {
     local groups="$PWD/$STATE_DIR/checklist-groups/groups.txt"
-    local directory="" group id prompt packet batch_label compact_groups
+    local directory="" group id prompt packet batch_label compact_groups compact_batch_size
     local worker_count=0 status pid jobs
     local -a ids pids pid_ids packet_names
 
@@ -1977,7 +2024,9 @@ print(' '.join(c['id'] for c in payload.get('checks', []) if c.get('required', T
 PY
         groups="$PWD/$compact_groups"
         jobs=1
-        echo 'Checklist compact mode: one shared evidence worker; automated rows cite driver green-check evidence.'
+        compact_batch_size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-8}"
+        [[ "$compact_batch_size" =~ ^[1-9][0-9]*$ ]] || compact_batch_size=8
+        echo "Checklist compact mode: bounded shared evidence batches of up to $compact_batch_size checks; automated rows cite driver green-check evidence."
     fi
     while IFS= read -r group; do
         set -- $group
@@ -2014,7 +2063,11 @@ PY
         group_index=$((group_index + 1))
         n="${#ids[@]}"
         [[ "$n" -gt 1 ]] || continue
-        batches=$(( n < jobs ? n : jobs ))
+        if [[ -n "$compact_batch_size" ]]; then
+            batches=$(( (n + compact_batch_size - 1) / compact_batch_size ))
+        else
+            batches=$(( n < jobs ? n : jobs ))
+        fi
         chunk=$(( (n + batches - 1) / batches ))
         i=0
         batch_index=0
@@ -2030,7 +2083,7 @@ PY
                 id="${ids[$start]}"
                 printf -- '- Execute `%s`.\n' "$id" >> "$prompt"
             done
-            printf '\n## Required result packet\n\nWrite the complete JSON packet to `%s`.\n' "$packet" >> "$prompt"
+            printf '\n## Required result packet\n\nReturn the complete JSON packet as your final response. The driver, not the worker, writes the private packet file.\n' >> "$prompt"
             packet_names+=("$batch_label")
             i="$end"
         done
@@ -2042,7 +2095,11 @@ PY
         group_index=$((group_index + 1))
         n="${#ids[@]}"
         [[ "$n" -gt 1 ]] || continue
-        batches=$(( n < jobs ? n : jobs ))
+        if [[ -n "$compact_batch_size" ]]; then
+            batches=$(( (n + compact_batch_size - 1) / compact_batch_size ))
+        else
+            batches=$(( n < jobs ? n : jobs ))
+        fi
         echo "Checklist worker group: $group ($batches batch(es))"
         pids=()
         pid_ids=()
@@ -2060,6 +2117,14 @@ PY
         for ((status = 0; status < ${#pids[@]}; status++)); do
             pid="${pids[$status]}"
             wait "$pid" || echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run its assigned rows." >&2
+            packet="$directory/${pid_ids[$status]}.json"
+            if [[ ! -s "$packet" ]] && ! python3 "$ROOT/scripts/lib/recover_worker_packet.py" \
+                "$LOG_DIR/execute-checklist-worker-${pid_ids[$status]}.jsonl" "$packet" \
+                --kind checklist-execution-worker-packet \
+                --checklist "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
+                --prompt "$directory/prompts/${pid_ids[$status]}.md"; then
+                echo "Worker ${pid_ids[$status]} returned no valid result packet." >&2
+            fi
         done
     done < "$groups"
     python3 "$ROOT/scripts/lib/checklist_worker_packets.py" "$directory" \
@@ -2225,23 +2290,38 @@ run_stage() {
                     implementation_notes_investigation=".uncle/workflow/implementation-notes-investigation.md"
                     rm -f "$implementation_notes_investigation"
                     run_claude prompts/implement-investigate.md implementation-investigate
-                    require_file "$implementation_notes_investigation"
-                    python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
-                        "$implementation_notes_investigation" \
-                        .uncle/docs/IMPLEMENTATION_NOTES.md Implementation || return 1
-                    echo 'Implementation-notes fast path: preserved the completed investigation as a canonical fragment.'
+                    if [[ -s "$implementation_notes_investigation" ]]; then
+                        python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
+                            "$implementation_notes_investigation" \
+                            .uncle/docs/IMPLEMENTATION_NOTES.md Implementation || return 1
+                        echo 'Implementation-notes fast path: preserved the completed investigation as a canonical fragment.'
+                    else
+                        # Coding is the work; this private prose checkpoint is
+                        # merely a handoff.  A long self-hosted coding turn can
+                        # finish its edits yet lose the final Write call.  Do
+                        # not discard that tree or make an operator retry it.
+                        # The driver below records an explicitly incomplete
+                        # canonical handoff and its green check supplies the
+                        # actual observed verification evidence.
+                        echo 'Implementation notes checkpoint was omitted; recording incomplete canonical handoff evidence.'
+                    fi
                 else
                     run_claude prompts/implement.md implementation
                 fi
-                # A serial implementation agent can finish its coding turn
-                # without writing one of its two handoff artifacts.  Do not
-                # reject it before the existing report-only reconciler gets a
-                # chance to record the evidence: that formerly made the
-                # fallback below unreachable and sent a completed tree into a
-                # costly repair loop.
-                if [[ ! -s .uncle/docs/IMPLEMENTATION_NOTES.md || ! -s .uncle/docs/AUTOMATED_TEST_REPORT.md ]]; then
-                    echo 'Implementation omitted a required handoff; reconciling reports without rerunning source.'
-                    run_claude prompts/test-evidence-handoff.md implementation-report 'Read,Glob,Grep,Write,Bash'
+                # A serial implementation agent can finish code while omitting
+                # one or both reports.  Ingest a valid JSON-first test report
+                # when one was supplied, but never spend a second model turn
+                # merely to format or reconstruct handoff prose.  The
+                # conservative driver fallback below preserves the gap as NOT
+                # RUN and lets the driver-owned green check decide the code.
+                if [[ -s .uncle/docs/AUTOMATED_TEST_REPORT.md ]]; then
+                    python3 "$ROOT/scripts/lib/test_report.py" validate . application \
+                        .uncle/docs/AUTOMATED_TEST_REPORT.md 2>/dev/null \
+                        || echo 'Implementation test handoff was not valid JSON; recording incomplete canonical evidence instead.'
+                fi
+                if [[ ! -s "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" || ! -s "$STATE_DIR/documents/AUTOMATED_TEST_REPORT.json" ]]; then
+                    echo 'Implementation omitted a required handoff; recording incomplete reports without rerunning source.'
+                    python3 "$ROOT/scripts/lib/implementation_report_fallback.py" --project . --kind application --missing-only
                 fi
                 local notes_ingest_error
                 notes_ingest_error="$(python3 "$ROOT/scripts/lib/implementation_notes.py" validate . \
@@ -3371,6 +3451,24 @@ while true; do
         REPAIR)
             repair_source="$(cat "$STATE_DIR/repair-source" 2>/dev/null || true)"
             repair_count_existing="$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)"
+            # Older runs can already be parked in REPAIR because their first
+            # post-implementation snapshot rejected a source/test input that
+            # the approved plan introduced but the implementation did not create.
+            # There was no prior test input to protect. Take the explicit
+            # absent-directory snapshot, run the normal driver green check,
+            # and continue; invoking a repair agent cannot make that stale
+            # snapshot failure meaningful.
+            if [[ "$repair_source" == "$STATE_DIR/VERIFICATION_INTEGRITY.md" ]] \
+                && [[ ! -e "$STATE_DIR/verification-snapshot" ]] \
+                && grep -q '^Missing protected verification path:' "$STATE_DIR/verification-integrity.log" 2>/dev/null; then
+                echo 'Repair reclassified as an initial absent verification-input snapshot; continuing with driver verification.'
+                capture_verification_inputs
+                run_green_check || true
+                plan_delivery_summary
+                check_verification_inputs
+                set_state WAIT_IMPLEMENT_APPROVAL
+                continue
+            fi
             if [[ "$WORKFLOW_AUTO_REPAIR" != 1 || "$repair_source" != "$GREEN_MD" || "$repair_count_existing" -ge 1 ]]; then
                 if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] \
                     && [[ "$repair_source" == "$GREEN_MD" || "$repair_source" == .uncle/docs/TEST_REVIEW.md ]]; then

@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STAGEGATE="$ROOT/scripts/stagegate.sh"
 PROMPT="$ROOT/prompts/implement.md"
+INVESTIGATE="$ROOT/prompts/implement-investigate.md"
 HANDOFF="$ROOT/prompts/test-evidence-handoff.md"
 PROJECT_PLAN="$ROOT/prompts/project-plan.md"
 UPDATED_PLAN="$ROOT/prompts/updated-plan.md"
@@ -14,13 +15,17 @@ UPDATED_PLAN="$ROOT/prompts/updated-plan.md"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 serial_block="$(sed -n '/^[[:space:]]*IMPLEMENT)/,/^[[:space:]]*PREFLIGHT)/p' "$STAGEGATE")"
-[[ "$serial_block" == *"Implementation omitted a required handoff; reconciling reports without rerunning source."* ]] || fail "serial reconciliation missing"
+[[ "$serial_block" == *"Implementation omitted a required handoff; recording incomplete reports without rerunning source."* ]] || fail "serial reconciliation missing"
 
-handoff_pos="$(printf '%s\n' "$serial_block" | grep -n 'prompts/test-evidence-handoff.md implementation-report' | head -1 | cut -d: -f1)"
+fallback_pos="$(printf '%s\n' "$serial_block" | grep -n 'implementation_report_fallback.py" --project . --kind application --missing-only' | head -1 | cut -d: -f1)"
 validate_pos="$(printf '%s\n' "$serial_block" | grep -n 'implementation_notes.py" validate' | head -1 | cut -d: -f1)"
-[[ -n "$handoff_pos" && -n "$validate_pos" && "$handoff_pos" -lt "$validate_pos" ]] || fail "serial reconciliation must precede notes validation"
+[[ -n "$fallback_pos" && -n "$validate_pos" && "$fallback_pos" -lt "$validate_pos" ]] || fail "serial reconciliation must precede notes validation"
+[[ "$serial_block" != *'prompts/test-evidence-handoff.md implementation-report'* ]] || fail "serial reconciliation must not start a report-only model turn"
+[[ "$serial_block" != *'require_file "$implementation_notes_investigation"'* ]] || fail "missing private notes checkpoint must not discard completed code"
 
 grep -Fq 'A plan step labelled `Reconcile` is not an exception' "$PROMPT" || fail "serial prompt lacks reconciliation boundary"
+grep -Fq 'Manual-only plans: bounded completion rule' "$INVESTIGATE" || fail "self-hosted implementation can loop on manual-only plans"
+grep -Fq 'do not invent a test framework' "$INVESTIGATE" || fail "self-hosted implementation may invent unavailable test tooling"
 grep -Fq 'Never run the approved full Verification commands block here' "$HANDOFF" || fail "handoff can rerun driver verification"
 grep -Fq '`.uncle/workflow/documents/IMPLEMENTATION_NOTES.json`' "$HANDOFF" || fail "handoff does not write canonical notes"
 grep -Fq '"kind":"automated-test-report"' "$HANDOFF" || fail "handoff does not produce canonical test-report JSON"

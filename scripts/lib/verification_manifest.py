@@ -6,6 +6,14 @@ import sys
 
 
 def manifest(scopes_file):
+    allowed_absent = set()
+    absent_file = os.environ.get("WORKFLOW_ALLOW_ABSENT_PROTECTED_DIRECTORIES")
+    if absent_file:
+        try:
+            allowed_absent = set(Path(absent_file).read_text(encoding="utf-8").splitlines())
+        except OSError:
+            # A missing opt-in file must not weaken scope validation.
+            allowed_absent = set()
     entries = set()
     for scope in Path(scopes_file).read_text(encoding="utf-8").splitlines():
         directory_only = scope.endswith("/")
@@ -42,11 +50,16 @@ def manifest(scopes_file):
                         entries.add(child.as_posix())
         elif path.is_file() and not directory_only:
             entries.add(scope)
+        elif (scope + "/" if directory_only else scope) in allowed_absent:
+            # The initial baseline may precede implementation, so a
+            # plan-named source/test file can be absent just as a new test
+            # directory can. Later appearance remains a manifest change.
+            entries.add("ABSENT\t" + scope)
         else:
             raise ValueError(f"Missing protected verification path: {scope}")
     result = []
     for entry in sorted(entries, key=os.fsencode):
-        if entry.startswith("DIRECTORY\t"):
+        if entry.startswith(("DIRECTORY\t", "ABSENT\t")):
             result.append(entry)
         else:
             digest = hashlib.sha256()

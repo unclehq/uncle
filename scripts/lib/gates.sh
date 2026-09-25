@@ -157,6 +157,12 @@ gated_prompt() {
                 updated-change-plan-review-worker-*)
                     worker_inputs='`.uncle/workflow/documents/CHANGE_PLAN.json` and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
                     ;;
+                manual-checklist-review-worker-*)
+                    # The driver appends the exact base/delta evidence set.
+                    # Keep a truthful fallback here so the compact contract
+                    # never directs a worker to an unnamed input set.
+                    worker_inputs='the canonical JSON evidence paths listed below under Canonical inputs'
+                    ;;
             esac
             {
                 cat "$prompt_file"

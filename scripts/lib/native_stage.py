@@ -530,9 +530,15 @@ class Stage:
                             kill_tree(self.child)
                         self.child.wait()
                     finish_check(self.child)
+        # Native Codex streams agent text as deltas.  A completed turn can
+        # omit the aggregate message entirely, leaving a JSON-authoritative
+        # stage with hundreds of fragments but no parseable final artifact.
+        # Preserve the assembled terminal response in the result event; this
+        # is the common artifact handoff for every native runner.
         result=dict(type='result',uncle_timing_native=True,subtype='success' if success else 'error_during_execution',is_error=not success,
             error_detail=error,usage=self.usage,total_cost_usd=self.cost,input_includes_cache=self.inclusive,
-            num_turns=1,duration_ms=int((time.monotonic()-self.started)*1000))
+            num_turns=1,duration_ms=int((time.monotonic()-self.started)*1000),
+            result=self.output_answer() if success else '')
         print(json.dumps(result),flush=True)
         return 0 if success else 1
 

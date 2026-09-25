@@ -1394,7 +1394,7 @@ run_parallel_checklist_workers() {
     local groups="$PROJECT_ROOT/$STATE_DIR/checklist-groups/groups.txt"
     # Runner adapters may rebuild .uncle while they start. Worker handoffs are
     # outside the project entirely, so no workflow cleanup can race them.
-    local directory="" group id prompt packet batch_label compact_groups
+    local directory="" group id prompt packet batch_label compact_groups compact_batch_size
     local worker_count=0 worker_cap synthesis_cap failed=0 status pid jobs
     local -a ids pids pid_ids packet_names
 
@@ -1410,7 +1410,9 @@ print(' '.join(c['id'] for c in payload.get('checks', []) if c.get('required', T
 PY
         groups="$PROJECT_ROOT/$compact_groups"
         jobs=1
-        echo 'Checklist compact mode: one shared evidence worker; automated rows cite driver green-check evidence.'
+        compact_batch_size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-8}"
+        [[ "$compact_batch_size" =~ ^[1-9][0-9]*$ ]] || compact_batch_size=8
+        echo "Checklist compact mode: bounded shared evidence batches of up to $compact_batch_size checks; automated rows cite driver green-check evidence."
     fi
     while IFS= read -r group; do
         set -- $group
@@ -1458,7 +1460,11 @@ PY
         group_index=$((group_index + 1))
         n="${#ids[@]}"
         [[ "$n" -gt 1 ]] || continue
-        batches=$(( n < jobs ? n : jobs ))
+        if [[ -n "$compact_batch_size" ]]; then
+            batches=$(( (n + compact_batch_size - 1) / compact_batch_size ))
+        else
+            batches=$(( n < jobs ? n : jobs ))
+        fi
         chunk=$(( (n + batches - 1) / batches ))
         i=0
         batch_index=0
@@ -1474,7 +1480,7 @@ PY
                 id="${ids[$start]}"
                 printf -- '- Execute `%s`.\n' "$id" >> "$prompt"
             done
-            printf '\n## Required result packet\n\nWrite the complete JSON packet to `%s`.\n' "$packet" >> "$prompt"
+            printf '\n## Required result packet\n\nReturn the complete JSON packet as your final response. The driver, not the worker, writes the private packet file.\n' >> "$prompt"
             packet_names+=("$batch_label")
             i="$end"
         done
@@ -1486,7 +1492,11 @@ PY
         group_index=$((group_index + 1))
         n="${#ids[@]}"
         [[ "$n" -gt 1 ]] || continue
-        batches=$(( n < jobs ? n : jobs ))
+        if [[ -n "$compact_batch_size" ]]; then
+            batches=$(( (n + compact_batch_size - 1) / compact_batch_size ))
+        else
+            batches=$(( n < jobs ? n : jobs ))
+        fi
         chunk=$(( (n + batches - 1) / batches ))
         echo "Checklist worker group: $group ($batches batch(es))"
         pids=()
@@ -1513,6 +1523,15 @@ PY
             pid="${pids[$status]}"
             if ! wait "$pid"; then
                 echo "Worker ${pid_ids[$status]} did not complete; reconciliation will run its assigned rows." >&2
+                failed=1
+            fi
+            packet="$directory/${pid_ids[$status]}.json"
+            if [[ ! -s "$packet" ]] && ! python3 "$ROOT/scripts/lib/recover_worker_packet.py" \
+                "$LOG_DIR/execute-checklist-worker-${pid_ids[$status]}.jsonl" "$packet" \
+                --kind checklist-execution-worker-packet \
+                --checklist "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
+                --prompt "$directory/prompts/${pid_ids[$status]}.md"; then
+                echo "Worker ${pid_ids[$status]} returned no valid result packet." >&2
                 failed=1
             fi
         done
@@ -1573,6 +1592,11 @@ verify_implementation_review() {
 # merges and removes worktrees.
 run_supervised_parallel_implementation() {
     local base="$1" groups group step prompt cmd model effort result step_line
+    local serial_fallback_marker="$STATE_DIR/parallel-implementation-serial-fallback"
+    if [[ -e "$serial_fallback_marker" ]]; then
+        echo 'Parallel implementation was previously rejected for this plan; using serial implementation.'
+        return 2
+    fi
     groups="$(parallel_groups .uncle/docs/CHANGE_PLAN.md "$ROOT/scripts/lib")" || return 2
     [[ -n "$groups" ]] || return 2
     [[ ! -s "$STATE_DIR/implement-step-done" ]] || return 2
@@ -1628,7 +1652,19 @@ EOF
             } >> "$prompt"
         done
         echo "Supervisor schedule: isolated parallel steps $group."
-        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" .uncle/docs/CHANGE_PLAN.md $group)" || return $?
+        # Exit 3 means the isolated merge rejected undeclared writes and did
+        # not touch the project tree.  Continue through the established
+        # serial implementation path rather than asking an operator to edit
+        # a plan solely because an agent needed an integration boundary.
+        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" .uncle/docs/CHANGE_PLAN.md $group)" || {
+            parallel_status=$?
+            if [[ "$parallel_status" == 3 ]]; then
+                touch "$serial_fallback_marker"
+                echo 'Implementation fan-out ownership mismatch; no worker changes were merged. Falling back to serial implementation.'
+                return 2
+            fi
+            return "$parallel_status"
+        }
         PARALLEL_RESULT="$result" python3 - "$group" <<'PY'
 import json, os, sys
 group = sys.argv[1]
@@ -2479,11 +2515,29 @@ run_checklist_panel() {
         cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
         local range
         case "$lens" in coverage) range='MC-100 through MC-199';; invariants) range='MC-200 through MC-299';; resources) range='MC-300 through MC-399';; regressions) range='MC-400 through MC-499';; esac
-        printf '\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass. Use IDs only in %s; no other worker owns that range.\n' "$lens" "$kind" "$range" >> "$prompt"
+        local inputs
+        if [[ "$kind" == base ]]; then
+            inputs='`.uncle/workflow/documents/BASELINE_REPORT.json`, `.uncle/workflow/documents/CHANGE_SPEC.json`, `.uncle/workflow/documents/CHANGE_PLAN.json`, and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
+        else
+            inputs='`.uncle/workflow/documents/BASELINE_REPORT.json`, `.uncle/workflow/documents/CHANGE_SPEC.json`, `.uncle/workflow/documents/CHANGE_PLAN.json`, `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`, `.uncle/workflow/documents/IMPLEMENTATION_NOTES.json`, `.uncle/workflow/documents/CHANGE_TEST_REPORT.json`, and `.uncle/workflow/documents/TEST_REVIEW.json`'
+        fi
+        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: %s. Do not inspect any rendered Markdown view or enumerate directories.\n\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$kind" "$range" >> "$prompt"
         ( run_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens" "$CODEX_EFFORT_CHECKLIST" ) > "$LOG_DIR/manual-checklist-$kind-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Checklist worker failed; canonical packet validation will stop the panel.' >&2; done
+    # Repair only the malformed worker packet.  A stale rendered checklist can
+    # tempt a weak model into prose; it must still deliver its assigned JSON
+    # lens, and healthy siblings must not be re-run.
+    for lens in coverage invariants resources regressions; do
+        output="$directory/$lens.json"; prompt="$directory/prompts/$lens.md"
+        if ! python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" validate "$output"; then
+            echo "Checklist worker $lens returned an invalid packet; retrying that worker once."
+            printf '\n## Required retry\n\nYour preceding response was rejected because it was not one complete `manual-checklist-worker-packet` JSON object. Do not ask a question, discuss prior checklist documents, or return Markdown/prose. Produce the assigned lens packet now, even if its checks overlap a prior rendered report.\n' >> "$prompt"
+            rm -f "$output"
+            run_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens-retry" "$CODEX_EFFORT_CHECKLIST" || true
+        fi
+    done
     local target="$STATE_DIR/documents/MANUAL_CHECKLIST.json"
     [[ "$kind" == base ]] && target="$STATE_DIR/documents/MANUAL_CHECKLIST.base.json"
     python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$target" coverage invariants resources regressions || return 1

@@ -950,6 +950,23 @@ sys.exit(7 if mode=='fail' else 0)
         with self.assertRaises(ValueError):
             response_from_events(path)
 
+    def test_artifact_stage_keeps_last_valid_json_before_compaction_recap(self):
+        path = self.root/'artifact-output.log'
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan',
+                'narrative': '## Approach\n\nUse the shared boundary.',
+                'dispositions': [{'finding': 'AR-001', 'disposition': 'Accepted',
+                                  'reason': 'Required.', 'plan_change': 'Add the boundary.'}]}
+        events = [
+            dict(type='text', part=dict(text='Planning notes.\n```json\n' + json.dumps(plan) + '\n```')),
+            dict(type='step_finish', part=dict(reason='tool-calls')),
+            dict(type='text', part=dict(text='## Objective\nThe JSON was delivered.')),
+            dict(type='step_finish', part=dict(reason='stop')),
+        ]
+        path.write_text('\n'.join(json.dumps(event) for event in events), encoding='utf-8')
+        response, turns = response_from_events(path, artifact_kind='change-plan')
+        self.assertEqual(turns, 2)
+        self.assertEqual(json.loads(response), plan)
+
     def test_stage_dispatch(self):
         for side, stage in (('agent','implementation'),('reviewer','final-audit')):
             result = subprocess.run([bash_executable(), '-c',

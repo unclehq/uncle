@@ -92,6 +92,33 @@ for path in missing ../outside /etc/passwd ./tests .git .uncle/workflow tests/..
     printf '%s\n' "$path" > paths
     rejected
 done
+# A file or directory introduced by the approved implementation can be absent
+# in the first snapshot only. It is represented explicitly, and its later
+# appearance still changes the manifest. Ordinary missing paths remain
+# rejected above.
+printf 'planned-tests/\n' > paths
+printf 'planned-tests/\n' > absent-paths
+for backend in python shell; do
+    absent_manifest="$(WORKFLOW_HASH_BACKEND="$backend" WORKFLOW_ALLOW_ABSENT_PROTECTED_DIRECTORIES=absent-paths verification_manifest paths)"
+    [[ "$absent_manifest" == $'ABSENT\tplanned-tests' ]] || { echo 'FAIL: missing planned directory was not recorded'; exit 1; }
+    mkdir -p planned-tests
+    printf 'assert true\n' > planned-tests/first-test.txt
+    COUNT=$((COUNT + 1))
+    [[ "$(WORKFLOW_HASH_BACKEND="$backend" WORKFLOW_ALLOW_ABSENT_PROTECTED_DIRECTORIES=absent-paths verification_manifest paths)" != "$absent_manifest" ]] \
+        || { echo 'FAIL: appearance of planned directory was not detected'; exit 1; }
+    rm -rf planned-tests
+done
+printf 'planned-source.js\n' > paths
+printf 'planned-source.js\n' > absent-paths
+for backend in python shell; do
+    absent_manifest="$(WORKFLOW_HASH_BACKEND="$backend" WORKFLOW_ALLOW_ABSENT_PROTECTED_DIRECTORIES=absent-paths verification_manifest paths)"
+    [[ "$absent_manifest" == $'ABSENT\tplanned-source.js' ]] || { echo 'FAIL: missing planned source file was not recorded'; exit 1; }
+    printf 'export default 1\n' > planned-source.js
+    COUNT=$((COUNT + 1))
+    [[ "$(WORKFLOW_HASH_BACKEND="$backend" WORKFLOW_ALLOW_ABSENT_PROTECTED_DIRECTORIES=absent-paths verification_manifest paths)" != "$absent_manifest" ]] \
+        || { echo 'FAIL: appearance of planned source file was not detected'; exit 1; }
+    rm planned-source.js
+done
 if make_symlink tests alias; then
     printf 'alias/test.txt\n' > paths
     rejected
@@ -114,4 +141,7 @@ COUNT=$((COUNT + 1))
 printf '## Protected verification paths\n\n```\ntests\n' > plan.md
 COUNT=$((COUNT + 1))
 if verification_paths plan.md > /dev/null; then echo 'FAIL: unclosed scope fence'; exit 1; fi
+printf '## Protected verification paths\n\n```text\nSnapshot `src/app.js`, `lockfile`, and `vite.config.*`; retain hashes.\n```\n' > plan.md
+COUNT=$((COUNT + 1))
+[[ "$(verification_paths plan.md)" == $'src/app.js\npackage-lock.json\nvite.config.js' ]] || { echo 'FAIL: backticked protected paths were not normalized'; exit 1; }
 echo "verification-integrity-test.sh: $COUNT checks passed"

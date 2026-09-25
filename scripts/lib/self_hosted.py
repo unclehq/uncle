@@ -317,7 +317,38 @@ def ensure_output_complete(usage, limit):
                               'so the response is incomplete' % (limit, produced))
 
 
-def response_from_events(path):
+def canonical_response_from_texts(texts, kind):
+    """Return the last complete canonical artifact emitted before narration.
+
+    A weak model can emit the requested JSON plan, then receive a compaction
+    nudge and end with a prose recap.  For an artifact-producing stage that
+    recap must not erase the earlier complete, schema-valid delivery.  This is
+    deliberately limited to an expected artifact kind; ordinary agent stages
+    still return their final text exactly as before.
+    """
+    artifact_json = _artifact_json_module()
+    decoder = json.JSONDecoder()
+    for text in reversed(texts):
+        candidates = [text]
+        for match in re.finditer(r'\{', text):
+            try:
+                value, _ = decoder.raw_decode(text[match.start():])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                candidates.append(json.dumps(value))
+        for candidate in reversed(candidates):
+            try:
+                payload = artifact_json.loads_response_json(candidate)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if (isinstance(payload, dict) and payload.get('schema') == 'uncle.artifact/v1'
+                    and payload.get('kind') == kind):
+                return json.dumps(payload, ensure_ascii=False)
+    return None
+
+
+def response_from_events(path, artifact_kind=None):
     events = opencode_events(path)
     if any(event.get('type') == 'error' for event in events):
         raise ValueError('OpenCode reported a model or session error')
@@ -330,6 +361,10 @@ def response_from_events(path):
         raise OutputTruncated('OpenCode stopped at the output token limit (finish reason %s); the response is incomplete' % reason)
     if reason not in ('stop', 'end_turn'):
         raise ValueError('OpenCode stopped before completing the response')
+    if artifact_kind:
+        artifact = canonical_response_from_texts(texts, artifact_kind)
+        if artifact is not None:
+            return artifact, len(finished)
     return texts[-1].strip(), len(finished)
 
 
@@ -858,7 +893,8 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                 attempt_usage = {}
                 canonical_response = None
                 try:
-                    response, count = _run_opencode('agent', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage, read_cache=read_cache)
+                    response, count = _run_opencode('agent', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage, read_cache=read_cache,
+                                                     artifact_kind='requirements-interpretation')
                     turns += count
                 finally:
                     if usage is not None:
@@ -911,7 +947,8 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                 attempt_usage = {}
                 canonical_response = None
                 try:
-                    response, count = _run_opencode(side, values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage, read_cache=read_cache)
+                    response, count = _run_opencode(side, values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage, read_cache=read_cache,
+                                                     artifact_kind=expected_kind)
                     turns += count
                 finally:
                     if usage is not None:
@@ -973,7 +1010,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         return response, turns
 
 
-def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diagnostic_root=None, usage_baseline=None, read_cache=None):
+def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diagnostic_root=None, usage_baseline=None, read_cache=None, artifact_kind=None):
     from process_tree import start_check, launch_command, kill_tree, finish_check
     seconds = int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600'))
     if seconds < 1:
@@ -998,6 +1035,10 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
                     raise ValueError('OpenCode returned no response')
                 ensure_output_complete({'output_tokens': adapter.usage.get('output_tokens')},
                                        output_token_limit(os.environ.get('UNCLE_STATUS_STAGE', '')))
+                if artifact_kind:
+                    artifact = canonical_response_from_texts([adapter.answer, adapter.final_answer], artifact_kind)
+                    if artifact is not None:
+                        return artifact, 1
                 return adapter.final_answer or adapter.answer, 1
             finally:
                 adapter.parent_watch_stop.set()
@@ -1045,7 +1086,7 @@ def _run_opencode(side, values, prompt, root, allow_shell=True, usage=None, diag
                 if read_cache is not None:
                     for runner_event in opencode_events(Path(directory)/'output.log'):
                         read_cache.observe(runner_event)
-                response, turns = response_from_events(Path(directory)/'output.log')
+                response, turns = response_from_events(Path(directory)/'output.log', artifact_kind=artifact_kind)
             except ValueError:
                 diagnostic = (Path(directory)/'output.log').read_text(encoding='utf-8', errors='replace')
                 if re.search(r'APITimeoutError|litellm\.Timeout|provider timed out', diagnostic, re.I):

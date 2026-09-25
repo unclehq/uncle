@@ -30,8 +30,8 @@ mutations here.
 You may run narrow checks and inspect evidence needed for your assigned IDs.
 Do not edit product source, tests, configuration, `.uncle/docs/MANUAL_CHECKLIST.md`,
 `.uncle/docs/VERIFICATION_REPORT.md`, or `.uncle/docs/DEFECTS.md`. Do not start another agent. For
-each assigned ID, record the result in the one JSON packet path appended
-below (never write separate evidence files), using exactly:
+each assigned ID, record the result in one JSON packet (never write separate
+evidence files), using exactly:
 
 - Check ID
 - Action actually performed
@@ -49,12 +49,14 @@ initial snapshot with no predecessor is normal, not a `BLOCKED-SETUP` result.
 Never mark an unexecuted check PASS. A blocked result must name the missing
 setup, person, or environmental limit. Finish every assigned ID before
 ending; a worker that stops early leaves the rest to the driver's
-reconciliation with no evidence at all, which reads as NOT RUN. Write exactly
-one object to the assigned packet path:
+reconciliation with no evidence at all, which reads as NOT RUN. Return exactly
+one object as your final response. Do not write it to a temporary path: the
+driver extracts and validates your final response into its private packet store:
 
 `{"schema":"uncle.artifact/v1","kind":"checklist-execution-worker-packet","results":[{"id":"MC-1","action":"...","expected_result":"...","actual_result":"...","evidence":"...","status":"PASS","defect_reference":"None"}]}`
 
 Include one result for every assigned ID; `status` is exactly PASS, FAIL,
 BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, or NOT RUN. Your final
-message may only confirm the packet was written. The driver has a separate
-single writer that consumes the collated JSON and writes canonical reports.
+message must be the JSON object itself, with no Markdown fence or prose. The
+driver has a separate single writer that consumes the collated JSON and writes
+canonical reports.

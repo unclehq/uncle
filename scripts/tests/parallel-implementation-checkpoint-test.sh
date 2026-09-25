@@ -17,6 +17,8 @@ FUNCTION="$(awk '/^run_parallel_application_implementation\(\) \{/{p=1} p{print}
 [[ -n "$FUNCTION" ]] || { echo 'FAIL: implementation fan-out function missing' >&2; exit 1; }
 grep -Fq '## Isolated ownership boundary (binding)' "$ROOT/scripts/stagegate.sh" || { echo 'FAIL: isolated workers may scaffold outside ownership' >&2; exit 1; }
 grep -Fq 'Do not invoke a framework generator or' "$ROOT/scripts/stagegate.sh" || { echo 'FAIL: scaffold generator ban missing' >&2; exit 1; }
+grep -Fq 'Implementation fan-out ownership mismatch; no worker changes were merged.' "$ROOT/scripts/stagegate.sh" || { echo 'FAIL: application fan-out does not fall back after a safe ownership rejection' >&2; exit 1; }
+grep -Fq 'Implementation fan-out ownership mismatch; no worker changes were merged.' "$ROOT/scripts/change-workflow.sh" || { echo 'FAIL: change fan-out does not fall back after a safe ownership rejection' >&2; exit 1; }
 
 parallel_groups() { printf '1\n2\n'; }
 uncle_resolve_stage_runner() { :; }
@@ -49,4 +51,23 @@ set -e
 run_parallel_application_implementation
 [[ "$(cat calls)" == 2 ]] || { echo 'FAIL: resume replayed an already merged group' >&2; exit 1; }
 [[ -e "$STATE_DIR/parallel-implementation-complete" ]] || { echo 'FAIL: complete marker missing' >&2; exit 1; }
+
+# An ownership violation is distinct from a worker failure: the executor has
+# not merged anything, so the application driver must return its normal
+# serial-fallback sentinel rather than strand the workflow in IMPLEMENT.
+STATE_DIR="$WORK/fallback-state"
+LOG_DIR="$STATE_DIR/logs"
+mkdir -p "$LOG_DIR" "$STATE_DIR/parallel/prompts" .uncle/docs
+parallel_groups() { printf '1 2\n'; }
+parallel_run_group() { return 3; }
+set +e
+run_parallel_application_implementation
+status=$?
+set -e
+[[ "$status" == 2 ]] || { echo "FAIL: ownership rejection returned $status, not serial fallback" >&2; exit 1; }
+[[ ! -e "$STATE_DIR/parallel-implementation-complete" ]] || { echo 'FAIL: rejected parallel work was marked complete' >&2; exit 1; }
+[[ -e "$STATE_DIR/parallel-implementation-serial-fallback" ]] || { echo 'FAIL: serial fallback was not persisted for resume' >&2; exit 1; }
+parallel_run_group() { echo 'FAIL: rejected parallel work was retried' >&2; return 99; }
+run_parallel_application_implementation
+[[ $? == 2 ]] || { echo 'FAIL: persisted serial fallback was not reused' >&2; exit 1; }
 echo 'parallel-implementation-checkpoint-test.sh: resumes at the first unmerged group'

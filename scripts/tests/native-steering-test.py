@@ -410,6 +410,7 @@ class ContextBudgetTests(unittest.TestCase):
    child,stdout,stderr,_=self.run_stage(d,{'STEPS':'100000,150000,180000','COMPLETE_ON_START':'1'})
    self.assertEqual(child.returncode,0,stderr+stdout)
    self.assertFalse((Path(d)/'record').exists())
+   self.assertEqual(json.loads(stdout.splitlines()[-1])['result'], 'done')
 
  def test_ceiling_fails_closed(self):
   with tempfile.TemporaryDirectory() as d:

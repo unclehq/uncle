@@ -9,7 +9,8 @@ VERIFICATION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # match cost a run and a human approval when a plan said "## Protected paths"
 # -- the block was there, correct, and unreadable for one missing word.
 verification_paths() {
-    awk '
+    local line rest token candidate emitted raw
+    raw="$(awk '
         /^#+[ \t]/ {
             h = tolower($0)
             sub(/\r$/, "", h)
@@ -24,7 +25,38 @@ verification_paths() {
         section && opened { sub(/\r$/, ""); if (NF) { print; rows++ }; next }
         section && /^#/ { section=0 }
         END { if (sections != 1 || !opened || !closed || !rows) exit 1 }
-    ' "$1"
+    ' "$1")" || return 1
+    while IFS= read -r line; do
+        emitted=0
+        rest="$line"
+        # Some older plan prompts asked for a prose sentence containing
+        # backticked paths.  Recover those explicit paths deterministically;
+        # never treat the surrounding sentence as a filesystem path.
+        while [[ "$rest" == *'`'*'`'* ]]; do
+            rest="${rest#*\`}"
+            token="${rest%%\`*}"
+            rest="${rest#*\`}"
+            case "$token" in
+                lockfile) token=package-lock.json ;;
+                playwright.config.'*')
+                    token=playwright.config.js
+                    for candidate in playwright.config.js playwright.config.ts playwright.config.mjs playwright.config.cjs; do
+                        if [[ -e "$candidate" ]]; then token="$candidate"; break; fi
+                    done
+                    ;;
+                vite.config.'*')
+                    token=vite.config.js
+                    for candidate in vite.config.js vite.config.ts vite.config.mjs vite.config.cjs; do
+                        if [[ -e "$candidate" ]]; then token="$candidate"; break; fi
+                    done
+                    ;;
+            esac
+            [[ -n "$token" ]] || return 1
+            printf '%s\n' "$token"
+            emitted=1
+        done
+        [[ "$emitted" == 1 ]] || printf '%s\n' "$line"
+    done <<< "$raw"
 }
 
 # Prints one deterministic manifest. Directory inventories detect additions
@@ -62,8 +94,10 @@ verification_manifest() {
 }
 
 verification_manifest_shell() {
-    local paths="$1" path file component prefix digest links directory_only
+    local paths="$1" path file component prefix digest links directory_only absent_paths scope
+    absent_paths="${WORKFLOW_ALLOW_ABSENT_PROTECTED_DIRECTORIES:-}"
     while IFS= read -r path; do
+        scope="$path"
         directory_only=0
         if [[ "$path" == */ ]]; then
             directory_only=1
@@ -91,12 +125,20 @@ verification_manifest_shell() {
             find "$path" -type f ! -name '*.pyc' ! -path '*/__pycache__/*' -print || return 1
         elif [[ -f "$path" && "$directory_only" == 0 ]]; then
             printf '%s\n' "$path"
+        elif [[ -n "$absent_paths" && -f "$absent_paths" ]] \
+            && grep -Fqx -- "$scope" "$absent_paths"; then
+            # An initial build can legitimately introduce both source/test
+            # files and directories named by its approved plan.  Record an
+            # absent input explicitly instead of routing a missing pre-build
+            # file to REPAIR. Its appearance/disappearance after this first
+            # snapshot still changes the manifest.
+            printf 'ABSENT\t%s\n' "$path"
         else
             echo "Missing protected verification path: $path" >&2; return 1
         fi
     done < "$paths" | LC_ALL=C sort -u | while IFS= read -r file; do
         case "$file" in
-            DIRECTORY$'\t'*) printf '%s\n' "$file" ;;
+            DIRECTORY$'\t'*|ABSENT$'\t'*) printf '%s\n' "$file" ;;
             *$'\t'*) echo "Tabs are not supported in protected paths." >&2; return 1 ;;
             *)
                 [[ -f "$file" ]] || return 1

@@ -77,6 +77,22 @@ use:
 - when a command floods the terminal, re-run it filtered to the failures
   rather than reading the whole transcript.
 
+## Manual-only plans: bounded completion rule
+
+When the approved plan explicitly declares manual-only verification or no
+automated test infrastructure, do not invent a test framework, install new
+test dependencies, or build a browser harness solely to satisfy a generic
+defect-injection instruction. Implement the approved product, run at most one
+available narrow smoke check, then record each unavailable manual or
+defect-injection check as `NOT RUN` or `DRIVER PENDING` with its concrete
+prerequisite. The driver and later checklist own those checks.
+
+Write the automated-test report and implementation-notes investigation before
+any optional exploration. Do not spend turns repeatedly trying alternate
+servers, package installs, DOM scrapers, or temporary test harnesses after a
+capability is known unavailable. A truthful incomplete evidence record is a
+successful handoff; it is not a reason to keep investigating.
+
 Run applicable targeted checks. The driver owns .uncle/docs/UPDATED_PROJECT_PLAN.md's full
 verification block and runs it once immediately after this stage. Do not run a
 full-project regression command or an equivalent loop over every suite here

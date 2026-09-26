@@ -116,7 +116,7 @@ explicitly in the report.
 
 Write `.uncle/docs/AUTOMATED_TEST_REPORT.md` as JSON only:
 
-`{"schema":"uncle.artifact/v1","kind":"automated-test-report","commands":[{"command":"...","status":"PASS|FAIL|BLOCKED|NOT RUN|DRIVER PENDING","output":"...","requirements":["..."]}],"coverage_gaps":["..."],"next_action":"..."}`
+`{"schema":"uncle.artifact/v1","kind":"automated-test-report","commands":[{"command":"...","status":"PASS|FAIL|BLOCKED|NOT RUN|N/A|DRIVER PENDING","output":"...","requirements":["..."]}],"coverage_gaps":["..."],"next_action":"..."}`
 
 For its command records include:
 

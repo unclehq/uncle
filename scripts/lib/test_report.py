@@ -36,7 +36,18 @@ def _validate(payload, kind):
     commands = payload.get('commands')
     if not isinstance(commands, list) or not commands:
         raise ValueError('%s requires at least one command result' % expected)
-    allowed = {'PASS', 'FAIL', 'BLOCKED', 'NOT RUN', 'DRIVER PENDING'}
+    # implement-change.md's own "Output economy" section (still written for
+    # the pre-JSON Markdown report) tells the agent N/A and NOT RUN are
+    # deliberately not interchangeable -- N/A means the check does not apply
+    # to this change, NOT RUN means it applies and was skipped -- and to
+    # never collapse that distinction. The JSON contract a few lines above it
+    # in the same prompt never had N/A in its status enum, so every report
+    # that correctly followed the first instruction failed this one
+    # (canopy issue #4, command results 9-11: "Migration tests"/"Rollback
+    # test"/"Performance checks", genuinely inapplicable to this change).
+    # Widening the enum to match the deliberate distinction the prompt asks
+    # for, rather than asking the prompt to give it up.
+    allowed = {'PASS', 'FAIL', 'BLOCKED', 'NOT RUN', 'DRIVER PENDING', 'N/A'}
     for index, row in enumerate(commands, 1):
         if not isinstance(row, dict) or not row.get('command'):
             raise ValueError('command result %d is missing command' % index)
@@ -44,7 +55,24 @@ def _validate(payload, kind):
             raise ValueError('command result %d has invalid status' % index)
         if not row.get('output'):
             raise ValueError('command result %d is missing output' % index)
-        if not isinstance(row.get('requirements', []), list):
+        requirements = row.get('requirements', [])
+        if isinstance(requirements, str):
+            # Observed (canopy issue #4): every command result wrote this as
+            # a natural comma-joined string ("AC-4, AC-5, I-3", or "None
+            # stated" for an empty one) instead of the required array --
+            # not a one-off slip, every row in the report did it the same
+            # way, which reads as the obvious way to write "the requirements
+            # for this row" in prose. Normalizing here, the same tolerant
+            # spirit as the dispositions/change_impact_table aliases, means
+            # a report that is otherwise complete and correct is not thrown
+            # away for a type this common wording gets wrong.
+            stripped = requirements.strip()
+            if not stripped or stripped.lower() in ('none', 'none stated', 'n/a', 'na'):
+                requirements = []
+            else:
+                requirements = [item.strip() for item in stripped.split(',') if item.strip()]
+            row['requirements'] = requirements
+        if not isinstance(requirements, list):
             raise ValueError('command result %d requirements must be an array' % index)
     if not isinstance(payload.get('coverage_gaps', []), list):
         raise ValueError('coverage_gaps must be an array')

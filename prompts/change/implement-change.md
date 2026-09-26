@@ -100,7 +100,7 @@ The JSON object's other fields cover:
 Run the targeted checks needed to demonstrate the changed behavior and write
 `.uncle/workflow/documents/CHANGE_TEST_REPORT.json` as one JSON object, not Markdown:
 
-`{"schema":"uncle.artifact/v1","kind":"change-test-report","commands":[{"command":"...","status":"PASS|FAIL|BLOCKED|NOT RUN|DRIVER PENDING","output":"...","requirements":["..."]}],"coverage_gaps":["..."],"next_action":"..."}`
+`{"schema":"uncle.artifact/v1","kind":"change-test-report","commands":[{"command":"...","status":"PASS|FAIL|BLOCKED|NOT RUN|N/A|DRIVER PENDING","output":"...","requirements":["..."]}],"coverage_gaps":["..."],"next_action":"..."}`
 
 The driver validates it, saves canonical JSON, and renders the Markdown review
 view. Its command results must cover:

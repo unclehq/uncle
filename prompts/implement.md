@@ -116,7 +116,7 @@ matching this contract (the driver stores it canonically as
 `.uncle/workflow/documents/AUTOMATED_TEST_REPORT.json` and renders its Markdown
 review view):
 
-`{"schema":"uncle.artifact/v1","kind":"automated-test-report","commands":[{"command":"...","status":"PASS|FAIL|BLOCKED|NOT RUN|DRIVER PENDING","output":"...","requirements":["..."]}],"coverage_gaps":["..."],"next_action":"..."}`
+`{"schema":"uncle.artifact/v1","kind":"automated-test-report","commands":[{"command":"...","status":"PASS|FAIL|BLOCKED|NOT RUN|N/A|DRIVER PENDING","output":"...","requirements":["..."]}],"coverage_gaps":["..."],"next_action":"..."}`
 
 For every command result include:
 

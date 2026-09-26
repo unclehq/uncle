@@ -154,6 +154,11 @@ def main(argv):
     # Markdown only -- it never names a canonical JSON -- so this is where a
     # real run's evidence actually is.
     delivered = args.missing_only and report.is_file() and report.stat().st_size > 0
+    if delivered and 'Driver-owned incomplete result' in report.read_text(encoding='utf-8'):
+        # A record this module fabricated on an earlier pass. Re-deriving rows
+        # from it would launder "NOT RUN" placeholders into something that
+        # looks like delivered evidence.
+        delivered = False
     if not delivered:
         report.write_text(verification(ids), encoding='utf-8')
     if not args.missing_only or not defect.is_file() or defect.stat().st_size == 0:

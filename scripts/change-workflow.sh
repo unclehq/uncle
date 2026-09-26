@@ -1931,6 +1931,41 @@ recover_missing_implementation_reports() {
 # agent omitted canonical reports, reconcile that evidence in a small,
 # report-only pass instead of replaying checks or asking the operator to
 # manufacture documentation.
+# Whether the execute stage actually left check results behind, as opposed to
+# an earlier attempt's file or the driver's own fallback. Both of those are
+# present and non-empty, which is all the old code ever asked.
+checklist_execution_delivered() {
+    local report=.uncle/docs/VERIFICATION_REPORT.md
+    local marker="$STATE_DIR/execute-checklist.started"
+    [[ -s "$report" ]] || return 1
+    # verification() stamps this heading on every record it fabricates.
+    grep -q 'Driver-owned incomplete result' "$report" && return 1
+    # Written by this attempt, not found lying there by it.
+    [[ ! -e "$marker" || "$report" -nt "$marker" ]] || return 1
+    return 0
+}
+
+compose_checklist_wait_retry_prompt() {
+    local target="$STATE_DIR/execute-checklist-wait-retry.md"
+    cat "$(resolve_prompt "${CHECKLIST_EXECUTE_PROMPT:-prompts/change/execute-change-checklist.md}")" > "$target"
+    cat >> "$target" <<'RETRY'
+
+## Required retry: the previous attempt ended with its checks still running
+
+Your previous turn ended while the checks were still running in the background,
+so no results reached `.uncle/docs/VERIFICATION_REPORT.md`. A turn that ends
+with work outstanding delivers nothing: the driver cannot see a background
+process, and results that land after this stage rewrite documents the final
+audit has already read, which blocks publication entirely.
+
+Do not end your turn until every check has finished and its result is written.
+If a batch runner is doing the work, poll it to completion in this same turn.
+If the full set cannot finish, run what can, and record the rest with an
+explicit blocker class (BLOCKED-SETUP, BLOCKED-HUMAN) and the reason -- a
+recorded blocker is a result; an unfinished background job is not.
+RETRY
+}
+
 recover_missing_checklist_reports() {
     if [[ -s "$STATE_DIR/documents/VERIFICATION_REPORT.json" && -s "$STATE_DIR/documents/DEFECTS.json" ]]; then
         return 0
@@ -3733,8 +3768,45 @@ REPAIR
             PROGRESS_TOTAL="$(jq -r '.checks[]?.id // empty' "$STATE_DIR/documents/MANUAL_CHECKLIST.json" 2>/dev/null \
                 | sort -u | grep -c . || echo 0)"
             PROGRESS_LABEL="checklist"
+            # Anything already on disk belongs to an earlier attempt or to the
+            # driver's own fallback. The marker dates this attempt so a report
+            # can be told apart from one that was already sitting there.
+            : > "$STATE_DIR/execute-checklist.started"
             run_claude "${CHECKLIST_EXECUTE_PROMPT:-prompts/change/execute-change-checklist.md}" execute-checklist \
                 "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 200 "${CHECKLIST_SYNTHESIS_BUDGET:-$BUDGET_EXECUTE}"
+            if ! checklist_execution_delivered; then
+                # A real run ended this stage after one turn with "Waiting for
+                # the batch run to finish.": the checks were still running in
+                # the background. The driver went on, FINAL_AUDIT read the
+                # driver's placeholder, and the batch rewrote
+                # .uncle/docs/VERIFICATION_REPORT.md three minutes later --
+                # after the audit had bound the tree. Publication was then
+                # refused with "Reviewed files changed; rerun FINAL_AUDIT.",
+                # and no PR was ever created.
+                if [[ ! -e "$STATE_DIR/execute-checklist-wait-retry" ]]; then
+                    : > "$STATE_DIR/execute-checklist-wait-retry"
+                    echo 'Execute-checklist ended with no check results on disk; retrying once.'
+                    compose_checklist_wait_retry_prompt
+                    : > "$STATE_DIR/execute-checklist.started"
+                    run_claude "$STATE_DIR/execute-checklist-wait-retry.md" execute-checklist \
+                        "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 200 "${CHECKLIST_SYNTHESIS_BUDGET:-$BUDGET_EXECUTE}"
+                fi
+                if ! checklist_execution_delivered; then
+                    echo
+                    echo "The execute-checklist stage produced no check results."
+                    echo "Recording them as NOT RUN would audit a document the"
+                    echo "stage did not write, and any checks still running in"
+                    echo "the background would rewrite it after the audit --"
+                    echo "which is what stops publication with"
+                    echo "\"Reviewed files changed; rerun FINAL_AUDIT.\""
+                    echo
+                    echo "Let the checks finish, or reduce the checklist to what"
+                    echo "this runner can complete in one turn, then resume."
+                    triage_stop_reason "$STATE_DIR" human
+                    exit 1
+                fi
+            fi
+            rm -f "$STATE_DIR/execute-checklist-wait-retry"
             PROGRESS_TOTAL=0
             wait_green_check_bg || exit $?
             set_state VALIDATE_CHECKLIST

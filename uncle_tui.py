@@ -135,59 +135,17 @@ def _default_config_path():
 
 
 def _ensure_uncle_gitignored(project_root):
-    """.uncle holds run state, cost/token logs, and (via self_hosted.py) API
-    keys -- never something to commit. This only edits a .gitignore that
-    already exists: a project with no git repository, or one that manages
-    ignores elsewhere (e.g. a global excludesfile), gets no file created on
-    its behalf.
+    """Delegates to scripts/lib/uncle_gitignore.py.
 
-    Generated documents (generated_input.py: REQUIREMENTS.md/CHANGE_REQUEST.md,
-    and any workflow output that lands under .uncle/docs) live there instead
-    of the project root specifically so a human-authored file and a generated
-    one are never confused for each other. But git's own worktree-removal
-    dirty check only ever sees tracked content, so a blanket `.uncle/` ignore
-    makes a freshly generated, not-yet-committed document invisible to it --
-    worktree_remove() (scripts/lib/worktrees.sh) would then happily discard a
-    worktree holding one no operator has used yet. `!.uncle/docs/` re-includes
-    the whole directory; nothing re-excludes its contents, so everything
-    under it stays tracked and visible.
+    The worktree a run happens in needs the same normalization, and
+    worktrees.sh reaches that module directly; one implementation keeps the
+    two from drifting apart.
     """
-    path = os.path.join(project_root, ".gitignore")
     try:
-        with open(path, encoding="utf-8") as fh:
-            existing = fh.read()
-    except OSError:
+        import uncle_gitignore
+    except ImportError:
         return
-    lines = existing.splitlines()
-    # Normalize Uncle's own legacy and canonical entries as one block. A
-    # project can have a stale bare `.uncle` after an earlier canonical pair;
-    # replacing just that bare line added another pair on every first-run
-    # refresh. Keep the first occurrence's position and remove every duplicate
-    # or legacy spelling, while leaving unrelated user rules untouched.
-    managed = {'.uncle', '.uncle/', '.uncle/*', '!.uncle/docs/'}
-    positions = [index for index, line in enumerate(lines) if line.strip() in managed]
-    if positions:
-        first = positions[0]
-        normalized = []
-        for index, line in enumerate(lines):
-            if index == first:
-                normalized.extend(['.uncle/*', '!.uncle/docs/'])
-            if line.strip() not in managed:
-                normalized.append(line)
-        if normalized == lines:
-            return
-        try:
-            with open(path, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write("\n".join(normalized) + "\n")
-        except OSError:
-            pass
-        return
-    try:
-        with open(path, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(("\n" if existing and not existing.endswith("\n") else "") +
-                      ".uncle/*\n!.uncle/docs/\n")
-    except OSError:
-        pass
+    uncle_gitignore.ensure(project_root)
 
 
 CONFIG_PATH = os.environ.get("UNCLE_CONFIG", _default_config_path())

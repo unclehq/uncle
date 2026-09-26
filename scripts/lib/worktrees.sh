@@ -100,6 +100,14 @@ worktree_create() {
         fi
     fi
 
+    # A worktree checks out a commit, so its .gitignore is whatever was
+    # committed -- on a project that adopted the block later, that is the
+    # version without it. Normalizing only the project root left every
+    # worktree unconfigured, which is how one ended up tracking a previous
+    # run's .uncle/workflow-history and carrying 2379 files into a PR.
+    # Best effort: a project whose ignore file cannot be written still runs.
+    python3 "$ROOT/scripts/lib/uncle_gitignore.py" "$abs" 2>/dev/null || true
+
     worktree_copy_venvs "$root" "$abs"
     return 0
 }

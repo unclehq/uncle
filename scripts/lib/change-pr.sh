@@ -468,9 +468,44 @@ def snapshot(audit=False, excludes=(), attestation=False):
             ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z']).split(b'\0'))
         paths.update(subprocess.check_output(
             ['git', 'ls-tree', '-rz', '--name-only', 'HEAD']).split(b'\0'))
+        paths.discard(b'')
+        # Whatever .gitignore covers is not hashed, tracked or not.
+        # `ls-files --others --exclude-standard` above already drops ignored
+        # *untracked* files; a tracked file is never reported as ignored
+        # without --no-index, which is what turns the question from "is this
+        # untracked and ignored" into "do the ignore rules cover this path".
+        # That gap is how a previous run's archived .uncle/workflow-history,
+        # committed once, kept being hashed and re-committed afterwards.
+        if paths:
+            ignored = subprocess.run(
+                ['git', 'check-ignore', '--no-index', '-z', '--stdin'],
+                input=b'\0'.join(sorted(paths)) + b'\0',
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if ignored.returncode not in (0, 1):
+                raise ValueError('git check-ignore failed: '
+                                 + ignored.stderr.decode('utf-8', 'replace').strip())
+            paths -= set(ignored.stdout.split(b'\0'))
         entries = []
+        batched = []
         for raw in sorted(paths):
-            if not raw or raw.startswith(b'.uncle/workflow/') or raw == b'.uncle/docs/FINAL_AUDIT.md':
+            # Everything under .uncle/ is uncle's own state -- run logs, cost
+            # ledgers, attestation, config, launch metadata -- and none of it
+            # is part of the change under review. Only .uncle/docs/ is: those
+            # are the artifacts a human approves and the PR carries.
+            #
+            # This used to name individual subdirectories, so each new one had
+            # to be remembered. .uncle/workflow-history/<uuid>/ (a previous
+            # run's archived .uncle/workflow, from workflow_family.py) was
+            # not: on one real checkout it put 2379 files of an earlier run's
+            # logs into the PR, and made every snapshot hash 2761 files where
+            # 368 belonged to the project. Excluding the directory rather than
+            # a list of its children is what keeps that from recurring.
+            #
+            # FINAL_AUDIT.md is skipped here and appended under the `audit`
+            # flag instead, so a snapshot can be taken with or without it.
+            if (not raw
+                    or (raw.startswith(b'.uncle/') and not raw.startswith(b'.uncle/docs/'))
+                    or raw == b'.uncle/docs/FINAL_AUDIT.md'):
                 continue
             name = os.fsdecode(raw)
             # The attestation names the tree it is committed into, so the
@@ -487,11 +522,30 @@ def snapshot(audit=False, excludes=(), attestation=False):
                 mode, content = '120000', os.fsencode(os.readlink(path))
             elif path.is_file():
                 mode = '100755' if path.stat().st_mode & 0o100 else '100644'
-                content = path.read_bytes()
+                content = None if b'\n' not in raw else path.read_bytes()
             else:
                 raise ValueError('Submodules/nested repositories cannot be bound; use a supported tree.')
+            if content is None:
+                # Hashed in one batch below. `git hash-object` costs about 9ms
+                # of process spawn per call and almost nothing per byte, so a
+                # call per file was the whole cost of a snapshot -- and the
+                # publish path takes roughly eighteen of them between the
+                # audit and the created PR. Batching is only safe for regular
+                # files whose path carries no newline, because --stdin-paths
+                # is newline-delimited; symlinks read their target text and
+                # newline-bearing paths keep the per-file call.
+                batched.append((mode, raw, path))
+                continue
             oid = git('hash-object', '-w', '--no-filters', '--stdin', data=content)
             entries.append(mode.encode() + b' ' + oid.encode() + b'\t' + raw + b'\0')
+        if batched:
+            listing = b'\n'.join(os.fsencode(str(item[2])) for item in batched) + b'\n'
+            oids = run('git', 'hash-object', '-w', '--no-filters', '--stdin-paths',
+                       data=listing).split('\n')
+            if len(oids) != len(batched):
+                raise ValueError('hash-object returned %d ids for %d files.' % (len(oids), len(batched)))
+            for (mode, raw, _), oid in zip(batched, oids):
+                entries.append(mode.encode() + b' ' + oid.encode() + b'\t' + raw + b'\0')
         if audit:
             if AUDIT.is_symlink() or not AUDIT.is_file():
                 raise ValueError('.uncle/docs/FINAL_AUDIT.md must be a regular file.')

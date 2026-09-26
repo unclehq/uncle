@@ -1302,8 +1302,26 @@ start_green_baseline_bg() {
     echo
     echo "Recording the green-check baseline in the background while planning runs."
     echo "Log: $LOG_DIR/green-check-baseline.log"
+    # Niced, because this is the one place where the workflow deliberately
+    # competes with itself: a full project test suite runs flat out while the
+    # planning stage is waiting on a model. On uncle's own repository the
+    # suite is 85 shell suites -- one of them alone still running at 357s --
+    # and the machine sat at load 9.78 on 10 cores. Four review workers doing
+    # near-identical work (about 120k cache reads, 2-3k output each) came back
+    # in 54s, 170s, 205s and 229s: the same work, a 4.2x spread, which is what
+    # scheduler contention looks like from the outside.
+    #
+    # The baseline is batch work nothing is waiting on until IMPLEMENT, so it
+    # should yield to the stage that is. Lowering its own priority needs no
+    # privilege; raising one back would, which is why this only ever lowers.
+    # Children inherit it, so the whole suite runs behind the foreground.
     ( capture_green_baseline ) > "$LOG_DIR/green-baseline.bg.log" 2>&1 < /dev/null &
     BASELINE_BG_PID=$!
+    # Reniced from here rather than inside the subshell: $$ there is still the
+    # parent's pid, and $BASHPID is bash 4+ while this runs on macOS's bash
+    # 3.2. The job's own pid is what $! just gave us, and the suite's children
+    # are forked after this returns, so they start at the lowered priority.
+    renice -n "${WORKFLOW_BASELINE_NICE:-10}" -p "$BASELINE_BG_PID" > /dev/null 2>&1 || true
 }
 
 # Joined before anything writes code. A failure here is fatal, exactly as it was
@@ -3064,6 +3082,17 @@ run_planning_pass() {
         cat "$(resolve_prompt prompts/change/change-spec.md)"
         printf '\n\n# Then plan the specified change\n\n'
         cat "$(resolve_prompt prompts/change/change-plan.md)"
+        # Each section above is a standalone stage prompt, and each one names
+        # its own document because in its own stage that document is the whole
+        # deliverable. Concatenated here they tell the agent to write three
+        # files, which contradicts the single-bundle contract the driver
+        # appends after this. A real run followed the section instructions,
+        # spent its turns, and left artifact-delivery/ empty -- the driver then
+        # reported the bundle "missing or invalid" with nothing to point at.
+        # Say plainly, once, which instruction wins.
+        printf '\n\n## Those three sections describe content, not delivery\n\n'
+        printf 'Each section above was written for a stage where that document is the only output, so each names a file to write. In this combined pass none of them is written: `.uncle/docs/BASELINE_REPORT.md`, `.uncle/docs/CHANGE_SPEC.md` and `.uncle/docs/CHANGE_PLAN.md` are rendered by the driver afterwards, from the bundle.\n\n'
+        printf 'Take from those sections what each packet must contain and how to judge it. Ignore where they say to put it. Everything you produce goes into the single JSON bundle named in the delivery contract below, as the `baseline_report`, `change_spec` and `change_plan` packets. Writing those Markdown paths yourself delivers nothing the driver reads.\n'
     } > "$prompt"
     UNCLE_COMBINED_CHANGE_PLAN=1 run_claude "$prompt" change-plan \
         "$MODEL_CHANGE_PLAN" "" 120 "$BUDGET_CHANGE_PLAN"

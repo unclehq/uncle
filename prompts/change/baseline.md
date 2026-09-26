@@ -46,8 +46,9 @@ For each existing invariant include:
 | ID | Invariant | Current enforcement | Existing test | Confidence |
 |---|---|---|---|---|
 
-`verification_commands` is section 8, "Exact build and test commands
-executed", as its own field, not inside `narrative` -- see below.
+`verification_commands` is section 8, "Exact build and test commands", as
+its own field, not inside `narrative` -- see below. The driver executes
+them; you identify them.
 `parallel_groups` is the optional "Parallel verification groups" content,
 also its own field -- see below.
 
@@ -62,8 +63,9 @@ of this stage. A large command output read early is paid for many times over.
 This stage reads more of the repository than any other, so the discipline
 matters most here.
 
-- Run test suites with the quietest flag that still reports failures. Record
-  the summary line and the names of failures; never paste passing output.
+- Do not run test suites here at all; see "Do not run the suite yourself"
+  below. For the few commands you do run to identify something, use the
+  quietest flag that answers the question and never paste passing output.
 - Pipe commands whose output is unbounded through `tail`, `wc -l`, or a
   summary flag. `find`, `ls -R`, and full-tree greps need a bound.
 - Use Grep with a targeted pattern in preference to reading a large file end
@@ -71,7 +73,7 @@ matters most here.
   the symbols CHANGE_REQUEST.md names and read the surrounding lines. One
   whole large module is a third of this stage's context.
 - Write .uncle/docs/BASELINE_REPORT.md as soon as `verification_commands` and
-  section 9 have their evidence, before any reading for later documents. A
+  section 9 are settled, before any reading for later documents. A
   report on disk survives a context that runs out; one still in your head
   does not.
 - Cite code by path and line rather than quoting it. The report is read by
@@ -98,22 +100,50 @@ here is paid for six times over.
 the same content in two places: `verification_commands` is the bare command
 list alone (see below -- nothing else belongs on those lines, not even on
 the same line as a command), and section 9, in `narrative`, is where you
-report what each one produced. Together they are the evidence the rest of
-the workflow depends on, but the driver runs `verification_commands` as
+record where those commands came from and any failure the repository already
+documents -- not results you ran, which the driver's baseline supplies.
+Together they are the evidence the rest of the workflow depends on, but the
+driver runs `verification_commands` as
 written, verbatim, as shell input (see below) -- a result appended to a
 command line (e.g. "pytest -q  => 28 passed") is not a comment there, it is
 part of the command, and running it fails with a shell syntax error every
 time the driver re-executes it, silently turning off regression detection
 for that command instead of reporting one.
 
-## verification_commands is executed, not just read
+## Do not run the suite yourself
 
-The driver re-runs `verification_commands` itself — once now, against the
-unmodified tree, and once after the change — and compares the two. That is
-how the workflow knows a check passed, rather than taking the implementation
-stage's word for it. So write it as a command list a shell can run:
+The driver runs `verification_commands` itself: once against this unmodified
+tree, and once after the change, comparing the two. Your job here is to
+identify those commands, not to execute them.
 
-- one command per line, exactly as you ran it, from the repository root;
+Running them yourself buys nothing and costs twice. A real run spent nine
+minutes on a project's own 85-suite battery during this stage, then the
+driver ran the identical list again a state later -- and because both were
+competing with the stage that was waiting on them, each took several times
+its solo cost. The same battery measured 106 seconds with the machine to
+itself.
+
+So: read the project's build and test configuration -- the Makefile, package
+scripts, CI workflow, tooling config -- and write down the commands it
+defines. Run one only when you cannot otherwise tell what a command is, and
+then prefer the cheap form that answers it (`--help`, `--version`, a
+collect-only or dry-run flag) over the suite itself. Never run a full test
+suite, build, or lint pass to find out what it reports: the driver's baseline
+reports exactly that, from its own execution, minutes later.
+
+Section 9 therefore records where the commands came from and any pre-existing
+failure the repository already documents -- a known-flaky test, a CI badge, a
+TODO naming one. It does not report results you produced, because you did not
+produce any. The driver's baseline is the authority on what passes today, and
+`.uncle/workflow/green-check.baseline.tsv` is where it lands.
+
+## verification_commands is executed by the driver, not just read
+
+That execution is how the workflow knows a check passed, rather than taking
+the implementation stage's word for it. So write it as a command list a shell
+can run:
+
+- one command per line, exactly as the project defines it, from the repository root;
 - no prompt prefixes, no comments, no prose, no placeholders;
 - no command that needs a human, a password, an interactive browser, or a network service
   you cannot reach here — leave those to the manual checklist instead;

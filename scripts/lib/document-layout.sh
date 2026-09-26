@@ -203,14 +203,39 @@ document_final_response_contract() {
         # given is the actual, driver-enforced one, and repeating a
         # conflicting one in different words no longer helps.
         IMPLEMENTATION_NOTES.md|AUTOMATED_TEST_REPORT.md|CHANGE_TEST_REPORT.md) return 0 ;;
+        # Same defect, found by a follow-up audit across every JSON-canonical
+        # artifact (not just the three above). Each of these has its own
+        # validator requiring exact keys (dispositions; findings+
+        # overall_assessment; findings+verdict; checks; sections), and this
+        # function's per-file text below still instructs Markdown headings
+        # or invents different vocabulary for them, in the same prompt turn
+        # as the correct JSON contract:
+        #  - CHANGE_PLAN.md/UPDATED_CHANGE_PLAN.md: told the exact heading
+        #    "## Change-impact table" -- the literal, confirmed root cause
+        #    of the change_impact_table bug already fixed via alias in
+        #    render_change_plan(); this prose is what primed it and remains
+        #    live for every future run until removed here too.
+        #  - REQUIREMENTS_INTERPRETATION.md: describes content as "an
+        #    ID-keyed requirements/behaviors/invariants table ... and
+        #    acceptance criteria" -- none of those phrases are among the
+        #    ten required `sections` keys (required_functionality,
+        #    optional_functionality, constraints, user_visible_behaviors,
+        #    system_behaviors, failure_behaviors, ambiguities, assumptions,
+        #    explicit_non_goals, definition_of_done).
+        #  - ADVERSARIAL_REVIEW.md, MANUAL_CHECKLIST.md/.base.md,
+        #    FINAL_AUDIT.md, PREFLIGHT_REPORT.md, TEST_REVIEW.md: each
+        #    instructs a Markdown heading/table format ("## AR-001: Title",
+        #    "# Manual checklist" with MC-ID headings, a findings table
+        #    ending in a bare verdict line, a "## Acceptance gate" table)
+        #    where the actual contract is one JSON object
+        #    ({findings,overall_assessment} / {checks} / {findings,verdict}
+        #    / {rows}).
+        REQUIREMENTS_INTERPRETATION.md|CHANGE_PLAN.md|UPDATED_CHANGE_PLAN.md|\
+        ADVERSARIAL_REVIEW.md|MANUAL_CHECKLIST.md|MANUAL_CHECKLIST.base.md|\
+        FINAL_AUDIT.md|PREFLIGHT_REPORT.md|TEST_REVIEW.md) return 0 ;;
     esac
     printf 'Final-response contract for `%s` (binding):\n\n' "$file"
     case "${file##*/}" in
-        REQUIREMENTS_INTERPRETATION.md)
-            cat <<'CONTRACT'
-Return a requirements interpretation, not a plan or a review. Start with `# Requirements interpretation`; then give only: the requested outcome, an ID-keyed requirements/behaviors/invariants table, assumptions and ambiguities, and acceptance criteria. State unknowns as explicit questions or constraints; do not invent an implementation, file list, commands, or verdict.
-CONTRACT
-            ;;
         PROJECT_PLAN.md)
             cat <<'CONTRACT'
 Return an executable proposal, not a requirements restatement or review. Start with `# Project plan`; then give only: objective and constraints, current-state findings, ID-keyed behavior/invariant coverage, ordered implementation steps with exact files and changes, verification commands/evidence, risks/rollback, and open decisions. Do not claim implementation or test results.
@@ -233,33 +258,6 @@ CONTRACT
 Return a frozen change specification, not an implementation plan. Start with `# Change specification`; then give only: requested change, ID-keyed requirements/behaviors/invariants, preserved behavior, acceptance criteria, explicit non-goals, and compatibility/rollback constraints. Do not list coding steps, assert tests passed, or make an audit verdict.
 CONTRACT
             ;;
-        CHANGE_PLAN.md|UPDATED_CHANGE_PLAN.md)
-            cat <<'CONTRACT'
-Return an executable change plan, not a specification or review. Start with `# Change plan`; then give only: scope and constraints, the exact `## Change-impact table`, ordered file-level implementation steps, requirement-to-step traceability, verification commands/evidence, rollback, and unresolved approval decisions. Do not claim the edits or tests were performed.
-Every numbered implementation step must end with `Owns:` (exact repo-relative files, or `*` only for a final reconcile step) and `Depends on:` (prior step numbers or `none`). The parallel implementation scheduler consumes these declarations directly; never omit or infer them.
-CONTRACT
-            ;;
-        ADVERSARIAL_REVIEW.md)
-            cat <<'CONTRACT'
-Return an adversarial assessment of the supplied plan only. Start directly with zero or more `## AR-001: Title` findings in the required finding format, then end with `## Overall assessment`. Every finding must identify a concrete failure mode and correction; do not write a plan, implementation notes, test report, conversation, or generic praise. If clean, say `No findings` in the overall assessment.
-CONTRACT
-            ;;
-        PREFLIGHT_REPORT.md)
-            cat <<'CONTRACT'
-Return a preflight readiness report, not a plan or final audit. Start with `# Preflight report`; then give only: checked prerequisites/environment, the approved-plan verification commands and outcomes, blockers with recovery actions, and exactly one final `## Acceptance gate` table. Do not modify scope, invent execution evidence, or issue a release verdict.
-CONTRACT
-            ;;
-        TEST_REVIEW.md)
-            cat <<'CONTRACT'
-Return an independent test-readiness review, not test execution output. Start with `# Test review`; then give only: adequacy findings, missing or weak coverage, evidence references, required corrections, and exactly one final `## Acceptance gate` table. Do not write tests, claim unrun checks passed, or give the final release verdict.
-CONTRACT
-            ;;
-        MANUAL_CHECKLIST.md|MANUAL_CHECKLIST.base.md)
-            cat <<'CONTRACT'
-Return an executable human test checklist only. Start with `# Manual checklist`; then give only the required MC-ID check headings and fields, followed by traceability if needed. Every check must be independently runnable and have explicit preconditions, exact action, expected result, evidence, actual result, and status. Do not write test results before execution, a plan, or a release verdict.
-Every check must also contain `Exclusive resources` and `Depends on` in that order; use `none` for each when no lock or ordering requirement exists. These declarations are consumed directly by the parallel checklist scheduler, so never omit or infer them.
-CONTRACT
-            ;;
         VERIFICATION_REPORT.md)
             cat <<'CONTRACT'
 Return execution evidence for the manual/verification checks only. Start with `# Verification report`; then give only: each executed check ID, actual result, status, evidence, failures/blockers, and exactly one final `## Acceptance gate` table. Do not alter the checklist, propose implementation, or pronounce final release readiness.
@@ -268,11 +266,6 @@ CONTRACT
         DEFECTS.md)
             cat <<'CONTRACT'
 Return a defect register only. Start with `# Defects`; then give only one ID-keyed entry per observed defect or blocker: severity, reproduction/evidence, affected requirement or check, current status, owner/next action, and disposition. Do not include clean test narration, a plan, or an audit verdict. If none were observed, state `No defects found` and the evidence scope.
-CONTRACT
-            ;;
-        FINAL_AUDIT.md)
-            cat <<'CONTRACT'
-Return the release audit only. Start with `# Final audit`; then give only the findings table with evidence, correction, and `Blocks` for each issue, followed by the required verdict as the very last line. Do not include an implementation diary, rerun test output, remediation plan, greeting, or any text after the verdict.
 CONTRACT
             ;;
         *)

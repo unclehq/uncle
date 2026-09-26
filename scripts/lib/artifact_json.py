@@ -449,6 +449,24 @@ def render_change_plan(payload, require_dispositions=False):
     if not narrative or not narrative.strip():
         raise ValueError('change-plan has no narrative')
     dispositions = payload.get('dispositions')
+    if dispositions is None and isinstance(payload, dict):
+        # Observed repeatedly (canopy issue #4), even after tightening the
+        # prompt's wording: an agent that wrote a complete, correctly shaped
+        # disposition list still names the key `disposition_table` (or a
+        # similar variant), because the prompt's own prose refers to "the
+        # disposition table" throughout -- vocabulary that keeps winning out
+        # over one schema example, no matter how the wording is adjusted.
+        # Rather than keep chasing phrasing, accept any single top-level key
+        # that is plainly the same field under another name: starts with
+        # "disposition" and holds a list. Ambiguous only if more than one
+        # such key exists, which is a real authoring error worth rejecting.
+        aliases = [
+            key for key, value in payload.items()
+            if key != 'dispositions' and key.lower().lstrip('_').startswith('disposition')
+            and isinstance(value, list)
+        ]
+        if len(aliases) == 1:
+            dispositions = payload[aliases[0]]
     # An explicit empty list is the correct, deliberate answer when the
     # adversarial review had zero findings -- there is nothing to
     # disposition. Only an omitted key (None) is the actual contract

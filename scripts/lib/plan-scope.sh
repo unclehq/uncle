@@ -53,9 +53,65 @@ PY
 # Only backticked tokens that look like paths are taken, so a function name in
 # the same cell is ignored rather than treated as a file.
 plan_scope_files() {
-    local plan="$1"
+    local plan="$1" json
 
     [[ -s "$plan" ]] || return 0
+
+    # Observed repeatedly (canopy issue #4): an agent asked for a narrative
+    # containing a "## Change-impact table" heading instead gives the table
+    # its own top-level JSON field, change_impact_table -- a list of
+    # objects, not markdown -- no matter how the heading instruction is
+    # worded, the same way dispositions kept arriving as disposition_table.
+    # Reading the table directly when it exists this way, instead of only
+    # ever parsing it back out of rendered narrative prose, is not fooled
+    # by which shape the model chose this run.
+    case "$plan" in
+        .uncle/docs/UPDATED_PROJECT_PLAN.md|.uncle/docs/PROJECT_PLAN.md|.uncle/docs/CHANGE_PLAN.md)
+            local stem="${plan##*/}"; stem="${stem%.md}"
+            json="${STATE_DIR:-.uncle/workflow}/documents/$stem.json"
+            [[ -s "$json" ]] || json=""
+            ;;
+    esac
+    if [[ -n "$json" ]]; then
+        local structured
+        structured="$(python3 - "$json" <<'PY'
+import json, re, sys
+try:
+    payload = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    raise SystemExit(1)
+table = payload.get('change_impact_table') if isinstance(payload, dict) else None
+if not isinstance(table, list) or not table:
+    raise SystemExit(1)
+seen = []
+for row in table:
+    if not isinstance(row, dict):
+        continue
+    component = row.get('component')
+    if not isinstance(component, str):
+        continue
+    for tok in re.split(r'[,\n]|`', component):
+        tok = tok.strip().strip('`').strip()
+        if not tok or tok.startswith('/'):
+            continue
+        # A path cell can carry a trailing annotation with no delimiter
+        # ("server/app/records/api.py voice-login routes"); take only the
+        # leading path-shaped run, same as the backticked-markdown path
+        # already only takes the part inside the backticks.
+        match = re.match(r'^\S+', tok)
+        tok = match.group(0) if match else tok
+        if '/' in tok or re.search(r'\.[A-Za-z0-9]+$', tok):
+            seen.append(tok)
+if not seen:
+    raise SystemExit(1)
+print('\n'.join(seen))
+PY
+)"
+        if [[ -n "$structured" ]]; then
+            printf '%s\n' "$structured" | sort -u
+            return 0
+        fi
+    fi
 
     plan_text "$plan" | awk '
         /^## Change-impact table/ { intable = 1; next }

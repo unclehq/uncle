@@ -3968,7 +3968,46 @@ class UncleTUI:
             self.triage_history.append(('system', sanitize(' '.join(notes))))
         if getattr(self, 'recovery_active', False):
             self.chat_error = self.triage_error
+        self._maybe_auto_resume_triage()
         return True
+
+    def _maybe_auto_resume_triage(self):
+        """In an unattended run, continue past triage the same way a person
+        typing /resume would, but only when the diagnosis itself offered
+        that as safe -- never for a run left "needs owner decision" (no
+        Offer: resume line at all) or one the guard just tainted.
+
+        Triage never checked for --unattended before this: every abnormal
+        driver exit handed off to an interactive recovery session and then
+        waited for a keypress at the TUI regardless of the flag, so an
+        unattended run could sit blocked on a human indefinitely with
+        nothing surfacing that fact (observed repeatedly on canopy issue
+        #4). This mirrors the honesty of the unattended acceptance-row
+        waiver (waivers.sh's "no person authorized this") rather than
+        silently resuming: the record it leaves says plainly that nobody
+        reviewed the diagnosis.
+        """
+        if not getattr(self, 'workflow_unattended', False):
+            return
+        if not self.triage_offer_resume or self.triage_tainted:
+            return
+        if self.triage_request is not None:
+            return  # a turn (diagnosis or an applied fix) is still in flight
+        note = 'Unattended: auto-resuming past triage (%s); no person reviewed this diagnosis.' % (
+            self.triage_classification or 'no classification parsed')
+        self.triage_history.append(('system', note))
+        try:
+            state_dir = self._workflow_dir()
+            os.makedirs(state_dir, exist_ok=True)
+            with open(os.path.join(state_dir, 'unattended-gates'), 'a', encoding='utf-8') as fh:
+                fh.write('%s\ttriage-resume\t%s\n' % (
+                    time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), note))
+        except OSError:
+            pass
+        try:
+            self.triage_resume()
+        except ValueError as exc:
+            self.triage_history.append(('system', 'Auto-resume did not start: ' + sanitize(str(exc))))
 
     def _is_known_stage(self, name):
         """True when this project's workflow really has a stage by that name.

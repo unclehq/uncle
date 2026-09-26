@@ -26,6 +26,16 @@ def paths(baseline=None):
         old = set(Path(baseline).read_text(errors='surrogateescape').splitlines())
     patterns = artifact_patterns()
     candidates = {os.fsdecode(p) for p in (diff.stdout + untracked.stdout).split(b'\0') if p}
+    # `git diff` reports tracked files whatever the ignore rules say, and
+    # `--exclude-standard` above only filters untracked ones. Without this a
+    # file committed before its ignore rule existed lands in the review
+    # document -- and the reviewer reads thousands of lines of it.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        from project_paths import ignored
+        candidates -= ignored('.', candidates)
+    except ImportError:
+        pass
     return sorted(p for p in candidates if p not in old and not any(fnmatch.fnmatchcase(p, pattern) for pattern in patterns))
 
 

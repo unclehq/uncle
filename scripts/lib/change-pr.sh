@@ -70,14 +70,23 @@ change_pr_publish() {
         return 0
     fi
     if [[ -s "$ORIGIN_FILE" ]]; then
-        local recorded verdict_class
+        local recorded verdict_class audit_artifact
         recorded="$(awk -F'\t' 'NR == 1 {print $1}' "$VERDICT_FILE")"
         verdict_class="$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")"
+        # issue_close_eligible rehashes this file and compares it against the
+        # hash in the verdict record. Both drivers record that hash from the
+        # canonical JSON artifact, so handing over the rendered Markdown made
+        # the comparison one of two different files: it always failed with
+        # ".uncle/docs/FINAL_AUDIT.md changed after it was classified", and the
+        # `|| return 0` below turned that into a silent no-PR. The Markdown
+        # stays the fallback for a run recorded before the canonical artifact.
+        audit_artifact="${STATE_DIR:-.uncle/workflow}/documents/FINAL_AUDIT.json"
+        [[ -s "$audit_artifact" ]] || audit_artifact=.uncle/docs/FINAL_AUDIT.md
         case "$verdict_class" in
             READY|READY_WITH_NON_BLOCKING_ISSUES)
                 issue_close_eligible "$recorded" \
                     "$(origin_field "$ORIGIN_FILE" 1)" "$(origin_field "$ORIGIN_FILE" 2)" \
-                    "$VERDICT_FILE" "$ORIGIN_FILE" .uncle/docs/FINAL_AUDIT.md "$MARKER_FILE" \
+                    "$VERDICT_FILE" "$ORIGIN_FILE" "$audit_artifact" "$MARKER_FILE" \
                     1 "$ORIGIN_BOUND" 1 "$(origin_fetch_method "$ORIGIN_FILE")" || return 0
                 ;;
             *)
@@ -506,7 +515,18 @@ def snapshot(audit=False, excludes=(), attestation=False):
 
 
 def audit_hash():
-    return hashlib.sha256(AUDIT.read_bytes()).hexdigest()
+    # Bind to the same bytes the verdict file binds to. Both drivers record the
+    # verdict as sha256 of the canonical artifact (change-workflow.sh and
+    # stagegate.sh each hash .uncle/workflow/documents/FINAL_AUDIT.json), while
+    # this hashed the rendered Markdown view. validate() then compared
+    # verdict[2] against j['audit_hash'] -- two hashes of two different files,
+    # which can never be equal. Every completed run raised "Verdict binding
+    # changed; rerun FINAL_AUDIT.", change_pr_publish swallowed the nonzero
+    # status, and no PR was ever created. The Markdown remains the fallback so
+    # a journal bound before the canonical artifact existed still validates.
+    canonical = STATE / 'documents' / 'FINAL_AUDIT.json'
+    source = canonical if canonical.is_file() else AUDIT
+    return hashlib.sha256(source.read_bytes()).hexdigest()
 
 
 def load():

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import importlib.util
 import subprocess
 import tempfile
 import unittest
@@ -14,7 +15,7 @@ class ChecklistReportFallbackTests(unittest.TestCase):
             root = Path(temp); docs = root/'.uncle/docs'; docs.mkdir(parents=True)
             artifact = root/'.uncle/workflow/documents'; artifact.mkdir(parents=True)
             (artifact/'EXECUTE_CHECKLIST.json').write_text('{"schema":"uncle.artifact/v1","kind":"execute-checklist","results":[{"id":"MC-1","required":true,"status":"FAIL","evidence":"expected x"}]}')
-            module = __import__('importlib').util
+            module = importlib.util
             spec = module.spec_from_file_location('fallback', SCRIPT); fallback = module.module_from_spec(spec); spec.loader.exec_module(fallback)
             fallback.render_from_json(root)
             self.assertIn('| MC-1 | YES | FAIL | expected x |', (docs/'VERIFICATION_REPORT.md').read_text())

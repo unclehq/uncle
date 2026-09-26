@@ -139,13 +139,13 @@ issue_close_eligible() {
     fi
 
     if [[ ! -s "$audit_file" ]]; then
-        echo ".uncle/docs/FINAL_AUDIT.md is missing; leaving $repo#$issue open."
+        echo "$audit_file is missing; leaving $repo#$issue open."
         return 1
     fi
 
     actual_hash="$(hash_file "$audit_file")"
     if [[ "$actual_hash" != "$recorded_hash" ]]; then
-        echo ".uncle/docs/FINAL_AUDIT.md changed after it was classified;"
+        echo "$audit_file changed after it was classified;"
         echo "leaving $repo#$issue open."
         return 1
     fi

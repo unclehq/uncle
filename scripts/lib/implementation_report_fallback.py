@@ -39,6 +39,34 @@ def tests(kind):
             'next_action': 'Run the approved verification commands and replace this incomplete record with actual results.'}
 
 
+def usable(path, kind):
+    """Whether an existing canonical artifact can be handed on as-is.
+
+    --missing-only used to mean "present and non-empty", which an agent that
+    invented its own shape satisfies: a change-test-report written as
+    {"source": ..., "rows": [...]} is preserved, fails the validation below,
+    and -- because errexit is suspended for the whole function in the driver's
+    `run_stepwise_implementation ... || step_status=$?` call -- surfaces as a
+    traceback that does not stop the stage. Treat an artifact that is not the
+    kind its consumer validates as missing, and rewrite it conservatively.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    return (isinstance(payload, dict)
+            and payload.get('schema') == 'uncle.artifact/v1'
+            and payload.get('kind') == kind)
+
+
+def check(command, description):
+    """Report a failed validation as an operator-readable stop, not a traceback."""
+    if subprocess.run(command).returncode:
+        raise SystemExit('Implementation handoff fallback: %s. The conservative '
+                         'record this stage wrote did not validate; the run cannot '
+                         'hand on an artifact its own schema rejects.' % description)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--project', default='.')
@@ -53,15 +81,18 @@ def main():
     outputs = ((canonical_notes, notes(changed_files(project))),
                (canonical_tests, tests(args.kind)))
     for path, content in outputs:
-        if not args.missing_only or not path.is_file() or path.stat().st_size == 0:
+        if not args.missing_only or not usable(path, content['kind']):
             path.write_text(json.dumps(content) + '\n', encoding='utf-8')
     root = Path(__file__).resolve().parent
-    subprocess.run(['python3', str(root / 'implementation_notes.py'), 'validate', str(project),
-                    '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json', '--require-json'], check=True)
-    subprocess.run(['python3', str(root / 'implementation_notes.py'), 'render', str(project),
-                    '.uncle/docs/IMPLEMENTATION_NOTES.md'], check=True)
-    subprocess.run(['python3', str(root / 'test_report.py'), 'validate', str(project), args.kind,
-                    '.uncle/workflow/documents/' + test_name.replace('.md', '.json')], check=True)
+    check(['python3', str(root / 'implementation_notes.py'), 'validate', str(project),
+           '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json', '--require-json'],
+          'the implementation notes did not validate')
+    check(['python3', str(root / 'implementation_notes.py'), 'render', str(project),
+           '.uncle/docs/IMPLEMENTATION_NOTES.md'],
+          'the implementation notes could not be rendered')
+    check(['python3', str(root / 'test_report.py'), 'validate', str(project), args.kind,
+           '.uncle/workflow/documents/' + test_name.replace('.md', '.json')],
+          'the %s test report did not validate' % args.kind)
 
 
 if __name__ == '__main__':

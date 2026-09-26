@@ -149,21 +149,45 @@ def main(argv):
         return 1
     docs.mkdir(parents=True, exist_ok=True)
     report, defect = docs / 'VERIFICATION_REPORT.md', docs / 'DEFECTS.md'
-    if not args.missing_only or not report.is_file() or report.stat().st_size == 0:
+    # True when the execution stage's own report is on disk and --missing-only
+    # kept it. prompts/change/execute-change-checklist.md asks the agent for
+    # Markdown only -- it never names a canonical JSON -- so this is where a
+    # real run's evidence actually is.
+    delivered = args.missing_only and report.is_file() and report.stat().st_size > 0
+    if not delivered:
         report.write_text(verification(ids), encoding='utf-8')
     if not args.missing_only or not defect.is_file() or defect.stat().st_size == 0:
         defect.write_text(defects(ids), encoding='utf-8')
     artifact = project / '.uncle/workflow/documents/EXECUTE_CHECKLIST.json'
     artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'execute-checklist',
-                                    'results': [{'id': identifier, 'required': True, 'status': 'NOT RUN',
-                                                 'evidence': 'No check-specific execution evidence was recorded.'}
-                                                for identifier in ids]}, indent=2) + '\n', encoding='utf-8')
+    rows = None
+    if delivered:
+        # The canonical artifact must be derived from that report, never
+        # fabricated over it. These three writes used to be unconditional, so
+        # a stage that had executed every check still produced 42 rows of
+        # NOT RUN -- and VALIDATE_CHECKLIST then re-rendered the Markdown from
+        # those empty rows, destroying the evidence --missing-only had just
+        # preserved. export_from_markdown is the existing parser for exactly
+        # this; nothing here infers a status the report did not state.
+        try:
+            export_from_markdown(project)
+            rows = json.loads(artifact.read_text(encoding='utf-8'))['results']
+        except (OSError, ValueError, KeyError) as error:
+            print(f'Could not read the execution report ({error}); recording NOT RUN.', file=sys.stderr)
+            rows = None
+    if rows is None:
+        rows = [{'id': identifier, 'required': True, 'status': 'NOT RUN',
+                 'evidence': 'No check-specific execution evidence was recorded.'}
+                for identifier in ids]
+        artifact.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'execute-checklist',
+                                        'results': rows}, indent=2) + '\n', encoding='utf-8')
     state = project / '.uncle/workflow/documents'
     (state / 'VERIFICATION_REPORT.json').write_text(json.dumps(
         {'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report',
-         'rows': [{'id': identifier, 'required': True, 'status': 'NOT RUN',
-                   'evidence': 'No check-specific execution evidence was recorded.'} for identifier in ids]},
+         'rows': [{'id': row['id'], 'required': row.get('required', True),
+                   'status': row.get('status') or 'NOT RUN',
+                   'evidence': row.get('evidence') or 'No check-specific execution evidence was recorded.'}
+                  for row in rows]},
         indent=2) + '\n', encoding='utf-8')
     (state / 'DEFECTS.json').write_text(json.dumps(
         {'schema': 'uncle.artifact/v1', 'kind': 'defects', 'defects': []}, indent=2) + '\n', encoding='utf-8')

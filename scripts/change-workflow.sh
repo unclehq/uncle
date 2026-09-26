@@ -1897,7 +1897,11 @@ run_stepwise_implementation() {
     if [[ ! -f "$report_done_file" ]]; then
         echo
         echo "Implementation report: recording checkpointed evidence without a report-only model call."
-        python3 "$ROOT/scripts/lib/implementation_report_fallback.py" --project . --kind change --missing-only
+        # errexit is suspended for this whole function: the driver calls it as
+        # `run_stepwise_implementation ... || step_status=$?`. A bare command
+        # that fails here does not stop the stage, so a handoff that could not
+        # be validated used to print its error and be reported as success.
+        python3 "$ROOT/scripts/lib/implementation_report_fallback.py" --project . --kind change --missing-only || return 1
         check_document_budget .uncle/docs/CHANGE_TEST_REPORT.md || exit 1
         touch "$report_done_file"
     fi
@@ -2389,8 +2393,14 @@ record_codex_cost() {
         tokens="$(awk '/tokens used/ {getline; gsub(/[^0-9]/, "", $0); if ($0 != "") t = $0} END {print (t == "" ? "-" : t)}' "$log")"
     fi
 
-    local result
-    result="$(jq -R -c 'fromjson? | select(type == "object") | select(.type == "result")' "$log" | tail -n 1)"
+    # A stage that merged authoritative worker packets itself never launched a
+    # reviewer, so it has no log and nothing to bill. jq on a missing file is
+    # exit 2, which under `set -euo pipefail` killed the driver at the end of
+    # IMPLEMENT -- after the whole implementation had already been paid for.
+    local result=""
+    if [[ -s "$log" ]]; then
+        result="$(jq -R -c 'fromjson? | select(type == "object") | select(.type == "result")' "$log" | tail -n 1)"
+    fi
     if [[ -n "$result" ]]; then
         record_cost "reviewer:$log_name" "$elapsed" \
             "$(printf '%s' "$result" | jq -r '.total_cost_usd // "-"')" \
@@ -2735,7 +2745,16 @@ run_checklist_panel() {
     [[ "$kind" == base ]] && target="$STATE_DIR/documents/MANUAL_CHECKLIST.base.json"
     python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$target" coverage invariants resources regressions || return 1
     python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$target" || return 1
-    [[ "$kind" == base ]] || python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$target" .uncle/docs/MANUAL_CHECKLIST.md || return 1
+    # Both kinds need their rendered view on disk. The delta pass owns the
+    # operator-facing document; the base pass owns the working copy that
+    # wait_codex_bg requires, that the CHECKLIST state requires again, and
+    # that manual-checklist-context.py feeds to the delta pass. Rendering only
+    # the delta view left the base fast path with no view at all.
+    if [[ "$kind" == base ]]; then
+        python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$target" "$STATE_DIR/MANUAL_CHECKLIST.base.md" || return 1
+    else
+        python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$target" .uncle/docs/MANUAL_CHECKLIST.md || return 1
+    fi
     cp "$target" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
     CHECKLIST_PANEL_PROMPT="$target"
     CHECKLIST_PANEL_DIRECT=1
@@ -2850,6 +2869,14 @@ start_codex_bg() {
         if [[ -n "$panel_kind" ]]; then
             run_checklist_panel "$panel_kind" "$panel_source"
             if [[ "${CHECKLIST_PANEL_DIRECT:-0}" == 1 ]]; then
+                # status_stage_context announced this stage to the TUI before
+                # the subshell forked, and the TUI closes a stage on its end
+                # record. Exiting straight out skipped the perf_record below,
+                # so the row kept its spinner for the rest of the run -- still
+                # turning while later stages ran. The panel did the work, so
+                # it gets the same end record the reviewer call would write.
+                UNCLE_SPECULATIVE=true perf_record reviewer "$log_name" \
+                    "$((SECONDS-started))" 0 "" "$cmd" "$model" "$effort"
                 exit 0
             fi
             prompt_file="$(resolve_prompt "$CHECKLIST_PANEL_PROMPT")"
@@ -3618,7 +3645,15 @@ REPAIR
                 run_checklist_panel delta prompts/change/manual-checklist-delta.md
                 if [[ "${CHECKLIST_PANEL_DIRECT:-0}" == 1 ]]; then
                     echo 'Manual-checklist delta fast path: merged authoritative worker packets without parent synthesis.'
-                    set_state VALIDATE_CHECKLIST
+                    # The only thing this path saves is the parent synthesis
+                    # model call. It used to jump to VALIDATE_CHECKLIST, which
+                    # is two states further on, so VALIDATE_MANUAL_CHECKLIST
+                    # and EXECUTE_CHECKLIST were both skipped: the checklist
+                    # was written and then never executed. Every row reached
+                    # the audit as "NOT RUN -- No check-specific execution
+                    # evidence was recorded", and the run ended NOT READY on a
+                    # verification that had never been attempted.
+                    set_state VALIDATE_MANUAL_CHECKLIST
                     continue
                 fi
                 checklist_prompt="$CHECKLIST_PANEL_PROMPT"

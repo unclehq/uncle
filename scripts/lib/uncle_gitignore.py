@@ -36,6 +36,12 @@ import sys
 # them behind is what made a project's ignore file read as half-configured.
 MANAGED = {
     '.uncle', '.uncle/', '.uncle/*', '!.uncle/docs/',
+    # The intermediate spellings, from after the `.workflow` rename but before
+    # the `.uncle/*` block. `.uncle/workflow` on its own is the one that
+    # matters most: it does not cover `.uncle/workflow-history/`, so a project
+    # carrying only that line ignored the live run directory and nothing else.
+    '.uncle/workflow', '.uncle/workflow/', '.uncle/workflow/*',
+    '.uncle/workflow-history', '.uncle/workflow-history/', '.uncle/workflow-history/*',
     '.workflow', '.workflow/', '.workflow/*',
     '.workflow/state', '.workflow/approvals/', '.workflow/logs/',
     '.workflow/change.diff', '.workflow/change-stat.txt',

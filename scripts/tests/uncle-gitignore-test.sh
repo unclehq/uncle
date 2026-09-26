@@ -53,6 +53,31 @@ run_it
 #    the negation the approved artifacts would drop out of the PR.
 body | grep -qx '!\.uncle/docs/' || fail 'the docs negation went missing'
 
+# 3b. The real shape of a long-lived project: a stale `.uncle/workflow` from
+#     one era, legacy `.workflow` rules from another, and the canonical pair
+#     already present further down. All of it collapses to one block, in the
+#     position of the first managed line. `.uncle/workflow` alone never
+#     covered `.uncle/workflow-history/`, which is how a worktree kept
+#     enumerating 2379 archived files.
+case_dir '.uncle/workflow
+keep-me/
+
+# Local agent workflow state
+.workflow/state
+.workflow/logs/
+other/
+.uncle/*
+!.uncle/docs/
+'
+run_it
+body | grep -q '^\.uncle/workflow$'  && fail 'the stale .uncle/workflow line survived'
+body | grep -q '^\.workflow'          && fail 'a legacy .workflow rule survived'
+[[ "$(body | grep -cx '\.uncle/\*')"     == 1 ]] || fail "expected exactly one .uncle/* rule: $(body)"
+[[ "$(body | grep -cx '!\.uncle/docs/')" == 1 ]] || fail 'expected exactly one docs negation'
+body | grep -qx 'keep-me/' || fail 'an unrelated rule was dropped'
+body | grep -qx 'other/'   || fail 'an unrelated rule was dropped'
+[[ "$(body | sed -n '1p')" == '.uncle/*' ]] || fail "block should take the first managed position: $(body | sed -n '1p')"
+
 # 4. No .gitignore means no file is created on the project's behalf.
 rm -rf "$work/c"; mkdir -p "$work/c"
 run_it

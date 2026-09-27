@@ -193,11 +193,11 @@ class ViewerTests(unittest.TestCase):
         ui = self.ui()
         rows = ui._config_items()
         self.assertEqual(len(rows), 3)
-        self.assertTrue(rows[0].startswith("Auto mode: off"))
+        self.assertTrue(rows[0].startswith("Auto mode: on"))  # the default
         self.assertTrue(rows[1].startswith("Name for approvals: "))
         self.assertEqual(rows[2], "Markdown viewer: auto (first installed)")
         ui.handle_key(10)
-        self.assertEqual(ui.misc["auto_mode"], "true")
+        self.assertEqual(ui.misc["auto_mode"], "false")
         self.assertEqual(ui.state, "config")
         ui.config_sel = 1
         ui.handle_key(10)

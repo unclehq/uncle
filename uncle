@@ -525,7 +525,8 @@ run_workflow() {
     fi
 
     approval_name="$(config_get misc.approval_name)"
-    if [[ "$(config_get misc.auto_mode)" == true ]]; then
+    # Auto mode is the default; only an explicit `misc.auto_mode false` is attended.
+    if [[ "$(config_get misc.auto_mode | tr '[:upper:]' '[:lower:]')" != false ]]; then
         UNCLE_APPROVAL_NAME="$approval_name" launch "$@" --unattended
     else
         UNCLE_APPROVAL_NAME="$approval_name" launch "$@"
@@ -696,7 +697,8 @@ configure_menu() {
             1) configure_stages_menu ;;
             2) python3 "$ROOT/scripts/lib/self_hosted.py" models "$UNCLE_CONFIG" || true ;;
             3)
-                printf 'Auto mode (true/false) [%s]: ' "$(config_get misc.auto_mode)"
+                auto_mode="$(config_get misc.auto_mode)"
+                printf 'Auto mode (true/false) [%s]: ' "${auto_mode:-true}"
                 read -r value || return 0
                 case "$value" in true|false) config_set misc.auto_mode "$value" ;; esac
                 printf 'Name for approvals [%s]: ' "$(config_get misc.approval_name)"

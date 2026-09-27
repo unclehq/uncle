@@ -861,6 +861,34 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
         self.assertEqual(config['permission']['edit'], 'allow')
         self.assertEqual(config['permission']['bash'], 'deny')
 
+    def test_inline_checklist_worker_gets_write_only_and_a_turn_cap(self):
+        # Checklist workers with inlined inputs need one Write; the read tools
+        # only let a weak model loop for dozens of full-context turns.
+        delivery = self.root/'.uncle/workflow/checklist-base-panel/coverage.json.delivery.json'
+        env_vars = {'UNCLE_ARTIFACT_DELIVERY': str(delivery), 'UNCLE_INLINE_INPUTS': '1',
+                    'UNCLE_WORKER_MAX_TURNS': '10', 'UNCLE_STATUS_STAGE_TURNS': '0'}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, env_vars):
+            _, _, turns, _ = parse_arguments('reviewer', ['exec', 'Write the packet'])
+            values = dict(self.values(), max_turns=turns)
+            _, env = opencode_invocation('reviewer', values, 'Write the packet', self.root, directory)
+        config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+        self.assertEqual(turns, 10)
+        self.assertEqual(config['agent']['uncle']['steps'], 10)
+        self.assertEqual(config['permission']['edit'], 'allow')
+        for tool in ('read', 'glob', 'grep', 'list'):
+            self.assertEqual(config['permission'][tool], 'deny', tool)
+
+    def test_ordinary_reviewer_keeps_read_tools_and_default_turns(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'UNCLE_STATUS_STAGE_TURNS': '0'}):
+            os.environ.pop('UNCLE_INLINE_INPUTS', None)
+            os.environ.pop('UNCLE_WORKER_MAX_TURNS', None)
+            _, _, turns, _ = parse_arguments('reviewer', ['exec', 'Review'])
+            _, env = opencode_invocation('reviewer', dict(self.values(), max_turns=turns), 'Review', self.root, directory)
+        config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+        self.assertEqual(turns, 80)
+        self.assertEqual(config['permission']['glob'], 'allow')
+        self.assertEqual(config['permission']['read']['*'], 'allow')
+
     def test_effort_reaches_the_opencode_model_options(self):
         with tempfile.TemporaryDirectory() as directory:
             command, env = opencode_invocation('agent', dict(self.values(), effort='high'), 'Test prompt', self.root, directory)

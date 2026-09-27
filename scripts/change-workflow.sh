@@ -2760,6 +2760,24 @@ run_final_audit_panel() {
     printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/FINAL_AUDIT_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$FINAL_AUDIT_PROMPT"
 }
 
+# A self-hosted endpoint is usually one local model. There the background
+# base panel only competes with the implementation the run is waiting on, so
+# it is deferred until implementation has finished.
+checklist_base_overlaps_implementation() {
+    [[ "$(uncle_stage_runner manual-checklist)" != self-hosted ]]
+}
+
+# Serial (self-hosted) workers get their canonical inputs inlined, no read
+# tools, and a small turn budget: each used to spend 17-40 turns re-reading
+# the same four files, resending the whole context every turn.
+checklist_worker_codex() {
+    if [[ "${serial_workers:-0}" == 1 ]]; then
+        UNCLE_INLINE_INPUTS=1 UNCLE_WORKER_MAX_TURNS=10 run_codex "$@"
+    else
+        run_codex "$@"
+    fi
+}
+
 run_checklist_panel() {
     local kind="$1" source="$2" directory="$STATE_DIR/checklist-$1-panel" lens prompt output pid
     local serial_workers=0
@@ -2790,9 +2808,21 @@ run_checklist_panel() {
         else
             inputs='`.uncle/workflow/documents/BASELINE_REPORT.json`, `.uncle/workflow/documents/CHANGE_SPEC.json`, `.uncle/workflow/documents/CHANGE_PLAN.json`, `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`, `.uncle/workflow/documents/IMPLEMENTATION_NOTES.json`, `.uncle/workflow/documents/CHANGE_TEST_REPORT.json`, and `.uncle/workflow/documents/TEST_REVIEW.json`'
         fi
-        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: %s. Do not inspect any rendered Markdown view or enumerate directories.\n\nUse current-tree snapshots, file hashes, and `.uncle/workflow/green-check.tsv` for regression evidence. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$kind" "$range" >> "$prompt"
         if [[ "$serial_workers" == 1 ]]; then
-            ( run_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens" "$CODEX_EFFORT_CHECKLIST" ) \
+            local input_path
+            printf '\n## Canonical inputs (inlined, binding)\n\nThe canonical JSON artifacts are reproduced below in full. Do not call Read, Glob, Grep, or List: everything you need is here. Your only tool call is one Write of the packet.\n' >> "$prompt"
+            for input_path in $(printf '%s' "$inputs" | grep -o '\.uncle/workflow/[A-Za-z_./-]*\.json') .uncle/workflow/green-check.tsv; do
+                [[ -f "$input_path" ]] || continue
+                printf '\n### `%s`\n\n```\n' "$input_path" >> "$prompt"
+                cat "$input_path" >> "$prompt"
+                printf '\n```\n' >> "$prompt"
+            done
+            printf '\nNever require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass. Use IDs only in %s; no other worker owns that range.\n' "$lens" "$kind" "$range" >> "$prompt"
+        else
+            printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: %s. Do not inspect any rendered Markdown view or enumerate directories.\n\nUse current-tree snapshots, file hashes, and `.uncle/workflow/green-check.tsv` for regression evidence. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s** for the %s pass. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$kind" "$range" >> "$prompt"
+        fi
+        if [[ "$serial_workers" == 1 ]]; then
+            ( checklist_worker_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens" "$CODEX_EFFORT_CHECKLIST" ) \
                 > "$LOG_DIR/manual-checklist-$kind-worker-$lens.log" 2>&1 \
                 || echo 'Checklist worker failed; canonical packet validation will stop the panel.' >&2
         else
@@ -2800,7 +2830,7 @@ run_checklist_panel() {
             pids+=("$!")
         fi
     done
-    for pid in "${pids[@]}"; do wait "$pid" || echo 'Checklist worker failed; canonical packet validation will stop the panel.' >&2; done
+    for pid in ${pids[@]+"${pids[@]}"}; do wait "$pid" || echo 'Checklist worker failed; canonical packet validation will stop the panel.' >&2; done
     # Repair only the malformed worker packet.  A stale rendered checklist can
     # tempt a weak model into prose; it must still deliver its assigned JSON
     # lens, and healthy siblings must not be re-run.
@@ -2810,7 +2840,7 @@ run_checklist_panel() {
             echo "Checklist worker $lens returned an invalid packet; retrying that worker once."
             printf '\n## Required retry\n\nYour preceding response was rejected because it was not one complete `manual-checklist-worker-packet` JSON object. Do not ask a question, discuss prior checklist documents, or return Markdown/prose. Produce the assigned lens packet now, even if its checks overlap a prior rendered report.\n' >> "$prompt"
             rm -f "$output"
-            run_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens-retry" "$CODEX_EFFORT_CHECKLIST" || true
+            checklist_worker_codex "$prompt" "$output" "manual-checklist-review-worker-$kind-$lens-retry" "$CODEX_EFFORT_CHECKLIST" || true
         fi
     done
     local target="$STATE_DIR/documents/MANUAL_CHECKLIST.json"
@@ -3495,7 +3525,7 @@ while true; do
             # would otherwise race Claude's in-flight edits; anything that
             # genuinely depends on the implementation is added by the delta
             # pass in the CHECKLIST state.
-            if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
+            if [[ "$PARALLEL_CHECKLIST" == "1" ]] && checklist_base_overlaps_implementation; then
                 start_codex_bg \
                     "" \
                     "$STATE_DIR/MANUAL_CHECKLIST.base.md" \
@@ -3627,6 +3657,16 @@ REPAIR
             # the driver, and cleanup_bg would kill a checklist run that is
             # already nearly paid for.
             if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
+                if [[ -z "$BG_PID" ]] && ! checklist_base_overlaps_implementation; then
+                    # Deferred on a self-hosted endpoint: start it now that
+                    # implementation no longer needs the model.
+                    start_codex_bg \
+                        "" \
+                        "$STATE_DIR/MANUAL_CHECKLIST.base.md" \
+                        manual-checklist-base \
+                        "$CODEX_EFFORT_CHECKLIST" \
+                        base prompts/change/manual-checklist-base.md
+                fi
                 wait_codex_bg "$STATE_DIR/MANUAL_CHECKLIST.base.md"
             fi
 

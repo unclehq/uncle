@@ -216,7 +216,8 @@ def settings(config, stage):
 def parse_arguments(side, args):
     output, prompt = '', ''
     effort = ''
-    turns = int(os.environ.get('UNCLE_STATUS_STAGE_TURNS') or 80)
+    # UNCLE_WORKER_MAX_TURNS: a driver-set budget for small packet workers.
+    turns = int(os.environ.get('UNCLE_WORKER_MAX_TURNS') or os.environ.get('UNCLE_STATUS_STAGE_TURNS') or 80)
     # Reviewer status uses zero to mean no explicit stage turn limit.
     # Explicit --max-turns values below still require a positive number.
     if turns == 0:
@@ -388,6 +389,10 @@ def opencode_invocation(side, values, prompt, root, directory, allow_shell=True)
                   'list': 'allow', 'edit': 'allow' if may_write else 'deny',
                   'bash': 'allow' if side == 'agent' and allow_shell else 'deny',
                   'external_directory': 'deny'}
+    if side == 'reviewer' and os.environ.get('UNCLE_INLINE_INPUTS') == '1':
+        # The driver inlined every input into the prompt; reading only lets a
+        # weak model loop.  Writing the one delivery packet is all that is left.
+        permission.update(read='deny', glob='deny', grep='deny', list='deny')
     # Self-hosted stages intentionally default to no reasoning. Keep that
     # value in both places OpenCode understands it: the model option is sent
     # to the OpenAI-compatible endpoint and the selector makes it explicit to

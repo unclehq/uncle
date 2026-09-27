@@ -1372,7 +1372,7 @@ class UncleTUI:
         if section == "opencode":
             return ["OpenCode connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
         if section == "misc":
-            return ["Auto mode: " + ("on" if getattr(self, "misc", {}).get("auto_mode") == "true" else "off"),
+            return ["Auto mode: " + ("off" if str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "false" else "on"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set"),
                     "Markdown viewer: " + (getattr(self, "misc", {}).get("markdown_viewer") or "auto (first installed)")]
         """One row per stage: the stage, its runner, and what that runner uses."""
@@ -2123,11 +2123,14 @@ class UncleTUI:
             os.environ["UNCLE_PROJECT_ROOT"] = launch
 
     def _next_run_unattended(self):
-        """D-7: a session Shift-Tab override wins over the persisted setting."""
+        """D-7: a session Shift-Tab override wins over the persisted setting.
+
+        Auto mode is the default; only an explicit `misc.auto_mode false`
+        runs attended."""
         override = getattr(self, "session_auto_mode", None)
         if override is not None:
             return override
-        return str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "true"
+        return str(getattr(self, "misc", {}).get("auto_mode", "")).lower() != "false"
 
     def _build_live(self):
         proc = getattr(self, "proc", None)
@@ -6857,7 +6860,7 @@ class UncleTUI:
                     self._supervision_enter()
                 elif section == "misc":
                     if self.config_sel == 0:
-                        self._set_field("!misc", "auto_mode", "false" if self.misc.get("auto_mode") == "true" else "true")
+                        self._set_field("!misc", "auto_mode", "true" if str(self.misc.get("auto_mode", "")).lower() == "false" else "false")
                     elif self.config_sel == 1:
                         self._open_picker("approval_name", "!misc")
                     else:

@@ -230,6 +230,7 @@ class MenuInputTests(unittest.TestCase):
         self.assertNotIn('Resume stopped build', self.ui.menu_items())
 
     def test_issue_new_forwarding(self):
+        self.ui.misc = {'auto_mode': 'false'}  # attended: forwarding only
         self.select(1)
         self.ui.input_buf = '123'
         self.ui._confirm_text()
@@ -238,6 +239,8 @@ class MenuInputTests(unittest.TestCase):
         self.ui.start_workflow.assert_called_once()
         self.assertEqual(self.ui.cmd_for()[-2:], ['123', '--new'])
         install, env = self.shell_fixture()
+        with Path(env['UNCLE_CONFIG']).open('a') as config:
+            config.write('misc.auto_mode false\n')
         result = subprocess.run(['bash', str(install / 'uncle')], cwd=self.project,
                                 env=env, input='2\n123\nn\nq\n', text=True,
                                 capture_output=True, timeout=20)
@@ -392,6 +395,8 @@ class MenuInputTests(unittest.TestCase):
 
     def test_shell_missing_retry_eof_and_arguments(self):
         install, env = self.shell_fixture()
+        with Path(env['UNCLE_CONFIG']).open('a') as config:
+            config.write('misc.auto_mode false\n')  # attended unless --unattended
         for unattended in (False, True):
             args = ['--unattended'] if unattended else []
             result = subprocess.run(['bash', str(install / 'uncle'), *args], cwd=self.project,
@@ -414,6 +419,17 @@ class MenuInputTests(unittest.TestCase):
             Path(env['CALLS']).unlink()
             for name in INPUTS.values():
                 (self.project / name).unlink()
+
+    def test_shell_auto_mode_is_the_default(self):
+        # No misc.auto_mode line: the launcher runs unattended.
+        install, env = self.shell_fixture()
+        for name in INPUTS.values():
+            (self.project / name).touch()
+        result = subprocess.run(['bash', str(install / 'uncle')], cwd=self.project, env=env,
+                                input='1\nq\n', text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(Path(env['CALLS']).read_text().splitlines(),
+                         [f'stagegate.sh|{self.project}|--unattended'])
 
     def test_shell_file_types_and_auto_mode(self):
         install, env = self.shell_fixture()

@@ -223,11 +223,26 @@ class HotkeyTests(unittest.TestCase):
     # AC-7
     def test_shift_tab_mode(self):
         ui = self.ui()
+        ui.misc = {'auto_mode': 'false'}
         ui.handle_key(curses.KEY_BTAB)
         self.assertTrue(ui._next_run_unattended())
         self.assertEqual(ui.chat_focus, 'chat')
         self.assertEqual(ui.chat_error, 'Next run: UNATTENDED (Shift-Tab)')
-        self.assertEqual(ui.misc, {})  # never persisted
+        self.assertEqual(ui.misc, {'auto_mode': 'false'})  # never persisted
+        ui.handle_key(curses.KEY_BTAB)
+        self.assertFalse(ui._next_run_unattended())
+        self.assertEqual(ui.chat_error, 'Next run: attended')
+
+    def test_auto_mode_is_the_default(self):
+        # Unset means auto; only an explicit false runs attended.
+        for misc, expected in (({}, True), ({'auto_mode': 'true'}, True),
+                               ({'auto_mode': 'false'}, False), ({'auto_mode': 'FALSE'}, False)):
+            with self.subTest(misc=misc):
+                ui = self.ui()
+                ui.misc = dict(misc)
+                self.assertEqual(ui._next_run_unattended(), expected)
+        ui = self.ui(config_section='misc')
+        self.assertEqual(ui._config_items()[0], 'Auto mode: on')
         ui.handle_key(curses.KEY_BTAB)
         self.assertFalse(ui._next_run_unattended())
         self.assertEqual(ui.chat_error, 'Next run: attended')

@@ -11,6 +11,36 @@ set -uo pipefail
 # logs and refuses; every fixture commit passes --no-gpg-sign under
 # -c commit.gpgsign=false -c tag.gpgsign=false, and the log must stay absent.
 
+# Refused inside a live uncle build, before anything else here runs.
+#
+# This suite creates git worktrees and drives from-issue.sh against them. That
+# is exactly what a build is already doing when uncle green-checks its own
+# repository, and the two contend: the suite waits on locks and runner pools
+# the live run holds, and never finishes. Measured on this repository -- about
+# 15 seconds run on its own, against the harness's 600-second timeout inside a
+# build, with 85 of 86 suites finished and the whole baseline waiting on this
+# one. The build then sits at IMPLEMENT, blocked on a baseline that cannot
+# complete.
+#
+# Skipping is the honest result: the suite has not run, and exit 77 says so
+# rather than reporting a pass nobody earned or a failure nobody caused. The
+# check reads UNCLE_PROJECT_ROOT, so it has to happen before the hermetic
+# unset below strips it.
+#
+# UNCLE_TEST_ALLOW_NESTED=1 forces it to run anyway, for anyone deliberately
+# testing this interaction.
+if [[ "${UNCLE_TEST_ALLOW_NESTED:-0}" != 1 && -n "${UNCLE_PROJECT_ROOT:-}" ]]; then
+    # The driver's single-writer lock, held for the lifetime of a run. A stale
+    # lock directory left by a killed run names a pid that is gone, and must
+    # not skip anything.
+    uncle_lock_pid="$(cat "${UNCLE_PROJECT_ROOT}/.uncle/workflow/lock/pid" 2>/dev/null || true)"
+    if [[ -n "$uncle_lock_pid" ]] && kill -0 "$uncle_lock_pid" 2>/dev/null; then
+        echo "worktree-run-test.sh: skipped, a live uncle build (pid $uncle_lock_pid) owns ${UNCLE_PROJECT_ROOT}"
+        echo "worktree-run-test.sh: this suite drives worktrees and would contend with it; set UNCLE_TEST_ALLOW_NESTED=1 to run anyway"
+        exit 77
+    fi
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
 TMP="$(cd "$TMP" && pwd -P)"

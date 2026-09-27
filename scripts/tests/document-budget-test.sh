@@ -188,6 +188,7 @@ awk '/^require_artifact\(\)/ {copy=1} copy {print} copy && /^}/ {exit}' \
 [[ -s guard.sh ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 bash -n guard.sh
 . ./guard.sh
+rm -f advanced
 # Missing artifacts still block stage advancement.
 if (require_artifact MISSING_PLAN.md; touch advanced) 2>/dev/null; then exit 1; fi
 [[ ! -e advanced ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }

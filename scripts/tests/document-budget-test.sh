@@ -79,10 +79,7 @@ for stage in $DOC_STAGES implementation-step-2; do
     # Synthesis stages use an early return in gated_prompt that omits the budget
     # block to reduce input token cost; their budgets are validated above via
     # document_budget_prompt directly.
-    case "$stage" in
-        project-plan|change-plan|updated-plan|updated-change-plan|adversarial-review|test-review|manual-checklist|final-audit)
-            continue ;;
-    esac
+    if is_synthesis_stage "$stage"; then continue; fi
     gated_prompt prompt.md "$stage" > resolved
     [[ -n $(stage_documents "$stage") ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     while IFS= read -r file; do

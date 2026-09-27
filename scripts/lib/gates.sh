@@ -131,6 +131,18 @@ DOC_STAGES=" requirements requirements-investigate project-plan project-plan-inv
 # prompt file on disk. Requires LOG_DIR (set by the calling driver).
 PLAN_STAGES=" project-plan project-plan-investigate updated-plan updated-plan-investigate change-plan updated-change-plan "
 
+# Stages that use the synthesis early return in gated_prompt. These stages have
+# a complete JSON contract embedded in their source prompt and do not need the
+# generic evidence index, document rules, or output gate corpus appended.
+# Reviewer invocations bypass this early return to receive the full prompt.
+is_synthesis_stage() {
+    case "$1" in
+        project-plan|change-plan|updated-plan|updated-change-plan|adversarial-review|test-review|manual-checklist|final-audit)
+            return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Echo the prompt path the stage should read: the original prompt file for
 # stages with nothing to append, or a temp copy with the output rules (and the
 # plan gates for plan stages) appended. A reviewer stage additionally gets a
@@ -190,13 +202,11 @@ gated_prompt() {
     # ingest hundreds of thousands of tokens before resolving one canonical
     # artifact. Keep parent input to the canonical plan/review packets and its
     # own contract; deterministic validators still enforce each stage's rules.
-    case "$log_name" in
-        project-plan|change-plan|updated-plan|updated-change-plan|adversarial-review|test-review|manual-checklist|final-audit)
-            if [[ "$role" != "reviewer" ]]; then
-                local synthesis_prompt="$LOG_DIR/${log_name}.gated-prompt.md"
-                {
-                    cat "$prompt_file"
-                    cat <<'SYNTHESIS_JSON'
+    if is_synthesis_stage "$log_name" && [[ "$role" != "reviewer" ]]; then
+        local synthesis_prompt="$LOG_DIR/${log_name}.gated-prompt.md"
+        {
+            cat "$prompt_file"
+            cat <<'SYNTHESIS_JSON'
 
 ## Compact canonical synthesis contract (binding)
 
@@ -213,12 +223,10 @@ one revision from those inputs; do not conduct a second investigation pass.
 Return/write the one authoritative artifact requested by the stage prompt.
 The driver performs structural validation, rendering, approval, and gates.
 SYNTHESIS_JSON
-                } > "$synthesis_prompt"
-                printf '%s\n' "$synthesis_prompt"
-                return 0
-            fi
-            ;;
-    esac
+        } > "$synthesis_prompt"
+        printf '%s\n' "$synthesis_prompt"
+        return 0
+    fi
 
     # Self-hosted planning uses a short investigation pass followed by the
     # JSON formatter above. The investigator needs only the requirements, not

@@ -1472,7 +1472,10 @@ run_parallel_checklist_workers() {
 
     [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
     jobs="${WORKFLOW_VERIFY_JOBS:-4}"
-    [[ "$jobs" =~ ^[1-8]$ ]] || jobs=4
+    # Two digits now: ^[1-8]$ silently rejected anything above 9 and fell
+    # back to 4, so raising the ceiling without widening the pattern would
+    # have changed nothing.
+    [[ "$jobs" =~ ^([1-9]|1[0-6])$ ]] || jobs=4
     if [[ "${WORKFLOW_EXECUTE_CHECKLIST_COMPACT:-1}" == 1 ]]; then
         compact_groups="$STATE_DIR/checklist-groups/compact-all.txt"
         python3 - "$STATE_DIR/documents/MANUAL_CHECKLIST.json" > "$compact_groups" <<'PY'

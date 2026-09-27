@@ -15,8 +15,8 @@ from process_tree import bash_executable, start_check, finish_check, kill_tree
 
 
 def run(jobs, suites=()):
-    if not 1 <= jobs <= 8:
-        raise ValueError('WORKFLOW_VERIFY_JOBS must be from 1 to 8')
+    if not 1 <= jobs <= 16:
+        raise ValueError('WORKFLOW_VERIFY_JOBS must be from 1 to 16')
     if any(not re.fullmatch(r'[a-z0-9][a-z0-9-]*', name) for name in suites):
         raise ValueError('Invalid shell suite name')
     files = ([f'scripts/tests/{name}-test.sh' for name in suites] if suites
@@ -52,8 +52,8 @@ def run_commands(jobs, commands):
     than an arbitrary two, so this only bounds jobs by the actual work and a
     generous ceiling against a mistyped huge number, not by the unrelated
     CLI's own limit."""
-    if not 1 <= jobs <= max(8, len(commands)):
-        raise ValueError(f'Worker count must be from 1 to {max(8, len(commands))}')
+    if not 1 <= jobs <= max(16, len(commands)):
+        raise ValueError(f'Worker count must be from 1 to {max(16, len(commands))}')
     timeout = check_timeout('WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS', 600)
     files = list(commands)
     active, lock, stopped = set(), threading.Lock(), threading.Event()

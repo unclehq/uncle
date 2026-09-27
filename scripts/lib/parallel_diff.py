@@ -18,8 +18,8 @@ def file_diff(path, tracked_paths=None):
 
 def main():
     jobs = int(os.environ.get('WORKFLOW_VERIFY_JOBS', '4'))
-    if not 1 <= jobs <= 8:
-        raise ValueError('WORKFLOW_VERIFY_JOBS must be from 1 to 8')
+    if not 1 <= jobs <= 16:
+        raise ValueError('WORKFLOW_VERIFY_JOBS must be from 1 to 16')
     paths = [line.rstrip('\n') for line in sys.stdin if line.rstrip('\n')]
     if not paths:
         return

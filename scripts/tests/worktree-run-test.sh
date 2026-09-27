@@ -57,7 +57,19 @@ TMP="$(mktemp -d)"
 TMP="$(cd "$TMP" && pwd -P)"
 trap 'if [[ "${UNCLE_KEEP_TEST_TMP:-0}" == 1 ]]; then echo "Kept worktree fixtures: $TMP"; else rm -rf "$TMP"; fi' EXIT
 
-for var in $(env | sed -n 's/^\(UNCLE_[A-Z_0-9]*\|STAGEGATE_[A-Z_0-9]*\|WORKFLOW_[A-Z_0-9]*\|GIT_[A-Z_0-9]*\|GPG_[A-Z_0-9]*\|SSH_[A-Z_0-9]*\)=.*/\1/p'); do
+# -E, because this is the whole of the suite's hermeticity and it was silently
+# doing nothing. BSD sed -- which is what macOS ships -- has no \| alternation
+# in a basic regular expression, so the pattern matched no line, the loop
+# iterated over an empty list, and not one variable was unset. GNU sed accepts
+# \|, so this worked in CI and failed only on the machine it was written on.
+#
+# What that cost: from-issue.sh prefers $UNCLE_RUNTIME_ROOT over its own
+# location, so a suite inheriting a live build's environment resolved the
+# installed uncle instead of the scratch install below -- running the real
+# driver, and real model calls at --max-turns 120, in place of the stub driver
+# this fixture writes. That is why the suite took 18 seconds alone and hit the
+# harness's 600-second timeout inside a build.
+for var in $(env | sed -nE 's/^(UNCLE_[A-Z_0-9]*|STAGEGATE_[A-Z_0-9]*|WORKFLOW_[A-Z_0-9]*|GIT_[A-Z_0-9]*|GPG_[A-Z_0-9]*|SSH_[A-Z_0-9]*)=.*/\1/p'); do
     unset "$var"
 done
 

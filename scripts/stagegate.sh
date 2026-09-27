@@ -2137,7 +2137,10 @@ run_parallel_checklist_workers() {
 
     [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
     jobs="${WORKFLOW_VERIFY_JOBS:-4}"
-    [[ "$jobs" =~ ^[1-8]$ ]] || jobs=4
+    # Two digits now: ^[1-8]$ silently rejected anything above 9 and fell
+    # back to 4, so raising the ceiling without widening the pattern would
+    # have changed nothing.
+    [[ "$jobs" =~ ^([1-9]|1[0-6])$ ]] || jobs=4
     # A checklist should not multiply model sessions or runtime setup. One
     # worker shares whatever evidence environment this project needs (browser,
     # service, CLI, database, or filesystem); driver green-check remains the

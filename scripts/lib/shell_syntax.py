@@ -53,8 +53,8 @@ def main():
             return subprocess.run(argv).returncode
         os.execv(argv[0], argv)
     jobs = int(sys.argv[1])
-    if not 1 <= jobs <= 8:
-        raise ValueError('Syntax check workers must be from 1 to 8')
+    if not 1 <= jobs <= 16:
+        raise ValueError('Syntax check workers must be from 1 to 16')
     files = []
     for pattern in ('scripts/*.sh', 'scripts/lib/*.sh', 'scripts/tests/*.sh'):
         # Preserve Bash's failure on an unmatched glob.

@@ -60,8 +60,8 @@ def _run_checks(args):
             raise ValueError("Parallel groups must contain ordered, disjoint, consecutive command numbers.")
         groups[indices[0] - 1] = indices[-1]
         previous = indices[-1]
-    if not 1 <= args.jobs <= 8:
-        raise ValueError("WORKFLOW_VERIFY_JOBS must be from 1 to 8.")
+    if not 1 <= args.jobs <= 16:
+        raise ValueError("WORKFLOW_VERIFY_JOBS must be from 1 to 16.")
     expected = Path(args.expected).read_text(encoding="utf-8") if args.expected else None
     scopes = args.paths
     halted = threading.Event()

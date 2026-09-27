@@ -3,6 +3,7 @@
 Records contain executable names, not command arguments, prompts or environment.
 Instrumentation never decides workflow success. Samples are not exact lifetimes.
 """
+import collections
 from contextlib import ContextDecorator
 import json
 import os
@@ -195,6 +196,49 @@ class BuildTiming(ContextDecorator):
         return False
 
 
+def _idle_gap_section(spans):
+    """Where a stage's wall-clock went while the runner said nothing.
+
+    The per-kind tables below already total these, but a total alone does not
+    separate "the model was working" from "something was stuck": both look like
+    elapsed seconds. Two things distinguish them, and neither survives being
+    summed -- the longest single gap, and whether the same length keeps
+    recurring. Natural latency scatters; a timeout does not. One real run spent
+    693s of change-plan in gaps with sixteen of them at exactly 30.0s, which is
+    a retry cadence rather than anything the model was doing.
+
+    Only the 20 largest gaps per attempt are retained upstream, so these totals
+    are floors. A gap covers any work or wait between received events; it is
+    not evidence of API latency on its own.
+    """
+    gaps = collections.defaultdict(list)
+    for row in spans:
+        if row['kind'] in ('runner_event_gap', 'runner_tail_gap'):
+            gaps[row['name']].append(row['elapsed_seconds'])
+    if not gaps:
+        return []
+    lines = ['## Runner idle gaps', '',
+             'Time between received stream events, by stage. A repeated identical '
+             'length is a timeout-and-retry signature, not model latency: compare '
+             '"Repeated" against "Gaps". Totals are floors -- only the 20 largest '
+             'gaps per attempt are kept.', '',
+             '| Stage | Gaps | Total seconds | Longest | Repeated length | Repeated |',
+             '|---|---:|---:|---:|---:|---:|']
+    for name, values in sorted(gaps.items(), key=lambda item: -sum(item[1])):
+        # Round to the nearest half-second before counting repeats: a retry
+        # fires on a timer and lands within jitter of the same value, never on
+        # the identical float. Sub-second gaps are the ordinary rhythm of a
+        # stream and swamp the count, so they cannot be the answer here -- a
+        # timeout worth finding is seconds long.
+        buckets = collections.Counter(round(value * 2) / 2 for value in values if value >= 1)
+        length, repeats = buckets.most_common(1)[0] if buckets else (0, 0)
+        label = str(name).replace('|', '&#124;').replace('\n', ' ')
+        shown = f'{length:g}' if repeats > 1 else '-'
+        lines.append(f'| {label} | {len(values)} | {sum(values):.1f} | {max(values):.1f} '
+                     f'| {shown} | {repeats if repeats > 1 else 0} |')
+    return lines + ['']
+
+
 def render(directory):
     metadata = json.loads((directory / 'run.json').read_text())
     records = []
@@ -264,6 +308,7 @@ def render(directory):
         label = stage_name.replace('|', '&#124;').replace('\n', ' ')
         lines.append(f'| {label} | {latest} | {peak} |')
     lines.append('')
+    lines += _idle_gap_section(spans)
     for kind in ('workflow_stage', 'agent', 'reviewer', 'model_usage', 'approval', 'check', 'integrity', 'checklist_item', 'checklist_unfinished', 'tool_call', 'tool_unpaired', 'tool_unfinished', 'runner_first_event', 'runner_first_response', 'runner_event_gap', 'runner_tail_gap', 'runner_observation', 'read_cache', 'process', 'unfinished_process', 'sampled_process'):
         totals = {}
         usage_rows = {}

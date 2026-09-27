@@ -162,7 +162,7 @@ grep -qF 'Do not narrate your investigation' "$(cat resolved)"
 document_layout_prompt project-plan > resolved
 grep -qF 'Return an executable proposal, not a requirements restatement or review.' resolved
 document_layout_prompt adversarial-review > resolved
-grep -qF 'Return an adversarial assessment of the supplied plan only.' resolved
+grep -qF 'Write each finding as a level-2 heading `## AR-001: Title`' resolved
 if WORKFLOW_DOC_MAX_BYTES_PREFLIGHT_REPORT=invalid gated_prompt prompt.md preflight 2>/dev/null; then exit 1; fi
 # Draft targets use the effective override, including leading-zero integers.
 # execute-checklist is a compact-first stage: in advisory mode it is held to ZERO
@@ -181,21 +181,22 @@ ROOT="$ROOT_SAVED"
 # Code and raw logs are outside the document cap.
 printf 'uncapped evidence' > raw.log
 WORKFLOW_DOC_MAX_BYTES=1 check_document_budget raw.log
-# Exercise the driver's post-agent guard: oversized output cannot reach approval.
+# Exercise the driver's post-agent guard: missing artifacts stop progress, while
+# oversized rendered Markdown is advisory-only.
 awk '/^require_artifact\(\)/ {copy=1} copy {print} copy && /^}/ {exit}' \
     "$ROOT/scripts/stagegate.sh" > guard.sh
 [[ -s guard.sh ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 bash -n guard.sh
 . ./guard.sh
-# Enforcing, the stage does not advance past an oversized document.
-if (WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_BYTES=1 require_artifact PROJECT_PLAN.md; touch advanced) 2>/dev/null; then
-    exit 1
-fi
-[[ ! -e advanced && -s PROJECT_PLAN.md ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
-# By default it does advance, and the document survives. This is the whole
-# behaviour change: a plan that ran for ten minutes and came out 3KB long is
-# worth more than the limit it missed, and killing the stage there threw the
-# work away and then re-ran it to produce the same overrun again.
+# Missing artifacts still block stage advancement.
+if (require_artifact MISSING_PLAN.md; touch advanced) 2>/dev/null; then exit 1; fi
+[[ ! -e advanced ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+# Even under enforcement, oversized rendered Markdown must not stop the stage.
+(WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_BYTES=1 require_artifact PROJECT_PLAN.md; touch advanced) 2>/dev/null \
+    || { echo "FAIL $0:$LINENO an enforcing overrun on rendered Markdown must not stop the stage" >&2; exit 1; }
+[[ -e advanced && -s PROJECT_PLAN.md ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+rm -f advanced
+# By default it does advance, and the document survives.
 (WORKFLOW_DOC_MAX_BYTES=1 require_artifact PROJECT_PLAN.md; touch advanced) 2>/dev/null \
     || { echo "FAIL $0:$LINENO an advisory overrun must not stop the stage" >&2; exit 1; }
 [[ -e advanced && -s PROJECT_PLAN.md ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }

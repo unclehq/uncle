@@ -1982,7 +1982,15 @@ run_parallel_application_implementation() {
     export PARALLEL_AGENT_EFFORT="$effort" PARALLEL_AGENT_TOOLS="$(stage_tools implementation)"
     checkpoint_dir="$STATE_DIR/parallel-implementation-groups"
     mkdir -p "$STATE_DIR/parallel/prompts" "$STATE_DIR/parallel/notes" "$checkpoint_dir"
-    export PARALLEL_PROMPT_DIR="$PWD/$STATE_DIR/parallel/prompts"
+    # STATE_DIR is already absolute ("$PROJECT_ROOT/.uncle/workflow"), so
+    # prefixing $PWD built a path with the project root in it twice --
+    # /project//project/.uncle/workflow/parallel/prompts -- which exists
+    # nowhere. Every isolated worker then died before doing any work with
+    # "parallel worker prompt missing", and the fan-out reported "Steps
+    # failed: 1" with no report to point at. The path has to stay absolute:
+    # workers run with their sandbox as cwd, and the prompts deliberately
+    # live in the driver-owned tree that sandboxes do not copy.
+    export PARALLEL_PROMPT_DIR="$STATE_DIR/parallel/prompts"
     plan_steps .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-steps.txt"
     # Preserve worker handoffs in one canonical input for the report-only
     # reconciliation stage. A worker may record its narrow check here, but it

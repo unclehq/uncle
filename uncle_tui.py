@@ -46,7 +46,7 @@ from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
 from triage_chat import (TriageRequest, parse_reply as parse_triage_reply, compose_prompt as triage_prompt,
                          runner_flags as triage_runner_flags, scrub_env as triage_scrub_env,
-                         DIAGNOSIS_TOOLS, EXECUTE_TOOLS)
+                         hold_reason as triage_hold_reason, DIAGNOSIS_TOOLS, EXECUTE_TOOLS)
 from github_issues import IssuePicker, references as issue_references, issue_context
 from self_hosted import settings as home_settings
 from self_hosted import key_file, read_keys, save_keys, connection_settings, refresh_models, local_model
@@ -3808,6 +3808,9 @@ class UncleTUI:
                                   '(see the note above for what it applied). Type /resume to continue, '
                                   'or ask a follow-up question to get a new proposal.' % number)
             raise ValueError('No proposal %d is selectable. Open triage and read the current reply.' % number)
+        # The diagnosis's Offer: resume, before the execute turn overwrites it:
+        # unattended auto-resume after /do requires it.
+        self.triage_do_offer = bool(getattr(self, 'triage_offer_resume', False))
         if NO_EDIT_PROPOSAL.search(chosen[0][1]):
             self._triage_apply_local(chosen[0])
         else:
@@ -3851,6 +3854,48 @@ class UncleTUI:
             self.triage_offer_resume = True
         if getattr(self, 'recovery_active', False):
             self.chat_error = ''
+        self._auto_resume_after_do(proposal, summary, False)
+
+    def _auto_resume_after_do(self, proposal, summary, failed):
+        """After /do N completes, resume the build the ordinary way unless the
+        execute failed, the guard refused anything, or the proposal holds.
+
+        Called last on both execute paths, so the resume is the final change
+        to the transcript and screen. Returns True: the outcome is handled and
+        the unattended diagnosis resume must not run on top of it.
+        """
+        number = proposal[0] if proposal else 0
+        unattended = getattr(self, 'workflow_unattended', False)
+        problem = ('runner error' if failed else 'guard refused' if summary.get('refused')
+                   else 'guard failed' if summary.get('failed') else 'tree tainted' if summary.get('tainted') else '')
+        if problem:
+            self.triage_offer_resume = False
+            self.triage_history.append(('system', 'Not resuming: %s.' % problem))
+            return True
+        reason = triage_hold_reason(proposal[1] if proposal else '')
+        if reason:
+            self.triage_offer_resume = True
+            if unattended:
+                line = 'Not resuming (unattended): proposal %d is a %s; waiting for operator.' % (number, reason)
+            else:
+                line = 'Not resuming: proposal %d is a %s; type /resume or press r when ready.' % (number, reason)
+            self.triage_history.append(('system', line))
+            return True
+        if unattended and not getattr(self, 'triage_do_offer', False):
+            self.triage_offer_resume = True
+            self.triage_history.append(('system', 'Not resuming (unattended): no resume offer from diagnosis; '
+                                                  'waiting for operator.'))
+            return True
+        note = 'Auto-resuming the build after /do %d.' % number
+        self.triage_history.append(('system', note))
+        if unattended:
+            self._record_unattended_gate(note + ' No person reviewed this fix.')
+        try:
+            self.triage_resume()
+        except ValueError as exc:
+            self.triage_offer_resume = True
+            self.triage_history.append(('system', 'Auto-resume did not start: ' + sanitize(str(exc))))
+        return True
 
     def poll_triage(self):
         request = getattr(self, 'triage_request', None)
@@ -3926,7 +3971,10 @@ class UncleTUI:
             self.triage_history.append(('system', sanitize(' '.join(notes))))
         if getattr(self, 'recovery_active', False):
             self.chat_error = self.triage_error
-        self._maybe_auto_resume_triage()
+        if pending.get('mode') == 'execute':
+            self._auto_resume_after_do(pending.get('proposal'), summary, kind != 'reply')
+        else:
+            self._maybe_auto_resume_triage()
         return True
 
     def _maybe_auto_resume_triage(self):
@@ -3954,6 +4002,13 @@ class UncleTUI:
         note = 'Unattended: auto-resuming past triage (%s); no person reviewed this diagnosis.' % (
             self.triage_classification or 'no classification parsed')
         self.triage_history.append(('system', note))
+        self._record_unattended_gate(note)
+        try:
+            self.triage_resume()
+        except ValueError as exc:
+            self.triage_history.append(('system', 'Auto-resume did not start: ' + sanitize(str(exc))))
+
+    def _record_unattended_gate(self, note):
         try:
             state_dir = self._workflow_dir()
             os.makedirs(state_dir, exist_ok=True)
@@ -3962,10 +4017,6 @@ class UncleTUI:
                     time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), note))
         except OSError:
             pass
-        try:
-            self.triage_resume()
-        except ValueError as exc:
-            self.triage_history.append(('system', 'Auto-resume did not start: ' + sanitize(str(exc))))
 
     def _is_known_stage(self, name):
         """True when this project's workflow really has a stage by that name.

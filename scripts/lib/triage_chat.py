@@ -70,6 +70,41 @@ def parse_reply(text):
             'offer_resume': bool(_RESUME_RE.search(text))}
 
 
+# Proposals that must not auto-resume after /do: the contract's [stop] and
+# [manual] tags, and the phrase families that mean a person still has work to
+# do. Unclear wording errs toward holding; a false hold costs one /resume.
+_HOLD_TAG_RE = re.compile(r'^\s*[*_`]*\s*\[(stop|manual)\]', re.IGNORECASE)
+_HOLD_PHRASES = (
+    (re.compile(r'\b(?:stop|halt|abort)\s+(?:the\s+)?(?:build|run|workflow)\b', re.IGNORECASE),
+     'stop proposal (halts the build)'),
+    (re.compile(r'\bmanual(?:ly)?\b|\bby\s+hand\b|\byourself\b|\b(?:operator|owner|you)\s+must\b', re.IGNORECASE),
+     'manual proposal (needs a person)'),
+    (re.compile(r'\bcredentials?\b|\bsecrets?\b|\bpasswords?\b|\bapi[\s-]?keys?\b'
+                r'|\b(?:rotate|provide|set|supply)\s+(?:an?\s+|the\s+)?(?:\w+\s+)?tokens?\b', re.IGNORECASE),
+     'manual proposal (credentials or secrets)'),
+    (re.compile(r'\brestart\s+(?:the\s+|a\s+)?(?:\w+\s+)?(?:server|service)s?\b', re.IGNORECASE),
+     'manual proposal (server or service restart)'),
+    (re.compile(r'\bdraft\s+(?:an?\s+)?issue\b', re.IGNORECASE),
+     'manual proposal (issue draft needs follow-up)'),
+)
+
+
+def hold_reason(proposal_text):
+    """Why a proposal must not auto-resume after /do, or '' when it may.
+
+    Reads the raw stored proposal text, so a tag shown verbatim still counts.
+    """
+    text = proposal_text or ''
+    tag = _HOLD_TAG_RE.match(text)
+    if tag:
+        kind = tag.group(1).lower()
+        return '%s proposal ([%s] tag)' % (kind, kind)
+    for pattern, reason in _HOLD_PHRASES:
+        if pattern.search(text):
+            return reason
+    return ''
+
+
 def _text_of(content):
     if isinstance(content, str):
         return content

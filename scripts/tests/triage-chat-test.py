@@ -376,7 +376,8 @@ class TriageTests(unittest.TestCase):
             ui.handle_key(ord(char))
         ui.handle_key(10)
         self.assertIsNotNone(ui.triage_request)
-        self.finish_turn(ui)
+        with patch.object(ui, 'start_workflow'):
+            self.finish_turn(ui)
         execute = self.prompts()[1]
         self.assertIn('Execute Proposal 2 only: Edit CHANGE_PLAN.md to record the decision', execute)
         self.assertNotIn('Execute Proposal 1', execute)
@@ -480,19 +481,30 @@ class TriageTests(unittest.TestCase):
         ui.open_triage()
         self.finish_turn(ui)
         ui._triage_command('/do 2')
-        self.finish_turn(ui)
+        # AC-1: a clean applied edit resumes on its own (was: typed /resume;
+        # that coverage moved to the held-case and failed-auto-resume tests).
+        with patch.object(ui, 'start_workflow') as start:
+            def launched():
+                ui.state = 'running'
+                ui.proc = Mock()
+                ui.proc.poll.return_value = None  # the relaunched driver is alive
+            start.side_effect = launched
+            self.finish_turn(ui)
+            start.assert_called_once()
+            self.assertEqual(ui.state, 'running')
+            system = [text for role, text in ui.triage_history if role == 'system']
+            applied = [i for i, text in enumerate(system) if 'Applied: .uncle/docs/CHANGE_PLAN.md' in text]
+            auto = [i for i, text in enumerate(system) if text == 'Auto-resuming the build after /do 2.']
+            self.assertTrue(applied and auto and applied[0] < auto[0], system)
+            ui._triage_command('/resume')  # SI-4: a later /resume does not start a second run
+            start.assert_called_once()
+        self.assertIn('answer its prompt', ui.triage_error)
+        ui.proc = None
         self.assertEqual((self.project / '.uncle/docs/CHANGE_PLAN.md').read_text(), '# plan edited by triage\n')
         tsv = (self.project / '.uncle/workflow/triage-actions.tsv').read_text()
         self.assertIn('\tAPPLIED\t.uncle/docs/CHANGE_PLAN.md\t', tsv)
         self.assertIn('Deviation (triage): `.uncle/docs/CHANGE_PLAN.md`', (self.project / '.uncle/docs/IMPLEMENTATION_NOTES.md').read_text())
         self.assertFalse((self.project / '.uncle/workflow/triage/sandbox').exists())
-        with patch.object(ui, 'start_workflow') as start:
-            start.side_effect = lambda: setattr(ui, 'state', 'running')
-            for char in '/resume':
-                ui.handle_key(ord(char))
-            ui.handle_key(10)
-            start.assert_called_once()
-        self.assertEqual(ui.state, 'running')
 
     def test_execute_turn_with_no_reply_text_still_reports_what_it_applied(self):
         # A real stuck run: kimi-code made the requested edit -- the guard's
@@ -507,7 +519,8 @@ class TriageTests(unittest.TestCase):
         ui.open_triage()
         self.finish_turn(ui)
         ui._triage_command('/do 2')
-        self.finish_turn(ui)
+        with patch.object(ui, 'start_workflow'):
+            self.finish_turn(ui)
         self.assertEqual((self.project / '.uncle/docs/CHANGE_PLAN.md').read_text(), '# plan edited by triage\n')
         self.assertTrue(ui.triage_offer_resume)
         self.assertTrue(any('Applied: .uncle/docs/CHANGE_PLAN.md' in text for _, text in ui.triage_history))
@@ -609,7 +622,8 @@ class TriageTests(unittest.TestCase):
         ui._triage_init()
         ui.recovery_active = True
         ui.triage_proposals = [(1, 'Resume as is; no files edited.')]
-        ui._triage_do(1)
+        with patch.object(ui, 'start_workflow'):
+            ui._triage_do(1)
         self.assertIsNone(ui.triage_request)
         self.assertEqual(self.prompts(), [])
         self.assertTrue(ui.triage_offer_resume)
@@ -622,7 +636,8 @@ class TriageTests(unittest.TestCase):
         ui.triage_proposals = [(2, 'Edit CHANGE_PLAN.md to record the fix.')]
         ui._triage_do(2)
         self.assertIsNotNone(ui.triage_request)
-        self.finish_turn(ui)
+        with patch.object(ui, 'start_workflow'):
+            self.finish_turn(ui)
         self.assertTrue(ui.triage_offer_resume)
         self.assertTrue(any('/do 2' in text for _, text in ui.triage_history))
 
@@ -677,6 +692,184 @@ class TriageTests(unittest.TestCase):
         self.assertTrue(ui.poll_triage())
         self.assertEqual(ui.triage_stream, '')
         self.assertIn(('master', 'final text'), ui.triage_history)
+
+    # --- Issue 66: auto-resume after a completed /do ---------------------------
+
+    CLEAN = {'applied': [], 'refused': [], 'failed': [], 'no_edit': True, 'tainted': False, 'messages': []}
+
+    def running(self, ui):
+        start = patch.object(ui, 'start_workflow', side_effect=lambda: setattr(ui, 'state', 'running'))
+        self.addCleanup(start.stop)
+        return start.start()
+
+    def execute_done(self, ui, proposal, summary=None, kind='reply', value='Done.'):
+        """Finish an execute turn for `proposal` through poll_triage (path P)."""
+        ui._triage_init()
+        ui.triage_request = Mock()
+        ui.triage_request.events = queue.Queue()
+        ui.triage_request.events.put((kind, value))
+        ui.triage_pending = {'mode': 'execute', 'proposal': proposal, 'turn': 1, 'digest': ''}
+        ui._triage_guard = Mock(return_value=dict(summary or self.CLEAN))
+        self.assertTrue(ui.poll_triage())
+
+    def system_lines(self, ui):
+        return [text for role, text in ui.triage_history if role == 'system']
+
+    def test_no_edit_do_auto_resumes_once_as_last_line(self):  # T-2 (L)
+        ui = self.ui()
+        ui._triage_init()
+        ui.triage_proposals = [(1, 'Resume as is; no files edited.')]
+        start = self.running(ui)
+        ui._triage_do(1)
+        start.assert_called_once()
+        self.assertEqual(ui.state, 'running')
+        texts = [text for _, text in ui.triage_history]
+        order = [next(i for i, t in enumerate(texts) if needle in t)
+                 for needle in ('/do 1', 'No files changed.', 'Auto-resuming the build after /do 1.')]
+        self.assertEqual(order, sorted(order))
+        self.assertNotIn('Not resuming', ' '.join(texts))
+
+    def test_held_proposals_do_not_resume_and_resume_or_r_start_once(self):  # T-3 (P)
+        for proposal in ((1, '[manual] Rotate the API token'), (2, 'Restart the server yourself')):
+            for how in ('/resume', 'r'):
+                ui = self.ui()
+                start = self.running(ui)
+                self.execute_done(ui, proposal)
+                start.assert_not_called()
+                self.assertTrue(ui.triage_offer_resume)
+                self.assertEqual(ui.state, 'chat')
+                self.assertTrue(any(t.startswith('Not resuming: proposal %d is a manual proposal' % proposal[0])
+                                    and '/resume or press r' in t for t in self.system_lines(ui)), ui.triage_history)
+                if how == '/resume':
+                    ui._triage_command('/resume')
+                else:
+                    ui.state = 'triage'
+                    ui.handle_key(ord('r'))
+                start.assert_called_once()
+                self.assertEqual(ui.state, 'running')
+
+    def test_stop_proposal_holds(self):  # T-4 (P)
+        ui = self.ui()
+        start = self.running(ui)
+        self.execute_done(ui, (1, '[stop] Halt the build'))
+        start.assert_not_called()
+        self.assertIn('Not resuming: proposal 1 is a stop proposal ([stop] tag); type /resume or press r when ready.',
+                      self.system_lines(ui))
+
+    def test_local_held_proposals_do_not_resume(self):  # T-4L (L)
+        for text, kind in (('[manual] Restart the service yourself; no files edited.', 'manual'),
+                           ('[stop] Halt the build; no files edited.', 'stop')):
+            ui = self.ui()
+            ui._triage_init()
+            ui.triage_proposals = [(1, text)]
+            start = self.running(ui)
+            ui._triage_do(1)
+            start.assert_not_called()
+            self.assertIsNone(ui.triage_request)
+            self.assertTrue(ui.triage_offer_resume)
+            self.assertTrue(any(t.startswith('Not resuming: proposal 1 is a %s proposal' % kind)
+                                for t in self.system_lines(ui)), ui.triage_history)
+
+    def test_runner_error_on_execute_does_not_resume(self):  # T-5 (P)
+        ui = self.ui()
+        ui._triage_init()
+        ui.triage_offer_resume = True  # the diagnosis offered resume
+        start = self.running(ui)
+        self.execute_done(ui, (2, 'Edit CHANGE_PLAN.md to record the fix.'), kind='error', value='model exploded')
+        start.assert_not_called()
+        self.assertFalse(ui.triage_offer_resume)
+        self.assertEqual(self.system_lines(ui)[-1], 'Not resuming: runner error.')
+        self.assertIn('model exploded', ui.triage_error)
+        ui._triage_command('/resume')  # SB-6: still callable
+        start.assert_called_once()
+
+    def test_guard_problems_never_resume_and_win_over_holds(self):  # T-6a/b/c (P)
+        cases = [('refused', {'refused': ['x']}, 'guard refused'), ('failed', {'failed': ['x']}, 'guard failed'),
+                 ('tainted', {'tainted': True, 'messages': ['bad tree']}, 'tree tainted')]
+        for name, extra, problem in cases:
+            for proposal in ((2, 'Edit CHANGE_PLAN.md to record the fix.'), (1, '[manual] Rotate the token')):
+                ui = self.ui()
+                ui.triage_offer_resume = True
+                start = self.running(ui)
+                self.execute_done(ui, proposal, dict(self.CLEAN, no_edit=False, **extra))
+                start.assert_not_called()
+                self.assertFalse(ui.triage_offer_resume, name)
+                self.assertEqual(self.system_lines(ui)[-1], 'Not resuming: %s.' % problem)
+
+    def test_local_path_dirty_guard_does_not_resume(self):  # T-6L (L)
+        ui = self.ui()
+        ui._triage_init()
+        ui.triage_proposals = [(1, 'Resume as is; no files edited.')]
+        ui._triage_guard = Mock(side_effect=[{'digest': 'd'}, dict(self.CLEAN, failed=['src/x'])])
+        start = self.running(ui)
+        ui._triage_do(1)
+        start.assert_not_called()
+        self.assertFalse(ui.triage_offer_resume)
+        self.assertEqual(self.system_lines(ui)[-1], 'Not resuming: guard failed.')
+
+    def test_unattended_after_do(self):  # T-7
+        def unattended(offer):
+            ui = self.ui()
+            ui.workflow_unattended = True
+            ui._triage_init()
+            ui.triage_do_offer = offer
+            return ui, self.running(ui)
+        ui, start = unattended(True)
+        self.execute_done(ui, (1, '[manual] Provide the credentials'))
+        start.assert_not_called()
+        self.assertTrue(self.system_lines(ui)[-1].startswith('Not resuming (unattended): proposal 1 is a manual'))
+        ui, start = unattended(True)
+        self.execute_done(ui, (2, 'Edit CHANGE_PLAN.md'), kind='error', value='model exploded')
+        start.assert_not_called()
+        ui, start = unattended(False)
+        self.execute_done(ui, (2, 'Edit CHANGE_PLAN.md'))
+        start.assert_not_called()
+        self.assertEqual(self.system_lines(ui)[-1],
+                         'Not resuming (unattended): no resume offer from diagnosis; waiting for operator.')
+        # A seeded diagnosis Offer: resume, set through /do itself.
+        ui = self.ui()
+        ui.workflow_unattended = True
+        ui._triage_init()
+        ui.triage_offer_resume = True
+        ui.triage_proposals = [(1, 'Resume as is; no files edited.')]
+        start = self.running(ui)
+        ui._triage_do(1)
+        start.assert_called_once()
+        gates = (self.project / '.uncle/workflow/unattended-gates').read_text()
+        self.assertIn('Auto-resuming the build after /do 1.', gates)
+        self.assertNotIn('Unattended: auto-resuming past triage', ' '.join(self.system_lines(ui)))
+
+    def test_hold_reason_families_tags_and_negatives(self):  # T-8a
+        positives = ['Stop the build until the owner decides', 'Halt the run', 'Abort the workflow',
+                     'Apply the migration manually', 'Edit the config by hand', 'Run it yourself',
+                     'The operator must approve', 'Provide the credentials', 'Store the secret in .env',
+                     'Reset the password', 'Add the API key', 'Rotate the token', 'Restart the server',
+                     'Restart a service', 'Restart the web server', 'Draft an issue against uncle',
+                     '[manual] do it', '[MANUAL] do it', '  **[Manual]** do it', '_[stop]_ now', '`[stop]` now']
+        for text in positives:
+            self.assertTrue(triage_chat.hold_reason(text), text)
+        self.assertEqual(triage_chat.hold_reason('  **[Manual]** x'), 'manual proposal ([manual] tag)')
+        for text in ('Edit CHANGE_PLAN.md to record the fix.', 'Fix token parsing in foo.py',
+                     'Resume as is; no files edited.', 'Fix the /health handler', ''):
+            self.assertEqual(triage_chat.hold_reason(text), '', text)
+
+    def test_tagged_proposal_parses_verbatim(self):  # T-8b
+        parsed = triage_chat.parse_reply('Classification: code defect\nProposal 1: [manual] Restart the server')
+        self.assertEqual(parsed['proposals'], [(1, '[manual] Restart the server')])
+        self.assertTrue(triage_chat.hold_reason(parsed['proposals'][0][1]))
+
+    def test_auto_resume_failure_is_reported_and_resume_still_works(self):  # T-9 (P)
+        ui = self.ui()
+        start = self.running(ui)
+        with patch.object(ui, 'triage_resume', side_effect=ValueError('The workflow did not start.')):
+            self.execute_done(ui, (2, 'Edit CHANGE_PLAN.md to record the fix.'))
+        self.assertEqual(self.system_lines(ui)[-2:], ['Auto-resuming the build after /do 2.',
+                                                      'Auto-resume did not start: The workflow did not start.'])
+        self.assertEqual(ui.state, 'chat')
+        self.assertTrue(ui.triage_offer_resume)
+        start.assert_not_called()
+        ui._triage_command('/resume')
+        start.assert_called_once()
 
 
 if __name__ == '__main__':

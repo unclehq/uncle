@@ -46,6 +46,10 @@ Plain text, in this order:
    3), each one concrete action the operator can select. Name the files a
    proposal would edit. A proposal may be "draft an issue" for a tool bug, or
    "resume as is" when the fix is a decision the driver will ask for.
+   A proposal that needs a person (credentials, a restart, a manual step)
+   begins `[manual]`; one that halts the build begins `[stop]`, e.g.
+   `Proposal 2: [manual] Rotate the API token in .env`. Any other proposal
+   resumes the build on its own once `/do N` applies it cleanly.
 4. Optionally `Offer: resume` on its own line when the run can be resumed now.
 
 Nothing else is parsed. `/do N` in your reply does nothing; selection is the

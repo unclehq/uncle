@@ -201,7 +201,7 @@ class FindingsTests(unittest.TestCase):
                 shutil.rmtree(self.state / 'audit-dispositions', ignore_errors=True)
                 # Execute the production WAIT arm, avoiding external agents,
                 # approval dialogs and issue-close calls from the other states.
-                source = (ROOT / 'scripts' / driver).read_text()
+                source = (ROOT / 'scripts' / driver).read_text(encoding='utf-8')
                 arm = source.split('        WAIT_AUDIT_OVERRIDE)\n', 1)[1].split('\n        COMPLETE)', 1)[0]
                 harness = f'''set -euo pipefail
 ROOT={ROOT.as_posix()!r}

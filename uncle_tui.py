@@ -790,6 +790,30 @@ class TuiSupervisionHost:
                                  session=self.tui._supervisor_session())
 
 
+ESC_WINDOW = 0.4  # D-2: seconds between two Esc presses that count as a double tap
+
+
+def is_double_esc(previous, now, window=ESC_WINDOW):
+    """True when an Esc at `now` follows one at `previous` within `window`."""
+    return previous is not None and 0 <= now - previous <= window
+
+
+def history_step(entries, index, delta):
+    """Move a recall cursor through `entries`; None means the empty composer.
+
+    Up (delta -1) walks from the newest entry backward; Down walks forward and
+    falls off the end back to None.
+    """
+    if not entries:
+        return None
+    if index is None:
+        return len(entries) - 1 if delta < 0 else None
+    index += delta
+    if index < 0:
+        return 0
+    return index if index < len(entries) else None
+
+
 # Composer line editing (Issue 96). Each edit is pure:
 # (text, cursor) -> (text, cursor, killed). Word boundaries follow Bash:
 # Ctrl-W stops at whitespace, the Alt word keys at non-alphanumerics.
@@ -4877,6 +4901,122 @@ class UncleTUI:
             self.chat_picker = False
         self.chat_error = ''
 
+    # ---- control hotkeys (issue 92) ----
+    def _remember_input(self, text, gate=False, sent=False):
+        """D-13: memory only; never written to disk."""
+        if not text.strip():
+            return
+        history = self.__dict__.setdefault('input_history', [])
+        history.append({'text': text, 'gate': gate, 'sent': sent})
+        self.history_index = None
+
+    def _recall_input(self, delta):
+        """CB-6: Up/Down walk submitted chat inputs; gate answers are excluded."""
+        entries = [e['text'] for e in getattr(self, 'input_history', []) if not e['gate']]
+        index = getattr(self, 'history_index', None)
+        if self.chat_composer and (index is None or index >= len(entries)
+                                   or self.chat_composer != entries[index]):
+            return  # the composer holds the operator's own text
+        self.history_index = history_step(entries, index, delta)
+        self.chat_composer = '' if self.history_index is None else entries[self.history_index]
+
+    def _esc_pending_bytes(self):
+        """D-11: a bare Esc with bytes behind it is a split escape sequence."""
+        if getattr(self, 'esc_follow', None) is not None:
+            return self.esc_follow  # _read_meta_key already peeked and pushed back
+        screen = getattr(self, 'stdscr', None)
+        if screen is None:
+            return False
+        try:
+            screen.nodelay(True)
+            nxt = screen.getch()
+        finally:
+            screen.nodelay(False)
+            screen.timeout(80)
+        if nxt == -1:
+            return False
+        curses.ungetch(nxt)
+        return True
+
+    def _composer_esc(self):
+        """Unclaimed Esc at the build page composer: interrupt, then rewind (D-10)."""
+        if self._esc_pending_bytes():
+            return
+        now = getattr(self, 'clock', time.monotonic)()
+        double = is_double_esc(getattr(self, 'last_esc', None), now)
+        self.last_esc = None if double else now
+        if double:
+            self._rewind()
+        elif self._build_live():
+            self._interrupt_stage()
+
+    def _interrupt_stage(self):
+        """D-3: stop the driver the way /stop does; run state stays resumable."""
+        stage = getattr(self, 'status_stage', '') or 'the stage'
+        self.workflow_exit_reported = True
+        self.stop_workflow()
+        self.proc_done = True
+        self.prompt_kind = ''
+        self.chat_focus = 'chat'
+        self.home_history.append(('system', 'Interrupted %s. /resume continues the run.' % stage))
+
+    def _rewind(self):
+        """D-4: restore the last submitted input into the composer."""
+        history = getattr(self, 'input_history', [])
+        if not history:
+            self.home_history.append(('system', 'Nothing to rewind.'))
+            return
+        entry = history[-1]
+        self.chat_composer = entry['text']
+        self.history_index = None
+        if entry['gate'] and entry['sent']:
+            self.home_history.append(('system', 'That answer was already taken by the driver; use /resume to redo the stage.'))
+
+    def _control_key(self, k):
+        """Global control keys; none of them is claimed by an existing handler."""
+        if k == 12:  # Ctrl-L
+            self.stdscr.clearok(True)
+            return True
+        if k == curses.KEY_BTAB:
+            self.session_auto_mode = not self._next_run_unattended()
+            self.chat_error = ('Next run: UNATTENDED (Shift-Tab)' if self.session_auto_mode
+                               else 'Next run: attended')
+            return True
+        if k == 18 and self.state == 'running':  # Ctrl-R
+            self.transcript_full = not getattr(self, 'transcript_full', False)
+            return True
+        if k == 2:  # Ctrl-B
+            if self.state == 'running' and self._build_live() and not getattr(self, 'prompt_kind', ''):
+                self.backgrounded = True
+                self.state = 'menu'
+                self.chat_focus = 'chat'
+                self.home_menu_open = False
+                return True
+            if self.state == 'menu' and getattr(self, 'backgrounded', False):
+                self.backgrounded = False
+                self.state = 'running'
+                self.chat_focus = 'gate' if getattr(self, 'prompt_kind', '') else 'chat'
+                return True
+        return False
+
+    def _control_hint(self, width, build=True):
+        """CB-8/INV-6: control keys, Shift-Tab only when terminfo has kcbt."""
+        keys = ['Esc interrupt', 'Esc Esc rewind', '^R transcript', '^B background'] if build else []
+        keys += ['^L redraw', 'Up/Down history']
+        if getattr(self, 'has_kcbt', False):
+            keys.append('Shift-Tab mode')
+        return '/homepage  / cmds  Tab chat  ' + '  '.join(keys) if build else '/ cmds  Ctrl-P menu  Tab chat  ' + '  '.join(keys)
+
+    def _background_status(self):
+        """D-12: the homepage line for a backgrounded build, or ''."""
+        if not getattr(self, 'backgrounded', False):
+            return ''
+        if not self._build_live():
+            return 'build finished — Ctrl-B to view'
+        if getattr(self, 'prompt_kind', ''):
+            return 'build waiting at gate — Ctrl-B to return'
+        return 'build running — Ctrl-B to return'
+
     def _issue_empty_message(self):
         picker = getattr(self, 'issue_picker', None)
         if picker is not None and getattr(picker, 'loading', False):
@@ -4949,6 +5089,7 @@ class UncleTUI:
             screen.timeout(0)
             follow = screen.getch()
             if not isinstance(follow, int) or follow == -1:
+                self.esc_follow = False
                 return None
             if follow in (ord('b'), ord('f'), ord('d'), curses.KEY_BACKSPACE, 127, 8):
                 self._chat_meta(follow)
@@ -4957,6 +5098,7 @@ class UncleTUI:
                 curses.ungetch(follow)
             except curses.error:
                 pass
+            self.esc_follow = True
             return None
         finally:
             screen.timeout(saved)
@@ -6510,6 +6652,7 @@ class UncleTUI:
 
     # ---- input ----
     def handle_key(self, k):
+        self.esc_follow = None  # what _read_meta_key saw behind this key's Esc
         # Ctrl-L redraws everywhere; triage keeps its own keys otherwise.
         if (k == 12 or self.state != 'triage') and self._control_key(k):
             return
@@ -6967,6 +7110,10 @@ class UncleTUI:
         self.stdscr.keypad(True)
         self.input_timeout = 80
         self.stdscr.timeout(self.input_timeout)
+        try:
+            self.has_kcbt = bool(curses.tigetstr('kcbt'))  # D-8
+        except curses.error:
+            self.has_kcbt = False
         self._setup_colors()
         dirty = True
         size = None

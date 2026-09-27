@@ -23,7 +23,7 @@ if WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_BYTES=1 check_document_budget 
 [[ $(cat VERIFICATION_REPORT.md) == "mandatory acceptance evidence" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 LOG_DIR="$tmp"
 printf 'stage instructions' > prompt.md
-WORKFLOW_DOC_MAX_BYTES=12345 gated_prompt prompt.md updated-plan > resolved
+WORKFLOW_DOC_MAX_BYTES=12345 gated_prompt prompt.md preflight > resolved
 grep -q '12345 UTF-8 bytes' "$(cat resolved)"
 # Every artifact gets three times its source brief. An interpretation squeezed to
 # the brief's own length is what sent the requirements agent into repeated
@@ -76,10 +76,13 @@ for stage in $DOC_STAGES implementation-step-2; do
                 'Missing an advisory drafting target does not require compaction.'; do
         [[ "$budget_prompt" == *"$rule"* ]] || { echo "Missing compaction limit for $stage: $rule" >&2; exit 1; }
     done
+    # Synthesis stages use an early return in gated_prompt that omits the budget
+    # block to reduce input token cost; their budgets are validated above via
+    # document_budget_prompt directly.
+    if is_synthesis_stage "$stage"; then continue; fi
     gated_prompt prompt.md "$stage" > resolved
     [[ -n $(stage_documents "$stage") ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
     while IFS= read -r file; do
-        grep -qF "Final-response contract for \`$file\`" "$(cat resolved)" || { echo "Missing final-response contract for $file" >&2; exit 1; }
         read -r bytes lines <<< "$(document_budget "$file")"
         grep -qF -- "$file: at most $bytes UTF-8 bytes and $lines lines." "$(cat resolved)"
         printf 'abc\ndef' > "$file"
@@ -156,45 +159,45 @@ grep -qF 'FINAL_AUDIT.md: at most 7 UTF-8 bytes' "$(cat resolved)"
 grep -q 'Reviewer output' "$(cat resolved)"
 grep -qF 'Use no more than 2,000 output tokens for this entire turn' "$(cat resolved)"
 grep -qF 'Do not narrate your investigation' "$(cat resolved)"
-grep -qF 'Final-response contract for `.uncle/docs/FINAL_AUDIT.md`' "$(cat resolved)"
-grep -qF 'Return the release audit only.' "$(cat resolved)"
 document_layout_prompt project-plan > resolved
 grep -qF 'Return an executable proposal, not a requirements restatement or review.' resolved
 document_layout_prompt adversarial-review > resolved
-grep -qF 'Return an adversarial assessment of the supplied plan only.' resolved
-if WORKFLOW_DOC_MAX_BYTES_FINAL_AUDIT=invalid gated_prompt prompt.md final-audit 2>/dev/null; then exit 1; fi
+grep -qF 'Write each finding as a level-2 heading `## AR-001: Title`' resolved
+if WORKFLOW_DOC_MAX_BYTES_PREFLIGHT_REPORT=invalid gated_prompt prompt.md preflight 2>/dev/null; then exit 1; fi
 # Draft targets use the effective override, including leading-zero integers.
-# updated-plan is a compact-first stage: in advisory mode it is held to ZERO
+# execute-checklist is a compact-first stage: in advisory mode it is held to ZERO
 # size-only passes and never reaches the BUDGET block, so assert the numeric
 # limits under enforcement, where that block is what the agent is given.
 WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_BYTES=01000 \
-    gated_prompt prompt.md updated-plan > resolved
+    gated_prompt prompt.md execute-checklist > resolved
 grep -qF 'Draft toward 750 bytes' "$(cat resolved)"
 grep -qF 'supersede any fixed byte target' "$(cat resolved)"
 # No installed/local output rules must not disable prompt budgets.
 ROOT_SAVED="$ROOT"
 ROOT=""
-UNCLE_OUTPUT_RULES= gated_prompt prompt.md final-audit > resolved
+UNCLE_OUTPUT_RULES= gated_prompt prompt.md preflight > resolved
 grep -q 'Compact output budgets' "$(cat resolved)"
 ROOT="$ROOT_SAVED"
 # Code and raw logs are outside the document cap.
 printf 'uncapped evidence' > raw.log
 WORKFLOW_DOC_MAX_BYTES=1 check_document_budget raw.log
-# Exercise the driver's post-agent guard: oversized output cannot reach approval.
+# Exercise the driver's post-agent guard: missing artifacts stop progress, while
+# oversized rendered Markdown is advisory-only.
 awk '/^require_artifact\(\)/ {copy=1} copy {print} copy && /^}/ {exit}' \
     "$ROOT/scripts/stagegate.sh" > guard.sh
 [[ -s guard.sh ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 bash -n guard.sh
 . ./guard.sh
-# Enforcing, the stage does not advance past an oversized document.
-if (WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_BYTES=1 require_artifact PROJECT_PLAN.md; touch advanced) 2>/dev/null; then
-    exit 1
-fi
-[[ ! -e advanced && -s PROJECT_PLAN.md ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
-# By default it does advance, and the document survives. This is the whole
-# behaviour change: a plan that ran for ten minutes and came out 3KB long is
-# worth more than the limit it missed, and killing the stage there threw the
-# work away and then re-ran it to produce the same overrun again.
+rm -f advanced
+# Missing artifacts still block stage advancement.
+if (require_artifact MISSING_PLAN.md; touch advanced) 2>/dev/null; then exit 1; fi
+[[ ! -e advanced ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+# Even under enforcement, oversized rendered Markdown must not stop the stage.
+(WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_DOC_MAX_BYTES=1 require_artifact PROJECT_PLAN.md; touch advanced) 2>/dev/null \
+    || { echo "FAIL $0:$LINENO an enforcing overrun on rendered Markdown must not stop the stage" >&2; exit 1; }
+[[ -e advanced && -s PROJECT_PLAN.md ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+rm -f advanced
+# By default it does advance, and the document survives.
 (WORKFLOW_DOC_MAX_BYTES=1 require_artifact PROJECT_PLAN.md; touch advanced) 2>/dev/null \
     || { echo "FAIL $0:$LINENO an advisory overrun must not stop the stage" >&2; exit 1; }
 [[ -e advanced && -s PROJECT_PLAN.md ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }

@@ -164,7 +164,8 @@ def parse_reply(text):
     Exactly the keys of REPLY_KEYS may appear; `reply` is prose; at most one
     of the action keys may be non-null. A single, whole-response Markdown code
     fence is unwrapped as transport noise regardless of its language or fence
-    length. Everything inside still has to be the exact JSON envelope.
+    length, as is one that ends the response after leading prose. Everything
+    inside still has to be the exact JSON envelope.
     """
     candidate = str(text or '').strip()
     # Some runners label a JSON response as `swift`, and some renderers widen
@@ -197,6 +198,16 @@ def parse_reply(text):
                 continue
             data = value
             break
+        if data is None:
+            # Local models reason first and then fence the envelope. Accept
+            # one fence that ends the response and holds exactly one object;
+            # prose after it stays malformed, like the unfenced case above.
+            tail = re.search(r'(?:^|\n)(?P<mark>`{3,}|~{3,})[^\r\n]*\r?\n(?P<body>.*)\r?\n(?P=mark)$', candidate, re.S)
+            if tail:
+                try:
+                    data = json.loads(tail.group('body').strip())
+                except ValueError:
+                    data = None
         if data is None:
             raise ValueError('malformed: reply is not a JSON object')
     if not isinstance(data, dict):

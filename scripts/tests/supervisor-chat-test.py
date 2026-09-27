@@ -551,7 +551,21 @@ class DelegationTests(Base):
         parsed = sc.parse_reply(fenced)
         self.assertEqual(parsed['reply'], 'Building.')
         self.assertEqual(parsed['home_action']['uncle_action'], 'run_app')
-        self.assertRaises(ValueError, sc.parse_reply, 'Before\n' + fenced)
+        # A local model often reasons first and then fences the envelope. That
+        # is the same prose-then-object shape accepted unfenced below, so it is
+        # accepted too -- but only when the fence ends the response.
+        self.assertEqual(sc.parse_reply('Before\n' + fenced)['home_action']['uncle_action'], 'run_app')
+        self.assertRaises(ValueError, sc.parse_reply, 'Before\n' + fenced + '\nAfter')
+        self.assertRaises(ValueError, sc.parse_reply, 'Before\n```json\n{"schema":1}\n{"schema":1}\n```')
+        self.assertRaises(ValueError, sc.parse_reply, 'Before\n```json\nnot json\n```')
+        # calculator-local: deepseek reasoning, then a fenced create_app action.
+        local = ('Based on the data:\n\n- **State:** Idle.\n\nThe correct action is `create_app`.\n\n```json\n'
+                 + reply('Starting the build.', home_action={'uncle_action': 'create_app', 'message': 'Build it.',
+                                                             'document': '# Calc\n\n## Tech\n- React', 'start': True})
+                 + '\n```')
+        parsed = sc.parse_reply(local)
+        self.assertEqual(parsed['reply'], 'Starting the build.')
+        self.assertEqual(parsed['home_action']['uncle_action'], 'create_app')
         prefixed = 'I will now produce the required JSON.\n' + reply('Building.')
         self.assertEqual(sc.parse_reply(prefixed)['reply'], 'Building.')
         self.assertRaises(ValueError, sc.parse_reply, prefixed + '\nAfter')

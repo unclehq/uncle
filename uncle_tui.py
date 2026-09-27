@@ -35,8 +35,12 @@ except ImportError:  # Windows has no curses in the stdlib
         "  Linux:   install your distribution's python3 curses package\n"
         "The line-based menu in `uncle` is used instead.\n")
     raise SystemExit(1)
+try:
+    import termios
+except ImportError:  # Windows: no suspend character to disable.
+    termios = None
 
-ROOT = os.path.dirname(os.path.realpath(__file__))
+ROOT =os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
 from completion_preview import CompletionPreview, STAR_URL, launch_spec
 from preview_server import DevelopmentPreview, PreviewServer, development_preview
@@ -786,32 +790,154 @@ class TuiSupervisionHost:
                                  session=self.tui._supervisor_session())
 
 
-ESC_WINDOW = 0.4  # D-2: seconds between two Esc presses that count as a double tap
+# Composer line editing (Issue 96). Each edit is pure:
+# (text, cursor) -> (text, cursor, killed). Word boundaries follow Bash:
+# Ctrl-W stops at whitespace, the Alt word keys at non-alphanumerics.
+COMPOSER_LIMIT = 1024 * 1024
 
 
-def is_double_esc(previous, now, window=ESC_WINDOW):
-    """True when an Esc at `now` follows one at `previous` within `window`."""
-    return previous is not None and 0 <= now - previous <= window
+def edit_insert(text, cursor, value, limit=COMPOSER_LIMIT):
+    size = len(text.encode('utf-8'))
+    if size >= limit or (len(value) > 1 and size + len(value.encode('utf-8')) > limit):
+        raise ValueError('Transcript exceeds 1 MiB limit')
+    return text[:cursor] + value + text[cursor:], cursor + len(value), ''
 
 
-def history_step(entries, index, delta):
-    """Move a recall cursor through `entries`; None means the empty composer.
+def edit_backspace(text, cursor):
+    if cursor <= 0:
+        return text, 0, ''
+    return text[:cursor - 1] + text[cursor:], cursor - 1, ''
 
-    Up (delta -1) walks from the newest entry backward; Down walks forward and
-    falls off the end back to None.
+
+def edit_delete(text, cursor):
+    return text[:cursor] + text[cursor + 1:], cursor, ''
+
+
+def _line_start(text, cursor):
+    return text.rfind('\n', 0, cursor) + 1
+
+
+def _line_end(text, cursor):
+    end = text.find('\n', cursor)
+    return len(text) if end < 0 else end
+
+
+def _word_back(text, cursor):
+    while cursor > 0 and not text[cursor - 1].isalnum():
+        cursor -= 1
+    while cursor > 0 and text[cursor - 1].isalnum():
+        cursor -= 1
+    return cursor
+
+
+def _word_forward(text, cursor):
+    while cursor < len(text) and not text[cursor].isalnum():
+        cursor += 1
+    while cursor < len(text) and text[cursor].isalnum():
+        cursor += 1
+    return cursor
+
+
+def edit_kill_whitespace_word(text, cursor):  # Ctrl-W
+    start = cursor
+    while start > 0 and text[start - 1].isspace():
+        start -= 1
+    while start > 0 and not text[start - 1].isspace():
+        start -= 1
+    return text[:start] + text[cursor:], start, text[start:cursor]
+
+
+def edit_kill_word_back(text, cursor):  # Alt-Backspace
+    start = _word_back(text, cursor)
+    return text[:start] + text[cursor:], start, text[start:cursor]
+
+
+def edit_kill_word_forward(text, cursor):  # Alt-D
+    end = _word_forward(text, cursor)
+    return text[:cursor] + text[end:], cursor, text[cursor:end]
+
+
+def edit_kill_to_start(text, cursor):  # Ctrl-U
+    start = _line_start(text, cursor)
+    return text[:start] + text[cursor:], start, text[start:cursor]
+
+
+def edit_kill_to_end(text, cursor):  # Ctrl-K
+    end = _line_end(text, cursor)
+    return text[:cursor] + text[end:], cursor, text[cursor:end]
+
+
+def _tty_fd():
+    return sys.stdin.fileno()
+
+
+# False only where the suspend character exists but could not be disabled:
+# Ctrl-Y would then suspend, so it stays unbound instead of half-working.
+CTRL_Y_BOUND = True
+
+
+def disable_dsusp(fd):
+    """Free Ctrl-Y from the delayed-suspend character (macOS VDSUSP).
+
+    Returns the saved attributes to restore, or None. Called after curses
+    is initialised; def_prog_mode records the change so ncurses reapplies it
+    after Ctrl-Z/fg and around child processes, while endwin's shell mode
+    (captured at initscr) still holds the original dsusp.
     """
-    if not entries:
+    global CTRL_Y_BOUND
+    if termios is None or not hasattr(termios, 'VDSUSP'):
         return None
-    if index is None:
-        return len(entries) - 1 if delta < 0 else None
-    index += delta
-    if index < 0:
-        return 0
-    return index if index < len(entries) else None
+    try:
+        saved = termios.tcgetattr(fd)
+        attrs = termios.tcgetattr(fd)
+        try:
+            disabled = os.fpathconf(fd, 'PC_VDISABLE')
+        except (OSError, ValueError, AttributeError):
+            disabled = 0xff
+        if not isinstance(disabled, int) or not 0 <= disabled <= 0xff:
+            disabled = 0xff
+        cc = attrs[6]
+        cc[termios.VDSUSP] = bytes([disabled]) if isinstance(cc[termios.VDSUSP], bytes) else disabled
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    except Exception:
+        CTRL_Y_BOUND = False
+        return None
+    try:
+        curses.def_prog_mode()
+    except curses.error:
+        pass
+    return saved
+
+
+def restore_tty(fd, saved):
+    if saved is None or termios is None:
+        return
+    try:
+        termios.tcsetattr(fd, termios.TCSANOW, saved)
+    except Exception:
+        pass
 
 
 class UncleTUI:
-    VIEWER_PROGRAMS = ("cursor", "code", "glow", "bat", "less", "more", "cat")
+    VIEWER_PROGRAMS =("cursor", "code", "glow", "bat", "less", "more", "cat")
+
+    # Assigning the composer (the ~20 sites that clear or fill it) puts the
+    # cursor at the end; edits go through _set_composer to place it.
+    @property
+    def chat_composer(self):
+        return self.__dict__.get('_chat_text', '')
+
+    @chat_composer.setter
+    def chat_composer(self, value):
+        self._chat_text = value
+        self.chat_cursor = len(value)
+
+    def _composer_cursor(self):
+        return max(0, min(getattr(self, 'chat_cursor', len(self.chat_composer)), len(self.chat_composer)))
+
+    def _set_composer(self, text, cursor):
+        self._chat_text = text
+        self.chat_cursor = max(0, min(cursor, len(text)))
 
     def __init__(self, stdscr):
         self.stdscr = stdscr
@@ -4726,7 +4852,7 @@ class UncleTUI:
     def _complete_chat_file(self):
         if getattr(self, 'chat_picker_kind', 'file') == 'issue':
             if not self.chat_choices:
-                self.chat_error = self.issue_picker.message or 'No matching open issues.'
+                self.chat_error = self._issue_empty_message()
                 return
             item = self.issue_matches[self.chat_pick]
             self.chat_composer = self.chat_composer[:self.chat_ref_start] + '#' + str(item['number']) + ' '
@@ -4751,121 +4877,94 @@ class UncleTUI:
             self.chat_picker = False
         self.chat_error = ''
 
-    # ---- control hotkeys (issue 92) ----
-    def _remember_input(self, text, gate=False, sent=False):
-        """D-13: memory only; never written to disk."""
-        if not text.strip():
+    def _issue_empty_message(self):
+        picker = getattr(self, 'issue_picker', None)
+        if picker is not None and getattr(picker, 'loading', False):
+            return 'Loading open GitHub issues…'
+        return (picker.message if picker is not None else '') or 'No matching open issues.'
+
+    def _chat_menu(self):
+        """The menu Tab/Enter would accept: 'slash', 'picker' or None.
+
+        Menus only exist with the cursor at the end of the composer, so an
+        accept never rewrites text after a mid-buffer cursor."""
+        if self._composer_cursor() != len(self.chat_composer):
+            return None
+        if not self.chat_edit and self._slash_choices():
+            return 'slash'
+        if self.chat_picker:
+            return 'picker'
+        return None
+
+    def _chat_accept(self):
+        """The one accept path for Tab and Enter on every menu kind."""
+        menu = self._chat_menu()
+        if menu == 'slash':
+            choices = self._slash_choices()
+            choice = choices[getattr(self, 'slash_pick', 0) % len(choices)]
+            self.chat_composer = choice + (' ' if choice in ('/issue', '/run', '/runstage') else '')
+        elif menu == 'picker':
+            self._complete_chat_file()
+        return menu
+
+    def _chat_meta(self, k):
+        """ESC-prefixed (Meta/Alt) keys: word motion and word kills."""
+        text, cursor = self.chat_composer, self._composer_cursor()
+        killed = ''
+        if k == ord('b'):
+            cursor = _word_back(text, cursor)
+        elif k == ord('f'):
+            cursor = _word_forward(text, cursor)
+        elif k == ord('d'):
+            text, cursor, killed = edit_kill_word_forward(text, cursor)
+        else:
+            text, cursor, killed = edit_kill_word_back(text, cursor)
+        if killed:
+            self.chat_kill = killed
+        self._set_composer(text, cursor)
+        self._refresh_chat_menus()
+
+    def _refresh_chat_menus(self):
+        if self.chat_edit:
             return
-        history = self.__dict__.setdefault('input_history', [])
-        history.append({'text': text, 'gate': gate, 'sent': sent})
-        self.history_index = None
+        if self._composer_cursor() != len(self.chat_composer):
+            self.chat_picker = False
+            self.chat_choices = []
+        elif self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'file' and not self.chat_composer[self.chat_ref_start:].startswith('@'):
+            self.chat_choices = self.chat.refs.browse(self.chat_composer[self.chat_ref_start:])
+            self.chat_pick = 0
+        else:
+            self._chat_suggestions()
 
-    def _recall_input(self, delta):
-        """CB-6: Up/Down walk submitted chat inputs; gate answers are excluded."""
-        entries = [e['text'] for e in getattr(self, 'input_history', []) if not e['gate']]
-        index = getattr(self, 'history_index', None)
-        if self.chat_composer and (index is None or index >= len(entries)
-                                   or self.chat_composer != entries[index]):
-            return  # the composer holds the operator's own text
-        self.history_index = history_step(entries, index, delta)
-        self.chat_composer = '' if self.history_index is None else entries[self.history_index]
+    def _read_meta_key(self):
+        """After a bare Esc, return an immediately following Meta key.
 
-    def _esc_pending_bytes(self):
-        """D-11: a bare Esc with bytes behind it is a split escape sequence."""
+        Any other key goes back to the queue with ungetch; the input timeout
+        is restored on every path."""
         screen = getattr(self, 'stdscr', None)
         if screen is None:
-            return False
+            return None
+        saved = getattr(self, 'input_timeout', 80)
         try:
-            screen.nodelay(True)
-            nxt = screen.getch()
+            screen.timeout(0)
+            follow = screen.getch()
+            if not isinstance(follow, int) or follow == -1:
+                return None
+            if follow in (ord('b'), ord('f'), ord('d'), curses.KEY_BACKSPACE, 127, 8):
+                self._chat_meta(follow)
+                return follow
+            try:
+                curses.ungetch(follow)
+            except curses.error:
+                pass
+            return None
         finally:
-            screen.nodelay(False)
-            screen.timeout(80)
-        if nxt == -1:
-            return False
-        curses.ungetch(nxt)
-        return True
-
-    def _composer_esc(self):
-        """Unclaimed Esc at the build page composer: interrupt, then rewind (D-10)."""
-        if self._esc_pending_bytes():
-            return
-        now = getattr(self, 'clock', time.monotonic)()
-        double = is_double_esc(getattr(self, 'last_esc', None), now)
-        self.last_esc = None if double else now
-        if double:
-            self._rewind()
-        elif self._build_live():
-            self._interrupt_stage()
-
-    def _interrupt_stage(self):
-        """D-3: stop the driver the way /stop does; run state stays resumable."""
-        stage = getattr(self, 'status_stage', '') or 'the stage'
-        self.workflow_exit_reported = True
-        self.stop_workflow()
-        self.proc_done = True
-        self.prompt_kind = ''
-        self.chat_focus = 'chat'
-        self.home_history.append(('system', 'Interrupted %s. /resume continues the run.' % stage))
-
-    def _rewind(self):
-        """D-4: restore the last submitted input into the composer."""
-        history = getattr(self, 'input_history', [])
-        if not history:
-            self.home_history.append(('system', 'Nothing to rewind.'))
-            return
-        entry = history[-1]
-        self.chat_composer = entry['text']
-        self.history_index = None
-        if entry['gate'] and entry['sent']:
-            self.home_history.append(('system', 'That answer was already taken by the driver; use /resume to redo the stage.'))
-
-    def _control_key(self, k):
-        """Global control keys; none of them is claimed by an existing handler."""
-        if k == 12:  # Ctrl-L
-            self.stdscr.clearok(True)
-            return True
-        if k == curses.KEY_BTAB:
-            self.session_auto_mode = not self._next_run_unattended()
-            self.chat_error = ('Next run: UNATTENDED (Shift-Tab)' if self.session_auto_mode
-                               else 'Next run: attended')
-            return True
-        if k == 18 and self.state == 'running':  # Ctrl-R
-            self.transcript_full = not getattr(self, 'transcript_full', False)
-            return True
-        if k == 2:  # Ctrl-B
-            if self.state == 'running' and self._build_live() and not getattr(self, 'prompt_kind', ''):
-                self.backgrounded = True
-                self.state = 'menu'
-                self.chat_focus = 'chat'
-                self.home_menu_open = False
-                return True
-            if self.state == 'menu' and getattr(self, 'backgrounded', False):
-                self.backgrounded = False
-                self.state = 'running'
-                self.chat_focus = 'gate' if getattr(self, 'prompt_kind', '') else 'chat'
-                return True
-        return False
-
-    def _control_hint(self, width, build=True):
-        """CB-8/INV-6: control keys, Shift-Tab only when terminfo has kcbt."""
-        keys = ['Esc interrupt', 'Esc Esc rewind', '^R transcript', '^B background'] if build else []
-        keys += ['^L redraw', 'Up/Down history']
-        if getattr(self, 'has_kcbt', False):
-            keys.append('Shift-Tab mode')
-        return '/homepage  / cmds  Tab chat  ' + '  '.join(keys) if build else '/ cmds  Ctrl-P menu  Tab chat  ' + '  '.join(keys)
-
-    def _background_status(self):
-        """D-12: the homepage line for a backgrounded build, or ''."""
-        if not getattr(self, 'backgrounded', False):
-            return ''
-        if not self._build_live():
-            return 'build finished — Ctrl-B to view'
-        if getattr(self, 'prompt_kind', ''):
-            return 'build waiting at gate — Ctrl-B to return'
-        return 'build running — Ctrl-B to return'
+            screen.timeout(saved)
 
     def _chat_key(self, k):
+        if k == 9 and self.chat_focus == 'chat' and self._chat_menu():
+            self._chat_accept()
+            return True
         if k == 27 and getattr(self, 'recovery_active', False):
             self.recovery_active = False
             self.chat_focus = 'gate' if self.state == 'running' and self.prompt_kind else 'chat'
@@ -4938,18 +5037,30 @@ class UncleTUI:
                 self._recall_input(-1 if k == curses.KEY_UP else 1)
                 return True
             if k in (10, 13):
-                # A complete numeric mention is already usable, even while the
-                # asynchronous picker is loading or has no matching results.
-                if (self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'issue'
-                        and re.search(r'(?<!\S)#[1-9][0-9]*\s*$', self.chat_composer)):
-                    self.chat_picker = False
-                    self.chat_choices = []
-                if self.chat_choices:
-                    self._complete_chat_file()
-                elif self.chat_picker:
-                    self.chat_error = (self.issue_picker.message or 'No matching open issues.') if getattr(self, 'chat_picker_kind', 'file') == 'issue' else 'No matching files. Keep typing or press Esc to close.'
+                if self._chat_menu() == 'picker' and getattr(self, 'chat_picker_kind', 'file') == 'issue':
+                    typed = re.search(r'(?<!\S)#([1-9][0-9]*)$', self.chat_composer)
+                    if self.chat_choices and typed:
+                        # A typed number that names an entry wins over the highlight.
+                        numbers = [item['number'] for item in getattr(self, 'issue_matches', [])]
+                        if int(typed[1]) in numbers:
+                            self.chat_pick = numbers.index(int(typed[1]))
+                    elif (not self.chat_choices
+                          and re.search(r'(?<!\S)#[1-9][0-9]*\s*$', self.chat_composer)):
+                        # A complete numeric mention is already usable while the
+                        # asynchronous picker is loading or has no matching results.
+                        self.chat_picker = False
+                if self._chat_menu() == 'picker':
+                    self._chat_accept()
                 elif self.chat_edit:
-                    self.chat_composer += '\n'
+                    cursor = self._composer_cursor()
+                    self._set_composer(self.chat_composer[:cursor] + '\n' + self.chat_composer[cursor:], cursor + 1)
+                elif self.chat_composer.endswith('\\\\') and self._composer_cursor() == len(self.chat_composer):
+                    # An escaped backslash sends one trailing backslash.
+                    self.send_home_chat(self.chat_composer[:-1])
+                    self.chat_composer = ''
+                    self.chat_error = ''
+                elif self.chat_composer.endswith('\\') and self._composer_cursor() == len(self.chat_composer):
+                    self.chat_composer = self.chat_composer[:-1] + '\n'
                 else:
                     self._remember_input(self.chat_composer)
                     self.send_home_chat(self.chat_composer)
@@ -4983,18 +5094,28 @@ class UncleTUI:
                 self.state = 'config'
                 self.config_sel = 0
                 return True
-            if k in (curses.KEY_BACKSPACE, 127, 8):
-                self.chat_composer = self.chat_composer[:-1]
+            text, cursor = self.chat_composer, self._composer_cursor()
+            edits = {curses.KEY_BACKSPACE: edit_backspace, 127: edit_backspace, 8: edit_backspace,
+                     curses.KEY_DC: edit_delete, 23: edit_kill_whitespace_word,
+                     21: edit_kill_to_start, 11: edit_kill_to_end}
+            moves = {curses.KEY_LEFT: lambda: max(0, cursor - 1),
+                     curses.KEY_RIGHT: lambda: min(len(text), cursor + 1),
+                     curses.KEY_HOME: lambda: _line_start(text, cursor), 1: lambda: _line_start(text, cursor),
+                     curses.KEY_END: lambda: _line_end(text, cursor), 5: lambda: _line_end(text, cursor)}
+            if k in edits:
+                text, cursor, killed = edits[k](text, cursor)
+                if killed:
+                    self.chat_kill = killed
+                self._set_composer(text, cursor)
+            elif k in moves:
+                self._set_composer(text, moves[k]())
+            elif k == 25:  # Ctrl-Y
+                if not CTRL_Y_BOUND or not getattr(self, 'chat_kill', ''):
+                    return True
+                self._set_composer(*edit_insert(text, cursor, self.chat_kill)[:2])
             elif 32 <= k <= 0x10ffff and k < curses.KEY_MIN:
-                if len(self.chat_composer.encode('utf-8')) >= 1024 * 1024:
-                    raise ValueError('Transcript exceeds 1 MiB limit')
-                self.chat_composer += chr(k)
-            if not self.chat_edit:
-                if self.chat_picker and getattr(self, 'chat_picker_kind', 'file') == 'file' and not self.chat_composer[self.chat_ref_start:].startswith('@'):
-                    self.chat_choices = self.chat.refs.browse(self.chat_composer[self.chat_ref_start:])
-                    self.chat_pick = 0
-                else:
-                    self._chat_suggestions()
+                self._set_composer(*edit_insert(text, cursor, chr(k))[:2])
+            self._refresh_chat_menus()
         except (OSError, ValueError) as exc:
             self.chat_error = sanitize(str(exc))
         return True
@@ -5015,9 +5136,9 @@ class UncleTUI:
         start = max(0, pick - slots + 1)
         entries = choices[start:start + slots]
         is_issue = getattr(self, 'chat_picker_kind', 'file') == 'issue'
-        rows = ['Commands  ↑↓ select · Enter run' if slash else 'Open issues  ↑↓ select · Tab/Enter insert · Esc close' if is_issue else 'Files  ↑↓ select · Tab complete · Enter attach · Esc close']
+        rows = ['Commands  ↑↓ select · Tab complete · Enter run' if slash else 'Open issues  ↑↓ select · Tab/Enter insert · Esc close' if is_issue else 'Files  ↑↓ select · Tab complete · Enter attach · Esc close']
         rows += [('› ' if start + i == pick else '  ') + name
-                 for i, name in enumerate(entries)] if entries else [(self.issue_picker.message or 'No matching open issues.') if is_issue else 'No matching files']
+                 for i, name in enumerate(entries)] if entries else [self._issue_empty_message() if is_issue else 'No matching files']
         y = composer_row - len(rows)
         for i, line in enumerate(rows):
             attr = curses.A_REVERSE if i > 0 and entries and start + i - 1 == pick else curses.A_NORMAL
@@ -5148,6 +5269,9 @@ class UncleTUI:
             self.chat_focus = 'menu' if self.home_menu_open else 'chat'
             self.sel = 0
             return True
+        if k == 9 and self.chat_focus == 'chat' and self._chat_menu():
+            self._chat_accept()
+            return True
         if k == 9:
             self.home_menu_open = self.chat_focus == 'chat'
             self.chat_focus = 'menu' if self.home_menu_open else 'chat'
@@ -5168,6 +5292,8 @@ class UncleTUI:
     def _slash_choices(self):
         commands = ['/homepage', '/configure', '/settings', '/file', '/quit', '/issue', '/requirements', '/change', '/approve', '/clear', '/stop', '/triage', '/do', '/resume', '/run', '/runstage', '/delegate', '/app-input']
         text = self.chat_composer.lower()
+        if self._composer_cursor() != len(text):
+            return []
         return [command for command in commands if command.startswith(text)] if text.startswith('/') and ' ' not in text else []
 
     def _chat_command(self, k):
@@ -5176,11 +5302,8 @@ class UncleTUI:
             self.slash_pick = (getattr(self, 'slash_pick', 0) + (1 if k == curses.KEY_DOWN else -1)) % len(choices)
             return True
         if choices and k in (10, 13) and self.chat_composer.lower() not in choices:
-            self.chat_composer = choices[getattr(self, 'slash_pick', 0) % len(choices)]
-            self.chat_cursor = len(self.chat_composer)
-            if self.chat_composer in ('/issue', '/run', '/runstage'):
-                self.chat_composer += ' '
-                self.chat_cursor = len(self.chat_composer)
+            self._chat_accept()
+            if self.chat_composer.endswith(' '):
                 return True
         if k not in (10, 13):
             self.slash_pick = 0
@@ -5467,6 +5590,40 @@ class UncleTUI:
             chunks.append(current)
         return chunks
 
+    def _composer_cursor_cell(self, text, width):
+        """(row, column) of the buffer cursor in _wrap_input(text, width).
+
+        text is the drawn composer; the cursor offset is found by pushing
+        composer[:cursor] through the same sanitize/expandtabs/lstrip."""
+        full = sanitize(self.chat_composer).replace('\n', ' / ').expandtabs(4)
+        prefix = sanitize(self.chat_composer[:self._composer_cursor()]).replace('\n', ' / ').expandtabs(4)
+        offset = max(0, min(len(text), len(prefix) - (len(full) - len(full.lstrip()))))
+        # Replay _wrap_input, tracking where each chunk starts in text.
+        starts, chunks, current, start, position = [], [], '', 0, 0
+        for word in text.split(' '):
+            candidate = word if not current else current + ' ' + word
+            if not current:
+                start = position
+            while len(candidate) > width:
+                if current:
+                    chunks.append(current)
+                    starts.append(start)
+                    current, candidate, start = '', word, position
+                else:
+                    chunks.append(candidate[:width])
+                    starts.append(start)
+                    candidate = candidate[width:]
+                    start += width
+            current = candidate
+            position += len(word) + 1
+        if text:
+            chunks.append(current)
+            starts.append(start)
+        if not chunks:
+            return 0, 0
+        row = max(i for i, s in enumerate(starts) if s <= offset)
+        return row, min(offset - starts[row], len(chunks[row]))
+
     def _draw_chat_composer(self, row, h, w, left, width, compact=True):
         """Shared homepage and build chat appearance."""
         first_row = row
@@ -5514,7 +5671,10 @@ class UncleTUI:
         wrap_width = max(8, width - 2)
         # The composer grows as the input wraps; long pastes scroll to the tail.
         chunks = self._wrap_input(text, wrap_width)
-        chunks = chunks[-max(1, min(6, h - composer_row - 3)):]
+        cursor_row, cursor_col = self._composer_cursor_cell(text, wrap_width)
+        shown = max(1, min(6, h - composer_row - 3))
+        cursor_row -= max(0, len(chunks) - shown)
+        chunks = chunks[-shown:]
         extra = len(chunks) - 1 if text else 0
         if text:
             for i, chunk in enumerate(chunks):
@@ -5523,11 +5683,13 @@ class UncleTUI:
             put(composer_row, '› ' + placeholder, color.get('muted', curses.A_DIM))
         put(composer_row, '›', color.get('warning', curses.A_BOLD))
         if self.chat_focus == 'chat' and (self.state != 'menu' or not getattr(self, 'home_menu_open', False)):
-            cursor_y = composer_row + extra
-            cursor_x = left + 2 + (len(chunks[-1]) if chunks else 0)
+            cursor_y = composer_row + max(0, cursor_row)
+            cursor_x = left + 2 + (cursor_col if cursor_row >= 0 else 0)
+            row_text = chunks[max(0, cursor_row)] if chunks else ''
+            under = row_text[cursor_col] if text and cursor_row >= 0 and cursor_col < len(row_text) else ' '
             if cursor_y < h and cursor_x < w - 1:
                 try:
-                    self.stdscr.addnstr(cursor_y, min(cursor_x, left + width - 1), ' ' if text else placeholder[0], 1,
+                    self.stdscr.addnstr(cursor_y, min(cursor_x, left + width - 1), under if text else placeholder[0], 1,
                                        color.get('warning', 0) | curses.A_REVERSE)
                 except curses.error:
                     pass
@@ -6379,11 +6541,20 @@ class UncleTUI:
         if self.state == 'triage':
             self._triage_key(k)
             return
-        if (k == 9 and getattr(self, 'chat_open', False) and
-                self.state in ('menu', 'chat', 'running') and
-                self.chat_focus == 'chat' and self.chat_picker):
+        chat_composing = (getattr(self, 'chat_open', False) and self.state in ('menu', 'chat', 'running')
+                          and getattr(self, 'chat_focus', '') == 'chat'
+                          and not (self.state == 'menu' and getattr(self, 'home_menu_open', False))
+                          and not (self.state == 'running' and getattr(self, 'prompt_kind', '') == 'complete'))
+        if k == 27 and chat_composing:
             try:
-                self._complete_chat_file()
+                if self._read_meta_key() is not None:
+                    return
+            except (OSError, ValueError) as exc:
+                self.chat_error = sanitize(str(exc))
+                return
+        if k == 9 and chat_composing and self._chat_menu():
+            try:
+                self._chat_accept()
             except (OSError, ValueError) as exc:
                 self.chat_error = sanitize(str(exc))
             return
@@ -6794,11 +6965,8 @@ class UncleTUI:
     def _run_loop(self):
         curses.curs_set(0)
         self.stdscr.keypad(True)
-        self.stdscr.timeout(80)
-        try:
-            self.has_kcbt = bool(curses.tigetstr('kcbt'))  # D-8
-        except curses.error:
-            self.has_kcbt = False
+        self.input_timeout = 80
+        self.stdscr.timeout(self.input_timeout)
         self._setup_colors()
         dirty = True
         size = None
@@ -6844,7 +7012,24 @@ class UncleTUI:
 
 
 def main(stdscr):
-    UncleTUI(stdscr).run()
+    try:
+        fd = _tty_fd()
+    except (OSError, ValueError, AttributeError):
+        fd = None
+    saved = disable_dsusp(fd) if fd is not None else None
+    hangup = getattr(signal, 'SIGHUP', None)
+    previous_hup = signal.getsignal(hangup) if hangup is not None else None
+    if hangup is not None:
+        def hung_up(signum, frame):
+            raise SystemExit(128 + signum)
+        signal.signal(hangup, hung_up)
+    try:
+        UncleTUI(stdscr).run()
+    finally:
+        # SIGTERM (run's handler) and SIGHUP both unwind through here.
+        restore_tty(fd, saved)
+        if hangup is not None:
+            signal.signal(hangup, previous_hup)
 
 
 def _record_tui_pid():

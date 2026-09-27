@@ -192,10 +192,11 @@ gated_prompt() {
     # own contract; deterministic validators still enforce each stage's rules.
     case "$log_name" in
         project-plan|change-plan|updated-plan|updated-change-plan|adversarial-review|test-review|manual-checklist|final-audit)
-            local synthesis_prompt="$LOG_DIR/${log_name}.gated-prompt.md"
-            {
-                cat "$prompt_file"
-                cat <<'SYNTHESIS_JSON'
+            if [[ "$role" != "reviewer" ]]; then
+                local synthesis_prompt="$LOG_DIR/${log_name}.gated-prompt.md"
+                {
+                    cat "$prompt_file"
+                    cat <<'SYNTHESIS_JSON'
 
 ## Compact canonical synthesis contract (binding)
 
@@ -212,9 +213,10 @@ one revision from those inputs; do not conduct a second investigation pass.
 Return/write the one authoritative artifact requested by the stage prompt.
 The driver performs structural validation, rendering, approval, and gates.
 SYNTHESIS_JSON
-            } > "$synthesis_prompt"
-            printf '%s\n' "$synthesis_prompt"
-            return 0
+                } > "$synthesis_prompt"
+                printf '%s\n' "$synthesis_prompt"
+                return 0
+            fi
             ;;
     esac
 

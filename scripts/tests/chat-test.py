@@ -1186,6 +1186,375 @@ def terminal_case(screen):
     assert ui.state == 'quit'
 
 
+class ComposerEditingTests(unittest.TestCase):
+    """Issue 96: one Tab/Enter accept path and an editable composer."""
+    setUp = ChatInteractionTests.setUp
+    type = ChatInteractionTests.type
+
+    def test_tab_accepts_highlighted_slash_command(self):
+        # T-TAB-SLASH (regression: Tab used to toggle focus instead).
+        for state in ('chat', 'menu'):
+            self.ui.state = state
+            self.ui.chat_focus = 'chat'
+            self.ui.chat_composer = ''
+            self.type('/res')
+            self.ui.handle_key(9)
+            self.assertEqual(self.ui.chat_composer, '/resume')
+            self.assertEqual(self.ui.chat_focus, 'chat')
+            self.assertEqual(self.ui.state, state)
+            self.assertFalse(self.ui.chat.messages)
+        for typed, expected in (('/iss', '/issue '), ('/ru', '/run '), ('/runs', '/runstage ')):
+            self.ui.chat_composer = ''
+            self.type(typed)
+            self.ui.handle_key(9)
+            self.assertEqual(self.ui.chat_composer, expected)
+            self.assertFalse(self.ui.chat.messages)
+
+    def issue_stub(self, numbers):
+        stub = Mock(loading=False, message='')
+        stub.matches.side_effect = lambda query: [{'number': n, 'title': 'T%d' % n} for n in numbers
+                                                  if str(n).startswith(query)]
+        self.ui.issue_picker = stub
+        return stub
+
+    def test_slash_enter_still_expands_then_runs(self):
+        # T-SLASH-ENTER
+        self.ui._resume_build = Mock(return_value='resumed')
+        self.type('/res')
+        self.ui.handle_key(10)
+        self.ui._resume_build.assert_called_once_with('')
+        self.type('/iss')
+        self.ui.handle_key(10)
+        self.assertEqual(self.ui.chat_composer, '/issue ')
+        self.assertFalse(self.ui.chat.messages)
+
+    def test_every_tab_and_enter_accept_uses_one_function(self):
+        # T-ACCEPT-SPY
+        (self.root / 'foo.txt').write_text('x')
+        self.issue_stub([12])
+        with patch.object(self.ui, '_chat_accept', wraps=self.ui._chat_accept) as accept:
+            for text, key in (('/res', 9), ('@fo', 9), ('#1', 9), ('/iss', 10), ('@fo', 10), ('#1', 10)):
+                self.ui.chat_composer = ''
+                self.type(text)
+                before = accept.call_count
+                self.ui.handle_key(key)
+                self.assertEqual(accept.call_count, before + 1, (text, key))
+            for route in (self.ui._chat_key, self.ui._homepage_key):
+                self.ui.chat_composer = ''
+                self.type('/res')
+                before = accept.call_count
+                route(9)
+                self.assertEqual(accept.call_count, before + 1)
+                self.assertEqual(self.ui.chat_composer, '/resume')
+
+    def test_mid_buffer_cursor_has_no_menu(self):
+        # T-MIDCURSOR
+        (self.root / 'foo.txt').write_text('x')
+        self.type('@fo')
+        self.assertTrue(self.ui.chat_picker)
+        self.ui.handle_key(tui.curses.KEY_LEFT)
+        self.assertFalse(self.ui.chat_picker)
+        self.assertIsNone(self.ui._chat_menu())
+        self.ui.handle_key(9)
+        self.assertEqual(self.ui.chat_composer, '@fo')
+        self.assertEqual(self.ui.chat_focus, 'gate')
+        self.ui.chat_focus = 'chat'
+        self.ui.handle_key(tui.curses.KEY_RIGHT)
+        self.assertTrue(self.ui.chat_picker)
+        self.ui.chat_composer = ''
+        self.issue_stub([7, 70])
+        self.type('#7')
+        self.ui.handle_key(tui.curses.KEY_LEFT)
+        self.ui.send_home_chat = Mock()
+        self.ui.handle_key(10)
+        self.ui.send_home_chat.assert_called_once_with('#7')
+        self.ui.chat_composer = ''
+        self.type('/res')
+        self.ui.handle_key(tui.curses.KEY_LEFT)
+        self.assertEqual(self.ui._slash_choices(), [])
+
+    def test_tab_without_menu_toggles_focus(self):
+        # T-TAB-FOCUS
+        self.ui.handle_key(9)
+        self.assertEqual(self.ui.chat_focus, 'gate')
+        self.ui.handle_key(9)
+        self.assertEqual(self.ui.chat_focus, 'chat')
+        self.ui.state = 'menu'
+        self.ui.handle_key(9)
+        self.assertTrue(self.ui.home_menu_open)
+        self.assertEqual(self.ui.chat_focus, 'menu')
+        self.ui.state, self.ui.chat_focus, self.ui.home_menu_open = 'running', 'chat', False
+        self.ui.handle_key(9)
+        self.assertEqual(self.ui.chat_focus, 'gate')
+
+    def test_cursor_movement_and_editing_at_cursor(self):
+        # T-CURSOR
+        c = tui.curses
+        self.type('abc')
+        self.ui.handle_key(c.KEY_LEFT)
+        self.ui.handle_key(c.KEY_LEFT)
+        self.type('X')
+        self.assertEqual((self.ui.chat_composer, self.ui.chat_cursor), ('aXbc', 2))
+        self.ui.handle_key(127)
+        self.assertEqual((self.ui.chat_composer, self.ui.chat_cursor), ('abc', 1))
+        self.ui.handle_key(c.KEY_DC)
+        self.assertEqual((self.ui.chat_composer, self.ui.chat_cursor), ('ac', 1))
+        for key, expected in ((c.KEY_HOME, 0), (c.KEY_END, 2), (1, 0), (5, 2), (c.KEY_RIGHT, 2)):
+            self.ui.handle_key(key)
+            self.assertEqual(self.ui.chat_cursor, expected, key)
+        self.ui.handle_key(1)
+        self.ui.handle_key(c.KEY_LEFT)
+        self.ui.handle_key(c.KEY_BACKSPACE)
+        self.assertEqual((self.ui.chat_composer, self.ui.chat_cursor), ('ac', 0))
+        self.ui.chat_composer = 'reset'
+        self.assertEqual(self.ui.chat_cursor, 5)
+
+    def test_cursor_stays_in_bounds_under_random_operations(self):
+        # T-CURSOR-FUZZ
+        import random
+        rng = random.Random(96)
+        c = tui.curses
+        keys = [c.KEY_LEFT, c.KEY_RIGHT, c.KEY_HOME, c.KEY_END, 1, 5, 127, c.KEY_DC,
+                23, 21, 11, 25, ord('a'), ord(' '), ord('.')]
+        for _ in range(600):
+            if rng.random() < 0.05:
+                self.ui.chat_composer = 'x' * rng.randrange(5)
+            else:
+                self.ui.handle_key(rng.choice(keys))
+            self.assertTrue(0 <= self.ui.chat_cursor <= len(self.ui.chat_composer))
+
+    def test_kill_functions_follow_bash_boundaries(self):
+        # T-KILL (pure functions)
+        cases = [
+            (tui.edit_kill_whitespace_word, 'git commit-tree  ', 17, ('git ', 4, 'commit-tree  ')),
+            (tui.edit_kill_word_back, 'git commit-tree', 15, ('git commit-', 11, 'tree')),
+            (tui.edit_kill_word_forward, 'a foo.bar', 1, ('a.bar', 1, ' foo')),
+            (tui.edit_kill_to_end, 'one two', 3, ('one', 3, ' two')),
+            (tui.edit_kill_to_start, 'one two', 3, (' two', 0, 'one')),
+            (tui.edit_kill_to_start, 'l1\nline2', 5, ('l1\nne2', 3, 'li')),
+            (tui.edit_kill_word_back, '', 0, ('', 0, '')),
+        ]
+        for function, text, cursor, expected in cases:
+            self.assertEqual(function(text, cursor), expected, (function.__name__, text))
+
+    def test_kill_keys_store_text(self):
+        # T-KILL (keys, including ESC-prefixed Alt-D and Alt-Backspace)
+        self.type('run the tests')
+        self.ui.handle_key(23)
+        self.assertEqual((self.ui.chat_composer, self.ui.chat_kill), ('run the ', 'tests'))
+        self.ui.handle_key(1)
+        self.ui.handle_key(11)
+        self.assertEqual((self.ui.chat_composer, self.ui.chat_kill), ('', 'run the '))
+        self.type('abc def')
+        self.ui.handle_key(21)
+        self.assertEqual((self.ui.chat_composer, self.ui.chat_kill), ('', 'abc def'))
+        self.type('abc def')
+        self.ui.stdscr = Mock()
+        self.ui.stdscr.getch.side_effect = [127]
+        self.ui.handle_key(27)
+        self.assertEqual((self.ui.chat_composer, self.ui.chat_kill), ('abc ', 'def'))
+        self.ui.handle_key(1)
+        self.ui.stdscr.getch.side_effect = [ord('d')]
+        self.ui.handle_key(27)
+        self.assertEqual((self.ui.chat_composer, self.ui.chat_kill), (' ', 'abc'))
+
+    def test_yank_inserts_last_kill_within_limit(self):
+        # T-YANK
+        self.type('hello world')
+        self.ui.handle_key(23)
+        self.ui.handle_key(1)
+        self.ui.handle_key(25)
+        self.assertEqual((self.ui.chat_composer, self.ui.chat_cursor), ('worldhello ', 5))
+        self.ui.chat_kill = 'y' * 10
+        self.ui.chat_composer = 'x' * (1024 * 1024 - 5)
+        self.ui.handle_key(25)
+        self.assertIn('1 MiB', self.ui.chat_error)
+        self.assertEqual(len(self.ui.chat_composer), 1024 * 1024 - 5)
+        self.assertTrue(0 <= self.ui.chat_cursor <= len(self.ui.chat_composer))
+        self.ui.chat_composer = ''
+        self.ui.chat_kill = 'a\x1b[31mb'
+        self.ui.handle_key(25)
+        self.assertEqual(self.ui.chat_composer, 'a\x1b[31mb')
+        screen = Mock()
+        screen.getmaxyx.return_value = (24, 80)
+        self.ui.stdscr = screen
+        self.ui._draw_chat_composer(10, 24, 80, 0, 60)
+        self.assertFalse(any('\x1b' in str(call.args[2]) for call in screen.addnstr.call_args_list))
+        with patch.object(tui, 'CTRL_Y_BOUND', False):
+            self.ui.chat_composer = ''
+            self.ui.handle_key(25)
+            self.assertEqual(self.ui.chat_composer, '')
+
+    def test_meta_keys_move_by_word_and_restore_timeout(self):
+        # T-META
+        self.type('foo.bar baz')
+        screen = self.ui.stdscr = Mock()
+        self.ui.input_timeout = 80
+        screen.getch.side_effect = [ord('b')]
+        self.ui.handle_key(27)
+        self.assertEqual(self.ui.chat_cursor, 8)
+        screen.getch.side_effect = [ord('b')]
+        self.ui.handle_key(27)
+        self.assertEqual(self.ui.chat_cursor, 4)
+        screen.getch.side_effect = [ord('f')]
+        self.ui.handle_key(27)
+        self.assertEqual(self.ui.chat_cursor, 7)
+        self.assertEqual([call.args[0] for call in screen.timeout.call_args_list], [0, 80] * 3)
+        screen.timeout.reset_mock()
+        screen.getch.side_effect = [ord('f')]
+        with patch.object(self.ui, '_chat_meta', side_effect=ValueError('boom')):
+            self.ui.handle_key(27)
+        self.assertEqual(screen.timeout.call_args_list[-1].args, (80,))
+        self.assertEqual(self.ui.chat_error, 'boom')
+
+    def test_bare_escape_unchanged_and_other_keys_requeued(self):
+        # T-ESC
+        (self.root / 'foo.txt').write_text('x')
+        screen = self.ui.stdscr = Mock()
+        self.ui.input_timeout = 80
+        self.type('@fo')
+        screen.getch.side_effect = [-1]
+        self.ui.handle_key(27)
+        self.assertFalse(self.ui.chat_picker)
+        self.assertEqual(self.ui.chat_composer, '@fo')
+        screen.getch.side_effect = [ord('x')]
+        with patch.object(tui.curses, 'ungetch') as ungetch:
+            self.ui.handle_key(27)
+        ungetch.assert_called_once_with(ord('x'))
+        self.assertEqual(self.ui.state, 'menu')
+        self.assertEqual(screen.timeout.call_args_list[-1].args, (80,))
+
+    def test_backslash_enter_inserts_newline(self):
+        # T-BACKSLASH
+        self.ui.send_home_chat = Mock()
+        self.type('line one\\')
+        self.ui.handle_key(10)
+        self.assertEqual(self.ui.chat_composer, 'line one\n')
+        self.ui.send_home_chat.assert_not_called()
+        self.type('/run')
+        self.ui.handle_key(10)
+        self.ui.send_home_chat.assert_called_once_with('line one\n/run')
+        self.type('path\\\\')
+        self.ui.handle_key(10)
+        self.assertEqual(self.ui.send_home_chat.call_args.args, ('path\\',))
+
+    def cursor_call(self, screen):
+        return [call.args for call in screen.addnstr.call_args_list
+                if len(call.args) > 4 and call.args[3] == 1 and call.args[4] & tui.curses.A_REVERSE][-1]
+
+    def test_drawn_cursor_follows_buffer_cursor(self):
+        # T-DRAW
+        cell = self.ui._composer_cursor_cell
+        cases = [('\tab', 1, (0, 0)), ('ab\tc', 3, (1, 0)), ('\x01ab', 3, None), ('   abc', 4, (0, 1)),
+                 ('abcd efgh', 5, (1, 0)), ('abcd efgh', 4, (0, 4)), ('abc', 0, (0, 0)),
+                 ('abc', 3, (0, 3)), ('a\x1b[31mb c', 8, None)]
+        for composer, cursor, expected in cases:
+            self.ui._set_composer(composer, cursor)
+            text = tui.sanitize(composer).replace('\n', ' / ').expandtabs(4).lstrip()
+            row, col = cell(text, 4)
+            self.assertTrue(0 <= col <= len(self.ui._wrap_input(text, 4)[row]), composer)
+            if expected:
+                self.assertEqual((row, col), expected, composer)
+        self.ui._set_composer('abc', 3)
+        self.assertEqual(cell(tui.sanitize('abc'), 4), cell(tui.sanitize('abc'), 4))
+        screen = Mock()
+        screen.getmaxyx.return_value = (24, 80)
+        self.ui.stdscr = screen
+        self.ui._set_composer('hello world', 2)
+        self.ui._draw_chat_composer(10, 24, 80, 0, 60)
+        y, x, char = self.cursor_call(screen)[:3]
+        self.assertEqual((x, char), (4, 'l'))
+        screen.reset_mock()
+        self.ui._set_composer('hello world', 11)
+        self.ui._draw_chat_composer(10, 24, 80, 0, 60)
+        self.assertEqual(self.cursor_call(screen)[1:3], (13, ' '))
+
+    def test_hints_advertise_tab_and_no_alt(self):
+        # T-HINT
+        screen = Mock()
+        screen.getmaxyx.return_value = (24, 120)
+        self.ui.stdscr = screen
+        self.ui.chat_composer = '/'
+        self.ui._draw_file_picker(15, 0, 78)
+        rows = [call.args[2] for call in screen.addnstr.call_args_list]
+        self.assertIn('Tab', rows[0])
+        for state in ('chat', 'running'):
+            self.ui.state = state
+            for width in (20, 30, 40, 50, 62, 70, 80, 110):
+                self.ui._draw_chat_composer(10, 24, 120, 0, width)
+        self.assertFalse(any('Alt' in str(call.args[2]) or 'Meta' in str(call.args[2])
+                             for call in screen.addnstr.call_args_list))
+
+    def test_existing_bindings_preserved(self):
+        # T-BIND-PRESERVE: End keeps scrolling the build output while running.
+        self.ui.state = 'running'
+        self.ui.build_scroll = 5
+        self.type('abc')
+        self.ui.handle_key(tui.curses.KEY_HOME)
+        self.ui.handle_key(tui.curses.KEY_END)
+        self.assertEqual(self.ui.build_scroll, 0)
+        self.assertEqual(self.ui.chat_cursor, 0)
+
+    def fake_termios(self, **overrides):
+        fake = Mock(spec=['VDSUSP', 'TCSANOW', 'tcgetattr', 'tcsetattr', 'error'])
+        fake.VDSUSP, fake.TCSANOW, fake.error = 11, 0, OSError
+        fake.tcgetattr.side_effect = lambda fd: [0, 0, 0, 0, 0, 0, [b'\x00'] * 20]
+        for name, value in overrides.items():
+            setattr(fake, name, value)
+        return fake
+
+    def test_dsusp_disabled_after_init_and_restored(self):
+        # T-DSUSP (mocked termios)
+        fake = self.fake_termios()
+        order = []
+        fake.tcsetattr.side_effect = lambda *a: order.append('set')
+        with patch.object(tui, 'termios', fake), patch.object(tui, 'CTRL_Y_BOUND', True), \
+                patch.object(tui.os, 'fpathconf', return_value=255), \
+                patch.object(tui.curses, 'def_prog_mode', side_effect=lambda: order.append('prog')), \
+                patch.object(tui, '_tty_fd', return_value=7), \
+                patch.object(tui, 'UncleTUI', side_effect=RuntimeError('crash')):
+            with self.assertRaises(RuntimeError):
+                tui.main(Mock())
+            self.assertEqual(order, ['set', 'prog', 'set'])
+            first = fake.tcsetattr.call_args_list[0].args
+            self.assertEqual(first[2][6][11], b'\xff')
+            restored = fake.tcsetattr.call_args_list[-1].args
+            self.assertEqual(restored[2][6][11], b'\x00')
+            self.assertTrue(tui.CTRL_Y_BOUND)
+        # SIGHUP unwinds through the restore; SIGTERM uses run()'s SystemExit.
+        fake = self.fake_termios()
+        def hang_up():
+            tui.signal.getsignal(tui.signal.SIGHUP)(tui.signal.SIGHUP, None)
+        app = Mock()
+        app.return_value.run.side_effect = hang_up
+        with patch.object(tui, 'termios', fake), patch.object(tui.curses, 'def_prog_mode'), \
+                patch.object(tui.os, 'fpathconf', side_effect=OSError), \
+                patch.object(tui, '_tty_fd', return_value=7), patch.object(tui, 'UncleTUI', app):
+            with self.assertRaises(SystemExit):
+                tui.main(Mock())
+        self.assertEqual(fake.tcsetattr.call_args_list[0].args[2][6][11], b'\xff')
+        self.assertEqual(fake.tcsetattr.call_args_list[-1].args[2][6][11], b'\x00')
+        self.assertNotEqual(tui.signal.getsignal(tui.signal.SIGHUP).__name__ if callable(
+            tui.signal.getsignal(tui.signal.SIGHUP)) else '', 'hung_up')
+
+    def test_dsusp_absent_or_failing_is_silent(self):
+        # T-DSUSP: no VDSUSP -> no tcsetattr; tcgetattr failure -> Ctrl-Y unbound.
+        fake = Mock(spec=['TCSANOW', 'tcgetattr', 'tcsetattr'])
+        with patch.object(tui, 'termios', fake), patch.object(tui, 'CTRL_Y_BOUND', True):
+            self.assertIsNone(tui.disable_dsusp(7))
+            fake.tcsetattr.assert_not_called()
+            self.assertTrue(tui.CTRL_Y_BOUND)
+        fake = self.fake_termios()
+        fake.tcgetattr.side_effect = OSError('no tty')
+        with patch.object(tui, 'termios', fake), patch.object(tui, 'CTRL_Y_BOUND', True):
+            self.assertIsNone(tui.disable_dsusp(7))
+            fake.tcsetattr.assert_not_called()
+            self.assertFalse(tui.CTRL_Y_BOUND)
+            self.ui.chat_kill = 'k'
+            self.ui.handle_key(25)
+            self.assertEqual(self.ui.chat_composer, '')
+
+
 if __name__ == "__main__":
     if '--terminal-case' in sys.argv:
         tui.curses.wrapper(terminal_case)

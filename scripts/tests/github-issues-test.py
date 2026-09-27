@@ -165,4 +165,70 @@ class Issues(unittest.TestCase):
             ui.send_home_chat.assert_called_once_with('fix #69 please')
 
 
+class IssueMenuEnter(unittest.TestCase):
+    """Issue 96: Enter on an open # menu with entries accepts, never sends."""
+    def make_ui(self, root, items):
+        import uncle_tui as tui
+        ui=tui.UncleTUI.__new__(tui.UncleTUI)
+        ui.state='menu';ui.proc=None
+        ui._ensure_chat()
+        ui.issue_picker=issues.IssuePicker(root)
+        ui.issue_picker.load=Mock()
+        ui.issue_picker.items=items
+        ui.send_home_chat=Mock()
+        return ui
+
+    def test_enter_on_highlighted_numeric_mention_inserts_not_sends(self):
+        # T-ISSUE-ENTER-NUM (regression: this used to send the message).
+        import uncle_tui as tui
+        with tempfile.TemporaryDirectory() as root, patch.object(tui,'_project_root',return_value=root):
+            ui=self.make_ui(root,[{'number':76,'title':'Tab accept'},{'number':761,'title':'Other'}])
+            ui.chat_composer='fix #76';ui._chat_suggestions()
+            self.assertTrue(ui.chat_choices)
+            ui.handle_key(10)
+            self.assertEqual(ui.chat_composer,'fix #76 ')
+            ui.send_home_chat.assert_not_called()
+
+    def test_typed_number_wins_over_highlight_only_on_exact_match(self):
+        # T-ISSUE-ENTER-MISMATCH
+        import uncle_tui as tui
+        with tempfile.TemporaryDirectory() as root, patch.object(tui,'_project_root',return_value=root):
+            ui=self.make_ui(root,[{'number':70,'title':'Seventy'},{'number':71,'title':'Seventy-one'}])
+            ui.chat_composer='#7';ui._chat_suggestions()
+            self.assertEqual(ui.chat_pick,0)
+            ui.handle_key(10)
+            self.assertEqual(ui.chat_composer,'#70 ')
+            ui.chat_composer='#70';ui._chat_suggestions()
+            ui.chat_pick=len(ui.chat_choices)-1
+            ui.handle_key(10)
+            self.assertEqual(ui.chat_composer,'#70 ')
+            ui.send_home_chat.assert_not_called()
+
+    def test_empty_picker_loading_message_and_typed_number_sends(self):
+        # T-ISSUE-LOADING with a stub picker: deterministic loading states.
+        import uncle_tui as tui
+        with tempfile.TemporaryDirectory() as root, patch.object(tui,'_project_root',return_value=root):
+            ui=self.make_ui(root,[])
+            stub=Mock(loading=True,message='');stub.matches.return_value=[]
+            ui.issue_picker=stub
+            ui.chat_composer='see #zz';ui._chat_suggestions()
+            self.assertTrue(ui.chat_picker)
+            ui.handle_key(10)
+            self.assertIn('Loading',ui.chat_error)
+            self.assertNotIn('No matching',ui.chat_error)
+            screen=Mock();screen.getmaxyx.return_value=(24,80);ui.stdscr=screen
+            ui._draw_file_picker(15,0,78)
+            rows=[c.args[2] for c in screen.addnstr.call_args_list]
+            self.assertTrue(any('Loading' in r for r in rows))
+            self.assertFalse(any('No matching' in r for r in rows))
+            stub.loading=False
+            ui.handle_key(10)
+            self.assertEqual(ui.chat_error,'No matching open issues.')
+            ui.send_home_chat.assert_not_called()
+            stub.loading=True
+            ui.chat_composer='see #76';ui._chat_suggestions()
+            ui.handle_key(10)
+            ui.send_home_chat.assert_called_once_with('see #76')
+
+
 if __name__=='__main__': unittest.main()

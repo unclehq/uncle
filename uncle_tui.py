@@ -55,6 +55,7 @@ import supervisor_runner
 from supervisor_runner import SupervisorRequest, build_command as supervisor_command
 import supervisor_chat
 from supervisor_chat import ChatRequest
+import build_memory
 import gate_answer
 import worktree_runs
 
@@ -1678,6 +1679,8 @@ class UncleTUI:
                     changed = True
         except OSError:
             pass
+        if self._memory_tick():
+            changed = True
         return changed or before != (self.status_model, self.status_mode, self.status_stage,
                                      self.status_stage_index, self.status_stage_total)
 
@@ -2324,6 +2327,9 @@ class UncleTUI:
             pass
         if self.state == 'running':
             self._build_messages()
+            memory = self._memory() if getattr(self, 'build_memory', None) is not None else None
+            if memory is not None and getattr(self, 'status_stage', ''):
+                memory.ingest_output(self.status_stage, line.rstrip('\n') + '\n')
         self.output.append(line)
         if len(self.output) > 4000:
             del self.output[:500]
@@ -2726,7 +2732,8 @@ class UncleTUI:
             self.chat_focus = 'chat'
             self.home_menu_open = False
             self.home_request = None
-            self.home_history = []
+            # Build memory (Issue 76) may have reloaded the transcript first.
+            self.home_history = getattr(self, 'home_history', None) or []
             self.home_issue_context = ''
         # Supervisor chat state (Issue 45): the latest driver-named gate, the
         # session's standing grant, steering delivery records and call counts.
@@ -2958,8 +2965,18 @@ class UncleTUI:
         known = supervision_lib.known_secret_values(os.environ, CONFIG_PATH)
         roots = [root]
         stage = getattr(self, 'status_stage', '')
-        logs = supervisor_chat.gather_logs(state_dir, [stage, getattr(self, 'previous_stage', '')], roots, known)
-        status = supervisor_chat.status_tail(getattr(self, 'status_path', None), [tempfile.gettempdir(), root], known)
+        memory = self._memory()
+        section = None
+        if memory is not None:
+            # Issue 76: the persisted build memory replaces per-turn log and
+            # status gathering; events written while the TUI was down are
+            # ingested here, before the turn.
+            self._memory_tick()
+            section = memory.compose_section()
+            logs, status = {}, []
+        else:
+            logs = supervisor_chat.gather_logs(state_dir, [stage, getattr(self, 'previous_stage', '')], roots, known)
+            status = supervisor_chat.status_tail(getattr(self, 'status_path', None), [tempfile.gettempdir(), root], known)
         recovery = ''
         if getattr(self, 'recovery_active', False):
             recovery = supervision_lib.redact(
@@ -2982,11 +2999,14 @@ class UncleTUI:
                  'recovery': bool(getattr(self, 'recovery_active', False)),
                  'standing_delegation': bool(self.delegation_session) or config.delegate_gates == 'routine'}
         context_delegation = dict(delegation or {'source': None}, steer_request=steer_request)
-        prompt = supervisor_chat.compose_context(self._chat_contract(), user_text, history, dialog, context_delegation,
+        contract = self._chat_contract()
+        if section is not None:
+            contract = contract.rstrip() + '\n' + supervisor_chat.MEMORY_CONTRACT
+        prompt = supervisor_chat.compose_context(contract, user_text, history, dialog, context_delegation,
                                                  [{k: r.get(k) for k in ('id', 'stage', 'state', 'detail')}
                                                   for r in self.steer_records],
                                                  logs, status, supervisor_chat.cost_summary(state_dir), state,
-                                                 recovery=recovery, extra=extra)
+                                                 recovery=recovery, extra=extra, memory=section)
         if trigger == 'chat' and not issue_references(message):
             prompt += getattr(self, 'home_issue_context', '')
         self.chat_calls += 1
@@ -3016,6 +3036,7 @@ class UncleTUI:
         request.delegation = delegation
         request.dialog_id = (dialog['run'], dialog['prompt_id']) if dialog and dialog.get('run') else None
         request.steer_request = steer_request
+        request.trigger = trigger
         request.home_intent = trigger == 'chat' and supervisor_chat.home_intent(message)
         request.operator = message
         request.config = config
@@ -3196,6 +3217,8 @@ class UncleTUI:
                 self._apply_gate_answer(request, parsed['gate_answer'])
             elif parsed['steer'] is not None:
                 self._apply_steer(request, parsed['steer'])
+            elif parsed.get('runner_answer') is not None:
+                self._apply_runner_answer(request, parsed['runner_answer'])
             elif parsed['home_action'] is not None:
                 self._apply_home_action(request, parsed['home_action'])
         except (OSError, ValueError) as exc:
@@ -3276,8 +3299,13 @@ class UncleTUI:
             raise ValueError('The answer could not be written to the driver; nothing was recorded as answered.')
 
     def _apply_steer(self, request, steer):
-        """SI-5: a steering delivery needs an operator steering request in this turn."""
-        if not getattr(request, 'steer_request', None):
+        """SI-3 (Issue 76): a steering delivery needs an operator-triggered chat
+        turn; event-triggered turns never steer. Every delivery is echoed."""
+        trigger = getattr(request, 'trigger', None)
+        if not isinstance(trigger, str):
+            meta = getattr(request, 'meta', None)
+            trigger = meta.get('trigger') if isinstance(meta, dict) else None
+        if trigger != 'chat':
             self.home_history.append(('system', 'Recommendation only: the supervisor suggests steering the stage: %s. '
                                                 'Say "tell it to ..." to have it relayed.' % sanitize(steer['text'])[:400]))
             return
@@ -3288,7 +3316,7 @@ class UncleTUI:
         self._deliver_steering(record)
 
     def _deliver_steering(self, record):
-        stage = getattr(self, 'status_stage', '')
+        stage = record.get('target') or getattr(self, 'status_stage', '')
         channel = getattr(self, 'steering_channels', {}).get(stage)
         if not channel or not self.proc or self.proc.poll() is not None or getattr(self, 'workflow_exit_reported', False):
             record['state'] = 'retained'
@@ -3297,7 +3325,7 @@ class UncleTUI:
             self.home_history.append(('system', 'Steering not delivered; retained (no live channel for %s). '
                                                 'Say "send it" once the stage accepts steering.' % (stage or 'the stage')))
             return False
-        payload = supervisor_chat.steer_payload(record['text'])
+        payload = record.get('payload') or supervisor_chat.steer_payload(record['text'])
         if len(payload.encode('utf-8')) > 60000:
             record['state'] = 'failed'
             record['detail'] = 'payload exceeds 60 KB'
@@ -3320,6 +3348,12 @@ class UncleTUI:
         record['state'] = 'queued'
         self.steer_retained = None
         self.home_history.append(('system', 'Steering %s queued for %s' % (record['id'][:8], stage)))
+        self.home_history.append(('system', 'Sent to %s: %s' % (stage, record.get('echo') or record['text'])))
+        memory = getattr(self, 'build_memory', None)
+        if record.get('question_id') and memory is not None:
+            memory.record_answer(record['question_id'], record.get('selection', ''), record.get('echo', ''),
+                                 record['id'], record['id'])
+            memory.maybe_save()
         host = getattr(self, 'supervision_host', None)
         if host is not None:
             host.controller.steering_queued(stage, record['id'], payload)
@@ -3330,7 +3364,117 @@ class UncleTUI:
         if record is None:
             self.home_history.append(('system', 'Nothing is retained to send.'))
             return
+        if record.get('question_id'):
+            memory = self._memory()
+            question = memory.question(record['question_id']) if memory is not None else None
+            if question is None or question['state'] != 'pending':
+                self.steer_retained = None
+                record['state'] = 'failed'
+                record['detail'] = 'runner question no longer pending'
+                self.home_history.append(('system', 'Not sent: runner question %s is no longer pending.'
+                                          % record['question_id']))
+                if memory is not None:
+                    memory.transcript('system', 'Not sent: runner question no longer pending', kind='answer',
+                                      question_id=record['question_id'], state='not-sent')
+                return
         self._deliver_steering(record)
+
+    def _apply_runner_answer(self, request, answer):
+        """SI-4/SI-8 (Issue 76): a runner answer goes only to the stage that
+        asked, only while that question id is pending, only on an operator
+        turn, and only through the stage inbox -- never to a driver dialog."""
+        memory = self._memory()
+        qid = answer.get('question_id', '')
+        if getattr(request, 'trigger', None) != 'chat':
+            self.home_history.append(('system', 'Recommendation only: the supervisor would answer runner question %s '
+                                                'with %s.' % (sanitize(qid)[:40], sanitize(answer.get('selection', ''))[:40])))
+            return
+        question = memory.question(qid) if memory is not None else None
+        if question is None or question['state'] != 'pending':
+            self.home_history.append(('system', 'Not sent: runner question %s is not pending.' % sanitize(qid)[:40]))
+            if memory is not None:
+                memory.transcript('system', 'Not sent: runner question not pending', kind='answer',
+                                  question_id=qid, state='not-sent')
+            return
+        choice = build_memory.parse_selection(question, answer.get('selection'))
+        if choice is None:
+            self.home_history.append(('system', 'Not sent: %r is not an option of runner question %s.'
+                                      % (sanitize(answer.get('selection', ''))[:40], qid)))
+            return
+        selection = str(answer.get('selection')).strip()
+        number = re.sub(r'^(?:choose|option)\s+', '', selection, flags=re.I)
+        echo = ('%s) %s' % (number, choice)) if question.get('options') else choice
+        payload = (supervisor_chat.ANSWER_HEADER % question['id'] + '\n\n'
+                   + 'Question: ' + build_memory.sanitize_option(question.get('text', '')) + '\n'
+                   + 'Answer: ' + build_memory.sanitize_option(echo) + '\n')
+        record = {'id': str(uuid.uuid4()), 'stage': question['stage'], 'target': question['stage'],
+                  'text': echo, 'echo': echo, 'payload': payload, 'question_id': question['id'],
+                  'selection': selection, 'operator': sanitize(getattr(request, 'operator', '')),
+                  'state': 'retained', 'detail': ''}
+        self.steer_records.append(record)
+        del self.steer_records[:-supervisor_chat.DELIVERY_STATES]
+        if not getattr(self, 'steering_channels', {}).get(question['stage']):
+            self.home_history.append(('system', 'The answer cannot be relayed now: %s has no steering inbox.'
+                                      % question['stage']))
+        self._deliver_steering(record)
+
+    def _memory(self):
+        """The build memory (Issue 76), created and reloaded on first use; None
+        when UNCLE_SUPERVISOR_MEMORY=0."""
+        memory = getattr(self, 'build_memory', None)
+        if memory is not None:
+            return memory
+        if not build_memory.enabled():
+            return None
+        root = _project_root()
+        state_dir = os.path.join(root, '.uncle', 'workflow')
+        memory = build_memory.BuildMemory(os.path.join(state_dir, 'supervisor'), os.path.join(state_dir, 'logs'),
+                                          supervision_lib.known_secret_values(os.environ, CONFIG_PATH))
+        memory.load()
+        self.build_memory = memory
+        if not getattr(self, 'home_history', None):
+            self.home_history = []
+            self.home_history.extend(memory.load_transcript())
+        self.memory_persisted = len(self.home_history)
+        path = getattr(self, 'status_path', None) or memory.status.get('path')
+        found = memory.replay(path) if path else []
+        proc = getattr(self, 'proc', None)
+        alive = bool(proc and proc.poll() is None)
+        memory.stale_unless_running(memory.current_stage if alive else None)
+        self.memory_new_questions = [q for q in found if q['state'] == 'pending']
+        return memory
+
+    def _memory_tick(self):
+        """Once per poll: ingest new status events, show new runner questions,
+        persist new chat rows, save (debounced)."""
+        memory = getattr(self, 'build_memory', None)
+        if memory is None:
+            if not getattr(self, 'status_path', None) or not build_memory.enabled():
+                return False
+            memory = self._memory()
+            if memory is None:
+                return False
+        changed = False
+        path = getattr(self, 'status_path', None) or memory.status.get('path')
+        found = list(getattr(self, 'memory_new_questions', None) or [])
+        self.memory_new_questions = []
+        for question in found + (memory.replay(path) if path else []):
+            options = ''.join('\n  %d) %s' % (i + 1, o) for i, o in enumerate(question['options']))
+            self.home_history.append(('system', 'Runner question %s from %s: %s%s'
+                                      % (question['id'], question['stage'], question['text'], options)))
+            changed = True
+        while memory.notes:
+            self.home_history.append(('system', memory.notes.pop(0)))
+        history = self.home_history
+        done = min(getattr(self, 'memory_persisted', 0), len(history))
+        end = len(history)
+        if end and history[-1][0].startswith('assistant ('):
+            end -= 1  # still streaming; persisted once another row follows
+        for role, text in history[done:end]:
+            memory.transcript(role, text, kind='chat')
+        self.memory_persisted = max(done, end)
+        memory.maybe_save()
+        return changed
 
     def _apply_home_action(self, request, action):
         proc = getattr(self, 'proc', None)

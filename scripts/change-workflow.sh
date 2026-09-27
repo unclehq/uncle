@@ -2760,13 +2760,6 @@ run_final_audit_panel() {
     printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/FINAL_AUDIT_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$FINAL_AUDIT_PROMPT"
 }
 
-# A self-hosted endpoint is usually one local model. There the background
-# base panel only competes with the implementation the run is waiting on, so
-# it is deferred until implementation has finished.
-checklist_base_overlaps_implementation() {
-    [[ "$(uncle_stage_runner manual-checklist)" != self-hosted ]]
-}
-
 # Serial (self-hosted) workers get their canonical inputs inlined, no read
 # tools, and a small turn budget: each used to spend 17-40 turns re-reading
 # the same four files, resending the whole context every turn.
@@ -3525,7 +3518,7 @@ while true; do
             # would otherwise race Claude's in-flight edits; anything that
             # genuinely depends on the implementation is added by the delta
             # pass in the CHECKLIST state.
-            if [[ "$PARALLEL_CHECKLIST" == "1" ]] && checklist_base_overlaps_implementation; then
+            if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
                 start_codex_bg \
                     "" \
                     "$STATE_DIR/MANUAL_CHECKLIST.base.md" \
@@ -3657,16 +3650,6 @@ REPAIR
             # the driver, and cleanup_bg would kill a checklist run that is
             # already nearly paid for.
             if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
-                if [[ -z "$BG_PID" ]] && ! checklist_base_overlaps_implementation; then
-                    # Deferred on a self-hosted endpoint: start it now that
-                    # implementation no longer needs the model.
-                    start_codex_bg \
-                        "" \
-                        "$STATE_DIR/MANUAL_CHECKLIST.base.md" \
-                        manual-checklist-base \
-                        "$CODEX_EFFORT_CHECKLIST" \
-                        base prompts/change/manual-checklist-base.md
-                fi
                 wait_codex_bg "$STATE_DIR/MANUAL_CHECKLIST.base.md"
             fi
 

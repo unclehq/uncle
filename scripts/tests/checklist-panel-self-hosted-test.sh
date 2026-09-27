@@ -5,8 +5,9 @@
 #    died on bash 3.2 with "pids[@]: unbound variable" (issue 97 run).
 # 2. Each local worker spent 17-40 turns re-reading four small canonical JSON
 #    files; the inputs are now inlined, read tools withheld, and turns capped.
-# 3. The base panel no longer runs alongside implementation on a self-hosted
-#    endpoint, where it only slows the stage the run is waiting on.
+# The base panel still starts alongside implementation, self-hosted or not:
+# this server handles concurrent requests fine, and the parallel start lets
+# the checklist be ready by the time implementation finishes either way.
 # Hosted runners keep their read-based prompt and background fan-out.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -77,19 +78,10 @@ if grep -q MARKER- "$work/hosted/seen-coverage.md" 2>/dev/null; then
     bad hosted-not-inlined "hosted worker prompt was inlined"
 else ok; fi
 
-# --- base panel does not overlap implementation on self-hosted -------------
-{
-    printf 'set -euo pipefail\n'
-    printf 'uncle_stage_runner() { printf "%%s" "$RUNNER"; }\n'
-    extract checklist_base_overlaps_implementation
-} > "$work/overlap.sh"
-RUNNER=self-hosted bash -c ". '$work/overlap.sh'; checklist_base_overlaps_implementation" \
-    && bad overlap-local "self-hosted base panel still overlaps implementation" || ok
-RUNNER=codex bash -c ". '$work/overlap.sh'; checklist_base_overlaps_implementation" \
-    && ok || bad overlap-hosted "hosted base panel no longer overlaps implementation"
-# Both call sites must consult it: the IMPLEMENT start and the deferred start.
-[[ "$(grep -c 'checklist_base_overlaps_implementation' "$ROOT/scripts/change-workflow.sh")" -ge 3 ]] && ok \
-    || bad overlap-callers "IMPLEMENT start and deferred start must both use checklist_base_overlaps_implementation"
+# The base panel starts unconditionally alongside implementation, self-hosted
+# or not -- there is no runner-gated deferral to test for.
+grep -q 'checklist_base_overlaps_implementation' "$ROOT/scripts/change-workflow.sh" \
+    && bad no-deferral "the removed self-hosted deferral is still referenced" || ok
 
 echo
 if [[ "$FAIL" -gt 0 ]]; then

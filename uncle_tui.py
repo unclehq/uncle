@@ -786,6 +786,30 @@ class TuiSupervisionHost:
                                  session=self.tui._supervisor_session())
 
 
+ESC_WINDOW = 0.4  # D-2: seconds between two Esc presses that count as a double tap
+
+
+def is_double_esc(previous, now, window=ESC_WINDOW):
+    """True when an Esc at `now` follows one at `previous` within `window`."""
+    return previous is not None and 0 <= now - previous <= window
+
+
+def history_step(entries, index, delta):
+    """Move a recall cursor through `entries`; None means the empty composer.
+
+    Up (delta -1) walks from the newest entry backward; Down walks forward and
+    falls off the end back to None.
+    """
+    if not entries:
+        return None
+    if index is None:
+        return len(entries) - 1 if delta < 0 else None
+    index += delta
+    if index < 0:
+        return 0
+    return index if index < len(entries) else None
+
+
 class UncleTUI:
     VIEWER_PROGRAMS = ("cursor", "code", "glow", "bat", "less", "more", "cat")
 
@@ -1426,7 +1450,7 @@ class UncleTUI:
         return bool(re.fullmatch(r'[1-9][0-9]*|https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?', value))
 
     def cmd_for(self):
-        auto = ["--unattended"] if str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "true" else []
+        auto = ["--unattended"] if self._next_run_unattended() else []
         if self.workflow_idx == 1:
             if not self._valid_issue(self.issue):
                 raise ValueError('Enter a GitHub issue number or https://github.com/owner/repo/issues/123')
@@ -1948,7 +1972,25 @@ class UncleTUI:
         else:
             os.environ["UNCLE_PROJECT_ROOT"] = launch
 
+    def _next_run_unattended(self):
+        """D-7: a session Shift-Tab override wins over the persisted setting."""
+        override = getattr(self, "session_auto_mode", None)
+        if override is not None:
+            return override
+        return str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "true"
+
+    def _build_live(self):
+        proc = getattr(self, "proc", None)
+        return bool(proc) and proc.poll() is None and not getattr(self, "workflow_exit_reported", False)
+
     def start_workflow(self):
+        if getattr(self, "backgrounded", False) and self._build_live():
+            # D-12: one run at a time; the backgrounded one is not orphaned.
+            self.state = "menu"
+            self._ensure_chat()
+            self.home_history.append(('system', 'A build is running in the background — Ctrl-B to return'))
+            return
+        self.backgrounded = False
         fd, self.status_path = tempfile.mkstemp(prefix="uncle-status-", suffix=".jsonl")
         os.close(fd)
         env = dict(os.environ)
@@ -2687,6 +2729,8 @@ class UncleTUI:
             self._dialog_closed('driver gone')
             return False
         sent = self._stdin_line(answer)
+        if answer:
+            self._remember_input(answer, gate=True, sent=bool(sent))
         # Keep the answer in the transcript, so the log reads like a session.
         self._absorb_line("%s%s" % (self.partial.rstrip(), answer))
         self.partial = ""
@@ -4707,6 +4751,120 @@ class UncleTUI:
             self.chat_picker = False
         self.chat_error = ''
 
+    # ---- control hotkeys (issue 92) ----
+    def _remember_input(self, text, gate=False, sent=False):
+        """D-13: memory only; never written to disk."""
+        if not text.strip():
+            return
+        history = self.__dict__.setdefault('input_history', [])
+        history.append({'text': text, 'gate': gate, 'sent': sent})
+        self.history_index = None
+
+    def _recall_input(self, delta):
+        """CB-6: Up/Down walk submitted chat inputs; gate answers are excluded."""
+        entries = [e['text'] for e in getattr(self, 'input_history', []) if not e['gate']]
+        index = getattr(self, 'history_index', None)
+        if self.chat_composer and (index is None or index >= len(entries)
+                                   or self.chat_composer != entries[index]):
+            return  # the composer holds the operator's own text
+        self.history_index = history_step(entries, index, delta)
+        self.chat_composer = '' if self.history_index is None else entries[self.history_index]
+
+    def _esc_pending_bytes(self):
+        """D-11: a bare Esc with bytes behind it is a split escape sequence."""
+        screen = getattr(self, 'stdscr', None)
+        if screen is None:
+            return False
+        try:
+            screen.nodelay(True)
+            nxt = screen.getch()
+        finally:
+            screen.nodelay(False)
+            screen.timeout(80)
+        if nxt == -1:
+            return False
+        curses.ungetch(nxt)
+        return True
+
+    def _composer_esc(self):
+        """Unclaimed Esc at the build page composer: interrupt, then rewind (D-10)."""
+        if self._esc_pending_bytes():
+            return
+        now = getattr(self, 'clock', time.monotonic)()
+        double = is_double_esc(getattr(self, 'last_esc', None), now)
+        self.last_esc = None if double else now
+        if double:
+            self._rewind()
+        elif self._build_live():
+            self._interrupt_stage()
+
+    def _interrupt_stage(self):
+        """D-3: stop the driver the way /stop does; run state stays resumable."""
+        stage = getattr(self, 'status_stage', '') or 'the stage'
+        self.workflow_exit_reported = True
+        self.stop_workflow()
+        self.proc_done = True
+        self.prompt_kind = ''
+        self.chat_focus = 'chat'
+        self.home_history.append(('system', 'Interrupted %s. /resume continues the run.' % stage))
+
+    def _rewind(self):
+        """D-4: restore the last submitted input into the composer."""
+        history = getattr(self, 'input_history', [])
+        if not history:
+            self.home_history.append(('system', 'Nothing to rewind.'))
+            return
+        entry = history[-1]
+        self.chat_composer = entry['text']
+        self.history_index = None
+        if entry['gate'] and entry['sent']:
+            self.home_history.append(('system', 'That answer was already taken by the driver; use /resume to redo the stage.'))
+
+    def _control_key(self, k):
+        """Global control keys; none of them is claimed by an existing handler."""
+        if k == 12:  # Ctrl-L
+            self.stdscr.clearok(True)
+            return True
+        if k == curses.KEY_BTAB:
+            self.session_auto_mode = not self._next_run_unattended()
+            self.chat_error = ('Next run: UNATTENDED (Shift-Tab)' if self.session_auto_mode
+                               else 'Next run: attended')
+            return True
+        if k == 18 and self.state == 'running':  # Ctrl-R
+            self.transcript_full = not getattr(self, 'transcript_full', False)
+            return True
+        if k == 2:  # Ctrl-B
+            if self.state == 'running' and self._build_live() and not getattr(self, 'prompt_kind', ''):
+                self.backgrounded = True
+                self.state = 'menu'
+                self.chat_focus = 'chat'
+                self.home_menu_open = False
+                return True
+            if self.state == 'menu' and getattr(self, 'backgrounded', False):
+                self.backgrounded = False
+                self.state = 'running'
+                self.chat_focus = 'gate' if getattr(self, 'prompt_kind', '') else 'chat'
+                return True
+        return False
+
+    def _control_hint(self, width, build=True):
+        """CB-8/INV-6: control keys, Shift-Tab only when terminfo has kcbt."""
+        keys = ['Esc interrupt', 'Esc Esc rewind', '^R transcript', '^B background'] if build else []
+        keys += ['^L redraw', 'Up/Down history']
+        if getattr(self, 'has_kcbt', False):
+            keys.append('Shift-Tab mode')
+        return '/homepage  / cmds  Tab chat  ' + '  '.join(keys) if build else '/ cmds  Ctrl-P menu  Tab chat  ' + '  '.join(keys)
+
+    def _background_status(self):
+        """D-12: the homepage line for a backgrounded build, or ''."""
+        if not getattr(self, 'backgrounded', False):
+            return ''
+        if not self._build_live():
+            return 'build finished — Ctrl-B to view'
+        if getattr(self, 'prompt_kind', ''):
+            return 'build waiting at gate — Ctrl-B to return'
+        return 'build running — Ctrl-B to return'
+
     def _chat_key(self, k):
         if k == 27 and getattr(self, 'recovery_active', False):
             self.recovery_active = False
@@ -4720,6 +4878,8 @@ class UncleTUI:
             self.recovery_active = False
             self.chat_focus = 'chat'
             self.chat_error = ''
+            if not self.chat_composer:
+                self._composer_esc()  # D-10: a double tap still rewinds
             return True
         if self.state == 'running' and self.chat_focus == 'menu':
             self.chat_focus = 'gate'
@@ -4761,6 +4921,8 @@ class UncleTUI:
                     self.state = 'menu'
                     self.chat_focus = 'menu'
                     self.sel = 0
+                elif self.state == 'running' and not self.chat_composer:
+                    self._composer_esc()
                 return True
             if k == 16 and not self.chat_edit:  # Ctrl-P
                 self.chat_picker = True
@@ -4771,6 +4933,9 @@ class UncleTUI:
                 return True
             if self.chat_choices and k in (curses.KEY_UP, curses.KEY_DOWN):
                 self.chat_pick = (self.chat_pick + (1 if k == curses.KEY_DOWN else -1)) % len(self.chat_choices)
+                return True
+            if k in (curses.KEY_UP, curses.KEY_DOWN) and not self.chat_picker and not self.chat_edit:
+                self._recall_input(-1 if k == curses.KEY_UP else 1)
                 return True
             if k in (10, 13):
                 # A complete numeric mention is already usable, even while the
@@ -4786,6 +4951,7 @@ class UncleTUI:
                 elif self.chat_edit:
                     self.chat_composer += '\n'
                 else:
+                    self._remember_input(self.chat_composer)
                     self.send_home_chat(self.chat_composer)
                     self.chat_composer = ''
                     self.chat_error = ''
@@ -4947,7 +5113,7 @@ class UncleTUI:
         h, w = self.stdscr.getmaxyx()
         self.stdscr.erase()
         if self.state in ("running", "viewer"):
-            panel = min(34, w // 3) if w >= 60 else 0
+            panel = min(34, w // 3) if w >= 60 and not getattr(self, 'transcript_full', False) else 0
             chat_height = 0
             chat_width = 0
             if self.state == 'running' and getattr(self, 'chat_open', False):
@@ -5327,11 +5493,13 @@ class UncleTUI:
         if greeting:
             put(row + (0 if compact else 1), 'What can uncle do for you?', color.get('title', 0) | curses.A_BOLD, True)
         if build:
-            hint = ('/homepage to leave   / commands   @ files   # issues   Tab to chat' if width >= 66
+            hint = (self._control_hint(width) if width >= 100 else
+                    '/homepage to leave   / commands   @ files   # issues   Tab to chat' if width >= 66
                     else '/homepage   / cmds  @ files  # issues  Tab chat' if width >= 48
                     else '/homepage  / cmds  Tab chat' if width >= 28 else '/homepage')
         else:
-            hint = ('/homepage   / commands   @ files   # issues   Ctrl-P menu  Tab to chat' if width >= 72
+            hint = self._background_status() or (self._control_hint(width, False) if width >= 100 else
+                    '/homepage   / commands   @ files   # issues   Ctrl-P menu  Tab to chat' if width >= 72
                     else '/ commands   @ files   # issues   Ctrl-P menu  Tab to chat' if width >= 60
                     else '/ cmds  @ files  # issues  Ctrl-P menu  Tab chat' if width >= 52
                     else '/ cmds @ files Ctrl-P menu Tab chat' if width >= 35
@@ -5385,8 +5553,10 @@ class UncleTUI:
             project += ' (' + (head.removeprefix('ref: refs/heads/') if head.startswith('ref: refs/heads/') else 'detached') + ')'
         except OSError:
             pass
-        auto = getattr(self, 'misc', {}).get('auto_mode') == 'true'
+        auto = self._next_run_unattended()
         project_status = project + '  ·  ' + ('mode(auto)' if auto else 'mode(manual)')
+        if getattr(self, 'session_auto_mode', None) is not None:
+            project_status += '  ·  ' + ('Next run: UNATTENDED (Shift-Tab)' if auto else 'Next run: attended')
         if build:
             # Only shown while checks are actually running. "Tests: Stopped"
             # was on screen for most of every run and read as a fault, when it
@@ -6178,6 +6348,15 @@ class UncleTUI:
 
     # ---- input ----
     def handle_key(self, k):
+        # Ctrl-L redraws everywhere; triage keeps its own keys otherwise.
+        if (k == 12 or self.state != 'triage') and self._control_key(k):
+            return
+        if k == 3 and getattr(self, 'backgrounded', False) and self._build_live() \
+                and not getattr(self, 'quit_armed', False):
+            # D-12: quitting would stop a build the operator cannot see.
+            self.quit_armed = True
+            self.chat_error = 'A build is running in the background — Ctrl-C again stops it and quits.'
+            return
         # Scroll transcript before the composer can consume navigation keys.
         # Dialog-focused navigation remains owned by the dialog.
         if self.state == 'running' and (not getattr(self, 'prompt_kind', '') or
@@ -6616,6 +6795,10 @@ class UncleTUI:
         curses.curs_set(0)
         self.stdscr.keypad(True)
         self.stdscr.timeout(80)
+        try:
+            self.has_kcbt = bool(curses.tigetstr('kcbt'))  # D-8
+        except curses.error:
+            self.has_kcbt = False
         self._setup_colors()
         dirty = True
         size = None
@@ -6638,7 +6821,7 @@ class UncleTUI:
             dirty = self.poll_supervision() or dirty
             dirty = self.poll_status() or dirty
             dirty = self.poll_session_stats() or dirty
-            if self.state in ("running", "triage") and getattr(self, "proc", None):
+            if (self.state in ("running", "triage") or getattr(self, "backgrounded", False)) and getattr(self, "proc", None):
                 # Drained in triage too: a driver still streaming a stage must
                 # not block on a full pipe while the operator reads a reply.
                 dirty = self.drain_output() or dirty
@@ -6685,4 +6868,5 @@ def _record_tui_pid():
 
 if __name__ == "__main__":
     _record_tui_pid()
+    os.environ.setdefault('ESCDELAY', '25')  # D-1: fast single Esc, user value wins
     curses.wrapper(main)

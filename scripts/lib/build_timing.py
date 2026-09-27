@@ -196,46 +196,111 @@ class BuildTiming(ContextDecorator):
         return False
 
 
+def _gap_pattern(windows):
+    """Name the shape of a stage's repeated gaps, or None when there isn't one.
+
+    A length that recurs is not by itself a fault. Two very different things
+    produce one, and only their *arrangement* tells them apart:
+
+      heartbeat  gaps butt up against each other, each starting where the last
+                 ended, because something emits on a timer while the stage is
+                 otherwise idle. The gap is the quiet between beats; the length
+                 is the beat interval and means nothing else.
+      repeated   gaps of the same length scattered among real work, which is
+                 what a timeout-and-retry looks like.
+
+    Reading one as the other is not hypothetical: a run showed nineteen gaps of
+    exactly 30.0s in execute-checklist and it was taken for a retry loop worth
+    ~9.5 minutes. The start times were 30s apart back to back -- a heartbeat
+    over a stage that was busy running the checklist's own commands. Nothing
+    was there to reclaim.
+    """
+    timed = sorted((start, start + length, length) for start, length in windows if length >= 1)
+    if len(timed) < 3:
+        return None
+    buckets = collections.Counter(round(length * 2) / 2 for _, _, length in timed)
+    length, repeats = buckets.most_common(1)[0]
+    if repeats < 3:
+        return None
+    same = [row for row in timed if abs(round(row[2] * 2) / 2 - length) < .01]
+    # Contiguous means the next gap opens where the previous closed, within a
+    # sampling tolerance. Beats are consecutive; retries have work between them.
+    pairs = len(same) - 1
+    adjacent = sum(1 for previous, following in zip(same, same[1:])
+                   if abs(following[0] - previous[1]) <= max(1., length * .1))
+    # Judged against the number of *pairs*, not the number of gaps -- counting
+    # 19 beats as 19 adjacencies asks for one more than can exist and reads a
+    # heartbeat as a retry. Allow a few breaks: a beat is skipped whenever real
+    # work lands between two of them, and one real run broke twice in 18.
+    if pairs and adjacent >= max(2, int(pairs * .7 + .5)):
+        return f'heartbeat {length:g}s x{repeats}'
+    return f'repeated {length:g}s x{repeats}'
+
+
+def _busiest_during(spans, windows):
+    """The process that was alive longest while a stage sat quiet.
+
+    A gap says nothing was emitted; it cannot say whether anything was
+    happening. The sampler is already recording every descendant process, so
+    the answer is on disk -- it just was not being read. Naming `bash` and
+    `Python` here is the difference between "30 seconds of nothing" and "30
+    seconds of the checklist running its own commands".
+    """
+    if not windows:
+        return '-'
+    busy = collections.Counter()
+    for row in spans:
+        if row['kind'] != 'sampled_process':
+            continue
+        start = row.get('started_at')
+        if start is None:
+            continue
+        finish = start + (row.get('elapsed_seconds') or 0)
+        for window_start, length in windows:
+            overlap = min(finish, window_start + length) - max(start, window_start)
+            if overlap > 0:
+                busy[row['name']] += overlap
+    if not busy:
+        return '-'
+    name, seconds = busy.most_common(1)[0]
+    return f'{name} ({seconds:.0f}s)'
+
+
 def _idle_gap_section(spans):
     """Where a stage's wall-clock went while the runner said nothing.
 
-    The per-kind tables below already total these, but a total alone does not
-    separate "the model was working" from "something was stuck": both look like
-    elapsed seconds. Two things distinguish them, and neither survives being
-    summed -- the longest single gap, and whether the same length keeps
-    recurring. Natural latency scatters; a timeout does not. One real run spent
-    693s of change-plan in gaps with sixteen of them at exactly 30.0s, which is
-    a retry cadence rather than anything the model was doing.
+    The per-kind tables below already total these, but a total alone cannot
+    separate "the model was working" from "something was stuck": both are
+    elapsed seconds. What separates them is the arrangement of the gaps and
+    what was running during them, and neither survives being summed.
 
     Only the 20 largest gaps per attempt are retained upstream, so these totals
     are floors. A gap covers any work or wait between received events; it is
     not evidence of API latency on its own.
     """
-    gaps = collections.defaultdict(list)
+    windows = collections.defaultdict(list)
     for row in spans:
         if row['kind'] in ('runner_event_gap', 'runner_tail_gap'):
-            gaps[row['name']].append(row['elapsed_seconds'])
-    if not gaps:
+            windows[row['name']].append((row.get('started_at') or 0, row['elapsed_seconds']))
+    if not windows:
         return []
     lines = ['## Runner idle gaps', '',
-             'Time between received stream events, by stage. A repeated identical '
-             'length is a timeout-and-retry signature, not model latency: compare '
-             '"Repeated" against "Gaps". Totals are floors -- only the 20 largest '
-             'gaps per attempt are kept.', '',
-             '| Stage | Gaps | Total seconds | Longest | Repeated length | Repeated |',
-             '|---|---:|---:|---:|---:|---:|']
-    for name, values in sorted(gaps.items(), key=lambda item: -sum(item[1])):
-        # Round to the nearest half-second before counting repeats: a retry
-        # fires on a timer and lands within jitter of the same value, never on
-        # the identical float. Sub-second gaps are the ordinary rhythm of a
-        # stream and swamp the count, so they cannot be the answer here -- a
-        # timeout worth finding is seconds long.
-        buckets = collections.Counter(round(value * 2) / 2 for value in values if value >= 1)
-        length, repeats = buckets.most_common(1)[0] if buckets else (0, 0)
+             'Time between received stream events, by stage. Pattern reads the '
+             'arrangement, not just the lengths: `heartbeat` means the gaps run '
+             'back to back, so the interval is something emitting on a timer over '
+             'an idle stage and there is nothing to reclaim; `repeated` means the '
+             'same length recurs among real work, which is what a timeout and '
+             'retry looks like. "Busiest process" is what the sampler saw alive '
+             'during those gaps. Totals are floors -- only the 20 largest gaps '
+             'per attempt are kept.', '',
+             '| Stage | Gaps | Total seconds | Longest | Pattern | Busiest process |',
+             '|---|---:|---:|---:|---|---|']
+    for name, rows in sorted(windows.items(), key=lambda item: -sum(v for _, v in item[1])):
+        lengths = [length for _, length in rows]
         label = str(name).replace('|', '&#124;').replace('\n', ' ')
-        shown = f'{length:g}' if repeats > 1 else '-'
-        lines.append(f'| {label} | {len(values)} | {sum(values):.1f} | {max(values):.1f} '
-                     f'| {shown} | {repeats if repeats > 1 else 0} |')
+        pattern = _gap_pattern(rows) or '-'
+        lines.append(f'| {label} | {len(rows)} | {sum(lengths):.1f} | {max(lengths):.1f} '
+                     f'| {pattern} | {_busiest_during(spans, rows)} |')
     return lines + ['']
 
 

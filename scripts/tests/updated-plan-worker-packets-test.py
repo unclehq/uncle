@@ -329,6 +329,47 @@ class WorkerPackets(unittest.TestCase):
             (ROOT/'scripts/stagegate.sh').read_text(),
         )
 
+    def test_synthesis_asks_for_a_patch_not_the_whole_narrative(self):
+        # The parent reproduced the entire narrative every time even when the
+        # review touched one sentence -- its output was proportional to the
+        # plan's size, not the review's. It must now name only what changed.
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative':
+                '# Title\n\n## 1. Approach\n\nDo it.\n\n## 22. Risks\n\nNone.',
+                'verification_commands': 'true', 'protected_verification_paths': 'tests'}
+        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': [{'id': 'AR-001'}]}
+        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets',
+                   'workers': [], 'findings': [{'id': 'AR-001', 'sources': []}]}
+        prompt = SYNTHESIS.prompt(plan, review, workers)
+        self.assertIn('`patch` object naming only what changed', prompt)
+        self.assertIn('Do not reproduce a section you are not changing', prompt)
+        self.assertIn('edit_sections', prompt)
+        self.assertIn('insert_sections', prompt)
+        # 'narrative' is no longer a required top-level field in its own
+        # right; only the short app-plan fields keep that requirement.
+        self.assertNotIn('`narrative`, `verification_commands`', prompt)
+        # The model must be told the exact existing headings to reference.
+        self.assertIn('## 1. Approach', prompt)
+        self.assertIn('## 22. Risks', prompt)
+        self.assertIn("disposition's `plan_change` must be reflected", prompt)
+
+    def test_synthesis_still_requires_the_short_app_plan_fields(self):
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## 1. X\n\nY.',
+                'verification_commands': 'true', 'protected_verification_paths': 'tests'}
+        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}
+        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
+        self.assertIn('`verification_commands` and `protected_verification_paths` are also required',
+                      SYNTHESIS.prompt(plan, review, workers))
+        # The change-plan kind has no verification_commands convention of its own.
+        change_plan = dict(plan, kind='change-plan')
+        self.assertNotIn('protected_verification_paths` are also required',
+                          SYNTHESIS.prompt(change_plan, review, workers, change=True))
+
+    def test_synthesis_reports_no_sections_when_the_base_plan_has_none(self):
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'narrative': 'No headings at all.'}
+        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}
+        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
+        self.assertIn('the base plan has no `## ` sections', SYNTHESIS.prompt(plan, review, workers, change=True))
+
     def test_updated_plan_parent_gets_a_sealed_json_input(self):
         plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': 'base',
                 'verification_commands': 'true', 'protected_verification_paths': 'tests'}

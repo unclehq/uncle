@@ -28,6 +28,15 @@ ARTIFACT = {
     'updated-change-plan': ('CHANGE_PLAN.md', 'change-plan'),
 }
 
+# The base document each synthesis stage's `patch` (see
+# updated_plan_synthesis_prompt.py) applies against. 'updated-change-plan'
+# revises CHANGE_PLAN.md in place, so its base and its own target are the
+# same name -- read here, before this publish() call's write() overwrites it.
+PATCH_BASE = {
+    'updated-plan': 'PROJECT_PLAN.md',
+    'updated-change-plan': 'CHANGE_PLAN.md',
+}
+
 
 def texts(value):
     if isinstance(value, dict):
@@ -99,6 +108,31 @@ def delivered(path, kind):
     return payload
 
 
+def expand_patch(payload, project, stage):
+    """Reconstruct `payload['narrative']` from `payload['patch']` in place.
+
+    updated_plan_synthesis_prompt.py asks the synthesis stage for a small
+    patch -- only the sections a review actually requires changing -- instead
+    of the plan's whole text, since reproducing every unaffected section made
+    a self-hosted model's output (and time) proportional to the plan's size
+    rather than to the review's. `patch` takes precedence over any stray
+    `narrative` the model included alongside it: the contract asked for one
+    or the other, and a patch is what this stage's prompt actually requests.
+    A model that ignores the new instructions and returns `narrative`
+    directly, with no `patch` key, is unaffected -- used exactly as before.
+    """
+    if 'patch' not in payload or stage not in PATCH_BASE:
+        return
+    artifact_json = module('artifact_json')
+    plan_patch = module('plan_patch')
+    base_name = PATCH_BASE[stage]
+    try:
+        base = artifact_json.read(project, base_name)
+    except (OSError, ValueError) as error:
+        raise ValueError('patch: base document %s is missing or invalid: %s' % (base_name, error)) from error
+    payload['narrative'] = plan_patch.apply_patch(base.get('narrative') or '', payload['patch'])
+
+
 def publish(stage, log, project, delivery=None):
     if stage not in ARTIFACT:
         return False
@@ -112,6 +146,7 @@ def publish(stage, log, project, delivery=None):
         # overwritten with a deterministic rendering and cannot remain an
         # operational JSON input.
         payload = legacy_raw_document(project, name, kind)
+    expand_patch(payload, project, stage)
     artifact_json = module('artifact_json')
     project = Path(project)
     if stage == 'requirements':

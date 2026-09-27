@@ -10,6 +10,11 @@ import json
 import sys
 from pathlib import Path
 
+# Loaded both as a normal script (sys.path[0] is this directory already) and
+# via importlib.util.spec_from_file_location (which does not add it), so the
+# sibling import below needs the directory on sys.path explicitly.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from plan_patch import split_sections
 
 SCHEMA = 'uncle.artifact/v1'
 
@@ -31,27 +36,51 @@ def prompt(plan, review, workers, change=False):
         raise ValueError('worker packet: findings and workers must be arrays')
     artifact = 'CHANGE_PLAN.md' if change else 'UPDATED_PROJECT_PLAN.md'
     label = 'change plan' if change else 'implementation plan'
-    fields = "the base plan's narrative updated only where the review requires it"
+    extra_fields = ''
     if not change:
-        fields = "the base plan's narrative/verification_commands/protected_verification_paths updated only where the review requires it"
+        extra_fields = (' `verification_commands` and `protected_verification_paths` are also '
+                         'required top-level strings, even when unchanged.')
+    _, sections = split_sections(plan.get('narrative') or '')
+    headings = '\n'.join('- `%s`' % section['heading'] for section in sections) or '(the base plan has no `## ` sections)'
     return '''You are revising an approved %s after adversarial review.
 
 This is a sealed synthesis task. The complete authoritative inputs are embedded
 below. Do not read files, enumerate directories, inspect the repository, run
 commands, or read worker packets. Do not investigate again. Resolve only the
-listed findings and preserve every unaffected normative plan row exactly.
+listed findings.
 
 Produce exactly one JSON object. Do not read files, enumerate directories, run
 commands, or write any file except the one canonical delivery path supplied by
 the driver. Your final chat response is diagnostics only; the driver publishes
 that file as `.uncle/docs/%s`. It must have
-schema `uncle.artifact/v1`, kind `%s`, %s, and
-one disposition for every AR finding. For an implementation plan,
-`narrative`, `verification_commands`, and `protected_verification_paths` are
-all required top-level strings, even when unchanged. The disposition fields
-are finding, disposition (Accepted, Partially accepted, Rejected, or Deferred),
-reason, and plan_change. Do not write Markdown, a summary, a draft, or
-progress commentary.
+schema `uncle.artifact/v1`, kind `%s`, one disposition for every AR finding,
+and a `patch` object naming only what changed -- never the plan's full text.%s
+
+Do not reproduce a section you are not changing: every section not named in
+`patch` carries over from the base plan exactly as it already is. `patch` has
+two optional arrays:
+
+- `edit_sections`: `[{"heading": "<exact existing heading, copied verbatim from
+  the list below>", "content": "<the section's whole new body, heading line
+  excluded>"}]`. Replaces one existing section's body in full.
+- `insert_sections`: `[{"content": "<a whole new section, its own \\"## \\"
+  heading line included>", "after": "<an existing heading to insert after>"}]`.
+  Use `"before"` instead of `"after"` to insert before that heading, or
+  `"position": "start"` to insert first; omitting all three appends at the end.
+  Only for content that plainly does not belong in any existing section --
+  prefer `edit_sections` whenever the change extends one that already exists.
+
+Every disposition's `plan_change` must be reflected by some `patch` entry: a
+disposition with no matching edit or insert is a rejected delivery. The
+disposition fields are finding, disposition (Accepted, Partially accepted,
+Rejected, or Deferred), reason, and plan_change. Do not write Markdown, a
+summary, a draft, or progress commentary.
+
+## Existing sections in the base plan, in order
+
+Quote a heading exactly, as printed here, to edit it or to anchor an insert.
+
+%s
 
 ## Base project plan JSON
 ```json
@@ -67,7 +96,7 @@ progress commentary.
 ```json
 %s
 ```
-''' % (label, artifact, plan['kind'], fields,
+''' % (label, artifact, plan['kind'], extra_fields, headings,
        json.dumps(plan, indent=2, sort_keys=True),
        json.dumps(review, indent=2, sort_keys=True),
        json.dumps(workers, indent=2, sort_keys=True))

@@ -868,8 +868,12 @@ def publish_file_delivery(root, raw, expected_kind):
     delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
     if not delivery:
         return
+    # The driver passes an absolute "$STATE_DIR/..." path; shim callers pass
+    # one relative to the live root.  Either is safe only inside the live
+    # workflow tree.
     path = Path(delivery)
-    if path.is_absolute() or '..' in path.parts:
+    workflow = (Path(root) / '.uncle/workflow').resolve()
+    if '..' in path.parts or not (Path(root) / path).resolve().is_relative_to(workflow):
         raise ValueError('Refusing unsafe canonical artifact delivery path: ' + delivery)
     payload = _artifact_json_module().loads_response_json(raw)
     if (not isinstance(payload, dict) or payload.get('schema') != 'uncle.artifact/v1'

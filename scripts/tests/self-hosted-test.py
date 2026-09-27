@@ -416,6 +416,37 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
                 run_opencode('agent', self.values(), 'Plan', self.root, stage='change-plan')
         self.assertEqual(json_module.loads((self.root/delivery).read_text(encoding='utf-8')), payload)
 
+    def test_absolute_driver_delivery_path_is_published(self):
+        # change-workflow.sh passes "$STATE_DIR/artifact-delivery/<stage>.json",
+        # which is always absolute.  Rejecting absolute paths failed every
+        # otherwise successful self-hosted updated-change-plan stage.
+        import self_hosted, json as json_module
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan',
+                   'narrative': '# Change\n\nMake it.',
+                   'dispositions': [{'finding': 'AR-001', 'disposition': 'Accepted',
+                                     'reason': 'Valid.', 'plan_change': 'Added a test.'}]}
+        raw = json_module.dumps(payload)
+        delivery = self.root.resolve()/'.uncle/workflow/artifact-delivery/updated-change-plan.json'
+        with patch.dict(os.environ, {'UNCLE_ARTIFACT_DELIVERY': str(delivery)}):
+            self_hosted.publish_file_delivery(self.root, raw, 'change-plan')
+        self.assertEqual(json_module.loads(delivery.read_text(encoding='utf-8')), payload)
+
+    def test_delivery_path_outside_the_workflow_tree_is_refused(self):
+        import self_hosted, json as json_module
+        raw = json_module.dumps({'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'narrative': 'x'})
+        with tempfile.TemporaryDirectory() as outside:
+            cases = [str(Path(outside)/'plan.json'),
+                     str(self.root/'uncle_tui.py'),
+                     '.uncle/workflow/../docs/CHANGE_PLAN.md',
+                     '../plan.json']
+            for delivery in cases:
+                with self.subTest(delivery=delivery), patch.dict(os.environ, {'UNCLE_ARTIFACT_DELIVERY': delivery}):
+                    with self.assertRaisesRegex(ValueError, 'unsafe canonical artifact delivery path'):
+                        self_hosted.publish_file_delivery(self.root, raw, 'change-plan')
+            self.assertEqual(os.listdir(outside), [])
+        self.assertFalse((self.root/'uncle_tui.py').exists())
+        self.assertFalse((self.root/'.uncle/docs/CHANGE_PLAN.md').exists())
+
     def test_updated_plan_omitting_protected_paths_preserves_approved_paths(self):
         import self_hosted, json as json_module
         documents = self.root/'.uncle/workflow/documents'

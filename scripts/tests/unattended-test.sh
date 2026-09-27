@@ -248,6 +248,22 @@ if [[ -s "$w" ]]; then ok; else bad "ic-waiver-file" "no waiver written for AC-1
 if grep -q "unattended run" "$w" 2>/dev/null; then ok
 else bad "ic-waiver-reason" "waiver does not say it was unattended"; fi
 
+# Prompt #3: no rejected rows at all -- the implementation delivered nothing,
+# so implementation-completion.txt was never written. There is nothing on the
+# record to waive. Unattended used to call record_waiver with no ids, which
+# died on bash 3.2's `ids[@]: unbound variable`; it must stop pending instead.
+rm -rf "$ic/.uncle/workflow/unattended-gates" "$ic/.uncle/workflow/waivers" \
+    "$ic/.uncle/workflow/implementation-completion.txt"
+out="$(cd "$ic" && ROOT="$ROOT" UNATTENDED=1 bash gate.sh < /dev/null 2>&1)" || true
+check "ic-no-rows-returns" "CHOICE_RETURNED 1" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+case "$out" in
+    *"unbound variable"*) bad "ic-no-rows-crash" "the empty waiver crashed the driver" ;;
+    *"waiving rejected rows"*) bad "ic-no-rows-no-waiver" "an empty set of rows was announced as waived" ;;
+    *) ok ;;
+esac
+if [[ -e "$ic/.uncle/workflow/waivers" ]]; then bad "ic-no-rows-no-waiver-file" "a waiver was written with no rows"
+else ok; fi
+
 # --- the issue stays open ---------------------------------------------------
 
 # Closing the originating issue announces outside the repository that this

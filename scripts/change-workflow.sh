@@ -514,6 +514,14 @@ implementation_incomplete_choice() {
         fi
     fi
     echo
+    if [[ "${UNATTENDED:-0}" == 1 && -z "${ids// /}" ]]; then
+        # No rejected rows means nothing on the record to waive: the stage
+        # delivered no change, or no acceptance report. Waiving an empty set
+        # would be dishonest (and crashed record_waiver on bash 3.2).
+        record_unattended_gate implementation-incomplete "stopped: no rejected acceptance rows to waive"
+        echo "Unattended: no rejected acceptance rows to waive; the run remains pending at IMPLEMENT."
+        return 1
+    fi
     if [[ "${UNATTENDED:-0}" == 1 ]]; then
         # Auto mode means human gates do not block progress. `retry` reruns
         # the same plan unchanged and this same choice is reached again next

@@ -706,7 +706,12 @@ class ChatInteractionTests(unittest.TestCase):
         self.ui.handle_key(tui.curses.KEY_F3)
         self.assertIn('isolation', self.ui.chat_error)
         self.assertEqual(self.ui.chat.messages, ['Build a task list'])
-        self.assertFalse(list(self.root.iterdir()))
+        # Persisted chat-history is expected (issue 97).
+        items = list(self.root.iterdir())
+        if len(items) == 1 and items[0].name == '.uncle':
+            pass
+        else:
+            self.assertFalse(items)
 
     def test_picker_rechecks_file_after_selection(self):
         file = self.root / 'context'

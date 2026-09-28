@@ -385,6 +385,34 @@ class WorkerPackets(unittest.TestCase):
         self.assertNotIn('protected_verification_paths` are also required',
                           SYNTHESIS.prompt(change_plan, review, workers, change=True))
 
+    def test_synthesis_forbids_uncle_paths_in_protected_verification_paths(self):
+        # calculator-local: the model kept listing `.uncle/docs/REQUIREMENTS.md`
+        # there, which the validator rejects, and the rejection's error text
+        # named only the bad path without explaining the rule -- so retries
+        # repeated the same mistake instead of learning it.
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## 1. X\n\nY.',
+                'verification_commands': 'true', 'protected_verification_paths': 'tests'}
+        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}
+        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
+        prompt = SYNTHESIS.prompt(plan, review, workers)
+        self.assertIn('never anything under `.uncle/`', prompt)
+        self.assertIn('One repository-relative path per line, not comma-separated', prompt)
+        # The change-plan kind has no protected_verification_paths field at all.
+        change_prompt = SYNTHESIS.prompt(dict(plan, kind='change-plan'), review, workers, change=True)
+        self.assertNotIn('never anything under `.uncle/`', change_prompt)
+
+    def test_synthesis_tells_the_model_to_stop_after_delivery(self):
+        # calculator-local: after writing a correct delivery, the model kept
+        # going -- summarizing what it wrote, then answering a request the
+        # operator never made -- burning turns and tokens nothing would read.
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## 1. X\n\nY.',
+                'verification_commands': 'true', 'protected_verification_paths': 'tests'}
+        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}
+        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
+        prompt = SYNTHESIS.prompt(plan, review, workers)
+        self.assertIn('you are done: stop immediately', prompt)
+        self.assertIn('do not ask what to do next', prompt)
+
     def test_synthesis_reports_no_sections_when_the_base_plan_has_none(self):
         plan = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'narrative': 'No headings at all.'}
         review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}

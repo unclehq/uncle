@@ -39,7 +39,12 @@ def prompt(plan, review, workers, change=False):
     extra_fields = ''
     if not change:
         extra_fields = (' `verification_commands` and `protected_verification_paths` are also '
-                         'required top-level strings, even when unchanged.')
+                         'required top-level strings, even when unchanged.\n\n'
+                         '`protected_verification_paths` names test and source files the '
+                         'implementation must not edit -- never anything under `.uncle/`, which is '
+                         'workflow bookkeeping, not a file under test, and is a rejected delivery if '
+                         'listed. One repository-relative path per line, not comma-separated. Example: '
+                         '`src/calc.js\\nsrc/calc.test.js\\ne2e/calc.spec.js`.')
     _, sections = split_sections(plan.get('narrative') or '')
     headings = '\n'.join('- `%s`' % section['heading'] for section in sections) or '(the base plan has no `## ` sections)'
     example_kind = 'change-plan' if change else 'plan'
@@ -87,6 +92,12 @@ disposition with no matching edit or insert is a rejected delivery. The
 disposition fields are finding, disposition (Accepted, Partially accepted,
 Rejected, or Deferred), reason, and plan_change. Do not write Markdown, a
 summary, a draft, or progress commentary, and do not write a `narrative` key.
+
+Once you have written the delivery file, you are done: stop immediately.
+There is no operator here to answer a question or approve a next step, and
+nothing you write after delivery is read. Do not summarize what you wrote, do
+not propose implementation steps, do not ask what to do next -- any of that
+is pure generation time spent on a reply nothing will ever see.
 
 ## Existing sections in the base plan, in order
 

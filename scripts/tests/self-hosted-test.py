@@ -416,6 +416,61 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
                 run_opencode('agent', self.values(), 'Plan', self.root, stage='change-plan')
         self.assertEqual(json_module.loads((self.root/delivery).read_text(encoding='utf-8')), payload)
 
+    def test_chat_only_delivery_is_recovered_when_the_model_never_calls_write(self):
+        # issue 97's updated-change-plan: two attempts in a row -- the second
+        # even after self_hosted.py's own "Use Write to replace..." retry
+        # correction -- produced a complete, valid change-plan JSON that was
+        # only ever in the chat response, never written to the candidate
+        # file. Both were discarded. A real, several-minutes-expensive result
+        # must not be thrown away for landing in the wrong channel.
+        import self_hosted, json as json_module
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan',
+                   'dispositions': [{'finding': 'AR-001', 'disposition': 'Accepted',
+                                     'reason': 'x', 'plan_change': 'x'}],
+                   'narrative': '# Change\n\nRevised.'}
+
+        def generate(side, values, prompt, staged, **kwargs):
+            # No Write call at all: the candidate file is never created.
+            return '\n\n```json\n' + json_module.dumps(payload) + '\n```\n', 1
+
+        delivery = '.uncle/workflow/artifact-delivery/updated-change-plan.json'
+        with patch.dict(os.environ, {'UNCLE_ARTIFACT_DELIVERY': delivery}):
+            with patch.object(self_hosted, '_run_opencode', side_effect=generate):
+                run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-change-plan')
+        self.assertEqual(json_module.loads((self.root/delivery).read_text(encoding='utf-8')), payload)
+
+    def test_a_genuinely_missing_delivery_still_fails(self):
+        # The recovery above must not swallow the real failure: chat text
+        # that isn't our JSON contract at all still has nothing to recover.
+        import self_hosted
+
+        def generate(side, values, prompt, staged, **kwargs):
+            return 'Sorry, I could not complete this task.', 1
+
+        delivery = '.uncle/workflow/artifact-delivery/updated-change-plan.json'
+        with patch.dict(os.environ, {'UNCLE_ARTIFACT_DELIVERY': delivery}):
+            with patch.object(self_hosted, '_run_opencode', side_effect=generate):
+                with self.assertRaisesRegex(ValueError, 'did not write canonical JSON delivery'):
+                    run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-change-plan')
+        self.assertFalse((self.root/delivery).is_file())
+
+    def test_chat_only_requirements_delivery_is_also_recovered(self):
+        import self_hosted, json as json_module
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'requirements-interpretation',
+                   'sections': {key: 'x' for key in (
+                       'required_functionality', 'optional_functionality', 'constraints',
+                       'user_visible_behaviors', 'system_behaviors', 'failure_behaviors',
+                       'ambiguities', 'assumptions', 'explicit_non_goals', 'definition_of_done')}}
+
+        def generate(side, values, prompt, staged, **kwargs):
+            return json_module.dumps(payload), 1
+
+        delivery = '.uncle/workflow/artifact-delivery/requirements.json'
+        with patch.dict(os.environ, {'UNCLE_ARTIFACT_DELIVERY': delivery}):
+            with patch.object(self_hosted, '_run_opencode', side_effect=generate):
+                run_opencode('agent', self.values(), 'Requirements', self.root, stage='requirements')
+        self.assertEqual(json_module.loads((self.root/delivery).read_text(encoding='utf-8')), payload)
+
     def test_absolute_driver_delivery_path_is_published(self):
         # change-workflow.sh passes "$STATE_DIR/artifact-delivery/<stage>.json",
         # which is always absolute.  Rejecting absolute paths failed every

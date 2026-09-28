@@ -979,11 +979,19 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                         file_text = candidate.read_text(encoding='utf-8')
                         canonical_response = file_text
                         document = document_response(file_text, artifact) if is_json_response(file_text) else file_text
-                    elif require_file_delivery:
-                        raise ValueError('requirements agent did not write canonical JSON delivery: ' + str(candidate))
-                    else:  # compatibility for direct shim callers predating the file contract
-                        canonical_response = response
+                    elif not require_file_delivery or is_json_response(response):
+                        # Either compatibility mode, or a complete, schema-shaped
+                        # response that never reached the Write tool -- seen live,
+                        # twice in a row, even after the retry's own "Use Write"
+                        # correction. A real result should not be discarded for
+                        # landing in chat instead of the delivery file; every
+                        # check below still applies unchanged. Unfence it first:
+                        # publish_file_delivery() below writes this text verbatim,
+                        # and the delivery file must be bare JSON, not a fence.
+                        canonical_response = _artifact_json_module().unfence_json(response) if is_json_response(response) else response
                         document = document_response(response, artifact)
+                    else:
+                        raise ValueError('requirements agent did not write canonical JSON delivery: ' + str(candidate))
                     validate_requirements(document)
                 except ValueError as error:
                     logs = root/'.uncle/workflow/logs'
@@ -1043,13 +1051,24 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                                 file_text = preserve_updated_plan_contract(file_text, root)
                             canonical_response = file_text
                             candidate.write_text(document_response(file_text, artifact, expected_kind, require_dispositions), encoding='utf-8', newline='\n')
-                    elif require_file_delivery:
-                        raise ValueError('plan agent did not write canonical JSON delivery: ' + str(candidate))
-                    else:  # compatibility for direct shim callers predating the file contract
+                    elif not require_file_delivery or is_json_response(response):
+                        # Either compatibility mode, or a complete, schema-shaped
+                        # response that never reached the Write tool -- seen live,
+                        # twice in a row, even after the retry's own "Use Write"
+                        # correction, discarding a real plan revision that had
+                        # cost several minutes of generation. Every check below
+                        # (validate_plan, publish_plan_json, publish_file_delivery)
+                        # still applies unchanged; only the source is widened.
                         if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md':
                             response = preserve_updated_plan_contract(response, root)
-                        canonical_response = response
+                        # Unfence it first: publish_file_delivery() below writes
+                        # this text verbatim, and the delivery file must be bare
+                        # JSON, not a fence -- candidate.exists() always held bare
+                        # text because a model that used Write never fenced it.
+                        canonical_response = _artifact_json_module().unfence_json(response) if is_json_response(response) else response
                         candidate.write_text(document_response(response, artifact, expected_kind, require_dispositions), encoding='utf-8', newline='\n')
+                    else:
+                        raise ValueError('plan agent did not write canonical JSON delivery: ' + str(candidate))
                     if expected_kind == 'plan':
                         validate_plan(candidate.read_text(encoding='utf-8'), protected=artifact == '.uncle/docs/UPDATED_PROJECT_PLAN.md')
                     if (canonical_response is not None and is_json_response(canonical_response)

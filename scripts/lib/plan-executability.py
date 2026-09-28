@@ -528,7 +528,11 @@ def delivery_summary(j):
     rows = []
     seen = set()
     for delivery in deliveries:
-        if not isinstance(delivery, dict) or not re.fullmatch(r'AC-\d+', str(delivery.get('id', ''))):
+        # One optional trailing lowercase letter (AC-4b): a reasonable,
+        # recurring model convention for a closely related sub-criterion.
+        # implementation-completion.py accepts the same shape; excluding it
+        # here only would silently drop a real row from this summary.
+        if not isinstance(delivery, dict) or not re.fullmatch(r'AC-\d+[a-z]?', str(delivery.get('id', ''))):
             continue
         identifier = delivery['id']
         if identifier in seen:

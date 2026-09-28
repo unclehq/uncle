@@ -18,6 +18,15 @@ def section(text, title):
     return re.split(r"^#{1,2}\s", rest, maxsplit=1, flags=re.M)[0]
 
 
+# One optional trailing lowercase letter (AC-4b) for a closely related
+# sub-criterion added after the original numbering was set -- a reasonable,
+# recurring model convention (issue 97: a spec that regenerates AC-4b every
+# cycle). Rejecting it as "malformed" rather than a normal per-row mismatch
+# sent the whole run back through ANALYZE to rebuild baseline, spec, plan and
+# review from scratch, every single time this exact ID appeared again.
+ACCEPTANCE_ID = r"AC-\d+[a-z]?"
+
+
 def rows(text, header):
     result = {}
     headers = 0
@@ -29,7 +38,7 @@ def rows(text, header):
         if cells == header:
             headers += 1
             continue
-        if not re.fullmatch(r"AC-\d+", cells[0]):
+        if not re.fullmatch(ACCEPTANCE_ID, cells[0]):
             continue
         if cells[0] in result:
             raise ValueError(f"Duplicate criterion {cells[0]}")
@@ -70,7 +79,7 @@ def json_required(payload):
         raise ValueError('wrong change-spec JSON schema')
     result = {}
     for row in payload.get('acceptance_criteria') or []:
-        if not isinstance(row, dict) or not re.fullmatch(r'AC-\d+', str(row.get('id', ''))):
+        if not isinstance(row, dict) or not re.fullmatch(ACCEPTANCE_ID, str(row.get('id', ''))):
             raise ValueError('change-spec has malformed acceptance criteria')
         identifier = row['id']
         if identifier in result:
@@ -85,7 +94,7 @@ def json_delivered(payload):
     result = {}
     for fragment in _fragments(payload):
         for row in fragment.get('deliveries') or []:
-            if not isinstance(row, dict) or not re.fullmatch(r'AC-\d+', str(row.get('id', ''))):
+            if not isinstance(row, dict) or not re.fullmatch(ACCEPTANCE_ID, str(row.get('id', ''))):
                 raise ValueError('implementation-notes has malformed acceptance delivery')
             identifier = row['id']
             if identifier in result:

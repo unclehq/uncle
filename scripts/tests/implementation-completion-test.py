@@ -75,6 +75,30 @@ class CompletionTests(unittest.TestCase):
             required, delivered = completion.canonical_rows(spec_path, notes_path)
         self.assertEqual(completion.check_rows(required, delivered), [])
 
+    def test_lettered_sub_criterion_is_accepted_not_treated_as_malformed(self):
+        # issue 97: CHANGE_SPEC.json regenerated with an "AC-4b" id every
+        # ANALYZE cycle -- a reasonable sub-criterion convention, not a
+        # malformed schema. Rejecting it as unevaluable sent the whole run
+        # back through ANALYZE to rebuild baseline/spec/plan/review from
+        # scratch, every cycle, with no way out.
+        spec = {"schema": "uncle.artifact/v1", "kind": "change-spec",
+                "acceptance_criteria": [
+                    {"id": "AC-4", "criterion": "Base case", "verification": "UI check"},
+                    {"id": "AC-4b", "criterion": "Related sub-case", "verification": "UI check"},
+                ]}
+        notes = {"schema": "uncle.artifact/v1", "kind": "implementation-notes", "fragments": [
+            {"schema": "uncle.artifact/v1", "kind": "implementation-notes", "deliveries": [
+                {"id": "AC-4", "status": "IMPLEMENTED", "changed_code": "ui.py", "observed_verification": "PASS"},
+                {"id": "AC-4b", "status": "IMPLEMENTED", "changed_code": "ui.py", "observed_verification": "PASS"},
+            ]}
+        ]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spec_path, notes_path = root / 'CHANGE_SPEC.json', root / 'IMPLEMENTATION_NOTES.json'
+            spec_path.write_text(json.dumps(spec)); notes_path.write_text(json.dumps(notes))
+            required, delivered = completion.canonical_rows(spec_path, notes_path)
+        self.assertEqual(completion.check_rows(required, delivered), [])
+
     def test_nested_legacy_accumulator_is_flattened(self):
         leaf = {"schema": "uncle.artifact/v1", "kind": "implementation-notes", "deliveries": [
             {"id": "AC-1", "status": "IMPLEMENTED", "changed_code": "ui.py", "observed_verification": "PASS"}

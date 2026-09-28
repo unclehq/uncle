@@ -24,6 +24,33 @@ class Reuse(unittest.TestCase):
                     with self.assertRaises(ValueError):approval_snapshot.main('python3 --version',state)
             finally:os.chdir(old)
 
+    def test_record_is_not_raced_by_a_new_file_appearing_after_prepare(self):
+        # calculator-local (2026-09-28): the approval snapshot's path *set*
+        # was re-derived live (git diff/ls-files) on both prepare and record.
+        # A background job -- backgrounded preflight is the default -- still
+        # finishing between the two and touching the tree made record see a
+        # different set than prepare did, raising and killing the whole
+        # driver right after a correctly auto-recorded --unattended
+        # approval. State was left parked at WAIT_IMPLEMENT_APPROVAL with no
+        # process running -- indistinguishable from "still waiting."
+        with tempfile.TemporaryDirectory() as d:
+            old=os.getcwd();os.chdir(d)
+            try:
+                subprocess.run(['git','init','-q'],check=True)
+                subprocess.run(['git','config','commit.gpgsign','false'],check=True)
+                subprocess.run(['git','config','tag.gpgsign','false'],check=True)
+                state=Path('.uncle/workflow');(state/'approvals').mkdir(parents=True)
+                Path('app.txt').write_text('source')
+                (state/'approvals/IMPLEMENTATION_REVIEW.sha256').write_text('approved')
+                approval_snapshot.main('prepare',state)
+                # A background job writes a new untracked file in the window
+                # between prepare and record.
+                Path('background-output.txt').write_text('written by a still-finishing background job')
+                approval_snapshot.main('record',state)
+                recorded=json.loads((state/'approvals/IMPLEMENTATION_REVIEW.inputs.json').read_text())
+                self.assertNotIn('background-output.txt',recorded['inputs'])
+            finally:os.chdir(old)
+
     def test_approval_ignores_generated_uncle_evidence(self):
         with tempfile.TemporaryDirectory() as d:
             old=os.getcwd();os.chdir(d)

@@ -1729,11 +1729,20 @@ run_codex_review() {
             if [[ -s "$delivery_file" ]]; then
                 cp "$delivery_file" "$output_file"
             else
+                # Leave output_file missing rather than failing here directly:
+                # the empty-output retry below already exists and is proven
+                # for exactly this shape (exit 0, nothing written, a chat-only
+                # narration instead) -- it was only ever reachable for the
+                # legacy non-delivery-file path. A weak self-hosted worker
+                # narrating "the file has been written successfully" while
+                # never calling Write is the same failure, and previously
+                # skipped straight to status=1 with no retry at all, which is
+                # fatal for a noninteractive panel worker (immediate return).
                 echo "Reviewer $log_name did not write its required canonical JSON delivery: $delivery_file" >&2
-                status=1
+                rm -f "$output_file"
             fi
         fi
-        if [[ "$status" == 0 ]] && { ! normalize_reviewer_packet "$output_file" "$cmd" || ! validate_reviewer_artifact "$output_file" "$cmd"; }; then
+        if [[ "$status" == 0 ]] && [[ -s "$output_file" ]] && { ! normalize_reviewer_packet "$output_file" "$cmd" || ! validate_reviewer_artifact "$output_file" "$cmd"; }; then
             status=1
         fi
         perf_record reviewer "$log_name" "$((SECONDS-started))" "$status" \

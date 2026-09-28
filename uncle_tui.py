@@ -1038,6 +1038,14 @@ class UncleTUI:
         self.chat_focus = 'chat'
         self.home_menu_open = False
         self.sel = 0
+        # Chat-history persistence (issue 97)
+        self._history_path = os.path.join(_project_root(), '.uncle', 'workflow', 'chat-history.json')
+        self._load_chat_history()
+        # Incremental search state (issue 97)
+        self._search_active = False
+        self._search_text = ''
+        self._search_results = []
+        self._search_index = -1
     # ---- colors (cline's CLI palette) ----
     def _setup_colors(self):
         # emphasis sits between plain text and the bold user rows of the supervisor chat;
@@ -4905,13 +4913,43 @@ class UncleTUI:
         self.chat_error = ''
 
     # ---- control hotkeys (issue 92) ----
+    def _load_chat_history(self):
+        try:
+            path = getattr(self, '_history_path', os.path.join(_project_root(), '.uncle', 'workflow', 'chat-history.json'))
+            with open(path) as f:
+                data = json.load(f)
+            entries = data.get('entries', [])
+            self.input_history = [{'text': e if isinstance(e, str) else e['text'],
+                                   'gate': False, 'sent': False} for e in entries]
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            self.input_history = []
+
+    def _save_chat_history(self):
+        try:
+            path = Path(getattr(self, '_history_path', os.path.join(_project_root(), '.uncle', 'workflow', 'chat-history.json')))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            texts = [e['text'] for e in self.input_history if not e['gate']][-300:]
+            with open(path, 'w') as f:
+                json.dump({'entries': texts}, f)
+        except OSError:
+            pass
+
     def _remember_input(self, text, gate=False, sent=False):
-        """D-13: memory only; never written to disk."""
+        """D-13: memory only; never written to disk.
+
+        Issue 97: persists non-gate entries to .uncle/workflow/chat-history.json,
+        collapses duplicates (remove-then-append), caps at 300 entries.
+        """
         if not text.strip():
             return
         history = self.__dict__.setdefault('input_history', [])
+        history[:] = [e for e in history if e['text'] != text]
         history.append({'text': text, 'gate': gate, 'sent': sent})
+        if len(history) > 300:
+            del history[:-300]
         self.history_index = None
+        if not gate:
+            self._save_chat_history()
 
     def _recall_input(self, delta):
         """CB-6: Up/Down walk submitted chat inputs; gate answers are excluded."""
@@ -4985,9 +5023,11 @@ class UncleTUI:
             self.chat_error = ('Next run: UNATTENDED (Shift-Tab)' if self.session_auto_mode
                                else 'Next run: attended')
             return True
-        if k == 18 and self.state == 'running':  # Ctrl-R
-            self.transcript_full = not getattr(self, 'transcript_full', False)
-            return True
+        if k == 18:  # Ctrl-R
+            if self.state == 'running':
+                self.transcript_full = not getattr(self, 'transcript_full', False)
+                return True
+            return self._chat_search(k)
         if k == 2:  # Ctrl-B
             if self.state == 'running' and self._build_live() and not getattr(self, 'prompt_kind', ''):
                 self.backgrounded = True
@@ -5106,7 +5146,83 @@ class UncleTUI:
         finally:
             screen.timeout(saved)
 
+    # ---- incremental search (issue 97) ----
+    def _chat_search(self, k):
+        """Incremental history search triggered by Ctrl-R in the composer."""
+        if self.chat_focus != 'chat' or self.chat_edit or self.chat_picker:
+            return False
+        entries = [e['text'] for e in getattr(self, 'input_history', []) if not e['gate']]
+        if not entries:
+            self.chat_error = 'No history to search'
+            return True
+        if not getattr(self, '_search_active', False):
+            self._search_active = True
+            self._search_draft = self.chat_composer
+            self._search_text = ''
+            self._search_results = []
+            self._search_index = -1
+            self.history_index = None
+            self._chat_search_status(entries)
+            return True
+        if k == 18:  # Ctrl-R repeat: cycle forward
+            if self._search_results:
+                self._search_index = (self._search_index - 1) % len(self._search_results)
+                idx = self._search_results[self._search_index]
+                self.chat_composer = entries[idx]
+                self.history_index = idx
+            return True
+        if k == 27:  # Esc: cancel search, restore pre-search draft
+            self._search_active = False
+            self.chat_composer = getattr(self, '_search_draft', '')
+            self._search_draft = ''
+            self._search_text = ''
+            self._search_results = []
+            self._search_index = -1
+            self.chat_error = ''
+            return True
+        if k in (10, 13):  # Enter: accept search
+            self._search_active = False
+            self._search_text = ''
+            self._search_results = []
+            self._search_index = -1
+            self.chat_error = ''
+            return True
+        if k in (curses.KEY_BACKSPACE, 127, 8):
+            self._search_text = self._search_text[:-1]
+            self._chat_search_status(entries)
+            return True
+        if 32 <= k <= 0x10ffff and k < curses.KEY_MIN:
+            self._search_text += chr(k)
+            self._chat_search_status(entries)
+            return True
+        return False
+
+    def _chat_search_status(self, entries):
+        """Update search results and composer from current search text."""
+        if not self._search_text:
+            self._search_results = []
+            self._search_index = -1
+            self.chat_composer = ''
+            self.chat_error = ''
+        else:
+            needle = self._search_text.lower()
+            self._search_results = [i for i, e in enumerate(entries) if needle in e.lower()]
+            self._search_index = -1
+            if self._search_results:
+                self._search_index = 0  # start at newest
+                idx = self._search_results[self._search_index]
+                self.chat_composer = entries[idx]
+                self.history_index = idx
+            else:
+                self.chat_composer = ''
+                self.chat_error = 'No matches'
+            self._search_results = self._search_results or []
+            self._search_index = min(self._search_index, len(self._search_results) - 1) if self._search_results else -1
+
+    # ---- chat composer key handler ----
     def _chat_key(self, k):
+        if getattr(self, '_search_active', False):
+            return self._chat_search(k)
         if k == 9 and self.chat_focus == 'chat' and self._chat_menu():
             self._chat_accept()
             return True

@@ -84,5 +84,16 @@ assert (p/{peer!r}).exists()
         with self.assertRaisesRegex(ValueError, 'Checklist changed'):
             run(self.mapping,self.checklist,self.groups,self.root/'results')
 
+    def test_jobs_cap_matches_other_verify_job_callers(self):
+        # parallel_checks.py and shell_syntax.py both accept 1-16 for the same
+        # WORKFLOW_VERIFY_JOBS value; this runner used to cap at 8, so a
+        # perfectly valid setting like 10 crashed only this one caller.
+        with self.assertRaisesRegex(ValueError, 'Jobs must be 1–16'):
+            self.execute({}, jobs=17)
+        with self.assertRaisesRegex(ValueError, 'Jobs must be 1–16'):
+            self.execute({}, jobs=0)
+        results = self.execute({}, jobs=10)
+        self.assertEqual(results['MC-001']['status'], 'NOT_RUN')
+
 
 if __name__=='__main__': unittest.main()

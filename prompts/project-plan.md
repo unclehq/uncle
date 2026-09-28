@@ -164,11 +164,22 @@ binaries only after checking version/lockfile compatibility and actual usability
 Require fresh installation only when testing installation, when reuse is invalid,
 or when explicitly requested. State cache invalidation inputs in the setup step.
 
-Group independent file creation and verification work so the implementation model
-can batch it. Name concrete reasons for serial dependencies. Arrange for each
-required report to be written once after evidence is collected. On revision,
-change only what findings or requirements require; do not expand scope or invent
-additional tooling merely because another planning pass is occurring.
+Design step boundaries with parallelism as an input, not a retrofit. When the
+requested behavior naturally decomposes into components with no shared file
+and no ordering requirement (an isolated data layer plus an isolated UI,
+independent modules, config vs. logic), prefer that decomposition over one
+step that touches everything in sequence, so the implementation model can
+batch the independent steps. Never split a file, module, or step purely to
+manufacture concurrency where the underlying edits are not actually
+independent -- see Proportional implementation above; an artificial split
+that produces a merge conflict or a broken intermediate state costs more than
+the parallel step would ever save. When two steps do share a file, say why in
+that step's own text (e.g. "builds on step 2's change to this function"), not
+just a repeated `Owns:` entry -- a reviewer must be able to tell a real
+dependency from an easy default. Arrange for each required report to be
+written once after evidence is collected. On revision, change only what
+findings or requirements require; do not expand scope or invent additional
+tooling merely because another planning pass is occurring.
 
 ## Compact first draft
 

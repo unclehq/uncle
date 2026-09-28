@@ -373,6 +373,20 @@ class WorkerPackets(unittest.TestCase):
         change_prompt = SYNTHESIS.prompt(dict(plan, kind='change-plan'), review, workers, change=True)
         self.assertIn('"kind":"change-plan"', change_prompt)
 
+    def test_synthesis_reminds_owns_and_depends_on_when_editing_implementation_sequence(self):
+        # edit_sections replaces a whole section body in one shot; if the
+        # revision touches Implementation sequence, the declared parallel
+        # structure (Owns:/Depends on:) must not silently get dropped or
+        # loosened just because this sealed prompt never restated the rule.
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative':
+                '# Title\n\n## Implementation sequence\n\n1. Do it. — Owns: `a.py`',
+                'verification_commands': 'true', 'protected_verification_paths': 'tests'}
+        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}
+        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
+        prompt = SYNTHESIS.prompt(plan, review, workers)
+        self.assertIn('is `Implementation sequence`, every step in the new body still ends with', prompt)
+        self.assertIn('do not drop or loosen them', prompt)
+
     def test_synthesis_still_requires_the_short_app_plan_fields(self):
         plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## 1. X\n\nY.',
                 'verification_commands': 'true', 'protected_verification_paths': 'tests'}

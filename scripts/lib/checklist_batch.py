@@ -33,8 +33,11 @@ def report_draft(checks, results):
 
 
 def run(mapping, checklist, groups_file, output, jobs=4, timeout=300):
-    if not 1 <= jobs <= 8 or timeout <= 0:
-        raise ValueError('Jobs must be 1–8 and timeout must be positive')
+    # Match the 1-16 range parallel_checks.py/shell_syntax.py accept for the
+    # same WORKFLOW_VERIFY_JOBS value; a narrower cap here made a valid
+    # env-var setting (e.g. 10) crash this runner alone.
+    if not 1 <= jobs <= 16 or timeout <= 0:
+        raise ValueError('Jobs must be 1–16 and timeout must be positive')
     raw = Path(checklist).read_bytes()
     checks, by_id, warnings = parse(raw.decode('utf-8'))
     errors = validate(checks, by_id)

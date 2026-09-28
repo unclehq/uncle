@@ -79,7 +79,12 @@ two optional arrays:
 
 - `edit_sections`: `[{"heading": "<exact existing heading, copied verbatim from
   the list below>", "content": "<the section's whole new body, heading line
-  excluded>"}]`. Replaces one existing section's body in full.
+  excluded>"}]`. Replaces one existing section's body in full. If the heading
+  is `Implementation sequence`, every step in the new body still ends with
+  `Owns:` (and `Depends on:` where one step needs another finished first) --
+  the base plan's steps you are not otherwise changing keep the exact `Owns:`/
+  `Depends on:` they already have; do not drop or loosen them while rewriting
+  the section for the finding at hand.
 - `insert_sections`: `[{"content": "<a whole new section, its own \\"## \\"
   heading line included>", "after": "<an existing heading to insert after>"}]`.
   Use `"before"` instead of `"after"` to insert before that heading, or

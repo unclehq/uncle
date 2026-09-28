@@ -1711,7 +1711,7 @@ run_codex_review() {
     [[ -z "$model" ]] || echo "Model: $model"
     status_stage_context "$log_name" "${model:-}" review
     local status=0
-    local started retry_answer empty_retried=""
+    local started retry_answer empty_retried="" schema_error=""
     while true; do
         started="$SECONDS"
         # stdin is the operator's gate-answer channel, not stage input: codex
@@ -1742,8 +1742,13 @@ run_codex_review() {
                 rm -f "$output_file"
             fi
         fi
-        if [[ "$status" == 0 ]] && [[ -s "$output_file" ]] && { ! normalize_reviewer_packet "$output_file" "$cmd" || ! validate_reviewer_artifact "$output_file" "$cmd"; }; then
-            status=1
+        schema_error=""
+        if [[ "$status" == 0 ]] && [[ -s "$output_file" ]]; then
+            if ! schema_error="$(normalize_reviewer_packet "$output_file" "$cmd" 2>&1)"; then
+                status=1
+            elif ! schema_error="$(validate_reviewer_artifact "$output_file" "$cmd" 2>&1)"; then
+                status=1
+            fi
         fi
         perf_record reviewer "$log_name" "$((SECONDS-started))" "$status" \
             "$LOG_DIR/${log_name}.log" "$cmd" "$model" "$effort"
@@ -1777,6 +1782,30 @@ run_codex_review() {
                 continue
             fi
             status=1
+        fi
+
+        # calculator-local/issue-98 (2026-09-28): a worker that DID write a
+        # file, but in a shape it invented instead of the required schema --
+        # e.g. keying rows by acceptance-criterion name with status/verified
+        # fields, not the {schema,kind,findings:[{id,summary,evidence}]}
+        # worker-packet envelope. This previously went straight to status=1
+        # with no retry, same dead end as the empty-output case above. One
+        # bounded retry, with the exact schema error the driver already has,
+        # same one-shot budget as that case.
+        if [[ "$status" != 0 && -n "$schema_error" && -s "$output_file" ]]; then
+            if [[ -z "$empty_retried" ]]; then
+                empty_retried=1
+                echo
+                echo "Reviewer $log_name wrote $output_file in the wrong shape; retrying once with the exact schema error."
+                {
+                    cat "$prompt_file"
+                    printf '\n\n## Required retry\n\nThe previous attempt wrote %s, but the driver rejected it:\n\n%s\n\nWrite the complete document again, in exactly the required schema -- not a shape you invent, whatever seems reasonable for the content. This driver is unattended; nobody will answer a question left open.\n' "$output_file" "$schema_error"
+                } > "$STATE_DIR/${log_name}-schema-retry-prompt.md"
+                prompt_file="$STATE_DIR/${log_name}-schema-retry-prompt.md"
+                rm -f "$output_file"
+                status=0
+                continue
+            fi
         fi
 
         [[ "$status" != 0 ]] || break

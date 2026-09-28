@@ -24,6 +24,24 @@ class Validate(unittest.TestCase):
             stored = json.loads((root / '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json').read_text())
             self.assertEqual(len(stored['fragments']), 1)
 
+    def test_notes_shaped_fragment_is_not_silently_dropped(self):
+        # calculator-local: the prompt asks for "concise implementation
+        # notes" without giving changed_files/deviations field names, and a
+        # model produced a plain [{topic, detail}] list instead -- real,
+        # substantive content that rendered as an empty document because
+        # render_fragment_body only recognized the two named shapes.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path = root / 'IMPLEMENTATION_NOTES.md'
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
+                       'notes': [{'topic': 'Backspace-in-error (AR-002)',
+                                  'detail': 'Clears the error and resets to 0.'}]}
+            path.write_text(json.dumps(payload))
+            self.assertTrue(notes.validate(root, 'IMPLEMENTATION_NOTES.md'))
+            text = path.read_text()
+            self.assertIn('### Notes', text)
+            self.assertIn('**Backspace-in-error (AR-002)**: Clears the error and resets to 0.', text)
+
     def test_legacy_markdown_is_a_noop(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

@@ -77,6 +77,19 @@ def render_fragment_body(payload):
     unresolved = payload.get('unresolved_concerns') or []
     if unresolved:
         lines += ['### Unresolved concerns', ''] + ['- ' + str(entry) for entry in unresolved] + ['']
+    # A model asked for "concise implementation notes" with no field names
+    # given (unlike changed_files/deviations, which the prompt spells out)
+    # commonly produces a plain {topic, detail} list instead -- real,
+    # substantive content that silently rendered as nothing at all.
+    notes = payload.get('notes') or []
+    if notes:
+        lines += ['### Notes', '']
+        for entry in notes:
+            if isinstance(entry, dict) and entry.get('topic'):
+                lines.append('- **%s**: %s' % (entry['topic'], entry.get('detail', '')))
+            else:
+                lines.append('- ' + str(entry))
+        lines.append('')
     raw = payload.get('raw_markdown')
     if raw and raw.strip():
         lines += [raw.strip(), '']

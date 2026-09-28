@@ -42,6 +42,7 @@ def prompt(plan, review, workers, change=False):
                          'required top-level strings, even when unchanged.')
     _, sections = split_sections(plan.get('narrative') or '')
     headings = '\n'.join('- `%s`' % section['heading'] for section in sections) or '(the base plan has no `## ` sections)'
+    example_kind = 'change-plan' if change else 'plan'
     return '''You are revising an approved %s after adversarial review.
 
 This is a sealed synthesis task. The complete authoritative inputs are embedded
@@ -54,7 +55,18 @@ commands, or write any file except the one canonical delivery path supplied by
 the driver. Your final chat response is diagnostics only; the driver publishes
 that file as `.uncle/docs/%s`. It must have
 schema `uncle.artifact/v1`, kind `%s`, one disposition for every AR finding,
-and a `patch` object naming only what changed -- never the plan's full text.%s
+and a `patch` object naming only what changed.%s
+
+Do not write a top-level `narrative` key -- not `null`, not the unchanged
+text, not present at all. This is enforced: the driver silently discards any
+`narrative` you include and reconstructs the plan's full text from `patch`
+alone, against the base plan already on disk. Writing one out costs you
+generation time for zero effect on the result. Shape your reply exactly like
+this, with nothing else at the top level:
+
+```json
+{"schema":"uncle.artifact/v1","kind":"%s","dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}],"patch":{"edit_sections":[{"heading":"...","content":"..."}],"insert_sections":[]}}
+```
 
 Do not reproduce a section you are not changing: every section not named in
 `patch` carries over from the base plan exactly as it already is. `patch` has
@@ -74,7 +86,7 @@ Every disposition's `plan_change` must be reflected by some `patch` entry: a
 disposition with no matching edit or insert is a rejected delivery. The
 disposition fields are finding, disposition (Accepted, Partially accepted,
 Rejected, or Deferred), reason, and plan_change. Do not write Markdown, a
-summary, a draft, or progress commentary.
+summary, a draft, or progress commentary, and do not write a `narrative` key.
 
 ## Existing sections in the base plan, in order
 
@@ -96,7 +108,7 @@ Quote a heading exactly, as printed here, to edit it or to anchor an insert.
 ```json
 %s
 ```
-''' % (label, artifact, plan['kind'], extra_fields, headings,
+''' % (label, artifact, plan['kind'], extra_fields, example_kind, headings,
        json.dumps(plan, indent=2, sort_keys=True),
        json.dumps(review, indent=2, sort_keys=True),
        json.dumps(workers, indent=2, sort_keys=True))

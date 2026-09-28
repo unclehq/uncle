@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -351,6 +352,26 @@ class WorkerPackets(unittest.TestCase):
         self.assertIn('## 1. Approach', prompt)
         self.assertIn('## 22. Risks', prompt)
         self.assertIn("disposition's `plan_change` must be reflected", prompt)
+
+    def test_synthesis_forbids_a_narrative_key_and_shows_an_example(self):
+        # issue 97: the model wrote a patch AND a full, redundant narrative
+        # anyway, so the fix's speed benefit was only partial. Make the
+        # instruction a literal, example-backed constraint instead of prose.
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## 1. X\n\nY.',
+                'verification_commands': 'true', 'protected_verification_paths': 'tests'}
+        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}
+        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
+        prompt = SYNTHESIS.prompt(plan, review, workers)
+        self.assertIn('Do not write a top-level `narrative` key', prompt)
+        self.assertIn('the driver silently discards any\n`narrative` you include', prompt)
+        # A concrete example with the exact top-level keys, no narrative.
+        example = re.search(r'```json\n(\{"schema".*?\})\n```', prompt)
+        self.assertIsNotNone(example)
+        shown = json.loads(example.group(1))
+        self.assertEqual(set(shown), {'schema', 'kind', 'dispositions', 'patch'})
+        self.assertEqual(shown['kind'], 'plan')
+        change_prompt = SYNTHESIS.prompt(dict(plan, kind='change-plan'), review, workers, change=True)
+        self.assertIn('"kind":"change-plan"', change_prompt)
 
     def test_synthesis_still_requires_the_short_app_plan_fields(self):
         plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## 1. X\n\nY.',

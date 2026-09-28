@@ -455,7 +455,13 @@ implementation_incomplete_choice() {
     # exactly the same broken contract, so offering the normal choices creates
     # an infinite, misleading prompt loop.  Send it back through the existing
     # specification-and-plan approval path instead.
-    if [[ -s "$completion" ]] && grep -qvE '^AC-[0-9]+: requires IMPLEMENTED,' "$completion"; then
+    #
+    # [a-z]?: one optional trailing letter for a closely related sub-criterion
+    # (AC-4b) -- implementation-completion.py accepts the same id shape (issue
+    # 97: rejecting it here sent an otherwise-evaluable, ordinary rejected row
+    # through this same "cannot be evaluated" branch, a full ANALYZE restart,
+    # every time this one id recurred).
+    if [[ -s "$completion" ]] && grep -qvE '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion"; then
         echo
         echo 'The approved acceptance contract cannot be evaluated; implementation cannot repair it.'
         echo 'Repair rebuilds .uncle/docs/CHANGE_SPEC.md and .uncle/docs/CHANGE_PLAN.md from the request and baseline, then asks for approval again.'
@@ -509,7 +515,7 @@ implementation_incomplete_choice() {
         echo "Rejected rows:"
         sed 's/^/  /' "$completion"
         # Format errors cannot be waived as acceptance rows.
-        if ! grep -qvE '^AC-[0-9]+: requires IMPLEMENTED,' "$completion"; then
+        if ! grep -qvE '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion"; then
             ids="$(awk -F: '{ printf "%s ", $1 }' "$completion")"
         fi
     fi
@@ -3245,7 +3251,7 @@ sys.exit(0 if all(isinstance(f, dict) and f.get("driver_fallback") is True for f
     # advance; structural errors, missing IDs, and unrelated waivers still fail.
     [[ -s "$completion" ]] || return 1
     while IFS= read -r line; do
-        [[ "$line" =~ ^(AC-[0-9]+):\ requires\ IMPLEMENTED, ]] || return 1
+        [[ "$line" =~ ^(AC-[0-9]+[a-z]?):\ requires\ IMPLEMENTED, ]] || return 1
         id="${BASH_REMATCH[1]}"
         waiver="$(waive_file "$id")"
         [[ -s "$waiver" ]] || return 1

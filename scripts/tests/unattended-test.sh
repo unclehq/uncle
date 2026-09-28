@@ -248,6 +248,21 @@ if [[ -s "$w" ]]; then ok; else bad "ic-waiver-file" "no waiver written for AC-1
 if grep -q "unattended run" "$w" 2>/dev/null; then ok
 else bad "ic-waiver-reason" "waiver does not say it was unattended"; fi
 
+# issue 97: a lettered sub-criterion (AC-4b) is an ordinary rejected row, not
+# a malformed contract -- it must waive (return 2) the same as AC-1 above, not
+# fall into the "cannot be evaluated" full-restart branch (return 3).
+rm -f "$ic/.uncle/workflow/unattended-gates" "$ic/.uncle/workflow/waivers/AC-1"
+printf 'AC-4b: requires IMPLEMENTED, changed code, and observed targeted verification; got missing\n' \
+    > "$ic/.uncle/workflow/implementation-completion.txt"
+out="$(cd "$ic" && ROOT="$ROOT" UNATTENDED=1 bash gate.sh < /dev/null 2>&1)"
+check "ic-lettered-id-returns" "CHOICE_RETURNED 2" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+case "$out" in
+    *"cannot be evaluated"*) bad "ic-lettered-id-not-malformed" "AC-4b was wrongly treated as a malformed contract" ;;
+    *) ok ;;
+esac
+if [[ -s "$ic/.uncle/workflow/waivers/AC-4b" ]]; then ok
+else bad "ic-lettered-id-waiver-file" "no waiver written for AC-4b"; fi
+
 # Prompt #3: no rejected rows at all -- the implementation delivered nothing,
 # so implementation-completion.txt was never written. There is nothing on the
 # record to waive. Unattended used to call record_waiver with no ids, which

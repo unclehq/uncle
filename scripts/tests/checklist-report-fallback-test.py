@@ -77,6 +77,23 @@ class ChecklistReportFallbackTests(unittest.TestCase):
             self.assertIn('## Acceptance gate', report)
             self.assertIn('CHECKLIST-EVIDENCE-MISSING', (docs / 'DEFECTS.md').read_text())
 
+    def test_missing_only_recovers_a_report_misplaced_at_the_project_root(self):
+        # calculator-local (2026-09-28): prompts/execute-checklist.md says
+        # "Create .uncle/docs/VERIFICATION_REPORT.md", but the agent wrote a
+        # real, substantial report to the bare project-root filename instead.
+        # report.is_file() at the canonical path then saw nothing, and this
+        # module fabricated a placeholder in its place -- discarding the
+        # agent's actual evidence entirely.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            docs = root / '.uncle/docs'
+            docs.mkdir(parents=True)
+            (docs / 'MANUAL_CHECKLIST.md').write_text('### MC-1: First\n- Exact action: x\n- Expected result: y\n')
+            (root / 'VERIFICATION_REPORT.md').write_text('real evidence written to the wrong place\n')
+            subprocess.run(['python3', str(SCRIPT), '--project', str(root), '--missing-only'], check=True)
+            self.assertEqual('real evidence written to the wrong place\n', (docs / 'VERIFICATION_REPORT.md').read_text())
+            self.assertFalse((root / 'VERIFICATION_REPORT.md').is_file())
+
     def test_missing_only_preserves_a_real_report(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

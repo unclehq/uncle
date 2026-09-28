@@ -149,6 +149,19 @@ def main(argv):
         return 1
     docs.mkdir(parents=True, exist_ok=True)
     report, defect = docs / 'VERIFICATION_REPORT.md', docs / 'DEFECTS.md'
+    # calculator-local (2026-09-28): prompts/execute-checklist.md tells the
+    # agent to "Create .uncle/docs/VERIFICATION_REPORT.md", and the agent
+    # wrote a real, substantial report -- just to the bare project-root
+    # filename instead of that path. report.is_file() below then saw nothing
+    # and this function fabricated a placeholder in its place, discarding the
+    # agent's actual evidence. A loose file with the exact canonical name
+    # sitting at the project root is overwhelmingly a misplaced write, not a
+    # coincidence; recover it before deciding whether real evidence exists.
+    for canonical in (report, defect):
+        misplaced = project / canonical.name
+        if not (canonical.is_file() and canonical.stat().st_size > 0) and misplaced.is_file() and misplaced.stat().st_size > 0:
+            print(f'Recovering {canonical.name}: the agent wrote it to the project root instead of {canonical}.', file=sys.stderr)
+            misplaced.rename(canonical)
     # True when the execution stage's own report is on disk and --missing-only
     # kept it. prompts/change/execute-change-checklist.md asks the agent for
     # Markdown only -- it never names a canonical JSON -- so this is where a

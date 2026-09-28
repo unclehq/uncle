@@ -439,6 +439,36 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
                 run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-change-plan')
         self.assertEqual(json_module.loads((self.root/delivery).read_text(encoding='utf-8')), payload)
 
+    def test_chat_only_patch_response_is_expanded_before_self_hosted_validates_it(self):
+        # After the fix above, issue 97's updated-change-plan produced a
+        # correct patch-only response (exactly what updated_plan_synthesis_
+        # prompt.py asks for) delivered by chat recovery -- and self_hosted.py
+        # rejected it anyway with "change-plan has no narrative", because its
+        # OWN internal document_response()/publish_plan_json() render the raw
+        # response before the shell driver's expand_patch() ever sees it.
+        import self_hosted, json as json_module
+        base = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan',
+                'narrative': '## 1. Approach\n\nOriginal.\n\n## 2. Risks\n\nNone.'}
+        (self.root/'.uncle/workflow/documents').mkdir(parents=True)
+        (self.root/'.uncle/workflow/documents/CHANGE_PLAN.json').write_text(json_module.dumps(base))
+        payload = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan',
+                   'dispositions': [{'finding': 'AR-001', 'disposition': 'Accepted',
+                                     'reason': 'x', 'plan_change': 'x'}],
+                   'patch': {'edit_sections': [{'heading': '## 1. Approach', 'content': 'Revised.'}]}}
+
+        def generate(side, values, prompt, staged, **kwargs):
+            return '\n\n```json\n' + json_module.dumps(payload) + '\n```\n', 1
+
+        delivery = '.uncle/workflow/artifact-delivery/updated-change-plan.json'
+        with patch.dict(os.environ, {'UNCLE_ARTIFACT_DELIVERY': delivery}):
+            with patch.object(self_hosted, '_run_opencode', side_effect=generate):
+                run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-change-plan')
+        delivered = json_module.loads((self.root/delivery).read_text(encoding='utf-8'))
+        self.assertIn('## 1. Approach\n\nRevised.', delivered['narrative'])
+        self.assertIn('## 2. Risks\n\nNone.', delivered['narrative'])
+        stored = json_module.loads((self.root/'.uncle/workflow/documents/CHANGE_PLAN.json').read_text())
+        self.assertEqual(stored['narrative'], delivered['narrative'])
+
     def test_a_genuinely_missing_delivery_still_fails(self):
         # The recovery above must not swallow the real failure: chat text
         # that isn't our JSON contract at all still has nothing to recover.

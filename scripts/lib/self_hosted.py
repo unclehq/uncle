@@ -728,6 +728,53 @@ def _artifact_json_module():
     return _module
 
 
+def _plan_patch_module():
+    _spec = importlib.util.spec_from_file_location('plan_patch', Path(__file__).with_name('plan_patch.py'))
+    _module = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_module)
+    return _module
+
+
+# The base document a patch-shaped synthesis response (see
+# updated_plan_synthesis_prompt.py) applies against. Mirrors
+# publish_agent_artifact.py's PATCH_BASE for the same reason:
+# 'updated-change-plan' revises CHANGE_PLAN.md in place, so its base and its
+# own target share a name.
+PATCH_BASE = {
+    'updated-plan': 'PROJECT_PLAN.md',
+    'updated-change-plan': 'CHANGE_PLAN.md',
+}
+
+
+def expand_patch_response(text, root, stage_name):
+    """Reconstruct `narrative` from `patch` in a self-hosted response's JSON.
+
+    self_hosted.py validates and renders a plan/change-plan response itself
+    (document_response(), publish_plan_json()) before the shell driver's own
+    publish_agent_artifact.py ever sees it. Those still require `narrative`
+    directly, so a correct patch-only response -- exactly what
+    updated_plan_synthesis_prompt.py now asks for -- failed here first with
+    "change-plan has no narrative", regardless of whether it arrived by file
+    or by chat recovery. Any response that isn't a patch-shaped JSON object
+    for one of these stages is returned unchanged."""
+    if stage_name not in PATCH_BASE:
+        return text
+    artifact_json = _artifact_json_module()
+    unfenced = artifact_json.unfence_json(text)
+    try:
+        payload = json.loads(unfenced)
+    except (ValueError, TypeError):
+        return text
+    if not isinstance(payload, dict) or 'patch' not in payload:
+        return text
+    try:
+        base = artifact_json.read(root, PATCH_BASE[stage_name])
+    except (OSError, ValueError) as error:
+        raise ValueError('patch: base document %s is missing or invalid: %s'
+                         % (PATCH_BASE[stage_name], error)) from error
+    payload['narrative'] = _plan_patch_module().apply_patch(base.get('narrative') or '', payload['patch'])
+    return json.dumps(payload)
+
+
 def is_json_response(text):
     """True when TEXT (a chat response or a file the model wrote directly)
     is our JSON contract rather than already-rendered Markdown. A model that
@@ -1043,9 +1090,10 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                             usage[key] = usage.get(key, 0) + value
                 if candidate.is_symlink():
                     raise ValueError('Refusing a symlinked plan; original preserved')
+                response = expand_patch_response(response, root, stage_name)
                 try:
                     if candidate.exists():
-                        file_text = candidate.read_text(encoding='utf-8')
+                        file_text = expand_patch_response(candidate.read_text(encoding='utf-8'), root, stage_name)
                         if is_json_response(file_text):
                             if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md':
                                 file_text = preserve_updated_plan_contract(file_text, root)

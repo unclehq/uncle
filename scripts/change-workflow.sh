@@ -2252,7 +2252,16 @@ CANONICAL_WORKER_PACKET_CONTRACT
                 fi
                 ;;
             change-plan|updated-change-plan)
-                if [[ "${UNCLE_COMBINED_CHANGE_PLAN:-0}" == 1 ]]; then
+                # A self-hosted runner already gets its own delivery contract
+                # from self_hosted.py's delivery_notice, pointing at the
+                # disposable staged copy's own path. Appending this one too
+                # -- naming the live tree's $agent_delivery, which sits
+                # outside that sandbox and is denied -- gave the model two
+                # conflicting instructions; one real run tried the denied
+                # live path, then narrated success without writing anywhere.
+                if [[ "${UNCLE_RESOLVED_RUNNER:-}" == self-hosted ]]; then
+                    :
+                elif [[ "${UNCLE_COMBINED_CHANGE_PLAN:-0}" == 1 ]]; then
                     cat >> "$effective_prompt" <<'CANONICAL_PLANNING_BUNDLE_CONTRACT'
 
 ## Canonical combined planning delivery (binding)

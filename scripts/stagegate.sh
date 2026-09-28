@@ -1497,20 +1497,29 @@ CANONICAL_WORKER_PACKET_CONTRACT
                 fi
                 ;;
             requirements|project-plan|updated-plan)
-                cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
+                # A self-hosted runner already gets its own delivery contract
+                # from self_hosted.py's delivery_notice, pointing at the
+                # disposable staged copy's own path. Appending this one too
+                # -- naming the live tree's $agent_delivery, which sits
+                # outside that sandbox and is denied -- gave the model two
+                # conflicting instructions; one real run tried the denied
+                # live path, then narrated success without writing anywhere.
+                if [[ "${UNCLE_RESOLVED_RUNNER:-}" != self-hosted ]]; then
+                    cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
 
 ## Canonical artifact contract (binding)
 
 Use your Write tool to create exactly one complete `uncle.artifact/v1` JSON
 object at `
 CANONICAL_ARTIFACT_CONTRACT
-                printf '%s' "$agent_delivery" >> "$effective_prompt"
-                cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
+                    printf '%s' "$agent_delivery" >> "$effective_prompt"
+                    cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
 `. This file is the only authoritative handoff; chat text is diagnostics only.
 Do not write a Markdown view or modify another file.
 CANONICAL_ARTIFACT_CONTRACT
-                if [[ -n "$artifact_error" ]]; then
-                    printf '\nThe previous canonical delivery was rejected: %s\nUse Write to replace the same delivery file with a complete corrected JSON object.\n' "$artifact_error" >> "$effective_prompt"
+                    if [[ -n "$artifact_error" ]]; then
+                        printf '\nThe previous canonical delivery was rejected: %s\nUse Write to replace the same delivery file with a complete corrected JSON object.\n' "$artifact_error" >> "$effective_prompt"
+                    fi
                 fi
                 ;;
         esac

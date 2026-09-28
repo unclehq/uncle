@@ -1854,6 +1854,48 @@ run_updated_plan_panel() {
         "$UPDATED_PLAN_PROMPT" || return 1
 }
 
+# Three lenses (tooling, data, reviewers) run concurrently: each only reads
+# files and runs local version-check/status commands, so nothing collides.
+# The fourth lens (browser) launches a real browser and/or binds a real port
+# -- side effects that would race against a concurrent instance of themselves
+# or each other -- so it always runs afterward, alone. A worker packet is the
+# authoritative source for its own rows; unlike the review panels there is no
+# separate synthesis agent to fall back on, so any worker failure fails the
+# whole panel and the caller falls back to the single-agent investigation.
+run_preflight_investigation_panel() {
+    local directory="$STATE_DIR/preflight-panel" lens prompt output pid
+    local -a pids=()
+    [[ "${WORKFLOW_PREFLIGHT_PANEL:-1}" == 1 ]] || return 1
+    local tools; tools="$(stage_tools preflight-investigate)"
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    echo "Preflight investigation panel: launching 3 workers in parallel (tooling, data, reviewers); browser follows serially."
+    for lens in tooling data reviewers; do
+        prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
+        cp "$ROOT/prompts/preflight-investigate-worker.md" "$prompt"
+        printf '\n## Assigned lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        if [[ "$lens" == data ]]; then
+            printf '\nAlso write the pre-implementation input files that `Files the plan says to create` requires you to derive -- this lens, and only this lens, owns that work.\n' >> "$prompt"
+        fi
+        ( UNCLE_WORKER_PACKET_PATH="$output" run_claude "$prompt" "preflight-worker-$lens" "$tools" ) \
+            > "$LOG_DIR/preflight-worker-$lens.log" 2>&1 &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || { echo 'Preflight worker failed; falling back to the single-agent investigation.' >&2; return 1; }
+    done
+    prompt="$directory/prompts/browser.md"; output="$directory/browser.json"
+    cp "$ROOT/prompts/preflight-investigate-worker.md" "$prompt"
+    printf '\n## Assigned lens\n\nFocus only on **browser**.\n' >> "$prompt"
+    UNCLE_WORKER_PACKET_PATH="$output" run_claude "$prompt" "preflight-worker-browser" "$tools" \
+        > "$LOG_DIR/preflight-worker-browser.log" 2>&1 \
+        || { echo 'Preflight browser worker failed; falling back to the single-agent investigation.' >&2; return 1; }
+    python3 "$ROOT/scripts/lib/preflight_worker_packets.py" "$directory" "$STATE_DIR/documents/PREFLIGHT_REPORT.json" \
+        --expected tooling data reviewers browser \
+        || { echo 'Preflight worker packets rejected; falling back to the single-agent investigation.' >&2; return 1; }
+    python3 "$ROOT/scripts/lib/acceptance_context.py" --render \
+        "$STATE_DIR/documents/PREFLIGHT_REPORT.json" .uncle/docs/PREFLIGHT_REPORT.md || return 1
+}
+
 run_updated_plan_fast_path() {
     ensure_project_plan_json || return 1
     require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" || return 1
@@ -2503,17 +2545,21 @@ run_stage() {
             else
                 echo "Preflight: requesting model diagnosis of unresolved prerequisites."
                 if stage_uses_self_hosted preflight AGENT; then
-                    preflight_investigation=".uncle/workflow/preflight-investigation.md"
-                    rm -f "$preflight_investigation"
-                    run_claude prompts/preflight-investigate.md preflight-investigate
-                    require_file "$preflight_investigation"
-                    cp "$preflight_investigation" .uncle/docs/PREFLIGHT_REPORT.md
-                    python3 "$ROOT/scripts/lib/acceptance_context.py" --export-json \
-                        .uncle/docs/PREFLIGHT_REPORT.md . PREFLIGHT_REPORT || exit 1
-                    python3 "$ROOT/scripts/lib/acceptance_context.py" --render \
-                        "$STATE_DIR/documents/PREFLIGHT_REPORT.json" \
-                        .uncle/docs/PREFLIGHT_REPORT.md || exit 1
-                    echo 'Preflight fast path: deterministically rendered canonical JSON from the completed investigation.'
+                    if run_preflight_investigation_panel; then
+                        echo 'Preflight investigation panel: canonical JSON collated from parallel worker packets.'
+                    else
+                        preflight_investigation=".uncle/workflow/preflight-investigation.md"
+                        rm -f "$preflight_investigation"
+                        run_claude prompts/preflight-investigate.md preflight-investigate
+                        require_file "$preflight_investigation"
+                        cp "$preflight_investigation" .uncle/docs/PREFLIGHT_REPORT.md
+                        python3 "$ROOT/scripts/lib/acceptance_context.py" --export-json \
+                            .uncle/docs/PREFLIGHT_REPORT.md . PREFLIGHT_REPORT || exit 1
+                        python3 "$ROOT/scripts/lib/acceptance_context.py" --render \
+                            "$STATE_DIR/documents/PREFLIGHT_REPORT.json" \
+                            .uncle/docs/PREFLIGHT_REPORT.md || exit 1
+                        echo 'Preflight fast path: deterministically rendered canonical JSON from the completed investigation.'
+                    fi
                 else
                     run_claude prompts/preflight.md preflight
                 fi

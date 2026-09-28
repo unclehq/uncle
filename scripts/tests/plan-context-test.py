@@ -78,6 +78,35 @@ class PlanContext(unittest.TestCase):
             self.assertEqual(payload['verification_commands'], 'pytest -q')
             self.assertEqual(payload['narrative'], '## 15. Risks\n\nNone.')
 
+    def test_project_plan_export_keeps_the_narrative_when_verification_commands_comes_first(self):
+        # calculator-local (2026-09-28): the prompt never says Verification
+        # commands must be the last section. A model that wrote it first --
+        # a reasonable reading -- lost its entire plan here: splitting on the
+        # heading and keeping only "before" text kept an empty narrative and
+        # silently discarded the 140+ lines that followed. The run then
+        # proceeded through review and updated-plan on a near-empty plan.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); plan = root/'PROJECT_PLAN.md'
+            plan.write_text('## Verification commands\n\n```sh\npytest\n```\n\n'
+                            '## 1. Architecture\n\nStatic app.\n\n## 2. Authoritative state\n\nNone.\n',
+                            encoding='utf-8')
+            payload = module.export_project_plan(plan, root)
+            self.assertEqual(payload['verification_commands'], 'pytest')
+            self.assertIn('## 1. Architecture', payload['narrative'])
+            self.assertIn('## 2. Authoritative state', payload['narrative'])
+            self.assertNotIn('Verification commands', payload['narrative'])
+
+    def test_project_plan_export_keeps_the_narrative_when_verification_commands_is_in_the_middle(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); plan = root/'PROJECT_PLAN.md'
+            plan.write_text('## 1. Architecture\n\nStatic app.\n\n## Verification commands\n\n```sh\npytest\n```\n\n'
+                            '## 2. Authoritative state\n\nNone.\n', encoding='utf-8')
+            payload = module.export_project_plan(plan, root)
+            self.assertEqual(payload['verification_commands'], 'pytest')
+            self.assertIn('## 1. Architecture', payload['narrative'])
+            self.assertIn('## 2. Authoritative state', payload['narrative'])
+            self.assertNotIn('Verification commands', payload['narrative'])
+
     def test_json_like_plan_with_bare_keys_is_ingested(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d); plan = root/'PROJECT_PLAN.md'

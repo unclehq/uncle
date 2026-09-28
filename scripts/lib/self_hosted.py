@@ -984,7 +984,12 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
     # OpenCode never edits the live project during planning. Publish only the
     # required document after validation; incidental model edits stay isolated.
     with tempfile.TemporaryDirectory(prefix='uncle-plan-') as directory:
-        staged = Path(directory) / 'project'
+        # macOS returns /var/folders/... here, a symlink to /private/var/folders/....
+        # OpenCode resolves its own worktree root internally; handing it the
+        # unresolved path makes every write inside `staged` look external to
+        # that resolved root, so `external_directory: deny` blocks it -- the
+        # model can edit nothing in its own sandbox and every delivery fails.
+        staged = Path(directory).resolve() / 'project'
         excluded = shutil.ignore_patterns('.git', '.uncle', '.opencode*', 'node_modules', '.venv', 'venv', '__pycache__')
         def ignore(directory, names):
             return set(excluded(directory, names)) | {name for name in names if (Path(directory)/name).is_symlink()}

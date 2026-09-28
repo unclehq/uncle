@@ -337,6 +337,25 @@ printf '%s:%s:%s\\n' "$(uncle_stage_runner "$stage")" "$(uncle_stage_side "$stag
                     self.assertEqual(plan.read_text(encoding='utf-8'), valid)
             self.assertFalse((self.root/'unwanted.py').exists())
 
+    def test_staged_plan_directory_is_a_resolved_path(self):
+        # macOS hands tempfile.TemporaryDirectory() an unresolved /var/folders/...
+        # path (a symlink to /private/var/folders/...). OpenCode resolves its
+        # own worktree root internally, so a model told to write inside the
+        # unresolved path sees every edit as outside that root and
+        # `external_directory: deny` blocks it -- every delivery in that run
+        # fails with "the tool system is blocking all my attempts," never a
+        # validation error, because the file is never written at all.
+        import self_hosted
+        valid = '## Verification commands\n```bash\npytest\n```\n## Protected verification paths\n```text\ntests/\n```\n'
+        captured = {}
+        def generate(side, values, prompt, staged, **kwargs):
+            captured['staged'] = staged
+            (staged/'.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text(valid)
+            return 'response', 1
+        with patch.object(self_hosted, '_run_opencode', side_effect=generate):
+            run_opencode('agent', self.values(), 'Plan', self.root, stage='updated-plan')
+        self.assertEqual(captured['staged'], captured['staged'].resolve())
+
     def test_plan_format_retry_preserves_evidence_and_usage(self):
         import self_hosted
         invalid = '````markdown\n# Plan\nIncomplete'

@@ -1897,7 +1897,21 @@ RENDER_PY
         for part in "${client_cmd[@]}"; do printf '%q ' "$part"; done
         printf -- 'exec --ephemeral --skip-git-repo-check --sandbox %q ' "$reviewer_sandbox"
         for part in "${model_args[@]+"${model_args[@]}"}"; do printf '%q ' "$part"; done
-        printf -- '--output-last-message "$CANDIDATE_DIR/output" "$(cat "$CANDIDATE_DIR/prompt.md")" < /dev/null > "$CANDIDATE_DIR/raw.jsonl" 2>&1\n'
+        # self_hosted.py's reviewer branch requires a *.json output path
+        # whenever a delivery file is in play ("file-backed reviewer
+        # delivery requires a JSON output path") -- $output_target is
+        # always *.json when delivery_mode=1 (that's what set delivery_mode
+        # in the first place), so match it here too. A plain "output" (no
+        # extension) tripped this on every candidate, in every lens, every
+        # time, live on a real project -- confirmed by re-reading the
+        # archived candidate logs there ("file-backed reviewer delivery
+        # requires a JSON output path"), not merely a unit-test finding.
+        if [[ "$delivery_mode" == 1 ]]; then
+            printf -- '--output-last-message "$CANDIDATE_DIR/output.json" '
+        else
+            printf -- '--output-last-message "$CANDIDATE_DIR/output" '
+        fi
+        printf -- '"$(cat "$CANDIDATE_DIR/prompt.md")" < /dev/null > "$CANDIDATE_DIR/raw.jsonl" 2>&1\n'
         printf 'echo $? > "$CANDIDATE_DIR/status"\n'
     } > "$launch_script"
 

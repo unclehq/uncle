@@ -6258,10 +6258,20 @@ class UncleTUI:
             group["attempts"] += 1
             group["last_result"] = row
             result_exit = row.get("process_exit")
-            group["any_failed"] = group["any_failed"] or result_exit not in (None, 0) or row.get("reported_error") in (True, "true")
+            # issue 103: exit 130 on a `-candidate-` raw stage is
+            # race_self_hosted_candidates'/race_self_hosted_reviewer_candidates'
+            # own convention for "stopped once another candidate already won
+            # or timed out, never judged on its own merits" -- not a failure.
+            # Almost every race has 3 of these for 1 winner, so counting them
+            # as failed made every completed race's row red regardless of
+            # its actual outcome.
+            candidate_stopped = "-candidate-" in stage and result_exit == 130
+            failed = not candidate_stopped and (
+                result_exit not in (None, 0) or row.get("reported_error") in (True, "true"))
+            group["any_failed"] = group["any_failed"] or failed
             group.setdefault("_worker_statuses", {})[stage] = {
                 "active": False,
-                "failed": result_exit not in (None, 0) or row.get("reported_error") in (True, "true"),
+                "failed": failed,
                 "exit": result_exit,
             }
         for stage, started in stats["active"].items():

@@ -76,7 +76,14 @@ adds concurrent requests for `claude`, `codex`, `kimi`, or `cline`.
 `WORKFLOW_SELF_HOSTED_CANDIDATES` sets how many candidates race per stage
 attempt (default 4); a per-stage override is available as
 `WORKFLOW_SELF_HOSTED_CANDIDATES_<STAGE>`. Setting it to `1` restores the
-original single-candidate behavior.
+original single-candidate behavior. These environment variables apply for
+that invocation only; to persist a lower count across runs, set it in
+`.uncle/config` instead, the same way as any other per-stage setting:
+`<stage>.candidates 2` for one stage (a lens like
+`adversarial-review-worker-requirements` inherits its parent stage's row,
+so use `adversarial-review.candidates`, not the lens name), or
+`self-hosted.candidates 2` to apply it to every self-hosted stage. The
+environment variables still win over either config setting.
 
 Your model server must be able to serve that many concurrent requests. A
 server sized for one request at a time will see the extra concurrency as

@@ -1354,13 +1354,24 @@ stage_uses_self_hosted() {
 # coordinator with a race of one -- see IMPLEMENTATION_NOTES.md for why that
 # is a deliberate deviation from the plan's literal wording.
 self_hosted_candidate_count() {
-    local stage="$1" var
+    local stage="$1" var fallback
     var="WORKFLOW_SELF_HOSTED_CANDIDATES_$(upper "$stage" | tr -c 'A-Z0-9' '_')"
     if [[ -n "${!var:-}" ]]; then
         printf '%s' "${!var}"
-    else
-        printf '%s' "${WORKFLOW_SELF_HOSTED_CANDIDATES:-4}"
+        return
     fi
+    if [[ -n "${WORKFLOW_SELF_HOSTED_CANDIDATES:-}" ]]; then
+        printf '%s' "$WORKFLOW_SELF_HOSTED_CANDIDATES"
+        return
+    fi
+    # Unlike the env vars above (a one-off override for this invocation),
+    # `.uncle/config` is where every other per-stage setting (runner, model,
+    # effort) already lives and persists across runs -- read it the same
+    # way, folding a worker stage to its configured parent first (an
+    # adversarial-review lens has no config row of its own).
+    fallback="$(uncle_stage_key "$(uncle_config_stage "$stage")" candidates)"
+    [[ -n "$fallback" ]] || fallback="$(uncle_config_get self-hosted.candidates)"
+    printf '%s' "${fallback:-4}"
 }
 
 # Race `count` isolated invocations of one self-hosted stage attempt,

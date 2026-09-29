@@ -204,6 +204,15 @@ DEFAULT_EFFORT = "low"
 
 def parent_stage(stage):
     """Return the configured parent for a driver-created stage name."""
+    # issue 103: a raced stage's own candidates (`<stage>-candidate-<n>`) fold
+    # back only as far as `<stage>` itself, not past it -- checked first so
+    # a raced worker (`adversarial-review-worker-requirements-candidate-2`)
+    # keeps its own row grouping its own 4 candidates, instead of falling
+    # through to the "-worker-" rule below and collapsing every lens's
+    # candidates into one shared row. adversarial-review's 4 lenses each
+    # racing 4 candidates therefore renders as 4 rows of 4, not 1 row of 16.
+    if "-candidate-" in stage:
+        return stage.rsplit("-candidate-", 1)[0]
     if "-review-worker-" in stage:
         return stage.split("-review-worker-", 1)[0]
     if "-worker-" in stage:
@@ -6253,6 +6262,7 @@ class UncleTUI:
             group.setdefault("_worker_statuses", {})[stage] = {
                 "active": False,
                 "failed": result_exit not in (None, 0) or row.get("reported_error") in (True, "true"),
+                "exit": result_exit,
             }
         for stage, started in stats["active"].items():
             parent = parent_stage(stage)
@@ -6271,6 +6281,7 @@ class UncleTUI:
             group.setdefault("_worker_statuses", {})[stage] = {
                 "active": True,
                 "failed": False,
+                "exit": None,
             }
         lines = ["STAGE", "Cost of usage so far", ""]
         tokens, costs = [], []
@@ -6298,10 +6309,28 @@ class UncleTUI:
                 indicator_chars = []
                 for raw in sorted(raw_stages):
                     ws = statuses.get(raw, {})
+                    # issue 103: a raced candidate gets one of 4 states, not
+                    # the plain worker's 2 (running/failed) -- winner (exit
+                    # 0), stopped (exit 130: killed once another candidate
+                    # already won, or timed out; never judged on its own
+                    # merits, so distinct from an actual rejection), or
+                    # rejected/crashed (anything else). See the matching
+                    # exit-code convention in race_self_hosted_candidates.
                     if ws.get("active"):
                         indicator_chars.append(SPINNER[
                             getattr(self, "_spinner_count", 0) % len(SPINNER)])
                         indicator_styles.append("title")
+                    elif "-candidate-" in raw:
+                        exit_code = ws.get("exit")
+                        if exit_code == 0:
+                            indicator_chars.append("\u2713")
+                            indicator_styles.append("good")
+                        elif exit_code == 130:
+                            indicator_chars.append("\u00b7")
+                            indicator_styles.append("warning")
+                        else:
+                            indicator_chars.append("\u2717")
+                            indicator_styles.append("bad")
                     elif ws.get("failed"):
                         indicator_chars.append("\u00b7")
                         indicator_styles.append("bad")

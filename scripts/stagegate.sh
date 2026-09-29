@@ -1360,6 +1360,181 @@ stage_uses_self_hosted() {
     [[ "$UNCLE_RESOLVED_RUNNER" == self-hosted ]]
 }
 
+# issue 103: how many isolated candidates race for one self-hosted stage
+# attempt. Per-stage WORKFLOW_SELF_HOSTED_CANDIDATES_<STAGE> wins over the
+# global WORKFLOW_SELF_HOSTED_CANDIDATES, which defaults to 4 (D-1). Setting
+# either to 1 takes the untouched single-shot branch below, not the
+# coordinator with a race of one -- see IMPLEMENTATION_NOTES.md for why that
+# is a deliberate deviation from the plan's literal wording.
+self_hosted_candidate_count() {
+    local stage="$1" var
+    var="WORKFLOW_SELF_HOSTED_CANDIDATES_$(upper "$stage" | tr -c 'A-Z0-9' '_')"
+    if [[ -n "${!var:-}" ]]; then
+        printf '%s' "${!var}"
+    else
+        printf '%s' "${WORKFLOW_SELF_HOSTED_CANDIDATES:-4}"
+    fi
+}
+
+# Race `count` isolated invocations of one self-hosted stage attempt,
+# promoting the first to produce a valid result (candidate_race.py,
+# AC-1..AC-5). Each candidate's own body is exactly today's single-shot
+# invocation in run_claude below -- generated once per race as a small script
+# so the delivery-file contract and produced log stay the same shape; only
+# the outer fan-out/selection is new. On success, populates $log_file with
+# the winner's own stream (so perf_stream/format_claude_stream and the
+# turns/context-overflow retry greps in run_claude see the log they always
+# have) and copies the winner's delivery file to $delivery_target. Returns
+# the winner's status (always 0 -- only a validated candidate is ever
+# selected) or a nonzero status when every candidate failed, with every
+# candidate's own output concatenated into $log_file for diagnosis.
+race_self_hosted_candidates() {
+    local log_name="$1" count="$2" prompt_file="$3" delivery_target="$4" log_file="$5"
+    local work_dir="$STATE_DIR/candidate-race/$log_name"
+    rm -rf "$work_dir"
+    mkdir -p "$work_dir"
+
+    # A non-artifact self-hosted stage (anything not in self_hosted.py's
+    # PLAN_ARTIFACTS) gets NO isolation from self_hosted.py itself -- it runs
+    # `_run_opencode` straight against the live root, on the assumption that
+    # exactly one such process is ever in flight. Racing N of those
+    # concurrently against the SAME live tree, several with a broad Edit
+    # grant (`may_write = side == 'agent' or bool(delivery)`), is exactly the
+    # clobbering hazard AC-3 exists to prevent -- so every candidate here
+    # gets its OWN isolated copy of the project first, reusing
+    # self_hosted.py's own `copy_generated_documents` so the isolation
+    # boundary (what crosses in: docs and packets, never .uncle state/creds)
+    # matches the one self_hosted.py already enforces for its own copytree,
+    # instead of a second, drifting definition of the same boundary. A
+    # PLAN_ARTIFACTS stage still isolates a second time one level deeper
+    # inside self_hosted.py itself; redundant, not unsafe.
+    local config_path
+    config_path="$(uncle_config_file)"
+    [[ "$config_path" = /* ]] || config_path="$PWD/$config_path"
+
+    local isolate_script="$work_dir/isolate.py"
+    cat > "$isolate_script" <<'ISOLATE_PY'
+import shutil
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[3])
+from self_hosted import copy_generated_documents
+root, staged = Path(sys.argv[1]), Path(sys.argv[2])
+excluded = shutil.ignore_patterns('.git', '.uncle', '.opencode*', 'node_modules', '.venv', 'venv', '__pycache__')
+def ignore(directory, names):
+    return set(excluded(directory, names)) | {name for name in names if (Path(directory) / name).is_symlink()}
+shutil.copytree(root, staged, ignore=ignore)
+copy_generated_documents(root, staged)
+ISOLATE_PY
+
+    local launch_script="$work_dir/launch.sh"
+    {
+        printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+        printf 'python3 -B %q %q "$CANDIDATE_DIR/project" %q || exit 1\n' \
+            "$isolate_script" "$PWD" "$ROOT/scripts/lib"
+        printf 'export UNCLE_CONFIG=%q\n' "$config_path"
+        printf 'cd "$CANDIDATE_DIR/project" || exit 1\n'
+        printf 'mkdir -p "$CANDIDATE_DIR/project/.uncle/workflow" || exit 1\n'
+        printf 'env UNCLE_ARTIFACT_DELIVERY="$CANDIDATE_DIR/project/.uncle/workflow/candidate-delivery.json" '
+        local part
+        for part in "${client_cmd[@]}"; do printf '%q ' "$part"; done
+        printf -- '-p '
+        for part in "${model_args[@]+"${model_args[@]}"}"; do printf '%q ' "$part"; done
+        printf -- '--effort %q --strict-mcp-config --max-turns %q --output-format stream-json --verbose --allowedTools %q < %q > "$CANDIDATE_DIR/raw.jsonl" 2>&1\n' \
+            "$effort" "$turns" "$tools" "$prompt_file"
+        printf 'echo $? > "$CANDIDATE_DIR/status"\n'
+    } > "$launch_script"
+
+    local validate_script="$work_dir/validate.sh"
+    {
+        printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+        printf 'status_file="$CANDIDATE_DIR/status"\n'
+        printf '[[ -f "$status_file" ]] || { echo "no status file"; exit 1; }\n'
+        printf 'status="$(cat "$status_file")"\n'
+        printf '[[ "$status" == "0" ]] || { echo "agent exited with status $status"; exit 1; }\n'
+        # Final delivery/schema validation stays a one-time, post-selection
+        # step in run_claude's existing case block below, run only against
+        # the winner -- never here, which would write every losing
+        # candidate's document into the live tree too.
+        case "$log_name" in
+            requirements|project-plan|updated-plan|change-plan|updated-change-plan)
+                printf '[[ -s "$CANDIDATE_DIR/project/.uncle/workflow/candidate-delivery.json" ]] || { echo "no delivery.json written"; exit 1; }\n'
+                printf 'python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$CANDIDATE_DIR/project/.uncle/workflow/candidate-delivery.json" || { echo "delivery.json is not valid JSON"; exit 1; }\n'
+                ;;
+            *-worker-*)
+                printf '[[ -s "$CANDIDATE_DIR/project/.uncle/workflow/candidate-delivery.json" ]] || { echo "no delivery.json written"; exit 1; }\n'
+                ;;
+        esac
+    } > "$validate_script"
+    chmod +x "$launch_script" "$validate_script"
+
+    # Tell the TUI every candidate began, the same way publish_worker_start
+    # does for -worker- fan-out (parallel_steps.py): without this the panel
+    # shows the whole race as idle until it is already decided.
+    if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
+        local n
+        for ((n = 0; n < count; n++)); do
+            printf '{"event":"start","model":"%s","mode":"act","stage":"%s","stage_index":0,"stage_total":0,"stage_turns":0}\n' \
+                "${model:-}" "${log_name}-candidate-${n}" >> "$UNCLE_STATUS_FILE"
+        done
+    fi
+
+    local evidence_file="$LOG_DIR/${log_name}.candidate-race-evidence.json"
+    local winner_dir status=0
+    winner_dir="$(python3 -B "$ROOT/scripts/lib/candidate_race.py" run \
+        --stage "$log_name" --count "$count" \
+        --work-dir "$work_dir/candidates" \
+        --launch-script "$launch_script" --validate-script "$validate_script" \
+        --evidence "$evidence_file")" || status=$?
+
+    # One completion glyph per candidate (AC-6): validated-winner -> exit 0,
+    # stopped-nonselected/stopped-timeout -> a distinct "stopped, not judged"
+    # exit code the TUI reads apart from a genuine failure, everything else
+    # (rejected-invalid, crashed) -> a plain failure exit. This is a private
+    # convention between this function and uncle_tui.py's candidate glyph
+    # rendering, not a general meaning for process_exit elsewhere.
+    if [[ -f "$evidence_file" ]]; then
+        local candidate_total
+        candidate_total="$(jq '.candidates | length' "$evidence_file" 2>/dev/null || echo 0)"
+        local i
+        for ((i = 0; i < candidate_total; i++)); do
+            local entry cid cstatus celapsed cdir cexit clog
+            entry="$(jq -c ".candidates[$i]" "$evidence_file")"
+            cid="$(jq -r '.id' <<<"$entry")"
+            cstatus="$(jq -r '.status' <<<"$entry")"
+            celapsed="$(jq -r '.elapsed // 0' <<<"$entry")"
+            cdir="$(jq -r '.directory // empty' <<<"$entry")"
+            case "$cstatus" in
+                validated-winner) cexit=0 ;;
+                stopped-nonselected|stopped-timeout) cexit=130 ;;
+                *) cexit=1 ;;
+            esac
+            clog="/dev/null"
+            [[ -n "$cdir" && -f "$cdir/raw.jsonl" ]] && clog="$cdir/raw.jsonl"
+            perf_record agent "${log_name}-candidate-${cid}" "$celapsed" "$cexit" "$clog" "$cmd" "$model" "$effort"
+        done
+    fi
+
+    if [[ "$status" -ne 0 || -z "$winner_dir" ]]; then
+        : > "$log_file"
+        local candidate_dir
+        for candidate_dir in "$work_dir"/candidates/candidate-*; do
+            [[ -d "$candidate_dir" ]] || continue
+            {
+                printf '\n=== %s ===\n' "$candidate_dir"
+                cat "$candidate_dir/raw.jsonl" 2>/dev/null
+            } >> "$log_file"
+        done
+        return 1
+    fi
+
+    cat "$winner_dir/raw.jsonl" | perf_stream "$log_name" | tee "$log_file" | format_claude_stream
+    if [[ -n "$delivery_target" && -s "$winner_dir/project/.uncle/workflow/candidate-delivery.json" ]]; then
+        cp "$winner_dir/project/.uncle/workflow/candidate-delivery.json" "$delivery_target"
+    fi
+    return 0
+}
+
 # A merged pass has two operational outputs but the JSON delivery contract has
 # one output path. It is therefore disabled by default. Explicit opt-in stays
 # available only for bespoke runners which really do publish both packets.
@@ -1539,18 +1714,25 @@ CANONICAL_ARTIFACT_CONTRACT
         local -a model_args=()
         [[ -n "$model" ]] && model_args=(--model "$model")
         local started="$SECONDS"
-        env UNCLE_ARTIFACT_DELIVERY="$agent_delivery" "${client_cmd[@]}" -p \
-            "${model_args[@]+"${model_args[@]}"}" \
-            --effort "$effort" \
-            --strict-mcp-config \
-            --max-turns "$turns" \
-            --output-format stream-json \
-            --verbose \
-            --allowedTools "$tools" \
-            < "$effective_prompt" \
-            2>&1 \
-            | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.jsonl" \
-            | format_claude_stream || status=$?
+        local candidates
+        candidates="$(self_hosted_candidate_count "$log_name")"
+        if [[ "${UNCLE_RESOLVED_RUNNER:-}" == self-hosted && "$candidates" -gt 1 ]]; then
+            race_self_hosted_candidates "$log_name" "$candidates" "$effective_prompt" \
+                "$agent_delivery" "$LOG_DIR/${log_name}.jsonl" || status=$?
+        else
+            env UNCLE_ARTIFACT_DELIVERY="$agent_delivery" "${client_cmd[@]}" -p \
+                "${model_args[@]+"${model_args[@]}"}" \
+                --effort "$effort" \
+                --strict-mcp-config \
+                --max-turns "$turns" \
+                --output-format stream-json \
+                --verbose \
+                --allowedTools "$tools" \
+                < "$effective_prompt" \
+                2>&1 \
+                | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.jsonl" \
+                | format_claude_stream || status=$?
+        fi
         perf_record agent "$log_name" "$((SECONDS-started))" "$status" \
             "$LOG_DIR/${log_name}.jsonl" "$cmd" "$model" "$effort"
         supervision_stage_end "$log_name" "$status" "$LOG_DIR/${log_name}.jsonl"
@@ -1643,6 +1825,178 @@ validate_reviewer_artifact() {
     mv "$normalized" "$output_file"
 }
 
+# Reviewer-side counterpart to race_self_hosted_candidates, for
+# run_codex_review's self-hosted branch (adversarial-review, test-review,
+# manual-checklist, final-audit, and each of their -worker- lenses -- e.g.
+# adversarial-review's 4-lens panel racing 4 candidates each renders as 4
+# rows of 4 in the TUI, one row per lens/parent_stage grouping). A plain
+# read-only reviewer run is already safe to race unmodified (`may_write` in
+# self_hosted.py's permission table is false with no delivery file), but the
+# `*.json`-output/delivery-file branch below grants Edit broadly, so every
+# candidate here still gets its own isolated project copy exactly like the
+# agent-side race, rather than relying on the read-only case being the only
+# one ever raced.
+race_self_hosted_reviewer_candidates() {
+    local log_name="$1" count="$2" prompt_file="$3" reviewer_sandbox="$4" \
+        delivery_mode="$5" output_target="$6" log_file="$7"
+    local work_dir="$STATE_DIR/candidate-race/$log_name"
+    rm -rf "$work_dir"
+    mkdir -p "$work_dir"
+
+    local config_path
+    config_path="$(uncle_config_file)"
+    [[ "$config_path" = /* ]] || config_path="$PWD/$config_path"
+
+    local isolate_script="$work_dir/isolate.py"
+    cat > "$isolate_script" <<'ISOLATE_PY'
+import shutil
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[3])
+from self_hosted import copy_generated_documents
+root, staged = Path(sys.argv[1]), Path(sys.argv[2])
+excluded = shutil.ignore_patterns('.git', '.uncle', '.opencode*', 'node_modules', '.venv', 'venv', '__pycache__')
+def ignore(directory, names):
+    return set(excluded(directory, names)) | {name for name in names if (Path(directory) / name).is_symlink()}
+shutil.copytree(root, staged, ignore=ignore)
+copy_generated_documents(root, staged)
+ISOLATE_PY
+
+    # In delivery_mode, $prompt_file already has the literal, binding
+    # instruction text baked in by the caller ("Use your Write tool to
+    # create exactly one JSON object at `$delivery_file`") -- $delivery_file
+    # being the single shared, non-candidate path. Handing every candidate
+    # that same prompt while pointing UNCLE_ARTIFACT_DELIVERY at its own
+    # per-candidate path gives the model two conflicting locations, and the
+    # isolation sandbox denies the one the text names (it sits outside the
+    # candidate's own project copy) -- so every candidate must instead see
+    # its OWN path written into its OWN copy of the prompt, substituted at
+    # run time (only $CANDIDATE_DIR, not $delivery_file, is known yet here).
+    cp "$prompt_file" "$work_dir/prompt-template.md"
+    local render_script="$work_dir/render-prompt.py"
+    cat > "$render_script" <<'RENDER_PY'
+import sys
+from pathlib import Path
+template, old, new, target = sys.argv[1:5]
+Path(target).write_text(
+    Path(template).read_text(encoding='utf-8').replace(old, new), encoding='utf-8')
+RENDER_PY
+
+    local launch_script="$work_dir/launch.sh"
+    {
+        printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+        printf 'python3 -B %q %q "$CANDIDATE_DIR/project" %q || exit 1\n' \
+            "$isolate_script" "$PWD" "$ROOT/scripts/lib"
+        printf 'export UNCLE_CONFIG=%q\n' "$config_path"
+        printf 'cd "$CANDIDATE_DIR/project" || exit 1\n'
+        printf 'mkdir -p "$CANDIDATE_DIR/project/.uncle/workflow" || exit 1\n'
+        # self_hosted.py's reviewer side hard-requires the model to Write its
+        # own delivery file whenever UNCLE_ARTIFACT_DELIVERY is non-empty
+        # (may_write is unconditional for the agent side, but not here) --
+        # setting it unconditionally would make every plain, read-only
+        # review fail for never writing a file it was never asked to write.
+        # Match delivery_mode exactly: a real per-candidate path only in the
+        # *.json/delivery-file case, empty (not unset) otherwise, exactly
+        # like the non-race $delivery_file this mirrors.
+        if [[ "$delivery_mode" == 1 ]]; then
+            printf 'python3 -B %q %q %q "$CANDIDATE_DIR/project/candidate-delivery.json" "$CANDIDATE_DIR/prompt.md" || exit 1\n' \
+                "$render_script" "$work_dir/prompt-template.md" "$delivery_file"
+            printf 'env UNCLE_ARTIFACT_DELIVERY="$CANDIDATE_DIR/project/candidate-delivery.json" '
+        else
+            printf 'cp %q "$CANDIDATE_DIR/prompt.md"\n' "$work_dir/prompt-template.md"
+            printf 'env UNCLE_ARTIFACT_DELIVERY= '
+        fi
+        local part
+        for part in "${client_cmd[@]}"; do printf '%q ' "$part"; done
+        printf -- 'exec --ephemeral --skip-git-repo-check --sandbox %q ' "$reviewer_sandbox"
+        for part in "${model_args[@]+"${model_args[@]}"}"; do printf '%q ' "$part"; done
+        printf -- '--output-last-message "$CANDIDATE_DIR/output" "$(cat "$CANDIDATE_DIR/prompt.md")" < /dev/null > "$CANDIDATE_DIR/raw.jsonl" 2>&1\n'
+        printf 'echo $? > "$CANDIDATE_DIR/status"\n'
+    } > "$launch_script"
+
+    local validate_script="$work_dir/validate.sh"
+    {
+        printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+        printf 'status_file="$CANDIDATE_DIR/status"\n'
+        printf '[[ -f "$status_file" ]] || { echo "no status file"; exit 1; }\n'
+        printf 'status="$(cat "$status_file")"\n'
+        printf '[[ "$status" == "0" ]] || { echo "reviewer exited with status $status"; exit 1; }\n'
+        # Final schema/kind validation stays a one-time, post-selection step
+        # in run_codex_review's existing code below, run only against the
+        # winner -- exactly the same split agent-side racing already makes.
+        if [[ "$delivery_mode" == 1 ]]; then
+            printf '[[ -s "$CANDIDATE_DIR/project/candidate-delivery.json" ]] || { echo "no delivery.json written"; exit 1; }\n'
+            printf 'python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$CANDIDATE_DIR/project/candidate-delivery.json" || { echo "delivery.json is not valid JSON"; exit 1; }\n'
+        else
+            printf '[[ -s "$CANDIDATE_DIR/output" ]] || { echo "no output written"; exit 1; }\n'
+        fi
+    } > "$validate_script"
+    chmod +x "$launch_script" "$validate_script"
+
+    if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
+        local n
+        for ((n = 0; n < count; n++)); do
+            printf '{"event":"start","model":"%s","mode":"review","stage":"%s","stage_index":0,"stage_total":0,"stage_turns":0}\n' \
+                "${model:-}" "${log_name}-candidate-${n}" >> "$UNCLE_STATUS_FILE"
+        done
+    fi
+
+    local evidence_file="$LOG_DIR/${log_name}.candidate-race-evidence.json"
+    local winner_dir status=0
+    winner_dir="$(python3 -B "$ROOT/scripts/lib/candidate_race.py" run \
+        --stage "$log_name" --count "$count" \
+        --work-dir "$work_dir/candidates" \
+        --launch-script "$launch_script" --validate-script "$validate_script" \
+        --evidence "$evidence_file")" || status=$?
+
+    if [[ -f "$evidence_file" ]]; then
+        local candidate_total
+        candidate_total="$(jq '.candidates | length' "$evidence_file" 2>/dev/null || echo 0)"
+        local i
+        for ((i = 0; i < candidate_total; i++)); do
+            local entry cid cstatus celapsed cdir cexit clog
+            entry="$(jq -c ".candidates[$i]" "$evidence_file")"
+            cid="$(jq -r '.id' <<<"$entry")"
+            cstatus="$(jq -r '.status' <<<"$entry")"
+            celapsed="$(jq -r '.elapsed // 0' <<<"$entry")"
+            cdir="$(jq -r '.directory // empty' <<<"$entry")"
+            case "$cstatus" in
+                validated-winner) cexit=0 ;;
+                stopped-nonselected|stopped-timeout) cexit=130 ;;
+                *) cexit=1 ;;
+            esac
+            clog="/dev/null"
+            [[ -n "$cdir" && -f "$cdir/raw.jsonl" ]] && clog="$cdir/raw.jsonl"
+            perf_record reviewer "${log_name}-candidate-${cid}" "$celapsed" "$cexit" "$clog" "$cmd" "$model" "$effort"
+        done
+    fi
+
+    if [[ "$status" -ne 0 || -z "$winner_dir" ]]; then
+        : > "$log_file"
+        local candidate_dir
+        for candidate_dir in "$work_dir"/candidates/candidate-*; do
+            [[ -d "$candidate_dir" ]] || continue
+            {
+                printf '\n=== %s ===\n' "$candidate_dir"
+                cat "$candidate_dir/raw.jsonl" 2>/dev/null
+            } >> "$log_file"
+        done
+        return 1
+    fi
+
+    # A reviewer's own stdout is plain text (self_hosted.py's `print(text)`
+    # for side == 'reviewer'), not the agent side's JSON chat-event stream --
+    # the non-race reviewer call above never pipes through
+    # format_claude_stream either, only perf_stream | tee.
+    cat "$winner_dir/raw.jsonl" | perf_stream "$log_name" | tee "$log_file"
+    if [[ "$delivery_mode" == 1 ]]; then
+        [[ -s "$winner_dir/project/candidate-delivery.json" ]] && cp "$winner_dir/project/candidate-delivery.json" "$output_target"
+    else
+        [[ -s "$winner_dir/output" ]] && cp "$winner_dir/output" "$output_target"
+    fi
+    return 0
+}
+
 run_codex_review() {
     local prompt_file
     prompt_file="$(resolve_prompt "$1")"
@@ -1727,6 +2081,15 @@ run_codex_review() {
     local started retry_answer empty_retried="" schema_error=""
     while true; do
         started="$SECONDS"
+        local reviewer_candidates raced=0
+        reviewer_candidates="$(self_hosted_candidate_count "$log_name")"
+        if [[ "${UNCLE_RESOLVED_RUNNER:-}" == self-hosted && "$reviewer_candidates" -gt 1 ]]; then
+            raced=1
+            local delivery_mode=0
+            [[ -n "$delivery_file" ]] && delivery_mode=1
+            race_self_hosted_reviewer_candidates "$log_name" "$reviewer_candidates" "$prompt_file" \
+                "$reviewer_sandbox" "$delivery_mode" "$output_file" "$LOG_DIR/${log_name}.log" || status=$?
+        else
         # stdin is the operator's gate-answer channel, not stage input: codex
         # appends a non-TTY stdin to the prompt and would block on it forever.
         # Project dirs need not be git repos; the read-only sandbox is the boundary.
@@ -1738,7 +2101,14 @@ run_codex_review() {
             --output-last-message "$output_file" \
             "$(cat "$prompt_file")" \
             < /dev/null 2>&1 | perf_stream "$log_name" | tee "$LOG_DIR/${log_name}.log" || status=$?
-        if [[ -n "$delivery_file" ]]; then
+        fi
+        # race_self_hosted_reviewer_candidates already wrote $output_file
+        # straight from the winning candidate's own delivery/output file;
+        # $delivery_file itself (the live, non-candidate path) was never
+        # touched by any candidate, so this legacy single-shot handling must
+        # not re-inspect it and mistake a successful race for a missing
+        # delivery.
+        if [[ "$raced" != 1 && -n "$delivery_file" ]]; then
             if [[ -s "$delivery_file" ]]; then
                 cp "$delivery_file" "$output_file"
             else

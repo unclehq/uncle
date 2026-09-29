@@ -1380,9 +1380,16 @@ self_hosted_candidate_count() {
     # Unlike the env vars above (a one-off override for this invocation),
     # `.uncle/config` is where every other per-stage setting (runner, model,
     # effort) already lives and persists across runs -- read it the same
-    # way, folding a worker stage to its configured parent first (an
-    # adversarial-review lens has no config row of its own).
-    fallback="$(uncle_stage_key "$(uncle_config_stage "$stage")" candidates)"
+    # way. Check the stage's own row first: `preview-build` has no config
+    # row of its own for runner/model (it inherits whichever stage is first
+    # configured with a model, uncle_config_stage's own special case) but a
+    # candidate count set specifically for it -- WORKFLOW_SELF_HOSTED_CANDIDATES_PREVIEW_BUILD
+    # already works this way -- must not be forced to also match whatever it
+    # inherits its model from. Only fall through to that inherited stage
+    # (e.g. an adversarial-review lens has no config row of its own and
+    # should use its parent's) when the stage's own row has nothing set.
+    fallback="$(uncle_stage_key "$stage" candidates)"
+    [[ -n "$fallback" ]] || fallback="$(uncle_stage_key "$(uncle_config_stage "$stage")" candidates)"
     [[ -n "$fallback" ]] || fallback="$(uncle_config_get self-hosted.candidates)"
     printf '%s' "${fallback:-4}"
 }

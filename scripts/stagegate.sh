@@ -605,7 +605,7 @@ plan_headings() {
 }
 
 plan_structure_problem() {
-    local plan="$1" commands
+    local plan="$1" commands ownership_gaps
     commands="$(mktemp)" || return 0
     if ! verify_commands "$plan" > "$commands" || [[ ! -s "$commands" ]]; then
         rm -f "$commands"
@@ -621,6 +621,19 @@ plan_structure_problem() {
     if ! verification_paths "$plan" > /dev/null; then
         printf 'no Protected verification paths block'
         return 0
+    fi
+    # calculator-local (2026-09-28): package.json was a protected/frozen
+    # path the plan named throughout, but no Implementation-order step's
+    # Owns: covered it -- only a Reconcile step's `Owns: *`, whose own
+    # description ruled out creating new files. Nothing enforced the plan's
+    # own promise, and the gap surfaced only much later as an npm ENOENT at
+    # green-check time, after a full implementation cycle had already run.
+    if [[ -s "${STATE_DIR:-.uncle/workflow}/documents/$(basename "${plan%.md}").json" ]]; then
+        ownership_gaps="$(python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" "$plan" "$PWD" "${STATE_DIR:-.uncle/workflow}" 2>/dev/null)"
+        if [[ -n "$ownership_gaps" ]]; then
+            printf 'a protected verification path with no owning implementation step'
+            return 0
+        fi
     fi
     return 1
 }
@@ -3291,6 +3304,13 @@ while true; do
                 elif [[ "$plan_problem" == 'no Verification commands block' ]]; then
                     echo 'Expected: ## Verification commands with one fenced block of'
                     echo 'commands, one per line, and nothing else in it.'
+                elif [[ "$plan_problem" == 'a protected verification path with no owning implementation step' ]]; then
+                    echo 'These protected/frozen paths have no step in the Implementation'
+                    echo 'order whose Owns: covers them, and do not exist yet -- nothing is'
+                    echo 'tasked with creating them (a Reconcile step'"'"'s Owns: * does not'
+                    echo 'count; name the file explicitly in the step that creates it):'
+                    python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" \
+                        .uncle/docs/UPDATED_PROJECT_PLAN.md "$PWD" "$STATE_DIR" 2>/dev/null | sed 's/^/  /'
                 fi
                 echo "The driver reads that block to run and protect verification,"
                 echo "so amend the plan before approving it; you are not being asked"

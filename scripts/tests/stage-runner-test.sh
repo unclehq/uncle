@@ -170,6 +170,30 @@ check_absent "stagegate: empty model emits no --model" "--model" "$argv"
 check_contains "stagegate: stage effort is used" "--effort low" "$argv"
 check_contains "stagegate: banner names the runner default" "(runner default)" "$out"
 
+# --- BH-6: a non-self-hosted stage takes the unmodified single-shot path ---
+#
+# issue 103's candidate racing is gated on stage_uses_self_hosted; this
+# project-plan stage resolves to the default `claude` runner (no self-hosted
+# config anywhere here), so setting WORKFLOW_SELF_HOSTED_CANDIDATES must not
+# engage racing at all -- proven two ways: the output is byte-identical to
+# the same run without it, and race_self_hosted_candidates' own work_dir
+# (which it always mkdir -p's, win or lose) is never created.
+rm -rf "$PROJ/.uncle" "$PROJ/REQUIREMENTS_INTERPRETATION.md"
+: > "$ARGV"
+out_candidates="$(cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
+    UNCLE_PROJECT_ROOT="$PROJ" \
+    WORKFLOW_AGENT_CMD="$TMP/agent-global" \
+    WORKFLOW_AGENT_CMD_PROJECT_PLAN="$TMP/agent-stage" \
+    WORKFLOW_MODEL_PROJECT_PLAN= \
+    WORKFLOW_EFFORT_PROJECT_PLAN=low \
+    WORKFLOW_SELF_HOSTED_CANDIDATES=4 \
+    WORKFLOW_SPECULATE=0 \
+    bash "$ROOT/scripts/stagegate.sh" 2>&1)"
+COUNT=$((COUNT + 1))
+[[ "$out_candidates" == "$out" ]] || fail "BH-6: a non-self-hosted stage's output changed when WORKFLOW_SELF_HOSTED_CANDIDATES was set"
+check_absent "BH-6: race_self_hosted_candidates' own work_dir was never created" \
+    "candidate-race" "$(find "$PROJ/.uncle/workflow" -type d 2>/dev/null)"
+
 # A model that is set is still passed.
 rm -rf "$PROJ/.uncle" "$PROJ/REQUIREMENTS_INTERPRETATION.md"
 : > "$ARGV"

@@ -65,6 +65,28 @@ The model must support tool calls for implementation and file inspection. Uncle 
 
 The default model limits are 65,536 context tokens and 8,192 output tokens. Match your server with `WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS` and `WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS`. Set `WORKFLOW_SELF_HOSTED_SECONDS` for the stage timeout (default 3,600 seconds), or `WORKFLOW_SELF_HOSTED_REQUEST_SECONDS` for a separate API timeout. `WORKFLOW_OPENCODE_CMD` selects an alternate CLI executable.
 
+### Candidate racing (multiple concurrent requests)
+
+Uncle races several isolated candidates per self-hosted stage attempt and
+promotes the first to pass validation, to absorb an occasional malformed,
+stalled, or slow response from a local model instead of failing the whole
+stage on it. This applies only to `self-hosted`-runner stages; it never
+adds concurrent requests for `claude`, `codex`, `kimi`, or `cline`.
+
+`WORKFLOW_SELF_HOSTED_CANDIDATES` sets how many candidates race per stage
+attempt (default 4); a per-stage override is available as
+`WORKFLOW_SELF_HOSTED_CANDIDATES_<STAGE>`. Setting it to `1` restores the
+original single-candidate behavior.
+
+Your model server must be able to serve that many concurrent requests. A
+server sized for one request at a time will see the extra concurrency as
+contention -- slower responses, or a request timing out -- which surfaces
+as an ordinary per-candidate failure (the stage still succeeds as long as
+at least one candidate finishes and validates; it fails, with per-candidate
+diagnostics, only if all of them do not). If your stages routinely need
+more than one retry under racing, lower `WORKFLOW_SELF_HOSTED_CANDIDATES`
+or increase your server's concurrent-request capacity.
+
 ## GitHub access
 
 For GitHub issue workflows, authenticate and check access:

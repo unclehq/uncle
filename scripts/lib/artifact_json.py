@@ -345,7 +345,11 @@ def render_acceptance(payload):
         if not row.get('evidence'):
             raise ValueError(identifier + ' has empty evidence')
         required = 'YES' if row['required'] else 'NO'
-        evidence = str(row['evidence']).replace('|', r'\|').replace('\n', ' ')
+        # The acceptance validators split a row on every pipe, escaped or not
+        # (their contract: no cell may contain one), so a `\|` here made the
+        # renderer's own output fail validation -- a grep pattern in evidence
+        # stopped a whole run.  Use the entity, as repair-acceptance.py does.
+        evidence = str(row['evidence']).replace('|', '&#124;').replace('\n', ' ')
         lines.append('| %s | %s | %s | %s |' % (identifier, required, status, evidence))
     return '\n'.join(lines) + '\n'
 

@@ -33,9 +33,13 @@ def _fenced_block(heading, lang):
     return re.compile(r'^## ' + re.escape(heading) + r'\s*\n+```' + lang + r'\n(.*?)\n```', re.M | re.S)
 
 
-_VERIFICATION_COMMANDS_RE = _fenced_block('Verification commands', 'sh')
+# A fence's language tag is decoration, not content: models write ```sh, ```bash,
+# ```shell or a bare ``` for the same block, and a plan used to be rejected (and a
+# run stopped) over the tag alone. The commands inside are what is read.
+_SHELL_FENCE = r'(?:sh|bash|shell)?'
+_VERIFICATION_COMMANDS_RE = _fenced_block('Verification commands', _SHELL_FENCE)
 _PROJECT_VERIFICATION_COMMANDS_RE = re.compile(
-    r'^#{1,6}\s+(?:Exact\s+)?Verification commands(?:\s+block)?\s*\n+```sh\n(.*?)\n```', re.M | re.S | re.I)
+    r'^#{1,6}\s+(?:Exact\s+)?Verification commands(?:\s+block)?\s*\n+```' + _SHELL_FENCE + r'\n(.*?)\n```', re.M | re.S | re.I)
 _PROTECTED_PATHS_RE = _fenced_block('Protected verification paths', 'text')
 _DISPOSITIONS_TABLE_RE = re.compile(
     r'^## Adversarial review dispositions\s*\n\n\|.*\|\n\|[-| ]+\|\n((?:\|.*\|\n?)*)', re.M)

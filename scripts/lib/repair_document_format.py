@@ -15,6 +15,8 @@ change with one possible reading:
   - promote a bold `**Overall assessment:**` label to a `## Overall assessment`
     heading, keeping its text
   - move a final-audit verdict back to the last line when prose follows it
+  - fence a plan's Verification commands written as shell prompt lines
+    (`$ cmd`), dropping the `$ ` prompt markers
 
 It does not invent a section, reword a finding, change a status, add a row, or
 decide anything. If a document is wrong in a way that needs judgment, it is
@@ -177,6 +179,35 @@ def _verdict_last(text):
     return text, None
 
 
+_VERIFICATION_HEADING = re.compile(r'^(#{1,6})[ \t]+(?:Exact[ \t]+)?Verification commands(?:[ \t]+block)?[ \t]*$', re.M | re.I)
+
+
+def _fence_verification_commands(text):
+    """A Verification commands section written as `$ command` lines gets its fence.
+
+    Only the one unambiguous shape: the section has no fence at all and its first
+    line is a shell prompt line. The commands are not reworded; the fence is added
+    and the `$ ` prompt marker, which a shell would run as a command named `$`,
+    is dropped.
+    """
+    heading = _VERIFICATION_HEADING.search(text)
+    if not heading:
+        return text, None
+    level = len(heading.group(1))
+    following = re.compile(r'^#{1,%d}[ \t]+\S' % level, re.M).search(text, heading.end())
+    end = following.start() if following else len(text)
+    body = text[heading.end():end]
+    if '```' in body:
+        return text, None
+    lines = body.strip('\n').splitlines()
+    if not lines or not lines[0].startswith('$ '):
+        return text, None
+    commands = '\n'.join(line[2:] if line.startswith('$ ') else line for line in lines).rstrip()
+    fenced = '\n\n```sh\n%s\n```\n\n' % commands
+    return text[:heading.end()] + fenced + text[end:].lstrip('\n'), \
+        'fenced the Verification commands written as shell prompt lines'
+
+
 # file -> the repairs that are safe for it.
 _RULES = {
     'ADVERSARIAL_REVIEW.md': (_strip_preamble, _promote_assessment),
@@ -185,6 +216,8 @@ _RULES = {
     'MANUAL_CHECKLIST.md': (_strip_preamble,),
     'VERIFICATION_REPORT.md': (_strip_preamble,),
     'PREFLIGHT_REPORT.md': (_strip_preamble,),
+    'PROJECT_PLAN.md': (_fence_verification_commands,),
+    'UPDATED_PROJECT_PLAN.md': (_fence_verification_commands,),
 }
 
 

@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# After the implementation was approved, a later stage re-ran the green check and
+# rewrote an approved input.  Unattended, the driver then reopened the gate and
+# EXITED, and nothing restarts it: the run sat at WAIT_IMPLEMENT_APPROVAL with
+# every stage having worked.  Unattended it now re-approves the current tree in
+# place and continues; attended it still stops and asks.
+
+ROOT_REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+FAILED=0; COUNT=0
+check() { COUNT=$((COUNT + 1)); [[ "$3" == "$2" ]] || { echo "FAIL: $1 — expected '$2', got '$3'"; FAILED=$((FAILED + 1)); }; }
+
+FUNCS="$(ROOT="$ROOT_REAL" python3 -B - <<'PY'
+import os, re
+from pathlib import Path
+source = (Path(os.environ["ROOT"]) / "scripts" / "stagegate.sh").read_text()
+for name in ("verify_implementation_review", "reapprove_implementation_unattended"):
+    print(re.search(r"^" + name + r"\(\) \{.*?^}", source, re.M | re.S).group(0))
+PY
+)"
+
+# A fake approval_snapshot: `check` says the inputs changed, `record` notes the call.
+mkdir -p "$TMP/root/scripts/lib" "$TMP/approvals" "$TMP/state"
+cat > "$TMP/root/scripts/lib/approval_snapshot.py" <<'PY'
+import sys
+if sys.argv[1] == 'check':
+    sys.exit(1)
+open(sys.argv[2] + '/recorded', 'a').write('record\n')
+PY
+printf 'sha\n' > "$TMP/approvals/IMPLEMENTATION_REVIEW.sha256"
+printf '{}\n' > "$TMP/approvals/IMPLEMENTATION_REVIEW.inputs.json"
+
+run() {  # $1 = UNATTENDED value; prints the trace and the exit status
+    (
+        eval "$FUNCS"
+        ROOT="$TMP/root"; APPROVAL_DIR="$TMP/approvals"; STATE_DIR="$TMP/state"; REVIEW_FILE="$TMP/review.md"
+        UNATTENDED="$1"; WORKFLOW_UNTRACKED_BASELINE=""
+        require_file() { :; }
+        build_implementation_review() { echo built; }
+        set_state() { echo "state=$1"; }
+        review_and_approve() { echo "approved:$2:$3"; }
+        record_unattended_gate() { echo "ledger:$1"; }
+        verify_implementation_review
+        echo "continued"
+    ) 2>&1
+    echo "exit=$?"
+}
+
+rm -f "$TMP/state/recorded"
+out="$(run 1)"
+check "unattended: the gate is re-approved" yes "$([[ "$out" == *"approved:IMPLEMENTATION_REVIEW:approve"* ]] && echo yes || echo no)"
+check "unattended: the new inputs are recorded" record "$(cat "$TMP/state/recorded")"
+check "unattended: the unreviewed approval is in the ledger" yes "$([[ "$out" == *"ledger:IMPLEMENTATION_REVIEW"* ]] && echo yes || echo no)"
+check "unattended: the stage carries on" yes "$([[ "$out" == *continued* ]] && echo yes || echo no)"
+check "unattended: the driver is not sent back to the approval gate" no "$([[ "$out" == *state=WAIT_IMPLEMENT_APPROVAL* ]] && echo yes || echo no)"
+check "unattended: the driver finishes normally, not by exiting at the gate" yes "$([[ "$out" == *continued*exit=0* ]] && echo yes || echo no)"
+
+out="$(run 0)"
+check "attended: the gate is reopened" yes "$([[ "$out" == *state=WAIT_IMPLEMENT_APPROVAL* ]] && echo yes || echo no)"
+check "attended: it stops for the person" yes "$([[ "$out" == *exit=0* ]] && echo yes || echo no)"
+check "attended: nothing is approved on their behalf" no "$([[ "$out" == *approved:* ]] && echo yes || echo no)"
+check "attended: it does not carry on" no "$([[ "$out" == *continued* ]] && echo yes || echo no)"
+
+if [[ "$FAILED" -ne 0 ]]; then echo "implementation-reapproval-test.sh: $FAILED of $COUNT checks failed"; exit 1; fi
+echo "implementation-reapproval-test.sh: $COUNT checks passed"

@@ -221,6 +221,48 @@ verify_parallel_groups "$TMP/plan.md" "$TMP/commands.after" > "$TMP/groups" || f
 check_eq "fallback has no parallel groups" "" "$(cat "$TMP/groups")"
 check_contains "fallback is explained" "commands will run serially" "$TMP/repair.out"
 
+# --- a command written across lines runs whole, not in fragments ------------
+# `sh -c '` ... `'` used to be split per line: the first and last lines failed
+# on their own and the lines between ran as top-level commands.
+
+cat > "$TMP/MULTILINE_PLAN.md" <<'PLAN'
+## Verification commands
+
+```sh
+sh -c '
+  set -e
+  echo inside-quotes >> "$MARK"
+  if true; then
+    echo nested >> "$MARK"
+  fi
+'
+echo second >> "$MARK"
+for i in 1 2; do
+  echo "loop $i" >> "$MARK"
+done
+```
+PLAN
+verify_commands "$TMP/MULTILINE_PLAN.md" > "$TMP/multi.commands"
+check_eq "multi-line: three commands, not nine fragments" "3" "$(wc -l < "$TMP/multi.commands" | tr -d ' ')"
+export MARK="$TMP/multi.mark"; : > "$MARK"
+(cd "$TMP" && green_run "$TMP/multi.commands" "$TMP/multi.tsv" "$TMP/multi.log") > /dev/null
+check_eq "multi-line: every command passes" "0 0 0" "$(cut -f1 "$TMP/multi.tsv" | tr '\n' ' ' | sed 's/ $//')"
+check_eq "multi-line: the script ran as written" "inside-quotes nested second loop 1 loop 2" "$(tr '\n' ' ' < "$MARK" | sed 's/ $//')"
+printf '%s\n' "sh -c 'unterminated" "echo ok" > "$TMP/broken.commands"
+check_eq "an unterminated quote is left for the shell to report" "$(cat "$TMP/broken.commands")" "$(python3 "$ROOT/scripts/lib/fold_shell_commands.py" < "$TMP/broken.commands")"
+
+# --- a check that waits forever is ended, not waited on ----------------------
+# A test runner probing a port that something else holds open without answering
+# hung a run for good: the sequential loop had no time limit.
+
+printf '%s\n' 'echo before' 'sleep 60' 'echo after' > "$TMP/hang.commands"
+started=$SECONDS
+(cd "$TMP" && WORKFLOW_CHECK_TIMEOUT_SECONDS=2 green_run "$TMP/hang.commands" "$TMP/hang.tsv" "$TMP/hang.log") > /dev/null
+check_eq "hang: the loop finished promptly" yes "$([[ $((SECONDS - started)) -lt 30 ]] && echo yes || echo no)"
+check_eq "hang: the stuck command is a failure with the timeout status" "0 124 0" "$(cut -f1 "$TMP/hang.tsv" | tr '\n' ' ' | sed 's/ $//')"
+check_contains "hang: the log says it timed out" "TIMEOUT after 2s" "$TMP/hang.log"
+check_not_contains "hang: nothing after the sleep ran inside it" "never" "$TMP/hang.log"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "green-check-test.sh: $FAILED of $COUNT checks failed"
     exit 1

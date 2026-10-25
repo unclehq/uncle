@@ -48,46 +48,54 @@ Install and configure every client selected in **Configure → Configure stages*
 
 Before starting a workflow, confirm each selected client can run from your terminal and access its model. Hosted providers may require a subscription or funded API account. Uncle does not provide model access.
 
-### OpenCode / self hosted
+### Self hosted
 
-You need a running model server, enough server resources for the chosen model, and network access from Uncle to that server. OpenCode is the client; it does not host the model.
+You need a running model server, enough server resources for the chosen model, and network access from Uncle to that server. Uncle talks to the server directly over its OpenAI-compatible HTTP API; it does not host the model.
 
-In **Configure → Configure OpenCode / self hosting**, enter:
+In **Configure → Configure self hosting**, enter:
 
 - **Base URL:** the OpenAI-compatible API root, such as `http://localhost:8000/v1`.
 - **API key:** the endpoint's credential. For an unauthenticated server, use a placeholder such as `local`.
 
-The endpoint must support authenticated `GET <Base URL>/models` discovery and chat completions. Uncle prefixes model names with `local/` for OpenCode, while sending the underlying model ID to the server. Select one for each OpenCode stage, or apply it to all stages.
+The endpoint must support authenticated `GET <Base URL>/models` discovery and chat completions. Select a model for each stage, or apply one to all stages.
 
-The server must support the requested context size and return responses within the configured timeouts. Successful model discovery alone does not prove that inference works. Install the OpenCode CLI separately; see the [OpenCode documentation](https://opencode.ai/docs/).
+The server must support the requested context size and return responses within the configured timeouts. Successful model discovery alone does not prove that inference works.
 
-The model must support tool calls for implementation and file inspection. Uncle uses a custom OpenCode provider for your endpoint and starts a fresh session per stage. Existing self-hosted credentials and model selections migrate automatically; the old `openai/` catalog prefix is removed during migration.
+The model must support tool calls for implementation and file inspection. Uncle runs its own tool loop (read, search, write, edit and shell tools confined to the project) with a fresh conversation per stage, at temperature 0. The requirements stage (`requirements` and `requirements-investigate`) is the exception and runs at temperature 1. Change either with `<stage>.temperature` (or `self-hosted.temperature` for all stages) in `.uncle/config`, or with `WORKFLOW_SELF_HOSTED_TEMPERATURE_<STAGE>` / `WORKFLOW_SELF_HOSTED_TEMPERATURE` in the environment (0 to 2; environment wins over config, a stage's own setting wins over the global one, and workers inherit from their stage).
+
+**Schema enforcement.** When a stage owes a known JSON artifact, its final answer is a request that carries the artifact's JSON schema. Uncle asks the server to enforce it in the strongest form it accepts, and falls back cleanly when a server rejects one: Ollama's native `format`, then OpenAI-style `response_format` (JSON schema), vLLM's `structured_outputs` and `guided_json`, then plain JSON-object mode, then prompt-only. Every answer is also checked against the schema locally, and a workflow document the model writes itself is refused at the write if it does not match. Stages whose answer is prose, such as chat, have no schema and are not constrained.
+
+**Connections.** Uncle keeps one persistent connection per server and reuses it for every request in a stage, reconnecting once if the server closed it while idle. HTTP/2 is used when it can be negotiated: over `https` (via ALPN) when the optional `httpx` and `h2` Python packages are installed. Plain `http` servers speak HTTP/1.1 keep-alive. Most local servers do not accept HTTP/2 without TLS; if yours does (for example Hypercorn), set `WORKFLOW_SELF_HOSTED_HTTP2=h2c`. `WORKFLOW_SELF_HOSTED_HTTP2=off` forces HTTP/1.1.
+
+OpenCode is no longer needed. To return to the OpenCode CLI for a run, set `WORKFLOW_SELF_HOSTED_TRANSPORT=opencode`. Existing self-hosted credentials and model selections migrate automatically; the old `openai/` catalog prefix is removed during migration.
 
 The default model limits are 65,536 context tokens and 8,192 output tokens. Match your server with `WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS` and `WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS`. Set `WORKFLOW_SELF_HOSTED_SECONDS` for the stage timeout (default 3,600 seconds), or `WORKFLOW_SELF_HOSTED_REQUEST_SECONDS` for a separate API timeout. `WORKFLOW_OPENCODE_CMD` selects an alternate CLI executable.
 
 ### Candidate racing (multiple concurrent requests)
 
-Uncle races several isolated candidates per self-hosted stage attempt and
-promotes the first to pass validation, to absorb an occasional malformed,
-stalled, or slow response from a local model instead of failing the whole
-stage on it. This applies only to `self-hosted`-runner stages; it never
+Racing is **off by default**: each self-hosted stage runs one request. Self-hosted
+stages now enforce their JSON schema at the server, so malformed answers are
+rare enough that four concurrent copies of every stage are not worth their cost.
+It remains available: Uncle can race several isolated candidates per stage
+attempt and promote the first to pass validation, to absorb an occasional
+malformed, stalled, or slow response from a local model. This applies only to `self-hosted`-runner stages; it never
 adds concurrent requests for `claude`, `codex`, `kimi`, or `cline`.
 
 `WORKFLOW_SELF_HOSTED_CANDIDATES` sets how many candidates race per stage
-attempt (default 4); a per-stage override is available as
+attempt (default 1, no racing); a per-stage override is available as
 `WORKFLOW_SELF_HOSTED_CANDIDATES_<STAGE>`. Setting it to `1` restores the
-original single-candidate behavior. These environment variables apply for
+default single-candidate behavior. To turn racing on, use a value above 1. These environment variables apply for
 that invocation only; to persist a lower count across runs, set it in
 `.uncle/config` instead, the same way as any other per-stage setting, in
 this order of precedence: `<stage>.candidates 2` for one specific stage,
 else `self-hosted.candidates 2` to apply it to every self-hosted stage,
-else the default of 4. A stage without its own config row for runner and
+else the default of 1. A stage without its own config row for runner and
 model -- a lens like `adversarial-review-worker-requirements`, or
 `preview-build`, which inherits whichever stage is first configured with a
 model -- inherits its candidate count the same way, but a `.candidates` row
 set directly on that stage's own name still wins over what it inherits: set
 `preview-build.candidates 2` to change only preview builds even if the
-stage they inherit their model from stays at 4. The environment variables
+stage they inherit their model from stays at 1. The environment variables
 still win over any config setting.
 
 Your model server must be able to serve that many concurrent requests. A
@@ -98,6 +106,10 @@ at least one candidate finishes and validates; it fails, with per-candidate
 diagnostics, only if all of them do not). If your stages routinely need
 more than one retry under racing, lower `WORKFLOW_SELF_HOSTED_CANDIDATES`
 or increase your server's concurrent-request capacity.
+
+## Repairing failing verification
+
+After implementation the driver runs the plan's verification commands itself (for example `npx playwright test`). A failing command is sent to a repair stage, up to `WORKFLOW_AUTO_REPAIR_ATTEMPTS` times (default 3, never more than `WORKFLOW_MAX_REPAIRS`, default 4). After the last attempt, an unattended run (`WORKFLOW_CONTINUE_ON_TEST_FAILURE`, on by default) carries what still fails to the final audit as unresolved evidence and keeps going; with it off, the run stops and asks the owner. Set `WORKFLOW_AUTO_REPAIR_ATTEMPTS=0` to skip automatic repair.
 
 ## GitHub access
 

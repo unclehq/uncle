@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import os
+# The self-hosted case drives a fake OpenCode server; direct HTTP is covered by self-hosted-http-test.py.
+os.environ['WORKFLOW_SELF_HOSTED_TRANSPORT'] = 'opencode'
 from pathlib import Path
 import subprocess
 import sys

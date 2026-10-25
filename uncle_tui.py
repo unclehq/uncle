@@ -705,7 +705,7 @@ SUPERVISION_DESC = {
     "stage_time_seconds": "Active seconds a stage may run before a diagnosis, excluding gate waits (default 1800; 0 disables).",
     "stage_tokens": "Reported tokens a stage may use before a diagnosis (default 0 = off; unknown usage never triggers).",
     "call_timeout_seconds": "Deadline for one supervisor call; the worker tree is killed at the deadline (default 300).",
-    "max_calls_per_run": "Supervisor calls allowed per workflow run, counted before each spawn (default 8).",
+    "max_calls_per_run": "Supervisor calls allowed per workflow run, counted before each spawn (default 80).",
     "call_max_cost_usd": "Dollar cap passed to each supervisor call (default 0.50).",
     "delegate_gates": "Standing delegation for routine dialogs (none/routine). With routine, the supervisor answers document approvals, audit findings and press-Enter prompts once each as they open, recorded as supervisor:standing. Signing, publication and waiver gates always need your explicit ask in chat.",
     "files_allowlist": "Comma-separated repository-relative paths (default package.json,package-lock.json,vite.config.js) that a parallel implementation step may write without declaring ownership. A merge normally refuses a whole group when any step touches a file the plan didn't assign it -- these paths are exempt because tooling like `npm install` legitimately rewrites them from a step the plan never named as their owner.",
@@ -1360,7 +1360,7 @@ class UncleTUI:
         self.save_config()
 
     def _apply_opencode_to_all_stages(self):
-        """Use the selected stage's OpenCode connection throughout the workflow."""
+        """Use the selected stage's connection throughout the workflow."""
         self.maybe_reload()
         source = self.stage_target
         if self.stage_runner(source) != "self-hosted":
@@ -1381,13 +1381,13 @@ class UncleTUI:
     def _config_items(self):
         section = getattr(self, "config_section", "")
         if not section:
-            return ["1. Configure stages", "2. Configure OpenCode / self hosting", "3. Miscellaneous", "4. Supervision", "5. Recovery"]
+            return ["1. Configure stages", "2. Configure self hosting", "3. Miscellaneous", "4. Supervision", "5. Recovery"]
         if section == "supervision":
             return self._supervision_items()
         if section == "recovery":
             return ["Recovery model — diagnose failures and propose repairs"]
         if section == "opencode":
-            return ["OpenCode connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
+            return ["Connection — Base URL and API key", "Refresh supported models (%d loaded)" % len(self.stage_api_keys.get("__opencode_models__", {}))]
         if section == "misc":
             return ["Auto mode: " + ("off" if str(getattr(self, "misc", {}).get("auto_mode", "")).lower() == "false" else "on"),
                     "Name for approvals: " + getattr(self, "misc", {}).get("approval_name", "not set"),
@@ -1435,7 +1435,7 @@ class UncleTUI:
             field = self._stage_field()
             desc = CONFIG_DESC.get("field:%s" % field, "")
             if field == "model" and self.stage_runner(self.stage_target) == "self-hosted":
-                return "Choose one of your configured OpenCode self-hosted models. Set the Base URL and API key to discover models in Configure → Configure OpenCode / self hosting."
+                return "Choose one of your configured OpenCode self-hosted models. Set the Base URL and API key to discover models in Configure → Configure self hosting."
             if field == "runner":
                 side = STAGE_SIDE.get(self.stage_target, AGENT)
                 desc += " This is a %s stage, so its choices are %s." % (
@@ -1548,7 +1548,7 @@ class UncleTUI:
         runner = (self.supervision.get("runner", supervision_lib.DEFAULTS["runner"])
                   if target == "!supervision" else self.stage_runner(target))
         if kind == "model" and runner == "self-hosted" and not self.stage_api_keys.get("__opencode_models__"):
-            self.notice = "Set up your endpoint in Configure → Configure OpenCode / self hosting to discover models first."
+            self.notice = "Set up your endpoint in Configure → Configure self hosting to discover models first."
             return
         self.pick_filter = ""
         cur = (self._picker_current() or "").lower()
@@ -3275,10 +3275,19 @@ class UncleTUI:
             return session
         try:
             config, homepage_stage = self.homepage_supervision_config()
-            if config.runner != 'claude':
+            if config.runner == 'self-hosted':
+                # Direct HTTP on a persistent connection of the supervisor's own.
+                from self_hosted import http_transport
+                if not http_transport():
+                    return None
+                values = home_settings(CONFIG_PATH, homepage_stage)
+                values['effort'] = config.effort
+                session = supervisor_runner.SelfHostedSession(values)
+            elif config.runner != 'claude':
                 return None
-            command, env, home = supervisor_command(config, ROOT, config_path=CONFIG_PATH, stage=homepage_stage)
-            session = supervisor_runner.SupervisorSession(command, env, home)
+            else:
+                command, env, home = supervisor_command(config, ROOT, config_path=CONFIG_PATH, stage=homepage_stage)
+                session = supervisor_runner.SupervisorSession(command, env, home)
         except (OSError, ValueError):
             self.supervisor_session = None
             return None
@@ -6456,7 +6465,7 @@ class UncleTUI:
             if self.stage_target == "triage":
                 return "Recovery model — Enter: change, d: default, q back"
             if self.stage_target.startswith("@"):
-                return "OpenCode connection — Enter: edit, q back"
+                return "Connection — Enter: edit, q back"
             return "%s — Enter: change, a: use OpenCode for all stages, d: default, q back" % self.stage_target
         title = {
             "menu": "The man from uncle",

@@ -6,6 +6,17 @@ Execute every feasible mandatory acceptance check, regardless of priority, plus
 Critical and Important checks. On a repair pass, rerun checks and record current
 results; do not reuse a previous PASS without confirming it still holds.
 
+## Browser checks
+
+Before you write a browser script, read the real page: load it and print its DOM
+(or an accessibility snapshot) and take every selector from that output. Never
+guess class names or structure. Keep scripts you write in `.uncle/tests/` or a
+temporary directory; do not copy them into the project's test directory, which
+the driver's verification runs. If a script fails because its own selector or
+setup is wrong, correct the script (at most twice) -- that is not an application
+defect. Record FAIL only for an application behavior you verified against the
+page, and name the observed and expected values.
+
 ## Parallel execution
 
 Read `.uncle/workflow/checklist-groups/README.md` before running anything. The

@@ -1,0 +1,467 @@
+"""Direct-HTTP agent loop for self-hosted stages.
+
+Replaces the OpenCode session for local models: the model gets read, search,
+write, edit and shell tools confined to the stage's project, runs at the
+configured temperature (0 by default), and, when the stage owes a JSON
+artifact, ends with one request whose schema the server is told to enforce.
+Files the model writes to a known document path are validated against that
+document's schema before they land, so a wrong shape comes back as a tool error.
+"""
+import contextvars
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+import self_hosted_http as transport
+from self_hosted_http import OutputTruncated, add_usage, chat, conforms, constrained_completion
+
+READ_LIMIT = 200_000
+OUTPUT_LIMIT = 30_000
+SKIP_DIRS = {'.git', 'node_modules', '.venv', 'venv', '__pycache__'}
+# Workflow state the model may read and write; the rest of .uncle (config,
+# credentials) is never exposed.
+UNCLE_OPEN = ('docs', 'workflow')
+SECRET = re.compile(r'(^|/)(\.env(\..*)?|.*self-hosted-keys\.json|config)$')
+ENV_STRIPPED = ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG', 'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO',
+                'STAGEGATE_ORIGIN_ISSUE', 'DOCUMENT_BUDGET_SOURCE')
+
+SYSTEM = ('You are an automated engineering agent working in the project at the current directory. Use the tools to '
+          'inspect and change files; paths are relative to the project root. Work until the task is complete, then give '
+          'your final response without calling a tool.')
+
+
+def _tool(name, description, properties, required):
+    return {'type': 'function', 'function': {'name': name, 'description': description, 'parameters': {
+        'type': 'object', 'properties': properties, 'required': required}}}
+
+
+_S, _I = {'type': 'string'}, {'type': 'integer'}
+READ_TOOLS = [
+    _tool('read_file', 'Read a text file in the project.', {'path': _S, 'offset': _I, 'limit': _I}, ['path']),
+    _tool('list_dir', 'List a project directory.', {'path': _S}, []),
+    _tool('grep', 'Search project files with a regular expression.', {'pattern': _S, 'path': _S}, ['pattern']),
+]
+WRITE_TOOLS = [
+    _tool('write_file', 'Create or replace a file with the given content.', {'path': _S, 'content': _S}, ['path', 'content']),
+    _tool('edit_file', 'Replace exact text in a file.', {'path': _S, 'old_string': _S, 'new_string': _S,
+                                                         'replace_all': {'type': 'boolean'}}, ['path', 'old_string', 'new_string']),
+]
+SHELL_TOOLS = [_tool('bash', 'Run a shell command in the project root.', {'command': _S, 'timeout': _I}, ['command'])]
+
+
+class Policy:
+    """What a stage may do.  `writable` limits writes to exact paths when given."""
+
+    def __init__(self, root, write=False, shell=False, writable=None, schema_for=None):
+        self.root = Path(root).resolve()
+        self.write, self.shell = write, shell
+        self.writable = {(self.root / p).resolve() for p in writable} if writable is not None else None
+        self.schema_for = schema_for or (lambda relative: None)
+
+    def tools(self):
+        return READ_TOOLS + (WRITE_TOOLS if self.write else []) + (SHELL_TOOLS if self.shell else [])
+
+    def hidden(self, parts):
+        if parts[:1] == ('.uncle',):
+            if len(parts) < 2 or parts[1] not in UNCLE_OPEN:
+                return True
+            parts = parts[2:]
+        return any(part in SKIP_DIRS for part in parts)
+
+    def resolve(self, name, writing=False):
+        path = (self.root / (name or '.')).resolve()
+        if path != self.root and self.root not in path.parents:
+            raise ValueError('path is outside the project')
+        relative = path.relative_to(self.root)
+        if SECRET.search(relative.as_posix()) or self.hidden(relative.parts):
+            raise ValueError('path is not %s' % ('writable' if writing else 'readable'))
+        if writing:
+            if not self.write or (self.writable is not None and path not in self.writable):
+                raise ValueError('writing this path is not permitted')
+            # Judge the path as requested, not as resolved: resolution would
+            # follow a symlink out of the way of this check.
+            cursor = self.root
+            for part in Path(os.path.normpath(name)).parts:
+                cursor = cursor / part
+                if cursor.is_symlink():
+                    raise ValueError('refusing to write through a symlink')
+        return path
+
+
+def bash_timeout(requested):
+    """Seconds a shell command may run: what the model asked for (default 120), capped.
+
+    The cap is WORKFLOW_SELF_HOSTED_BASH_MAX_SECONDS (default 900). A model could
+    ask for an hour, and a Playwright suite whose failing tests each wait out a
+    30 s timeout then ran for 12+ silent minutes while the stage looked hung.  On
+    timeout the model is told so and can run less.
+    """
+    configured = os.environ.get('WORKFLOW_SELF_HOSTED_BASH_MAX_SECONDS', '').strip()
+    ceiling = int(configured) if configured else 900
+    return max(1, min(int(requested or 120), ceiling))
+
+
+def _bash(policy, command, timeout):
+    from process_tree import start_check, launch_command, kill_tree, finish_check, bash_executable
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('OPENCODE_', 'AIDER_')) and k not in ENV_STRIPPED}
+    env.update(PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
+    with tempfile.TemporaryFile() as log:
+        child = start_check(launch_command([bash_executable(), '-c', command]), cwd=policy.root, env=env,
+                            stdout=log, stderr=subprocess.STDOUT)
+        timed_out = False
+        try:
+            try:
+                status = child.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                kill_tree(child)
+                status = child.wait()
+        finally:
+            finish_check(child)
+        log.seek(0)
+        output = log.read().decode('utf-8', errors='replace')
+    if len(output) > OUTPUT_LIMIT:
+        output = output[:OUTPUT_LIMIT // 2] + '\n[... output truncated ...]\n' + output[-OUTPUT_LIMIT // 2:]
+    return '%s\n[%s]' % (output.rstrip(), 'timed out after %ds' % timeout if timed_out else 'exit status %d' % status)
+
+
+def run_tool(policy, name, arguments):
+    try:
+        if name == 'read_file':
+            path = policy.resolve(arguments.get('path'))
+            if not path.is_file():
+                return 'error: not a file'
+            lines = path.read_bytes()[:READ_LIMIT].decode('utf-8', errors='replace').splitlines()
+            start = max(int(arguments.get('offset') or 0), 0)
+            count = int(arguments.get('limit') or 2000)
+            return '\n'.join('%d\t%s' % (n, text) for n, text in enumerate(lines[start:start + count], start + 1))
+        if name == 'list_dir':
+            path = policy.resolve(arguments.get('path'))
+            if not path.is_dir():
+                return 'error: not a directory'
+            return '\n'.join(sorted(child.name + ('/' if child.is_dir() else '') for child in path.iterdir()
+                                    if not policy.hidden(child.relative_to(policy.root).parts)))[:20_000]
+        if name == 'grep':
+            pattern = re.compile(arguments['pattern'])
+            base = policy.resolve(arguments.get('path'))
+            found = []
+            for path in ([base] if base.is_file() else sorted(base.rglob('*'))):
+                if len(found) >= 200:
+                    break
+                relative = path.relative_to(policy.root)
+                if not path.is_file() or policy.hidden(relative.parts) or SECRET.search(relative.as_posix()):
+                    continue
+                try:
+                    for number, text in enumerate(path.read_bytes()[:READ_LIMIT].decode('utf-8').splitlines(), 1):
+                        if pattern.search(text):
+                            found.append('%s:%d:%s' % (relative.as_posix(), number, text[:300]))
+                except (UnicodeDecodeError, OSError):
+                    continue
+            return '\n'.join(found) or 'no matches'
+        if name in ('write_file', 'edit_file'):
+            path = policy.resolve(arguments.get('path'), writing=True)
+            if name == 'write_file':
+                content = arguments['content']
+                if not isinstance(content, str):
+                    return 'error: content must be a string'
+            else:
+                old, new = arguments['old_string'], arguments['new_string']
+                text = path.read_text(encoding='utf-8')
+                count = text.count(old)
+                if not old or count == 0:
+                    return 'error: old_string was not found'
+                if count > 1 and not arguments.get('replace_all'):
+                    return 'error: old_string matches %d places; add context or set replace_all' % count
+                content = text.replace(old, new) if arguments.get('replace_all') else text.replace(old, new, 1)
+            schema = policy.schema_for(path.relative_to(policy.root).as_posix())
+            if schema is not None:
+                try:
+                    conforms(json.loads(content), schema)
+                except json.JSONDecodeError as error:
+                    return 'error: not written; this document must be one valid JSON object (%s)' % error
+                except ValueError as error:
+                    return 'error: not written; the document violates its schema: %s' % error
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding='utf-8', newline='')
+            return 'wrote %s' % path.relative_to(policy.root).as_posix()
+        if name == 'bash' and policy.shell:
+            return _bash(policy, arguments['command'], bash_timeout(arguments.get('timeout')))
+        return 'error: unknown tool %s' % name
+    except (ValueError, KeyError, TypeError, re.error, OSError) as error:
+        return 'error: ' + str(error)
+
+
+INTERRUPTED = object()
+
+
+def interruptible_chat(stage, values, messages, tools, limit, effort, timeout):
+    """`chat`, abandoned the moment the operator sends this stage a message.
+
+    A request is not streamed and can take many minutes, and the operator's message
+    is only read between requests, so chat to a self-hosted stage sat unanswered for
+    the whole wait.  The request runs in a thread; when a steering message lands in
+    the stage's inbox the connection is shut down, the request is dropped (it was
+    going to be redone with the message in it anyway), and INTERRUPTED is returned.
+    """
+    channel = getattr(stage, 'channel', None) if stage is not None else None
+    if channel is None:
+        return chat(values, messages, tools, limit, effort, timeout)
+    outcome = {}
+    pool = transport._connections()
+    context = contextvars.copy_context()
+
+    def run():
+        try:
+            outcome['data'] = context.run(chat, values, messages, tools, limit, effort, timeout)
+        except BaseException as error:  # noqa: BLE001 -- handed back to the caller's thread
+            outcome['error'] = error
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    while thread.is_alive():
+        thread.join(0.5)
+        if thread.is_alive() and any(Path(channel).glob('*.json')):
+            pool.abort()
+            thread.join(10)
+            return INTERRUPTED
+    if 'error' in outcome:
+        raise outcome['error']
+    return outcome['data']
+
+
+def announce(stage, text, side='agent'):
+    """Show what a stage is doing: the shell command it is about to run.
+
+    A tool call can take many minutes and says nothing while it runs; without a
+    line saying what is running, the stage looks hung.  A native Stage shows it
+    in its chat; otherwise it goes out as the same `chat_output` event.
+    """
+    text = ' '.join(str(text).split())[:300] + '\n'
+    if stage is not None:
+        stage.text('\n' + text)
+        return
+    path = os.environ.get('UNCLE_STATUS_FILE')
+    if not path:
+        return
+    event = {'event': 'chat_output', 'stage': os.environ.get('UNCLE_STATUS_STAGE', ''), 'runner': 'self-hosted',
+             'mode': 'act' if side == 'agent' else 'review', 'text': text}
+    try:
+        with open(path, 'a', encoding='utf-8') as stream:
+            stream.write(json.dumps(event) + '\n')
+    except OSError:
+        pass
+
+
+def publish_usage(values, usage, side='agent'):
+    """Tell the TUI a stage's running token total (the same `usage` event a native Stage sends).
+
+    Without it, a stage that makes many long, silent requests shows "Tokens
+    Unavailable" and a frozen row for its whole run, which reads as hung.
+    """
+    path = os.environ.get('UNCLE_STATUS_FILE')
+    if not path:
+        return
+    totals = {key: int(usage.get(key, 0) or 0) for key in ('input_tokens', 'output_tokens')}
+    event = {'event': 'usage', 'stage': os.environ.get('UNCLE_STATUS_STAGE', ''), 'runner': 'self-hosted',
+             'model': values.get('model', ''), 'effort': values.get('effort') or 'none',
+             'mode': 'act' if side == 'agent' else 'review',
+             'usage': dict(totals, cache_read_input_tokens=0, cache_creation_input_tokens=0),
+             'total_cost_usd': None, 'input_includes_cache': True, 'total_tokens': sum(totals.values())}
+    try:
+        with open(path, 'a', encoding='utf-8') as stream:
+            stream.write(json.dumps(event) + '\n')
+    except OSError:
+        pass  # progress reporting never interrupts a stage
+
+
+def run_agent(values, prompt, policy, limit, turns=80, usage=None, final_schema=None, final_name='artifact',
+              stage=None, read_cache=None, seconds=3600, tools_required=True, side='agent'):
+    """Run on the stage's connection; a run outside any stage scope gets one of its own.
+
+    The stage entry points open `connection_scope()` once, so every request the
+    stage makes, retries included, reuses one connection.  A subagent run in the
+    same process opens its own scope and so never shares that socket.
+    """
+    if transport.in_scope():
+        return _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache,
+                          seconds, tools_required, side)
+    with transport.connection_scope():
+        return _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache,
+                          seconds, tools_required, side)
+
+
+def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache, seconds,
+               tools_required, side='agent'):
+    """Run the tool loop; returns (final text, model requests made).
+
+    With `final_schema` the closing answer is a schema-constrained request and
+    is verified locally.  `stage` (a native Stage) receives live text, usage and
+    steering; `read_cache` learns which files were read.
+    """
+    usage = usage if usage is not None else {}
+    effort = values.get('effort') or 'none'
+    timeout = transport.request_seconds(seconds)
+    turn_limit = transport.turn_output_tokens(limit)
+    deadline = time.monotonic() + seconds
+    messages = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': prompt}]
+    steered, requests, nudged, text = [], 0, False, ''
+    tools = policy.tools()
+
+    def steer(note, identifier):
+        messages.append({'role': 'user', 'content': note})
+        stage.pending[identifier] = True
+        stage.ack({'id': identifier, 'result': {}})
+        steered.append(identifier)
+
+    def tally(data):
+        add_usage(usage, data.get('usage') or {})
+        if stage is not None:
+            stage.tokens(usage, inclusive=True)
+        else:
+            publish_usage(values, usage, side)
+
+    if stage is not None:
+        stage.correlation = 'message'
+    exhausted = False
+    for _ in range(turns):
+        if time.monotonic() >= deadline:
+            raise ValueError('Self hosted stage exceeded its %d-second time limit' % seconds)
+        if stage is not None:
+            stage.incoming(steer)
+        data = interruptible_chat(stage, values, messages, tools, turn_limit, effort, timeout)
+        if data is INTERRUPTED:
+            # The operator wrote while the model was thinking: take the message in
+            # and ask again, without counting a turn.
+            stage.incoming(steer)
+            data = interruptible_chat(stage, values, messages, tools, turn_limit, effort, timeout)
+            while data is INTERRUPTED:
+                stage.incoming(steer)
+                data = interruptible_chat(stage, values, messages, tools, turn_limit, effort, timeout)
+        if data is None:
+            if tools_required and (policy.write or policy.shell):
+                raise ValueError('The model server does not support tool calling, which this stage needs; '
+                                 'select a tool-capable model')
+            break  # read-only stage on a server without tools: go straight to the answer
+        requests += 1
+        tally(data)
+        choice = data['choices'][0]
+        message = choice['message']
+        calls = message.get('tool_calls') or []
+        text = message.get('content') or ''
+        if choice.get('finish_reason') == 'length':
+            raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete' % turn_limit)
+        if stage is not None:
+            stage.text(text)
+            # A message is answered by words to the operator; a turn that only
+            # called a tool answers nothing yet.
+            if text.strip():
+                for identifier in steered:
+                    stage.answered(identifier, str(requests))
+                steered.clear()
+        if not calls:
+            if not text.strip() and not nudged:
+                nudged = True
+                messages.append({'role': 'user', 'content': 'Your turn ended without a final text response. Continue from '
+                                 'the work already done, finish any remaining required artifacts, then give the final '
+                                 'response the original task requires.'})
+                continue
+            if not text.strip():
+                raise ValueError('Model returned no final text after one recovery attempt. No successful completion recorded; '
+                                 'retry or select another model.')
+            messages.append({'role': 'assistant', 'content': text})
+            break
+        messages.append({'role': 'assistant', 'content': text, 'tool_calls': calls})
+        for call in calls:
+            name = call['function']['name']
+            try:
+                arguments = json.loads(call['function'].get('arguments') or '{}')
+            except json.JSONDecodeError:
+                arguments = {}
+            arguments = arguments if isinstance(arguments, dict) else {}
+            if name == 'bash':
+                announce(stage, '$ %s  (up to %ds)' % (arguments.get('command', ''), bash_timeout(arguments.get('timeout'))), side)
+            result = run_tool(policy, name, arguments)
+            if read_cache is not None and name == 'read_file':
+                path = arguments.get('path')
+                identity = call.get('id') or 'call-%d' % requests
+                read_cache.observe({'message': {'content': [{'type': 'tool_use', 'id': identity, 'name': 'Read',
+                                                             'input': {'file_path': str((policy.root / str(path)))}}]}})
+                read_cache.observe({'message': {'content': [{'type': 'tool_result', 'tool_use_id': identity,
+                                                             'content': result, 'is_error': result.startswith('error:')}]}})
+            messages.append({'role': 'tool', 'tool_call_id': call.get('id', ''), 'content': result})
+    else:
+        exhausted = turns > 0
+    if exhausted:
+        # Out of turns: ask for the answer without offering more tools.
+        messages.append({'role': 'user', 'content': 'You have used every allowed turn. Stop using tools and give your final response.'})
+        data = chat(values, messages, None, turn_limit, effort, timeout)
+        if data is None:
+            raise ValueError('Model API rejected every request form; check the model name')
+        requests += 1
+        tally(data)
+        choice = data['choices'][0]
+        text = choice['message'].get('content') or ''
+        if choice.get('finish_reason') == 'length':
+            raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete' % turn_limit)
+        messages.append({'role': 'assistant', 'content': text})
+    if final_schema is None:
+        if stage is not None:
+            stage.final_answer = text
+        return text, requests
+    messages.append({'role': 'user', 'content': 'Work is finished. Return only the final JSON object matching the required '
+                     'schema, with no commentary.'})
+    # The closing answer is one artifact, never the size of a whole session's
+    # budget; a runaway generation should fail at this cap, not at 64k tokens.
+    # A worker packet is a few findings: it gets a much smaller one.
+    default_cap = 8192 if final_name.endswith('worker_packet') else 32768
+    final_limit = min(limit, int(os.environ.get('WORKFLOW_SELF_HOSTED_FINAL_OUTPUT_TOKENS') or default_cap))
+    # Grammar-constrained decoding has a known failure: the grammar allows
+    # whitespace anywhere between tokens, and a model can emit newlines until the
+    # token limit without ever producing a character of JSON (seen live: three
+    # review lenses, each ending at the cap with an empty tail).  When the
+    # constrained answer is cut off, ask once more without the grammar and rely on
+    # the local schema check; the mode actually used is recorded.
+    for attempt, skip in enumerate(((), transport.GRAMMAR_MODES)):
+        final, reason, final_usage, mode = constrained_completion(values, messages, final_schema, final_name, final_limit,
+                                                                  effort, timeout, skip=skip)
+        add_usage(usage, final_usage)
+        if stage is not None:
+            stage.tokens(usage, inclusive=True)
+        else:
+            publish_usage(values, usage, side)
+        usage['constraint_mode'] = mode
+        if reason != 'length':
+            break
+        tail = ' '.join(final[-300:].split()) or '(only whitespace)'
+        if attempt or mode == 'prompt':
+            raise OutputTruncated('Model output reached the limit of %d tokens; the response is incomplete. '
+                                  'It ended with: %s' % (final_limit, tail))
+        print('Self hosted: the %s-constrained answer hit the %d-token limit (it ended with: %s); asking once more '
+              'without the grammar.' % (mode, final_limit, tail), file=sys.stderr)
+        messages.append({'role': 'user', 'content': 'That was cut off. Reply with the complete JSON object only, on one '
+                         'compact line, with no extra spaces, newlines or commentary.'})
+    final = re.sub(r'<think>.*?</think>', '', final, flags=re.S).strip()
+    try:
+        conforms(json.loads(final), final_schema)
+    except json.JSONDecodeError as error:
+        raise ValueError('Model response is not valid JSON (%s constraint): %s' % (mode, error)) from None
+    except ValueError as error:
+        raise ValueError('Model response violates the artifact schema (%s constraint): %s' % (mode, error)) from None
+    if stage is not None:
+        stage.final_answer = final
+    return final, requests + 1
+
+
+def run_document(values, prompt, root, schema, name, limit, turns=40, usage=None, explore_first=True, read_cache=None, seconds=3600):
+    """Read-only exploration, then a schema-constrained answer."""
+    policy = Policy(root)
+    if not explore_first:
+        turns = 0
+    return run_agent(values, prompt, policy, limit, turns=turns, usage=usage, final_schema=schema, final_name=name,
+                     read_cache=read_cache, seconds=seconds, tools_required=False)

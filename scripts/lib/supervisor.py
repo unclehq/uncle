@@ -51,7 +51,7 @@ CONTROLS = (
     ('stage_time_seconds', 'count0', 1800),
     ('stage_tokens', 'count0', 0),
     ('call_timeout_seconds', 'count1', 300),
-    ('max_calls_per_run', 'count1', 8),
+    ('max_calls_per_run', 'count1', 80),
     ('call_max_cost_usd', 'money', 0.5),
     ('delegate_gates', 'delegate', 'none'),
     ('files_allowlist', 'filelist', ('package.json', 'package-lock.json', 'vite.config.js')),

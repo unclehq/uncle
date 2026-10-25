@@ -197,7 +197,7 @@ def settings(config, stage):
         profile = profiles[selected]
         result = dict(model=profile.get('model', selected), base_url=profile.get('base_url', ''), api_key=profile.get('api_key', ''))
     elif profiles and not values.get(stage + '.base_url'):
-        raise ValueError('Select a configured OpenCode self-hosted model for stage ' + stage)
+        raise ValueError('No self-hosted model is selected for stage %s; choose one in Configure → Stages, or add %s.model to .uncle/config' % (stage, stage))
     for field in ('model', 'base_url', 'api_key'):
         result[field] = os.environ.get('UNCLE_SELF_HOSTED_' + field.upper()) or result[field]
     result['model'] = result['model'].removeprefix('openai/').removeprefix('local/')
@@ -271,8 +271,7 @@ OUTPUT_TOKENS_ENV = 'WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS'
 CONTEXT_TOKENS_ENV = 'WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS'
 
 
-class OutputTruncated(ValueError):
-    """The model reached the configured output limit: the response is a fragment."""
+from self_hosted_http import OutputTruncated  # noqa: E402  (shared with the direct HTTP transport)
 
 
 def output_token_limit(stage=''):
@@ -475,6 +474,261 @@ PLAN_ARTIFACTS = {
     # JSON schema, but follows the same source-JSON then rendered-view rule.
     'updated-change-plan': '.uncle/docs/CHANGE_PLAN.md',
 }
+
+
+def _str(max_length=None):
+    schema = {'type': 'string', 'minLength': 1}
+    if max_length:
+        schema['maxLength'] = max_length
+    return schema
+
+
+def _obj(properties, required=None, closed=False):
+    schema = {'type': 'object', 'properties': properties, 'required': list(properties if required is None else required)}
+    if closed:
+        schema['additionalProperties'] = False
+    return schema
+
+
+def _rows(properties, required, closed=False, max_items=None):
+    schema = {'type': 'array', 'items': _obj(properties, required, closed)}
+    if max_items:
+        schema['maxItems'] = max_items
+    return schema
+
+
+def _envelope(kind, properties, required=None, closed=True):
+    properties = dict({'schema': {'const': 'uncle.artifact/v1'}, 'kind': {'const': kind}}, **properties)
+    return _obj(properties, ['schema', 'kind'] + list(required if required is not None else
+                [key for key in properties if key not in ('schema', 'kind')]), closed)
+
+
+DISPOSITIONS = _rows({'finding': _str(), 'disposition': {'enum': ['Accepted', 'Partially accepted', 'Rejected', 'Deferred']},
+                      'reason': _str(), 'plan_change': _str()}, ['finding', 'disposition', 'reason', 'plan_change'], True)
+ACCEPTANCE_ROW_STATUS = {'enum': ['PASS', 'FAIL', 'BLOCKED-SETUP', 'BLOCKED-HUMAN', 'BLOCKED-IMPOSSIBLE', 'NOT RUN', 'N/A']}
+REQUIREMENTS_KEYS = ('required_functionality', 'optional_functionality', 'constraints', 'user_visible_behaviors',
+                     'system_behaviors', 'failure_behaviors', 'ambiguities', 'assumptions', 'explicit_non_goals',
+                     'definition_of_done')
+# Contracts of the document kinds a reviewer may be asked for.  Only fields
+# the canonical validators require are required here; the rest is permitted.
+REVIEWER_SCHEMAS = {
+    'adversarial-review': _envelope('adversarial-review', {
+        'findings': _rows({k: _str(1200) for k in ('id', 'title', 'severity', 'references', 'failure', 'fix', 'verify')},
+                          ['id', 'title', 'severity', 'references', 'failure', 'fix', 'verify'], max_items=40),
+        'overall_assessment': _str()}, closed=False),
+    'final-audit': _envelope('final-audit', {
+        'findings': _rows({k: _str() for k in ('id', 'severity', 'evidence', 'affected_requirement', 'required_correction', 'blocks')},
+                          ['id', 'severity', 'evidence', 'required_correction', 'blocks']),
+        'verdict': {'enum': ['READY', 'READY WITH NON-BLOCKING ISSUES', 'NOT READY']}}, closed=False),
+    'acceptance-report': _envelope('acceptance-report', {
+        'narrative': {'type': 'string'},
+        'rows': _rows({'id': _str(), 'required': {'type': 'boolean'}, 'status': ACCEPTANCE_ROW_STATUS, 'evidence': _str()},
+                      ['id', 'required', 'status', 'evidence'])}, ['rows'], closed=False),
+    'manual-checklist': _envelope('manual-checklist', {
+        'checks': _rows({'id': _str(), 'required': {'type': 'boolean'}, 'exact_action': _str(), 'expected_result': _str(),
+                         'exclusive_resources': {'type': 'array', 'items': {'type': 'string'}},
+                         'depends_on': {'type': 'array', 'items': {'type': 'string'}}},
+                        ['id', 'exact_action', 'expected_result']),
+        'traceability': {'type': 'string'}}, ['checks'], closed=False),
+    'manual-checklist-worker-packet': _envelope('manual-checklist-worker-packet', {
+        'checks': _rows({'id': _str(), 'exact_action': _str(), 'expected_result': _str(),
+                         'exclusive_resources': {'type': 'array', 'items': {'type': 'string'}},
+                         'depends_on': {'type': 'array', 'items': {'type': 'string'}}},
+                        ['id', 'exact_action', 'expected_result'])}, closed=False),
+    'test-review-worker-packet': _envelope('test-review-worker-packet', {
+        'rows': _rows({'id': _str(), 'status': ACCEPTANCE_ROW_STATUS, 'evidence': _str()}, ['id', 'status', 'evidence'])}, closed=False),
+    'preflight-worker-packet': _envelope('preflight-worker-packet', {
+        'rows': _rows({'id': _str(), 'required': {'type': 'boolean'}, 'status': ACCEPTANCE_ROW_STATUS, 'evidence': _str()},
+                      ['id', 'status', 'evidence'])}, closed=False),
+    # A panel lens reports a handful of findings, each a sentence or two.  Tight
+    # bounds are what stop a repetition loop: a lens that wrote 32k tokens of
+    # one finding could not do so inside 20 findings of 800 and 1500 characters.
+    'adversarial-review-worker-packet': _envelope('adversarial-review-worker-packet', {
+        'findings': _rows({'id': _str(60), 'summary': _str(800), 'evidence': {'type': 'string', 'maxLength': 1500}},
+                          ['id', 'summary'], max_items=20)}, closed=False),
+    'final-audit-worker-packet': _envelope('final-audit-worker-packet', {
+        'findings': _rows({'id': _str(60), 'summary': _str(800), 'evidence': {'type': 'string', 'maxLength': 1500}},
+                          ['id', 'summary'], max_items=20)}, closed=False),
+    'updated-plan-worker-packet': _envelope('updated-plan-worker-packet', {
+        'findings': _rows({k: _str(1200) for k in ('id', 'gap', 'evidence', 'risk', 'required_correction')},
+                          ['id', 'gap', 'evidence', 'risk', 'required_correction'], max_items=20)}, closed=False),
+    'checklist-execution-worker-packet': _envelope('checklist-execution-worker-packet', {
+        'results': _rows({'id': _str(), 'action': _str(), 'expected_result': _str(), 'actual_result': _str(),
+                          'evidence': _str(), 'status': ACCEPTANCE_ROW_STATUS, 'defect_reference': {'type': 'string'}},
+                         ['id', 'status', 'evidence'])}, closed=False),
+}
+
+
+def _test_report(kind):
+    return _envelope(kind, {
+        'commands': _rows({'command': _str(), 'status': {'enum': ['PASS', 'FAIL', 'BLOCKED', 'NOT RUN', 'DRIVER PENDING', 'N/A']},
+                           'output': _str(), 'requirements': {'type': 'array', 'items': {'type': 'string'}}},
+                          ['command', 'status', 'output']),
+        'coverage_gaps': {'type': 'array', 'items': {'type': 'string'}}, 'next_action': {'type': 'string'}},
+        ['commands'], closed=False)
+
+
+REVIEWER_SCHEMAS['automated-test-report'] = _test_report('automated-test-report')
+REVIEWER_SCHEMAS['change-test-report'] = _test_report('change-test-report')
+REVIEWER_SCHEMAS['implementation-notes'] = dict(_envelope('implementation-notes', {
+    'changed_files': _rows({'path': _str(), 'purpose': {'type': 'string'}, 'plan_step': {'type': 'string'},
+                            'behavior_or_invariant': {'type': 'string'}}, ['path']),
+    'deviations': {'type': 'array', 'items': {}}, 'unresolved_concerns': {'type': 'array', 'items': {}},
+    'plan_blockers': {'type': 'array', 'items': {}}}, [], closed=False))
+REVIEWER_SCHEMAS['implementation-notes']['properties']['kind'] = {'enum': ['implementation-notes', 'implementation-notes-fragment']}
+# Workflow documents a model may write itself; a wrong shape is refused at the write.
+DOCUMENT_KINDS = {'IMPLEMENTATION_NOTES.json': 'implementation-notes', 'AUTOMATED_TEST_REPORT.json': 'automated-test-report',
+                  'CHANGE_TEST_REPORT.json': 'change-test-report', 'ADVERSARIAL_REVIEW.json': 'adversarial-review',
+                  'MANUAL_CHECKLIST.json': 'manual-checklist'}
+
+
+def document_schema_for(delivery, prompt):
+    """Resolver for http_agent.Policy: schema a written file must satisfy, else None."""
+    delivery_kind = reviewer_artifact_kind(prompt)
+    def resolve(relative):
+        if delivery and delivery_kind and Path(relative).name == Path(delivery).name:
+            return artifact_schema(delivery_kind)
+        if relative.startswith('.uncle/workflow/documents/') and Path(relative).name in DOCUMENT_KINDS:
+            return artifact_schema(DOCUMENT_KINDS[Path(relative).name])
+        return None
+    return resolve
+
+
+# Size bounds.  A grammar-constrained model that falls into a repetition loop
+# (greedy decoding makes it likely) cannot close a string or an array that the
+# schema leaves open, and writes until the token limit: one adversarial-review
+# worker produced 64,512 tokens of one finding.  Bounding every string and array
+# lets the grammar force the close.  Fields that legitimately hold a document are
+# given room for one; everything else is a sentence or a paragraph.
+DEFAULT_MAX_LENGTH, DEFAULT_MAX_ITEMS = 2500, 60
+LONG_FIELDS = {'narrative': 60000, 'verification_commands': 20000, 'protected_verification_paths': 4000,
+               'traceability': 20000, 'output': 20000, 'parallel_groups': 4000}
+SECTION_MAX_LENGTH = 12000
+
+
+def _bounded(schema, name=None):
+    if not isinstance(schema, dict):
+        return schema
+    result = dict(schema)
+    if result.get('type') == 'string' and 'maxLength' not in result:
+        result['maxLength'] = LONG_FIELDS.get(name, DEFAULT_MAX_LENGTH)
+    if result.get('type') == 'array' and 'maxItems' not in result:
+        result['maxItems'] = DEFAULT_MAX_ITEMS
+    if 'properties' in result:
+        in_sections = name == 'sections'
+        result['properties'] = {key: (_bounded(value, key) if not in_sections else
+                                      dict(_bounded(value, key), maxLength=SECTION_MAX_LENGTH))
+                                for key, value in result['properties'].items()}
+    if 'items' in result:
+        result['items'] = _bounded(result['items'], name)
+    return result
+
+
+def artifact_schema(kind, protected=False, require_dispositions=False):
+    """JSON Schema of the artifact a document stage must deliver, with bounded sizes."""
+    schema = _artifact_schema(kind, protected, require_dispositions)
+    return _bounded(schema) if schema is not None else None
+
+
+def _artifact_schema(kind, protected=False, require_dispositions=False):
+    """JSON Schema of the artifact a document stage must deliver."""
+    if kind == 'requirements-interpretation':
+        return _envelope(kind, {'sections': _obj({key: _str() for key in REQUIREMENTS_KEYS}, closed=True)})
+    if kind == 'plan':
+        properties = {'narrative': _str(), 'verification_commands': _str()}
+        if protected:
+            properties['protected_verification_paths'] = _str()
+        # An updated plan carries its review dispositions in the same object.
+        if protected or require_dispositions:
+            properties['dispositions'] = DISPOSITIONS
+        return _envelope(kind, properties, ['narrative', 'verification_commands'] + (['protected_verification_paths'] if protected else []))
+    if kind == 'change-plan':
+        properties = {'narrative': _str(), 'dispositions': DISPOSITIONS}
+        return _envelope(kind, properties, ['narrative'] + (['dispositions'] if require_dispositions else []))
+    if kind == 'change-planning-bundle':
+        return _envelope(kind, {
+            'baseline_report': _envelope('baseline-report', {'narrative': _str(), 'verification_commands': _str(),
+                                                             'parallel_groups': {'type': 'string'}}, ['narrative', 'verification_commands']),
+            'change_spec': _envelope('change-spec', {'narrative': _str(), 'acceptance_criteria': {
+                'type': 'array', 'items': _obj({'id': _str(), 'criterion': _str(), 'verification': _str()}, closed=True)}}),
+            'change_plan': _envelope('change-plan', {'narrative': _str()})})
+    return REVIEWER_SCHEMAS.get(kind)
+
+
+def reviewer_artifact_kind(prompt):
+    """The one artifact kind a reviewer prompt's contract names, else None."""
+    kinds = set(re.findall(r'"kind"\s*:\s*"([a-z-]+)"', prompt))
+    return next(iter(kinds)) if len(kinds) == 1 and next(iter(kinds)) in REVIEWER_SCHEMAS else None
+
+
+def http_transport():
+    """Document stages use direct HTTP unless the operator opts back into OpenCode."""
+    return os.environ.get('WORKFLOW_SELF_HOSTED_TRANSPORT', 'http') != 'opencode'
+
+
+def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=False, require_dispositions=False):
+    from http_agent import Policy
+    stage_name = os.environ.get('UNCLE_STATUS_STAGE', '')
+    delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
+    schema = artifact_schema(schema_kind, protected, require_dispositions) if schema_kind else None
+    request = prompt
+    if schema_kind:
+        request += ('\nYour final message must be exactly one JSON object matching the required schema; the server '
+                    'enforces it. Do not return Markdown.')
+    # A reviewer's one authoritative output is its document: writable only at the delivery path.
+    policy = Policy(root, write=side == 'agent' or bool(delivery), shell=side == 'agent' and allow_shell,
+                    writable=([delivery] if delivery else []) if side == 'reviewer' else None,
+                    schema_for=document_schema_for(delivery, prompt))
+    return (request, policy, schema, (schema_kind or 'artifact').replace('-', '_'), output_token_limit(stage_name),
+            int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))
+
+
+def run_http_stage(stage, directory, values, root, allow_shell=True):
+    """Drive a native Stage (live steering) over direct HTTP; the stage's prompt is complete."""
+    from http_agent import run_agent
+    _, policy, schema, name, limit, seconds = _http_setup(stage.side, values, stage.prompt, root, allow_shell,
+                                                          reviewer_artifact_kind(stage.prompt))
+    stage.model = values['model']
+    stage.ready(directory)
+    run_agent(values, stage.prompt, policy, limit, turns=int(values.get('max_turns') or 80), usage={}, final_schema=schema,
+              final_name=name, stage=stage, seconds=seconds)
+
+
+def run_http_agent(side, values, prompt, root, allow_shell=True, usage=None, schema_kind=None, read_cache=None,
+                   protected=False, require_dispositions=False, turns=None):
+    """One self-hosted stage over direct HTTP; returns (final text, requests made).
+
+    The model works through tools at the configured temperature.  When the stage
+    owes a known JSON artifact, its final answer is a request carrying that
+    artifact's schema (see self_hosted_http for how servers are asked to enforce it).
+    """
+    from http_agent import run_agent
+    request, policy, schema, name, limit, seconds = _http_setup(side, values, prompt, root, allow_shell, schema_kind,
+                                                                protected, require_dispositions)
+    turns = int(turns or values.get('max_turns') or 80)
+    if os.environ.get('UNCLE_STEERING') != '1' or side == 'reviewer':
+        return run_agent(values, request, policy, limit, turns=turns, usage=usage, final_schema=schema, final_name=name,
+                         read_cache=read_cache, seconds=seconds, side=side)
+    # Live steering: the same loop, observed by a native Stage that relays operator messages.
+    from native_stage import Stage
+    from process_tree import kill_tree, finish_check
+    adapter = Stage('self-hosted', side, os.environ.get('UNCLE_STATUS_STAGE', ''), [], prompt=request)
+    adapter.model = values['model']
+    adapter.usage_baseline = {}
+    with runner_directory(prefix='uncle-http-live-') as directory:
+        try:
+            adapter.watch_parent()
+            adapter.ready(directory)
+            return run_agent(values, adapter.prompt, policy, limit, turns=turns, usage=usage if usage is not None else {},
+                             final_schema=schema, final_name=name, stage=adapter, read_cache=read_cache, seconds=seconds)
+        finally:
+            adapter.parent_watch_stop.set()
+            if adapter.channel:
+                adapter.status('steering_closed', channel=str(adapter.channel))
+            if adapter.child is not None and adapter.child.poll() is None:
+                kill_tree(adapter.child)
+                adapter.child.wait()
+                finish_check(adapter.child)
 
 
 def copy_generated_documents(root, staged):
@@ -976,6 +1230,18 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
     if stage_name == 'project-plan' and 'You perform two consecutive roles in a single pass' in prompt:
         artifact = PLAN_ARTIFACTS['requirements']
     if not artifact:
+        if http_transport():
+            kind = reviewer_artifact_kind(prompt)
+            text, turns = run_http_agent(side, values, prompt, root, usage=usage, schema_kind=kind, read_cache=read_cache)
+            delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
+            if delivery and kind:
+                # The schema-constrained answer is the delivery; nothing else may be.
+                target_path = Path(delivery)
+                if not target_path.is_absolute():
+                    target_path = root / target_path
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.write_text(text, encoding='utf-8', newline='\n')
+            return text, turns
         return _run_opencode(side, values, prompt, root, usage=usage, read_cache=read_cache)
     target = root / artifact
     if target.is_symlink():
@@ -999,7 +1265,9 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
         candidate.parent.mkdir(parents=True, exist_ok=True)
         if candidate.exists():
             candidate.unlink()
-        delivery_notice = (
+        use_http = http_transport()
+        # Over HTTP the final message is the delivery; there is no Write tool.
+        delivery_notice = '' if use_http else (
             '\nUse your Write tool to create the complete JSON object at ' + str(candidate) +
             '. This isolated delivery file is the only authoritative handoff. Do not write '
             'any other file. Your final chat response is diagnostics only and is ignored.')
@@ -1017,13 +1285,17 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                 attempt_usage = {}
                 canonical_response = None
                 try:
-                    response, count = _run_opencode('agent', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage, read_cache=read_cache,
-                                                     artifact_kind='requirements-interpretation')
+                    if use_http:
+                        response, count = run_http_agent('agent', values, request, staged, allow_shell=False, usage=attempt_usage,
+                                                         schema_kind='requirements-interpretation', read_cache=read_cache)
+                    else:
+                        response, count = _run_opencode('agent', values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage, read_cache=read_cache,
+                                                         artifact_kind='requirements-interpretation')
                     turns += count
                 finally:
                     if usage is not None:
                         for key, value in attempt_usage.items():
-                            usage[key] = usage.get(key, 0) + value
+                            usage[key] = usage.get(key, 0) + value if isinstance(value, (int, float)) else value
                 try:
                     if candidate.is_symlink():
                         raise ValueError('Refusing a symlinked requirements document')
@@ -1086,13 +1358,19 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                 attempt_usage = {}
                 canonical_response = None
                 try:
-                    response, count = _run_opencode(side, values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage, read_cache=read_cache,
-                                                     artifact_kind=expected_kind)
+                    if use_http:
+                        response, count = run_http_agent(side, values, request, staged, allow_shell=False, usage=attempt_usage,
+                                                         schema_kind=expected_kind, read_cache=read_cache,
+                                                         protected=Path(artifact).name == 'UPDATED_PROJECT_PLAN.md',
+                                                         require_dispositions=require_dispositions)
+                    else:
+                        response, count = _run_opencode(side, values, request, staged, allow_shell=False, usage=attempt_usage, diagnostic_root=root, usage_baseline=usage, read_cache=read_cache,
+                                                         artifact_kind=expected_kind)
                     turns += count
                 finally:
                     if usage is not None:
                         for key, value in attempt_usage.items():
-                            usage[key] = usage.get(key, 0) + value
+                            usage[key] = usage.get(key, 0) + value if isinstance(value, (int, float)) else value
                 if candidate.is_symlink():
                     raise ValueError('Refusing a symlinked plan; original preserved')
                 response = expand_patch_response(response, root, stage_name)
@@ -1144,7 +1422,8 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                         candidate.unlink()
                     print('Plan response format rejected; retrying once. Response saved to ' + rejected, file=sys.stderr)
                     request += ('\nThe previous response was rejected: ' + str(error) +
-                                '\nUse Write to replace the required isolated delivery file with the complete JSON object again, exactly matching the contract above. Do not write Markdown or any other file.')
+                                ('\nReturn the complete JSON object again, exactly matching the contract above.' if use_http else
+                                 '\nUse Write to replace the required isolated delivery file with the complete JSON object again, exactly matching the contract above. Do not write Markdown or any other file.'))
                     continue
                 break
         if not candidate.is_file() or candidate.is_symlink():
@@ -1454,13 +1733,13 @@ def main(side, args):
         if usage:
             print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,
                               'model':local_model(values['model']), 'usage':usage, 'total_cost_usd':usage.get('_total_cost_usd'),
-                              'usage_source':'OpenCode step_finish events', 'usage_scope':'stage'}))
+                              'usage_source':'Model API usage' if 'constraint_mode' in usage else 'OpenCode step_finish events', 'usage_scope':'stage'}))
             print('tokens used\n' + str(usage['total_tokens']))
     else:
         print(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':text}]}}))
         print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':text,
                           'model':local_model(values['model']),'num_turns':turns,'duration_ms':int((time.monotonic()-started)*1000),'usage':usage,'total_cost_usd':usage.get('_total_cost_usd'),
-                          'usage_source':'OpenCode step_finish events','usage_scope':'stage'}))
+                          'usage_source':'Model API usage' if 'constraint_mode' in usage else 'OpenCode step_finish events','usage_scope':'stage'}))
     return 0
 
 
@@ -1469,7 +1748,11 @@ if __name__ == '__main__':
     sys.stderr.reconfigure(encoding='utf-8', newline='\n')
     cli_started = time.monotonic()
     try:
-        sys.exit(main(sys.argv[1], sys.argv[2:]))
+        # One process is one stage (panel workers and candidates are processes of
+        # their own): its requests share a persistent connection no other stage uses.
+        from self_hosted_http import connection_scope
+        with connection_scope():
+            sys.exit(main(sys.argv[1], sys.argv[2:]))
     except KeyboardInterrupt:
         sys.exit(130)
     except (ValueError, OSError, KeyError, TypeError, StopIteration) as error:
@@ -1478,5 +1761,5 @@ if __name__ == '__main__':
             print(json.dumps({'type':'result','subtype':'error','is_error':True,
                               'usage':getattr(error, 'opencode_usage', {}), 'total_cost_usd':getattr(error, 'opencode_usage', {}).get('_total_cost_usd'),
                               'error_detail':str(error), 'duration_ms':int((time.monotonic()-cli_started)*1000),
-                              'usage_source':'OpenCode step_finish events','usage_scope':'stage'}))
+                              'usage_source':'Model API usage' if http_transport() else 'OpenCode step_finish events','usage_scope':'stage'}))
         sys.exit(2)

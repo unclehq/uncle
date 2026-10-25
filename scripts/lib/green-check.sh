@@ -157,7 +157,7 @@ verify_commands() {
     [[ -s "$file" ]] || return 0
 
     if [[ "$file" == *.json ]]; then
-        python3 - "$file" <<'PY' || return 0
+        python3 - "$file" <<'PY' | green_fold_commands || return 0
 import json, sys
 try:
     payload = json.load(open(sys.argv[1], encoding='utf-8'))
@@ -192,7 +192,19 @@ PY
         | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^\$[[:space:]]*//' \
         | grep -v '^#' \
         | grep -v '^$' \
+        | green_fold_commands \
         || true
+}
+
+# Fold a command that spans lines (`sh -c '` ... `'`, a multi-line if) into one
+# line, so green_run's one-command-per-line loop runs it whole instead of in
+# fragments. Falls back to the list as written when python3 is unavailable.
+green_fold_commands() {
+    if command -v python3 >/dev/null 2>&1 && [[ -f "$GREEN_LIB_DIR/fold_shell_commands.py" ]]; then
+        python3 -B "$GREEN_LIB_DIR/fold_shell_commands.py"
+    else
+        cat
+    fi
 }
 
 # green_run <commands_file> <out_tsv> <log_file> [integrity_guard] — run each command from the
@@ -245,6 +257,11 @@ green_run() {
         local -a check_command=(bash -c "$cmd")
         if [[ -f "$GREEN_LIB_DIR/shell_syntax.py" ]] && command -v python3 >/dev/null 2>&1; then
             check_command=(python3 -B "$GREEN_LIB_DIR/shell_syntax.py" --command-file "$cmds" "$command_line" "${WORKFLOW_VERIFY_JOBS:-4}")
+        fi
+        # Bound the command (WORKFLOW_CHECK_TIMEOUT_SECONDS, default 900): a check that
+        # waits forever used to stall the run with no output at all.
+        if [[ -f "$GREEN_LIB_DIR/run_check.py" ]] && command -v python3 >/dev/null 2>&1; then
+            check_command=(python3 -B "$GREEN_LIB_DIR/run_check.py" -- "${check_command[@]}")
         fi
         env -u UNCLE_STATUS_FILE -u UNCLE_PROJECT_ROOT -u UNCLE_CONFIG -u STAGEGATE_RUN_ID -u STAGEGATE_ORIGIN_REPO -u STAGEGATE_ORIGIN_ISSUE -u DOCUMENT_BUDGET_SOURCE "${check_command[@]}" < /dev/null >> "$log" 2>&1 || status=$?
         perf_record check "$cmd" "$((SECONDS-started))" "$status"

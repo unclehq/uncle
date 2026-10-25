@@ -62,6 +62,16 @@ source PDF), and cross-reference it. Do not invent speculative assumptions.
 Preserve the source's modality: "prefer" and "not required" do not mean
 "must" or "forbidden." Concentrate prose on ambiguities and decisions.
 
+Resolve style words. A subjective or stylistic term in the brief ("groovy",
+"clean", "modern", "retro", "playful") is not an ambiguity to hand back: pick
+its most common meaning and define it in Assumptions as concrete, checkable
+values, tagged `ASSUMPTION:` -- never "settled by stakeholder clarification", and
+never defined as whatever the existing code already does. "Groovy" means
+1970s: a warm palette (burnt orange, mustard, avocado, chocolate brown, cream),
+rounded fonts, and a psychedelic swirl or radial-stripe background. Give the hex
+values and the font stack, so a later stage can implement and test them. A brief
+that names a different meaning wins over this default.
+
 ## Proportional interpretation
 
 Keep each section brief;

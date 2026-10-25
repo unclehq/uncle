@@ -276,6 +276,23 @@ claiming a file the step does not write is worse than claiming none, and a step
 whose files genuinely overlap another's should say so by naming the same file,
 not by omitting the field.
 
+Put every behavior a browser can check into the protected automated suite, not
+into the manual checklist. For a web application that means rendering, theme,
+keyboard input, and error states: each gets a browser test in the directory the
+test runner's config actually reads (not under `.uncle/`), those test files and
+the config are listed under Protected verification paths, and the Verification
+commands run the whole suite, not one new test. A failure there is a driver
+failure and goes to repair; a check that only the later checklist stage writes
+and runs ad hoc is never repaired. Keep the manual checklist for what cannot be
+automated.
+
+A style assumption in the requirements interpretation (for example what "groovy"
+means) is binding, not a suggestion: carry its exact values into the plan as a
+behavior and an invariant, and give it an automated check against the computed
+styles of the running page. Do not substitute generic defaults such as a stock
+purple-blue gradient, and do not define the theme as whatever the existing CSS
+already contains.
+
 Before finishing this stage, write or update `.gitignore` at the project root
 yourself, now, using the tools available to you -- do not merely describe it in
 the plan. Include every entry the chosen stack usually needs: its dependency

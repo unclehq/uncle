@@ -89,6 +89,14 @@ export UNCLE_UNATTENDED="$UNATTENDED"
 # record; set this to 0 for the older stop-and-decide behaviour.
 WORKFLOW_AUTO_REPAIR="${WORKFLOW_AUTO_REPAIR:-1}"
 WORKFLOW_CONTINUE_ON_TEST_FAILURE="${WORKFLOW_CONTINUE_ON_TEST_FAILURE:-1}"
+# How many automatic repair passes a failing driver verification gets before the
+# run stops insisting on it. This used to be one, so a suite with a dozen failures
+# was handed to a single bounded agent run, and whatever that run did not finish
+# was carried forward as "nonblocking evidence". Bounded by the repair limit.
+WORKFLOW_AUTO_REPAIR_ATTEMPTS="${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-3}"
+case "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" in
+    ''|*[!0-9]*) echo "WORKFLOW_AUTO_REPAIR_ATTEMPTS must be an integer from 0 to 100." >&2; exit 1 ;;
+esac
 
 # Serialize both workflow families before mutable initialization.
 if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/plan-executability.py" lock-child "$$" "$PPID" 2>/dev/null; then
@@ -1362,8 +1370,9 @@ stage_uses_self_hosted() {
 
 # issue 103: how many isolated candidates race for one self-hosted stage
 # attempt. Per-stage WORKFLOW_SELF_HOSTED_CANDIDATES_<STAGE> wins over the
-# global WORKFLOW_SELF_HOSTED_CANDIDATES, which defaults to 4 (D-1). Setting
-# either to 1 takes the untouched single-shot branch below, not the
+# global WORKFLOW_SELF_HOSTED_CANDIDATES, which defaults to 1: racing is off
+# unless asked for, now that self-hosted stages enforce their JSON schema over
+# direct HTTP and a malformed answer is rare. Setting either to 1 takes the untouched single-shot branch below, not the
 # coordinator with a race of one -- see IMPLEMENTATION_NOTES.md for why that
 # is a deliberate deviation from the plan's literal wording.
 self_hosted_candidate_count() {
@@ -1391,7 +1400,7 @@ self_hosted_candidate_count() {
     fallback="$(uncle_stage_key "$stage" candidates)"
     [[ -n "$fallback" ]] || fallback="$(uncle_stage_key "$(uncle_config_stage "$stage")" candidates)"
     [[ -n "$fallback" ]] || fallback="$(uncle_config_get self-hosted.candidates)"
-    printf '%s' "${fallback:-4}"
+    printf '%s' "${fallback:-1}"
 }
 
 # Race `count` isolated invocations of one self-hosted stage attempt,
@@ -1406,6 +1415,34 @@ self_hosted_candidate_count() {
 # the winner's status (always 0 -- only a validated candidate is ever
 # selected) or a nonzero status when every candidate failed, with every
 # candidate's own output concatenated into $log_file for diagnosis.
+# green_failure_route <continue-on-failure> <repairs-used> <attempts>
+# What to do with a driver verification that failed: `repair` while automatic
+# attempts remain, then `continue` (carry it to the final audit as unresolved
+# evidence) when the run is configured to, else `ask` the owner.
+green_failure_route() {
+    local continue_on_failure="$1" used="$2" attempts="$3"
+    if [[ "$used" -lt "$attempts" ]]; then
+        printf 'repair'
+    elif [[ "$continue_on_failure" == 1 ]]; then
+        printf 'continue'
+    else
+        printf 'ask'
+    fi
+}
+
+# A race runs every candidate in its own copy of the project, and only the
+# winner's stream and delivery file used to cross back.  Everything else a stage
+# produces lives in that copy: an investigation stage's Written document, an
+# implementation stage's source edits, execute-checklist's reports.  Left behind,
+# a stage that succeeded changed nothing, and the driver either found no file or
+# synthesized an empty "NOT RUN" report.  Promote what the winner changed (see
+# promote_candidate.py: only its own changes, only project files and workflow
+# documents, never over a live file edited meanwhile).
+promote_winner_work() {
+    python3 -B "$ROOT/scripts/lib/promote_candidate.py" promote "$1" "$PWD" \
+        || echo "Warning: the winning candidate could not be promoted; its work stays in $1" >&2
+}
+
 race_self_hosted_candidates() {
     local log_name="$1" count="$2" prompt_file="$3" delivery_target="$4" log_file="$5"
     local work_dir="$STATE_DIR/candidate-race/$log_name"
@@ -1443,6 +1480,8 @@ def ignore(directory, names):
     return set(excluded(directory, names)) | {name for name in names if (Path(directory) / name).is_symlink()}
 shutil.copytree(root, staged, ignore=ignore)
 copy_generated_documents(root, staged)
+from promote_candidate import snapshot
+snapshot(staged)
 ISOLATE_PY
 
     local launch_script="$work_dir/launch.sh"
@@ -1546,6 +1585,7 @@ ISOLATE_PY
         return 1
     fi
 
+    promote_winner_work "$winner_dir"
     cat "$winner_dir/raw.jsonl" | perf_stream "$log_name" | tee "$log_file" | format_claude_stream
     if [[ -n "$delivery_target" && -s "$winner_dir/project/.uncle/workflow/candidate-delivery.json" ]]; then
         cp "$winner_dir/project/.uncle/workflow/candidate-delivery.json" "$delivery_target"
@@ -1878,6 +1918,8 @@ def ignore(directory, names):
     return set(excluded(directory, names)) | {name for name in names if (Path(directory) / name).is_symlink()}
 shutil.copytree(root, staged, ignore=ignore)
 copy_generated_documents(root, staged)
+from promote_candidate import snapshot
+snapshot(staged)
 ISOLATE_PY
 
     # In delivery_mode, $prompt_file already has the literal, binding
@@ -2015,6 +2057,8 @@ RENDER_PY
         done
         return 1
     fi
+
+    promote_winner_work "$winner_dir"
 
     # A reviewer's own stdout is plain text (self_hosted.py's `print(text)`
     # for side == 'reviewer'), not the agent side's JSON chat-event stream --
@@ -2848,6 +2892,9 @@ run_stage() {
                 # Do that conversion in the driver rather than spending a
                 # second self-hosted model call copying a large plan into JSON.
                 cp "$project_plan_investigation" .uncle/docs/PROJECT_PLAN.md
+                # Shape-only repair of the one unambiguous slip (commands as
+                # `$ cmd` lines with no fence); anything else still fails below.
+                python3 -B "$ROOT/scripts/lib/repair_document_format.py" .uncle/docs/PROJECT_PLAN.md || true
                 python3 "$ROOT/scripts/lib/plan_context.py" export-project-plan \
                     .uncle/docs/PROJECT_PLAN.md . || exit 1
                 python3 "$ROOT/scripts/lib/plan_context.py" render-project-plan \
@@ -3309,6 +3356,7 @@ verify_implementation_review() {
             return 0
         fi
         build_implementation_review
+        reapprove_implementation_unattended && return 0
         set_state WAIT_IMPLEMENT_APPROVAL
         echo "Approved inputs changed; review the current implementation again."
         exit 0
@@ -3319,10 +3367,28 @@ verify_implementation_review() {
         echo
         echo "The working tree changed after the implementation was approved."
         echo "$REVIEW_FILE has been rebuilt from the current tree."
+        reapprove_implementation_unattended && return 0
         set_state WAIT_IMPLEMENT_APPROVAL
         echo "Re-run the driver to review and approve what is there now."
         exit 0
     fi
+}
+
+# Unattended, nobody is there to review the implementation again, and stopping at
+# a reopened gate ended the run for good: the driver exits and nothing restarts
+# it. A later stage re-runs the green check, which rewrites a file the approval
+# covers, so a check that failed when the implementation was approved and passes
+# now (a stray process released its port) was enough to strand the run after
+# every stage had worked. Re-approve the current tree in place, record it in the
+# unattended ledger like any other unreviewed approval, and carry on with the
+# stage that was running. Attended runs still stop and ask.
+reapprove_implementation_unattended() {
+    [[ "${UNATTENDED:-0}" == 1 ]] || return 1
+    review_and_approve "$REVIEW_FILE" IMPLEMENTATION_REVIEW approve || return 1
+    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" record "$STATE_DIR" || return 1
+    record_unattended_gate IMPLEMENTATION_REVIEW "re-approved the current implementation after its inputs changed, without human review"
+    echo "Unattended: the approved implementation inputs changed after approval; re-approved the current tree and continuing."
+    return 0
 }
 
 # --- Speculative execution across human gates -------------------------------
@@ -4047,7 +4113,8 @@ while true; do
             fi
             if [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
                 && [[ "$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS)" == PASS ]]; then
-                if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]]; then
+                green_route="$(green_failure_route "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" "$WORKFLOW_AUTO_REPAIR_ATTEMPTS")"
+                if [[ "$green_route" == continue ]]; then
                     echo 'Test review is otherwise complete; continuing despite failed driver verification.'
                     record_nonblocking_failure green-check 'TEST_REVIEW passed while one or more driver verification commands failed'
                     record_test_failure_disposition
@@ -4079,7 +4146,8 @@ while true; do
                 # the stage fixes them. Offer the choice only once repair has had
                 # a turn and the same command is still failing, which is the
                 # shape of a check the code cannot satisfy.
-                if [[ "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" -ge 1 \
+                if [[ "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" \
+                      && "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" -ge 1 \
                       && -n "${green_ids// /}" ]]; then
                     echo
                     echo "This verification failure survived a repair pass:"
@@ -4156,7 +4224,7 @@ while true; do
                 set_state WAIT_IMPLEMENT_APPROVAL
                 continue
             fi
-            if [[ "$WORKFLOW_AUTO_REPAIR" != 1 || "$repair_source" != "$GREEN_MD" || "$repair_count_existing" -ge 1 ]]; then
+            if [[ "$WORKFLOW_AUTO_REPAIR" != 1 || "$repair_source" != "$GREEN_MD" || "$repair_count_existing" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
                 if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] \
                     && [[ "$repair_source" == "$GREEN_MD" || "$repair_source" == .uncle/docs/TEST_REVIEW.md ]]; then
                     echo 'A verification finding is not eligible for another automatic repair; continuing it to final audit as unresolved evidence.'
@@ -4166,7 +4234,7 @@ while true; do
                     continue
                 fi
                 echo 'Automatic repair is not eligible for this failure.'
-                echo 'Only one driver green-check source/test repair is automatic. Checklist, test-review, and other canonical report failures remain stopped for an explicit owner decision.'
+                echo "Only $WORKFLOW_AUTO_REPAIR_ATTEMPTS driver green-check source/test repair(s) are automatic (WORKFLOW_AUTO_REPAIR_ATTEMPTS). Checklist, test-review, and other canonical report failures remain stopped for an explicit owner decision."
                 exit 1
             fi
             # A run that reached REPAIR before the current test-review JSON

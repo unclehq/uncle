@@ -3,8 +3,9 @@
 
 Investigation prompts ask an agent to write a private handoff file.  Some
 OpenCode models instead return that complete document in their final event.
-This utility recovers only a fenced, structurally recognizable Markdown
-document; it never manufactures prose from a partial status message.
+This utility recovers only a structurally recognizable Markdown document
+(fenced, or a final answer that is itself the document, opening with a heading);
+it never manufactures prose from a partial status message.
 """
 import argparse
 import json
@@ -41,10 +42,18 @@ def document(log, heading):
             match = FENCE.match(text)
             if match:
                 candidates.append((priority, match.group(1).strip()))
+            elif priority and text.lstrip().startswith('#'):
+                # The model returned the document itself as its final answer,
+                # unfenced (seen live: a complete requirements investigation
+                # in one 13 s turn, no Write, no fence).  Failing it cost a
+                # whole rerun of the stage for a formatting choice.  Only a
+                # final answer that opens with a heading qualifies, so chat
+                # such as "I wrote the document." still never does.
+                candidates.append((0, text.strip()))
     for _, text in reversed(sorted(candidates, key=lambda item: item[0])):
         if heading in text:
             return text + '\n'
-    raise ValueError('no complete fenced Markdown investigation with heading %r in final runner output' % heading)
+    raise ValueError('no complete Markdown investigation with heading %r in final runner output' % heading)
 
 
 def recover(log, target, heading):

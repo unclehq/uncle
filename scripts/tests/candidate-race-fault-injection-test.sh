@@ -36,7 +36,7 @@ from pathlib import Path
 root = Path(os.environ["ROOT"])
 source = (root / "scripts" / "stagegate.sh").read_text()
 names = ("upper", "stage_setting", "stage_setting_opt", "self_hosted_candidate_count",
-          "race_self_hosted_candidates", "format_claude_stream")
+          "promote_winner_work", "race_self_hosted_candidates", "format_claude_stream")
 functions = "\n".join(m.group(0) for name in names
     for m in re.finditer(r"^" + name + r"\(\) \{.*?^}", source, re.M | re.S))
 Path(os.environ["TMP"], "funcs.sh").write_text(functions)
@@ -172,6 +172,68 @@ sleep 3
 late_dir="$PROJ/.uncle/workflow/candidate-race/fault-injection-smoke/candidates/candidate-1"
 check "slow-after-selection: the late candidate was stopped before writing" \
     "$([[ ! -f "$late_dir/output.txt" ]] && echo 0 || echo 1)"
+
+# --- racing is off unless asked for -------------------------------------------
+
+count_for() (
+    cd "$PROJ"
+    . "$ROOT/scripts/lib/stage-config.sh"
+    . "$FUNCS"
+    self_hosted_candidate_count "$1"
+)
+saved_config="$(cat "$PROJ/.uncle/config")"
+check "default: no racing without configuration" "$([[ "$(unset WORKFLOW_SELF_HOSTED_CANDIDATES; count_for implementation)" == 1 ]] && echo 0 || echo 1)"
+printf 'self-hosted.candidates 2\n' > "$PROJ/.uncle/config"
+check "default: config can turn racing on" "$([[ "$(unset WORKFLOW_SELF_HOSTED_CANDIDATES; count_for implementation)" == 2 ]] && echo 0 || echo 1)"
+check "default: the environment wins over config" "$([[ "$(WORKFLOW_SELF_HOSTED_CANDIDATES=3 count_for implementation)" == 3 ]] && echo 0 || echo 1)"
+printf '%s' "$saved_config" > "$PROJ/.uncle/config"
+
+# --- the winner's work crosses back to the live project ---------------------
+# Each candidate works in an isolated copy.  What the winner changed (edits, new
+# and deleted files, documents it Writes) must reach the live tree; a loser's
+# work, state files, and live edits made during the race must not be clobbered.
+
+export LIVE_ROOT="$PROJ"
+mkdir -p "$PROJ/src" "$PROJ/.uncle/docs"
+printf 'v1\n' > "$PROJ/src/app.js"
+printf 'old\n' > "$PROJ/old.txt"
+printf 'keep\n' > "$PROJ/untouched.txt"
+printf 'base\n' > "$PROJ/conflict.txt"
+printf 'live report\n' > "$PROJ/.uncle/docs/REPORT.md"
+
+out="$(run_race promotion 2 '
+mkdir -p .uncle/workflow
+if [[ "$CANDIDATE_ID" == "0" ]]; then
+    printf "v2\n" > src/app.js
+    printf "new\n" > src/added.js
+    rm -f old.txt
+    printf "# Project plan\nwinner\n" > .uncle/workflow/plan-investigation.md
+    printf "winner report\n" > .uncle/docs/REPORT.md
+    printf "not promoted\n" > .uncle/workflow/scratch.md
+    mkdir -p node_modules/pkg && printf "x\n" > node_modules/pkg/index.js
+    printf "candidate wanted this\n" > conflict.txt
+    printf "changed by someone else\n" > "$LIVE_ROOT/conflict.txt"
+    exit 0
+else
+    sleep 2
+    printf "loser\n" > src/app.js
+    exit 0
+fi
+' 5)"
+live() { cat "$PROJ/$1" 2>/dev/null || echo MISSING; }
+check "promotion: the race completes" "$([[ "$out" == *"RACE_STATUS=0"* ]] && echo 0 || echo 1)"
+check "promotion: an edited file is promoted" "$([[ "$(live src/app.js)" == v2 ]] && echo 0 || echo 1)"
+check "promotion: a new file is promoted" "$([[ "$(live src/added.js)" == new ]] && echo 0 || echo 1)"
+check "promotion: a file the winner deleted is deleted" "$([[ ! -e "$PROJ/old.txt" ]] && echo 0 || echo 1)"
+check "promotion: an untouched file is left alone" "$([[ "$(live untouched.txt)" == keep ]] && echo 0 || echo 1)"
+check "promotion: the winner's document in .uncle/docs replaces the old one" "$([[ "$(live .uncle/docs/REPORT.md)" == "winner report" ]] && echo 0 || echo 1)"
+check "promotion: the investigation document is promoted" \
+    "$([[ "$(live .uncle/workflow/plan-investigation.md)" == *winner* ]] && echo 0 || echo 1)"
+check "promotion: workflow state is not promoted" "$([[ ! -e "$PROJ/.uncle/workflow/scratch.md" ]] && echo 0 || echo 1)"
+check "promotion: node_modules is not promoted" "$([[ ! -e "$PROJ/node_modules" ]] && echo 0 || echo 1)"
+check "promotion: a live edit made during the race is not overwritten" \
+    "$([[ "$(live conflict.txt)" == "changed by someone else" ]] && echo 0 || echo 1)"
+check "promotion: the conflict is reported" "$([[ "$out" == *"conflict.txt (changed in the live project meanwhile)"* ]] && echo 0 || echo 1)"
 
 if [[ "$FAILED" -ne 0 ]]; then
     echo "candidate-race-fault-injection-test.sh: $FAILED of $COUNT checks failed"

@@ -18,6 +18,11 @@ from process_tree import bash_executable
 
 class SelfHosted(unittest.TestCase):
     def setUp(self):
+        # These tests drive the OpenCode transport; document stages default to
+        # direct HTTP, which SelfHostedHttp below covers.
+        transport = patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_TRANSPORT': 'opencode'})
+        transport.start()
+        self.addCleanup(transport.stop)
         self.tmp = tempfile.TemporaryDirectory(prefix='self hosted test ')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
@@ -1192,7 +1197,7 @@ sys.exit(7 if mode=='fail' else 0)
         with patch.object(module,'CONFIG_PATH',str(self.config)):
             ui=module.UncleTUI.__new__(module.UncleTUI)
             ui.load_config()
-            self.assertEqual(ui._config_items(), ['1. Configure stages', '2. Configure OpenCode / self hosting', '3. Miscellaneous', '4. Supervision', '5. Recovery'])
+            self.assertEqual(ui._config_items(), ['1. Configure stages', '2. Configure self hosting', '3. Miscellaneous', '4. Supervision', '5. Recovery'])
             ui.config_section = 'misc'
             with patch.object(ui, 'maybe_reload'):
                 ui._set_field('!misc', 'auto_mode', 'true')

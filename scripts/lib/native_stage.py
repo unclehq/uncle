@@ -507,8 +507,16 @@ class Stage:
         with tempfile.TemporaryDirectory(prefix='uncle-native-') as directory:
             try:
                 if self.runner=='self-hosted':
-                    from native_opencode import run
-                    run(self,directory)
+                    from self_hosted import http_transport, run_http_stage, settings
+                    if http_transport():
+                        from self_hosted_http import connection_scope
+                        values=settings(os.environ.get('UNCLE_CONFIG',str(Path.cwd()/'.uncle/config')),self.stage)
+                        values['max_turns']=int(self.option('--max-turns') or 80)
+                        with connection_scope():
+                            run_http_stage(self,directory,values,Path.cwd(),allow_shell=True)
+                    else:
+                        from native_opencode import run
+                        run(self,directory)
                 else:
                     getattr(self,self.runner)(directory)
                 success=True

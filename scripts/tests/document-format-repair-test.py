@@ -152,6 +152,53 @@ class ReviewerOutput(unittest.TestCase):
         text = '| ID | Blocks |\n|---|---|\n| FA-1 | NO |\n'
         self.assertEqual(self.mod.check(text), text)
 
+PLAN_PROMPT_LINES = (
+    "## Verification commands\n\n$ sh -c '\n  set -e\n  npm ci\n  npx vite build\n'\n\n"
+    "## 1. Architecture\n\nA static React app.\n")
+
+
+class VerificationCommandsFence(unittest.TestCase):
+    """A plan whose commands are `$ cmd` lines gets the fence the exporter requires."""
+
+    def export(self, path):
+        plan_context = _load('plan_context', 'plan_context.py')
+        return plan_context.export_project_plan(str(path), tempfile.mkdtemp())
+
+    def test_prompt_lines_are_fenced_and_the_plan_then_exports(self):
+        path = write('PROJECT_PLAN.md', PLAN_PROMPT_LINES)
+        with self.assertRaisesRegex(ValueError, 'Verification commands fenced block'):
+            self.export(path)
+        self.assertTrue(repair_module.repair(path))
+        payload = self.export(path)
+        self.assertEqual(payload['verification_commands'], "sh -c '\n  set -e\n  npm ci\n  npx vite build\n'")
+        self.assertIn('## 1. Architecture', payload['narrative'])
+        self.assertNotIn('$ ', payload['verification_commands'])
+
+    def test_any_shell_fence_tag_exports(self):
+        # A bare ``` (or ```bash) fence for the commands used to stop a run: only ```sh parsed.
+        for tag in ('', 'sh', 'bash', 'shell'):
+            text = '## Verification commands\n\n```%s\nsh -c \'\n  set -e\n  npm test\n\'\n```\n\n## 1. Architecture\n\nx\n' % tag
+            payload = self.export(write('PROJECT_PLAN.md', text))
+            self.assertEqual(payload['verification_commands'], "sh -c '\n  set -e\n  npm test\n'", tag)
+        with self.assertRaisesRegex(ValueError, 'Verification commands fenced block'):
+            self.export(write('PROJECT_PLAN.md', '## Verification commands\n\n```python\nprint(1)\n```\n'))
+
+    def test_a_correct_fence_is_left_alone(self):
+        text = '## Verification commands\n\n```sh\nnpm test\n```\n'
+        path = write('PROJECT_PLAN.md', text)
+        self.assertEqual(repair_module.repair(path), [])
+        self.assertEqual(path.read_text(encoding='utf-8'), text)
+
+    def test_prose_instead_of_commands_is_not_guessed_at(self):
+        text = '## Verification commands\n\nRun the usual build and tests.\n\n## 1. Architecture\n'
+        path = write('PROJECT_PLAN.md', text)
+        self.assertEqual(repair_module.repair(path), [])
+        self.assertEqual(path.read_text(encoding='utf-8'), text)
+
+    def test_other_documents_are_not_touched(self):
+        path = write('MANUAL_CHECKLIST.md', PLAN_PROMPT_LINES)
+        self.assertEqual(repair_module.repair(path), [])
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=0)

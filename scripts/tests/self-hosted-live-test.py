@@ -10,6 +10,9 @@ import threading
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'scripts/lib'))
 from self_hosted import run_opencode
 
+# This integration is about the real OpenCode CLI; document stages otherwise use direct HTTP.
+os.environ['WORKFLOW_SELF_HOSTED_TRANSPORT'] = 'opencode'
+
 calls = []
 response_text = '## Findings\n\nREADY'
 phase = 'reviewer'

@@ -691,7 +691,7 @@ PYKEYS
 configure_menu() {
     local choice value
     while true; do
-        printf '\nConfigure\n  1) Configure stages\n  2) Configure OpenCode / self hosting\n  3) Miscellaneous\n  q) Back\nChoice: '
+        printf '\nConfigure\n  1) Configure stages\n  2) Configure self hosting\n  3) Miscellaneous\n  q) Back\nChoice: '
         read -r choice || return 0
         case "$choice" in
             1) configure_stages_menu ;;

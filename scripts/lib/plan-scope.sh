@@ -137,6 +137,11 @@ PY
     ' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d' | sort -u
 }
 
+# A plan may head its steps "Implementation steps with Owns/Depends" (a model that wrote
+# an unowned "Implementation order" and then added the owned list as its own section
+# did exactly that), so `steps` is a recognised heading too: ownership was otherwise
+# read from nothing and a correct plan stopped at the approval gate.
+#
 # The heading is numbered in a change plan ("## 20. Implementation sequence")
 # and bare in a greenfield plan ("## Implementation order"): the prompts list
 # sections by number, but the plan writes the heading it is given. Requiring the
@@ -154,7 +159,7 @@ plan_steps() {
         # Greenfield plans head this "Implementation order"; change plans say
         # "Implementation sequence". Matching only the latter meant stepwise
         # implementation could never engage on a greenfield plan at all.
-        /^## ([0-9]+\. )?Implementation (sequence|order)/ { inseq = 1; next }
+        /^## ([0-9]+\. )?Implementation (sequence|order|steps)/ { inseq = 1; next }
         inseq && /^## / { inseq = 0 }
         !inseq { next }
         /^[0-9]+\./ {
@@ -209,7 +214,7 @@ plan_step_owns() {
                 print position[cur] "\t" tok
             }
         }
-        /^## ([0-9]+\. )?Implementation (sequence|order)/ { inseq = 1; next }
+        /^## ([0-9]+\. )?Implementation (sequence|order|steps)/ { inseq = 1; next }
         inseq && /^## / { inseq = 0 }
         !inseq { next }
         /^[0-9]+\./ {
@@ -272,7 +277,7 @@ plan_step_depends() {
                 line = substr(line, RSTART + RLENGTH)
             }
         }
-        /^## ([0-9]+\. )?Implementation (sequence|order)/ { inseq = 1; next }
+        /^## ([0-9]+\. )?Implementation (sequence|order|steps)/ { inseq = 1; next }
         inseq && /^## / { inseq = 0 }
         !inseq { next }
         /^[0-9]+\./ {

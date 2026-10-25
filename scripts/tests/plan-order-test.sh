@@ -103,6 +103,32 @@ MD
     || fail "the gap report must name exactly the unowned file"
 rm -rf "$STATE_DIR"; unset STATE_DIR
 
+# Steps under "Implementation steps with Owns/Depends" count: a plan that kept an
+# unowned "Implementation order" and added the owned list as its own section was
+# reported as having no owner for any protected file.
+full
+export STATE_DIR=".uncle/workflow"
+mkdir -p "$STATE_DIR/documents"
+cat > "$STATE_DIR/documents/PLAN.json" <<'JSON'
+{"schema":"uncle.artifact/v1","kind":"plan","protected_verification_paths":"tests/a.test.js\nplaywright.config.js"}
+JSON
+cat >> PLAN.md <<'MD'
+
+## Implementation order
+
+1. Calculator core
+2. Tests and config
+
+## Implementation steps with Owns/Depends
+
+1. Inspect the tree. Owns: none (read-only).
+2. Create the config and tests. Owns: `tests/a.test.js`, `playwright.config.js`. Depends on: 1.
+3. Build the core. Owns: `src/calc.js`. Depends on: 2.
+MD
+[ -z "$(python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" PLAN.md . "$STATE_DIR")" ] \
+    || fail "owned steps under 'Implementation steps' must count: $(python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" PLAN.md . "$STATE_DIR")"
+rm -rf "$STATE_DIR"; unset STATE_DIR
+
 # The gate order itself: the check has to precede the approval call.
 python3 - "$ROOT/scripts/stagegate.sh" <<'PY' || exit 1
 import io, sys

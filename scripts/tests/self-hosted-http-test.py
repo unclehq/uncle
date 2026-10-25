@@ -702,6 +702,37 @@ class SelfHostedHttp(unittest.TestCase):
         policy = http_agent.Policy(self.root, shell=True)
         self.assertIn('timed out after 1s', http_agent.run_tool(policy, 'bash', {'command': 'sleep 30', 'timeout': 1}))
 
+    def test_the_model_is_told_where_the_project_is(self):
+        server = self.serve('x', tool_script=[{'role': 'assistant', 'content': 'done'}])
+        policy = http_agent.Policy(self.root, shell=True)
+        http_agent.run_agent(self.values(server), 'Go.', policy, 4096, usage={})
+        body = [b for _p, b in server.requests if b.get('tools')][0]
+        system = body['messages'][0]['content']
+        self.assertIn(str(self.root), system)
+        self.assertIn('Never cd to another directory', system)
+        bash = [t for t in body['tools'] if t['function']['name'] == 'bash'][0]
+        self.assertIn(str(self.root), bash['function']['description'])
+
+    def test_a_cd_out_of_the_project_is_refused_before_it_runs(self):
+        policy = http_agent.Policy(self.root, shell=True)
+        marker = self.root/'ran'
+        for command in ('cd /Users/brian && touch %s' % marker, 'cd ~ && touch %s' % marker,
+                        'cd $HOME/src; touch %s' % marker, 'cd "/Users/brian/Library" && touch %s' % marker):
+            out = http_agent.run_tool(policy, 'bash', {'command': command})
+            self.assertTrue(out.startswith('error: not run.'), (command, out))
+            self.assertIn(str(self.root), out)
+        self.assertFalse(marker.exists())
+
+    def test_cd_inside_the_project_and_to_scratch_space_is_allowed(self):
+        (self.root/'sub').mkdir()
+        policy = http_agent.Policy(self.root, shell=True)
+        self.assertIsNone(http_agent.escapes_project(policy, 'cd sub && ls'))
+        self.assertIsNone(http_agent.escapes_project(policy, 'cd "%s/sub" && ls' % self.root))
+        self.assertIsNone(http_agent.escapes_project(policy, 'cd /tmp/scratch && ls'))
+        self.assertIsNone(http_agent.escapes_project(policy, 'echo "cd /etc is only text"'))
+        out = http_agent.run_tool(policy, 'bash', {'command': 'cd sub && pwd'})
+        self.assertIn('/sub', out)
+
     def test_a_shell_command_cannot_ask_for_more_than_the_ceiling(self):
         self.assertEqual(http_agent.bash_timeout(None), 120)
         self.assertEqual(http_agent.bash_timeout(30), 30)

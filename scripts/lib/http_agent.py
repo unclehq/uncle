@@ -31,9 +31,11 @@ SECRET = re.compile(r'(^|/)(\.env(\..*)?|.*self-hosted-keys\.json|config)$')
 ENV_STRIPPED = ('UNCLE_STATUS_FILE', 'UNCLE_PROJECT_ROOT', 'UNCLE_CONFIG', 'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO',
                 'STAGEGATE_ORIGIN_ISSUE', 'DOCUMENT_BUDGET_SOURCE')
 
-SYSTEM = ('You are an automated engineering agent working in the project at the current directory. Use the tools to '
-          'inspect and change files; paths are relative to the project root. Work until the task is complete, then give '
-          'your final response without calling a tool.')
+SYSTEM = ('You are an automated engineering agent. The project is at {root} -- that is your working directory, the '
+          'directory every shell command starts in, and the root of every relative path. Never cd to another directory '
+          '(not the home directory, not a parent) to find or run project files; if a file seems to be missing, look for it '
+          'under {root}. Use the tools to inspect and change files. Work until the task is complete, then give your final '
+          'response without calling a tool.')
 
 
 def _tool(name, description, properties, required):
@@ -52,7 +54,9 @@ WRITE_TOOLS = [
     _tool('edit_file', 'Replace exact text in a file.', {'path': _S, 'old_string': _S, 'new_string': _S,
                                                          'replace_all': {'type': 'boolean'}}, ['path', 'old_string', 'new_string']),
 ]
-SHELL_TOOLS = [_tool('bash', 'Run a shell command in the project root.', {'command': _S, 'timeout': _I}, ['command'])]
+def _shell_tools(root):
+    return [_tool('bash', 'Run a shell command. It starts in the project root, %s, and must stay there.' % root,
+                  {'command': _S, 'timeout': _I}, ['command'])]
 
 
 class Policy:
@@ -65,7 +69,7 @@ class Policy:
         self.schema_for = schema_for or (lambda relative: None)
 
     def tools(self):
-        return READ_TOOLS + (WRITE_TOOLS if self.write else []) + (SHELL_TOOLS if self.shell else [])
+        return READ_TOOLS + (WRITE_TOOLS if self.write else []) + (_shell_tools(self.root) if self.shell else [])
 
     def hidden(self, parts):
         if parts[:1] == ('.uncle',):
@@ -92,6 +96,30 @@ class Policy:
                 if cursor.is_symlink():
                     raise ValueError('refusing to write through a symlink')
         return path
+
+
+CD_TARGET = re.compile(r'''(?:^|[;&|(]|\s)cd\s+(?:--\s+)?(?:"(?P<dq>[^"]*)"|'(?P<sq>[^']*)'|(?P<bare>[^\s;&|()]+))''')
+
+
+def escapes_project(policy, command):
+    """The first absolute `cd` target in `command` that leaves the project, else None.
+
+    Not a sandbox: a shell can always reach elsewhere.  It catches the common
+    mistake, a model that does not know where it is and cd's to the home
+    directory to look for the project, running (and failing) its tests there.
+    Temporary directories are allowed; they are legitimate scratch space.
+    """
+    temp = os.path.realpath(tempfile.gettempdir())
+    for match in CD_TARGET.finditer(command):
+        raw = next(group for group in (match.group('dq'), match.group('sq'), match.group('bare')) if group is not None)
+        if not raw.startswith(('/', '~', '$HOME')):
+            continue  # relative: stays under the project
+        target = os.path.realpath(os.path.expanduser(os.path.expandvars(raw.replace('$HOME', '~'))))
+        inside = Path(target) == policy.root or policy.root in Path(target).parents
+        scratch = target == temp or temp in Path(target).parents or target.startswith('/tmp') or target.startswith('/private/tmp')
+        if not (inside or scratch):
+            return raw
+    return None
 
 
 def bash_timeout(requested):
@@ -191,6 +219,10 @@ def run_tool(policy, name, arguments):
             path.write_text(content, encoding='utf-8', newline='')
             return 'wrote %s' % path.relative_to(policy.root).as_posix()
         if name == 'bash' and policy.shell:
+            outside = escapes_project(policy, str(arguments.get('command', '')))
+            if outside:
+                return ('error: not run. The project is at %s and every command already starts there; '
+                        '`cd %s` leaves it. Run the command without the cd.' % (policy.root, outside))
             return _bash(policy, arguments['command'], bash_timeout(arguments.get('timeout')))
         return 'error: unknown tool %s' % name
     except (ValueError, KeyError, TypeError, re.error, OSError) as error:
@@ -309,7 +341,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     timeout = transport.request_seconds(seconds)
     turn_limit = transport.turn_output_tokens(limit)
     deadline = time.monotonic() + seconds
-    messages = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': prompt}]
+    messages = [{'role': 'system', 'content': SYSTEM.format(root=policy.root)}, {'role': 'user', 'content': prompt}]
     steered, requests, nudged, text = [], 0, False, ''
     tools = policy.tools()
 

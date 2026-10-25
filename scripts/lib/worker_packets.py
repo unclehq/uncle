@@ -42,17 +42,42 @@ def load(path, kind):
         out.append({'id':identifier,'summary':item['summary'].strip(), 'evidence':str(item.get('evidence','')).strip()})
     return out
 
+def _norm(text):
+    return re.sub(r'[^a-z0-9]+', ' ', text.casefold()).strip()
+
 def collate(directory, output, kind, expected):
-    merged={}; workers=[]
+    """Merge the lenses' findings, without letting their IDs collapse distinct ones.
+
+    Every lens numbers its own findings from the prompt's example, AR-001, so the
+    first finding of four different lenses all arrive as "AR-001".  Merging by that
+    ID alone fused unrelated findings into one entry with their titles joined by
+    semicolons (nine findings became four).  A finding now merges into an existing
+    one only when it is the same observation: the same summary (whatever ID each lens gave
+    it), or the same ID from the same worker (a reused ID within one packet).  Where
+    different findings still share an ID, they are renumbered in order.
+    """
+    groups=[]; workers=[]
     for source in expected:
         findings=load(Path(directory)/(source+'.json'),kind); workers.append({'source':source,'status':'ok','finding_count':len(findings)})
         for item in findings:
-            target=merged.setdefault(item['id'],{'id':item['id'],'summaries':[],'evidence':[],'sources':[]})
+            norm=_norm(item['summary'])
+            target=next((g for g in groups if norm in g['_norm'] or (g['id']==item['id'] and g['sources']==[source])), None)
+            if target is None:
+                target={'id':item['id'],'summaries':[],'evidence':[],'sources':[],'_norm':set()}
+                groups.append(target)
+            target['_norm'].add(norm)
             for key,value in (('summaries',item['summary']),('evidence',item['evidence'])):
                 if value and value not in target[key]: target[key].append(value)
             if source not in target['sources']:
                 target['sources'].append(source)
-    payload={'schema':SCHEMA,'kind':kind+'s','workers':workers,'findings':[merged[k] for k in sorted(merged)]}
+    counts={}
+    for g in groups: counts[g['id']]=counts.get(g['id'],0)+1
+    if any(n>1 for n in counts.values()):
+        for number,g in enumerate(groups,1):
+            match=re.match(r'^([A-Za-z]+)-\d+$', g['id'])
+            g['worker_id']=g['id']; g['id']='%s-%03d' % (match.group(1) if match else 'F', number)
+    for g in groups: g.pop('_norm',None)
+    payload={'schema':SCHEMA,'kind':kind+'s','workers':workers,'findings':sorted(groups,key=lambda g:g['id'])}
     Path(output).parent.mkdir(parents=True,exist_ok=True); Path(output).write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n',encoding='utf-8')
 
 def main():

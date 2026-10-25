@@ -128,6 +128,38 @@ class WorkerPackets(unittest.TestCase):
             with self.assertRaisesRegex(WORKERS.PacketError, 'regression.json: worker packet is missing'):
                 WORKERS.collate(directory, output, kind, ('requirements', 'regression'))
 
+    def test_lenses_that_each_start_at_ar_001_do_not_collapse_distinct_findings(self):
+        # Every lens copies the prompt's example id, so four unrelated first findings
+        # arrived as "AR-001" and were fused, titles joined by semicolons.
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp); kind = 'adversarial-review-worker-packet'
+            def packet(findings):
+                return {'schema': 'uncle.artifact/v1', 'kind': kind,
+                        'findings': [{'id': 'AR-%03d' % n, 'summary': text, 'evidence': text + ' proof'}
+                                     for n, text in enumerate(findings, 1)]}
+            self.write(directory, 'requirements', packet(['theme undefined', 'scope unclear']))
+            self.write(directory, 'regression', packet(['keyboard regression']))
+            self.write(directory, 'testability', packet(['no keyboard tests', 'theme undefined']))
+            output = directory / 'combined.json'
+            WORKERS.collate(directory, output, kind, ('requirements', 'regression', 'testability'))
+            findings = json.loads(output.read_text())['findings']
+            self.assertEqual([f['id'] for f in findings], ['AR-001', 'AR-002', 'AR-003', 'AR-004'])
+            self.assertEqual([f['summaries'] for f in findings],
+                             [['theme undefined'], ['scope unclear'], ['keyboard regression'], ['no keyboard tests']])
+            self.assertEqual(findings[0]['sources'], ['requirements', 'testability'])   # a true duplicate still merges
+            self.assertEqual([f['worker_id'] for f in findings], ['AR-001', 'AR-002', 'AR-001', 'AR-001'])
+
+    def test_ids_that_never_collide_are_left_as_the_workers_wrote_them(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp); kind = 'adversarial-review-worker-packet'
+            self.write(directory, 'requirements', {'schema': 'uncle.artifact/v1', 'kind': kind,
+                       'findings': [{'id': 'AR-REQ-1', 'summary': 'a', 'evidence': ''}]})
+            self.write(directory, 'security', {'schema': 'uncle.artifact/v1', 'kind': kind,
+                       'findings': [{'id': 'AR-SEC-1', 'summary': 'b', 'evidence': ''}]})
+            output = directory / 'combined.json'
+            WORKERS.collate(directory, output, kind, ('requirements', 'security'))
+            self.assertEqual([f['id'] for f in json.loads(output.read_text())['findings']], ['AR-REQ-1', 'AR-SEC-1'])
+
     def test_generic_panel_merges_duplicate_ids_from_one_worker(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp); kind = 'adversarial-review-worker-packet'

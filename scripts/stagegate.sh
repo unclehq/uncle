@@ -398,6 +398,17 @@ continue_nonblocking_test_review() {
     result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" \
         "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS)"
     [[ "$result" != PASS ]] || return 1
+    # A test review that FAILED rows (assertions too weak to reject an injected
+    # defect, a missing test) names something repair can fix, and carrying it
+    # forward as "nonblocking evidence" meant it never was. While automatic
+    # attempts remain, hand it to repair first; rows that are merely NOT RUN or
+    # BLOCKED are evidence gaps no code change closes, and still pass through.
+    if [[ "$result" == REPAIR && "$next" == MANUAL_CHECKLIST && "${WORKFLOW_AUTO_REPAIR:-1}" == 1 ]] \
+        && [[ "$(green_failure_route "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" \
+               "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" "$WORKFLOW_AUTO_REPAIR_ATTEMPTS")" == repair ]]; then
+        echo "Test review found failing rows; sending them to repair (automatic attempt $(($(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0) + 1)) of $WORKFLOW_AUTO_REPAIR_ATTEMPTS)."
+        return 1
+    fi
     echo 'Test-review findings are recorded as nonblocking evidence after a passing driver green check.'
     record_nonblocking_failure TEST_REVIEW.json "canonical test-review acceptance $result after passing driver green check"
     set_state "$next"
@@ -4224,7 +4235,7 @@ while true; do
                 set_state WAIT_IMPLEMENT_APPROVAL
                 continue
             fi
-            if [[ "$WORKFLOW_AUTO_REPAIR" != 1 || "$repair_source" != "$GREEN_MD" || "$repair_count_existing" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
+            if [[ "$WORKFLOW_AUTO_REPAIR" != 1 || ( "$repair_source" != "$GREEN_MD" && "$repair_source" != .uncle/docs/TEST_REVIEW.md ) || "$repair_count_existing" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
                 if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] \
                     && [[ "$repair_source" == "$GREEN_MD" || "$repair_source" == .uncle/docs/TEST_REVIEW.md ]]; then
                     echo 'A verification finding is not eligible for another automatic repair; continuing it to final audit as unresolved evidence.'

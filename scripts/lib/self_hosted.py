@@ -271,6 +271,10 @@ OUTPUT_TOKENS_ENV = 'WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS'
 CONTEXT_TOKENS_ENV = 'WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS'
 
 
+# The sibling modules are imported by name; make that work when this file is loaded
+# by path (tests and tools do), not only when scripts/lib is already on sys.path.
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_hosted_http import OutputTruncated  # noqa: E402  (shared with the direct HTTP transport)
 
 

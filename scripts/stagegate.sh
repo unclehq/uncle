@@ -2688,6 +2688,22 @@ check or `DRIVER PENDING` for full verification.
 EOF
                 fi
             } >> "$prompt"
+            # The same inputs open every step, and each step used to read them by tool call after
+            # its own text, where no prefix cache can share them. Put them in the shared part
+            # (implement.md, the inputs, then only this step's text) so steps 2..n of a group
+            # reuse the first one's prefill and skip the read turns.  Unchanged on any failure.
+            if [[ -f "$ROOT/scripts/lib/worker_prompt.py" ]]; then
+                local -a shared_inputs=()
+                local shared
+                for shared in REQUIREMENTS.md .uncle/docs/REQUIREMENTS_INTERPRETATION.md \
+                              .uncle/docs/UPDATED_PROJECT_PLAN.md .uncle/docs/PREFLIGHT_REPORT.md; do
+                    [[ -s "$shared" ]] && shared_inputs+=("$shared")
+                done
+                if [[ ${#shared_inputs[@]} -gt 0 ]] \
+                   && python3 -B "$ROOT/scripts/lib/worker_prompt.py" --contract implementation "$prompt" "$prompt.shared" "${shared_inputs[@]}" 2>/dev/null; then
+                    mv "$prompt.shared" "$prompt"
+                fi
+            fi
         done
         # A boundary violation is safe to recover from: parallel_steps.py
         # leaves the project untouched when it returns 3, so abandon only the

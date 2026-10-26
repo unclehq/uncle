@@ -347,6 +347,36 @@ COMPACT_JSON_REQUEST = ('Work is finished. Return only the final JSON object mat
                         'command per line), never replace it with a space.')
 
 
+def answer_already_given(text, schema):
+    """The final JSON, as a string, when the model's last message already is a valid answer; else None.
+
+    A stage told to finish with one JSON object usually does exactly that in its last chat message.
+    The closing request below then generated the same document a second time under the schema grammar:
+    twice the output tokens, and on one server the grammar's copy came back with its backslashes
+    stripped (every \\n turned into the letter n, quotes unescaped, a verification block cut to one
+    line) while the model's own message was correct.  A message that parses and passes the same local
+    schema check the grammar answer would face is the answer; anything else falls through to the
+    closing request as before.
+    """
+    body = re.sub(r'<think>.*?</think>', '', text or '', flags=re.S).strip()
+    if not body:
+        return None
+    candidates = [match.group(1) for match in re.finditer(r'```(?:json)?\s*(\{.*?\})\s*```', body, re.S)][::-1]
+    if body.startswith('{'):
+        candidates.append(body)
+    first, last = body.find('{'), body.rfind('}')
+    if 0 <= first < last:
+        candidates.append(body[first:last + 1])
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+            conforms(value, schema)
+        except ValueError:
+            continue
+        return json.dumps(value, ensure_ascii=False)
+    return None
+
+
 TRUNCATED_KEEP_CHARS = 4 * 1024 * 1024
 
 
@@ -630,6 +660,12 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         if stage is not None:
             stage.final_answer = text
         return text, requests
+    given = answer_already_given(text, final_schema)
+    if given is not None:
+        usage['constraint_mode'] = 'model answer (already valid; not regenerated)'
+        if stage is not None:
+            stage.final_answer = given
+        return given, requests
     # Compact, single-line JSON: a grammar permits whitespace anywhere, and a model that
     # starts pretty-printing (newline, indent, newline...) can keep going until the token
     # limit without ever writing a character of JSON.

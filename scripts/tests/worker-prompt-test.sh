@@ -74,6 +74,29 @@ while n<min(len(x),len(y)) and x[n]==y[n]: n+=1
 print('yes' if 'requirements text' in x[:n] and '# Report' in x[:n] and 'Focus only' not in x[:n] else 'no')")"
 
 
+# implementation steps: implement.md first, the four input documents, then only the step's own text
+printf 'You are the primary implementation agent.\n\nRead these in one parallel batch of tool calls:\n\n- REQUIREMENTS.md\n' > IMPL.md
+printf 'requirements text\n' > REQUIREMENTS.md
+mkdir -p .uncle/docs; printf '# Interpretation\nassumptions\n' > .uncle/docs/REQUIREMENTS_INTERPRETATION.md
+printf '# Plan\n## 12. Implementation order\n1. Core. Owns: `a.js`.\n' > .uncle/docs/UPDATED_PROJECT_PLAN.md
+for n in 1 2; do
+    { cat IMPL.md; printf '\n## Assigned isolated implementation step %s\n\nStep %s text. Owns: `f%s.js`.\n\n## Isolated ownership boundary (binding)\n\nStay in your files.\n' "$n" "$n" "$n"; } > "step-$n.md"
+    python3 -B "$HERE/../lib/worker_prompt.py" --contract implementation "step-$n.md" "step-$n.shared" REQUIREMENTS.md .uncle/docs/REQUIREMENTS_INTERPRETATION.md .uncle/docs/UPDATED_PROJECT_PLAN.md
+    check "implementation step $n is laid out" "0" "$?"
+done
+check "steps share everything up to their own heading" "yes" "$(python3 -c "
+x,y=(open('step-%d.shared'%i).read() for i in (1,2)); n=0
+while n<min(len(x),len(y)) and x[n]==y[n]: n+=1
+shared=x[:n]
+ok=all(t in shared for t in ('primary implementation agent','requirements text','# Interpretation','## 12. Implementation order','Shared inputs are embedded')) and 'step 1' not in shared.lower().replace('implementation step','')
+print('yes' if ok else 'no')")"
+has "step text stays after the shared part" 'Step 1 text. Owns: `f1.js`.' "$(cat step-1.shared)"
+has "the ownership boundary stays with the step" 'Stay in your files.' "$(cat step-2.shared)"
+check "implementation contract lets the worker read other files" "yes" "$([[ "$(cat step-1.shared)" == *'Read any other project file your'* ]] && echo yes || echo no)"
+check "implementation contract does not forbid tool use" "no" "$([[ "$(cat step-1.shared)" == *'exploratory tool calls'* ]] && echo yes || echo no)"
+python3 -B "$HERE/../lib/worker_prompt.py" --contract nonsense step-1.md o.md REQUIREMENTS.md >/dev/null 2>&1; check "an unknown contract is refused" "1" "$?"
+
+
 # through gated_prompt: a worker log name takes the new layout, others are untouched
 export STATE_DIR="$TMP/.uncle/workflow"; LOG_DIR="$TMP/logs"; ROOT="$HERE/../.."
 . "$HERE/../lib/gates.sh" 2>/dev/null

@@ -119,7 +119,8 @@ class SelfHostedHttp(unittest.TestCase):
         return [body for path, body in server.requests if not body.get('tools')][-1]
 
     def test_schema_is_attached_as_response_format(self):
-        server = self.serve(PLAN)
+        # The model ends in prose, so the closing request is what carries the schema.
+        server = self.serve(PLAN, tool_script=[{'role': 'assistant', 'content': 'finished'}])
         usage = {}
         text, turns = self.plan(server, usage=usage)
         self.assertEqual(json.loads(text), PLAN)
@@ -127,6 +128,48 @@ class SelfHostedHttp(unittest.TestCase):
         self.assertEqual(body['response_format']['type'], 'json_schema')
         self.assertEqual(body['response_format']['json_schema']['schema'], artifact_schema('plan'))
         self.assertEqual((usage['constraint_mode'], usage['input_tokens'], usage['output_tokens']), ('json_schema', 20, 10))
+
+    def test_a_valid_json_message_is_the_answer_and_is_not_generated_a_second_time(self):
+        server = self.serve('unused', tool_script=[{'role': 'assistant', 'content': json.dumps(PLAN)}])
+        usage = {}
+        text, _ = http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 4096, usage=usage,
+                                       final_schema=artifact_schema('plan'), final_name='plan')
+        self.assertEqual(json.loads(text), PLAN)
+        self.assertEqual([body for _path, body in server.requests if not body.get('tools')], [], 'a closing request was sent')
+        self.assertIn('already valid', usage['constraint_mode'])
+
+    def test_a_fenced_answer_with_prose_around_it_is_accepted_as_is(self):
+        message = 'Here is the plan.\n\n```json\n' + json.dumps(PLAN, indent=2) + '\n```\nDone.'
+        server = self.serve('unused', tool_script=[{'role': 'assistant', 'content': message}])
+        text, _ = http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 4096, usage={},
+                                       final_schema=artifact_schema('plan'), final_name='plan')
+        self.assertEqual(json.loads(text), PLAN)
+        self.assertEqual([body for _path, body in server.requests if not body.get('tools')], [])
+
+    def test_newlines_in_the_models_own_answer_survive(self):
+        plan = dict(PLAN, verification_commands='npm ci\nnpm test\nnpm run build')
+        server = self.serve('unused', tool_script=[{'role': 'assistant', 'content': json.dumps(plan)}])
+        text, _ = http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 4096, usage={},
+                                       final_schema=artifact_schema('plan'), final_name='plan')
+        self.assertEqual(json.loads(text)['verification_commands'].splitlines(), ['npm ci', 'npm test', 'npm run build'])
+
+    def test_a_message_that_breaks_the_schema_still_gets_the_closing_request(self):
+        broken = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': 'x'}   # no verification_commands
+        server = self.serve(PLAN, tool_script=[{'role': 'assistant', 'content': json.dumps(broken)}])
+        text, _ = http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 4096, usage={},
+                                       final_schema=artifact_schema('plan'), final_name='plan')
+        self.assertEqual(json.loads(text), PLAN)
+        self.assertEqual(len([1 for _path, body in server.requests if not body.get('tools')]), 1)
+
+    def test_a_message_that_is_only_prose_gets_the_closing_request(self):
+        server = self.serve(PLAN, tool_script=[{'role': 'assistant', 'content': 'All done, the work is finished.'}])
+        http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 4096, usage={},
+                             final_schema=artifact_schema('plan'), final_name='plan')
+        self.assertEqual(len([1 for _path, body in server.requests if not body.get('tools')]), 1)
+
+    def test_reasoning_text_in_think_tags_is_ignored_when_looking_for_the_answer(self):
+        message = '<think>maybe {"schema": "decoy"}</think>' + json.dumps(PLAN)
+        self.assertEqual(json.loads(http_agent.answer_already_given(message, artifact_schema('plan'))), PLAN)
 
     def test_final_call_defaults_to_temperature_zero_and_honours_override(self):
         server = self.serve(PLAN)
@@ -921,7 +964,7 @@ class SelfHostedHttp(unittest.TestCase):
             key: 'text' for key in ('required_functionality', 'optional_functionality', 'constraints', 'user_visible_behaviors',
                                     'system_behaviors', 'failure_behaviors', 'ambiguities', 'assumptions', 'explicit_non_goals',
                                     'definition_of_done')}}
-        server = self.serve(reply)
+        server = self.serve(reply, tool_script=[{'role': 'assistant', 'content': 'finished'}])
         (self.root/'REQUIREMENTS.md').write_text('# Requirements\n', encoding='utf-8')
         env = {'WORKFLOW_SELF_HOSTED_TRANSPORT': 'http', 'UNCLE_ARTIFACT_DELIVERY': '.uncle/workflow/artifact-delivery/requirements.json'}
         cwd = os.getcwd()
@@ -939,7 +982,7 @@ class SelfHostedHttp(unittest.TestCase):
 
     def test_reviewer_with_a_known_contract_uses_http_and_writes_its_delivery(self):
         reply = {'schema': 'uncle.artifact/v1', 'kind': 'final-audit-worker-packet', 'findings': []}
-        server = self.serve(reply)
+        server = self.serve(reply, tool_script=[{'role': 'assistant', 'content': 'finished'}])
         delivery = self.root/'delivery.json'
         prompt = 'Return `{"schema":"uncle.artifact/v1","kind":"final-audit-worker-packet","findings":[]}`'
         with patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_TRANSPORT': 'http', 'UNCLE_ARTIFACT_DELIVERY': str(delivery)}):

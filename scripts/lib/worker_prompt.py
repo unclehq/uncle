@@ -10,7 +10,7 @@ The layout here is: shared instructions, the shared input documents (embedded, c
 byte-stable), the shared contract, and only then everything that differs per worker (its
 lens, its delivery path).  Workers 2..n of a panel then prefill only their own tail.
 
-usage: worker_prompt.py PROMPT_FILE OUT_FILE [INPUT ...]   (.json, .md or .tsv)
+usage: worker_prompt.py [--contract implementation] PROMPT_FILE OUT_FILE [INPUT ...]   (.json, .md or .tsv)
 
 Inputs come from the "Read only ..." sentences of the prompt's own "## Canonical inputs
 (binding)" section when it has one, else from the arguments.  The lens is whichever
@@ -28,6 +28,15 @@ LENS = re.compile(r'\n## Assigned [^\n]*')
 READ_SENTENCE = re.compile(r'(?:Read only|Do not inspect any rendered|Do not enumerate)(?:[^.]|\.(?!\s|$))*\.(?=\s|$)\s*')
 INPUTS = '## Canonical inputs (binding)'
 LIMIT_BYTES = 160 * 1024
+# What the embedded documents mean to the worker.  `packet` workers are read-only specialists that
+# return one JSON packet; `implementation` workers write code and may read any project file.
+CONTRACTS = {'implementation': '''## Shared inputs are embedded
+
+The requirements, the requirements interpretation, the approved updated plan and the preflight report
+(when one exists) are embedded above: they are the files this prompt's first instruction asks you to
+read. Do not read them again; go straight to your assigned step. Read any other project file your
+step needs.
+'''}
 CONTRACT = '''## Compact worker contract (binding)
 
 The input documents are embedded above. Do not read them again, and do not enumerate
@@ -82,8 +91,14 @@ def embed(paths):
 
 
 def main(argv):
+    contract = CONTRACT
+    usage = 'usage: worker_prompt.py [--contract implementation] PROMPT_FILE OUT_FILE [INPUT ...]   (.json, .md or .tsv)'
+    if argv[:1] == ['--contract']:
+        if len(argv) < 3 or argv[1] not in CONTRACTS:
+            raise SystemExit(usage)
+        contract, argv = CONTRACTS[argv[1]], argv[2:]
     if len(argv) < 2:
-        raise SystemExit('usage: worker_prompt.py PROMPT_FILE OUT_FILE [INPUT ...]   (.json, .md or .tsv)')
+        raise SystemExit(usage)
     text = Path(argv[0]).read_text(encoding='utf-8')
     split = split_prompt(text)
     if split is None:
@@ -95,7 +110,7 @@ def main(argv):
     embedded = embed(paths)
     if embedded is None:
         return 3
-    pieces = [head.rstrip('\n'), '## Shared inputs (read-only, embedded)\n\n' + embedded, CONTRACT.rstrip('\n')]
+    pieces = [head.rstrip('\n'), '## Shared inputs (read-only, embedded)\n\n' + embedded, contract.rstrip('\n')]
     if kept:
         pieces.append(kept)
     pieces.append(tail)

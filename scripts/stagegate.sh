@@ -93,7 +93,7 @@ WORKFLOW_CONTINUE_ON_TEST_FAILURE="${WORKFLOW_CONTINUE_ON_TEST_FAILURE:-1}"
 # run stops insisting on it. This used to be one, so a suite with a dozen failures
 # was handed to a single bounded agent run, and whatever that run did not finish
 # was carried forward as "nonblocking evidence". Bounded by the repair limit.
-WORKFLOW_AUTO_REPAIR_ATTEMPTS="${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-3}"
+WORKFLOW_AUTO_REPAIR_ATTEMPTS="${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-0}"
 case "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" in
     ''|*[!0-9]*) echo "WORKFLOW_AUTO_REPAIR_ATTEMPTS must be an integer from 0 to 100." >&2; exit 1 ;;
 esac
@@ -394,7 +394,14 @@ continue_nonblocking_test_review() {
     local next="$1" result
     [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] || return 1
     [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] || return 1
-    [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] || return 1
+    # A failing driver check blocks this only while repair could still help.
+    # Once no automatic repair remains, REPAIR would send the run back through
+    # the checklist and return here, so the failure goes to the audit instead.
+    if [[ "$(green_regressions "$GREEN_CLASS")" -ne 0 ]]; then
+        [[ "$(green_failure_route "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" \
+              "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" \
+              "$WORKFLOW_AUTO_REPAIR_ATTEMPTS")" == continue ]] || return 1
+    fi
     result="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" \
         "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS)"
     [[ "$result" != PASS ]] || return 1
@@ -4452,6 +4459,22 @@ while true; do
             if [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] \
                 && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
                 && ! { [[ -n "${green_ids// /}" ]] && waived_ids $green_ids; }; then
+                # The checklist has already run. When no automatic repair is
+                # left, REPAIR's "continue" path returns to MANUAL_CHECKLIST,
+                # which regenerates and re-executes the whole checklist and
+                # lands back here: a loop that never reaches the audit. Carry
+                # the failing check to the audit instead, as unresolved
+                # evidence, exactly as the earlier gates do.
+                if [[ "$(green_failure_route "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" \
+                        "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" \
+                        "$WORKFLOW_AUTO_REPAIR_ATTEMPTS")" == continue ]]; then
+                    echo 'Driver verification still fails and no automatic repair remains; continuing to final audit with the failure recorded as unresolved evidence.'
+                    record_nonblocking_failure green-check 'driver verification failed after the checklist; automatic repair not available'
+                    record_test_failure_disposition
+                    record_nonblocking_failure VERIFICATION_REPORT.json 'checklist ran; failing driver check carried to final audit'
+                    set_state FINAL_AUDIT
+                    continue
+                fi
                 printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
                 set_state REPAIR
             else

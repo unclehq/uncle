@@ -159,38 +159,106 @@ PY
 # and one did: the readers below only knew `1. ... Owns: ...` lines, saw no step
 # at all, and the plan stopped at the approval gate for "a protected verification
 # path with no owning implementation step" while its first step visibly owned it.
-# Each data row becomes `N. <description> Owns: <cell> Depends on: <cell>`.  Rows
-# are recognised by the header's own words (Owns, Depends on); text elsewhere
-# passes through unchanged.
+# Each data row becomes `N. <description> Owns: <cell> Depends on: <cell>`.  The step id
+# may be `3`, `S-3`, `Step 3`; Owns may be a column or written inline in the Description
+# cell (a plan did exactly that: `Owns: ...` at the end of each description, no Owns
+# column, ids S-0..S-9).  Text elsewhere passes through unchanged.
 plan_table_steps_as_list() {
     awk '
         function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
-        /^## ([0-9]+\. )?Implementation (sequence|order|steps)/ { insec = 1; ownsCol = 0; print; next }
-        insec && /^## / { insec = 0 }
-        insec && /^[ \t]*\|/ {
+        # A step id: "3", "S-3", "S3", "Step 3", "#3".  Returns the number, or "" if the cell is not one.
+        function stepnum(cell,    t) {
+            t = tolower(trim(cell))
+            if (t ~ /^(s|step|#)?[ ._-]*[0-9]+$/) { gsub(/[^0-9]/, "", t); return t }
+            return ""
+        }
+        # A sentence ends a field: "S0. Dependencies pinned to exact versions" depends on S0 only.
+        function firstsentence(text) { sub(/\.([ \t].*)?$/, "", text); return text }
+        function flush(    i, line, num, pre, rest, k, nums, n, owns, dep, emitted) {
+            # 1. Steps described by prose lines under the table: "S1 Owns: `a`, `b`. Depends on: S0."
+            for (i = 1; i <= nbuf; i++) {
+                line = buf[i]
+                if (line ~ /^[ \t]*([Ss]tep[ \t]*|[Ss][ -]?)?[0-9]+[ \t]*[Oo]wns:/) {
+                    pre = line; sub(/[Oo]wns:.*$/, "", pre); num = stepnum(pre)
+                    if (num == "") continue
+                    rest = line; sub(/^.*[Oo]wns:/, "", rest)
+                    dep = ""
+                    if (match(rest, /[Dd]epends[ \t]+on:/)) { dep = firstsentence(substr(rest, RSTART + RLENGTH)); rest = substr(rest, 1, RSTART - 1) }
+                    proseOwns[num] = (num in proseOwns ? proseOwns[num] ", " : "") trim(rest)
+                    if (dep != "") proseDep[num] = dep
+                    prose[i] = num
+                }
+            }
+            # 2. Rewrite the table rows (and drop the prose lines they absorbed).
+            for (i = 1; i <= nbuf; i++) {
+                if (i in prose) continue
+                if (i in row) {
+                    num = row[i]
+                    owns = rowOwns[i]
+                    if (num in proseOwns) owns = (owns != "" ? owns ", " : "") proseOwns[num]
+                    dep = rowDep[i]; if (dep == "" && (num in proseDep)) dep = proseDep[num]
+                    printf "%s. %s", num, rowTitle[i]
+                    if (owns != "") printf " Owns: %s", owns
+                    if (dep != "") printf " Depends on: %s", dep
+                    printf "\n"
+                    rowSeen[num] = 1
+                } else print buf[i]
+            }
+            # 3. Prose steps with no table row become list steps of their own.
+            n = 0
+            for (k in proseOwns) if (!(k in rowSeen)) nums[++n] = k + 0
+            for (i = 1; i <= n; i++) for (k = i + 1; k <= n; k++) if (nums[k] < nums[i]) { t = nums[i]; nums[i] = nums[k]; nums[k] = t }
+            for (i = 1; i <= n; i++) {
+                printf "%s. Owns: %s", nums[i], proseOwns[nums[i]]
+                if (nums[i] in proseDep) printf " Depends on: %s", proseDep[nums[i]]
+                printf "\n"
+            }
+            nbuf = 0; split("", buf); split("", prose); split("", row); split("", rowOwns); split("", rowDep)
+            split("", rowTitle); split("", proseOwns); split("", proseDep); split("", rowSeen)
+        }
+        /^## ([0-9]+\. )?Implementation (sequence|order|steps)/ { if (insec) flush(); insec = 1; header = 0; print; next }
+        insec && /^## / { flush(); insec = 0 }
+        !insec { print; next }
+        {
+            # A bulleted step ("- S-2: Arithmetic core. Owns: `a`. Depends on: S-1.") is a
+            # numbered step by another marker; a plan written this way stopped at the
+            # approval gate with every protected path "unowned".
+            if (match($0, /^[ \t]*[-*+][ \t]+([Ss]tep[ \t]*|[Ss])?[ ._-]*[0-9]+[ \t]*[:.)-]/)) {
+                bl = $0; sub(/^[ \t]*[-*+][ \t]+/, "", bl)
+                bn = bl; sub(/^([Ss]tep[ \t]*|[Ss])?[ ._-]*/, "", bn); sub(/[^0-9].*$/, "", bn)
+                sub(/^([Ss]tep[ \t]*|[Ss])?[ ._-]*[0-9]+[ \t]*[:.)-][ \t]*/, "", bl)
+                $0 = bn ". " bl
+            }
+            buf[++nbuf] = $0
+            if ($0 !~ /^[ \t]*\|/) next
             n = split($0, f, "|")
-            if (!ownsCol && tolower($0) ~ /owns/) {
+            h1 = tolower(trim(f[2]))
+            # The header row: its first cell names the step column, or a cell names Owns/Paths.
+            if (!header && (h1 ~ /^(step|steps|#|id|no\.?|number)$/ || tolower($0) ~ /\|[ \t]*(owns|paths?|files?)[ \t]*\|/)) {
                 ownsCol = 0; depCol = 0; descCol = 0
                 for (i = 2; i < n; i++) {
                     h = tolower(trim(f[i]))
-                    if (h ~ /^owns/) ownsCol = i
+                    if (h ~ /^(owns|paths?|files?)/) ownsCol = i
                     else if (h ~ /^depend/) depCol = i
-                    else if (h ~ /desc|task|work|what/) descCol = i
+                    else if (h ~ /^(desc|title|task|work|what|summary|name)/) descCol = i
                 }
-                if (!ownsCol) { ownsCol = 0 }
+                header = 1
+                delete buf[nbuf]; nbuf--
                 next
             }
-            if (ownsCol && trim(f[2]) ~ /^[0-9]+$/) {
-                desc = descCol ? trim(f[descCol]) : trim(f[3])
-                printf "%s. %s Owns: %s", trim(f[2]), desc, trim(f[ownsCol])
-                if (depCol) printf " Depends on: %s", trim(f[depCol])
-                printf "\n"
+            num = stepnum(f[2])
+            if (header && num != "") {
+                row[nbuf] = num
+                rowTitle[nbuf] = descCol ? trim(f[descCol]) : trim(f[3])
+                rowOwns[nbuf] = ownsCol ? trim(f[ownsCol]) : ""
+                rowDep[nbuf] = depCol ? trim(f[depCol]) : ""
                 next
             }
-            if (trim(f[2]) ~ /^:?-+:?$/) next
+            if (trim(f[2]) ~ /^:?-+:?$/) { delete buf[nbuf]; nbuf-- }
         }
-        { print }
+        END { if (insec) flush() }
     '
+
 }
 
 # plan_steps <plan> — the implementation sequence, one step per line, in order,
@@ -315,7 +383,7 @@ plan_step_owns() {
             if (match(line, /[Dd]epends[ \t]+on:/)) { line = substr(line, 1, RSTART - 1); owns = 0 }
             extract(line)
         }
-    '
+    ' | awk '!seen[$0]++'
 }
 
 # plan_step_depends <plan> — "<step>TAB<step it waits for>" per declared edge.

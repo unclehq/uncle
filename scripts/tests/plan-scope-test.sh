@@ -287,6 +287,88 @@ check_eq "bare paths: dependencies still read" "2	1
 3	2
 5	3" "$(plan_step_depends "$BARE")"
 
+# A step table with ids "S-0".."S-9" and `Owns:` written inline at the end of each
+# Description cell (no Owns column) is read too.  A planner wrote exactly that and the
+# plan was reported as having no owner for any file.
+SNPLAN="$TMP/SN.md"
+cat > "$SNPLAN" <<'SNT'
+## 12. Implementation order
+
+| Step | Description | Requirements | Depends on | Capability |
+|---|---|---|---|---|
+| S-0 | Inspect existing files and record the snapshot. Owns: `.uncle/docs/IMPLEMENTATION_NOTES.md` | R-1 | none | CAP-1 |
+| S-1 | Scaffold the project. Owns: `package.json`, `playwright.config.js`, `src/main.jsx` | R-1 | S-0 | CAP-1 |
+| S-2 | Reducer module. Owns: `src/calc.js` | R-5 | S-1 | CAP-2 |
+| S-3 | Browser tests. Owns: `tests/e2e/calc.spec.js` | D-1 | S-1, S-2 | CAP-5 |
+
+## Decisions
+
+| ID | Decision | Owns |
+|---|---|---|
+| DEC-1 | not a step | `elsewhere.js` |
+SNT
+check_eq "S-n table: inline Owns is read per step" ".uncle/docs/IMPLEMENTATION_NOTES.md
+package.json
+playwright.config.js
+src/main.jsx
+src/calc.js
+tests/e2e/calc.spec.js" "$(plan_step_owns "$SNPLAN" | cut -f2)"
+check_eq "S-n table: steps are numbered by position" "1 2 2 2 3 4" "$(plan_step_owns "$SNPLAN" | cut -f1 | tr '\n' ' ' | sed 's/ $//')"
+check_eq "S-n table: S-ids in Depends on become edges" "2	1
+3	2
+4	2
+4	3" "$(plan_step_depends "$SNPLAN")"
+check_eq "S-n table: a table in another section is not a step" "0" "$(plan_step_owns "$SNPLAN" | grep -c elsewhere || true)"
+check_eq "S-n table: four steps are found" "4" "$(plan_steps "$SNPLAN" | wc -l | tr -d ' ')"
+
+# A table whose path column is called "Paths" (no Owns column), with each step's full
+# ownership written as a prose line under it ("S1 Owns: `a`, `b`. Depends on: S0.").  A
+# planner wrote exactly this; the table said "explicit list below" for step S1 and the plan
+# was rejected for having no owner of its own protected files.
+PATHS="$TMP/PATHS.md"
+cat > "$PATHS" <<'PTH'
+## 12. Implementation order
+
+| Step | Title | Paths | Reqs | Depends |
+|---|---|---|---|---|
+| S0 | Baseline | none (writes outside repo) | R-1 | none |
+| S1 | Scaffold | explicit list below | R-1 | S0 |
+| S2 | Reducer and tests | `src/calc.js`, `tests/unit/calc.test.js` | R-1 | S1 |
+| S3 | Config and e2e | `playwright.config.js` | D-1 | S2 |
+
+S0 Owns: a copy of the existing `index.html` stored outside the repo. Depends on: none.
+S1 Owns: `package.json`, `package-lock.json`, `vite.config.js`. Depends on: S0. Dependencies pinned to exact versions; port 4173 is owned by the dev script.
+S3 Owns: `playwright.config.js`, `tests/e2e/calc.spec.js` (incl. T-E2E-8..10). Depends on: S2.
+
+## 13. Requirement traceability
+PTH
+check_eq "Paths column + prose: a step's prose Owns is read even when its cell says 'explicit list below'" "yes" \
+    "$([[ "$(plan_step_owns "$PATHS")" == *'2	package.json'* && "$(plan_step_owns "$PATHS")" == *'2	vite.config.js'* ]] && echo yes || echo no)"
+check_eq "Paths column + prose: the table cell paths are owned too" "yes" \
+    "$([[ "$(plan_step_owns "$PATHS")" == *'3	tests/unit/calc.test.js'* ]] && echo yes || echo no)"
+check_eq "Paths column + prose: the prose adds files the cell omitted" "yes" \
+    "$([[ "$(plan_step_owns "$PATHS")" == *'4	tests/e2e/calc.spec.js'* ]] && echo yes || echo no)"
+check_eq "Paths column + prose: a path named twice is listed once" "1" "$(plan_step_owns "$PATHS" | grep -c '^4	playwright.config.js$')"
+check_eq "Paths column + prose: dependencies stop at the end of the sentence" "2	1
+3	2
+4	3" "$(plan_step_depends "$PATHS")"
+check_eq "Paths column + prose: four steps, the prose lines are not extra steps" "4" "$(plan_steps "$PATHS" | wc -l | tr -d ' ')"
+PROSE="$TMP/PROSE.md"
+printf '## Implementation order\n\nS1 Owns: `a.js`, `b.js`. Depends on: none.\nS2 Owns: `c.js`. Depends on: S1.\n' > "$PROSE"
+check_eq "prose-only steps become steps" "1	a.js
+1	b.js
+2	c.js" "$(plan_step_owns "$PROSE")"
+check_eq "prose-only steps keep their dependencies" "2	1" "$(plan_step_depends "$PROSE")"
+BULLETS="$TMP/BULLETS.md"
+printf '## 12. Implementation order\n\n- S-0: Backup. Owns: `.uncle/backup/a`. Depends on: none.\n- S-1: Scaffold. Owns: `package.json`, `vite.config.js`. Depends on: S-0.\n- S-2: Core. Owns: `src/calc.js`. Depends on: S-1.\nS-2 imports calc.js, hence depends on S-1.\n\n## 13. Next\n' > "$BULLETS"
+check_eq "bulleted S-N steps are read as steps" "1	.uncle/backup/a
+2	package.json
+2	vite.config.js
+3	src/calc.js" "$(plan_step_owns "$BULLETS")"
+check_eq "bulleted S-N steps keep their dependencies (none for S-0)" "2	1
+3	2" "$(plan_step_depends "$BULLETS")"
+check_eq "bulleted steps: prose after them is not a step" "3" "$(plan_steps "$BULLETS" | wc -l | tr -d ' ')"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "plan-scope-test.sh: $FAILED of $COUNT checks failed"
     exit 1

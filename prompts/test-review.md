@@ -57,6 +57,19 @@ EXECUTE_CHECKLIST, not as a required row in this stage's Acceptance gate.
 It remains mandatory in .uncle/docs/VERIFICATION_REPORT.md before final acceptance.
 Earlier prerequisite approvals (such as source/oracle review) are still required.
 
+Status decides what the driver does next, so grade by what could fix the row:
+FAIL sends the row to an automatic repair stage, which can only change source,
+tests and its own reports. Use FAIL only for a defect that edit can correct: a
+test that is absent, an assertion that does not measure the requirement, a
+failing driver command. Do not use FAIL when you merely could not confirm
+something (a test file you did not open, a defect injection nobody ran, evidence
+older than the current green check), when the only remedy is a person's
+judgment or sign-off (BLOCKED-HUMAN), or when the evidence is out of date
+because the checks now pass (re-read green-check.md and grade the current
+result). Those are NOT RUN or BLOCKED-HUMAN with the exact evidence needed, and
+the run continues to the final audit carrying them. A repair that cannot change
+a row's outcome is wasted work and hides the real finding.
+
 Add required rows for any other findings blocking this stage. Missing test coverage or
 incorrect assertions are FAIL, with concrete repair instructions. Missing
 external prerequisites are BLOCKED; unknown results are NOT RUN. If approved

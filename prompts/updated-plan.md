@@ -291,6 +291,13 @@ claiming a file the step does not write is worse than claiming none, and a step
 whose files genuinely overlap another's should say so by naming the same file,
 not by omitting the field.
 
+Keep the implementation steps in the form the driver reads: one numbered list item per
+step, `N. <what the step does>. Owns: \`path\`, \`path\`. Depends on: M, N.`, with every
+path the step creates or edits named in its `Owns:` (and every protected verification
+path owned by exactly the step that creates it). A table is acceptable only if it has an
+`Owns` column holding those paths; a table whose cell says "see below", or a list kept
+apart from the steps, is not read. Do not drop a step's `Owns:` when you revise the plan.
+
 Put every behavior a browser can check into the protected automated suite, not
 into the manual checklist. For a web application that means rendering, theme,
 keyboard input, and error states: each gets a browser test in the directory the

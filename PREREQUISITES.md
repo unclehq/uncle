@@ -109,7 +109,7 @@ or increase your server's concurrent-request capacity.
 
 ## Repairing failing verification
 
-After implementation the driver runs the plan's verification commands itself (for example `npx playwright test`). A failing command is sent to a repair stage, up to `WORKFLOW_AUTO_REPAIR_ATTEMPTS` times (default 3, never more than `WORKFLOW_MAX_REPAIRS`, default 4). After the last attempt, an unattended run (`WORKFLOW_CONTINUE_ON_TEST_FAILURE`, on by default) carries what still fails to the final audit as unresolved evidence and keeps going; with it off, the run stops and asks the owner. Set `WORKFLOW_AUTO_REPAIR_ATTEMPTS=0` to skip automatic repair.
+After implementation the driver runs the plan's verification commands itself (for example `npx playwright test`). Automatic repair is off by default (`WORKFLOW_AUTO_REPAIR_ATTEMPTS=0`): a failing command, or a failing test-review row, is carried to the final audit as unresolved evidence and the run keeps going (`WORKFLOW_CONTINUE_ON_TEST_FAILURE`, on by default; with it off, the run stops and asks the owner). Set `WORKFLOW_AUTO_REPAIR_ATTEMPTS` to a number to send failures to a repair stage that many times first (never more than `WORKFLOW_MAX_REPAIRS`, default 4).
 
 ## GitHub access
 

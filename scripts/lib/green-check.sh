@@ -216,7 +216,14 @@ green_fold_commands() {
 green_run() {
     local cmds="$1" out="$2" log="$3"
     local cmd status guard="${4:-}"
-    local groups="${5:-}" started
+    local groups="${5:-}" started port_note=""
+
+    # A leftover server on a port the checks bind fails them at once and reads
+    # as a test failure. Stop this project's own leftovers; name anyone else's.
+    if [[ -f "$GREEN_LIB_DIR/port_guard.py" ]] && command -v python3 >/dev/null 2>&1; then
+        port_note="$(python3 -B "$GREEN_LIB_DIR/port_guard.py" "$cmds" "${UNCLE_PROJECT_ROOT:-$PWD}" 2>/dev/null || true)"
+        [[ -z "$port_note" ]] || printf '%s\n' "$port_note" >&2
+    fi
 
     if [[ -n "$groups" && -s "$groups" ]] \
         && python3 -c pass > /dev/null 2>&1 \
@@ -240,6 +247,7 @@ green_run() {
 
     : > "$out"
     : > "$log"
+    [[ -z "$port_note" ]] || printf '%s\n' "$port_note" >> "$log"
 
     local command_line=0
     while IFS= read -r cmd || [[ -n "$cmd" ]]; do

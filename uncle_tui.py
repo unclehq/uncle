@@ -2437,7 +2437,14 @@ class UncleTUI:
             return None
         url = spec.get("url", "")
         if not url.startswith("file://"):
-            return None
+            # A manifest naming a local server (a stale one from an earlier build, or one the
+            # preview agent wrote) must not hide a single-file page at the root: with no
+            # package.json there is no dev server to wait for, and the page is all there is.
+            root = Path(_project_root())
+            if (root / "index.html").is_file() and not (root / "package.json").is_file():
+                url = (root / "index.html").resolve().as_uri()
+            else:
+                return None
         try:
             page = url2pathname(urlparse(url).path)
             info = os.stat(page)

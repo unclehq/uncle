@@ -185,6 +185,20 @@ class EarlyPreview(unittest.TestCase):
             self.settle(self.make(project(**{'index.html': '<h1>x</h1>'}), stage))
             self.assertEqual(self.opened, [], stage)
 
+    def test_stale_server_manifest_does_not_hide_a_single_file_page(self):
+        manifest = '{"kind":"webpage","command":["npm","run","start"],"url":"http://127.0.0.1:5173"}'
+        screen = self.make(project(**{'index.html': '<h1>calc</h1>', '.uncle__launch.json': manifest}))
+        self.settle(screen)
+        self.assertEqual(len(self.opened), 1)
+        self.assertIn('<h1>calc</h1>', get(self.opened[0]))
+
+    def test_server_manifest_with_a_package_still_waits_for_its_dev_server(self):
+        manifest = '{"kind":"webpage","command":["npm","run","start"],"url":"http://127.0.0.1:5173"}'
+        screen = self.make(project(**{'index.html': '<div id=root></div>', 'package.json': '{}',
+                                      '.uncle__launch.json': manifest}))
+        self.settle(screen)
+        self.assertEqual(self.opened, [])
+
     def test_command_projects_are_never_launched(self):
         root = project(**{'.uncle__launch.json': '{"kind":"command","command":["./run.sh"]}'})
         self.settle(self.make(root))

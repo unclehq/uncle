@@ -254,7 +254,7 @@ green_run() {
 
         status=0
         started="$SECONDS"
-        local -a check_command=(bash -c "$cmd")
+        local -a check_command=(bash -o pipefail -c "$cmd")
         if [[ -f "$GREEN_LIB_DIR/shell_syntax.py" ]] && command -v python3 >/dev/null 2>&1; then
             check_command=(python3 -B "$GREEN_LIB_DIR/shell_syntax.py" --command-file "$cmds" "$command_line" "${WORKFLOW_VERIFY_JOBS:-4}")
         fi

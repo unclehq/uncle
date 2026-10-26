@@ -8,6 +8,7 @@ Files the model writes to a known document path are validated against that
 document's schema before they land, so a wrong shape comes back as a tool error.
 """
 import contextvars
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -67,6 +68,26 @@ class Policy:
         self.write, self.shell = write, shell
         self.writable = {(self.root / p).resolve() for p in writable} if writable is not None else None
         self.schema_for = schema_for or (lambda relative: None)
+        self.shell_children = []   # every shell command started, so its leftovers can be cleaned up
+        self.shell_results = {}    # (command, tree fingerprint, live background processes) -> output
+
+    def cleanup(self):
+        """End whatever the stage's shell commands left running (dev servers started with `&`).
+
+        A command that returns can leave a server behind in the process group it
+        started.  Those used to outlive the stage: three `vite` servers piled up on
+        port 5173, one spinning at 70% CPU for the best part of an hour, and the
+        next stage's tests then ran against stale code or hung on the busy port.
+        Servers started in one tool call and used in a later one still work, because
+        this runs when the stage ends, not when the call does.
+        """
+        from process_tree import kill_tree
+        for child in self.shell_children:
+            try:
+                kill_tree(child)
+            except OSError:
+                pass
+        self.shell_children.clear()
 
     def tools(self):
         return READ_TOOLS + (WRITE_TOOLS if self.write else []) + (_shell_tools(self.root) if self.shell else [])
@@ -122,6 +143,42 @@ def escapes_project(policy, command):
     return None
 
 
+FINGERPRINT_SKIP = SKIP_DIRS | {'.uncle', 'dist', 'build', 'coverage', 'test-results', 'playwright-report', 'play-report',
+                                '.next', '.cache', '.turbo'}
+
+
+def tree_fingerprint(root, limit=20000):
+    """A cheap digest of the project's files (path, size, mtime), without build output or dependencies."""
+    digest = hashlib.sha256()
+    count = 0
+    for directory, names, files in os.walk(root):
+        names[:] = sorted(n for n in names if n not in FINGERPRINT_SKIP)
+        for name in sorted(files):
+            try:
+                info = os.stat(os.path.join(directory, name))
+            except OSError:
+                continue
+            digest.update(('%s\0%d\0%d\n' % (os.path.relpath(os.path.join(directory, name), root), info.st_size,
+                                                 info.st_mtime_ns)).encode('utf-8', 'replace'))
+            count += 1
+            if count >= limit:
+                return digest.hexdigest()
+    return digest.hexdigest()
+
+
+def _alive(child):
+    try:
+        os.killpg(child.pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+
+
+def repeat_key(policy, command):
+    """What must be unchanged for a repeated command to give the same answer again."""
+    return (command, tree_fingerprint(policy.root), tuple(sorted(c.pid for c in policy.shell_children if _alive(c))))
+
+
 def bash_timeout(requested):
     """Seconds a shell command may run: what the model asked for (default 120), capped.
 
@@ -152,6 +209,7 @@ def _bash(policy, command, timeout):
                 status = child.wait()
         finally:
             finish_check(child)
+            policy.shell_children.append(child)
         log.seek(0)
         output = log.read().decode('utf-8', errors='replace')
     if len(output) > OUTPUT_LIMIT:
@@ -223,7 +281,19 @@ def run_tool(policy, name, arguments):
             if outside:
                 return ('error: not run. The project is at %s and every command already starts there; '
                         '`cd %s` leaves it. Run the command without the cd.' % (policy.root, outside))
-            return _bash(policy, arguments['command'], bash_timeout(arguments.get('timeout')))
+            # The same command on the same files with the same servers up gives the same
+            # answer.  A model that cannot tell why a suite fails re-runs it again and
+            # again (a 26-test Playwright run is minutes each time) instead of changing
+            # anything; hand back the earlier result and say what to do instead.
+            key = repeat_key(policy, arguments['command'])
+            if key in policy.shell_results:
+                return (policy.shell_results[key] + '\n[repeated: this exact command already ran, nothing in the project '
+                        'changed since, and no server was started or stopped, so the result above is unchanged and it was '
+                        'not run again. Change the code, or run something narrower, before re-running it.]')
+            output = _bash(policy, arguments['command'], bash_timeout(arguments.get('timeout')))
+            if 'timed out after' not in output.rsplit('\n', 1)[-1]:
+                policy.shell_results[repeat_key(policy, arguments['command'])] = output
+            return output
         return 'error: unknown tool %s' % name
     except (ValueError, KeyError, TypeError, re.error, OSError) as error:
         return 'error: ' + str(error)
@@ -261,10 +331,47 @@ def interruptible_chat(stage, values, messages, tools, limit, effort, timeout):
         if thread.is_alive() and any(Path(channel).glob('*.json')):
             pool.abort()
             thread.join(10)
+            pool.aborting.clear()
             return INTERRUPTED
     if 'error' in outcome:
         raise outcome['error']
     return outcome['data']
+
+
+def _health_path():
+    root = os.environ.get('UNCLE_PROJECT_ROOT') or os.getcwd()
+    return Path(root) / '.uncle' / 'workflow' / 'constraint-health.json'
+
+
+def _health_key(values):
+    return '%s|%s' % (values.get('base_url', '').rstrip('/'), values.get('model', ''))
+
+
+def constraint_health(values):
+    """What this project has learned about the model server's grammar-constrained output."""
+    try:
+        return json.loads(_health_path().read_text(encoding='utf-8')).get(_health_key(values), {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def record_whitespace_runaway(values):
+    """Remember that a constrained answer ran to its limit on whitespace alone.
+
+    Every panel worker is its own process, so without this each one pays the full wait
+    to discover what the one before it already found out.
+    """
+    path = _health_path()
+    try:
+        data = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+        entry = data.setdefault(_health_key(values), {})
+        entry['whitespace_runaways'] = int(entry.get('whitespace_runaways', 0)) + 1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix('.tmp%d' % os.getpid())
+        temporary.write_text(json.dumps(data, sort_keys=True), encoding='utf-8')
+        os.replace(temporary, path)
+    except (OSError, ValueError, AttributeError):
+        pass  # advisory only
 
 
 def announce(stage, text, side='agent'):
@@ -320,12 +427,15 @@ def run_agent(values, prompt, policy, limit, turns=80, usage=None, final_schema=
     stage makes, retries included, reuses one connection.  A subagent run in the
     same process opens its own scope and so never shares that socket.
     """
-    if transport.in_scope():
-        return _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache,
-                          seconds, tools_required, side)
-    with transport.connection_scope():
-        return _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache,
-                          seconds, tools_required, side)
+    try:
+        if transport.in_scope():
+            return _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache,
+                              seconds, tools_required, side)
+        with transport.connection_scope():
+            return _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache,
+                              seconds, tools_required, side)
+    finally:
+        policy.cleanup()
 
 
 def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache, seconds,
@@ -361,7 +471,17 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     if stage is not None:
         stage.correlation = 'message'
     exhausted = False
-    for _ in range(turns):
+    warned = False
+    for turn_number in range(turns):
+        # Tell the model when its budget is nearly spent.  A repair stage ran all of its
+        # 40 turns probing and ended with an empty message, so the file the driver needs was
+        # never written and the run stopped; a model that does not know the end is near
+        # keeps investigating.
+        if not warned and turns > 6 and turns - turn_number == 3:
+            warned = True
+            messages.append({'role': 'user', 'content': 'You have 3 tool turns left. Stop investigating now. Use them to produce '
+                             'everything this task requires -- write the required file(s) -- then give your final response '
+                             'without calling a tool.'})
         if time.monotonic() >= deadline:
             raise ValueError('Self hosted stage exceeded its %d-second time limit' % seconds)
         if stage is not None:
@@ -441,13 +561,25 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         text = choice['message'].get('content') or ''
         if choice.get('finish_reason') == 'length':
             raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete' % turn_limit)
+        if not text.strip():
+            # An empty closing message gives the driver nothing to recover a result from.
+            messages.append({'role': 'user', 'content': 'Your last reply was empty. Reply now with what you found, what you '
+                             'changed and what is still unresolved, in a few plain sentences.'})
+            data = chat(values, messages, None, turn_limit, effort, timeout)
+            if data is not None:
+                requests += 1
+                tally(data)
+                text = data['choices'][0]['message'].get('content') or ''
         messages.append({'role': 'assistant', 'content': text})
     if final_schema is None:
         if stage is not None:
             stage.final_answer = text
         return text, requests
+    # Compact, single-line JSON: a grammar permits whitespace anywhere, and a model that
+    # starts pretty-printing (newline, indent, newline...) can keep going until the token
+    # limit without ever writing a character of JSON.
     messages.append({'role': 'user', 'content': 'Work is finished. Return only the final JSON object matching the required '
-                     'schema, with no commentary.'})
+                     'schema, written compactly on a single line with no indentation, blank lines or commentary.'})
     # The closing answer is one artifact, never the size of a whole session's
     # budget; a runaway generation should fail at this cap, not at 64k tokens.
     # A worker packet is a few findings: it gets a much smaller one.
@@ -459,8 +591,16 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     # review lenses, each ending at the cap with an empty tail).  When the
     # constrained answer is cut off, ask once more without the grammar and rely on
     # the local schema check; the mode actually used is recorded.
-    for attempt, skip in enumerate(((), transport.GRAMMAR_MODES)):
-        final, reason, final_usage, mode = constrained_completion(values, messages, final_schema, final_name, final_limit,
+    worker_packet = final_name.endswith('worker_packet')
+    # A packet is a few findings (about 1-2k tokens in practice), so the grammar-constrained
+    # try gets half the cap and fails fast; the unconstrained retry gets all of it.  A server
+    # that has already looped on whitespace twice in this project starts without the grammar.
+    health = constraint_health(values)
+    attempts = [((), min(final_limit, 4096) if worker_packet else final_limit), (transport.GRAMMAR_MODES, final_limit)]
+    if worker_packet and health.get('whitespace_runaways', 0) >= 2:
+        attempts = attempts[1:]
+    for attempt, (skip, cap) in enumerate(attempts):
+        final, reason, final_usage, mode = constrained_completion(values, messages, final_schema, final_name, cap,
                                                                   effort, timeout, skip=skip)
         add_usage(usage, final_usage)
         if stage is not None:
@@ -471,11 +611,13 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         if reason != 'length':
             break
         tail = ' '.join(final[-300:].split()) or '(only whitespace)'
-        if attempt or mode == 'prompt':
+        if not final.strip():
+            record_whitespace_runaway(values)
+        if attempt >= len(attempts) - 1 or mode == 'prompt':
             raise OutputTruncated('Model output reached the limit of %d tokens; the response is incomplete. '
-                                  'It ended with: %s' % (final_limit, tail))
+                                  'It ended with: %s' % (cap, tail))
         print('Self hosted: the %s-constrained answer hit the %d-token limit (it ended with: %s); asking once more '
-              'without the grammar.' % (mode, final_limit, tail), file=sys.stderr)
+              'without the grammar.' % (mode, cap, tail), file=sys.stderr)
         messages.append({'role': 'user', 'content': 'That was cut off. Reply with the complete JSON object only, on one '
                          'compact line, with no extra spaces, newlines or commentary.'})
     final = re.sub(r'<think>.*?</think>', '', final, flags=re.S).strip()

@@ -12,13 +12,16 @@ installed; plain http servers speak HTTP/1.1 keep-alive.
 """
 import contextlib
 import contextvars
+import errno
 import http.client
 import io
 import json
 import os
 import re
 import socket
+import sys
 import threading
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 
@@ -147,6 +150,7 @@ class Connections:
         self.http1 = {}         # (scheme, netloc) -> http.client connection
         self.http2 = {}         # (scheme, netloc) -> httpx.Client
         self.lock = threading.Lock()
+        self.aborting = threading.Event()   # set while a request is being dropped on purpose
 
     def abort(self):
         """Wake a request blocked on one of these connections, from another thread.
@@ -154,6 +158,7 @@ class Connections:
         Shutting the socket down makes the blocked read return at once; closing it
         alone does not reliably do so.  The request fails and the caller moves on.
         """
+        self.aborting.set()
         for connection in list(self.http1.values()):
             sock = connection.sock
             if sock is not None:
@@ -239,6 +244,72 @@ class ServerUnreachable(OSError):
     """The model server could not be reached at all; the message says where and why."""
 
 
+class NetworkLost(OSError):
+    """An established connection died mid-request (reset, or no acknowledgement for too long)."""
+
+
+NETWORK_ERRNOS = {errno.ECONNRESET, errno.ECONNABORTED, errno.EPIPE, errno.EHOSTUNREACH, errno.ENETUNREACH,
+                  errno.ENETDOWN, errno.ETIMEDOUT, errno.ENOTCONN}
+
+
+def tune_socket(sock):
+    """Make a dead path show up in about a minute, not at the end of a 20-minute read.
+
+    A request is not streamed, so a connection can be silent for many minutes while the
+    server generates.  If the network under it dies (a dropped VPN), nothing says so: the
+    kernel retransmits into the void and the stage looks hung (three preflight workers sat
+    with 100 KB unsent in their sockets).  Keepalive probes and a bound on how long sent
+    data may go unacknowledged turn that into a connection error the caller can act on.
+    A live server that is merely busy still answers both.
+    """
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        for name, value in (('TCP_KEEPIDLE', 30), ('TCP_KEEPALIVE', 30), ('TCP_KEEPINTVL', 10), ('TCP_KEEPCNT', 3)):
+            if hasattr(socket, name):
+                sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, name), value)
+        if hasattr(socket, 'TCP_USER_TIMEOUT'):                      # Linux, milliseconds
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, 90_000)
+        elif sys.platform == 'darwin':                                # TCP_RXT_CONNDROPTIME, seconds
+            sock.setsockopt(socket.IPPROTO_TCP, 0x80, 90)
+    except OSError:
+        pass  # tuning is best-effort
+
+
+def reconnect_seconds():
+    """How long a request keeps trying to get through a lost network (WORKFLOW_SELF_HOSTED_RECONNECT_SECONDS, 300)."""
+    configured = os.environ.get('WORKFLOW_SELF_HOSTED_RECONNECT_SECONDS', '').strip()
+    try:
+        return float(configured) if configured else 300.0
+    except ValueError:
+        raise ValueError('WORKFLOW_SELF_HOSTED_RECONNECT_SECONDS must be a number') from None
+
+
+def post(url, api_key, body, timeout, what='model request'):
+    """`_request` that rides out a lost network instead of failing the stage.
+
+    A connection that cannot be made, or one that died mid-request, is tried again every
+    few seconds for up to reconnect_seconds() (a VPN usually comes back within a minute).
+    A server that answered, or one that simply never did (a read timeout), is not retried.
+    """
+    started = time.monotonic()
+    budget = reconnect_seconds()
+    noted = -30.0
+    while True:
+        try:
+            return _request(url, api_key, body, timeout)
+        except (ServerUnreachable, NetworkLost) as error:
+            if _connections().aborting.is_set():
+                raise  # the caller dropped this request on purpose; do not resend it
+            waited = time.monotonic() - started
+            if waited >= budget:
+                raise type(error)('%s (the network stayed down for %d seconds; %s)' % (error, waited, what)) from None
+            if waited - noted >= 30:
+                noted = waited
+                print('Self hosted: lost the model server (%s); retrying for up to %d more seconds.' %
+                      (str(error).split(' (')[0][:120], budget - waited), file=sys.stderr, flush=True)
+            time.sleep(min(10.0, max(1.0, budget - waited)) if budget >= 10 else 0.2)
+
+
 def connect_timeout():
     """Seconds allowed to open a connection (WORKFLOW_SELF_HOSTED_CONNECT_SECONDS, default 15).
 
@@ -269,6 +340,10 @@ def _failure(url, error, connecting=False):
             reason = str(error) or type(error).__name__
         return ServerUnreachable('Cannot reach the model server at %s://%s (%s). Check that it is running and that '
                                  'the network or VPN that leads to it is up.' % (parts.scheme, parts.netloc, reason))
+    if isinstance(error, OSError) and getattr(error, 'errno', None) in NETWORK_ERRNOS:
+        return NetworkLost('The connection to the model server was lost (%s).' % (str(error) or type(error).__name__))
+    if isinstance(error, (http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+        return NetworkLost('The connection to the model server was lost (%s).' % (str(error) or type(error).__name__))
     if isinstance(error, TimeoutError):
         return error
     return URLError(error)
@@ -297,6 +372,7 @@ def _via_http1(method, url, data, headers, timeout):
                     raise _failure(url, error, connecting=True) from None
             connection.timeout = timeout
             connection.sock.settimeout(timeout)
+            tune_socket(connection.sock)
             connection.request(method, target, body=data, headers=dict(headers, Connection='keep-alive'))
             response = connection.getresponse()
             raw = response.read()
@@ -421,7 +497,7 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
     if mode == 'ollama_format':
         body = {'model': values['model'], 'messages': _flatten(messages), 'stream': False, 'format': schema,
                 'options': {'num_predict': limit, 'temperature': temperature()}}
-        data = _request(_origin(base_url) + '/api/chat', key, body, timeout)
+        data = post(_origin(base_url) + '/api/chat', key, body, timeout)
         usage = {'prompt_tokens': data.get('prompt_eval_count', 0), 'completion_tokens': data.get('eval_count', 0)}
         reason = 'length' if data.get('done_reason') == 'length' else 'stop'
         return data['message']['content'], reason, usage
@@ -437,7 +513,7 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
         body['guided_json'] = schema
     elif mode == 'json_object':
         body['response_format'] = {'type': 'json_object'}
-    data = _request(base_url + '/chat/completions', key, body, timeout)
+    data = post(base_url + '/chat/completions', key, body, timeout)
     choice = data['choices'][0]
     return choice['message'].get('content') or '', choice.get('finish_reason'), data.get('usage') or {}
 
@@ -482,7 +558,32 @@ def add_usage(total, usage):
 
 def conforms(value, schema, path='$'):
     """Check the JSON-Schema subset these artifacts use; raises ValueError."""
+    if 'anyOf' in schema:
+        problems = []
+        for option in schema['anyOf']:
+            try:
+                conforms(value, option, path)
+                return
+            except ValueError as error:
+                problems.append(str(error))
+        raise ValueError('%s matches none of the allowed forms (%s)' % (path, '; '.join(problems)))
     kind = schema.get('type')
+    if isinstance(kind, list):
+        kinds = kind
+        if value is None and 'null' in kinds:
+            return
+        remaining = [k for k in kinds if k != 'null']
+        for option in remaining:
+            try:
+                conforms(value, dict(schema, type=option), path)
+                return
+            except ValueError:
+                continue
+        raise ValueError('%s must be %s' % (path, ' or '.join(kinds)))
+    if kind == 'null':
+        if value is not None:
+            raise ValueError('%s must be null' % path)
+        return
     checks = {'object': dict, 'array': list, 'string': str, 'integer': int, 'boolean': bool}
     if kind in checks and (not isinstance(value, checks[kind]) or (kind == 'integer' and isinstance(value, bool))):
         raise ValueError('%s must be %s' % (path, kind))
@@ -527,7 +628,7 @@ def chat(values, messages, tools, limit, effort='none', timeout=3600):
         if with_effort:
             body['reasoning_effort'] = with_effort
         try:
-            return _request(values['base_url'].rstrip('/') + '/chat/completions', values['api_key'], body, timeout)
+            return post(values['base_url'].rstrip('/') + '/chat/completions', values['api_key'], body, timeout)
         except HTTPError as error:
             if error.code not in REJECTED:
                 raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None

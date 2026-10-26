@@ -631,6 +631,15 @@ plan_structure_problem() {
         printf 'no Verification commands block'
         return 0
     fi
+    # `.uncle/config` is uncle's own configuration FILE and `.uncle/` is driver state:
+    # a plan that runs its tests from `.uncle/config/playwright.config.js` or
+    # `.uncle/tests/` names a path that cannot exist, and every stage after it
+    # reports a missing config. Project files belong in the project tree.
+    if grep -qE '(^|[^[:alnum:]_./-])\.?/?\.uncle/(config|tests)(/|[[:space:]]|$)' "$commands"; then
+        rm -f "$commands"
+        printf 'verification commands that run files under .uncle/'
+        return 0
+    fi
     if ! repair_parallel_groups "$plan" "$commands"; then
         rm -f "$commands"
         printf 'invalid Parallel verification groups'
@@ -655,6 +664,29 @@ plan_structure_problem() {
         fi
     fi
     return 1
+}
+
+# The text the planner is shown when its plan fails the structural check: what the
+# driver rejected and what to change. Appended to the next updated-plan prompt.
+plan_structure_feedback() {
+    local problem="$1" plan="$2" gaps
+    printf '\n\n## Plan structure error (binding)\n\n'
+    printf 'The driver rejected the plan you just wrote: it has %s.\n\n' "$problem"
+    case "$problem" in
+        'a protected verification path with no owning implementation step')
+            gaps="$(python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" "$plan" "$PWD" "${STATE_DIR:-.uncle/workflow}" 2>/dev/null | sed 's/^/- `/; s/$/`/')"
+            printf 'These Protected verification paths do not exist yet and no implementation step names them in its `Owns:`:\n\n%s\n\n' "$gaps"
+            printf 'Fix it one of two ways: add each path to the `Owns:` of the step that creates it (a reconcile step'"'"'s `Owns: *` does not count), or, if nothing will create a path, remove it from Protected verification paths. Only list a path as protected when it already exists or a step explicitly owns it. Return the complete corrected plan.\n'
+            ;;
+        'verification commands that run files under .uncle/')
+            printf '`.uncle/config` is uncle'"'"'s own configuration file and `.uncle/` is driver state, so nothing can be created under `.uncle/config/` or `.uncle/tests/`. Put the test runner config and the tests in the project tree (for example `playwright.config.js` and `tests/` at the project root), name them in the `Owns:` of the step that creates them, list them under Protected verification paths, and point the Verification commands at those paths. Return the complete corrected plan.\n' ;;
+        'no Verification commands block')
+            printf 'The plan needs `## Verification commands` with one fenced block of shell commands, one per line, and nothing else in it.\n' ;;
+        'no Protected verification paths block')
+            printf 'The plan needs a heading with the words "protected" and "paths", then one fenced block of repository-relative paths, one per line.\n' ;;
+        *)
+            printf 'Correct that and return the complete plan.\n' ;;
+    esac
 }
 
 acceptance_json_ids() {
@@ -2969,6 +3001,10 @@ run_stage() {
             # The panel has already collated every specialist finding into
             # canonical JSON. Every runner gets the sealed compact prompt;
             # there is no repository-discovery fallback or Markdown handoff.
+            if [[ -s "$STATE_DIR/updated-plan-structure-feedback.md" && -f "$UPDATED_PLAN_PROMPT" ]]; then
+                cat "$STATE_DIR/updated-plan-structure-feedback.md" >> "$UPDATED_PLAN_PROMPT"
+                rm -f "$STATE_DIR/updated-plan-structure-feedback.md"
+            fi
             run_claude "$UPDATED_PLAN_PROMPT" updated-plan
             ;;
         IMPLEMENT)
@@ -3790,6 +3826,16 @@ while true; do
                     echo 'count; name the file explicitly in the step that creates it):'
                     python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" \
                         .uncle/docs/UPDATED_PROJECT_PLAN.md "$PWD" "$STATE_DIR" 2>/dev/null | sed 's/^/  /'
+                fi
+                # Nobody is asked to approve a plan the next stage would reject, and a
+                # dead stop here ended unattended runs for good. Give the planner the
+                # exact error once; only a second failure stops for a person.
+                if [[ ! -e "$STATE_DIR/updated-plan-structure-retried" ]]; then
+                    touch "$STATE_DIR/updated-plan-structure-retried"
+                    plan_structure_feedback "$plan_problem" .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/updated-plan-structure-feedback.md"
+                    echo "Returning to UPDATED_PLAN once with this error for the planner to correct."
+                    set_state UPDATED_PLAN
+                    continue
                 fi
                 echo "The driver reads that block to run and protect verification,"
                 echo "so amend the plan before approving it; you are not being asked"

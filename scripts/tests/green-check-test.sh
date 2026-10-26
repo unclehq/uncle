@@ -263,6 +263,15 @@ check_eq "hang: the stuck command is a failure with the timeout status" "0 124 0
 check_contains "hang: the log says it timed out" "TIMEOUT after 2s" "$TMP/hang.log"
 check_not_contains "hang: nothing after the sleep ran inside it" "never" "$TMP/hang.log"
 
+# --- a failing command in a pipeline is a failure -----------------------------
+# `npx playwright test … | tee out.log` reported PASS when Playwright failed: the
+# pipeline's status was tee's.  A plan's own `set -o pipefail` on an earlier line
+# never reaches the shell that runs the next line.
+
+printf '%s\n' 'false | tee /dev/null' 'true | tee /dev/null' 'sh -c "exit 7" | cat' > "$TMP/pipe.commands"
+(cd "$TMP" && green_run "$TMP/pipe.commands" "$TMP/pipe.tsv" "$TMP/pipe.log") > /dev/null
+check_eq "pipefail: a failing command before tee fails the check" "1 0 7" "$(cut -f1 "$TMP/pipe.tsv" | tr '\n' ' ' | sed 's/ $//')"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "green-check-test.sh: $FAILED of $COUNT checks failed"
     exit 1

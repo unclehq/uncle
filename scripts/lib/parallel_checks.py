@@ -127,7 +127,7 @@ def _run_checks(args):
                             'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE',
                             'DOCUMENT_BUDGET_SOURCE', 'UNCLE_STEERING', 'UNCLE_SUPERVISION_HOST'):
                     check_env.pop(key, None)
-                argv = syntax_command(command, args.jobs) or [bash_executable(), '-c', command]
+                argv = syntax_command(command, args.jobs) or [bash_executable(), '-o', 'pipefail', '-c', command]
                 child = start_check(argv, env=check_env,
                                     stdout=output, stderr=subprocess.STDOUT)
                 children.add(child)

@@ -3282,7 +3282,9 @@ class UncleTUI:
                     return None
                 values = home_settings(CONFIG_PATH, homepage_stage)
                 values['effort'] = config.effort
-                session = supervisor_runner.SelfHostedSession(values)
+                session = supervisor_runner.SelfHostedSession(
+                    values, reply_schema=supervisor_chat.REPLY_SCHEMA,
+                    fallback=supervisor_command(config, ROOT, config_path=CONFIG_PATH, stage=homepage_stage))
             elif config.runner != 'claude':
                 return None
             else:

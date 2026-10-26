@@ -222,6 +222,71 @@ check_eq "wrapped Owns: step 2 owns every file on its own continuation lines" \
 2	prompts/change/final-audit.md
 2	prompts/implement.md" "$(plan_step_owns "$WRAP" | grep '^2	')"
 
+# An implementation order laid out as a TABLE is read like a numbered list.  A real
+# plan used one, no step was seen to own its protected test file, and the plan
+# stopped at the approval gate.
+TABLE="$TMP/TABLE.md"
+cat > "$TABLE" <<'TBL'
+## 12. Implementation order
+
+| Step | Description | Owns | Depends on |
+|---|---|---|---|
+| 1 | Add failing regression tests | `tests/calc.test.js`, `tests/e2e.test.js` | — |
+| 2 | Guard division in calc logic | `src/App.jsx` | 1 |
+| 3 | Palette and background | `src/App.css` | 1 |
+| 4 | Keyboard mapping | `src/App.jsx` | 2 |
+| 5 | Build and verify | — | 3, 4 |
+
+## 13. Requirement traceability
+
+| Step | Description | Owns |
+|---|---|---|
+| 9 | not an implementation step | `elsewhere.js` |
+TBL
+check_eq "table: ownership is read per step" "1	tests/calc.test.js
+1	tests/e2e.test.js
+2	src/App.jsx
+3	src/App.css
+4	src/App.jsx" "$(plan_step_owns "$TABLE")"
+check_eq "table: dependencies are read as edges" "2	1
+3	1
+4	2
+5	3
+5	4" "$(plan_step_depends "$TABLE")"
+check_eq "table: five steps are found" "5" "$(plan_steps "$TABLE" | wc -l | tr -d ' ')"
+check_eq "table: a table in another section is not a step" "0" "$(plan_step_owns "$TABLE" | grep -c elsewhere || true)"
+check_eq "table: the first step's text is its description" "yes" "$([[ "$(plan_steps "$TABLE" | head -1)" == 'Add failing regression tests Owns:'* ]] && echo yes || echo no)"
+LISTPLAN="$TMP/LIST.md"
+printf '## Implementation order\n\n1. Core — Owns: `a.js`\n2. UI — Owns: `b.js` — Depends on: 1\n' > "$LISTPLAN"
+check_eq "a numbered list is unaffected" "1	a.js
+2	b.js" "$(plan_step_owns "$LISTPLAN")"
+
+# Paths written WITHOUT backticks are still ownership.  A planner wrote
+# "Owns: tests/calc.test.js, tests/theme.test.js. Depends on: step 1" and the plan was
+# rejected for having no owner of its own protected tests.
+BARE="$TMP/BARE.md"
+cat > "$BARE" <<'BRE'
+## 12. Implementation order
+
+1. Config and dependencies. Owns: package.json, package-lock.json, vite.config.mjs
+2. Create the tests (red first). Owns: tests/calc.test.js, tests/theme.test.js. Depends on: step 1
+3. Change the handler; limited to keys. Owns: src/Calculator.jsx (modify). Depends on: steps 1, 2
+4. Verify only. Owns: none (read-only).
+5. Reconcile. Owns: *. Depends on: 3
+BRE
+check_eq "bare paths: ownership is read per step" "1	package.json
+1	package-lock.json
+1	vite.config.mjs
+2	tests/calc.test.js
+2	tests/theme.test.js
+3	src/Calculator.jsx
+5	*" "$(plan_step_owns "$BARE")"
+check_eq "bare paths: prose after Owns owns nothing" "0" "$(plan_step_owns "$BARE" | grep -c '^4	' || true)"
+check_eq "bare paths: dependencies still read" "2	1
+3	1
+3	2
+5	3" "$(plan_step_depends "$BARE")"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "plan-scope-test.sh: $FAILED of $COUNT checks failed"
     exit 1

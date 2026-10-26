@@ -44,7 +44,10 @@ def main():
             command, jobs = raw.removesuffix(b'\r').decode('utf-8'), int(sys.argv[4])
         else:
             command, jobs = sys.argv[2], int(sys.argv[3])
-        argv = syntax_command(command, jobs) or [bash_executable(), '-c', command]
+        # pipefail: a pipeline's exit status is its worst command's, not the last one's.
+        # `npx playwright test … | tee out.log` used to report PASS when Playwright failed,
+        # and a plan's own `set -o pipefail` on an earlier line never reaches this shell.
+        argv = syntax_command(command, jobs) or [bash_executable(), '-o', 'pipefail', '-c', command]
         if os.name == 'nt':
             # Windows execv uses CRT argument joining, which loses quoting for
             # paths such as C:\Program Files\Git and shell command strings.

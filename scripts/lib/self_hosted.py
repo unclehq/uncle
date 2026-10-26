@@ -1737,13 +1737,13 @@ def main(side, args):
         if usage:
             print(json.dumps({'type':'result', 'subtype':'success', 'is_error':False,
                               'model':local_model(values['model']), 'usage':usage, 'total_cost_usd':usage.get('_total_cost_usd'),
-                              'usage_source':'Model API usage' if 'constraint_mode' in usage else 'OpenCode step_finish events', 'usage_scope':'stage'}))
+                              'usage_source':'Model API usage' if http_transport() else 'OpenCode step_finish events', 'usage_scope':'stage'}))
             print('tokens used\n' + str(usage['total_tokens']))
     else:
         print(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':text}]}}))
         print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':text,
                           'model':local_model(values['model']),'num_turns':turns,'duration_ms':int((time.monotonic()-started)*1000),'usage':usage,'total_cost_usd':usage.get('_total_cost_usd'),
-                          'usage_source':'Model API usage' if 'constraint_mode' in usage else 'OpenCode step_finish events','usage_scope':'stage'}))
+                          'usage_source':'Model API usage' if http_transport() else 'OpenCode step_finish events','usage_scope':'stage'}))
     return 0
 
 

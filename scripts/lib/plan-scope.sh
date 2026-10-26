@@ -148,6 +148,51 @@ PY
 # number meant this matched no greenfield plan at all, so stepwise implementation
 # silently did nothing there.
 #
+# plan_table_steps_as_list — stdin to stdout, with an implementation-order TABLE
+# rewritten as the numbered list every reader here understands.
+#
+# A planner is free to lay the steps out as
+#
+#   | Step | Description | Owns | Depends on |
+#   | 1 | Add failing tests | `tests/calc.test.js` | — |
+#
+# and one did: the readers below only knew `1. ... Owns: ...` lines, saw no step
+# at all, and the plan stopped at the approval gate for "a protected verification
+# path with no owning implementation step" while its first step visibly owned it.
+# Each data row becomes `N. <description> Owns: <cell> Depends on: <cell>`.  Rows
+# are recognised by the header's own words (Owns, Depends on); text elsewhere
+# passes through unchanged.
+plan_table_steps_as_list() {
+    awk '
+        function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+        /^## ([0-9]+\. )?Implementation (sequence|order|steps)/ { insec = 1; ownsCol = 0; print; next }
+        insec && /^## / { insec = 0 }
+        insec && /^[ \t]*\|/ {
+            n = split($0, f, "|")
+            if (!ownsCol && tolower($0) ~ /owns/) {
+                ownsCol = 0; depCol = 0; descCol = 0
+                for (i = 2; i < n; i++) {
+                    h = tolower(trim(f[i]))
+                    if (h ~ /^owns/) ownsCol = i
+                    else if (h ~ /^depend/) depCol = i
+                    else if (h ~ /desc|task|work|what/) descCol = i
+                }
+                if (!ownsCol) { ownsCol = 0 }
+                next
+            }
+            if (ownsCol && trim(f[2]) ~ /^[0-9]+$/) {
+                desc = descCol ? trim(f[descCol]) : trim(f[3])
+                printf "%s. %s Owns: %s", trim(f[2]), desc, trim(f[ownsCol])
+                if (depCol) printf " Depends on: %s", trim(f[depCol])
+                printf "\n"
+                next
+            }
+            if (trim(f[2]) ~ /^:?-+:?$/) next
+        }
+        { print }
+    '
+}
+
 # plan_steps <plan> — the implementation sequence, one step per line, in order,
 # with its leading number removed.
 plan_steps() {
@@ -155,7 +200,7 @@ plan_steps() {
 
     [[ -s "$plan" ]] || return 0
 
-    plan_text "$plan" | awk '
+    plan_text "$plan" | plan_table_steps_as_list | awk '
         # Greenfield plans head this "Implementation order"; change plans say
         # "Implementation sequence". Matching only the latter meant stepwise
         # implementation could never engage on a greenfield plan at all.
@@ -202,16 +247,37 @@ plan_step_owns() {
     # numbered heading's own line; `cur`/`owns` continue it across the lines
     # that follow, so a plan that correctly declared every file it touches
     # was not read as having declared none of them past the first line.
-    plan_text "$plan" | awk '
-        function extract(line,    tok) {
+    plan_text "$plan" | plan_table_steps_as_list | awk '
+        function emit(tok) {
+            gsub(/^[ \t]+|[ \t]+$/, "", tok)
+            if (tok == "") return 0
+            if (tok ~ /^\//) return 0
+            sub(/^\.\//, "", tok)
+            print position[cur] "\t" tok
+            return 1
+        }
+        function extract(line,    tok, found) {
+            found = 0
             while (match(line, /`[^`]+`/)) {
                 tok = substr(line, RSTART + 1, RLENGTH - 2)
                 line = substr(line, RSTART + RLENGTH)
+                found += emit(tok)
+            }
+            return found
+        }
+        # Paths written without backticks ("Owns: a.js, tests/b.js."), as a planner did
+        # and the plan then stopped at the approval gate: nothing was seen to own its
+        # protected tests.  Only comma-separated tokens that look like a path (a
+        # slash or a dot in them, or `*`) count, so prose such as "Owns: none
+        # (read-only)" owns nothing.
+        function extract_bare(line,    n, parts, i, tok) {
+            n = split(line, parts, /,/)
+            for (i = 1; i <= n; i++) {
+                tok = parts[i]
                 gsub(/^[ \t]+|[ \t]+$/, "", tok)
-                if (tok == "") continue
-                if (tok ~ /^\//) continue
-                sub(/^\.\//, "", tok)
-                print position[cur] "\t" tok
+                sub(/[.;:]+$/, "", tok)
+                sub(/[ \t].*$/, "", tok)
+                if (tok ~ /^[A-Za-z0-9_.\/*@-]+$/ && (tok ~ /[\/.]/ || tok == "*") && tok !~ /^[.]+$/) emit(tok)
             }
         }
         /^## ([0-9]+\. )?Implementation (sequence|order|steps)/ { inseq = 1; next }
@@ -228,7 +294,7 @@ plan_step_owns() {
                 # Stop at a following field so "Depends on" paths are not owned.
                 if (match(line, /[Dd]epends[ \t]+on:/)) line = substr(line, 1, RSTART - 1)
                 owns = 1
-                extract(line)
+                if (!extract(line)) extract_bare(line)
             }
             next
         }
@@ -263,7 +329,7 @@ plan_step_depends() {
 
     [[ -s "$plan" ]] || return 0
 
-    awk '
+    plan_text "$plan" | plan_table_steps_as_list | awk '
         # Rendered plans normally put this field on the following bullet
         # (`- Depends on: 2`), rather than on the numbered heading.  Retain
         # the current step until the next heading so either layout has the
@@ -288,7 +354,7 @@ plan_step_depends() {
             next
         }
         current { emit_dependencies($0) }
-    ' "$plan"
+    '
 }
 
 # plan_out_of_scope <plan> <file>... — the given files that the plan did not

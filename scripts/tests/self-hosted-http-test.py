@@ -99,6 +99,10 @@ class SelfHostedHttp(unittest.TestCase):
         http_transport._capabilities.clear()
         http_transport.close_connections()
         self.addCleanup(http_transport.close_connections)
+        # What the driver learns about the server is stored in the project; keep it in this test's.
+        isolate = patch.dict(os.environ, {'UNCLE_PROJECT_ROOT': str(self.root)})
+        isolate.start()
+        self.addCleanup(isolate.stop)
 
     def serve(self, *args, **kwargs):
         server = Server(*args, **kwargs)
@@ -239,14 +243,87 @@ class SelfHostedHttp(unittest.TestCase):
         supervisor_ports = {server.peers[0], server.peers[2], server.peers[3]}
         self.assertEqual(len(supervisor_ports), 1, server.peers)          # prime + both turns: one connection
         self.assertNotIn(stage_connection[0], supervisor_ports)           # the stage's was separate
-        # The conversation is carried by the session, at temperature 0.
+        # Each prompt is complete, so each turn sends only its own prompt, at temperature 0.
         body = server.requests[-1][1]
-        self.assertEqual([m['role'] for m in body['messages']], ['user', 'assistant', 'user'])
+        self.assertEqual([m['role'] for m in body['messages']], ['user'])
         self.assertEqual(body['temperature'], 0.0)
         self.assertNotIn('tools', body)
         session.close()
         self.assertFalse(session.alive())
         self.assertIsNone(self.supervisor_turn(session, 'late')[0])
+
+    CHAT_PROMPT = 'contract...\n## Data (untrusted)\n{"operator_message": "status?", "workflow_state": {"stage": "preflight"}}'
+    ENVELOPE = {'schema': 1, 'reply': 'Preflight is running.', 'steer': None, 'gate_answer': None, 'home_action': None,
+                'runner_answer': None}
+
+    def test_the_session_exposes_what_the_tui_reads_from_a_live_session(self):
+        # uncle_tui reads session.command/env/home for the per-call fallback; a session without them
+        # crashed every chat turn.
+        import supervisor_runner
+        server = self.serve(Raw('x'))
+        session = supervisor_runner.SelfHostedSession(self.values(server))
+        command, env, home = session.command, session.env, session.home
+        self.assertIsInstance(command, list)
+        self.assertIsInstance(env, dict)
+        self.assertTrue(os.path.isdir(home))
+        fallback = (['agent', '-p'], {'A': '1'}, str(self.root))
+        self.assertEqual((lambda s: (s.command, s.env, s.home))(supervisor_runner.SelfHostedSession(self.values(server), fallback=fallback)), fallback)
+
+    def test_a_chat_turn_is_answered_under_the_reply_envelope_schema(self):
+        import supervisor_runner, supervisor_chat
+        server = self.serve(self.ENVELOPE)
+        session = supervisor_runner.SelfHostedSession(self.values(server), reply_schema=supervisor_chat.REPLY_SCHEMA)
+        lines, _, progress = self.supervisor_turn(session, self.CHAT_PROMPT)
+        body = server.requests[-1][1]
+        self.assertEqual(body['response_format']['json_schema']['schema'], supervisor_chat.REPLY_SCHEMA)
+        self.assertIn('single line', body['messages'][0]['content'])
+        reply, _usage, _cost, error = supervisor_runner.parse_stream(lines)
+        self.assertEqual(error, '')
+        self.assertEqual(supervisor_chat.parse_reply(reply)['reply'], 'Preflight is running.')
+        self.assertEqual(json.loads(progress.get_nowait()), self.ENVELOPE)
+
+    def test_the_whole_chat_path_runs_through_a_chat_request(self):
+        import supervisor_runner, supervisor_chat
+        server = self.serve(dict(self.ENVELOPE, steer={'text': 'Please add tests.'}))
+        session = supervisor_runner.SelfHostedSession(self.values(server), reply_schema=supervisor_chat.REPLY_SCHEMA)
+        request = supervisor_chat.ChatRequest(session.command, self.CHAT_PROMPT, session.env, session.home,
+                                              str(self.root/'chat.jsonl'), {'deadline': 30}, session=session)
+        outcome = request.result(wait=True)
+        self.assertEqual(outcome['status'], 'reply', outcome)
+        self.assertEqual(supervisor_chat.parse_reply(outcome['reply'])['steer'], {'text': 'Please add tests.'})
+
+    def test_only_chat_prompts_are_constrained_to_the_envelope(self):
+        import supervisor_runner, supervisor_chat
+        server = self.serve(Raw('{"schema":1,"diagnosis":"d"}'))
+        session = supervisor_runner.SelfHostedSession(self.values(server), reply_schema=supervisor_chat.REPLY_SCHEMA)
+        self.supervisor_turn(session, 'A workflow diagnosis request with its own envelope.')
+        self.assertNotIn('response_format', server.requests[-1][1])
+        self.assertTrue(session.alive())
+
+    def test_a_cut_off_grammar_answer_is_retried_without_the_grammar(self):
+        import supervisor_runner, supervisor_chat
+        server = self.serve('x')
+        modes = []
+        def fake(values, messages, schema, name, mode, limit, effort, timeout):
+            modes.append(mode)
+            if mode == 'json_schema':
+                return '\n \n', 'length', {}
+            return json.dumps(self.ENVELOPE), 'stop', {'prompt_tokens': 5, 'completion_tokens': 9}
+        session = supervisor_runner.SelfHostedSession(self.values(server), reply_schema=supervisor_chat.REPLY_SCHEMA)
+        with patch.object(http_transport, '_final_call', fake):
+            lines, _, _ = self.supervisor_turn(session, self.CHAT_PROMPT)
+        self.assertEqual(modes, ['json_schema', 'prompt'])
+        self.assertEqual(supervisor_chat.parse_reply(supervisor_runner.parse_stream(lines)[0])['reply'], 'Preflight is running.')
+
+    def test_a_reply_that_breaks_the_envelope_does_not_end_the_session(self):
+        import supervisor_runner, supervisor_chat
+        server = self.serve(Raw('Sorry, here is some prose.'))
+        session = supervisor_runner.SelfHostedSession(self.values(server))      # no schema: plain text comes back
+        lines, _, _ = self.supervisor_turn(session, self.CHAT_PROMPT)
+        self.assertIsNotNone(lines)
+        self.assertTrue(session.alive())
+        with self.assertRaisesRegex(ValueError, 'malformed'):
+            supervisor_chat.parse_reply(supervisor_runner.parse_stream(lines)[0])   # the TUI reports it; the session lives on
 
     def test_two_supervisors_do_not_share_a_connection(self):
         import supervisor_runner
@@ -381,6 +458,143 @@ class SelfHostedHttp(unittest.TestCase):
             http_transport._request(server.url + '/models', 'k', timeout=1234)
             (connection,) = pool.http1.values()
             self.assertEqual(connection.sock.gettimeout(), 1234)
+
+    def test_a_lost_network_is_ridden_out_not_fatal(self):
+        # Preflight "hung": the VPN dropped, three workers sat on dead sockets, and when
+        # the failure finally came it ended the stage.  A request now retries a lost
+        # network for a bounded time.
+        calls = []
+        def flaky(url, key, body, timeout):
+            calls.append(url)
+            if len(calls) <= 2:
+                raise http_transport.ServerUnreachable('Cannot reach the model server at http://x (timed out).')
+            return {'ok': True}
+        with patch.object(http_transport, '_request', flaky), patch.object(http_transport.time, 'sleep', lambda s: None), \
+                patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_RECONNECT_SECONDS': '600'}):
+            self.assertEqual(http_transport.post('http://x/v1/chat/completions', 'k', {}, 30), {'ok': True})
+        self.assertEqual(len(calls), 3)
+
+    def test_a_connection_that_dies_mid_request_is_retried_too(self):
+        calls = []
+        def dies_once(url, key, body, timeout):
+            calls.append(1)
+            if len(calls) == 1:
+                raise http_transport.NetworkLost('The connection to the model server was lost (reset).')
+            return {'ok': True}
+        with patch.object(http_transport, '_request', dies_once), patch.object(http_transport.time, 'sleep', lambda s: None):
+            self.assertEqual(http_transport.post('http://x/v1/chat/completions', 'k', {}, 30), {'ok': True})
+
+    def test_a_network_that_stays_down_fails_with_how_long_it_was_tried(self):
+        def down(url, key, body, timeout):
+            raise http_transport.ServerUnreachable('Cannot reach the model server at http://x (timed out).')
+        ticks = iter(range(0, 10000, 100))
+        with patch.object(http_transport, '_request', down), patch.object(http_transport.time, 'sleep', lambda s: None), \
+                patch.object(http_transport.time, 'monotonic', lambda: next(ticks)), \
+                patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_RECONNECT_SECONDS': '250'}):
+            with self.assertRaisesRegex(http_transport.ServerUnreachable, r'network stayed down for \d+ seconds'):
+                http_transport.post('http://x/v1/chat/completions', 'k', {}, 30)
+
+    def test_a_server_that_answered_or_never_does_is_not_retried(self):
+        calls = []
+        def answers(url, key, body, timeout):
+            calls.append(1)
+            raise http_transport.HTTPError(url, 500, 'boom', {}, None)
+        with patch.object(http_transport, '_request', answers):
+            with self.assertRaises(http_transport.HTTPError):
+                http_transport.post('http://x/v1/chat/completions', 'k', {}, 30)
+        self.assertEqual(len(calls), 1)
+        calls.clear()
+        def silent(url, key, body, timeout):
+            calls.append(1)
+            raise TimeoutError('timed out')
+        with patch.object(http_transport, '_request', silent):
+            with self.assertRaises(TimeoutError):
+                http_transport.post('http://x/v1/chat/completions', 'k', {}, 30)
+        self.assertEqual(len(calls), 1)
+
+    def test_network_errors_are_told_apart_from_a_slow_server(self):
+        import errno as errno_module
+        lost = http_transport._failure('http://x/', ConnectionResetError(errno_module.ECONNRESET, 'reset'))
+        self.assertIsInstance(lost, http_transport.NetworkLost)
+        self.assertIsInstance(http_transport._failure('http://x/', OSError(errno_module.ETIMEDOUT, 'Operation timed out')),
+                              http_transport.NetworkLost)
+        self.assertIsInstance(http_transport._failure('http://x/', OSError(errno_module.EHOSTUNREACH, 'no route')),
+                              http_transport.NetworkLost)
+        slow = http_transport._failure('http://x/', TimeoutError('timed out'))   # a read that simply got no answer
+        self.assertNotIsInstance(slow, http_transport.NetworkLost)
+        self.assertIsInstance(slow, TimeoutError)
+
+    def test_sockets_are_tuned_to_notice_a_dead_path(self):
+        import socket as socket_module
+        with socket_module.socket() as sock:
+            http_transport.tune_socket(sock)
+            self.assertEqual(sock.getsockopt(socket_module.SOL_SOCKET, socket_module.SO_KEEPALIVE) != 0, True)
+            for name in ('TCP_KEEPIDLE', 'TCP_KEEPALIVE'):
+                if hasattr(socket_module, name):
+                    self.assertEqual(sock.getsockopt(socket_module.IPPROTO_TCP, getattr(socket_module, name)), 30)
+        server = self.serve(PLAN)
+        with http_transport.connection_scope() as pool:
+            http_transport._request(server.url + '/models', 'k')
+            (connection,) = pool.http1.values()
+            self.assertNotEqual(connection.sock.getsockopt(socket_module.SOL_SOCKET, socket_module.SO_KEEPALIVE), 0)
+
+    def test_the_model_is_warned_when_three_turns_are_left(self):
+        # A repair stage spent all 40 turns probing, ended with an empty message, and the run stopped.
+        seen = []
+        def scripted(values, messages, tools, limit, effort, timeout):
+            seen.append(([m['content'] for m in messages if m['role'] == 'user'], bool(tools)))
+            if tools:
+                return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [
+                    {'id': 'c%d' % len(seen), 'type': 'function', 'function': {'name': 'list_dir', 'arguments': '{}'}}]},
+                    'finish_reason': 'tool_calls'}], 'usage': {}}
+            return {'choices': [{'message': {'role': 'assistant', 'content': 'wrapped up'}, 'finish_reason': 'stop'}], 'usage': {}}
+        server = self.serve('x')
+        with patch.object(http_agent, 'chat', scripted):
+            text, _ = http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 4096, turns=8, usage={})
+        self.assertEqual(text, 'wrapped up')
+        warnings = [i for i, (users, _) in enumerate(seen) if any('3 tool turns left' in u for u in users)]
+        self.assertEqual(warnings[0], 5)                         # the 6th request of 8 is the first to carry it
+        self.assertEqual(sum(1 for u in seen[-1][0] if '3 tool turns left' in u), 1)   # and it is said only once
+
+    def test_a_short_budget_is_not_nagged(self):
+        seen = []
+        def scripted(values, messages, tools, limit, effort, timeout):
+            seen.append(' '.join(m['content'] for m in messages if m['role'] == 'user'))
+            return {'choices': [{'message': {'role': 'assistant', 'content': 'done'}, 'finish_reason': 'stop'}], 'usage': {}}
+        server = self.serve('x')
+        with patch.object(http_agent, 'chat', scripted):
+            http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 4096, turns=4, usage={})
+        self.assertNotIn('tool turns left', seen[-1])
+
+    def test_an_empty_closing_message_after_the_budget_is_asked_for_once_more(self):
+        replies = iter(['', 'Found the cause: the display is an input element.'])
+        calls = []
+        def scripted(values, messages, tools, limit, effort, timeout):
+            calls.append(bool(tools))
+            if tools:
+                return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [
+                    {'id': 'c%d' % len(calls), 'type': 'function', 'function': {'name': 'list_dir', 'arguments': '{}'}}]},
+                    'finish_reason': 'tool_calls'}], 'usage': {}}
+            return {'choices': [{'message': {'role': 'assistant', 'content': next(replies)}, 'finish_reason': 'stop'}], 'usage': {}}
+        server = self.serve('x')
+        with patch.object(http_agent, 'chat', scripted):
+            text, _ = http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 4096, turns=3, usage={})
+        self.assertEqual(text, 'Found the cause: the display is an input element.')
+        self.assertEqual(calls, [True, True, True, False, False])
+
+    def test_the_stage_result_names_the_model_api_as_its_usage_source(self):
+        import subprocess
+        server = self.serve('x', tool_script=[{'role': 'assistant', 'content': 'All done.'}])
+        config = self.root/'.uncle'/'config'
+        config.parent.mkdir(exist_ok=True)
+        config.write_text('implementation.runner self-hosted\nimplementation.model local/m\n', encoding='utf-8')
+        env = dict(os.environ, UNCLE_CONFIG=str(config), UNCLE_STATUS_STAGE='implementation', UNCLE_SELF_HOSTED_BASE_URL=server.url,
+                   UNCLE_SELF_HOSTED_MODEL='m', UNCLE_SELF_HOSTED_API_KEY='k', WORKFLOW_SELF_HOSTED_TRANSPORT='http')
+        env.pop('UNCLE_STEERING', None)
+        result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/lib/self_hosted.py'), 'agent', '-p'], input='Do it.',
+                                text=True, capture_output=True, cwd=self.root, env=env, timeout=60)
+        final = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{"type": "result"')][-1]
+        self.assertEqual(final['usage_source'], 'Model API usage')
 
     def test_unreachable_server_is_an_oserror(self):
         with self.assertRaises(OSError):
@@ -574,7 +788,53 @@ class SelfHostedHttp(unittest.TestCase):
         http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
                              final_schema=artifact_schema('adversarial-review-worker-packet'),
                              final_name='adversarial_review_worker_packet')
-        self.assertEqual(self.final(server)['max_tokens'], 8192)
+        # The grammar-constrained try is capped lower than the unconstrained retry.
+        self.assertEqual(self.final(server)['max_tokens'], 4096)
+
+    def test_a_worker_packet_asks_for_compact_json_and_retries_with_the_full_cap(self):
+        server = self.serve({'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review-worker-packet', 'findings': []})
+        caps = []
+        def fake(values, messages, schema, name, mode, limit, effort, timeout):
+            caps.append((mode, limit, messages[-1]['content']))
+            if mode == 'json_schema':
+                return '\n   \n', 'length', {}
+            return json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review-worker-packet', 'findings': []}), 'stop', {}
+        with patch.object(http_transport, '_final_call', fake):
+            http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
+                                 final_schema=artifact_schema('adversarial-review-worker-packet'),
+                                 final_name='adversarial_review_worker_packet')
+        self.assertEqual([(m, l) for m, l, _ in caps], [('json_schema', 4096), ('prompt', 8192)])
+        self.assertIn('compactly on a single line', caps[0][2])
+
+    def test_a_server_that_keeps_looping_on_whitespace_skips_the_grammar_for_packets(self):
+        calls = []
+        def fake(values, messages, schema, name, mode, limit, effort, timeout):
+            calls.append(mode)
+            if name == 'plan':
+                return json.dumps(PLAN), 'stop', {}
+            if mode == 'json_schema':
+                return '', 'length', {}
+            return json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review-worker-packet', 'findings': []}), 'stop', {}
+        server = self.serve('x')
+        def run():
+            with patch.object(http_transport, '_final_call', fake):
+                http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
+                                     final_schema=artifact_schema('adversarial-review-worker-packet'),
+                                     final_name='adversarial_review_worker_packet')
+        for _ in range(2):
+            run()
+        self.assertEqual(calls, ['json_schema', 'prompt', 'json_schema', 'prompt'])   # two wasted tries recorded
+        calls.clear()
+        run()
+        self.assertEqual(calls, ['prompt'])                                           # now it skips straight there
+        health = json.loads((self.root/'.uncle/workflow/constraint-health.json').read_text(encoding='utf-8'))
+        self.assertEqual(list(health.values())[0]['whitespace_runaways'], 2)
+        # Other kinds of answer still use the grammar.
+        calls.clear()
+        with patch.object(http_transport, '_final_call', fake):
+            http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
+                                 final_schema=artifact_schema('plan'), final_name='plan')
+        self.assertEqual(calls[0], 'json_schema')
 
     def test_truncated_closing_answer_reports_how_it_ended(self):
         server = self.serve(PLAN)
@@ -752,6 +1012,73 @@ class SelfHostedHttp(unittest.TestCase):
         self.assertEqual(len(notes), 1)
         self.assertEqual(notes[0]['stage'], 'execute-checklist')
         self.assertIn('$ echo hi (up to 5s)', notes[0]['text'])
+
+    def test_an_unchanged_command_is_not_run_again(self):
+        # A stage re-ran a multi-minute suite five times in a row against unchanged files.
+        policy = http_agent.Policy(self.root, write=True, shell=True)
+        count = self.root/'count.txt'
+        command = 'echo run >> count.txt; echo failing-output; exit 3'
+        first = http_agent.run_tool(policy, 'bash', {'command': command})
+        again = http_agent.run_tool(policy, 'bash', {'command': command})
+        self.assertIn('failing-output', again)
+        self.assertIn('exit status 3', again)
+        self.assertIn('[repeated:', again)
+        self.assertEqual(count.read_text(encoding='utf-8').count('run'), 1)    # the second call never ran it
+        self.assertNotIn('[repeated:', first)
+        # Changing a project file makes it a different question.
+        http_agent.run_tool(policy, 'write_file', {'path': 'src/new.js', 'content': 'x'})
+        third = http_agent.run_tool(policy, 'bash', {'command': command})
+        self.assertNotIn('[repeated:', third)
+        self.assertEqual(count.read_text(encoding='utf-8').count('run'), 2)
+        # A different command is always run.
+        self.assertNotIn('[repeated:', http_agent.run_tool(policy, 'bash', {'command': 'echo other'}))
+
+    def test_starting_a_server_between_runs_makes_a_rerun_legitimate(self):
+        policy = http_agent.Policy(self.root, shell=True)
+        command = 'echo checked >> count.txt; echo ok'
+        http_agent.run_tool(policy, 'bash', {'command': command})
+        http_agent.run_tool(policy, 'bash', {'command': 'sleep 300 & echo started'})   # a server comes up
+        out = http_agent.run_tool(policy, 'bash', {'command': command})
+        self.assertNotIn('[repeated:', out)
+        self.assertEqual((self.root/'count.txt').read_text(encoding='utf-8').count('checked'), 2)
+        policy.cleanup()
+
+    def test_build_output_and_dependencies_do_not_count_as_changes(self):
+        policy = http_agent.Policy(self.root, shell=True)
+        command = 'echo x >> count.txt; echo ok'
+        http_agent.run_tool(policy, 'bash', {'command': command})
+        (self.root/'node_modules').mkdir(); (self.root/'node_modules/p.js').write_text('1', encoding='utf-8')
+        (self.root/'dist').mkdir(); (self.root/'dist/a.js').write_text('1', encoding='utf-8')
+        (self.root/'test-results').mkdir(); (self.root/'test-results/r.json').write_text('1', encoding='utf-8')
+        self.assertIn('[repeated:', http_agent.run_tool(policy, 'bash', {'command': command}))
+
+    def test_a_timed_out_command_is_never_remembered(self):
+        policy = http_agent.Policy(self.root, shell=True)
+        with patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_BASH_MAX_SECONDS': '1'}):
+            first = http_agent.run_tool(policy, 'bash', {'command': 'sleep 20', 'timeout': 1})
+            second = http_agent.run_tool(policy, 'bash', {'command': 'sleep 20', 'timeout': 1})
+        self.assertIn('timed out after 1s', first)
+        self.assertIn('timed out after 1s', second)
+        self.assertNotIn('[repeated:', second)
+
+    def test_servers_a_stage_left_running_are_ended_when_it_finishes(self):
+        # `npx vite &` inside a command used to outlive the stage: servers piled up on
+        # the same port, one spinning at 70% CPU, and later tests ran against them.
+        server = self.serve('x', tool_script=[
+            self.call('bash', {'command': 'sleep 300 & echo $!'}, 'a'),
+            self.call('bash', {'command': 'kill -0 %s' % '$(cat pid.txt)'}, 'b'),
+            {'role': 'assistant', 'content': 'done'}])
+        policy = http_agent.Policy(self.root, shell=True)
+        # First call: start the background process and remember its pid in the project.
+        pid_file = self.root/'pid.txt'
+        server.tool_script[0] = self.call('bash', {'command': 'sleep 300 & echo $! > pid.txt'}, 'a')
+        http_agent.run_agent(self.values(server), 'Go.', policy, 4096, usage={})
+        pid = int(pid_file.read_text(encoding='utf-8'))
+        results = [m['content'] for m in server.requests[-1][1]['messages'] if m['role'] == 'tool']
+        self.assertIn('exit status 0', results[1])         # still alive for the stage's later commands
+        time.sleep(0.5)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)                                # gone once the stage ended
 
     def test_shell_does_not_inherit_driver_identity(self):
         with patch.dict(os.environ, {'UNCLE_CONFIG': '/secret/config', 'STAGEGATE_RUN_ID': 'r1', 'KEEP_ME': 'yes'}):

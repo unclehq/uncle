@@ -18,6 +18,7 @@ from supervisor_runner import SupervisorRequest
 SCHEMA = 1
 REPLY_KEYS = ('schema', 'reply', 'steer', 'gate_answer', 'home_action', 'runner_answer')
 ACTION_KEYS = ('steer', 'gate_answer', 'home_action', 'runner_answer')
+
 MAX_REPLY_TEXT = 8000
 MAX_STEER = 4000
 MAX_RATIONALE = 1000
@@ -26,6 +27,32 @@ STATUS_LINES = 60
 DELIVERY_STATES = 10
 TURNS = 12
 CONTEXT_CAP = 100 * 1024
+
+
+# The reply envelope as a JSON Schema, so a model server can be told to enforce it.
+# parse_reply stays the authority (at most one action, size and control-character
+# limits); this makes the shape arrive right instead of being rejected afterwards.
+REPLY_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'schema': {'const': SCHEMA},
+        'reply': {'type': 'string', 'maxLength': MAX_REPLY_TEXT},
+        'steer': {'type': ['object', 'null'], 'properties': {'text': {'type': 'string', 'maxLength': MAX_STEER}},
+                  'required': ['text'], 'additionalProperties': False},
+        'gate_answer': {'type': ['object', 'null'],
+                        'properties': {'answer': {'type': 'string', 'maxLength': 400},
+                                       'rationale': {'type': 'string', 'maxLength': MAX_RATIONALE}},
+                        'required': ['answer', 'rationale'], 'additionalProperties': False},
+        'home_action': {'type': ['object', 'null'], 'properties': {'uncle_action': {'type': 'string', 'maxLength': 60}},
+                        'required': ['uncle_action']},
+        'runner_answer': {'type': ['object', 'null'],
+                          'properties': {'question_id': {'type': 'string', 'maxLength': 80},
+                                         'selection': {'type': 'string', 'maxLength': 40}},
+                          'required': ['question_id', 'selection'], 'additionalProperties': False},
+    },
+    'required': list(REPLY_KEYS),
+    'additionalProperties': False,
+}
 # Issue 76: appended to the contract when build memory is on.
 MEMORY_CONTRACT = '''
 ## Build memory and runner questions

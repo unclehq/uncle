@@ -492,25 +492,32 @@ class SupervisorSession:
 
 
 class SelfHostedSession:
-    """The supervisor conversation for a self-hosted model, over direct HTTP.
+    """The supervisor for a self-hosted model: the same conversation, over direct HTTP.
 
-    Same contract as SupervisorSession (alive, prime, turn, close), but the
-    worker is this object: it owns one persistent connection to the model server
-    that no stage, subagent or other supervisor shares, and keeps the chat
-    history itself.  The supervisor has no tools, as with the Claude worker.
-    Any failure marks the session dead and returns None, and the caller then
-    falls back to a per-call worker.
+    Same contract as SupervisorSession (alive, prime, turn, close, and the command, env
+    and home the TUI reads from a live session).  The TUI builds each prompt to be
+    complete -- contract, state, dialog, build memory, logs, the last turns of chat -- so
+    every turn sends exactly that one prompt and nothing else; carrying earlier prompts
+    forward would only resend tens of kilobytes of stale state.  The supervisor has no
+    tools.  A chat turn (a prompt whose data block holds `operator_message`) is answered
+    under the reply envelope's JSON Schema, so the shape the TUI requires arrives intact
+    instead of being rejected afterwards; any other prompt is answered as plain text.
+    The one persistent connection is this supervisor's own.  A failed turn ends the session
+    and returns None, and the caller falls back to a per-call worker.
     """
-    MAX_MESSAGES = 40
 
-    def __init__(self, values):
+    def __init__(self, values, reply_schema=None, fallback=None):
         import self_hosted_http
         self.http = self_hosted_http
         self.values = dict(values)
+        self.reply_schema = reply_schema
         self.connections = self_hosted_http.Connections()
         self.lock = threading.Lock()
-        self.messages = []
         self.dead = False
+        # What the TUI reads from a live session (the argv/env/home a per-call worker
+        # would use if this one dies mid-turn).
+        command, env, home = fallback if fallback else ([], dict(os.environ), tempfile.mkdtemp(prefix='uncle-supervisor-'))
+        self.command, self.env, self.home = command, env, home
 
     def alive(self):
         return not self.dead
@@ -532,30 +539,44 @@ class SelfHostedSession:
             return False
         return True
 
+    def _answer(self, prompt, timeout):
+        """(text, usage totals) for one prompt; raises OSError/ValueError on failure."""
+        from self_hosted import output_token_limit
+        limit = min(output_token_limit(''), 8192)
+        effort = self.values.get('effort') or 'none'
+        messages = [{'role': 'user', 'content': prompt}]
+        totals = {}
+        if self.reply_schema is not None and '"operator_message"' in prompt:
+            messages[0]['content'] += ('\n\nReturn the reply envelope as one compact JSON object on a single line, with no '
+                                      'indentation or blank lines.')
+            text = ''
+            for skip in ((), self.http.GRAMMAR_MODES):
+                text, reason, usage, _mode = self.http.constrained_completion(
+                    self.values, messages, self.reply_schema, 'supervisor_reply', limit, effort, timeout, skip=skip)
+                self.http.add_usage(totals, usage)
+                if reason != 'length':
+                    break
+            return text, totals
+        data = self.http.chat(self.values, messages, None, limit, effort, timeout=timeout)
+        if not data:
+            raise ValueError('the model server rejected the request')
+        self.http.add_usage(totals, data.get('usage') or {})
+        return data['choices'][0]['message'].get('content') or '', totals
+
     def turn(self, prompt, log, deadline, cancelled, progress=None):
-        """One chat turn on the persistent connection; the stream-json-shaped lines, or None."""
+        """One supervisor turn on the persistent connection; the stream-json-shaped lines, or None."""
         if self.dead:
             return None
-        from self_hosted import output_token_limit
         with self.lock:
             remaining = deadline - time.monotonic()
             if self.dead or cancelled.is_set() or remaining <= 0:
                 return None
-            messages = self.messages + [{'role': 'user', 'content': prompt}]
             try:
                 with self.http.connection_scope(self.connections):
-                    data = self.http.chat(self.values, messages, None, output_token_limit(''),
-                                          self.values.get('effort') or 'none', timeout=max(1, int(remaining)))
-                choice = data['choices'][0] if data else None
+                    text, totals = self._answer(prompt, max(1, int(remaining)))
             except (OSError, ValueError, KeyError, IndexError, TypeError):
-                choice = None
-            if choice is None:
-                # An abandoned or failed turn leaves the history unreliable: end the session.
                 self.close()
                 return None
-            text = choice['message'].get('content') or ''
-            totals = {}
-            self.http.add_usage(totals, data.get('usage') or {})
             usage = {'input_tokens': totals.get('input_tokens', 0), 'output_tokens': totals.get('output_tokens', 0)}
             lines = [json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': text}]}}),
                      json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': text,
@@ -563,7 +584,6 @@ class SelfHostedSession:
             log.write(('\n'.join(lines) + '\n').encode('utf-8'))
             if progress is not None and text:
                 progress.put(text)
-            self.messages = (messages + [{'role': 'assistant', 'content': text}])[-self.MAX_MESSAGES:]
             return lines
 
 

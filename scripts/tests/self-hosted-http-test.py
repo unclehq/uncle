@@ -381,7 +381,7 @@ class SelfHostedHttp(unittest.TestCase):
         server = self.serve(PLAN, tool_script=[self.call('list_dir', {}), {'role': 'assistant', 'content': 'done'}])
         http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, usage={})
         turns = [body for _path, body in server.requests if body.get('tools')]
-        self.assertEqual({body['max_tokens'] for body in turns}, {16384})
+        self.assertEqual({body['max_tokens'] for body in turns}, {32768})
         with patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS': '2048'}):
             self.assertEqual(http_transport.turn_output_tokens(64512), 2048)
         self.assertEqual(http_transport.turn_output_tokens(1000), 1000)
@@ -690,6 +690,39 @@ class SelfHostedHttp(unittest.TestCase):
                 self.plan(server, explore_first=False)
         self.assertIs(http_transport._final_call, original)
 
+    def test_a_truncated_answer_is_kept_for_diagnosis(self):
+        server = self.serve(PLAN)
+        partial = '{"schema": "uncle.artifact/v1", "narrative": "' + 'x' * 500
+        with patch.dict(os.environ, {'UNCLE_STATUS_STAGE': 'updated-plan'}), \
+             patch.object(http_transport, '_final_call', lambda *a: (partial, 'length', {'output_tokens': 7})):
+            with self.assertRaises(OutputTruncated) as caught:
+                self.plan(server, explore_first=False)
+        saved = sorted((self.root / '.uncle/workflow/logs').glob('truncated-updated-plan-final-*.txt'))
+        self.assertTrue(saved, 'no partial output was kept')
+        self.assertIn(str(saved[-1]), str(caught.exception))
+        text = saved[-1].read_text(encoding='utf-8')
+        self.assertIn('stage: updated-plan', text)
+        self.assertIn('output cap:', text)
+        self.assertIn(partial, text)
+
+    def test_a_truncated_tool_turn_keeps_its_half_written_call(self):
+        call = {'id': 'a', 'type': 'function', 'function': {'name': 'write_file', 'arguments': '{"path": "x.md", "content": "half'}}
+        server = self.serve(PLAN, tool_script=[{'role': 'assistant', 'content': 'writing', 'tool_calls': [call]}])
+        body = server.httpd.RequestHandlerClass
+        original = http_transport.chat
+        def length(values, messages, tools, limit, effort, timeout):
+            data = original(values, messages, tools, limit, effort, timeout)
+            data['choices'][0]['finish_reason'] = 'length'
+            return data
+        with patch.object(http_agent, 'chat', length), patch.dict(os.environ, {'UNCLE_STATUS_STAGE': 'updated-plan'}):
+            with self.assertRaises(OutputTruncated):
+                http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, usage={})
+        saved = sorted((self.root / '.uncle/workflow/logs').glob('truncated-updated-plan-turn-*.txt'))
+        self.assertTrue(saved)
+        text = saved[-1].read_text(encoding='utf-8')
+        self.assertIn('partial tool call: write_file', text)
+        self.assertIn('"content": "half', text)
+
     def test_exploration_reads_project_files_then_schema_final(self):
         (self.root/'notes.txt').write_text('alpha\nbeta\n', encoding='utf-8')
         (self.root/'.env').write_text('SECRET=1\n', encoding='utf-8')
@@ -755,11 +788,11 @@ class SelfHostedHttp(unittest.TestCase):
     def test_a_worker_packet_cannot_hold_a_runaway_of_findings(self):
         schema = artifact_schema('adversarial-review-worker-packet')
         items = schema['properties']['findings']
-        self.assertEqual(items['maxItems'], 20)
-        self.assertEqual(items['items']['properties']['summary']['maxLength'], 800)
-        # 20 findings at the largest allowed size is far below the closing-answer cap, in characters.
-        biggest = 20 * (60 + 800 + 1500 + 100)
-        self.assertLess(biggest / 3, 32768)
+        self.assertEqual(items['maxItems'], 8)
+        self.assertEqual(items['items']['properties']['summary']['maxLength'], 400)
+        # 8 findings at the largest allowed size is far below the worker-packet cap (8192 tokens).
+        biggest = 8 * (60 + 400 + 700 + 100)
+        self.assertLess(biggest / 3, 8192)
 
     def test_whitespace_runaway_in_the_grammar_is_retried_without_it(self):
         server = self.serve(PLAN)

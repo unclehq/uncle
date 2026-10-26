@@ -52,6 +52,15 @@ PY
 speculate_updated_plan() {
     [[ "$WORKFLOW_SPECULATE" == "1" ]] || return 0
     [[ -z "$spec_pid" ]] || return 0
+    # The draft runs the full-plan prompt: it writes the whole revised plan in one
+    # turn, the large single output a self-hosted model can run away on (it hit
+    # the per-turn cap on calculator-local). The foreground stage uses the sealed
+    # patch prompt, so a self-hosted run skips the draft and loses only the head start.
+    if declare -F uncle_stage_runner >/dev/null 2>&1 \
+       && [[ "$(uncle_stage_runner updated-change-plan 2>/dev/null)" == self-hosted ]]; then
+        echo "Not drafting the updated plan during review: self-hosted stages write it as a patch in the foreground."
+        return 0
+    fi
     local file
     for file in "$@"; do
         [[ -s "$file" ]] || return 0

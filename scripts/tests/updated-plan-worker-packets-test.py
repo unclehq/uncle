@@ -54,7 +54,8 @@ class WorkerPackets(unittest.TestCase):
             finding = result['findings'][0]
             self.assertEqual(finding['sources'], ['scope', 'verification'])
             self.assertEqual(finding['evidence'], ['scope proof', 'test proof'])
-            self.assertTrue(finding['conflicting_corrections'])
+            self.assertEqual(finding['required_corrections'], ['narrow scope', 'add test'])
+            self.assertNotIn('conflicting_corrections', finding)
 
     def test_duplicate_id_within_one_packet_preserves_both_observations(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -69,7 +70,7 @@ class WorkerPackets(unittest.TestCase):
             self.assertEqual(finding['sources'], ['verification'])
             self.assertEqual(finding['evidence'], ['first proof', 'second proof'])
             self.assertEqual(finding['gaps'], ['gap', 'second gap'])
-            self.assertTrue(finding['conflicting_corrections'])
+            self.assertEqual(len(finding['required_corrections']), 2)
 
     def test_missing_and_malformed_packets_name_the_worker(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -476,7 +477,8 @@ class WorkerPackets(unittest.TestCase):
         prompt = SYNTHESIS.prompt(plan, review, workers)
         self.assertIn('Do not read files, enumerate directories, inspect the repository', prompt)
         self.assertIn('## Base project plan JSON', prompt)
-        self.assertIn('## Collated specialist findings JSON', prompt)
+        self.assertIn('## Collated specialist corrections (condensed)', prompt)
+        self.assertIn('## Adversarial review findings (every finding, condensed)', prompt)
         with self.assertRaisesRegex(ValueError, 'expected collated'):
             SYNTHESIS.prompt(plan, review, {'schema': 'uncle.artifact/v1', 'kind': 'wrong'})
         stagegate = (ROOT / 'scripts/stagegate.sh').read_text()

@@ -508,7 +508,7 @@ def _envelope(kind, properties, required=None, closed=True):
 
 
 DISPOSITIONS = _rows({'finding': _str(), 'disposition': {'enum': ['Accepted', 'Partially accepted', 'Rejected', 'Deferred']},
-                      'reason': _str(), 'plan_change': _str()}, ['finding', 'disposition', 'reason', 'plan_change'], True)
+                      'reason': _str(300), 'plan_change': _str(300)}, ['finding', 'disposition', 'reason', 'plan_change'], True)
 ACCEPTANCE_ROW_STATUS = {'enum': ['PASS', 'FAIL', 'BLOCKED-SETUP', 'BLOCKED-HUMAN', 'BLOCKED-IMPOSSIBLE', 'NOT RUN', 'N/A']}
 REQUIREMENTS_KEYS = ('required_functionality', 'optional_functionality', 'constraints', 'user_visible_behaviors',
                      'system_behaviors', 'failure_behaviors', 'ambiguities', 'assumptions', 'explicit_non_goals',
@@ -517,7 +517,7 @@ REQUIREMENTS_KEYS = ('required_functionality', 'optional_functionality', 'constr
 # the canonical validators require are required here; the rest is permitted.
 REVIEWER_SCHEMAS = {
     'adversarial-review': _envelope('adversarial-review', {
-        'findings': _rows({k: _str(1200) for k in ('id', 'title', 'severity', 'references', 'failure', 'fix', 'verify')},
+        'findings': _rows({k: _str() for k in ('id', 'title', 'severity', 'references', 'failure', 'fix', 'verify')},
                           ['id', 'title', 'severity', 'references', 'failure', 'fix', 'verify'], max_items=40),
         'overall_assessment': _str()}, closed=False),
     'final-audit': _envelope('final-audit', {
@@ -534,28 +534,37 @@ REVIEWER_SCHEMAS = {
                          'depends_on': {'type': 'array', 'items': {'type': 'string'}}},
                         ['id', 'exact_action', 'expected_result']),
         'traceability': {'type': 'string'}}, ['checks'], closed=False),
+    # A lens owns one ID range (100 IDs) and real lenses use about 15 checks; the largest real
+    # action, expected result and capture note are 682, 611 and 632 characters.
     'manual-checklist-worker-packet': _envelope('manual-checklist-worker-packet', {
-        'checks': _rows({'id': _str(), 'exact_action': _str(), 'expected_result': _str(),
-                         'exclusive_resources': {'type': 'array', 'items': {'type': 'string'}},
-                         'depends_on': {'type': 'array', 'items': {'type': 'string'}}},
-                        ['id', 'exact_action', 'expected_result'])}, closed=False),
+        'checks': _rows({'id': _str(60), 'exact_action': _str(700), 'expected_result': _str(700),
+                         'exclusive_resources': {'type': 'array', 'items': {'type': 'string', 'maxLength': 120}, 'maxItems': 6},
+                         'depends_on': {'type': 'array', 'items': {'type': 'string', 'maxLength': 60}, 'maxItems': 10}},
+                        ['id', 'exact_action', 'expected_result'], max_items=24)}, closed=False),
+    # A lens owns one to three rows (ORACLE and NEGATIVE share one); evidence is a short paragraph.
     'test-review-worker-packet': _envelope('test-review-worker-packet', {
-        'rows': _rows({'id': _str(), 'status': ACCEPTANCE_ROW_STATUS, 'evidence': _str()}, ['id', 'status', 'evidence'])}, closed=False),
+        'rows': _rows({'id': _str(60), 'status': ACCEPTANCE_ROW_STATUS, 'evidence': _str(800)},
+                      ['id', 'status', 'evidence'], max_items=4)}, closed=False),
     'preflight-worker-packet': _envelope('preflight-worker-packet', {
         'rows': _rows({'id': _str(), 'required': {'type': 'boolean'}, 'status': ACCEPTANCE_ROW_STATUS, 'evidence': _str()},
                       ['id', 'status', 'evidence'])}, closed=False),
     # A panel lens reports a handful of findings, each a sentence or two.  Tight
     # bounds are what stop a repetition loop: a lens that wrote 32k tokens of
     # one finding could not do so inside 20 findings of 800 and 1500 characters.
+    # A lens reports its few most serious findings, a sentence or two each.
     'adversarial-review-worker-packet': _envelope('adversarial-review-worker-packet', {
-        'findings': _rows({'id': _str(60), 'summary': _str(800), 'evidence': {'type': 'string', 'maxLength': 1500}},
-                          ['id', 'summary'], max_items=20)}, closed=False),
+        'findings': _rows({'id': _str(60), 'severity': {'enum': ['Critical', 'High', 'Medium', 'Low']},
+                           'summary': _str(400), 'evidence': {'type': 'string', 'maxLength': 700}},
+                          ['id', 'summary'], max_items=8)}, closed=False),
     'final-audit-worker-packet': _envelope('final-audit-worker-packet', {
-        'findings': _rows({'id': _str(60), 'summary': _str(800), 'evidence': {'type': 'string', 'maxLength': 1500}},
-                          ['id', 'summary'], max_items=20)}, closed=False),
+        'findings': _rows({'id': _str(60), 'severity': {'enum': ['Critical', 'High', 'Medium', 'Low']},
+                           'summary': _str(400), 'evidence': {'type': 'string', 'maxLength': 700}},
+                          ['id', 'summary'], max_items=8)}, closed=False),
+    # A lens reports only the findings it has a correction for, one sentence per field.
     'updated-plan-worker-packet': _envelope('updated-plan-worker-packet', {
-        'findings': _rows({k: _str(1200) for k in ('id', 'gap', 'evidence', 'risk', 'required_correction')},
-                          ['id', 'gap', 'evidence', 'risk', 'required_correction'], max_items=20)}, closed=False),
+        'findings': _rows({'id': _str(60), 'gap': _str(300), 'evidence': _str(400), 'risk': _str(300),
+                           'required_correction': _str(500)},
+                          ['id', 'gap', 'evidence', 'risk', 'required_correction'], max_items=24)}, closed=False),
     'checklist-execution-worker-packet': _envelope('checklist-execution-worker-packet', {
         'results': _rows({'id': _str(), 'action': _str(), 'expected_result': _str(), 'actual_result': _str(),
                           'evidence': _str(), 'status': ACCEPTANCE_ROW_STATUS, 'defect_reference': {'type': 'string'}},
@@ -604,9 +613,30 @@ def document_schema_for(delivery, prompt):
 # worker produced 64,512 tokens of one finding.  Bounding every string and array
 # lets the grammar force the close.  Fields that legitimately hold a document are
 # given room for one; everything else is a sentence or a paragraph.
-DEFAULT_MAX_LENGTH, DEFAULT_MAX_ITEMS = 2500, 60
+DEFAULT_MAX_LENGTH, DEFAULT_MAX_ITEMS = 1500, 60
 LONG_FIELDS = {'narrative': 60000, 'verification_commands': 20000, 'protected_verification_paths': 4000,
                'traceability': 20000, 'output': 20000, 'parallel_groups': 4000}
+# Limits by field name, set from the largest value each field has held in real runs (164
+# artifacts) with room above it: a sentence or a paragraph, never a page.  A bound that sits
+# far above real use only lets a repetition loop run until the output cap.  The requirements
+# sections are the exception: definition_of_done reached 2,677 characters, over the old 2,500.
+FIELD_LIMITS = {
+    'id': 80, 'severity': 40, 'blocks': 40, 'title': 400, 'affected_requirement': 400,
+    'criterion': 800, 'verification': 800, 'finding': 80,
+    'evidence': 2000, 'references': 2000, 'failure': 2000, 'actual_result': 2000,
+    'fix': 1200, 'verify': 1200, 'reason': 1200, 'plan_change': 1200, 'summary': 1200,
+    'gap': 1200, 'risk': 1200, 'gaps': 1200, 'risks': 1200,
+    'required_correction': 1200, 'required_corrections': 1200,
+    'exact_action': 1200, 'expected_result': 1200, 'evidence_to_capture': 1200, 'action': 1200,
+    'purpose': 1200, 'behavior_or_invariant': 1200, 'command': 1000,
+    **{key: 4000 for key in ('required_functionality', 'optional_functionality', 'constraints',
+                              'user_visible_behaviors', 'system_behaviors', 'failure_behaviors',
+                              'ambiguities', 'assumptions', 'explicit_non_goals', 'definition_of_done')},
+}
+# The largest real list of each kind, with room above it.
+LIST_LIMITS = {'findings': 40, 'dispositions': 40, 'rows': 80, 'checks': 80, 'results': 80, 'commands': 40,
+               'deliveries': 30, 'acceptance_criteria': 30, 'changed_files': 80, 'edit_sections': 40,
+               'insert_sections': 20}
 SECTION_MAX_LENGTH = 12000
 
 
@@ -615,9 +645,9 @@ def _bounded(schema, name=None):
         return schema
     result = dict(schema)
     if result.get('type') == 'string' and 'maxLength' not in result:
-        result['maxLength'] = LONG_FIELDS.get(name, DEFAULT_MAX_LENGTH)
+        result['maxLength'] = LONG_FIELDS.get(name, FIELD_LIMITS.get(name, DEFAULT_MAX_LENGTH))
     if result.get('type') == 'array' and 'maxItems' not in result:
-        result['maxItems'] = DEFAULT_MAX_ITEMS
+        result['maxItems'] = LIST_LIMITS.get(name, DEFAULT_MAX_ITEMS)
     if 'properties' in result:
         in_sections = name == 'sections'
         result['properties'] = {key: (_bounded(value, key) if not in_sections else
@@ -628,8 +658,38 @@ def _bounded(schema, name=None):
     return result
 
 
-def artifact_schema(kind, protected=False, require_dispositions=False):
+SYNTHESIS_MARKER = 'This is a sealed synthesis task.'
+
+
+def patch_schema(kind, protected=False):
+    """The artifact a sealed synthesis stage delivers: dispositions and a patch, never a narrative.
+
+    updated_plan_synthesis_prompt.py tells the model to answer with `dispositions` and a
+    `patch` of the sections it changes, and the driver rebuilds the full text from the base
+    plan.  The server was nonetheless enforcing the full-plan schema, which requires a
+    `narrative` and admits no `patch`: the grammar made the model write the entire plan
+    (20k tokens, then rejected) while its prompt said not to.  The enforced shape has to be
+    the one the prompt asks for.
+    """
+    edit = _obj({'heading': _str(300), 'content': _str(SECTION_MAX_LENGTH)}, closed=True)
+    insert = _obj({'content': _str(SECTION_MAX_LENGTH), 'after': {'type': 'string', 'maxLength': 300},
+                   'before': {'type': 'string', 'maxLength': 300}, 'position': {'enum': ['start', 'end']}},
+                  required=['content'], closed=True)
+    patch = _obj({'edit_sections': {'type': 'array', 'items': edit, 'maxItems': 40},
+                  'insert_sections': {'type': 'array', 'items': insert, 'maxItems': 20}}, required=[], closed=True)
+    properties = {'dispositions': DISPOSITIONS, 'patch': patch}
+    required = ['dispositions', 'patch']
+    if protected:
+        properties['verification_commands'] = _str()
+        properties['protected_verification_paths'] = _str()
+        required += ['verification_commands', 'protected_verification_paths']
+    return _envelope(kind, properties, required)
+
+
+def artifact_schema(kind, protected=False, require_dispositions=False, synthesis=False):
     """JSON Schema of the artifact a document stage must deliver, with bounded sizes."""
+    if synthesis and kind in ('plan', 'change-plan'):
+        return _bounded(patch_schema(kind, protected))
     schema = _artifact_schema(kind, protected, require_dispositions)
     return _bounded(schema) if schema is not None else None
 
@@ -674,7 +734,8 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
     from http_agent import Policy
     stage_name = os.environ.get('UNCLE_STATUS_STAGE', '')
     delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
-    schema = artifact_schema(schema_kind, protected, require_dispositions) if schema_kind else None
+    synthesis = SYNTHESIS_MARKER in prompt and (protected or require_dispositions)
+    schema = artifact_schema(schema_kind, protected, require_dispositions, synthesis) if schema_kind else None
     request = prompt
     if schema_kind:
         request += ('\nYour final message must be exactly one JSON object matching the required schema; the server '
@@ -1345,18 +1406,31 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                 break
         else:
             protected_fields = (', "protected_verification_paths":"..."' if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md' else '')
-            if expected_kind == 'change-planning-bundle':
+            # A sealed synthesis prompt asks for dispositions and a patch against the base
+            # plan.  Appending the full-plan contract below as well told the model to write
+            # the entire plan, against its own instructions and the enforced schema.
+            synthesis = SYNTHESIS_MARKER in prompt and expected_kind in ('plan', 'change-plan')
+            if synthesis:
+                patch_fields = ('"dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}],'
+                                '"patch":{"edit_sections":[{"heading":"...","content":"..."}],"insert_sections":[]}')
+                extra = (', "verification_commands":"...", "protected_verification_paths":"..."' if protected_fields else '')
+                kind_fields = '"kind":"%s",%s%s' % (expected_kind, patch_fields, extra)
+            elif expected_kind == 'change-planning-bundle':
                 kind_fields = ('"kind":"change-planning-bundle","baseline_report":{"schema":"uncle.artifact/v1","kind":"baseline-report","narrative":"...","verification_commands":"..."},'
                                '"change_spec":{"schema":"uncle.artifact/v1","kind":"change-spec","narrative":"...","acceptance_criteria":[{"id":"AC-1","criterion":"...","verification":"..."}]},'
                                '"change_plan":{"schema":"uncle.artifact/v1","kind":"change-plan","narrative":"..."}')
             else:
                 kind_fields = ('"kind":"change-plan","narrative":"...","dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}]'
                                if expected_kind == 'change-plan' else '"kind":"plan","narrative":"...","verification_commands":"..."' + protected_fields)
+            if synthesis:
+                tail = ('Name only the sections you change in `patch`; every other section carries over from the base plan. '
+                        'Do not write a `narrative`.' + (' `verification_commands` is the exact shell commands block, as '
+                        'plain text (no fence markers).' if protected_fields else ''))
+            else:
+                tail = ('`verification_commands` is the exact shell commands block, as plain text (no fence markers). '
+                        '`narrative` is everything else the plan needs to say, as one Markdown block.')
             request = (prompt + '\nCreate one JSON object matching this contract; do not return Markdown:\n'
-                       '`{"schema":"uncle.artifact/v1",' + kind_fields + '}`.\n'
-                       '`verification_commands` is the exact shell commands block, as plain text (no fence markers). '
-                       '`narrative` is everything else the plan needs to say, as one Markdown block.'
-                       + delivery_notice)
+                       '`{"schema":"uncle.artifact/v1",' + kind_fields + '}`.\n' + tail + delivery_notice)
             turns = 0
             for attempt in range(2):
                 attempt_usage = {}

@@ -69,7 +69,7 @@ The model must support tool calls for implementation and file inspection. Uncle 
 
 OpenCode is no longer needed. To return to the OpenCode CLI for a run, set `WORKFLOW_SELF_HOSTED_TRANSPORT=opencode`. Existing self-hosted credentials and model selections migrate automatically; the old `openai/` catalog prefix is removed during migration.
 
-The default model limits are 65,536 context tokens and 8,192 output tokens. Match your server with `WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS` and `WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS`. Set `WORKFLOW_SELF_HOSTED_SECONDS` for the stage timeout (default 3,600 seconds), or `WORKFLOW_SELF_HOSTED_REQUEST_SECONDS` for a separate API timeout. `WORKFLOW_OPENCODE_CMD` selects an alternate CLI executable.
+The default model limits are 65,536 context tokens and 8,192 output tokens. Match your server with `WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS` and `WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS`. One tool-loop turn is capped at 32,768 output tokens (`WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS`); a stage that writes its whole delivery in one turn needs room for it, and a turn that reaches the cap fails as incomplete. Set `WORKFLOW_SELF_HOSTED_SECONDS` for the stage timeout (default 3,600 seconds), or `WORKFLOW_SELF_HOSTED_REQUEST_SECONDS` for a separate API timeout. `WORKFLOW_OPENCODE_CMD` selects an alternate CLI executable.
 
 ### Candidate racing (multiple concurrent requests)
 

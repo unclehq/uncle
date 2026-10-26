@@ -338,6 +338,48 @@ def interruptible_chat(stage, values, messages, tools, limit, effort, timeout):
     return outcome['data']
 
 
+TRUNCATED_KEEP_CHARS = 4 * 1024 * 1024
+
+
+def save_truncated(where, cap, text, calls=None, usage=None):
+    """Keep what the model had written when it hit an output cap; return the file's path ('' if unwritable).
+
+    A stage that fails on a cap used to leave only "the response is incomplete": the model's
+    partial answer died with the process, so there was nothing to tell a runaway loop from an
+    answer that was simply longer than the cap.  The file names the stage, the cap and where it
+    was hit, and holds the text and any half-written tool call, so the next failure can be read.
+    """
+    try:
+        root = Path(os.environ.get('UNCLE_PROJECT_ROOT') or os.getcwd())
+        logs = root / '.uncle' / 'workflow' / 'logs'
+        logs.mkdir(parents=True, exist_ok=True)
+        stage = re.sub(r'[^A-Za-z0-9._-]+', '-', os.environ.get('UNCLE_STATUS_STAGE', '') or 'stage')
+        fd, name = tempfile.mkstemp(prefix='truncated-%s-%s-' % (stage, where), suffix='.txt', dir=str(logs))
+        text = text or ''
+        tail = ' '.join(text[-300:].split()) or '(only whitespace)'
+        parts = ['stage: %s' % (os.environ.get('UNCLE_STATUS_STAGE', '') or 'unknown'),
+                 'where: %s' % where, 'output cap: %d tokens' % cap,
+                 'tokens reported: %s' % json.dumps({key: (usage or {}).get(key) for key in
+                                                     ('input_tokens', 'output_tokens', 'total_tokens')}),
+                 'text: %d chars, %d non-whitespace' % (len(text), len(''.join(text.split()))),
+                 'ended with: %s' % tail, '']
+        for call in calls or []:
+            function = (call or {}).get('function') or {}
+            arguments = str(function.get('arguments') or '')
+            parts += ['--- partial tool call: %s (%d chars of arguments) ---' % (function.get('name', '?'), len(arguments)),
+                      arguments[:TRUNCATED_KEEP_CHARS], '']
+        parts += ['--- text ---', text[:TRUNCATED_KEEP_CHARS]]
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+            stream.write('\n'.join(parts) + '\n')
+        return name
+    except (OSError, ValueError):
+        return ''  # a diagnostic; never the reason a stage fails
+
+
+def truncation_note(path):
+    return ' The partial output is saved in %s.' % path if path else ''
+
+
 def _health_path():
     root = os.environ.get('UNCLE_PROJECT_ROOT') or os.getcwd()
     return Path(root) / '.uncle' / 'workflow' / 'constraint-health.json'
@@ -507,7 +549,9 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         calls = message.get('tool_calls') or []
         text = message.get('content') or ''
         if choice.get('finish_reason') == 'length':
-            raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete' % turn_limit)
+            saved = save_truncated('turn', turn_limit, text, calls, data.get('usage'))
+            raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete.%s'
+                                  % (turn_limit, truncation_note(saved)))
         if stage is not None:
             stage.text(text)
             # A message is answered by words to the operator; a turn that only
@@ -560,7 +604,9 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         choice = data['choices'][0]
         text = choice['message'].get('content') or ''
         if choice.get('finish_reason') == 'length':
-            raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete' % turn_limit)
+            saved = save_truncated('closing-turn', turn_limit, text, None, data.get('usage'))
+            raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete.%s'
+                                  % (turn_limit, truncation_note(saved)))
         if not text.strip():
             # An empty closing message gives the driver nothing to recover a result from.
             messages.append({'role': 'user', 'content': 'Your last reply was empty. Reply now with what you found, what you '
@@ -613,9 +659,10 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         tail = ' '.join(final[-300:].split()) or '(only whitespace)'
         if not final.strip():
             record_whitespace_runaway(values)
+        saved = save_truncated('final-%s' % mode, cap, final, None, final_usage)
         if attempt >= len(attempts) - 1 or mode == 'prompt':
             raise OutputTruncated('Model output reached the limit of %d tokens; the response is incomplete. '
-                                  'It ended with: %s' % (cap, tail))
+                                  'It ended with: %s.%s' % (cap, tail, truncation_note(saved)))
         print('Self hosted: the %s-constrained answer hit the %d-token limit (it ended with: %s); asking once more '
               'without the grammar.' % (mode, cap, tail), file=sys.stderr)
         messages.append({'role': 'user', 'content': 'That was cut off. Reply with the complete JSON object only, on one '

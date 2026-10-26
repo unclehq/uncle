@@ -162,12 +162,15 @@ gated_prompt() {
         *-worker-*)
             local worker_prompt="$LOG_DIR/${log_name}.gated-prompt.md"
             local worker_inputs='the canonical JSON prerequisite artifacts named in your assigned prompt'
+            local worker_files=''
             case "$log_name" in
                 updated-plan-review-worker-*)
                     worker_inputs='`.uncle/workflow/documents/PROJECT_PLAN.json` and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
+                    worker_files='.uncle/workflow/documents/PROJECT_PLAN.json .uncle/workflow/documents/ADVERSARIAL_REVIEW.json'
                     ;;
                 updated-change-plan-review-worker-*)
                     worker_inputs='`.uncle/workflow/documents/CHANGE_PLAN.json` and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
+                    worker_files='.uncle/workflow/documents/CHANGE_PLAN.json .uncle/workflow/documents/ADVERSARIAL_REVIEW.json'
                     ;;
                 manual-checklist-review-worker-*)
                     # The driver appends the exact base/delta evidence set.
@@ -175,7 +178,40 @@ gated_prompt() {
                     # never directs a worker to an unnamed input set.
                     worker_inputs='the canonical JSON evidence paths listed below under Canonical inputs'
                     ;;
+                final-audit-review-worker-*)
+                    # The worker prompt names no inputs, so the evidence set is defined
+                    # here: what the final audit itself cites. Only what exists is sent.
+                    local evidence
+                    for evidence in .uncle/workflow/documents/VERIFICATION_REPORT.json \
+                                    .uncle/workflow/documents/TEST_REVIEW.json \
+                                    .uncle/workflow/documents/AUTOMATED_TEST_REPORT.json \
+                                    .uncle/workflow/documents/CHANGE_TEST_REPORT.json \
+                                    .uncle/workflow/documents/IMPLEMENTATION_NOTES.json \
+                                    .uncle/workflow/documents/UPDATED_PROJECT_PLAN.json \
+                                    .uncle/workflow/documents/CHANGE_PLAN.json \
+                                    .uncle/workflow/green-check.md .uncle/docs/DEFECTS.md; do
+                        [[ -s "$evidence" ]] && worker_files="${worker_files:+$worker_files }$evidence"
+                    done
+                    ;;
+                test-review-worker-*)
+                    # The four documents every lens reads first (its prompt names
+                    # them); the plan and report are whichever pipeline wrote them.
+                    local candidate
+                    for candidate in REQUIREMENTS.md .uncle/docs/UPDATED_PROJECT_PLAN.md .uncle/docs/CHANGE_PLAN.md \
+                                     .uncle/docs/AUTOMATED_TEST_REPORT.md .uncle/docs/CHANGE_TEST_REPORT.md \
+                                     .uncle/workflow/green-check.md; do
+                        [[ -s "$candidate" ]] && worker_files="${worker_files:+$worker_files }$candidate"
+                    done
+                    ;;
             esac
+            # Shared documents first, per-worker text last, so a server's prefix
+            # cache covers workers 2..n of a panel. Falls back to the layout below
+            # when the inputs are unknown, missing or too large to embed.
+            if [[ -f "$GATES_LIB_DIR/worker_prompt.py" ]] && command -v python3 >/dev/null 2>&1 \
+               && python3 -B "$GATES_LIB_DIR/worker_prompt.py" "$prompt_file" "$worker_prompt" $worker_files 2>/dev/null; then
+                printf '%s\n' "$worker_prompt"
+                return 0
+            fi
             {
                 cat "$prompt_file"
                 # Do not use an expanding here-document: the literal backticks

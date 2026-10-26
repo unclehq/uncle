@@ -29,6 +29,54 @@ def load(path, kind):
     return value
 
 
+def _cell(value, limit=None):
+    """One table cell: whitespace collapsed, pipes escaped.  `limit` None keeps all of it."""
+    if isinstance(value, (list, tuple)):
+        value = '; '.join(str(item) for item in value)
+    text = ' '.join(str(value if value is not None else '').split()).replace('|', '\\|')
+    if limit and len(text) > limit:
+        text = text[:limit - 1].rstrip() + '\u2026'
+    return text
+
+
+def review_table(review):
+    """The adversarial review as one row per finding: id, severity, evidence, required change.
+
+    The model wrote its updated plan from the full review JSON, which repeats each finding
+    as a title, a failure, a reference and a fix.  Every finding and its evidence is kept;
+    the repeated prose around them is not, which shortens the input the model has to hold
+    while it writes a plan that already has to stay short.
+    """
+    rows = ['| id | severity | evidence | required plan change |', '|---|---|---|---|']
+    for finding in review.get('findings') or []:
+        if not isinstance(finding, dict):
+            continue
+        evidence = finding.get('references') or finding.get('failure') or finding.get('title') or ''
+        change = finding.get('fix') or ''
+        verify = finding.get('verify')
+        if verify:
+            change = (change + ' Verify: ' + _cell(verify)).strip()
+        rows.append('| %s | %s | %s | %s |' % (_cell(finding.get('id')), _cell(finding.get('severity')),
+                                              _cell(evidence), _cell(change)))
+    verdict = _cell(review.get('overall_assessment'))
+    return '\n'.join(rows) + ('\n\nOverall verdict: ' + verdict if verdict else '')
+
+
+def corrections_table(workers):
+    """What each specialist asked for, per finding.  Their evidence and sources repeat the
+    review table's, so only the corrections, gaps and risks are carried."""
+    rows = ['| id | required corrections | gaps | risks |', '|---|---|---|---|']
+    for finding in workers.get('findings') or []:
+        if not isinstance(finding, dict):
+            continue
+        rows.append('| %s | %s | %s | %s |' % (
+            _cell(finding.get('id')), _cell(finding.get('required_corrections')),
+            _cell(finding.get('gaps')), _cell(finding.get('risks'))))
+    status = ', '.join('%s: %s' % (_cell(w.get('source')), _cell(w.get('status')))
+                       for w in workers.get('workers') or [] if isinstance(w, dict))
+    return '\n'.join(rows) + ('\n\nSpecialists: ' + status if status else '')
+
+
 def prompt(plan, review, workers, change=False):
     if workers.get('schema') != SCHEMA or workers.get('kind') != 'updated-plan-worker-packets':
         raise ValueError('worker packet: expected collated updated-plan-worker-packets JSON')
@@ -95,7 +143,9 @@ two optional arrays:
 Every disposition's `plan_change` must be reflected by some `patch` entry: a
 disposition with no matching edit or insert is a rejected delivery. The
 disposition fields are finding, disposition (Accepted, Partially accepted,
-Rejected, or Deferred), reason, and plan_change. Do not write Markdown, a
+Rejected, or Deferred), reason, and plan_change. `reason` and `plan_change` are one
+sentence each (300 characters at most); `plan_change` may simply name the section the
+patch edits. Do not write Markdown, a
 summary, a draft, or progress commentary, and do not write a `narrative` key.
 
 Once you have written the delivery file, you are done: stop immediately.
@@ -115,19 +165,17 @@ Quote a heading exactly, as printed here, to edit it or to anchor an insert.
 %s
 ```
 
-## Adversarial review JSON
-```json
-%s
-```
+## Adversarial review findings (every finding, condensed)
 
-## Collated specialist findings JSON
-```json
 %s
-```
+
+## Collated specialist corrections (condensed)
+
+%s
 ''' % (label, artifact, plan['kind'], extra_fields, example_kind, headings,
        json.dumps(plan, indent=2, sort_keys=True),
-       json.dumps(review, indent=2, sort_keys=True),
-       json.dumps(workers, indent=2, sort_keys=True))
+       review_table(review),
+       corrections_table(workers))
 
 
 def main(argv=None):

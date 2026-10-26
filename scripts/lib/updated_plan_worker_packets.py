@@ -73,8 +73,6 @@ def collate(directory, output, expected=()):
                     current[key].append(value)
             if source not in current['sources']:
                 current['sources'].append(source)
-    for item in merged.values():
-        item['conflicting_corrections'] = len(item['required_corrections']) > 1
     payload = {'schema': SCHEMA, 'kind': 'updated-plan-worker-packets',
                'workers': workers, 'findings': [merged[key] for key in sorted(merged)]}
     target = Path(output); target.parent.mkdir(parents=True, exist_ok=True)

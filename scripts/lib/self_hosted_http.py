@@ -51,14 +51,16 @@ def request_seconds(stage_seconds=3600):
 
 
 def turn_output_tokens(limit):
-    """Output cap for one tool-loop turn (WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS, default 16384).
+    """Output cap for one tool-loop turn (WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS, default 32768).
 
     A turn is a tool call or a short note.  Using the whole-stage ceiling (64k) let
     one degenerate turn run for the better part of an hour before the server
-    returned anything.
+    returned anything.  A synthesis stage writes its whole JSON delivery as one tool
+    call, so the cap must hold a full plan: 16k cut one off mid-document
+    (calculator-local, updated-plan); 32k matches the closing-answer cap.
     """
     configured = os.environ.get('WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS', '').strip()
-    return min(int(limit), int(configured) if configured else 16384)
+    return min(int(limit), int(configured) if configured else 32768)
 
 
 # Stages that run hotter than the default.  Requirements interpretation is

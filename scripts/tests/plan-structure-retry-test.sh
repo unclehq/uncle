@@ -37,7 +37,7 @@ has "both fixes are offered" "add each path to the \`Owns:\` of the step that cr
 has "removal is offered" "remove it from Protected verification paths" "$out"
 
 has "a missing commands block is explained" 'one fenced block of shell commands' "$(plan_structure_feedback 'no Verification commands block' PLAN.md)"
-has "an unknown problem still gets a message" 'Correct that and return the complete plan' "$(plan_structure_feedback 'something else' PLAN.md)"
+has "an unknown problem still gets a message" 'return the delivery again in the same shape' "$(plan_structure_feedback 'something else' PLAN.md)"
 
 # The gate retries once, then stops; the feedback reaches the next planner call.
 DRIVER="$ROOT/scripts/stagegate.sh"

@@ -4,7 +4,7 @@ review. Read REQUIREMENTS.md, .uncle/docs/UPDATED_PROJECT_PLAN.md (or .uncle/doc
 only the assigned acceptance-gate row below. Do not modify source, tests, or
 `.uncle/docs/TEST_REVIEW.md`, and do not run destructive probes.
 
-Return exactly one JSON object: `{"schema":"uncle.artifact/v1","kind":"test-review-worker-packet","rows":[{"id":"COVERAGE","status":"PASS","evidence":"..."}]}`. Return every assigned acceptance row, with PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, or NOT RUN. No Markdown or prose.
+Return exactly one JSON object: `{"schema":"uncle.artifact/v1","kind":"test-review-worker-packet","rows":[{"id":"COVERAGE","status":"PASS","evidence":"..."}]}`. Return every assigned acceptance row, with PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, or NOT RUN. No Markdown or prose. `evidence` is at most three sentences naming the file, symbol, requirement ID or command output; do not paste logs or restate the plan.
 
 - Exact evidence: file/symbol, requirement ID, or command output
 - Whether the assigned row should be PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN,

@@ -724,7 +724,7 @@ plan_structure_feedback() {
         'no Protected verification paths block')
             printf 'The plan needs a heading with the words "protected" and "paths", then one fenced block of repository-relative paths, one per line.\n' ;;
         *)
-            printf 'Correct that and return the complete plan.\n' ;;
+            printf 'Correct that and return the delivery again in the same shape: dispositions and a patch against the base plan, not the whole plan.\n' ;;
     esac
 }
 

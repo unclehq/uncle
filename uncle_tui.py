@@ -2581,6 +2581,10 @@ class UncleTUI:
         text = line.strip()
         if text.startswith("Finished build:") or text.startswith("NOT READY - "):
             self.finished_lines = getattr(self, "finished_lines", []) + [text]
+            self._in_finished_block = True
+        elif (getattr(self, "_in_finished_block", False)
+              and (text.startswith("Total time:") or text.startswith("PR:"))):
+            self.finished_lines = getattr(self, "finished_lines", []) + [text]
         if text in ("Workflow complete.", "Change workflow complete.",
                     "Workflow complete with waived acceptance.",
                     "Change workflow complete with waived acceptance."):

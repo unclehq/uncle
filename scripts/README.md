@@ -162,6 +162,33 @@ hashing, falling back to the shell implementation only when Python is unavailabl
 Set `shell` or `python` to select a backend explicitly. Backend failures never
 trigger a fallback that could hide an unreadable or missing protected input.
 
+### Closing summary: total time and PR
+
+After `Finished build:` (unattended) or the COMPLETE summary (attended), both
+drivers print two extra lines:
+
+```text
+Total time: 1h 2m 3s (stages 40m 1s, approx. waiting at gates 22m 2s)
+PR: https://github.com/org/repo/pull/12 (#12, draft)
+```
+
+- `Total time:` spans the whole run, including resumed sessions. The start
+  time is written once to `.uncle/workflow/run-started-at` and never
+  overwritten. Leading zero units are dropped (`0s` for zero). The
+  parenthetical stages/approx. waiting split is approximate and appears only in
+  attended runs when session totals are available.
+- `PR:` shows the URL and number for a change build whose journal phase is
+  `created`, marked `draft` when applicable. Otherwise it gives a reason:
+  `none (handoff disabled)`, `none (no base commit)`,
+  `not created (publication pending)`, or `none (not published)`.
+- New-application builds always print `PR: none (not applicable to new-application builds)`.
+- A stopped or failed run prints `Total time:` so far, and a `PR:` line only
+  if a PR already exists.
+- Limitation: if the PR draft state is absent from the journal, the PR is
+  shown without the `draft` marker.
+- These lines are best-effort: missing or corrupt state never fails the run.
+  The `Finished build:` line format is unchanged.
+
 ### `change-workflow.sh` — existing-code change workflow driver
 
 Runs the human-gated existing-code change workflow from `CHANGE_REQUEST.md`.

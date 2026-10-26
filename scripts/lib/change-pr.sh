@@ -9,7 +9,15 @@ change_pr_person_channel() {
     [[ -t 0 || -n "${UNCLE_STATUS_FILE:-}" ]]
 }
 
+# Reason for a missing PR, read by the driver's finished-extras block. Set by
+# change_pr_complete on each path that returns without a created PR.
+CHANGE_PR_EXTRAS_REASON=""
+change_pr_extras_reason() {
+    printf '%s\n' "${CHANGE_PR_EXTRAS_REASON:-not-published}"
+}
+
 change_pr_complete() {
+    CHANGE_PR_EXTRAS_REASON=""
     # The publication boundary. The unattended stages have ended; whether the
     # handoff dialogs open depends only on whether someone can answer them.
     # The unattended ledger never routes: an attended rerun after a headless
@@ -23,6 +31,7 @@ change_pr_complete() {
         echo "Unattended: publishing the PR without a dialog (draft when the audit is not READY)."
         local -x UNCLE_AUTO_PUBLISH=1
         change_pr_publish 0 </dev/null
+        CHANGE_PR_EXTRAS_REASON=publication-pending
         return 0
     fi
     if [[ "$CLOSE_ISSUE" == 1 ]]; then
@@ -45,9 +54,11 @@ change_pr_complete() {
             else
                 echo "PR handoff disabled or unattended; no PR was created."
             fi
+            CHANGE_PR_EXTRAS_REASON=handoff-disabled
             return 0
         fi
         change_pr_publish 0 </dev/null
+        CHANGE_PR_EXTRAS_REASON=publication-pending
         return 0
     fi
     if [[ "$boundary" == 1 ]]; then
@@ -612,7 +623,8 @@ def load():
         phases += ('started',)
     if (not isinstance(j, dict) or not required <= j.keys() or j['version'] not in (1, 2)
             or not isinstance(j['owner'], str) or not re.fullmatch(r'[0-9a-f]{32}', j['owner'])
-            or not isinstance(j.get('early_ref', False), bool) or j['phase'] not in phases):
+            or not isinstance(j.get('early_ref', False), bool)
+            or not isinstance(j.get('draft', False), bool) or j['phase'] not in phases):
         raise ValueError('Missing/corrupt PR binding; rerun FINAL_AUDIT.')
     return j
 
@@ -1260,7 +1272,7 @@ def resolve(j):
 def lookup(j):
     rows = json.loads(gh('pr', 'list', '--repo', j['base_repo'], '--state', 'all',
                          '--head', j['head_branch'], '--limit', '1000', '--json',
-                         'number,url,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName'))
+                         'number,url,isDraft,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName'))
     if len(rows) >= 1000:
         raise ValueError('PR lookup truncated; independent reconciliation required.')
     matches = []
@@ -1298,6 +1310,8 @@ def reconcile_absent(j):
 
 def record_pr(j, row):
     j.update(phase='created', url=row['url'], number=row['number'])
+    if isinstance(row.get('isDraft'), bool):
+        j['draft'] = row['isDraft']
     save(j)
     print('PR: ' + j['url'], flush=True)
 
@@ -1479,6 +1493,7 @@ def handoff(j):
         j['attestation'] = sealed_attestation(j)
         j['body'] = attestation().attach_body(j['body'], j['attestation'])
         save(j)
+    j['draft'] = bool(auto_publish() and (j.get('release_skipped') or len(override_record()) == 4))
     j['phase'] = 'creating'
     save(j)
     fd, body = tempfile.mkstemp(prefix='uncle-pr-body-')
@@ -1488,7 +1503,7 @@ def handoff(j):
         created_url = gh('pr', 'create', '--repo', j['base_repo'], '--head',
            j['head_repo'].split('/')[0] + ':' + j['head_branch'], '--base', j['base_branch'],
            '--title', j['title'], '--body-file', body,
-           *(['--draft'] if auto_publish() and (j.get('release_skipped') or len(override_record()) == 4) else [])
+           *(['--draft'] if j['draft'] else [])
            ).splitlines()[-1]
         if not re.fullmatch(r'https://github\.com/' + re.escape(j['base_repo']) + r'/pull/[0-9]+', created_url, re.I):
             raise ValueError('Create returned an unexpected PR URL; independent reconciliation required.')

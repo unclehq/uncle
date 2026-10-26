@@ -210,6 +210,18 @@ class UnattendedFinishTests(unittest.TestCase):
         self.assertIn("accepted without human review", source)
         self.assertIn("nothing is committed, pushed or opened as a PR", source)
 
+    def test_total_time_and_pr_captured_only_in_finished_block(self):
+        ui = build(None)
+        for line in ("Total time: 1s", "PR: stray"):
+            ui._read_banner(line)
+        self.assertEqual(getattr(ui, "finished_lines", []), [])
+        for line in ("Finished build: verdict=READY skipped=0 path=/tmp/p",
+                     "Total time: 1m 2s", "PR: none (not published)"):
+            ui._read_banner(line)
+        self.assertEqual(ui.finished_lines, [
+            "Finished build: verdict=READY skipped=0 path=/tmp/p",
+            "Total time: 1m 2s", "PR: none (not published)"])
+
     def test_auto_and_flag_commands_match(self):
         for auto_mode, expected in (("true", True), ("false", False)):
             ui = UncleTUI.__new__(UncleTUI)

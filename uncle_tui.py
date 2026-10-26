@@ -7470,10 +7470,11 @@ def _record_tui_pid():
 if __name__ == "__main__":
     _record_tui_pid()
     os.environ.setdefault('ESCDELAY', '25')  # D-1: fast single Esc, user value wins
-    finished = curses.wrapper(main)
-    if STARTUP_REFUSAL:
-        print(STARTUP_REFUSAL[0], file=sys.stderr, flush=True)
-        raise SystemExit(1)
+    try:
+        finished = curses.wrapper(main)
+    except KeyboardInterrupt:
+        # Ctrl-C while the screen is waiting for a key is a normal way out.
+        raise SystemExit(130)
     if finished:
         # Printed after curses teardown so it lands on the real terminal.
         print('\n'.join(finished), flush=True)

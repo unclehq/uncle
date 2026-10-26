@@ -333,13 +333,14 @@ HARNESS
     else bad "$driver-finished-line" "golden Finished line missing: $out"; fi
     if grep -qF "NOT READY - 2 blocking findings WAIVED WITHOUT HUMAN REVIEW" <<< "$out"; then ok
     else bad "$driver-not-ready-marker" "marker missing: $out"; fi
-    if [[ -e "$d/calls.log" ]] || grep -q "CALLED" <<< "$out"; then
+    if [[ "$driver" == change-workflow ]]; then
+        # Issue 107 follow-up: an unattended change run hands off to the PR
+        # publisher, which publishes with no dialog (a draft unless READY).
+        if grep -q "change_pr_complete CALLED" <<< "$out" && grep -q "Built in $d" <<< "$out"; then ok
+        else bad "cw-unattended-publishes" "unattended change run did not reach the PR publisher or say where it built: $out"; fi
+    elif [[ -e "$d/calls.log" ]] || grep -q "CALLED" <<< "$out"; then
         bad "$driver-no-publish" "git/gh/PR handoff invoked unattended: $(cat "$d/calls.log" 2>/dev/null) $out"
     else ok; fi
-    if [[ "$driver" == change-workflow ]]; then
-        if grep -q "PR handoff skipped" <<< "$out" && grep -q "Built in $d" <<< "$out"; then ok
-        else bad "cw-built-where" "what was built and where is not printed: $out"; fi
-    fi
     # Attended: no Finished line; the PR handoff still runs (change-workflow).
     out="$(cd "$d" && UNATTENDED=0 PATH="$d/bin:$PATH" timeout 60 bash "$d/run.sh" < /dev/null 2>&1)" || true
     if grep -q "Finished build:" <<< "$out"; then bad "$driver-attended-silent" "attended run printed the unattended line"; else ok; fi

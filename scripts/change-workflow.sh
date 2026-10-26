@@ -4145,12 +4145,18 @@ REPAIR
             fi
             triage_print_actions "$STATE_DIR"
             if [[ "$UNATTENDED" == 1 ]]; then
-                # Issue 107: nothing is committed, pushed or opened as a PR
-                # without a person. Say what was built and where instead.
+                # Issue 107: no dialog and no waiting. change_pr_complete publishes
+                # an unattended run on its own (a draft when the audit is not
+                # READY); without a base commit or with the handoff disabled it
+                # publishes nothing and says so.
                 echo
                 finished_build_line "$(completed_verdict)"
-                echo "Unattended: PR handoff skipped; no commit, push or PR was made."
-                echo "Built in $PROJECT_ROOT; review $DIFF_FILE and publish from an attended run."
+                if git rev-parse --verify HEAD >/dev/null 2>&1; then
+                    change_pr_complete </dev/null
+                else
+                    echo "Unattended: no base commit, so no PR was made."
+                fi
+                echo "Built in $PROJECT_ROOT; review $DIFF_FILE."
             elif git rev-parse --verify HEAD >/dev/null 2>&1; then
                 change_pr_complete
             elif [[ -s "$ORIGIN_FILE" ]]; then

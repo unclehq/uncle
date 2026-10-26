@@ -15,6 +15,16 @@ change_pr_complete() {
     # The unattended ledger never routes: an attended rerun after a headless
     # run still publishes.
     local interactive=0 boundary=0
+    # Unattended (auto) mode is zero human input: the title, summary and consent
+    # are generated, a NOT_READY audit is published over on the record as a DRAFT
+    # PR, and nothing waits on anyone. The release envelope and the PR banner still
+    # say the audit failed; only the gesture is automated, never the verdict.
+    if [[ "$CLOSE_ISSUE" == 1 && "${UNATTENDED:-0}" == 1 && -s "$ORIGIN_FILE" ]]; then
+        echo "Unattended: publishing the PR without a dialog (draft when the audit is not READY)."
+        local -x UNCLE_AUTO_PUBLISH=1
+        change_pr_publish 0 </dev/null
+        return 0
+    fi
     if [[ "$CLOSE_ISSUE" == 1 ]]; then
         if [[ "${UNATTENDED:-0}" != 1 ]]; then
             interactive=1
@@ -61,7 +71,7 @@ change_pr_publish() {
     # actual verdict. Headless runs are never asked.
     change_pr_engine validate || status=$?
     if [[ "$status" == 3 ]]; then
-        if [[ "$interactive" == 1 ]] && change_pr_engine verdict-override; then
+        if { [[ "$interactive" == 1 ]] || [[ "${UNCLE_AUTO_PUBLISH:-0}" == 1 ]]; } && change_pr_engine verdict-override; then
             change_pr_engine validate || return 0
         else
             return 0
@@ -303,6 +313,9 @@ def consent_entry(artifact):
     # The consent just given: a person at the terminal, or a supervisor
     # receipt relayed for one. Only the former counts as human.
     env = envelope()
+    if auto_publish():
+        return {'gate': 'publication', 'required': True, 'approved_by': 'unattended (no human)',
+                'delegated_by': '', 'digest': artifact, 'timestamp': env.utc_now()}
     answered = os.environ.get('UNCLE_GATE_ANSWERED_BY', '')
     delegated = answered if env.DELEGATED.match(answered) else ''
     approved = '' if delegated else (answered or os.environ.get('UNCLE_APPROVAL_NAME', '') or 'operator')
@@ -847,6 +860,25 @@ def ask(prompt, default=None):
     return answer.strip() or default or ''
 
 
+def auto_publish():
+    """Set only by the driver's unattended publication path (change_pr_complete)."""
+    return os.environ.get('UNCLE_AUTO_PUBLISH') == '1'
+
+
+def auto_summary():
+    verdict = read(STATE / 'audit-verdict.original').strip().split('\t')
+    if len(verdict) != 3:
+        verdict = read(STATE / 'audit-verdict').strip().split('\t')
+    state = verdict[1] if len(verdict) == 3 else 'unknown'
+    return ('Built by an unattended Uncle run; no human reviewed this change or the generated text. '
+            'Final audit verdict: ' + state + '. Findings are in .uncle/docs/FINAL_AUDIT.md.')
+
+
+def auto_manual_steps():
+    return ('Review the diff, run the project test suite, and read .uncle/docs/VERIFICATION_REPORT.md '
+            'for the checks that failed or were blocked.')
+
+
 def title_default():
     text = read(input_document('CHANGE_REQUEST.md'))
     match = re.search(r'^##\s+(?:\d+\.\s+)?Summary\s*\n(.*?)(?=^##\s|\Z)', text, re.M | re.S | re.I)
@@ -1323,7 +1355,9 @@ def handoff(j):
         # driver had already decided it would not create.
         blocked = release_blocked_reason(j)
         if blocked:
-            if blocked_gate(blocked) != 'skip':
+            if auto_publish():
+                print('Not publishing as READY: ' + blocked, flush=True)
+            elif blocked_gate(blocked) != 'skip':
                 # The same error the post-consent gate raises, so the exit code
                 # and the wording do not depend on which one caught it.
                 raise attestation().AttestationError(blocked)
@@ -1338,17 +1372,24 @@ def handoff(j):
         print('Target: ' + j['base_repo'] + ':' + j['base_branch'] + ' <- ' + j['head_repo'] + ':' + j['head_branch'], flush=True)
         if envelopes_enabled():
             print('After consent, .uncle/attestation.json (and .sig when a signer exists) are added to this commit.', flush=True)
-        title = ask('PR title [default: ' + title_default() + ']: ', title_default())
-        summary = ask('Work summary: ')
-        manual = ask('Manual verification steps: ')
-        if not summary or not manual:
-            raise ValueError('Summary and manual verification steps must be nonempty; PR remains pending.')
-        if ask('Commit and publish exactly this audited diff and create the PR? [y/n]: ').lower() != 'y':
-            raise ValueError('Publication declined; rerun to resume PR handoff.')
+        if auto_publish():
+            title, summary, manual = title_default(), auto_summary(), auto_manual_steps()
+            print('Unattended: generated PR title, summary and verification steps; no one confirmed them.', flush=True)
+        else:
+            title = ask('PR title [default: ' + title_default() + ']: ', title_default())
+            summary = ask('Work summary: ')
+            manual = ask('Manual verification steps: ')
+            if not summary or not manual:
+                raise ValueError('Summary and manual verification steps must be nonempty; PR remains pending.')
+            if ask('Commit and publish exactly this audited diff and create the PR? [y/n]: ').lower() != 'y':
+                raise ValueError('Publication declined; rerun to resume PR handoff.')
         validate(j)
         if remote_sha(j) != j['remote_before']:
             raise ValueError('Remote changed during prompts; rerun FINAL_AUDIT.')
         body = '## Work summary\n\n' + summary + '\n\n## Manual verification\n\n' + manual + '\n'
+        if auto_publish() and blocked and not j.get('release_skipped'):
+            j['release_skipped'] = blocked
+            save(j)
         skipped = j.get('release_skipped')
         if skipped:
             # First thing a reviewer reads. A PR published over a failing audit
@@ -1376,7 +1417,8 @@ def handoff(j):
             # The consent just given is the publication gate; only a person at
             # the terminal reaches this line, so it is the one field stamped here.
             sealed = sealed_attestation(j)
-            sealed['gate_publication'] = 'APPROVED (human)'
+            sealed['gate_publication'] = ('UNATTENDED (no human approval)' if auto_publish()
+                                          else 'APPROVED (human)')
         j['attestation'] = sealed
         body = attestation().attach_body(body, sealed)
         if j['origin']:
@@ -1445,7 +1487,9 @@ def handoff(j):
             stream.write(j['body'])
         created_url = gh('pr', 'create', '--repo', j['base_repo'], '--head',
            j['head_repo'].split('/')[0] + ':' + j['head_branch'], '--base', j['base_branch'],
-           '--title', j['title'], '--body-file', body).splitlines()[-1]
+           '--title', j['title'], '--body-file', body,
+           *(['--draft'] if auto_publish() and (j.get('release_skipped') or len(override_record()) == 4) else [])
+           ).splitlines()[-1]
         if not re.fullmatch(r'https://github\.com/' + re.escape(j['base_repo']) + r'/pull/[0-9]+', created_url, re.I):
             raise ValueError('Create returned an unexpected PR URL; independent reconciliation required.')
         j['url'] = created_url
@@ -1556,6 +1600,11 @@ def main():
         if len(verdict) != 3 or verdict[0] != j['verdict_run'] or verdict[2] != j['audit_hash']:
             raise ValueError('Verdict binding changed; rerun FINAL_AUDIT.')
         if verdict[1] in ('READY', 'READY_WITH_NON_BLOCKING_ISSUES'):
+            return
+        if os.environ.get('UNCLE_AUTO_PUBLISH') == '1':
+            OVERRIDE.write_text('\t'.join([j['verdict_run'], verdict[1], j['audit_hash'],
+                                           time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())]) + '\n')
+            print('Unattended: no human reviewed this; publishing a draft PR over a ' + verdict[1] + ' verdict.', flush=True)
             return
         if os.environ.get('UNCLE_UNATTENDED') == '1':
             raise NotReadyError('PR requires an owned READY verdict.')

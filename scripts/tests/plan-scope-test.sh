@@ -369,6 +369,11 @@ check_eq "bulleted S-N steps keep their dependencies (none for S-0)" "2	1
 3	2" "$(plan_step_depends "$BULLETS")"
 check_eq "bulleted steps: prose after them is not a step" "3" "$(plan_steps "$BULLETS" | wc -l | tr -d ' ')"
 
+ROOTF="$TMP/rootfile"; mkdir -p "$ROOTF"; : > "$ROOTF/uncle"; : > "$ROOTF/app.py"
+printf '## Change-impact table\n\n| Component | Planned change |\n|---|---|\n| `uncle` | reword |\n| `app.py` | reword |\n| `enroll_voice` | symbol, not a file |\n' > "$ROOTF/PLAN.md"
+check_eq "an extensionless root file named in the table is in scope when it exists" "app.py
+uncle" "$(cd "$ROOTF" && plan_scope_files PLAN.md)"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "plan-scope-test.sh: $FAILED of $COUNT checks failed"
     exit 1

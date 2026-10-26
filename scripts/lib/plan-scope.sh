@@ -75,7 +75,7 @@ plan_scope_files() {
     if [[ -n "$json" ]]; then
         local structured
         structured="$(python3 - "$json" <<'PY'
-import json, re, sys
+import json, os, re, sys
 try:
     payload = json.load(open(sys.argv[1], encoding='utf-8'))
 except Exception:
@@ -100,7 +100,9 @@ for row in table:
         # already only takes the part inside the backticks.
         match = re.match(r'^\S+', tok)
         tok = match.group(0) if match else tok
-        if '/' in tok or re.search(r'\.[A-Za-z0-9]+$', tok):
+        # A root file with no extension (`uncle`, `Makefile`, `Dockerfile`) has neither a
+        # slash nor a dot; it is a file when it exists, a symbol name when it does not.
+        if '/' in tok or re.search(r'\.[A-Za-z0-9]+$', tok) or (re.fullmatch(r'[A-Za-z0-9_-]+', tok) and os.path.isfile(tok)):
             seen.append(tok)
 if not seen:
     raise SystemExit(1)
@@ -132,9 +134,16 @@ PY
                 # ("/login", "/api/admin/users"), not a file.
                 if (tok ~ /^\//) continue
                 if (tok ~ /\//  || tok ~ /\.[A-Za-z0-9]+$/) print tok
+                else if (tok ~ /^[A-Za-z0-9_-]+$/) print "?" tok
             }
         }
-    ' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d' | sort -u
+    ' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d' | while IFS= read -r tok; do
+        # "?name" is a bare token: an extensionless root file only when it exists.
+        case "$tok" in
+            '?'*) [[ -f "${tok#?}" ]] && printf '%s\n' "${tok#?}" ;;
+            *) printf '%s\n' "$tok" ;;
+        esac
+    done | sort -u
 }
 
 # A plan may head its steps "Implementation steps with Owns/Depends" (a model that wrote

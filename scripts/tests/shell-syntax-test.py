@@ -70,7 +70,7 @@ class Tests(unittest.TestCase):
              patch.object(syntax.os, 'execv') as execv, \
              patch.object(syntax.subprocess, 'run', return_value=subprocess.CompletedProcess([], 7)) as run:
             self.assertEqual(syntax.main(), 7)
-            run.assert_called_once_with([bash, '-c', command])
+            run.assert_called_once_with([bash, '-o', 'pipefail', '-c', command])
             execv.assert_not_called()
 
     def test_only_known_read_only_loop_is_parallelized(self):

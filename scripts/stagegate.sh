@@ -333,6 +333,38 @@ record_unattended_gate() {
         >> "$UNATTENDED_FILE" 2>/dev/null || true
 }
 
+# An unattended run says so up front and ledgers what enabled it, so a mode
+# inherited from a wrapper is visible in the run's own record.
+if [[ "$UNATTENDED" == 1 ]]; then
+    echo "UNATTENDED RUN: no human prompts; blocking audit findings are skipped and ledgered ($UNATTENDED_FILE)."
+    if ! grep -qs $'\tunattended-enabled\t' "$UNATTENDED_FILE" 2>/dev/null; then
+        record_unattended_gate unattended-enabled "enabled by the --unattended flag (UNCLE_UNATTENDED=1)"
+    fi
+fi
+
+# The auditor's own verdict, not the READY the waiver wrote over it.
+completed_verdict() {
+    local verdict original="$STATE_DIR/audit-verdict.original"
+    verdict="$(awk -F'\t' 'NR == 1 {print $1}' "$VERDICT_FILE" 2>/dev/null)"
+    if [[ "$UNATTENDED" == 1 && -s "$original" && -s "$UNATTENDED_FILE" ]] \
+        && grep -qs $'\taudit-finding-skipped\t' "$UNATTENDED_FILE"; then
+        verdict="$(awk -F'\t' 'NR == 1 {print $1}' "$original")"
+    fi
+    printf '%s' "$verdict"
+}
+
+# One stable line for wrappers and the TUI; format is asserted by tests.
+finished_build_line() {
+    local verdict="$1" skipped=0
+    if [[ -s "$UNATTENDED_FILE" ]]; then
+        skipped="$(grep -c $'\taudit-finding-skipped\t' "$UNATTENDED_FILE" || true)"
+    fi
+    printf 'Finished build: verdict=%s skipped=%s path=%s\n' "$verdict" "${skipped:-0}" "$PROJECT_ROOT"
+    if [[ "$verdict" == NOT_READY && "${skipped:-0}" != 0 ]]; then
+        echo "NOT READY - ${skipped} blocking findings WAIVED WITHOUT HUMAN REVIEW"
+    fi
+}
+
 
 # A failing verification command, named by its 1-based position in the approved
 # command list, so a waiver has a stable id that is also a safe filename. The
@@ -4575,7 +4607,7 @@ while true; do
             # Recover an interruption after saving READY but before COMPLETE.
             if [[ "$audit_class" == READY ]]; then
                 [[ "$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")" == "$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")" ]] || exit 1
-                python3 "$ROOT/scripts/lib/audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" --check || exit 1
+                python3 "$ROOT/scripts/lib/audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" --check $([[ "${UNATTENDED:-0}" == 1 ]] && printf %s --unattended) || exit 1
                 set_state COMPLETE
                 continue
             fi
@@ -4587,9 +4619,14 @@ while true; do
                     echo "The audit changed since its verdict was recorded; rerun FINAL_AUDIT."
                     exit 1
                 fi
-                # Each finding needs an explicit decision, including in an
-                # unattended run. EOF leaves the saved review pending.
-                python3 "$ROOT/scripts/lib/audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" || exit 1
+                # Attended: each finding needs an explicit decision and EOF leaves
+                # the review pending. Unattended (Issue 107): every blocker is
+                # skipped, labelled and ledgered by audit-findings.py.
+                if [[ "${UNATTENDED:-0}" == 1 ]]; then
+                    python3 "$ROOT/scripts/lib/audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" --unattended --ledger "$UNATTENDED_FILE" </dev/null || exit 1
+                else
+                    python3 "$ROOT/scripts/lib/audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" || exit 1
+                fi
                 [[ "$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")" == "$audit_hash" ]] || exit 1
                 cp "$VERDICT_FILE" "$STATE_DIR/audit-verdict.original"
                 printf '%s\t%s\n' "READY" "$audit_hash" > "$VERDICT_FILE"
@@ -4643,7 +4680,7 @@ while true; do
                 echo "Workflow complete."
             fi
             if [[ -s "$VERDICT_FILE" ]]; then
-                echo "Build verdict: $(awk -F'\t' 'NR == 1 {print $1}' "$VERDICT_FILE")"
+                echo "Build verdict: $(completed_verdict)"
             fi
             echo
             echo "Artifacts:"
@@ -4689,6 +4726,10 @@ while true; do
                 echo "summary is the only place that says so out loud."
             fi
             triage_print_actions "$STATE_DIR"
+            if [[ "$UNATTENDED" == 1 ]]; then
+                echo
+                finished_build_line "$(completed_verdict)"
+            fi
 
             exit 0
             ;;

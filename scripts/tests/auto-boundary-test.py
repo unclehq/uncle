@@ -25,6 +25,7 @@ DRIVER = ROOT / 'scripts/change-workflow.sh'
 SOURCE = LIB.read_text().split("<<'PY'", 1)[1].split('\n', 1)[1].split('\nPY\n', 1)[0]
 REAL_GIT = shutil.which('git')
 SKIP = 'PR handoff disabled or unattended; no PR was created.'
+UNATTENDED_SKIP = 'Unattended: PR handoff skipped; no commit, push or PR was made.'
 BOUNDARY = 'Publication boundary: unattended stages ended; a person answers from here.'
 PENDING_EOF = 'No answer received; PR remains pending. Rerun to resume.'
 LEDGER = '2026-09-14T00:00:00Z\tCHANGE_PLAN.md\tapproved unattended\n2026-09-14T00:00:01Z\tFINAL_AUDIT\tapproved unattended\n'
@@ -251,9 +252,8 @@ class HeadlessTests(Fixture):
         self.freeze()
         result = self.complete('', unattended=True, relay=False)
         self.ok(result)
-        self.assertIn(SKIP, result.stdout)
+        self.assertIn(UNATTENDED_SKIP, result.stdout)
         self.assert_no_prompt(result.stdout)
-        self.assertEqual(self.journal()['phase'], 'bound')
         self.assertEqual((self.creates(), self.pushes(), self.commits()), ([], [], []))
         self.assertEqual(self.git('rev-parse', 'HEAD'), self.original)
         self.assertFalse((self.root / 'status.jsonl').exists())
@@ -281,49 +281,52 @@ class HeadlessTests(Fixture):
         self.freeze()
         code, out = self.complete_open_pipe(unattended=True, relay=False)
         self.assertEqual(code, 0, out)
-        self.assertIn(SKIP, out)
+        self.assertIn(UNATTENDED_SKIP, out)
         self.assert_no_prompt(out)
-        self.assertEqual(self.journal()['phase'], 'bound')
-        # A prepared journal whose commit the person has not made yet (signing
-        # on): the dialog would wait on the pipe; the headless probe declines.
+        # Issue 107: a prepared journal (signing on) is left alone too. The
+        # unattended run neither prompts nor resumes, even once the person has
+        # made the commit; only an attended rerun publishes it.
         self.enable_signing()
-        result = self.complete('\nSummary text\nManual steps\ny\n', unattended=True, relay=True)
+        result = self.complete('\nSummary text\nManual steps\ny\n', unattended=False, relay=True)
         self.ok(result)
         self.assertEqual(self.journal()['phase'], 'prepared')
         self.assertEqual(self.git('rev-parse', 'HEAD'), self.original)
         code, out = self.complete_open_pipe(unattended=True, relay=False)
         self.assertEqual(code, 0, out)
-        self.assertIn(SKIP, out)
+        self.assertIn(UNATTENDED_SKIP, out)
         self.assert_no_prompt(out)
         self.assertEqual(self.journal()['phase'], 'prepared')
         self.assertEqual(self.creates(), [])
-        # The completed signed-resume path (close-flow-test.sh phases/markers)
-        # still publishes headless once the commit exists, and only once.
         self.human_commit(result.stdout, signed=True)
         for close in ('1', '0'):
             code, out = self.complete_open_pipe(unattended=True, relay=False)
             self.assertEqual(code, 0, out)
             self.assert_no_prompt(out)
-        j = self.assert_created()
-        self.assertEqual(j['manual_signed_head'], j['intended_head'])
-        for phase in ('prepared', 'published', 'creating', 'unknown'):
-            for marker in (True, False):
-                row = dict(j, phase=phase)
-                if not marker:
-                    row.pop('manual_signed_head')
-                (self.state / 'pr/journal.json').write_text(json.dumps(row))
-                result = self.complete('', unattended=True, relay=False, close='0')
-                self.ok(result)
-                self.assertEqual(self.journal()['phase'], 'created', result.stdout)
-                self.assertEqual(len(self.creates()), 1)
+            self.assertEqual((self.creates(), self.pushes()), ([], []))
+        self.assertEqual(self.journal()['phase'], 'prepared')
 
 
 class PersonChannelTests(Fixture):
+    # Issue 107: these flows are the attended counterpart. A ledger left by an
+    # earlier unattended run still routes an attended rerun through the person
+    # at the publication boundary. The unattended run itself no longer does:
+    # see test_unattended_relay_asks_nobody_and_publishes_nothing.
+    def test_unattended_relay_asks_nobody_and_publishes_nothing(self):
+        self.freeze()
+        result = self.complete('\nSummary text\nManual steps\ny\n', unattended=True, relay=True)
+        self.ok(result)
+        self.assertIn(UNATTENDED_SKIP, result.stdout)
+        self.assertIn('Finished build: verdict=READY skipped=0 path=', result.stdout)
+        self.assert_no_prompt(result.stdout)
+        self.assertEqual((self.creates(), self.pushes(), self.commits()), ([], [], []))
+        self.assertEqual(self.git('rev-parse', 'HEAD'), self.original)
+        self.assertEqual(self.gate_events(), [])
+
     def test_t3_auto_relay_unsigned_publishes_by_human_input(self):
         self.freeze()
         self.ledger.write_text(LEDGER)
         before = self.ledger.read_bytes()
-        result = self.complete('\nSummary text\nManual steps\ny\n', unattended=True, relay=True)
+        result = self.complete('\nSummary text\nManual steps\ny\n', unattended=False, relay=True)
         self.ok(result)
         self.assertIn(BOUNDARY, result.stdout)
         self.assertNotIn(SKIP, result.stdout)
@@ -349,7 +352,7 @@ class PersonChannelTests(Fixture):
     def test_t4_auto_relay_signed_resume_creates_pr(self):
         self.enable_signing()
         self.freeze()
-        result = self.complete('\nSummary text\nManual steps\ny\n', unattended=True, relay=True)
+        result = self.complete('\nSummary text\nManual steps\ny\n', unattended=False, relay=True)
         self.ok(result)
         self.assertIn(BOUNDARY, result.stdout)
         self.assert_prompted(result.stdout, signed=True)
@@ -361,7 +364,7 @@ class PersonChannelTests(Fixture):
         command = self.human_commit(result.stdout, signed=True)
         self.assertNotIn('--no-gpg-sign', command)
         self.assertEqual(self.git('verify-commit', 'HEAD'), '')
-        result = self.complete('', unattended=True, relay=True)
+        result = self.complete('', unattended=False, relay=True)
         self.ok(result)
         j = self.assert_created()
         self.assertEqual(j['manual_signed_head'], j['intended_head'])
@@ -371,13 +374,13 @@ class PersonChannelTests(Fixture):
     def test_t5_unsigned_commit_is_rejected(self):
         self.enable_signing()
         self.freeze()
-        result = self.complete('\nSummary text\nManual steps\ny\n', unattended=True, relay=True)
+        result = self.complete('\nSummary text\nManual steps\ny\n', unattended=False, relay=True)
         self.ok(result)
         self.assertIn('Commit signing needs your help.', result.stdout)
         j = self.journal()
         self.git('read-tree', j['commit_tree'])
         self.git('commit', '--no-gpg-sign', '-qm', 'unsigned by hand')
-        result = self.complete('', unattended=True, relay=True)
+        result = self.complete('', unattended=False, relay=True)
         self.ok(result)
         self.assertIn('PR pending: Command failed: git verify-commit', result.stdout)
         self.assertEqual(self.journal()['phase'], 'prepared')
@@ -385,7 +388,7 @@ class PersonChannelTests(Fixture):
 
     def test_t6_not_ready_override_asks_the_person(self):
         self.freeze('NOT_READY')
-        declined = self.complete('n\n', unattended=True, relay=True)
+        declined = self.complete('n\n', unattended=False, relay=True)
         self.ok(declined)
         self.assertIn(BOUNDARY, declined.stdout)
         self.assertIn('The audit verdict is NOT_READY, not READY. Create the PR anyway? [y/N]:', declined.stdout)
@@ -395,10 +398,10 @@ class PersonChannelTests(Fixture):
         self.assertEqual(self.creates(), [])
         headless = self.complete('y\n', unattended=True, relay=False)
         self.ok(headless)
-        self.assertIn(SKIP, headless.stdout)
+        self.assertIn(UNATTENDED_SKIP, headless.stdout)
         self.assert_no_prompt(headless.stdout)
         self.assertFalse((self.state / 'pr/verdict-override').exists())
-        approved = self.complete('y\n\nSummary text\nManual steps\ny\n', unattended=True, relay=True)
+        approved = self.complete('y\n\nSummary text\nManual steps\ny\n', unattended=False, relay=True)
         self.ok(approved)
         self.assertIn('Override recorded; creating the PR over a NOT_READY verdict.', approved.stdout)
         self.assert_prompted(approved.stdout)
@@ -574,7 +577,7 @@ class IsolationTests(Fixture):
         self.git('push', '-q', 'origin', 'main')
         self.freeze()
         self.ok(self.complete('', unattended=True, relay=False))
-        result = self.complete('\nSummary text\nManual steps\ny\n', unattended=True, relay=True)
+        result = self.complete('\nSummary text\nManual steps\ny\n', unattended=False, relay=True)
         self.ok(result)
         self.assertNotIn('needs your help', result.stdout)
         self.assert_created()

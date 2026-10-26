@@ -151,5 +151,76 @@ class CompleteDialogTests(unittest.TestCase):
         self.assertTrue(any("Build is complete" in t for t in drawn), drawn)
 
 
+class UnattendedFinishTests(unittest.TestCase):
+    """Issue 107: an unattended finished build opens no dialog and exits 0."""
+
+    def finish(self, unattended, banner="Change workflow complete.", code=0):
+        ui = build(banner, code=code)
+        ui.workflow_unattended = unattended
+        ui.support_checked = False
+        ui.proc.poll.return_value = code
+        for line in ("Finished build: verdict=NOT_READY skipped=2 path=/tmp/p",
+                     "NOT READY - 2 blocking findings WAIVED WITHOUT HUMAN REVIEW"):
+            ui._read_banner(line)
+        return ui
+
+    def test_decision_function(self):
+        from uncle_tui import finish_decision
+        self.assertEqual(finish_decision(True, True, 0), 'exit')
+        self.assertEqual(finish_decision(True, False, 0), 'dialog')
+        self.assertEqual(finish_decision(True, True, 1), 'dialog')
+        self.assertEqual(finish_decision(True, True, 130), 'dialog')
+        self.assertEqual(finish_decision(False, True, 0), 'dialog')  # toggled to attended
+
+    def test_unattended_completed_quits_without_dialog_or_preview(self):
+        ui = self.finish(True)
+        with patch("uncle_tui.CompletionPreview") as preview:
+            ui._offer_support()
+            preview.assert_not_called()
+        self.assertEqual(ui.state, "quit")
+        self.assertNotIn(ui.prompt_kind, ("support", "finished", "complete"))
+        self.assertEqual(ui.finished_build_lines(), [
+            "Finished build: verdict=NOT_READY skipped=2 path=/tmp/p",
+            "NOT READY - 2 blocking findings WAIVED WITHOUT HUMAN REVIEW"])
+
+    def test_attended_completed_still_offers_dialog_flow(self):
+        ui = self.finish(False)
+        with patch("uncle_tui.CompletionPreview") as preview:
+            ui._offer_support()
+            preview.assert_called_once()
+        self.assertEqual(ui.state, "running")
+        self.assertIsNone(ui.finished_build_lines())
+
+    def test_unattended_failed_or_nonzero_keeps_todays_flow(self):
+        for code in (1, 130):
+            ui = self.finish(True, code=code)
+            with patch("uncle_tui.CompletionPreview") as preview:
+                ui._offer_support()
+                preview.assert_not_called()
+            self.assertEqual(ui.state, "running")
+            self.assertIsNone(ui.finished_build_lines())
+        ui = self.finish(True, banner="")
+        ui._offer_support()
+        self.assertEqual(ui.state, "running")
+
+    def test_help_text_no_longer_claims_publication_stop(self):
+        import uncle_tui
+        source = Path(uncle_tui.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("It stops at the publication boundary", source)
+        self.assertIn("accepted without human review", source)
+        self.assertIn("nothing is committed, pushed or opened as a PR", source)
+
+    def test_auto_and_flag_commands_match(self):
+        for auto_mode, expected in (("true", True), ("false", False)):
+            ui = UncleTUI.__new__(UncleTUI)
+            ui.misc = {"auto_mode": auto_mode}
+            ui._startup_unattended = False
+            ui.workflow_idx = 0
+            self.assertEqual("--unattended" in ui.cmd_for(), expected)
+        ui.session_auto_mode = False  # Shift-Tab to attended affects the next run only
+        ui.misc = {"auto_mode": "true"}
+        self.assertNotIn("--unattended", ui.cmd_for())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -56,7 +56,7 @@ sg="$WORK/sg"
 mkdir -p "$sg/.uncle/workflow/approvals"
 extract_fns "$ROOT/scripts/stagegate.sh" "$sg/fns.sh" \
     gate_prompt legacy_word_notice upper lower require_file \
-    record_unattended_gate review_and_approve
+    record_unattended_gate approval_artifact_path review_and_approve
 cat > "$sg/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -156,7 +156,7 @@ else ok; fi
 cw="$WORK/cw"
 mkdir -p "$cw/.uncle/workflow/approvals"
 extract_fns "$ROOT/scripts/change-workflow.sh" "$cw/fns.sh" \
-    gate_prompt legacy_word_notice require_file record_unattended_gate human_gate
+    gate_prompt legacy_word_notice require_file record_unattended_gate approval_artifact_path human_gate
 cat > "$cw/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -285,6 +285,75 @@ else ok; fi
 # change was accepted. Unattended, nobody accepted it.
 if grep -q 'the issue remains open' "$ROOT/scripts/change-workflow.sh"; then ok
 else bad "cw-issue-open" "completion must leave the issue open"; fi
+
+# --- Issue 107: unattended COMPLETE is dialog-free and publishes nothing ----
+# Run each driver's production COMPLETE arm with stdin closed. git and gh are
+# PATH shims that record the call and fail: any commit/push/PR attempt is a defect.
+for driver in stagegate change-workflow; do
+    d="$WORK/fin-$driver"
+    mkdir -p "$d/.uncle/workflow" "$d/bin"
+    for tool in git gh; do
+        printf '#!/bin/sh\n[ "$1" = rev-parse ] && exit 0\necho "$0 $*" >> "%s/calls.log"\nexit 1\n' "$d" > "$d/bin/$tool"
+        chmod +x "$d/bin/$tool"
+    done
+    if [[ "$driver" == stagegate ]]; then col=1; else col=2; fi
+    extract_fns "$ROOT/scripts/$driver.sh" "$d/fns.sh" record_unattended_gate completed_verdict finished_build_line
+    arm="$d/arm.sh"
+    awk '/^        COMPLETE\)$/ {p = 1; next} p && /^        \*\)$/ {exit} p {print}' "$ROOT/scripts/$driver.sh" > "$arm"
+    cat > "$d/run.sh" <<HARNESS
+set -uo pipefail
+ROOT='$ROOT'
+PROJECT_ROOT='$d'
+STATE_DIR='$d/.uncle/workflow'
+VERDICT_FILE="\$STATE_DIR/audit-verdict"
+UNATTENDED_FILE="\$STATE_DIR/unattended-gates"
+AUDIT_OVERRIDE_FILE="\$STATE_DIR/audit-override"
+GREEN_OVERRIDE_FILE="\$STATE_DIR/green-override"
+LEDGER_FILE="\$STATE_DIR/ledger"
+ORIGIN_FILE="\$STATE_DIR/origin"
+DIFF_FILE=DIFF
+GREEN_MD=GREEN
+UNATTENDED=\${UNATTENDED:-0}
+triage_print_actions() { :; }
+change_pr_complete() { echo "change_pr_complete CALLED"; git commit; }
+. "\$(dirname "\$0")/fns.sh"
+$(cat "$arm")
+HARNESS
+    printf '%s\tNOT_READY\tabc\n' "x" > "$d/.uncle/workflow/audit-verdict"
+    if [[ "$col" == 1 ]]; then printf 'NOT_READY\tabc\n' > "$d/.uncle/workflow/audit-verdict.original"
+    else printf -- '-\tNOT_READY\tabc\n' > "$d/.uncle/workflow/audit-verdict.original"; fi
+    if [[ "$col" == 1 ]]; then printf 'READY\tabc\n' > "$d/.uncle/workflow/audit-verdict"
+    else printf -- '-\tREADY\tabc\n' > "$d/.uncle/workflow/audit-verdict"; fi
+    for id in FA-1 FA-2; do
+        printf '2026-01-01T00:00:00Z\taudit-finding-skipped\t%s accepted without human review (audit abc)\n' "$id" >> "$d/.uncle/workflow/unattended-gates"
+    done
+    out="$(cd "$d" && UNATTENDED=1 PATH="$d/bin:$PATH" timeout 60 bash "$d/run.sh" < /dev/null 2>&1)"; rc=$?
+    check "$driver-unattended-complete-rc" "0" "$rc"
+    if grep -qF "Finished build: verdict=NOT_READY skipped=2 path=$d" <<< "$out"; then ok
+    else bad "$driver-finished-line" "golden Finished line missing: $out"; fi
+    if grep -qF "NOT READY - 2 blocking findings WAIVED WITHOUT HUMAN REVIEW" <<< "$out"; then ok
+    else bad "$driver-not-ready-marker" "marker missing: $out"; fi
+    if [[ -e "$d/calls.log" ]] || grep -q "CALLED" <<< "$out"; then
+        bad "$driver-no-publish" "git/gh/PR handoff invoked unattended: $(cat "$d/calls.log" 2>/dev/null) $out"
+    else ok; fi
+    if [[ "$driver" == change-workflow ]]; then
+        if grep -q "PR handoff skipped" <<< "$out" && grep -q "Built in $d" <<< "$out"; then ok
+        else bad "cw-built-where" "what was built and where is not printed: $out"; fi
+    fi
+    # Attended: no Finished line; the PR handoff still runs (change-workflow).
+    out="$(cd "$d" && UNATTENDED=0 PATH="$d/bin:$PATH" timeout 60 bash "$d/run.sh" < /dev/null 2>&1)" || true
+    if grep -q "Finished build:" <<< "$out"; then bad "$driver-attended-silent" "attended run printed the unattended line"; else ok; fi
+    if [[ "$driver" == change-workflow ]]; then
+        if grep -q "change_pr_complete CALLED" <<< "$out"; then ok
+        else bad "cw-attended-handoff" "attended run no longer reaches the PR handoff: $out"; fi
+    fi
+done
+
+# Source-level guard: the unattended audit branch passes the flag and closes stdin.
+for driver in stagegate change-workflow; do
+    if grep -q 'audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" --unattended --ledger "$UNATTENDED_FILE" </dev/null' "$ROOT/scripts/$driver.sh"; then ok
+    else bad "$driver-audit-flag" "unattended audit branch missing"; fi
+done
 
 echo
 if [[ "$FAIL" -gt 0 ]]; then

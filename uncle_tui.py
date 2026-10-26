@@ -1442,7 +1442,7 @@ class UncleTUI:
                     side, ", ".join(runners_for(side)))
             return desc
         if getattr(self, "config_section", "") == "misc":
-            return "Auto mode runs unattended: human gates are recorded as waived; failing tests still stop the run. It stops at the publication boundary: the PR title, summary, consent and any commit signing are asked of you here, never delegated. The approval name identifies your manual approvals."
+            return "Auto mode runs unattended: human gates are recorded as waived; failing tests still stop the run. It asks nothing: blocking final-audit findings are skipped and ledgered as accepted without human review, no completion or star dialog opens, nothing is committed, pushed or opened as a PR, and the finished-build line is printed on exit. The approval name identifies your manual approvals."
         if getattr(self, "config_section", "") == "supervision":
             return self._supervision_desc()
         if not getattr(self, "config_section", ""):
@@ -2283,6 +2283,15 @@ class UncleTUI:
         preview_changed = self._poll_completion_preview()
         return got or preview_changed or before != (self.proc_done, self.prompt_kind)
 
+    def finished_build_lines(self):
+        """Lines to print on the terminal after an unattended finish, else None."""
+        if not getattr(self, "unattended_finished", False):
+            return None
+        lines = list(getattr(self, "finished_lines", []))
+        if not lines:
+            lines = ["Finished build: verdict=UNKNOWN skipped=0 path=" + _project_root()]
+        return lines
+
     def _build_finished(self):
         """A successful, finished run: banner seen, exit observed, exit code 0.
 
@@ -2335,6 +2344,12 @@ class UncleTUI:
         self.support_checked = True
         self.prompt_kind = ""
         if code != 0 or not getattr(self, "workflow_completed", False):
+            return
+        if finish_decision(getattr(self, "workflow_unattended", False),
+                           getattr(self, "workflow_completed", False), code) == 'exit':
+            # Unattended and finished: nobody is here to dismiss a dialog.
+            self.unattended_finished = True
+            self._quit()
             return
         self.completion_preview = CompletionPreview(_project_root())
         self.chat_focus = "chat"
@@ -2554,6 +2569,8 @@ class UncleTUI:
     # model, which was never this stage's model at all.
     def _read_banner(self, line):
         text = line.strip()
+        if text.startswith("Finished build:") or text.startswith("NOT READY - "):
+            self.finished_lines = getattr(self, "finished_lines", []) + [text]
         if text in ("Workflow complete.", "Change workflow complete.",
                     "Workflow complete with waived acceptance.",
                     "Change workflow complete with waived acceptance."):
@@ -7327,6 +7344,16 @@ class UncleTUI:
                 size = current_size
 
 
+def finish_decision(unattended, completed, exit_code):
+    """What a finished driver does to the screen (Issue 107).
+
+    'exit' only for an unattended run that completed with exit 0: no Finished
+    or star dialog, leave curses and print the finished-build line. Anything
+    else, including an attended run, keeps the dialog flow and exit code.
+    """
+    return 'exit' if unattended and completed and exit_code == 0 else 'dialog'
+
+
 def main(stdscr):
     try:
         fd = _tty_fd()
@@ -7340,7 +7367,9 @@ def main(stdscr):
             raise SystemExit(128 + signum)
         signal.signal(hangup, hung_up)
     try:
-        UncleTUI(stdscr).run()
+        ui = UncleTUI(stdscr)
+        ui.run()
+        return ui.finished_build_lines()
     finally:
         # SIGTERM (run's handler) and SIGHUP both unwind through here.
         restore_tty(fd, saved)
@@ -7370,4 +7399,8 @@ def _record_tui_pid():
 if __name__ == "__main__":
     _record_tui_pid()
     os.environ.setdefault('ESCDELAY', '25')  # D-1: fast single Esc, user value wins
-    curses.wrapper(main)
+    finished = curses.wrapper(main)
+    if finished:
+        # Printed after curses teardown so it lands on the real terminal.
+        print('\n'.join(finished), flush=True)
+        raise SystemExit(0)

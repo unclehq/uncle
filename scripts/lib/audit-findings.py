@@ -106,8 +106,11 @@ def findings_payload(payload, require_blockers=True):
         if item.get('blocks') not in ('YES', 'NO') or not item.get('evidence') or not item.get('required_correction'):
             raise ValueError('Missing finding evidence, correction, or YES/NO blocking status')
         if item['blocks'] == 'YES':
-            result.append({'id': identifier, 'evidence': item['evidence'],
-                           'required correction': item['required_correction'], 'blocks': 'YES'})
+            entry = {'id': identifier, 'evidence': item['evidence'],
+                     'required correction': item['required_correction'], 'blocks': 'YES'}
+            if isinstance(item.get('severity'), str):
+                entry['severity'] = item['severity']
+            result.append(entry)
     if require_blockers and not result:
         raise ValueError('NOT READY audit has no explicit blocking findings')
     return result
@@ -129,11 +132,72 @@ def save(path, data):
 ACCEPTED_DECISIONS = {'ignore', 'skip', 'human-reviewed'}
 
 
-def accepted(record, identifier):
-    return record['decisions'].get(identifier, {}).get('decision') in ACCEPTED_DECISIONS
+def accepted(record, identifier, allow_unattended=False):
+    """A machine waiver (mode: unattended) counts only for an unattended run."""
+    entry = record['decisions'].get(identifier, {})
+    if entry.get('mode') == 'unattended' and not allow_unattended:
+        return False
+    return entry.get('decision') in ACCEPTED_DECISIONS
 
 
-def review(report, state_dir, check_only=False):
+def ledger_text(sha, identifier):
+    return identifier + ' accepted without human review (audit ' + sha[:12] + ')'
+
+
+def reconcile_ledger(ledger, sha, record, blockers):
+    """Ledger every unattended waiver that has no line yet; never duplicate."""
+    if ledger is None:
+        return
+    try:
+        existing = ledger.read_text(encoding='utf-8') if ledger.exists() else ''
+    except OSError:
+        existing = ''
+    lines = []
+    for item in blockers:
+        entry = record['decisions'].get(item['id'], {})
+        if entry.get('mode') != 'unattended':
+            continue
+        detail = ledger_text(sha, item['id'])
+        if ('\taudit-finding-skipped\t' + detail) in existing:
+            continue
+        lines.append('\t'.join((datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                'audit-finding-skipped', detail)) + '\n')
+    if lines:
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        with open(ledger, 'a', encoding='utf-8', newline='\n') as stream:
+            stream.writelines(lines)
+
+
+def review_unattended(report, original, sha, path, record, blockers, ledger):
+    """Record a labelled skip for every unaccepted blocker; never prompt."""
+    print('AUDIT REVIEW (unattended): ' + str(report), flush=True)
+    for item in blockers:
+        identifier = item['id']
+        if accepted(record, identifier, True):
+            continue
+        record['decisions'][identifier] = {
+            'decision': 'skip',
+            'mode': 'unattended',
+            'recorded_at': datetime.now(timezone.utc).isoformat(),
+            'approved_by': 'unattended',
+            'finding': item,
+        }
+    if report.read_bytes() != original:
+        raise ValueError('Audit changed during review; review the updated report')
+    record['effective_verdict'] = 'READY'
+    save(path, record)
+    reconcile_ledger(ledger, sha, record, blockers)
+    waived = [item for item in blockers if record['decisions'][item['id']].get('mode') == 'unattended']
+    print(f'{len(waived)} blocking audit findings skipped', flush=True)
+    for item in waived:
+        severity = item.get('severity')
+        print('  ' + item['id'] + (' (' + severity + ')' if severity else '') + ': accepted without human review', flush=True)
+    print('Build verdict: NOT READY - ' + str(len(waived)) + ' blocking findings WAIVED WITHOUT HUMAN REVIEW')
+    print('Audit decisions: ' + str(path))
+    return 0
+
+
+def review(report, state_dir, check_only=False, unattended=False, ledger=None):
     original = report.read_bytes()
     sha = hashlib.sha256(original).hexdigest()
     if report.suffix == '.json':
@@ -147,7 +211,12 @@ def review(report, state_dir, check_only=False):
         if record.get('audit_sha256') != sha or not isinstance(record.get('decisions'), dict):
             raise ValueError('Invalid saved audit decisions')
     if check_only:
-        return 0 if all(accepted(record, item['id']) for item in blockers) else 1
+        machine = [item['id'] for item in blockers if record['decisions'].get(item['id'], {}).get('mode') == 'unattended']
+        if machine:
+            print('Unattended waivers (no human review): ' + ', '.join(machine), flush=True)
+        return 0 if all(accepted(record, item['id'], unattended) for item in blockers) else 1
+    if unattended:
+        return review_unattended(report, original, sha, path, record, blockers, ledger)
     print('AUDIT REVIEW REQUIRED: ' + str(report), flush=True)
     for index, item in enumerate(blockers, 1):
         identifier = item['id']
@@ -162,10 +231,9 @@ def review(report, state_dir, check_only=False):
                   f'Evidence: {item["evidence"]} '
                   f'Required correction: {item["required correction"]} '
                   'Choose [s] Skip, [r] Human reviewed — OK, [n] Keep blocking: ')
-        # Unattended mode runs all build stages automatically, but it does
-        # not have authority to waive the final human review.  Under the TUI
-        # stdin is a live modal pipe, so this prompt is answered by the owner;
-        # in a noninteractive invocation EOF leaves the audit pending.
+        # Attended path only: --unattended never reaches this prompt (see
+        # review_unattended). Under the TUI stdin is a live modal pipe, so this
+        # prompt is answered by the owner; EOF leaves the audit pending.
         while True:
             try:
                 answer = input(prompt).strip().lower()
@@ -204,9 +272,12 @@ def main():
     parser.add_argument('report', type=Path)
     parser.add_argument('state_dir', type=Path)
     parser.add_argument('--check', action='store_true', help='Validate saved decisions without prompting')
+    parser.add_argument('--unattended', action='store_true',
+                        help='Record every unaccepted blocker as a labelled skip without prompting')
+    parser.add_argument('--ledger', type=Path, help='Unattended-gates ledger to append skipped findings to')
     args = parser.parse_args()
     try:
-        return review(args.report, args.state_dir, args.check)
+        return review(args.report, args.state_dir, args.check, args.unattended, args.ledger)
     except (OSError, ValueError, KeyError, TypeError) as error:
         print('Audit finding review stopped: ' + str(error), flush=True)
         return 2

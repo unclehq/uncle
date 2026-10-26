@@ -456,6 +456,24 @@ legacy_word_notice() {
 . "$ROOT/scripts/lib/progress.sh"
 . "$ROOT/scripts/lib/issue-close.sh"
 . "$ROOT/scripts/lib/change-pr.sh"
+[ -r "$ROOT/scripts/lib/finished-extras.sh" ] && . "$ROOT/scripts/lib/finished-extras.sh" || true
+declare -f finished_extras > /dev/null || finished_extras() { :; }
+
+# The finished-extras block after change_pr_complete. A non-zero rc prints it
+# with --stopped. The reason comes from change_pr_extras_reason when
+# change-pr.sh provides it.
+change_pr_extras_print() {
+    local rc="${1:-0}" reason=not-published
+    if declare -f change_pr_extras_reason > /dev/null; then
+        reason="$(change_pr_extras_reason 2>/dev/null || echo not-published)"
+    fi
+    if [[ "$rc" != 0 ]]; then
+        finished_extras print --kind change --reason "$reason" --stopped
+    else
+        finished_extras print --kind change --reason "$reason" ${UNATTENDED:+$([[ "$UNATTENDED" == 1 ]] && echo --unattended)}
+    fi
+    return 0
+}
 
 # The independent verification run, and the generated document the
 # post-implementation gate shows.
@@ -664,6 +682,9 @@ on_exit() {
     if declare -f cleanup_bg > /dev/null; then cleanup_bg; fi
     if declare -f release_lock > /dev/null; then release_lock; fi
     uncle_title_end
+    if [[ "$rc" != 0 && -e "${STATE_DIR:-.uncle/workflow}/run-started-at" ]]; then
+        finished_extras print --kind change --reason "$(change_pr_extras_reason 2>/dev/null || echo not-published)" --stopped
+    fi
     triage_on_exit "$rc"
 }
 trap on_exit EXIT
@@ -3299,6 +3320,9 @@ sys.exit(0 if all(isinstance(f, dict) and f.get("driver_fallback") is True for f
 # here, before the first stage.
 change_pr_engine start || exit 1
 
+[[ -e "$STATE_FILE" ]] || finished_extras reset
+finished_extras start
+
 while true; do
     python3 "$ROOT/scripts/lib/rerun_stage.py" change || exit 1
     state="$(get_state)"
@@ -4150,13 +4174,18 @@ REPAIR
                 echo
                 finished_build_line "$(completed_verdict)"
                 if git rev-parse --verify HEAD >/dev/null 2>&1; then
-                    change_pr_complete </dev/null
+                    pr_rc=0
+                    change_pr_complete </dev/null || pr_rc=$?
+                    ! declare -f change_pr_extras_print >/dev/null || change_pr_extras_print "$pr_rc"
                 else
                     echo "Unattended: no base commit, so no PR was made."
+                    finished_extras print --kind change --reason no-base-commit --unattended
                 fi
                 echo "Built in $PROJECT_ROOT; review $DIFF_FILE."
             elif git rev-parse --verify HEAD >/dev/null 2>&1; then
-                change_pr_complete
+                pr_rc=0
+                change_pr_complete || pr_rc=$?
+                ! declare -f change_pr_extras_print >/dev/null || change_pr_extras_print "$pr_rc"
             elif [[ -s "$ORIGIN_FILE" ]]; then
                 echo "Build complete without a commit. PR publication requires an existing base commit; the issue remains open."
             else

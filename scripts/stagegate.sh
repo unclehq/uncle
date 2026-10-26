@@ -266,6 +266,8 @@ AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"
 
 . "$ROOT/scripts/lib/sha256.sh"
 . "$ROOT/scripts/lib/triage.sh"
+[ -r "$ROOT/scripts/lib/finished-extras.sh" ] && . "$ROOT/scripts/lib/finished-extras.sh" || true
+declare -f finished_extras > /dev/null || finished_extras() { :; }
 
 # One EXIT hook for the whole run: cancel speculation, then hand the exit
 # status to the triage hook, which writes the failure bundle for anything
@@ -281,6 +283,7 @@ on_exit() {
         kill "$PREFLIGHT_BG_PID" 2>/dev/null || true
         wait "$PREFLIGHT_BG_PID" 2>/dev/null || true
     fi
+    if [[ "$rc" != 0 ]]; then finished_extras print --kind new --reason not-applicable --stopped; fi
     triage_on_exit "$rc"
 }
 trap on_exit EXIT
@@ -3655,6 +3658,10 @@ python3 "$ROOT/scripts/lib/session-totals.py" "$STATE_DIR" "$DOCUMENT_BUDGET_SOU
 # previous "human" stop would silence the triage bundle on this run's failure.
 rm -f "$STATE_DIR/stop-reason"
 
+# A fresh run (no state file yet) drops any stale start stamp; a resume keeps it.
+[[ -e "$STATE_FILE" ]] || finished_extras reset
+finished_extras start
+
 while true; do
     preserve_requirements_source
     python3 "$ROOT/scripts/lib/rerun_stage.py" app || exit 1
@@ -4728,6 +4735,7 @@ while true; do
                 echo
                 finished_build_line "$(completed_verdict)"
             fi
+            finished_extras print --kind new --reason not-applicable ${UNATTENDED:+$([[ "$UNATTENDED" == 1 ]] && echo --unattended)}
 
             exit 0
             ;;

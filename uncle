@@ -596,7 +596,7 @@ configure_stage() {
         printf '  effort  %s\n' "$(uncle_stage_effort "$stage")"
         if [[ "${effective}" == "self-hosted" ]]; then
             printf '  model     %s\n' "$(config_get "$stage.model")"
-            printf 'Set [r]unner [m]odel, [a]pply OpenCode to all stages, [d]efaults, [q]back: '
+            printf 'Set [r]unner [m]odel, [a]pply Self hosted to all stages, [d]efaults, [q]back: '
         elif [[ "${effective}" == "cline" ]]; then
             printf '  model   %s\n' "$(config_get "$stage.model")"
             printf '%s' "Set [${C_CYAN}r${C_RESET}]unner [${C_CYAN}e${C_RESET}]ffort [${C_CYAN}m${C_RESET}]odel, [${C_CYAN}d${C_RESET}]efaults, [${C_CYAN}q${C_RESET}]back: "
@@ -655,7 +655,7 @@ for stage in sys.argv[4:]:
         keys.pop(stage, None)
 save_keys(sys.argv[2], keys)
 PYKEYS
-                echo 'OpenCode and this LLM connection selected for all stages.'
+                echo 'Self hosted and this LLM connection selected for all stages.'
                 ;;
             e)
                 choose_effort

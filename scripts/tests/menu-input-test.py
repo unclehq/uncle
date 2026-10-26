@@ -128,7 +128,7 @@ class MenuInputTests(unittest.TestCase):
             capture_output=True, env=dict(os.environ, PATH=str(bindir),
                 ROOT=str(ROOT), UNCLE_CONFIG=str(config), CONFIG_STAGES="requirements"))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("[a]pply OpenCode", result.stdout)
+        self.assertIn("[a]pply Self hosted", result.stdout)
         self.assertIn("RELOADED:self-hosted:vendor/model", result.stdout)
         self.assertNotIn("requirements.runner", config.read_text())
 

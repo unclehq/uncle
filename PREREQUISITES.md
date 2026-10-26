@@ -44,7 +44,7 @@ Install and configure every client selected in **Configure → Configure stages*
 | Claude | `claude` | Authenticate the Claude Code client. |
 | Codex | `codex` | Authenticate the Codex client. |
 | Kimi | `kimi` | Authenticate the Kimi client. |
-| OpenCode / self hosted | `opencode` | Configure an OpenAI-compatible model endpoint in Uncle, as described below. |
+| Self hosted | `opencode` | Configure an OpenAI-compatible model endpoint in Uncle, as described below. |
 
 Before starting a workflow, confirm each selected client can run from your terminal and access its model. Hosted providers may require a subscription or funded API account. Uncle does not provide model access.
 
@@ -124,7 +124,7 @@ Your account needs read access to the source issue and permission to close it if
 
 ## Project setup
 
-Run `uncle` from a writable project directory. Start with `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or a GitHub issue. A Git repository is optional: you do not need to run `git init`. OpenCode runs from the project directory without requiring a repository.
+Run `uncle` from a writable project directory. Start with `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or a GitHub issue. A Git repository is optional: you do not need to run `git init`. Self-hosted runs from the project directory without requiring a repository.
 
 Without a repository, review the project files directly; Uncle cannot produce Git change diffs. In a repository, keep unrelated work committed or stashed so review diffs are clear. The Git command-line tool remains an installer dependency.
 

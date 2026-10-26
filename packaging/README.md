@@ -59,7 +59,7 @@ The package declares Scoop dependencies for Git, Python, jq, and gh. Its
 PowerShell shim locates Scoop's Git Bash and Python, preserves the calling
 project directory, and passes arguments/exit codes through. The private
 `python3` shell wrapper avoids relying on Windows Python executable aliases.
-Curses is optional; install `windows-curses` into Scoop Python for the full UI.
+Curses is optional. The Scoop install tries `windows-curses` and continues with a warning when none exists for your Python version (for example a very new release).
 Agent CLIs still need to be available to Git Bash and authenticated separately.
 
 `-SourceDir` packages a local checkout, retaining its ZIP in Scoop's

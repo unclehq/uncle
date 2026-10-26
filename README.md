@@ -284,6 +284,14 @@ uncle
 
 Give Uncle a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue.
 
+To start a change from a prepared request, pipe it in:
+
+```sh
+cat request.md | uncle --change-request [--unattended]
+```
+
+`--change-request` reads all of stdin (UTF-8, at most 1 MiB, no NUL or control characters), writes it unchanged (CRLF becomes LF) to `CHANGE_REQUEST.md`, and starts the change workflow. It refuses to overwrite an existing `CHANGE_REQUEST.md` and cannot be combined with `--application` or `--issue`. Treat piped text as untrusted input to tool-using agents, especially with `--unattended`.
+
 Then work with Uncle while it works.
 
 ## Install

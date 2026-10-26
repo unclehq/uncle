@@ -14,6 +14,7 @@ from pathlib import Path
 import queue
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -45,7 +46,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
 from completion_preview import CompletionPreview, STAR_URL, launch_spec
 from preview_server import DevelopmentPreview, PreviewServer, development_preview
 from chat import Conversation, sanitize
-from generated_input import generated_input_path
+from generated_input import generated_input_path, generated_input_write_path
 from home_chat import HomeRequest, IssueSeedRequest
 from home_actions import prompt as home_action_prompt, parse_reply as parse_home_action
 from triage_chat import (TriageRequest, parse_reply as parse_triage_reply, compose_prompt as triage_prompt,
@@ -83,6 +84,14 @@ NO_EDIT_PROPOSAL = re.compile(
 # install libexec before launching this TUI; without it os.getcwd() would be
 # the install dir and config edits would land in the wrong .uncle/.
 _CONFIGURE_FIRST_RUN = object()  # sentinel: leave in place until set in __init__
+
+
+CHANGE_REQUEST_EXISTS = 'CHANGE_REQUEST.md already exists. Run it or choose a new project; it was not overwritten.'
+STARTUP_REFUSAL = []
+
+
+class StartupRefused(Exception):
+    """A launch flag was refused: restore the terminal, print, exit 1."""
 
 
 def _project_root():
@@ -1038,6 +1047,7 @@ class UncleTUI:
         # Read startup action from environment if present
         self._startup_action = os.environ.get("UNCLE_STARTUP_ACTION")
         self._startup_text = os.environ.get("UNCLE_STARTUP_TEXT")
+        self._startup_text_file = os.environ.get("UNCLE_STARTUP_TEXT_FILE")
         self._startup_unattended = os.environ.get("UNCLE_STARTUP_UNATTENDED") == "1"
         self._startup_injected = False
         if self._startup_unattended:
@@ -3899,11 +3909,69 @@ class UncleTUI:
                     'message': 'Starting GitHub issue build'
                 }
                 self._home_action(action, replace_approved=True)
+            elif self._startup_action == 'change_request':
+                text = self._read_startup_text_file(self._startup_text_file)
+                if any(os.path.lexists(os.path.join(_project_root(), *part, 'CHANGE_REQUEST.md'))
+                       for part in ((), ('.uncle', 'docs'))):
+                    raise StartupRefused(CHANGE_REQUEST_EXISTS)
+                self._start_change_request(text)
             else:
                 raise ValueError('Unknown startup action: ' + str(self._startup_action))
         finally:
             self._startup_action = None
             self._startup_text = None
+            self._startup_text_file = None
+
+    def _start_change_request(self, text):
+        """Write piped text to CHANGE_REQUEST.md verbatim and start the change build.
+
+        create_change requires the section schema and would reshape plain text,
+        so this seeds the same file and enters the same workflow (index 2)
+        directly; O_EXCL makes the existence check race-free.
+        """
+        root = _project_root()
+        path = generated_input_write_path('CHANGE_REQUEST.md', root)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            raise StartupRefused(CHANGE_REQUEST_EXISTS) from None
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(text.encode('utf-8'))
+            stream.flush()
+            os.fsync(stream.fileno())
+        self.new_workflow_pending = True
+        self.workflow_idx = 2
+        self._run()
+        self.home_history.append(('system', 'Started the change workflow using CHANGE_REQUEST.md.'))
+
+    @staticmethod
+    def _read_startup_text_file(path):
+        """Read and delete the launcher's private change-request file.
+
+        Only a regular, non-symlink, user-owned file directly inside a 0700
+        directory owned by this user is trusted; anything else is refused and
+        left in place, since the path comes from the environment.
+        """
+        if not path or not os.path.isabs(path):
+            raise StartupRefused('Error: --change-request input file is missing or untrusted')
+        try:
+            parent = os.lstat(os.path.dirname(path))
+            info = os.lstat(path)
+            safe = (stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.getuid()
+                    and not parent.st_mode & 0o077
+                    and stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid())
+            if not safe:
+                raise OSError
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, 'r', encoding='utf-8', newline='') as stream:
+                text = stream.read()
+        except (OSError, UnicodeDecodeError):
+            raise StartupRefused('Error: --change-request input file is missing or untrusted') from None
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        return text
 
     def _startup_brief_turn(self, text):
         """Hand a launch-flag description to the homepage supervisor, as if typed.
@@ -7309,6 +7377,9 @@ class UncleTUI:
             try:
                 self._handle_startup_action()
                 dirty = True
+            except StartupRefused as exc:
+                STARTUP_REFUSAL.append(str(exc))
+                self.state = 'quit'
             except Exception as exc:
                 self.home_history.append(('system', 'Startup action failed: %s. Try again or pick from menu.' % sanitize(str(exc))))
                 dirty = True
@@ -7400,6 +7471,9 @@ if __name__ == "__main__":
     _record_tui_pid()
     os.environ.setdefault('ESCDELAY', '25')  # D-1: fast single Esc, user value wins
     finished = curses.wrapper(main)
+    if STARTUP_REFUSAL:
+        print(STARTUP_REFUSAL[0], file=sys.stderr, flush=True)
+        raise SystemExit(1)
     if finished:
         # Printed after curses teardown so it lands on the real terminal.
         print('\n'.join(finished), flush=True)

@@ -96,5 +96,84 @@ class StartupAction(unittest.TestCase):
         self.assertEqual(self.ui.state, 'menu')
 
 
+class ChangeRequestStartup(StartupAction):
+    # Shares StartupAction.setUp; its own tests are not re-run here.
+    test_description_starts_the_build_immediately = None
+    test_no_supervisor_is_needed_for_a_launch_flag = None
+    test_existing_brief_is_replaced_without_a_proposal = None
+    test_typed_messages_are_unchanged = None
+
+    TEXT = 'Fix the bug.\r\nNo heading here\n\n  trailing  '
+
+    def setUp(self):
+        super().setUp()
+        self.private = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(self.private, ignore_errors=True))
+        self.private.chmod(0o700)
+        self.file = self.private / 'cr'
+        self.file.write_bytes(b'Fix the bug.\nNo heading here\n\n  trailing  ')
+        self.ui._startup_action = 'change_request'
+        self.ui._startup_text_file = str(self.file)
+
+    def target(self):
+        return Path(generated_input_path('CHANGE_REQUEST.md', self.root))
+
+    def test_starts_change_workflow_with_exact_bytes_and_no_github(self):
+        with patch('subprocess.run') as run, patch('subprocess.Popen') as popen:
+            self.ui._handle_startup_action()
+        run.assert_not_called()
+        popen.assert_not_called()
+        self.assertEqual(self.target().read_bytes(), b'Fix the bug.\nNo heading here\n\n  trailing  ')
+        self.assertEqual(self.ui.workflow_idx, 2)
+        self.assertEqual(self.ui.state, 'running')
+        self.assertFalse(self.file.exists())
+        self.ChatRequest.assert_not_called()
+
+    def test_existing_request_refused_untouched(self):
+        existing = self.root / 'CHANGE_REQUEST.md'
+        existing.write_text('old')
+        with self.assertRaises(tui.StartupRefused) as ctx:
+            self.ui._handle_startup_action()
+        self.assertIn('CHANGE_REQUEST.md already exists', str(ctx.exception))
+        self.assertEqual(existing.read_text(), 'old')
+        self.assertFalse((self.root / '.uncle/brief-history').exists())
+        self.assertEqual(self.ui.state, 'menu')
+
+    def test_dangling_symlink_refused(self):
+        (self.root / 'CHANGE_REQUEST.md').symlink_to(self.root / 'nowhere')
+        with self.assertRaises(tui.StartupRefused):
+            self.ui._handle_startup_action()
+        self.assertTrue((self.root / 'CHANGE_REQUEST.md').is_symlink())
+
+    def test_untrusted_paths_refused_and_not_deleted(self):
+        link_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(link_dir, ignore_errors=True))
+        link_dir.chmod(0o700)
+        victim = link_dir / 'victim'
+        victim.write_text('keep')
+        link = self.private / 'link'
+        link.symlink_to(victim)
+        open_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(open_dir, ignore_errors=True))
+        open_dir.chmod(0o755)
+        loose = open_dir / 'f'
+        loose.write_text('keep')
+        for path in (str(link), str(self.private), str(loose), 'relative', '', None):
+            self.ui._startup_action = 'change_request'
+            self.ui._startup_text_file = path
+            with self.assertRaises(tui.StartupRefused):
+                self.ui._handle_startup_action()
+        self.assertEqual(victim.read_text(), 'keep')
+        self.assertEqual(loose.read_text(), 'keep')
+        self.assertFalse(self.target().exists())
+
+    def test_app_and_issue_unchanged_with_text_file_set(self):
+        self.ui._startup_action, self.ui._startup_text = 'create_app', DESCRIPTION
+        self.ui._handle_startup_action()
+        self.assertIn(DESCRIPTION, self.brief())
+        self.assertEqual(self.ui.workflow_idx, 0)
+        self.assertTrue(self.file.exists())
+
+
 if __name__ == '__main__':
     unittest.main()

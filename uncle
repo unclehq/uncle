@@ -59,6 +59,7 @@ usage() {
 Usage: uncle [-h|--help|--performance|--runs] [--unattended]
        uncle --application TEXT [--unattended]
        uncle --issue ISSUE [--unattended]
+       uncle --change-request [--unattended] < request.md
        uncle verify [<pr>] [--attestation PATH] [--tree SHA]
                     [--allowed-signers PATH] [--certificate-identity ID]
                     [--certificate-oidc-issuer URL]
@@ -81,8 +82,13 @@ build; without a supervisor the build starts from TEXT as written. Composes
 with --unattended.
 --issue ISSUE starts a GitHub issue build immediately with the given issue
 reference (number, #number, or full https://github.com/... URL), skipping
-interactive input. Composes with --unattended. --application and --issue are
-mutually exclusive.
+interactive input. Composes with --unattended.
+--change-request reads the whole change request from stdin (UTF-8, at most
+1048576 bytes, no NUL or control characters), writes it to CHANGE_REQUEST.md and
+starts the change workflow. stdin must be piped or redirected; it refuses to
+overwrite an existing CHANGE_REQUEST.md. The text is untrusted input to
+tool-using agents, especially with --unattended. --application, --issue and
+--change-request are mutually exclusive.
 --performance reports recorded runtime and token usage for the current project.
 --runs lists the runs across this project's git worktrees (see
 `from-issue.sh --worktree`): one line per worktree holding a run, as
@@ -102,6 +108,10 @@ UNCLE_ORIGINAL_ARGS=("$@")
 UNCLE_ARGS=()
 UNCLE_STARTUP_ACTION=""
 UNCLE_STARTUP_TEXT=""
+UNCLE_STARTUP_TEXT_FILE=""
+UNCLE_UNATTENDED=""
+UNCLE_CR_DIR=""
+trap '[[ -n "$UNCLE_CR_DIR" ]] && rm -rf "$UNCLE_CR_DIR"' EXIT
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)     usage; exit 0 ;;
@@ -109,10 +119,29 @@ while [[ $# -gt 0 ]]; do
         verify)        shift; cd "$PROJECT_ROOT" && exec python3 "$ROOT/scripts/uncle-verify.py" "$@" ;;
         --performance) exec bash "$ROOT/scripts/performance-report.sh" "$PROJECT_ROOT" ;;
         --runs)        exec python3 "$ROOT/scripts/lib/worktree_runs.py" "$PROJECT_ROOT" ;;
-        --unattended)  UNCLE_ARGS+=(--unattended); shift ;;
+        --unattended)  UNCLE_ARGS+=(--unattended); UNCLE_UNATTENDED=1; shift ;;
+        --change-request)
+            if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
+                printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2
+                exit 1
+            fi
+            if [[ -t 0 ]]; then
+                printf 'Error: --change-request reads the change request from stdin; pipe or redirect it in\n' >&2
+                exit 1
+            fi
+            if ! command -v python3 >/dev/null 2>&1; then
+                printf 'Error: --change-request requires python3\n' >&2
+                exit 1
+            fi
+            UNCLE_CR_DIR="$(mktemp -d)" || exit 1
+            UNCLE_STARTUP_TEXT_FILE="$(python3 "$ROOT/scripts/lib/change_request_stdin.py" "$PROJECT_ROOT" "$UNCLE_CR_DIR")" || exit 1
+            [[ -n "$UNCLE_STARTUP_TEXT_FILE" ]] || exit 1
+            UNCLE_STARTUP_ACTION="change_request"
+            shift
+            ;;
         --application)
             if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
-                printf 'Error: --application and --issue are mutually exclusive\n' >&2
+                printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2
                 exit 1
             fi
             shift
@@ -130,7 +159,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --issue)
             if [[ -n "$UNCLE_STARTUP_ACTION" ]]; then
-                printf 'Error: --application and --issue are mutually exclusive\n' >&2
+                printf 'Error: --application, --issue and --change-request are mutually exclusive\n' >&2
                 exit 1
             fi
             shift
@@ -166,7 +195,7 @@ while [[ $# -gt 0 ]]; do
             hint="$(python3 -c '
 import difflib, sys
 close = difflib.get_close_matches(sys.argv[1], sys.argv[2:], n=1, cutoff=0.6)
-print(close[0] if close else "")' "$1" --help --performance --runs --unattended --application --issue verify 2>/dev/null)"
+print(close[0] if close else "")' "$1" --help --performance --runs --unattended --application --issue --change-request verify 2>/dev/null)"
             if [[ -n "$hint" ]]; then
                 printf 'Did you mean %s? Run uncle --help for usage.\n' "$hint" >&2
             else
@@ -189,7 +218,9 @@ export UNCLE_CONFIG
 export UNCLE_PROJECT_ROOT="$PROJECT_ROOT"
 # The TUI reads the launch flags from its environment; unexported, they were
 # parsed and then never seen, and --application opened an idle homepage.
-export UNCLE_STARTUP_ACTION UNCLE_STARTUP_TEXT
+export UNCLE_STARTUP_ACTION UNCLE_STARTUP_TEXT UNCLE_STARTUP_TEXT_FILE
+# The TUI runs the driver itself, so it needs --unattended told to it as well.
+[[ -z "$UNCLE_UNATTENDED" ]] || export UNCLE_STARTUP_UNATTENDED=1
 CONFIG_STAGES="requirements change-spec project-plan change-plan adversarial-review updated-plan updated-change-plan preflight implementation repair test-review manual-checklist execute-checklist final-audit"
 
 # A Python process never picks up a rebuilt uncle_tui.py on its own -- it

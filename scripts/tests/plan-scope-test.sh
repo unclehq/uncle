@@ -374,6 +374,22 @@ printf '## Change-impact table\n\n| Component | Planned change |\n|---|---|\n| `
 check_eq "an extensionless root file named in the table is in scope when it exists" "app.py
 uncle" "$(cd "$ROOTF" && plan_scope_files PLAN.md)"
 
+BLOCKS="$TMP/BLOCKS.md"
+printf '## 12. Implementation order\n\nIntro text.\n\n**Step 1: Scaffolding**\n- Create the config.\n- Owns: `playwright.config.js`, `tests/calc.spec.js`\n- Depends on: (none)\n\n**Step 2: Verify**\n- Run tests.\n- Owns: `index.html` (if fixes needed)\n- Depends on: Step 1\n\n### Step 3: Reconcile\n- Owns: `.uncle/launch.json`\n- Depends on: Step 1, Step 2\n\n## 13. Next\n' > "$BLOCKS"
+check_eq "bold step headings: Owns bullets are read" "1	playwright.config.js
+1	tests/calc.spec.js
+2	index.html
+3	.uncle/launch.json" "$(plan_step_owns "$BLOCKS")"
+check_eq "bold step headings: Depends on bullets are read" "2	1
+3	1
+3	2" "$(plan_step_depends "$BLOCKS")"
+check_eq "bold step headings: three steps, titles kept" "3" "$(plan_steps "$BLOCKS" | wc -l | tr -d ' ')"
+check_eq "bold step headings: work bullets are not steps" "no" "$([[ "$(plan_steps "$BLOCKS")" == *'Create the config'* ]] && echo yes || echo no)"
+NUM="$TMP/NUM.md"
+printf '## 12. Implementation order\n\n1. Core. Owns: `a.js`. Depends on: none.\n2. UI. Owns: `b.js`. Depends on: 1.\n' > "$NUM"
+check_eq "numbered lists still pass through unchanged" "1	a.js
+2	b.js" "$(plan_step_owns "$NUM")"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "plan-scope-test.sh: $FAILED of $COUNT checks failed"
     exit 1

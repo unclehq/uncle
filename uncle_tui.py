@@ -2579,7 +2579,7 @@ class UncleTUI:
     # model, which was never this stage's model at all.
     def _read_banner(self, line):
         text = line.strip()
-        if text.startswith("Finished build:") or text.startswith("NOT READY - "):
+        if text.startswith("Finished build:") or text.startswith("READY - ") or text.startswith("NOT READY - "):
             self.finished_lines = getattr(self, "finished_lines", []) + [text]
         if text in ("Workflow complete.", "Change workflow complete.",
                     "Workflow complete with waived acceptance.",

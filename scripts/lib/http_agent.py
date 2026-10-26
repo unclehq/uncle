@@ -338,6 +338,15 @@ def interruptible_chat(stage, values, messages, tools, limit, effort, timeout):
     return outcome['data']
 
 
+# Compact means no whitespace *between* JSON tokens.  It must not reach into string values:
+# told to write "on a single line", a model flattened a multi-line `verification_commands` into
+# one line starting with "#", which the driver read as an all-comment block and rejected.
+COMPACT_JSON_REQUEST = ('Work is finished. Return only the final JSON object matching the required schema. Write it '
+                        'compactly: no indentation and no spaces or line breaks between JSON tokens, and no commentary. '
+                        'Inside string values, keep every line break as the \\n escape (a list of commands has one '
+                        'command per line), never replace it with a space.')
+
+
 TRUNCATED_KEEP_CHARS = 4 * 1024 * 1024
 
 
@@ -624,8 +633,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     # Compact, single-line JSON: a grammar permits whitespace anywhere, and a model that
     # starts pretty-printing (newline, indent, newline...) can keep going until the token
     # limit without ever writing a character of JSON.
-    messages.append({'role': 'user', 'content': 'Work is finished. Return only the final JSON object matching the required '
-                     'schema, written compactly on a single line with no indentation, blank lines or commentary.'})
+    messages.append({'role': 'user', 'content': COMPACT_JSON_REQUEST})
     # The closing answer is one artifact, never the size of a whole session's
     # budget; a runaway generation should fail at this cap, not at 64k tokens.
     # A worker packet is a few findings: it gets a much smaller one.
@@ -642,7 +650,11 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     # try gets half the cap and fails fast; the unconstrained retry gets all of it.  A server
     # that has already looped on whitespace twice in this project starts without the grammar.
     health = constraint_health(values)
-    attempts = [((), min(final_limit, 4096) if worker_packet else final_limit), (transport.GRAMMAR_MODES, final_limit)]
+    # Any answer, not only a packet, gets a first try sized to what real answers need: the largest
+    # model-written JSON seen is about 10k tokens, so 16k covers it with room.  A grammar that has
+    # slipped into whitespace costs the whole first cap before the retry even starts (calculator-local:
+    # 32,768 tokens of "\n  \t" after 4,900 real characters, then the retry, 22 minutes in all).
+    attempts = [((), min(final_limit, 4096 if worker_packet else 16384)), (transport.GRAMMAR_MODES, final_limit)]
     if worker_packet and health.get('whitespace_runaways', 0) >= 2:
         attempts = attempts[1:]
     for attempt, (skip, cap) in enumerate(attempts):
@@ -657,7 +669,9 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         if reason != 'length':
             break
         tail = ' '.join(final[-300:].split()) or '(only whitespace)'
-        if not final.strip():
+        # A runaway on whitespace is an answer that ends in whitespace, however much real JSON came
+        # before it; only an empty answer used to count, so a run like the one above was never learned from.
+        if not final.strip() or (len(final) > 2000 and not final[-2000:].strip()):
             record_whitespace_runaway(values)
         saved = save_truncated('final-%s' % mode, cap, final, None, final_usage)
         if attempt >= len(attempts) - 1 or mode == 'prompt':
@@ -665,8 +679,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                                   'It ended with: %s.%s' % (cap, tail, truncation_note(saved)))
         print('Self hosted: the %s-constrained answer hit the %d-token limit (it ended with: %s); asking once more '
               'without the grammar.' % (mode, cap, tail), file=sys.stderr)
-        messages.append({'role': 'user', 'content': 'That was cut off. Reply with the complete JSON object only, on one '
-                         'compact line, with no extra spaces, newlines or commentary.'})
+        messages.append({'role': 'user', 'content': 'That was cut off. ' + COMPACT_JSON_REQUEST})
     final = re.sub(r'<think>.*?</think>', '', final, flags=re.S).strip()
     try:
         conforms(json.loads(final), final_schema)

@@ -172,8 +172,57 @@ PY
 # may be `3`, `S-3`, `Step 3`; Owns may be a column or written inline in the Description
 # cell (a plan did exactly that: `Owns: ...` at the end of each description, no Owns
 # column, ids S-0..S-9).  Text elsewhere passes through unchanged.
-plan_table_steps_as_list() {
+# plan_step_blocks_as_list — stdin to stdout, with steps written as headings
+# rewritten as the numbered list every reader here understands.
+#
+#   **Step 1: Project scaffolding**        (or `### Step 1: ...`, `**1. ...**`, `#### S-1: ...`)
+#   - Create `playwright.config.js` ...
+#   - Owns: `playwright.config.js`, `tests/calculator.spec.js`
+#   - Depends on: Step 1
+#
+# becomes `1. Project scaffolding Owns: ... Depends on: 1`: the Owns:/Depends on: bullets
+# are folded onto the step's own line, wherever they sit in its block.  The block's other
+# lines follow it unchanged.  A numbered list or a table passes through untouched.
+plan_step_blocks_as_list() {
     awk '
+        function flush(    i) {
+            if (!have) return
+            printf "%s%s%s\n", head, (owns != "" ? " " owns : ""), (dep != "" ? " " dep : "")
+            for (i = 1; i <= nbody; i++) print body[i]
+            have = 0; nbody = 0; owns = ""; dep = ""
+        }
+        /^## ([0-9]+\. )?Implementation (sequence|order|steps)/ { flush(); insec = 1; print; next }
+        insec && /^## / { flush(); insec = 0 }
+        !insec { print; next }
+        {
+            line = $0
+            t = line; sub(/^[ \t]+/, "", t)
+            marked = (t ~ /^(\*\*|__|#+[ \t]+)/)
+            stripped = t; sub(/^(\*\*|__|#+[ \t]+)/, "", stripped)
+            if (marked && stripped ~ /^([Ss]tep[ \t]*|[Ss][ -]?)?[0-9]+[ \t]*[:.)-]/) {
+                flush()
+                n = stripped; sub(/^([Ss]tep[ \t]*|[Ss][ -]?)?/, "", n); sub(/[^0-9].*$/, "", n)
+                title = stripped; sub(/^([Ss]tep[ \t]*|[Ss][ -]?)?[0-9]+[ \t]*[:.)-][ \t]*/, "", title)
+                gsub(/(\*\*|__)[ \t]*$/, "", title)
+                head = n ". " title; have = 1
+                next
+            }
+            if (have && t ~ /^[-*+][ \t]+(\*\*)?[Oo]wns(\*\*)?[ \t]*:/) {
+                v = t; sub(/^[-*+][ \t]+/, "", v); gsub(/\*\*/, "", v); owns = (owns != "" ? owns ", " : "") v; next
+            }
+            if (have && t ~ /^[-*+][ \t]+(\*\*)?[Dd]epends[ \t]+on(\*\*)?[ \t]*:/) {
+                v = t; sub(/^[-*+][ \t]+/, "", v); gsub(/\*\*/, "", v)
+                gsub(/\(none\)/, "none", v); dep = v; next
+            }
+            if (have) { body[++nbody] = line; next }
+            print line
+        }
+        END { flush() }
+    '
+}
+
+plan_table_steps_as_list() {
+    plan_step_blocks_as_list | awk '
         function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
         # A step id: "3", "S-3", "S3", "Step 3", "#3".  Returns the number, or "" if the cell is not one.
         function stepnum(cell,    t) {

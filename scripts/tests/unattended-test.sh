@@ -329,9 +329,9 @@ HARNESS
     done
     out="$(cd "$d" && UNATTENDED=1 PATH="$d/bin:$PATH" timeout 60 bash "$d/run.sh" < /dev/null 2>&1)"; rc=$?
     check "$driver-unattended-complete-rc" "0" "$rc"
-    if grep -qF "Finished build: verdict=NOT_READY skipped=2 path=$d" <<< "$out"; then ok
+    if grep -qF "Finished build: verdict=READY skipped=2 path=$d" <<< "$out"; then ok
     else bad "$driver-finished-line" "golden Finished line missing: $out"; fi
-    if grep -qF "NOT READY - 2 blocking findings WAIVED WITHOUT HUMAN REVIEW" <<< "$out"; then ok
+    if grep -qF "READY - 2 blocking findings WAIVED WITHOUT HUMAN REVIEW (the auditor said NOT READY)" <<< "$out"; then ok
     else bad "$driver-not-ready-marker" "marker missing: $out"; fi
     if [[ "$driver" == change-workflow ]]; then
         # Issue 107 follow-up: an unattended change run hands off to the PR

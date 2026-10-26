@@ -69,6 +69,17 @@ class SynthesisSchema(unittest.TestCase):
         self.assertIn('Do not write a `narrative`', block)
 
 
+class CompactRequest(unittest.TestCase):
+    def test_compact_json_never_asks_to_flatten_string_values(self):
+        sys.path.insert(0, str(LIB))
+        agent = load('http_agent.py')
+        text = agent.COMPACT_JSON_REQUEST
+        self.assertNotIn('single line', text)
+        self.assertIn('between JSON tokens', text)
+        self.assertIn('\\n escape', text)
+        self.assertIn('one command per line', text)
+
+
 class FieldLimits(unittest.TestCase):
     def schema(self, kind, **kw):
         return SH.artifact_schema(kind, **kw)

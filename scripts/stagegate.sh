@@ -342,14 +342,12 @@ if [[ "$UNATTENDED" == 1 ]]; then
     fi
 fi
 
-# The auditor's own verdict, not the READY the waiver wrote over it.
+# The verdict the build finishes with. A waiver (a person's, or an unattended run's) leaves READY
+# in the verdict file and the auditor's own verdict in audit-verdict.original; the run reports
+# the effective one and says out loud, on the next line, that findings were waived unreviewed.
 completed_verdict() {
-    local verdict original="$STATE_DIR/audit-verdict.original"
+    local verdict
     verdict="$(awk -F'\t' 'NR == 1 {print $1}' "$VERDICT_FILE" 2>/dev/null)"
-    if [[ "$UNATTENDED" == 1 && -s "$original" && -s "$UNATTENDED_FILE" ]] \
-        && grep -qs $'\taudit-finding-skipped\t' "$UNATTENDED_FILE"; then
-        verdict="$(awk -F'\t' 'NR == 1 {print $1}' "$original")"
-    fi
     printf '%s' "$verdict"
 }
 
@@ -360,8 +358,8 @@ finished_build_line() {
         skipped="$(grep -c $'\taudit-finding-skipped\t' "$UNATTENDED_FILE" || true)"
     fi
     printf 'Finished build: verdict=%s skipped=%s path=%s\n' "$verdict" "${skipped:-0}" "$PROJECT_ROOT"
-    if [[ "$verdict" == NOT_READY && "${skipped:-0}" != 0 ]]; then
-        echo "NOT READY - ${skipped} blocking findings WAIVED WITHOUT HUMAN REVIEW"
+    if [[ "$verdict" == READY && "${skipped:-0}" != 0 ]]; then
+        echo "READY - ${skipped} blocking findings WAIVED WITHOUT HUMAN REVIEW (the auditor said NOT READY)"
     fi
 }
 

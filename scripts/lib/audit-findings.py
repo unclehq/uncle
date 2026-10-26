@@ -192,7 +192,7 @@ def review_unattended(report, original, sha, path, record, blockers, ledger):
     for item in waived:
         severity = item.get('severity')
         print('  ' + item['id'] + (' (' + severity + ')' if severity else '') + ': accepted without human review', flush=True)
-    print('Build verdict: NOT READY - ' + str(len(waived)) + ' blocking findings WAIVED WITHOUT HUMAN REVIEW')
+    print('Build verdict: READY - ' + str(len(waived)) + ' blocking findings WAIVED WITHOUT HUMAN REVIEW (the auditor said NOT READY)')
     print('Audit decisions: ' + str(path))
     return 0
 

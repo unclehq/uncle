@@ -159,8 +159,8 @@ class UnattendedFinishTests(unittest.TestCase):
         ui.workflow_unattended = unattended
         ui.support_checked = False
         ui.proc.poll.return_value = code
-        for line in ("Finished build: verdict=NOT_READY skipped=2 path=/tmp/p",
-                     "NOT READY - 2 blocking findings WAIVED WITHOUT HUMAN REVIEW"):
+        for line in ("Finished build: verdict=READY skipped=2 path=/tmp/p",
+                     "READY - 2 blocking findings WAIVED WITHOUT HUMAN REVIEW (the auditor said NOT READY)"):
             ui._read_banner(line)
         return ui
 
@@ -180,8 +180,8 @@ class UnattendedFinishTests(unittest.TestCase):
         self.assertEqual(ui.state, "quit")
         self.assertNotIn(ui.prompt_kind, ("support", "finished", "complete"))
         self.assertEqual(ui.finished_build_lines(), [
-            "Finished build: verdict=NOT_READY skipped=2 path=/tmp/p",
-            "NOT READY - 2 blocking findings WAIVED WITHOUT HUMAN REVIEW"])
+            "Finished build: verdict=READY skipped=2 path=/tmp/p",
+            "READY - 2 blocking findings WAIVED WITHOUT HUMAN REVIEW (the auditor said NOT READY)"])
 
     def test_attended_completed_still_offers_dialog_flow(self):
         ui = self.finish(False)

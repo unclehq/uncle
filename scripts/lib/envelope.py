@@ -503,10 +503,16 @@ def filter_strings(value, root='.', known=()):
 
 # --- Statement and signing ---------------------------------------------------
 
-def blocking_reason(envelopes, artifact):
+def blocking_reason(envelopes, artifact, waived=()):
     """The first reason release is refused, or ''. Policy is BLOCKING plus the
-    artifact identity (I-3); nothing else is consulted."""
+    artifact identity (I-3); nothing else is consulted.
+
+    `waived` names stages whose failure the caller has already answered on the record (an
+    unattended run's skipped audit findings, whose human review happens later, at testing or PR
+    review).  The stage's own envelope is untouched and still says `fail`; only this refusal is lifted."""
     for stage, results in BLOCKING.items():
+        if stage in waived:
+            continue
         env = envelopes.get(stage)
         if env is None:
             return stage + ' result unavailable; envelope missing'

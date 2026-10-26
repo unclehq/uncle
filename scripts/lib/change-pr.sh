@@ -288,7 +288,7 @@ def release_blocked_reason(j):
         if not (STATE / 'envelopes').is_dir():
             return ''
         artifact = snapshot(excludes=env.ARTIFACT_EXCLUDES)
-        reason = env.blocking_reason(env.load_envelopes(STATE), artifact)
+        reason = env.blocking_reason(env.load_envelopes(STATE), artifact, waived_stages(j))
     except Exception:
         return ''
     if not reason:
@@ -323,6 +323,28 @@ def consent_entry(artifact):
             'delegated_by': delegated, 'digest': artifact, 'timestamp': env.utc_now()}
 
 
+def unattended_audit_waiver(j):
+    """How many blocking audit findings an unattended run waived for THIS audit, or 0.
+
+    The run recorded each in the unattended ledger as accepted without human review, keyed by the
+    audit's hash.  Their human review is later (testing for a new app, PR review for a change), so
+    they do not stop release; the PR says so, and the ledger and the audit envelope keep the record.
+    """
+    prefix = (j.get('audit_hash') or '')[:12]
+    if not prefix:
+        return 0
+    count = 0
+    for line in read(STATE / 'unattended-gates').splitlines():
+        parts = line.split('\t')
+        if len(parts) >= 3 and parts[1] == 'audit-finding-skipped' and ('(audit ' + prefix + ')') in parts[2]:
+            count += 1
+    return count
+
+
+def waived_stages(j):
+    return ('audit',) if unattended_audit_waiver(j) else ()
+
+
 def override_entry(j):
     if (STATE / 'audit-override').exists():
         entry = envelope().approval_entry(STATE, 'FINAL_AUDIT_OVERRIDE')
@@ -332,7 +354,8 @@ def override_entry(j):
         return {'gate': 'verdict-override', 'approved_by': os.environ.get('UNCLE_APPROVAL_NAME', '') or 'operator', 'delegated_by': ''}
     original = read(STATE / 'audit-verdict.original').strip().split('\t')
     if len(original) == 3 and original[2] == j['audit_hash'] and original[1] == 'NOT_READY':
-        return {'gate': 'audit-findings', 'approved_by': os.environ.get('UNCLE_APPROVAL_NAME', '') or 'operator', 'delegated_by': ''}
+        approver = 'unattended (no human)' if unattended_audit_waiver(j) else (os.environ.get('UNCLE_APPROVAL_NAME', '') or 'operator')
+        return {'gate': 'audit-findings', 'approved_by': approver, 'delegated_by': ''}
     return None
 
 
@@ -351,7 +374,7 @@ def attest(j):
         raise error(str(failure)) from failure
     approvals = [env.approval_entry(STATE, name) for name in gate_names()] + [consent_entry(artifact)]
     override = override_entry(j)
-    reason = env.blocking_reason(envelopes, artifact)
+    reason = env.blocking_reason(envelopes, artifact, waived_stages(j))
     if reason and override:
         reason += '; the override is recorded but does not release'
     extra = {'approvals': approvals}
@@ -1402,6 +1425,13 @@ def handoff(j):
                 for row in rows[:10]:
                     banner += '> - ' + row.replace('\n', ' ') + '\n'
             body = banner + '\n' + body
+        waived = unattended_audit_waiver(j)
+        if waived:
+            # Said plainly at the top: the review that was skipped is this one.
+            body = ('> [!NOTE]\n'
+                    '> **Built unattended: %d blocking audit finding%s waived without human review.** '
+                    'The auditor said NOT READY. Human review is this PR; the findings are in '
+                    '`.uncle/docs/FINAL_AUDIT.md`.\n\n' % (waived, '' if waived == 1 else 's')) + body
         record = override_record()
         if len(record) == 4 and record[0] == j['verdict_run'] and record[2] == j['audit_hash']:
             # An overridden verdict is not a READY verdict; the PR says so.

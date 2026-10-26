@@ -837,7 +837,7 @@ class SelfHostedHttp(unittest.TestCase):
                                  final_schema=artifact_schema('adversarial-review-worker-packet'),
                                  final_name='adversarial_review_worker_packet')
         self.assertEqual([(m, l) for m, l, _ in caps], [('json_schema', 4096), ('prompt', 8192)])
-        self.assertIn('compactly on a single line', caps[0][2])
+        self.assertIn('Write it compactly', caps[0][2])
 
     def test_a_server_that_keeps_looping_on_whitespace_skips_the_grammar_for_packets(self):
         calls = []
@@ -869,6 +869,19 @@ class SelfHostedHttp(unittest.TestCase):
                                  final_schema=artifact_schema('plan'), final_name='plan')
         self.assertEqual(calls[0], 'json_schema')
 
+    def test_a_long_run_of_trailing_whitespace_is_recorded_as_a_runaway(self):
+        server = self.serve('x')
+        looped = '{"schema":"uncle.artifact/v1","kind":"plan","dispositions":[]' + '\n  \t' * 1500
+        def fake(values, messages, schema, name, mode, limit, effort, timeout):
+            if mode == 'json_schema':
+                return looped, 'length', {}
+            return json.dumps(PLAN), 'stop', {}
+        with patch.object(http_transport, '_final_call', fake):
+            http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
+                                 final_schema=artifact_schema('plan'), final_name='plan')
+        health = json.loads((self.root/'.uncle/workflow/constraint-health.json').read_text(encoding='utf-8'))
+        self.assertEqual(list(health.values())[0]['whitespace_runaways'], 1)
+
     def test_truncated_closing_answer_reports_how_it_ended(self):
         server = self.serve(PLAN)
         with patch.object(http_transport, '_final_call', lambda *a: ('{"findings":[' + '{"id":"AR-1"},' * 400, 'length', {})):
@@ -889,7 +902,9 @@ class SelfHostedHttp(unittest.TestCase):
         server = self.serve(PLAN)
         http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
                              final_schema=artifact_schema('plan'), final_name='plan')
-        self.assertEqual(self.final(server)['max_tokens'], 32768)
+        # The first, grammar-constrained try is capped at 16k (the largest real answer is about 10k);
+        # only the retry without the grammar gets the full 32768.
+        self.assertEqual(self.final(server)['max_tokens'], 16384)
         with patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_FINAL_OUTPUT_TOKENS': '2048'}):
             http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
                                  final_schema=artifact_schema('plan'), final_name='plan')

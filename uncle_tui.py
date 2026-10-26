@@ -440,7 +440,7 @@ CONFIG_DESC = {
     ),
     "field:effort": (
         "Reasoning effort for this stage: none, low, medium, or high. "
-        "OpenCode defaults to none; other runners default to low."
+        "Self hosted defaults to none; other runners default to low."
     ),
     "field:network": (
         "Whether this stage's sandbox may reach the network. Shown only when "
@@ -461,7 +461,7 @@ CONFIG_DESC = {
         "here is choosing which model list the row below offers, and a model "
         "from the other list is dropped rather than carried across."
     ),
-    "field:base_url": "The OpenAI-compatible API root OpenCode should use, for example http://localhost:8000/v1.",
+    "field:base_url": "The OpenAI-compatible API root the model server should use, for example http://localhost:8000/v1.",
     "field:api_key": "Endpoint credential, hidden while editing and stored separately in .uncle/self-hosted-keys.json. Use a placeholder for a server without authentication.",
     "field:model": (
         "The model this stage runs. For cline that is a `modelType/model` "
@@ -489,7 +489,7 @@ CONFIG_DESC = {
     ),
     "runner": (
         "The CLI program that drives the agent and reviewer stages of every "
-        "workflow. Choose cline, claude, kimi, codex, or Self hosted (OpenCode). The runner "
+        "workflow. Choose cline, claude, kimi, codex, or Self hosted. The runner "
         "decides which agent and reviewer scripts the workflow invokes, so you "
         "can plug in a different coding agent without touching the rest of the "
         "pipeline. Press Enter on this row to cycle through the runners."
@@ -503,7 +503,7 @@ CONFIG_DESC = {
     ),
     "effort": (
         "The reasoning effort applied to every stage: none, low, medium, or "
-        "high. OpenCode defaults to none; other runners default to low."
+        "high. Self hosted defaults to none; other runners default to low."
     ),
     "derive-brief": (
         "Fills in a brief seeded from a GitHub issue, reading the issue text and "
@@ -701,7 +701,7 @@ SUPERVISION_DESC = {
     "model": "Model id passed to the supervisor runner (default sonnet).",
     "effort": "Reasoning effort for the supervisor: low, medium or high.",
     "max_interventions": "Corrections applied per stage per run (default 2; 0 disables corrections). The next trigger asks you instead of calling a model.",
-    "steering_timeout_seconds": "Seconds an accepted steering message may go unanswered during active stage time before a diagnosis (default 120). Only runners that confirm answers (claude, OpenCode) are timed.",
+    "steering_timeout_seconds": "Seconds an accepted steering message may go unanswered during active stage time before a diagnosis (default 120). Only runners that confirm answers (claude, self-hosted) are timed.",
     "stage_time_seconds": "Active seconds a stage may run before a diagnosis, excluding gate waits (default 1800; 0 disables).",
     "stage_tokens": "Reported tokens a stage may use before a diagnosis (default 0 = off; unknown usage never triggers).",
     "call_timeout_seconds": "Deadline for one supervisor call; the worker tree is killed at the deadline (default 300).",
@@ -1225,7 +1225,7 @@ class UncleTUI:
         list is bought two ways. Network belongs to codex alone: it is the
         only runner that sandboxes a stage, and so the only one where the
         setting changes anything. Every runner takes an effort: claude, kimi,
-        cline, and codex as a reasoning level, self-hosted as the OpenCode
+        cline, and codex as a reasoning level, self-hosted as the
         model's reasoningEffort option. Claude, codex, and kimi take a model
         from their own catalogue; codex's row order keeps network above model.
         """
@@ -1279,7 +1279,7 @@ class UncleTUI:
         if field == "base_url" or (field == "model" and self.stage_runner(stage) == "self-hosted"):
             return stored or "not set"
         if field == "runner" and stored == "self-hosted":
-            return "OpenCode (Self hosted)"
+            return "Self hosted"
         if stored:
             if field == "model":
                 label = MODEL_LABELS.get(stored, "")
@@ -1332,7 +1332,7 @@ class UncleTUI:
             connection = connection_settings(self.stage_api_keys)
             connection[field] = value
             if connection.get('base_url') and connection.get('api_key'):
-                self.notice = "Discovering supported OpenCode models…"
+                self.notice = "Discovering supported self-hosted models…"
                 try:
                     refresh_models(self.stage_api_keys, connection['base_url'], connection['api_key'])
                 except ValueError as exc:
@@ -1376,7 +1376,7 @@ class UncleTUI:
         for stage in CONFIG_STAGES:
             self.stage_runners[stage] = "self-hosted"
         self.save_config()
-        self.notice = "OpenCode and this LLM connection selected for all stages."
+        self.notice = "Self hosted and this LLM connection selected for all stages."
 
     def _config_items(self):
         section = getattr(self, "config_section", "")
@@ -1396,7 +1396,7 @@ class UncleTUI:
         width = max(len(s) for s in BUILD_CONFIG_STAGES)
         rows = []
         for stage in BUILD_CONFIG_STAGES:
-            parts = ["Self hosted (OpenCode)" if self.stage_runner(stage) == "self-hosted" else self.stage_runner(stage)]
+            parts = ["Self hosted" if self.stage_runner(stage) == "self-hosted" else self.stage_runner(stage)]
             model = self.stage_model(stage)
             if model:
                 parts.append(MODEL_LABELS.get(model, model))
@@ -1435,7 +1435,7 @@ class UncleTUI:
             field = self._stage_field()
             desc = CONFIG_DESC.get("field:%s" % field, "")
             if field == "model" and self.stage_runner(self.stage_target) == "self-hosted":
-                return "Choose one of your configured OpenCode self-hosted models. Set the Base URL and API key to discover models in Configure → Configure self hosting."
+                return "Choose one of your configured self-hosted models. Set the Base URL and API key to discover models in Configure → Configure self hosting."
             if field == "runner":
                 side = STAGE_SIDE.get(self.stage_target, AGENT)
                 desc += " This is a %s stage, so its choices are %s." % (
@@ -1794,7 +1794,7 @@ class UncleTUI:
             "# Format: <stage>.runner | <stage>.effort | <stage>.model |\n"
             "#         <stage>.network VALUE\n"
             "#   (VALUE = runner, effort, model, or true/false for network).\n"
-            "# OpenCode connections and credentials are stored separately.\n"
+            "# Self-hosted connections and credentials are stored separately.\n"
             "# Edit from `uncle` ->\n"
             "#   Configure, or by hand.\n"
         )
@@ -6468,7 +6468,7 @@ class UncleTUI:
                 return "Recovery model — Enter: change, d: default, q back"
             if self.stage_target.startswith("@"):
                 return "Connection — Enter: edit, q back"
-            return "%s — Enter: change, a: use OpenCode for all stages, d: default, q back" % self.stage_target
+            return "%s — Enter: change, a: use Self hosted for all stages, d: default, q back" % self.stage_target
         title = {
             "menu": "The man from uncle",
             "issue_mode": "Seed as",
@@ -6580,7 +6580,7 @@ class UncleTUI:
                     text.lower() == (self._picker_current() or "").lower()
                 marker = "  <current>" if cur else ""
                 label = MODEL_LABELS.get(text, "") if kind == "model" else ""
-                display_text = "OpenCode (Self hosted)" if self.picker_kind == "runner" and text == "self-hosted" else text
+                display_text = "Self hosted" if self.picker_kind == "runner" and text == "self-hosted" else text
                 disp = prefix + display_text + ("  %s" % label if label else "") + marker
             try:
                 self.stdscr.addnstr(top + i, cx, disp, w - 1 - cx, attr)

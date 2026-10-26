@@ -12,7 +12,7 @@
 
 Uncle is a terminal-native supervisor and integrity layer for AI coding agents.
 
-Use Claude, Codex, OpenCode, Cline, Kimi, or the agents you already have.
+Use Claude, Codex, Self hosted models, Cline, Kimi, or the agents you already have.
 Uncle coordinates the change while keeping implementation, independent
 review, verification, human authority, and publication separate.
 
@@ -52,7 +52,7 @@ Coding agents can write code. They should not be trusted to approve their own wo
 Uncle separates the people and agents doing the work from the system establishing the integrity of the change.
 
 * **Work with Uncle while it works.** Ask questions, provide context, redirect implementation, or discuss failures without leaving the terminal.
-* **Use the agents you already have.** Uncle works with Cline, Claude, Codex, Kimi, OpenCode, and other coding agents.
+* **Use the agents you already have.** Uncle works with Cline, Claude, Codex, Kimi, self-hosted models, and other coding agents.
 * **Independent review.** The agent that writes the code does not approve its own implementation.
 * **Human authority.** Consequential decisions remain explicit human approval gates.
 * **Pinned intent.** Approved specifications and plans are cryptographically identified so they cannot silently change.

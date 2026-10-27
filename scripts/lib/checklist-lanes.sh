@@ -11,10 +11,13 @@
 # checklist_lane_batches <manual-checklist.json> <output-file> — batches on stdout of python, count returned.
 checklist_lane_batches() {
     local checklist="$1" output="$2" size max
-    size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-2}"
-    [[ "$size" =~ ^[1-9][0-9]*$ ]] || size=2
-    max="${WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-8}"
-    [[ "$max" =~ ^[1-9][0-9]*$ ]] || max=8
+    # One check per worker by default: a worker's time is mostly hidden reasoning that grows with the checks it
+    # holds (noinit: two checks, 5k tokens out for ~1k of answer, 73-96 s; the stage waits for the slowest), and
+    # the runner pool has 20 slots.  Checks sharing a resource or dependency stay together in one ordered lane.
+    size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-1}"
+    [[ "$size" =~ ^[1-9][0-9]*$ ]] || size=1
+    max="${WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-18}"
+    [[ "$max" =~ ^[1-9][0-9]*$ ]] || max=18
     python3 -B "$ROOT/scripts/lib/checklist_lanes.py" "$checklist" "$size" "$max" > "$output" 2>/dev/null || return 1
     wc -l < "$output" | tr -d ' '
 }

@@ -16,6 +16,7 @@ any doubt collapsing to one unit per group.
 """
 import fnmatch
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -94,8 +95,14 @@ def covers(owned, path):
     return False
 
 
-def group(total, owned, deps):
+def group(total, owned, deps, ignore_deps=False):
     """Consecutive runs of steps that share no owned path and break no dependency.
+
+    `ignore_deps` groups by ownership alone.  Implementation workers write only their own files, read none of
+    another step's and run nothing (the Speed rule in the step prompt), so a `Depends on:` buys them nothing
+    at this stage -- the plan's interfaces are what they build to -- and honouring it just serialises: a runner
+    that "depends on" the mutation list and the app waited for all of them, adding a whole step's time.
+    Ordering that matters is checked by verification, after the merge.
 
     A step that declared nothing owns everything: silence must never be read as
     'safe to run beside anything'.
@@ -104,7 +111,7 @@ def group(total, owned, deps):
     for step in range(1, total + 1):
         mine = owned.get(step) or {'*'}
         clash = '*' in mine or '*' in held or bool(mine & held)
-        waits = any(on in [s for g in [current] for s in g] for on in deps.get(step, ()))
+        waits = (not ignore_deps) and any(on in [s for g in [current] for s in g] for on in deps.get(step, ()))
         if current and (clash or waits):
             groups.append(current)
             current, held = [], set()
@@ -152,7 +159,8 @@ def main():
     steps = [s for s in sh('plan_steps') if s.strip()]
     owned, deps = owns(sh('plan_step_owns')), depends(sh('plan_step_depends'))
     total = len(steps)
-    groups = group(total, owned, deps) if total else []
+    ignore_deps = os.environ.get('WORKFLOW_IMPLEMENT_IGNORE_DEPENDS', '1') == '1'
+    groups = group(total, owned, deps, ignore_deps) if total else []
     declared = sorted({p for v in owned.values() for p in v})
     actual = sorted(set(changed_files(root)))
     # Accuracy is measured against *specific* claims only. A reconciling step

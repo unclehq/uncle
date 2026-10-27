@@ -58,5 +58,40 @@ class CoversTests(unittest.TestCase):
                           'a single-star glob does not cross a path separator')
 
 
+class GroupTests(unittest.TestCase):
+    OWNED = {n: {'f%d' % n} for n in range(1, 10)}
+    DEPS = {9: [1, 2, 3, 4, 8], 8: []}
+
+    def test_a_dependency_splits_a_group_by_default_in_the_function(self):
+        self.assertEqual(module.group(9, self.OWNED, self.DEPS), [[1, 2, 3, 4, 5, 6, 7, 8], [9]])
+
+    def test_ignoring_dependencies_groups_by_ownership_alone(self):
+        self.assertEqual(module.group(9, self.OWNED, self.DEPS, ignore_deps=True), [list(range(1, 10))])
+
+    def test_a_shared_file_still_splits_when_dependencies_are_ignored(self):
+        owned = {**self.OWNED, 9: {'f8'}}
+        self.assertEqual(module.group(9, owned, self.DEPS, ignore_deps=True), [list(range(1, 9)), [9]])
+
+    def test_a_step_that_declared_nothing_still_runs_alone(self):
+        owned = {1: {'a'}, 2: set(), 3: {'c'}}
+        self.assertEqual(module.group(3, owned, {}, ignore_deps=True), [[1], [2], [3]])
+
+    def test_the_driver_ignores_dependencies_unless_told_not_to(self):
+        import os, subprocess, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / 'plan.md'
+            plan.write_text('# Plan\n\n## 12. Implementation order\n\n1. A\n   Owns: `a.js`\n2. B\n   Owns: `b.js`\n'
+                            '   Depends on: 1\n')
+            lib = Path(__file__).resolve().parents[1] / 'lib'
+            def groups(flag):
+                env = dict(os.environ, WORKFLOW_IMPLEMENT_IGNORE_DEPENDS=flag)
+                out = subprocess.run([sys.executable, str(lib / 'step_groups.py'), str(plan), tmp],
+                                     capture_output=True, text=True, env=env).stdout
+                import json
+                return json.loads(out)['groups']
+            self.assertEqual(groups('1'), [[1, 2]])
+            self.assertEqual(groups('0'), [[1], [2]])
+
+
 if __name__ == '__main__':
     unittest.main()

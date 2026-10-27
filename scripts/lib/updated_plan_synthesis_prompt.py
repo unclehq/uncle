@@ -101,6 +101,11 @@ stage, so change as little text as the finding needs. `patch` has three optional
   Only for content that plainly does not belong in any existing section --
   prefer `replace_text` (or `edit_sections`) whenever the change extends one that already exists.
 
+Never add a `Depends on:` to an implementation step to make one file match another's contents: steps run
+at the same time, and every dependency adds a whole step's time (25-35 s) to the stage. Fix the interface in the
+plan instead (the export name, the shape of the data, the file path the other step uses) so both steps can be
+written at once, and add a dependency only when a step truly cannot be written before another's output exists.
+
 Never add a section that "overrides", "supersedes" or "amends" other sections. Implementation
 reads each section on its own, so a change to a step, an invariant, a test or a command that
 lives in an addendum is a change nobody applies. Change the step, row or paragraph itself with

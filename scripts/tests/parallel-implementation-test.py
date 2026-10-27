@@ -111,6 +111,51 @@ class ParallelImplementationTests(unittest.TestCase):
             self.assertEqual(handoff['changed_files'][0]['plan_step'], '1')
             self.assertIn('synthesized', result.stderr)
 
+    def test_a_sandbox_does_not_copy_scratch_and_generated_output(self):
+        sys.path.insert(0, str(ROOT / 'scripts/lib'))
+        import triage_guard
+        temp, root, worker = self.fixture()
+        with temp:
+            for name in ('.inject-scratch', '.uncle-scratch', '.verify-out', 'dist', 'test-results'):
+                (root / name).mkdir()
+                (root / name / 'big.bin').write_text('x' * 1000)
+            (root / 'src').mkdir()
+            (root / 'src' / 'keep.js').write_text('kept')
+            sandbox = root / '.uncle' / 'workflow' / 'parallel' / 'step-9'
+            triage_guard.make_sandbox(root, sandbox)
+            self.assertTrue((sandbox / 'src' / 'keep.js').is_file())
+            for name in ('.inject-scratch', '.uncle-scratch', '.verify-out', 'dist', 'test-results'):
+                self.assertFalse((sandbox / name).exists(), name)
+            triage_guard.drop_sandbox(root, sandbox)
+
+    def test_a_file_the_project_already_holds_unchanged_is_not_a_step_write(self):
+        """A step that rewrites .gitignore un-ignores old leftovers, which then appear in the `after`
+        snapshot but not the `before` one; with the project's own bytes behind them they are not writes."""
+        sys.path.insert(0, str(ROOT / 'scripts/lib'))
+        import hashlib
+        import parallel_steps
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / '.scratch').mkdir()
+            (project / '.scratch' / 'old.txt').write_text('left over')
+            (project / 'kept.txt').write_text('same')
+            digest = lambda text: hashlib.sha256(text.encode()).hexdigest()
+            after = {'.scratch/old.txt': digest('left over'), 'kept.txt': digest('same'),
+                     '1.txt': digest('new'), 'edited.txt': digest('edit')}
+            (project / 'edited.txt').write_text('orig')
+            before = {'edited.txt': digest('orig'), 'kept.txt': digest('same')}
+            self.assertEqual(parallel_steps.changed(before, after, project), {'1.txt', 'edited.txt'})
+            self.assertEqual(parallel_steps.changed(before, after), {'.scratch/old.txt', '1.txt', 'edited.txt'})
+
+    def test_a_new_file_with_other_bytes_than_the_project_is_still_a_write(self):
+        sys.path.insert(0, str(ROOT / 'scripts/lib'))
+        import hashlib
+        import parallel_steps
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / 'x.txt').write_text('project bytes')
+            after = {'x.txt': hashlib.sha256(b'step bytes').hexdigest()}
+            self.assertEqual(parallel_steps.changed({}, after, tmp), {'x.txt'})
+
     def test_the_synthesized_fragment_renders_in_the_notes_like_an_agent_written_one(self):
         temp, root, worker = self.fixture()
         with temp:

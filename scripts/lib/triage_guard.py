@@ -48,7 +48,12 @@ FORBIDDEN_WORKFLOW_PREFIXES = ('green-check.',)
 # essential for copy-mode projects (including unborn Git repositories): without
 # it copytree descends into the sandbox it is creating and never reaches a
 # worker launch.
-SANDBOX_EXCLUDES = ('.git', '.pw-browsers', 'node_modules', '.venv',
+# Generated or scratch output a sandbox never needs: a project reused across runs holds hundreds of MB of
+# mutation-runner copies and test output, and copying it into every one of eight sandboxes took ~30 s before the
+# first step could start.
+GENERATED_EXCLUDES = ('.inject-scratch', '.uncle-scratch', '.verify-out', '.artifacts', 'dist', 'test-results',
+                      'playwright-report', 'blob-report')
+SANDBOX_EXCLUDES = GENERATED_EXCLUDES + ('.git', '.pw-browsers', 'node_modules', '.venv',
                     '.uncle/workflow-history', '.uncle/workflow/logs',
                     '.uncle/workflow/triage', '.uncle/workflow/parallel')
 INSTALL_PINS = ('uncle_tui.py', 'scripts')

@@ -159,9 +159,26 @@ def snapshot(root, project):
     return out
 
 
-def changed(before, after):
-    """Paths this step created or whose content it altered."""
-    return {rel for rel, digest in after.items() if before.get(rel) != digest}
+def changed(before, after, project=None):
+    """Paths this step created or whose content it altered.
+
+    A path the project already holds with the very same bytes is not something the step wrote, however it
+    got into `after` but not `before`.  The two snapshots skip whatever .gitignore ignores at that moment, so
+    a step that rewrites .gitignore (the scaffold step does) un-ignores old leftovers -- scratch folders from
+    a previous run, say -- and every one of them looked newly created: 879 "writes" in noinit, an ownership
+    mismatch, nothing merged, and a 250 s serial implementation instead of the parallel one."""
+    found = set()
+    for rel, digest in after.items():
+        if before.get(rel) == digest:
+            continue
+        if project is not None and rel not in before:
+            try:
+                if hashlib.sha256((Path(project) / rel).read_bytes()).hexdigest() == digest:
+                    continue
+            except OSError:
+                pass
+        found.add(rel)
+    return found
 
 
 def publish_worker_start(spec):
@@ -267,7 +284,7 @@ def run_step(spec, results):
                               stdout=open(spec['log'], 'wb'), stderr=subprocess.STDOUT)
         results[number] = {'exit': proc.returncode,
                            'seconds': round(time.monotonic() - started, 3),
-                           'wrote': sorted(changed(before, snapshot(sandbox, spec['project'])))}
+                           'wrote': sorted(changed(before, snapshot(sandbox, spec['project']), spec['project']))}
     except (OSError, ValueError) as error:
         results[number] = {'exit': 1, 'seconds': round(time.monotonic() - started, 3),
                            'wrote': [], 'detail': str(error)}

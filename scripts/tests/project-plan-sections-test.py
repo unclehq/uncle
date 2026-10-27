@@ -215,7 +215,16 @@ class Layout(unittest.TestCase):
 
     def test_every_worker_shares_the_base_prompt_as_an_identical_prefix(self):
         base = 'BASE PROMPT\nwith lines\n'
-        self.assertTrue(all(sections.build_prompt(name, 'dir', base).startswith(base) for name in sections.WORKERS))
+        built = [sections.build_prompt(name, 'dir', base) for name in sections.WORKERS]
+        self.assertTrue(all(text.split('BASE PROMPT')[0] == built[0].split('BASE PROMPT')[0] and base in text for text in built))
+        self.assertEqual(len({text.split(base)[0] for text in built}), 1)
+
+    def test_the_whole_plan_output_instruction_is_not_shown_to_a_section_worker(self):
+        base = 'Intro\n\n## This is an investigation, not the final document\nWrite the plan to the file.\n\n## Compact first draft\nKeep.\n'
+        for json_mode in (False, True):
+            text = sections.build_prompt('outline', 'dir', base, json_mode)
+            self.assertNotIn('Write the plan to the file', text)
+            self.assertIn('## Compact first draft', text)
 
     def test_each_contract_names_exactly_its_own_headings(self):
         for name in sections.WORKERS:

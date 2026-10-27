@@ -234,8 +234,19 @@ def contract(name, directory, json_mode=False):
     return '\n'.join(lines)
 
 
+OUTPUT_SECTION = re.compile(r'^## This is an investigation, not the final document\n.*?(?=^## )', re.S | re.M)
+
+
 def build_prompt(name, directory, base_prompt, json_mode=False):
-    return base_prompt.rstrip('\n') + '\n' + contract(name, directory, json_mode)
+    """The base prompt with its own output instructions removed, then this worker's contract.
+
+    The base prompt ends by telling the worker to write the whole plan to one investigation file.  A late
+    "this overrides the above" does not beat that for every model: a local one wrote the whole plan there
+    and delivered no section, twice (calculator-local), so the instruction is not shown to a section worker."""
+    base = OUTPUT_SECTION.sub('', base_prompt)
+    header = ('You are one of several workers writing one plan. Your task is named in "Section mode" at the end; '
+              'ignore any instruction below to write the whole plan or an investigation file.\n\n')
+    return header + base.rstrip('\n') + '\n' + contract(name, directory, json_mode)
 
 
 def render_packet(name, packet):

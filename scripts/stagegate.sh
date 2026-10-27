@@ -3262,6 +3262,10 @@ project_plan_section_run() {
 project_plan_section_finish() {
     local name="$1" directory="$2" delivery="$3" helper="$ROOT/scripts/lib/project_plan_sections.py"
     if [[ "$delivery" != file ]]; then
+        if [[ ! -s "$directory/$name.json" ]] && python3 -B "$ROOT/scripts/lib/structured_output.py" recover \
+                "$LOG_DIR/project-plan-section-$name.jsonl" "$directory/$name.json" 2>/dev/null; then
+            echo "Project plan section $name printed its packet instead of writing it; took it from the reply."
+        fi
         python3 -B "$helper" render "$name" "$directory/$name.json" "$directory/$name.md" || return 1
         [[ -s "$directory/$name.md" ]]
         return
@@ -3297,6 +3301,9 @@ run_project_plan_sections() {
             project_plan_section_finish "$name" "$directory" "$delivery" && continue
             # A worker that delivered nothing usable gets one more run, alone, before the plan is given up on.
             echo "Project plan section $name delivered nothing usable; running that worker once more."
+            # Keep the failed attempt's logs: the rerun overwrites them, and why it failed is the evidence.
+            cp "$LOG_DIR/project-plan-section-$name.jsonl" "$LOG_DIR/project-plan-section-$name.attempt1.jsonl" 2>/dev/null || true
+            cp "$LOG_DIR/project-plan-section-$name.log" "$LOG_DIR/project-plan-section-$name.attempt1.log" 2>/dev/null || true
             project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || true
             project_plan_section_finish "$name" "$directory" "$delivery" || { echo "Project plan section $name wrote nothing." >&2; failed=1; }
         done

@@ -425,9 +425,13 @@ class Slicing(unittest.TestCase):
     def test_few_findings_stay_one_call(self):
         self.assertEqual(edits.slices(['A', 'B', 'C']), [])
 
-    def test_findings_are_split_evenly_and_in_order(self):
+    def test_by_default_each_finding_gets_its_own_writer_in_order(self):
         ids = ['AR-%d' % n for n in range(1, 10)]
-        self.assertEqual(edits.slices(ids), [('1', ids[:3]), ('2', ids[3:6]), ('3', ids[6:])])
+        self.assertEqual(edits.slices(ids), [(str(n + 1), [ids[n]]) for n in range(9)])
+
+    def test_a_bigger_size_splits_evenly(self):
+        ids = ['AR-%d' % n for n in range(1, 10)]
+        self.assertEqual(edits.slices(ids, 4), [('1', ids[:3]), ('2', ids[3:6]), ('3', ids[6:])])
 
     def test_writer_count_is_capped(self):
         rows = edits.slices(['AR-%d' % n for n in range(1, 61)])
@@ -438,8 +442,9 @@ class Slicing(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             review = Path(tmp) / 'r.json'
             review.write_text(json.dumps({'findings': [{'id': 'AR-%d' % n} for n in range(1, 7)]}))
+            env = dict(__import__('os').environ, WORKFLOW_UPDATED_PLAN_EDIT_SLICE='3')
             out = subprocess.run([sys.executable, str(LIB / 'updated_plan_edits.py'), 'slices', str(review)],
-                                 capture_output=True, text=True, check=True).stdout
+                                 capture_output=True, text=True, check=True, env=env).stdout
             self.assertEqual(out.splitlines(), ['1\tAR-1,AR-2,AR-3', '2\tAR-4,AR-5,AR-6'])
             base = Path(tmp) / 'base.md'
             base.write_text('BASE')

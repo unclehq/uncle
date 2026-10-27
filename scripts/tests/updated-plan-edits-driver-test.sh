@@ -5,7 +5,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fails=0
-export WORKFLOW_UPDATED_PLAN_EDITS=1
+export WORKFLOW_UPDATED_PLAN_EDITS=1 WORKFLOW_UPDATED_PLAN_EDIT_SLICE=3
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
 awk '/^(updated_plan_launch_writer|run_updated_plan_edit_writers)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
 check "function extracted" test -s "$TMP/fn.sh"
@@ -137,6 +137,7 @@ block="$(awk '/^        UPDATED_PLAN\)$/,/^        IMPLEMENT\)$/' "$ROOT/scripts
 check "a failed fan-out runs the single call" grep -qF 'run_updated_plan_edit_writers; then' <<< "$block"
 check "structure feedback skips the fan-out"  grep -qF 'single_call=1' <<< "$block"
 
+check "one writer per finding by default"     grep -q '^SLICE = 1 ' "$ROOT/scripts/lib/updated_plan_edits.py"
 check "on by default"                         grep -qF 'WORKFLOW_UPDATED_PLAN_EDITS:-1' "$ROOT/scripts/stagegate.sh"
 
 [[ "$fails" == 0 ]] && echo "updated-plan-edits-driver-test.sh: all checks passed" || exit 1

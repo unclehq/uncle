@@ -30,8 +30,10 @@ from updated_plan_fast_path import protected_paths
 from updated_plan_slices import finding_ids
 from worker_schemas import EDIT_KIND, RESOLUTION_KIND
 
-SLICE = 4       # findings per writer: the slowest writer sets the wall time, so keep them small
-MAX_WRITERS = 8
+SLICE = 1       # findings per writer: the slowest writer sets the wall time, and its time is mostly hidden
+                # reasoning that grows with the findings it holds (noinit: 4 findings, 5.8k chars out, 16k tokens, 96 s;
+                # 1-2 findings: 8-10 s).  One finding each keeps the slowest writer near the typical one.
+MAX_WRITERS = 20  # the runner pool's size
 MIN_FINDINGS = 4  # fewer than this and one call is already quick; splitting it only adds a merge
 
 

@@ -6272,28 +6272,6 @@ class UncleTUI:
             return sum(row[k] for k in fields)
         return None
 
-    def _live_cost(self, event):
-        # (value, estimated): reported dollars are authoritative; a token-price
-        # estimate only fills the gap and stays labeled as one.
-        if isinstance(event.get("total_cost_usd"), (int, float)):
-            return event["total_cost_usd"], False
-        usage = event.get("usage") or {}
-        row = dict(model=event.get("model", ""), reported_cost_usd=None,
-                   input_tokens=usage.get("input_tokens"), output_tokens=usage.get("output_tokens"),
-                   cache_read_tokens=usage.get("cache_read_input_tokens"),
-                   cache_write_tokens=usage.get("cache_creation_input_tokens"),
-                   input_includes_cache=event.get("input_includes_cache", False))
-        try:
-            if not hasattr(self, "_estimate_cost"):
-                spec = importlib.util.spec_from_file_location("uncle_usage_cost", os.path.join(ROOT, "scripts", "lib", "usage-cost.py"))
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                self._estimate_cost = module.enrich
-            estimate = self._estimate_cost(row).get("estimated_cost_usd")
-        except (OSError, ValueError, TypeError, KeyError):
-            estimate = None
-        return (estimate, True) if estimate is not None else (None, False)
-
     def _session_panel_lines(self):
         self._spinner_count = getattr(self, "_spinner_count", 0) + 1
         stats = getattr(self, "session_stats", None)
@@ -6317,28 +6295,15 @@ class UncleTUI:
             return "%d:%02d:%02d" % (value // 3600, value // 60 % 60, value % 60)
         def count(value):
             return "Unavailable" if value is None else format(int(value), ",")
-        def dollars(value):
-            return "Unavailable" if value is None else "$%.4f" % value
         def subtotal(values, formatter):
             known = [v for v in values if isinstance(v, (int, float))]
             text = formatter(sum(known) if known else None)
             return text + (" (partial)" if known and len(known) < len(values) else "")
-        def cost_subtotal(entries):
-            # (value, estimated) pairs: a line that includes any estimate is
-            # labeled "est" so reported dollars never blend invisibly with
-            # projections.
-            known = [value for value, _ in entries if isinstance(value, (int, float))]
-            if not known:
-                return dollars(None)
-            text = dollars(sum(known))
-            if any(estimated for value, estimated in entries if isinstance(value, (int, float))):
-                text += " est"
-            return text + (" (partial)" if len(known) < len(entries) else "")
         groups = {}
         for row in sorted(stats["records"], key=lambda r: r.get("started_at", 0)):
             stage = row.get("stage", "")
             parent = parent_stage(stage)
-            group = groups.setdefault(parent, {"tokens": [], "costs": [], "attempts": 0, "started": float("inf"), "ended": float("-inf"), "raw_stages": set(), "any_failed": False})
+            group = groups.setdefault(parent, {"tokens": [], "attempts": 0, "started": float("inf"), "ended": float("-inf"), "raw_stages": set(), "any_failed": False})
             group["raw_stages"].add(stage)
             elapsed = max(0, row.get("elapsed_seconds", 0))
             started = row.get("started_at", row.get("ended_at", 0) - elapsed)
@@ -6349,25 +6314,6 @@ class UncleTUI:
                 wall_started.append(started)
                 wall_ended.append(max(started, ended))
             group["tokens"].append(self._token_total(row))
-            cost = row.get("reported_cost_usd")
-            # A runner that consumed tokens did not usually do it for nothing:
-            # a reported zero is normally a runner that declined to say, and
-            # rendering it as $0.0000 understates the session total with a
-            # number that reads like a fact.
-            #
-            # A free model is the exception, and it is not a rare one -- it is
-            # what a stage runs on once a subscription is exhausted. There the
-            # zero is the fact, and calling it unknown hides a real total
-            # behind "Unavailable" on every row.
-            if cost == 0 and self._token_total(row) \
-                    and (row.get("model") or "") not in FREE_MODEL_IDS:
-                cost = None
-            if cost is not None:
-                group["costs"].append((cost, False))
-            elif isinstance(row.get("estimated_cost_usd"), (int, float)):
-                group["costs"].append((row["estimated_cost_usd"], True))
-            else:
-                group["costs"].append((None, False))
             group["attempts"] += 1
             group["last_result"] = row
             result_exit = row.get("process_exit")
@@ -6389,7 +6335,7 @@ class UncleTUI:
             }
         for stage, started in stats["active"].items():
             parent = parent_stage(stage)
-            group = groups.setdefault(parent, {"tokens": [], "costs": [], "attempts": 0, "started": float("inf"), "ended": float("-inf"), "raw_stages": set(), "any_failed": False})
+            group = groups.setdefault(parent, {"tokens": [], "attempts": 0, "started": float("inf"), "ended": float("-inf"), "raw_stages": set(), "any_failed": False})
             group["raw_stages"].add(stage)
             group["started"] = min(group["started"], started)
             event = stats["live"].get(stage, {})
@@ -6399,15 +6345,14 @@ class UncleTUI:
                 wall_started.append(started)
                 wall_ended.append(max(started, ended))
             group["tokens"].append(event.get("total_tokens"))
-            group["costs"].append(self._live_cost(event) if event else (None, False))
             group["attempts"] += 1
             group.setdefault("_worker_statuses", {})[stage] = {
                 "active": True,
                 "failed": False,
                 "exit": None,
             }
-        lines = ["STAGE", "Cost of usage so far", ""]
-        tokens, costs = [], []
+        lines = ["STAGE", ""]
+        tokens = []
         self._panel_stage_styles = {}
         self._panel_indicator_styles = {}
         self._panel_indicator_prefix = {}
@@ -6475,19 +6420,49 @@ class UncleTUI:
             self._panel_stage_styles[title] = style
             stage_seconds = max(0, group["ended"] - group["started"]) if group["ended"] > float("-inf") else 0
             lines += [title, "Time   " + duration(stage_seconds),
-                      "Tokens " + subtotal(group["tokens"], count),
-                      "Cost   " + cost_subtotal(group["costs"]), ""]
+                      "Tokens " + subtotal(group["tokens"], count), ""]
             tokens.extend(group["tokens"])
-            costs.extend(group["costs"])
         if not groups:
             lines += ["Waiting for stage…", ""]
         wall_seconds = max(0, max(wall_ended) - min(wall_started)) \
             if wall_started and wall_ended else 0
         lines += ["TOTALS",
                   "Time   " + duration(wall_seconds),
-                  "Tokens " + subtotal(tokens, count),
-                  "Cost   " + cost_subtotal(costs), "Reported + projected"]
+                  "Tokens " + subtotal(tokens, count)]
         return lines
+
+    def exit_token_summary_lines(self):
+        """Token totals for the session, with a per-stage-group breakdown."""
+        stats = getattr(self, "session_stats", None)
+        records = (stats or {}).get("records") or []
+        if not records:
+            return []
+        def clean(text):
+            return "".join(c for c in str(text) if c.isprintable())
+        def num(value):
+            return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+        def total(rows, keys, partial_live):
+            vals = [[num(r.get(k)) for k in keys] for r in rows]
+            flat = [v for row in vals for v in row]
+            known = [v for v in flat if v is not None]
+            if not known:
+                return "Unavailable"
+            text = format(sum(known), ",")
+            if len(known) < len(flat) or partial_live:
+                text += " (partial)"
+            return text
+        fields = (("input", ("input_tokens",)), ("output", ("output_tokens",)),
+                  ("cache-read", ("cache_read_tokens",)), ("cache-write", ("cache_write_tokens",)))
+        live = bool(stats.get("active"))
+        def line(prefix, rows):
+            return prefix + "  ".join("%s %s" % (n, total(rows, k, live)) for n, k in fields)
+        out = [line("Tokens: ", records)]
+        groups = {}
+        for row in sorted(records, key=lambda r: r.get("started_at", 0) if isinstance(r.get("started_at", 0), (int, float)) else 0):
+            groups.setdefault(clean(parent_stage(row.get("stage", ""))), []).append(row)
+        for name, rows in groups.items():
+            out.append(line("  %s: " % name, rows))
+        return out
 
     def _session_panel_attr(self, line):
         palette = getattr(self, "color", {})
@@ -6498,12 +6473,6 @@ class UncleTUI:
             return palette.get("title", 0) | curses.A_BOLD
         if "Unavailable" in line or "(partial)" in line or line.startswith("Waiting"):
             return palette.get("warning", 0)
-        if line.startswith("Cost   ") and " est" in line:
-            return palette.get("warning", 0)
-        if line.startswith("Cost   "):
-            return palette.get("accent", 0)
-        if line in ("Cost of usage so far", "Reported + projected"):
-            return palette.get("muted", curses.A_DIM)
         return 0
 
     def _draw_session_stats(self, h, w, panel):
@@ -7442,7 +7411,32 @@ def finish_decision(unattended, completed, exit_code):
     return 'exit' if unattended and completed and exit_code == 0 else 'dialog'
 
 
+_EXIT_SUMMARY_LINES = []
+
+
+def emit_exit_output(finished_lines, summary_lines):
+    """Print the finished-build lines, then the token summary, after teardown."""
+    if finished_lines:
+        print('\n'.join(finished_lines), flush=True)
+    if summary_lines:
+        print('\n'.join(summary_lines), flush=True)
+
+
+def _emit_summary_safely(finished_lines, summary_lines):
+    if summary_lines == ['Token summary unavailable']:
+        summary_lines = []
+        print('Token summary unavailable', file=sys.stderr)
+    try:
+        emit_exit_output(finished_lines, summary_lines)
+    except Exception:
+        if finished_lines:
+            raise
+        print('Token summary unavailable', file=sys.stderr)
+
+
 def main(stdscr):
+    global _EXIT_SUMMARY_LINES
+    _EXIT_SUMMARY_LINES = []
     try:
         fd = _tty_fd()
     except (OSError, ValueError, AttributeError):
@@ -7456,8 +7450,14 @@ def main(stdscr):
         signal.signal(hangup, hung_up)
     try:
         ui = UncleTUI(stdscr)
-        ui.run()
-        return ui.finished_build_lines()
+        try:
+            ui.run()
+            return ui.finished_build_lines()
+        finally:
+            try:
+                _EXIT_SUMMARY_LINES = ui.exit_token_summary_lines()
+            except Exception:
+                _EXIT_SUMMARY_LINES = ['Token summary unavailable']
     finally:
         # SIGTERM (run's handler) and SIGHUP both unwind through here.
         restore_tty(fd, saved)
@@ -7484,15 +7484,38 @@ def _record_tui_pid():
         pass
 
 
+def _test_main(mode):
+    """Terminal-free stand-in for `main`, selected by UNCLE_TUI_TEST_MAIN."""
+    global _EXIT_SUMMARY_LINES
+    _EXIT_SUMMARY_LINES = []
+    try:
+        if mode == 'raise_summary':
+            raise RuntimeError('summary failed')
+        _EXIT_SUMMARY_LINES = UncleTUI.exit_token_summary_lines(None) \
+            if mode == 'real' else ['Tokens: stub summary']
+    except Exception:
+        _EXIT_SUMMARY_LINES = ['Token summary unavailable']
+    if mode == 'systemexit':
+        raise SystemExit(3)
+    return ['Finished: stub build']
+
+
 if __name__ == "__main__":
     _record_tui_pid()
     os.environ.setdefault('ESCDELAY', '25')  # D-1: fast single Esc, user value wins
+    _stub_mode = os.environ.get('UNCLE_TUI_TEST_MAIN')
     try:
-        finished = curses.wrapper(main)
+        if _stub_mode in ('normal', 'systemexit', 'raise_summary'):
+            finished = _test_main(_stub_mode)
+        else:
+            finished = curses.wrapper(main)
     except KeyboardInterrupt:
         # Ctrl-C while the screen is waiting for a key is a normal way out.
         raise SystemExit(130)
+    except SystemExit:
+        _emit_summary_safely([], _EXIT_SUMMARY_LINES)
+        raise
+    # Printed after curses teardown so it lands on the real terminal.
+    _emit_summary_safely(finished, _EXIT_SUMMARY_LINES)
     if finished:
-        # Printed after curses teardown so it lands on the real terminal.
-        print('\n'.join(finished), flush=True)
         raise SystemExit(0)

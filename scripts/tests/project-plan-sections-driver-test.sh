@@ -173,6 +173,11 @@ w="$TMP/jbad/.uncle/workflow"
 check "bad packet: refused after one retry"       test "$(cat "$w/rc")" != 0
 check "bad packet: no plan left behind"           test ! -e "$TMP/jbad/plan.md"
 
+# Under the TUI every stage runs through native_stage.py (steering); schema mode must work there too, or the
+# outline worker is refused instantly and the whole plan falls back to the single pass (noinit, 85 s, no threads).
+check "schema mode is allowed through native_stage" bash -c '! grep -q "client_cmd\[0\]\" != python3" "$1/scripts/stagegate.sh"' _ "$ROOT"
+check "a refused schema run is a loud message"       grep -qF 'asked for schema-checked output, which this runner cannot give' "$ROOT/scripts/stagegate.sh"
+
 # On by default, on every runner: the sectional plan is attempted before the self-hosted/hosted split.
 block="$(awk '/^        PROJECT_PLAN\)$/,/^        ADVERSARIAL_REVIEW\)$/' "$ROOT/scripts/stagegate.sh" | head -n 60)"
 check "sections default on"                        grep -qF 'WORKFLOW_PROJECT_PLAN_SECTIONS:-1' <<< "$block"

@@ -1795,8 +1795,9 @@ run_claude() {
     # `stage_supports_structured_output` first and keeps its file contract for every other runner.
     local -a schema_args=()
     if [[ -n "${UNCLE_OUTPUT_SCHEMA_FILE:-}" ]]; then
-        if [[ "${cmd##*/}" == claude && "${client_cmd[0]}" != python3 && "$UNCLE_RESOLVED_RUNNER" == claude \
-              && -n "${UNCLE_STRUCTURED_OUTPUT_PATH:-}" ]]; then
+        # Direct, or through native_stage.py (steering sessions, i.e. every run under the TUI): the flag
+        # reaches the same Claude process, and native_stage reports its validated object on the result event.
+        if [[ "${cmd##*/}" == claude && "$UNCLE_RESOLVED_RUNNER" == claude && -n "${UNCLE_STRUCTURED_OUTPUT_PATH:-}" ]]; then
             schema_args=(--json-schema "$(cat "$UNCLE_OUTPUT_SCHEMA_FILE")")
         else
             echo "Stage $log_name asked for schema-checked output, which this runner cannot give." >&2

@@ -43,6 +43,9 @@ class Stage:
         self.parent_lost = False
         self.parent_watch_stop = threading.Event()
         self.runner, self.side, self.stage, self.args = runner, side, stage, args
+        # The schema-validated object a `--json-schema` run reports (Claude's `structured_output`): the driver
+        # reads it from the result event this stage prints, exactly as it does from a direct Claude run.
+        self.structured_output = None
         self.model = self.option('--model', '-m') or ''
         self.effort = self.option('--effort') or os.environ.get('UNCLE_CLINE_EFFORT', 'low')
         for i, arg in enumerate(args[:-1]):
@@ -438,7 +441,13 @@ class Stage:
                 for part in e.get('message',{}).get('content',[]):
                     if part.get('type')=='text':
                         self.text(part['text']);self.final_answer+=part['text']
+            if e.get('type')=='assistant':
+                for part in e.get('message',{}).get('content',[]):
+                    if part.get('type')=='tool_use' and part.get('name')=='StructuredOutput' and isinstance(part.get('input'),dict):
+                        self.structured_output=part['input']
             if e.get('type')=='result':
+                if isinstance(e.get('structured_output'),dict):
+                    self.structured_output=e['structured_output']
                 for key in KEYS:
                     completed_usage[key] += (e.get('usage') or {}).get(key,0) or 0
                 live_usage.clear()
@@ -552,6 +561,8 @@ class Stage:
             error_detail=error,usage=self.usage,total_cost_usd=self.cost,input_includes_cache=self.inclusive,
             num_turns=1,duration_ms=int((time.monotonic()-self.started)*1000),
             result=self.output_answer() if success else '')
+        if success and self.structured_output is not None:
+            result['structured_output']=self.structured_output
         print(json.dumps(result),flush=True)
         return 0 if success else 1
 

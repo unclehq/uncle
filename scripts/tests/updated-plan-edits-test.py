@@ -301,6 +301,61 @@ class Resolve(unittest.TestCase):
         self.assertEqual(json.loads((self.dir / 'conflicts.json').read_text())[0]['avoid'], ['I-2 holds sometimes.'])
         self.assertIn('- `I-2 holds sometimes.`', (self.dir / 'prompts' / 'resolve-G1.md').read_text())
 
+    def answer_file(self, gid, patch, **extra):
+        row = {'group': gid, 'patch': patch}
+        row.update(extra)
+        (self.dir / ('resolutions-%s.json' % gid)).write_text(json.dumps({'resolutions': [row]}))
+
+    def test_a_resolver_answer_quoting_text_that_is_not_there_is_caught_per_group(self):
+        with self.assertRaises(edits.NeedsResolution):
+            self.merge()
+        self.answer_file('G1', {'replace_text': [{'heading': '## 2. Invariants', 'old': 'I-1 holds always, honestly.', 'new': 'x'}]})
+        bad = edits.check_resolutions(self.dir / 'plan.json', self.dir)
+        self.assertEqual(list(bad), ['G1'])
+        self.assertIn('not in section', bad['G1'])
+        retry = (self.dir / 'prompts' / 'resolve-G1.retry.md').read_text()
+        self.assertIn('previous answer was rejected', retry)
+        self.assertIn('I-1 holds always, honestly.', retry)
+        self.assertTrue(retry.startswith((self.dir / 'prompts' / 'resolve-G1.md').read_text()))
+
+    def test_a_good_resolver_answer_passes_the_check(self):
+        with self.assertRaises(edits.NeedsResolution):
+            self.merge()
+        self.answer_file('G1', {'replace_text': [{'heading': '## 2. Invariants', 'old': 'I-1 holds always.', 'new': 'x'}]})
+        self.assertEqual(edits.check_resolutions(self.dir / 'plan.json', self.dir), {})
+
+    def test_a_missing_ambiguous_or_unknown_target_is_caught(self):
+        with self.assertRaises(edits.NeedsResolution):
+            self.merge()
+        for patch, word in (({'replace_text': [{'heading': '## 9. Nowhere', 'old': 'a', 'new': 'b'}]}, 'does not exist'),
+                            ({'replace_text': [{'heading': '## 2. Invariants', 'old': 'holds', 'new': 'b'}]}, 'occurs 2 times'),
+                            ({'edit_sections': [{'heading': '## 9. Nowhere', 'content': 'x'}]}, 'does not exist')):
+            self.answer_file('G1', patch)
+            self.assertIn(word, edits.check_resolutions(self.dir / 'plan.json', self.dir)['G1'])
+        (self.dir / 'resolutions-G1.json').unlink()
+        self.assertIn('no valid answer', edits.check_resolutions(self.dir / 'plan.json', self.dir)['G1'])
+
+    def test_the_cli_check_exits_5_and_names_the_groups(self):
+        with self.assertRaises(edits.NeedsResolution):
+            self.merge()
+        cli = [sys.executable, str(LIB / 'updated_plan_edits.py'), 'check', str(self.dir / 'plan.json'), str(self.dir)]
+        self.answer_file('G1', {'replace_text': [{'heading': '## 2. Invariants', 'old': 'nope', 'new': 'x'}]})
+        done = subprocess.run(cli, capture_output=True, text=True)
+        self.assertEqual((done.returncode, done.stdout.split()), (5, ['G1']))
+        self.answer_file('G1', {'replace_text': [{'heading': '## 2. Invariants', 'old': 'I-1 holds always.', 'new': 'x'}]})
+        self.assertEqual(subprocess.run(cli, capture_output=True, text=True).returncode, 0)
+
+    def test_a_missing_group_shows_the_resolver_the_closest_real_lines(self):
+        (self.dir / '1.json').write_text(json.dumps({'dispositions': [row('AR-1')], 'patch': {'replace_text': [
+            {'heading': '## 3. Tests', 'old': 'T-1 checks it, truly.', 'new': 'x'}]}}))
+        (self.dir / '2.json').write_text(json.dumps({'dispositions': [row('AR-2')], 'patch': {}}))
+        with self.assertRaises(edits.NeedsResolution) as caught:
+            self.merge()
+        group = caught.exception.groups[0]
+        self.assertEqual(group['kind'], 'missing')
+        self.assertIn('T-1 checks it.', group['nearest'])
+        self.assertIn('closest to what the writer quoted', (self.dir / 'prompts' / 'resolve-G1.md').read_text())
+
     def test_a_missing_answer_is_refused(self):
         with self.assertRaises(edits.NeedsResolution):
             self.merge()

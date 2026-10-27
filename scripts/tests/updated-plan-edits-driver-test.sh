@@ -37,15 +37,17 @@ PY
             [[ "$mode:$n" != fail:2 ]] || return 1
             if [[ "$2" == updated-plan-worker-resolve-* ]]; then
                 echo resolver >> "$STATE_DIR/resolver-calls"
-                [[ "$mode" == resolve ]] || return 1
-                printf '%s' '{"resolutions":[{"group":"G1","patch":{"replace_text":[{"heading":"## 1. Overview","old":"Alpha.","new":"MERGED."}]}}]}' > "$UNCLE_WORKER_PACKET_PATH"
+                [[ "$mode" == resolve || "$mode" == resolve-retry ]] || return 1
+                local old_text="Alpha."
+                if [[ "$mode" == resolve-retry && "$2" != *-retry ]]; then old_text="Alpha. (misquoted)"; fi
+                printf '{"resolutions":[{"group":"G1","patch":{"replace_text":[{"heading":"## 1. Overview","old":"%s","new":"MERGED."}]}}]}' "$old_text" > "$UNCLE_WORKER_PACKET_PATH"
                 return 0
             fi
             python3 -B - "$n" "$mode" "$UNCLE_WORKER_PACKET_PATH" <<'PY'
 import json, sys
 n, mode, target = sys.argv[1:4]
 ids = ['AR-1', 'AR-2', 'AR-3'] if n == '1' else ['AR-4', 'AR-5', 'AR-6']
-old = 'Alpha.' if n == '1' else ('Alpha.' if mode in ('clash', 'resolve', 'resolve-fail') else 'Beta.')
+old = 'Alpha.' if n == '1' else ('Alpha.' if mode in ('clash', 'resolve', 'resolve-fail', 'resolve-retry') else 'Beta.')
 body = {'dispositions': [{'finding': i, 'disposition': 'Accepted', 'reason': 'r', 'plan_change': 'c'} for i in ids],
         'patch': {'replace_text': [{'heading': '## 1. Overview', 'old': old, 'new': 'X%s.' % n}]}}
 if n == '1':
@@ -82,6 +84,13 @@ check "overlap: one resolver call"            test "$(wc -l < "$w/resolver-calls
 check "overlap: the resolution is published"  grep -q 'MERGED\.' "$TMP/resolve/.uncle/docs/UPDATED_PROJECT_PLAN.md"
 check "overlap: the other edit still merged"  bash -c '! grep -q "Alpha\." "$1"' _ "$TMP/resolve/.uncle/docs/UPDATED_PROJECT_PLAN.md"
 check "overlap: resolver sent only the group" bash -c 'grep -q "Group G1" "$1" && ! grep -q "Group G2" "$1"' _ "$w/updated-plan-edits/prompts/resolve-G1.md"
+
+run_case retry resolve-retry
+w="$TMP/retry/.uncle/workflow"
+check "bad resolver answer: retried once, then merged" test "$(cat "$w/rc")" == 0
+check "bad resolver answer: the group ran twice"       test "$(wc -l < "$w/resolver-calls")" -eq 2
+check "bad resolver answer: the retry is published"    grep -q 'MERGED\.' "$TMP/retry/.uncle/docs/UPDATED_PROJECT_PLAN.md"
+check "bad resolver answer: retry prompt carries the reason" grep -q 'previous answer was rejected' "$w/updated-plan-edits/prompts/resolve-G1.retry.md"
 
 run_case clash resolve-fail
 check "resolver failure: nonzero"             test "$(cat "$TMP/clash/.uncle/workflow/rc")" != 0

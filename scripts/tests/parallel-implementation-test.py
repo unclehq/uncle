@@ -105,8 +105,36 @@ class ParallelImplementationTests(unittest.TestCase):
                                     text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((root / '1.txt').read_text(), 'changed')
-            handoff = (root / '.uncle/workflow/parallel/notes/step-1.md').read_text()
-            self.assertIn('synthesized by the driver', handoff)
+            handoff = json.loads((root / '.uncle/workflow/parallel/notes/step-1.md').read_text())
+            self.assertEqual(handoff['kind'], 'implementation-notes-fragment')
+            self.assertEqual([row['path'] for row in handoff['changed_files']], ['1.txt'])
+            self.assertEqual(handoff['changed_files'][0]['plan_step'], '1')
+            self.assertIn('synthesized', result.stderr)
+
+    def test_the_synthesized_fragment_renders_in_the_notes_like_an_agent_written_one(self):
+        temp, root, worker = self.fixture()
+        with temp:
+            worker.write_text('#!/usr/bin/env bash\nset -euo pipefail\nprintf changed > 1.txt\n')
+            request = {'project': str(root), 'owned': {'1': ['1.txt']}, 'steps': [
+                {'number': 1, 'log': str(root / 'one.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.json', 'command': ['bash', str(worker)]}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root, text=True, capture_output=True, check=True)
+            sys.path.insert(0, str(ROOT / 'scripts/lib'))
+            import implementation_notes
+            (root / '.uncle/docs').mkdir(parents=True, exist_ok=True)
+            rendered = implementation_notes.append(str(root), str(root / '.uncle/workflow/parallel/notes/step-1.json'),
+                                                   '.uncle/docs/IMPLEMENTATION_NOTES.md', 'Isolated step 1')
+            self.assertIn('1.txt', rendered)
+            self.assertNotIn('raw_markdown', rendered)
+
+    def test_workers_are_told_to_skip_exploration_checks_and_routine_notes(self):
+        driver = (ROOT / 'scripts/stagegate.sh').read_text()
+        block = driver[driver.index('## Speed (binding)'):driver.index('## Isolated ownership boundary')]
+        for phrase in ('Do not run `ls`', 'parallel Write calls', 'Do not run tests, builds or checks',
+                       'unless this step has a deviation'):
+            self.assertIn(phrase, block + driver[driver.index('Do not write an implementation-notes fragment'):][:400])
+        self.assertNotIn('Run a narrow check', driver)
 
     def test_inherited_dirty_gitignore_is_not_a_later_step_write(self):
         """A prior merged step may leave an uncommitted .gitignore behind.

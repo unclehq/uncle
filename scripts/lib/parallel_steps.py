@@ -326,14 +326,13 @@ def capture_notes(project, steps, results):
             continue
         result = results.get(step['number'], {})
         files = sorted(result.get('wrote') or ())
-        target.write_text(
-            '# Implementation step %d handoff\n\n'
-            '- Worker exited successfully.\n'
-            '- Changed files: %s\n'
-            '- Worker log: `%s`\n'
-            '- Agent-authored handoff was unavailable; this record was synthesized by the driver.\n'
-            % (step['number'], ', '.join(files) if files else '(none)', step.get('log', '')),
-            encoding='utf-8')
+        # A routine step reports nothing beyond the files it wrote, and workers are told not to spend a turn
+        # on a fragment saying so; the driver writes that fragment, in the shape the notes merge renders.
+        target.write_text(json.dumps({
+            'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes-fragment',
+            'changed_files': [{'path': name, 'purpose': 'Written by isolated step %d' % step['number'],
+                               'plan_step': str(step['number'])} for name in files],
+            'deviations': [], 'unresolved_concerns': [], 'plan_blockers': []}, indent=2) + '\n', encoding='utf-8')
         synthesized.append(step['number'])
     return synthesized
 

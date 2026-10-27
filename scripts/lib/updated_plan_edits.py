@@ -14,6 +14,7 @@ published: dispositions plus a patch against the base plan.
     updated_plan_edits.py slices REVIEW.json            one `n<TAB>ids` line per writer
     updated_plan_edits.py prompt BASE_PROMPT IDS OUT [owner]  the sealed prompt plus this writer's slice
     updated_plan_edits.py merge PLAN.json SLICES.tsv DIR OUTPUT [RESOLUTIONS.json]
+    updated_plan_edits.py check PLAN.json DIR     (exit 5, with the group ids on stdout, when a resolver answer cannot be applied)
     (exit 3: edits overlap; DIR/prompts/resolve-<group>.md are the resolvers' prompts -- rerun with RESOLUTIONS.json, or a directory of resolutions-<group>.json)
 """
 import json
@@ -208,6 +209,14 @@ def components(items):
     return groups
 
 
+def nearest_lines(body, wanted, count=3):
+    """The lines of `body` closest to text a writer quoted but the section does not contain."""
+    import difflib
+    lines = [line for line in body.splitlines() if line.strip()]
+    first = wanted.strip().splitlines()[0] if wanted.strip() else ''
+    return sorted(lines, key=lambda line: -difflib.SequenceMatcher(None, line, first).ratio())[:count]
+
+
 def find_groups(parts, command_edits, narrative, base_commands):
     """Every place two writers' edits collide, as groups that hold only the colliding edits.
 
@@ -253,7 +262,8 @@ def find_groups(parts, command_edits, narrative, base_commands):
             # but the same remedy -- a model that sees the section places the change in text that exists
             groups.append({'kind': 'missing', 'heading': heading, 'context': bodies[heading],
                            'edits': [{'writer': w, 'replace_text': op} for _, w, op in lost],
-                           'refs': [op for _, _, op in lost]})
+                           'refs': [op for _, _, op in lost],
+                           'nearest': sorted({line for _, _, op in lost for line in nearest_lines(bodies[heading], op['old'])})})
             rows = [row for row in rows if all(row[2] is not op for _, _, op in lost)]
         whole = [row for row in rows if row[0] == 'edit_sections']
         if whole and len(rows) > 1:
@@ -338,11 +348,15 @@ def resolver_prompt(groups, dispositions):
                       for row in dispositions if row.get('writer') in {e['writer'] for e in group['edits']}})
         blocks.append('## Group %s: %s edits in %s\n\nWhat the writers say they were doing: %s\n\n'
                       'Text as it is in the base plan:\n```\n%s\n```\n\nTheir overlapping edits:\n```json\n%s\n```\n\n'
+                      '%s'
                       'Text already changed by other edits, which you must not touch:\n%s'
                       % (group['id'], group['kind'], group['heading'],
                          ' / '.join(w for w in why if w) or '(not stated)',
                          '(this section is printed under an earlier group)' if group['heading'] in shown else group['context'],
                          json.dumps(group['edits'], indent=2),
+                         ('The lines of that section closest to what the writer quoted. Your `old` must be text '
+                          'copied exactly from the section above, and these are the likeliest places:\n```\n%s\n```\n\n'
+                          % '\n'.join(group['nearest'])) if group.get('nearest') else '',
                          '\n'.join('- `%s`' % text.replace('\n', ' ')[:300] for text in group.get('avoid') or []) or '(none)'))
         shown.add(group['heading'])
     return RESOLVE_PROMPT % (RESOLUTION_KIND, '\n\n'.join(blocks))
@@ -393,6 +407,58 @@ def read_resolutions(path):
     for answer in sorted(path.glob('resolutions-*.json')):
         rows += read_json(answer).get('resolutions') or []
     return {'resolutions': rows}
+
+
+def check_resolutions(plan_path, directory):
+    """{group id: why its answer cannot be applied}, judged one group at a time against the base plan.
+
+    A resolver is quick and now and then quotes text that is not in the section; finding that here lets
+    that one group be asked again, with the reason, instead of failing the whole merge."""
+    plan = read_json(plan_path)
+    narrative = plan.get('narrative') or ''
+    bodies = {section['heading']: section['body'] for section in split_sections(narrative)[1]}
+    commands = (plan.get('verification_commands') or '').strip()
+    groups = json.loads(Path(directory, 'conflicts.json').read_text(encoding='utf-8'))
+    answers = {}
+    for answer in sorted(Path(directory).glob('resolutions-*.json')):
+        try:
+            for row in read_json(answer).get('resolutions') or []:
+                if isinstance(row, dict) and isinstance(row.get('group'), str):
+                    answers[row['group']] = row
+        except Conflict:
+            pass
+    bad = {}
+    for group in groups:
+        row = answers.get(group['id'])
+        if row is None:
+            bad[group['id']] = 'there was no valid answer for this group'
+            continue
+        patch = row.get('patch') if isinstance(row.get('patch'), dict) else {}
+        for edit in patch.get('replace_text') or []:
+            heading = (edit.get('heading') or '').strip()
+            old = edit.get('old')
+            if heading not in bodies:
+                bad[group['id']] = 'the section %r does not exist' % heading
+            elif not isinstance(old, str) or not old:
+                bad[group['id']] = 'an edit has no `old` text'
+            elif bodies[heading].count(old) == 0:
+                bad[group['id']] = ('`old` text %r is not in section %r; copy it exactly from the section text shown'
+                                    % (old[:120], heading))
+            elif bodies[heading].count(old) > 1 and not edit.get('all'):
+                bad[group['id']] = ('`old` text %r occurs %d times in section %r; add surrounding text so it is unique'
+                                    % (old[:120], bodies[heading].count(old), heading))
+        for edit in patch.get('edit_sections') or []:
+            if (edit.get('heading') or '').strip() not in bodies:
+                bad[group['id']] = 'the section %r does not exist' % edit.get('heading')
+        for edit in row.get('commands_replace') or []:
+            if isinstance(edit, dict) and commands.count(edit.get('old') or '\0') != 1:
+                bad[group['id']] = 'command text %r is not in the verification commands exactly once' % (edit.get('old') or '')[:120]
+    for gid, why in bad.items():
+        original = Path(directory, 'prompts', 'resolve-%s.md' % gid).read_text(encoding='utf-8')
+        Path(directory, 'prompts', 'resolve-%s.retry.md' % gid).write_text(
+            original + '\n\n## Your previous answer was rejected\n\n%s.\nAnswer again for this group, copying every `old` '
+            'exactly from the text shown above.\n' % why, encoding='utf-8')
+    return bad
 
 
 def merge(plan_path, slices_path, directory, output, resolutions=None):
@@ -471,6 +537,12 @@ def main(argv):
                 print('%s\t%s' % (name, ','.join(ids)))
         elif command == 'prompt' and len(rest) in (3, 4):
             write_prompt(rest[0], [i for i in rest[1].split(',') if i], rest[2], owns_fields=len(rest) == 4)
+        elif command == 'check' and len(rest) == 2:
+            bad = check_resolutions(*rest)
+            for gid, why in sorted(bad.items()):
+                print(gid)
+                print('updated-plan edits: group %s: %s' % (gid, why), file=sys.stderr)
+            return 5 if bad else 0
         elif command == 'merge' and len(rest) in (4, 5):
             merge(*rest)
         else:

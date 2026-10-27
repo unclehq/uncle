@@ -2561,6 +2561,26 @@ run_updated_plan_edit_writers() {
             wait "${pids[$pid]}" || { echo "Updated-plan resolver ${names[$pid]} did not complete." >&2; resolver_failed=1; }
         done
         [[ "$resolver_failed" == 0 ]] || return 1
+        # A resolver answer that cannot be applied (text quoted from the wrong place) gets one more try, for that
+        # group only, with the reason -- a few seconds, against the full single call.
+        local bad_groups
+        if ! bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory")"; then
+            echo "Updated-plan resolver answer(s) could not be applied; asking again: $(echo $bad_groups)"
+            pids=(); names=()
+            for group_id in $bad_groups; do
+                local retry_schema=""
+                [[ "$delivery" != hosted ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
+                ( [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+                  UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                    run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-plan-worker-resolve-$group_id-retry" ) \
+                    > "$LOG_DIR/updated-plan-worker-resolve-$group_id-retry.log" 2>&1 &
+                pids+=("$!"); names+=("$group_id")
+            done
+            for pid in "${!pids[@]}"; do
+                wait "${pids[$pid]}" || { echo "Updated-plan resolver retry ${names[$pid]} did not complete." >&2; resolver_failed=1; }
+            done
+            [[ "$resolver_failed" == 0 ]] || return 1
+        fi
         python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || return 1
     elif [[ "$merge_status" != 0 ]]; then
         return 1
@@ -2787,10 +2807,25 @@ run_parallel_application_implementation() {
                 step_line="$(sed -n "${step}p" "$STATE_DIR/implement-steps.txt")"
                 printf '%s\n' "$step_line"
                 echo; echo "Work only on this approved step and its declared owned files."
-                echo "Do not edit workflow documents. Run a narrow check and write this"
-                echo "step's implementation-notes fragment, as one JSON object matching"
-                echo "the contract given earlier in this prompt, to"
-                echo ".uncle/workflow/parallel/notes/step-$step.json."
+                echo "Do not edit workflow documents."
+                cat <<'EOF'
+
+## Speed (binding)
+
+Steps run at the same time and the slowest one sets the stage's time, so every turn counts.
+Everything you need is in this prompt: the plan, the requirements and your step.
+
+- Do not run `ls`, `find`, `cat` or any other exploratory command, and do not read files that other
+  steps own: they are being written right now and may not exist yet. (Where your step's own text tells
+  you to inspect or preserve a file that already exists, do exactly that.)
+- Write every file you own in your first response, as parallel Write calls, then stop.
+- Do not run tests, builds or checks. The driver runs the whole verification right after the merge.
+EOF
+                echo "- Do not write an implementation-notes fragment unless this step has a deviation from the"
+                echo "  plan, an unresolved concern or a plan blocker to report: the driver records the routine"
+                echo "  fragment from the files you wrote. When you do have one, write it as one JSON object"
+                echo "  matching the contract given earlier in this prompt, to"
+                echo "  .uncle/workflow/parallel/notes/step-$step.json."
                 if [[ ! "$step_line" =~ Owns:[[:space:]]*\* ]]; then
                     cat <<'EOF'
 

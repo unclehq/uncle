@@ -197,6 +197,8 @@ A step that touches everything declares `Owns: *`.
 
 If a step's own description or title names a file it touches (a "scaffold", a ".gitignore update", a config it edits), that file must also appear in its `Owns:` list -- do not describe touching a file without declaring it. This is the single most common real gap: a step that legitimately runs a package manager also writes its lockfile, which needs its own `Owns:` entry beside the manifest.
 
+Steps are implemented at the same time, and the slowest one sets the stage's time. Size steps evenly and give no step a file you expect to exceed about 100 lines: split a big file across steps (a defect-injection runner: the list of mutations in one file, the runner in another) and keep helper scripts simple, sequential where that will do.
+
   1. Arithmetic core — Owns: `src/calc.js`, `tests/calc.test.js`
   2. Keypad and display — Owns: `src/ui.js`, `index.html`
   3. Reconcile — Owns: `*` — Depends on: 1, 2

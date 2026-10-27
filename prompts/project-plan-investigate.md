@@ -98,6 +98,22 @@ Identify the test, fixture, helper, configuration, and source-oracle paths that
 the plan will freeze during verification. Keep generated test outputs outside
 those protected paths.
 
+## Make verification fast
+
+Verification runs more than once, so its slowest command sets the build's pace. On a typical web
+application install, build, unit and browser tests take seconds; a defect-injection script takes
+minutes when it is written the obvious way. Plan it so it does not:
+
+- Defect injections are independent of one another. The runner starts every mutation at once (each in its
+  own scratch copy, with its own port and output directory) and waits for all of them; it never loops over them
+  one by one.
+- Each injection runs only the test or tests that defect must break (a single spec file or test name), never the
+  whole suite, and never a fresh install: link or copy the existing `node_modules` and build output into the
+  scratch copy.
+- Put commands that touch no shared port, output or fixture into `## Parallel verification groups`, and keep the
+  slow ones (browser suites, the injection runner) out of the strictly ordered tail.
+
+
 Identify independent verification commands that can run concurrently. Commands
 sharing ports, writable fixtures, generated outputs, or ordered state must stay
 sequential. Use isolated output directories and local test-server ports where
@@ -142,6 +158,32 @@ Plan setup separately from verification. Allow reuse of dependencies and browser
 binaries only after checking version/lockfile compatibility and actual usability.
 Require fresh installation only when testing installation, when reuse is invalid,
 or when explicitly requested. State cache invalidation inputs in the setup step.
+
+Shape the steps so they can run together. The driver runs *adjacent* steps at the same
+time when they share no owned file and none depends on another in the group, so a plan that
+reads as one long chain wastes most of its implementation time:
+
+- `Depends on:` means "reads or imports what that step writes while it is being built". Being
+  verified afterwards, being built later in the usual order, or sharing a theme is not a
+  dependency. Leave it out unless the step cannot be written without the other's output.
+- Fix the interfaces in the plan, not in code: the functions and their signatures, the
+  selectors or `data-testid` names, the file layout, the state shape. Steps that build to the
+  same written interface do not depend on each other. Tests are written from the plan's
+  behaviors and interfaces, so a test step needs no earlier code step.
+- One owner per file. Two steps that name the same file cannot run together, so split a
+  shared file or assign it to one step.
+- Prefer several small steps of one to three files to a few large ones, and list independent
+  steps next to each other: only adjacent steps are grouped.
+- A step that only runs or checks other steps' files at verification time (a defect-injection runner, an
+  integration script) does not depend on them while it is written: write it from the plan's interfaces,
+  naming the spec files and test IDs this plan assigns, and it runs beside the rest. At most the scaffold.
+- `Depends on:` lists at most three steps, each one whose output this step reads while it is written. A step
+  that names most or all of the others is a serial tail: it starts only after everything else has finished and
+  adds its whole duration to the build. If you are about to write one, remove the dependencies instead.
+- Do not end with a `Reconcile` step. The driver runs the verification commands itself and a repair stage
+  fixes cross-file mismatches, so a final step that re-checks everything only adds a serial model call.
+  Assign `.uncle/launch.json` to the scaffold step. A scaffold step that must run first is fine; write the
+  project's files directly instead of a generator whenever that is as short.
 
 Group independent file creation and verification work so the implementation model
 can batch it. Name concrete reasons for serial dependencies. Arrange for each

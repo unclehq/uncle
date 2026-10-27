@@ -57,6 +57,33 @@ class PreviewTests(unittest.TestCase):
             self.assertTrue(any('received:hello' in str(e) for e in seen))
             self.assertEqual(seen[-1], ('done', True))
 
+    def test_it_opens_the_port_the_server_announces_when_the_manifest_names_another(self):
+        """noinit: launch.json said 4173, `npm run start` served 5173, and no browser ever opened."""
+        import socket
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0)); real = sock.getsockname()[1]
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0)); wrong = sock.getsockname()[1]
+        script = ('import http.server\n'
+                  'print("Local:   http://127.0.0.1:%d/", flush=True)\n'
+                  'http.server.HTTPServer(("127.0.0.1", %d), http.server.SimpleHTTPRequestHandler).serve_forever()\n') % (real, real)
+        self.spec({'kind': 'webpage', 'command': [sys.executable, '-u', '-c', script], 'url': 'http://127.0.0.1:%d' % wrong})
+        opened = []
+        with patch('completion_preview.has_starred', return_value=True), \
+                patch('completion_preview.webbrowser.open', side_effect=lambda url: opened.append(url) or True):
+            preview = CompletionPreview(self.root)
+            self.addCleanup(preview.close)
+            events = self.events(preview)
+        self.assertEqual(opened, ['http://127.0.0.1:%d' % real], events)
+        self.assertFalse(any('did not become ready' in str(e) for e in events))
+
+    def test_announced_ports_are_read_through_colour_codes_and_in_order(self):
+        from completion_preview import announced_ports
+        text = '  \x1b[32m➜\x1b[39m  Local:   \x1b[36mhttp://127.0.0.1:\x1b[1m5173\x1b[22m/\x1b[39m\n  Network: http://localhost:5174/\nhttp://example.com:80'
+        self.assertEqual(announced_ports(text), [5173, 5174])
+        self.assertEqual(announced_ports(''), [])
+        self.assertEqual(announced_ports('http://[::1]:3000 and http://127.0.0.1:3000'), [3000])
+
     def test_static_page_opened_before_star_check(self):
         (self.root / 'index.html').write_text('<h1>App</h1>')
         order = []

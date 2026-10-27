@@ -318,3 +318,27 @@ implementation step runs, means no later step has to discover it by failing.
 Name `.gitignore` in whichever step's `Owns:` covers project scaffolding, the
 same as any other file it writes. If `.gitignore` already covers the chosen
 stack (a revision pass after project-plan already wrote one), leave it alone.
+
+## Keep the steps parallel
+
+When you revise the implementation steps, keep `Depends on:` minimal: at most three steps, each one whose output
+the step reads while it is written, never most or all of the others. A step that only runs or checks other steps'
+files at verification time (a defect-injection runner, an integration script) depends on the scaffold at most.
+Do not add a final step that re-checks everything: the driver runs the verification commands itself. A serial
+tail starts after every other step and adds its whole duration to the build.
+
+## Make verification fast
+
+Verification runs more than once, so its slowest command sets the build's pace. On a typical web
+application install, build, unit and browser tests take seconds; a defect-injection script takes
+minutes when it is written the obvious way. Plan it so it does not:
+
+- Defect injections are independent of one another. The runner starts every mutation at once (each in its
+  own scratch copy, with its own port and output directory) and waits for all of them; it never loops over them
+  one by one.
+- Each injection runs only the test or tests that defect must break (a single spec file or test name), never the
+  whole suite, and never a fresh install: link or copy the existing `node_modules` and build output into the
+  scratch copy.
+- Put commands that touch no shared port, output or fixture into `## Parallel verification groups`, and keep the
+  slow ones (browser suites, the injection runner) out of the strictly ordered tail.
+

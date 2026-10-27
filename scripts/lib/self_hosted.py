@@ -138,7 +138,7 @@ def config_stage(stage, values):
         return 'manual-checklist'
     if stage == 'final-audit-investigate':
         return 'final-audit'
-    if stage == 'project-plan-investigate':
+    if stage == 'project-plan-investigate' or stage.startswith('project-plan-section-'):
         return 'project-plan'
     if stage in ('requirements', 'requirements-investigate'):
         # New-app requirements deliberately inherit the project-plan picker.
@@ -170,6 +170,8 @@ def config_stage(stage, values):
         return stage.split('-worker-', 1)[0]
     if stage.startswith('implementation-step-'):
         return 'implementation'
+    if stage.startswith('preview-build-part-'):
+        stage = 'preview-build'     # a part is the preview stage as far as its model goes
     if stage == 'preview-build' and not values.get('preview-build.model'):
         for key, value in values.items():
             if key.endswith('.model') and value and key != 'self-hosted.model':
@@ -581,6 +583,15 @@ def _test_report(kind):
         ['commands'], closed=False)
 
 
+def _register_worker_packets():
+    """The plan-stage worker packets (worker_schemas.py): the grammar a local model is held to for them."""
+    spec = importlib.util.spec_from_file_location('worker_schemas', Path(__file__).with_name('worker_schemas.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    REVIEWER_SCHEMAS.update(module.STATIC)
+
+
+_register_worker_packets()
 REVIEWER_SCHEMAS['automated-test-report'] = _test_report('automated-test-report')
 REVIEWER_SCHEMAS['change-test-report'] = _test_report('change-test-report')
 REVIEWER_SCHEMAS['implementation-notes'] = dict(_envelope('implementation-notes', {
@@ -675,7 +686,10 @@ def patch_schema(kind, protected=False):
     insert = _obj({'content': _str(SECTION_MAX_LENGTH), 'after': {'type': 'string', 'maxLength': 300},
                    'before': {'type': 'string', 'maxLength': 300}, 'position': {'enum': ['start', 'end']}},
                   required=['content'], closed=True)
+    replace = _obj({'heading': _str(300), 'old': _str(SECTION_MAX_LENGTH), 'new': _str(SECTION_MAX_LENGTH),
+                    'all': {'type': 'boolean'}}, required=['heading', 'old', 'new'], closed=True)
     patch = _obj({'edit_sections': {'type': 'array', 'items': edit, 'maxItems': 40},
+                  'replace_text': {'type': 'array', 'items': replace, 'maxItems': 80},
                   'insert_sections': {'type': 'array', 'items': insert, 'maxItems': 20}}, required=[], closed=True)
     properties = {'dispositions': DISPOSITIONS, 'patch': patch}
     required = ['dispositions', 'patch']
@@ -1412,7 +1426,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
             synthesis = SYNTHESIS_MARKER in prompt and expected_kind in ('plan', 'change-plan')
             if synthesis:
                 patch_fields = ('"dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}],'
-                                '"patch":{"edit_sections":[{"heading":"...","content":"..."}],"insert_sections":[]}')
+                                '"patch":{"replace_text":[{"heading":"...","old":"...","new":"..."}],"edit_sections":[],"insert_sections":[]}')
                 extra = (', "verification_commands":"...", "protected_verification_paths":"..."' if protected_fields else '')
                 kind_fields = '"kind":"%s",%s%s' % (expected_kind, patch_fields, extra)
             elif expected_kind == 'change-planning-bundle':

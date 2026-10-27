@@ -85,6 +85,49 @@ class PlanOwnershipGapTests(unittest.TestCase):
         status = gap.main([str(self.plan), str(self.root), str(self.state_dir)])
         self.assertEqual(status, 0)
 
+    # noinit: the plan froze the directory `tests/` and assigned every file under it to steps 5-8.  The check asked
+    # whether an owned file covers the directory, which it never does, so three triage rounds chased a plan that
+    # was right.
+    def gaps_for(self, protected):
+        self.write_protected(protected)
+        return gap.unowned_protected_paths(self.plan, self.root, gap.load_protected_paths(self.plan, self.state_dir))
+
+    def test_a_protected_directory_is_owned_when_steps_own_files_inside_it(self):
+        self.write_plan(
+            '1. Scaffold — Owns: `package.json`, `vitest.config.js`\n'
+            '5. Unit tests — Owns: `tests/unit/calc.test.js`, `tests/unit/keymap.test.js`\n'
+            '7. Browser tests — Owns: `tests/e2e/theme.spec.js`\n'
+        )
+        self.assertEqual(self.gaps_for(['tests/', 'vitest.config.js']), [])
+        # A bare name with no slash that is not on disk cannot be told from a file called `tests`: still reported.
+        self.assertEqual(self.gaps_for(['tests']), ['tests'])
+
+    def test_a_protected_directory_with_nothing_owned_inside_it_is_still_a_gap(self):
+        self.write_plan('1. Core — Owns: `src/calc.js`\n')
+        self.assertEqual(self.gaps_for(['tests/']), ['tests/'])
+
+    def test_files_owned_in_a_different_directory_do_not_satisfy_it(self):
+        self.write_plan('1. Core — Owns: `src/tests/calc.test.js`, `testsupport/x.js`\n')
+        self.assertEqual(self.gaps_for(['tests/']), ['tests/'])
+
+    def test_a_wildcard_owner_still_does_not_count_for_a_directory(self):
+        self.write_plan('1. Core — Owns: `src/calc.js`\n2. Reconcile — Owns: `*` — Depends on: 1\n')
+        self.assertEqual(self.gaps_for(['tests/']), ['tests/'])
+
+    def test_a_glob_owned_under_the_directory_counts(self):
+        self.write_plan('1. Tests — Owns: `tests/unit/*.test.js`\n')
+        self.assertEqual(self.gaps_for(['tests/']), [])
+
+    def test_only_the_unowned_entries_of_a_mixed_list_are_reported(self):
+        self.write_plan('1. Tests — Owns: `tests/unit/calc.test.js`, `vitest.config.js`\n')
+        self.assertEqual(self.gaps_for(['tests/', 'vitest.config.js', 'playwright.config.js', 'scripts/']),
+                         ['playwright.config.js', 'scripts/'])
+
+    def test_an_existing_directory_is_not_a_gap(self):
+        (self.root / 'tests').mkdir()
+        self.write_plan('1. Core — Owns: `src/calc.js`\n')
+        self.assertEqual(self.gaps_for(['tests/']), [])
+
 
 if __name__ == '__main__':
     unittest.main()

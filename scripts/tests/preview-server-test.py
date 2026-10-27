@@ -96,6 +96,34 @@ class Server(unittest.TestCase):
                 self.assertEqual(spec['command'][:4], ['npm', 'run', 'dev', '--'])
                 self.assertTrue(spec['url'].startswith('http://127.0.0.1:'))
 
+    def test_a_project_whose_dev_server_is_not_called_dev_still_gets_one(self):
+        """noinit's Vite server was the `start` script; with no `dev` it was served statically, a blank page."""
+        manifest = '{"scripts":{"start":"vite --port 5173"},"dependencies":{"react":"x"},"devDependencies":{"vite":"x"}}'
+        root = project(**{'package.json': manifest})
+        self.assertIsNone(development_preview(root))           # dependencies not installed yet
+        vite = root / 'node_modules' / '.bin' / 'vite'
+        vite.parent.mkdir(parents=True)
+        vite.write_text('')
+        spec = development_preview(root)
+        self.assertEqual(Path(spec['command'][0]).resolve(), vite.resolve())
+        self.assertIn('--strictPort', spec['command'])
+        self.assertTrue(spec['url'].startswith('http://127.0.0.1:'))
+        self.assertIn(spec['url'].rsplit(':', 1)[1], spec['command'])        # our port, not the script's
+
+    def test_a_project_with_a_dev_script_still_goes_through_it(self):
+        root = project(**{'package.json': '{"scripts":{"dev":"vite"},"dependencies":{"react":"x"}}'})
+        vite = root / 'node_modules' / '.bin' / 'vite'
+        vite.parent.mkdir(parents=True)
+        vite.write_text('')
+        self.assertEqual(development_preview(root)['command'][:4], ['npm', 'run', 'dev', '--'])
+
+    def test_a_framework_project_without_vite_gets_no_dev_server(self):
+        root = project(**{'package.json': '{"scripts":{"start":"node server.js"},"dependencies":{"react":"x"}}'})
+        vite = root / 'node_modules' / '.bin' / 'vite'
+        vite.parent.mkdir(parents=True)
+        vite.write_text('')
+        self.assertIsNone(development_preview(root))
+
 
 class EarlyPreview(unittest.TestCase):
     """The TUI side: one tab, live, and no end-of-run dialog."""

@@ -167,6 +167,16 @@ def is_none(value):
     return value.strip().lower().strip(".") in {w.strip(".") for w in NONE_WORDS}
 
 
+def normalize_resource(token):
+    """One spelling per resource: `port:4173`, `port-4173` and `Port 4173` are the same port.
+
+    Four reviewer lenses wrote the same preview port two ways, so checks that fought over it were
+    scheduled side by side; a token only works if everyone's spelling of it agrees.
+    """
+    token = token.strip("`").strip("*_").strip().lower()
+    return re.sub(r"[\s:_-]+", ":", token).strip(":")
+
+
 def set_resources(check, value):
     value = value.strip().strip("`").strip("*_").strip()
     if is_none(value) or not value:
@@ -177,7 +187,7 @@ def set_resources(check, value):
         # only the very first and very last backtick, so split_list's own
         # items still carry a stray "`" wherever a per-resource backtick
         # bordered a comma. Each item needs the same cleanup individually.
-        check.resources = {r.strip("`").strip("*_").strip().lower() for r in split_list(value)}
+        check.resources = {normalize_resource(r) for r in split_list(value)}
 
 
 def set_depends(check, value):

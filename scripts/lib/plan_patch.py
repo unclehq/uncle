@@ -5,9 +5,10 @@ only has to change what the review found. Asking it to reproduce every
 unaffected section too made its output proportional to the whole plan's size
 instead of to the size of the review -- the dominant cost on a slow model.
 
-A patch names only what changed: replace an existing section's body by its
-exact heading text (`edit_sections`), or insert a whole new section next to
-one that already exists (`insert_sections`). Sections are the plan's own
+A patch names only what changed: change a snippet inside an existing section
+(`replace_text`), replace a section's whole body by its exact heading text
+(`edit_sections`), or insert a whole new section next to one that already
+exists (`insert_sections`). Sections are the plan's own
 `## ` headings, numbered or not; nested `### ` headings stay inside whichever
 section's body they already live in. Everything not named in the patch is
 carried over from the base narrative byte for byte.
@@ -58,10 +59,12 @@ def _heading_and_body(content):
 
 
 def apply_patch(narrative, patch):
-    """Apply `{'edit_sections': [...], 'insert_sections': [...]}` to `narrative`.
+    """Apply `{'edit_sections': [...], 'replace_text': [...], 'insert_sections': [...]}` to `narrative`.
 
     edit_sections: [{'heading': exact existing heading text, e.g. '## 7. Title',
                       'content': the section's new body, heading line excluded}]
+    replace_text: [{'heading': exact existing heading text, 'old': text that occurs once in that
+                     section's body (or `all`: true for every occurrence), 'new': its replacement}]
     insert_sections: [{'content': the whole new section, heading line included,
                         'after': an existing (or already-inserted) heading text,
                         'before': likewise, 'position': 'start'|'end'}]
@@ -93,6 +96,26 @@ def apply_patch(narrative, patch):
         # Always insert exactly one.
         content = edit['content'].strip('\n')
         sections[by_heading[heading]]['body'] = ('\n\n' + content) if content else ''
+
+    # replace_text: change a snippet inside a section instead of rewriting the section.  Most review
+    # findings change a sentence, a table row or a command; rewriting the whole section made the output
+    # (and the time) proportional to the section, not to the change.
+    for edit in patch.get('replace_text') or []:
+        if (not isinstance(edit, dict) or not edit.get('heading') or not isinstance(edit.get('old'), str)
+                or not edit['old'] or not isinstance(edit.get('new'), str)):
+            raise ValueError('replace_text entries need "heading", a non-empty "old" and a "new"')
+        heading = edit['heading'].strip()
+        if heading not in by_heading:
+            raise ValueError('replace_text: no existing section with heading %r' % heading)
+        section = sections[by_heading[heading]]
+        count = section['body'].count(edit['old'])
+        if count == 0:
+            raise ValueError('replace_text: %r does not occur in section %r; copy the text exactly as the base '
+                             'plan has it' % (edit['old'][:80], heading))
+        if count > 1 and not edit.get('all'):
+            raise ValueError('replace_text: %r occurs %d times in section %r; include more surrounding text so '
+                             'it is unique, or set "all" to true' % (edit['old'][:80], count, heading))
+        section['body'] = section['body'].replace(edit['old'], edit['new'])
 
     for insert in patch.get('insert_sections') or []:
         if not isinstance(insert, dict) or not insert.get('content'):

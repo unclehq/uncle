@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'scripts/lib'))
-from self_hosted import read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models, parse_arguments, reviewer_document, reviewer_packet, reviewer_json_artifact, reviewer_expects_worker_packet, InvalidReviewerDocument
+from self_hosted import config_stage, read_keys, save_keys, settings, opencode_invocation, run_opencode, response_from_events, discover_models, refresh_models, parse_arguments, reviewer_document, reviewer_packet, reviewer_json_artifact, reviewer_expects_worker_packet, InvalidReviewerDocument
 from process_tree import bash_executable
 
 
@@ -84,6 +84,10 @@ class SelfHosted(unittest.TestCase):
             self.assertNotIn('named-secret', result.stdout + result.stderr)
             if success:
                 self.assertEqual(result.stdout.strip(), 'local/qwen')
+
+    def test_preview_build_parts_resolve_like_the_preview_stage(self):
+        for values in ({'project-plan.model': 'local/x', 'self-hosted.model': 'z'}, {'preview-build.model': 'q'}):
+            self.assertEqual(config_stage('preview-build-part-script', values), config_stage('preview-build', values))
 
     def test_review_workers_inherit_the_parent_stage_configuration(self):
         parents = ('adversarial-review', 'updated-plan', 'updated-change-plan',

@@ -37,11 +37,34 @@ verify_parallel_groups() {
                 && plan="${STATE_DIR:-.uncle/workflow}/documents/$stem.json"
             ;;
     esac
-    # Parallel groups are an optional optimization. Canonical plan packets do
-    # not yet model them separately, so JSON plans run their authoritative
-    # command list sequentially rather than parsing the rendered approval
-    # view for scheduling prose.
-    [[ "$plan" == *.json ]] && return 0
+    # Parallel groups are an optional optimization. A canonical plan packet has no field of its own
+    # for them: the planner writes the `## Parallel verification groups` section inside `narrative`,
+    # as its prompt says.  This used to return here for every JSON plan, so declared groups were never
+    # read and every verification ran strictly in order.  Read them from the narrative instead; a bad
+    # declaration costs the optimization (sequential, with a note), never the run.
+    local narrative_file=""
+    if [[ "$plan" == *.json ]]; then
+        narrative_file="$(mktemp "${TMPDIR:-/tmp}/uncle-groups.XXXXXX")" || return 0
+        if ! python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1])).get("narrative") or "")' \
+                "$plan" > "$narrative_file" 2>/dev/null; then
+            rm -f "$narrative_file"; return 0
+        fi
+        local rows status=0
+        rows="$(verify_parallel_groups_text "$narrative_file" "$commands")" || status=$?
+        rm -f "$narrative_file"
+        if [[ "$status" != 0 ]]; then
+            echo "Invalid parallel verification groups in the plan; running the verification commands in order." >&2
+            return 0
+        fi
+        [[ -z "$rows" ]] || printf '%s\n' "$rows"
+        return 0
+    fi
+    verify_parallel_groups_text "$plan" "$commands"
+}
+
+# The group declarations in one Markdown text: rows on stdout, nonzero when malformed.
+verify_parallel_groups_text() {
+    local plan="$1" commands="$2"
     awk -v count="$(wc -l < "$commands" | tr -d ' ')" '
         /^## Parallel verification groups[ \t\r]*$/ { active=1; sections++; next }
         active && /^```/ { if (opened) { closed=1; active=0 } else opened=1; next }

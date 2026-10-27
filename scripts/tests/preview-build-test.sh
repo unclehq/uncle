@@ -16,6 +16,15 @@ check "preview prompt names canonical interpretation JSON" grep -qF '.uncle/work
 check "preview prompt names canonical plan JSON" grep -qF '.uncle/workflow/documents/PROJECT_PLAN.json' "$ROOT/prompts/preview-build.md"
 check "preview prompt does not read rendered plan markdown" bash -c '! grep -qF ".uncle/docs/PROJECT_PLAN.md, if it exists" "$1"' _ "$ROOT/prompts/preview-build.md"
 
+# A stand-in for preview_vendor.py: records the order of fetch and rewrite, never touches the network.
+cat > "$TMP/vendor-stub.py" <<'STUB'
+import sys, time
+with open('.uncle/workflow/vendor-calls', 'a') as log:
+    log.write(sys.argv[1] + '\n')
+if sys.argv[1] == 'fetch':
+    time.sleep(0.3)
+STUB
+
 # case <name> <files...>: a fresh project with the named fixtures, the lib
 # sourced with a stub runner, one start attempt, then the background job joined.
 run_case() {
@@ -30,13 +39,23 @@ run_case() {
     (
         cd "$dir"
         ROOT="$ROOT" STATE_DIR=".uncle/workflow" LOG_DIR=".uncle/workflow/logs"
+        PREVIEW_VENDOR_PY="$TMP/vendor-stub.py"
         PROJECT_ROOT="$PWD" UNCLE_CONFIG="$PWD/.uncle/config"
         . "$ROOT/scripts/lib/stage-config.sh"
         run_claude() {
             printf '%s\n' "$*" > "$STATE_DIR/ran"
             printf '%s\n' "${WORKFLOW_MODEL_PREVIEW_BUILD:-}" > "$STATE_DIR/model"
+            printf '%s\n' "${WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS:-unset}" > "$STATE_DIR/cap"
             [[ -z "${STUB_LAUNCH:-}" ]] || printf '%s' "$STUB_LAUNCH" > .uncle/launch.json
+            if [[ -n "${STUB_STAGE_PAGE:-}" ]]; then
+                mkdir -p .uncle/workflow/preview; printf '%s' "$STUB_STAGE_PAGE" > .uncle/workflow/preview/index.html
+            fi
+            [[ -z "${STUB_FAIL:-}" ]] || return 1
         }
+        if [[ -n "${STUB_SHARED:-}" ]]; then
+            stage_uses_self_hosted() { [[ "$1" == preview-build || "$1" == project-plan ]]; }
+            uncle_stage_model() { if [[ "$1" == preview-build ]]; then printf '%s' "${STUB_PREVIEW_MODEL:-m}"; else printf m; fi; }
+        fi
         . "$ROOT/scripts/lib/preview-build.sh"
         preview_build_start > "$STATE_DIR/out" 2>&1
         [[ -n "$PREVIEW_PID" ]] && wait "$PREVIEW_PID"
@@ -61,6 +80,49 @@ check "runner was invoked for preview-build"   grep -q "preview-build" "$TMP/bri
 check "no plan hash without a plan"            test ! -e "$TMP/brief-only/.uncle/workflow/preview-build.plan"
 check "brief-only preview never survives"      test "$(cat "$TMP/brief-only/.uncle/workflow/survived")" != 0
 check "says it builds from the brief"          grep -q "preview from the brief" "$TMP/brief-only/.uncle/workflow/out"
+
+# Contention: a preview on the planning model's own server waits for the plan.
+STUB_SHARED=1 WORKFLOW_PREVIEW_BUILD_DEFER=auto run_case shared-brief REQUIREMENTS.md "$WEB_BRIEF"
+check "shared server: preview waits without a plan"   test "$(cat "$TMP/shared-brief/.uncle/workflow/started")" == 0
+check "shared server: says why it waits"              grep -q "waits for the plan" "$TMP/shared-brief/.uncle/workflow/out"
+check "shared server: nothing was launched"           test ! -e "$TMP/shared-brief/.uncle/workflow/ran"
+STUB_SHARED=1 WORKFLOW_PREVIEW_BUILD_DEFER=auto run_case shared-plan REQUIREMENTS.md "$WEB_BRIEF" PROJECT_PLAN.md "$PLAN"
+check "shared server: starts once the plan exists"    test "$(cat "$TMP/shared-plan/.uncle/workflow/started")" == 1
+STUB_SHARED=1 STUB_PREVIEW_MODEL=fast WORKFLOW_PREVIEW_BUILD_DEFER=auto run_case other-model REQUIREMENTS.md "$WEB_BRIEF"
+check "different model: starts without waiting"       test "$(cat "$TMP/other-model/.uncle/workflow/started")" == 1
+STUB_SHARED=1 run_case default-shared REQUIREMENTS.md "$WEB_BRIEF"
+check "default: a shared server does not delay the preview" test "$(cat "$TMP/default-shared/.uncle/workflow/started")" == 1
+STUB_SHARED=1 WORKFLOW_PREVIEW_BUILD_DEFER=0 run_case no-defer REQUIREMENTS.md "$WEB_BRIEF"
+check "defer=0: never waits"                          test "$(cat "$TMP/no-defer/.uncle/workflow/started")" == 1
+WORKFLOW_PREVIEW_BUILD_DEFER=1 run_case force-defer REQUIREMENTS.md "$WEB_BRIEF"
+check "defer=1: waits for the plan on any runner"     test "$(cat "$TMP/force-defer/.uncle/workflow/started")" == 0
+
+
+# Speed: the preview is one small hand-written file, so it is told so, given only the tools to write
+# it, a short turn limit, and an output cap that makes a runaway cost seconds.
+check "preview prompt sets a size budget"          grep -qF 'Size budget (binding)' "$ROOT/prompts/preview-build.md"
+check "preview prompt forbids bundlers and CDN links" grep -qF 'No bundler, no `npm`, no build step, no CDN' "$ROOT/prompts/preview-build.md"
+check "preview prompt loads React from the local vendor copies" grep -qF '.uncle/vendor/react.production.min.js' "$ROOT/prompts/preview-build.md"
+check "preview gets only Read and Write"           grep -qF 'preview-build|preview-build-part-*) fallback="Read,Write"' "$ROOT/scripts/stagegate.sh"
+check "preview gets a short turn limit"            grep -qF 'preview-build|preview-build-part-*) fallback=8' "$ROOT/scripts/stagegate.sh"
+run_case capped REQUIREMENTS.md "$WEB_BRIEF"
+check "preview output is capped by default"        test "$(cat "$TMP/capped/.uncle/workflow/cap")" == 8000
+WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS=1234 run_case operator-cap REQUIREMENTS.md "$WEB_BRIEF"
+check "an operator's own output limit still wins"  test "$(cat "$TMP/operator-cap/.uncle/workflow/cap")" == 1234
+
+run_case vendor REQUIREMENTS.md "$WEB_BRIEF"
+check "libraries are fetched beside the model, then rewritten after it" test "$(tr '\n' ' ' < "$TMP/vendor/.uncle/workflow/vendor-calls")" == "fetch rewrite "
+
+
+# Publishing: the placeholder is on screen at once, and the staged page replaces it in one step.
+STUB_STAGE_PAGE='<!doctype html><title>real</title><body>the real page</body>' run_case published REQUIREMENTS.md "$WEB_BRIEF"
+check "the staged page replaces the placeholder"   grep -q 'the real page' "$TMP/published/index.html"
+check "the placeholder text is gone"               bash -c '! grep -q "Building the first look" "$1"' _ "$TMP/published/index.html"
+check "no half-published file is left"             test ! -e "$TMP/published/index.html.publishing"
+STUB_FAIL=1 run_case failed-preview REQUIREMENTS.md "$WEB_BRIEF"
+check "a failed preview leaves no placeholder"     test ! -e "$TMP/failed-preview/index.html"
+run_case lone-placeholder REQUIREMENTS.md "$WEB_BRIEF"
+check "a stage that wrote nothing keeps the placeholder it was started with" test -e "$TMP/lone-placeholder/index.html"
 
 run_case generated-brief .uncle/docs/REQUIREMENTS.md "$WEB_BRIEF"
 check "starts from a generated brief"          test "$(cat "$TMP/generated-brief/.uncle/workflow/started")" == 1

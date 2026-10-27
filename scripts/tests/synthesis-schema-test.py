@@ -37,7 +37,7 @@ class SynthesisSchema(unittest.TestCase):
     def test_a_patch_can_edit_or_insert_and_either_may_be_empty(self):
         patch = SH.artifact_schema('plan', True, False, synthesis=True)['properties']['patch']
         self.assertEqual(patch['required'], [])
-        self.assertEqual(set(patch['properties']), {'edit_sections', 'insert_sections'})
+        self.assertEqual(set(patch['properties']), {'edit_sections', 'replace_text', 'insert_sections'})
         self.assertIn('content', patch['properties']['insert_sections']['items']['required'])
 
     def test_the_other_plan_stages_keep_the_full_plan_schema(self):
@@ -51,6 +51,25 @@ class SynthesisSchema(unittest.TestCase):
         workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
         self.assertIn(SH.SYNTHESIS_MARKER, PROMPT.prompt(plan, review, workers))
         self.assertIn(SH.SYNTHESIS_MARKER, PROMPT.prompt(dict(plan, kind='change-plan'), review, workers, change=True))
+
+    def test_the_prompt_forbids_override_sections(self):
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## A\nx'}
+        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}
+        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
+        for change in (False, True):
+            text = PROMPT.prompt(dict(plan, kind='change-plan' if change else 'plan'), review, workers, change=change)
+            self.assertIn('Never add a section that "overrides"', text)
+
+    def test_the_prompt_and_schema_offer_snippet_replacement_first(self):
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## A\nx'}
+        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}
+        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
+        text = PROMPT.prompt(plan, review, workers)
+        self.assertIn('`replace_text` (use this first)', text)
+        self.assertLess(text.index('`replace_text` (use this first)'), text.index('`edit_sections` (only when most'))
+        replace = SH.patch_schema('plan')['properties']['patch']['properties']['replace_text']['items']
+        self.assertEqual(set(replace['required']), {'heading', 'old', 'new'})
+        self.assertIn('replace_text', SH.patch_schema('plan')['properties']['patch']['properties'])
 
     def test_http_setup_enforces_the_patch_schema_only_for_a_synthesis_prompt(self):
         import tempfile

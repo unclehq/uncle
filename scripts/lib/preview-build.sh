@@ -66,10 +66,45 @@ preview_build_model() {
     printf '%s' haiku
 }
 
+# preview_build_defer — 0 while the preview should wait for the plan.
+#
+# Planning is a single decode stream, and the preview is a second one on the
+# same model server: measured on a local model, the preview's 160-360 s of
+# generation ran beside project-plan and slowed both.  When the two stages use the
+# same self-hosted model they share a server, so the preview waits until the plan
+# exists and starts beside the review panel instead -- a parallel fan-out the server
+# can batch -- and is built from the plan rather than the brief alone.  A preview
+# on a different model, or on a hosted runner, has no such contention and starts
+# as soon as the brief is approved.
+#
+# Off by default: the operator asked for the application on screen while planning runs,
+# and waiting for the plan trades that away.  WORKFLOW_PREVIEW_BUILD_DEFER=auto defers
+# only on a shared self-hosted server, =1 always defers until the plan exists, =0 (the
+# default) never does.
+PREVIEW_DEFER_NOTED=0
+preview_build_defer() {
+    local mode="${WORKFLOW_PREVIEW_BUILD_DEFER:-0}"
+    [[ "$mode" != 0 ]] || return 1
+    [[ -s .uncle/docs/PROJECT_PLAN.md || -s PROJECT_PLAN.md ]] && return 1
+    if [[ "$mode" != 1 ]]; then
+        declare -f stage_uses_self_hosted > /dev/null 2>&1 \
+            && declare -f uncle_stage_model > /dev/null 2>&1 || return 1
+        [[ -z "${WORKFLOW_MODEL_PREVIEW_BUILD:-}" ]] || return 1
+        stage_uses_self_hosted preview-build AGENT && stage_uses_self_hosted project-plan AGENT || return 1
+        [[ "$(uncle_stage_model preview-build self-hosted)" == "$(uncle_stage_model project-plan self-hosted)" ]] || return 1
+    fi
+    if [[ "$PREVIEW_DEFER_NOTED" == 0 ]]; then
+        PREVIEW_DEFER_NOTED=1
+        echo "Preview build waits for the plan: it shares a model server with planning."
+    fi
+    return 0
+}
+
 # preview_build_start — launch it, detached, and return immediately.
 preview_build_start() {
     [[ "$PREVIEW_BUILD" == "1" ]] || return 0
     [[ "$PREVIEW_STARTED" == 0 ]] || return 0
+    if preview_build_defer; then return 0; fi
     [[ -s .uncle/docs/PROJECT_PLAN.md || -s PROJECT_PLAN.md || -s "${DOCUMENT_BUDGET_SOURCE:-.uncle/docs/REQUIREMENTS.md}" || -s .uncle/docs/REQUIREMENTS.md || -s REQUIREMENTS.md ]] || return 0
 
     # Only a web application or a command line tool has anything to show this
@@ -92,6 +127,13 @@ preview_build_start() {
     if [[ -n "${UNTRACKED_BASELINE:-}" && ! -e "$UNTRACKED_BASELINE" ]] \
        && declare -f snapshot_untracked > /dev/null 2>&1; then
         snapshot_untracked "$UNTRACKED_BASELINE"
+    fi
+    # An instant first look, painted from the brief with no model: the tab opens now, and the
+    # model's page replaces this one when it lands (preview_placeholder.py).  Only for a web page.
+    mkdir -p .uncle/workflow/preview
+    rm -f .uncle/workflow/preview/index.html
+    if [[ "$kind" == webpage ]]; then
+        python3 -B "${PREVIEW_PLACEHOLDER_PY:-$ROOT/scripts/lib/preview_placeholder.py}" . > /dev/null 2>&1 || true
     fi
     # The plan this was built from, so the later stage can tell whether the
     # review changed anything the code depends on. A preview built from the
@@ -124,13 +166,37 @@ preview_build_start() {
         launch_before=""
         [[ -f .uncle/launch.json ]] && launch_before="$(cat .uncle/launch.json)"
         status=0
+        # React, ReactDOM and Babel download beside the model, not after it: the page it writes
+        # loads them from .uncle/vendor/, so a React preview costs no CDN round trip and no tokens.
+        python3 -B "${PREVIEW_VENDOR_PY:-$ROOT/scripts/lib/preview_vendor.py}" fetch . &
+        vendor_pid=$!
         # A throwaway first look does not need the top tier deliberating over
         # it: the last one spent 124s and ~11,900 output tokens to produce a
         # 2 KB page. Speed is the whole product of this stage.
-        UNCLE_PREVIEW_BUILD=true \
-        WORKFLOW_MODEL_PREVIEW_BUILD="$(preview_build_model)" \
-        WORKFLOW_EFFORT_PREVIEW_BUILD="${WORKFLOW_EFFORT_PREVIEW_BUILD:-low}" \
+        # A page is about 2k tokens.  Cap the output so a runaway costs seconds, not the minutes a
+        # 32k-token default allows; an operator's own limit still wins.
+        [[ -n "${WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS:-}" ]] \
+            || export WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS="${WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS_PREVIEW_BUILD:-8000}"
+        # Exported for the whole subshell: the single-pass stage and every part worker read them.
+        export UNCLE_PREVIEW_BUILD=true
+        export WORKFLOW_MODEL_PREVIEW_BUILD="$(preview_build_model)"
+        export WORKFLOW_EFFORT_PREVIEW_BUILD="${WORKFLOW_EFFORT_PREVIEW_BUILD:-low}"
+        if preview_build_use_parts && preview_build_parallel; then
+            echo "Preview built in parallel parts."
+        elif preview_build_use_oneshot && preview_build_oneshot; then
+            echo "Preview built in one call."
+        else
             run_claude prompts/preview-build.md preview-build || status=$?
+        fi
+        wait "$vendor_pid" 2>/dev/null || true
+        # Publish the staged page over the placeholder in one step, so the tab swaps pages once.
+        if [[ -s .uncle/workflow/preview/index.html ]]; then
+            cp .uncle/workflow/preview/index.html index.html.publishing \
+                && mv -f index.html.publishing index.html
+        elif [[ "$status" != 0 && "$(grep -c "Building the first look" index.html 2>/dev/null)" -gt 0 ]]; then
+            rm -f index.html      # the stage failed and only the placeholder exists: not a preview
+        fi
+        python3 -B "${PREVIEW_VENDOR_PY:-$ROOT/scripts/lib/preview_vendor.py}" rewrite . || true
         if [[ -n "$launch_before" ]]; then
             printf '%s' "$launch_before" > .uncle/launch.json
         else
@@ -139,6 +205,96 @@ preview_build_start() {
         exit "$status"
     ) > "$LOG_DIR/preview-build.log" 2>&1 < /dev/null &
     PREVIEW_PID=$!
+}
+
+# preview_build_use_oneshot — whether to ask for the whole page in a single tool-free call.
+#
+# The tool-based preview makes several API round trips (read the brief, write the file, report), each
+# over a large cached prompt.  One call that embeds the inputs and answers with the page removes them
+# all.  For a self-hosted model the parts path wins instead (decode is the cost there), so the default
+# is one call for every other runner.  WORKFLOW_PREVIEW_BUILD_ONESHOT=1 forces it, =0 forbids it.
+preview_build_use_oneshot() {
+    case "${WORKFLOW_PREVIEW_BUILD_ONESHOT:-auto}" in
+        1) return 0 ;;
+        0) return 1 ;;
+    esac
+    declare -f stage_uses_self_hosted > /dev/null 2>&1 || return 0
+    ! stage_uses_self_hosted preview-build AGENT
+}
+
+# preview_build_oneshot — one model call, no tools: the prompt carries the brief, the interpretation and
+# the plan, the reply is the page, and the driver pulls it out and stages it for publishing.  Nonzero
+# when the reply holds no usable page, and the caller runs the tool-based preview.
+preview_build_oneshot() {
+    local state helper="$ROOT/scripts/lib/preview_oneshot.py" prompt
+    case "$STATE_DIR" in /*) state="$STATE_DIR" ;; *) state="$PWD/$STATE_DIR" ;; esac
+    prompt="$state/preview-oneshot-prompt.md"
+    mkdir -p "$state/preview"
+    python3 -B "$helper" prompt . > "$prompt" || return 1
+    # Read is only a harmless allow-list entry: the prompt says no tools, and one retry turn is the limit.
+    WORKFLOW_TOOLS_PREVIEW_BUILD=Read WORKFLOW_TURNS_PREVIEW_BUILD=2 \
+        run_claude "$prompt" preview-build || return 1
+    python3 -B "$helper" extract "$LOG_DIR/preview-build.jsonl" "$state/preview/index.html"
+}
+
+# preview_build_use_parts — whether to write the page in parallel parts.
+#
+# Parts pay off where decoding is slow: a local model writes a page at about thirty tokens a second, so
+# three short parts side by side beat one long one.  A fast hosted model writes the whole page in 15
+# seconds, and the parts only add a serial contract step and a second and third session -- measured on
+# haiku, 14-17 s single-pass against about 65 s in parts.  So the default is parts for a self-hosted
+# preview and one pass for everything else.  WORKFLOW_PREVIEW_BUILD_PARALLEL=1 forces parts, =0 forbids them.
+preview_build_use_parts() {
+    case "${WORKFLOW_PREVIEW_BUILD_PARALLEL:-auto}" in
+        1) return 0 ;;
+        0) return 1 ;;
+    esac
+    declare -f stage_uses_self_hosted > /dev/null 2>&1 || return 1
+    stage_uses_self_hosted preview-build AGENT
+}
+
+# preview_build_parallel — the page in parts (preview_build_parts.py): a short contract, then markup,
+# styles and script written side by side, assembled into one index.html by the driver.  Nonzero, with
+# no index.html written, on any failure; the caller then runs the single-pass preview.
+preview_build_parallel() {
+    local directory="$STATE_DIR/preview-parts" helper="$ROOT/scripts/lib/preview_build_parts.py"
+    local phase name prompt pid failed watcher="" created=0
+    local -a pids names
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    # Show the page as it grows: a placeholder within a second, then each part as it lands.  The tab
+    # opens on the first sighting and reloads on every change, so a person watches it fill in.
+    # Only when there is no page yet: an earlier first look is not replaced by a placeholder.
+    if [[ ! -e index.html ]]; then
+        created=1
+        python3 -B "$helper" watch "$directory" index.html "$directory/stop" > /dev/null 2>&1 &
+        watcher=$!
+    fi
+    preview_build_parts_finish() {   # status
+        : > "$directory/stop"
+        [[ -z "$watcher" ]] || wait "$watcher" 2>/dev/null || true
+        # A page this function made and could not finish is not a preview; the single pass starts clean.
+        if [[ "$1" != 0 && "$created" == 1 ]]; then rm -f index.html; fi
+        return "$1"
+    }
+    for phase in 1 2; do
+        pids=(); names=()
+        for name in $(python3 -B "$helper" names "$directory" "$phase"); do
+            prompt="$directory/prompts/$name.md"
+            python3 -B "$helper" prompt "$name" "$directory" "$ROOT/prompts/preview-build.md" "$prompt" || { preview_build_parts_finish 1; return 1; }
+            ( SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                run_claude "$prompt" "preview-build-part-$name" ) > "$LOG_DIR/preview-build-part-$name.log" 2>&1 &
+            pids+=("$!"); names+=("$name")
+        done
+        failed=0
+        for pid in "${!pids[@]}"; do
+            wait "${pids[$pid]}" || failed=1
+        done
+        [[ "$failed" == 0 ]] || { preview_build_parts_finish 1; return 1; }
+    done
+    # Stop the preview writer first: the strict page replaces the partial one, never the other way round.
+    : > "$directory/stop"; [[ -z "$watcher" ]] || wait "$watcher" 2>/dev/null || true
+    python3 -B "$helper" assemble "$directory" index.html || { preview_build_parts_finish 1; return 1; }
+    return 0
 }
 
 # preview_build_wait — join it before anything reads the tree. Never fatal: a

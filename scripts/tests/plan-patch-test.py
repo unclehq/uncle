@@ -122,5 +122,58 @@ class PlanPatch(unittest.TestCase):
         self.assertIn('### Sub-heading', sections[0]['body'])
 
 
+class ReplaceText(unittest.TestCase):
+    """A review usually changes a sentence or a row; the patch should cost that, not the whole section."""
+
+    def test_a_snippet_is_replaced_and_everything_else_is_untouched(self):
+        out = plan_patch.apply_patch(NARRATIVE, {'replace_text': [
+            {'heading': '## 14. Rollback plan', 'old': 'Revert the diff.', 'new': 'Revert the diff and re-run the suite.'}]})
+        self.assertIn('Revert the diff and re-run the suite.', out)
+        self.assertIn('Restore the module.', out)
+        self.assertIn('| R-1 | keep tests green |', out)
+        self.assertEqual(out.count('## '), NARRATIVE.count('## '))
+
+    def test_a_table_row_can_be_changed_in_place(self):
+        out = plan_patch.apply_patch(NARRATIVE, {'replace_text': [
+            {'heading': '## Restrictions', 'old': '| R-1 | keep tests green |', 'new': '| R-1 | keep tests green |\n| R-2 | no new deps |'}]})
+        self.assertIn('| R-2 | no new deps |', out)
+
+    def test_text_that_is_not_there_is_refused_loudly(self):
+        with self.assertRaisesRegex(ValueError, 'does not occur'):
+            plan_patch.apply_patch(NARRATIVE, {'replace_text': [
+                {'heading': '## 14. Rollback plan', 'old': 'Revert the commit.', 'new': 'x'}]})
+
+    def test_text_that_occurs_twice_needs_more_context_or_all(self):
+        narrative = NARRATIVE + '\n## 15. Notes\nrepeat repeat\n'
+        with self.assertRaisesRegex(ValueError, 'occurs 2 times'):
+            plan_patch.apply_patch(narrative, {'replace_text': [{'heading': '## 15. Notes', 'old': 'repeat', 'new': 'once'}]})
+        out = plan_patch.apply_patch(narrative, {'replace_text': [{'heading': '## 15. Notes', 'old': 'repeat', 'new': 'once', 'all': True}]})
+        self.assertIn('once once', out)
+
+    def test_an_unknown_section_or_a_malformed_entry_is_refused(self):
+        for entry in ({'heading': '## 99. Nope', 'old': 'a', 'new': 'b'}, {'heading': '## 1. Selected technical approach', 'old': '', 'new': 'b'},
+                      {'heading': '## 1. Selected technical approach', 'old': 'Restore'}, 'not an object'):
+            with self.assertRaises(ValueError):
+                plan_patch.apply_patch(NARRATIVE, {'replace_text': [entry]})
+
+    def test_it_composes_with_edits_and_inserts_in_one_patch(self):
+        out = plan_patch.apply_patch(NARRATIVE, {
+            'edit_sections': [{'heading': '## 1. Selected technical approach', 'content': 'Rewrite the module.'}],
+            'replace_text': [{'heading': '## 1. Selected technical approach', 'old': 'Rewrite', 'new': 'Rebuild'},
+                             {'heading': '## 14. Rollback plan', 'old': 'Revert', 'new': 'Undo'}],
+            'insert_sections': [{'content': '## 15. Added\nnew', 'after': '## 14. Rollback plan'}]})
+        self.assertIn('Rebuild the module.', out)
+        self.assertIn('Undo the diff.', out)
+        self.assertIn('## 15. Added', out)
+
+    def test_the_replacement_is_far_smaller_than_the_section_it_replaces(self):
+        big = '## 10. Tests\n' + ''.join('row %d | assertion | oracle\n' % n for n in range(300))
+        patch = {'replace_text': [{'heading': '## 10. Tests', 'old': 'row 7 | assertion | oracle', 'new': 'row 7 | stronger | oracle'}]}
+        edit = {'edit_sections': [{'heading': '## 10. Tests', 'content': big}]}
+        import json
+        self.assertLess(len(json.dumps(patch)) * 20, len(json.dumps(edit)))
+        self.assertIn('row 7 | stronger | oracle', plan_patch.apply_patch('# P\n\n' + big, patch))
+
+
 if __name__ == '__main__':
     unittest.main()

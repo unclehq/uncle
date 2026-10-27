@@ -47,6 +47,23 @@ def specifically_owned(plan):
     return [paths for paths in specific.values() if paths]
 
 
+def owns_something_under(specific, directory):
+    """A protected directory (`tests/`) is owned when the plan assigns files inside it.
+
+    `covers` answers the other direction -- does a declared token cover this path -- and a file under a
+    directory does not cover the directory, so every directory entry was reported as having no owner even
+    when steps 5-8 owned every test file in it (noinit: three triage rounds on `tests/`, none of which
+    could fix a plan that was right).  The directory stays protected as a whole; what it needs is someone
+    tasked with creating what goes in it.
+    """
+    prefix = directory.rstrip('/') + '/'
+    return any(token.startswith(prefix) for paths in specific for token in paths)
+
+
+def is_directory_entry(path, root):
+    return path.endswith('/') or (Path(root) / path).is_dir()
+
+
 def unowned_protected_paths(plan, root, protected):
     root = Path(root)
     specific = specifically_owned(plan)
@@ -57,6 +74,8 @@ def unowned_protected_paths(plan, root, protected):
         if (root / path).exists():
             continue
         if any(covers(paths, path) for paths in specific):
+            continue
+        if is_directory_entry(path, root) and owns_something_under(specific, path):
             continue
         gaps.append(path)
     return gaps

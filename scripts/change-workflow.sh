@@ -27,6 +27,7 @@ PROJECT_ROOT="$PWD"
 # Every workflow-generated document lives here, never the project root.
 mkdir -p .uncle/docs
 . "$ROOT/scripts/lib/generated-input.sh"
+. "$ROOT/scripts/lib/checklist-lanes.sh"
 export DOCUMENT_BUDGET_SOURCE="$(generated_input_path CHANGE_REQUEST.md)"
 
 # Prompt files are named relative to the uncle install, but the cwd is now the
@@ -1521,6 +1522,22 @@ wait_green_check_bg() {
     return 0
 }
 
+# One checklist worker session for the lane runner (checklist-lanes.sh): run it with this driver's
+# model, effort and budget, check its packet, and give it one retry with the exact schema error.
+checklist_run_worker() {
+    local prompt="$1" label="$2" size="$3" packet="$4" worker_error budget
+    budget="$(awk -v cap="${CHECKLIST_WORKER_CAP:-}" -v n="$size" 'BEGIN { printf "%.2f", cap * n }')"
+    SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$packet" \
+        run_claude "$prompt" "execute-checklist-worker-$label" "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 80 "$budget"
+    if ! worker_error="$(python3 "$ROOT/scripts/lib/checklist_worker_packets.py" --expected placeholder --validate "$packet" 2>&1)"; then
+        rm -f "$packet"
+        echo "Worker $label packet rejected; retrying once with the exact schema error." >&2
+        SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$packet" UNCLE_WORKER_PACKET_ERROR="$worker_error" \
+            run_claude "$prompt" "execute-checklist-worker-$label" "$MODEL_EXECUTE" "$EFFORT_EXECUTE" 80 "$budget"
+        python3 "$ROOT/scripts/lib/checklist_worker_packets.py" --expected placeholder --validate "$packet"
+    fi
+}
+
 # Run only the rows that the independent checklist reviewer explicitly placed
 # together.  Each worker owns a private evidence file; it never writes the
 # canonical reports or product files.  Groups remain barriers, so a row that
@@ -1531,34 +1548,85 @@ run_parallel_checklist_workers() {
     # Packets must live inside the workspace because runner Write tools are
     # intentionally sandboxed there.  The directory is uniquely named and
     # created before any worker starts, so sibling workers cannot collide.
-    local directory="" group id prompt packet batch_label compact_groups compact_batch_size
+    local directory="" group id prompt packet batch_label compact_groups compact_batch_size compact_max_workers
     local worker_count=0 worker_cap synthesis_cap failed=0 status pid jobs
     local -a ids pids pid_ids packet_names
 
     [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
+    # Lanes, the default: checks that share a resource or depend on one another run in order inside one
+    # worker, everything else runs beside them, and nothing waits at a barrier (checklist_lanes.py).
+    if [[ "${WORKFLOW_EXECUTE_CHECKLIST_COMPACT:-1}" == 1 && "${WORKFLOW_EXECUTE_CHECKLIST_LANES:-1}" == 1 ]]; then
+        local lane_file="$STATE_DIR/checklist-groups/lanes.txt" lane_count lane_checks
+        case "$lane_file" in /*) ;; *) lane_file="$PROJECT_ROOT/$lane_file" ;; esac
+        mkdir -p "$(dirname "$lane_file")"
+        if lane_count="$(checklist_lane_batches "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$lane_file")"; then
+            if [[ "$lane_count" -lt 2 ]]; then
+                echo "Checklist runs as one agent: its checks do not split into independent lanes."
+                return 0
+            fi
+            lane_checks="$(wc -w < "$lane_file" | tr -d ' ')"
+            # Reserve half of the stage cap for reconciliation and split the rest among the checks.
+            synthesis_cap="$BUDGET_EXECUTE"
+            CHECKLIST_WORKER_CAP="$BUDGET_EXECUTE"
+            if [[ -n "$BUDGET_EXECUTE" ]]; then
+                synthesis_cap="$(awk -v cap="$BUDGET_EXECUTE" 'BEGIN { printf "%.2f", cap / 2 }')"
+                CHECKLIST_WORKER_CAP="$(awk -v cap="$BUDGET_EXECUTE" -v n="$lane_checks" 'BEGIN { printf "%.2f", cap / (2 * n) }')"
+            fi
+            CHECKLIST_SYNTHESIS_BUDGET="$synthesis_cap"
+            directory="$(mktemp -d "$STATE_DIR/checklist-workers.XXXXXX")" || return 1
+            {
+                echo '# Parallel checklist worker evidence'
+                echo
+                echo 'Each batch ran as one worker; checks that share a resource or a dependency ran in order inside one.'
+                echo 'The final execute-checklist stage is the sole writer of canonical reports.'
+            } > "$directory/README.md"
+            checklist_run_lanes "$directory" "$lane_file" "$ROOT/prompts/change/execute-checklist-worker.md"
+            [[ "$failed" == 0 ]] || printf '\nSome workers failed; their IDs require reconciliation.\n' >> "$directory/README.md"
+            python3 "$ROOT/scripts/lib/checklist_worker_packets.py" "$directory" \
+                "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" --expected "${packet_names[@]}" || return 1
+            CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"
+            cp "$ROOT/prompts/change/execute-change-checklist.md" "$CHECKLIST_EXECUTE_PROMPT"
+            printf '\n## Collated worker results (binding)\n\nRead only `%s/documents/EXECUTE_CHECKLIST_WORKERS.json` for worker execution results. Do not read the worker directory, README, individual worker prompts, or raw worker output. It is complete, validated, ordered, and is the authoritative worker handoff. Do not rerun checks already represented there merely to compose reports.\n' \
+                "$STATE_DIR" >> "$CHECKLIST_EXECUTE_PROMPT"
+            return 0
+        fi
+    fi
     jobs="${WORKFLOW_VERIFY_JOBS:-4}"
     # Two digits now: ^[1-8]$ silently rejected anything above 9 and fell
     # back to 4, so raising the ceiling without widening the pattern would
     # have changed nothing.
     [[ "$jobs" =~ ^([1-9]|1[0-6])$ ]] || jobs=4
     if [[ "${WORKFLOW_EXECUTE_CHECKLIST_COMPACT:-1}" == 1 ]]; then
-        compact_groups="$STATE_DIR/checklist-groups/compact-all.txt"
-        python3 - "$STATE_DIR/documents/MANUAL_CHECKLIST.json" > "$compact_groups" <<'PY'
-import json, sys
-payload=json.load(open(sys.argv[1]))
-print(' '.join(c['id'] for c in payload.get('checks', []) if c.get('required', True)))
-PY
-        groups="$PROJECT_ROOT/$compact_groups"
+        compact_groups="$STATE_DIR/checklist-groups/compact.txt"
+        # The reviewer's declared groups stay barriers; compact mode only bounds the
+        # checks one worker takes inside a group (see compact_groups.py).
+        python3 "$ROOT/scripts/lib/compact_groups.py" "$groups" "$STATE_DIR/documents/MANUAL_CHECKLIST.json" > "$compact_groups" || return 1
+        # compact_groups is already under the absolute STATE_DIR; prefixing the project root again
+        # pointed at a file that never existed, so no worker ever ran in compact mode.
+        case "$compact_groups" in /*) groups="$compact_groups" ;; *) groups="$PROJECT_ROOT/$compact_groups" ;; esac
         jobs=1
-        compact_batch_size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-8}"
-        [[ "$compact_batch_size" =~ ^[1-9][0-9]*$ ]] || compact_batch_size=8
-        echo "Checklist compact mode: bounded shared evidence batches of up to $compact_batch_size checks; automated rows cite driver green-check evidence."
+        compact_batch_size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-4}"
+        [[ "$compact_batch_size" =~ ^[1-9][0-9]*$ ]] || compact_batch_size=4
+        # Workers running at once inside one group; a larger group's batches simply grow.
+        compact_max_workers="${WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-8}"
+        [[ "$compact_max_workers" =~ ^[1-9][0-9]*$ ]] || compact_max_workers=8
+        echo "Checklist compact mode: declared groups kept as barriers, up to $compact_batch_size checks per worker session; automated rows cite driver green-check evidence."
     fi
+    local group_total=0 max_groups
     while IFS= read -r group; do
         set -- $group
-        [[ $# -gt 1 ]] && worker_count=$((worker_count + $#))
+        worker_count=$((worker_count + $#))
+        group_total=$((group_total + 1))
     done < "$groups"
     [[ "$worker_count" -gt 1 ]] || return 0
+    # Every group is a barrier, so a checklist declared as many serial groups would take longer as workers
+    # (each carries about fifteen seconds of startup) than as one agent running them in order.
+    max_groups="${WORKFLOW_EXECUTE_CHECKLIST_MAX_GROUPS:-4}"
+    [[ "$max_groups" =~ ^[1-9][0-9]*$ ]] || max_groups=4
+    if [[ "$group_total" -gt "$max_groups" ]]; then
+        echo "Checklist runs as one agent: its $worker_count checks fall into $group_total serial groups (over $max_groups), so workers would only add startup time."
+        return 0
+    fi
 
     # Reserve half of the existing stage cap for reconciliation and split the
     # other half among workers. This bounds a fan-out to the old stage budget
@@ -1599,9 +1667,9 @@ PY
         read -r -a ids <<< "$group"
         group_index=$((group_index + 1))
         n="${#ids[@]}"
-        [[ "$n" -gt 1 ]] || continue
         if [[ -n "$compact_batch_size" ]]; then
             batches=$(( (n + compact_batch_size - 1) / compact_batch_size ))
+            [[ "$batches" -le "$compact_max_workers" ]] || batches="$compact_max_workers"
         else
             batches=$(( n < jobs ? n : jobs ))
         fi
@@ -1631,9 +1699,9 @@ PY
         read -r -a ids <<< "$group"
         group_index=$((group_index + 1))
         n="${#ids[@]}"
-        [[ "$n" -gt 1 ]] || continue
         if [[ -n "$compact_batch_size" ]]; then
             batches=$(( (n + compact_batch_size - 1) / compact_batch_size ))
+            [[ "$batches" -le "$compact_max_workers" ]] || batches="$compact_max_workers"
         else
             batches=$(( n < jobs ? n : jobs ))
         fi
@@ -2772,18 +2840,22 @@ run_updated_change_plan_panel() {
     [[ "${WORKFLOW_UPDATED_CHANGE_PLAN_PANEL:-${WORKFLOW_UPDATED_PLAN_PANEL:-1}}" == 1 ]] || return 0
     require_file "$STATE_DIR/documents/CHANGE_PLAN.json" || return 1
     require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" || return 1
-    echo "Updated-change-plan review panel: launching 4 workers in parallel."
+    echo "Updated-change-plan review panel: launching its workers in parallel."
     rm -rf "$directory"; mkdir -p "$directory/prompts"
-    for lens in dispositions ownership verification scope; do
+    # The dispositions lens is split by finding when the review is long (see updated_plan_slices.py).
+    local ids; local -a names=()
+    while IFS=$'\t' read -r lens ids; do
+        names+=("$lens")
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
-        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "${lens%%-*}" >> "$prompt"
+        [[ -z "$ids" ]] || printf '\nYour findings: %s. Report only these finding IDs.\n' "${ids//,/, }" >> "$prompt"
         ( run_codex "$prompt" "$output" "updated-change-plan-review-worker-$lens" "$CODEX_EFFORT_REVIEW" ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         pids+=("$!")
-    done
+    done < <(python3 -B "$ROOT/scripts/lib/updated_plan_slices.py" "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json")
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-change-plan worker failed; canonical packet validation will stop the panel.' >&2; done
     python3 "$ROOT/scripts/lib/updated_plan_worker_packets.py" "$directory" "$STATE_DIR/documents/UPDATED_CHANGE_PLAN_WORKERS.json" \
-        --expected dispositions ownership verification scope || return 1
+        --expected "${names[@]}" || return 1
     echo "Updated-change-plan review panel: worker packets collected; preparing sealed synthesis input."
     UPDATED_PLAN_PROMPT="$directory/synthesis.md"
     python3 -B "$ROOT/scripts/lib/updated_plan_synthesis_prompt.py" --change \
@@ -3898,12 +3970,19 @@ REPAIR
             ensure_checklist_runner execute-checklist || exit 1
             run_parallel_checklist_workers
             if [[ -s "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" ]]; then
-                python3 -B "$ROOT/scripts/lib/execute_checklist_reports.py" . || exit 1
-                echo 'Execute-checklist fast path: rendered authoritative worker results without parent synthesis.'
-                PROGRESS_TOTAL=0
-                wait_green_check_bg || exit $?
-                set_state VALIDATE_CHECKLIST
-                continue
+                # Only when the workers covered every required check; the rest go to the one agent.
+                execute_uncovered="$(python3 -B "$ROOT/scripts/lib/checklist_coverage.py" \
+                    "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json")"
+                if [[ -z "$execute_uncovered" ]]; then
+                    python3 -B "$ROOT/scripts/lib/execute_checklist_reports.py" . || exit 1
+                    echo 'Execute-checklist fast path: rendered authoritative worker results without parent synthesis.'
+                    PROGRESS_TOTAL=0
+                    wait_green_check_bg || exit $?
+                    set_state VALIDATE_CHECKLIST
+                    continue
+                fi
+                printf '\n## Checks the workers did not cover (execute these now, with the same evidence rules)\n\n%s\n' \
+                    "$execute_uncovered" >> "${CHECKLIST_EXECUTE_PROMPT:-/dev/null}"
             fi
             PROGRESS_TOTAL="$(jq -r '.checks[]?.id // empty' "$STATE_DIR/documents/MANUAL_CHECKLIST.json" 2>/dev/null \
                 | sort -u | grep -c . || echo 0)"

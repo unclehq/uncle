@@ -64,6 +64,28 @@ Rules:
     `killall`): the agent runtime hosting this session is itself a local
     process those patterns can match, and killing it loses the whole stage.
 
+## Write the defect-injection runner to be fast
+
+When the plan calls for defect injections, write one runner that starts every injection concurrently and waits
+for all of them: each in its own scratch copy with its own port and output directory, running only the test or
+tests that defect must break, with `node_modules` and build output linked or copied in rather than reinstalled.
+A runner that loops over the injections running the full suite each time takes minutes and runs on every
+verification.
+
+## Keep the output small
+
+Generating text is the slow part of this stage; everything below only removes text nobody reads.
+
+- Change an existing file with Edit (the smallest unique `old_string` that places the change),
+  not by writing the whole file again. Use Write for a file that does not exist, or when most of
+  it is being replaced. Rewriting a 300-line file to change ten lines costs the whole file.
+- Do not paste a file you wrote, a diff, or a test transcript into your reply.
+- `purpose` and `behavior_or_invariant` in the notes are one short phrase each, not sentences.
+  Leave `deviations` and `unresolved_concerns` empty when there are none; do not narrate that
+  there are none.
+- Your final reply is one or two sentences saying what is done and what is not. The driver reads
+  the notes file, the tree and the checks, so a recap in chat is never read.
+
 Work efficiently. This stage is a long loop, and everything already in the
 conversation is re-sent on every turn, so avoid pulling in what you will not
 use:

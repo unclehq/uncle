@@ -58,8 +58,23 @@ what each check touches:
 Declare both on every check. The driver derives the execution groups from these
 two fields alone and hands them to the stage that runs the checklist, so this is
 where the question gets decided — not later, by the agent whose results depend
-on the answer. An empty `exclusive_resources` array is scheduled alone, so an
+on the answer. A check with no declaration at all is scheduled alone, so an
 omission costs wall-clock rather than correctness.
+
+Declaring nothing is a statement: `[]` (or "none") says the check can overlap with any other,
+while a check whose fields are left out is scheduled alone because nothing says it is safe. Most
+checks are safe to overlap, and every needless resource splits the checklist into more serial steps,
+so declare a resource only when two checks running at once would really collide:
+
+- A server that checks only send requests to or read pages from is not a resource. Several checks
+  can use one running application; do not name its port.
+- An automated headless browser (Playwright or similar) gets its own context per check and is not a
+  resource. Only the machine's one visible browser window is (`browser:system`, below).
+- A resource is a fixed port the check itself binds, a file, database or account that the check writes
+  and another reads, an output directory, or a build/install that must not run twice.
+- `depends_on` is for a real data dependency (this check reads what that one created), never for topic
+  or order of presentation.
+
 
 Two checks that would fight over the same port must name the same token, spelled
 the same way. A resource token is only as good as that agreement.

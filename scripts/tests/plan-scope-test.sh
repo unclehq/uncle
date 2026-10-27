@@ -390,6 +390,59 @@ printf '## 12. Implementation order\n\n1. Core. Owns: `a.js`. Depends on: none.\
 check_eq "numbered lists still pass through unchanged" "1	a.js
 2	b.js" "$(plan_step_owns "$NUM")"
 
+# A step table with the ownership in a bullet list under it, and a numbered sentence above it
+# (noinit: every step read as owning nothing, and the sentence counted as step 1).
+TABLE="$TMP/TABLE.md"
+printf '## 12. Implementation order\n1. S-1 scaffold first; S-2 and S-3 are independent; S-4 last.\n\n| Step | Title | Reqs | Depends on |\n|---|---|---|---|\n| S-1 | Scaffold | R-1 | none |\n| S-2 | Reducer | R-2 | none |\n| S-3 | Tests | R-3 | none |\n| S-4 | Reconcile | all | 1-3 |\n\nOwnership:\n- S-1 Owns: `package.json`, `index.html`\n- S-2 Owns: `src/calc.js`\n- S-3 Owns: `tests/calc.test.js`\n- S-4 Owns: `*` Depends on: 1, 2, 3\n\n## 13. Next\n' > "$TABLE"
+check_eq "bullet ownership under a step table is read" "1	package.json
+1	index.html
+2	src/calc.js
+3	tests/calc.test.js
+4	*" "$(plan_step_owns "$TABLE")"
+check_eq "a numbered sentence restating a table row is not a step" "4" "$(plan_steps "$TABLE" | wc -l | tr -d ' ')"
+check_eq "dependency ranges expand to every step" "4	1
+4	2
+4	3" "$(plan_step_depends "$TABLE")"
+check_eq "independent steps with bullet ownership share a group" "1 2 3
+4" "$(python3 -B "$ROOT/scripts/lib/plan_parallelism.py" "$TABLE" >/dev/null; python3 -B - "$TABLE" "$ROOT/scripts/lib" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[2])
+import plan_parallelism as pp
+total, groups, _ = pp.analyse(sys.argv[1])
+print('\n'.join(' '.join(map(str, g)) for g in groups))
+PY
+)"
+
+# --- Owns: on its own line under the step (the project-plan steps worker's layout) ---
+OWNLINE="$TMP/OWNLINE.md"
+cat > "$OWNLINE" <<'EOF'
+# Plan
+
+## 12. Implementation order
+
+1. **Scaffold** -- Write the manifest and configs.
+   Owns: `package.json`, `vite.config.js`
+2. **Engine** -- Pure functions.
+   - Owns: `src/calc.js`
+3. **Tests** -- Unit tests.
+   **Owns:** `tests/unit/calc.test.js`,
+   `tests/unit/keys.test.js`
+   Depends on: 1, 2
+4. **Same line** -- Owns: `src/App.jsx`
+
+## 13. Requirement traceability
+
+   Owns: `not-a-step.js`
+EOF
+check_eq "own-line: Owns on the next line is read" "1	package.json
+1	vite.config.js" "$(plan_step_owns "$OWNLINE" | grep '^1	')"
+check_eq "own-line: a bullet Owns is read" "2	src/calc.js" "$(plan_step_owns "$OWNLINE" | grep '^2	')"
+check_eq "own-line: bold label and wrapped continuation are read" "3	tests/unit/calc.test.js
+3	tests/unit/keys.test.js" "$(plan_step_owns "$OWNLINE" | grep '^3	')"
+check_eq "own-line: Depends on is not ownership" "0" "$(plan_step_owns "$OWNLINE" | grep -c '^3	1' || true)"
+check_eq "own-line: the same-line form still works" "4	src/App.jsx" "$(plan_step_owns "$OWNLINE" | grep '^4	')"
+check_eq "own-line: an Owns outside the sequence is not read" "0" "$(plan_step_owns "$OWNLINE" | grep -c 'not-a-step' || true)"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "plan-scope-test.sh: $FAILED of $COUNT checks failed"
     exit 1

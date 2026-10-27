@@ -236,8 +236,10 @@ plan_table_steps_as_list() {
             # 1. Steps described by prose lines under the table: "S1 Owns: `a`, `b`. Depends on: S0."
             for (i = 1; i <= nbuf; i++) {
                 line = buf[i]
-                if (line ~ /^[ \t]*([Ss]tep[ \t]*|[Ss][ -]?)?[0-9]+[ \t]*[Oo]wns:/) {
-                    pre = line; sub(/[Oo]wns:.*$/, "", pre); num = stepnum(pre)
+                # A bullet ("- S-1 Owns: `a`") is the same ownership line: a plan listed its ownership
+                # that way under the step table and every step read as owning nothing.
+                if (line ~ /^[ \t]*([-*+][ \t]+)?([Ss]tep[ \t]*|[Ss][ -]?)?[0-9]+[ \t]*[Oo]wns:/) {
+                    pre = line; sub(/[Oo]wns:.*$/, "", pre); sub(/^[ \t]*[-*+][ \t]+/, "", pre); num = stepnum(pre)
                     if (num == "") continue
                     rest = line; sub(/^.*[Oo]wns:/, "", rest)
                     dep = ""
@@ -248,8 +250,15 @@ plan_table_steps_as_list() {
                 }
             }
             # 2. Rewrite the table rows (and drop the prose lines they absorbed).
+            for (i = 1; i <= nbuf; i++) if (i in row) rowNum[row[i]] = 1
             for (i = 1; i <= nbuf; i++) {
                 if (i in prose) continue
+                # A numbered sentence that restates a table row ("1. S-1 scaffold first; S-2..S-8 are
+                # independent") is commentary, not a second step: kept, it shifted every later step by one.
+                if (!(i in row) && match(buf[i], /^[0-9]+\./)) {
+                    cnum = substr(buf[i], 1, RLENGTH - 1) + 0
+                    if ((cnum in rowNum) && buf[i] !~ /[Oo]wns:/) continue
+                }
                 if (i in row) {
                     num = row[i]
                     owns = rowOwns[i]
@@ -272,7 +281,7 @@ plan_table_steps_as_list() {
                 printf "\n"
             }
             nbuf = 0; split("", buf); split("", prose); split("", row); split("", rowOwns); split("", rowDep)
-            split("", rowTitle); split("", proseOwns); split("", proseDep); split("", rowSeen)
+            split("", rowTitle); split("", proseOwns); split("", proseDep); split("", rowSeen); split("", rowNum)
         }
         /^## ([0-9]+\. )?Implementation (sequence|order|steps)/ { if (insec) flush(); insec = 1; header = 0; print; next }
         insec && /^## / { flush(); insec = 0 }
@@ -424,6 +433,18 @@ plan_step_owns() {
             }
             next
         }
+        # The field on its own line under the step ("1. **Scaffold** -- ...", then "   Owns: `a`, `b`", or a
+        # "- Owns:" bullet), which is how the project-plan steps worker lays a step out.  Only an Owns: on the
+        # numbered line itself was read, so every step of such a plan owned nothing and the plan stopped at its
+        # approval gate with every protected path "unowned".
+        cur != "" && /^[ \t]+([-*+][ \t]+)?[*_]*[Oo]wns:/ {
+            line = $0
+            sub(/^.*[Oo]wns:/, "", line)
+            if (match(line, /[Dd]epends[ \t]+on:/)) line = substr(line, 1, RSTART - 1)
+            owns = 1
+            if (!extract(line)) extract_bare(line)
+            next
+        }
         owns {
             line = $0
             trimmed = line
@@ -463,10 +484,19 @@ plan_step_depends() {
         function emit_dependencies(line,    ref) {
             if (!match(line, /[Dd]epends[ \t]+on:/)) return
             line = substr(line, RSTART + RLENGTH)
-            while (match(line, /[0-9]+/)) {
+            while (match(line, /[0-9]+([ \t]*-[ \t]*[0-9]+)?/)) {
                 ref = substr(line, RSTART, RLENGTH)
-                print current "\t" ((ref in position) ? position[ref] : ref)
                 line = substr(line, RSTART + RLENGTH)
+                # "1-8" is steps 1 through 8, not steps 1 and 8.
+                if (ref ~ /-/) {
+                    lo = ref; sub(/[ \t]*-.*$/, "", lo); hi = ref; sub(/^.*-[ \t]*/, "", hi)
+                    if (lo + 0 <= hi + 0 && hi - lo < 100) {
+                        for (k = lo + 0; k <= hi + 0; k++) print current "\t" ((k in position) ? position[k] : k)
+                        continue
+                    }
+                    sub(/[ \t]*-.*$/, "", ref)
+                }
+                print current "\t" ((ref in position) ? position[ref] : ref)
             }
         }
         /^## ([0-9]+\. )?Implementation (sequence|order|steps)/ { inseq = 1; next }

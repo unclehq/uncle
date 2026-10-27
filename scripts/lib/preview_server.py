@@ -155,7 +155,7 @@ def development_preview(root):
             if isinstance(value, dict):
                 deps.update(value)
     framework = 'react' in deps or 'react-dom' in deps or 'svelte' in deps
-    if not framework or not isinstance(scripts, dict) or not isinstance(scripts.get('dev'), str):
+    if not framework or not isinstance(scripts, dict):
         return None
     vite = root / 'node_modules' / '.bin' / 'vite'
     if not vite.is_file():
@@ -163,6 +163,14 @@ def development_preview(root):
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
+    if not isinstance(scripts.get('dev'), str):
+        # A project that names its dev server something else (`start`, `serve`) still has a source index.html
+        # that only a dev server can run -- served statically it is a blank page (noinit: `start` was Vite,
+        # there was no `dev`).  The binary is already installed; run it directly with our own host and port.
+        if 'vite' not in deps and 'vite' not in ' '.join(str(v) for v in scripts.values()):
+            return None
+        return {'command': [str(vite), '--host', '127.0.0.1', '--port', str(port), '--strictPort'],
+                'url': 'http://127.0.0.1:%d' % port}
     manager = 'pnpm' if (root / 'pnpm-lock.yaml').is_file() else 'yarn' if (root / 'yarn.lock').is_file() else 'npm'
     command = ([manager, 'run', 'dev', '--', '--host', '127.0.0.1', '--port', str(port), '--strictPort'])
     return {'command': command, 'url': 'http://127.0.0.1:%d' % port}

@@ -91,7 +91,7 @@ uncle_config_stage() {
         # name, not as a separator before `worker`.
         test-review-worker-*) printf 'test-review' ;;
         *-review-worker-*) printf '%s' "${1%%-review-worker-*}" ;;
-        preview-build)
+        preview-build|preview-build-part-*)
             local first_model_stage
             first_model_stage="$(uncle_first_configured_model_stage)"
             [[ -n "$first_model_stage" ]] && printf '%s' "$first_model_stage" || printf '%s' "$1"
@@ -108,7 +108,7 @@ uncle_config_stage() {
         adversarial-review-investigate) printf 'adversarial-review' ;;
         manual-checklist-investigate) printf 'manual-checklist' ;;
         final-audit-investigate) printf 'final-audit' ;;
-        project-plan-investigate) printf 'project-plan' ;;
+        project-plan-investigate|project-plan-section-*) printf 'project-plan' ;;
         requirements-investigate) printf 'requirements' ;;
         preflight-investigate) printf 'preflight' ;;
         implementation-investigate) printf 'implementation' ;;
@@ -140,7 +140,7 @@ uncle_stage_side() {
     # side after the alias launches reviewer-self-hosted without --max-turns.
     # OpenCode then rejects it before it sees the prompt. Keep the inherited
     # runner/model pairing while preserving preview's agent protocol.
-    [[ "$1" == "preview-build" ]] && { printf '%s' agent; return 0; }
+    [[ "$1" == "preview-build" || "$1" == preview-build-part-* ]] && { printf '%s' agent; return 0; }
     [[ "$1" == *-review-worker-* ]] && { printf '%s' reviewer; return 0; }
     local stage
     stage="$(uncle_config_stage "$1")"

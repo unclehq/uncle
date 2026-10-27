@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -24,6 +25,20 @@ def has_starred():
         return result.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
+
+
+ANNOUNCED = re.compile(r'https?://(?:localhost|127\.0\.0\.1|\[::1\]):(\d{2,5})')
+ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+
+
+def announced_ports(output):
+    """Loopback ports a server printed ("Local: http://127.0.0.1:5173/"), in the order first seen."""
+    ports = []
+    for match in ANNOUNCED.finditer(ANSI.sub('', output or '')):
+        port = int(match.group(1))
+        if port not in ports and 0 < port < 65536:
+            ports.append(port)
+    return ports
 
 
 def launch_spec(root):
@@ -69,6 +84,7 @@ class CompletionPreview:
         self.terminal_done = threading.Event()
         self.lock = threading.Lock()
         self.kind = 'none'
+        self.seen_output = ''
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
 
@@ -112,6 +128,16 @@ class CompletionPreview:
                     while not self.cancelled.is_set():
                         if self.process.poll() is not None:
                             raise ValueError('Preview server exited before it was ready')
+                        # The manifest names the port the plan expected; the server prints the one it bound
+                        # (noinit: launch.json said 4173, `npm run start` serves 5173, and the 30 s wait ended
+                        # with no browser).  Any loopback address it announces is a candidate too.
+                        for announced in announced_ports(self.seen_output):
+                            if announced != parsed.port:
+                                for host in ('127.0.0.1', 'localhost', '::1'):
+                                    extra = '%s://%s:%d%s' % (parsed.scheme, '[%s]' % host if ':' in host else host,
+                                                              announced, path_suffix)
+                                    if extra not in candidates:
+                                        candidates.append(extra)
                         ready = False
                         for candidate in candidates:
                             try:
@@ -149,7 +175,9 @@ class CompletionPreview:
                 chunk = os.read(self.process.stdout.fileno(), 4096)
                 if not chunk:
                     break
-                self.events.put(('output', chunk.decode('utf-8', 'replace')))
+                text = chunk.decode('utf-8', 'replace')
+                self.seen_output = (self.seen_output + text)[-20000:]
+                self.events.put(('output', text))
         except (OSError, ValueError):
             pass
 

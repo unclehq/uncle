@@ -77,6 +77,37 @@ def corrections_table(workers):
     return '\n'.join(rows) + ('\n\nSpecialists: ' + status if status else '')
 
 
+EDIT_RULES = '''Do not reproduce a section you are not changing: every section not named in
+`patch` carries over from the base plan exactly as it already is. Output is the cost of this
+stage, so change as little text as the finding needs. `patch` has three optional arrays:
+
+- `replace_text` (use this first): `[{"heading": "<exact existing heading>", "old": "<text copied
+  exactly from that section, unique within it>", "new": "<what replaces it>"}]`. Changes a sentence,
+  a table row, a command or a line without rewriting the section; `"all": true` replaces every
+  occurrence. Most findings are this small. Copy `old` exactly as the base plan has it; if it is
+  missing or occurs more than once the delivery is rejected.
+- `edit_sections` (only when most of a section changes): `[{"heading": "<exact existing heading, copied verbatim from
+  the list below>", "content": "<the section's whole new body, heading line
+  excluded>"}]`. Replaces one existing section's body in full. If the heading
+  is `Implementation sequence`, every step in the new body still ends with
+  `Owns:` (and `Depends on:` where one step needs another finished first) --
+  the base plan's steps you are not otherwise changing keep the exact `Owns:`/
+  `Depends on:` they already have; do not drop or loosen them while rewriting
+  the section for the finding at hand.
+- `insert_sections`: `[{"content": "<a whole new section, its own \\"## \\"
+  heading line included>", "after": "<an existing heading to insert after>"}]`.
+  Use `"before"` instead of `"after"` to insert before that heading, or
+  `"position": "start"` to insert first; omitting all three appends at the end.
+  Only for content that plainly does not belong in any existing section --
+  prefer `replace_text` (or `edit_sections`) whenever the change extends one that already exists.
+
+Never add a section that "overrides", "supersedes" or "amends" other sections. Implementation
+reads each section on its own, so a change to a step, an invariant, a test or a command that
+lives in an addendum is a change nobody applies. Change the step, row or paragraph itself with
+`replace_text` or `edit_sections` on the section it belongs to -- the step, row or paragraph itself,
+not a note beside it.'''
+
+
 def prompt(plan, review, workers, change=False):
     if workers.get('schema') != SCHEMA or workers.get('kind') != 'updated-plan-worker-packets':
         raise ValueError('worker packet: expected collated updated-plan-worker-packets JSON')
@@ -118,27 +149,10 @@ generation time for zero effect on the result. Shape your reply exactly like
 this, with nothing else at the top level:
 
 ```json
-{"schema":"uncle.artifact/v1","kind":"%s","dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}],"patch":{"edit_sections":[{"heading":"...","content":"..."}],"insert_sections":[]}}
+{"schema":"uncle.artifact/v1","kind":"%s","dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}],"patch":{"replace_text":[{"heading":"...","old":"...","new":"..."}],"edit_sections":[],"insert_sections":[]}}
 ```
 
-Do not reproduce a section you are not changing: every section not named in
-`patch` carries over from the base plan exactly as it already is. `patch` has
-two optional arrays:
-
-- `edit_sections`: `[{"heading": "<exact existing heading, copied verbatim from
-  the list below>", "content": "<the section's whole new body, heading line
-  excluded>"}]`. Replaces one existing section's body in full. If the heading
-  is `Implementation sequence`, every step in the new body still ends with
-  `Owns:` (and `Depends on:` where one step needs another finished first) --
-  the base plan's steps you are not otherwise changing keep the exact `Owns:`/
-  `Depends on:` they already have; do not drop or loosen them while rewriting
-  the section for the finding at hand.
-- `insert_sections`: `[{"content": "<a whole new section, its own \\"## \\"
-  heading line included>", "after": "<an existing heading to insert after>"}]`.
-  Use `"before"` instead of `"after"` to insert before that heading, or
-  `"position": "start"` to insert first; omitting all three appends at the end.
-  Only for content that plainly does not belong in any existing section --
-  prefer `edit_sections` whenever the change extends one that already exists.
+%s
 
 Every disposition's `plan_change` must be reflected by some `patch` entry: a
 disposition with no matching edit or insert is a rejected delivery. The
@@ -172,7 +186,7 @@ Quote a heading exactly, as printed here, to edit it or to anchor an insert.
 ## Collated specialist corrections (condensed)
 
 %s
-''' % (label, artifact, plan['kind'], extra_fields, example_kind, headings,
+''' % (label, artifact, plan['kind'], extra_fields, example_kind, EDIT_RULES, headings,
        json.dumps(plan, indent=2, sort_keys=True),
        review_table(review),
        corrections_table(workers))

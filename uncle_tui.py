@@ -228,6 +228,12 @@ def parent_stage(stage):
         return stage.split("-worker-", 1)[0]
     if stage.startswith("implementation-step-"):
         return "implementation"
+    # The project plan's parallel sections (core, behaviors, verify, closing, trace) are one stage
+    # drawn as one row with a spinner per section, like the other fan-outs.
+    if stage.startswith("project-plan-section-"):
+        return "project-plan"
+    if stage.startswith("preview-build-part-"):
+        return "preview-build"
     if stage in ("manual-checklist-base", "manual-checklist-delta"):
         return "manual-checklist"
     # The investigate/format split's first call always names itself

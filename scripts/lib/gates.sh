@@ -292,6 +292,17 @@ COMPACT_INVESTIGATION
             ;;
     esac
 
+    # The preview build is a throwaway page written in seconds.  The generic gates (acceptance
+    # provenance, tool-call economy, the evidence index, preloaded excerpts) are about reports and
+    # reviews: about 7 KB of text that does not apply, is prefilled on every call, and invites the
+    # model to deliberate over rules instead of writing the page.  Its own prompt is complete.
+    case "$log_name" in
+        preview-build|preview-build-part-*)
+            printf '%s\n' "$prompt_file"
+            return 0
+            ;;
+    esac
+
     local is_plan=0 is_doc=0
     case "$PLAN_STAGES" in
         *" $log_name "*) is_plan=1 ;;

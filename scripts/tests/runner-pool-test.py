@@ -127,5 +127,61 @@ class Pool(unittest.TestCase):
         self.stop_client(first); self.stop_client(second)
 
 
+class Saturation(unittest.TestCase):
+    """More concurrent workers than the pool has slots must run, not fail (the updated-plan panel)."""
+
+    def load(self):
+        import importlib.util
+        sys.path.insert(0, str(ROOT / 'scripts/lib'))
+        spec = importlib.util.spec_from_file_location('runner_pool_under_test', POOL)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_pool_has_room_for_a_panel_of_six_and_is_configurable(self):
+        pool = self.load()
+        old = os.environ.pop('UNCLE_RUNNER_POOL_SLOTS', None)
+        try:
+            self.assertEqual(pool.slot_count(), 20)
+            os.environ['UNCLE_RUNNER_POOL_SLOTS'] = '3'
+            self.assertEqual(pool.slot_count(), 3)
+            os.environ['UNCLE_RUNNER_POOL_SLOTS'] = 'many'
+            self.assertEqual(pool.slot_count(), 20)
+        finally:
+            os.environ.pop('UNCLE_RUNNER_POOL_SLOTS', None)
+            if old is not None:
+                os.environ['UNCLE_RUNNER_POOL_SLOTS'] = old
+
+    def test_when_every_slot_is_busy_the_command_runs_directly(self):
+        import socket
+        import threading
+        import types
+        pool = self.load()
+        server = socket.socket()
+        server.bind(('127.0.0.1', 0)); server.listen(16)
+
+        def answer():
+            while True:
+                try:
+                    connection, _ = server.accept()
+                except OSError:
+                    return
+                connection.makefile('rb').readline()
+                connection.sendall(b'{"ok": false, "error": "busy"}\n')
+                connection.close()
+        threading.Thread(target=answer, daemon=True).start()
+        self.addCleanup(server.close)
+        pool.ensure = lambda *a, **k: {'port': server.getsockname()[1], 'token': 't', 'pid': 1}
+        marker = Path(tempfile.mkdtemp()) / 'ran'
+        args = types.SimpleNamespace(root='r', owner='1', runner='x', side='agent')
+        os.environ['UNCLE_RUNNER_POOL_SLOTS'] = '2'
+        try:
+            status = pool.connect(args, [sys.executable, '-c', 'import sys; open(sys.argv[1], "w").write("ok")', str(marker)])
+        finally:
+            os.environ.pop('UNCLE_RUNNER_POOL_SLOTS', None)
+        self.assertEqual(status, 0)
+        self.assertEqual(marker.read_text(), 'ok')
+
+
 if __name__ == '__main__':
     unittest.main()

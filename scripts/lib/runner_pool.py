@@ -101,9 +101,19 @@ def ensure(root, owner, runner, side, command, slot=0):
         shutil.rmtree(lock, ignore_errors=True)
 
 
+def slot_count():
+    """Warm runner slots a stage may use at once.  Four until a panel needed more, now twenty: the updated-plan
+    panel runs a worker per lens plus one per slice of findings, and a fifth concurrent worker found
+    every slot busy and failed outright (noinit: scope and verification never started)."""
+    try:
+        return max(1, int(os.environ.get('UNCLE_RUNNER_POOL_SLOTS') or 20))
+    except ValueError:
+        return 20
+
+
 def connect(args, command):
     sock = reader = None
-    for slot in range(4):
+    for slot in range(slot_count()):
         descriptor = ensure(args.root, args.owner, args.runner, args.side, command, slot)
         sock = socket.create_connection(('127.0.0.1', descriptor['port']), timeout=30)
         sock.settimeout(None)
@@ -117,7 +127,10 @@ def connect(args, command):
         if hello.get('error') != 'busy':
             raise RuntimeError(hello.get('error') or 'runner pool refused connection')
     if sock is None:
-        raise RuntimeError('all runner pool workers are busy')
+        # Past the pool, a worker is slower to start but still a worker: run the command
+        # directly, exactly as an unpooled stage would, rather than failing the stage.
+        print('runner pool: every slot is busy; running this stage without a pooled runner.', file=sys.stderr)
+        return subprocess.call(command)
     sys.stdout.write(json.dumps({'type': 'runner_pool', 'reused': bool(hello.get('reused')),
                                  'pool_pid': descriptor['pid']}) + '\n')
     sys.stdout.flush()

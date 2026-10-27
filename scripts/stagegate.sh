@@ -108,6 +108,8 @@ python3 "$ROOT/scripts/lib/workflow_family.py" app
 unset UNCLE_NEW_WORKFLOW
 . "$ROOT/scripts/lib/project-git.sh"
 . "$ROOT/scripts/lib/preview-build.sh"
+. "$ROOT/scripts/lib/install-warm.sh"
+. "$ROOT/scripts/lib/checklist-lanes.sh"
 uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
 . "$ROOT/scripts/lib/plan-scope.sh"
@@ -278,6 +280,7 @@ on_exit() {
     local rc=$?
     if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
     if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
+    if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
     # A probe must not outlive the run that started it.
     if [[ -n "${PREFLIGHT_BG_PID:-}" ]] && kill -0 "$PREFLIGHT_BG_PID" 2>/dev/null; then
         kill "$PREFLIGHT_BG_PID" 2>/dev/null || true
@@ -1046,6 +1049,7 @@ stage_model() {
     local fallback="$DEFAULT_MODEL"
     case "$1" in
         requirements|requirements-investigate) lookup_stage="project-plan" ;;
+        preview-build-part-*) lookup_stage="preview-build" ;;
         execute-checklist) fallback="kimi" ;;
     esac
     if uncle_has_config || [[ -n "${UNCLE_RESOLVED_RUNNER:-}" ]]; then
@@ -1101,6 +1105,8 @@ stage_turns() {
     local fallback=40
     case "$1" in
         implementation|repair) fallback=200 ;;
+        # Read the brief, write one file, stop.  A longer leash only lets it explore and install.
+        preview-build|preview-build-part-*) fallback=8 ;;
         implementation-report) fallback=20 ;;
         execute-checklist) fallback=120 ;;
     esac
@@ -1121,10 +1127,10 @@ stage_tools() {
     case "$1" in
         updated-plan|updated-plan-investigate|derive-brief)
             fallback="Read,Glob,Grep,Write,Edit" ;;
-        implementation|implementation-investigate|implementation-report|repair|repair-investigate|execute-checklist|preflight|preflight-investigate|preview-build)
-            # The preview build is an implementation, just an early one: a
-            # scaffolded app needs the same tools as the real stage, and with
-            # Write alone it cannot get a framework project off the ground.
+        # The preview is one hand-written file: with Bash it scaffolds and installs, with Edit and
+        # Glob it explores, and each of those is minutes of a stage that exists to be quick.
+        preview-build|preview-build-part-*) fallback="Read,Write" ;;
+        implementation|implementation-investigate|implementation-report|repair|repair-investigate|execute-checklist|preflight|preflight-investigate)
             fallback="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
             ;;
     esac
@@ -1440,8 +1446,19 @@ format_claude_stream() {
 stage_runner_config_name() {
     case "$1" in
         requirements|requirements-investigate) printf '%s\n' project-plan ;;
+        preview-build-part-*) printf '%s\n' preview-build ;;
         *) printf '%s\n' "$1" ;;
     esac
+}
+
+# Whether this stage's agent can be forced to answer in schema-checked JSON (see run_claude): the direct
+# Claude CLI only.  Codex, self-hosted models and a custom command keep the drivers' file contracts.
+stage_supports_structured_output() {
+    local stage="$1" UNCLE_RESOLVED_RUNNER
+    [[ "${WORKFLOW_STRUCTURED_OUTPUT:-1}" == 1 ]] || return 1
+    stage="$(stage_runner_config_name "$stage")"
+    uncle_resolve_stage_runner "$stage" AGENT 2>/dev/null || return 1
+    [[ "$UNCLE_RESOLVED_RUNNER" == claude ]] && [[ "$(stage_agent_cmd "$stage" 2>/dev/null)" == *claude ]]
 }
 
 stage_uses_self_hosted() {
@@ -1772,6 +1789,21 @@ run_claude() {
         client_cmd=(python3 "$ROOT/scripts/lib/native_stage.py" --runner "$UNCLE_RESOLVED_RUNNER" --side agent --stage "$log_name" --)
     fi
 
+    # Forced JSON: the driver names a JSON Schema, Claude must answer through a schema-validated
+    # StructuredOutput call, and the validated object is what the driver reads -- never chat text,
+    # never a file the model may forget to write.  Only the direct Claude CLI can do this; a driver asks
+    # `stage_supports_structured_output` first and keeps its file contract for every other runner.
+    local -a schema_args=()
+    if [[ -n "${UNCLE_OUTPUT_SCHEMA_FILE:-}" ]]; then
+        if [[ "${cmd##*/}" == claude && "${client_cmd[0]}" != python3 && "$UNCLE_RESOLVED_RUNNER" == claude \
+              && -n "${UNCLE_STRUCTURED_OUTPUT_PATH:-}" ]]; then
+            schema_args=(--json-schema "$(cat "$UNCLE_OUTPUT_SCHEMA_FILE")")
+        else
+            echo "Stage $log_name asked for schema-checked output, which this runner cannot give." >&2
+            return 1
+        fi
+    fi
+
     require_file "$prompt_file"
     status_stage_context "$log_name" "${model:-}" act
 
@@ -1808,7 +1840,9 @@ run_claude() {
         esac
         case "$log_name" in
             *-worker-*)
-                if [[ -n "$agent_delivery" ]]; then
+                if [[ "${#schema_args[@]}" -gt 0 ]]; then
+                    : # the structured-output contract below replaces the Write contract
+                elif [[ -n "$agent_delivery" ]]; then
                     cat >> "$effective_prompt" <<'CANONICAL_WORKER_PACKET_CONTRACT'
 
 ## Canonical worker-packet delivery (binding)
@@ -1852,6 +1886,16 @@ CANONICAL_ARTIFACT_CONTRACT
                 fi
                 ;;
         esac
+        if [[ "${#schema_args[@]}" -gt 0 ]]; then
+            cat >> "$effective_prompt" <<'STRUCTURED_OUTPUT_CONTRACT'
+
+## Delivery (binding)
+
+Deliver by calling the StructuredOutput tool exactly once, with the complete object. Its input is checked
+against a JSON Schema, so every required field must be present and nothing outside the schema may be added.
+Do not write the content as chat text first and do not write any file: the tool call is the whole answer.
+STRUCTURED_OUTPUT_CONTRACT
+        fi
         local -a model_args=()
         [[ -n "$model" ]] && model_args=(--model "$model")
         local started="$SECONDS"
@@ -1863,6 +1907,7 @@ CANONICAL_ARTIFACT_CONTRACT
         else
             env UNCLE_ARTIFACT_DELIVERY="$agent_delivery" "${client_cmd[@]}" -p \
                 "${model_args[@]+"${model_args[@]}"}" \
+                "${schema_args[@]+"${schema_args[@]}"}" \
                 --effort "$effort" \
                 --strict-mcp-config \
                 --max-turns "$turns" \
@@ -1911,6 +1956,18 @@ CANONICAL_ARTIFACT_CONTRACT
             echo "Agent ($cmd) exited with status $status."
             echo "Raw event log: $log"
             exit "$status"
+        fi
+
+        if [[ "${#schema_args[@]}" -gt 0 ]]; then
+            if ! python3 -B "$ROOT/scripts/lib/structured_output.py" extract "$LOG_DIR/${log_name}.jsonl" "$UNCLE_STRUCTURED_OUTPUT_PATH"; then
+                if [[ -z "$artifact_retried" ]]; then
+                    artifact_retried=1
+                    echo "Stage $log_name returned no schema-checked object; retrying once."
+                    continue
+                fi
+                echo "Stage $log_name returned no schema-checked object." >&2
+                exit 1
+            fi
         fi
 
         case "$log_name" in
@@ -2410,18 +2467,22 @@ run_updated_plan_panel() {
     [[ "${WORKFLOW_UPDATED_PLAN_PANEL:-1}" == 1 ]] || return 0
     ensure_project_plan_json || return 1
     require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" || return 1
-    echo "Updated-plan review panel: launching 4 workers in parallel."
+    echo "Updated-plan review panel: launching its workers in parallel."
     rm -rf "$directory"; mkdir -p "$directory/prompts"
-    for lens in dispositions ownership verification scope; do
+    # The dispositions lens is split by finding when the review is long (see updated_plan_slices.py).
+    local ids; local -a names=()
+    while IFS=$'\t' read -r lens ids; do
+        names+=("$lens")
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
-        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "${lens%%-*}" >> "$prompt"
+        [[ -z "$ids" ]] || printf '\nYour findings: %s. Report only these finding IDs.\n' "${ids//,/, }" >> "$prompt"
         ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "updated-plan-review-worker-$lens" < /dev/null ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         pids+=("$!")
-    done
+    done < <(python3 -B "$ROOT/scripts/lib/updated_plan_slices.py" "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json")
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-plan worker failed; canonical packet validation will stop the panel.' >&2; done
     python3 "$ROOT/scripts/lib/updated_plan_worker_packets.py" "$directory" "$STATE_DIR/documents/UPDATED_PLAN_WORKERS.json" \
-        --expected dispositions ownership verification scope || return 1
+        --expected "${names[@]}" || return 1
     # The parent receives a sealed input file, not paths it must rediscover.
     # In particular, do not let a missing/partial worker output degrade into a
     # broad agent search that burns its turn budget without writing a plan.
@@ -2432,6 +2493,78 @@ run_updated_plan_panel() {
         "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
         "$STATE_DIR/documents/UPDATED_PLAN_WORKERS.json" \
         "$UPDATED_PLAN_PROMPT" || return 1
+}
+
+# Resolve the findings in parallel, one writer per run of findings, and merge their patches without a
+# model (see updated_plan_edits.py).  Any problem returns nonzero before anything is published, and the
+# caller runs the single synthesis call.  Hosted runners only: a local model keeps one call.
+# Edits that overlap go to one short resolver call (WORKFLOW_UPDATED_PLAN_EDITS=0 turns the whole thing off).
+run_updated_plan_edit_writers() {
+    local directory="$STATE_DIR/updated-plan-edits" helper="$ROOT/scripts/lib/updated_plan_edits.py" name ids pid failed=0
+    local -a pids=() names=()
+    [[ "${WORKFLOW_UPDATED_PLAN_EDITS:-1}" == 1 ]] || return 1
+    # Forced, schema-checked JSON wherever the runner can enforce it: hosted Claude through --json-schema, a
+    # self-hosted model through the grammar its adapter derives from the packet kind named in the prompt.
+    local delivery=file
+    if stage_supports_structured_output updated-plan-worker-edits-1; then
+        delivery=hosted
+    elif stage_uses_self_hosted updated-plan AGENT; then
+        delivery=local
+    fi
+    [[ -f "${UPDATED_PLAN_PROMPT:-}" ]] || return 1
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    python3 -B "$helper" slices "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" > "$directory/slices.tsv" || return 1
+    [[ -s "$directory/slices.tsv" ]] || return 1
+    while IFS=$'\t' read -r name ids; do
+        python3 -B "$helper" prompt "$UPDATED_PLAN_PROMPT" "$ids" "$directory/prompts/$name.md" $([[ "$name" == 1 ]] && echo owner) || return 1
+        echo "Updated-plan edit writer $name: ${ids//,/, }"
+        local schema_file=""
+        if [[ "$delivery" == hosted ]]; then
+            mkdir -p "$directory/schemas"
+            schema_file="$directory/schemas/$name.json"
+            python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" \
+                $([[ "$name" == 1 ]] && echo owner) || return 1
+        fi
+        ( [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
+          UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+            run_claude "$directory/prompts/$name.md" "updated-plan-worker-edits-$name" ) \
+            > "$LOG_DIR/updated-plan-worker-edits-$name.log" 2>&1 &
+        pids+=("$!"); names+=("$name")
+    done < "$directory/slices.tsv"
+    for pid in "${!pids[@]}"; do
+        wait "${pids[$pid]}" || { echo "Updated-plan edit writer ${names[$pid]} did not complete." >&2; failed=1; }
+    done
+    [[ "$failed" == 0 ]] || return 1
+    local merge_status=0
+    python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" || merge_status=$?
+    if [[ "$merge_status" == 3 ]]; then
+        # Only the overlapping edits go to a model, with the text around them; the rest stays mechanical.
+        echo "Updated-plan edits overlap; one small resolver call per overlapping group, all at once."
+        local group_prompt group_id resolver_failed=0
+        pids=(); names=()
+        for group_prompt in "$directory"/prompts/resolve-*.md; do
+            group_id="${group_prompt##*/resolve-}"; group_id="${group_id%.md}"
+            local resolver_schema=""
+            if [[ "$delivery" == hosted ]]; then
+                resolver_schema="$directory/schemas/resolve-$group_id.json"
+                mkdir -p "$directory/schemas"
+                python3 -B "$ROOT/scripts/lib/worker_schemas.py" resolve "$STATE_DIR/documents/PROJECT_PLAN.json" "$resolver_schema" || return 1
+            fi
+            ( [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+              UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                run_claude "$group_prompt" "updated-plan-worker-resolve-$group_id" ) \
+                > "$LOG_DIR/updated-plan-worker-resolve-$group_id.log" 2>&1 &
+            pids+=("$!"); names+=("$group_id")
+        done
+        for pid in "${!pids[@]}"; do
+            wait "${pids[$pid]}" || { echo "Updated-plan resolver ${names[$pid]} did not complete." >&2; resolver_failed=1; }
+        done
+        [[ "$resolver_failed" == 0 ]] || return 1
+        python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || return 1
+    elif [[ "$merge_status" != 0 ]]; then
+        return 1
+    fi
+    python3 "$ROOT/scripts/lib/publish_agent_artifact.py" updated-plan "$LOG_DIR/updated-plan.jsonl" . "$directory/merged.json" || return 1
 }
 
 # Three lenses (tooling, data, reviewers) run concurrently: each only reads
@@ -2534,7 +2667,11 @@ run_manual_checklist_panel() {
     local -a pids=()
     [[ "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || return 0
     rm -rf "$directory"; mkdir -p "$directory/prompts"
-    for lens in coverage invariants resources regressions; do
+    # A new application has nothing to regress: the regressions lens wrote a third copy of the
+    # behavior checks (MC-400s repeating the MC-100s and MC-200s), about a third of a 42-check list.
+    local lenses="coverage invariants resources"
+    [[ "${WORKFLOW_MANUAL_CHECKLIST_REGRESSIONS:-0}" != 1 ]] || lenses="$lenses regressions"
+    for lens in $lenses; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
         local range
@@ -2551,7 +2688,7 @@ run_manual_checklist_panel() {
     # question after seeing a stale rendered checklist.  Validate each compact
     # packet independently and give only that worker one explicit correction;
     # healthy packets stay intact and the full panel is never needlessly rerun.
-    for lens in coverage invariants resources regressions; do
+    for lens in $lenses; do
         output="$directory/$lens.json"; prompt="$directory/prompts/$lens.md"
         if ! python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" validate "$output"; then
             echo "Manual-checklist worker $lens returned an invalid packet; retrying that worker once."
@@ -2560,7 +2697,7 @@ run_manual_checklist_panel() {
             UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens-retry" < /dev/null || true
         fi
     done
-    python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$STATE_DIR/documents/MANUAL_CHECKLIST.json" coverage invariants resources regressions || return 1
+    python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$STATE_DIR/documents/MANUAL_CHECKLIST.json" $lenses || return 1
     python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" || return 1
     python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" .uncle/docs/MANUAL_CHECKLIST.md || return 1
     cp "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
@@ -2771,18 +2908,64 @@ run_parallel_implementation_report() {
 # only to opt out of agent fan-out.
 PARALLEL_CHECKLIST_WORKERS="${WORKFLOW_PARALLEL_CHECKLIST_WORKERS:-1}"
 
+# One checklist worker session for the lane runner (checklist-lanes.sh): run it, check its packet, and
+# give it one retry with the exact schema error.
+checklist_run_worker() {
+    local prompt="$1" label="$2" size="$3" packet="$4" worker_error
+    SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$packet" \
+        run_claude "$prompt" "execute-checklist-worker-$label"
+    if ! worker_error="$(python3 "$ROOT/scripts/lib/checklist_worker_packets.py" --expected placeholder --validate "$packet" 2>&1)"; then
+        rm -f "$packet"
+        echo "Worker $label packet rejected; retrying once with the exact schema error." >&2
+        SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 UNCLE_WORKER_PACKET_PATH="$packet" UNCLE_WORKER_PACKET_ERROR="$worker_error" \
+            run_claude "$prompt" "execute-checklist-worker-$label"
+        python3 "$ROOT/scripts/lib/checklist_worker_packets.py" --expected placeholder --validate "$packet"
+    fi
+}
+
 # Run only the rows that the independent checklist reviewer explicitly placed
 # together. Each worker owns a private evidence file; it never writes the
 # canonical reports or product files. Groups remain barriers, so a row that
 # depends on an earlier group cannot start early. A worker failure is evidence
 # for the synthesizer, not a reason to throw away results from its siblings.
 run_parallel_checklist_workers() {
-    local groups="$PWD/$STATE_DIR/checklist-groups/groups.txt"
-    local directory="" group id prompt packet batch_label compact_groups compact_batch_size
-    local worker_count=0 status pid jobs
+    local groups="$STATE_DIR/checklist-groups/groups.txt"
+    # STATE_DIR is absolute in this driver; prefixing $PWD built /project//project/... and every
+    # fan-out below returned early because that file never existed.
+    case "$groups" in /*) ;; *) groups="$PWD/$groups" ;; esac
+    local directory="" group id prompt packet batch_label compact_groups compact_batch_size compact_max_workers
+    local worker_count=0 status pid jobs failed=0
     local -a ids pids pid_ids packet_names
 
     [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
+    # Lanes, the default: checks that share a resource or depend on one another run in order inside one
+    # worker, everything else runs beside them, and nothing waits at a barrier (checklist_lanes.py).
+    if [[ "${WORKFLOW_EXECUTE_CHECKLIST_COMPACT:-1}" == 1 && "${WORKFLOW_EXECUTE_CHECKLIST_LANES:-1}" == 1 ]]; then
+        local lane_file="$STATE_DIR/checklist-groups/lanes.txt" lane_count
+        case "$lane_file" in /*) ;; *) lane_file="$PWD/$lane_file" ;; esac
+        mkdir -p "$(dirname "$lane_file")"
+        if lane_count="$(checklist_lane_batches "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$lane_file")"; then
+            if [[ "$lane_count" -lt 2 ]]; then
+                echo "Checklist runs as one agent: its checks do not split into independent lanes."
+                return 0
+            fi
+            directory="$(mktemp -d "$STATE_DIR/checklist-workers.XXXXXX")" || return 1
+            {
+                echo '# Parallel checklist worker evidence'
+                echo
+                echo 'Each batch ran as one worker; checks that share a resource or a dependency ran in order inside one.'
+                echo 'The final execute-checklist stage is the sole writer of canonical reports.'
+            } > "$directory/README.md"
+            checklist_run_lanes "$directory" "$lane_file" "$ROOT/prompts/change/execute-checklist-worker.md"
+            python3 "$ROOT/scripts/lib/checklist_worker_packets.py" "$directory" \
+                "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" --expected "${packet_names[@]}" || return 1
+            CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"
+            cp "$ROOT/prompts/execute-checklist.md" "$CHECKLIST_EXECUTE_PROMPT"
+            printf '\n## Collated worker results (binding)\n\nRead only `%s/documents/EXECUTE_CHECKLIST_WORKERS.json` for worker execution results. Do not read the worker directory, README, individual worker prompts, or raw worker output. It is complete, validated, ordered, and is the authoritative worker handoff. Do not rerun checks already represented there merely to compose reports.\n' \
+                "$STATE_DIR" >> "$CHECKLIST_EXECUTE_PROMPT"
+            return 0
+        fi
+    fi
     jobs="${WORKFLOW_VERIFY_JOBS:-4}"
     # Two digits now: ^[1-8]$ silently rejected anything above 9 and fell
     # back to 4, so raising the ceiling without widening the pattern would
@@ -2793,23 +2976,34 @@ run_parallel_checklist_workers() {
     # service, CLI, database, or filesystem); driver green-check remains the
     # binding evidence for automated rows.
     if [[ "${WORKFLOW_EXECUTE_CHECKLIST_COMPACT:-1}" == 1 ]]; then
-        compact_groups="$STATE_DIR/checklist-groups/compact-all.txt"
-        python3 - "$STATE_DIR/documents/MANUAL_CHECKLIST.json" > "$compact_groups" <<'PY'
-import json, sys
-payload=json.load(open(sys.argv[1]))
-print(' '.join(c['id'] for c in payload.get('checks', []) if c.get('required', True)))
-PY
-        groups="$PWD/$compact_groups"
+        compact_groups="$STATE_DIR/checklist-groups/compact.txt"
+        # The reviewer's declared groups stay barriers; compact mode only bounds the
+        # checks one worker takes inside a group (see compact_groups.py).
+        python3 "$ROOT/scripts/lib/compact_groups.py" "$groups" "$STATE_DIR/documents/MANUAL_CHECKLIST.json" > "$compact_groups" || return 1
+        case "$compact_groups" in /*) groups="$compact_groups" ;; *) groups="$PWD/$compact_groups" ;; esac
         jobs=1
-        compact_batch_size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-8}"
-        [[ "$compact_batch_size" =~ ^[1-9][0-9]*$ ]] || compact_batch_size=8
-        echo "Checklist compact mode: bounded shared evidence batches of up to $compact_batch_size checks; automated rows cite driver green-check evidence."
+        compact_batch_size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-4}"
+        [[ "$compact_batch_size" =~ ^[1-9][0-9]*$ ]] || compact_batch_size=4
+        # Workers running at once inside one group; a larger group's batches simply grow.
+        compact_max_workers="${WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-8}"
+        [[ "$compact_max_workers" =~ ^[1-9][0-9]*$ ]] || compact_max_workers=8
+        echo "Checklist compact mode: declared groups kept as barriers, up to $compact_batch_size checks per worker session; automated rows cite driver green-check evidence."
     fi
+    local group_total=0 max_groups
     while IFS= read -r group; do
         set -- $group
-        [[ $# -gt 1 ]] && worker_count=$((worker_count + $#))
+        worker_count=$((worker_count + $#))
+        group_total=$((group_total + 1))
     done < "$groups"
     [[ "$worker_count" -gt 1 ]] || return 0
+    # Every group is a barrier, so a checklist declared as many serial groups would take longer as workers
+    # (each carries about fifteen seconds of startup) than as one agent running them in order.
+    max_groups="${WORKFLOW_EXECUTE_CHECKLIST_MAX_GROUPS:-4}"
+    [[ "$max_groups" =~ ^[1-9][0-9]*$ ]] || max_groups=4
+    if [[ "$group_total" -gt "$max_groups" ]]; then
+        echo "Checklist runs as one agent: its $worker_count checks fall into $group_total serial groups (over $max_groups), so workers would only add startup time."
+        return 0
+    fi
 
     # Runner Write tools are sandboxed to the workspace, so packets must be
     # created under workflow state rather than in an external temporary dir.
@@ -2841,9 +3035,9 @@ PY
         read -r -a ids <<< "$group"
         group_index=$((group_index + 1))
         n="${#ids[@]}"
-        [[ "$n" -gt 1 ]] || continue
         if [[ -n "$compact_batch_size" ]]; then
             batches=$(( (n + compact_batch_size - 1) / compact_batch_size ))
+            [[ "$batches" -le "$compact_max_workers" ]] || batches="$compact_max_workers"
         else
             batches=$(( n < jobs ? n : jobs ))
         fi
@@ -2873,9 +3067,9 @@ PY
         read -r -a ids <<< "$group"
         group_index=$((group_index + 1))
         n="${#ids[@]}"
-        [[ "$n" -gt 1 ]] || continue
         if [[ -n "$compact_batch_size" ]]; then
             batches=$(( (n + compact_batch_size - 1) / compact_batch_size ))
+            [[ "$batches" -le "$compact_max_workers" ]] || batches="$compact_max_workers"
         else
             batches=$(( n < jobs ? n : jobs ))
         fi
@@ -2918,6 +3112,95 @@ PY
     printf '\n## Collated worker results (binding)\n\nRead only `%s/documents/EXECUTE_CHECKLIST_WORKERS.json` for worker execution results. Do not read the worker directory, README, individual worker prompts, or raw worker output. It is complete, validated, ordered, and is the authoritative worker handoff. Do not rerun checks already represented there merely to compose reports.\n' \
         "$STATE_DIR" >> "$CHECKLIST_EXECUTE_PROMPT"
     return 0
+}
+
+# The project plan in sections (project_plan_sections.py): the core design first, then behaviors,
+# invariants/tests and the closing sections side by side, then the traceability join.  Every worker
+# shares the investigation prompt as its prefix.  Returns nonzero -- leaving nothing at $1 -- on any
+# failure, so the caller runs the single-pass plan.
+# One section worker, started in the background by the caller.  With schema-checked JSON (hosted Claude's
+# --json-schema, or the grammar a self-hosted adapter enforces for the packet kind) the worker returns a packet
+# and the driver renders its section file; otherwise (Codex) the worker writes the file itself.
+project_plan_section_run() {
+    local name="$1" directory="$2" helper="$ROOT/scripts/lib/project_plan_sections.py" delivery="$3" prompt
+    prompt="$directory/prompts/$name.md"
+    if [[ "$delivery" == file ]]; then
+        python3 -B "$helper" prompt "$name" "$directory" "$ROOT/prompts/project-plan-investigate.md" "$prompt" || return 1
+        SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 run_claude "$prompt" "project-plan-section-$name"
+        return
+    fi
+    python3 -B "$helper" prompt "$name" "$directory" "$ROOT/prompts/project-plan-investigate.md" "$prompt" --json || return 1
+    rm -f "$directory/$name.json"
+    if [[ "$delivery" == hosted ]]; then
+        mkdir -p "$directory/schemas"
+        python3 -B "$ROOT/scripts/lib/worker_schemas.py" section "$name" "$directory/schemas/$name.json" || return 1
+        UNCLE_OUTPUT_SCHEMA_FILE="$directory/schemas/$name.json" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json" \
+            UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+            run_claude "$prompt" "project-plan-section-$name"
+    else
+        UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+            run_claude "$prompt" "project-plan-section-$name"
+    fi
+}
+
+# After a section worker has finished: its section file exists, or this says why not.
+project_plan_section_finish() {
+    local name="$1" directory="$2" delivery="$3" helper="$ROOT/scripts/lib/project_plan_sections.py"
+    if [[ "$delivery" != file ]]; then
+        python3 -B "$helper" render "$name" "$directory/$name.json" "$directory/$name.md" || return 1
+        [[ -s "$directory/$name.md" ]]
+        return
+    fi
+    [[ -s "$directory/$name.md" ]] && return 0
+    # The worker answered in chat instead of calling Write (it happens): its answer is the section.
+    python3 -B "$helper" recover "$LOG_DIR/project-plan-section-$name.jsonl" "$directory/$name.md" 2>/dev/null \
+        && echo "Project plan section $name was answered in chat; used that answer."
+}
+
+run_project_plan_sections() {
+    local output="$1" directory="$STATE_DIR/project-plan-sections"
+    local helper="$ROOT/scripts/lib/project_plan_sections.py" phase name pid failed delivery=file
+    local -a pids names
+    # Forced, schema-checked JSON wherever the runner can enforce it.
+    if stage_supports_structured_output project-plan-section-outline; then
+        delivery=hosted
+    elif stage_uses_self_hosted project-plan AGENT; then
+        delivery=local
+    fi
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    while IFS= read -r phase; do
+        pids=(); names=()
+        for name in $phase; do
+            echo "Project plan section worker: $name"
+            ( project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
+            pids+=("$!"); names+=("$name")
+        done
+        failed=0
+        for pid in "${!pids[@]}"; do
+            name="${names[$pid]}"
+            wait "${pids[$pid]}" || { echo "Project plan section $name did not complete." >&2; failed=1; continue; }
+            project_plan_section_finish "$name" "$directory" "$delivery" && continue
+            # A worker that delivered nothing usable gets one more run, alone, before the plan is given up on.
+            echo "Project plan section $name delivered nothing usable; running that worker once more."
+            project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || true
+            project_plan_section_finish "$name" "$directory" "$delivery" || { echo "Project plan section $name wrote nothing." >&2; failed=1; }
+        done
+        [[ "$failed" == 0 ]] || return 1
+    done < <(python3 -B "$helper" phases)
+    # The traceability table is built here from the workers' own mapping lines.  Only a plan whose workers
+    # left too little behind needs the model, and then one worker reads everything and writes it.
+    if ! python3 -B "$helper" trace-ready "$directory"; then
+        echo "Project plan: the workers left too few requirement mappings; a traceability worker will write section 13."
+        project_plan_section_run trace "$directory" "$delivery" > "$LOG_DIR/project-plan-section-trace.log" 2>&1 \
+            || { echo "Project plan section trace did not complete." >&2; return 1; }
+        project_plan_section_finish trace "$directory" "$delivery" || { echo "Project plan section trace wrote nothing." >&2; return 1; }
+    fi
+    python3 -B "$helper" assemble "$directory" "$output" || return 1
+    # The assembled plan must pass the checks a single-pass plan does before it is believed.
+    python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected "$output" . > /dev/null 2>&1 || {
+        echo 'The assembled project plan did not validate; falling back to the single-pass plan.' >&2
+        return 1
+    }
 }
 
 # Every stage's actual work, with no state transitions and no approval checks,
@@ -2974,10 +3257,21 @@ run_stage() {
             fi
             ;;
         PROJECT_PLAN)
-            if stage_uses_self_hosted project-plan AGENT; then
-                project_plan_investigation=".uncle/workflow/project-plan-investigation.md"
+            project_plan_investigation=".uncle/workflow/project-plan-investigation.md"
+            rm -f "$project_plan_investigation"
+            # The plan is written in sections by parallel workers, on every runner
+            # (WORKFLOW_PROJECT_PLAN_SECTIONS=0 turns it off).  Any failure -- a worker, a section out
+            # of its lane, an assembled plan the validators refuse -- leaves no investigation behind and
+            # the single-pass plan runs as it always did.
+            project_plan_sectioned=0
+            if [[ "${WORKFLOW_PROJECT_PLAN_SECTIONS:-1}" == 1 ]] && run_project_plan_sections "$project_plan_investigation"; then
+                project_plan_sectioned=1
+                echo 'Project plan written in parallel sections and assembled by the driver.'
+            else
                 rm -f "$project_plan_investigation"
-                run_claude prompts/project-plan-investigate.md project-plan-investigate
+            fi
+            if [[ "$project_plan_sectioned" == 1 ]] || stage_uses_self_hosted project-plan AGENT; then
+                [[ "$project_plan_sectioned" == 1 ]] || run_claude prompts/project-plan-investigate.md project-plan-investigate
                 if [[ ! -s "$project_plan_investigation" ]]; then
                     python3 "$ROOT/scripts/lib/recover_investigation.py" \
                         "$LOG_DIR/project-plan-investigate.jsonl" "$project_plan_investigation" \
@@ -2989,7 +3283,7 @@ run_stage() {
                 # all prose becomes `narrative` and the one fenced
                 # Verification commands block becomes `verification_commands`.
                 # Do that conversion in the driver rather than spending a
-                # second self-hosted model call copying a large plan into JSON.
+                # second model call copying a large plan into JSON.
                 cp "$project_plan_investigation" .uncle/docs/PROJECT_PLAN.md
                 # Shape-only repair of the one unambiguous slip (commands as
                 # `$ cmd` lines with no fence); anything else still fails below.
@@ -3011,6 +3305,11 @@ run_stage() {
                 ensure_project_plan_json || exit 1
             fi
             require_artifact .uncle/docs/PROJECT_PLAN.md
+            # Advisory: how much of the plan can implement at once, while it can still change.
+            python3 -B "$ROOT/scripts/lib/plan_parallelism.py" .uncle/docs/PROJECT_PLAN.md 2>/dev/null \
+                | tee "$STATE_DIR/plan-parallelism.txt" || true
+            # The plan names the packages and the browser: fetch them now, while review runs.
+            install_warm_start .uncle/docs/PROJECT_PLAN.md
             ;;
         ADVERSARIAL_REVIEW)
             ensure_project_plan_json || exit 1
@@ -3057,11 +3356,15 @@ run_stage() {
             # The panel has already collated every specialist finding into
             # canonical JSON. Every runner gets the sealed compact prompt;
             # there is no repository-discovery fallback or Markdown handoff.
+            local single_call=0
             if [[ -s "$STATE_DIR/updated-plan-structure-feedback.md" && -f "$UPDATED_PLAN_PROMPT" ]]; then
                 cat "$STATE_DIR/updated-plan-structure-feedback.md" >> "$UPDATED_PLAN_PROMPT"
                 rm -f "$STATE_DIR/updated-plan-structure-feedback.md"
+                single_call=1   # a rejected plan is repaired by one call that sees the whole problem
             fi
-            run_claude "$UPDATED_PLAN_PROMPT" updated-plan
+            if [[ "$single_call" == 1 ]] || ! run_updated_plan_edit_writers; then
+                run_claude "$UPDATED_PLAN_PROMPT" updated-plan
+            fi
             ;;
         IMPLEMENT)
             parallel_status=0
@@ -3291,9 +3594,16 @@ run_stage() {
             rm -f .uncle/docs/VERIFICATION_REPORT.md
             run_parallel_checklist_workers
             if [[ -s "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" ]]; then
-                python3 -B "$ROOT/scripts/lib/execute_checklist_reports.py" . || exit 1
-                echo 'Execute-checklist fast path: rendered authoritative worker results without parent synthesis.'
-                return 0
+                # Only when the workers covered every required check; the rest go to the one agent.
+                execute_uncovered="$(python3 -B "$ROOT/scripts/lib/checklist_coverage.py" \
+                    "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json")"
+                if [[ -z "$execute_uncovered" ]]; then
+                    python3 -B "$ROOT/scripts/lib/execute_checklist_reports.py" . || exit 1
+                    echo 'Execute-checklist fast path: rendered authoritative worker results without parent synthesis.'
+                    return 0
+                fi
+                printf '\n## Checks the workers did not cover (execute these now, with the same evidence rules)\n\n%s\n' \
+                    "$execute_uncovered" >> "${CHECKLIST_EXECUTE_PROMPT:-/dev/null}"
             fi
             # A malformed acceptance table gets one local, format-only retry
             # even when optional supervision is disabled. The marker remains
@@ -3385,6 +3695,32 @@ run_green_check() {
         return 0
     fi
 
+    # The same code, tests and commands that already passed need not run again: the driver verifies
+    # after implementation and once more before the checklist, and nothing changes in between.
+    local green_fingerprint="" green_reused=0
+    if [[ "${WORKFLOW_GREEN_CHECK_REUSE:-1}" == 1 ]]; then
+        green_fingerprint="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$GREEN_CMDS" 2>/dev/null || true)"
+        local remembered remembered_status
+        remembered="$(cut -d' ' -f1 "$STATE_DIR/green-check.fingerprint" 2>/dev/null)"
+        remembered_status="$(cut -d' ' -f2 "$STATE_DIR/green-check.fingerprint" 2>/dev/null)"
+        if [[ -n "$green_fingerprint" && -s "$GREEN_MD" && -s "$GREEN_CLASS" && -f "$GREEN_CUR" \
+              && "$remembered" == "$green_fingerprint" ]]; then
+            # A clean run is always reusable.  A failing one is too, unless asked otherwise: the same code,
+            # tests and commands fail the same way (a surviving mutant took 40-60 s to learn twice), and
+            # any change -- a repair, an edit -- changes the fingerprint and runs it again.
+            if [[ "$remembered_status" == clean || "${WORKFLOW_GREEN_CHECK_REUSE_FAILED:-1}" == 1 ]]; then
+                green_reused=1
+                echo
+                if [[ "$remembered_status" == clean ]]; then
+                    echo "Verification commands already passed on this exact tree; reusing that result."
+                else
+                    echo "Verification commands already failed on this exact tree; reusing that result (any change runs them again)."
+                fi
+            fi
+        fi
+    fi
+    if [[ "$green_reused" == 0 ]]; then
+    rm -f "$STATE_DIR/green-check.fingerprint"
     echo
     echo "Re-running the plan's verification commands from the driver:"
     # Migrate snapshots left by older Uncle versions before invoking project
@@ -3410,9 +3746,22 @@ run_green_check() {
     green_classify "$STATE_DIR/green-check.no-baseline" "$GREEN_CUR" > "$GREEN_CLASS"
     green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/UPDATED_PROJECT_PLAN.md \
         "$LOG_DIR/green-check.log" 0
+    fi
 
     local failures
     failures="$(green_regressions "$GREEN_CLASS")"
+    # Remembered with its outcome.  Taken after the run, so files the run itself wrote are part of the
+    # tree it describes.
+    if [[ "$green_reused" == 0 && -n "$green_fingerprint" ]]; then
+        local green_after green_outcome=clean
+        [[ "$failures" == 0 ]] || green_outcome=failed
+        green_after="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$GREEN_CMDS" 2>/dev/null || true)"
+        if [[ -n "$green_after" ]]; then
+            printf '%s %s\n' "$green_after" "$green_outcome" > "$STATE_DIR/green-check.fingerprint"
+        else
+            rm -f "$STATE_DIR/green-check.fingerprint"
+        fi
+    fi
 
     if [[ "$failures" -gt 0 ]]; then
         echo
@@ -3860,6 +4209,10 @@ while true; do
             verify_approval .uncle/docs/PROJECT_PLAN.md PROJECT_PLAN
             verify_approval .uncle/docs/ADVERSARIAL_REVIEW.md ADVERSARIAL_REVIEW
             require_artifact .uncle/docs/UPDATED_PROJECT_PLAN.md
+            python3 -B "$ROOT/scripts/lib/plan_parallelism.py" .uncle/docs/UPDATED_PROJECT_PLAN.md 2>/dev/null \
+                | tee "$STATE_DIR/plan-parallelism.txt" || true
+            # Anything the review added to the dependencies; already-cached packages cost nothing.
+            install_warm_start .uncle/docs/UPDATED_PROJECT_PLAN.md
             set_state WAIT_UPDATED_PLAN_APPROVAL
             ;;
 

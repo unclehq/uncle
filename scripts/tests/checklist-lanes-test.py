@@ -106,5 +106,16 @@ class Batches(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
 
+class Defaults(unittest.TestCase):
+    def test_one_check_per_worker_by_default_with_room_in_the_pool(self):
+        text = (ROOT / 'scripts' / 'lib' / 'checklist-lanes.sh').read_text()
+        self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-1', text)
+        self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-18', text)
+
+    def test_fourteen_free_checks_make_fourteen_workers_at_the_defaults(self):
+        checks = plan(*[check('MC-%d' % n) for n in range(100, 114)])
+        self.assertEqual(len(lanes.batches(checks, 1, 18)), 14)
+
+
 if __name__ == '__main__':
     unittest.main()

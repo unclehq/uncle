@@ -223,7 +223,8 @@ def contract(name, directory, json_mode=False):
     if name in TRACE_KINDS and json_mode:
         lines += ['', 'Also fill `trace` (kinds: %s): one entry per requirement and kind, `requirement` being a requirement ID from '
                   'the outline\'s `## Requirement map`, nothing else, and `ids` the IDs of yours that cover it. The driver builds '
-                  'the traceability table from `trace`.' % TRACE_KINDS[name]]
+                  'the traceability table from `trace`, and a worker that leaves it empty makes a whole extra model call '
+                  'necessary: map every requirement of the outline to at least one of your IDs.' % TRACE_KINDS[name]]
     elif name in TRACE_KINDS:
         lines += ['', 'End your file with one line per kind (%s), after the last section, exactly in this form: ' % TRACE_KINDS[name]]
         lines += ['`%s`' % example for example in TRACE_EXAMPLES[name]]

@@ -5,7 +5,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fails=0
-export WORKFLOW_UPDATED_PLAN_EDITS=1 WORKFLOW_UPDATED_PLAN_EDIT_SLICE=3
+export WORKFLOW_UPDATED_PLAN_EDITS=1 WORKFLOW_UPDATED_PLAN_EDIT_SLICE=3 WORKFLOW_UPDATED_PLAN_HEDGE_SECONDS=300
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
 awk '/^(updated_plan_launch_writer|run_updated_plan_edit_writers)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
 check "function extracted" test -s "$TMP/fn.sh"
@@ -33,6 +33,7 @@ PY
             printf '%s %s\n' "$n" "$(python3 -c 'import time; print("%.2f" % time.time())')" >> "$STATE_DIR/starts"
             grep -q 'You own exactly these findings' "$1" || echo "no slice note: $n" >> "$STATE_DIR/violations"
             echo "$2 schema=${UNCLE_OUTPUT_SCHEMA_FILE:-none} out=${UNCLE_STRUCTURED_OUTPUT_PATH:-none} packet=${UNCLE_WORKER_PACKET_PATH:-none} kinds=$(grep -o '"kind":"[a-z-]*"' "$1" | sort -u | tr '\n' ' ')" >> "$STATE_DIR/calls"
+            if [[ "$mode:$n" == slow:2 ]]; then sleep 30; fi
             sleep 0.4
             if [[ "$mode:$n" == limit:2 ]]; then echo "cause: You've hit your session limit" > "$LOG_DIR/updated-plan-worker-edits-2.log"; return 1; fi
             [[ "$mode:$n" != fail:2 && "$mode:$n" != fail:2-* && "$mode:$n" != failonce:2 ]] || return 1
@@ -50,7 +51,7 @@ n, mode, target, prompt = sys.argv[1:5]
 ids = re.search(r'You own exactly these findings: ([^.]*)\.', open(prompt).read()).group(1).split(', ')
 old = 'Alpha.' if n == '1' else ('Alpha.' if mode in ('clash', 'resolve', 'resolve-fail', 'resolve-retry') else 'Beta.')
 body = {'dispositions': [{'finding': i, 'disposition': 'Accepted', 'reason': 'r', 'plan_change': 'c'} for i in ids],
-        'patch': {'replace_text': [{'heading': '## 1. Overview', 'old': old, 'new': 'X%s.' % n.split('-')[0]}]}}
+        'patch': {'replace_text': [{'heading': '## 1. Overview', 'old': old, 'new': 'X%s.' % re.sub(r'[^0-9].*', '', n)}]}}
 if n in ('1', '1-1'):
     body['protected_verification_paths'] = 'tests/a.test.js'
 json.dump(body, open(target, 'w'))
@@ -81,6 +82,18 @@ check "failed writer: one writer per finding"   bash -c 'for s in 2-1 2-2 2-3; d
 check "failed writer: its siblings did not rerun" test "$(grep -c "edits-1 " "$w/calls")" == 1
 check "failed writer: every finding still has a row" bash -c 'for n in 1 2 3 4 5 6; do grep -q "AR-$n" "$1" || exit 1; done' _ "$TMP/failonce/.uncle/docs/UPDATED_PROJECT_PLAN.md"
 check "failed writer: said what it was doing"   grep -q 'asking again, one finding at a time' "$w/out"
+
+WORKFLOW_UPDATED_PLAN_HEDGE_SECONDS=1 run_case slow slow
+w="$TMP/slow/.uncle/workflow"
+check "slow writer: a twin finishes the stage"  test "$(cat "$w/rc")" == 0
+check "slow writer: the twin was started"       grep -q 'is slow; starting a twin' "$w/out"
+check "slow writer: its twin's answer is used"  grep -q 'twin delivered first' "$w/out"
+check "slow writer: the plan has every finding" bash -c 'for n in 1 2 3 4 5 6; do grep -q "AR-$n" "$1" || exit 1; done' _ "$TMP/slow/.uncle/docs/UPDATED_PROJECT_PLAN.md"
+check "slow writer: did not wait for it"        python3 - "$w/starts" <<'PY'
+import sys
+t = [float(l.split()[1]) for l in open(sys.argv[1])]
+sys.exit(0 if max(t) - min(t) < 20 else 1)
+PY
 
 run_case limit limit
 w="$TMP/limit/.uncle/workflow"

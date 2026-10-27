@@ -2534,13 +2534,53 @@ run_updated_plan_edit_writers() {
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     python3 -B "$helper" slices "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" > "$directory/slices.tsv" || return 1
     [[ -s "$directory/slices.tsv" ]] || return 1
+    local -a ids_of=() owner_of=() started=() hedge=() finished=()
+    local index=0
     while IFS=$'\t' read -r name ids; do
-        updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$([[ "$name" == 1 ]] && echo owner)" || return 1
-        pids+=("$!"); names+=("$name")
+        owner_of[index]="$([[ "$name" == 1 ]] && echo owner)"
+        ids_of[index]="$ids"
+        updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "${owner_of[index]}" || return 1
+        pids+=("$!"); names+=("$name"); started[index]="$SECONDS"; hedge[index]=""; finished[index]=0
+        index=$((index + 1))
     done < "$directory/slices.tsv"
     local -a failed_names=()
-    for pid in "${!pids[@]}"; do
-        wait "${pids[$pid]}" || { echo "Updated-plan edit writer ${names[$pid]} did not complete." >&2; failed_names+=("${names[$pid]}"); }
+    local total="${#pids[@]}" left="${#pids[@]}" i status hedge_after="${WORKFLOW_UPDATED_PLAN_HEDGE_SECONDS:-35}"
+    # Join the writers.  A writer is mostly hidden reasoning and a few run several times longer than the rest
+    # (noinit: one finding, no output at all for 80+ s while its 19 siblings finished in 8-20 s), and the stage
+    # waits for the slowest.  Once half have finished, a writer still running after $hedge_after s gets an identical
+    # twin; whichever delivers first is used and the other is stopped.
+    while (( left > 0 )); do
+        for i in "${!pids[@]}"; do
+            [[ "${finished[i]}" == 0 ]] || continue
+            if ! kill -0 "${pids[i]}" 2>/dev/null; then
+                status=0; wait "${pids[i]}" || status=$?
+                if [[ "$status" == 0 ]]; then
+                    finished[i]=1; left=$((left - 1))
+                    [[ -z "${hedge[i]}" ]] || { pkill -P "${hedge[i]}" 2>/dev/null; kill "${hedge[i]}" 2>/dev/null; }
+                    [[ "${names[i]}" != *h ]] || cp "$directory/${names[i]}.json" "$directory/${names[i]%h}.json"
+                elif [[ -n "${hedge[i]}" ]] && kill -0 "${hedge[i]}" 2>/dev/null; then
+                    pids[i]="${hedge[i]}"; hedge[i]=""; names[i]="${names[i]}h"   # the twin is now the writer
+                else
+                    echo "Updated-plan edit writer ${names[i]} did not complete." >&2
+                    finished[i]=1; left=$((left - 1)); failed_names+=("${names[i]%h}")
+                fi
+            elif [[ -n "${hedge[i]}" ]] && ! kill -0 "${hedge[i]}" 2>/dev/null; then
+                status=0; wait "${hedge[i]}" || status=$?
+                if [[ "$status" == 0 && -s "$directory/${names[i]}h.json" ]]; then
+                    cp "$directory/${names[i]}h.json" "$directory/${names[i]}.json"
+                    pkill -P "${pids[i]}" 2>/dev/null; kill "${pids[i]}" 2>/dev/null
+                    echo "Updated-plan edit writer ${names[i]}: its twin delivered first."
+                    finished[i]=1; left=$((left - 1))
+                fi
+                hedge[i]=""
+            elif [[ -z "${hedge[i]}" && "${names[i]}" != *h && $((total - left)) -ge $(((total + 1) / 2)) \
+                    && $((SECONDS - started[i])) -ge "$hedge_after" ]]; then
+                echo "Updated-plan edit writer ${names[i]} is slow; starting a twin."
+                updated_plan_launch_writer "$directory" "$delivery" "${names[i]}h" "${ids_of[i]}" "${owner_of[i]}" || true
+                hedge[i]="$!"
+            fi
+        done
+        (( left > 0 )) && sleep 1
     done
     if [[ "${#failed_names[@]}" -gt 0 ]]; then
         # A writer that delivered nothing usable (its own JSON would not parse) is asked again as one writer per

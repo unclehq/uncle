@@ -89,6 +89,12 @@ class SectionSchema(unittest.TestCase):
         self.assertTrue(validate(packet('behaviors', trace=[{'kind': 'T', 'requirement': 'R-1', 'ids': ['T-1']}]),
                                  self.schema('behaviors')))
 
+    def test_a_worker_that_owes_a_trace_cannot_leave_it_empty(self):
+        schema = self.schema('behaviors')
+        self.assertTrue(validate(packet('behaviors', trace=[]), schema))
+        self.assertEqual(validate(packet('behaviors'), schema), [])
+        self.assertEqual(schemas.section_packet(sections.expected_headings('design'))['properties'].get('trace'), None)
+
     def test_every_worker_has_a_usable_schema(self):
         for name in sections.WORKERS:
             schema = self.schema(name)

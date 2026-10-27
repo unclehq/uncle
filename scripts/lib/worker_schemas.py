@@ -58,7 +58,7 @@ def section_packet(headings=None, trace_kinds=''):
                                'items': _object({'heading': heading, 'body': _text(BODY_MAX)}, ('heading', 'body'))}}
     if trace_kinds or headings is None:
         kinds = list(trace_kinds) if trace_kinds else ['B', 'I', 'C', 'T', 'M']
-        properties['trace'] = {'type': 'array', 'maxItems': 300, 'items': _object({
+        properties['trace'] = {'type': 'array', 'minItems': 1 if (trace_kinds and headings) else 0, 'maxItems': 300, 'items': _object({
             'kind': {'type': 'string', 'enum': kinds},
             'requirement': _text(40),
             'ids': {'type': 'array', 'minItems': 1, 'maxItems': 60, 'items': _text(40)}},

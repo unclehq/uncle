@@ -56,6 +56,13 @@ class Stage:
         # names the sole writable path; native runners must receive matching
         # write capability rather than their legacy read-only reviewer mode.
         self.delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')
+        self.started_wall = time.time()
+        self.last_event = time.monotonic()
+        self._delivery_checked = 0.0
+        try:
+            self.delivery_idle = max(5.0, float(os.environ.get('WORKFLOW_DELIVERY_IDLE_SECONDS') or 20))
+        except ValueError:
+            self.delivery_idle = 20.0
         self.prompt = prompt if prompt is not None else (sys.stdin.read() if side == 'agent' else args[-1])
         self.read_cache = ReadCache(os.getcwd())
         self.prompt += self.read_cache.context(self.prompt)
@@ -302,6 +309,27 @@ class Stage:
             self.status('steering_rejected', message_id=id, detail=str(event.get('error', '')))
         return True
 
+    def delivered_and_idle(self):
+        """True when the stage's one JSON delivery file is complete and the runner has gone quiet.
+
+        A runner can write its delivery and then never send its terminal event (a final-audit worker: packet written
+        at 03:27:50, no `result`, the whole stage waiting 2+ minutes on it).  The delivery is the stage's output, so a
+        parseable one that this run wrote, with nothing from the runner for WORKFLOW_DELIVERY_IDLE_SECONDS, ends it."""
+        if not self.delivery or time.monotonic() - self.last_event < self.delivery_idle:
+            return False
+        now = time.monotonic()
+        if now - self._delivery_checked < 1:
+            return False
+        self._delivery_checked = now
+        try:
+            path = Path(self.delivery)
+            stat = path.stat()
+            if stat.st_size == 0 or stat.st_mtime < self.started_wall or time.time() - stat.st_mtime < self.delivery_idle:
+                return False
+            return isinstance(json.loads(path.read_text(encoding='utf-8')), dict)
+        except (OSError, ValueError):
+            return False
+
     def loop(self, handler, steer):
         seconds = int(os.environ.get('WORKFLOW_NATIVE_STAGE_SECONDS', '3600'))
         while time.monotonic()-self.started < seconds:
@@ -312,7 +340,10 @@ class Stage:
             try:
                 event = self.events.get(timeout=.1)
             except queue.Empty:
+                if self.delivered_and_idle():
+                    return
                 continue
+            self.last_event = time.monotonic()
             if self.ack(event):
                 continue
             if event.get('_eof'):

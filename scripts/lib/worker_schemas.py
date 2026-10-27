@@ -19,6 +19,7 @@ what it receives for runners with no schema support.
     worker_schemas.py resolve PLAN.json OUTPUT        updated-plan resolver
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -87,6 +88,7 @@ def _commands():
 
 
 def edit_packet(headings=None, owner=False):
+    owner = owner and os.environ.get('UNCLE_PLAN_KIND') != 'change-plan'   # a change plan has no protected paths
     properties = {
         'dispositions': {'type': 'array', 'maxItems': 40, 'items': _object({
             'finding': _text(80), 'disposition': {'type': 'string', 'enum': list(DISPOSITIONS)},

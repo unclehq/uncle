@@ -100,10 +100,27 @@ preview_build_defer() {
     return 0
 }
 
+# preview_existing_project — 0 when the directory already holds a project of its own: tracked files in a git
+# history.  The preview writes at the repository root (index.html, assets) for the implementation to rewrite, which
+# is right for a new application and wrong for an existing codebase, where it drops a stray page into the repo.
+# (An issue run on Uncle's own repository got an index.html in its root.)  A brand-new project has no commits, and
+# a few tracked files such as a README or LICENSE do not make an existing project.
+preview_existing_project() {
+    [[ "${WORKFLOW_PREVIEW_EXISTING_PROJECT:-0}" != 1 ]] || return 1
+    git rev-parse --verify -q HEAD > /dev/null 2>&1 || return 1
+    local tracked
+    tracked="$(git ls-files 2>/dev/null | grep -v -E '^(README|LICENSE|\.gitignore|\.uncle/)' | head -n "${PREVIEW_EXISTING_FILES:-8}" | wc -l | tr -d ' ')"
+    [[ "${tracked:-0}" -ge "${PREVIEW_EXISTING_FILES:-8}" ]]
+}
+
 # preview_build_start — launch it, detached, and return immediately.
 preview_build_start() {
     [[ "$PREVIEW_BUILD" == "1" ]] || return 0
     [[ "$PREVIEW_STARTED" == 0 ]] || return 0
+    if preview_existing_project; then
+        echo "No preview build: this directory already holds a project, and a preview would write into its root."
+        return 0
+    fi
     if preview_build_defer; then return 0; fi
     [[ -s .uncle/docs/PROJECT_PLAN.md || -s PROJECT_PLAN.md || -s "${DOCUMENT_BUDGET_SOURCE:-.uncle/docs/REQUIREMENTS.md}" || -s .uncle/docs/REQUIREMENTS.md || -s REQUIREMENTS.md ]] || return 0
 

@@ -28,6 +28,7 @@ PROJECT_ROOT="$PWD"
 mkdir -p .uncle/docs
 . "$ROOT/scripts/lib/generated-input.sh"
 . "$ROOT/scripts/lib/checklist-lanes.sh"
+. "$ROOT/scripts/lib/install-warm.sh"
 export DOCUMENT_BUDGET_SOURCE="$(generated_input_path CHANGE_REQUEST.md)"
 
 # Prompt files are named relative to the uncle install, but the cwd is now the
@@ -274,7 +275,13 @@ stepwise_implementation_enabled() {
         auto)
             local count
             count="$(plan_steps .uncle/docs/CHANGE_PLAN.md 2>/dev/null | grep -c . || true)"
-            [[ "${count:-0}" -ge 8 ]]
+            [[ "${count:-0}" -ge 8 ]] && return 0
+            # A short plan was always one single-shot call, which left its parallel fan-out unreachable: the fan-out
+            # lives in the stepwise path.  A plan whose ownership lets two or more steps run at once takes that
+            # path whatever its length (issue 113: four steps, two of them independent, ran as one 49 s+ call), unless
+            # parallel execution was already rejected for this plan.
+            [[ "${count:-0}" -ge 2 && ! -e "$STATE_DIR/parallel-implementation-serial-fallback" ]] \
+                && parallel_groups .uncle/docs/CHANGE_PLAN.md "$ROOT/scripts/lib" > /dev/null 2>&1
             ;;
         *)
             echo "Invalid WORKFLOW_STEPWISE_IMPLEMENT: $STEPWISE_IMPLEMENT (expected auto, 0, or 1)" >&2
@@ -681,6 +688,7 @@ on_exit() {
     local rc=$?
     if declare -f progress_end > /dev/null; then progress_end; fi
     if declare -f cleanup_bg > /dev/null; then cleanup_bg; fi
+    if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
     if declare -f release_lock > /dev/null; then release_lock; fi
     uncle_title_end
     if [[ "$rc" != 0 && -e "${STATE_DIR:-.uncle/workflow}/run-started-at" ]]; then
@@ -1438,16 +1446,50 @@ run_green_check() {
         return 0
     fi
 
-    echo
-    echo "Re-running this project's checks from the driver:"
-    resolve_baseline_parallel_groups .uncle/docs/BASELINE_REPORT.md "$GREEN_CMDS" "$STATE_DIR/green-check.groups" || exit $?
-    green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" "" "$STATE_DIR/green-check.groups" || exit $?
-    green_classify "$GREEN_BASE" "$GREEN_CUR" > "$GREEN_CLASS"
-    green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/BASELINE_REPORT.md \
-        "$LOG_DIR/green-check.log"
+    # The same code, tests and commands that already ran need not run again: the driver verifies after
+    # implementation and again before the checklist, and nothing changes in between.  The fingerprint covers the
+    # tree and the commands; a clean result is always reusable, a failing one too unless asked otherwise (any
+    # repair or edit changes the fingerprint and runs the commands again).
+    local green_fingerprint="" green_reused=0
+    if [[ "${WORKFLOW_GREEN_CHECK_REUSE:-1}" == 1 ]]; then
+        green_fingerprint="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$GREEN_CMDS" 2>/dev/null || true)"
+        local remembered remembered_status
+        remembered="$(cut -d' ' -f1 "$STATE_DIR/green-check.fingerprint" 2>/dev/null)"
+        remembered_status="$(cut -d' ' -f2 "$STATE_DIR/green-check.fingerprint" 2>/dev/null)"
+        if [[ -n "$green_fingerprint" && -s "$GREEN_MD" && -s "$GREEN_CLASS" && -f "$GREEN_CUR" \
+              && "$remembered" == "$green_fingerprint" ]] \
+           && [[ "$remembered_status" == clean || "${WORKFLOW_GREEN_CHECK_REUSE_FAILED:-1}" == 1 ]]; then
+            green_reused=1
+            echo
+            if [[ "$remembered_status" == clean ]]; then
+                echo "This project's checks already passed on this exact tree; reusing that result."
+            else
+                echo "This project's checks already failed on this exact tree; reusing that result (any change runs them again)."
+            fi
+        fi
+    fi
+    if [[ "$green_reused" == 0 ]]; then
+        rm -f "$STATE_DIR/green-check.fingerprint"
+        echo
+        echo "Re-running this project's checks from the driver:"
+        resolve_baseline_parallel_groups .uncle/docs/BASELINE_REPORT.md "$GREEN_CMDS" "$STATE_DIR/green-check.groups" || exit $?
+        green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" "" "$STATE_DIR/green-check.groups" || exit $?
+        green_classify "$GREEN_BASE" "$GREEN_CUR" > "$GREEN_CLASS"
+        green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/BASELINE_REPORT.md \
+            "$LOG_DIR/green-check.log"
+    fi
 
     local regressions
     regressions="$(green_regressions "$GREEN_CLASS")"
+    # Remembered with its outcome, taken after the run so files the run itself wrote are part of the tree.
+    if [[ "$green_reused" == 0 && -n "$green_fingerprint" ]]; then
+        local green_after green_outcome=clean
+        [[ "$regressions" == 0 ]] || green_outcome=failed
+        green_after="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$GREEN_CMDS" 2>/dev/null || true)"
+        if [[ -n "$green_after" ]]; then
+            printf '%s %s\n' "$green_after" "$green_outcome" > "$STATE_DIR/green-check.fingerprint"
+        fi
+    fi
 
     if [[ "$regressions" -gt 0 ]]; then
         echo
@@ -1845,15 +1887,25 @@ run_supervised_parallel_implementation() {
                 printf '%s\n' "$step_line"
                 echo
                 echo "Work only on this approved step and its declared owned files."
-                echo "Do not edit workflow documents in the project root. Write this"
-                echo "step's implementation-notes fragment, as one JSON object matching"
-                echo "the contract given earlier in this prompt, to"
-                echo ".uncle/workflow/parallel/notes/step-$step.json. Do not write"
+                echo "Do not edit workflow documents in the project root. Do not write"
                 echo ".uncle/docs/IMPLEMENTATION_NOTES.md or .uncle/docs/CHANGE_TEST_REPORT.md;"
-                echo "the driver merges the fragment and reconciles the test report after merging."
-                echo "Finish in at most 12 tool actions. Read only the named files,"
-                echo "make the smallest edit, run one narrow check, write the fragment,"
-                echo "and stop; do not investigate unrelated failures or repeat probes."
+                echo "the driver merges the notes and reconciles the test report after merging."
+                cat <<'EOF'
+
+## Speed (binding)
+
+Steps run at the same time and the slowest one sets the stage's time, so every turn counts.
+
+- Read only the files this step owns or names, in one batch of parallel Read calls. Do not run `ls`, `find`
+  or `cat`, do not search the tree, and do not read files another step owns: they are being edited right now.
+- Make every edit in your next response, as parallel Edit/Write calls, then stop.
+- Do not run tests, builds or checks. The driver runs the whole verification right after the merge.
+EOF
+                echo "- Do not write an implementation-notes fragment unless this step has a deviation from the"
+                echo "  plan, an unresolved concern or a plan blocker to report: the driver records the routine"
+                echo "  fragment from the files you changed. When you do have one, write it as one JSON object"
+                echo "  matching the contract given earlier in this prompt, to"
+                echo "  .uncle/workflow/parallel/notes/step-$step.json."
                 if [[ "$step_line" =~ ^[[:space:]]*[Rr]econcile:|Owns:[[:space:]]*\* ]]; then
                     cat <<'EOF'
 
@@ -2248,6 +2300,22 @@ CHANGE_REQUEST_SOURCE
     printf '%s\n' "$bound_prompt"
 }
 
+# Whether this stage's agent can be forced to answer in schema-checked JSON (see run_claude): the direct Claude
+# CLI only -- also when it runs through native_stage.py, which relays the validated object.  Codex, self-hosted
+# models and a custom command keep the file contract.
+stage_supports_structured_output() {
+    local stage="$1" UNCLE_RESOLVED_RUNNER
+    [[ "${WORKFLOW_STRUCTURED_OUTPUT:-1}" == 1 ]] || return 1
+    uncle_resolve_stage_runner "$stage" AGENT 2>/dev/null || return 1
+    [[ "$UNCLE_RESOLVED_RUNNER" == claude ]] && [[ "$(stage_agent_cmd "$stage" 2>/dev/null)" == *claude ]]
+}
+
+stage_uses_self_hosted() {
+    local stage="$1" side="$2" UNCLE_RESOLVED_RUNNER
+    uncle_resolve_stage_runner "$stage" "$side" 2>/dev/null || true
+    [[ "$UNCLE_RESOLVED_RUNNER" == self-hosted ]]
+}
+
 run_claude() {
     local prompt_file
     prompt_file="$(resolve_prompt "$1")"
@@ -2278,6 +2346,19 @@ run_claude() {
     # A stage configured in `uncle` overrides what the call site asked for.
     model="$(stage_model_for "$log_name" "$model")"
     effort="$(stage_effort_for "$log_name")"
+
+    # Forced JSON: the caller names a JSON Schema, Claude must answer through a schema-validated StructuredOutput
+    # call, and the validated object is what the driver reads -- never chat text, never a file the model may forget
+    # to write (see structured_output.py).
+    local -a schema_args=()
+    if [[ -n "${UNCLE_OUTPUT_SCHEMA_FILE:-}" ]]; then
+        if [[ "${cmd##*/}" == claude && "$UNCLE_RESOLVED_RUNNER" == claude && -n "${UNCLE_STRUCTURED_OUTPUT_PATH:-}" ]]; then
+            schema_args=(--json-schema "$(cat "$UNCLE_OUTPUT_SCHEMA_FILE")")
+        else
+            echo "Stage $log_name asked for schema-checked output, which this runner cannot give." >&2
+            return 1
+        fi
+    fi
 
     require_file "$prompt_file"
 
@@ -2359,7 +2440,9 @@ run_claude() {
         esac
         case "$log_name" in
             *-worker-*)
-                if [[ -n "$agent_delivery" ]]; then
+                if [[ "${#schema_args[@]}" -gt 0 ]]; then
+                    : # the structured-output contract below replaces the Write contract
+                elif [[ -n "$agent_delivery" ]]; then
                     cat >> "$effective_prompt" <<'CANONICAL_WORKER_PACKET_CONTRACT'
 
 ## Canonical worker-packet delivery (binding)
@@ -2424,6 +2507,17 @@ CANONICAL_ARTIFACT_CONTRACT
                 fi
                 ;;
         esac
+        if [[ "${#schema_args[@]}" -gt 0 ]]; then
+            flags+=("${schema_args[@]}")
+            cat >> "$effective_prompt" <<'STRUCTURED_OUTPUT_CONTRACT'
+
+## Delivery (binding)
+
+Deliver by calling the StructuredOutput tool exactly once, with the complete object. Its input is checked
+against a JSON Schema, so every required field must be present and nothing outside the schema may be added.
+Do not write the content as chat text first and do not write any file: the tool call is the whole answer.
+STRUCTURED_OUTPUT_CONTRACT
+        fi
         ( env UNCLE_ARTIFACT_DELIVERY="$agent_delivery" "${client_cmd[@]}" "${flags[@]}" \
             < "$effective_prompt" \
             2>&1 \
@@ -2539,8 +2633,24 @@ CANONICAL_ARTIFACT_CONTRACT
             exit 1
         fi
 
+        if [[ "${#schema_args[@]}" -gt 0 ]]; then
+            if ! python3 -B "$ROOT/scripts/lib/structured_output.py" extract "$log" "$UNCLE_STRUCTURED_OUTPUT_PATH"; then
+                if [[ -z "$artifact_retried" ]]; then
+                    artifact_retried=1
+                    echo "Stage $log_name returned no schema-checked object; retrying once."
+                    continue
+                fi
+                echo "Stage $log_name returned no schema-checked object." >&2
+                exit 1
+            fi
+        fi
+
         case "$log_name" in
             *-worker-*)
+                if [[ -n "$agent_delivery" && ! -s "$agent_delivery" ]]; then
+                    python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/${log_name}.jsonl" "$agent_delivery" 2>/dev/null \
+                        && echo "Worker $log_name printed its packet instead of writing it; took it from the reply."
+                fi
                 if [[ -n "$agent_delivery" && ! -s "$agent_delivery" ]]; then
                     echo "Worker $log_name did not write its required canonical JSON packet: $agent_delivery" >&2
                     exit 1
@@ -2863,6 +2973,172 @@ run_updated_change_plan_panel() {
         "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
         "$STATE_DIR/documents/UPDATED_CHANGE_PLAN_WORKERS.json" \
         "$UPDATED_PLAN_PROMPT" || return 1
+}
+
+# Resolve the adversarial findings in parallel, one writer per finding, and merge their patches without a model
+# (updated_plan_edits.py): the change-plan twin of the new-application driver's updated-plan fan-out.  Writers and
+# resolvers answer in schema-checked JSON on hosted Claude; a slow writer gets a twin; overlapping edits go to small
+# per-group resolvers; any problem returns nonzero with nothing published and the caller runs the single call.
+updated_change_plan_launch_writer() {
+    local directory="$1" delivery="$2" name="$3" ids="$4" owner="$5" schema_file=""
+    python3 -B "$ROOT/scripts/lib/updated_plan_edits.py" prompt "$UPDATED_PLAN_PROMPT" "$ids" "$directory/prompts/$name.md" $owner || return 1
+    echo "Updated-plan edit writer $name: ${ids//,/, }"
+    if [[ "$delivery" == hosted ]]; then
+        mkdir -p "$directory/schemas"
+        schema_file="$directory/schemas/$name.json"
+        python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit "$STATE_DIR/documents/CHANGE_PLAN.json" "$schema_file" $owner || return 1
+    fi
+    rm -f "$directory/$name.json"
+    ( [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
+      UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+        run_claude "$directory/prompts/$name.md" "updated-change-plan-worker-edits-$name" "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN" ) \
+        > "$LOG_DIR/updated-change-plan-worker-edits-$name.log" 2>&1 &
+}
+
+run_updated_change_plan_edit_writers() {
+    local directory="$STATE_DIR/updated-change-plan-edits" helper="$ROOT/scripts/lib/updated_plan_edits.py" name ids pid failed=0
+    local -a pids=() names=()
+    [[ "${WORKFLOW_UPDATED_PLAN_EDITS:-1}" == 1 ]] || return 1
+    export UNCLE_PLAN_KIND=change-plan     # the helpers write and merge a change-plan, with no commands or protected paths
+    # Forced, schema-checked JSON wherever the runner can enforce it: hosted Claude through --json-schema, a
+    # self-hosted model through the grammar its adapter derives from the packet kind named in the prompt.
+    local delivery=file
+    if stage_supports_structured_output updated-change-plan-worker-edits-1; then
+        delivery=hosted
+    elif stage_uses_self_hosted updated-change-plan AGENT; then
+        delivery=local
+    fi
+    [[ -f "${UPDATED_PLAN_PROMPT:-}" ]] || return 1
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    python3 -B "$helper" slices "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" > "$directory/slices.tsv" || return 1
+    [[ -s "$directory/slices.tsv" ]] || return 1
+    local -a ids_of=() owner_of=() started=() hedge=() finished=()
+    local index=0
+    while IFS=$'\t' read -r name ids; do
+        owner_of[index]="$([[ "$name" == 1 ]] && echo owner)"
+        ids_of[index]="$ids"
+        updated_change_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "${owner_of[index]}" || return 1
+        pids+=("$!"); names+=("$name"); started[index]="$SECONDS"; hedge[index]=""; finished[index]=0
+        index=$((index + 1))
+    done < "$directory/slices.tsv"
+    local -a failed_names=()
+    local total="${#pids[@]}" left="${#pids[@]}" i status hedge_after="${WORKFLOW_UPDATED_PLAN_HEDGE_SECONDS:-35}"
+    # A self-hosted model is one shared server: a twin only queues behind the writer it duplicates (calculator-local:
+    # twins doubled the load and the slowest writer still took 200-400 s), so hedge only on hosted runners.
+    if stage_uses_self_hosted updated-change-plan AGENT; then hedge_after=999999; fi
+    # Join the writers.  A writer is mostly hidden reasoning and a few run several times longer than the rest
+    # (noinit: one finding, no output at all for 80+ s while its 19 siblings finished in 8-20 s), and the stage
+    # waits for the slowest.  Once half have finished, a writer still running after $hedge_after s gets an identical
+    # twin; whichever delivers first is used and the other is stopped.
+    while (( left > 0 )); do
+        for i in "${!pids[@]}"; do
+            [[ "${finished[i]}" == 0 ]] || continue
+            if ! kill -0 "${pids[i]}" 2>/dev/null; then
+                status=0; wait "${pids[i]}" || status=$?
+                if [[ "$status" == 0 ]]; then
+                    finished[i]=1; left=$((left - 1))
+                    [[ -z "${hedge[i]}" ]] || { pkill -P "${hedge[i]}" 2>/dev/null; kill "${hedge[i]}" 2>/dev/null; }
+                    [[ "${names[i]}" != *h ]] || cp "$directory/${names[i]}.json" "$directory/${names[i]%h}.json"
+                elif [[ -n "${hedge[i]}" ]] && kill -0 "${hedge[i]}" 2>/dev/null; then
+                    pids[i]="${hedge[i]}"; hedge[i]=""; names[i]="${names[i]}h"   # the twin is now the writer
+                else
+                    echo "Updated-plan edit writer ${names[i]} did not complete." >&2
+                    finished[i]=1; left=$((left - 1)); failed_names+=("${names[i]%h}")
+                fi
+            elif [[ -n "${hedge[i]}" ]] && ! kill -0 "${hedge[i]}" 2>/dev/null; then
+                status=0; wait "${hedge[i]}" || status=$?
+                if [[ "$status" == 0 && -s "$directory/${names[i]}h.json" ]]; then
+                    cp "$directory/${names[i]}h.json" "$directory/${names[i]}.json"
+                    pkill -P "${pids[i]}" 2>/dev/null; kill "${pids[i]}" 2>/dev/null
+                    echo "Updated-plan edit writer ${names[i]}: its twin delivered first."
+                    finished[i]=1; left=$((left - 1))
+                fi
+                hedge[i]=""
+            elif [[ -z "${hedge[i]}" && "${names[i]}" != *h && $((total - left)) -ge $(((total + 1) / 2)) \
+                    && $((SECONDS - started[i])) -ge "$hedge_after" ]]; then
+                echo "Updated-plan edit writer ${names[i]} is slow; starting a twin."
+                updated_change_plan_launch_writer "$directory" "$delivery" "${names[i]}h" "${ids_of[i]}" "${owner_of[i]}" || true
+                hedge[i]="$!"
+            fi
+        done
+        (( left > 0 )) && sleep 1
+    done
+    if [[ "${#failed_names[@]}" -gt 0 ]]; then
+        # A writer that delivered nothing usable (its own JSON would not parse) is asked again as one writer per
+        # finding: less text to escape, a fresh attempt each, all at once.  Anything that fails again is final.
+        # An account limit (session, usage or rate) fails every call alike: more calls only burn time, so stop
+        # here and let the caller's single call report it.
+        local limited name_failed
+        for name_failed in "${failed_names[@]}"; do
+            if grep -qiE "hit your (session|usage) limit|usage limit|rate.?limit|too many requests|quota" "$LOG_DIR/updated-change-plan-worker-edits-$name_failed.log" 2>/dev/null; then
+                echo "Updated-plan edit writers stopped by an account limit: $(grep -hiE 'limit|quota' "$LOG_DIR/updated-change-plan-worker-edits-$name_failed.log" | head -1)" >&2
+                return 1
+            fi
+        done
+        echo "Updated-plan edit writer(s) ${failed_names[*]} failed; asking again, one finding at a time."
+        pids=(); names=()
+        local rows
+        rows="$(python3 -B "$helper" resplit "$directory/slices.tsv" "${failed_names[@]}")" || return 1
+        while IFS=$'\t' read -r name ids; do
+            [[ -n "$name" ]] || continue
+            updated_change_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$([[ "$name" == 1 || "$name" == 1-1 ]] && echo owner)" || return 1
+            pids+=("$!"); names+=("$name")
+        done <<< "$rows"
+        for pid in "${!pids[@]}"; do
+            wait "${pids[$pid]}" || { echo "Updated-plan edit writer ${names[$pid]} did not complete again." >&2; failed=1; }
+        done
+        [[ "$failed" == 0 ]] || return 1
+    fi
+    local merge_status=0
+    python3 -B "$helper" merge "$STATE_DIR/documents/CHANGE_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" || merge_status=$?
+    if [[ "$merge_status" == 3 ]]; then
+        # Only the overlapping edits go to a model, with the text around them; the rest stays mechanical.
+        echo "Updated-plan edits overlap; one small resolver call per overlapping group, all at once."
+        local group_prompt group_id resolver_failed=0
+        pids=(); names=()
+        for group_prompt in "$directory"/prompts/resolve-*.md; do
+            group_id="${group_prompt##*/resolve-}"; group_id="${group_id%.md}"
+            local resolver_schema=""
+            if [[ "$delivery" == hosted ]]; then
+                resolver_schema="$directory/schemas/resolve-$group_id.json"
+                mkdir -p "$directory/schemas"
+                python3 -B "$ROOT/scripts/lib/worker_schemas.py" resolve "$STATE_DIR/documents/CHANGE_PLAN.json" "$resolver_schema" || return 1
+            fi
+            ( [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+              UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                run_claude "$group_prompt" "updated-change-plan-worker-resolve-$group_id" "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN" ) \
+                > "$LOG_DIR/updated-change-plan-worker-resolve-$group_id.log" 2>&1 &
+            pids+=("$!"); names+=("$group_id")
+        done
+        for pid in "${!pids[@]}"; do
+            wait "${pids[$pid]}" || { echo "Updated-plan resolver ${names[$pid]} did not complete." >&2; resolver_failed=1; }
+        done
+        [[ "$resolver_failed" == 0 ]] || return 1
+        # A resolver answer that cannot be applied (text quoted from the wrong place) gets one more try, for that
+        # group only, with the reason -- a few seconds, against the full single call.
+        local bad_groups
+        if ! bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/CHANGE_PLAN.json" "$directory")"; then
+            echo "Updated-plan resolver answer(s) could not be applied; asking again: $(echo $bad_groups)"
+            pids=(); names=()
+            for group_id in $bad_groups; do
+                local retry_schema=""
+                [[ "$delivery" != hosted ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
+                ( [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+                  UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                    run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-change-plan-worker-resolve-$group_id-retry" "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN" ) \
+                    > "$LOG_DIR/updated-change-plan-worker-resolve-$group_id-retry.log" 2>&1 &
+                pids+=("$!"); names+=("$group_id")
+            done
+            for pid in "${!pids[@]}"; do
+                wait "${pids[$pid]}" || { echo "Updated-plan resolver retry ${names[$pid]} did not complete." >&2; resolver_failed=1; }
+            done
+            [[ "$resolver_failed" == 0 ]] || return 1
+        fi
+        python3 -B "$helper" merge "$STATE_DIR/documents/CHANGE_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || return 1
+    elif [[ "$merge_status" != 0 ]]; then
+        return 1
+    fi
+    python3 "$ROOT/scripts/lib/publish_agent_artifact.py" updated-change-plan "$LOG_DIR/updated-change-plan.jsonl" . "$directory/merged.json" || return 1
 }
 
 run_updated_change_plan_fast_path() {
@@ -3483,6 +3759,8 @@ while true; do
                 check_document_budget .uncle/docs/CHANGE_PLAN.md || exit 1
             fi
 
+            # The plan names the packages and the browser: fetch them now, while review runs.
+            install_warm_start .uncle/docs/CHANGE_PLAN.md
             envelope_invalidate CHANGE_PLAN
             envelope_write --stage plan --result pass \
                 --evidence .uncle/docs/CHANGE_PLAN.md \
@@ -3578,9 +3856,12 @@ while true; do
                 continue
             fi
             run_updated_change_plan_panel || exit 1
-            run_claude "$UPDATED_PLAN_PROMPT" updated-change-plan \
-                "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \
-                "$BUDGET_UPDATED_PLAN"
+            # One writer per finding, merged mechanically; the single call below is the fallback.
+            if ! run_updated_change_plan_edit_writers; then
+                run_claude "$UPDATED_PLAN_PROMPT" updated-change-plan \
+                    "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \
+                    "$BUDGET_UPDATED_PLAN"
+            fi
             set_state VALIDATE_UPDATED_PLAN
             ;;
 

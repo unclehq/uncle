@@ -1974,6 +1974,10 @@ STRUCTURED_OUTPUT_CONTRACT
         case "$log_name" in
             *-worker-*)
                 if [[ -n "$agent_delivery" && ! -s "$agent_delivery" ]]; then
+                    python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/${log_name}.jsonl" "$agent_delivery" 2>/dev/null \
+                        && echo "Worker $log_name printed its packet instead of writing it; took it from the reply."
+                fi
+                if [[ -n "$agent_delivery" && ! -s "$agent_delivery" ]]; then
                     echo "Worker $log_name did not write its required canonical JSON packet: $agent_delivery" >&2
                     exit 1
                 fi
@@ -2545,6 +2549,9 @@ run_updated_plan_edit_writers() {
     done < "$directory/slices.tsv"
     local -a failed_names=()
     local total="${#pids[@]}" left="${#pids[@]}" i status hedge_after="${WORKFLOW_UPDATED_PLAN_HEDGE_SECONDS:-35}"
+    # A self-hosted model is one shared server: a twin only queues behind the writer it duplicates (calculator-local:
+    # twins doubled the load and the slowest writer still took 200-400 s), so hedge only on hosted runners.
+    if stage_uses_self_hosted updated-plan AGENT; then hedge_after=999999; fi
     # Join the writers.  A writer is mostly hidden reasoning and a few run several times longer than the rest
     # (noinit: one finding, no output at all for 80+ s while its 19 siblings finished in 8-20 s), and the stage
     # waits for the slowest.  Once half have finished, a writer still running after $hedge_after s gets an identical

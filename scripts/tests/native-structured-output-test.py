@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -77,6 +78,55 @@ class NativeStructuredOutput(unittest.TestCase):
             log = Path(tmp) / 'stage.jsonl'
             log.write_text(json.dumps(result) + '\n')
             self.assertEqual(structured_output.extract(log), {'from': 'result'})
+
+
+
+SILENT = '''#!/usr/bin/env python3
+import json, os, sys, time
+for line in sys.stdin:
+    event = json.loads(line)
+    if event.get('type') != 'user':
+        continue
+    print(json.dumps({'type': 'user', 'uuid': event['uuid']}), flush=True)
+    if os.environ.get('FAKE_WRITE'):
+        open(os.environ['UNCLE_ARTIFACT_DELIVERY'], 'w').write(os.environ['FAKE_WRITE'])
+    time.sleep(60)      # the runner never sends its terminal event
+'''
+
+
+class DeliveredButSilent(unittest.TestCase):
+    def run_stage(self, content, idle='5'):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / 'claude'
+            fake.write_text(SILENT)
+            fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+            delivery = Path(tmp) / 'packet.json'
+            env = dict(os.environ, WORKFLOW_CLAUDE_CMD=str(fake), UNCLE_ARTIFACT_DELIVERY=str(delivery),
+                       WORKFLOW_DELIVERY_IDLE_SECONDS=idle, WORKFLOW_NATIVE_STAGE_SECONDS='25', UNCLE_STEERING='1')
+            if content is not None:
+                env['FAKE_WRITE'] = content
+            env.pop('UNCLE_STATUS_FILE', None)
+            began = time.monotonic()
+            done = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/lib/native_stage.py'), '--runner', 'claude',
+                                   '--side', 'reviewer', '--stage', 'final-audit-review-worker-scope', '--',
+                                   '-p', '--output-format', 'stream-json', '--verbose'],
+                                  input='Audit.', capture_output=True, text=True, cwd=tmp, env=env, timeout=60)
+            result = [json.loads(line) for line in done.stdout.splitlines() if line.startswith('{"type": "result"')]
+            return result[-1] if result else {}, time.monotonic() - began
+
+    def test_a_complete_delivery_ends_a_runner_that_goes_quiet(self):
+        result, elapsed = self.run_stage('{"schema":"uncle.artifact/v1","findings":[]}')
+        self.assertFalse(result.get('is_error'), result)
+        self.assertLess(elapsed, 20)
+
+    def test_a_half_written_delivery_does_not(self):
+        result, elapsed = self.run_stage('{"schema":')
+        self.assertTrue(result.get('is_error'), result)       # ran to the stage time limit instead
+        self.assertGreater(elapsed, 20)
+
+    def test_no_delivery_does_not(self):
+        result, elapsed = self.run_stage(None)
+        self.assertTrue(result.get('is_error'), result)
 
 
 if __name__ == '__main__':

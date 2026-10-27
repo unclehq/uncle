@@ -6,6 +6,7 @@ validated against SCHEMA, and reports the validated object as `structured_output
 Nothing is parsed out of chat text and nothing depends on the model calling Write.
 
     structured_output.py extract EVENT_LOG OUTPUT.json     exit 1 when the log holds no object
+    structured_output.py recover EVENT_LOG OUTPUT.json     the packet a worker printed in chat instead of writing
 """
 import json
 import sys
@@ -36,12 +37,54 @@ def extract(log):
     return found
 
 
+def final_text(log):
+    """The worker's last words: the result event's text, else its last assistant text."""
+    result, last = '', ''
+    try:
+        lines = Path(log).read_text(encoding='utf-8', errors='replace').splitlines()
+    except OSError:
+        return ''
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get('type') == 'result' and isinstance(event.get('result'), str):
+            result = event['result']
+        elif event.get('type') == 'assistant':
+            for part in (event.get('message') or {}).get('content') or []:
+                if isinstance(part, dict) and part.get('type') == 'text':
+                    last = part.get('text') or last
+    return result or last
+
+
+def recover(log):
+    """The last JSON object in the worker's final chat text that is an uncle artifact packet, or None.
+
+    A local model that has nothing to edit often prints its packet instead of calling Write.  Only an object
+    carrying the artifact schema and a kind is taken; the consumer still validates its content."""
+    text = final_text(log)
+    decoder, found, index = json.JSONDecoder(), None, text.find('{')
+    while index != -1:
+        try:
+            value, end = decoder.raw_decode(text, index)
+        except ValueError:
+            index = text.find('{', index + 1)
+            continue
+        if isinstance(value, dict) and value.get('schema') == 'uncle.artifact/v1' and value.get('kind'):
+            found = value
+        index = text.find('{', end)
+    return found
+
+
 def main(argv):
-    if len(argv) != 3 or argv[0] != 'extract':
+    if len(argv) != 3 or argv[0] not in ('extract', 'recover'):
         raise SystemExit(__doc__)
-    value = extract(argv[1])
+    value = extract(argv[1]) if argv[0] == 'extract' else recover(argv[1])
     if value is None:
-        print('structured output: the stage returned no schema-checked object', file=sys.stderr)
+        print('structured output: the stage returned no %s object' % ('schema-checked' if argv[0] == 'extract' else 'packet in chat'), file=sys.stderr)
         return 1
     Path(argv[2]).write_text(json.dumps(value, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     return 0

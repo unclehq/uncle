@@ -173,5 +173,27 @@ run_case disabled REQUIREMENTS.md "$WEB_BRIEF"
 WORKFLOW_PREVIEW_BUILD=0 run_case disabled2 REQUIREMENTS.md "$WEB_BRIEF"
 check "WORKFLOW_PREVIEW_BUILD=0 stays off"     test "$(cat "$TMP/disabled2/.uncle/workflow/started")" == 0
 
+# An existing project (a git history with real tracked files) never gets a preview written into its root.
+LIB="$ROOT/scripts/lib/preview-build.sh"
+probe() { ( cd "$1" && PREVIEW_LIB_DIR="$ROOT/scripts/lib" bash -c ". '$LIB'; preview_existing_project" ) >/dev/null 2>&1; }
+mkrepo() {   # name tracked-file-count
+    mkdir -p "$TMP/$1"
+    ( cd "$TMP/$1" && git init -q && for i in $(seq 1 "$2"); do echo "x$i" > "src$i.js"; done && echo r > README.md \
+        && git add . && git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --no-gpg-sign -m c )
+}
+mkrepo existing-big 12; mkrepo existing-small 2
+mkdir -p "$TMP/fresh" "$TMP/nogit"; ( cd "$TMP/fresh" && git init -q )
+probe "$TMP/existing-big";   big=$?
+probe "$TMP/existing-small"; small=$?
+probe "$TMP/fresh";          fresh=$?
+probe "$TMP/nogit";          nogit=$?
+check "twelve tracked source files make an existing project" test "$big" == 0
+check "a README and two files do not"                        test "$small" == 1
+check "a repository with no commits is a new project"        test "$fresh" == 1
+check "a directory outside git is a new project"             test "$nogit" == 1
+WORKFLOW_PREVIEW_EXISTING_PROJECT=1 probe "$TMP/existing-big"; forced=$?
+check "the override lets a preview run anyway"               test "$forced" == 1
+check "start checks it before anything else"                 bash -c 'awk "/^preview_build_start\\(\\)/,/^}/" "$1" | grep -q preview_existing_project' _ "$LIB"
+
 if [[ "$fails" -gt 0 ]]; then echo "preview-build-test.sh: $fails failure(s)"; exit 1; fi
 echo "preview-build-test.sh: all checks passed"

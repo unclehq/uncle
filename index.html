@@ -1,0 +1,88 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>uncle</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+.bar{background:#161b22;padding:6px 12px;border-bottom:1px solid #30363d;display:flex;justify-content:space-between}
+.bar b{color:#58a6ff}
+.stage{padding:4px 12px;border-bottom:1px solid #21262d;display:flex;justify-content:space-between}
+.stage.live{background:#132030}
+.name{color:#e6edf3}
+.tok{color:#8b949e}
+.tok b{color:#3fb950}
+.status-run{color:#d29922}
+.status-done{color:#3fb950}
+.status-wait{color:#6e7681}
+#log{padding:10px 12px;height:260px;overflow:auto;border-bottom:1px solid #30363d}
+#log div{margin-bottom:2px}
+.footer{padding:8px 12px;display:flex;flex-wrap:wrap;gap:16px;color:#8b949e}
+.footer b{color:#e6edf3}
+.exit{background:#161b22;margin:12px;border:1px solid #30363d;border-radius:6px;padding:10px 12px;display:none}
+.exit.show{display:block}
+.exit h3{margin:0 0 6px;color:#58a6ff;font-size:13px}
+.row{display:flex;justify-content:space-between;color:#8b949e}
+.row b{color:#c9d1d9}
+button{background:#238636;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-family:inherit;margin:12px}
+button:disabled{background:#30363d;cursor:default}
+</style></head>
+<body>
+<div class="bar"><b>uncle</b><span id="clock">run: 00:00</span></div>
+<div id="stages"></div>
+<div id="log"></div>
+<div class="footer" id="tokfoot"></div>
+<div class="exit" id="exit">
+<h3>Session ended</h3>
+<div class="row">Input tokens <b id="ti">0</b></div>
+<div class="row">Output tokens <b id="to">0</b></div>
+<div class="row">Cache read <b id="tcr">0</b></div>
+<div class="row">Cache write <b id="tcw">0</b></div>
+<div class="row">Total time <b id="tt">0:00</b></div>
+<div class="row">PR <b id="pr">—</b></div>
+</div>
+<button id="btn" onclick="stop()">Stop</button>
+<script>
+const stages=[["baseline","Baseline report"],["plan","Change plan"],["review","Adversarial review"],["impl","Implementation"],["verify","Verification"]];
+let cur=0,i=0,o=0,cr=0,cw=0,start=Date.now(),running=true;
+const sEl=document.getElementById('stages'),lEl=document.getElementById('log'),fEl=document.getElementById('tokfoot');
+function render(){
+sEl.innerHTML=stages.map(([id,n],idx)=>{
+let cls=idx<cur?'':idx===cur?'live':'';
+let st=idx<cur?'<span class="status-done">done</span>':idx===cur?'<span class="status-run">running</span>':'<span class="status-wait">waiting</span>';
+let t=idx<=cur?`<span class="tok">in <b>${Math.floor((i*(idx+1))/(cur+1))}</b> out <b>${Math.floor((o*(idx+1))/(cur+1))}</b></span>`:'<span class="tok">—</span>';
+return `<div class="stage ${cls}"><span class="name">${n}</span>${t}${st}</div>`;
+}).join('');
+fEl.innerHTML=`<span>in <b>${i}</b></span><span>out <b>${o}</b></span><span>cache-r <b>${cr}</b></span><span>cache-w <b>${cw}</b></span>`;
+}
+function log(t){let d=document.createElement('div');d.textContent=t;lEl.appendChild(d);lEl.scrollTop=lEl.scrollHeight;}
+function tick(){
+if(!running)return;
+i+=Math.floor(Math.random()*180)+40;
+o+=Math.floor(Math.random()*60)+10;
+cr+=Math.floor(Math.random()*300);
+cw+=Math.floor(Math.random()*40);
+if(Math.random()<0.15 && cur<stages.length-1){log(`[${stages[cur][1]}] complete`);cur++;log(`[${stages[cur][1]}] started`);}
+let el=Math.floor((Date.now()-start)/1000);
+document.getElementById('clock').textContent=`run: ${String(Math.floor(el/60)).padStart(2,'0')}:${String(el%60).padStart(2,'0')}`;
+render();
+if(cur===stages.length-1 && Math.random()<0.05)finish();
+}
+function finish(){
+running=false;
+document.getElementById('btn').disabled=true;
+document.getElementById('btn').textContent='Stopped';
+document.getElementById('ti').textContent=i;
+document.getElementById('to').textContent=o;
+document.getElementById('tcr').textContent=cr;
+document.getElementById('tcw').textContent=cw;
+let el=Math.floor((Date.now()-start)/1000);
+document.getElementById('tt').textContent=`${Math.floor(el/60)}:${String(el%60).padStart(2,'0')}`;
+document.getElementById('pr').textContent='#113';
+document.getElementById('exit').classList.add('show');
+log('session ended');
+}
+function stop(){if(running)finish();}
+log('[baseline] started');
+render();
+setInterval(tick,900);
+</script>
+</body></html>

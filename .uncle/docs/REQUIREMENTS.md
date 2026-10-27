@@ -1,123 +1,184 @@
+
 # Project brief
 
-Issue 111
+Issue 113
 
-> Seeded from [unclehq/uncle#111](https://github.com/unclehq/uncle/issues/111).
+> Seeded from [unclehq/uncle#113](https://github.com/unclehq/uncle/issues/113).
 > Replace the placeholder guidance below with specifics before running the driver.
 
 ## Summary
 
-Print total time and the PR it made in Uncle's final results
+Remove cost display from the TUI; print token totals when Uncle exits
 
 ## Problem
 
-## Summary
+## Problem
 
-When Uncle finishes and prints its final results to stdout, add two things to that output:
+The TUI shows a dollar COST for runs and stages (`uncle_tui.py`: `_live_cost`, the per-stage cost subtotals, and the session summary). The figure is not meaningful:
 
-1. **Total time** for the build.
-2. **The PR it made**, if it made one (URL and number).
+- Many runs use subscription or session-limit billing, so there is no per-call price.
+- Self-hosted and free models report `$0` or nothing.
+- Where the runner reports no cost the TUI shows an estimate (`estimated_cost_usd`), so one column mixes reported, estimated and missing values.
+- Sums across runners and billing modes add numbers that do not mean the same thing.
 
-This applies to both drivers (new-application builds via `stagegate.sh`, change builds via `change-workflow.sh`), to attended and unattended runs, and to the line the TUI prints after an unattended finish.
+## Requested change
 
-## Why
+1. **Remove COST from the TUI display**: the live per-stage figure, the per-stage and total subtotals, and any cost column or label. Keep token counts.
+2. **Print token totals when Uncle exits**: on normal exit (including after a finished or stopped workflow), print total input, output, cache-read and cache-write tokens for the session, broken down by stage group if cheap. This sits beside the existing "Total time:" / "PR:" lines printed at the end of a run.
 
-At the end of a build you currently get `Finished build: verdict=… skipped=… path=…`, the "Workflow complete." banner and the artifact list. To learn how long it took you have to add up the cost ledger or the performance records, and to find the PR you have to open `.uncle/workflow/pr/journal.json` or search GitHub. Both are the first things you want after an unattended run, where nobody watched it happen. Issue #107 and the auto-publish path produce PRs with no dialog, so the URL needs to be in the output.
+## Notes
 
-## Requested behavior
+- Cost data can stay in `session-totals.json` and the metrics files; this is about what the TUI shows and prints.
+- `usage-cost.py` and `call_max_cost_usd` (the supervisor's dollar cap) are separate and are not part of this issue.
 
-**Final output, for a completed build**
+## Acceptance
 
-```
-Finished build: verdict=READY skipped=0 path=/home/me/project
-Total time: 47m 12s (stages 41m 03s, waiting at gates 6m 09s)
-PR: https://github.com/unclehq/uncle/pull/110 (#110, draft)
-```
-
-- **Total time.** Wall-clock from when the run began to when it finished, as `Nh Nm Ns` (drop leading zero units). Include a resumed run's earlier time, so a build that was stopped and resumed reports the whole thing, not just the last session. Where it can be known, also show how much of it was waiting at human gates, since attended and unattended totals are otherwise not comparable.
-- **PR.** Print the URL, number and whether it is a draft when the run created one. If the run published nothing, say why in one short line instead of omitting it silently (for example `PR: none (handoff disabled)`, `PR: none (no base commit)`, `PR: not created (publication pending)`). A run that finds an existing PR for the branch should print that PR too.
-- **Failures and stops.** A run that stops before completing should still print total time so far, and no PR line unless one already exists.
-- **Unattended runs.** The same lines print to stdout, with nothing waiting on input, and after the `Finished build:` line so wrappers that read that first line are unaffected. The new lines come after it, not inside it, so its existing format (`verdict=… skipped=… path=…`) stays stable.
-
-## Where the data already is
-
-- **Time.** `.uncle/workflow/session-totals.json` has per-stage `started_at`, `ended_at` and `elapsed_seconds`. `.uncle/workflow/performance/<run>/run.json` has `started_at`, `ended_at` and `elapsed_seconds` per recorded run. The driver also knows when the run started (the `unattended-enabled` ledger line is stamped at start). A resumed run needs a persisted start time under `.uncle/workflow/` so the clock survives a restart.
-- **Gate waiting.** The approval records under `.uncle/workflow/approvals/` and the gate prompts give when each gate opened and was answered. Unattended runs have none.
-- **PR.** `.uncle/workflow/pr/journal.json` holds `phase`, `url` and `number` once `change_pr_complete` has run. `phase: created` means the PR exists. It is written after the driver's COMPLETE block, so the print has to come after `change_pr_complete` returns, or re-read the journal at that point.
-
-## Implementation notes
-
-- `scripts/stagegate.sh` and `scripts/change-workflow.sh`: add the lines where `finished_build_line` is called and in the COMPLETE block for attended runs. In the change driver, the PR is published after the summary, so move the final lines after `change_pr_complete`.
-- Keep `finished_build_line` itself unchanged. It is asserted by tests and read by the TUI; add a separate `finished_extras` function that prints the time and PR lines.
-- `uncle_tui.py`: `finished_build_lines()` collects lines starting with `Finished build:` or `READY - `. Extend it to include `Total time:` and `PR:` so the post-TUI terminal output has them.
-- A small helper (a function in `scripts/lib/` or a Python script) to format the duration and read `pr/journal.json` once, shared by both drivers.
-- Persist the run's start timestamp in `.uncle/workflow/` on the first run and never overwrite it on resume.
-
-## Acceptance criteria
-
-- A completed unattended build prints `Total time:` with the whole run's duration and a `PR:` line, after the `Finished build:` line, and exits without waiting for input.
-- A resumed build reports the total across sessions.
-- A change build that created a PR prints its URL and number, and marks a draft PR as a draft. One that created none prints a one-line reason.
-- A new-application build prints `PR: none (…)` with a reason where there is no PR concept, or omits the line; whichever is chosen is the same in both drivers and documented.
-- The format of `Finished build:` and of the `READY - … WAIVED WITHOUT HUMAN REVIEW` line is unchanged, and existing tests pass.
-- Tests cover the duration formatter (including zero units and over an hour), a resumed run, a created PR, a draft PR, and each no-PR reason.
+- No dollar amounts appear in the TUI during or after a run.
+- Exiting Uncle prints the session's token totals.
 
 ## Scope
 
-What this project covers. Keep it to what must ship.
+- Remove the dollar-cost figures that `uncle_tui.py`'s session panel currently
+  renders: the live per-stage estimate (`_live_cost`), the per-stage `Cost`
+  row and its `Reported + projected` label (`_session_panel_lines`, the
+  `"STAGE", "Cost of usage so far"` header, `cost_subtotal`, and the
+  `Cost   ...` rows at both per-stage and TOTALS level), and any cost-specific
+  style branch in `_session_panel_attr`.
+- Keep the existing `Tokens` row and token subtotal/TOTALS behavior in the
+  session panel unchanged.
+- On normal Uncle exit (finished or stopped workflow), print the session's
+  total input, output, cache-read and cache-write token counts, next to the
+  existing `Total time:` / `PR:` lines printed by
+  `scripts/lib/finished_extras.py`'s `print` command. Break the totals down
+  by stage group (`parent_stage`) when that is cheap to compute from the
+  already-read `session-totals.json` records.
 
 ## Non-goals
 
-What this project explicitly does not do.
+- `usage-cost.py` and `call_max_cost_usd` (the supervisor's dollar cap) are
+  explicitly out of scope (stated in Notes).
+- Removing cost data from `session-totals.json` or other metrics files; the
+  issue says cost data may stay there (Notes). Only TUI display/printing
+  changes.
+- Any change to what counts as a "normal exit" (crash/interrupt handling is
+  TODO: the issue does not say whether the token-totals line is expected on a
+  Ctrl-C-interrupted exit, as opposed to a workflow that is itself in
+  `stopped` state, which it does name explicitly).
 
 ## Functional requirements
 
 | ID | Requirement | Priority |
 |---|---|---|
-| R-001 | | Must |
-| R-002 | | Should |
-| R-003 | | Could |
+| R-001 | Remove the live per-stage cost figure, the per-stage and TOTALS `Cost` subtotal rows, the `Cost of usage so far` header text, and the `Reported + projected` label from the TUI session panel (`uncle_tui.py` `_session_panel_lines`, `_live_cost`, `_session_panel_attr`). | Must |
+| R-002 | Keep the TUI's existing token count display (`Tokens` row, per-stage and TOTALS subtotals) unchanged. | Must |
+| R-003 | On normal Uncle exit (a finished or stopped workflow), print total input, output, cache-read and cache-write token counts for the session. | Must |
+| R-004 | Print the exit token totals beside the existing `Total time:` / `PR:` lines (same exit print point, `scripts/lib/finished_extras.py`). | Must |
+| R-005 | Break the printed exit totals down by stage group when cheap to compute from `session-totals.json`. | Should |
+| R-006 | No dollar amount (`$` followed by a digit) appears anywhere in the TUI during or after a run. | Must |
 
 ## User-visible behavior
 
 | ID | Trigger | Expected result | On failure |
 |---|---|---|---|
-| B-001 | | | |
+| B-001 | A stage runs or finishes while the TUI session panel is visible. | Panel shows stage title, `Time`, and `Tokens` rows only; no `Cost` row, no `Cost of usage so far` header, no `Reported + projected` label, no live per-stage dollar figure. | TODO: issue does not state what the panel should show if `session-totals.json` is missing/unreadable; current code already handles this for tokens (`Unavailable`/`(partial)`) — no new failure behavior is requested. |
+| B-002 | Uncle exits normally (workflow finished or stopped) and the `Total time:` / `PR:` lines are printed. | A token-totals line (input, output, cache-read, cache-write, summed across the session) prints beside those lines; stage-group breakdown lines print too, when cheap to derive. | TODO: issue does not say what to print if `session-totals.json` is missing, empty, or unreadable at exit. `finished_extras.py`'s existing `parenthetical()` treats that as "no data" (empty string) rather than an error; TODO: confirm the token-totals line should do the same (e.g. print zeros, or omit the line) rather than raising. |
 
 ## Domain rules and invariants
 
 | ID | Invariant | Consequence if violated |
 |---|---|---|
-| I-001 | | |
+| I-001 | No TUI-rendered string contains `$` followed by a digit, during or after a run. | Acceptance criterion "No dollar amounts appear in the TUI" is violated. |
+| I-002 | The exit print always includes a token-totals line on a normal exit (finished or stopped workflow). | Acceptance criterion "Exiting Uncle prints the session's token totals" is violated. |
+| I-003 | `session-totals.json` and other metrics/cost files on disk are left untouched by this change. | Backward compatibility with existing cost tooling (`usage-cost.py`, metrics consumers) breaks. |
 
 ## Data and state
 
-What the authoritative state is, where it lives, what may hold a cached copy,
-and what survives a restart.
+- Authoritative state is unchanged: `.uncle/workflow/session-totals.json`
+  (read by `uncle_tui.py::_restore_session_totals` and by
+  `finished_extras.py::parenthetical`), containing per-stage records with
+  `stage`, `elapsed_seconds`, `started_at`, `ended_at`, and usage fields
+  (`total_tokens`/`reported_total_tokens`, or `input_tokens`,
+  `output_tokens`, `cache_read_tokens`, `cache_write_tokens`,
+  `input_includes_cache`) per the existing `_token_total` reader.
+- No new persisted state is requested by the issue; the exit token totals are
+  derived from the existing file at print time.
+- `run-started-at` stamp file (`finished_extras.py::STAMP`) is unrelated and
+  untouched.
 
 ## Interfaces
 
-APIs, CLI surface, UI entry points, message formats, external services.
+- `uncle_tui.py`: `_session_panel_lines`, `_live_cost`, `_session_panel_attr`
+  (display surface being reduced); `_token_total`, `parent_stage` (existing
+  helpers to reuse, not change, for the token-only panel and for any
+  stage-group breakdown logic shared with the exit print).
+- `scripts/lib/finished_extras.py`: `print` CLI command, `total_line`,
+  `pr_line`, `parenthetical` (exit print surface where the new token-totals
+  line is added). TODO: issue does not specify whether the token-totals line
+  is a new function here, reusing `parenthetical`'s record-reading pattern,
+  or implemented elsewhere; this is an implementation choice for the change
+  plan, not settled by the issue text.
+- No new CLI flags, APIs, or external services are implied by the issue.
 
 ## Constraints
 
-Language, runtime, frameworks, libraries, deployment target, budgets,
-compatibility that must not break.
+- Python 3 stdlib only (`curses` TUI, no framework/build step), matching the
+  existing files touched.
+- Must not change `usage-cost.py` or `call_max_cost_usd` (Notes, explicitly
+  out of scope).
+- Must not remove cost data from `session-totals.json` or other metrics
+  files (Notes).
 
 ## Failure behavior
 
-What must happen on invalid input, unavailable dependencies, partial writes,
-concurrent access, and restart mid-operation.
+- TODO: the issue does not describe failure behavior for a missing/unreadable
+  `session-totals.json` at exit time, for malformed records, or for a crash
+  (non-normal exit). Existing code's pattern for the analogous `Total time:`
+  line (`finished_extras.py::total_line`) is to print `'unknown'`/skip
+  silently on error; `parenthetical` returns `''` on any read/parse error.
+  Whether the new token-totals print should follow the same "fail silent,
+  never crash the exit print" convention is not stated by the issue and is
+  left as a TODO for the change plan.
 
 ## Verification
 
-How correctness will be demonstrated: test frameworks, commands, and anything
-only checkable by hand.
+- Automated: a test can assert no TUI-rendered line (from `_session_panel_lines`
+  or any other panel renderer) matches `$` followed by a digit, satisfying
+  R-006/I-001. No reference image or screenshot is provided with this issue,
+  so there is no pixel-tolerance check to state here.
+- Automated: a test can run `finished_extras.py print` against a fixture
+  `session-totals.json` and assert a token-totals line appears containing the
+  expected input/output/cache-read/cache-write sums, satisfying R-003/R-004/
+  I-002.
+- TODO: the issue does not specify the exact text/format of the token-totals
+  line (labels, ordering of input/output/cache-read/cache-write, whether
+  stage-group lines are required or merely permitted when "cheap"). This
+  format must be fixed in the change plan, not invented here.
+- Manual: visually confirm, by running a workflow in the TUI, that no cost
+  figures appear during a run and that the exit screen shows the token
+  totals — TODO: owner has not stated whether this manual check is required
+  or whether the automated checks above are considered sufficient.
 
 ## Definition of done
 
-The concrete conditions under which this is finished.
+- R-001 through R-006 are implemented and automated-verified as above.
+- No dollar amount appears in any TUI-rendered output, during or after a run.
+- A normal Uncle exit (finished or stopped workflow) prints the session's
+  token totals beside `Total time:` / `PR:`.
+- `session-totals.json` and other metrics/cost files remain unchanged by this
+  issue's code paths.
+- `usage-cost.py` and `call_max_cost_usd` are untouched.
 
 ## Open questions
 
-Anything genuinely undecided.
+- TODO: Exact text/format and line ordering for the new token-totals exit
+  print (R-003/R-004) — not stated by the issue.
+- TODO: Whether the per-stage-group breakdown (R-005) is required or merely
+  encouraged ("if cheap") — the issue's own wording ("by stage group if
+  cheap") already hedges this, so the change plan should treat it as Should,
+  not Must, unless the owner says otherwise.
+- TODO: Behavior when `session-totals.json` is missing, empty, or malformed
+  at exit time (print zeros? omit the line? match `total_line`'s `'unknown'`
+  convention?) — not stated by the issue.
+- TODO: Whether the token-totals exit print is also expected on an abnormal
+  exit (e.g. Ctrl-C outside of a "stopped" workflow state) or only on the two
+  cases the issue names (finished, stopped) — not stated by the issue.

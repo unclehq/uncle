@@ -30,6 +30,9 @@ from updated_plan_fast_path import protected_paths
 from updated_plan_slices import finding_ids
 from worker_schemas import EDIT_KIND, RESOLUTION_KIND
 
+# A change plan (UNCLE_PLAN_KIND=change-plan) has no verification commands or protected paths of its own: its
+# writers and merge leave both out and publish a `change-plan` document.
+CHANGE = os.environ.get('UNCLE_PLAN_KIND') == 'change-plan'
 SLICE = 1       # findings per writer: the slowest writer sets the wall time, and its time is mostly hidden
                 # reasoning that grows with the findings it holds (noinit: 4 findings, 5.8k chars out, 16k tokens, 96 s;
                 # 1-2 findings: 8-10 s).  One finding each keeps the slowest writer near the typical one.
@@ -83,7 +86,11 @@ WRITER_EXAMPLE = (
     '{"schema":"uncle.artifact/v1","kind":"%s","dispositions":[{"finding":"AR-001","disposition":"Accepted",'
     '"reason":"...","plan_change":"..."}],"patch":{"replace_text":[{"heading":"...","old":"...","new":"..."}],'
     '"edit_sections":[],"insert_sections":[]},"commands_replace":[]%s}')
-EXAMPLE_BLOCK = re.compile(r'```json\n\{"schema":"uncle\.artifact/v1","kind":"plan".*?\n```', re.S)
+CHANGE_EXAMPLE = (
+    '{"schema":"uncle.artifact/v1","kind":"%s","dispositions":[{"finding":"AR-001","disposition":"Accepted",'
+    '"reason":"...","plan_change":"..."}],"patch":{"replace_text":[{"heading":"...","old":"...","new":"..."}],'
+    '"edit_sections":[],"insert_sections":[]}}')
+EXAMPLE_BLOCK = re.compile(r'```json\n\{"schema":"uncle\.artifact/v1","kind":"(?:plan|change-plan)".*?\n```', re.S)
 
 
 def write_prompt(base, ids, output, owns_fields=False):
@@ -92,9 +99,13 @@ def write_prompt(base, ids, output, owns_fields=False):
     The base prompt's example is the whole-plan reply (kind `plan`); the writer's reply is its own packet
     kind, and a prompt that names two kinds gives a schema-enforcing runner no kind to hold the model to."""
     text = Path(base).read_text(encoding='utf-8')
-    example = WRITER_EXAMPLE % (EDIT_KIND, ',"protected_verification_paths":"..."' if owns_fields else '')
+    if CHANGE:
+        example = CHANGE_EXAMPLE % EDIT_KIND
+        note = SLICE_NOTE % (', '.join(ids), '')
+    else:
+        example = WRITER_EXAMPLE % (EDIT_KIND, ',"protected_verification_paths":"..."' if owns_fields else '')
+        note = SLICE_NOTE % (', '.join(ids), (FIELDS_OWNER if owns_fields else FIELDS_OTHER) + COMMANDS_NOTE)
     text = EXAMPLE_BLOCK.sub(lambda _: '```json\n' + example + '\n```', text)
-    note = SLICE_NOTE % (', '.join(ids), (FIELDS_OWNER if owns_fields else FIELDS_OTHER) + COMMANDS_NOTE)
     Path(output).write_text(text + note, encoding='utf-8')
 
 
@@ -544,10 +555,14 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
             raise NeedsResolution(groups)
         parts, command_edits = substitute(parts, command_edits, groups, read_resolutions(resolutions))
     commands = merged_commands(base_commands, command_edits)
-    if not (next(iter(paths), base_paths) or '').strip():
+    if not CHANGE and not (next(iter(paths), base_paths) or '').strip():
         raise Conflict('no writer supplied protected_verification_paths')
     patch = merged_patch(parts, narrative)
     apply_patch(narrative, patch)   # a patch that does not apply is a conflict, found here
+    if CHANGE:
+        result = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'dispositions': dispositions, 'patch': patch}
+        Path(output).write_text(json.dumps(result, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+        return
     result = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'dispositions': dispositions, 'patch': patch,
               'verification_commands': commands,
               'protected_verification_paths': next(iter(paths), base_paths)}

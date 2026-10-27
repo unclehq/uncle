@@ -14,6 +14,7 @@ published: dispositions plus a patch against the base plan.
     updated_plan_edits.py slices REVIEW.json            one `n<TAB>ids` line per writer
     updated_plan_edits.py prompt BASE_PROMPT IDS OUT [owner]  the sealed prompt plus this writer's slice
     updated_plan_edits.py merge PLAN.json SLICES.tsv DIR OUTPUT [RESOLUTIONS.json]
+    updated_plan_edits.py resplit SLICES.tsv NAME...   (failed writers become one writer per finding; prints the new rows)
     updated_plan_edits.py check PLAN.json DIR     (exit 5, with the group ids on stdout, when a resolver answer cannot be applied)
     (exit 3: edits overlap; DIR/prompts/resolve-<group>.md are the resolvers' prompts -- rerun with RESOLUTIONS.json, or a directory of resolutions-<group>.json)
 """
@@ -398,6 +399,32 @@ def substitute(parts, command_edits, groups, resolutions):
     return cleaned, kept
 
 
+def resplit(slices_path, failed):
+    """Replace each failed writer's row with one row per finding, rewrite the file, return the new rows.
+
+    A writer whose delivery was unusable (its own JSON would not parse, five times) is asked again as several
+    single-finding writers: less text to escape, a fresh attempt each, all at once."""
+    rows, fresh = [], []
+    for line in Path(slices_path).read_text(encoding='utf-8').splitlines():
+        name, _, ids = line.partition('\t')
+        name = name.strip()
+        if not name:
+            continue
+        found = [i for i in ids.split(',') if i]
+        if name in failed and len(found) > 1:
+            for index, finding in enumerate(found, 1):
+                row = ('%s-%d' % (name, index), [finding])
+                rows.append(row)
+                fresh.append(row)
+        elif name in failed:
+            rows.append((name, found))
+            fresh.append((name, found))
+        else:
+            rows.append((name, found))
+    Path(slices_path).write_text(''.join('%s\t%s\n' % (n, ','.join(i)) for n, i in rows), encoding='utf-8')
+    return fresh
+
+
 def read_resolutions(path):
     """One answer file, or a directory of `resolutions-<group>.json` files (one per resolver call)."""
     path = Path(path)
@@ -537,6 +564,9 @@ def main(argv):
                 print('%s\t%s' % (name, ','.join(ids)))
         elif command == 'prompt' and len(rest) in (3, 4):
             write_prompt(rest[0], [i for i in rest[1].split(',') if i], rest[2], owns_fields=len(rest) == 4)
+        elif command == 'resplit' and len(rest) >= 2:
+            for name, ids in resplit(rest[0], set(rest[1:])):
+                print('%s\t%s' % (name, ','.join(ids)))
         elif command == 'check' and len(rest) == 2:
             bad = check_resolutions(*rest)
             for gid, why in sorted(bad.items()):

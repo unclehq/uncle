@@ -7,7 +7,7 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fails=0
 export WORKFLOW_UPDATED_PLAN_EDITS=1
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
-awk '/^run_updated_plan_edit_writers\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
+awk '/^(updated_plan_launch_writer|run_updated_plan_edit_writers)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
 check "function extracted" test -s "$TMP/fn.sh"
 
 run_case() {   # name mode [hosted|local]
@@ -29,12 +29,13 @@ PY
         stage_uses_self_hosted() { [[ "$runner" == local ]]; }
         stage_supports_structured_output() { [[ "$runner" == hosted ]]; }
         run_claude() {   # prompt stage
-            local n="${2##*-}"; [[ "$2" != updated-plan-worker-resolve-* ]] || n=resolve
+            local n="${2#updated-plan-worker-edits-}"; [[ "$2" != updated-plan-worker-resolve-* ]] || n=resolve
             printf '%s %s\n' "$n" "$(python3 -c 'import time; print("%.2f" % time.time())')" >> "$STATE_DIR/starts"
             grep -q 'You own exactly these findings' "$1" || echo "no slice note: $n" >> "$STATE_DIR/violations"
             echo "$2 schema=${UNCLE_OUTPUT_SCHEMA_FILE:-none} out=${UNCLE_STRUCTURED_OUTPUT_PATH:-none} packet=${UNCLE_WORKER_PACKET_PATH:-none} kinds=$(grep -o '"kind":"[a-z-]*"' "$1" | sort -u | tr '\n' ' ')" >> "$STATE_DIR/calls"
             sleep 0.4
-            [[ "$mode:$n" != fail:2 ]] || return 1
+            if [[ "$mode:$n" == limit:2 ]]; then echo "cause: You've hit your session limit" > "$LOG_DIR/updated-plan-worker-edits-2.log"; return 1; fi
+            [[ "$mode:$n" != fail:2 && "$mode:$n" != fail:2-* && "$mode:$n" != failonce:2 ]] || return 1
             if [[ "$2" == updated-plan-worker-resolve-* ]]; then
                 echo resolver >> "$STATE_DIR/resolver-calls"
                 [[ "$mode" == resolve || "$mode" == resolve-retry ]] || return 1
@@ -43,14 +44,14 @@ PY
                 printf '{"resolutions":[{"group":"G1","patch":{"replace_text":[{"heading":"## 1. Overview","old":"%s","new":"MERGED."}]}}]}' "$old_text" > "$UNCLE_WORKER_PACKET_PATH"
                 return 0
             fi
-            python3 -B - "$n" "$mode" "$UNCLE_WORKER_PACKET_PATH" <<'PY'
-import json, sys
-n, mode, target = sys.argv[1:4]
-ids = ['AR-1', 'AR-2', 'AR-3'] if n == '1' else ['AR-4', 'AR-5', 'AR-6']
+            python3 -B - "$n" "$mode" "$UNCLE_WORKER_PACKET_PATH" "$1" <<'PY'
+import json, re, sys
+n, mode, target, prompt = sys.argv[1:5]
+ids = re.search(r'You own exactly these findings: ([^.]*)\.', open(prompt).read()).group(1).split(', ')
 old = 'Alpha.' if n == '1' else ('Alpha.' if mode in ('clash', 'resolve', 'resolve-fail', 'resolve-retry') else 'Beta.')
 body = {'dispositions': [{'finding': i, 'disposition': 'Accepted', 'reason': 'r', 'plan_change': 'c'} for i in ids],
-        'patch': {'replace_text': [{'heading': '## 1. Overview', 'old': old, 'new': 'X%s.' % n}]}}
-if n == '1':
+        'patch': {'replace_text': [{'heading': '## 1. Overview', 'old': old, 'new': 'X%s.' % n.split('-')[0]}]}}
+if n in ('1', '1-1'):
     body['protected_verification_paths'] = 'tests/a.test.js'
 json.dump(body, open(target, 'w'))
 PY
@@ -72,6 +73,19 @@ import sys
 t = sorted(float(l.split()[1]) for l in open(sys.argv[1]))
 sys.exit(0 if len(t) == 2 and t[1] - t[0] < 0.3 else 1)
 PY
+
+run_case failonce failonce
+w="$TMP/failonce/.uncle/workflow"
+check "failed writer: asked again, returns 0"   test "$(cat "$w/rc")" == 0
+check "failed writer: one writer per finding"   bash -c 'for s in 2-1 2-2 2-3; do grep -q "edits-$s " "$1" || exit 1; done' _ "$w/calls"
+check "failed writer: its siblings did not rerun" test "$(grep -c "edits-1 " "$w/calls")" == 1
+check "failed writer: every finding still has a row" bash -c 'for n in 1 2 3 4 5 6; do grep -q "AR-$n" "$1" || exit 1; done' _ "$TMP/failonce/.uncle/docs/UPDATED_PROJECT_PLAN.md"
+check "failed writer: said what it was doing"   grep -q 'asking again, one finding at a time' "$w/out"
+
+run_case limit limit
+w="$TMP/limit/.uncle/workflow"
+check "account limit: stops without retrying"  bash -c 'test "$(cat "$1/rc")" != 0 && ! grep -q "asking again" "$1/out" && grep -q "account limit" "$1/out"' _ "$w"
+check "account limit: no extra writers ran"    test "$(wc -l < "$w/starts" | tr -d ' ')" == 2
 
 run_case fail fail
 check "writer failure: nonzero"               test "$(cat "$TMP/fail/.uncle/workflow/rc")" != 0

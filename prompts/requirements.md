@@ -72,6 +72,14 @@ rounded fonts, and a psychedelic swirl or radial-stripe background. Give the hex
 values and the font stack, so a later stage can implement and test them. A brief
 that names a different meaning wins over this default.
 
+## Be terse (binding)
+
+Output length is the cost of this stage; the content you owe is small. Write each value as short lines, not
+paragraphs: one line per item, a fragment instead of a sentence, no preamble, no restating the brief, no
+explanations of why. Reference the brief by ID or line range instead of quoting it. Aim for under 1,500 words
+across the whole object, and fewer when the brief is short. Never drop a mandatory criterion, a constraint or an
+ambiguity to save words: shorten how it is said, not what is covered.
+
 ## Proportional interpretation
 
 Keep each section brief;

@@ -2500,6 +2500,24 @@ run_updated_plan_panel() {
 # model (see updated_plan_edits.py).  Any problem returns nonzero before anything is published, and the
 # caller runs the single synthesis call.  Hosted runners only: a local model keeps one call.
 # Edits that overlap go to one short resolver call (WORKFLOW_UPDATED_PLAN_EDITS=0 turns the whole thing off).
+# Start one updated-plan edit writer in the background (see run_updated_plan_edit_writers); `owner` is passed
+# for the writer that also owns the protected verification paths.
+updated_plan_launch_writer() {
+    local directory="$1" delivery="$2" name="$3" ids="$4" owner="$5" schema_file=""
+    python3 -B "$ROOT/scripts/lib/updated_plan_edits.py" prompt "$UPDATED_PLAN_PROMPT" "$ids" "$directory/prompts/$name.md" $owner || return 1
+    echo "Updated-plan edit writer $name: ${ids//,/, }"
+    if [[ "$delivery" == hosted ]]; then
+        mkdir -p "$directory/schemas"
+        schema_file="$directory/schemas/$name.json"
+        python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" $owner || return 1
+    fi
+    rm -f "$directory/$name.json"
+    ( [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
+      UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+        run_claude "$directory/prompts/$name.md" "updated-plan-worker-edits-$name" ) \
+        > "$LOG_DIR/updated-plan-worker-edits-$name.log" 2>&1 &
+}
+
 run_updated_plan_edit_writers() {
     local directory="$STATE_DIR/updated-plan-edits" helper="$ROOT/scripts/lib/updated_plan_edits.py" name ids pid failed=0
     local -a pids=() names=()
@@ -2517,25 +2535,39 @@ run_updated_plan_edit_writers() {
     python3 -B "$helper" slices "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" > "$directory/slices.tsv" || return 1
     [[ -s "$directory/slices.tsv" ]] || return 1
     while IFS=$'\t' read -r name ids; do
-        python3 -B "$helper" prompt "$UPDATED_PLAN_PROMPT" "$ids" "$directory/prompts/$name.md" $([[ "$name" == 1 ]] && echo owner) || return 1
-        echo "Updated-plan edit writer $name: ${ids//,/, }"
-        local schema_file=""
-        if [[ "$delivery" == hosted ]]; then
-            mkdir -p "$directory/schemas"
-            schema_file="$directory/schemas/$name.json"
-            python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" \
-                $([[ "$name" == 1 ]] && echo owner) || return 1
-        fi
-        ( [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
-          UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-            run_claude "$directory/prompts/$name.md" "updated-plan-worker-edits-$name" ) \
-            > "$LOG_DIR/updated-plan-worker-edits-$name.log" 2>&1 &
+        updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$([[ "$name" == 1 ]] && echo owner)" || return 1
         pids+=("$!"); names+=("$name")
     done < "$directory/slices.tsv"
+    local -a failed_names=()
     for pid in "${!pids[@]}"; do
-        wait "${pids[$pid]}" || { echo "Updated-plan edit writer ${names[$pid]} did not complete." >&2; failed=1; }
+        wait "${pids[$pid]}" || { echo "Updated-plan edit writer ${names[$pid]} did not complete." >&2; failed_names+=("${names[$pid]}"); }
     done
-    [[ "$failed" == 0 ]] || return 1
+    if [[ "${#failed_names[@]}" -gt 0 ]]; then
+        # A writer that delivered nothing usable (its own JSON would not parse) is asked again as one writer per
+        # finding: less text to escape, a fresh attempt each, all at once.  Anything that fails again is final.
+        # An account limit (session, usage or rate) fails every call alike: more calls only burn time, so stop
+        # here and let the caller's single call report it.
+        local limited name_failed
+        for name_failed in "${failed_names[@]}"; do
+            if grep -qiE "hit your (session|usage) limit|usage limit|rate.?limit|too many requests|quota" "$LOG_DIR/updated-plan-worker-edits-$name_failed.log" 2>/dev/null; then
+                echo "Updated-plan edit writers stopped by an account limit: $(grep -hiE 'limit|quota' "$LOG_DIR/updated-plan-worker-edits-$name_failed.log" | head -1)" >&2
+                return 1
+            fi
+        done
+        echo "Updated-plan edit writer(s) ${failed_names[*]} failed; asking again, one finding at a time."
+        pids=(); names=()
+        local rows
+        rows="$(python3 -B "$helper" resplit "$directory/slices.tsv" "${failed_names[@]}")" || return 1
+        while IFS=$'\t' read -r name ids; do
+            [[ -n "$name" ]] || continue
+            updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$([[ "$name" == 1 || "$name" == 1-1 ]] && echo owner)" || return 1
+            pids+=("$!"); names+=("$name")
+        done <<< "$rows"
+        for pid in "${!pids[@]}"; do
+            wait "${pids[$pid]}" || { echo "Updated-plan edit writer ${names[$pid]} did not complete again." >&2; failed=1; }
+        done
+        [[ "$failed" == 0 ]] || return 1
+    fi
     local merge_status=0
     python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" || merge_status=$?
     if [[ "$merge_status" == 3 ]]; then

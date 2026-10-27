@@ -395,6 +395,32 @@ class Resolve(unittest.TestCase):
         self.assertEqual(subprocess.run(cli + [str(self.dir / 'res.json')], capture_output=True).returncode, 0)
 
 
+class Resplit(unittest.TestCase):
+    def test_a_failed_writer_becomes_one_writer_per_finding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 's.tsv'
+            path.write_text('1\tAR-1,AR-2\n2\tAR-3,AR-4,AR-5\n3\tAR-6\n')
+            fresh = edits.resplit(path, {'2'})
+            self.assertEqual(fresh, [('2-1', ['AR-3']), ('2-2', ['AR-4']), ('2-3', ['AR-5'])])
+            self.assertEqual(path.read_text(),
+                             '1\tAR-1,AR-2\n2-1\tAR-3\n2-2\tAR-4\n2-3\tAR-5\n3\tAR-6\n')
+
+    def test_a_single_finding_writer_is_simply_asked_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 's.tsv'
+            path.write_text('1\tAR-1\n2\tAR-2,AR-3\n')
+            self.assertEqual(edits.resplit(path, {'1'}), [('1', ['AR-1'])])
+            self.assertEqual(path.read_text(), '1\tAR-1\n2\tAR-2,AR-3\n')
+
+    def test_the_cli_prints_the_rows_to_launch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 's.tsv'
+            path.write_text('1\tAR-1,AR-2\n2\tAR-3,AR-4\n')
+            out = subprocess.run([sys.executable, str(LIB / 'updated_plan_edits.py'), 'resplit', str(path), '1', '2'],
+                                 capture_output=True, text=True, check=True).stdout
+            self.assertEqual(out.splitlines(), ['1-1\tAR-1', '1-2\tAR-2', '2-1\tAR-3', '2-2\tAR-4'])
+
+
 class Slicing(unittest.TestCase):
     def test_few_findings_stay_one_call(self):
         self.assertEqual(edits.slices(['A', 'B', 'C']), [])

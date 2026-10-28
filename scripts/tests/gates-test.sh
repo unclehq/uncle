@@ -52,6 +52,15 @@ sync_canonical() {
             jq -n --arg narrative "$(cat "$md")" \
                 '{schema:"uncle.artifact/v1",kind:"change-plan",narrative:$narrative}' \
                 > "$REPO/.uncle/workflow/documents/${name}.json" ;;
+        UPDATED_PROJECT_PLAN|PROJECT_PLAN)
+            jq -n --arg narrative "$(cat "$md")" \
+                '{schema:"uncle.artifact/v1",kind:"plan",
+                  narrative:$narrative,verification_commands:"bash app/test.sh",protected_verification_paths:"app/test.sh"}' \
+                > "$REPO/.uncle/workflow/documents/${name}.json" ;;
+        REQUIREMENTS_INTERPRETATION)
+            jq -n '{schema:"uncle.artifact/v1",kind:"requirements-interpretation",
+                sections:{required_functionality:"AC-1: Change the greeting."}}' \
+                > "$REPO/.uncle/workflow/documents/${name}.json" ;;
     esac
 }
 
@@ -372,6 +381,7 @@ if [[ "$out" == *assessment.json ]]; then
 fi
 printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
 if [[ "$out" == *.json ]]; then
+    delivery="${UNCLE_ARTIFACT_DELIVERY:-$out}"
     case "$review_prompt" in
         *'adversarial-review-worker-packet'*) kind=adversarial-review-worker-packet ;;
         *'test-review-worker-packet'*) kind=test-review-worker-packet ;;
@@ -379,11 +389,16 @@ if [[ "$out" == *.json ]]; then
         *'final-audit-worker-packet'*) kind=final-audit-worker-packet ;;
         *) kind=updated-plan-worker-packet ;;
     esac
-    if [[ "$kind" == updated-plan-worker-packet ]]; then
-        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"updated-plan-worker-packet","findings":[]}' > "$out"
-    else
-        printf '{"schema":"uncle.artifact/v1","kind":"%s","findings":[]}\n' "$kind" > "$out"
-    fi
+    case "$kind" in
+        updated-plan-worker-packet)
+            printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"updated-plan-worker-packet","findings":[]}' > "$delivery" ;;
+        test-review-worker-packet)
+            printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"test-review-worker-packet","rows":[]}' > "$delivery" ;;
+        manual-checklist-worker-packet)
+            printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist-worker-packet","checks":[{"id":"MC-1","exact_action":"Open the page","expected_result":"Greeting visible"}]}' > "$delivery" ;;
+        *)
+            printf '{"schema":"uncle.artifact/v1","kind":"%s","findings":[]}\n' "$kind" > "$delivery" ;;
+    esac
     exit 0
 fi
 if [[ "$out" == *MANUAL_CHECKLIST.base.md ]]; then
@@ -520,8 +535,12 @@ bash app/test.sh
 app/test.sh
 ```
 EOF
-    hash_file "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md" \
-        > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
+    hash_canonical UPDATED_PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
+    # plan-executability-test.py's fixture pre-seeding always reads this
+    # file's canonical JSON for a stagegate case, whether or not the
+    # executability-review feature itself is enabled for the test.
+    printf '# Requirements interpretation\n\nAC-1: Change the greeting.\n' > "$REPO/.uncle/docs/REQUIREMENTS_INTERPRETATION.md"
+    sync_canonical REQUIREMENTS_INTERPRETATION
     # New-app reviewer with a real acceptance table, configurable failures,
     # and an invocation log so tests can prove stages were not reached.
     cat > "$CASE/bin/fake-reviewer" <<'REV'
@@ -542,12 +561,20 @@ if [[ "$out" == *assessment.json ]]; then
 fi
 # Stagegate's review panels write strict worker packets before the primary
 # document reviewer runs.  Model that protocol so unrelated end-to-end cases
-# exercise the stage they were written for.
+# exercise the stage they were written for. A .json output_file now also
+# means run_codex wants the packet at $UNCLE_ARTIFACT_DELIVERY (named
+# "<output_file>.delivery.json"), not at $out directly -- it copies that
+# delivery file to $out itself afterward.
 if [[ "$out" == *.json ]]; then
+    delivery="${UNCLE_ARTIFACT_DELIVERY:-$out}"
     if [[ "$out" == *updated-plan-panel/*.json ]]; then
-        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"updated-plan-worker-packet","findings":[]}' > "$out"
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"updated-plan-worker-packet","findings":[]}' > "$delivery"
+    elif [[ "$out" == *test-review-panel/*.json ]]; then
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"test-review-worker-packet","rows":[]}' > "$delivery"
+    elif [[ "$out" == *manual-checklist-panel/*.json ]]; then
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist-worker-packet","checks":[{"id":"MC-1","exact_action":"Open the page","expected_result":"Greeting visible"}]}' > "$delivery"
     else
-        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"review-worker-packet","findings":[]}' > "$out"
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"review-worker-packet","findings":[]}' > "$delivery"
     fi
     exit 0
 fi
@@ -688,10 +715,13 @@ case "$prompt" in
         ;;
     *STUB:implement*)
         printf 'implemented\n' > .uncle/workflow/implemented
-        printf '# Implementation Notes\n\nBuilt app/main.sh.\n' \
-            > .uncle/docs/IMPLEMENTATION_NOTES.md
-        printf '# Automated Test Report\n\nAll green. Trust me.\n' \
-            > .uncle/docs/AUTOMATED_TEST_REPORT.md
+        mkdir -p .uncle/workflow/documents
+        jq -n '{schema:"uncle.artifact/v1",kind:"implementation-notes",
+            changed_files:[{path:"app/main.sh",purpose:"Built app/main.sh."}]}' \
+            > .uncle/workflow/documents/IMPLEMENTATION_NOTES.json
+        jq -n '{schema:"uncle.artifact/v1",kind:"automated-test-report",
+            commands:[{command:"bash app/test.sh",status:"PASS",output:"ok"}]}' \
+            > .uncle/workflow/documents/AUTOMATED_TEST_REPORT.json
         if [[ -n "${FAKE_IMPL:-}" ]]; then
             bash -c "$FAKE_IMPL"
         fi
@@ -704,6 +734,12 @@ case "$prompt" in
             status=PASS
             [[ -e .uncle/workflow/repaired ]] || status=FAIL
         fi
+        # acceptance_context.py's export_from_markdown-equivalent ingestion
+        # (checklist_report_fallback.py) parses the real "## Acceptance gate"
+        # table into canonical JSON; a report file that is merely non-empty
+        # but lacks that table, or that lands within the same mtime second as
+        # the stage's own start marker, both still read as "no results."
+        sleep 1
         if [[ "$status" == MALFORMED ]]; then
             printf '# Verification Report\n\nAll checks ran. No acceptance table this time.\n' > .uncle/docs/VERIFICATION_REPORT.md
             printf '# Defects\n\nNo unresolved defects in fixture.\n' > .uncle/docs/DEFECTS.md

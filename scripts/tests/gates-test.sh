@@ -234,9 +234,17 @@ EOF
 EOF
 
     local f
-    for f in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN ADVERSARIAL_REVIEW; do
+    for f in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN; do
         hash_canonical "$f" > "$REPO/.uncle/workflow/approvals/${f}.sha256"
     done
+    # Not ADVERSARIAL_REVIEW: both drivers' ADVERSARIAL_REVIEW state fast-paths
+    # straight to VALIDATE_ADVERSARIAL_REVIEW whenever
+    # .uncle/workflow/documents/ADVERSARIAL_REVIEW.json already exists on
+    # disk, panel or no panel -- pre-seeding it here would make every
+    # PLAN/ADVERSARIAL_REVIEW-state test skip the reviewer it means to
+    # exercise. plan_check_inputs's approval_artifact_path fallback to the
+    # .md view already covers the tests that start past ADVERSARIAL_REVIEW
+    # and only need the document to exist, not be approved.
 
     # The project under change: one script, one test that checks it.
     printf '#!/bin/sh\necho hello\n' > "$REPO/app/main.sh"
@@ -350,11 +358,19 @@ case "$prompt" in
         fi
         ;;
     *STUB:plan*)
-        printf '# Change Plan\n\n## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n' \
-            > .uncle/docs/CHANGE_PLAN.md
+        # The plain (non-combined) change-plan delivery: a single canonical
+        # JSON object at the path named inside the prompt, same contract
+        # style as the combined bundle and every other canonical delivery.
+        narrative='## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n'
         if [[ "${FAKE_PLAN_DENIAL:-0}" == 1 ]]; then
-            printf '\nR-1: DESIGN blanket denial, required property mediated access.\n' >> .uncle/docs/CHANGE_PLAN.md
+            narrative="${narrative}\nR-1: DESIGN blanket denial, required property mediated access.\n"
         fi
+        delivery="$(printf '%s\n' "$prompt" | sed -n 's/.*JSON object at `\([^`]*\)`.*/\1/p' | head -n1)"
+        [[ -n "$delivery" ]] || delivery=.uncle/workflow/artifact-delivery/change-plan.json
+        mkdir -p "$(dirname "$delivery")"
+        jq -n --arg narrative "$(printf "$narrative")" \
+            '{schema:"uncle.artifact/v1",kind:"change-plan",narrative:$narrative}' \
+            > "$delivery"
         ;;
 esac
 printf '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0,"usage":{"input_tokens":%s,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"session_id":"stub"}\n' "${FAKE_INPUT_TOKENS:-1}"
@@ -490,6 +506,7 @@ run_driver_stdin() {
         WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
         WORKFLOW_CLAUDE_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_PARALLEL_CHECKLIST=0 \
+        UNCLE_SUPERVISION_HOST=gates-test \
         "$@" \
         bash -c 'cd "$1"; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/change-workflow.sh ${DRIVER_ARGS:-}' _ "$REPO" \
         < "$stdin_file" > "$OUT" 2>&1
@@ -667,6 +684,7 @@ run_stagegate_stdin() {
         WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
         WORKFLOW_CLAUDE_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_SPECULATE=0 FAKE_WORKFLOW=stagegate \
+        UNCLE_SUPERVISION_HOST=gates-test \
         "$@" \
         bash -c 'cd "$1"; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/stagegate.sh' _ "$REPO" \
         < "$stdin_file" > "$OUT" 2>&1
@@ -1080,8 +1098,7 @@ expect_state "WAIT_IMPLEMENT_APPROVAL"
 new_stagegate_case sg-plan-without-commands
 stagegate_agent
 printf '# Updated Project Plan\n\nNo commands.\n' > "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md"
-hash_file "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md" \
-    > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
+hash_canonical UPDATED_PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
 run_stagegate FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 1
@@ -1530,7 +1547,7 @@ gate_group_15() {
 new_stagegate_case sg-speculative-fragment-is-rerun-not-adopted
 stagegate_agent
 cp "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md" "$REPO/.uncle/docs/PROJECT_PLAN.md"
-hash_file "$REPO/.uncle/docs/PROJECT_PLAN.md" > "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
+hash_canonical PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
 set_state WAIT_PLAN_APPROVAL
 run_stagegate_stdin "$(gate_input y)" WORKFLOW_SPECULATE=1 FAKE_SPEC_REVIEW=fragment WORKFLOW_DIFF_GATE=0
 expect_out 'Speculative ADVERSARIAL_REVIEW produced a document that fails validation. Running it again.'
@@ -1604,7 +1621,7 @@ sed '/^bash app\/test.sh$/a\
 printf ran > .uncle/workflow/second-command
 ' "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md" > "$CASE/plan.md"
 cp "$CASE/plan.md" "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md"
-hash_file "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md" > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
+hash_canonical UPDATED_PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
 run_stagegate FAKE_IMPL="printf 'echo exit 0 > app/test.sh\n' > app/test.sh"
 expect_status 1
@@ -1645,7 +1662,7 @@ for n in {1..50}; do
 done
 exit 7
 EOF
-hash_file "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md" > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
+hash_canonical UPDATED_PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
 run_stagegate WORKFLOW_DIFF_GATE=0
 expect_status 0
@@ -1659,7 +1676,7 @@ fi
 new_stagegate_case sg-invalid-parallel-plan
 stagegate_agent
 printf '\n## Parallel verification groups\n```\n1 3\n```\n' >> "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md"
-hash_file "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md" > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
+hash_canonical UPDATED_PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
 run_stagegate
 expect_status 1
@@ -1851,12 +1868,13 @@ expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
 gate_group_9() {
 new_stagegate_case sg-review-cache
 printf 'requirements\n' > "$REPO/REQUIREMENTS.md"
-printf 'plan\n' > "$REPO/.uncle/docs/PROJECT_PLAN.md"
+printf 'plan\n\n## Verification commands\n\n```\nbash app/test.sh\n```\n' > "$REPO/.uncle/docs/PROJECT_PLAN.md"
 printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
-hash_file "$REPO/.uncle/docs/PROJECT_PLAN.md" > "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
+sync_canonical PROJECT_PLAN
+hash_canonical PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
 set_state ADVERSARIAL_REVIEW
 for attempt in 1 2; do
-    run_stagegate WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+    run_stagegate WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
     expect_status 1
     expect_state VALIDATE_ADVERSARIAL_REVIEW
     COUNT=$((COUNT + 1))
@@ -1864,7 +1882,7 @@ for attempt in 1 2; do
 done
 expect_out 'Document budget exceeded'
 # Raising only the budget adopts the preserved review without another call.
-run_stagegate WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=100
+run_stagegate WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=100
 expect_status 0
 expect_state WAIT_REVIEW_ACKNOWLEDGEMENT
 COUNT=$((COUNT + 1))
@@ -1872,17 +1890,18 @@ COUNT=$((COUNT + 1))
 # Real input changes force a new review.
 printf 'changed requirements\n' >> "$REPO/REQUIREMENTS.md"
 set_state ADVERSARIAL_REVIEW
-run_stagegate WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+run_stagegate WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
 expect_status 1
 COUNT=$((COUNT + 1))
 [[ $(grep -c '^.uncle/docs/ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'changed inputs reused stale review'
 
 new_stagegate_case sg-speculative-budget-pause
 printf 'requirements\n' > "$REPO/REQUIREMENTS.md"
-printf 'plan\n' > "$REPO/.uncle/docs/PROJECT_PLAN.md"
+printf 'plan\n\n## Verification commands\n\n```\nbash app/test.sh\n```\n' > "$REPO/.uncle/docs/PROJECT_PLAN.md"
 printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
+sync_canonical PROJECT_PLAN
 set_state WAIT_PLAN_APPROVAL
-run_stagegate_stdin "$(gate_input y)" WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_SPECULATE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+run_stagegate_stdin "$(gate_input y)" WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_SPECULATE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
 expect_status 1
 expect_state VALIDATE_ADVERSARIAL_REVIEW
 expect_out 'Document budget exceeded'
@@ -1892,7 +1911,7 @@ COUNT=$((COUNT + 1))
 new_case change-review-cache
 set_state PLAN
 for attempt in 1 2; do
-    run_driver WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
+    run_driver WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
     expect_status 1
     expect_state VALIDATE_ADVERSARIAL_REVIEW
     COUNT=$((COUNT + 1))
@@ -1905,7 +1924,7 @@ expect_out 'Document budget exceeded'
 # malformed review still stops for a human instead of looping.
 new_case change-review-format-retry
 set_state PLAN
-run_driver FAKE_AR_FORMAT=MISSING_ASSESSMENT_ONCE
+run_driver WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 FAKE_AR_FORMAT=MISSING_ASSESSMENT_ONCE
 expect_status 0
 expect_state WAIT_PLAN_APPROVAL
 expect_out 'Retrying adversarial-review once with the format diagnostic.'

@@ -3541,13 +3541,15 @@ run_project_plan_sections() {
     }
 }
 
-# A sectioned plan starts more than twenty specialist calls. That is useful
-# for a large, ambiguous brief, but it is pure startup overhead for a small
-# application where one planner can write a complete, valid plan faster. Keep
-# the legacy behavior available explicitly; the default chooses from the
-# stable size of the stated requirements before any model is launched.
+# A sectioned plan starts more than twenty specialist calls, which the
+# fanned-out parallelism makes faster for every brief, not only a large one
+# -- the per-section calls run concurrently, so more sections cost wall-clock
+# only up to the slowest one, not their sum. Default on; WORKFLOW_PROJECT_PLAN_SECTIONS=auto
+# restores the size-gated heuristic (small briefs get one serial planner
+# instead) for anyone who wants to trade that speed for fewer total calls,
+# and =0 turns sectioning off entirely.
 project_plan_sections_enabled() {
-    local setting="${WORKFLOW_PROJECT_PLAN_SECTIONS:-auto}"
+    local setting="${WORKFLOW_PROJECT_PLAN_SECTIONS:-1}"
     local source="${DOCUMENT_BUDGET_SOURCE:-REQUIREMENTS.md}"
     local minimum="${WORKFLOW_PROJECT_PLAN_SECTIONS_MIN_BYTES:-12000}"
     case "$setting" in

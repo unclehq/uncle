@@ -1148,7 +1148,7 @@ def document_response(response, artifact, expected_kind='plan', require_disposit
         if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'requirements-interpretation':
             raise ValueError('wrong requirements-interpretation JSON schema')
         try:
-            return _artifact_json.render_requirements(payload) + '\n'
+            return _artifact_json.render_requirements(payload, strict=True) + '\n'
         except KeyError as error:
             raise ValueError('Requirements-interpretation JSON missing a required section: %s' % error) from error
     if Path(artifact).name in ('PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md', 'CHANGE_PLAN.md') and unfenced.startswith('{'):

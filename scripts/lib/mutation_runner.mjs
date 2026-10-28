@@ -35,7 +35,9 @@ const keep = args.includes('--keep') || process.env.MUTATION_KEEP === '1';
 const explicit = args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--only');
 const strict = process.env.MUTATION_STRICT === '1';
 const timeoutMs = Number(process.env.MUTATION_TIMEOUT_MS || 180000);
-const jobs = Math.max(1, Number(process.env.MUTATION_JOBS || Math.min(8, os.cpus().length)));
+// Half the cores, at most four: it runs in the background beside the model calls and the checklist's application, and each
+// browser-backed defect starts a build and a browser (eight at once took 81 s for one defect, noinit).
+const jobs = Math.max(1, Number(process.env.MUTATION_JOBS || Math.max(2, Math.min(4, Math.floor(os.cpus().length / 2)))));
 
 const exists = (p) => fs.existsSync(p);
 const read = (p) => fs.readFileSync(p, 'utf8');

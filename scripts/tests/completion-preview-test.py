@@ -11,6 +11,65 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
 from completion_preview import CompletionPreview, launch_spec, has_starred
 
 
+class ScriptFallback(unittest.TestCase):
+    def project(self, scripts, built=False, command=('npm', 'run', 'start')):
+        root = Path(tempfile.mkdtemp())
+        (root / '.uncle').mkdir()
+        (root / 'package.json').write_text(json.dumps({'scripts': scripts}))
+        (root / '.uncle/launch.json').write_text(json.dumps({'kind': 'webpage', 'command': list(command), 'url': 'http://127.0.0.1:4173'}))
+        if built:
+            (root / 'dist').mkdir()
+            (root / 'dist/index.html').write_text('x')
+        return root
+
+    def test_a_missing_start_script_becomes_dev_before_a_build_exists(self):
+        # noinit: launch.json said `npm run start`; package.json had dev, build and preview; the page was blank
+        root = self.project({'dev': 'vite', 'build': 'vite build', 'preview': 'vite preview'})
+        self.assertEqual(launch_spec(root)['command'], ['npm', 'run', 'dev'])
+
+    def test_it_becomes_preview_once_the_build_is_there(self):
+        root = self.project({'dev': 'vite', 'preview': 'vite preview'}, built=True)
+        self.assertEqual(launch_spec(root)['command'], ['npm', 'run', 'preview'])
+
+    def test_a_script_that_exists_or_another_command_is_left_alone(self):
+        self.assertEqual(launch_spec(self.project({'start': 'x', 'dev': 'y'}))['command'], ['npm', 'run', 'start'])
+        self.assertEqual(launch_spec(self.project({'dev': 'y'}, command=('node', 'server.js')))['command'], ['node', 'server.js'])
+        self.assertEqual(launch_spec(self.project({'build': 'b'}))['command'], ['npm', 'run', 'start'])
+
+
+class Prepare(unittest.TestCase):
+    def test_a_project_with_no_install_or_build_gets_both_before_it_is_launched(self):
+        import completion_preview as cp
+        root = Path(tempfile.mkdtemp())
+        (root / 'package.json').write_text(json.dumps({'scripts': {'build': 'vite build', 'preview': 'vite preview'}}))
+        calls = []
+        with patch('completion_preview.subprocess.run', side_effect=lambda cmd, **kw: calls.append(cmd)):
+            did = cp.prepare_project(root, ['npm', 'run', 'preview'])
+        self.assertEqual(calls, [['npm', 'install', '--no-audit', '--no-fund'], ['npm', 'run', 'build']])
+        self.assertEqual(did, 'npm install, npm run build')
+
+    def test_nothing_is_done_when_the_project_is_ready_or_the_command_is_not_npm(self):
+        import completion_preview as cp
+        root = Path(tempfile.mkdtemp())
+        (root / 'package.json').write_text(json.dumps({'scripts': {'build': 'b', 'preview': 'p'}}))
+        (root / 'node_modules').mkdir()
+        (root / 'dist').mkdir()
+        (root / 'dist/index.html').write_text('x')
+        with patch('completion_preview.subprocess.run') as run:
+            self.assertEqual(cp.prepare_project(root, ['npm', 'run', 'preview']), '')
+            self.assertEqual(cp.prepare_project(root, ['node', 'server.js']), '')
+            run.assert_not_called()
+
+    def test_a_dev_launch_installs_but_does_not_build(self):
+        import completion_preview as cp
+        root = Path(tempfile.mkdtemp())
+        (root / 'package.json').write_text(json.dumps({'scripts': {'build': 'b', 'dev': 'vite'}}))
+        calls = []
+        with patch('completion_preview.subprocess.run', side_effect=lambda cmd, **kw: calls.append(cmd)):
+            cp.prepare_project(root, ['npm', 'run', 'dev'])
+        self.assertEqual(calls, [['npm', 'install', '--no-audit', '--no-fund']])
+
+
 class PreviewTests(unittest.TestCase):
     def test_uncle_preview_hands_off_terminal_before_completion(self):
         self.spec({'kind':'command','command':['python3','uncle_tui.py']})

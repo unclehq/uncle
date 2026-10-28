@@ -41,6 +41,45 @@ def announced_ports(output):
     return ports
 
 
+def existing_script(root, command):
+    """`npm run X` for an X the project's package.json does not define (noinit: launch.json said `npm run start`, the plan's
+    package.json had dev, build and preview) becomes the script that does exist: start, then preview once a build is there, then dev."""
+    if not (isinstance(command, list) and len(command) == 3 and command[:2] == ['npm', 'run']):
+        return command
+    try:
+        scripts = json.loads((Path(root) / 'package.json').read_text()).get('scripts') or {}
+    except (OSError, ValueError, AttributeError):
+        return command
+    if command[2] in scripts or not isinstance(scripts, dict):
+        return command
+    built = any((Path(root) / name / 'index.html').is_file() for name in ('dist', 'build'))
+    for name in ('start', 'preview' if built else None, 'dev'):
+        if name and name in scripts:
+            return ['npm', 'run', name]
+    return command
+
+
+def prepare_project(root, command):
+    """Dependencies and a build for an `npm run X` launch, when the project has none yet: the verification commands run in the
+    background in a copy and bring their install back when they finish (noinit: the page was blank until then).  Returns what it did."""
+    root = Path(root)
+    if not (isinstance(command, list) and command[:2] == ['npm', 'run'] and (root / 'package.json').is_file()):
+        return ''
+    done = []
+    try:
+        scripts = json.loads((root / 'package.json').read_text()).get('scripts') or {}
+    except (OSError, ValueError, AttributeError):
+        return ''
+    if not (root / 'node_modules').exists():
+        subprocess.run(['npm', 'install', '--no-audit', '--no-fund'], cwd=root, capture_output=True, timeout=600)
+        done.append('npm install')
+    needs_build = len(command) > 2 and command[2] in ('preview', 'start') and 'build' in scripts
+    if needs_build and not any((root / name / 'index.html').is_file() for name in ('dist', 'build')):
+        subprocess.run(['npm', 'run', 'build'], cwd=root, capture_output=True, timeout=600)
+        done.append('npm run build')
+    return ', '.join(done)
+
+
 def launch_spec(root):
     root = Path(root).resolve()
     manifest = root / '.uncle' / 'launch.json'
@@ -49,6 +88,8 @@ def launch_spec(root):
         if not isinstance(data, dict) or data.get('kind') not in ('command', 'webpage', 'none'):
             raise ValueError('Invalid .uncle/launch.json kind')
         command = data.get('command')
+        if command is not None:
+            command = data['command'] = existing_script(root, command)
         if command is not None and (not isinstance(command, list) or not command or
                                     not all(isinstance(x, str) and x and '\0' not in x for x in command)):
             raise ValueError('Launch command must be a nonempty argument array')
@@ -98,6 +139,12 @@ class CompletionPreview:
                     pass
                 return
             if spec.get('command'):
+                try:
+                    did = prepare_project(self.root, spec['command'])
+                except (OSError, subprocess.SubprocessError):
+                    did = ''
+                if did:
+                    self.events.put(('output', 'Prepared the project for preview: %s.\n' % did))
                 with self.lock:
                     if self.cancelled.is_set():
                         return

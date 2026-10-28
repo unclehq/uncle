@@ -110,7 +110,7 @@ class Routing(unittest.TestCase):
 
     def test_the_driver_records_its_report_right_after_the_green_check(self):
         text = (LIB.parent / 'stagegate.sh').read_text()
-        self.assertLess(text.index('            run_green_check || true\n            collect_background_preflight'),
+        self.assertLess(text.index('            run_green_check_auto || true\n            collect_background_preflight'),
                         text.index('test_report.py" from-green . application'))
 
     def test_the_mutation_gap_router_still_recognises_a_review_that_asks_for_proof(self):

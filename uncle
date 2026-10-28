@@ -297,7 +297,7 @@ fi
 # no model flag and its runner uses its own default, so `uncle` never invents
 # one for it.
 CONFIG_STAGE_SIDE_reviewer=" adversarial-review test-review manual-checklist final-audit "
-DEFAULT_EFFORT="medium"
+DEFAULT_EFFORT="low"
 DEFAULT_CLINE_MODEL="cline-pass/deepseek-v4-pro"
 
 stage_side() {

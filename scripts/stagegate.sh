@@ -109,6 +109,7 @@ unset UNCLE_NEW_WORKFLOW
 . "$ROOT/scripts/lib/project-git.sh"
 . "$ROOT/scripts/lib/preview-build.sh"
 . "$ROOT/scripts/lib/install-warm.sh"
+. "$ROOT/scripts/lib/background-verify.sh"
 . "$ROOT/scripts/lib/checklist-lanes.sh"
 uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
@@ -282,6 +283,8 @@ on_exit() {
     if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
     if declare -f early_checklist_cancel > /dev/null; then early_checklist_cancel; fi
+    python3 -B "$ROOT/scripts/lib/app_server.py" stop "$STATE_DIR" > /dev/null 2>&1 || true
+    if [[ "$rc" != 0 ]] && declare -f green_background_cancel > /dev/null; then green_background_cancel; fi
     if [[ -n "${PARALLEL_PREWARM_PID:-}" ]] && kill -0 "$PARALLEL_PREWARM_PID" 2>/dev/null; then
         kill "$PARALLEL_PREWARM_PID" 2>/dev/null || true
         wait "$PARALLEL_PREWARM_PID" 2>/dev/null || true
@@ -3205,6 +3208,18 @@ run_parallel_checklist_workers() {
     local -a ids pids pid_ids packet_names
 
     [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
+    # A worker may not start a server (noinit: `npm run start` was denied and five browser checks were BLOCKED-SETUP after 86 s), so the
+    # driver starts the application and every worker is told where it is.
+    local worker_template="$ROOT/prompts/change/execute-checklist-worker.md" app_url=""
+    if [[ "${WORKFLOW_CHECKLIST_APP_SERVER:-1}" == 1 ]] && app_url="$(python3 -B "$ROOT/scripts/lib/app_server.py" start "$PWD" "$STATE_DIR" 2>/dev/null)" && [[ -n "$app_url" ]]; then
+        worker_template="$STATE_DIR/execute-checklist-worker-template.md"
+        { cat "$ROOT/prompts/change/execute-checklist-worker.md"
+          printf '\n## The application is already running (binding)\n\nThe driver started the application and it answers at %s. Drive that URL in the browser and with curl. Do not start, build or install anything yourself, and do not run `npm run start`, `vite` or any server: it is already up, and you are not allowed to start one.\n' "$app_url"
+        } > "$worker_template"
+        echo "Checklist: the application is running at $app_url for the browser checks."
+    elif [[ "${WORKFLOW_CHECKLIST_APP_SERVER:-1}" == 1 ]]; then
+        echo 'Checklist: the application could not be started by the driver; browser checks that need a running page may be BLOCKED-SETUP.'
+    fi
     # Lanes, the default: checks that share a resource or depend on one another run in order inside one
     # worker, everything else runs beside them, and nothing waits at a barrier (checklist_lanes.py).
     if [[ "${WORKFLOW_EXECUTE_CHECKLIST_COMPACT:-1}" == 1 && "${WORKFLOW_EXECUTE_CHECKLIST_LANES:-1}" == 1 ]]; then
@@ -3223,7 +3238,7 @@ run_parallel_checklist_workers() {
                 echo 'Each batch ran as one worker; checks that share a resource or a dependency ran in order inside one.'
                 echo 'The final execute-checklist stage is the sole writer of canonical reports.'
             } > "$directory/README.md"
-            checklist_run_lanes "$directory" "$lane_file" "$ROOT/prompts/change/execute-checklist-worker.md"
+            checklist_run_lanes "$directory" "$lane_file" "$worker_template"
             python3 "$ROOT/scripts/lib/checklist_worker_packets.py" "$directory" \
                 "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" --expected "${packet_names[@]}" || return 1
             CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"
@@ -3316,7 +3331,7 @@ run_parallel_checklist_workers() {
             batch_label="group-$group_index-batch-$batch_index"
             prompt="$directory/prompts/$batch_label.md"
             packet="$directory/$batch_label.json"
-            cp "$ROOT/prompts/change/execute-checklist-worker.md" "$prompt"
+            cp "$worker_template" "$prompt"
             printf '\n## Assigned checks\n\n' >> "$prompt"
             end=$(( i + chunk < n ? i + chunk : n ))
             for ((start = i; start < end; start++)); do
@@ -3694,6 +3709,7 @@ run_stage() {
             ;;
         IMPLEMENT)
             early_checklist_cancel      # the code is about to change
+            green_background_cancel
             parallel_status=0
             run_parallel_application_implementation || parallel_status=$?
             if [[ "$parallel_status" != 0 ]]; then
@@ -3858,6 +3874,7 @@ run_stage() {
             ;;
         REPAIR)
             early_checklist_cancel      # the code is about to change
+            green_background_cancel
             if stage_uses_self_hosted repair AGENT; then
                 # Same split as implementation, with a twist: the format pass
                 # cannot just emit a fresh document -- a repair only touches
@@ -3926,7 +3943,12 @@ run_stage() {
                 exit 1
             fi
             rm -f .uncle/docs/VERIFICATION_REPORT.md
+            # The workers' schedule is derived from the checklist, and the checklist can be written again after it was derived
+            # (noinit: the early checklist was grouped, then replaced by one with two more checks; the workers never saw those,
+            # so one agent ran for 78 s and 9,000 tokens to execute them and rewrite every report).  Derive it from this checklist.
+            snapshot_checklist_groups > /dev/null 2>&1 || true
             run_parallel_checklist_workers
+            python3 -B "$ROOT/scripts/lib/app_server.py" stop "$STATE_DIR" > /dev/null 2>&1 || true
             if [[ -s "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" ]]; then
                 # Only when the workers covered every required check; the rest go to the one agent.
                 execute_uncovered="$(python3 -B "$ROOT/scripts/lib/checklist_coverage.py" \
@@ -4079,8 +4101,9 @@ run_green_check() {
         fi
     done
     local execution_status=0
-    # The checklist reads the plans and the code, not the results: write it while the commands run.
-    early_checklist_start
+    # The checklist reads the plans and the code, not the results: write it while the commands run (a background run starts it
+    # from the foreground, where its process can be waited for).
+    [[ -n "${UNCLE_GREEN_BACKGROUND:-}" ]] || early_checklist_start
     green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" \
         check_verification_inputs "$STATE_DIR/green-check.groups" || execution_status=$?
     [[ "$execution_status" == 0 ]] || exit "$execution_status"
@@ -4370,6 +4393,7 @@ rm -f "$STATE_DIR/stop-reason"
 # A fresh run (no state file yet) drops any stale start stamp; a resume keeps it.
 [[ -e "$STATE_FILE" ]] || finished_extras reset
 finished_extras start
+green_background_recover
 
 while true; do
     preserve_requirements_source
@@ -4799,11 +4823,11 @@ while true; do
             # The result is carried to the gate rather than ending the run: a
             # failure is for the operator to weigh against the diff, and
             # killing the run here would throw away the stage that produced it.
-            run_green_check || true
+            run_green_check_auto || true
             collect_background_preflight
             # The driver knows each command's result; record them as the test report in place of the implementation stage's
             # placeholder, so the test review reads real evidence once instead of failing it and sending the run back here.
-            python3 -B "$ROOT/scripts/lib/test_report.py" from-green . application "$STATE_DIR/green-check.current.tsv" "$LOG_DIR/green-check.log" 2>/dev/null || true
+            green_pending || python3 -B "$ROOT/scripts/lib/test_report.py" from-green . application "$STATE_DIR/green-check.current.tsv" "$LOG_DIR/green-check.log" 2>/dev/null || true
 
             # Probe only: records what a parallel implementation would have
             # done and whether the plan's file ownership matched the tree.
@@ -4912,6 +4936,16 @@ while true; do
                 echo "Acceptance BLOCKED: the driver must run the approved verification suite."
                 echo "Enable WORKFLOW_GREEN_CHECK and rerun IMPLEMENT to capture its results."
                 exit 1
+            fi
+            # The verification commands are still running in the background and nothing waits for them: take the review as it
+            # stands (rows that cite results say so), record it for the final audit, and go on.
+            if green_pending; then
+                if [[ "$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS)" != PASS ]]; then
+                    record_nonblocking_failure TEST_REVIEW.json 'test review ran while the verification commands were still running in the background'
+                fi
+                echo 'Verification is still running in the background; the run continues without waiting for it.'
+                set_state MANUAL_CHECKLIST
+                continue
             fi
             # The direct worker fast path leaves the current acceptance report
             # TEST_REVIEW.json is produced and validated before this state;
@@ -5042,7 +5076,7 @@ while true; do
                 && grep -q '^Missing protected verification path:' "$STATE_DIR/verification-integrity.log" 2>/dev/null; then
                 echo 'Repair reclassified as an initial absent verification-input snapshot; continuing with driver verification.'
                 capture_verification_inputs
-                run_green_check || true
+                run_green_check_auto || true
                 plan_delivery_summary
                 check_verification_inputs
                 set_state WAIT_IMPLEMENT_APPROVAL
@@ -5122,7 +5156,7 @@ while true; do
                             plan_after_write || exit 1
                             verify_approval .uncle/docs/UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
                             capture_verification_inputs
-                            run_green_check || true
+                            run_green_check_auto || true
                             check_verification_inputs
                             set_state TEST_REVIEW
                             continue
@@ -5137,7 +5171,7 @@ while true; do
             case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
             verify_approval .uncle/docs/UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
             capture_verification_inputs
-            run_green_check || true
+            run_green_check_auto || true
             plan_delivery_summary
             check_verification_inputs
             set_state WAIT_IMPLEMENT_APPROVAL
@@ -5170,7 +5204,7 @@ while true; do
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
-            run_green_check || true
+            run_green_check_auto || true
             plan_delivery_summary
             check_verification_inputs
             # New applications may have no commits. A historical-baseline
@@ -5402,6 +5436,9 @@ while true; do
 
         COMPLETE)
             echo
+            if green_pending; then
+                echo "Verification commands are still running in the background; $GREEN_MD is replaced with their results when they finish."
+            fi
             if [[ -s "$STATE_DIR/delivery-summary.tsv" ]] && grep -q $'\tWAIVED\t' "$STATE_DIR/delivery-summary.tsv"; then
                 echo "Workflow complete with waived acceptance."
             else

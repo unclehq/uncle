@@ -2,6 +2,7 @@
 # The checklist is written beside the test review without the review as an input, and is kept only when the review passes.
 set -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REAL_ROOT="$ROOT"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fails=0
 not() { ! "$@"; }
@@ -61,6 +62,14 @@ green_regressions() { echo 0; }
 run_manual_checklist_panel() { return 1; }
 early_checklist_start; early_checklist_join
 check "failure leaves no marker" test ! -e "$STATE_DIR/checklist-early.ok"
+
+# the workers' schedule is derived from the checklist being executed, not one derived earlier
+check "execute derives its groups first" python3 - "$REAL_ROOT/scripts/stagegate.sh" <<'PY'
+import sys
+text = open(sys.argv[1]).read()
+block = text[text.index('\n        EXECUTE_CHECKLIST)\n'):]
+sys.exit(0 if 0 <= block.index('snapshot_checklist_groups > /dev/null') < block.index('run_parallel_checklist_workers') else 1)
+PY
 
 [[ "$fails" == 0 ]] && echo OK
 exit "$fails"

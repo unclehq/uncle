@@ -293,11 +293,18 @@ def _section_text(sections, key):
             return value.strip()
     return ''
 
-def render_requirements(payload):
+def render_requirements(payload, strict=False):
+    """The Markdown view of a requirements interpretation.  `strict` refuses a missing section (a self-hosted model is held to the
+    schema by being told); otherwise a short brief's empty sections render as 'None stated.'"""
     sections = payload.get('sections')
     if not isinstance(sections, dict):
         raise ValueError('requirements-interpretation needs a "sections" object keyed by %s' % ', '.join(
             name.lower().replace(' ', '_').replace('-', '_') for name in REQUIREMENTS_SECTIONS))
+    if strict:
+        missing = [name.lower().replace(' ', '_').replace('-', '_') for name in REQUIREMENTS_SECTIONS
+                   if not _section_text(sections, name.lower().replace(' ', '_').replace('-', '_'))]
+        if missing:
+            raise ValueError('requirements-interpretation is missing: ' + ', '.join(missing))
     rows = []
     for index, name in enumerate(REQUIREMENTS_SECTIONS, 1):
         key = name.lower().replace(' ', '_').replace('-', '_')

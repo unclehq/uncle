@@ -264,26 +264,28 @@ DELIVERY
     *STUB:execute*)
         printf '# Verification Report\n\nMC-1 PASS\n' > .uncle/docs/VERIFICATION_REPORT.md
         ;;
-    *STUB:baseline*)
-        # The combined planning pass. FAKE_ANALYZE=baseline-only dies after the
-        # baseline, once; FAKE_ANALYZE=exhaust writes nothing, every time.
+    *STUB:baseline*|*STUB:spec*)
+        # The combined planning pass delivers one canonical JSON bundle (not
+        # separate Markdown files) at the path the driver names inside the
+        # prompt itself (the "Use your Write tool to create exactly one JSON
+        # object at `<path>`" contract). FAKE_ANALYZE=baseline-only dies after
+        # the baseline, once; FAKE_ANALYZE=exhaust writes nothing, every time.
         printf 'x\n' >> .uncle/workflow/agent-calls
         mode="${FAKE_ANALYZE:-}"
         [[ "$mode" == baseline-only && -e .uncle/workflow/stub-analyze-done ]] && mode=""
         : > .uncle/workflow/stub-analyze-done
-        if [[ "$mode" != exhaust ]]; then
-            printf '# Baseline Report\n\n## Exact build and test commands executed\n\n```\nbash app/test.sh\n```\n' > .uncle/docs/BASELINE_REPORT.md
+        delivery="$(printf '%s\n' "$prompt" | sed -n 's/.*JSON object at `\([^`]*\)`.*/\1/p' | head -n1)"
+        if [[ "$mode" != exhaust && "$mode" != baseline-only && -n "$delivery" ]]; then
+            mkdir -p "$(dirname "$delivery")"
+            jq -n '{schema:"uncle.artifact/v1",kind:"change-planning-bundle",
+                baseline_report:{schema:"uncle.artifact/v1",kind:"baseline-report",
+                    narrative:"",verification_commands:"bash app/test.sh"},
+                change_spec:{schema:"uncle.artifact/v1",kind:"change-spec",
+                    narrative:"",acceptance_criteria:[{id:"AC-1",criterion:"Change the greeting",verification:"app/test.sh"}]},
+                change_plan:{schema:"uncle.artifact/v1",kind:"change-plan",
+                    narrative:"## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n"}}' \
+                > "$delivery"
         fi
-        if [[ -z "$mode" ]]; then
-            printf '# Change Spec\n\nAC-1: greeting.\n' > .uncle/docs/CHANGE_SPEC.md
-            printf '# Change Plan\n\n## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n' > .uncle/docs/CHANGE_PLAN.md
-        fi
-        ;;
-    *STUB:spec*)
-        # The follow-up pass: the baseline exists, only spec and plan are written.
-        printf 'x\n' >> .uncle/workflow/agent-calls
-        printf '# Change Spec\n\nAC-1: greeting.\n' > .uncle/docs/CHANGE_SPEC.md
-        printf '# Change Plan\n\n## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n' > .uncle/docs/CHANGE_PLAN.md
         ;;
     *STUB:plan*)
         printf '# Change Plan\n\n## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n' \

@@ -49,15 +49,25 @@ def good_files(directory, trace=True):
     t = (lambda kind, text: '\n<!-- trace %s: %s -->\n' % (kind, text)) if trace else (lambda kind, text: '')
     files = {
         'outline': OUTLINE,
-        'design': ''.join(section(n) for n in (1, 2, 3, 4, 5)),
+        'design': section(1),
+        'state': section(2),
+        'domain': section(3),
+        'components': section(4),
+        'flow': section(5),
         'steps': section(12),
+        'sequence': '## 12. Implementation order\nNONE\n',
         'decisions': '## Decision Record\n| D-1 | x |\n',
         'restrictions': '## Restriction Inventory\n| R-1 | y |\n',
+        'limits': '## Restriction Inventory\nNONE\n',
+        'bounds': '## Restriction Inventory\nNONE\n',
         'behaviors': section(6) + t('B', 'R-1=B-1,B-2; R-2=B-3'),
-        'handling': ''.join(section(n) for n in (8, 9, 11)) + t('M', 'R-2=M-1'),
+        'handling': ''.join(section(n) for n in (8, 9)),
+        'checks': section(11) + t('M', 'R-2=M-1'),
         'invariants': section(7) + t('I', 'R-1=I-1'),
+        'guards': section(7, 'Edge invariants.'),
         'tests': section(10) + t('T', 'R-1=T-1; R-2=T-2,T-3'),
-        'defects': section(10, 'Defect injections and obligations.'),
+        'defects': section(10, 'Defect injections.'),
+        'obligations': section(10, 'Obligations.'),
         'commands': '## Verification commands\n```sh\nnpm test\n```\n',
         'closing': section(14) + section(15),
     }
@@ -194,22 +204,87 @@ class Assemble(unittest.TestCase):
             sections.assemble(self.dir)
 
 
+class Halves(unittest.TestCase):
+    def test_two_halves_of_the_implementation_order_become_one_list_so_a_dependency_can_cross_them(self):
+        joined = sections.join_steps([{'kind': 'steps', 'items': [{'number': 1}]}, {'kind': 'steps', 'items': [{'number': 2}]},
+                                      {'kind': 'prose', 'text': 'x'}])
+        self.assertEqual([b['kind'] for b in joined], ['steps', 'prose'])
+        self.assertEqual([i['number'] for i in joined[0]['items']], [1, 2])
+
+
+class Guards(unittest.TestCase):
+    def test_the_two_invariant_workers_have_separate_id_ranges_and_both_report_i(self):
+        low, high = sections.SPECIFIC['invariants'], sections.SPECIFIC['guards']
+        self.assertIn('below `I-40`', low)
+        self.assertIn('from `I-41`', high)
+        self.assertEqual(sections.trace_letters('guards'), 'I')
+        self.assertEqual(sections.WORKERS['invariants']['sections'], sections.WORKERS['guards']['sections'])
+        order = list(sections.WORKERS)
+        self.assertLess(order.index('invariants'), order.index('guards'))
+
+    def test_the_blocks_prompt_carries_the_outline_so_no_worker_reads_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'outline.json').write_text(json.dumps({'stack': 'vite', 'components': [{'id': 'C-1'}]}, indent=2))
+            text = sections.block_contract('tests', tmp)
+            self.assertIn('{"stack":"vite","components":[{"id":"C-1"}]}', text)
+            self.assertIn('do not read any file for it', text)
+            self.assertNotIn('outline.json`', text)
+
+    def test_without_an_outline_file_the_worker_is_still_told_to_read_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIn('outline.json`', sections.block_contract('tests', tmp))
+
+
 class Layout(unittest.TestCase):
     def test_one_short_outline_then_everything_else_at_once(self):
-        self.assertEqual(sections.PHASES[0], ('outline',))
+        self.assertEqual(sections.PHASES[0], ('outline',) + sections.EARLY)
+        self.assertEqual(sections.EARLY, ('behaviors', 'handling', 'checks', 'decisions', 'restrictions', 'limits', 'bounds'))
         self.assertEqual(set(sections.PHASES[1]),
-                         {'design', 'steps', 'decisions', 'restrictions', 'behaviors', 'handling', 'invariants', 'tests', 'defects',
-                          'commands', 'closing'})
+                         {'design', 'state', 'domain', 'components', 'flow', 'steps', 'sequence', 'invariants', 'guards', 'tests',
+                          'defects', 'obligations', 'commands', 'closing'})
         self.assertEqual(len(sections.PHASES), 2)
         self.assertEqual(sections.FALLBACK, ('trace',))
 
-    def test_every_section_has_an_owner_and_only_the_test_strategy_has_two(self):
+    def test_every_section_has_an_owner_and_only_invariants_and_the_test_strategy_have_two(self):
         owned = [n for name, spec in sections.WORKERS.items() for n in spec['sections']]
+        self.assertEqual(sections.WORKERS['limits']['extra'], sections.WORKERS['restrictions']['extra'])
         self.assertEqual(sorted(set(owned)), sorted(sections.TITLES))
-        self.assertEqual(sorted(n for n in set(owned) if owned.count(n) > 1), [10])
-        self.assertEqual(sections.SHARED, {10})
+        self.assertEqual(sorted(n for n in set(owned) if owned.count(n) > 1), [7, 10, 12])
+        self.assertEqual(sections.SHARED, {7, 10, 12, 'Restriction Inventory'})
+        self.assertEqual(sections.WRITERS['Restriction Inventory'], 3)
         extras = [e for spec in sections.WORKERS.values() for e in spec['extra']]
-        self.assertEqual(sorted(extras), sorted(sections.EXTRA))
+        self.assertEqual(sorted(set(extras)), sorted(sections.EXTRA))
+
+    def test_early_workers_do_not_wait_for_the_outline_and_nobody_is_told_to_read_them(self):
+        for name in sections.EARLY:
+            self.assertIn(name, sections.PHASES[0])
+            self.assertEqual(sections.readable(name, 'd'), [])
+            self.assertIn('does not exist yet', sections.block_contract(name, '/d'))
+            self.assertNotIn('outline.json', sections.block_contract(name, '/d'))
+            self.assertIn('requirements interpretation', sections.contract(name, 'd') if name in sections.TRACE_KINDS else 'requirements interpretation')
+        self.assertIn('requirements interpretation', sections.block_contract('behaviors', '/d'))
+
+    def test_every_worker_is_given_a_length_and_the_restriction_thirds_have_their_own_id_ranges(self):
+        for name in sections.WORKERS:
+            if name != 'outline':
+                self.assertIn('about %d words' % sections.WORD_CAP[name], sections.length_note(name), name)
+        self.assertIn('below `R-20`', sections.SPECIFIC['restrictions'])
+        self.assertIn('from `R-20`', sections.SPECIFIC['limits'])
+        self.assertIn('from `R-40`', sections.SPECIFIC['bounds'])
+
+    def test_the_outline_no_longer_carries_what_other_workers_write(self):
+        for word in ('`decisions`: `id`', '`restrictions`: `id`', '`tests`: each runner'):
+            self.assertNotIn(word, sections.OUTLINE_BLOCKS)
+        self.assertIn('requirement_map', sections.OUTLINE_BLOCKS)
+
+    def test_the_restriction_inventory_is_split_in_thirds_and_a_none_part_is_dropped(self):
+        self.assertIn('first half', sections.SPECIFIC['steps'])
+        self.assertIn('second half', sections.SPECIFIC['sequence'])
+        with tempfile.TemporaryDirectory() as tmp:
+            good_files(tmp)
+            text = sections.assemble(tmp)
+        self.assertNotIn('NONE', text)
+        self.assertIn('| R-1 | y |', text)
 
     def test_phase_two_workers_read_only_the_outline_not_each_other(self):
         for name in sections.PHASES[1]:
@@ -272,7 +347,8 @@ class Layout(unittest.TestCase):
         self.assertNotIn('<!-- trace B:', sections.contract('invariants', 'd'))
         self.assertIn('<!-- trace B:', sections.contract('behaviors', 'd'))
         self.assertNotIn('<!-- trace M:', sections.contract('behaviors', 'd'))
-        self.assertIn('<!-- trace M:', sections.contract('handling', 'd'))
+        self.assertIn('<!-- trace M:', sections.contract('checks', 'd'))
+        self.assertNotIn('<!-- trace M:', sections.contract('handling', 'd'))
 
     def test_decisions_and_restrictions_are_separate_workers(self):
         self.assertEqual(sections.WORKERS['decisions']['extra'], ('Decision Record',))
@@ -412,8 +488,7 @@ class Blocks(unittest.TestCase):
 
     def handling(self):
         return [{'heading': '8. Failure handling', 'blocks': [{'kind': 'prose', 'text': 'x'}]},
-                {'heading': '9. Concurrency model', 'blocks': [{'kind': 'prose', 'text': 'y'}]},
-                {'heading': '11. Manual-test strategy', 'blocks': [{'kind': 'prose', 'text': 'z'}]}]
+                {'heading': '9. Concurrency model', 'blocks': [{'kind': 'prose', 'text': 'y'}]}]
 
     def test_a_block_packet_renders_the_markdown_the_other_stages_read(self):
         text, sections = S.render_model_packet('behaviors', self.packet('behaviors', self.behaviors(),
@@ -433,7 +508,7 @@ class Blocks(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'written twice'):
             S.render_model_packet('behaviors', self.packet('behaviors', self.behaviors() + self.behaviors()[:1]))
         with self.assertRaisesRegex(ValueError, 'missing sections'):
-            S.render_model_packet('handling', self.packet('handling', self.handling()[:2]))
+            S.render_model_packet('handling', self.packet('handling', self.handling()[:1]))
 
     def test_a_bad_block_is_refused_with_the_section_and_reason(self):
         bad = [{'heading': '6. Observable behaviors', 'blocks': [{'kind': 'rows', 'row_kind': 'behavior', 'rows': [{'trigger': 't'}]}]}]
@@ -443,8 +518,8 @@ class Blocks(unittest.TestCase):
     def test_the_block_contract_names_the_row_fields_the_lane_uses_and_the_outline_file(self):
         text = S.block_contract('behaviors', '/d')
         self.assertIn('`behavior` rows: id, trigger, result, failure, requirements (IDs, comma-separated), verification', text)
-        self.assertIn('`/d/outline.json`', text)
         self.assertIn('no Markdown syntax', text)
+        self.assertIn('`/d/outline.json`', S.block_contract('tests', '/d'))
         self.assertNotIn('`behavior` rows: id, statement', text)
 
     def outline(self, **change):
@@ -544,9 +619,10 @@ class SharedSection(unittest.TestCase):
 
     def test_the_block_contract_marks_the_shared_section_and_limits_the_row_kinds(self):
         text = sections.block_contract('defects', '/d')
-        self.assertIn('Section 10 is written by two workers', text)
+        self.assertIn('Section 10 is written by several workers', text)
         self.assertIn('`mutation` rows', text)
-        self.assertIn('`obligation` rows', text)
+        self.assertNotIn('`obligation` rows', text)
+        self.assertIn('`obligation` rows', sections.block_contract('obligations', '/d'))
         self.assertNotIn('`automated_test` rows', text)
         self.assertIn('`automated_test` rows', sections.block_contract('tests', '/d'))
 
@@ -568,7 +644,7 @@ class SharedSection(unittest.TestCase):
             trace = {'behaviors': [{'kind': 'B', 'requirement': 'R-1', 'ids': ['B-1']}],
                      'invariants': [{'kind': 'I', 'requirement': 'R-1', 'ids': ['I-1']}],
                      'tests': [{'kind': 'T', 'requirement': 'R-1', 'ids': ['T-1']}],
-                     'handling': [{'kind': 'M', 'requirement': 'R-1', 'ids': ['M-1']}]}.get(name)
+                     'checks': [{'kind': 'M', 'requirement': 'R-1', 'ids': ['M-1']}]}.get(name)
             packet = {'schema': 'uncle.artifact/v1', 'kind': 'project-plan-section-model-packet', 'sections': rows}
             if trace:
                 packet['trace'] = trace
@@ -578,8 +654,8 @@ class SharedSection(unittest.TestCase):
         model = sections.assemble_model(directory)
         ten = [s for s in model['sections'] if s['heading'].startswith('10.')]
         self.assertEqual(len(ten), 1)
-        self.assertEqual([b['text'] for b in ten[0]['blocks']], ['text of tests', 'text of defects'])
-        self.assertEqual([b['id'] for b in ten[0]['blocks']], ['%s.1' % ten[0]['id'], '%s.2' % ten[0]['id']])
+        self.assertEqual([b['text'] for b in ten[0]['blocks']], ['text of tests', 'text of defects', 'text of obligations'])
+        self.assertEqual([b['id'] for b in ten[0]['blocks']], ['%s.1' % ten[0]['id'], '%s.2' % ten[0]['id'], '%s.3' % ten[0]['id']])
 
 
 if __name__ == '__main__':

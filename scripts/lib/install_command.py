@@ -19,6 +19,9 @@ YARN_FROZEN = re.compile(r'(\byarn(?:\s+install)?)\s+--frozen-lockfile\b')
 PNPM_FROZEN = re.compile(r'(\bpnpm\s+(?:install|i))\s+--frozen-lockfile\b')
 
 
+PLAYWRIGHT_INSTALL = re.compile(r'^\s*npx\s+playwright\s+install\b(.*)$')
+
+
 def adapt(line, root):
     """(the command to run, why it changed or '')."""
     root = Path(root)
@@ -32,6 +35,12 @@ def adapt(line, root):
     if PNPM_FROZEN.search(line) and not (root / 'pnpm-lock.yaml').exists():
         line = PNPM_FROZEN.sub(r'\1', line)
         changed.append('`--frozen-lockfile` needs a pnpm-lock.yaml and there is none')
+    found = PLAYWRIGHT_INSTALL.match(line)
+    if found and not re.search(r'&&|;|\|', line):
+        # Once the project's dependencies are installed, `npx playwright` is a local binary; without --no-install npx asks the
+        # registry first (about eight seconds, every run).  Fall back to the plain command when it is not local yet.
+        line = 'npx --no-install playwright install%s || npx playwright install%s' % (found.group(1), found.group(1))
+        changed.append('the Playwright CLI is local once the install has run; `--no-install` skips the registry check')
     return line, '; '.join(changed)
 
 

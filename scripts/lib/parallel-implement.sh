@@ -79,19 +79,61 @@ import json, os, sys
 sys.path.insert(0, os.environ["UNCLE_LIB"])
 import supervisor
 print(json.dumps(list(supervisor.load_config(".uncle/config").files_allowlist)))')"
-    steps_json="$(python3 -B -c '
-import json, sys
+    steps_json="$(UNCLE_OWNED="$owned_json" python3 -B -c '
+import json, os, re, sys
 logdir, plan, lib = sys.argv[1], sys.argv[2], sys.argv[3]
+owned = json.loads(os.environ.get("UNCLE_OWNED") or "{}")
+RUNNER = {"run", "runner", "mutate", "run-mutations", "run_mutations", "runmutations", "mutation-runner", "mutation_runner",
+          "run-defects", "defect-runner", "run-injections", "inject"}
+
+def provided(paths):
+    """The path of the defect-injection runner when this step owns nothing else: the driver supplies that file (mutation_runner.mjs)."""
+    if len(paths) != 1:
+        return None
+    path = paths[0].strip()
+    match = re.match(r"^(?:.*/)?([^/]+)\.m?js$", path)
+    if not match or match.group(1).lower() not in RUNNER:
+        return None
+    if not re.search(r"mutat|defect|inject", path.lower()):
+        return None
+    return path
+
 steps = []
 for n in sys.argv[4:]:
+    command = ["bash", "%s/parallel-agent.sh" % lib, n]
+    target = provided(owned.get(n, []))
+    if target and os.environ.get("WORKFLOW_PROVIDED_MUTATION_RUNNER", "1") == "1":
+        command = ["bash", "%s/parallel-provided.sh" % lib, n, target]
     steps.append({"number": int(n),
                   "log": "%s/implementation-step-%s.log" % (logdir, n),
                   "note": ".uncle/workflow/parallel/notes/step-%s.json" % n,
-                  "command": ["bash", "%s/parallel-agent.sh" % lib, n]})
+                  "command": command})
 print(json.dumps(steps))' "$logdir" "$plan" "$lib" "$@")"
     printf '{"project": "%s", "owned": %s, "steps": %s, "files_allowlist": %s}\n' \
         "$PWD" "$owned_json" "$steps_json" "${allowlist_json:-[]}" > "$request"
     python3 -B "$lib/parallel_steps.py" "$request" || rc=$?
     rm -f "$request"
     return "$rc"
+}
+
+# parallel_prewarm_start <plan> <lib-dir> — make the first group's sandboxes in the background, while the updated plan is still
+# being written (parallel_steps.py prewarm).  They are used only if the tree is the one they mirror when the group starts, so this
+# can only save time.  WORKFLOW_PREWARM_SANDBOXES=0 turns it off.
+PARALLEL_PREWARM_PID=""
+parallel_prewarm_start() {
+    local plan="$1" lib="$2" first
+    [[ "${WORKFLOW_PREWARM_SANDBOXES:-1}" == 1 ]] || return 0
+    [[ -z "$PARALLEL_PREWARM_PID" ]] || return 0
+    first="$(parallel_groups "$plan" "$lib" 2>/dev/null | head -n 1)" || return 0
+    [[ -n "$first" ]] || return 0
+    # shellcheck disable=SC2086
+    python3 -B "$lib/parallel_steps.py" prewarm "$PWD" $first > /dev/null 2>&1 < /dev/null &
+    PARALLEL_PREWARM_PID=$!
+}
+
+# parallel_prewarm_wait — implementation must not start while the early sandboxes are still being made.
+parallel_prewarm_wait() {
+    [[ -n "${PARALLEL_PREWARM_PID:-}" ]] || return 0
+    wait "$PARALLEL_PREWARM_PID" 2>/dev/null || true
+    PARALLEL_PREWARM_PID=""
 }

@@ -29,7 +29,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from triage_guard import make_sandbox, drop_sandbox           # noqa: E402
+from triage_guard import make_sandbox, drop_sandbox, copy_entry, walk, git_ok, SANDBOX_EXCLUDES   # noqa: E402
 from step_groups import covers                                # noqa: E402
 
 SKIP = ('.uncle/', '.git/')
@@ -361,7 +361,95 @@ def capture_notes(project, steps, results):
     return synthesized
 
 
+# Sandboxes made while the updated plan is still being written (stagegate.sh, `prewarm`).  A mirror of the tree is the same
+# whenever the tree is, so the first group's mirrors can be made early and used as they are, once the tree is checked to be the
+# one they were made from.  The plan's own files change after that and are copied in again; nothing else may differ.
+PREWARM = 'prewarm.json'
+
+
+def tree_fingerprint(project):
+    """HEAD plus (path, size, mtime) of every file a mirror copies; the driver's own `.uncle/` is refreshed separately."""
+    project = Path(project)
+    head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=project, capture_output=True, text=True).stdout.strip() \
+        if git_ok(project) else ''
+    skip = SANDBOX_EXCLUDES + STEP_EXCLUDES
+    digest = hashlib.sha256(head.encode())
+    for dirpath, dirnames, filenames in os.walk(project):
+        rel_dir = os.path.relpath(dirpath, project)
+        rel_dir = '' if rel_dir == '.' else rel_dir
+        dirnames[:] = sorted(d for d in dirnames
+                             if (os.path.join(rel_dir, d) if rel_dir else d) not in skip
+                             and (os.path.join(rel_dir, d) if rel_dir else d) != '.uncle' and d != '__pycache__')
+        for name in sorted(filenames):
+            rel = os.path.join(rel_dir, name) if rel_dir else name
+            if rel in skip:
+                continue
+            try:
+                st = os.lstat(os.path.join(project, rel))
+            except OSError:
+                continue
+            digest.update(('%s\0%d\0%d\n' % (rel, st.st_size, st.st_mtime_ns)).encode('utf-8', 'replace'))
+    return digest.hexdigest()
+
+
+def refresh_overlay(project, sandbox):
+    """Copy the files a mirror takes from the driver's side again: Markdown and everything under `.uncle/`."""
+    project, sandbox = Path(project), Path(sandbox)
+    excludes = SANDBOX_EXCLUDES + STEP_EXCLUDES
+    for rel in walk(project, excludes=excludes):
+        src = project / rel
+        if (rel.lower().endswith('.md') or rel.startswith('.uncle/')) and not src.is_symlink():
+            copy_entry(src, sandbox / rel)
+
+
+def prewarm(project, numbers):
+    """Make the sandboxes for these steps now, and record the tree they mirror.  Silent on any trouble: a missing marker only
+    means they are made when the group starts."""
+    base = Path(project) / '.uncle' / 'workflow' / 'parallel'
+    marker = base / PREWARM
+    base.mkdir(parents=True, exist_ok=True)
+    marker.unlink(missing_ok=True)
+    before = tree_fingerprint(project)
+    made = []
+
+    def build(number):
+        make_sandbox(project, base / ('step-%d' % number), STEP_EXCLUDES)
+        made.append(number)
+
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, min(len(numbers), 8))) as pool:
+            list(pool.map(build, numbers))
+        ok = tree_fingerprint(project) == before
+    except (OSError, ValueError):
+        ok = False
+    if not ok:
+        for number in made:
+            drop_sandbox(project, base / ('step-%d' % number))
+        return 1
+    marker.write_text(json.dumps({'fingerprint': before, 'steps': sorted(numbers)}), encoding='utf-8')
+    return 0
+
+
+def take_prewarmed(project, wanted):
+    """The step numbers whose early sandboxes may be used as they are.  The marker is consumed: later groups run on a tree this
+    group changes.  Early sandboxes nobody asked for are dropped."""
+    base = Path(project) / '.uncle' / 'workflow' / 'parallel'
+    marker = base / PREWARM
+    try:
+        record = json.loads(marker.read_text(encoding='utf-8'))
+        marker.unlink()
+    except (OSError, ValueError):
+        return set()
+    made = {int(n) for n in record.get('steps', [])}
+    usable = made & set(wanted) if tree_fingerprint(project) == record.get('fingerprint') else set()
+    for number in made - usable:
+        drop_sandbox(project, base / ('step-%d' % number))
+    return usable
+
+
 def main():
+    if sys.argv[1:2] == ['prewarm']:
+        return prewarm(sys.argv[2], [int(n) for n in sys.argv[3:]])
     started = time.monotonic()
     request = json.loads(Path(sys.argv[1]).read_text())
     project = request['project']
@@ -371,6 +459,7 @@ def main():
     base = Path(project) / '.uncle' / 'workflow' / 'parallel'
 
     threads, results = [], {}
+    early = take_prewarmed(project, [s['number'] for s in steps])
 
     def prepare(step):
         """One step's sandbox and baseline snapshot.  A mirror of the tree costs about two seconds, so a group of
@@ -378,6 +467,9 @@ def main():
         number = step['number']
         sandbox = base / ('step-%d' % number)
         for attempt in (1, 2):
+            if number in early:
+                refresh_overlay(project, sandbox)
+                break
             try:
                 make_sandbox(project, sandbox, STEP_EXCLUDES)
                 break

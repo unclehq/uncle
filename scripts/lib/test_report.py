@@ -126,8 +126,75 @@ def ingest(project, kind, source):
     view.write_text(render(payload, kind), encoding='utf-8')
 
 
+def command_outputs(log_text):
+    """{command: its output} from the driver's green-check log, where each command follows a `$ command` line."""
+    found, current, buffer = {}, None, []
+    for line in log_text.splitlines():
+        if line.startswith('$ '):
+            if current is not None:
+                found[current] = '\n'.join(buffer).strip()
+            current, buffer = line[2:].strip(), []
+        elif current is not None:
+            buffer.append(line)
+    if current is not None:
+        found[current] = '\n'.join(buffer).strip()
+    return found
+
+
+def from_green(project, kind, current_tsv, log_path):
+    """Replace the missing or placeholder test report with the driver's own command results.  True when written.
+
+    The implementation stage is told not to run anything, so a parallel build leaves a placeholder ("Implementation handoff:
+    NOT RUN").  The driver runs the approved commands itself, so it knows each result.  Recording them here means the test
+    review judges real evidence the first time, and nothing is sent back to the implementation stage to write what the driver
+    already holds.  A report the implementation wrote for real is never replaced."""
+    name = 'CHANGE_TEST_REPORT.md' if kind == 'change' else 'AUTOMATED_TEST_REPORT.md'
+    canonical = artifact_json().path(project, name)
+    try:
+        existing = json.loads(canonical.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        existing = None
+    if existing is not None:
+        commands = existing.get('commands') or []
+        placeholder = (any(isinstance(row, dict) and row.get('status') in ('NOT RUN', 'DRIVER PENDING') for row in commands)
+                       and 'implementation stage omitted its required test handoff' in json.dumps(existing).lower())
+        if not placeholder and existing.get('driver_evidence') is not True:     # a report the driver wrote is refreshed each run
+            return False
+    try:
+        results = [line.split('\t', 1) for line in Path(current_tsv).read_text(encoding='utf-8').splitlines() if '\t' in line]
+    except OSError:
+        return False
+    if not results:
+        return False
+    try:
+        outputs = command_outputs(Path(log_path).read_text(encoding='utf-8', errors='replace'))
+    except OSError:
+        outputs = {}
+    rows, gaps = [], []
+    for code, command in results:
+        passed = code.strip() == '0'
+        tail = ' '.join((outputs.get(command.strip()) or '').split())[-500:]
+        rows.append({'command': command.strip(), 'status': 'PASS' if passed else 'FAIL', 'requirements': [],
+                     'output': 'Run by the driver, exit %s.%s' % (code.strip(), (' ' + tail) if tail else ' (no output)')})
+        if not passed:
+            gaps.append('`%s` failed (exit %s); the driver verification is not green.' % (command.strip(), code.strip()))
+    payload = {'schema': 'uncle.artifact/v1', 'kind': 'change-test-report' if kind == 'change' else 'automated-test-report',
+               'driver_evidence': True, 'commands': rows, 'coverage_gaps': gaps,
+               'next_action': 'Repair the failing command(s) and rerun the driver verification.' if gaps else 'None.'}
+    _validate(payload, kind)
+    artifact_json().write(project, name, payload)
+    view = Path(project) / '.uncle/docs' / name
+    view.parent.mkdir(parents=True, exist_ok=True)
+    view.write_text(render(payload, kind), encoding='utf-8')
+    return True
+
+
 if __name__ == '__main__':
     try:
+        if len(sys.argv) == 6 and sys.argv[1] == 'from-green':
+            print('Test report recorded from the driver verification.' if from_green(*sys.argv[2:6])
+                  else 'Test report kept as written.')
+            raise SystemExit(0)
         if sys.argv[1] != 'validate':
             raise ValueError('unknown action')
         ingest(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else (

@@ -38,6 +38,12 @@ Use a behavior table inside `user_visible_behaviors`:
 
 Do not draft it in chat first.
 
+Keep the whole answer to about 450 words: every section terse, no section longer than it needs to be, no repetition of the brief.
+The call takes as long as the answer is long.
+
+Inside any string value use single quotes, never a double quote or a backslash: one stray quote makes the whole answer
+invalid JSON and the call is made again, which doubles its time.
+
 Do not design the architecture.
 Do not implement code.
 Do not invoke another agent.

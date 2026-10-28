@@ -20,6 +20,7 @@ what it receives for runners with no schema support.
     worker_schemas.py resolve PLAN.json OUTPUT        updated-plan resolver
     worker_schemas.py edit-ops PLAN.json OUTPUT [owner]   the same writer, editing the plan model by id
     worker_schemas.py resolve-ops PLAN.json OUTPUT        the same resolver, for ops
+    worker_schemas.py requirements OUTPUT                     the requirements interpretation
     worker_schemas.py synthesis KIND protected|plain OUTPUT   the single-call updated plan (KIND plan or change-plan)
 """
 import json
@@ -119,7 +120,7 @@ def outline_packet():
         'stack': _text(500),
         'components': {'type': 'array', 'minItems': 1, 'maxItems': 80, 'items': _object({
             'id': _text(20), 'name': _text(200), 'responsibility': _text(500), 'files': _text(1000, 0)},
-            ('id', 'name', 'responsibility', 'files'))},
+            ('id', 'name', 'files'))},
         'steps': {'type': 'array', 'minItems': 1, 'maxItems': 60, 'items': _object({
             'number': _text(4), 'title': _text(300), 'owns': _text(2000), 'depends_on': _text(100, 0)},
             ('number', 'title', 'owns', 'depends_on'))},
@@ -132,7 +133,7 @@ def outline_packet():
             'runner': _text(200), 'files': _text(2000, 0)}, ('runner', 'files'))},
         'requirement_map': {'type': 'array', 'minItems': 1, 'maxItems': 300, 'items': _object({
             'requirement': _text(40), 'components': _text(500)}, ('requirement', 'components'))},
-    }, ('stack', 'components', 'steps', 'decisions', 'restrictions', 'tests', 'requirement_map'))
+    }, ('stack', 'components', 'steps', 'requirement_map'))      # decisions, restrictions and tests are written by their own workers
     return envelope(OUTLINE_KIND, required['properties'], required['required'])
 
 
@@ -253,6 +254,11 @@ def main(argv):
             if schema is None:
                 raise ValueError('no synthesis schema for %s' % argv[1])
             output = argv[3]
+        elif len(argv) == 2 and argv[0] == 'requirements':
+            # The requirements interpretation, delivered through a schema-checked call (hosted Claude) instead of a Write tool call
+            import self_hosted
+            schema = self_hosted.artifact_schema('requirements-interpretation')
+            output = argv[1]
         elif len(argv) == 3 and argv[0] == 'section-model':
             import project_plan_sections as sections
             if argv[1] == 'outline':

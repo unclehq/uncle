@@ -22,14 +22,27 @@ import subprocess
 import sys
 import tempfile
 
-NAME = r'(?:@[a-z0-9][\w.-]*/)?[a-z0-9][\w.-]*'
+NAME = r'(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*'      # npm names are lowercase
 SPEC = re.compile(r'^(%s)(?:@[\w.^~<>=*|-]+)?$' % NAME)
 STOP = {'run', 'for', 'and', 'the', 'with', 'via', 'plus', 'also', 'then', 'only', 'each', 'all', 'none',
         'npm', 'node', 'yarn', 'pnpm', 'lockfile', 'deps', 'dependencies', 'devdependencies', 'install', 'add',
-        'pinned', 'exact', 'versions', 'version', 'latest', 'dev', 'test', 'build', 'start', 'scripts', 'script'}
+        'pinned', 'exact', 'versions', 'version', 'latest', 'dev', 'test', 'build', 'start', 'scripts', 'script',
+        # Words a plan's prose puts after the keyword (noinit: the 40 "packages" were these, and one invalid name fails the whole
+        # install, so nothing was cached).
+        'to', 'create', 'write', 'on', 'in', 'at', 'it', 'any', 'never', 'must', 'have', 'which', 'include', 'list', 'first',
+        'read', 'place', 'project', 'root', 'output', 'already', 'exist', 'existing', 'content', 'adapt', 'blindly', 'entries',
+        'module', 'webpage', 'launch', 'untracked', 'tests', 'preview', 'div', 'overwriting', 'preserving', 'of', 'is', 'are',
+        'be', 'by', 'as', 'a', 'an', 'or', 'not', 'no', 'if', 'when', 'that', 'this', 'from', 'into', 'its', 'so', 'do', 'use',
+        'used', 'uses', 'using', 'set', 'get', 'add', 'make', 'see', 'one', 'two', 'both', 'same', 'other', 'than', 'after',
+        'before', 'while', 'until', 'where', 'what', 'how', 'file', 'files', 'step', 'steps', 'plan', 'app', 'code', 'page'}
 KEYWORD = re.compile(r'\b(?:dev[ -]?dependencies|dependencies|deps)\b\s*[:=]?|\bdev\s*:', re.I)
 COMMAND = re.compile(r'\bnpm\s+(?:i|install|add)\b([^`\n;|&]*)', re.I)
 LIMIT = 40
+# After a "dependencies" keyword a plan's prose runs on ("... covers mutation, sets scratch ..."): a bare word is taken only when it is
+# a package people actually install, or looks like a package name (a hyphen, scope, version, or backticks around it).
+KNOWN = {'vite', 'vitest', 'react', 'react-dom', 'svelte', 'vue', 'jsdom', 'express', 'typescript', 'eslint', 'prettier',
+         'playwright', 'jest', 'mocha', 'chai', 'webpack', 'rollup', 'esbuild', 'tailwindcss', 'postcss', 'sass', 'lodash',
+         'axios', 'zod', 'fastify', 'next', 'nuxt', 'preact', 'solid-js', 'puppeteer', 'cypress', 'sinon', 'ts-node', 'tsx'}
 
 
 def clean(token):
@@ -55,20 +68,37 @@ def packages(text):
     """npm package names (with a pinned version when the plan gives one) the plan says to install."""
     found = []
 
-    def add(token):
+    def add(token, prose=False):
         value = clean(token)
-        if value and value not in found:
+        if prose and value and '`' not in token and not re.search(r'[-/@\d]', value) and value.split('@')[0] not in KNOWN:
+            return
+        base = re.sub(r'(?<=.)@[^/]*$', '', value)
+        if value and not any(re.sub(r'(?<=.)@[^/]*$', '', other) == base for other in found):
             found.append(value)
 
     for line in text.splitlines():
         for match in COMMAND.finditer(line):
-            for token in match.group(1).split():
-                add(token)
+            # A command in code (backticks, or a line that starts with it) is a list of packages; the same words inside a
+            # sentence ("run npm install to create the lockfile, and write ...") are prose.
+            code = line[:match.start()].count('`') % 2 == 1 or line.lstrip().startswith(('npm', '$', '(npm'))
+            for token in re.split(r'[,\s]+', match.group(1).strip()):
+                if token in ('to', 'and', 'then', 'which', 'that', 'so') and not code:
+                    break
+                add(token, prose=not code)
         # Every keyword on the line ("deps: a, b; dev: c, d"), each list ending at its ';' or ')'.
         for keyword in KEYWORD.finditer(line):
             tail = re.split(r'[;)]|\.\s|\bthen\b|\brun\b|\bwith\b', line[keyword.end():], maxsplit=1)[0]
             for token in re.split(r',|\band\b', tail):
-                add(token)
+                add(token, prose=True)
+        # A scoped package named anywhere is a package.
+        for scoped in re.findall(r'(?<![\w@/])(@[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*)', line):
+            add(scoped)
+        # A well-known package named in prose on a line about dependencies ("React 18, Vite 5, Vitest, Playwright dependencies").
+        if re.search(r'depend|install', line, re.I):
+            for word in re.findall(r'[A-Za-z][A-Za-z0-9-]*', line):
+                name = word.lower()
+                if name in KNOWN:
+                    add('@playwright/test' if name == 'playwright' else name)
     return found[:LIMIT]
 
 
@@ -88,6 +118,15 @@ def run(command, cwd, timeout):
         return 1
 
 
+def usable(names):
+    """The names npm knows, checked together.  One unknown name makes `npm install` of the lot fail and cache nothing."""
+    from concurrent.futures import ThreadPoolExecutor
+    bare = [re.sub(r'(?<=.)@[^/]*$', '', name) for name in names]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        codes = list(pool.map(lambda n: run(['npm', 'view', n, 'name', '--loglevel=error'], tempfile.gettempdir(), 40), bare))
+    return [name for name, code in zip(names, codes) if code == 0]
+
+
 def warm(names, state_dir=None):
     """Fill the caches; returns a one-line summary.  Repeats for an unchanged package set are skipped."""
     if not names or not shutil.which('npm'):
@@ -97,8 +136,13 @@ def warm(names, state_dir=None):
         return 'already warmed'
     folder = tempfile.mkdtemp(prefix='uncle-warm-')
     try:
-        status = run(['npm', 'install', '--ignore-scripts', '--no-audit', '--no-fund', '--no-package-lock',
-                      '--loglevel=error', *names], folder, 900)
+        install = ['npm', 'install', '--ignore-scripts', '--no-audit', '--no-fund', '--no-package-lock', '--loglevel=error']
+        status = run(install + names, folder, 900)
+        if status != 0:
+            known = usable(names)
+            if known and known != names:
+                names = known
+                status = run(install + names, folder, 900)
         summary = ['%d package(s) %s' % (len(names), 'cached' if status == 0 else 'not fully cached')]
         if wants_playwright(names) and status == 0 and shutil.which('npx'):
             browser = run(['npx', '--no-install', 'playwright', 'install', 'chromium'], folder, 1200)

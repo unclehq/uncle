@@ -84,7 +84,7 @@ class SectionSchema(unittest.TestCase):
         self.assertIn('trace', self.schema('behaviors')['required'])
         self.assertNotIn('trace', self.schema('design')['properties'])
         self.assertEqual(sections.trace_letters('behaviors'), 'B')
-        self.assertEqual(sections.trace_letters('handling'), 'M')
+        self.assertEqual(sections.trace_letters('checks'), 'M')
         self.assertEqual(sections.trace_letters('design'), '')
         with_trace = packet('behaviors', trace=[{'kind': 'B', 'requirement': 'R-1', 'ids': ['B-1']}])
         self.assertEqual(validate(with_trace, self.schema('behaviors')), [])
@@ -345,7 +345,7 @@ class BlockSchemas(unittest.TestCase):
         heading = schema['properties']['sections']['items']['properties']['heading']['enum']
         self.assertEqual(heading, ['6. Observable behaviors'])
         handling = self.schema('handling')['properties']['sections']['items']['properties']['heading']['enum']
-        self.assertEqual(handling, ['8. Failure handling', '9. Concurrency model', '11. Manual-test strategy'])
+        self.assertEqual(handling, ['8. Failure handling', '9. Concurrency model'])
         self.assertEqual(schema['properties']['kind'], {'const': W.SECTION_MODEL_KIND})
         self.assertIn('trace', schema['required'])
 
@@ -354,7 +354,9 @@ class BlockSchemas(unittest.TestCase):
         self.assertIs(block['additionalProperties'], False)
         self.assertEqual(set(block['properties']['row_kind']['enum']), {'automated_test'})
         other = self.schema('defects')['properties']['sections']['items']['properties']['blocks']['items']
-        self.assertEqual(set(other['properties']['row_kind']['enum']), {'mutation', 'obligation'})
+        self.assertEqual(set(other['properties']['row_kind']['enum']), {'mutation'})
+        third = self.schema('obligations')['properties']['sections']['items']['properties']['blocks']['items']
+        self.assertEqual(set(third['properties']['row_kind']['enum']), {'obligation'})
         self.assertIn('failure', block['properties']['rows']['items']['properties'])
         self.assertNotIn('pattern', json.dumps(block))
 
@@ -364,11 +366,23 @@ class BlockSchemas(unittest.TestCase):
         steps = self.schema('steps')['properties']['sections']['items']['properties']['blocks']['items']['properties']['kind']['enum']
         self.assertIn('steps', steps)
 
+    def test_the_requirements_schema_is_the_interpretation_with_every_section_required(self):
+        import subprocess, sys, tempfile, json
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'requirements.json'
+            done = subprocess.run([sys.executable, str(Path(W.__file__)), 'requirements', str(out)], capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            schema = json.loads(out.read_text())
+        sections = schema['properties']['sections']
+        self.assertEqual(schema['properties']['kind'], {'const': 'requirements-interpretation'})
+        self.assertIn('failure_behaviors', sections['required'])
+        self.assertEqual(len(sections['required']), 10)
+
     def test_the_outline_schema_is_the_outline(self):
         schema = self.schema('outline')
         self.assertEqual(schema['properties']['kind'], {'const': W.OUTLINE_KIND})
         self.assertEqual(set(schema['required']) - {'schema', 'kind'},
-                         {'stack', 'components', 'steps', 'decisions', 'restrictions', 'tests', 'requirement_map'})
+                         {'stack', 'components', 'steps', 'requirement_map'})
 
     def test_both_kinds_are_registered_for_a_local_grammar(self):
         self.assertIn(W.SECTION_MODEL_KIND, W.STATIC)

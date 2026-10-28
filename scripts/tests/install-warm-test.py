@@ -43,6 +43,23 @@ class Extract(unittest.TestCase):
         self.assertFalse(warm.wants_playwright(['react', 'vitest']))
 
 
+NOINIT_PROSE = ("1. **Scaffold project** - Write package.json (React 18, Vite 5, Vitest, Playwright dependencies and scripts), run npm "
+                "install to create package-lock.json, and write vite.config.js (webServer on vite preview, tests in tests/unit).\n"
+                "10. **Mutation runner** - Scratch copies link node_modules read-only: the runner never runs npm install, and covers "
+                "mutation, sets scratch directory and writes hashes.\n| R-1 | Vite with @vitejs/plugin-react and React 18 |")
+
+
+class Prose(unittest.TestCase):
+    def test_words_after_npm_install_in_a_sentence_are_not_packages(self):
+        names = warm.packages(NOINIT_PROSE)
+        self.assertEqual(sorted(names), sorted(['react', 'vite', 'vitest', '@playwright/test', '@vitejs/plugin-react']))
+        for word in ('to', 'create', 'covers', 'mutation', 'scratch', 'webServer'):
+            self.assertNotIn(word, names)
+
+    def test_a_name_with_a_capital_is_not_an_npm_name(self):
+        self.assertEqual(warm.clean('webServer'), '')
+
+
 class Warm(unittest.TestCase):
     def setUp(self):
         self.bin = tempfile.mkdtemp()
@@ -88,6 +105,19 @@ class Warm(unittest.TestCase):
         self.assertIn('not fully cached', warm.warm(['react'], self.state))
         os.environ.pop('FAKE_STATUS')
         self.assertNotEqual(warm.warm(['react'], self.state), 'already warmed')
+
+    def test_one_unknown_name_does_not_stop_the_known_ones_being_cached(self):
+        # `npm install` of the whole list fails when any name is unknown; `npm view` says which, and the rest is installed.
+        path = Path(self.bin) / 'npm'
+        path.write_text('#!/bin/sh\necho "npm $@" >> "%s"\n'
+                        'case "$1" in view) [ "$2" = react ] && exit 0 || exit 1;; esac\n'
+                        'case "$*" in *nonsense*) exit 1;; esac\nexit 0\n' % self.log)
+        summary = warm.warm(['react', 'nonsense'], self.state)
+        self.assertIn('1 package(s) cached', summary)
+        installs = [c for c in self.calls() if c.startswith('npm install')]
+        self.assertEqual(len(installs), 2)
+        self.assertIn('nonsense', installs[0])
+        self.assertNotIn('nonsense', installs[1])
 
     def test_nothing_to_warm_runs_nothing(self):
         self.assertEqual(warm.warm([], self.state), 'nothing to warm')

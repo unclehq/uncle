@@ -101,5 +101,18 @@ class Unprotect(unittest.TestCase):
         self.assertIn('Protected path dropped: package-lock.json', done.stdout)
 
 
+class Playwright(unittest.TestCase):
+    def test_the_browser_download_checks_the_local_cli_first(self):
+        line, why = ic.adapt('npx playwright install chromium', '.')
+        self.assertEqual(line, 'npx --no-install playwright install chromium || npx playwright install chromium')
+        self.assertIn('--no-install', why)
+
+    def test_it_is_idempotent_and_leaves_chained_commands_alone(self):
+        once, _ = ic.adapt('npx playwright install chromium', '.')
+        self.assertEqual(ic.adapt(once, '.'), (once, ''))
+        chained = 'npm ci && npx playwright install chromium'
+        self.assertEqual(ic.adapt(chained, '.')[0].count('--no-install'), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

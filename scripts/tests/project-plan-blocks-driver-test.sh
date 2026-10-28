@@ -8,7 +8,7 @@ trap 'rm -rf "$TMP"' EXIT
 fails=0
 export WORKFLOW_PLAN_BLOCKS=1
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
-awk '/^(project_plan_section_run|project_plan_section_finish|run_project_plan_sections)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
+awk '/^(project_plan_section_run|project_plan_section_finish|project_plan_section_settle|run_project_plan_sections)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
 check "function extracted" test -s "$TMP/fn.sh"
 
 export ROOT_DIR="$ROOT"
@@ -77,11 +77,11 @@ run_case ok ok hosted
 w="$TMP/ok/.uncle/workflow"; parts="$w/project-plan-sections"
 check "hosted: plan assembled"                      test "$(cat "$w/rc")" == 0
 check "hosted: the plan is Markdown for people"     grep -q '^## 6\. Observable behaviors' "$TMP/ok/plan.md"
-check "hosted: twelve workers, no model trace"         bash -c 'test "$(wc -l < "$1" | tr -d " ")" == 12 && ! grep -q "^trace" "$1"' _ "$w/order"
-check "hosted: every worker had a schema"          bash -c 'test "$(grep -c "schema=.*/schemas/" "$1")" == 12' _ "$w/calls"
+check "hosted: twenty-two workers, no model trace"         bash -c 'test "$(wc -l < "$1" | tr -d " ")" == 22 && ! grep -q "^trace" "$1"' _ "$w/order"
+check "hosted: every worker had a schema"          bash -c 'test "$(grep -c "schema=.*/schemas/" "$1")" == 22' _ "$w/calls"
 check "hosted: the outline had the outline schema" bash -c 'grep "^outline " "$1" | grep -q "project-plan-outline-packet"' _ "$w/calls"
 check "hosted: workers were asked for blocks"      bash -c 'grep "^behaviors " "$1" | grep -q "project-plan-section-model-packet"' _ "$w/calls"
-check "hosted: workers read the outline as JSON"   grep -q 'outline.json' "$parts/prompts/behaviors.md"
+check "hosted: workers carry the outline as JSON"  grep -q '"requirement_map"' "$parts/prompts/tests.md"
 check "hosted: the outline schema is the outline"  python3 - "$parts/schemas/outline.json" <<'PY'
 import json, sys
 p = json.load(open(sys.argv[1]))['properties']

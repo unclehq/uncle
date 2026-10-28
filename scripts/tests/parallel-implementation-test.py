@@ -31,6 +31,72 @@ class ParallelImplementationTests(unittest.TestCase):
         worker.chmod(0o755)
         return temp, root, worker
 
+    def prewarmed_run(self, change=None):
+        """Prewarm step 1's sandbox, drop a marker file in it, optionally change the tree, then run the group."""
+        temp, root, _ = self.fixture()
+        worker = root / 'prewarm-worker.sh'
+        worker.write_text('#!/usr/bin/env bash\nset -euo pipefail\nn="$1"\n'
+                          'if [ -e early-sentinel ]; then echo reused > "${n}.txt"; else echo rebuilt > "${n}.txt"; fi\n')
+        with temp:
+            pre = subprocess.run([sys.executable, str(EXECUTOR), 'prewarm', str(root), '1'], cwd=root, text=True, capture_output=True)
+            self.assertEqual(pre.returncode, 0, pre.stderr)
+            sandbox = root / '.uncle/workflow/parallel/step-1'
+            self.assertTrue(sandbox.is_dir())
+            self.assertTrue((root / '.uncle/workflow/parallel/prewarm.json').is_file())
+            (sandbox / 'early-sentinel').write_text('x')
+            (root / '.uncle/docs').mkdir(parents=True, exist_ok=True)
+            (root / '.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text('final plan\n')     # written after the sandbox was made
+            if change:
+                change(root)
+            request = {'project': str(root), 'owned': {'1': ['1.txt']},
+                       'steps': [{'number': 1, 'log': str(root / 'one.log'), 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                                  'command': ['bash', str(worker), '1']}]}
+            path = Path(tempfile.mkdtemp()) / 'request.json'     # outside the tree: a new file in it is a changed tree
+            path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return (root / '1.txt').read_text().strip(), (root / '.uncle/workflow/parallel/prewarm.json').exists()
+
+    def test_a_sandbox_made_early_is_used_when_the_tree_has_not_changed(self):
+        text, marker = self.prewarmed_run()
+        self.assertEqual(text, 'reused')
+        self.assertFalse(marker)
+
+    def test_the_plan_written_after_the_sandbox_was_made_reaches_it(self):
+        temp, root, _ = self.fixture()
+        with temp:
+            subprocess.run([sys.executable, str(EXECUTOR), 'prewarm', str(root), '1'], cwd=root, check=True)
+            sandbox = root / '.uncle/workflow/parallel/step-1'
+            (root / '.uncle/docs').mkdir(parents=True, exist_ok=True)
+            (root / '.uncle/docs/UPDATED_PROJECT_PLAN.md').write_text('final plan\n')
+            (sandbox / 'early-sentinel').write_text('x')
+            worker = Path(tempfile.mkdtemp()) / 'w.sh'
+            worker.write_text('#!/usr/bin/env bash\ntest -e early-sentinel || exit 7\ncp .uncle/docs/UPDATED_PROJECT_PLAN.md 1.txt\n')
+            request = {'project': str(root), 'owned': {'1': ['1.txt']},
+                       'steps': [{'number': 1, 'log': str(root / 'l.log'), 'note': '.uncle/workflow/parallel/notes/step-1.md',
+                                  'command': ['bash', str(worker)]}]}
+            req = Path(tempfile.mkdtemp()) / 'r.json'
+            req.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(req)], cwd=root, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / '1.txt').read_text(), 'final plan\n')
+            self.assertTrue(sandbox.parent.exists())
+
+    def test_a_changed_tree_discards_the_early_sandbox_and_makes_a_fresh_one(self):
+        text, marker = self.prewarmed_run(lambda root: (root / 'a.txt').write_text('changed after the sandbox was made\n'))
+        self.assertEqual(text, 'rebuilt')
+        self.assertFalse(marker)
+
+    def test_a_moved_head_discards_the_early_sandbox(self):
+        def commit(root):
+            (root / 'a.txt').write_text('base\n')
+            (root / 'c.txt').write_text('new\n')
+            subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=F', '-c', 'user.email=f@example.test', 'commit', '--no-gpg-sign', '-qm', 'more'],
+                           cwd=root, check=True)
+        text, _ = self.prewarmed_run(commit)
+        self.assertEqual(text, 'rebuilt')
+
     def test_merges_declared_files_captures_notes_and_removes_worktrees(self):
         temp, root, worker = self.fixture()
         with temp:

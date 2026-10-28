@@ -283,12 +283,27 @@ REQUIREMENTS_SECTIONS = ('Required functionality', 'Optional functionality', 'Co
                           'User-visible behaviors', 'System behaviors', 'Failure behaviors',
                           'Ambiguities', 'Assumptions', 'Explicit non-goals', 'Definition of done')
 
+def _section_text(sections, key):
+    """A section's text, whatever small variation the writer used for its key; '' when it wrote none."""
+    for candidate in (key, key.rstrip('s'), key + 's', key.replace('behaviors', 'behavior'), key.replace('behaviors', 'behaviours')):
+        value = sections.get(candidate)
+        if isinstance(value, (list, tuple)):
+            value = '\n'.join('- ' + str(item) for item in value)
+        if isinstance(value, str):
+            return value.strip()
+    return ''
+
 def render_requirements(payload):
-    sections = payload['sections']
+    sections = payload.get('sections')
+    if not isinstance(sections, dict):
+        raise ValueError('requirements-interpretation needs a "sections" object keyed by %s' % ', '.join(
+            name.lower().replace(' ', '_').replace('-', '_') for name in REQUIREMENTS_SECTIONS))
     rows = []
     for index, name in enumerate(REQUIREMENTS_SECTIONS, 1):
         key = name.lower().replace(' ', '_').replace('-', '_')
-        rows += [f'## {index}. {name}', '', sections[key].strip(), '']
+        # A short brief leaves some sections empty (noinit: a one-line brief and no failure behaviours); the document still has
+        # every heading, because later stages and the importer look for them.
+        rows += [f'## {index}. {name}', '', _section_text(sections, key) or 'None stated.', '']
     return '\n'.join(rows)
 
 def render_final_audit(payload):

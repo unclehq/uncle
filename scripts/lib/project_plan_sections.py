@@ -60,39 +60,58 @@ OUTLINE_HEADINGS = ('Stack', 'Components', 'Steps', 'Decisions', 'Restrictions',
 
 WORKERS = {
     'outline': {'sections': (), 'extra': (), 'commands': False},
-    'design': {'sections': (1, 2, 3, 4, 5), 'extra': (), 'commands': False},
+    'design': {'sections': (1,), 'extra': (), 'commands': False},
+    'state': {'sections': (2,), 'extra': (), 'commands': False},
+    'domain': {'sections': (3,), 'extra': (), 'commands': False},
+    'components': {'sections': (4,), 'extra': (), 'commands': False},
+    'flow': {'sections': (5,), 'extra': (), 'commands': False},
+    # Section 12 is written by two workers, the first half of the outline's steps and the rest.
     'steps': {'sections': (12,), 'extra': (), 'commands': False},
+    'sequence': {'sections': (12,), 'extra': (), 'commands': False},
     'decisions': {'sections': (), 'extra': ('Decision Record',), 'commands': False},
+    # Restriction rows have ten fields each: the inventory is written by two workers, the first half of the outline's list and the rest.
     'restrictions': {'sections': (), 'extra': ('Restriction Inventory',), 'commands': False},
+    'limits': {'sections': (), 'extra': ('Restriction Inventory',), 'commands': False},
+    'bounds': {'sections': (), 'extra': ('Restriction Inventory',), 'commands': False},
     # The three longest outputs set the phase's time (behaviors with failure handling, concurrency and manual checks: 14 KB, 55 s;
     # the test strategy: 14 KB, 54 s), and a call takes about as long as it has tokens to write, so each is split in two.
     'behaviors': {'sections': (6,), 'extra': (), 'commands': False},
-    'handling': {'sections': (8, 9, 11), 'extra': (), 'commands': False},
+    'handling': {'sections': (8, 9), 'extra': (), 'commands': False},
+    'checks': {'sections': (11,), 'extra': (), 'commands': False},
+    # Section 7 is written by two workers, `invariants` first (what is true of the data and the results), then `guards` (what holds
+    # at the edges); the largest single output of the phase (5 KB, 30 s) is now two.
     'invariants': {'sections': (7,), 'extra': (), 'commands': False},
+    'guards': {'sections': (7,), 'extra': (), 'commands': False},
     # Section 10 is written by two workers, `tests` first: their blocks are joined in that order.
     'tests': {'sections': (10,), 'extra': (), 'commands': False, 'rows': ('automated_test',)},
-    'defects': {'sections': (10,), 'extra': (), 'commands': False, 'rows': ('mutation', 'obligation')},
+    'defects': {'sections': (10,), 'extra': (), 'commands': False, 'rows': ('mutation',)},
+    'obligations': {'sections': (10,), 'extra': (), 'commands': False, 'rows': ('obligation',)},
     'commands': {'sections': (), 'extra': (), 'commands': True},
     'closing': {'sections': (14, 15), 'extra': (), 'commands': False},
     'trace': {'sections': (13,), 'extra': (), 'commands': False},      # only when the driver cannot build it
 }
-PHASES = (('outline',),
-          ('design', 'steps', 'decisions', 'restrictions', 'behaviors', 'handling', 'invariants', 'tests', 'defects',
+# The behaviors, failure handling and manual checks are written from the requirements alone, so they start with the outline and
+# finish while the others run; the second phase starts when the outline does, not when the first phase has.
+EARLY = ('behaviors', 'handling', 'checks', 'decisions', 'restrictions', 'limits', 'bounds')
+PHASES = (('outline',) + EARLY,
+          ('design', 'state', 'domain', 'components', 'flow', 'steps', 'sequence', 'invariants', 'guards', 'tests', 'defects', 'obligations',
            'commands', 'closing'))
 FALLBACK = ('trace',)
 
 # A section more than one worker writes (their parts are joined in WORKERS order).
-SHARED = {n for n in TITLES if sum(n in spec['sections'] for spec in WORKERS.values()) > 1}
+WRITERS = {n: sum(n in spec['sections'] or n in spec['extra'] for spec in WORKERS.values()) for n in list(TITLES) + list(EXTRA)}
+SHARED = {n for n, count in WRITERS.items() if count > 1}
 
 # What each worker reports for the traceability table, as `<!-- trace K: R-1=ID,ID; R-2=ID -->`.
 TRACE_COLUMNS = (('B', 'Behavior'), ('I', 'Invariant'), ('C', 'Component'), ('T', 'Automated test'), ('M', 'Manual check'))
-TRACE_KINDS = {'behaviors': 'B', 'handling': 'M', 'invariants': 'I', 'tests': 'T'}
+TRACE_KINDS = {'behaviors': 'B', 'checks': 'M', 'invariants': 'I', 'guards': 'I', 'tests': 'T'}
 # One example per worker, in its own kind: a model copies the letter it is shown (noinit: the invariants and tests
 # workers both wrote `trace B`, no test mapping was recognised, and the traceability worker had to run).
 TRACE_EXAMPLES = {
     'behaviors': ('<!-- trace B: R-1=B-1,B-2; R-2=B-3 -->',),
-    'handling': ('<!-- trace M: R-2=M-1 -->',),
+    'checks': ('<!-- trace M: R-2=M-1 -->',),
     'invariants': ('<!-- trace I: R-1=I-1,I-2; R-2=I-3 -->',),
+    'guards': ('<!-- trace I: R-1=I-41,I-42; R-2=I-43 -->',),
     'tests': ('<!-- trace T: R-1=T-1,T-2; R-2=T-3 -->',),
 }
 COLUMN_OF = re.compile(r'^([BICTM])-\d+$')
@@ -110,8 +129,10 @@ SPECIFIC = {
         'project needs (source, tests, test and runner configuration, fixtures, `.gitignore`, `.uncle/launch.json`) is '
         'under exactly one step\'s `Owns:`. At most three dependencies per step; most steps have none. Steps are '
         'implemented at the same time and the slowest sets the time: size steps evenly, and give no step a file you expect '
-        'to exceed about 100 lines. Split a big file across steps (a defect-injection runner: the mutation list in one '
-        'file, the runner in another) and keep helper scripts simple, sequential where that will do.\n'
+        'to exceed about 100 lines. Split a big file across steps and keep helper scripts simple, sequential where that '
+        'will do. The defect-injection runner is supplied by the driver: give it its own step that owns only '
+        '`tests/mutations/run.mjs` (nothing else) and put the list in `tests/mutations/list.mjs`, a default-exported array '
+        'of `{id, file, find, replace, spec, expected}` (`find` occurs once in `file`; `spec` is the test file that must fail).\n'
         '- `## Decisions`: `- D-n: the choice, one phrase`.\n'
         '- `## Restrictions`: `- R-n: the restriction, one phrase -- USER, REPOSITORY, PLATFORM or DESIGN`.\n'
         '- `## Tests`: each runner and, by path, the test file each automated test lives in.\n'
@@ -119,31 +140,96 @@ SPECIFIC = {
         'components that implement it.\n\n'
         'Decide everything here once; the other workers will not revisit it.'),
     'design': (
-        'Write the architecture, state, domain model, components and data flow. The outline\'s component IDs, names '
-        'and files are binding: the Components table lists every `C-n` exactly as the outline has it. Refer to '
-        'decisions and restrictions by their outline IDs and do not restate them.'),
+        'Write the architecture. The outline\'s component IDs, names and files are binding. The authoritative state, the '
+        'domain model, the components and the data flow are written beside you by other workers. Do not cite decision or '
+        'restriction IDs: those are written beside you by other workers.'),
+    'state': (
+        'Write the authoritative state: what is stored, where, and which part is the source of truth. The outline\'s '
+        'component IDs, names and files are binding. The architecture, the domain model, the components and the data flow '
+        'are written beside you by other workers. Do not cite decision or restriction IDs: those are written beside you by '
+        'other workers.'),
+    'domain': (
+        'Write the domain model: the entities, values and rules of the problem, in terms of the requirements. The outline\'s '
+        'component IDs, names and files are binding. The architecture, the state, the components and the data flow are '
+        'written beside you by other workers. Do not cite decision or restriction IDs: those are written beside you by other '
+        'workers.'),
+    'components': (
+        'Write the components and responsibilities table. The outline\'s component IDs, names and files are binding: the '
+        'Components table lists every `C-n` exactly as the outline has it. The outline gives each component a name and files '
+        'only: you write what it is responsible for. The data flow is written beside you by another worker. Do not cite '
+        'decision or restriction IDs: those are written beside you by other workers.'),
+    'flow': (
+        'Write the data flow: how an input reaches the state and the display, step by step, naming components by the '
+        'outline\'s `C-n` IDs. The components table is written beside you by another worker; do not restate it. Do not cite '
+        'decision or restriction IDs: those are written beside you by other workers.'),
     'steps': (
-        'Expand the outline\'s steps in the same order and numbering, each with a one-line description. Keep every '
-        '`Owns:` and `Depends on:` exactly as the outline has them: do not add, drop or move a file or a dependency. '
-        'Also write `.gitignore` at the project root now, as described above.'),
+        'Expand the first half, rounded up, of the outline\'s steps in the same order and numbering, each with a one-line '
+        'description. Keep every `Owns:` and `Depends on:` exactly as the outline has them: do not add, drop or move a file '
+        'or a dependency. Another worker writes the second half beside you; do not write those. Also write `.gitignore` at '
+        'the project root now, as described above.'),
+    'sequence': (
+        'Expand the second half of the outline\'s steps, everything after the first half rounded up, in the same order and '
+        'numbering, each with a one-line description. Keep every `Owns:` and `Depends on:` exactly as the outline has them: '
+        'do not add, drop or move a file or a dependency. Another worker writes the first half beside you; do not write '
+        'those. If the outline lists fewer than two steps, there is nothing for you: write the single word NONE as one '
+        'prose block and no steps block.'),
     'decisions': (
-        'Write the Decision Record: one row per outline `D-n`, with its short reason. Use the outline\'s IDs exactly; '
-        'add none.'),
+        'Write the Decision Record: the engineering choices the plan rests on, one row each, with an ID `D-n` '
+        'numbered from `D-1`, a decision in one sentence and its short reason. At most 12 rows. You start before the '
+        'outline exists: work from the requirements alone and do not name components. Do not cite decisions '
+        'elsewhere by ID; other workers do not know yours.'),
     'restrictions': (
-        'Write the Restriction Inventory: one row per outline `R-n`, with every field the plan requires for a '
-        'restriction. Use the outline\'s IDs exactly; add none.'),
+        'Write the Restriction Inventory for the first third of the requirements, rounded up, in the  '
+        "interpretation's order: the restrictions those requirements impose (USER, REPOSITORY, PLATFORM or DESIGN),  "
+        'one row each with every field the plan requires, with an ID `R-n` numbered from `R-1` and staying below '
+        '`R-20`. At most 8 rows. Two other workers write the rest beside you; do not write those. You start before '
+        'the outline exists: work from the requirements alone.'),
+    'limits': (
+        'Write the Restriction Inventory for the second third of the requirements (split them into three parts in  '
+        "the interpretation's order, the first two rounded up): the restrictions those requirements impose (USER,  "
+        'REPOSITORY, PLATFORM or DESIGN), one row each with every field the plan requires, with an ID `R-n` numbered '
+        'from `R-20` and staying below `R-40`. At most 8 rows. Two other workers write the other parts beside you; '
+        'do not write those. You start before the outline exists: work from the requirements alone. If there are '
+        'fewer than two requirements, there is nothing for you: write the single word NONE as one prose block and no '
+        'table.'),
+    'bounds': (
+        'Write the Restriction Inventory for the last third of the requirements (split them into three parts in the  '
+        "interpretation's order, the first two rounded up, and take the rest): the restrictions those requirements  "
+        'impose (USER, REPOSITORY, PLATFORM or DESIGN), one row each with every field the plan requires, with an ID '
+        '`R-n` numbered from `R-40`. At most 8 rows. Two other workers write the other parts beside you; do not '
+        'write those. You start before the outline exists: work from the requirements alone. If there are fewer than '
+        'three requirements, there is nothing for you: write the single word NONE as one prose block and no table.'),
     'behaviors': (
         'Give every behavior an ID `B-n` in one table: trigger, observable result, failure behavior, requirement '
-        'IDs. Cite requirements by their interpretation IDs. Do not name test IDs or test files here. The failure '
+        'IDs. Cite requirements by their interpretation IDs. Do not name test IDs or test files here. You start before the '
+        'outline exists: work from the requirements alone and do not name components. The failure '
         'handling, concurrency and manual-test sections are written beside you by another worker.'),
     'handling': (
-        'Write the failure handling, the concurrency model and the manual-test strategy. Give every manual check an ID '
-        '`M-n`, citing requirement IDs. Refer to behaviors by the `B-n` IDs the behaviors worker assigns beside you '
-        '(it numbers them from 1 in the order the requirements raise them) and never restate their rows.'),
+        'Write the failure handling and the concurrency model. Refer to behaviors by the `B-n` IDs the behaviors worker '
+        'assigns beside you (it numbers them from 1 in the order the requirements raise them) and never restate their '
+        'rows. The manual-test strategy is written beside you by another worker. You start before the outline exists: '
+        'work from the requirements alone and do not name components.'),
+    'checks': (
+        'Write the manual-test strategy. Give every manual check an ID `M-n`, citing requirement IDs. Refer to behaviors '
+        'by the `B-n` IDs the behaviors worker assigns beside you (it numbers them from 1 in the order the requirements '
+        'raise them) and never restate their rows. The failure handling and concurrency sections are written beside you '
+        'by another worker. You start before the outline exists: work from the requirements alone and do not name '
+        'components.'),
     'invariants': (
-        'Give every invariant an ID `I-n` in the invariant table. In its "Automated test" column write `see 10`: '
-        'the test strategy is written beside you by another worker and the traceability table joins invariants '
-        'to tests afterwards. Enforcement points name components (`C-n`) and files from the outline.'),
+        'Give every invariant an ID `I-n`, numbered from `I-1` and staying below `I-40`, in the invariant table. You write the '
+        'invariants of the data and the results: what is always true of the state, the calculations, the ordering and the '
+        'stored values. Another worker writes, beside you, the invariants at the edges (input handling, display, persistence, '
+        'security, performance, resources, lifecycle) as `I-41` and up; do not write those. In its "Automated test" column '
+        'write `see 10`: the test strategy is written beside you by another worker and the traceability table joins '
+        'invariants to tests afterwards. Enforcement points name components (`C-n`) and files from the outline.'),
+    'guards': (
+        'Give every invariant an ID `I-n`, numbered from `I-41`, in the invariant table. You write the invariants at the '
+        'edges: input validation and rejection, what is displayed and when, persistence and restore, security, performance '
+        'limits, resource use and lifecycle (start, stop, reload). Another worker writes, beside you, the invariants of the '
+        'data and the results as `I-1` to `I-40`; do not write those. If your category has no invariant for this project, '
+        'write the one sentence "None beyond the invariants above." and no table. In its "Automated test" column write '
+        '`see 10`. Enforcement points name components (`C-n`) and files from the outline. Map only the requirements your '
+        'invariants cover in `trace`; the other worker maps the rest.'),
     'tests': (
         'Give every automated test an ID `T-n`. Use only test files, configuration and the runner that the outline '
         'assigns to a step; never invent a path it does not own. Plan tests from the requirements and acceptance '
@@ -152,14 +238,18 @@ SPECIFIC = {
         'are the rest of this section and another worker writes them. Do not write the verification commands either: '
         'another worker owns them.'),
     'defects': (
-        'Write the rest of the automated-test strategy, after the test table the `tests` worker writes beside you: the '
-        'representative defect injections (IDs `DI-n`; each names the defect and the one test FILE, taken from the '
-        'outline\'s tests, that must reject it; never a `T-n` ID, which is being assigned at the same time), the acceptance '
-        'obligations (IDs `O-n`, each with its observable assertion and independent oracle) and the protected '
-        'verification paths. Use only test files and paths that the outline assigns to a step. A protected path is a '
-        'file the implementation must not change: never a lockfile (`package-lock.json`, `yarn.lock`) or a directory the '
-        'install command creates, because nothing can hash a file that does not exist before the install. Do not write the '
-        'verification commands.'),
+        'Write the representative defect injections for the automated-test strategy, after the test table the `tests` worker '
+        'writes beside you: IDs `DI-n`, each naming the defect and the one test FILE that must reject it, a file one of the '
+        'steps owns; never a `T-n` ID, which is being assigned at the same time. At most 10. The acceptance obligations and '
+        'protected paths are written beside you by another worker; do not write those.'),
+    'obligations': (
+        'Write the acceptance obligations and the protected verification paths for the automated-test strategy, after the '
+        'test table the `tests` worker writes beside you: obligations with IDs `O-n`, each with its observable assertion and '
+        'independent oracle (at most 12), then the protected verification paths. Use only test files and paths a step owns. A '
+        'protected path is a file the implementation must not change: never a lockfile (`package-lock.json`, `yarn.lock`) or a '
+        'directory the install command creates, because nothing can hash a file that does not exist before the install. The '
+        'defect injections are written beside you by another worker; do not write those. Do not write the verification '
+        'commands.'),
     'commands': (
         'Write the one `## Verification commands` section: a single fenced `sh` block and nothing else. Use only '
         'paths, scripts and the runner the outline assigns to a step. Cover install (reusing a valid installation; a new project has '
@@ -200,7 +290,7 @@ def readable(name, directory):
         for phase in PHASES:
             if name in phase:
                 break
-            names.extend(phase)
+            names.extend(n for n in phase if n not in EARLY)       # an early worker may still be writing when this one starts
     return ['%s/%s.md' % (directory, earlier) for earlier in names]
 
 
@@ -216,6 +306,25 @@ def packet_example(name):
         trace = ',"trace":[{"kind":"%s","requirement":"R-1","ids":["%s-1","%s-2"]}]' % (letter, letter, letter)
     return ('{"schema":"uncle.artifact/v1","kind":"%s","sections":[{"heading":"%s","body":"..."}]%s}'
             % (SECTION_KIND, expected_headings(name)[0], trace))
+
+
+# About how long each worker's answer may be, in words.  A call takes about three seconds plus its tokens at roughly a hundred
+# and thirty a second, and the stage waits for the longest, so a worker that writes more than this is the stage's time (noinit:
+# the architecture section alone was 4,000 tokens, 45 s).
+WORD_CAP = {'design': 350, 'state': 300, 'domain': 350, 'components': 450, 'steps': 300, 'sequence': 300, 'decisions': 300,
+            'restrictions': 450, 'limits': 450, 'bounds': 450, 'behaviors': 550, 'handling': 450, 'checks': 350,
+            'invariants': 550, 'guards': 400, 'tests': 600, 'defects': 400, 'obligations': 400, 'flow': 300, 'commands': 200, 'closing': 400, 'trace': 400}
+
+
+def length_note(name):
+    cap = WORD_CAP.get(name)
+    return ('Keep your whole answer to about %d words: every row terse, no repetition of what the requirements or another worker '
+            'already says. The stage waits for the longest answer.' % cap) if cap else ''
+
+
+def requirement_source(name):
+    """Where a worker finds the requirement IDs it maps: an early worker starts before the outline exists."""
+    return ('the requirements interpretation' if name in EARLY else 'the outline\'s requirement map')
 
 
 def contract(name, directory, json_mode=False):
@@ -249,15 +358,16 @@ def contract(name, directory, json_mode=False):
         lines += ['- `%s`' % path for path in earlier]
     if name in TRACE_KINDS and json_mode:
         lines += ['', 'Also fill `trace` (kinds: %s): one entry per requirement and kind, `requirement` being a requirement ID from '
-                  'the outline\'s `## Requirement map`, nothing else, and `ids` the IDs of yours that cover it. The driver builds '
+                  '%s, nothing else, and `ids` the IDs of yours that cover it. The driver builds '
                   'the traceability table from `trace`, and a worker that leaves it empty makes a whole extra model call '
-                  'necessary: map every requirement of the outline to at least one of your IDs.' % TRACE_KINDS[name]]
+                  'necessary: map every requirement to at least one of your IDs.' % (TRACE_KINDS[name], requirement_source(name))]
     elif name in TRACE_KINDS:
         lines += ['', 'End your file with one line per kind (%s), after the last section, exactly in this form: ' % TRACE_KINDS[name]]
         lines += ['`%s`' % example for example in TRACE_EXAMPLES[name]]
-        lines += ['The left side of each entry is a requirement ID from the outline\'s `## Requirement map`, nothing else; '
-                  'the right side is the IDs of yours that cover it. The driver builds the traceability table from these lines.']
-    lines += ['', SPECIFIC[name], '']
+        lines += ['The left side of each entry is a requirement ID from %s, nothing else; '
+                  'the right side is the IDs of yours that cover it. The driver builds the traceability table from these lines.'
+                  % requirement_source(name)]
+    lines += ['', SPECIFIC[name], '', length_note(name), '']
     return '\n'.join(lines)
 
 
@@ -316,6 +426,16 @@ def blocks_reference():
     return '\n'.join(lines)
 
 
+def embedded_outline(directory):
+    """The outline packet as compact JSON, for a prompt that carries it (a worker's first call used to be a Read of it); '' when absent."""
+    try:
+        packet = json.loads((Path(directory) / 'outline.json').read_text(encoding='utf-8'))
+        packet = {k: v for k, v in packet.items() if k not in ('schema', 'kind')}      # not a packet kind the worker could copy
+        return json.dumps(packet, separators=(',', ':'))
+    except (OSError, ValueError):
+        return ''
+
+
 def block_contract(name, directory):
     """The Section mode text for a worker that answers with typed blocks (a `project-plan-section-model-packet`)."""
     spec = WORKERS[name]
@@ -333,7 +453,9 @@ def block_contract(name, directory):
              '`blocks` is the section\'s content in order. Do not write a file, and do not run a shell command to print '
              'it: the JSON object is your final reply, as plain text.', '',
              'Every value is plain text: no Markdown syntax anywhere in it (no pipes, no backticks around names, no '
-             '`**bold**`, no `#` headings). The driver renders the document from your blocks. Block kinds:', '',
+             '`**bold**`, no `#` headings), and no double quote or backslash inside a value (write \'single quotes\' and '
+             'forward slashes): one stray quote makes the whole answer invalid JSON and the call is made again, which doubles '
+             'its time. The driver renders the document from your blocks. Block kinds:', '',
              '- `prose`: `text`, paragraphs separated by a blank line.',
              '- `heading`: `level` (3 to 6) and `text`, a sub-heading inside your section.',
              '- `list`: `items` (an array of strings) and `ordered` (true for a numbered list).',
@@ -355,9 +477,9 @@ def block_contract(name, directory):
     if spec['commands']:
         lines += ['', 'The `%s` heading is optional: leave it out when no commands are independent. Each of the two is '
                   'one `code` block (`lang` `text` for the groups, `sh` for the commands) and nothing else.' % GROUPS]
-    shared = [n for n in spec['sections'] if n in SHARED]
+    shared = [n for n in list(spec['sections']) + list(spec['extra']) if n in SHARED]
     if shared:
-        lines += ['', 'Section %s is written by two workers at once, one after the other in the finished plan. Write the heading '
+        lines += ['', 'Section %s is written by several workers at once, one after the other in the finished plan. Write the heading '
                   'and only your part under it, as the instructions below say; do not restate the other worker\'s part.'
                   % ', '.join(str(n) for n in shared)]
     lines += ['', 'Do not write the plan title or any section not listed above. Another worker owns every section you are '
@@ -365,34 +487,44 @@ def block_contract(name, directory):
               'section defines.']
     if not spec['commands']:
         lines.append('Do not write a `%s` section; another worker owns it.' % COMMANDS)
-    lines += ['', 'Read this first. It is binding; do not contradict it:', '', '- `%s/outline.json`' % directory]
+    outline = embedded_outline(directory)
+    if name in EARLY:
+        lines += ['', 'The outline is being written beside you and does not exist yet: work from the requirements in the '
+                  'planning context above.']
+    elif outline:
+        lines += ['', 'The outline follows. It is binding; do not contradict it. It is already here: do not read any file for it.',
+                  '', '```json', outline, '```']
+    else:
+        lines += ['', 'Read this first. It is binding; do not contradict it:', '', '- `%s/outline.json`' % directory]
     if name in TRACE_KINDS:
         lines += ['', 'Also fill `trace` (kinds: %s): one entry per requirement and kind, `requirement` being a requirement ID '
-                  'from the outline\'s `requirement_map`, nothing else, and `ids` the IDs of yours that cover it. The driver '
-                  'builds the traceability table from `trace`: map every requirement of the outline to at least one of your '
-                  'IDs.' % TRACE_KINDS[name]]
-    lines += ['', SPECIFIC[name], '']
+                  'from %s, nothing else, and `ids` the IDs of yours that cover it. The driver '
+                  'builds the traceability table from `trace`: map every requirement to at least one of your '
+                  'IDs.' % (TRACE_KINDS[name], requirement_source(name))]
+    lines += ['', SPECIFIC[name], '', length_note(name), '']
     return '\n'.join(lines)
 
 
 OUTLINE_BLOCKS = (
-    'You are first. Every other worker starts the moment you finish and reads only your answer, so it is the contract '
-    'the whole plan is written to: exact, with no prose. Your whole answer is one JSON object, checked against a schema '
-    '(`%s`), with these fields (every value plain text; a field that holds several items is one string, items separated '
-    'by commas):\n\n'
+    'You are first. The workers for the architecture, components, steps, tests and invariants start the moment you finish and '
+    'read only your answer, so it is the contract they are written to: exact, with no prose, and short, because they wait for '
+    'it (about 600 tokens in all; if you are writing more, you are writing what another worker writes). Your whole answer is '
+    'one JSON object, checked against a schema (`%s`), with these fields (every value plain text; a field that holds several '
+    'items is one string, items separated by commas):\n\n'
     '- `stack`: one line naming the framework, the build tool, and the test runners.\n'
-    '- `components`: `id` (`C-n`), `name`, `responsibility` (one phrase), `files`. Every component has an ID.\n'
-    '- `steps`: numbered implementation steps: `number`, `title`, `owns`, `depends_on`. Every file the project needs '
-    '(source, tests, test and runner configuration, fixtures, `.gitignore`, `.uncle/launch.json`) is under exactly one '
-    'step\'s `owns`. At most three dependencies per step; most steps have none. Steps are implemented at the same time and '
-    'the slowest sets the time: size steps evenly, and give no step a file you expect to exceed about 100 lines. Split a '
-    'big file across steps (a defect-injection runner: the mutation list in one file, the runner in another) and keep '
-    'helper scripts simple, sequential where that will do.\n'
-    '- `decisions`: `id` (`D-n`) and `text`, the choice in one phrase.\n'
-    '- `restrictions`: `id` (`R-n`), `text`, and `source_kind` (USER, REPOSITORY, PLATFORM or DESIGN).\n'
-    '- `tests`: each runner and, by path, the test files it runs.\n'
+    '- `components`: `id` (`C-n`), `name`, `files`. Every component has an ID. No description: the components worker writes it.\n'
+    '- `steps`: numbered implementation steps: `number`, `title` (at most four words), `owns`, `depends_on`. Every file the '
+    'project needs (source, tests, test and runner configuration, fixtures, `.gitignore`, `.uncle/launch.json`) is under '
+    'exactly one step\'s `owns`. At most three dependencies per step; most steps have none. Steps are implemented at the same '
+    'time and the slowest sets the time: size steps evenly, and give no step a file you expect to exceed about 100 lines. '
+    'Split a big file across steps and keep helper scripts simple, sequential where that will do. The defect-injection runner '
+    'is supplied by the driver: give it its own step that owns only `tests/mutations/run.mjs` (nothing else) and put the list '
+    'in `tests/mutations/list.mjs`, a default-exported array of `{id, file, find, replace, spec, expected}` (`find` occurs '
+    'once in `file`; `spec` is the test file that must fail).\n'
     '- `requirement_map`: one entry per requirement of the interpretation: `requirement` (`R-1`) and `components`, the '
     'IDs of the components that implement it.\n\n'
+    'Decisions, restrictions and the test list are written by their own workers, from the requirements; do not '
+    'write them.\n'
     'Decide everything here once; the other workers will not revisit it.')
 
 
@@ -452,7 +584,7 @@ def render_outline(packet):
                 raise ValueError('outline: %s is owned by steps %s and %s' % (path, owned[path], step['number']))
             owned[path] = step['number']
     lines = ['## Stack', '', packet.get('stack', ''), '', '## Components', '']
-    lines += ['- %s %s -- %s; files: %s' % (c['id'], c['name'], c['responsibility'],
+    lines += ['- %s %s -- %s; files: %s' % (c['id'], c['name'], c.get('responsibility', ''),
                                             ', '.join('`%s`' % f for f in pm.split_list(c.get('files')))) for c in packet['components']]
     lines += ['', '## Steps', '']
     for step in packet['steps']:
@@ -653,7 +785,7 @@ def trace_section(directory):
 
 def assemble(directory):
     directory = Path(directory)
-    found, joined = {}, set()
+    found, joined = {}, {}
     for name in WORKERS:
         if name == 'outline':
             continue
@@ -681,9 +813,10 @@ def assemble(directory):
                 raise ValueError('%s: unexpected heading %r' % (path.name, line))
             if not body.strip():
                 raise ValueError('%s: section %r is empty' % (path.name, line))
-            if item in found and item in SHARED and item not in joined:
-                joined.add(item)
-                found[item] = (found[item][0], found[item][1] + '\n\n' + body)       # the second worker's part
+            if item in found and item in SHARED and joined.get(item, 0) < WRITERS[item] - 1:
+                joined[item] = joined.get(item, 0) + 1
+                if body.strip() != 'NONE':                                             # a second worker with nothing to add
+                    found[item] = (found[item][0], found[item][1] + '\n\n' + body)       # the second worker's part
             elif item in found:
                 raise ValueError('%s: section %r is written twice' % (path.name, line))
             else:
@@ -736,11 +869,22 @@ def trace_block(directory):
     return {'id': 'w.1', 'kind': 'rows', 'row_kind': 'traceability', 'rows': rows}
 
 
+def join_steps(blocks):
+    """One `steps` block where two workers each wrote their half of the implementation order: a step may depend on one in the other half."""
+    out = []
+    for block in blocks:
+        if out and block.get('kind') == 'steps' and out[-1].get('kind') == 'steps':
+            out[-1] = dict(out[-1], items=list(out[-1].get('items', [])) + list(block.get('items', [])))
+        else:
+            out.append(block)
+    return out
+
+
 def assemble_model(directory):
     """The plan as a model, from the workers' typed sections.  ValueError when any worker lacks them
     (then the Markdown assembly is the only way)."""
     directory = Path(directory)
-    found, joined = {}, set()
+    found, joined = {}, {}
     for name in WORKERS:
         if name == 'outline':
             continue
@@ -756,9 +900,10 @@ def assemble_model(directory):
             item = key('## ' + section['heading'])
             if item not in allowed:
                 raise ValueError('%s: unexpected heading %r' % (name, section['heading']))
-            if item in found and item in SHARED and item not in joined:
-                joined.add(item)
-                found[item] = dict(found[item], blocks=found[item]['blocks'] + section['blocks'])   # the second worker's part
+            if item in found and item in SHARED and joined.get(item, 0) < WRITERS[item] - 1:
+                joined[item] = joined.get(item, 0) + 1
+                extra = [b for b in section['blocks'] if not (b.get('kind') == 'prose' and str(b.get('text', '')).strip() == 'NONE')]
+                found[item] = dict(found[item], blocks=join_steps(found[item]['blocks'] + extra))   # the next worker's part, unless it had nothing
             elif item in found:
                 raise ValueError('%s: section %r is written twice' % (name, section['heading']))
             else:

@@ -281,6 +281,11 @@ on_exit() {
     if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
     if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
+    if declare -f early_checklist_cancel > /dev/null; then early_checklist_cancel; fi
+    if [[ -n "${PARALLEL_PREWARM_PID:-}" ]] && kill -0 "$PARALLEL_PREWARM_PID" 2>/dev/null; then
+        kill "$PARALLEL_PREWARM_PID" 2>/dev/null || true
+        wait "$PARALLEL_PREWARM_PID" 2>/dev/null || true
+    fi
     # A probe must not outlive the run that started it.
     if [[ -n "${PREFLIGHT_BG_PID:-}" ]] && kill -0 "$PREFLIGHT_BG_PID" 2>/dev/null; then
         kill "$PREFLIGHT_BG_PID" 2>/dev/null || true
@@ -1870,7 +1875,8 @@ CANONICAL_WORKER_PACKET_CONTRACT
                 # outside that sandbox and is denied -- gave the model two
                 # conflicting instructions; one real run tried the denied
                 # live path, then narrated success without writing anywhere.
-                if [[ "${UNCLE_RESOLVED_RUNNER:-}" != self-hosted ]]; then
+                # A schema-checked answer is delivered by the StructuredOutput call below; a Write instruction beside it is a conflict.
+                if [[ "${UNCLE_RESOLVED_RUNNER:-}" != self-hosted && "${#schema_args[@]}" -eq 0 ]]; then
                     cat >> "$effective_prompt" <<'CANONICAL_ARTIFACT_CONTRACT'
 
 ## Canonical artifact contract (binding)
@@ -2876,7 +2882,9 @@ run_manual_checklist_panel() {
         cp "$ROOT/prompts/change/manual-checklist-review-worker.md" "$prompt"
         local range
         case "$lens" in coverage) range='MC-100 through MC-199';; invariants) range='MC-200 through MC-299';; resources) range='MC-300 through MC-399';; regressions) range='MC-400 through MC-499';; esac
-        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`, `.uncle/workflow/documents/PROJECT_PLAN.json`, `.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json`, `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`, and `.uncle/workflow/documents/TEST_REVIEW.json`. Do not inspect any rendered Markdown view or enumerate directories.\n\nUse current-tree snapshots, file hashes, and `.uncle/workflow/green-check.tsv` for regression evidence. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$lens" "$range" >> "$prompt"
+        local inputs='`.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`, and `.uncle/workflow/documents/TEST_REVIEW.json`'
+        [[ "${UNCLE_CHECKLIST_EARLY:-0}" != 1 ]] || inputs='and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json` (the test review is being written beside you and is not an input)'
+        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`, `.uncle/workflow/documents/PROJECT_PLAN.json`, `.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json`, %s. Do not inspect any rendered Markdown view or enumerate directories.\n\nUse current-tree snapshots, file hashes, and `.uncle/workflow/green-check.tsv` for regression evidence. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$range" >> "$prompt"
         ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/manual-checklist-worker-$lens.log" 2>&1 &
         pids+=("$!")
@@ -2901,6 +2909,49 @@ run_manual_checklist_panel() {
     python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" || return 1
     python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" .uncle/docs/MANUAL_CHECKLIST.md || return 1
     cp "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
+}
+
+# The checklist is written while the test review runs. Its workers normally read TEST_REVIEW.json, so this run
+# leaves it out and the result is kept only when the review then passes with nothing to carry; otherwise the
+# MANUAL_CHECKLIST stage writes it again with the review as an input. WORKFLOW_EARLY_CHECKLIST=0 turns it off.
+EARLY_CHECKLIST_PID=""
+early_checklist_start() {
+    [[ -z "$EARLY_CHECKLIST_PID" ]] || return 0          # already started, beside the verification commands
+    rm -f "$STATE_DIR/checklist-early.ok"
+    [[ "${WORKFLOW_EARLY_CHECKLIST:-1}" == 1 && "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || return 0
+    # A failing driver check means the review will have findings and the checklist is rewritten anyway (noinit: 2 of 70 unit
+    # tests failed, the early checklist was discarded and the three workers ran twice).
+    # An unattended run carries the findings to the final audit and does not change the build for them, so the review's result does not
+    # decide anything the checklist needs; an attended one may repair, and then the checklist is written again.
+    if [[ "$UNATTENDED" != 1 && "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" && "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then
+        echo 'Not writing the checklist early: driver verification has failures, so the test review will have findings.'
+        return 0
+    fi
+    echo 'Writing the manual checklist while the test review runs.'
+    ( UNCLE_CHECKLIST_EARLY=1 run_manual_checklist_panel && [[ -s "$STATE_DIR/documents/MANUAL_CHECKLIST.json" ]] \
+        && : > "$STATE_DIR/checklist-early.ok" ) > "$LOG_DIR/manual-checklist-early.log" 2>&1 < /dev/null &
+    EARLY_CHECKLIST_PID=$!
+}
+# The code is about to change: whatever was written for it is no use.
+early_checklist_cancel() {
+    if [[ -n "$EARLY_CHECKLIST_PID" ]] && kill -0 "$EARLY_CHECKLIST_PID" 2>/dev/null; then
+        kill "$EARLY_CHECKLIST_PID" 2>/dev/null || true
+        pkill -P "$EARLY_CHECKLIST_PID" 2>/dev/null || true
+    fi
+    [[ -z "$EARLY_CHECKLIST_PID" ]] || wait "$EARLY_CHECKLIST_PID" 2>/dev/null || true
+    EARLY_CHECKLIST_PID=""
+    rm -f "$STATE_DIR/checklist-early.ok"
+}
+early_checklist_join() {
+    [[ -n "$EARLY_CHECKLIST_PID" ]] || return 0
+    wait "$EARLY_CHECKLIST_PID" 2>/dev/null || true
+    EARLY_CHECKLIST_PID=""
+}
+# Succeeds when the early checklist can stand in for the MANUAL_CHECKLIST stage.
+early_checklist_usable() {
+    [[ -e "$STATE_DIR/checklist-early.ok" && -s "$STATE_DIR/documents/MANUAL_CHECKLIST.json" ]] || return 1
+    [[ "$UNATTENDED" != 1 ]] || return 0
+    [[ "$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS 2>/dev/null)" == PASS ]]
 }
 
 run_final_audit_panel() {
@@ -2940,6 +2991,7 @@ run_parallel_application_implementation() {
         echo 'Parallel implementation was previously rejected for this plan; using serial implementation.'
         return 2
     fi
+    parallel_prewarm_wait
     groups="$(parallel_groups .uncle/docs/UPDATED_PROJECT_PLAN.md "$ROOT/scripts/lib")" || return 2
     [[ -n "$groups" ]] || return 2
     uncle_resolve_stage_runner implementation AGENT || return 1
@@ -3379,10 +3431,23 @@ project_plan_section_finish() {
         && echo "Project plan section $name was answered in chat; used that answer."
 }
 
+# Wait for one section worker and take its section; a worker that delivered nothing usable gets one more run, alone.
+project_plan_section_settle() {
+    local name="$1" directory="$2" delivery="$3" pid="$4"
+    wait "$pid" || { echo "Project plan section $name did not complete." >&2; return 1; }
+    project_plan_section_finish "$name" "$directory" "$delivery" && return 0
+    echo "Project plan section $name delivered nothing usable; running that worker once more."
+    # Keep the failed attempt's logs: the rerun overwrites them, and why it failed is the evidence.
+    cp "$LOG_DIR/project-plan-section-$name.jsonl" "$LOG_DIR/project-plan-section-$name.attempt1.jsonl" 2>/dev/null || true
+    cp "$LOG_DIR/project-plan-section-$name.log" "$LOG_DIR/project-plan-section-$name.attempt1.log" 2>/dev/null || true
+    project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || true
+    project_plan_section_finish "$name" "$directory" "$delivery" || { echo "Project plan section $name wrote nothing." >&2; return 1; }
+}
+
 run_project_plan_sections() {
     local output="$1" directory="$STATE_DIR/project-plan-sections"
-    local helper="$ROOT/scripts/lib/project_plan_sections.py" phase name pid failed delivery=file
-    local -a pids names
+    local helper="$ROOT/scripts/lib/project_plan_sections.py" phase name failed delivery=file index gate=1
+    local -a pids=() names=()
     # Forced, schema-checked JSON wherever the runner can enforce it.
     if stage_supports_structured_output project-plan-section-outline; then
         delivery=hosted
@@ -3390,28 +3455,32 @@ run_project_plan_sections() {
         delivery=local
     fi
     rm -rf "$directory"; mkdir -p "$directory/prompts"
+    # The first phase holds the outline and the workers that need only the requirements. The next phase starts when the
+    # outline is done, whether or not those are; everything still running is collected at the end.
     while IFS= read -r phase; do
-        pids=(); names=()
         for name in $phase; do
             echo "Project plan section worker: $name"
             ( project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
             pids+=("$!"); names+=("$name")
         done
-        failed=0
-        for pid in "${!pids[@]}"; do
-            name="${names[$pid]}"
-            wait "${pids[$pid]}" || { echo "Project plan section $name did not complete." >&2; failed=1; continue; }
-            project_plan_section_finish "$name" "$directory" "$delivery" && continue
-            # A worker that delivered nothing usable gets one more run, alone, before the plan is given up on.
-            echo "Project plan section $name delivered nothing usable; running that worker once more."
-            # Keep the failed attempt's logs: the rerun overwrites them, and why it failed is the evidence.
-            cp "$LOG_DIR/project-plan-section-$name.jsonl" "$LOG_DIR/project-plan-section-$name.attempt1.jsonl" 2>/dev/null || true
-            cp "$LOG_DIR/project-plan-section-$name.log" "$LOG_DIR/project-plan-section-$name.attempt1.log" 2>/dev/null || true
-            project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || true
-            project_plan_section_finish "$name" "$directory" "$delivery" || { echo "Project plan section $name wrote nothing." >&2; failed=1; }
-        done
-        [[ "$failed" == 0 ]] || return 1
+        if [[ "$gate" == 1 ]]; then
+            gate=0
+            for index in "${!names[@]}"; do
+                [[ "${names[$index]}" == outline ]] || continue
+                if ! project_plan_section_settle outline "$directory" "$delivery" "${pids[$index]}"; then
+                    kill "${pids[@]}" 2>/dev/null || true
+                    wait 2>/dev/null || true
+                    return 1
+                fi
+                unset "pids[$index]" "names[$index]"
+            done
+        fi
     done < <(python3 -B "$helper" phases)
+    failed=0
+    for index in "${!pids[@]}"; do
+        project_plan_section_settle "${names[$index]}" "$directory" "$delivery" "${pids[$index]}" || failed=1
+    done
+    [[ "$failed" == 0 ]] || return 1
     # The traceability table is built here from the workers' own mapping lines.  Only a plan whose workers
     # left too little behind needs the model, and then one worker reads everything and writes it.
     if ! python3 -B "$helper" trace-ready "$directory"; then
@@ -3479,6 +3548,15 @@ run_stage() {
                 python3 "$ROOT/scripts/lib/requirements-context.py" --render-json \
                     . .uncle/docs/REQUIREMENTS_INTERPRETATION.md || exit 1
                 echo 'Requirements fast path: deterministically rendered canonical JSON from the completed investigation.'
+            elif stage_supports_structured_output requirements \
+                 && mkdir -p "$STATE_DIR/artifact-delivery" \
+                 && python3 -B "$ROOT/scripts/lib/worker_schemas.py" requirements "$STATE_DIR/requirements-schema.json"; then
+                # Hosted Claude answers through a schema-checked call: no Write turn, and a missing section is a schema error the
+                # model sees, not a crash in the renderer.  Anything else keeps the file contract.
+                UNCLE_OUTPUT_SCHEMA_FILE="$STATE_DIR/requirements-schema.json" \
+                    UNCLE_STRUCTURED_OUTPUT_PATH="$STATE_DIR/artifact-delivery/requirements.json" \
+                    run_claude prompts/requirements.md requirements \
+                    || run_claude prompts/requirements.md requirements
             else
                 run_claude prompts/requirements.md requirements
             fi
@@ -3615,6 +3693,7 @@ run_stage() {
             fi
             ;;
         IMPLEMENT)
+            early_checklist_cancel      # the code is about to change
             parallel_status=0
             run_parallel_application_implementation || parallel_status=$?
             if [[ "$parallel_status" != 0 ]]; then
@@ -3778,6 +3857,7 @@ run_stage() {
             fi
             ;;
         REPAIR)
+            early_checklist_cancel      # the code is about to change
             if stage_uses_self_hosted repair AGENT; then
                 # Same split as implementation, with a twist: the format pass
                 # cannot just emit a fresh document -- a repair only touches
@@ -3800,6 +3880,12 @@ run_stage() {
             require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
             ;;
         MANUAL_CHECKLIST)
+            if early_checklist_usable; then
+                echo 'Manual-checklist: using the checklist written beside the test review (the review passed with nothing to carry).'
+                rm -f "$STATE_DIR/checklist-early.ok"
+                return 0
+            fi
+            rm -f "$STATE_DIR/checklist-early.ok"
             run_manual_checklist_panel
             # Only the canonical packet proves a panel completed. A rendered
             # view can survive a prior run or a user edit and is never an
@@ -3934,6 +4020,11 @@ run_green_check() {
         parallel_groups_format_hint
         exit 1
     fi
+    # A plan that declares no groups still runs a build beside the unit tests (auto_groups.py); WORKFLOW_AUTO_VERIFY_GROUPS=0 stops it.
+    if [[ ! -s "$STATE_DIR/green-check.groups" && "${WORKFLOW_AUTO_VERIFY_GROUPS:-1}" == 1 ]]; then
+        python3 -B "$ROOT/scripts/lib/auto_groups.py" "$GREEN_CMDS" > "$STATE_DIR/green-check.groups" 2>/dev/null || : > "$STATE_DIR/green-check.groups"
+        [[ ! -s "$STATE_DIR/green-check.groups" ]] || echo "Verification: the plan declares no parallel groups; running commands $(tr '\n' ';' < "$STATE_DIR/green-check.groups" | sed 's/;$//; s/;/; and /g') together."
+    fi
 
     if [[ ! -s "$GREEN_CMDS" ]]; then
         : > "$GREEN_CLASS"
@@ -3988,6 +4079,8 @@ run_green_check() {
         fi
     done
     local execution_status=0
+    # The checklist reads the plans and the code, not the results: write it while the commands run.
+    early_checklist_start
     green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" \
         check_verification_inputs "$STATE_DIR/green-check.groups" || execution_status=$?
     [[ "$execution_status" == 0 ]] || exit "$execution_status"
@@ -4435,6 +4528,8 @@ while true; do
             verify_approval \
                 .uncle/docs/ADVERSARIAL_REVIEW.md \
                 ADVERSARIAL_REVIEW
+            # The first group's sandboxes can be made now; they are used only if the tree is unchanged when the group starts.
+            parallel_prewarm_start .uncle/docs/PROJECT_PLAN.md "$ROOT/scripts/lib"
             run_gated_stage UPDATED_PLAN \
                 .uncle/docs/ADVERSARIAL_REVIEW.md \
                 .uncle/docs/UPDATED_PROJECT_PLAN.md
@@ -4706,6 +4801,9 @@ while true; do
             # killing the run here would throw away the stage that produced it.
             run_green_check || true
             collect_background_preflight
+            # The driver knows each command's result; record them as the test report in place of the implementation stage's
+            # placeholder, so the test review reads real evidence once instead of failing it and sending the run back here.
+            python3 -B "$ROOT/scripts/lib/test_report.py" from-green . application "$STATE_DIR/green-check.current.tsv" "$LOG_DIR/green-check.log" 2>/dev/null || true
 
             # Probe only: records what a parallel implementation would have
             # done and whether the plan's file ownership matched the tree.
@@ -4795,7 +4893,9 @@ while true; do
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
+            early_checklist_start
             run_stage TEST_REVIEW
+            early_checklist_join
             check_verification_inputs
             set_state VALIDATE_TEST_REVIEW
             ;;
@@ -4818,14 +4918,17 @@ while true; do
             # its Markdown rendering is never ingested as workflow input.
             # Passing driver verification plus only an incomplete fallback
             # report needs evidence reconciliation, never a source-code repair.
-            if [[ ! -e "$STATE_DIR/test-evidence-handoff-attempted" ]] \
+            # Only when the driver's own suite had no failure: a failing command (a mutation runner that does not run) is
+            # a defect to repair or waive, not missing documentation, and sending it back through the implementation stage
+            # to "reconcile evidence" ran the agent a second time and the review a second time for nothing (noinit).
+            if [[ ! -e "$STATE_DIR/test-evidence-handoff-attempted" ]] && [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] \
                 && python3 -B "$ROOT/scripts/lib/test_review_route.py" "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/AUTOMATED_TEST_REPORT.json"; then
                 touch "$STATE_DIR/test-evidence-handoff-attempted" "$STATE_DIR/test-evidence-reconcile"
                 echo 'Test review found an incomplete evidence handoff after a passing driver suite; returning to implementation-owned report reconciliation.'
                 set_state IMPLEMENT
                 continue
             fi
-            if [[ ! -e "$STATE_DIR/test-mutation-evidence-attempted" ]] \
+            if [[ ! -e "$STATE_DIR/test-mutation-evidence-attempted" ]] && [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] \
                 && python3 -B "$ROOT/scripts/lib/test_review_route.py" --mutation-evidence-gap "$STATE_DIR/documents/TEST_REVIEW.json"; then
                 touch "$STATE_DIR/test-mutation-evidence-attempted" "$STATE_DIR/test-evidence-reconcile"
                 echo 'Test review found missing mutation evidence; running one implementation-owned evidence reconciliation before re-review.'
@@ -4962,14 +5065,14 @@ while true; do
             # was ingested should recover on resume as well.  The fallback
             # report is an implementation-owned documentation gap, so no
             # source repair can make this acceptance result pass.
-            if [[ ! -e "$STATE_DIR/test-evidence-handoff-attempted" ]] \
+            if [[ ! -e "$STATE_DIR/test-evidence-handoff-attempted" ]] && [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] \
                 && python3 -B "$ROOT/scripts/lib/test_review_route.py" "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/AUTOMATED_TEST_REPORT.json"; then
                 touch "$STATE_DIR/test-evidence-handoff-attempted" "$STATE_DIR/test-evidence-reconcile"
                 echo 'Repair reclassified as incomplete test-evidence handoff; returning to implementation-owned report reconciliation.'
                 set_state IMPLEMENT
                 continue
             fi
-            if [[ ! -e "$STATE_DIR/test-mutation-evidence-attempted" ]] \
+            if [[ ! -e "$STATE_DIR/test-mutation-evidence-attempted" ]] && [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] \
                 && python3 -B "$ROOT/scripts/lib/test_review_route.py" --mutation-evidence-gap "$STATE_DIR/documents/TEST_REVIEW.json"; then
                 touch "$STATE_DIR/test-mutation-evidence-attempted" "$STATE_DIR/test-evidence-reconcile"
                 echo 'Repair reclassified as missing mutation evidence; running one implementation-owned evidence reconciliation.'

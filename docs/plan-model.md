@@ -401,3 +401,83 @@ by splitting large outputs, removing serial hand-offs and not repeating work.
 Not done: wiring `verify_prewarm.py` (installs and the browser download during implementation, about 18 s of a 31 s green check);
 running resolvers as soon as their own writers finish; grouping findings by the ids they name; cache-friendly shared prompt prefixes.
 
+## The implementation, test and verification loop (sixth noinit run)
+
+Sequence seen: `IMPLEMENT -> TEST_REVIEW -> IMPLEMENT -> TEST_REVIEW`, every run. Cause, two parts:
+1. The parallel implementation leaves a placeholder test report ("Implementation handoff: NOT RUN") because steps are told to run nothing.
+   The test review therefore failed its coverage and results rows, and `VALIDATE_TEST_REVIEW` routed the run back to IMPLEMENT to run an
+   agent that rewrote the report, then reviewed again. Both the review and the agent were wasted.
+2. That route (`--mutation-evidence-gap`, and the handoff one) fired even when a driver command had FAILED: the mutation runner exited 1,
+   the reviewers wrote "no mutation proof", and a failing command was treated as missing documentation.
+
+Fixed: the driver records its own command results as the test report right after the green check (`test_report.py from-green`; a report
+the implementation really wrote is kept, a driver-written one is refreshed each run), and both routes now require a green suite, so a failing
+command goes to repair or waiver and never back through the implementation stage as a documentation gap.
+
+Faster verification: a plan that declares no parallel groups now runs a build beside the unit tests (`auto_groups.py`; setup commands and
+browser tests are never grouped, and `WORKFLOW_AUTO_VERIFY_GROUPS=0` turns it off), and `npx playwright install` checks the local CLI first
+(`npx --no-install ... || npx ...`), skipping an eight-second registry check once the dependencies are installed.
+
+Why the test review does not run beside the verification commands: its reviewers are read-only and their evidence is the commands' results,
+so they cannot wait for them and would judge without. What can overlap is work that needs no results, such as writing the manual
+checklist (about 23 s); that is not built.
+
+Why implementation step 10 is the long pole: it writes the mutation runner (190 lines, about 8,300 output tokens, 53 s) against a list
+file and sources that other steps write at the same moment and it is told not to read. It guesses their shape (the report lists the
+assumptions), which costs reasoning time and is why the runner then fails.
+
+
+## Project plan to about 30 s (seventh round)
+
+From the fifth noinit run (stage 65 s: outline 28 s, then the longest worker 37 s):
+
+- **Outline cut to about 1,000 tokens.** Decisions, restrictions, component responsibilities and step titles are a few words each; the
+  decisions and restrictions workers write the full sentence, reason and fields.
+- **Workers over 2,500 tokens split.** `invariants` + `guards` (section 7, I-1..I-40 and I-41 up), `design` (1 to 3) + `components`
+  (4, 5), `handling` (8, 9) + `checks` (11), `restrictions` + `limits` (the first half of the outline's restrictions, rounded up, and the
+  rest; a `limits` worker with nothing writes NONE and the driver drops it). A section or inventory several workers write is joined in
+  `WORKERS` order. Sixteen workers.
+- **Early workers.** `behaviors`, `handling` and `checks` need only the requirements, so they start with the outline
+  (`PHASES[0]`). The second phase starts when the outline finishes, not when the first phase does; whatever is still running is
+  collected after the second phase has started (`project_plan_section_settle`).
+- Every worker's prompt carries the outline (without its schema fields) instead of telling it to read the file; one call fewer on
+  each worker's path.
+
+Estimated (not measured): outline ~12 s, longest worker ~20 s. A live noinit run is the test. Not done: a faster model for the
+mechanical workers (`decisions`, `restrictions`, `limits`, `commands`, `closing`).
+
+## Eighth round: measured 75 s, not 30 s
+
+The run after the seventh round took 75 s (outline 24 s at 2.3k tokens, not 1k; `design` 46 s at 6.2k tokens, `restrictions` and
+`limits` 35 s and 32 s at about 4.7k each, `steps` 30 s at 3.8k). Time followed output size again, so:
+
+- `design` is three workers (`design` for section 1, `state` for 2, `domain` for 3); `steps` is two (`steps`, `sequence`: first
+  half rounded up and the rest, joined into one `steps` block so a dependency can cross); the restriction inventory is three
+  (`restrictions`, `limits`, `bounds`: thirds of the outline's list). A shared section may now have more than two writers
+  (`WRITERS`); a part that says NONE is dropped. Twenty workers.
+- The outline asks for decisions, restrictions and step titles in four words or fewer and responsibilities in three.
+- Estimate (not measured): outline ~14 s, longest second-phase worker ~20 s, so about 35 s.
+
+Beside it: the early checklist now starts when the verification commands start and, in an unattended run, is kept whatever the review
+found (an attended run still writes it again after a failing review); `auto_groups.py` also runs the browser tests and the
+defect-injection runner together; the install warm-up no longer takes prose words for packages (noinit: 40 of them, one invalid,
+so nothing was cached) and checks names with `npm view` when a batch fails; the first group's step sandboxes are made while the
+updated plan is written (`parallel_steps.py prewarm`) and used only when the tree is unchanged.
+
+## Eighth round: measured 70 s after the sixteen-worker split
+
+Per worker, from the performance events of that run: the outline ended at 19 s but the second phase started at 25 s; `design` took
+70 s (4,258 tokens), `invariants` 65 s (5,129), `tests` 64 s (4,025), then `defects`, `limits`, `components`, `restrictions`, `domain`
+at about 2,300 to 3,000 tokens and 52 s. Time follows output; the models write far more than a prompt asks of them.
+
+- **Outline-lite.** The outline is components (id, name, files), steps and the requirement map only (about 600 tokens, the model
+  will write more). Decisions, restrictions and the test list left it; `decisions`, `restrictions`, `limits` and `bounds` now start
+  with the outline from the requirements alone (`EARLY`), the restrictions in thirds of the requirements with their own id ranges
+  (R-1.., R-20.., R-40..). Other workers no longer cite D- or R- ids.
+- **Finer splits.** `design` (section 1), `state` (2), `domain` (3); `steps` + `sequence` (halves, joined into one list); twenty workers.
+- **Length caps.** Every worker is told to keep to about 300 to 600 words (`WORD_CAP`), because the stage waits for the longest answer.
+  This trades plan detail for time, and is the part to loosen if plans read thin.
+- Also: the early checklist starts beside the verification commands and, in an unattended run, is kept whatever the review found;
+  browser tests and the defect-injection runner run together; the install warm-up no longer takes prose words for packages (noinit:
+  40 of them, one invalid, so nothing was cached); the first group's step sandboxes are made while the updated plan is written.
+- Estimate, not measured: outline about 15 s, second phase about 20 s, so about 35 to 40 s.

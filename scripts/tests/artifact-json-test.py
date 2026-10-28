@@ -112,6 +112,24 @@ class UnfenceJson(unittest.TestCase):
         self.assertEqual(module.unfence_json(text), text.strip())
 
 
+class RenderRequirements(unittest.TestCase):
+    def test_a_section_the_writer_left_out_is_rendered_empty_not_a_crash(self):
+        # noinit: a one-line brief, and the model wrote no `failure_behaviors`; the renderer raised KeyError and the stage failed.
+        text = module.render_requirements({'sections': {'required_functionality': 'a calculator'}})
+        self.assertIn('## 1. Required functionality\n\na calculator', text)
+        self.assertIn('## 6. Failure behaviors\n\nNone stated.', text)
+        self.assertEqual(text.count('## '), len(module.REQUIREMENTS_SECTIONS))
+
+    def test_a_singular_key_or_a_list_is_accepted(self):
+        text = module.render_requirements({'sections': {'failure_behavior': 'reject bad input', 'constraints': ['a', 'b']}})
+        self.assertIn('## 6. Failure behaviors\n\nreject bad input', text)
+        self.assertIn('- a\n- b', text)
+
+    def test_no_sections_object_is_an_error_that_names_the_keys(self):
+        with self.assertRaisesRegex(ValueError, 'failure_behaviors'):
+            module.render_requirements({'schema': 'uncle.artifact/v1'})
+
+
 class RenderChangePlan(unittest.TestCase):
     def test_explicit_empty_dispositions_is_valid_when_review_had_no_findings(self):
         # A model that correctly reasoned "zero adversarial findings, so

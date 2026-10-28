@@ -84,3 +84,12 @@ Option A on this run: 19 deciding writers (16 Accepted, 2 Partially accepted, 1 
 none left out. The longest implementation step (56 s) wrote 11 KB of mutation-runner code; time follows output size, so a plan whose
 outline puts two large files in one step has a long pole the driver does not split.
 
+
+## Step 10: the defect-injection runner (sixth noinit run)
+
+The slow, failing implementation step wrote a mutation runner blind (11 KB of model output, then it failed). The runner is now
+supplied by the driver: `scripts/lib/mutation_runner.mjs` copies the project into a scratch copy per defect (own port), applies
+`find`→`replace`, runs the spec's command, runs a control without the defect, and writes `.test-out/mutations.json`. A step whose
+`Owns:` is only a runner-named file (`run.mjs`, `mutate.mjs`, `run-mutations.js` …) gets `parallel-provided.sh` instead of an agent
+(no model call); the other step writes only the list. `WORKFLOW_PROVIDED_MUTATION_RUNNER=0` reverts. Stub/fixture tests only; not yet
+run live.

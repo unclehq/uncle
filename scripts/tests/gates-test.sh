@@ -604,11 +604,11 @@ printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
 # A speculative review that came back as a fragment: heading, severity,
 # references, and nothing else -- what a model cut off at its output limit
 # leaves behind. The foreground rerun writes the normal review.
-if [[ "$out" == .uncle/docs/ADVERSARIAL_REVIEW.md && "${FAKE_SPEC_REVIEW:-}" == fragment && "${UNCLE_SPECULATIVE:-}" == true ]]; then
+if [[ "$out" == *.uncle/docs/ADVERSARIAL_REVIEW.md && "${FAKE_SPEC_REVIEW:-}" == fragment && "${UNCLE_SPECULATIVE:-}" == true ]]; then
     printf '## AR-001: display does not reject Infinity\n\n- Severity: Medium\n- References: I-1\n' > "$out"
     exit 0
 fi
-if [[ "$out" == .uncle/docs/MANUAL_CHECKLIST.md && "${FAKE_MC_FORMAT:-0}" == MISSING_FIELDS_ONCE ]]; then
+if [[ "$out" == *.uncle/docs/MANUAL_CHECKLIST.md && "${FAKE_MC_FORMAT:-0}" == MISSING_FIELDS_ONCE ]]; then
     if [[ "$review_prompt" == *'Required format retry'* ]]; then
         printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","exact_action":"Open the page","expected_result":"Greeting visible"}]}' > "$out"
     else
@@ -616,7 +616,7 @@ if [[ "$out" == .uncle/docs/MANUAL_CHECKLIST.md && "${FAKE_MC_FORMAT:-0}" == MIS
     fi
     exit 0
 fi
-if [[ "$out" == .uncle/docs/FINAL_AUDIT.md && "${FAKE_AUDIT_FORMAT:-0}" == MISSING_VERDICT_ONCE ]]; then
+if [[ "$out" == *.uncle/docs/FINAL_AUDIT.md && "${FAKE_AUDIT_FORMAT:-0}" == MISSING_VERDICT_ONCE ]]; then
     if [[ "$review_prompt" == *'Required format retry'* ]]; then
         printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nREADY\n' >> "$out"
     else
@@ -624,7 +624,7 @@ if [[ "$out" == .uncle/docs/FINAL_AUDIT.md && "${FAKE_AUDIT_FORMAT:-0}" == MISSI
     fi
     exit 0
 fi
-if [[ "$out" == .uncle/docs/TEST_REVIEW.md ]]; then
+if [[ "$out" == *.uncle/docs/TEST_REVIEW.md ]]; then
     printf '%s\n' "$review_prompt" > .uncle/workflow/received-test-review-prompt.md
     status="${FAKE_TEST_REVIEW:-PASS}"
     if [[ "$status" == FAIL_ONCE ]]; then
@@ -649,21 +649,21 @@ if [[ "$out" == .uncle/docs/TEST_REVIEW.md ]]; then
         printf '| %s | YES | %s | stub evidence |\n' "$id" "$status" >> "$out"
     done
 else
-    if [[ "${FAKE_COMPACT_REVIEW:-0}" == 1 && "$out" == .uncle/docs/FINAL_AUDIT.md ]]; then
+    if [[ "${FAKE_COMPACT_REVIEW:-0}" == 1 && "$out" == *.uncle/docs/FINAL_AUDIT.md ]]; then
         printf 'Repeated background that adds no findings. Repeated background that adds no findings.\n' > "$out"
     else
         : > "$out"
     fi
-    if [[ "$out" == .uncle/docs/FINAL_AUDIT.md ]]; then
+    if [[ "$out" == *.uncle/docs/FINAL_AUDIT.md ]]; then
         printf 'x\n' >> .uncle/workflow/final-audit-calls
     fi
-    if [[ "$out" == .uncle/docs/FINAL_AUDIT.md && "${FAKE_AUDIT:-READY}" == NO_REPORT ]]; then
+    if [[ "$out" == *.uncle/docs/FINAL_AUDIT.md && "${FAKE_AUDIT:-READY}" == NO_REPORT ]]; then
         :
-    elif [[ "$out" == .uncle/docs/FINAL_AUDIT.md && "${FAKE_AUDIT:-READY}" == 'NOT READY' ]]; then
+    elif [[ "$out" == *.uncle/docs/FINAL_AUDIT.md && "${FAKE_AUDIT:-READY}" == 'NOT READY' ]]; then
         printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n| FA-1 | Missing review | Review greeting | YES |\n\nNOT READY\n' >> "$out"
-    elif [[ "$out" == .uncle/docs/FINAL_AUDIT.md ]]; then
+    elif [[ "$out" == *.uncle/docs/FINAL_AUDIT.md ]]; then
         printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\n%s\n' "${FAKE_AUDIT:-READY}" >> "$out"
-    elif [[ "$out" == .uncle/docs/ADVERSARIAL_REVIEW.md ]]; then
+    elif [[ "$out" == *.uncle/docs/ADVERSARIAL_REVIEW.md ]]; then
         printf '## Overall assessment\nNo findings.\n' >> "$out"
     else
         # reviewer_output.py's MANUAL_CHECKLIST.md check requires the canonical
@@ -1128,7 +1128,7 @@ new_stagegate_case sg-not-ready-stops-at-gate
 stagegate_agent
 set_state IMPLEMENT
 run_stagegate_stdin "$(gate_input y)" \
-    FAKE_AUDIT="NOT READY" \
+    WORKFLOW_FINAL_AUDIT_PANEL=0 FAKE_AUDIT="NOT READY" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 1
 expect_out "Audit verdict: NOT_READY"
@@ -1148,7 +1148,7 @@ new_stagegate_case sg-final-audit-missing-entirely
 stagegate_agent
 set_state IMPLEMENT
 run_stagegate_stdin "$(gate_input y)" \
-    FAKE_AUDIT=NO_REPORT \
+    WORKFLOW_FINAL_AUDIT_PANEL=0 FAKE_AUDIT=NO_REPORT \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 1
 expect_state FINAL_AUDIT
@@ -1209,7 +1209,7 @@ gate_group_5() {
 new_stagegate_case sg-test-review-malformed
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=MALFORMED
+run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=MALFORMED
 expect_status 1
 expect_state VALIDATE_TEST_REVIEW
 expect_no_file .uncle/docs/FINAL_AUDIT.md
@@ -1218,7 +1218,7 @@ expect_file .uncle/workflow/test-review-format-retry.md
 expect_in_file .uncle/workflow/test-review-format-retry.md 'Driver validator errors'
 expect_in_file .uncle/workflow/received-test-review-prompt.md 'Required format retry'
 COUNT=$((COUNT + 1))
-if [[ "$(grep -c '^.uncle/docs/TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 2 ]]; then
+if [[ "$(grep -c '.uncle/docs/TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 2 ]]; then
     fail 'a malformed test review must receive exactly one format retry'
 fi
 
@@ -1262,7 +1262,7 @@ fi
 new_stagegate_case sg-test-failure-repairs-and-regates
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate_stdin "$(gate_input y)" FAKE_TEST_REVIEW=FAIL_ONCE \
+run_stagegate_stdin "$(gate_input y)" WORKFLOW_TEST_REVIEW_PANEL=0 FAKE_TEST_REVIEW=FAIL_ONCE \
     FAKE_IMPL="printf 'new source\n' > app/new.sh" \
     FAKE_REPAIR="printf '#!/bin/sh\nsh app/main.sh | grep -qx hello\n' > app/test.sh"
 expect_status 0
@@ -1273,7 +1273,7 @@ expect_in_file .uncle/workflow/TEST_CHANGES.diff '-sh app/main.sh | grep -q . ||
 expect_in_file .uncle/workflow/IMPLEMENTATION_REVIEW.md '+sh app/main.sh | grep -qx hello'
 expect_no_file .uncle/docs/VERIFICATION_REPORT.md
 expect_no_file .uncle/docs/FINAL_AUDIT.md
-run_stagegate_stdin "$(gate_input y)" FAKE_TEST_REVIEW=FAIL_ONCE
+run_stagegate_stdin "$(gate_input y)" WORKFLOW_TEST_REVIEW_PANEL=0 FAKE_TEST_REVIEW=FAIL_ONCE
 expect_status 0
 expect_state COMPLETE
 expect_in_file .uncle/workflow/repair-count '1'
@@ -1299,7 +1299,7 @@ expect_state COMPLETE
 expect_in_file .uncle/workflow/repair-source .uncle/docs/VERIFICATION_REPORT.md
 expect_in_file .uncle/workflow/green-check.tsv PASS
 COUNT=$((COUNT + 1))
-if [[ "$(grep -c '^.uncle/docs/TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 2 ]]; then
+if [[ "$(grep -c '.uncle/docs/TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 2 ]]; then
     fail 'repair did not repeat independent test review'
 fi
 
@@ -1307,22 +1307,22 @@ fi
 new_stagegate_case sg-checklist-format-retry
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_MC_FORMAT=MISSING_FIELDS_ONCE
+run_stagegate WORKFLOW_MANUAL_CHECKLIST_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_MC_FORMAT=MISSING_FIELDS_ONCE
 expect_status 0
 expect_state COMPLETE
 expect_out 'Retrying manual-checklist once with the format diagnostic.'
 COUNT=$((COUNT + 1))
-[[ $(grep -c '^.uncle/docs/MANUAL_CHECKLIST.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'checklist format retry did not re-run the reviewer exactly once'
+[[ $(grep -c '.uncle/docs/MANUAL_CHECKLIST.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'checklist format retry did not re-run the reviewer exactly once'
 
 new_stagegate_case sg-audit-format-retry
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_AUDIT_FORMAT=MISSING_VERDICT_ONCE
+run_stagegate WORKFLOW_FINAL_AUDIT_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_AUDIT_FORMAT=MISSING_VERDICT_ONCE
 expect_status 0
 expect_state COMPLETE
 expect_out 'Retrying final-audit once with the format diagnostic.'
 COUNT=$((COUNT + 1))
-[[ $(grep -c '^.uncle/docs/FINAL_AUDIT.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'audit format retry did not re-run the reviewer exactly once'
+[[ $(grep -c '.uncle/docs/FINAL_AUDIT.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'audit format retry did not re-run the reviewer exactly once'
 
 # A persistent defect is bounded across restarts, not just within one process.
 
@@ -1332,12 +1332,12 @@ gate_group_6() {
 new_stagegate_case sg-repair-limit
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL WORKFLOW_MAX_REPAIRS=1
+run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL WORKFLOW_MAX_REPAIRS=1
 expect_status 1
 expect_state REPAIR
 expect_in_file .uncle/workflow/repair-count '1'
 expect_no_file .uncle/docs/FINAL_AUDIT.md
-run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL WORKFLOW_MAX_REPAIRS=1
+run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL WORKFLOW_MAX_REPAIRS=1
 expect_status 1
 expect_state REPAIR
 expect_in_file .uncle/workflow/repair-count '1'
@@ -1349,7 +1349,7 @@ expect_out 'Repair limit (1) reached'
 new_stagegate_case sg-repair-noop-retries-then-stops
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL FAKE_REPAIR_NOOP=1
+run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL FAKE_REPAIR_NOOP=1
 expect_status 1
 expect_state REPAIR
 expect_out 'changed none of the files these findings name: COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
@@ -1362,7 +1362,7 @@ expect_in_file .uncle/workflow/REPAIR_BRIEF.md 'not as evidence'
 expect_in_file .uncle/workflow/stop-reason 'human'
 expect_no_file .uncle/docs/FINAL_AUDIT.md
 COUNT=$((COUNT + 1))
-if [[ "$(grep -c '^.uncle/docs/TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 1 ]]; then
+if [[ "$(grep -c '.uncle/docs/TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 1 ]]; then
     fail 'a no-op repair pass must not be sent to review'
 fi
 
@@ -1371,7 +1371,7 @@ fi
 new_stagegate_case sg-repair-noop-once-then-repairs
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL_ONCE FAKE_REPAIR_NOOP=once WORKFLOW_MAX_REPAIRS=1
+run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL_ONCE FAKE_REPAIR_NOOP=once WORKFLOW_MAX_REPAIRS=1
 expect_status 0
 expect_state COMPLETE
 expect_in_file .uncle/workflow/repair-count '1'
@@ -1388,7 +1388,7 @@ expect_in_file .uncle/workflow/logs/repair-retry.prompt.md 'Repair brief (writte
 new_stagegate_case sg-repair-partial-continues-then-asks
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL FAKE_REVIEW_FINDINGS=1 WORKFLOW_MAX_REPAIRS=2
+run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL FAKE_REVIEW_FINDINGS=1 WORKFLOW_MAX_REPAIRS=2
 expect_status 1
 expect_state REPAIR
 expect_out 'changed files for some findings but none for: TR-B'
@@ -1403,7 +1403,7 @@ if grep -q '\*\*TR-A\*\*' "$REPO/.uncle/workflow/REPAIR_BRIEF.md"; then
     fail 'the brief must list only the findings still open'
 fi
 COUNT=$((COUNT + 1))
-if [[ "$(grep -c '^.uncle/docs/TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 1 ]]; then
+if [[ "$(grep -c '.uncle/docs/TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 1 ]]; then
     fail 'a partial repair must not be sent to review while findings have no change'
 fi
 
@@ -1597,7 +1597,7 @@ set_state FINAL_AUDIT
 # stops for a person, so a reviewer that is malformed every time settles at
 # VALIDATE_TEST_REVIEW -- where that second, final rejection is detected --
 # not back at FINAL_AUDIT where the first one was only ever observed.
-run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=MALFORMED
+run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=MALFORMED
 expect_status 1
 expect_state VALIDATE_TEST_REVIEW
 expect_not_out 'Workflow complete.'
@@ -1683,11 +1683,10 @@ printf '\n## Parallel verification groups\n```\n1 3\n```\n' >> "$REPO/.uncle/doc
 hash_canonical UPDATED_PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
 run_stagegate
-expect_status 1
-expect_state PREFLIGHT
-expect_out 'Invalid Parallel verification groups'
-expect_out 'at least two consecutive numbers per line'
-expect_no_file .uncle/workflow/implemented
+expect_status 0
+expect_state COMPLETE
+expect_out 'Invalid Parallel verification groups; running the verification commands in order.'
+expect_in_file .uncle/workflow/green-check.tsv PASS
 
 
 # Newly capped outputs are reported and preserved, and both drivers keep
@@ -1976,7 +1975,7 @@ COUNT=$((COUNT + 1))
 new_case change-checklist-format-retry
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
-run_driver_stdin "$(gate_input y)" FAKE_MC_FORMAT=MISSING_FIELDS_ONCE \
+run_driver_stdin "$(gate_input y)" WORKFLOW_MANUAL_CHECKLIST_PANEL=0 FAKE_MC_FORMAT=MISSING_FIELDS_ONCE \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
 expect_state COMPLETE
@@ -1987,7 +1986,7 @@ COUNT=$((COUNT + 1))
 new_case change-audit-format-retry
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
-run_driver_stdin "$(gate_input y)" FAKE_AUDIT_FORMAT=MISSING_VERDICT_ONCE \
+run_driver_stdin "$(gate_input y)" WORKFLOW_FINAL_AUDIT_PANEL=0 FAKE_AUDIT_FORMAT=MISSING_VERDICT_ONCE \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
 expect_state COMPLETE

@@ -44,9 +44,14 @@ sync_canonical() {
                   overall_assessment:"No unresolved findings in this fixture."}' \
                 > "$REPO/.uncle/workflow/documents/${name}.json" ;;
         BASELINE_REPORT)
-            jq -n --arg narrative "$(cat "$md")" \
+            # Extracted, not hardcoded: a fixture that deliberately omits the
+            # fenced command block (to exercise the "no commands" warning)
+            # must not have this canonical sibling silently supply one.
+            local commands
+            commands="$(sed -n '/^```/,/^```/p' "$md" | sed '1d;$d')"
+            jq -n --arg narrative "$(cat "$md")" --arg commands "$commands" \
                 '{schema:"uncle.artifact/v1",kind:"baseline-report",narrative:$narrative,
-                  verification_commands:"bash app/test.sh"}' \
+                  verification_commands:$commands}' \
                 > "$REPO/.uncle/workflow/documents/${name}.json" ;;
         CHANGE_PLAN)
             jq -n --arg narrative "$(cat "$md")" \
@@ -234,7 +239,7 @@ EOF
 EOF
 
     local f
-    for f in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN; do
+    for f in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN ADVERSARIAL_REVIEW; do
         hash_canonical "$f" > "$REPO/.uncle/workflow/approvals/${f}.sha256"
     done
     # Not ADVERSARIAL_REVIEW: both drivers' ADVERSARIAL_REVIEW state fast-paths
@@ -1051,8 +1056,7 @@ fi
 # A baseline report with no command block is a warning, not a stopped run.
 new_case baseline-without-commands-warns
 printf '# Baseline Report\n\nNo commands section.\n' > "$REPO/.uncle/docs/BASELINE_REPORT.md"
-hash_file "$REPO/.uncle/docs/BASELINE_REPORT.md" \
-    > "$REPO/.uncle/workflow/approvals/BASELINE_REPORT.sha256"
+hash_canonical BASELINE_REPORT > "$REPO/.uncle/workflow/approvals/BASELINE_REPORT.sha256"
 set_state PLAN
 run_driver
 expect_status 0
@@ -1492,17 +1496,17 @@ fi
 # reopens WAIT_PLAN_APPROVAL, the plan is revised again, and the run loops.
 new_case revised-plan-is-reapproved-before-implementation
 # As WAIT_PLAN_APPROVAL leaves things: both documents acknowledged as they are.
-hash_file "$REPO/.uncle/docs/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
-hash_file "$REPO/.uncle/docs/ADVERSARIAL_REVIEW.md" > "$REPO/.uncle/workflow/approvals/ADVERSARIAL_REVIEW.sha256"
+hash_canonical CHANGE_PLAN > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+hash_canonical ADVERSARIAL_REVIEW > "$REPO/.uncle/workflow/approvals/ADVERSARIAL_REVIEW.sha256"
 set_state UPDATED_PLAN
 run_driver_stdin "$(gate_input y)" WORKFLOW_DIFF_GATE=0 \
-    FAKE_REVISE="printf '\nRevised after review.\n' >> .uncle/docs/CHANGE_PLAN.md"
+    FAKE_REVISE="printf '\nRevised after review.\n' >> .uncle/docs/CHANGE_PLAN.md; jq --arg n \"\$(cat .uncle/docs/CHANGE_PLAN.md)\" '.narrative=\$n' .uncle/workflow/documents/CHANGE_PLAN.json > .uncle/workflow/.tmp-cp.json && mv .uncle/workflow/.tmp-cp.json .uncle/workflow/documents/CHANGE_PLAN.json"
 expect_not_out '.uncle/docs/CHANGE_PLAN.md changed after approval'
 expect_not_out 'Reopening WAIT_PLAN_APPROVAL'
 expect_in_file .uncle/workflow/approval-route WAIT_UPDATED_PLAN_APPROVAL
 expect_in_file .uncle/docs/CHANGE_PLAN.md 'Revised after review.'
 COUNT=$((COUNT + 1))
-if [[ "$(cat "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256")" != "$(hash_file "$REPO/.uncle/docs/CHANGE_PLAN.md")" ]]; then
+if [[ "$(cat "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256")" != "$(hash_file "$REPO/.uncle/workflow/documents/CHANGE_PLAN.json")" ]]; then
     fail 'the recorded CHANGE_PLAN approval must name the revised text'
 fi
 COUNT=$((COUNT + 1))
@@ -1514,17 +1518,17 @@ esac
 # rewrite the plan after the initial acknowledgement; that is expected, and
 # must not make IMPLEMENT reopen a human gate or loop back through review.
 new_case unattended-revised-plan-is-auto-reapproved-before-implementation
-hash_file "$REPO/.uncle/docs/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
-hash_file "$REPO/.uncle/docs/ADVERSARIAL_REVIEW.md" > "$REPO/.uncle/workflow/approvals/ADVERSARIAL_REVIEW.sha256"
+hash_canonical CHANGE_PLAN > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+hash_canonical ADVERSARIAL_REVIEW > "$REPO/.uncle/workflow/approvals/ADVERSARIAL_REVIEW.sha256"
 set_state UPDATED_PLAN
 run_driver DRIVER_ARGS='--unattended' WORKFLOW_DIFF_GATE=0 \
-    FAKE_REVISE="printf '\nRevised unattended after review.\n' >> .uncle/docs/CHANGE_PLAN.md"
+    FAKE_REVISE="printf '\nRevised unattended after review.\n' >> .uncle/docs/CHANGE_PLAN.md; jq --arg n \"\$(cat .uncle/docs/CHANGE_PLAN.md)\" '.narrative=\$n' .uncle/workflow/documents/CHANGE_PLAN.json > .uncle/workflow/.tmp-cp.json && mv .uncle/workflow/.tmp-cp.json .uncle/workflow/documents/CHANGE_PLAN.json"
 expect_not_out '.uncle/docs/CHANGE_PLAN.md changed after approval'
 expect_not_out 'Reopening WAIT_PLAN_APPROVAL'
 expect_in_file .uncle/workflow/approval-route WAIT_UPDATED_PLAN_APPROVAL
 expect_in_file .uncle/workflow/unattended-gates 'approve .uncle/docs/CHANGE_PLAN.md without human review'
 COUNT=$((COUNT + 1))
-if [[ "$(cat "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256")" != "$(hash_file "$REPO/.uncle/docs/CHANGE_PLAN.md")" ]]; then
+if [[ "$(cat "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256")" != "$(hash_file "$REPO/.uncle/workflow/documents/CHANGE_PLAN.json")" ]]; then
     fail 'the unattended CHANGE_PLAN approval must name the revised text'
 fi
 COUNT=$((COUNT + 1))
@@ -2079,10 +2083,16 @@ for exhausted in 0 1; do
     green_baseline 0 'bash app/test.sh'
     set_state IMPLEMENT
     if [[ "$exhausted" == 1 ]]; then
-        hash_file "$REPO/.uncle/docs/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/implementation-completion-repair"
+        hash_canonical CHANGE_PLAN > "$REPO/.uncle/workflow/implementation-completion-repair"
         printf '#!/bin/sh\necho goodbye\n' > "$REPO/app/main.sh"
         printf '## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | INCOMPLETE | app/main.sh | blocked stub check |\n' > "$REPO/.uncle/docs/IMPLEMENTATION_NOTES.md"
+        jq -n '{schema:"uncle.artifact/v1",kind:"implementation-notes",
+            deliveries:[{id:"AC-1",status:"INCOMPLETE",changed_code:"app/main.sh",observed_verification:"blocked stub check"}]}' \
+            > "$REPO/.uncle/workflow/documents/IMPLEMENTATION_NOTES.json"
         printf 'prior test evidence\n' > "$REPO/.uncle/docs/CHANGE_TEST_REPORT.md"
+        jq -n '{schema:"uncle.artifact/v1",kind:"change-test-report",
+            commands:[{command:"bash app/test.sh",status:"PASS",output:"ok"}]}' \
+            > "$REPO/.uncle/workflow/documents/CHANGE_TEST_REPORT.json"
         : > "$REPO/.uncle/workflow/attempts"
     fi
     run_driver_stdin "$(gate_input waive 'Deferred to follow-up issue')" FAKE_IMPL="$partial_impl"
@@ -2120,11 +2130,21 @@ done
 new_case implementation-contract-repair
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
-printf '# Change Spec\n\n## Acceptance criteria\n\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Greeting | app/test.sh |\n\n## Acceptance criteria\n\nDuplicate heading.\n' > "$REPO/.uncle/docs/CHANGE_SPEC.md"
-hash_file "$REPO/.uncle/docs/CHANGE_SPEC.md" > "$REPO/.uncle/workflow/approvals/CHANGE_SPEC.sha256"
-hash_file "$REPO/.uncle/docs/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/implementation-completion-repair"
+# A structurally broken acceptance contract: implementation-completion.py's
+# json_required() rejects a duplicate criterion id outright, the canonical
+# JSON equivalent of the old duplicate-heading Markdown trick (no longer
+# reachable now that this check reads CHANGE_SPEC.json, never the rendered view).
+printf '# Change Spec\n\n## Acceptance criteria\n\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Greeting | app/test.sh |\n' > "$REPO/.uncle/docs/CHANGE_SPEC.md"
+jq -n '{schema:"uncle.artifact/v1",kind:"change-spec",narrative:"",
+    acceptance_criteria:[{id:"AC-1",criterion:"Greeting",verification:"app/test.sh"},
+                          {id:"AC-1",criterion:"Duplicate",verification:"app/test.sh"}]}' \
+    > "$REPO/.uncle/workflow/documents/CHANGE_SPEC.json"
+hash_file "$REPO/.uncle/workflow/documents/CHANGE_SPEC.json" > "$REPO/.uncle/workflow/approvals/CHANGE_SPEC.sha256"
+hash_canonical CHANGE_PLAN > "$REPO/.uncle/workflow/implementation-completion-repair"
 printf '#!/bin/sh\necho goodbye\n' > "$REPO/app/main.sh"
-printf '## Acceptance delivery\n\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | IMPLEMENTED | app/main.sh | app/test.sh PASS |\n' > "$REPO/.uncle/docs/IMPLEMENTATION_NOTES.md"
+jq -n '{schema:"uncle.artifact/v1",kind:"implementation-notes",
+    deliveries:[{id:"AC-1",status:"IMPLEMENTED",changed_code:"app/main.sh",observed_verification:"app/test.sh PASS"}]}' \
+    > "$REPO/.uncle/workflow/documents/IMPLEMENTATION_NOTES.json"
 printf 'prior test evidence\n' > "$REPO/.uncle/docs/CHANGE_TEST_REPORT.md"
 run_driver_stdin "$(gate_input repair)"
 expect_status 0

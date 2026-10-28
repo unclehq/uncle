@@ -107,18 +107,6 @@ export const getClineDefaultSystemPrompt=()=>'';
 '''
 
 class NativeTests(unittest.TestCase):
- def test_codex_gets_the_driver_tool_budget_as_developer_instructions(self):
-  stage=Stage('codex','agent','project-plan',
-              ['-p','--allowedTools','Read,Glob,Grep,Write'],prompt='Write the plan')
-  instructions=stage.codex_developer_instructions()
-  self.assertIn('Read,Glob,Grep,Write',instructions)
-  self.assertIn('Do not run shell commands',instructions)
-  self.assertIn('canonical JSON paths',instructions)
-
-  implementation=Stage('codex','agent','implementation',
-                       ['-p','--allowedTools','Read,Glob,Grep,Write,Edit,TodoWrite,Bash'],prompt='Implement')
-  self.assertNotIn('Do not run shell commands',implementation.codex_developer_instructions())
-
  def test_readonly_reviewer_final_json_is_saved_by_adapter(self):
   fake_code = """#!/usr/bin/env python3
 import json, sys
@@ -130,7 +118,10 @@ for line in sys.stdin:
  elif method == 'thread/start':
   assert event['params']['sandbox'] == 'read-only'
   assert event['params']['approvalPolicy'] == 'never'
-  assert 'Uncle speed policy' in event['params']['developerInstructions']
+  # Codex's native tools are not Claude's Read/Write allowlist.  A prior
+  # adapter tried to forbid shell use for document stages and left Codex with
+  # no usable tool to read or deliver its artifact.
+  assert 'developerInstructions' not in event['params']
   send({'id':event['id'], 'result':{'thread':{'id':'review'}}})
  elif method == 'turn/start':
   send({'id':event['id'], 'result':{'turn':{'id':'assessment'}}})

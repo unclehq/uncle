@@ -110,29 +110,6 @@ class Stage:
                 return self.args[i+1]
         return None
 
-    def codex_developer_instructions(self):
-        """Give app-server Codex the same tool discipline as Claude stages.
-
-        Claude receives a real ``--allowedTools`` capability allowlist.  Codex's
-        app-server protocol does not expose an equivalent restriction for its
-        built-in tools, so the old adapter silently discarded the driver's
-        stage-specific limit.  That invited exploratory shell calls in short
-        document stages, where Claude only reads and writes the named artifact.
-        A developer instruction is the strongest equivalent Codex supports.
-        """
-        tools = self.option('--allowedTools') or 'Read,Glob,Grep,Write'
-        no_shell = 'Bash' not in {part.strip() for part in tools.split(',')}
-        lines = [
-            'Uncle speed policy: complete the stated stage directly.',
-            'Use only the files and canonical JSON paths named by the stage prompt; do not explore unrelated files.',
-            'Do not create a task list, repeat reads, or inspect logs unless the prompt specifically requires them.',
-            'The workflow grants this stage these capabilities: ' + tools + '.',
-        ]
-        if no_shell:
-            lines.append('Do not run shell commands or use shell commands as substitutes for the granted file operations.')
-        lines.append('When a required artifact path is named, write the complete artifact there and finish; chat is diagnostics only.')
-        return '\n'.join(lines)
-
     def status(self, event, **fields):
         path = os.environ.get('UNCLE_STATUS_FILE')
         if path:
@@ -383,8 +360,7 @@ class Stage:
         self.wait(self.rpc('initialize', {'clientInfo':{'name':'uncle','version':'1.0'}}))
         self.send({'method':'initialized'})
         params = {'cwd':os.getcwd(), 'approvalPolicy':'never',
-                  'sandbox':'workspace-write' if self.side=='agent' or self.delivery else 'read-only', 'ephemeral':True,
-                  'developerInstructions':self.codex_developer_instructions()}
+                  'sandbox':'workspace-write' if self.side=='agent' or self.delivery else 'read-only', 'ephemeral':True}
         if self.model: params['model']=self.model
         result=self.wait(self.rpc('thread/start',params))
         self.session=result['thread']['id']

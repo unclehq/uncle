@@ -364,7 +364,7 @@ case "$prompt" in
         mode="${FAKE_ANALYZE:-}"
         [[ "$mode" == baseline-only && -e .uncle/workflow/stub-analyze-done ]] && mode=""
         : > .uncle/workflow/stub-analyze-done
-        delivery="$(printf '%s\n' "$prompt" | sed -n 's/.*JSON object at `\([^`]*\)`.*/\1/p' | head -n1)"
+        delivery="$(printf '%s' "$prompt" | tr '\n' ' ' | sed -n 's/.*JSON object at ` *\([^` ]*\).*/\1/p' | head -n1)"
         if [[ "$mode" != exhaust && "$mode" != baseline-only && -n "$delivery" ]]; then
             mkdir -p "$(dirname "$delivery")"
             jq -n '{schema:"uncle.artifact/v1",kind:"change-planning-bundle",
@@ -385,7 +385,7 @@ case "$prompt" in
         if [[ "${FAKE_PLAN_DENIAL:-0}" == 1 ]]; then
             narrative="${narrative}\nR-1: DESIGN blanket denial, required property mediated access.\n"
         fi
-        delivery="$(printf '%s\n' "$prompt" | sed -n 's/.*JSON object at `\([^`]*\)`.*/\1/p' | head -n1)"
+        delivery="$(printf '%s' "$prompt" | tr '\n' ' ' | sed -n 's/.*JSON object at ` *\([^` ]*\).*/\1/p' | head -n1)"
         [[ -n "$delivery" ]] || delivery=.uncle/workflow/artifact-delivery/change-plan.json
         mkdir -p "$(dirname "$delivery")"
         jq -n --arg narrative "$(printf "$narrative")" \

@@ -7,7 +7,11 @@ author would call risky, and leaves everything else in order:
 
   - a build and a unit-test command next to each other: the build writes its output directory, the unit tests read the sources;
   - browser tests next to the defect-injection runner: the runner works in copies of the project, each on its own port, so it does
-    not touch the port or the output directory the browser tests use (noinit: the two ran one after the other, 40 s together).
+    not touch the port or the output directory the browser tests use (noinit: the two ran one after the other, 40 s together);
+  - unit tests next to browser tests: a unit suite reads source and writes no server of its own; a browser suite starts and
+    tears down its own dev server on its own port. Neither touches what the other needs. This is the common shape for a
+    project with no build step (a static page served directly) -- unit then e2e, back to back, with nothing between them
+    that a build+unit or e2e+mutation pairing would have caught.
 
 Setup commands (install, browser download) are not grouped: a command that runs `npx playwright` while `npm install` is still
 writing node_modules can pick up a half-written binary.  Browser tests stay after the build they serve; anything the patterns
@@ -24,7 +28,8 @@ SETUP = re.compile(r'\b(?:npm\s+(?:ci|install|i)|yarn(?:\s+install)?|pnpm\s+(?:i
                    r'bundle\s+install)\b|\bplaywright\s+install\b')
 BUILD = re.compile(r'\b(?:npm|yarn|pnpm)\s+(?:run\s+)?build\b|\bvite\s+build\b|\btsc\b|\bwebpack\b|\brollup\b|\besbuild\b|'
                    r'\bcargo\s+build\b|\bgo\s+build\b|\bmake\s+build\b')
-UNIT = re.compile(r'\b(?:vitest|jest|mocha|pytest)\b|\bgo\s+test\b|\bcargo\s+test\b|\b(?:npm|yarn|pnpm)\s+(?:run\s+)?test(?::unit)?\b')
+UNIT = re.compile(r'\b(?:vitest|jest|mocha|pytest)\b|\bgo\s+test\b|\bcargo\s+test\b|\bnode\s+--test\b|'
+                   r'\b(?:npm|yarn|pnpm)\s+(?:run\s+)?test(?::unit)?\b')
 MUTATION = re.compile(r'mutat|defect|inject', re.I)
 COMPOUND = re.compile(r'&&|;|(?<!\|)\|(?!\|)|`|\$\(')       # a pipeline or a chain is more than one command; leave it alone
 
@@ -48,7 +53,7 @@ def groups(commands):
     kinds = [kind(c) for c in commands]
     rows, i = [], 0
     while i < len(kinds) - 1:
-        if {kinds[i], kinds[i + 1]} in ({'build', 'unit'}, {'e2e', 'mutation'}):
+        if {kinds[i], kinds[i + 1]} in ({'build', 'unit'}, {'e2e', 'mutation'}, {'unit', 'e2e'}):
             rows.append([i + 1, i + 2])
             i += 2
         else:

@@ -145,6 +145,7 @@ class PreviewTests(unittest.TestCase):
 
     def test_static_page_opened_before_star_check(self):
         (self.root / 'index.html').write_text('<h1>App</h1>')
+        self.spec({'kind': 'webpage', 'path': 'index.html'})
         order = []
         with patch('completion_preview.webbrowser.open', side_effect=lambda url: order.append(url) or True), patch('completion_preview.has_starred', side_effect=lambda: order.append('star') or True):
             self.events(CompletionPreview(self.root))
@@ -231,6 +232,20 @@ class PreviewTests(unittest.TestCase):
         self.spec({'kind':'none'})
         self.assertEqual(launch_spec(self.root), {'kind':'none'})
 
+    def test_index_html_alone_never_implies_a_webpage(self):
+        # A CLI project can have an index.html for a reason unrelated to
+        # having a web UI (uncle's own repo does: a status-dashboard
+        # preview file). Only an explicit .uncle/launch.json may call a
+        # project a webpage; no fallback may guess it from a file's mere
+        # presence, so no browser tab opens for a project that never asked
+        # for one.
+        (self.root / 'index.html').write_text('<h1>Not actually a web app</h1>')
+        self.assertEqual(launch_spec(self.root), {'kind': 'none'})
+        with patch('completion_preview.webbrowser.open') as browser, \
+             patch('completion_preview.has_starred', return_value=True):
+            self.events(CompletionPreview(self.root))
+        browser.assert_not_called()
+
     def test_star_check_read_only_bounded_and_unknown_is_false(self):
         with patch('completion_preview.subprocess.run') as run:
             run.return_value.returncode = 0
@@ -244,6 +259,7 @@ class PreviewTests(unittest.TestCase):
 
     def test_browser_failure_is_visible_and_finishes(self):
         (self.root / 'index.html').write_text('app')
+        self.spec({'kind': 'webpage', 'path': 'index.html'})
         with patch('completion_preview.webbrowser.open', return_value=False):
             events = self.events(CompletionPreview(self.root))
         self.assertIn('Could not open browser', str(events))

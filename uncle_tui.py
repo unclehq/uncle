@@ -111,6 +111,29 @@ def _project_root():
     return os.getcwd()
 
 
+# Mirrors from-issue.sh's own auto-classification allowlist exactly: tracked
+# files beyond this scaffolding mean the repo is a real, populated project,
+# not a fresh template. Kept here too so a "build #<issue>" request can
+# default straight to a change request before from-issue.sh ever runs,
+# instead of depending on a second heuristic system reaching the same
+# answer independently.
+_SCAFFOLDING_ONLY = re.compile(
+    r'^(?:README\.md|REQUIREMENTS\.md|CLAUDE\.md|CHANGE_REQUEST\.md|\.gitignore'
+    r'|scripts/.*|prompts/.*|\.claude/.*|\.github/.*)$')
+
+
+def _project_already_populated(root):
+    try:
+        result = subprocess.run(['git', 'ls-files'], cwd=root, capture_output=True,
+                                text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    return any(path and not _SCAFFOLDING_ONLY.match(path)
+              for path in result.stdout.splitlines())
+
+
 _APPROVE_WORDS = frozenset(('approve', 'approved', 'approval', 'accept', 'accepted',
                             'yes', 'y', 'ok', 'okay', 'confirm', 'confirmed',
                             'go', 'proceed', 'do', 'it'))
@@ -3185,10 +3208,12 @@ class UncleTUI:
             # Asked to implement an issue now: select auto mode so the run
             # answers its own gates and the build page goes straight to work.
             self._set_field("!misc", "auto_mode", "true")
+            issue_mode = ('--change' if issue_request['change']
+                         or _project_already_populated(_project_root()) else '')
             self._home_action({'uncle_action': 'github_issue',
                                'issue': issue_request['issue'].removeprefix('#'),
                                'start': True,
-                               'issue_mode': '--change' if issue_request['change'] else ''})
+                               'issue_mode': issue_mode})
             return
         intent = supervisor_chat.delegation_intent(message)
         delegation = None

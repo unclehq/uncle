@@ -110,8 +110,14 @@ def launch_spec(root):
                 if url.scheme not in ('http', 'https') or url.hostname not in ('localhost', '127.0.0.1', '::1'):
                     raise ValueError('Preview URL must be a local HTTP address')
         return data
-    if (root / 'index.html').is_file():
-        return {'kind': 'webpage', 'url': (root / 'index.html').as_uri()}
+    # Deliberately conservative, matching preview_kind.py's own stated
+    # principle: answer `none` unless something positively says otherwise.
+    # A real web app gets an explicit .uncle/launch.json from the plan
+    # (prompts/project-plan.md requires it); an index.html's mere presence
+    # is not reliable evidence of that -- a CLI project can have one for
+    # unrelated reasons (uncle's own repo does, its status-dashboard
+    # preview) -- and opening a browser tab against a project that never
+    # asked for one is wrong regardless of why the file is there.
     return {'kind': 'none'}
 
 

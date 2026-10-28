@@ -96,6 +96,9 @@ class SelfHostedHttp(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='self hosted http ')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
+        patcher = patch.dict(os.environ, {'UNCLE_OUTAGE_DIR': str(self.root)})     # an outage mark must not leak between tests
+        patcher.start()
+        self.addCleanup(patcher.stop)
         http_transport._capabilities.clear()
         http_transport.close_connections()
         self.addCleanup(http_transport.close_connections)
@@ -536,6 +539,32 @@ class SelfHostedHttp(unittest.TestCase):
                 patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_RECONNECT_SECONDS': '250'}):
             with self.assertRaisesRegex(http_transport.ServerUnreachable, r'network stayed down for \d+ seconds'):
                 http_transport.post('http://x/v1/chat/completions', 'k', {}, 30)
+
+    def test_a_server_already_waited_out_is_not_waited_for_again_until_it_answers(self):
+        # calculator-local: eleven writers waited five minutes each, then the one-call fallback waited five more for the same host
+        url = 'http://outage-test.invalid:9/v1/chat/completions'
+        http_transport._outage_mark(url, clear=True)
+        calls = []
+        def down(u, key, body, timeout):
+            calls.append(1)
+            raise http_transport.ServerUnreachable('Cannot reach the model server at http://outage-test.invalid:9 (timed out).')
+        ticks = iter(range(0, 100000, 100))
+        try:
+            with patch.object(http_transport, '_request', down), patch.object(http_transport.time, 'sleep', lambda s: None), \
+                    patch.object(http_transport.time, 'monotonic', lambda: next(ticks)), \
+                    patch.dict(os.environ, {'WORKFLOW_SELF_HOSTED_RECONNECT_SECONDS': '250'}):
+                with self.assertRaises(http_transport.ServerUnreachable):
+                    http_transport.post(url, 'k', {}, 30)         # waits out its budget, and leaves the mark
+                first = len(calls)
+                self.assertGreater(first, 1)
+                with self.assertRaises(http_transport.ServerUnreachable):
+                    http_transport.post(url, 'k', {}, 30)         # the next call fails on its first attempt
+                self.assertEqual(len(calls), first + 1)
+            with patch.object(http_transport, '_request', lambda *a: {'ok': True}):
+                self.assertEqual(http_transport.post(url, 'k', {}, 30), {'ok': True})    # it answered: the mark is gone
+            self.assertFalse(http_transport._outage_recent(url))
+        finally:
+            http_transport._outage_mark(url, clear=True)
 
     def test_a_server_that_answered_or_never_does_is_not_retried(self):
         calls = []

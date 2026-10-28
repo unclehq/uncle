@@ -308,6 +308,23 @@ def read_answers(directory, groups):
     return answers
 
 
+TEST_FILE = re.compile(r'(?<![\w./-])((?:[\w.-]+/)*[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?)(?![\w])|'
+                       r'(?<![\w./-])((?:tests?|__tests__|e2e)/(?:[\w.-]+/)*[\w.-]+\.(?:[cm]?[jt]sx?|py|sh))(?![\w])|'
+                       r'(?<![\w./-])((?:vitest|jest|playwright|cypress|karma)\.config\.[cm]?[jt]s)(?![\w])')
+
+
+def derive_protected_paths(text, commands=''):
+    """Test files and runner configs the plan names (one per line), for a plan that lists no protected verification paths.
+    Generated output and lockfiles are never protected."""
+    found = []
+    for match in TEST_FILE.finditer((text or '') + '\n' + (commands or '')):
+        path = next(g for g in match.groups() if g)
+        if path.startswith(('.', '/', 'node_modules', 'dist/', 'build/', 'out/', 'coverage/')) or '..' in path or path in found or path.endswith(('.json', '.lock')):
+            continue
+        found.append(path)
+    return '\n'.join(found[:40])
+
+
 def merge(plan_path, slices_path, directory, output, resolutions=None):
     plan = base.read_json(plan_path)
     model = plan_model_of(plan, plan_path)
@@ -422,7 +439,14 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
         raise Conflict('the revised plan does not validate: %s' % '; '.join(errors))
     commands = base.merged_commands(base_commands, command_edits)
     if not CHANGE and not (next(iter(paths), base_paths) or '').strip():
-        raise Conflict('no writer supplied protected_verification_paths')
+        # Neither the base plan nor a writer named any (calculator-local: a local model's plan had none, the whole ops result was
+        # thrown away, and the one-call fallback failed on a text patch).  The plan's own test files and configs are what it means.
+        derived = derive_protected_paths(plan.get('narrative') or pm.render(new_model), commands)
+        if not derived:
+            raise Conflict('no writer supplied protected_verification_paths, and the plan names no test files to protect')
+        paths = {derived: 'driver'}
+        print('updated-plan ops: no protected_verification_paths anywhere; derived %d from the plan\'s test files' % len(derived.splitlines()),
+              file=sys.stderr)
     patch = to_patch(model, new_model)
     apply_patch(plan.get('narrative') or pm.render(model), patch)     # a patch that does not apply is a conflict
     if CHANGE:

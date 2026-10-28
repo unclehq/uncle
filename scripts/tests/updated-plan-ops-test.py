@@ -133,6 +133,34 @@ class Merge(Base):
         self.assertEqual(result['protected_verification_paths'], 'tests/a.test.js')
 
 
+class DerivedPaths(Base):
+    """calculator-local: the base plan named no protected paths and no writer did, the whole ops result was thrown away and the
+    one-call fallback failed on a text patch.  The plan's own test files and configs are the protected paths."""
+    def plan_without_paths(self, narrative_extra=''):
+        plan = dict(PLAN, narrative=NARRATIVE + narrative_extra)
+        plan['protected_verification_paths'] = ''
+        (self.dir / 'plan.json').write_text(json.dumps(plan))
+
+    def test_they_are_derived_from_the_plans_test_files_and_runner_configs(self):
+        self.plan_without_paths('\nTests: `tests/calc.test.js`, `tests/e2e/ui.spec.js`, vitest.config.js, package-lock.json, dist/app.test.js\n')
+        self.deliver('1', 'AR-1')
+        self.deliver('2', 'AR-2')
+        result = self.merge()
+        self.assertEqual(result['protected_verification_paths'].splitlines(),
+                         ['tests/calc.test.js', 'tests/e2e/ui.spec.js', 'vitest.config.js'])
+
+    def test_a_plan_that_names_no_test_file_is_still_refused(self):
+        self.plan_without_paths()
+        self.deliver('1', 'AR-1')
+        self.deliver('2', 'AR-2')
+        with self.assertRaisesRegex(ops.Conflict, 'names no test files'):
+            self.merge()
+
+    def test_the_derivation_leaves_out_outputs_lockfiles_and_hidden_paths(self):
+        found = ops.derive_protected_paths('see `.test-out/a.spec.js`, ../x.test.js, node_modules/y.test.js, tests/ok.test.js, package.json')
+        self.assertEqual(found, 'tests/ok.test.js')
+
+
 class Resolve(Base):
     def conflict(self):
         self.deliver('1', 'AR-1', set_fields('B-1', failure='first'))

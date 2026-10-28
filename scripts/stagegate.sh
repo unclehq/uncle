@@ -2525,6 +2525,27 @@ run_updated_plan_panel() {
 # Edits that overlap go to one short resolver call (WORKFLOW_UPDATED_PLAN_EDITS=0 turns the whole thing off).
 # Start one updated-plan edit writer in the background (see run_updated_plan_edit_writers); `owner` is passed
 # for the writer that also owns the protected verification paths.
+# Wait for the first writer to be well under way (its first model event, or a fixed time) so the others can reuse its prompt prefix
+# from the cache.  WORKFLOW_PREFIX_WARM_SECONDS: 0 turns it off; default 12 s hosted, off self-hosted (no event arrives until the
+# whole answer does).  Only worth it when several writers follow.
+updated_plan_warm_prefix() {
+    local name="$1" total="$2" limit="${WORKFLOW_PREFIX_WARM_SECONDS:-}" waited=0 log
+    [[ "$total" -ge 4 ]] || return 0
+    if [[ -z "$limit" ]]; then
+        # Self-hosted: off.  Measured on the calculator-local vLLM server, eleven simultaneous cold 12.7k-token prompts all
+        # finished in 6.5 s (one prefill is batched across them), while a warm-first start took 5.5 s + 1.8 s = 7.3 s, and the
+        # tokens are free there.  The time on a local server is decoding, not prefill.
+        if stage_uses_self_hosted updated-plan AGENT; then limit=0; else limit=12; fi
+    fi
+    [[ "$limit" -gt 0 ]] 2>/dev/null || return 0
+    log="$LOG_DIR/updated-plan-worker-edits-$name.jsonl"
+    echo "Updated plan: writer $name goes first so the others can reuse its prompt from the cache (up to ${limit}s)."
+    while (( waited < limit )); do
+        if ! stage_uses_self_hosted updated-plan AGENT && grep -q '"type": *"assistant"' "$log" 2>/dev/null; then break; fi
+        sleep 1; waited=$((waited + 1))
+    done
+}
+
 updated_plan_launch_writer() {
     local directory="$1" delivery="$2" name="$3" ids="$4" owner="$5" schema_file=""
     # The plan model (docs/plan-model.md): writers edit it by id.  WORKFLOW_UPDATED_PLAN_OPS=0 keeps the text patches.
@@ -2569,6 +2590,13 @@ run_updated_plan_edit_writers() {
         ids_of[index]="$ids"
         updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "${owner_of[index]}" || return 1
         pids+=("$!"); names+=("$name"); started[index]="$SECONDS"; hedge[index]=""; finished[index]=0
+        # The writers' prompts are the same for 97% of their length, and a prefix cache (hosted Claude's, or vLLM's) can only
+        # serve a prefix a finished request has already computed.  Started all at once, every writer computes (and a hosted one
+        # pays to write) the same 64k tokens.  So the first writer that shares the prefix (the owner's differs early) goes
+        # alone for a short while, and the others find the prefix cached.
+        if [[ "$index" == 1 && "${#pids[@]}" == 2 ]]; then
+            updated_plan_warm_prefix "$name" "$(wc -l < "$directory/slices.tsv" | tr -d ' ')"
+        fi
         index=$((index + 1))
     done < "$directory/slices.tsv"
     local -a failed_names=()

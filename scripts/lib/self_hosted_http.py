@@ -21,6 +21,7 @@ import re
 import socket
 import sys
 import threading
+import tempfile
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
@@ -298,18 +299,50 @@ def post(url, api_key, body, timeout, what='model request'):
     noted = -30.0
     while True:
         try:
-            return _request(url, api_key, body, timeout)
+            result = _request(url, api_key, body, timeout)
+            _outage_mark(url, clear=True)
+            return result
         except (ServerUnreachable, NetworkLost) as error:
             if _connections().aborting.is_set():
                 raise  # the caller dropped this request on purpose; do not resend it
             waited = time.monotonic() - started
-            if waited >= budget:
+            # A server another call has already waited out is not waited for again (calculator-local: eleven writers waited five
+            # minutes each, then the one-call fallback waited five more for the same dead host).
+            if waited >= budget or _outage_recent(url):
+                _outage_mark(url)
                 raise type(error)('%s (the network stayed down for %d seconds; %s)' % (error, waited, what)) from None
             if waited - noted >= 30:
                 noted = waited
                 print('Self hosted: lost the model server (%s); retrying for up to %d more seconds.' %
                       (str(error).split(' (')[0][:120], budget - waited), file=sys.stderr, flush=True)
             time.sleep(min(10.0, max(1.0, budget - waited)) if budget >= 10 else 0.2)
+
+
+OUTAGE_SECONDS = 180.0
+
+
+def _outage_file(url):
+    parts = urlsplit(url)
+    return os.path.join(os.environ.get('UNCLE_OUTAGE_DIR') or tempfile.gettempdir(), 'uncle-server-down-%s-%s' % (parts.hostname, parts.port or 0))
+
+
+def _outage_mark(url, clear=False):
+    """Remember that this server stayed down for a whole reconnect budget (or forget it: it answered)."""
+    try:
+        if clear:
+            os.unlink(_outage_file(url))
+        else:
+            with open(_outage_file(url), 'w') as handle:
+                handle.write(str(time.time()))
+    except OSError:
+        pass
+
+
+def _outage_recent(url):
+    try:
+        return time.time() - os.path.getmtime(_outage_file(url)) < OUTAGE_SECONDS
+    except OSError:
+        return False
 
 
 def connect_timeout():

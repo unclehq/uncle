@@ -9,8 +9,8 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fails=0
 export WORKFLOW_UPDATED_PLAN_OPS=1 WORKFLOW_UPDATED_PLAN_EDITS=1 WORKFLOW_UPDATED_PLAN_DECIDE=1 WORKFLOW_UPDATED_PLAN_EDIT_SLICE=3 WORKFLOW_UPDATED_PLAN_HEDGE_SECONDS=300
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
-awk '/^(updated_plan_launch_writer|run_updated_plan_edit_writers|updated_plan_start_reconcile|run_updated_plan_decide)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
-check "functions extracted" test "$(grep -c '^[a-z_]*() {' "$TMP/fn.sh")" == 4
+awk '/^(updated_plan_launch_writer|updated_plan_warm_prefix|run_updated_plan_edit_writers|updated_plan_start_reconcile|run_updated_plan_decide)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
+check "functions extracted" test "$(grep -c '^[a-z_]*() {' "$TMP/fn.sh")" == 5
 
 run_case() {   # name mode [hosted|local]
     local name="$1" mode="$2" runner="${3:-hosted}" dir="$TMP/$1"

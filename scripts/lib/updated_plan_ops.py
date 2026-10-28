@@ -272,6 +272,33 @@ def apply_leniently(model, attributed):
     return model, dropped
 
 
+def owned_protected_paths(model, value):
+    """Prefer inferred paths that an implementation step actually owns.
+
+    A fallback protected-path list is only a recovery contract for older
+    plans.  A stale prose reference must not turn into a protected file that
+    no step can create.  Keep the historic broad fallback when a plan has no
+    owned test/config path at all, so legacy plans remain usable.
+    """
+    candidates = [line.strip() for line in (value or '').splitlines() if line.strip()]
+    owned = set()
+
+    def visit(node):
+        if isinstance(node, dict):
+            values = node.get('owns')
+            if isinstance(values, list):
+                owned.update(item for item in values if isinstance(item, str))
+            for child in node.values():
+                visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child)
+
+    visit(model)
+    matching = [path for path in candidates if path in owned]
+    return '\n'.join(matching or candidates)
+
+
 def to_patch(old, new):
     """The section-level patch (`edit_sections` and `insert_sections`) that turns `old` into `new`."""
     old_by_id = {s['id']: s for s in old['sections']}
@@ -449,10 +476,13 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
     if not CHANGE and not (next(iter(paths), base_paths) or '').strip():
         # Neither the base plan nor a writer named any (calculator-local: a local model's plan had none, the whole ops result was
         # thrown away, and the one-call fallback failed on a text patch).  The plan's own test files and configs are what it means.
-        derived = derive_protected_paths(plan.get('narrative') or pm.render(new_model), commands)
+        # This is the post-merge contract.  Deriving from the base narrative
+        # resurrects paths a compact writer has just renamed, leaving stale
+        # protected files with no owning implementation step.
+        derived = derive_protected_paths(pm.render(new_model), commands)
         if not derived:
             raise Conflict('no writer supplied protected_verification_paths, and the plan names no test files to protect')
-        paths = {derived: 'driver'}
+        paths = {owned_protected_paths(new_model, derived): 'driver'}
         print('updated-plan ops: no protected_verification_paths anywhere; derived %d from the plan\'s test files' % len(derived.splitlines()),
               file=sys.stderr)
     patch = to_patch(model, new_model)
@@ -461,7 +491,10 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
     if not CHANGE and driver_contract:
         contract_paths = base_paths
         if not contract_paths.strip():
-            contract_paths = derive_protected_paths(plan.get('narrative') or pm.render(new_model), commands)
+            # Keep the published driver-owned field aligned with the merged
+            # model above, never with the pre-review narrative.
+            contract_paths = owned_protected_paths(
+                new_model, derive_protected_paths(pm.render(new_model), commands))
     if CHANGE:
         result = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'dispositions': dispositions, 'patch': patch}
     else:

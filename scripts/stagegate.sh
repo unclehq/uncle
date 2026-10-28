@@ -3224,8 +3224,6 @@ early_checklist_usable() {
     [[ -e "$STATE_DIR/checklist-early.ok" ]] || return 1
     python3 -B "$ROOT/scripts/lib/checklist_document.py" --validate-json \
         "$STATE_DIR/documents/MANUAL_CHECKLIST.json" >/dev/null 2>&1 || return 1
-    [[ "$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" \
-        "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS 2>/dev/null)" == PASS ]]
 }
 
 early_execute_join() {
@@ -5563,20 +5561,18 @@ while true; do
             # do, not against what the plan hoped for.
             snapshot_preflight_capabilities
             early_checklist_join
-            if early_checklist_usable; then
-                echo 'Adopted speculative MANUAL_CHECKLIST — TEST_REVIEW passed and its checklist inputs stayed canonical.'
-            else
-                early_execute_cancel
-                early_stream_cancel
-                # A review finding makes the early plan incomplete. Remove
-                # only its generated views/packet; the normal stage owns the
-                # replacement and will include TEST_REVIEW.json.
-                rm -f "$STATE_DIR/checklist-early.ok" \
-                    "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
-                    "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json" \
-                    .uncle/docs/MANUAL_CHECKLIST.md
-                run_stage MANUAL_CHECKLIST
+            if ! early_checklist_usable; then
+                # The early panel has already retried an invalid individual
+                # worker once. Do not restart the whole panel here: that was
+                # the duplicate manual-checklist run. Leave a clear durable
+                # failure for resume/recovery instead.
+                echo 'Speculative MANUAL_CHECKLIST did not deliver a valid canonical packet; not rerunning checklist workers.' >&2
+                exit 1
             fi
+            # The early packet is the sole manual-checklist execution for
+            # this run. Test-review findings feed later acceptance, but do
+            # not trigger a second checklist generation pass.
+            echo 'Adopted speculative MANUAL_CHECKLIST as the canonical checklist.'
             set_state VALIDATE_MANUAL_CHECKLIST
             ;;
 

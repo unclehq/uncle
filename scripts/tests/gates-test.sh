@@ -448,18 +448,7 @@ if [[ "$out" == *.json ]]; then
     esac
     exit 0
 fi
-if [[ "$out" == *MANUAL_CHECKLIST.base.md ]]; then
-    # Proof of real overlap, not an inference from timing: if implementation
-    # already wrote its own start marker by the time this synthesis call (the
-    # last step of the checklist-base panel) runs, the two genuinely ran
-    # concurrently rather than the panel finishing first.
-    [[ -e .uncle/workflow/impl-agent-started ]] && printf 'overlap\n' > .uncle/workflow/checklist-overlapped-implementation
-fi
-if [[ "${FAKE_COMPACT_REVIEW:-0}" == 1 && "$out" == *MANUAL_CHECKLIST.base.md ]]; then
-    printf 'Repeated background that adds no findings. Repeated background that adds no findings.\n' > "$out"
-else
-    : > "$out"
-fi
+: > "$out"
 if [[ "$out" == *.uncle/docs/ADVERSARIAL_REVIEW.md ]] && grep -q 'R-1' .uncle/docs/CHANGE_PLAN.md; then
     printf 'AR-001: preserve mediated access; validate isolated context.\n' >> "$out"
 fi
@@ -1781,42 +1770,13 @@ done
 }
 
 gate_group_8() {
-new_case change-budget-background-checklist
+new_case change-checklist-runs-once-after-implementation
 green_baseline 0 'bash app/test.sh'
-printf 'write a base checklist\n' > "$REPO/prompts/change/manual-checklist-base.md"
 set_state IMPLEMENT
-run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" WORKFLOW_PARALLEL_CHECKLIST=1 WORKFLOW_DOC_MAX_BYTES_MANUAL_CHECKLIST_BASE=1
-expect_status 0
-expect_out 'Continuing: the budget is advisory'
-expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
-expect_state WAIT_IMPLEMENT_APPROVAL
-expect_no_file '.uncle/workflow/logs/manual-checklist-base.compact-3.log'
-COUNT=$((COUNT + 1))
-[[ $(grep -c '/candidate.md$' "$REPO/.uncle/workflow/reviewer-calls") == 0 ]] || fail 'unexpected separate background compaction call'
-printf '## MC-1 Check the greeting.\nExact action: Open the page\nExpected result: Greeting visible\n\nREADY\n' > "$CASE/expected.md"
-COUNT=$((COUNT + 1))
-cmp -s "$CASE/expected.md" "$REPO/.uncle/workflow/MANUAL_CHECKLIST.base.md" || fail 'background exhaustion changed original bytes'
-
-# manual-checklist-base's own lens-worker fan-out used to run to completion,
-# blocking, before implementation was even started -- only its synthesis
-# pass was ever truly backgrounded. Four lens workers (concurrent with each
-# other) then a synthesis call then implementation, run sequentially, would
-# take at least 3 delay-units; overlapped as intended, close to 2.
-new_case change-checklist-panel-overlaps-implementation
-green_baseline 0 'bash app/test.sh'
-printf 'write a base checklist\n' > "$REPO/prompts/change/manual-checklist-base.md"
-set_state IMPLEMENT
-# The lens workers' own small delay gives the concurrently-started
-# implementation stub time to write its start marker before the panel
-# reaches its synthesis call; the marker's presence there is the proof of
-# overlap, not an inference from wall-clock timing.
-run_driver FAKE_REVIEW_DELAY=0.3 \
-    FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" \
-    WORKFLOW_PARALLEL_CHECKLIST=1
+run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" WORKFLOW_PARALLEL_CHECKLIST=1
 expect_status 0
 expect_state WAIT_IMPLEMENT_APPROVAL
-expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
-expect_file '.uncle/workflow/checklist-overlapped-implementation'
+expect_no_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
 
 # A real stuck run: an implementation step's automatically divided turn
 # share (150 turns split across the plan's steps, e.g. 16 for a ten-step
@@ -1899,16 +1859,6 @@ expect_state COMPLETE
 expect_file .uncle/docs/FINAL_AUDIT.md
 COUNT=$((COUNT + 1))
 [[ ! -e "$REPO/.uncle/workflow/logs/final-audit.compact-1.log" ]] || fail 'unexpected separate compaction session'
-
-new_case change-compact-background-checklist
-green_baseline 0 'bash app/test.sh'
-printf 'write a base checklist\n' > "$REPO/prompts/change/manual-checklist-base.md"
-set_state IMPLEMENT
-run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" WORKFLOW_PARALLEL_CHECKLIST=1 FAKE_COMPACT_REVIEW=1 WORKFLOW_DOC_MAX_BYTES_MANUAL_CHECKLIST_BASE=50
-expect_status 0
-expect_out 'budget is advisory'
-expect_state WAIT_IMPLEMENT_APPROVAL
-expect_file '.uncle/workflow/MANUAL_CHECKLIST.base.md'
 
 # Budget failures reuse the finished review, not a new full reviewer run.
 # The pause being tested here is the enforced path; by default an overrun is

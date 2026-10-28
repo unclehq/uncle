@@ -290,8 +290,10 @@ stepwise_implementation_enabled() {
     esac
 }
 
-# Write the Codex verification checklist concurrently with implementation.
-# Set to 0 to fall back to the serial single-shot checklist stage.
+# The manual checklist is constructed once, after implementation has produced
+# its canonical reports.  Older versions started a base checklist during
+# implementation and then a delta checklist afterward; both reread and
+# rechecked much of the same change.
 PARALLEL_CHECKLIST="${WORKFLOW_PARALLEL_CHECKLIST:-1}"
 
 # Independent checklist rows fan out through per-run temporary handoffs. The
@@ -4102,21 +4104,6 @@ while true; do
                 snapshot_untracked "$UNTRACKED_BASELINE"
             fi
 
-            # The verification checklist is derived from the frozen, approved
-            # artifacts, so it can be written while the implementation runs
-            # instead of after it. Its prompt forbids reading source, which
-            # would otherwise race Claude's in-flight edits; anything that
-            # genuinely depends on the implementation is added by the delta
-            # pass in the CHECKLIST state.
-            if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
-                start_codex_bg \
-                    "" \
-                    "$STATE_DIR/MANUAL_CHECKLIST.base.md" \
-                    manual-checklist-base \
-                    "$CODEX_EFFORT_CHECKLIST" \
-                    base prompts/change/manual-checklist-base.md
-            fi
-
             if [[ -s "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" ]] && implementation_has_changes && implementation_complete; then
                 echo "Existing implementation delivery accepted; continuing to verification."
             elif [[ "$plan_status" == 22 ]]; then
@@ -4236,13 +4223,6 @@ REPAIR
             write_verification_envelope
             plan_delivery_summary
 
-            # Waited for before the gate, not after: declining the gate exits
-            # the driver, and cleanup_bg would kill a checklist run that is
-            # already nearly paid for.
-            if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
-                wait_codex_bg "$STATE_DIR/MANUAL_CHECKLIST.base.md"
-            fi
-
             set_state WAIT_IMPLEMENT_APPROVAL
             ;;
 
@@ -4337,10 +4317,12 @@ REPAIR
                 checklist_retry_suffix="$(printf '\n\n## Required format retry\n\n'; cat "$checklist_retry_marker")"
             fi
             if [[ "$PARALLEL_CHECKLIST" == "1" ]]; then
-                require_file "$STATE_DIR/MANUAL_CHECKLIST.base.md"
-                run_checklist_panel delta prompts/change/manual-checklist-delta.md
+                # One canonical checklist after implementation.  It receives
+                # every authoritative report directly; there is no base/delta
+                # handoff and therefore no second worker panel.
+                run_checklist_panel full prompts/change/manual-checklist.md
                 if [[ "${CHECKLIST_PANEL_DIRECT:-0}" == 1 ]]; then
-                    echo 'Manual-checklist delta fast path: merged authoritative worker packets without parent synthesis.'
+                    echo 'Manual-checklist fast path: merged authoritative worker packets without parent synthesis.'
                     # The only thing this path saves is the parent synthesis
                     # model call. It used to jump to VALIDATE_CHECKLIST, which
                     # is two states further on, so VALIDATE_MANUAL_CHECKLIST
@@ -4361,7 +4343,7 @@ REPAIR
                 run_codex \
                     "$checklist_prompt" \
                     "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
-                    manual-checklist-delta \
+                    manual-checklist \
                     "$CODEX_EFFORT_CHECKLIST"
             else
                 checklist_prompt="prompts/change/manual-checklist.md"
@@ -4370,11 +4352,19 @@ REPAIR
                     cat "$ROOT/prompts/change/manual-checklist.md" > "$checklist_prompt"
                     printf '%s\n' "$checklist_retry_suffix" >> "$checklist_prompt"
                 fi
+                # run_codex's own validate_reviewer_artifact call (MANUAL_CHECKLIST.md
+                # is the one Markdown artifact it still checks directly) can fail
+                # this stricter, premature check and return nonzero; under this
+                # script's `set -e`, a bare failing call here would exit the whole
+                # process instead of reaching the ingestion below, which already
+                # has its own, final validation and one-shot retry
+                # (VALIDATE_MANUAL_CHECKLIST, below). Let that stage be the one
+                # that decides whether this was a format failure worth retrying.
                 run_codex \
                     "$checklist_prompt" \
                     "$PROJECT_ROOT/.uncle/docs/MANUAL_CHECKLIST.md" \
                     manual-checklist \
-                    "$CODEX_EFFORT_CHECKLIST"
+                    "$CODEX_EFFORT_CHECKLIST" || true
                 # The delta/panel path above writes the canonical JSON directly
                 # (its output_file already is documents/MANUAL_CHECKLIST.json).
                 # This single-reviewer path's output_file is the Markdown view,

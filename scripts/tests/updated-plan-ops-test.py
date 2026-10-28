@@ -160,6 +160,17 @@ class DerivedPaths(Base):
         found = ops.derive_protected_paths('see `.test-out/a.spec.js`, ../x.test.js, node_modules/y.test.js, tests/ok.test.js, package.json')
         self.assertEqual(found, 'tests/ok.test.js')
 
+    def test_driver_contract_derives_paths_from_the_merged_model_not_stale_base_text(self):
+        self.plan_without_paths('\nTests: `tests/old.spec.js`\n')
+        self.deliver('1', 'AR-1',
+                     {'op': 'set_text', 'id': 's3.1',
+                      'text': 'Tests: `tests/e2e/current.spec.js`'},
+                     {'op': 'set_step', 'id': 'step-2',
+                      'fields': {'owns': 'src/calc.js, tests/e2e/current.spec.js'}})
+        self.deliver('2', 'AR-2')
+        result = self.merge()
+        self.assertEqual(result['protected_verification_paths'], 'tests/e2e/current.spec.js')
+
 
 class Resolve(Base):
     def conflict(self):

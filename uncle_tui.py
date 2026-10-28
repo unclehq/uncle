@@ -74,6 +74,16 @@ WORKFLOWS = [
 EFFORTS = ["none", "low", "medium", "high"]
 ISSUE_MODES = [("auto", ""), ("change request", "--change"), ("new application", "--new"),
                ("change request in worktree", "--worktree")]
+# A complete, directly-sendable "build <issue>" message. Shared between
+# send_home_chat (which acts on it) and the chat composer's Enter handling
+# (which must not let the inline issue-picker swallow a message that already
+# fullmatches this -- see the ISSUE_REQUEST_RE check in handle_key).
+ISSUE_REQUEST_RE = re.compile(
+    r'(?:please\s+)?(?:build|bulid|implement|start|run|work on)\s+'
+    r'(?:(?P<change>change\s+request)\s+)?'
+    r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+|this\s+(?:issue\s+)?)?'
+    r'(?P<issue>https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?|#?[1-9][0-9]*)[.!]?',
+    re.IGNORECASE)
 # A triage proposal that says there is nothing to edit needs no master turn.
 NO_EDIT_PROPOSAL = re.compile(
     r'(?i)\bno\s+(?:files?\s+)?edits?\b|\bno\s+files?\s+edited\b|\bnothing\s+to\s+(?:edit|change)\b'
@@ -2367,7 +2377,23 @@ class UncleTUI:
             self.unattended_finished = True
             self._quit()
             return
-        self.completion_preview = CompletionPreview(_project_root())
+        # Only a new-application build gets a completion preview. A change
+        # request runs against a project that already exists -- often not a
+        # web app at all (uncle's own repo, worked on via its own change
+        # workflow, has an incidental index.html at its root and is a CLI
+        # tool) -- so guessing a launch target for it and opening a browser
+        # tab is never right. .uncle/workflow/family is the driver's own
+        # authoritative record of which state machine actually ran, set by
+        # workflow_family.py regardless of how this TUI session got here;
+        # trust it over self.workflow_idx, which only reflects the menu
+        # choice that started this specific session.
+        family_marker = os.path.join(_project_root(), ".uncle", "workflow", "family")
+        try:
+            family = open(family_marker, encoding="utf-8").read().strip()
+        except OSError:
+            family = ""
+        if family == "app":
+            self.completion_preview = CompletionPreview(_project_root())
         self.chat_focus = "chat"
 
     # How often to look for a page. Not a settling delay: the first
@@ -3153,12 +3179,7 @@ class UncleTUI:
         gate_question = (self.state == 'running' and bool(getattr(self, 'prompt_kind', ''))
                          and proc is not None and proc.poll() is None)
         running = self.state == 'running' or bool(proc and proc.poll() is None)
-        issue_request = re.fullmatch(
-            r'(?:please\s+)?(?:build|bulid|implement|start|run|work on)\s+'
-            r'(?:(?P<change>change\s+request)\s+)?'
-            r'(?:(?:from\s+)?(?:github\s+)?issue\s+|from\s+|this\s+(?:issue\s+)?)?'
-            r'(?P<issue>https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*/?|#?[1-9][0-9]*)[.!]?',
-            message.strip(), re.IGNORECASE)
+        issue_request = ISSUE_REQUEST_RE.fullmatch(message.strip())
         if issue_request and not running and not getattr(self, 'recovery_active', False):
             self.home_history.append(('user', sanitize(message)))
             # Asked to implement an issue now: select auto mode so the run
@@ -5420,7 +5441,15 @@ class UncleTUI:
                 self._recall_input(-1 if k == curses.KEY_UP else 1)
                 return True
             if k in (10, 13):
-                if self._chat_menu() == 'picker' and getattr(self, 'chat_picker_kind', 'file') == 'issue':
+                # A message that is already complete and directly sendable
+                # (e.g. "build #115") must not be swallowed by the inline
+                # issue-picker's own Enter-to-accept behavior just because the
+                # composer happens to end in "#<digits>" -- that picker exists
+                # to help pick an issue to *reference*, not to intercept a
+                # message that already names one and is ready to go.
+                composer_is_submit_ready = bool(ISSUE_REQUEST_RE.fullmatch(self.chat_composer.strip()))
+                if (self._chat_menu() == 'picker' and getattr(self, 'chat_picker_kind', 'file') == 'issue'
+                        and not composer_is_submit_ready):
                     typed = re.search(r'(?<!\S)#([1-9][0-9]*)$', self.chat_composer)
                     if self.chat_choices and typed:
                         # A typed number that names an entry wins over the highlight.
@@ -5432,6 +5461,8 @@ class UncleTUI:
                         # A complete numeric mention is already usable while the
                         # asynchronous picker is loading or has no matching results.
                         self.chat_picker = False
+                if composer_is_submit_ready:
+                    self.chat_picker = False
                 if self._chat_menu() == 'picker':
                     self._chat_accept()
                 elif self.chat_edit:

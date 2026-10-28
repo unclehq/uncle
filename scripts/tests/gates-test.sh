@@ -75,7 +75,7 @@ hash_canonical() {
 }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+[[ -n "${KEEP_TMP:-}" ]] || trap 'rm -rf "$TMP"' EXIT
 
 FAILED=0
 COUNT=0
@@ -242,14 +242,13 @@ EOF
     for f in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN ADVERSARIAL_REVIEW; do
         hash_canonical "$f" > "$REPO/.uncle/workflow/approvals/${f}.sha256"
     done
-    # Not ADVERSARIAL_REVIEW: both drivers' ADVERSARIAL_REVIEW state fast-paths
-    # straight to VALIDATE_ADVERSARIAL_REVIEW whenever
-    # .uncle/workflow/documents/ADVERSARIAL_REVIEW.json already exists on
-    # disk, panel or no panel -- pre-seeding it here would make every
-    # PLAN/ADVERSARIAL_REVIEW-state test skip the reviewer it means to
-    # exercise. plan_check_inputs's approval_artifact_path fallback to the
-    # .md view already covers the tests that start past ADVERSARIAL_REVIEW
-    # and only need the document to exist, not be approved.
+    # Both drivers' ADVERSARIAL_REVIEW state fast-paths straight to
+    # VALIDATE_ADVERSARIAL_REVIEW whenever .uncle/workflow/documents/ADVERSARIAL_REVIEW.json
+    # already exists on disk, panel or no panel. Leaving this default-seeded
+    # one in place is what most tests that start past ADVERSARIAL_REVIEW
+    # want (its content already matches the default .md). A test that means
+    # to exercise the reviewer removes it itself before its own
+    # `set_state ADVERSARIAL_REVIEW`.
 
     # The project under change: one script, one test that checks it.
     printf '#!/bin/sh\necho hello\n' > "$REPO/app/main.sh"
@@ -461,10 +460,10 @@ if [[ "${FAKE_COMPACT_REVIEW:-0}" == 1 && "$out" == *MANUAL_CHECKLIST.base.md ]]
 else
     : > "$out"
 fi
-if [[ "$out" == .uncle/docs/ADVERSARIAL_REVIEW.md ]] && grep -q 'R-1' .uncle/docs/CHANGE_PLAN.md; then
+if [[ "$out" == *.uncle/docs/ADVERSARIAL_REVIEW.md ]] && grep -q 'R-1' .uncle/docs/CHANGE_PLAN.md; then
     printf 'AR-001: preserve mediated access; validate isolated context.\n' >> "$out"
 fi
-if [[ "$out" == .uncle/docs/ADVERSARIAL_REVIEW.md && "${FAKE_AR_FORMAT:-0}" == MISSING_ASSESSMENT_ONCE ]]; then
+if [[ "$out" == *.uncle/docs/ADVERSARIAL_REVIEW.md && "${FAKE_AR_FORMAT:-0}" == MISSING_ASSESSMENT_ONCE ]]; then
     # First call omits the required Overall assessment heading; the
     # one-shot format retry's prompt names itself, so the retried call
     # can tell it is the retry and write a document that validates.
@@ -475,7 +474,7 @@ if [[ "$out" == .uncle/docs/ADVERSARIAL_REVIEW.md && "${FAKE_AR_FORMAT:-0}" == M
     fi
     exit 0
 fi
-if [[ "$out" == .uncle/docs/MANUAL_CHECKLIST.md && "${FAKE_MC_FORMAT:-0}" == MISSING_FIELDS_ONCE ]]; then
+if [[ "$out" == *.uncle/docs/MANUAL_CHECKLIST.md && "${FAKE_MC_FORMAT:-0}" == MISSING_FIELDS_ONCE ]]; then
     if [[ "$review_prompt" == *'Required format retry'* ]]; then
         printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","exact_action":"Open the page","expected_result":"Greeting visible"}]}' > "$out"
     else
@@ -483,7 +482,7 @@ if [[ "$out" == .uncle/docs/MANUAL_CHECKLIST.md && "${FAKE_MC_FORMAT:-0}" == MIS
     fi
     exit 0
 fi
-if [[ "$out" == .uncle/docs/FINAL_AUDIT.md && "${FAKE_AUDIT_FORMAT:-0}" == MISSING_VERDICT_ONCE ]]; then
+if [[ "$out" == *.uncle/docs/FINAL_AUDIT.md && "${FAKE_AUDIT_FORMAT:-0}" == MISSING_VERDICT_ONCE ]]; then
     if [[ "$review_prompt" == *'Required format retry'* ]]; then
         printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nREADY\n' >> "$out"
     else
@@ -492,8 +491,8 @@ if [[ "$out" == .uncle/docs/FINAL_AUDIT.md && "${FAKE_AUDIT_FORMAT:-0}" == MISSI
     exit 0
 fi
 case "$out" in
-    .uncle/docs/ADVERSARIAL_REVIEW.md) printf '## Overall assessment\nNo findings.\n' >> "$out" ;;
-    .uncle/docs/FINAL_AUDIT.md) printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nREADY\n' >> "$out" ;;
+    *.uncle/docs/ADVERSARIAL_REVIEW.md) printf '## Overall assessment\nNo findings.\n' >> "$out" ;;
+    *.uncle/docs/FINAL_AUDIT.md) printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nREADY\n' >> "$out" ;;
     # reviewer_output.py's MANUAL_CHECKLIST.md check requires the canonical
     # JSON contract with no legacy-Markdown fallback (unlike ADVERSARIAL_REVIEW.md
     # and FINAL_AUDIT.md, which still accept the pre-migration regex-parsed form).
@@ -622,6 +621,11 @@ if [[ "$out" == *.json ]]; then
         printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"test-review-worker-packet","rows":[]}' > "$delivery"
     elif [[ "$out" == *manual-checklist-panel/*.json ]]; then
         printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist-worker-packet","checks":[{"id":"MC-1","exact_action":"Open the page","expected_result":"Greeting visible"}]}' > "$delivery"
+    elif [[ "$out" == *documents/ADVERSARIAL_REVIEW.json ]]; then
+        # The primary (non-panel) adversarial-review reviewer delivers
+        # straight to the canonical path, not a Markdown view -- this is the
+        # real review object, not a worker packet.
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"adversarial-review","findings":[],"overall_assessment":"No findings."}' > "$delivery"
     elif [[ "$out" == *documents/MANUAL_CHECKLIST.json ]]; then
         # The primary (non-panel) manual-checklist reviewer delivers straight
         # to the canonical path, not a Markdown view -- this is the real
@@ -1919,13 +1923,14 @@ printf 'plan\n\n## Verification commands\n\n```\nbash app/test.sh\n```\n' > "$RE
 printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
 sync_canonical PROJECT_PLAN
 hash_canonical PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
+rm -f "$REPO/.uncle/workflow/documents/ADVERSARIAL_REVIEW.json"
 set_state ADVERSARIAL_REVIEW
 for attempt in 1 2; do
     run_stagegate WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
     expect_status 1
     expect_state VALIDATE_ADVERSARIAL_REVIEW
     COUNT=$((COUNT + 1))
-    [[ $(grep -c '^.uncle/docs/ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'full review repeated'
+    [[ $(grep -c 'documents/ADVERSARIAL_REVIEW.json$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'full review repeated'
 done
 expect_out 'Document budget exceeded'
 # Raising only the budget adopts the preserved review without another call.
@@ -1933,36 +1938,38 @@ run_stagegate WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_DOC_MAX_BYTES_ADVERSA
 expect_status 0
 expect_state WAIT_REVIEW_ACKNOWLEDGEMENT
 COUNT=$((COUNT + 1))
-[[ $(grep -c '^.uncle/docs/ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'budget adjustment reran reviewer'
+[[ $(grep -c 'documents/ADVERSARIAL_REVIEW.json$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'budget adjustment reran reviewer'
 # Real input changes force a new review.
 printf 'changed requirements\n' >> "$REPO/REQUIREMENTS.md"
 set_state ADVERSARIAL_REVIEW
 run_stagegate WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
 expect_status 1
 COUNT=$((COUNT + 1))
-[[ $(grep -c '^.uncle/docs/ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'changed inputs reused stale review'
+[[ $(grep -c 'documents/ADVERSARIAL_REVIEW.json$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'changed inputs reused stale review'
 
 new_stagegate_case sg-speculative-budget-pause
 printf 'requirements\n' > "$REPO/REQUIREMENTS.md"
 printf 'plan\n\n## Verification commands\n\n```\nbash app/test.sh\n```\n' > "$REPO/.uncle/docs/PROJECT_PLAN.md"
 printf 'review plan\n' > "$REPO/prompts/adversarial-review.md"
 sync_canonical PROJECT_PLAN
+rm -f "$REPO/.uncle/workflow/documents/ADVERSARIAL_REVIEW.json"
 set_state WAIT_PLAN_APPROVAL
 run_stagegate_stdin "$(gate_input y)" WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_SPECULATE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
 expect_status 1
 expect_state VALIDATE_ADVERSARIAL_REVIEW
 expect_out 'Document budget exceeded'
 COUNT=$((COUNT + 1))
-[[ $(grep -c '^.uncle/docs/ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'speculative budget failure repeated review'
+[[ $(grep -c 'documents/ADVERSARIAL_REVIEW.json$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'speculative budget failure repeated review'
 
 new_case change-review-cache
+rm -f "$REPO/.uncle/workflow/documents/ADVERSARIAL_REVIEW.json"
 set_state PLAN
 for attempt in 1 2; do
     run_driver WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_DOC_BUDGET_ENFORCE=1 WORKFLOW_REVIEW_COMPACT=0 WORKFLOW_DOC_MAX_BYTES_ADVERSARIAL_REVIEW=1
     expect_status 1
     expect_state VALIDATE_ADVERSARIAL_REVIEW
     COUNT=$((COUNT + 1))
-    [[ $(grep -c '^.uncle/docs/ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'change workflow repeated review'
+    [[ $(grep -c '.uncle/docs/ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 1 ]] || fail 'change workflow repeated review'
 done
 expect_out 'Document budget exceeded'
 
@@ -1970,6 +1977,7 @@ expect_out 'Document budget exceeded'
 # with the diagnostic before anyone is asked to look at it; a second
 # malformed review still stops for a human instead of looping.
 new_case change-review-format-retry
+rm -f "$REPO/.uncle/workflow/documents/ADVERSARIAL_REVIEW.json"
 set_state PLAN
 run_driver WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 FAKE_AR_FORMAT=MISSING_ASSESSMENT_ONCE
 expect_status 0
@@ -1978,7 +1986,7 @@ expect_out 'Retrying adversarial-review once with the format diagnostic.'
 expect_file .uncle/workflow/adversarial-review-format-retry.md
 expect_in_file .uncle/workflow/adversarial-review-format-retry.md 'Missing nonempty Overall assessment section'
 COUNT=$((COUNT + 1))
-[[ $(grep -c '^.uncle/docs/ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'format retry did not re-run the reviewer exactly once'
+[[ $(grep -c '.uncle/docs/ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'format retry did not re-run the reviewer exactly once'
 grep -q 'Overall assessment' "$REPO/.uncle/docs/ADVERSARIAL_REVIEW.md" || fail 'retried review was not adopted'
 
 }
@@ -1987,6 +1995,7 @@ grep -q 'Overall assessment' "$REPO/.uncle/docs/ADVERSARIAL_REVIEW.md" || fail '
 gate_group_19() {
 
 new_case change-review-format-retry-exhausted
+rm -f "$REPO/.uncle/workflow/documents/ADVERSARIAL_REVIEW.json"
 set_state PLAN
 # A reviewer stub that omits the Overall assessment heading on every call,
 # including the retry -- the format retry gets exactly one chance.
@@ -1999,7 +2008,7 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
-if [[ "$out" == .uncle/docs/ADVERSARIAL_REVIEW.md ]]; then
+if [[ "$out" == *.uncle/docs/ADVERSARIAL_REVIEW.md ]]; then
     printf 'No unresolved findings in this fixture.\n' >> "$out"
 else
     : > "$out"
@@ -2007,13 +2016,13 @@ else
 fi
 REV
 chmod +x "$CASE/bin/fake-reviewer"
-run_driver
+run_driver WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0
 expect_status 1
 expect_state VALIDATE_ADVERSARIAL_REVIEW
 expect_out 'Retrying adversarial-review once with the format diagnostic.'
 expect_out 'Missing nonempty Overall assessment section'
 COUNT=$((COUNT + 1))
-[[ $(grep -c '^.uncle/docs/ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'a second malformed review should not trigger a third call'
+[[ $(grep -c '.uncle/docs/ADVERSARIAL_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'a second malformed review should not trigger a third call'
 
 # The same one-shot format retry for .uncle/docs/MANUAL_CHECKLIST.md and .uncle/docs/FINAL_AUDIT.md.
 new_case change-checklist-format-retry
@@ -2025,7 +2034,7 @@ expect_status 0
 expect_state COMPLETE
 expect_out 'Retrying manual-checklist once with the format diagnostic.'
 COUNT=$((COUNT + 1))
-[[ $(grep -c '^.uncle/docs/MANUAL_CHECKLIST.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'checklist format retry did not re-run the reviewer exactly once'
+[[ $(grep -c '.uncle/docs/MANUAL_CHECKLIST.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'checklist format retry did not re-run the reviewer exactly once'
 
 new_case change-audit-format-retry
 green_baseline 0 'bash app/test.sh'
@@ -2036,7 +2045,7 @@ expect_status 0
 expect_state COMPLETE
 expect_out 'Retrying final-audit once with the format diagnostic.'
 COUNT=$((COUNT + 1))
-[[ $(grep -c '^.uncle/docs/FINAL_AUDIT.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'audit format retry did not re-run the reviewer exactly once'
+[[ $(grep -c '.uncle/docs/FINAL_AUDIT.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'audit format retry did not re-run the reviewer exactly once'
 
 # Explicit source prerequisites stop both drivers before any planning launch.
 new_stagegate_case sg-early-source

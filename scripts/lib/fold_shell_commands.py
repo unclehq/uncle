@@ -59,6 +59,13 @@ def main():
         folded = fold(lines, bash_executable())
     except (OSError, ImportError):
         folded = lines
+    if not any(line.strip() for line in folded):
+        # An input that was empty (or all blank lines, e.g. a single
+        # trailing newline from printing an empty verification_commands
+        # string) must fold to nothing -- not a bare newline, which
+        # verify_commands' own "no command block" check reads as "there is
+        # one command, and it is blank" instead of "there is none."
+        return
     sys.stdout.write('\n'.join(folded) + ('\n' if trailing else ''))
 
 

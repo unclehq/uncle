@@ -85,6 +85,26 @@ class Publisher(unittest.TestCase):
             # PROJECT_PLAN.json (the base) is untouched.
             self.assertEqual(json.loads((root/'.uncle/workflow/documents/PROJECT_PLAN.json').read_text()), base)
 
+    def test_compact_updated_plan_carries_legacy_execution_contract_without_model_echo(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'.uncle/workflow/documents').mkdir(parents=True)
+            base = {'schema': 'uncle.artifact/v1', 'kind': 'plan',
+                    'narrative': '## 1. Behavior\n\nVerify `tests/calc.test.js`.',
+                    'verification_commands': 'node --test tests/calc.test.js'}
+            (root/'.uncle/workflow/documents/PROJECT_PLAN.json').write_text(json.dumps(base))
+            # This is precisely the compact compiler shape: no repeated
+            # command block, no protected path list, only the review patch.
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan',
+                       'dispositions': [{'finding': 'AR-001', 'disposition': 'Accepted',
+                                         'reason': 'x', 'plan_change': 'Updated the behavior.'}],
+                       'patch': {'edit_sections': [{'heading': '## 1. Behavior', 'content': 'Updated behavior.'}]}}
+            delivery = root/'delivery.json'; delivery.write_text(json.dumps(payload))
+            self.assertTrue(publisher.publish('updated-plan', root/'unused.jsonl', root, delivery))
+            stored = json.loads((root/'.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json').read_text())
+            self.assertEqual(stored['verification_commands'], base['verification_commands'])
+            self.assertEqual(stored['protected_verification_paths'], 'tests/calc.test.js')
+
     def test_a_response_with_no_patch_key_is_used_exactly_as_before(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

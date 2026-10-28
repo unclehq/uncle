@@ -600,6 +600,16 @@ OP_NAMES = ('set_fields', 'set_text', 'set_step', 'insert_row', 'insert_item', '
 
 
 def split_list(text):
+    # JSON worker packets may naturally represent a typed list as an array.
+    # Treat that as equivalent to the legacy comma-delimited string instead
+    # of crashing during a speculative merge and forcing the whole panel to
+    # run again in the foreground.
+    if isinstance(text, list):
+        if not all(isinstance(part, str) for part in text):
+            raise PlanError('a typed list must contain only strings')
+        return [strip_ticks(part) for part in text if part.strip()]
+    if not isinstance(text, str):
+        raise PlanError('a typed list must be a string or JSON string array')
     return [strip_ticks(part) for part in re.split(r'[,;\n]\s*', text or '') if part.strip()]
 
 

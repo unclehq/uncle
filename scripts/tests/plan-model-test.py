@@ -268,6 +268,11 @@ class Authoring(unittest.TestCase):
             {'id': 'B-1', 'trigger': 't', 'result': 'r', 'failure': 'f', 'requirements': 'UB-1, UB-2'}]}, 's6.1')
         self.assertEqual((block['rows'][0]['id'], block['rows'][0]['requirements']), ('B-1', ['UB-1', 'UB-2']))
 
+    def test_flat_rows_accept_json_string_arrays_for_list_fields(self):
+        block = pm.authored_block({'kind': 'rows', 'row_kind': 'behavior', 'rows': [
+            {'id': 'B-1', 'trigger': 't', 'result': 'r', 'failure': 'f', 'requirements': ['UB-1', 'UB-2']}]}, 's6.1')
+        self.assertEqual(block['rows'][0]['requirements'], ['UB-1', 'UB-2'])
+
     def test_a_kind_keyed_by_a_name_gets_a_generated_row_id(self):
         block = pm.authored_block({'kind': 'rows', 'row_kind': 'state_field', 'rows': [
             {'field': 'display', 'type': 'string', 'initial': '0', 'description': 'shown'}]}, 's2.1')

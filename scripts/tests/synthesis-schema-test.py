@@ -24,9 +24,10 @@ PROMPT = load('updated_plan_synthesis_prompt.py')
 class SynthesisSchema(unittest.TestCase):
     def test_updated_plan_asks_for_patch_and_dispositions_not_narrative(self):
         schema = SH.artifact_schema('plan', True, False, synthesis=True)
-        self.assertEqual(set(schema['required']), {'schema', 'kind', 'dispositions', 'patch',
-                                                   'verification_commands', 'protected_verification_paths'})
+        self.assertEqual(set(schema['required']), {'schema', 'kind', 'dispositions', 'patch'})
         self.assertNotIn('narrative', schema['properties'])
+        self.assertNotIn('verification_commands', schema['properties'])
+        self.assertNotIn('protected_verification_paths', schema['properties'])
         self.assertIs(schema['additionalProperties'], False)
 
     def test_updated_change_plan_asks_for_patch_and_dispositions(self):

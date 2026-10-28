@@ -51,6 +51,22 @@ class AppServer(unittest.TestCase):
         root = self.project({'kind': 'webpage', 'command': ['python3', '-c', 'raise SystemExit(1)'], 'url': 'http://127.0.0.1:%d/' % free_port()})
         self.assertEqual(app_server.start(root, self.state), '')
 
+    def test_start_reuses_an_early_server_instead_of_binding_a_second_port(self):
+        port = free_port()
+        root = self.project({'kind': 'webpage', 'command': ['python3', '-m', 'http.server', str(port), '--bind', '127.0.0.1'],
+                             'url': 'http://127.0.0.1:%d/' % port})
+        first = app_server.start(root, self.state)
+        pid = (self.state / 'app-server.pid').read_text()
+        self.assertEqual(app_server.start(root, self.state), first)
+        self.assertEqual((self.state / 'app-server.pid').read_text(), pid)
+
+    def test_prewarm_refuses_to_install_or_build(self):
+        port = free_port()
+        root = self.project({'kind': 'webpage', 'command': ['npm', 'run', 'preview'],
+                             'url': 'http://127.0.0.1:%d/' % port},
+                            {'preview': 'vite preview', 'build': 'vite build'})
+        self.assertEqual(app_server.start(root, self.state, prepare=False), '')
+
     def test_a_non_webpage_project_is_not_started(self):
         root = self.project({'kind': 'command', 'command': ['python3', '-c', 'print(1)']})
         self.assertEqual(app_server.start(root, self.state), '')
@@ -69,6 +85,8 @@ class AppServer(unittest.TestCase):
         block = text[text.index('run_parallel_checklist_workers() {'):]
         self.assertLess(block.index('app_server.py" start'), block.index('checklist_run_lanes'))
         self.assertIn('The application is already running', block)
+        self.assertIn('app_server.py" prewarm', text)
+        self.assertIn('Prewarm never', text)
         self.assertIn('app_server.py" stop', text[text.index('snapshot_checklist_groups > /dev/null'):])
 
 

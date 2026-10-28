@@ -120,14 +120,9 @@ def prompt(plan, review, workers, change=False):
     label = 'change plan' if change else 'implementation plan'
     extra_fields = ''
     if not change:
-        extra_fields = (' `verification_commands` and `protected_verification_paths` are also '
-                         'required top-level strings, even when unchanged.\n\n'
-                         '`protected_verification_paths` names test and source files the '
-                         'implementation must not edit -- never anything under `.uncle/`, which is '
-                         'workflow bookkeeping, not a file under test, and is a rejected delivery if '
-                         'listed; and never a lockfile or other file the install command creates '
-                         '(`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`) unless the repository already has it. One repository-relative path per line, not comma-separated. Example: '
-                         '`src/calc.js\\nsrc/calc.test.js\\ne2e/calc.spec.js`.')
+        extra_fields = (' Verification commands and protected verification paths are carried '
+                        'forward by the driver from the approved plan; do not repeat them unless '
+                        'your patch actually changes them.')
     _, sections = split_sections(plan.get('narrative') or '')
     headings = '\n'.join('- `%s`' % section['heading'] for section in sections) or '(the base plan has no `## ` sections)'
     example_kind = 'change-plan' if change else 'plan'

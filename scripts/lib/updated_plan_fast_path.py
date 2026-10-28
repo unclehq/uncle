@@ -2,6 +2,7 @@
 """Produce an updated plan locally only when there is nothing to resolve."""
 import argparse
 import json
+import re
 from pathlib import Path
 
 
@@ -30,6 +31,33 @@ def protected_paths(plan):
             if paths:
                 return paths
     raise ValueError('project plan has no protected verification paths to preserve')
+
+
+# Older approved plans predate the dedicated protected-paths field.  These are
+# still deterministic plan facts: test files and runner configs named by the
+# plan or its verification commands.  Keep this small parser here rather than
+# asking an updated-plan compiler to reproduce an unchanged list.
+TEST_FILE = re.compile(r'(?<![\w./-])((?:[\w.-]+/)*[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?)(?![\w])|'
+                       r'(?<![\w./-])((?:tests?|__tests__|e2e)/(?:[\w.-]+/)*[\w.-]+\.(?:[cm]?[jt]sx?|py|sh))(?![\w])|'
+                       r'(?<![\w./-])((?:vitest|jest|playwright|cypress|karma)\.config\.[cm]?[jt]s)(?![\w])')
+
+
+def derive_protected_paths(text, commands=''):
+    """Return named test/config paths, one per line, excluding generated files."""
+    found = []
+    for match in TEST_FILE.finditer((text or '') + '\n' + (commands or '')):
+        path = next(group for group in match.groups() if group)
+        if (path.startswith(('.', '/', 'node_modules', 'dist/', 'build/', 'out/', 'coverage/'))
+                or '..' in path or path in found or path.endswith(('.json', '.lock'))):
+            continue
+        found.append(path)
+    # A plan often mentions both `tests/e2e/keyboard.spec.js` and the shorter
+    # `keyboard.spec.js` in prose. The latter cannot be matched against an
+    # implementation step's repository-relative `Owns:` path. Prefer the
+    # qualified spelling when both occur; retain a genuinely root-level test.
+    qualified_names = {Path(path).name for path in found if '/' in path}
+    found = [path for path in found if '/' in path or Path(path).name not in qualified_names]
+    return '\n'.join(found[:40])
 
 
 def render_view(payload, view, change=False):

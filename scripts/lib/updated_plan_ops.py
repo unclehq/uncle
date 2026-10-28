@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import plan_model as pm
 import updated_plan_edits as base
 from plan_patch import apply_patch, split_sections
-from updated_plan_fast_path import protected_paths
+from updated_plan_fast_path import protected_paths, derive_protected_paths
 from updated_plan_synthesis_prompt import EDIT_RULES
 from worker_schemas import EDIT_OPS_KIND, RESOLUTION_OPS_KIND
 
@@ -308,23 +308,6 @@ def read_answers(directory, groups):
     return answers
 
 
-TEST_FILE = re.compile(r'(?<![\w./-])((?:[\w.-]+/)*[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?)(?![\w])|'
-                       r'(?<![\w./-])((?:tests?|__tests__|e2e)/(?:[\w.-]+/)*[\w.-]+\.(?:[cm]?[jt]sx?|py|sh))(?![\w])|'
-                       r'(?<![\w./-])((?:vitest|jest|playwright|cypress|karma)\.config\.[cm]?[jt]s)(?![\w])')
-
-
-def derive_protected_paths(text, commands=''):
-    """Test files and runner configs the plan names (one per line), for a plan that lists no protected verification paths.
-    Generated output and lockfiles are never protected."""
-    found = []
-    for match in TEST_FILE.finditer((text or '') + '\n' + (commands or '')):
-        path = next(g for g in match.groups() if g)
-        if path.startswith(('.', '/', 'node_modules', 'dist/', 'build/', 'out/', 'coverage/')) or '..' in path or path in found or path.endswith(('.json', '.lock')):
-            continue
-        found.append(path)
-    return '\n'.join(found[:40])
-
-
 def merge(plan_path, slices_path, directory, output, resolutions=None):
     plan = base.read_json(plan_path)
     model = plan_model_of(plan, plan_path)
@@ -338,6 +321,13 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
             owners.append((name.strip(), [i for i in ids.split(',') if i]))
     if not owners:
         raise Conflict('no writers were planned')
+    # The bounded updated-plan path is deliberately a one-round fan-out.  A
+    # second model round per overlapping row destroys its latency guarantee.
+    # Its contract is stable slice order: later writers may refine an earlier
+    # edit, and every individual operation is applied leniently below.  The
+    # legacy resolver path remains available when this is not set.
+    fast_merge = os.environ.get('WORKFLOW_UPDATED_PLAN_FAST_MERGE') == '1'
+    driver_contract = os.environ.get('WORKFLOW_UPDATED_PLAN_DRIVER_CONTRACT') == '1'
     dispositions, writer_ops, command_edits, paths = [], [], [], {}
     base_commands = (plan.get('verification_commands') or '').strip()
     try:
@@ -360,9 +350,15 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
                     or not isinstance(edit.get('new'), str)):
                 raise Conflict('writer %s: commands_replace needs "old" and "new"' % name)
             command_edits.append((name, edit['old'], edit['new']))
-        value = delivery.get('protected_verification_paths')
-        if isinstance(value, str) and value.strip() and value.strip() != base_paths:
-            paths[value.strip()] = name
+        # Frozen verification paths are a driver-owned carry-forward field.
+        # A writer represents them in a compact packet as a string and can
+        # accidentally serialize a comma-delimited list, which is invalid for
+        # the canonical artifact.  Never make that unchanged contract depend
+        # on a worker in the fast path.
+        if not driver_contract:
+            value = delivery.get('protected_verification_paths')
+            if isinstance(value, str) and value.strip() and value.strip() != base_paths:
+                paths[value.strip()] = name
     if len(paths) > 1:
         raise Conflict('writers disagree on protected_verification_paths')
     command_edits, aside = base.place_commands(command_edits, base_commands)
@@ -378,6 +374,16 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
     groups += base.find_groups([], command_edits, plan.get('narrative') or '', base_commands)
     for number, group in enumerate(groups, 1):
         group['id'] = 'G%d' % number
+    force_lenient = False
+    if groups and fast_merge:
+        print('updated-plan ops: %d overlapping/invalid edit group(s); applying stable writer-order merge without resolvers' % len(groups),
+              file=sys.stderr)
+        # Keep all non-invalid operations in their writer/slice order.  The
+        # lenient application branch below applies the first edit, then lets a
+        # later finding refine the same target.  This is deterministic and
+        # avoids a slow, failure-prone resolver round.
+        groups = []
+        force_lenient = True
     answers = {}
     if groups:
         if resolutions is None:
@@ -426,7 +432,7 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
         final_ops += [({'reconcile'}, op) for op in late]
         if late:
             print('updated-plan ops: reconcile added %d edit(s)' % len(late), file=sys.stderr)
-    if groups or late_path:
+    if force_lenient or groups or late_path:
         new_model, dropped = apply_leniently(model, final_ops)
         for op, why, writers in dropped:
             print('updated-plan ops: left out %s: %s' % (json.dumps(op)[:100], why), file=sys.stderr)
@@ -438,6 +444,8 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
     if errors:
         raise Conflict('the revised plan does not validate: %s' % '; '.join(errors))
     commands = base.merged_commands(base_commands, command_edits)
+    if driver_contract:
+        paths = {}
     if not CHANGE and not (next(iter(paths), base_paths) or '').strip():
         # Neither the base plan nor a writer named any (calculator-local: a local model's plan had none, the whole ops result was
         # thrown away, and the one-call fallback failed on a text patch).  The plan's own test files and configs are what it means.
@@ -449,11 +457,16 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
               file=sys.stderr)
     patch = to_patch(model, new_model)
     apply_patch(plan.get('narrative') or pm.render(model), patch)     # a patch that does not apply is a conflict
+    contract_paths = next(iter(paths), base_paths)
+    if not CHANGE and driver_contract:
+        contract_paths = base_paths
+        if not contract_paths.strip():
+            contract_paths = derive_protected_paths(plan.get('narrative') or pm.render(new_model), commands)
     if CHANGE:
         result = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan', 'dispositions': dispositions, 'patch': patch}
     else:
         result = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'dispositions': dispositions, 'patch': patch,
-                  'verification_commands': commands, 'protected_verification_paths': next(iter(paths), base_paths)}
+                  'verification_commands': commands, 'protected_verification_paths': contract_paths}
     Path(output).write_text(json.dumps(result, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 
 

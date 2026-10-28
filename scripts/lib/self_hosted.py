@@ -698,10 +698,11 @@ def patch_schema(kind, protected=False):
                   'insert_sections': {'type': 'array', 'items': insert, 'maxItems': 20}}, required=[], closed=True)
     properties = {'dispositions': DISPOSITIONS, 'patch': patch}
     required = ['dispositions', 'patch']
-    if protected:
-        properties['verification_commands'] = _str()
-        properties['protected_verification_paths'] = _str()
-        required += ['verification_commands', 'protected_verification_paths']
+    # A synthesis reply is a patch, not a second copy of the execution
+    # contract.  The driver carries verification commands and protected paths
+    # forward from the approved plan (deriving legacy paths when necessary).
+    # Keeping those large, unchanged strings out of the schema cuts decoding
+    # time and removes a common source of malformed compact deliveries.
     return _envelope(kind, properties, required)
 
 
@@ -1437,8 +1438,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
             if synthesis:
                 patch_fields = ('"dispositions":[{"finding":"AR-001","disposition":"Accepted","reason":"...","plan_change":"..."}],'
                                 '"patch":{"replace_text":[{"heading":"...","old":"...","new":"..."}],"edit_sections":[],"insert_sections":[]}')
-                extra = (', "verification_commands":"...", "protected_verification_paths":"..."' if protected_fields else '')
-                kind_fields = '"kind":"%s",%s%s' % (expected_kind, patch_fields, extra)
+                kind_fields = '"kind":"%s",%s' % (expected_kind, patch_fields)
             elif expected_kind == 'change-planning-bundle':
                 kind_fields = ('"kind":"change-planning-bundle","baseline_report":{"schema":"uncle.artifact/v1","kind":"baseline-report","narrative":"...","verification_commands":"..."},'
                                '"change_spec":{"schema":"uncle.artifact/v1","kind":"change-spec","narrative":"...","acceptance_criteria":[{"id":"AC-1","criterion":"...","verification":"..."}]},'
@@ -1448,8 +1448,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                                if expected_kind == 'change-plan' else '"kind":"plan","narrative":"...","verification_commands":"..."' + protected_fields)
             if synthesis:
                 tail = ('Name only the sections you change in `patch`; every other section carries over from the base plan. '
-                        'Do not write a `narrative`.' + (' `verification_commands` is the exact shell commands block, as '
-                        'plain text (no fence markers).' if protected_fields else ''))
+                        'Do not write a `narrative`, verification commands, or protected paths; the driver carries them forward.')
             else:
                 tail = ('`verification_commands` is the exact shell commands block, as plain text (no fence markers). '
                         '`narrative` is everything else the plan needs to say, as one Markdown block.')

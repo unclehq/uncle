@@ -133,6 +133,40 @@ def expand_patch(payload, project, stage):
     payload['narrative'] = plan_patch.apply_patch(base.get('narrative') or '', payload['patch'])
 
 
+def preserve_updated_plan_fields(payload, project, stage):
+    """Fill unchanged execution-contract fields after a compact patch delivery.
+
+    The compiler owns dispositions and text edits.  Verification commands and
+    protected test paths are driver-owned carry-forward data; asking a model
+    to repeat them makes the response larger and turns an omitted legacy path
+    list into an avoidable retry.  Explicit compiler edits still win.
+    """
+    if stage != 'updated-plan':
+        return
+    artifact_json = module('artifact_json')
+    try:
+        base = artifact_json.read(project, PATCH_BASE[stage])
+    except (OSError, ValueError) as error:
+        raise ValueError('updated plan: base execution contract is unavailable: %s' % error) from error
+    commands = payload.get('verification_commands')
+    if not isinstance(commands, str) or not commands.strip():
+        payload['verification_commands'] = base.get('verification_commands') or ''
+    paths = payload.get('protected_verification_paths')
+    if isinstance(paths, str) and paths.strip():
+        return
+    from importlib.util import module_from_spec, spec_from_file_location
+    source = Path(__file__).with_name('updated_plan_fast_path.py')
+    spec = spec_from_file_location('updated_plan_fast_path', source)
+    fast_path = module_from_spec(spec); spec.loader.exec_module(fast_path)
+    try:
+        paths = fast_path.protected_paths(base)
+    except ValueError:
+        paths = fast_path.derive_protected_paths(base.get('narrative') or '', payload['verification_commands'])
+    if not paths:
+        raise ValueError('updated plan: no protected verification paths were supplied or derivable from the approved plan')
+    payload['protected_verification_paths'] = paths
+
+
 def publish(stage, log, project, delivery=None):
     if stage not in ARTIFACT:
         return False
@@ -147,6 +181,7 @@ def publish(stage, log, project, delivery=None):
         # operational JSON input.
         payload = legacy_raw_document(project, name, kind)
     expand_patch(payload, project, stage)
+    preserve_updated_plan_fields(payload, project, stage)
     artifact_json = module('artifact_json')
     project = Path(project)
     if stage == 'requirements':

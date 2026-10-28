@@ -1,14 +1,13 @@
 You are an isolated checklist-execution worker.
 
-Read `.uncle/docs/MANUAL_CHECKLIST.md`, `.uncle/workflow/checklist-groups/README.md`, and
-`.uncle/workflow/checklist-driver-checks/README.md`. Your assigned check IDs
-are appended below. The group these IDs came
-from already declared no exclusive resource conflicts between them, so
-executing them one after another in this single session is exactly as safe
-as the driver running them as separate workers -- it is fewer agent
-invocations rereading the same checklist and READMEs, not a change in what
-may overlap. Execute only these assigned IDs. Do not infer results for any
-other check and do not run a dependency that is not assigned to you.
+Read only the canonical checklist JSON path supplied by the driver for the
+assigned checks and `.uncle/workflow/green-check.tsv` for driver-owned verification
+evidence. These JSON/TSV artifacts are authoritative; rendered Markdown,
+worker directories, worker README files, and prior chat output are not inputs.
+Your assigned check IDs are appended below. The driver has already scheduled
+conflicting checks into the same lane, so execute only these assigned IDs in
+their listed order. Do not infer results for any other check and do not run a
+dependency that is not assigned to you.
 
 ## Browser checks
 
@@ -20,6 +19,19 @@ the driver's verification runs. If a script fails because its own selector or
 setup is wrong, correct the script (at most twice) -- that is not an application
 defect. Record FAIL only for an application behavior you verified against the
 page, and name the observed and expected values.
+
+### Browser-lane efficiency
+
+When this lane contains more than one browser check, inspect the page once,
+then use one browser process, one context, one page, and one temporary script
+to perform all assigned sequences in order. Collect structured observations in
+that script and write the packet when it finishes; do not reopen the page,
+reprint the DOM, create a fresh browser, or take exploratory screenshots for
+each individual check. Do not investigate an unexpected behavior outside the
+assigned expected result. The driver-supplied application URL is the runtime
+under test: use it even if a checklist action names an equivalent local port or
+launch command, and report a setup conflict only when that supplied URL cannot
+exercise the required behavior.
 
 ## Compact execution policy
 

@@ -31,6 +31,7 @@ check "normal workers get the test review" grep -q 'documents/TEST_REVIEW.json' 
 acceptance_json_result=PASS
 mkdir -p "$ROOT/scripts/lib"
 printf '#!/usr/bin/env python3\nimport os\nprint(os.environ.get("FAKE_RESULT","PASS"))\n' > "$ROOT/scripts/lib/acceptance_json.py"
+printf '#!/usr/bin/env python3\nraise SystemExit(0)\n' > "$ROOT/scripts/lib/checklist_document.py"
 echo '{}' > "$STATE_DIR/documents/MANUAL_CHECKLIST.json"; echo '{}' > "$STATE_DIR/documents/TEST_REVIEW.json"
 check "no marker: not usable" not early_checklist_usable
 : > "$STATE_DIR/checklist-early.ok"
@@ -56,7 +57,7 @@ rm -f "$STATE_DIR/early-ran"
 early_checklist_start; early_checklist_join
 check "unattended: a failing driver check does not stop it" test -e "$STATE_DIR/early-ran"
 : > "$STATE_DIR/checklist-early.ok"
-FAKE_RESULT=FAIL check "unattended: kept even when the review has findings" early_checklist_usable
+FAKE_RESULT=FAIL check "unattended: findings discard the early checklist" not early_checklist_usable
 UNATTENDED=0
 green_regressions() { echo 0; }
 run_manual_checklist_panel() { return 1; }
@@ -69,6 +70,40 @@ import sys
 text = open(sys.argv[1]).read()
 block = text[text.index('\n        EXECUTE_CHECKLIST)\n'):]
 sys.exit(0 if 0 <= block.index('snapshot_checklist_groups > /dev/null') < block.index('run_parallel_checklist_workers') else 1)
+PY
+
+# TEST_REVIEW starts the speculative checklist, while MANUAL_CHECKLIST adopts
+# only a validated early packet after the review has passed.
+check "test review starts the early checklist" python3 - "$REAL_ROOT/scripts/stagegate.sh" <<'PY'
+import sys
+text = open(sys.argv[1]).read()
+start = text.index('\n        TEST_REVIEW)\n')
+end = text.index('\n        VALIDATE_TEST_REVIEW)\n', start)
+sys.exit(0 if text.find('early_checklist_start', start, end) >= 0 else 1)
+PY
+check "manual stage joins and conditionally adopts" python3 - "$REAL_ROOT/scripts/stagegate.sh" <<'PY'
+import sys
+text = open(sys.argv[1]).read()
+start = text.index('\n        MANUAL_CHECKLIST)\n')
+end = text.index('\n        VALIDATE_MANUAL_CHECKLIST)\n', start)
+block = text[start:end]
+sys.exit(0 if 'early_checklist_join' in block and 'early_checklist_usable' in block and 'run_stage MANUAL_CHECKLIST' in block else 1)
+PY
+check "coverage lens streams execution only after its packet" python3 - "$REAL_ROOT/scripts/stagegate.sh" <<'PY'
+import sys
+text = open(sys.argv[1]).read()
+start = text.index('start_streamed_checklist_lens() {')
+end = text.index('\nearly_stream_join() {', start)
+block = text[start:end]
+sys.exit(0 if block.index('manual_checklist_packets.py') < block.index('run_parallel_checklist_workers') else 1)
+PY
+check "execute stage merges streamed lanes before normal execution" python3 - "$REAL_ROOT/scripts/stagegate.sh" <<'PY'
+import sys
+text = open(sys.argv[1]).read()
+start = text.index('\n        EXECUTE_CHECKLIST)\n')
+end = text.index('\n        VALIDATE_CHECKLIST)\n', start)
+block = text[start:end]
+sys.exit(0 if 'early_stream_join' in block and 'early_stream_collect' in block and 'CHECKLIST_STREAM_PRECOMPLETED' in block else 1)
 PY
 
 [[ "$fails" == 0 ]] && echo OK

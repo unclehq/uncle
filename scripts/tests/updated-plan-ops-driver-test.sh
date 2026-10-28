@@ -89,6 +89,14 @@ check "overlap: one resolver call"               test "$(wc -l < "$w/resolver-ca
 check "overlap: the resolution is published"     grep -q '| B-1 | click | appended | MERGED |' "$TMP/resolve/.uncle/docs/UPDATED_PROJECT_PLAN.md"
 check "overlap: resolver is shown the current row" grep -q '"failure": "unchanged"' "$w/updated-plan-edits/prompts/resolve-G1.md"
 
+# Fast adaptive mode deliberately has no resolver round: conflicting worker
+# ops are applied in stable slice order and the unchanged execution contract
+# is derived by the driver.
+WORKFLOW_UPDATED_PLAN_FAST_MERGE=1 WORKFLOW_UPDATED_PLAN_DRIVER_CONTRACT=1 run_case deterministic resolve
+w="$TMP/deterministic/.uncle/workflow"
+check "fast merge: overlap returns 0 without a resolver" bash -c 'test "$(cat "$1/rc")" == 0 && test ! -e "$1/resolver-calls"' _ "$w"
+check "fast merge: publishes stable writer-order edits" grep -q '| B-1 | click | appended | X2 |' "$TMP/deterministic/.uncle/docs/UPDATED_PROJECT_PLAN.md"
+
 run_case retry resolve-retry
 w="$TMP/retry/.uncle/workflow"
 check "bad resolver answer: retried once, then merged" bash -c 'test "$(cat "$1/rc")" == 0 && test "$(wc -l < "$1/resolver-calls")" -eq 2' _ "$w"
@@ -122,8 +130,17 @@ got = S.reviewer_artifact_kind(open(sys.argv[2]).read())
 sys.exit(0 if got == 'updated-plan-edit-ops-packet' else 1)
 PY
 
+# The fast adaptive path deliberately forces the portable private-file
+# delivery contract even for hosted Claude. It must not silently re-enable
+# nested structured output or parse a chat reply.
+WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY=file run_case hostedfile ok hosted
+w="$TMP/hostedfile/.uncle/workflow"
+check "forced file delivery: hosted writer returns 0" test "$(cat "$w/rc")" == 0
+check "forced file delivery: no schema, private packet path" bash -c '! grep -q "schema=.*schemas/" "$1" && grep -q "out=none" "$1" && ! grep -q "packet=none" "$1"' _ "$w/calls"
+
 run_case hostedresolve resolve hosted
 check "hosted resolver: schema and answer path"  bash -c 'grep -q "resolve-G1 schema=.*schemas/resolve-G1.json out=.*/resolutions-G1.json" "$1"' _ "$TMP/hostedresolve/.uncle/workflow/calls"
 check "ops mode is the default"                  grep -qF 'WORKFLOW_UPDATED_PLAN_OPS:-1' "$ROOT/scripts/stagegate.sh"
+check "non-owner batches are set-e safe"         bash -c '! grep -q '\''owner_of\[index\]="\$(\[\['\'' "$1" && ! grep -q '\''"\$(\[\[ "\$name" == 1 || "\$name" == 1-1 \]\] && echo owner)"'\'' "$1"' _ "$ROOT/scripts/stagegate.sh"
 
 [[ "$fails" == 0 ]] && echo "updated-plan-ops-driver-test.sh: all checks passed" || exit 1

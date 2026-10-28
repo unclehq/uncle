@@ -45,6 +45,11 @@ class UpdatedPlanFastPath(unittest.TestCase):
             self.assertTrue(FAST.build(plan, review, output))
             self.assertEqual(json.loads(output.read_text())['protected_verification_paths'], 'src/core.js tests/core.test.js')
 
+    def test_path_derivation_prefers_qualified_test_path_over_bare_duplicate(self):
+        paths = FAST.derive_protected_paths(
+            'Use tests/e2e/keyboard.spec.js and keyboard.spec.js; also use tests/unit/calc.test.js and calc.test.js.')
+        self.assertEqual(paths.splitlines(), ['tests/e2e/keyboard.spec.js', 'tests/unit/calc.test.js'])
+
     def test_any_finding_requires_parent_judgment(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)

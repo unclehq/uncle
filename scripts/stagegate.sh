@@ -280,6 +280,9 @@ declare -f finished_extras > /dev/null || finished_extras() { :; }
 on_exit() {
     local rc=$?
     if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
+    if declare -f early_checklist_cancel > /dev/null; then early_checklist_cancel; fi
+    if declare -f early_execute_cancel > /dev/null; then early_execute_cancel; fi
+    if declare -f early_stream_cancel > /dev/null; then early_stream_cancel; fi
     if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
     python3 -B "$ROOT/scripts/lib/app_server.py" stop "$STATE_DIR" > /dev/null 2>&1 || true
@@ -2601,12 +2604,28 @@ run_updated_plan_edit_writers() {
     if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; resolve_command=resolve-ops; fi
     # Forced, schema-checked JSON wherever the runner can enforce it: hosted Claude through --json-schema, a
     # self-hosted model through the grammar its adapter derives from the packet kind named in the prompt.
-    local delivery=file
-    if stage_supports_structured_output updated-plan-worker-edits-1; then
-        delivery=hosted
-    elif stage_uses_self_hosted updated-plan AGENT; then
-        delivery=local
-    fi
+    # A caller can deliberately select the universally-supported file handoff.
+    # This is important for the bounded updated-plan fan-out: nested native
+    # structured-output sessions have failed before emitting an event, while
+    # the private Write-path packet contract is used successfully by every
+    # runner.  The packet is parsed and semantically merged below, so chat is
+    # still never an artifact source.
+    local delivery="${WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY:-auto}"
+    case "$delivery" in
+        file|local|hosted) ;;
+        auto)
+            delivery=file
+            if stage_supports_structured_output updated-plan-worker-edits-1; then
+                delivery=hosted
+            elif stage_uses_self_hosted updated-plan AGENT; then
+                delivery=local
+            fi
+            ;;
+        *)
+            echo "Invalid WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY: $delivery" >&2
+            return 1
+            ;;
+    esac
     [[ -f "${UPDATED_PLAN_PROMPT:-}" ]] || return 1
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     python3 -B "$helper" slices "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" > "$directory/slices.tsv" || return 1
@@ -2614,7 +2633,15 @@ run_updated_plan_edit_writers() {
     local -a ids_of=() owner_of=() started=() hedge=() finished=()
     local index=0
     while IFS=$'\t' read -r name ids; do
-        owner_of[index]="$([[ "$name" == 1 ]] && echo owner)"
+        # Do not put a false test in a command substitution assignment.  With
+        # the driver's `set -e`, the second slice's false `[[ name == 1 ]]`
+        # used to terminate the entire parent immediately after writer 1
+        # launched, leaving no worker error or packet to diagnose.
+        if [[ "$name" == 1 ]]; then
+            owner_of[index]=owner
+        else
+            owner_of[index]=''
+        fi
         ids_of[index]="$ids"
         updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "${owner_of[index]}" || return 1
         pids+=("$!"); names+=("$name"); started[index]="$SECONDS"; hedge[index]=""; finished[index]=0
@@ -2693,7 +2720,11 @@ run_updated_plan_edit_writers() {
         rows="$(python3 -B "$helper" resplit "$directory/slices.tsv" "${failed_names[@]}")" || return 1
         while IFS=$'\t' read -r name ids; do
             [[ -n "$name" ]] || continue
-            updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$([[ "$name" == 1 || "$name" == 1-1 ]] && echo owner)" || return 1
+            local retry_owner=''
+            if [[ "$name" == 1 || "$name" == 1-1 ]]; then
+                retry_owner=owner
+            fi
+            updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$retry_owner" || return 1
             pids+=("$!"); names+=("$name")
         done <<< "$rows"
         for pid in "${!pids[@]}"; do
@@ -2887,6 +2918,95 @@ run_updated_plan_fast_path() {
         --render .uncle/docs/UPDATED_PROJECT_PLAN.md
 }
 
+# A non-empty review used to take the expensive "committee" path by default:
+# three advisory reviewers, one or more plan writers, then sometimes a
+# reconciler and conflict resolvers.  All of those calls reread the same base
+# plan and review.  They improve neither the canonical inputs nor the merge
+# when a single writer can make the small, ID-bound patch directly.
+#
+# Keep one compiler call as the normal path.  Its sealed prompt contains only
+# the canonical plan and condensed review; it has no tools to spend time on
+# discovery, no worker directory to inspect, and writes a patch rather than a
+# second full plan.  This makes the normal updated-plan critical path one LLM
+# round trip (target: about 30 seconds on a responsive runner), rather than
+# the slowest of a panel plus a reconciliation round.  The historical panel
+# remains available with WORKFLOW_UPDATED_PLAN_COMPACT=0 for diagnosing an
+# unusual model-specific failure.
+run_updated_plan_compact() {
+    [[ "${WORKFLOW_UPDATED_PLAN_COMPACT:-1}" == 1 ]] || return 1
+    ensure_project_plan_json || return 1
+    require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" || return 1
+    local directory="$STATE_DIR/updated-plan-compact"
+    rm -rf "$directory"; mkdir -p "$directory" "$STATE_DIR/artifact-delivery"
+    UPDATED_PLAN_PROMPT="$directory/synthesis.md"
+    python3 -B "$ROOT/scripts/lib/updated_plan_synthesis_prompt.py" \
+        "$STATE_DIR/documents/PROJECT_PLAN.json" \
+        "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
+        - "$UPDATED_PLAN_PROMPT" || return 1
+    echo 'Updated-plan compact path: one JSON patch compiler; skipping advisory and edit-writer fan-out.'
+    if stage_supports_structured_output updated-plan; then
+        local schema="$directory/synthesis.json"
+        python3 -B "$ROOT/scripts/lib/worker_schemas.py" synthesis plan protected "$schema" || return 1
+        UNCLE_OUTPUT_SCHEMA_FILE="$schema" \
+        UNCLE_STRUCTURED_OUTPUT_PATH="$STATE_DIR/artifact-delivery/updated-plan.json" \
+            run_claude "$UPDATED_PLAN_PROMPT" updated-plan
+    else
+        run_claude "$UPDATED_PLAN_PROMPT" updated-plan
+    fi
+}
+
+# A single compiler is fastest for a short review.  A long review is different:
+# one response has to serialize every disposition and patch, as calculator's
+# 23 findings did (12.8k output tokens / 80s).  Split only that response into
+# a small number of independent patch batches.  There are no advisory
+# reviewers and no reconciliation round; the existing typed-op merge is
+# deterministic, and asks a resolver only for a genuine conflicting edit.
+#
+# Local/self-hosted servers share one decoder, so parallel requests only queue
+# there.  Keep their one-call path. Hosted runners decode the bounded batches
+# concurrently and generally finish near the slowest batch, not their sum.
+run_updated_plan_adaptive() {
+    local count threshold slice directory
+    [[ "${WORKFLOW_UPDATED_PLAN_COMPACT:-1}" == 1 ]] || return 1
+    count="$(python3 -B - "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" <<'PY'
+import json, sys
+try:
+    print(len(json.load(open(sys.argv[1], encoding='utf-8')).get('findings') or []))
+except (OSError, ValueError):
+    print(0)
+PY
+)"
+    # Keep each response tiny.  On a large review, serializing one full plan
+    # patch took calculator more than 80 seconds.  Two findings per writer
+    # gives hosted runners enough independent work to finish near one short
+    # response (rather than the sum), without the 20-way request burst of a
+    # one-finding fan-out.
+    threshold="${WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD:-5}"
+    slice="${WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE:-2}"
+    if [[ "$count" =~ ^[0-9]+$ && "$threshold" =~ ^[0-9]+$ && "$slice" =~ ^[0-9]+$ ]] \
+        && (( count >= threshold && slice > 0 )) \
+        && ! stage_uses_self_hosted updated-plan AGENT; then
+        ensure_project_plan_json || return 1
+        require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" || return 1
+        directory="$STATE_DIR/updated-plan-adaptive"
+        rm -rf "$directory"; mkdir -p "$directory"
+        UPDATED_PLAN_PROMPT="$directory/synthesis.md"
+        python3 -B "$ROOT/scripts/lib/updated_plan_synthesis_prompt.py" \
+            "$STATE_DIR/documents/PROJECT_PLAN.json" \
+            "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
+            - "$UPDATED_PLAN_PROMPT" || return 1
+        echo "Updated-plan adaptive path: $count findings in batches of $slice; no advisory or reconciliation calls."
+        UPDATED_PLAN_ADVISOR_PIDS=()
+        # Do not use the nested structured-output protocol here.  Each child
+        # writes one JSON packet at its private path; run_claude verifies the
+        # path exists and this function parses/merges it before publication.
+        WORKFLOW_UPDATED_PLAN_EDIT_SLICE="$slice" WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY=file WORKFLOW_UPDATED_PLAN_FAST_MERGE=1 WORKFLOW_UPDATED_PLAN_DRIVER_CONTRACT=1 WORKFLOW_PREFIX_WARM_SECONDS=0 \
+            run_updated_plan_edit_writers
+        return $?
+    fi
+    run_updated_plan_compact
+}
+
 run_test_review_panel() {
     local directory="$STATE_DIR/test-review-panel" lens prompt output pid
     local -a pids=()
@@ -2929,7 +3049,7 @@ run_test_review_panel() {
 
 run_manual_checklist_panel() {
     local directory="$STATE_DIR/manual-checklist-panel" lens prompt output pid
-    local -a pids=()
+    local -a pids=() pid_lenses=()
     [[ "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || return 0
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     # A new application has nothing to regress: the regressions lens wrote a third copy of the
@@ -2942,39 +3062,186 @@ run_manual_checklist_panel() {
         local range
         case "$lens" in coverage) range='MC-100 through MC-199';; invariants) range='MC-200 through MC-299';; resources) range='MC-300 through MC-399';; regressions) range='MC-400 through MC-499';; esac
         local inputs='`.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`, and `.uncle/workflow/documents/TEST_REVIEW.json`'
+        if [[ "${UNCLE_CHECKLIST_EARLY:-0}" == 1 ]]; then
+            # Start beside TEST_REVIEW from stable plan/review inputs. Its
+            # result is adopted only after the test review itself passes.
+            inputs='`.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
+            printf '\n## Early speculative checklist\n\n`TEST_REVIEW.json` is intentionally not an input because it is being produced concurrently. Build checks from the approved plan, adversarial review, current tree, and driver evidence only. This packet is discarded unless the finished test review passes unchanged.\n' >> "$prompt"
+        fi
         printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`, `.uncle/workflow/documents/PROJECT_PLAN.json`, `.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json`, %s. Do not inspect any rendered Markdown view or enumerate directories.\n\nUse current-tree snapshots, file hashes, and `.uncle/workflow/green-check.tsv` for regression evidence. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$range" >> "$prompt"
         ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/manual-checklist-worker-$lens.log" 2>&1 &
         pids+=("$!")
+        pid_lenses+=("$lens")
     done
+    local index=0
     for pid in "${pids[@]}"; do
         wait "$pid" || echo 'Manual-checklist worker failed; canonical packet validation will stop the panel.' >&2
-    done
-    # Self-hosted models occasionally answer a checklist worker with a prose
-    # question after seeing a stale rendered checklist.  Validate each compact
-    # packet independently and give only that worker one explicit correction;
-    # healthy packets stay intact and the full panel is never needlessly rerun.
-    for lens in $lenses; do
-        output="$directory/$lens.json"; prompt="$directory/prompts/$lens.md"
+        lens="${pid_lenses[$index]}"; output="$directory/$lens.json"; prompt="$directory/prompts/$lens.md"
         if ! python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" validate "$output"; then
             echo "Manual-checklist worker $lens returned an invalid packet; retrying that worker once."
             printf '\n## Required retry\n\nYour preceding response was rejected because it was not one complete `manual-checklist-worker-packet` JSON object. Do not ask a question, discuss prior checklist documents, or return Markdown/prose. Produce the assigned lens packet now, even if its checks overlap a prior rendered report.\n' >> "$prompt"
             rm -f "$output"
             UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens-retry" < /dev/null || true
+            python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" validate "$output" || return 1
         fi
+        if [[ "$lens" == coverage && "${UNCLE_CHECKLIST_EARLY:-0}" == 1 ]]; then
+            start_streamed_checklist_lens "$directory" "$lens"
+        fi
+        index=$((index + 1))
     done
+    # Self-hosted models occasionally answer a checklist worker with a prose
+    # question after seeing a stale rendered checklist.  Validate each compact
+    # packet independently and give only that worker one explicit correction;
+    # healthy packets stay intact and the full panel is never needlessly rerun.
     python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$STATE_DIR/documents/MANUAL_CHECKLIST.json" $lenses || return 1
     python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" || return 1
     python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" .uncle/docs/MANUAL_CHECKLIST.md || return 1
     cp "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
 }
 
-# Manual-checklist generation used to speculatively overlap with
-# TEST_REVIEW/the driver verification commands (early_checklist_start/
-# _cancel/_join/_usable), discarding and rewriting the result whenever the
-# review turned out to have findings -- real duplicate panel cost, not just
-# wasted background work, every time that discard happened. Removed: the
-# checklist now runs exactly once, in the MANUAL_CHECKLIST stage below.
+# Manual checklist construction is independent of the test-review *result*:
+# it uses the approved plan, adversarial findings, current tree and driver
+# evidence. Start it beside test review, but never adopt it unless that review
+# ends PASS. This hides its three worker calls behind the test-review panel
+# without letting a finding silently disappear from a checklist.
+EARLY_CHECKLIST_PID=""
+EARLY_EXECUTE_PID_FILE="$STATE_DIR/execute-checklist.early.pid"
+EARLY_EXECUTE_STATUS_FILE="$STATE_DIR/execute-checklist.early.status"
+EARLY_EXECUTE_OK_FILE="$STATE_DIR/execute-checklist.early.ok"
+EARLY_STREAM_DIR="$STATE_DIR/checklist-stream"
+
+start_streamed_checklist_lens() {
+    local directory="$1" lens="$2" partial="$EARLY_STREAM_DIR/$lens.checklist.json"
+    local output="$EARLY_STREAM_DIR/$lens.results.json" pid_file="$EARLY_STREAM_DIR/$lens.pid"
+    mkdir -p "$EARLY_STREAM_DIR"
+    [[ -s "$pid_file" ]] && return 0
+    python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$partial" "$lens" || return 1
+    python3 -B "$ROOT/scripts/lib/checklist_document.py" --validate-json "$partial" || return 1
+    ensure_checklist_runner execute-checklist || return 1
+    echo "Streaming checklist lens $lens into execute-checklist."
+    (
+        CHECKLIST_STREAM_PRECOMPLETED='' CHECKLIST_STREAM_LANE=1 \
+            run_parallel_checklist_workers "$partial" "$output"
+        printf '%s\n' "$?" > "$EARLY_STREAM_DIR/$lens.status"
+    ) > "$LOG_DIR/execute-checklist-stream-$lens.log" 2>&1 < /dev/null &
+    printf '%s\n' "$!" > "$pid_file"
+}
+
+early_stream_join() {
+    local pid
+    [[ -d "$EARLY_STREAM_DIR" ]] || return 0
+    for pid_file in "$EARLY_STREAM_DIR"/*.pid; do
+        [[ -s "$pid_file" ]] || continue
+        pid="$(cat "$pid_file")"
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        echo "Waiting for streamed execute-checklist lane ${pid_file##*/}..."
+        while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
+    done
+}
+
+early_stream_cancel() {
+    local pid
+    [[ -d "$EARLY_STREAM_DIR" ]] || return 0
+    for pid_file in "$EARLY_STREAM_DIR"/*.pid; do
+        [[ -s "$pid_file" ]] || continue
+        pid="$(cat "$pid_file")"
+        [[ "$pid" =~ ^[0-9]+$ ]] && kill "$pid" 2>/dev/null || true
+    done
+    rm -rf "$EARLY_STREAM_DIR"
+}
+
+early_stream_collect() {
+    local -a packets=()
+    [[ -d "$EARLY_STREAM_DIR" ]] || return 1
+    for packet in "$EARLY_STREAM_DIR"/*.results.json; do
+        [[ -s "$packet" ]] || continue
+        [[ "$(cat "${packet%.results.json}.status" 2>/dev/null)" == 0 ]] || continue
+        packets+=("$packet")
+    done
+    [[ "${#packets[@]}" -gt 0 ]] || return 1
+    python3 -B "$ROOT/scripts/lib/checklist_stream.py" merge \
+        "$STATE_DIR/documents/EXECUTE_CHECKLIST_STREAMED.json" "${packets[@]}"
+}
+
+early_checklist_start() {
+    [[ "${WORKFLOW_EARLY_CHECKLIST:-1}" == 1 ]] || return 0
+    [[ -z "$EARLY_CHECKLIST_PID" ]] || return 0
+    # Do not spend workers when a completed, interactive run already knows
+    # verification is failing. A pending green check is deliberately allowed:
+    # it and test review are the work this panel overlaps.
+    if [[ "${GREEN_CHECK:-1}" == 1 && -s "${GREEN_CLASS:-}" ]] \
+        && { ! declare -f green_pending > /dev/null || ! green_pending; } \
+        && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
+        && [[ "${UNATTENDED:-0}" != 1 ]]; then
+        return 0
+    fi
+    rm -f "$STATE_DIR/checklist-early.ok" "$EARLY_EXECUTE_PID_FILE" \
+        "$EARLY_EXECUTE_STATUS_FILE" "$EARLY_EXECUTE_OK_FILE"
+    rm -rf "$EARLY_STREAM_DIR"
+    echo 'Starting MANUAL_CHECKLIST in the background while TEST_REVIEW runs.'
+    # Browser assertions still wait for the checklist's declared rows, but the
+    # server can be ready while those rows are being composed.  Prewarm never
+    # installs or builds, so it cannot contend with driver verification.
+    if [[ "${WORKFLOW_CHECKLIST_APP_SERVER:-1}" == 1 ]]; then
+        python3 -B "$ROOT/scripts/lib/app_server.py" prewarm "$PWD" "$STATE_DIR" \
+            > "$LOG_DIR/app-server.prewarm.log" 2>&1 < /dev/null &
+    fi
+    (
+        if UNCLE_CHECKLIST_EARLY=1 run_manual_checklist_panel; then
+            touch "$STATE_DIR/checklist-early.ok"
+        fi
+    ) > "$LOG_DIR/manual-checklist.early.log" 2>&1 < /dev/null &
+    EARLY_CHECKLIST_PID=$!
+}
+
+early_checklist_cancel() {
+    if [[ -n "$EARLY_CHECKLIST_PID" ]] && kill -0 "$EARLY_CHECKLIST_PID" 2>/dev/null; then
+        kill "$EARLY_CHECKLIST_PID" 2>/dev/null || true
+        wait "$EARLY_CHECKLIST_PID" 2>/dev/null || true
+    fi
+    EARLY_CHECKLIST_PID=""
+}
+
+early_execute_cancel() {
+    local pid=""
+    [[ -s "$EARLY_EXECUTE_PID_FILE" ]] && pid="$(cat "$EARLY_EXECUTE_PID_FILE")"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+        while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
+    fi
+    rm -f "$EARLY_EXECUTE_PID_FILE" "$EARLY_EXECUTE_STATUS_FILE" "$EARLY_EXECUTE_OK_FILE"
+}
+
+early_checklist_join() {
+    [[ -n "$EARLY_CHECKLIST_PID" ]] || return 0
+    echo 'Waiting for the speculative MANUAL_CHECKLIST started during TEST_REVIEW...'
+    wait "$EARLY_CHECKLIST_PID" 2>/dev/null || true
+    EARLY_CHECKLIST_PID=""
+}
+
+early_checklist_usable() {
+    [[ -e "$STATE_DIR/checklist-early.ok" ]] || return 1
+    python3 -B "$ROOT/scripts/lib/checklist_document.py" --validate-json \
+        "$STATE_DIR/documents/MANUAL_CHECKLIST.json" >/dev/null 2>&1 || return 1
+    [[ "$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" \
+        "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS 2>/dev/null)" == PASS ]]
+}
+
+early_execute_join() {
+    local pid=""
+    [[ -s "$EARLY_EXECUTE_PID_FILE" ]] || return 0
+    pid="$(cat "$EARLY_EXECUTE_PID_FILE")"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+    echo 'Waiting for the speculative EXECUTE_CHECKLIST started during TEST_REVIEW...'
+    while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
+}
+
+early_execute_usable() {
+    [[ -e "$EARLY_EXECUTE_OK_FILE" ]] || return 1
+    [[ "$(cat "$EARLY_EXECUTE_STATUS_FILE" 2>/dev/null)" == 0 ]] || return 1
+    [[ -s "$STATE_DIR/documents/VERIFICATION_REPORT.json" && -s "$STATE_DIR/documents/DEFECTS.json" ]]
+}
 
 run_final_audit_panel() {
     local directory="$STATE_DIR/final-audit-panel" lens prompt output pid
@@ -3226,6 +3493,25 @@ checklist_run_worker() {
 # depends on an earlier group cannot start early. A worker failure is evidence
 # for the synthesizer, not a reason to throw away results from its siblings.
 run_parallel_checklist_workers() {
+    local checklist_input="${1:-$STATE_DIR/documents/MANUAL_CHECKLIST.json}"
+    local workers_output="${2:-$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json}"
+    local streamed_input="${CHECKLIST_STREAM_PRECOMPLETED:-}" remaining_input=""
+    # A streamed lens has already executed some IDs. Derive the rest by ID;
+    # never ask a later worker to repeat that evidence.
+    if [[ -s "$streamed_input" ]]; then
+        remaining_input="$STATE_DIR/checklist-stream.remaining.json"
+        python3 -B "$ROOT/scripts/lib/checklist_stream.py" remaining \
+            "$checklist_input" "$streamed_input" "$remaining_input" || return 1
+        checklist_input="$remaining_input"
+        if [[ "$(python3 - "$checklist_input" <<'PY'
+import json, sys
+print(len(json.load(open(sys.argv[1])).get('checks', [])))
+PY
+)" == 0 ]]; then
+            cp "$streamed_input" "$workers_output"
+            return 0
+        fi
+    fi
     local groups="$STATE_DIR/checklist-groups/groups.txt"
     # STATE_DIR is absolute in this driver; prefixing $PWD built /project//project/... and every
     # fan-out below returned early because that file never existed.
@@ -3234,7 +3520,10 @@ run_parallel_checklist_workers() {
     local worker_count=0 status pid jobs failed=0
     local -a ids pids pid_ids packet_names
 
-    [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 && -s "$groups" ]] || return 0
+    [[ "$PARALLEL_CHECKLIST_WORKERS" == 1 ]] || return 0
+    if [[ "${WORKFLOW_EXECUTE_CHECKLIST_LANES:-1}" != 1 && ! -s "$groups" ]]; then
+        return 0
+    fi
     # A worker may not start a server (noinit: `npm run start` was denied and five browser checks were BLOCKED-SETUP after 86 s), so the
     # driver starts the application and every worker is told where it is.
     local worker_template="$ROOT/prompts/change/execute-checklist-worker.md" app_url=""
@@ -3247,15 +3536,25 @@ run_parallel_checklist_workers() {
     elif [[ "${WORKFLOW_CHECKLIST_APP_SERVER:-1}" == 1 ]]; then
         echo 'Checklist: the application could not be started by the driver; browser checks that need a running page may be BLOCKED-SETUP.'
     fi
+    # A streamed lens is its own complete, validated checklist slice. Every
+    # worker gets its exact immutable input instead of guessing the default.
+    local bound_template="$STATE_DIR/execute-checklist-worker-${workers_output##*/}.md"
+    cp "$worker_template" "$bound_template"
+    printf '\n## Checklist input (binding)\n\nRead only `%s` for checklist rows in this lane. Do not read any other checklist document.\n' \
+        "$checklist_input" >> "$bound_template"
+    worker_template="$bound_template"
     # Lanes, the default: checks that share a resource or depend on one another run in order inside one
     # worker, everything else runs beside them, and nothing waits at a barrier (checklist_lanes.py).
     if [[ "${WORKFLOW_EXECUTE_CHECKLIST_COMPACT:-1}" == 1 && "${WORKFLOW_EXECUTE_CHECKLIST_LANES:-1}" == 1 ]]; then
         local lane_file="$STATE_DIR/checklist-groups/lanes.txt" lane_count
+        [[ "$workers_output" == "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" ]] \
+            || lane_file="$STATE_DIR/checklist-groups/lanes.${workers_output##*/}.txt"
         case "$lane_file" in /*) ;; *) lane_file="$PWD/$lane_file" ;; esac
         mkdir -p "$(dirname "$lane_file")"
-        if lane_count="$(checklist_lane_batches "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$lane_file")"; then
-            if [[ "$lane_count" -lt 2 ]]; then
+        if lane_count="$(checklist_lane_batches "$checklist_input" "$lane_file")"; then
+            if [[ "$lane_count" -lt 2 && "${CHECKLIST_STREAM_LANE:-0}" != 1 ]]; then
                 echo "Checklist runs as one agent: its checks do not split into independent lanes."
+                [[ -s "$streamed_input" ]] && cp "$streamed_input" "$workers_output"
                 return 0
             fi
             directory="$(mktemp -d "$STATE_DIR/checklist-workers.XXXXXX")" || return 1
@@ -3267,7 +3566,12 @@ run_parallel_checklist_workers() {
             } > "$directory/README.md"
             checklist_run_lanes "$directory" "$lane_file" "$worker_template"
             python3 "$ROOT/scripts/lib/checklist_worker_packets.py" "$directory" \
-                "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" --expected "${packet_names[@]}" || return 1
+                "$workers_output" --expected "${packet_names[@]}" || return 1
+            if [[ -s "$streamed_input" ]]; then
+                python3 -B "$ROOT/scripts/lib/checklist_stream.py" merge \
+                    "$workers_output.merged" "$streamed_input" "$workers_output" \
+                    && mv "$workers_output.merged" "$workers_output" || return 1
+            fi
             CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"
             cp "$ROOT/prompts/execute-checklist.md" "$CHECKLIST_EXECUTE_PROMPT"
             printf '\n## Collated worker results (binding)\n\nRead only `%s/documents/EXECUTE_CHECKLIST_WORKERS.json` for worker execution results. Do not read the worker directory, README, individual worker prompts, or raw worker output. It is complete, validated, ordered, and is the authoritative worker handoff. Do not rerun checks already represented there merely to compose reports.\n' \
@@ -3288,7 +3592,7 @@ run_parallel_checklist_workers() {
         compact_groups="$STATE_DIR/checklist-groups/compact.txt"
         # The reviewer's declared groups stay barriers; compact mode only bounds the
         # checks one worker takes inside a group (see compact_groups.py).
-        python3 "$ROOT/scripts/lib/compact_groups.py" "$groups" "$STATE_DIR/documents/MANUAL_CHECKLIST.json" > "$compact_groups" || return 1
+        python3 "$ROOT/scripts/lib/compact_groups.py" "$groups" "$checklist_input" > "$compact_groups" || return 1
         case "$compact_groups" in /*) groups="$compact_groups" ;; *) groups="$PWD/$compact_groups" ;; esac
         jobs=1
         compact_batch_size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-4}"
@@ -3415,7 +3719,12 @@ run_parallel_checklist_workers() {
         done
     done < "$groups"
     python3 "$ROOT/scripts/lib/checklist_worker_packets.py" "$directory" \
-        "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" --expected "${packet_names[@]}" || return 1
+        "$workers_output" --expected "${packet_names[@]}" || return 1
+    if [[ -s "$streamed_input" ]]; then
+        python3 -B "$ROOT/scripts/lib/checklist_stream.py" merge \
+            "$workers_output.merged" "$streamed_input" "$workers_output" \
+            && mv "$workers_output.merged" "$workers_output" || return 1
+    fi
     CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"
     cp "$ROOT/prompts/execute-checklist.md" "$CHECKLIST_EXECUTE_PROMPT"
     printf '\n## Collated worker results (binding)\n\nRead only `%s/documents/EXECUTE_CHECKLIST_WORKERS.json` for worker execution results. Do not read the worker directory, README, individual worker prompts, or raw worker output. It is complete, validated, ordered, and is the authoritative worker handoff. Do not rerun checks already represented there merely to compose reports.\n' \
@@ -3723,6 +4032,20 @@ run_stage() {
             if run_updated_plan_fast_path; then
                 echo 'Updated-plan fast path: no adversarial findings; copied canonical plan without model synthesis.'
                 return 0
+            fi
+            # Findings normally need one small, schema-bound patch.  Do not
+            # turn that into a committee: every extra worker rereads the same
+            # plan and review and makes this approval gate minutes slower.
+            # A structural retry is the sole exception because it needs the
+            # driver's exact validation feedback appended below.
+            if [[ ! -s "$STATE_DIR/updated-plan-structure-feedback.md" && "${WORKFLOW_UPDATED_PLAN_COMPACT:-1}" == 1 ]]; then
+                # Do not silently turn one rejected compact delivery into the
+                # old many-call committee.  That made a nominally fast stage
+                # unpredictably take minutes and hid the useful JSON schema
+                # error.  Operators can opt into the legacy path with
+                # WORKFLOW_UPDATED_PLAN_COMPACT=0 when diagnosing a runner.
+                run_updated_plan_adaptive
+                return $?
             fi
             # A non-empty review needs the panel.  Never continue into the
             # parent call if collation failed: the collated JSON is its only
@@ -4971,6 +5294,9 @@ while true; do
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
+            # Start once here even when the green check was synchronous (the
+            # background verifier also calls this helper, and it is idempotent).
+            early_checklist_start
             run_stage TEST_REVIEW
             check_verification_inputs
             set_state VALIDATE_TEST_REVIEW
@@ -5236,7 +5562,21 @@ while true; do
             # The checklist is written against what this machine was proved to
             # do, not against what the plan hoped for.
             snapshot_preflight_capabilities
-            run_stage MANUAL_CHECKLIST
+            early_checklist_join
+            if early_checklist_usable; then
+                echo 'Adopted speculative MANUAL_CHECKLIST — TEST_REVIEW passed and its checklist inputs stayed canonical.'
+            else
+                early_execute_cancel
+                early_stream_cancel
+                # A review finding makes the early plan incomplete. Remove
+                # only its generated views/packet; the normal stage owns the
+                # replacement and will include TEST_REVIEW.json.
+                rm -f "$STATE_DIR/checklist-early.ok" \
+                    "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
+                    "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json" \
+                    .uncle/docs/MANUAL_CHECKLIST.md
+                run_stage MANUAL_CHECKLIST
+            fi
             set_state VALIDATE_MANUAL_CHECKLIST
             ;;
 
@@ -5277,7 +5617,14 @@ PY
             snapshot_checklist_checks
             snapshot_checklist_groups
             ensure_checklist_runner execute-checklist || exit 1
-            run_stage EXECUTE_CHECKLIST
+            early_stream_join
+            if early_stream_collect; then
+                echo 'Adopted streamed execute-checklist lanes; executing only uncovered checks.'
+                CHECKLIST_STREAM_PRECOMPLETED="$STATE_DIR/documents/EXECUTE_CHECKLIST_STREAMED.json" \
+                    run_stage EXECUTE_CHECKLIST
+            else
+                run_stage EXECUTE_CHECKLIST
+            fi
             check_verification_inputs
             # Execution and report validation are separate durable steps. A
             # malformed table must not replay browser checks on every resume.

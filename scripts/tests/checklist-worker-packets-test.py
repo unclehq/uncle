@@ -139,6 +139,10 @@ class ChecklistWorkerPackets(unittest.TestCase):
         self.assertIn('never write separate', worker)
         self.assertIn('evidence files', worker)
         self.assertIn('private packet path supplied by the driver', worker)
+        self.assertIn('canonical checklist JSON path supplied by the driver', worker)
+        self.assertIn('Browser-lane efficiency', worker)
+        self.assertIn('one browser process, one context, one page', worker)
+        self.assertNotIn('Read `.uncle/docs/MANUAL_CHECKLIST.md`', worker)
         self.assertNotIn('final response', worker)
 
 

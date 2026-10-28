@@ -45,13 +45,51 @@ def answers(url):
         return False
 
 
-def start(project, state):
+def existing_url(state, wait=0):
+    """Return the healthy driver server already owned by this workflow.
+
+    A prewarm and execute-checklist can overlap briefly.  The first process
+    writes its PID before it is ready; waiting for that owner avoids launching
+    a second server on the same strict port.
+    """
+    state = Path(state)
+    try:
+        pid = int((state / 'app-server.pid').read_text())
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return ''
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            url = (state / 'app-server.url').read_text().strip()
+        except OSError:
+            url = ''
+        if url and answers(url):
+            return url
+        if time.monotonic() >= deadline:
+            return ''
+        time.sleep(.1)
+
+
+def start(project, state, prepare=True):
     project, state = Path(project), Path(state)
+    ready = existing_url(state, wait=40)
+    if ready:
+        return ready
     spec = cp.launch_spec(project)
     command = command_for(project, spec)
     if spec.get('kind') != 'webpage' or not command or not spec.get('url'):
         return ''
-    cp.prepare_project(project, command)
+    if not prepare:
+        # Prewarming must never race the driver verification/install/build.
+        # Normal execute-checklist may still prepare these prerequisites later.
+        if (isinstance(command, list) and command[:2] == ['npm', 'run']
+                and (not (project / 'node_modules').exists()
+                     or (len(command) > 2 and command[2] in ('preview', 'start')
+                         and not any((project / name / 'index.html').is_file() for name in ('dist', 'build'))))):
+            return ''
+    else:
+        cp.prepare_project(project, command)
     log = state / 'app-server.log'
     process = subprocess.Popen(command, cwd=project, stdin=subprocess.DEVNULL, stdout=open(log, 'w'), stderr=subprocess.STDOUT,
                                start_new_session=True)
@@ -91,6 +129,10 @@ def main(argv):
     if argv[:1] == ['stop'] and len(argv) == 2:
         stop(argv[1])
         return 0
+    if argv[:1] == ['prewarm'] and len(argv) == 3:
+        url = start(argv[1], argv[2], prepare=False)
+        print(url)
+        return 0 if url else 1
     raise SystemExit(__doc__)
 
 

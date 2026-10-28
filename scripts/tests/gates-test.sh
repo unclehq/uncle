@@ -305,7 +305,17 @@ case "$prompt" in
         fi
         ;;
     *STUB:execute*)
-        printf '# Verification Report\n\nMC-1 PASS\n' > .uncle/docs/VERIFICATION_REPORT.md
+        # checklist_report_fallback.py's export_from_markdown (the single-agent
+        # execute-checklist path's real ingestion into canonical JSON) parses
+        # an "## Acceptance gate" table, not free prose, and
+        # checklist_execution_delivered() requires this file strictly newer
+        # than the stage's start marker -- a real model call always clears
+        # that by wall-clock elapsed time, but this stub can finish inside the
+        # same mtime second, so bump it forward explicitly.
+        sleep 1
+        printf '# Verification report\n\n## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n| MC-1 | YES | PASS | stub evidence |\n' \
+            > .uncle/docs/VERIFICATION_REPORT.md
+        printf '# Defects\n\nNo defects found.\n' > .uncle/docs/DEFECTS.md
         ;;
     *STUB:baseline*|*STUB:spec*)
         # The combined planning pass delivers one canonical JSON bundle (not
@@ -404,9 +414,9 @@ if [[ "$out" == .uncle/docs/ADVERSARIAL_REVIEW.md && "${FAKE_AR_FORMAT:-0}" == M
 fi
 if [[ "$out" == .uncle/docs/MANUAL_CHECKLIST.md && "${FAKE_MC_FORMAT:-0}" == MISSING_FIELDS_ONCE ]]; then
     if [[ "$review_prompt" == *'Required format retry'* ]]; then
-        printf '## MC-1 Check the greeting.\nExact action: Open the page\nExpected result: Greeting visible\n' >> "$out"
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","exact_action":"Open the page","expected_result":"Greeting visible"}]}' > "$out"
     else
-        printf 'MC-1: check the greeting somehow.\n' >> "$out"
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1"}]}' > "$out"
     fi
     exit 0
 fi
@@ -421,7 +431,10 @@ fi
 case "$out" in
     .uncle/docs/ADVERSARIAL_REVIEW.md) printf '## Overall assessment\nNo findings.\n' >> "$out" ;;
     .uncle/docs/FINAL_AUDIT.md) printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nREADY\n' >> "$out" ;;
-    *) printf '## MC-1 Check the greeting.\nExact action: Open the page\nExpected result: Greeting visible\n\nREADY\n' >> "$out" ;;
+    # reviewer_output.py's MANUAL_CHECKLIST.md check requires the canonical
+    # JSON contract with no legacy-Markdown fallback (unlike ADVERSARIAL_REVIEW.md
+    # and FINAL_AUDIT.md, which still accept the pre-migration regex-parsed form).
+    *) printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","exact_action":"Open the page","expected_result":"Greeting visible"}]}' > "$out" ;;
 esac
 REV
     chmod +x "$CASE/bin/fake-reviewer"
@@ -548,9 +561,9 @@ if [[ "$out" == .uncle/docs/ADVERSARIAL_REVIEW.md && "${FAKE_SPEC_REVIEW:-}" == 
 fi
 if [[ "$out" == .uncle/docs/MANUAL_CHECKLIST.md && "${FAKE_MC_FORMAT:-0}" == MISSING_FIELDS_ONCE ]]; then
     if [[ "$review_prompt" == *'Required format retry'* ]]; then
-        printf '## MC-1 Check the greeting.\nExact action: Open the page\nExpected result: Greeting visible\n\nREADY\n' >> "$out"
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","exact_action":"Open the page","expected_result":"Greeting visible"}]}' > "$out"
     else
-        printf 'MC-1: check the greeting somehow.\n' >> "$out"
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1"}]}' > "$out"
     fi
     exit 0
 fi
@@ -604,7 +617,9 @@ else
     elif [[ "$out" == .uncle/docs/ADVERSARIAL_REVIEW.md ]]; then
         printf '## Overall assessment\nNo findings.\n' >> "$out"
     else
-        printf '## MC-1 Check the greeting.\nExact action: Open the page\nExpected result: Greeting visible\n\nREADY\n' >> "$out"
+        # reviewer_output.py's MANUAL_CHECKLIST.md check requires the canonical
+        # JSON contract with no legacy-Markdown fallback.
+        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","exact_action":"Open the page","expected_result":"Greeting visible"}]}' > "$out"
     fi
 fi
 REV

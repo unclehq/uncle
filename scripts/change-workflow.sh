@@ -4322,6 +4322,12 @@ REPAIR
                     "$PROJECT_ROOT/.uncle/docs/MANUAL_CHECKLIST.md" \
                     manual-checklist \
                     "$CODEX_EFFORT_CHECKLIST"
+                # The delta/panel path above writes the canonical JSON directly
+                # (its output_file already is documents/MANUAL_CHECKLIST.json).
+                # This single-reviewer path's output_file is the Markdown view,
+                # so VALIDATE_MANUAL_CHECKLIST's --validate-json read of the
+                # canonical path needs this ingestion first.
+                python3 "$ROOT/scripts/lib/checklist_document.py" "$PROJECT_ROOT/.uncle/docs/MANUAL_CHECKLIST.md" || exit 1
             fi
             set_state VALIDATE_MANUAL_CHECKLIST
             ;;

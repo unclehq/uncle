@@ -64,3 +64,23 @@ replaced an existing `index.html` against the plan's merge-in-place rule and wro
 serves 4173; an unattended run still ends in COMPLETE over skipped blocking findings; plan prose cross-references (obligation O-6
 says M-1..M-15, the table lists M-1..M-18) are not checked.
 
+## Found in the fifth noinit run (green check never ran)
+
+Run with the decide-and-edit updated plan, the split project-plan workers and parallel sandboxes: 228 s to the green check
+(project plan 65 s, updated plan 33 s, implementation 55 s). It stopped in REPAIR before running any check:
+`VERIFICATION_INTEGRITY.md`: "Missing protected verification path: package-lock.json".
+
+Two defects, both fixed:
+1. The plan listed `package-lock.json` as a protected verification path. It does not exist in a new project and the plan's own install
+   command creates it, so it can be neither hashed before the install nor unchanged after it. `install_command.py unprotect` now drops
+   a lockfile that does not exist from the protected paths when the first snapshot is taken (an existing repository's lockfile stays
+   protected), and the plan writers are told not to list one.
+2. `parallel_checks.py` re-checks the protected inputs itself but was not given the list of paths allowed to be absent (the serial guard
+   was), so any protected path that legitimately did not exist yet read as "Missing". `green-check.sh` now passes it.
+
+To retry that project: remove `.uncle/workflow/verification.*` (and the failed repair state) and resume, or rerun from the plan.
+
+Option A on this run: 19 deciding writers (16 Accepted, 2 Partially accepted, 1 Rejected), 6 resolver groups, the reconciler added 4 edits,
+none left out. The longest implementation step (56 s) wrote 11 KB of mutation-runner code; time follows output size, so a plan whose
+outline puts two large files in one step has a long pole the driver does not split.
+

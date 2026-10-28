@@ -156,7 +156,9 @@ SPECIFIC = {
         'representative defect injections (IDs `DI-n`; each names the defect and the one test FILE, taken from the '
         'outline\'s tests, that must reject it; never a `T-n` ID, which is being assigned at the same time), the acceptance '
         'obligations (IDs `O-n`, each with its observable assertion and independent oracle) and the protected '
-        'verification paths. Use only test files and paths that the outline assigns to a step. Do not write the '
+        'verification paths. Use only test files and paths that the outline assigns to a step. A protected path is a '
+        'file the implementation must not change: never a lockfile (`package-lock.json`, `yarn.lock`) or a directory the '
+        'install command creates, because nothing can hash a file that does not exist before the install. Do not write the '
         'verification commands.'),
     'commands': (
         'Write the one `## Verification commands` section: a single fenced `sh` block and nothing else. Use only '

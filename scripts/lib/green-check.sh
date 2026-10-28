@@ -263,7 +263,11 @@ green_run() {
             flags+=(--metrics "$STATE_DIR/metrics")
         fi
         status=0
-        python3 -B "$GREEN_LIB_DIR/parallel_checks.py" "${flags[@]}" || status=$?
+        # parallel_checks.py re-checks the protected inputs itself.  The serial guard is told which of them may be absent
+        # (plan-owned files that did not exist at the first snapshot); this one was not, so a protected path that was
+        # legitimately absent then read as "Missing" and the whole green check was NOT RUN (noinit: package-lock.json).
+        WORKFLOW_ALLOW_ABSENT_PROTECTED_DIRECTORIES="${STATE_DIR:-.uncle/workflow}/verification.absent-paths" \
+            python3 -B "$GREEN_LIB_DIR/parallel_checks.py" "${flags[@]}" || status=$?
         if [[ "$status" == 3 && -n "$guard" ]]; then verification_integrity_failure; fi
         return "$status"
     fi

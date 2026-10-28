@@ -64,5 +64,42 @@ class Adapt(unittest.TestCase):
         self.assertIn('Install command adapted: npm ci -> npm install', done.stdout)
 
 
+class Unprotect(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def paths(self, *lines):
+        path = self.root / 'verification.paths'
+        path.write_text('\n'.join(lines) + '\n')
+        return path
+
+    def test_a_lockfile_that_does_not_exist_yet_is_not_protected(self):
+        path = self.paths('tests/a.test.js', 'package.json', 'package-lock.json', 'vite.config.js')
+        self.assertEqual(ic.unprotect(path, self.root), ['package-lock.json'])
+        self.assertEqual(path.read_text(), 'tests/a.test.js\npackage.json\nvite.config.js\n')
+
+    def test_a_lockfile_that_exists_stays_protected(self):
+        (self.root / 'package-lock.json').write_text('{}')
+        path = self.paths('package.json', 'package-lock.json')
+        self.assertEqual(ic.unprotect(path, self.root), [])
+        self.assertEqual(path.read_text(), 'package.json\npackage-lock.json\n')
+
+    def test_only_generated_lockfiles_are_dropped_not_other_missing_files(self):
+        path = self.paths('tests/new.test.js', 'src/app.js', 'yarn.lock', 'sub/pnpm-lock.yaml')
+        self.assertEqual(ic.unprotect(path, self.root), ['yarn.lock', 'sub/pnpm-lock.yaml'])
+        self.assertEqual(path.read_text(), 'tests/new.test.js\nsrc/app.js\n')
+
+    def test_the_cli_says_what_it_dropped(self):
+        path = self.paths('package-lock.json', 'package.json')
+        done = subprocess.run([sys.executable, str(LIB / 'install_command.py'), 'unprotect', str(path), str(self.root)],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0)
+        self.assertIn('Protected path dropped: package-lock.json', done.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()

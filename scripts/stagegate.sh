@@ -923,6 +923,8 @@ capture_verification_inputs() {
     verification_paths .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/verification.paths" \
         2> "$STATE_DIR/verification-integrity.log" \
         || verification_integrity_failure
+    # A lockfile the plan's own install command will create cannot be a protected input (see install_command.py).
+    python3 -B "$ROOT/scripts/lib/install_command.py" unprotect "$STATE_DIR/verification.paths" . 2>/dev/null | tee -a "$STATE_DIR/verification-integrity.log" || true
     absent_paths="$STATE_DIR/verification.absent-paths"
     : > "$absent_paths"
     # Only the first snapshot may record plan-owned inputs that do not exist

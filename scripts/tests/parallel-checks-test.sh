@@ -113,6 +113,35 @@ class Checks(unittest.TestCase):
         self.assertEqual(r.returncode,3,r.stderr + self.diagnostics())
         self.assertFalse((self.root/'must-not-run').exists())
         self.assertIn('changed',(self.root/'integrity').read_text())
+    def absent_case(self, commands, allow):
+        import hashlib
+        (self.root/'fixture').write_bytes(b'original\n')
+        (self.root/'scopes').write_text('fixture\nlock.json\n')
+        (self.root/'expected').write_text('ABSENT\tlock.json\n'+hashlib.sha256(b'original\n').hexdigest()+'\tfixture\n')
+        (self.root/'absent').write_text('lock.json\n')
+        (self.root/'commands').write_text('\n'.join(commands)+'\n')
+        (self.root/'groups').write_text('1 2\n')
+        env=dict(os.environ)
+        env.pop('WORKFLOW_ALLOW_ABSENT_PROTECTED_DIRECTORIES',None)
+        if allow:
+            env['WORKFLOW_ALLOW_ABSENT_PROTECTED_DIRECTORIES']='absent'
+        return subprocess.run([sys.executable,'-B',os.environ['UNCLE_TEST_ROOT']+'/scripts/lib/parallel_checks.py',
+                               '--commands','commands','--groups','groups','--out','results','--log','log','--jobs','2',
+                               '--paths','scopes','--expected','expected','--integrity-log','integrity'],
+                              cwd=self.root,capture_output=True,text=True,timeout=15,env=env)
+    def test_a_protected_path_absent_at_the_first_snapshot_is_allowed_to_stay_absent(self):
+        r=self.absent_case(['true','true'],allow=True)
+        self.assertEqual(r.returncode,0,r.stderr+self.diagnostics())
+    def test_without_the_allowance_an_absent_protected_path_reads_as_missing(self):
+        r=self.absent_case(['true','true'],allow=False)
+        self.assertEqual(r.returncode,3,r.stderr+self.diagnostics())
+        self.assertIn('Missing protected verification path: lock.json',(self.root/'integrity').read_text())
+    def test_an_absent_protected_path_that_appears_is_still_a_change(self):
+        r=self.absent_case(['touch lock.json','true'],allow=True)
+        self.assertEqual(r.returncode,3,r.stderr+self.diagnostics())
+    def test_the_driver_passes_the_allowance_to_the_parallel_runner(self):
+        text=pathlib.Path(os.environ['UNCLE_TEST_ROOT']+'/scripts/lib/green-check.sh').read_text()
+        self.assertIn('WORKFLOW_ALLOW_ABSENT_PROTECTED_DIRECTORIES="${STATE_DIR:-.uncle/workflow}/verification.absent-paths"',text)
     def test_interruption_stops_children(self):
         (self.root/'commands').write_text('echo $$ > pid1; sleep 30 & echo $! > child1; wait\necho $$ > pid2; sleep 30 & echo $! > child2; wait\ntouch must-not-run\n')
         (self.root/'groups').write_text('1 2\n')

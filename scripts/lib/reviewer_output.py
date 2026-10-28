@@ -75,8 +75,8 @@ def _validate_manual_checklist_json(text, runner):
     if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'manual-checklist':
         raise ValueError('%s returned the wrong manual-checklist JSON schema' % runner)
     checks = payload.get('checks')
-    if not isinstance(checks, list) or not checks:
-        raise ValueError('%s manual-checklist JSON requires a nonempty checks array' % runner)
+    if not isinstance(checks, list):
+        raise ValueError('%s manual-checklist JSON requires a checks array' % runner)
     for index, check in enumerate(checks, 1):
         if (not isinstance(check, dict) or not isinstance(check.get('id'), str) or not check['id'].strip()
                 or not isinstance(check.get('exact_action'), str) or not check['exact_action'].strip()

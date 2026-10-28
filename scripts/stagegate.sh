@@ -1713,6 +1713,15 @@ merged_requirements_plan_enabled() {
         && [[ "$runner" == multi-artifact ]]
 }
 
+# Requirements and the initial project plan have no useful conversational
+# history. Reusing a long-lived runner here made a small calculator brief
+# inherit tens of thousands of cached planning tokens and turned the plan into
+# a multi-minute response. Start these independent artifacts cold; later
+# worker panels still use their deliberate shared-prefix reuse.
+run_initial_planning_agent() {
+    SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 run_claude "$@"
+}
+
 # Requirements agents must see the selected brief as literal prompt content.
 # Self-hosted runners do not inherit the driver's internal "packet" in the
 # way native clients do.  A prompt which merely says "read the document named
@@ -2448,7 +2457,7 @@ run_codex_review() {
 # Read-only specialist packets improve review coverage. The primary reviewer
 # remains the sole writer and verdict owner; a missing packet is non-blocking.
 run_adversarial_review_panel() {
-    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid
+    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid packet_error retry_output
     local -a pids=()
     [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
     ensure_project_plan_json || return 1
@@ -2473,6 +2482,26 @@ run_adversarial_review_panel() {
     done
     for pid in "${pids[@]}"; do
         wait "$pid" || echo 'Adversarial-review worker failed; canonical packet validation will stop the panel.' >&2
+    done
+    # A file-backed local reviewer can finish its analysis yet make a small
+    # JSON escaping error in its private packet. Do not discard the healthy
+    # lenses or restart the entire speculative review: validate each packet
+    # independently and give only the failed worker one exact, bounded retry.
+    # This is especially important for small local models, where a panel-wide
+    # restart costs four full plan reads for one malformed response.
+    for lens in requirements regression security testability; do
+        output="$directory/$lens.json"
+        retry_output="$directory/$lens.validated.json"
+        if ! packet_error="$(python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$retry_output" \
+                --kind adversarial-review-worker-packet --expected "$lens" 2>&1)"; then
+            echo "Adversarial-review worker $lens returned an invalid packet; retrying that worker once."
+            printf '\n## Required retry\n\nYour preceding private packet was rejected: %s\nUse Write to replace the assigned packet path with one complete `adversarial-review-worker-packet` JSON object. Do not return Markdown, prose, or a draft in chat.\n' "$packet_error" >> "$directory/prompts/$lens.md"
+            rm -f "$output" "$output.delivery.json" "$retry_output"
+            UNCLE_NONINTERACTIVE=1 run_codex_review "$directory/prompts/$lens.md" "$output" "adversarial-review-worker-$lens-retry" < /dev/null || true
+            python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$retry_output" \
+                --kind adversarial-review-worker-packet --expected "$lens" || return 1
+        fi
+        rm -f "$retry_output"
     done
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
     # Worker packets are already validated, complete, and deduplicated by
@@ -3037,11 +3066,15 @@ run_parallel_application_implementation() {
 ## Speed (binding)
 
 Steps run at the same time and the slowest one sets the stage's time, so every turn counts.
-Everything you need is in this prompt: the plan, the requirements and your step.
+Your assigned step declaration below is the compact execution contract.
 
 - Do not run `ls`, `find`, `cat` or any other exploratory command, and do not read files that other
   steps own: they are being written right now and may not exist yet. (Where your step's own text tells
   you to inspect or preserve a file that already exists, do exactly that.)
+- Do not read the full requirements, plan, preflight report, or rendered workflow documents. They are
+  intentionally not embedded for isolated steps: doing so multiplied a large plan by every parallel
+  worker. Read one named canonical document only when the assigned step lacks a detail needed to make
+  an owned-file change, and read the smallest relevant section.
 - Write every file you own in your first response, as parallel Write calls, then stop.
 - Do not run tests, builds or checks. The driver runs the whole verification right after the merge.
 EOF
@@ -3085,11 +3118,15 @@ check or `DRIVER PENDING` for full verification.
 EOF
                 fi
             } >> "$prompt"
-            # The same inputs open every step, and each step used to read them by tool call after
-            # its own text, where no prefix cache can share them. Put them in the shared part
-            # (implement.md, the inputs, then only this step's text) so steps 2..n of a group
-            # reuse the first one's prefill and skip the read turns.  Unchanged on any failure.
-            if [[ -f "$ROOT/scripts/lib/worker_prompt.py" ]]; then
+            # Do not embed the whole approved plan in every isolated coding
+            # worker. On a modest application that turned one 60 KB plan into
+            # hundreds of KB of repeated prefill, and the slowest worker then
+            # dictated implementation latency. The declared step is the
+            # compact contract; a worker can make one targeted Read only when
+            # it genuinely needs a missing detail. Set this to 0 for an
+            # unusually underspecified legacy plan that needs old embedding.
+            if [[ "${WORKFLOW_COMPACT_IMPLEMENTATION_STEPS:-1}" != 1 \
+                  && -f "$ROOT/scripts/lib/worker_prompt.py" ]]; then
                 local -a shared_inputs=()
                 local shared
                 for shared in REQUIREMENTS.md .uncle/docs/REQUIREMENTS_INTERPRETATION.md \
@@ -3504,6 +3541,26 @@ run_project_plan_sections() {
     }
 }
 
+# A sectioned plan starts more than twenty specialist calls. That is useful
+# for a large, ambiguous brief, but it is pure startup overhead for a small
+# application where one planner can write a complete, valid plan faster. Keep
+# the legacy behavior available explicitly; the default chooses from the
+# stable size of the stated requirements before any model is launched.
+project_plan_sections_enabled() {
+    local setting="${WORKFLOW_PROJECT_PLAN_SECTIONS:-auto}"
+    local source="${DOCUMENT_BUDGET_SOURCE:-REQUIREMENTS.md}"
+    local minimum="${WORKFLOW_PROJECT_PLAN_SECTIONS_MIN_BYTES:-12000}"
+    case "$setting" in
+        0|false|no|off) return 1 ;;
+        1|true|yes|on) return 0 ;;
+        auto|'') ;;
+        *) echo "Invalid WORKFLOW_PROJECT_PLAN_SECTIONS value: $setting (use auto, 0, or 1)." >&2; return 1 ;;
+    esac
+    [[ -f "$source" ]] || return 1
+    [[ "$minimum" =~ ^[0-9]+$ ]] || minimum=12000
+    (( $(wc -c < "$source") >= minimum ))
+}
+
 # Every stage's actual work, with no state transitions and no approval checks,
 # so a stage can be run either in the foreground or speculatively.
 run_stage() {
@@ -3535,11 +3592,11 @@ run_stage() {
             # written separately, validated separately and approved separately;
             # only the invocation is shared.
             if merged_requirements_plan_enabled; then
-                run_claude prompts/requirements-plan.md project-plan
+                run_initial_planning_agent prompts/requirements-plan.md project-plan
             elif stage_uses_self_hosted requirements AGENT; then
                 requirements_investigation=".uncle/workflow/requirements-investigation.md"
                 rm -f "$requirements_investigation"
-                run_claude prompts/requirements-investigate.md requirements-investigate
+                run_initial_planning_agent prompts/requirements-investigate.md requirements-investigate
                 if [[ ! -s "$requirements_investigation" ]]; then
                     python3 "$ROOT/scripts/lib/recover_investigation.py" \
                         "$LOG_DIR/requirements-investigate.jsonl" "$requirements_investigation" \
@@ -3560,28 +3617,29 @@ run_stage() {
                 # model sees, not a crash in the renderer.  Anything else keeps the file contract.
                 UNCLE_OUTPUT_SCHEMA_FILE="$STATE_DIR/requirements-schema.json" \
                     UNCLE_STRUCTURED_OUTPUT_PATH="$STATE_DIR/artifact-delivery/requirements.json" \
-                    run_claude prompts/requirements.md requirements \
-                    || run_claude prompts/requirements.md requirements
+                    run_initial_planning_agent prompts/requirements.md requirements \
+                    || run_initial_planning_agent prompts/requirements.md requirements
             else
-                run_claude prompts/requirements.md requirements
+                run_initial_planning_agent prompts/requirements.md requirements
             fi
             ;;
         PROJECT_PLAN)
             project_plan_investigation=".uncle/workflow/project-plan-investigation.md"
             rm -f "$project_plan_investigation"
-            # The plan is written in sections by parallel workers, on every runner
-            # (WORKFLOW_PROJECT_PLAN_SECTIONS=0 turns it off).  Any failure -- a worker, a section out
+            # Large plans are written in sections by parallel workers. Small
+            # briefs use the single planner by default; setting
+            # WORKFLOW_PROJECT_PLAN_SECTIONS=1 forces sections. Any failure -- a worker, a section out
             # of its lane, an assembled plan the validators refuse -- leaves no investigation behind and
             # the single-pass plan runs as it always did.
             project_plan_sectioned=0
-            if [[ "${WORKFLOW_PROJECT_PLAN_SECTIONS:-1}" == 1 ]] && run_project_plan_sections "$project_plan_investigation"; then
+            if project_plan_sections_enabled && run_project_plan_sections "$project_plan_investigation"; then
                 project_plan_sectioned=1
                 echo 'Project plan written in parallel sections and assembled by the driver.'
             else
                 rm -f "$project_plan_investigation"
             fi
             if [[ "$project_plan_sectioned" == 1 ]] || stage_uses_self_hosted project-plan AGENT; then
-                [[ "$project_plan_sectioned" == 1 ]] || run_claude prompts/project-plan-investigate.md project-plan-investigate
+                [[ "$project_plan_sectioned" == 1 ]] || run_initial_planning_agent prompts/project-plan-investigate.md project-plan-investigate
                 if [[ ! -s "$project_plan_investigation" ]]; then
                     python3 "$ROOT/scripts/lib/recover_investigation.py" \
                         "$LOG_DIR/project-plan-investigate.jsonl" "$project_plan_investigation" \
@@ -3609,7 +3667,7 @@ run_stage() {
                 fi
                 echo 'Project-plan fast path: deterministically rendered canonical JSON from the completed investigation.'
             else
-                run_claude prompts/project-plan.md project-plan
+                run_initial_planning_agent prompts/project-plan.md project-plan
             fi
             if [[ -s .uncle/docs/PROJECT_PLAN.md ]]; then
                 plan_ingest_error="$(python3 "$ROOT/scripts/lib/plan_context.py" plan-unprotected .uncle/docs/PROJECT_PLAN.md . 2>&1)" || {
@@ -3860,6 +3918,17 @@ run_stage() {
                 fi
                 run_codex_review "$test_review_prompt" "$PROJECT_ROOT/.uncle/docs/TEST_REVIEW.md" test-review
             fi
+            # The panel path above already leaves documents/TEST_REVIEW.json
+            # (and returns before here). The single-reviewer path just wrote
+            # the Markdown view; nothing ingests it into the canonical JSON
+            # VALIDATE_TEST_REVIEW and later stages actually read. A failed
+            # export here (a malformed table) must not abort the stage --
+            # VALIDATE_TEST_REVIEW's own acceptance_result check reads the
+            # Markdown directly and owns the one-shot format-retry path.
+            if [[ ! -s "$STATE_DIR/documents/TEST_REVIEW.json" ]]; then
+                python3 "$ROOT/scripts/lib/acceptance_context.py" --export-json \
+                    .uncle/docs/TEST_REVIEW.md . TEST_REVIEW 2>/dev/null || true
+            fi
             ;;
         REPAIR)
             green_background_cancel
@@ -4020,9 +4089,13 @@ run_green_check() {
     # to create one: run the install that does (install_command.py), and say so.
     python3 -B "$ROOT/scripts/lib/install_command.py" normalize "$GREEN_CMDS" . 2>/dev/null | tee -a "$STATE_DIR/green-check.rewrites" || true
     if ! verify_parallel_groups .uncle/docs/UPDATED_PROJECT_PLAN.md "$GREEN_CMDS" > "$STATE_DIR/green-check.groups"; then
-        echo 'Invalid Parallel verification groups. Amend the plan and renew approval.'
+        # Parallel scheduling is an optional optimisation, never a reason to
+        # discard an already-approved verification command list.  In
+        # particular, a background run must always publish a real result
+        # instead of leaving its PENDING placeholder behind.
+        echo 'Invalid Parallel verification groups; running the verification commands in order.'
         parallel_groups_format_hint
-        exit 1
+        : > "$STATE_DIR/green-check.groups"
     fi
     # A plan that declares no groups still runs a build beside the unit tests (auto_groups.py); WORKFLOW_AUTO_VERIFY_GROUPS=0 stops it.
     if [[ ! -s "$STATE_DIR/green-check.groups" && "${WORKFLOW_AUTO_VERIFY_GROUPS:-1}" == 1 ]]; then
@@ -5188,6 +5261,17 @@ while true; do
             # checklist row is an invalid contract, so regenerate it rather
             # than misclassifying that normal state as blocked setup.
             python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" || exit 1
+            if python3 - "$STATE_DIR/documents/MANUAL_CHECKLIST.json" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1], encoding='utf-8'))
+raise SystemExit(0 if payload.get('checks') == [] else 1)
+PY
+            then
+                echo 'Manual checklist has no additional checks; recording an empty canonical execution report.'
+                python3 "$ROOT/scripts/lib/execute_checklist_reports.py" --empty . || exit 1
+                set_state VALIDATE_CHECKLIST
+                continue
+            fi
             snapshot_checklist_checks
             snapshot_checklist_groups
             ensure_checklist_runner execute-checklist || exit 1

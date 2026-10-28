@@ -187,9 +187,13 @@ check "bad packet: no plan left behind"           test ! -e "$TMP/jbad/plan.md"
 check "schema mode is allowed through native_stage" bash -c '! grep -q "client_cmd\[0\]\" != python3" "$1/scripts/stagegate.sh"' _ "$ROOT"
 check "a refused schema run is a loud message"       grep -qF 'asked for schema-checked output, which this runner cannot give' "$ROOT/scripts/stagegate.sh"
 
-# On by default, on every runner: the sectional plan is attempted before the self-hosted/hosted split.
+# Auto by default, on every runner: only a large stated brief pays for the
+# sectional fan-out, while an explicit 1 still forces it before the runner
+# split.
 block="$(awk '/^        PROJECT_PLAN\)$/,/^        ADVERSARIAL_REVIEW\)$/' "$ROOT/scripts/stagegate.sh" | head -n 60)"
-check "sections default on"                        grep -qF 'WORKFLOW_PROJECT_PLAN_SECTIONS:-1' <<< "$block"
+check "sections default adaptive"                  grep -qF 'project_plan_sections_enabled && run_project_plan_sections' <<< "$block"
+check "sections helper uses auto default"          grep -qF 'WORKFLOW_PROJECT_PLAN_SECTIONS:-auto' "$ROOT/scripts/stagegate.sh"
+check "sections helper retains force-on mode"      grep -qF '1|true|yes|on) return 0' "$ROOT/scripts/stagegate.sh"
 check "sections are tried before the runner split" bash -c 'a=$(grep -n "run_project_plan_sections" <<< "$1" | head -1 | cut -d: -f1); b=$(grep -n "stage_uses_self_hosted project-plan" <<< "$1" | head -1 | cut -d: -f1); [ "$a" -lt "$b" ]' _ "$block"
 check "a sectioned plan reaches the same conversion" grep -qF 'project_plan_sectioned" == 1 ]] || stage_uses_self_hosted' <<< "$block"
 

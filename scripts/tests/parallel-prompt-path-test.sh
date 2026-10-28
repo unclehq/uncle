@@ -51,6 +51,17 @@ grep -q 'prompt="\${PARALLEL_PROMPT_DIR:-[^}]*}/step-\$step.md"' "$worker" \
     && note 'ok: the worker appends only the step file to what it is handed' \
     || fail 'the worker no longer takes PARALLEL_PROMPT_DIR as given'
 
+# Implementation workers must not each receive a copy of the entire approved
+# plan. The opt-out is deliberately explicit for rare legacy plans whose step
+# declarations are not sufficiently detailed.
+driver="$ROOT/scripts/stagegate.sh"
+grep -q 'WORKFLOW_COMPACT_IMPLEMENTATION_STEPS:-1' "$driver" \
+    && note 'ok: compact implementation prompts are the default' \
+    || fail 'implementation workers no longer default to compact prompts'
+grep -q 'WORKFLOW_COMPACT_IMPLEMENTATION_STEPS:-1.*!= 1' "$driver" \
+    && note 'ok: full shared-input embedding requires an explicit opt-out' \
+    || fail 'implementation shared-input embedding is still unconditional'
+
 # The failure this guards against, end to end: a missing prompt must refuse
 # loudly rather than run a worker with no instruction.
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT

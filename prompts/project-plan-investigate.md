@@ -35,11 +35,9 @@ agent to make before it can start. Apply these rules before finalizing:
   actionable on the current evidence. Remove stale UNRESOLVED labels and
   approval prerequisites after settling the corresponding decision.
 
-Read these in one parallel batch of tool calls, along with any source files you
-need to inspect:
-
-- REQUIREMENTS.md
-- .uncle/docs/REQUIREMENTS_INTERPRETATION.md
+Read only `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`.
+It is the authoritative requirements handoff. Do not read `REQUIREMENTS.md`,
+rendered Markdown views, or a previous plan.
 
 The driver runs the plan's verification commands twice -- once now, against the
 unmodified tree, and once after the change -- and compares the two results.

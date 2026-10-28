@@ -12,6 +12,17 @@ EXECUTOR = ROOT / 'scripts/lib/parallel_steps.py'
 
 
 class ParallelImplementationTests(unittest.TestCase):
+    def test_stream_json_string_error_flag_is_parsed_as_a_boolean(self):
+        """A Codex ``is_error: \"false\"`` result must not make a red dot."""
+        sys.path.insert(0, str(ROOT / 'scripts/lib'))
+        import parallel_steps
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / 'worker.jsonl'
+            log.write_text(json.dumps({'type': 'result', 'is_error': 'false', 'usage': {}}) + '\n')
+            self.assertFalse(parallel_steps.extract_usage(log)['reported_error'])
+            log.write_text(json.dumps({'type': 'result', 'is_error': 'true', 'usage': {}}) + '\n')
+            self.assertTrue(parallel_steps.extract_usage(log)['reported_error'])
+
     def fixture(self):
         temp = tempfile.TemporaryDirectory()
         root = Path(temp.name)

@@ -278,9 +278,8 @@ SYNTHESIS_JSON
 
 ## Compact planning investigation (binding)
 
-Read only REQUIREMENTS.md and the canonical
-`.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json` (or its rendered
-view only when that JSON does not exist). Do not inspect project source,
+Read only the canonical `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`.
+Do not read REQUIREMENTS.md or its rendered view. Do not inspect project source,
 dependency caches, output rules, gates, logs, or tool configuration. Resolve
 ordinary implementation choices once; do not narrate alternatives or revisit
 an already-made choice. Write the requested investigation handoff directly,

@@ -85,6 +85,11 @@ def validate(path, project='.'):
         rendered = _artifact_json.render_checklist(payload)
         path.write_text(rendered, encoding='utf-8')
         _artifact_json.write(project, 'MANUAL_CHECKLIST.md', dict(payload, schema='uncle.artifact/v1', kind='manual-checklist'))
+        # The panel and the single-reviewer fallback share one canonical
+        # contract: an explicit empty array means automated evidence leaves
+        # no manual work, not that the reviewer forgot the artifact.
+        if payload.get('checks') == []:
+            return []
         return validate_text(rendered)
     try:
         return validate_text(text)
@@ -129,8 +134,8 @@ def validate_canonical(path):
     if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'manual-checklist':
         raise ValueError('wrong manual-checklist JSON schema')
     checks = payload.get('checks')
-    if not isinstance(checks, list) or not checks:
-        raise ValueError('manual checklist has no checks')
+    if not isinstance(checks, list):
+        raise ValueError('manual checklist checks must be an array')
     seen = set()
     for check in checks:
         if not isinstance(check, dict) or not check.get('id') or not check.get('exact_action') or not check.get('expected_result'):

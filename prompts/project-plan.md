@@ -35,11 +35,13 @@ agent to make before it can start. Apply these rules before finalizing:
   actionable on the current evidence. Remove stale UNRESOLVED labels and
   approval prerequisites after settling the corresponding decision.
 
-Read these in one parallel batch of tool calls, along with any source files you
-need to inspect:
+Read only the canonical requirements artifact in one tool call:
 
-- REQUIREMENTS.md
-- .uncle/docs/REQUIREMENTS_INTERPRETATION.md
+- `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`
+
+This JSON is authoritative for planning. Do not read `REQUIREMENTS.md`,
+rendered Markdown views, or a previous plan: the raw brief was already
+interpreted and is not an operational planning input.
 
 Write .uncle/docs/PROJECT_PLAN.md as one JSON object, not Markdown, matching
 this contract:
@@ -209,6 +211,18 @@ ID instead of repeating its wording. Preserve exact assertions, thresholds,
 failure behavior, dependencies, evidence requirements and restriction fields.
 Use concise tables initially, not an expanded narrative to compress afterward.
 Keep short None entries where appropriate; do not omit required sections.
+
+## Hard speed budget (binding)
+
+For a self-contained application request, keep `narrative` below **1,800
+words** and target **14 KB**. This is a delivery budget, not a request to omit
+requirements: use terse table cells, one-line decisions, and references to
+stable IDs rather than repeating a behavior in architecture, steps, tests, and
+traceability. Each non-table section gets at most three short bullets unless a
+requirement needs more. Do not write rationale, alternatives, a work diary, or
+generic framework advice. A complex, multi-service request may exceed the
+target only for concrete required rows; never pad a small app's plan to look
+comprehensive.
 
 Define each verification command and protected path once in its required
 location. Strategy and step rows reference those commands and check IDs; avoid

@@ -1,7 +1,7 @@
 import sys,tempfile,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'lib'))
-from checklist_document import validate
+from checklist_document import validate, validate_canonical, render_canonical
 class Document(unittest.TestCase):
     def test_rejects_progress_and_filename_but_accepts_checks(self):
         with tempfile.TemporaryDirectory() as d:
@@ -91,6 +91,23 @@ class Document(unittest.TestCase):
             subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / 'lib' / 'checklist_groups.py'),
                             '--checklist-json', str(packet), '--out-dir', str(output)], check=True)
             self.assertEqual((output / 'groups.txt').read_text().splitlines(), ['MC-1', 'MC-2'])
+
+    def test_empty_canonical_checklist_is_a_valid_no_op_with_a_human_view(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); packet = root / 'MANUAL_CHECKLIST.json'; view = root / 'MANUAL_CHECKLIST.md'
+            packet.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist', 'checks': []}))
+            self.assertEqual(validate_canonical(packet)['checks'], [])
+            render_canonical(packet, view)
+            self.assertIn('No additional manual checks are required', view.read_text())
+
+    def test_empty_json_response_is_a_valid_no_op(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); packet = root / 'MANUAL_CHECKLIST.md'
+            packet.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist', 'checks': []}))
+            self.assertEqual(validate(packet, root), [])
+            self.assertIn('No additional manual checks are required', packet.read_text())
     def test_json_response_is_validated_rendered_and_exported(self):
         import json
         with tempfile.TemporaryDirectory() as d:

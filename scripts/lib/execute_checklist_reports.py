@@ -3,9 +3,9 @@
 import json, sys
 from pathlib import Path
 
-def main(project='.'):
+def main(project='.', empty=False):
  p=Path(project); docs=p/'.uncle/docs'; state=p/'.uncle/workflow/documents'
- workers=json.loads((state/'EXECUTE_CHECKLIST_WORKERS.json').read_text())
+ workers={'results': []} if empty else json.loads((state/'EXECUTE_CHECKLIST_WORKERS.json').read_text())
  checklist=json.loads((state/'MANUAL_CHECKLIST.json').read_text())
  required={c['id']:bool(c.get('required',True)) for c in checklist.get('checks',[])}
  rows=[]
@@ -25,4 +25,8 @@ def main(project='.'):
  (state/'DEFECTS.json').write_text(json.dumps(defects,indent=2)+'\n')
  import importlib.util
  s=importlib.util.spec_from_file_location('fallback',Path(__file__).with_name('checklist_report_fallback.py')); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.render_from_json(p)
-if __name__=='__main__': main(sys.argv[1] if len(sys.argv)>1 else '.')
+if __name__=='__main__':
+ args=sys.argv[1:]
+ empty='--empty' in args
+ args=[arg for arg in args if arg != '--empty']
+ main(args[0] if args else '.', empty)

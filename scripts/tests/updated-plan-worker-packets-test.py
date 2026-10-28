@@ -185,13 +185,12 @@ class WorkerPackets(unittest.TestCase):
         with self.assertRaisesRegex(SELF_HOSTED.InvalidReviewerDocument, 'stable finding ID, not placeholder'):
             SELF_HOSTED.reviewer_packet(serialized, 'assertions.json')
 
-    def test_manual_checklist_requires_real_json_checks_at_runner_boundary(self):
+    def test_manual_checklist_accepts_an_explicit_empty_json_checklist(self):
         narrative = 'I rewrote .uncle/docs/MANUAL_CHECKLIST.md with 13 checks.'
         with self.assertRaisesRegex(ValueError, 'did not return a manual-checklist JSON object'):
             OUTPUT.check(narrative, 'claude', 'MANUAL_CHECKLIST.md')
         body = {'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist', 'checks': []}
-        with self.assertRaisesRegex(ValueError, 'requires a nonempty checks array'):
-            OUTPUT.check(json.dumps(body), 'claude', 'MANUAL_CHECKLIST.md')
+        self.assertEqual(json.loads(OUTPUT.check(json.dumps(body), 'claude', 'MANUAL_CHECKLIST.md'))['checks'], [])
         body['checks'] = [{'id': 'MC-001', 'exact_action': 'Open the page', 'expected_result': 'Calculator loads'}]
         self.assertEqual(json.loads(OUTPUT.check(json.dumps(body), 'claude', 'MANUAL_CHECKLIST.md'))['checks'][0]['id'], 'MC-001')
 

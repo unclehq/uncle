@@ -227,8 +227,19 @@ def extract_usage(log_path):
         if isinstance(event, dict) and event.get('type') == 'result':
             result = event
     usage = result.get('usage') or {}
+    # Stream-json runners do not agree on the JSON type of ``is_error``.
+    # Codex currently emits the strings "true" / "false" while others emit
+    # booleans.  ``bool(\"false\")`` is true, which made completed Codex
+    # implementation steps look failed in the session panel.
+    reported_error = None
+    if result:
+        value = result.get('is_error')
+        if isinstance(value, str):
+            reported_error = value.strip().lower() in ('1', 'true', 'yes', 'error')
+        else:
+            reported_error = bool(value)
     return {
-        'reported_error': bool(result.get('is_error')) if result else None,
+        'reported_error': reported_error,
         'input_tokens': usage.get('input_tokens'),
         'output_tokens': usage.get('output_tokens'),
         'reported_total_tokens': usage.get('total_tokens'),

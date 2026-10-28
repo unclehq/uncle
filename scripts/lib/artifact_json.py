@@ -565,10 +565,16 @@ _CHECKLIST_LIST_FIELDS = ('exclusive_resources', 'depends_on')
 
 def render_checklist(payload):
     checks = payload.get('checks')
-    if not checks:
-        raise ValueError('manual checklist has no checks')
+    if not isinstance(checks, list):
+        raise ValueError('manual checklist checks must be an array')
     seen = set()
     out = ['# Manual checklist', '']
+    if not checks:
+        # This Markdown is a human view only. The empty canonical JSON is the
+        # authoritative statement that no manual work remains after automated
+        # driver evidence; it must not be mistaken for an absent artifact.
+        out += ['No additional manual checks are required. Driver verification and automated evidence cover the approved acceptance criteria.', '']
+        return '\n'.join(out)
     section = None
     for check in checks:
         identifier = check['id']

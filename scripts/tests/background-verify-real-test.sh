@@ -36,6 +36,9 @@ early_checklist_start() { echo started >> "$STATE_DIR/early-started"; }
 record_nonblocking_failure() { printf '%s\t%s\n' "$1" "$2" >> "$STATE_DIR/nonblocking.tsv"; }
 record_test_failure_disposition() { :; }
 green_failed_ids() { :; }
+# Scheduling metadata is optional.  A malformed declaration must not make the
+# background child exit before it replaces PENDING with actual command rows.
+verify_parallel_groups() { return 1; }
 
 green_check_background_start > /dev/null
 check "pending at once" green_pending
@@ -43,6 +46,7 @@ check "placeholder rows" grep -q '^PENDING' "$GREEN_CLASS"
 wait "$GREEN_BG_PID" 2>/dev/null
 check "published rows: the false command is the one regression" bash -c '[ "$(grep -c "^REGRESSION" "$1")" == 1 ] && grep -q "^PASS	cat tests/config.js" "$1"' _ "$GREEN_CLASS"
 check "the report is the real one" grep -q 'Green check' "$GREEN_MD"
+check "bad optional scheduling falls back to sequential" grep -q 'Invalid Parallel verification groups; running the verification commands in order.' "$LOG_DIR/green-background.log"
 check "the log shows the moved port" grep -q -- '--port 5673' "$LOG_DIR/green-check.log"
 check "the project file keeps its port" grep -q -- "--port 4173" tests/config.js
 check "the protected file still matches the approved manifest" check_verification_inputs

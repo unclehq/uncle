@@ -30,7 +30,9 @@ def main(directory, output, *names):
             ident=check['id']
             if ident in checks and checks[ident] != check: raise ValueError('%s: conflicting duplicate check %s' % (path.name,ident))
             checks[ident]=check
-    if not checks: raise ValueError('manual checklist workers produced no checks')
+    # An empty result is meaningful: the workers found that driver evidence
+    # already covers every proposed manual observation. It is not a malformed
+    # packet, and must not force a second, redundant reviewer pass.
     result={'schema':'uncle.artifact/v1','kind':'manual-checklist','checks':[checks[k] for k in sorted(checks)]}
     Path(output).write_text(json.dumps(result,indent=2)+'\n')
 if __name__=='__main__':

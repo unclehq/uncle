@@ -4365,6 +4365,17 @@ REPAIR
                 set_state CHECKLIST
                 continue
             fi
+            if python3 - "$STATE_DIR/documents/MANUAL_CHECKLIST.json" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1], encoding='utf-8'))
+raise SystemExit(0 if payload.get('checks') == [] else 1)
+PY
+            then
+                echo 'Manual checklist has no additional checks; recording an empty canonical execution report.'
+                python3 "$ROOT/scripts/lib/execute_checklist_reports.py" --empty . || exit 1
+                set_state VALIDATE_CHECKLIST
+                continue
+            fi
             start_green_check_bg
             plan_delivery_summary
             snapshot_checklist_groups

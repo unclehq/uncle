@@ -41,6 +41,15 @@ class ManualChecklistWorkerInputs(unittest.TestCase):
         self.assertIn("manual-checklist-review-worker-*)", text)
         self.assertIn('canonical JSON evidence paths listed below under Canonical inputs', text)
 
+    def test_adversarial_panel_retries_only_the_invalid_packet(self):
+        text = (ROOT / 'scripts/stagegate.sh').read_text()
+        start = text.index('run_adversarial_review_panel()')
+        block = text[start:text.index('\n}\n', start) + 2]
+        self.assertIn('Adversarial-review worker $lens returned an invalid packet; retrying that worker once.', block)
+        self.assertIn('--expected "$lens"', block)
+        self.assertIn('adversarial-review-worker-$lens-retry', block)
+        self.assertIn('Use Write to replace the assigned packet path', block)
+
 
 if __name__ == '__main__':
     unittest.main()

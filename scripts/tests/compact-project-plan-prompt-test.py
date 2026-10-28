@@ -45,7 +45,8 @@ class CompactProjectPlanPrompt(unittest.TestCase):
         start = source.index('    # Review-parent synthesis')
         end = source.index('\n    local is_plan=', start)
         compact = source[start:end]
-        self.assertIn('project-plan|change-plan|updated-plan', compact)
+        self.assertIn('is_synthesis_stage "$log_name"', compact)
+        self.assertIn('project-plan|change-plan|updated-plan', source)
         self.assertIn('project-plan-investigate)', compact)
         self.assertIn('completed investigation and REQUIREMENTS_INTERPRETATION JSON', compact)
         self.assertIn('approved BASELINE_REPORT and CHANGE_SPEC', compact)
@@ -55,7 +56,8 @@ class CompactProjectPlanPrompt(unittest.TestCase):
     def test_adversarial_workers_receive_only_named_canonical_inputs(self):
         app = (ROOT / 'scripts/stagegate.sh').read_text()
         change = (ROOT / 'scripts/change-workflow.sh').read_text()
-        self.assertIn('REQUIREMENTS_INTERPRETATION.json` and `.uncle/workflow/documents/PROJECT_PLAN.json', app)
+        self.assertIn('REQUIREMENTS_INTERPRETATION.json', app)
+        self.assertIn('plan_input=".uncle/workflow/documents/PROJECT_PLAN.json"', app)
         self.assertIn('CHANGE_PLAN.json` and `.uncle/workflow/documents/CHANGE_SPEC.json', change)
         worker = (ROOT / 'prompts/change/adversarial-review-worker.md').read_text()
         self.assertIn('Return exactly one JSON object', worker)
@@ -68,6 +70,23 @@ class CompactProjectPlanPrompt(unittest.TestCase):
         self.assertIn('render-project-plan', block)
         self.assertIn('Project-plan fast path:', block)
         self.assertNotIn('project-plan-format-prompt.md', block)
+
+    def test_project_plan_prompts_use_only_canonical_requirements_json(self):
+        for name in ('project-plan.md', 'project-plan-investigate.md'):
+            prompt = (ROOT / 'prompts' / name).read_text(encoding='utf-8')
+            self.assertIn('REQUIREMENTS_INTERPRETATION.json', prompt)
+            self.assertIn('Do not read `REQUIREMENTS.md`', prompt)
+
+    def test_initial_planning_is_cold_and_has_a_real_output_budget(self):
+        stagegate = (ROOT / 'scripts/stagegate.sh').read_text(encoding='utf-8')
+        self.assertIn('run_initial_planning_agent()', stagegate)
+        self.assertIn('SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0', stagegate)
+        run_stage = stagegate[stagegate.index('run_stage()'):]
+        self.assertIn('run_initial_planning_agent prompts/requirements.md requirements', run_stage)
+        self.assertIn('run_initial_planning_agent prompts/project-plan.md project-plan', run_stage)
+        prompt = (ROOT / 'prompts/project-plan.md').read_text(encoding='utf-8')
+        self.assertIn('## Hard speed budget (binding)', prompt)
+        self.assertIn('1,800', prompt)
 
 
 if __name__ == '__main__':

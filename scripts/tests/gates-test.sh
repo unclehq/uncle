@@ -1704,9 +1704,9 @@ for artifact in IMPLEMENTATION_NOTES AUTOMATED_TEST_REPORT VERIFICATION_REPORT D
     set_state IMPLEMENT
     run_stagegate WORKFLOW_DIFF_GATE=0 "WORKFLOW_DOC_MAX_BYTES_$artifact=1"
     expect_status 0
-    expect_out "Document budget exceeded: $artifact.md"
+    expect_out "Document budget exceeded: .uncle/docs/$artifact.md"
     expect_out 'budget is advisory'
-    expect_file "$artifact.md"
+    expect_file ".uncle/docs/$artifact.md"
     expect_out "Workflow complete."
     expect_state COMPLETE
     if [[ "$artifact" == FINAL_AUDIT ]]; then
@@ -1722,9 +1722,9 @@ for artifact in IMPLEMENTATION_NOTES CHANGE_TEST_REPORT VERIFICATION_REPORT; do
     set_state IMPLEMENT
     run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" WORKFLOW_DIFF_GATE=0 "WORKFLOW_DOC_MAX_BYTES_$artifact=1"
     expect_status 0
-    expect_out "Document budget exceeded: $artifact.md"
+    expect_out "Document budget exceeded: .uncle/docs/$artifact.md"
     expect_out 'budget is advisory'
-    expect_file "$artifact.md"
+    expect_file ".uncle/docs/$artifact.md"
     expect_out "Change workflow complete."
     expect_state COMPLETE
 done

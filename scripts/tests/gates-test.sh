@@ -309,21 +309,36 @@ case "$prompt" in
         ;;
     *STUB:implement*)
         : > .uncle/workflow/impl-agent-started
-        # implement-change.md's binding delivery contract (not the Markdown
-        # views it used to write): a single canonical JSON object at each of
-        # these two paths, which the driver validates, canonicalizes, and
-        # renders into .uncle/docs/IMPLEMENTATION_NOTES.md and
-        # .uncle/docs/CHANGE_TEST_REPORT.md itself.
-        mkdir -p .uncle/workflow/documents
-        jq -n '{schema:"uncle.artifact/v1",kind:"implementation-notes",
-            changed_files:[{path:"app/main.sh",purpose:"Changed app/main.sh."}],
-            deliveries:[{id:"AC-1",status:"IMPLEMENTED",changed_code:"app/main.sh",observed_verification:"app/test.sh PASS"}]}' \
-            > .uncle/workflow/documents/IMPLEMENTATION_NOTES.json
-        jq -n '{schema:"uncle.artifact/v1",kind:"change-test-report",
-            commands:[{command:"bash app/test.sh",status:"PASS",output:"ok"}]}' \
-            > .uncle/workflow/documents/CHANGE_TEST_REPORT.json
-        if [[ -n "${FAKE_IMPL:-}" ]]; then
-            bash -c "$FAKE_IMPL"
+        # A stepwise invocation asks for its own per-step fragment (written to
+        # the exact path named in its own prompt text), merged into the
+        # canonical accumulator by the driver after this call returns -- never
+        # the single-shot delivery the non-stepwise contract below uses.
+        step_frag="$(printf '%s\n' "$prompt" | grep -oE '\.uncle/workflow/implement-step-[0-9]+-notes\.json' | head -n1)"
+        if [[ -n "$step_frag" ]]; then
+            jq -n '{schema:"uncle.artifact/v1",kind:"implementation-notes",
+                changed_files:[{path:"app/main.sh",purpose:"Changed app/main.sh."}],
+                deliveries:[{id:"AC-1",status:"IMPLEMENTED",changed_code:"app/main.sh",observed_verification:"app/test.sh PASS"}]}' \
+                > "$step_frag"
+            if [[ -n "${FAKE_IMPL:-}" ]]; then
+                bash -c "$FAKE_IMPL"
+            fi
+        else
+            # implement-change.md's binding delivery contract (not the
+            # Markdown views it used to write): a single canonical JSON
+            # object at each of these two paths, which the driver validates,
+            # canonicalizes, and renders into .uncle/docs/IMPLEMENTATION_NOTES.md
+            # and .uncle/docs/CHANGE_TEST_REPORT.md itself.
+            mkdir -p .uncle/workflow/documents
+            jq -n '{schema:"uncle.artifact/v1",kind:"implementation-notes",
+                changed_files:[{path:"app/main.sh",purpose:"Changed app/main.sh."}],
+                deliveries:[{id:"AC-1",status:"IMPLEMENTED",changed_code:"app/main.sh",observed_verification:"app/test.sh PASS"}]}' \
+                > .uncle/workflow/documents/IMPLEMENTATION_NOTES.json
+            jq -n '{schema:"uncle.artifact/v1",kind:"change-test-report",
+                commands:[{command:"bash app/test.sh",status:"PASS",output:"ok"}]}' \
+                > .uncle/workflow/documents/CHANGE_TEST_REPORT.json
+            if [[ -n "${FAKE_IMPL:-}" ]]; then
+                bash -c "$FAKE_IMPL"
+            fi
         fi
         ;;
     *STUB:execute*)

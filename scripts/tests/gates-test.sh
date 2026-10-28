@@ -365,7 +365,19 @@ case "$prompt" in
         [[ "$mode" == baseline-only && -e .uncle/workflow/stub-analyze-done ]] && mode=""
         : > .uncle/workflow/stub-analyze-done
         delivery="$(printf '%s' "$prompt" | tr '\n' ' ' | sed -n 's/.*JSON object at ` *\([^` ]*\).*/\1/p' | head -n1)"
-        if [[ "$mode" != exhaust && "$mode" != baseline-only && -n "$delivery" ]]; then
+        if [[ "$mode" == baseline-only ]]; then
+            # The combined delivery is all-or-nothing (publish_change_planning_bundle.py
+            # never writes a partial bundle), so a pass that "dies after the
+            # baseline" cannot leave it through the normal delivery path.
+            # Write the canonical BASELINE_REPORT.json directly, the same
+            # observable outcome a real exhausted-after-the-baseline pass
+            # would leave on disk, and leave the bundle delivery unwritten.
+            mkdir -p .uncle/workflow/documents .uncle/docs
+            jq -n '{schema:"uncle.artifact/v1",kind:"baseline-report",
+                narrative:"",verification_commands:"bash app/test.sh"}' \
+                > .uncle/workflow/documents/BASELINE_REPORT.json
+            printf '# Baseline Report\n\nPassing.\n' > .uncle/docs/BASELINE_REPORT.md
+        elif [[ "$mode" != exhaust && -n "$delivery" ]]; then
             mkdir -p "$(dirname "$delivery")"
             jq -n '{schema:"uncle.artifact/v1",kind:"change-planning-bundle",
                 baseline_report:{schema:"uncle.artifact/v1",kind:"baseline-report",
@@ -1488,7 +1500,8 @@ expect_out '.uncle/docs/CHANGE_PLAN.md has no approval on record'
 # context after the baseline keeps it; the rest is written in a fresh pass.
 new_case analyze-keeps-the-baseline-and-finishes-in-a-second-pass
 [[ -s "$REPO/CHANGE_REQUEST.md" ]] || printf '# Change request\n\nFix the greeting.\n' > "$REPO/CHANGE_REQUEST.md"
-rm -f "$REPO/.uncle/docs/BASELINE_REPORT.md" "$REPO/.uncle/docs/CHANGE_SPEC.md" "$REPO/.uncle/docs/CHANGE_PLAN.md"
+rm -f "$REPO/.uncle/docs/BASELINE_REPORT.md" "$REPO/.uncle/docs/CHANGE_SPEC.md" "$REPO/.uncle/docs/CHANGE_PLAN.md" \
+    "$REPO/.uncle/workflow/documents/BASELINE_REPORT.json" "$REPO/.uncle/workflow/documents/CHANGE_SPEC.json" "$REPO/.uncle/workflow/documents/CHANGE_PLAN.json"
 set_state ANALYZE
 run_driver FAKE_ANALYZE=baseline-only FAKE_INPUT_TOKENS=198597
 expect_out 'ran out of context (198597 tokens) before writing: .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md'
@@ -1501,13 +1514,14 @@ COUNT=$((COUNT + 1))
 if [[ "$(wc -l < "$REPO/.uncle/workflow/agent-calls")" -ne 2 ]]; then
     fail 'expected exactly two planning passes'
 fi
-expect_in_file .uncle/workflow/logs/change-planning.prompt.md '.uncle/docs/BASELINE_REPORT.md is already written'
+expect_in_file .uncle/workflow/logs/change-planning.prompt.md '.uncle/workflow/documents/BASELINE_REPORT.json is already written'
 expect_in_file .uncle/workflow/logs/change-planning.prompt.md 'Context note from the driver'
 
 # Two passes that write nothing stop with the cause, not "Required file missing".
 new_case analyze-exhausted-twice-stops-with-the-cause
 [[ -s "$REPO/CHANGE_REQUEST.md" ]] || printf '# Change request\n\nFix the greeting.\n' > "$REPO/CHANGE_REQUEST.md"
-rm -f "$REPO/.uncle/docs/BASELINE_REPORT.md" "$REPO/.uncle/docs/CHANGE_SPEC.md" "$REPO/.uncle/docs/CHANGE_PLAN.md"
+rm -f "$REPO/.uncle/docs/BASELINE_REPORT.md" "$REPO/.uncle/docs/CHANGE_SPEC.md" "$REPO/.uncle/docs/CHANGE_PLAN.md" \
+    "$REPO/.uncle/workflow/documents/BASELINE_REPORT.json" "$REPO/.uncle/workflow/documents/CHANGE_SPEC.json" "$REPO/.uncle/workflow/documents/CHANGE_PLAN.json"
 set_state ANALYZE
 run_driver FAKE_ANALYZE=exhaust FAKE_INPUT_TOKENS=198597
 expect_status 1

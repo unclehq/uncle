@@ -2669,7 +2669,18 @@ STRUCTURED_OUTPUT_CONTRACT
                 ;;
             change-plan|updated-change-plan)
                 if [[ "${UNCLE_COMBINED_CHANGE_PLAN:-0}" == 1 ]]; then
-                    if ! artifact_error="$(python3 "$ROOT/scripts/lib/publish_change_planning_bundle.py" . "$agent_delivery" 2>&1)"; then
+                    if [[ ! -s "$agent_delivery" ]]; then
+                        # Nothing to validate or retry: the pass ended (e.g.
+                        # ran out of context) before writing anything at all.
+                        # run_planning_stage's own two-pass loop already
+                        # reads the documents directly to decide what is
+                        # missing and whether to retry in a fresh context;
+                        # treating an empty delivery as a schema failure here
+                        # would waste a same-context retry that cannot help
+                        # and, on the second pass, hard-exit the whole
+                        # process instead of reporting the cause.
+                        :
+                    elif ! artifact_error="$(python3 "$ROOT/scripts/lib/publish_change_planning_bundle.py" . "$agent_delivery" 2>&1)"; then
                         if [[ -z "$artifact_retried" ]]; then
                             artifact_retried=1
                             rm -f "$agent_delivery"
@@ -2677,8 +2688,14 @@ STRUCTURED_OUTPUT_CONTRACT
                             printf '%s\n' "$artifact_error"
                             continue
                         fi
+                        # Unlike every other hard failure here, the combined
+                        # planning pass has an outer caller (run_planning_stage)
+                        # built to treat "wrote nothing twice" as a cause to
+                        # report, not a crash: exiting the whole process here
+                        # would skip its context-exhaustion retry and its
+                        # "Planning did not complete in two passes" message.
                         printf '%s\n' "$artifact_error" >&2
-                        exit 1
+                        return 1
                     fi
                 elif ! artifact_error="$(python3 "$ROOT/scripts/lib/publish_agent_artifact.py" "$log_name" "$log" . "$agent_delivery" 2>&1)"; then
                     if [[ -z "$artifact_retried" ]]; then
@@ -3664,8 +3681,8 @@ run_planning_stage() {
         fi
         planning_documents_complete && break
         missing=""
-        for f in "$STATE_DIR/documents/BASELINE_REPORT.json" "$STATE_DIR/documents/CHANGE_SPEC.json" "$STATE_DIR/documents/CHANGE_PLAN.json"; do
-            [[ -s "$f" ]] || missing="$missing$f "
+        for f in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN; do
+            [[ -s "$STATE_DIR/documents/${f}.json" ]] || missing="$missing.uncle/docs/${f}.md "
         done
         used="$(planning_context_used "$LOG_DIR/change-plan.jsonl")"
         case "$used" in ''|*[!0-9]*) used=0 ;; esac

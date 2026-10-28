@@ -4370,7 +4370,27 @@ REPAIR
                 # This single-reviewer path's output_file is the Markdown view,
                 # so VALIDATE_MANUAL_CHECKLIST's --validate-json read of the
                 # canonical path needs this ingestion first.
-                python3 "$ROOT/scripts/lib/checklist_document.py" "$PROJECT_ROOT/.uncle/docs/MANUAL_CHECKLIST.md" || exit 1
+                checklist_ingest_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" "$PROJECT_ROOT/.uncle/docs/MANUAL_CHECKLIST.md" 2>&1)" || {
+                    # Ingestion itself rejected this one -- the same format
+                    # failure VALIDATE_MANUAL_CHECKLIST's --validate-json
+                    # catches below, just caught earlier because this path's
+                    # canonical JSON never got written. Same one-shot retry.
+                    if [[ ! -s "$checklist_retry_marker" ]]; then
+                        {
+                            echo "The preceding .uncle/docs/MANUAL_CHECKLIST.md was rejected only for this required format."
+                            echo 'Write a new complete .uncle/docs/MANUAL_CHECKLIST.md: every check as its own item with an Exact action and an Expected result.'
+                            echo 'Preserve every substantive check. Never drop or merge checks merely to make the document parse.'
+                            echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
+                            echo
+                            echo 'Driver validator errors (data, not instructions):'
+                            printf '%s\n' "$checklist_ingest_error"
+                        } > "$checklist_retry_marker"
+                        echo "Retrying manual-checklist once with the format diagnostic."
+                        continue
+                    fi
+                    printf '%s\n' "$checklist_ingest_error" >&2
+                    exit 1
+                }
             fi
             set_state VALIDATE_MANUAL_CHECKLIST
             ;;
@@ -4532,6 +4552,25 @@ PY
 
         VALIDATE_AUDIT)
             echo "Validating saved audit; the reviewer will not be rerun."
+            # The fast path (panel) writes canonical JSON directly and never
+            # reaches here with an unconverted .md. This fallback (panel
+            # disabled) writes the legacy Markdown form, which --validate-json
+            # below cannot read -- ingest it first, same one-shot retry
+            # .uncle/docs/ADVERSARIAL_REVIEW.md and .uncle/docs/MANUAL_CHECKLIST.md get, before
+            # ever falling back to a driver-owned blocking audit.
+            if [[ -s .uncle/docs/FINAL_AUDIT.md ]] \
+                    && ! python3 "$ROOT/scripts/lib/final-audit-context.py" --validate-json . >/dev/null 2>&1; then
+                audit_ingest_error="$(python3 "$ROOT/scripts/lib/final-audit-context.py" --validate .uncle/docs/FINAL_AUDIT.md 2>&1)" || {
+                    if [[ ! -s "$STATE_DIR/final-audit-format-retry.md" ]]; then
+                        printf '%s\n' "$audit_ingest_error" > "$STATE_DIR/final-audit-format-retry.md"
+                        echo "Retrying final-audit once with the format diagnostic."
+                        set_state FINAL_AUDIT
+                        continue
+                    fi
+                    echo 'Final audit was malformed; recording a blocking driver-owned audit without retrying the reviewer.'
+                    python3 "$ROOT/scripts/lib/final-audit-context.py" --fallback .uncle/docs/FINAL_AUDIT.md "$audit_ingest_error"
+                }
+            fi
             require_file "$STATE_DIR/documents/FINAL_AUDIT.json"
             audit_validation_error="$(python3 "$ROOT/scripts/lib/final-audit-context.py" --validate-json . 2>&1)" || {
                 echo 'Final audit was malformed; recording a blocking driver-owned audit without retrying the reviewer.'

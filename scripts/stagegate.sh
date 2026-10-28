@@ -282,7 +282,6 @@ on_exit() {
     if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
     if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
-    if declare -f early_checklist_cancel > /dev/null; then early_checklist_cancel; fi
     python3 -B "$ROOT/scripts/lib/app_server.py" stop "$STATE_DIR" > /dev/null 2>&1 || true
     if [[ "$rc" != 0 ]] && declare -f green_background_cancel > /dev/null; then green_background_cancel; fi
     if [[ -n "${PARALLEL_PREWARM_PID:-}" ]] && kill -0 "$PARALLEL_PREWARM_PID" 2>/dev/null; then
@@ -2914,7 +2913,6 @@ run_manual_checklist_panel() {
         local range
         case "$lens" in coverage) range='MC-100 through MC-199';; invariants) range='MC-200 through MC-299';; resources) range='MC-300 through MC-399';; regressions) range='MC-400 through MC-499';; esac
         local inputs='`.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`, and `.uncle/workflow/documents/TEST_REVIEW.json`'
-        [[ "${UNCLE_CHECKLIST_EARLY:-0}" != 1 ]] || inputs='and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json` (the test review is being written beside you and is not an input)'
         printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`, `.uncle/workflow/documents/PROJECT_PLAN.json`, `.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json`, %s. Do not inspect any rendered Markdown view or enumerate directories.\n\nUse current-tree snapshots, file hashes, and `.uncle/workflow/green-check.tsv` for regression evidence. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$range" >> "$prompt"
         ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/manual-checklist-worker-$lens.log" 2>&1 &
@@ -2942,48 +2940,12 @@ run_manual_checklist_panel() {
     cp "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
 }
 
-# The checklist is written while the test review runs. Its workers normally read TEST_REVIEW.json, so this run
-# leaves it out and the result is kept only when the review then passes with nothing to carry; otherwise the
-# MANUAL_CHECKLIST stage writes it again with the review as an input. WORKFLOW_EARLY_CHECKLIST=0 turns it off.
-EARLY_CHECKLIST_PID=""
-early_checklist_start() {
-    [[ -z "$EARLY_CHECKLIST_PID" ]] || return 0          # already started, beside the verification commands
-    rm -f "$STATE_DIR/checklist-early.ok"
-    [[ "${WORKFLOW_EARLY_CHECKLIST:-1}" == 1 && "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || return 0
-    # A failing driver check means the review will have findings and the checklist is rewritten anyway (noinit: 2 of 70 unit
-    # tests failed, the early checklist was discarded and the three workers ran twice).
-    # An unattended run carries the findings to the final audit and does not change the build for them, so the review's result does not
-    # decide anything the checklist needs; an attended one may repair, and then the checklist is written again.
-    if [[ "$UNATTENDED" != 1 && "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" && "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then
-        echo 'Not writing the checklist early: driver verification has failures, so the test review will have findings.'
-        return 0
-    fi
-    echo 'Writing the manual checklist while the test review runs.'
-    ( UNCLE_CHECKLIST_EARLY=1 run_manual_checklist_panel && [[ -s "$STATE_DIR/documents/MANUAL_CHECKLIST.json" ]] \
-        && : > "$STATE_DIR/checklist-early.ok" ) > "$LOG_DIR/manual-checklist-early.log" 2>&1 < /dev/null &
-    EARLY_CHECKLIST_PID=$!
-}
-# The code is about to change: whatever was written for it is no use.
-early_checklist_cancel() {
-    if [[ -n "$EARLY_CHECKLIST_PID" ]] && kill -0 "$EARLY_CHECKLIST_PID" 2>/dev/null; then
-        kill "$EARLY_CHECKLIST_PID" 2>/dev/null || true
-        pkill -P "$EARLY_CHECKLIST_PID" 2>/dev/null || true
-    fi
-    [[ -z "$EARLY_CHECKLIST_PID" ]] || wait "$EARLY_CHECKLIST_PID" 2>/dev/null || true
-    EARLY_CHECKLIST_PID=""
-    rm -f "$STATE_DIR/checklist-early.ok"
-}
-early_checklist_join() {
-    [[ -n "$EARLY_CHECKLIST_PID" ]] || return 0
-    wait "$EARLY_CHECKLIST_PID" 2>/dev/null || true
-    EARLY_CHECKLIST_PID=""
-}
-# Succeeds when the early checklist can stand in for the MANUAL_CHECKLIST stage.
-early_checklist_usable() {
-    [[ -e "$STATE_DIR/checklist-early.ok" && -s "$STATE_DIR/documents/MANUAL_CHECKLIST.json" ]] || return 1
-    [[ "$UNATTENDED" != 1 ]] || return 0
-    [[ "$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS 2>/dev/null)" == PASS ]]
-}
+# Manual-checklist generation used to speculatively overlap with
+# TEST_REVIEW/the driver verification commands (early_checklist_start/
+# _cancel/_join/_usable), discarding and rewriting the result whenever the
+# review turned out to have findings -- real duplicate panel cost, not just
+# wasted background work, every time that discard happened. Removed: the
+# checklist now runs exactly once, in the MANUAL_CHECKLIST stage below.
 
 run_final_audit_panel() {
     local directory="$STATE_DIR/final-audit-panel" lens prompt output pid
@@ -3736,7 +3698,6 @@ run_stage() {
             fi
             ;;
         IMPLEMENT)
-            early_checklist_cancel      # the code is about to change
             green_background_cancel
             parallel_status=0
             run_parallel_application_implementation || parallel_status=$?
@@ -3901,7 +3862,6 @@ run_stage() {
             fi
             ;;
         REPAIR)
-            early_checklist_cancel      # the code is about to change
             green_background_cancel
             if stage_uses_self_hosted repair AGENT; then
                 # Same split as implementation, with a twist: the format pass
@@ -3925,12 +3885,6 @@ run_stage() {
             require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
             ;;
         MANUAL_CHECKLIST)
-            if early_checklist_usable; then
-                echo 'Manual-checklist: using the checklist written beside the test review (the review passed with nothing to carry).'
-                rm -f "$STATE_DIR/checklist-early.ok"
-                return 0
-            fi
-            rm -f "$STATE_DIR/checklist-early.ok"
             run_manual_checklist_panel
             # Only the canonical packet proves a panel completed. A rendered
             # view can survive a prior run or a user edit and is never an
@@ -4129,9 +4083,6 @@ run_green_check() {
         fi
     done
     local execution_status=0
-    # The checklist reads the plans and the code, not the results: write it while the commands run (a background run starts it
-    # from the foreground, where its process can be waited for).
-    [[ -n "${UNCLE_GREEN_BACKGROUND:-}" ]] || early_checklist_start
     green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" \
         check_verification_inputs "$STATE_DIR/green-check.groups" || execution_status=$?
     [[ "$execution_status" == 0 ]] || exit "$execution_status"
@@ -4945,9 +4896,7 @@ while true; do
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
-            early_checklist_start
             run_stage TEST_REVIEW
-            early_checklist_join
             check_verification_inputs
             set_state VALIDATE_TEST_REVIEW
             ;;

@@ -2175,10 +2175,10 @@ for invalid in foreign missing structural; do
     case "$invalid" in
         foreign) sed -i.bak 's@report: .*@report: unrelated.md@' "$REPO/.uncle/workflow/waivers/AC-1" ;;
         missing) rm "$REPO/.uncle/workflow/waivers/AC-1" ;;
-        structural) printf 'Malformed report\n' > "$REPO/.uncle/docs/IMPLEMENTATION_NOTES.md" ;;
+        structural) printf 'Malformed report\n' > "$REPO/.uncle/workflow/documents/IMPLEMENTATION_NOTES.json" ;;
     esac
     if [[ "$invalid" == structural ]]; then
-        run_driver FAKE_IMPL="printf 'Malformed report\n' > .uncle/docs/IMPLEMENTATION_NOTES.md"
+        run_driver FAKE_IMPL="printf 'Malformed report\n' > .uncle/workflow/documents/IMPLEMENTATION_NOTES.json"
     else
         run_driver FAKE_IMPL="$partial_impl"
     fi

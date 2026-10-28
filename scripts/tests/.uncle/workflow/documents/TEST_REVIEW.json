@@ -1,0 +1,13 @@
+{
+  "schema": "uncle.artifact/v1",
+  "kind": "acceptance-report",
+  "narrative": "Summary only; never a gate.",
+  "rows": [
+    {
+      "id": "RESULTS",
+      "required": true,
+      "status": "PASS",
+      "evidence": "driver"
+    }
+  ]
+}

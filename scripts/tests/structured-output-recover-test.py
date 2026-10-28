@@ -28,6 +28,14 @@ class Recover(unittest.TestCase):
         text = 'use {x} here %s then %s' % (json.dumps(PACKET), json.dumps(later))
         self.assertEqual(structured_output.recover(log_of(text)), later)
 
+    def test_packet_in_an_earlier_reply_is_found_behind_a_summary(self):
+        path = Path(tempfile.mkdtemp()) / 'w.jsonl'
+        events = [{'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': json.dumps(PACKET)}]}},
+                  {'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': 'Now verifying.'}]}},
+                  {'type': 'result', 'result': 'Done: the JSON is valid.'}]
+        path.write_text('\n'.join(json.dumps(e) for e in events) + '\n')
+        self.assertEqual(structured_output.recover(path), PACKET)
+
     def test_no_packet(self):
         self.assertIsNone(structured_output.recover(log_of('done')))
         self.assertIsNone(structured_output.recover(log_of('{"kind": "x"}')))

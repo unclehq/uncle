@@ -25,6 +25,7 @@ import sys
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -32,6 +33,12 @@ from triage_guard import make_sandbox, drop_sandbox           # noqa: E402
 from step_groups import covers                                # noqa: E402
 
 SKIP = ('.uncle/', '.git/')
+
+# Driver state a step never reads and that grows all run (the performance trace alone was 4,000 files, 21 MB, by the time
+# implementation began): copying it eleven times was most of the seconds each sandbox cost.
+STEP_EXCLUDES = tuple('.uncle/workflow/' + name for name in (
+    'performance', 'metrics', 'read-cache', 'speculative', 'runner-pool', 'updated-plan-edits',
+    'project-plan-sections', 'adversarial-review-panel', 'updated-plan-panel', 'final-audit-panel', 'test-review-panel'))
 
 
 # framework -> its default build-output directory, ignored even before any
@@ -363,19 +370,36 @@ def main():
     allowlist = request.get('files_allowlist') or ()
     base = Path(project) / '.uncle' / 'workflow' / 'parallel'
 
-    specs, threads, results = [], [], {}
-    for step in steps:
+    threads, results = [], {}
+
+    def prepare(step):
+        """One step's sandbox and baseline snapshot.  A mirror of the tree costs about two seconds, so a group of
+        eleven steps spent twenty before the first model call; the mirrors are independent, so they are made together."""
         number = step['number']
         sandbox = base / ('step-%d' % number)
-        try:
-            make_sandbox(project, sandbox)
-        except (OSError, ValueError) as error:
-            print('Could not mirror the tree for step %d: %s' % (number, error), file=sys.stderr)
-            return 2
-        specs.append({'number': number, 'project': project, 'sandbox': str(sandbox),
-                      'command': step['command'], 'log': step['log'],
-                      'env': dict(os.environ, **step.get('env', {})),
-                      'baseline': snapshot(sandbox, project)})
+        for attempt in (1, 2):
+            try:
+                make_sandbox(project, sandbox, STEP_EXCLUDES)
+                break
+            except (OSError, ValueError):
+                if attempt == 2:      # git can refuse two worktree adds at the same instant; once more, alone
+                    raise
+                time.sleep(0.2 * number)
+        return {'number': number, 'project': project, 'sandbox': str(sandbox),
+                'command': step['command'], 'log': step['log'],
+                'env': dict(os.environ, **step.get('env', {})),
+                'baseline': snapshot(sandbox, project)}
+
+    try:
+        jobs = max(1, min(len(steps), int(os.environ.get('WORKFLOW_SANDBOX_JOBS') or 8)))
+    except ValueError:
+        jobs = 8
+    try:
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            specs = list(pool.map(prepare, steps))
+    except (OSError, ValueError) as error:
+        print('Could not mirror the tree for a step: %s' % error, file=sys.stderr)
+        return 2
 
     for spec in specs:
         thread = threading.Thread(target=run_step, args=(spec, results))

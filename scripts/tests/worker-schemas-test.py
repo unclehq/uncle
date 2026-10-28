@@ -13,6 +13,7 @@ import project_plan_sections as sections
 import structured_output
 import updated_plan_edits as edits
 import worker_schemas as schemas
+W = schemas
 
 
 def validate(value, schema, path='$'):
@@ -82,7 +83,8 @@ class SectionSchema(unittest.TestCase):
     def test_trace_is_required_only_from_workers_that_report_it(self):
         self.assertIn('trace', self.schema('behaviors')['required'])
         self.assertNotIn('trace', self.schema('design')['properties'])
-        self.assertEqual(sections.trace_letters('behaviors'), 'BM')
+        self.assertEqual(sections.trace_letters('behaviors'), 'B')
+        self.assertEqual(sections.trace_letters('handling'), 'M')
         self.assertEqual(sections.trace_letters('design'), '')
         with_trace = packet('behaviors', trace=[{'kind': 'B', 'requirement': 'R-1', 'ids': ['B-1']}])
         self.assertEqual(validate(with_trace, self.schema('behaviors')), [])
@@ -297,6 +299,80 @@ class Extraction(unittest.TestCase):
             out = Path(tmp) / 'o.json'
             subprocess.run([sys.executable, '-B', str(LIB / 'structured_output.py'), 'extract', str(log), str(out)], check=True)
             self.assertEqual(json.loads(out.read_text()), {'d': 4})
+
+
+class LocalGrammarKind(unittest.TestCase):
+    def test_a_worker_prompt_quoting_its_base_document_still_names_its_packet_kind(self):
+        import self_hosted
+        prompt = ('Base plan:\n```json\n{"kind": "plan", "narrative": "x"}\n```\n'
+                  'Answer with `{"schema":"uncle.artifact/v1","kind":"updated-plan-edit-worker-packet"}`')
+        self.assertEqual(self_hosted.reviewer_artifact_kind(prompt), 'updated-plan-edit-worker-packet')
+
+    def test_two_foreign_kinds_still_name_nothing(self):
+        import self_hosted
+        self.assertIsNone(self_hosted.reviewer_artifact_kind('"kind": "plan" and "kind": "change-plan"'))
+
+
+class SynthesisSchema(unittest.TestCase):
+    def build(self, kind, mode):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 's.json'
+            subprocess.run([sys.executable, '-B', str(LIB / 'worker_schemas.py'), 'synthesis', kind, mode, str(out)], check=True)
+            return json.loads(out.read_text())
+
+    def test_the_single_call_updated_plan_is_schema_forced(self):
+        schema = self.build('plan', 'protected')
+        self.assertEqual(set(schema['required']), {'schema', 'kind', 'dispositions', 'patch', 'verification_commands',
+                                                   'protected_verification_paths'})
+        self.assertNotIn('narrative', schema['properties'])        # a patch, never the whole plan again
+        self.assertNotIn('"pattern"', json.dumps(schema))
+
+    def test_a_change_plan_has_no_protected_paths(self):
+        schema = self.build('change-plan', 'plain')
+        self.assertEqual(set(schema['required']), {'schema', 'kind', 'dispositions', 'patch'})
+
+
+class BlockSchemas(unittest.TestCase):
+    def schema(self, name):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 's.json'
+            self.assertEqual(W.main(['section-model', name, str(out)]), 0)
+            return json.loads(out.read_text())
+
+    def test_a_worker_schema_lists_its_titles_and_trace_kinds(self):
+        schema = self.schema('behaviors')
+        heading = schema['properties']['sections']['items']['properties']['heading']['enum']
+        self.assertEqual(heading, ['6. Observable behaviors'])
+        handling = self.schema('handling')['properties']['sections']['items']['properties']['heading']['enum']
+        self.assertEqual(handling, ['8. Failure handling', '9. Concurrency model', '11. Manual-test strategy'])
+        self.assertEqual(schema['properties']['kind'], {'const': W.SECTION_MODEL_KIND})
+        self.assertIn('trace', schema['required'])
+
+    def test_a_block_is_flat_and_closed_with_every_row_kind_offered(self):
+        block = self.schema('tests')['properties']['sections']['items']['properties']['blocks']['items']
+        self.assertIs(block['additionalProperties'], False)
+        self.assertEqual(set(block['properties']['row_kind']['enum']), {'automated_test'})
+        other = self.schema('defects')['properties']['sections']['items']['properties']['blocks']['items']
+        self.assertEqual(set(other['properties']['row_kind']['enum']), {'mutation', 'obligation'})
+        self.assertIn('failure', block['properties']['rows']['items']['properties'])
+        self.assertNotIn('pattern', json.dumps(block))
+
+    def test_a_worker_with_no_typed_table_cannot_write_rows_or_steps(self):
+        kinds = self.schema('closing')['properties']['sections']['items']['properties']['blocks']['items']['properties']['kind']['enum']
+        self.assertEqual(kinds, ['prose', 'heading', 'code', 'list', 'table'])
+        steps = self.schema('steps')['properties']['sections']['items']['properties']['blocks']['items']['properties']['kind']['enum']
+        self.assertIn('steps', steps)
+
+    def test_the_outline_schema_is_the_outline(self):
+        schema = self.schema('outline')
+        self.assertEqual(schema['properties']['kind'], {'const': W.OUTLINE_KIND})
+        self.assertEqual(set(schema['required']) - {'schema', 'kind'},
+                         {'stack', 'components', 'steps', 'decisions', 'restrictions', 'tests', 'requirement_map'})
+
+    def test_both_kinds_are_registered_for_a_local_grammar(self):
+        self.assertIn(W.SECTION_MODEL_KIND, W.STATIC)
+        self.assertIn(W.OUTLINE_KIND, W.STATIC)
 
 
 if __name__ == '__main__':

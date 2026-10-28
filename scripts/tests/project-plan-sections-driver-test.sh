@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fails=0
+export WORKFLOW_PLAN_BLOCKS=0     # this suite covers the Markdown-body packets; project-plan-blocks-driver-test.sh covers typed blocks
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
 
 awk '/^(project_plan_section_run|project_plan_section_finish|run_project_plan_sections)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
@@ -39,7 +40,7 @@ run_case() {   # name mode fixture
             printf '%s %s\n' "$worker" "$(python3 -c 'import time; print("%.2f" % time.time())')" >> "$STATE_DIR/order"
             case "$worker" in
                 outline) ;;
-                trace) for f in outline design steps decisions restrictions behaviors invariants tests commands closing; do [[ -s "$parts/$f.md" ]] || echo "trace started before $f" >> "$STATE_DIR/violations"; done ;;
+                trace) for f in outline design steps decisions restrictions behaviors handling invariants tests defects commands closing; do [[ -s "$parts/$f.md" ]] || echo "trace started before $f" >> "$STATE_DIR/violations"; done ;;
                 *) [[ -s "$parts/outline.md" ]] || echo "$worker started before the outline" >> "$STATE_DIR/violations" ;;
             esac
             sleep 0.4
@@ -92,7 +93,7 @@ w="$TMP/ok/.uncle/workflow"
 check "success: returns 0"                         test "$(cat "$w/rc")" == 0
 check "success: plan assembled"                    grep -q '^# Project plan' "$TMP/ok/plan.md"
 check "success: the outline ran first"             test "$(starts "$TMP/ok" | head -n1)" == outline
-check "success: ten workers ran, no model trace"   bash -c 'test "$(grep -vc " end " "$1")" == 10 && ! grep -q "^trace " "$1"' _ "$w/order"
+check "success: twelve workers ran, no model trace"   bash -c 'test "$(grep -vc " end " "$1")" == 12 && ! grep -q "^trace " "$1"' _ "$w/order"
 check "success: section 13 was built by the driver" grep -q '| R-1 | B-1, B-2 | I-1 | C-1 | T-1 | none |' "$TMP/ok/plan.md"
 check "success: nothing started before the outline" test ! -e "$w/violations"
 check "success: phase two ran concurrently"        python3 - "$w/order" <<'PY'
@@ -102,7 +103,7 @@ starts = {r[0]: float(r[1]) for r in rows if r[1] != 'end'}
 ends = {r[0]: float(r[2]) for r in rows if r[1] == 'end'}
 phase_two = [n for n in starts if n != 'outline']
 # every phase-two worker started before any phase-two worker finished: they overlapped
-sys.exit(0 if len(phase_two) == 9 and max(starts[n] for n in phase_two) < min(ends[n] for n in phase_two) else 1)
+sys.exit(0 if len(phase_two) == 11 and max(starts[n] for n in phase_two) < min(ends[n] for n in phase_two) else 1)
 PY
 check "success: phase two began after the outline finished" python3 - "$w/order" <<'PY'
 import sys
@@ -145,8 +146,8 @@ check "section out of lane: no plan left"          test ! -e "$TMP/lane/plan.md"
 JSON_MODE=hosted run_case jhosted ok
 w="$TMP/jhosted/.uncle/workflow"
 check "hosted json: plan assembled"               test "$(cat "$w/rc")" == 0
-check "hosted json: ten workers, no model trace"  bash -c 'test "$(grep -vc " end " "$1")" == 10 && ! grep -q "^trace " "$1"' _ "$w/order"
-check "hosted json: every worker had a schema"    bash -c 'test "$(grep -c "schema=.*/schemas/" "$1")" == 10 && ! grep -q "schema=none" "$1"' _ "$w/json-calls"
+check "hosted json: twelve workers, no model trace"  bash -c 'test "$(grep -vc " end " "$1")" == 12 && ! grep -q "^trace " "$1"' _ "$w/order"
+check "hosted json: every worker had a schema"    bash -c 'test "$(grep -c "schema=.*/schemas/" "$1")" == 12 && ! grep -q "schema=none" "$1"' _ "$w/json-calls"
 check "hosted json: the answer path is the packet" bash -c 'grep -q "out=.*/behaviors.json" "$1"' _ "$w/json-calls"
 check "hosted json: prompts name the JSON answer" bash -c 'test "$(grep -c "json=0" "$1")" == 0' _ "$w/json-calls"
 check "hosted json: the schema lists the lane's headings" python3 - "$w/project-plan-sections/schemas/behaviors.json" <<'PY'

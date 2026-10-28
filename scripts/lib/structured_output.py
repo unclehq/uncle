@@ -37,13 +37,13 @@ def extract(log):
     return found
 
 
-def final_text(log):
-    """The worker's last words: the result event's text, else its last assistant text."""
-    result, last = '', ''
+def reply_texts(log):
+    """What the worker said, newest first: the result event's text, then each assistant text."""
+    result, texts = '', []
     try:
         lines = Path(log).read_text(encoding='utf-8', errors='replace').splitlines()
     except OSError:
-        return ''
+        return []
     for line in lines:
         try:
             event = json.loads(line)
@@ -55,28 +55,32 @@ def final_text(log):
             result = event['result']
         elif event.get('type') == 'assistant':
             for part in (event.get('message') or {}).get('content') or []:
-                if isinstance(part, dict) and part.get('type') == 'text':
-                    last = part.get('text') or last
-    return result or last
+                if isinstance(part, dict) and part.get('type') == 'text' and part.get('text'):
+                    texts.append(part['text'])
+    return ([result] if result else []) + texts[::-1]
 
 
 def recover(log):
-    """The last JSON object in the worker's final chat text that is an uncle artifact packet, or None.
+    """The newest JSON object in the worker's replies that is an uncle artifact packet, or None.
 
-    A local model that has nothing to edit often prints its packet instead of calling Write.  Only an object
-    carrying the artifact schema and a kind is taken; the consumer still validates its content."""
-    text = final_text(log)
-    decoder, found, index = json.JSONDecoder(), None, text.find('{')
-    while index != -1:
-        try:
-            value, end = decoder.raw_decode(text, index)
-        except ValueError:
-            index = text.find('{', index + 1)
-            continue
-        if isinstance(value, dict) and value.get('schema') == 'uncle.artifact/v1' and value.get('kind'):
-            found = value
-        index = text.find('{', end)
-    return found
+    A local model often prints its packet instead of calling Write, and may follow it with a prose summary,
+    so every reply is searched, newest first.  Only an object carrying the artifact schema and a kind is
+    taken; the consumer still validates its content."""
+    decoder = json.JSONDecoder()
+    for text in reply_texts(log):
+        found, index = None, text.find('{')
+        while index != -1:
+            try:
+                value, end = decoder.raw_decode(text, index)
+            except ValueError:
+                index = text.find('{', index + 1)
+                continue
+            if isinstance(value, dict) and value.get('schema') == 'uncle.artifact/v1' and value.get('kind'):
+                found = value
+            index = text.find('{', end)
+        if found is not None:
+            return found
+    return None
 
 
 def main(argv):

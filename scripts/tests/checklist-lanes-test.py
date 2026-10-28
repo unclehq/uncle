@@ -84,14 +84,20 @@ class Batches(unittest.TestCase):
                 if 'A%d' % n in batch:
                     self.assertLess(batch.index('A%d' % n), batch.index('B%d' % n))
 
-    def test_noinits_checklist_becomes_seven_workers_without_barriers(self):
-        path = Path.home() / 'src/noinit/.uncle/workflow/documents/MANUAL_CHECKLIST.json'
-        if not path.exists():
-            self.skipTest('noinit checklist not present')
-        out = lanes.batches(json.loads(path.read_text()), 2, 8)
+    def test_a_realistic_fifteen_check_list_becomes_a_few_workers_without_barriers(self):
+        # The shape of a real run's list (noinit's): three checks that bind the same port, a short dependency chain on a
+        # shared directory, and independent reads.  It used to read the live project's checklist, so it failed whenever
+        # that project was run again and its check ids changed.
+        checks = [check('MC-102', ['port:4173']), check('MC-202', ['port:4173']), check('MC-300', ['port:4173']),
+                  check('MC-103', ['dir:.test-out']), check('MC-104', ['dir:.test-out'], depends=['MC-103']),
+                  check('MC-105'), check('MC-106'), check('MC-200'), check('MC-201'), check('MC-203'),
+                  check('MC-204'), check('MC-205'), check('MC-301'), check('MC-302'), check('MC-304')]
+        out = lanes.batches(plan(*checks), 2, 8)
         self.assertEqual(out[0], ['MC-102', 'MC-202', 'MC-300'])      # the three port:4173 checks, in order
+        self.assertIn(['MC-103', 'MC-104'], out)                       # the chain stays together, in order
         self.assertLessEqual(len(out), 8)
         self.assertEqual(sum(len(b) for b in out), 15)
+        self.assertEqual(sorted(c for b in out for c in b), sorted(c['id'] for c in checks))
 
     def test_the_command_line_prints_one_batch_per_line(self):
         path = Path(tempfile.mkdtemp()) / 'c.json'

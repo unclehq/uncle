@@ -5,7 +5,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fails=0
-export WORKFLOW_UPDATED_PLAN_EDITS=1 WORKFLOW_UPDATED_PLAN_EDIT_SLICE=3 WORKFLOW_UPDATED_PLAN_HEDGE_SECONDS=300
+export WORKFLOW_UPDATED_PLAN_OPS=0 WORKFLOW_UPDATED_PLAN_EDITS=1 WORKFLOW_UPDATED_PLAN_EDIT_SLICE=3 WORKFLOW_UPDATED_PLAN_HEDGE_SECONDS=300
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
 awk '/^(updated_change_plan_launch_writer|run_updated_change_plan_edit_writers)\(\) \{/,/^}/' "$ROOT/scripts/change-workflow.sh" > "$TMP/fn.sh"
 check "function extracted" test -s "$TMP/fn.sh"
@@ -26,6 +26,7 @@ PY
         cd "$dir"
         ROOT="$ROOT"; STATE_DIR=".uncle/workflow"; LOG_DIR=".uncle/workflow/logs"; UPDATED_PLAN_PROMPT="$dir/prompt.md"
         MODEL_UPDATED_PLAN=m; EFFORT_UPDATED_PLAN=low; BUDGET_UPDATED_PLAN=
+        UPDATED_PLAN_ADVISOR_PIDS=()      # a top-level array in the driver; the extracted functions read it
         stage_uses_self_hosted() { [[ "$runner" == local ]]; }
         stage_supports_structured_output() { [[ "$runner" == hosted ]]; }
         run_claude() {   # prompt stage

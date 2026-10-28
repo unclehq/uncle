@@ -29,59 +29,54 @@ def load(path, kind):
     return value
 
 
-def _cell(value, limit=None):
-    """One table cell: whitespace collapsed, pipes escaped.  `limit` None keeps all of it."""
+def _text(value):
+    """Plain text: lists joined, whitespace collapsed."""
     if isinstance(value, (list, tuple)):
         value = '; '.join(str(item) for item in value)
-    text = ' '.join(str(value if value is not None else '').split()).replace('|', '\\|')
-    if limit and len(text) > limit:
-        text = text[:limit - 1].rstrip() + '\u2026'
-    return text
+    return ' '.join(str(value if value is not None else '').split())
 
 
-def review_table(review):
-    """The adversarial review as one row per finding: id, severity, evidence, required change.
+def review_findings(review):
+    """The adversarial review as JSON, one object per finding: id, severity, evidence, required plan change.
 
-    The model wrote its updated plan from the full review JSON, which repeats each finding
-    as a title, a failure, a reference and a fix.  Every finding and its evidence is kept;
-    the repeated prose around them is not, which shortens the input the model has to hold
-    while it writes a plan that already has to stay short.
-    """
-    rows = ['| id | severity | evidence | required plan change |', '|---|---|---|---|']
+    The model wrote its updated plan from the full review JSON, which repeats each finding as a title, a failure,
+    a reference and a fix.  Every finding and its evidence is kept; the repeated prose around them is not, which
+    shortens the input the model has to hold while it writes a plan that already has to stay short."""
+    rows = []
     for finding in review.get('findings') or []:
         if not isinstance(finding, dict):
             continue
         evidence = finding.get('references') or finding.get('failure') or finding.get('title') or ''
-        change = finding.get('fix') or ''
+        change = _text(finding.get('fix'))
         verify = finding.get('verify')
         if verify:
-            change = (change + ' Verify: ' + _cell(verify)).strip()
-        rows.append('| %s | %s | %s | %s |' % (_cell(finding.get('id')), _cell(finding.get('severity')),
-                                              _cell(evidence), _cell(change)))
-    verdict = _cell(review.get('overall_assessment'))
-    return '\n'.join(rows) + ('\n\nOverall verdict: ' + verdict if verdict else '')
+            change = (change + ' Verify: ' + _text(verify)).strip()
+        rows.append({'id': _text(finding.get('id')), 'severity': _text(finding.get('severity')),
+                     'evidence': _text(evidence), 'required_plan_change': change})
+    return json.dumps({'findings': rows, 'overall_verdict': _text(review.get('overall_assessment'))},
+                      ensure_ascii=False, indent=1)
 
 
-def corrections_table(workers):
-    """What each specialist asked for, per finding.  Their evidence and sources repeat the
-    review table's, so only the corrections, gaps and risks are carried."""
-    rows = ['| id | required corrections | gaps | risks |', '|---|---|---|---|']
-    for finding in workers.get('findings') or []:
-        if not isinstance(finding, dict):
-            continue
-        rows.append('| %s | %s | %s | %s |' % (
-            _cell(finding.get('id')), _cell(finding.get('required_corrections')),
-            _cell(finding.get('gaps')), _cell(finding.get('risks'))))
-    status = ', '.join('%s: %s' % (_cell(w.get('source')), _cell(w.get('status')))
-                       for w in workers.get('workers') or [] if isinstance(w, dict))
-    return '\n'.join(rows) + ('\n\nSpecialists: ' + status if status else '')
+def specialist_corrections(workers):
+    """What each specialist asked for, per finding, as JSON.  Their evidence and sources repeat the review's,
+    so only the corrections, gaps and risks are carried."""
+    rows = [{'id': _text(finding.get('id')), 'required_corrections': _text(finding.get('required_corrections')),
+             'gaps': _text(finding.get('gaps')), 'risks': _text(finding.get('risks'))}
+            for finding in workers.get('findings') or [] if isinstance(finding, dict)]
+    status = [{'source': _text(w.get('source')), 'status': _text(w.get('status'))}
+              for w in workers.get('workers') or [] if isinstance(w, dict)]
+    return json.dumps({'findings': rows, 'specialists': status}, ensure_ascii=False, indent=1)
 
 
 EDIT_RULES = '''Do not reproduce a section you are not changing: every section not named in
 `patch` carries over from the base plan exactly as it already is. Output is the cost of this
-stage, so change as little text as the finding needs. `patch` has three optional arrays:
+stage, so change as little text as the finding needs. `patch` has four optional arrays:
 
-- `replace_text` (use this first): `[{"heading": "<exact existing heading>", "old": "<text copied
+- `replace_item` (use this first for a table row or list entry that begins with a plan ID such as `T-33`
+  or `C-3`): `[{"heading": "<its section>", "item": "T-33", "new": "<the whole replacement line>"}]`.
+  The ID names the line, so there is nothing to copy; `new` replaces the entire line, its leading `|` or `-`
+  included. The ID must begin exactly one line of that section.
+- `replace_text` (use this for any other change): `[{"heading": "<exact existing heading>", "old": "<text copied
   exactly from that section, unique within it>", "new": "<what replaces it>"}]`. Changes a sentence,
   a table row, a command or a line without rewriting the section; `"all": true` replaces every
   occurrence. Most findings are this small. Copy `old` exactly as the base plan has it; if it is
@@ -114,10 +109,13 @@ not a note beside it.'''
 
 
 def prompt(plan, review, workers, change=False):
-    if workers.get('schema') != SCHEMA or workers.get('kind') != 'updated-plan-worker-packets':
-        raise ValueError('worker packet: expected collated updated-plan-worker-packets JSON')
-    if not isinstance(workers.get('findings'), list) or not isinstance(workers.get('workers'), list):
-        raise ValueError('worker packet: findings and workers must be arrays')
+    """The sealed prompt.  `workers` None: no specialist has looked yet (the deciders read the review themselves), and
+    the specialist section is left out."""
+    if workers is not None:
+        if workers.get('schema') != SCHEMA or workers.get('kind') != 'updated-plan-worker-packets':
+            raise ValueError('worker packet: expected collated updated-plan-worker-packets JSON')
+        if not isinstance(workers.get('findings'), list) or not isinstance(workers.get('workers'), list):
+            raise ValueError('worker packet: findings and workers must be arrays')
     artifact = 'CHANGE_PLAN.md' if change else 'UPDATED_PROJECT_PLAN.md'
     label = 'change plan' if change else 'implementation plan'
     extra_fields = ''
@@ -184,17 +182,16 @@ Quote a heading exactly, as printed here, to edit it or to anchor an insert.
 %s
 ```
 
-## Adversarial review findings (every finding, condensed)
-
+## Adversarial review findings (JSON, every finding, condensed)
+```json
 %s
+```
 
-## Collated specialist corrections (condensed)
-
-%s
-''' % (label, artifact, plan['kind'], extra_fields, example_kind, EDIT_RULES, headings,
+%s''' % (label, artifact, plan['kind'], extra_fields, example_kind, EDIT_RULES, headings,
        json.dumps(plan, indent=2, sort_keys=True),
-       review_table(review),
-       corrections_table(workers))
+       review_findings(review),
+       '' if workers is None else
+       '## Collated specialist corrections (JSON, condensed)\n```json\n%s\n```\n' % specialist_corrections(workers))
 
 
 def main(argv=None):
@@ -207,7 +204,7 @@ def main(argv=None):
         raise ValueError('usage: [--change] PLAN.json ADVERSARIAL_REVIEW.json UPDATED_PLAN_WORKERS.json OUTPUT')
     plan = load(args[0], 'change-plan' if change else 'plan')
     review = load(args[1], 'adversarial-review')
-    workers = load(args[2], 'updated-plan-worker-packets')
+    workers = None if args[2] == '-' else load(args[2], 'updated-plan-worker-packets')
     Path(args[3]).write_text(prompt(plan, review, workers, change=change), encoding='utf-8')
 
 

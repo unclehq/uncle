@@ -111,6 +111,9 @@ install flag meant for a different platform (`playwright install
 environment actually needs it. A conditional command must still perform the
 real install when its check fails; it must never skip verification itself,
 only skip work that is already done.
+`npm ci` installs only what a committed `package-lock.json` lists and fails without one. A new project has no lockfile yet and no
+implementation step may install anything, so its install fallback must be `npm install` (which creates the lockfile), not `npm ci`;
+use `npm ci` only when the repository already has a lockfile.
 
 In the testing strategy, map every mandatory automated acceptance check to a
 command in this block. Include browser checks and delivered update-tool

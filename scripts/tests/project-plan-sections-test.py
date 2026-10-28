@@ -10,6 +10,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts' / 'lib'))
 import project_plan_sections as sections
+import plan_model as pm
+S = sections
 
 PLAN_CONTEXT = ROOT / 'scripts' / 'lib' / 'plan_context.py'
 
@@ -51,9 +53,11 @@ def good_files(directory, trace=True):
         'steps': section(12),
         'decisions': '## Decision Record\n| D-1 | x |\n',
         'restrictions': '## Restriction Inventory\n| R-1 | y |\n',
-        'behaviors': ''.join(section(n) for n in (6, 8, 9, 11)) + t('B', 'R-1=B-1,B-2; R-2=B-3') + t('M', 'R-2=M-1'),
+        'behaviors': section(6) + t('B', 'R-1=B-1,B-2; R-2=B-3'),
+        'handling': ''.join(section(n) for n in (8, 9, 11)) + t('M', 'R-2=M-1'),
         'invariants': section(7) + t('I', 'R-1=I-1'),
         'tests': section(10) + t('T', 'R-1=T-1; R-2=T-2,T-3'),
+        'defects': section(10, 'Defect injections and obligations.'),
         'commands': '## Verification commands\n```sh\nnpm test\n```\n',
         'closing': section(14) + section(15),
     }
@@ -194,13 +198,16 @@ class Layout(unittest.TestCase):
     def test_one_short_outline_then_everything_else_at_once(self):
         self.assertEqual(sections.PHASES[0], ('outline',))
         self.assertEqual(set(sections.PHASES[1]),
-                         {'design', 'steps', 'decisions', 'restrictions', 'behaviors', 'invariants', 'tests', 'commands', 'closing'})
+                         {'design', 'steps', 'decisions', 'restrictions', 'behaviors', 'handling', 'invariants', 'tests', 'defects',
+                          'commands', 'closing'})
         self.assertEqual(len(sections.PHASES), 2)
         self.assertEqual(sections.FALLBACK, ('trace',))
 
-    def test_every_section_has_exactly_one_owner(self):
+    def test_every_section_has_an_owner_and_only_the_test_strategy_has_two(self):
         owned = [n for name, spec in sections.WORKERS.items() for n in spec['sections']]
-        self.assertEqual(sorted(owned), sorted(sections.TITLES))
+        self.assertEqual(sorted(set(owned)), sorted(sections.TITLES))
+        self.assertEqual(sorted(n for n in set(owned) if owned.count(n) > 1), [10])
+        self.assertEqual(sections.SHARED, {10})
         extras = [e for spec in sections.WORKERS.values() for e in spec['extra']]
         self.assertEqual(sorted(extras), sorted(sections.EXTRA))
 
@@ -231,7 +238,9 @@ class Layout(unittest.TestCase):
             text = sections.contract(name, 'd')
             for row in sections.expected_headings(name):
                 self.assertIn('`%s`' % row, text)
-            others = [row for other in sections.WORKERS if other != name for row in sections.expected_headings(other)]
+            own = set(sections.expected_headings(name))      # the test strategy is shared, so its heading is in two lanes
+            others = [row for other in sections.WORKERS if other != name for row in sections.expected_headings(other)
+                      if row not in own]
             for row in others:
                 self.assertNotIn('- `%s`' % row, text)
 
@@ -262,7 +271,8 @@ class Layout(unittest.TestCase):
         self.assertIn('<!-- trace I:', sections.contract('invariants', 'd'))
         self.assertNotIn('<!-- trace B:', sections.contract('invariants', 'd'))
         self.assertIn('<!-- trace B:', sections.contract('behaviors', 'd'))
-        self.assertIn('<!-- trace M:', sections.contract('behaviors', 'd'))
+        self.assertNotIn('<!-- trace M:', sections.contract('behaviors', 'd'))
+        self.assertIn('<!-- trace M:', sections.contract('handling', 'd'))
 
     def test_decisions_and_restrictions_are_separate_workers(self):
         self.assertEqual(sections.WORKERS['decisions']['extra'], ('Decision Record',))
@@ -385,6 +395,191 @@ class Trace(unittest.TestCase):
             self.skipTest('the noinit run with the mislabelled trace lines is not present')
         self.assertTrue(sections.trace_ready(real))
         self.assertIn('| R-4 | B-9 | I-7, I-8 | C-2, C-3 | T-2, T-4 | M-2 |', sections.trace_section(real))
+
+
+class Blocks(unittest.TestCase):
+    """Section workers that answer with typed blocks, and the outline as data."""
+
+    def packet(self, name, sections, trace=None):
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'project-plan-section-model-packet', 'sections': sections}
+        if trace:
+            packet['trace'] = trace
+        return packet
+
+    def behaviors(self):
+        rows = [{'id': 'B-1', 'trigger': 't', 'result': 'r', 'failure': 'f', 'requirements': 'R-1'}]
+        return [{'heading': '6. Observable behaviors', 'blocks': [{'kind': 'rows', 'row_kind': 'behavior', 'rows': rows}]}]
+
+    def handling(self):
+        return [{'heading': '8. Failure handling', 'blocks': [{'kind': 'prose', 'text': 'x'}]},
+                {'heading': '9. Concurrency model', 'blocks': [{'kind': 'prose', 'text': 'y'}]},
+                {'heading': '11. Manual-test strategy', 'blocks': [{'kind': 'prose', 'text': 'z'}]}]
+
+    def test_a_block_packet_renders_the_markdown_the_other_stages_read(self):
+        text, sections = S.render_model_packet('behaviors', self.packet('behaviors', self.behaviors(),
+                                                [{'kind': 'B', 'requirement': 'R-1', 'ids': ['B-1']}]))
+        self.assertIn('## 6. Observable behaviors\n\n| ID | Trigger | Observable result | Failure behavior | Requirement IDs |', text)
+        self.assertIn('| B-1 | t | r | f | R-1 |', text)
+        self.assertIn('<!-- trace B: R-1=B-1 -->', text)
+        self.assertEqual([s['heading'] for s in sections][0], '6. Observable behaviors')
+
+    def test_render_packet_dispatches_on_the_kind(self):
+        self.assertIn('## 8. Failure handling', S.render_packet('handling', self.packet('handling', self.handling())))
+
+    def test_a_heading_outside_the_lane_a_duplicate_and_a_missing_section_are_refused(self):
+        stolen = self.behaviors() + [{'heading': '7. Domain invariants', 'blocks': [{'kind': 'prose', 'text': 'x'}]}]
+        with self.assertRaisesRegex(ValueError, 'not one of'):
+            S.render_model_packet('behaviors', self.packet('behaviors', stolen))
+        with self.assertRaisesRegex(ValueError, 'written twice'):
+            S.render_model_packet('behaviors', self.packet('behaviors', self.behaviors() + self.behaviors()[:1]))
+        with self.assertRaisesRegex(ValueError, 'missing sections'):
+            S.render_model_packet('handling', self.packet('handling', self.handling()[:2]))
+
+    def test_a_bad_block_is_refused_with_the_section_and_reason(self):
+        bad = [{'heading': '6. Observable behaviors', 'blocks': [{'kind': 'rows', 'row_kind': 'behavior', 'rows': [{'trigger': 't'}]}]}]
+        with self.assertRaisesRegex(ValueError, "section '6. Observable behaviors'.*needs an id"):
+            S.render_model_packet('behaviors', self.packet('behaviors', bad))
+
+    def test_the_block_contract_names_the_row_fields_the_lane_uses_and_the_outline_file(self):
+        text = S.block_contract('behaviors', '/d')
+        self.assertIn('`behavior` rows: id, trigger, result, failure, requirements (IDs, comma-separated), verification', text)
+        self.assertIn('`/d/outline.json`', text)
+        self.assertIn('no Markdown syntax', text)
+        self.assertNotIn('`behavior` rows: id, statement', text)
+
+    def outline(self, **change):
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'project-plan-outline-packet', 'stack': 's',
+                  'components': [{'id': 'C-1', 'name': 'App', 'responsibility': 'root', 'files': 'src/App.jsx'}],
+                  'steps': [{'number': '1', 'title': 'Scaffold', 'owns': 'a.js', 'depends_on': ''},
+                            {'number': '2', 'title': 'Core', 'owns': 'b.js', 'depends_on': '1'}],
+                  'decisions': [], 'restrictions': [], 'tests': [], 'requirement_map': [{'requirement': 'R-1', 'components': 'C-1, C-2'}]}
+        packet.update(change)
+        return packet
+
+    def test_the_outline_renders_for_people_and_gives_the_requirement_map_as_data(self):
+        text = S.render_packet('outline', self.outline())
+        self.assertIn('2. Core -- Owns: `b.js` -- Depends on: 1', text)
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'outline.json').write_text(json.dumps(self.outline()))
+            self.assertEqual(S.outline_requirements(tmp), {'R-1': ['C-1', 'C-2']})
+
+    def test_an_outline_with_a_file_owned_twice_or_a_repeated_step_is_refused(self):
+        twice = self.outline(steps=[{'number': '1', 'title': 'a', 'owns': 'x.js', 'depends_on': ''},
+                                    {'number': '2', 'title': 'b', 'owns': 'x.js', 'depends_on': ''}])
+        with self.assertRaisesRegex(ValueError, 'owned by steps'):
+            S.render_outline(twice)
+        with self.assertRaisesRegex(ValueError, 'used twice'):
+            S.render_outline(self.outline(steps=[{'number': '1', 'title': 'a', 'owns': 'x', 'depends_on': ''},
+                                                 {'number': '1', 'title': 'b', 'owns': 'y', 'depends_on': ''}]))
+
+    def test_the_model_is_assembled_from_the_typed_sections_and_section_13_is_built_from_trace_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'outline.json').write_text(json.dumps(self.outline()))
+            for name in S.WORKERS:
+                if name in ('outline', 'trace'):
+                    continue
+                spec = S.WORKERS[name]
+                if name == 'behaviors':
+                    sections = self.behaviors()
+                else:
+                    sections = [{'heading': t, 'blocks': [{'kind': 'prose', 'text': 'text for ' + t}]} for t in S.titles(name)]
+                    if spec['commands']:
+                        sections = [{'heading': 'Verification commands', 'blocks': [{'kind': 'code', 'lang': 'sh', 'text': 'npm test'}]}]
+                trace = {'behaviors': [{'kind': 'B', 'requirement': 'R-1', 'ids': ['B-1']}],
+                         'invariants': [{'kind': 'I', 'requirement': 'R-1', 'ids': ['I-1']}],
+                         'tests': [{'kind': 'T', 'requirement': 'R-1', 'ids': ['T-1']}]}.get(name)
+                text, typed = S.render_model_packet(name, self.packet(name, sections, trace))
+                Path(tmp, name + '.md').write_text(text)
+                Path(tmp, name + '.model.json').write_text(json.dumps({'worker': name, 'sections': typed}))
+            model = S.assemble_model(tmp)
+        self.assertEqual([s['id'] for s in model['sections']][:3], ['s1', 's2', 's3'])
+        headings = [s['heading'] for s in model['sections']]
+        self.assertIn('13. Requirement traceability', headings)
+        self.assertNotIn('Verification commands', headings)            # the commands are a separate field of the plan
+        last = [b for b in model['sections'][12]['blocks'] if b['kind'] == 'rows'][0]
+        self.assertEqual((last['row_kind'], last['rows'][0]['behaviors'], last['rows'][0]['components']),
+                         ('traceability', ['B-1'], ['C-1', 'C-2']))
+        self.assertEqual(pm.validate(model)[0], [])
+
+    def test_a_worker_without_typed_sections_means_the_markdown_assembly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, 'no typed sections'):
+                S.assemble_model(tmp)
+
+
+class SharedSection(unittest.TestCase):
+    """The test strategy is written by two workers; their parts are joined, the first worker's first."""
+
+    def test_the_markdown_parts_are_joined_in_worker_order_under_one_heading(self):
+        directory = tempfile.mkdtemp()
+        good_files(directory)
+        (Path(directory) / 'tests.md').write_text(section(10, 'THE TESTS') + '\n<!-- trace T: R-1=T-1 -->\n')
+        (Path(directory) / 'defects.md').write_text(section(10, 'THE DEFECTS'))
+        text = sections.assemble(directory)
+        self.assertEqual(text.count('## 10. Automated-test strategy'), 1)
+        self.assertLess(text.index('THE TESTS'), text.index('THE DEFECTS'))
+
+    def test_a_third_writer_of_the_shared_section_is_still_refused(self):
+        directory = tempfile.mkdtemp()
+        good_files(directory)
+        with open(Path(directory) / 'closing.md', 'a') as handle:
+            handle.write(section(10))
+        with self.assertRaisesRegex(ValueError, 'unexpected heading|twice'):
+            sections.assemble(directory)
+
+    def test_a_section_only_one_worker_may_write_is_still_refused_when_written_twice(self):
+        directory = tempfile.mkdtemp()
+        good_files(directory)
+        with open(Path(directory) / 'handling.md', 'a') as handle:
+            handle.write(section(8))
+        with self.assertRaisesRegex(ValueError, 'twice'):
+            sections.assemble(directory)
+
+    def test_the_two_contracts_split_the_section_and_name_different_ids(self):
+        tests, defects = sections.contract('tests', 'd'), sections.contract('defects', 'd')
+        self.assertIn('another worker writes them', tests)
+        self.assertIn('`DI-n`', defects)
+        self.assertNotIn('`DI-n`', tests)
+        self.assertIn('never a `T-n` ID', defects)
+
+    def test_the_block_contract_marks_the_shared_section_and_limits_the_row_kinds(self):
+        text = sections.block_contract('defects', '/d')
+        self.assertIn('Section 10 is written by two workers', text)
+        self.assertIn('`mutation` rows', text)
+        self.assertIn('`obligation` rows', text)
+        self.assertNotIn('`automated_test` rows', text)
+        self.assertIn('`automated_test` rows', sections.block_contract('tests', '/d'))
+
+    def test_the_model_joins_the_two_parts_blocks_in_order(self):
+        directory = Path(tempfile.mkdtemp())
+        (directory / 'outline.json').write_text(json.dumps({
+            'schema': 'uncle.artifact/v1', 'kind': 'project-plan-outline-packet', 'stack': 's',
+            'components': [{'id': 'C-1', 'name': 'a', 'responsibility': 'r', 'files': 'a.js'}],
+            'steps': [{'number': '1', 'title': 't', 'owns': 'a.js', 'depends_on': ''}], 'decisions': [], 'restrictions': [],
+            'tests': [], 'requirement_map': [{'requirement': 'R-1', 'components': 'C-1'}]}))
+        for name in sections.WORKERS:
+            if name in ('outline', 'trace'):
+                continue
+            titles = sections.titles(name)
+            blocks = [{'kind': 'prose', 'text': 'text of ' + name}]
+            rows = [{'heading': t, 'blocks': blocks} for t in titles]
+            if sections.WORKERS[name]['commands']:
+                rows = [{'heading': 'Verification commands', 'blocks': [{'kind': 'code', 'lang': 'sh', 'text': 'npm test'}]}]
+            trace = {'behaviors': [{'kind': 'B', 'requirement': 'R-1', 'ids': ['B-1']}],
+                     'invariants': [{'kind': 'I', 'requirement': 'R-1', 'ids': ['I-1']}],
+                     'tests': [{'kind': 'T', 'requirement': 'R-1', 'ids': ['T-1']}],
+                     'handling': [{'kind': 'M', 'requirement': 'R-1', 'ids': ['M-1']}]}.get(name)
+            packet = {'schema': 'uncle.artifact/v1', 'kind': 'project-plan-section-model-packet', 'sections': rows}
+            if trace:
+                packet['trace'] = trace
+            text, typed = sections.render_model_packet(name, packet)
+            (directory / (name + '.md')).write_text(text)
+            (directory / (name + '.model.json')).write_text(json.dumps({'worker': name, 'sections': typed}))
+        model = sections.assemble_model(directory)
+        ten = [s for s in model['sections'] if s['heading'].startswith('10.')]
+        self.assertEqual(len(ten), 1)
+        self.assertEqual([b['text'] for b in ten[0]['blocks']], ['text of tests', 'text of defects'])
+        self.assertEqual([b['id'] for b in ten[0]['blocks']], ['%s.1' % ten[0]['id'], '%s.2' % ten[0]['id']])
 
 
 if __name__ == '__main__':

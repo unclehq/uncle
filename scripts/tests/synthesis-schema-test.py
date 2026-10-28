@@ -37,7 +37,7 @@ class SynthesisSchema(unittest.TestCase):
     def test_a_patch_can_edit_or_insert_and_either_may_be_empty(self):
         patch = SH.artifact_schema('plan', True, False, synthesis=True)['properties']['patch']
         self.assertEqual(patch['required'], [])
-        self.assertEqual(set(patch['properties']), {'edit_sections', 'replace_text', 'insert_sections'})
+        self.assertEqual(set(patch['properties']), {'edit_sections', 'replace_item', 'replace_text', 'insert_sections'})
         self.assertIn('content', patch['properties']['insert_sections']['items']['required'])
 
     def test_the_other_plan_stages_keep_the_full_plan_schema(self):
@@ -65,8 +65,9 @@ class SynthesisSchema(unittest.TestCase):
         review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}
         workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
         text = PROMPT.prompt(plan, review, workers)
-        self.assertIn('`replace_text` (use this first)', text)
-        self.assertLess(text.index('`replace_text` (use this first)'), text.index('`edit_sections` (only when most'))
+        self.assertIn('`replace_item` (use this first', text)
+        self.assertLess(text.index('`replace_item` (use this first'), text.index('`replace_text` (use this for any other change)'))
+        self.assertLess(text.index('`replace_text` (use this for any other change)'), text.index('`edit_sections` (only when most'))
         replace = SH.patch_schema('plan')['properties']['patch']['properties']['replace_text']['items']
         self.assertEqual(set(replace['required']), {'heading', 'old', 'new'})
         self.assertIn('replace_text', SH.patch_schema('plan')['properties']['patch']['properties'])

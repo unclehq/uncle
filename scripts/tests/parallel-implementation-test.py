@@ -61,6 +61,81 @@ class ParallelImplementationTests(unittest.TestCase):
             self.assertFalse((root / '.uncle/workflow/parallel/step-1').exists())
             self.assertFalse((root / '.uncle/workflow/parallel/step-2').exists())
 
+    def test_many_sandboxes_are_made_together_and_leave_out_driver_state(self):
+        sys.path.insert(0, str(ROOT / 'scripts/lib'))
+        import parallel_steps
+        import triage_guard
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'src').mkdir()
+            (root / 'src/app.js').write_text('app\n')
+            (root / '.uncle/docs').mkdir(parents=True)
+            (root / '.uncle/docs/PLAN.md').write_text('plan\n')
+            for name in ('performance', 'metrics', 'updated-plan-edits', 'read-cache'):
+                (root / '.uncle/workflow' / name).mkdir(parents=True)
+                (root / '.uncle/workflow' / name / 'big.json').write_text('{}')
+            (root / '.uncle/workflow/documents').mkdir(parents=True)
+            (root / '.uncle/workflow/documents/PLAN.json').write_text('{}')
+            worker = root / 'worker.sh'
+            worker.write_text('#!/usr/bin/env bash\nset -euo pipefail\nprintf "x\\n" > "$1.txt"\n')
+            steps = [{'number': n, 'log': str(root / ('s%d.log' % n)), 'command': ['bash', str(worker), str(n)]}
+                     for n in range(1, 9)]
+            request = {'project': str(root), 'owned': {str(n): ['%d.txt' % n] for n in range(1, 9)}, 'steps': steps}
+            path = root / 'request.json'
+            path.write_text(json.dumps(request))
+            seen = []
+            real = triage_guard.make_sandbox
+
+            def spy(project, sandbox, extra=()):
+                seen.append(tuple(extra))
+                result = real(project, sandbox, extra)
+                if len(seen) == 1:      # inspect one finished mirror while the run is still going
+                    sandboxes.append(Path(sandbox))
+                    self.assertTrue((Path(sandbox) / 'src/app.js').is_file())
+                    self.assertTrue((Path(sandbox) / '.uncle/docs/PLAN.md').is_file())
+                    self.assertTrue((Path(sandbox) / '.uncle/workflow/documents/PLAN.json').is_file())
+                    for name in ('performance', 'metrics', 'updated-plan-edits', 'read-cache'):
+                        self.assertFalse((Path(sandbox) / '.uncle/workflow' / name).exists(), name)
+                return result
+
+            sandboxes = []
+            old_argv, parallel_steps.make_sandbox = sys.argv, spy
+            sys.argv = ['parallel_steps.py', str(path)]
+            try:
+                import io, contextlib
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    code = parallel_steps.main()
+            finally:
+                sys.argv, parallel_steps.make_sandbox = old_argv, real
+            self.assertEqual(code, 0)
+            self.assertEqual(len(seen), 8)
+            self.assertTrue(all(extra == parallel_steps.STEP_EXCLUDES for extra in seen))
+            self.assertEqual(json.loads(out.getvalue())['merged'], list(range(1, 9)))
+            for n in range(1, 9):
+                self.assertEqual((root / ('%d.txt' % n)).read_text(), 'x\n')
+
+    def test_a_sandbox_that_cannot_be_made_stops_the_group_with_code_2(self):
+        sys.path.insert(0, str(ROOT / 'scripts/lib'))
+        import parallel_steps
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'a.txt').write_text('base\n')
+            request = {'project': str(root), 'owned': {'1': ['1.txt']},
+                       'steps': [{'number': 1, 'log': str(root / 'one.log'), 'command': ['true']}]}
+            path = root / 'request.json'
+            path.write_text(json.dumps(request))
+
+            def broken(project, sandbox, extra=()):
+                raise OSError('no space left')
+
+            real, old_argv, parallel_steps.make_sandbox = parallel_steps.make_sandbox, sys.argv, broken
+            sys.argv = ['parallel_steps.py', str(path)]
+            try:
+                self.assertEqual(parallel_steps.main(), 2)
+            finally:
+                sys.argv, parallel_steps.make_sandbox = old_argv, real
+
     def test_unborn_or_plain_project_uses_copy_sandboxes_without_recursion(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

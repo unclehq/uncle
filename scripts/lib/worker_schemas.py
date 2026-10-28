@@ -15,8 +15,12 @@ keywords every server accepts are used (no `pattern`); ID shapes are checked by 
 what it receives for runners with no schema support.
 
     worker_schemas.py section NAME OUTPUT       project-plan section worker
+    worker_schemas.py section-model NAME OUTPUT   project-plan section worker, writing typed blocks (NAME outline: the outline)
     worker_schemas.py edit PLAN.json OUTPUT [owner]   updated-plan edit writer
     worker_schemas.py resolve PLAN.json OUTPUT        updated-plan resolver
+    worker_schemas.py edit-ops PLAN.json OUTPUT [owner]   the same writer, editing the plan model by id
+    worker_schemas.py resolve-ops PLAN.json OUTPUT        the same resolver, for ops
+    worker_schemas.py synthesis KIND protected|plain OUTPUT   the single-call updated plan (KIND plan or change-plan)
 """
 import json
 import os
@@ -29,6 +33,10 @@ ENVELOPE = 'uncle.artifact/v1'
 SECTION_KIND = 'project-plan-section-worker-packet'
 EDIT_KIND = 'updated-plan-edit-worker-packet'
 RESOLUTION_KIND = 'updated-plan-resolution-worker-packet'
+SECTION_MODEL_KIND = 'project-plan-section-model-packet'    # a section worker's sections as typed blocks, not Markdown
+OUTLINE_KIND = 'project-plan-outline-packet'                 # the outline every section worker is bound to, as data
+EDIT_OPS_KIND = 'updated-plan-edit-ops-packet'              # the same writers, editing the plan model by id
+RESOLUTION_OPS_KIND = 'updated-plan-resolution-ops-packet'
 BODY_MAX = 30000
 EDIT_MAX = 12000
 DISPOSITIONS = ('Accepted', 'Partially accepted', 'Rejected', 'Deferred')
@@ -68,9 +76,71 @@ def section_packet(headings=None, trace_kinds=''):
     return envelope(SECTION_KIND, properties, required)
 
 
+def _flat_block(row_kinds=None, steps=True):
+    """One block a section worker writes: every value a string (a list field is one comma-separated string).
+    `row_kinds` limits the table kinds it may use (None: all; empty: no typed table); `steps` allows a steps block."""
+    from plan_model import BLOCK_KINDS, FIELD_NAMES, ROW_KINDS
+    kinds = [k for k in BLOCK_KINDS if (k != 'rows' or row_kinds is None or row_kinds) and (k != 'steps' or steps)]
+    row_kinds = list(ROW_KINDS) if row_kinds is None else [k for k in row_kinds if k in ROW_KINDS] or list(ROW_KINDS)
+    row = _strings(['id'] + FIELD_NAMES, 4000)
+    step = _strings(['number', 'title', 'text', 'owns', 'depends_on'], 4000)
+    return _object({
+        'kind': {'type': 'string', 'enum': kinds}, 'text': _text(BODY_MAX, 0), 'level': _text(2, 0),
+        'lang': _text(30, 0), 'ordered': {'type': 'boolean'},
+        'items': {'type': 'array', 'maxItems': 80, 'items': _text(4000)},
+        'row_kind': {'type': 'string', 'enum': row_kinds},
+        'rows': {'type': 'array', 'maxItems': 150, 'items': row},
+        'columns': {'type': 'array', 'maxItems': 12, 'items': _text(200)},
+        'cells': {'type': 'array', 'maxItems': 150, 'items': {'type': 'array', 'maxItems': 12, 'items': _text(4000, 0)}},
+        'steps': {'type': 'array', 'maxItems': 40, 'items': step},
+    }, ('kind',))
+
+
+def section_model_packet(headings=None, trace_kinds='', row_kinds=None, steps=True):
+    """`section_packet`, with each section's body written as typed blocks.  `headings` are titles without the `##`."""
+    heading = {'type': 'string', 'enum': list(headings)} if headings else _text(300)
+    properties = {'sections': {'type': 'array', 'minItems': 1, 'maxItems': 20,
+                               'items': _object({'heading': heading,
+                                                 'blocks': {'type': 'array', 'minItems': 1, 'maxItems': 60, 'items': _flat_block(row_kinds, steps)}},
+                                                ('heading', 'blocks'))}}
+    if trace_kinds or headings is None:
+        kinds = list(trace_kinds) if trace_kinds else ['B', 'I', 'C', 'T', 'M']
+        properties['trace'] = {'type': 'array', 'minItems': 1 if (trace_kinds and headings) else 0, 'maxItems': 300, 'items': _object({
+            'kind': {'type': 'string', 'enum': kinds}, 'requirement': _text(40),
+            'ids': {'type': 'array', 'minItems': 1, 'maxItems': 60, 'items': _text(40)}}, ('kind', 'requirement', 'ids'))}
+    return envelope(SECTION_MODEL_KIND, properties, ['sections'] + (['trace'] if trace_kinds and headings else []))
+
+
+def outline_packet():
+    """The outline: the one thing every section worker reads, so it is data and not a Markdown file to parse."""
+    def rows(fields, maximum=80):
+        return {'type': 'array', 'minItems': 0, 'maxItems': maximum, 'items': _strings(fields, 1000)}
+    required = _object({
+        'stack': _text(500),
+        'components': {'type': 'array', 'minItems': 1, 'maxItems': 80, 'items': _object({
+            'id': _text(20), 'name': _text(200), 'responsibility': _text(500), 'files': _text(1000, 0)},
+            ('id', 'name', 'responsibility', 'files'))},
+        'steps': {'type': 'array', 'minItems': 1, 'maxItems': 60, 'items': _object({
+            'number': _text(4), 'title': _text(300), 'owns': _text(2000), 'depends_on': _text(100, 0)},
+            ('number', 'title', 'owns', 'depends_on'))},
+        'decisions': {'type': 'array', 'maxItems': 80, 'items': _object({'id': _text(20), 'text': _text(500)}, ('id', 'text'))},
+        'restrictions': {'type': 'array', 'maxItems': 80, 'items': _object({
+            'id': _text(20), 'text': _text(500),
+            'source_kind': {'type': 'string', 'enum': ['USER', 'REPOSITORY', 'PLATFORM', 'DESIGN']}},
+            ('id', 'text', 'source_kind'))},
+        'tests': {'type': 'array', 'maxItems': 40, 'items': _object({
+            'runner': _text(200), 'files': _text(2000, 0)}, ('runner', 'files'))},
+        'requirement_map': {'type': 'array', 'minItems': 1, 'maxItems': 300, 'items': _object({
+            'requirement': _text(40), 'components': _text(500)}, ('requirement', 'components'))},
+    }, ('stack', 'components', 'steps', 'decisions', 'restrictions', 'tests', 'requirement_map'))
+    return envelope(OUTLINE_KIND, required['properties'], required['required'])
+
+
 def _patch(headings=None):
     heading = _choice(headings)
     return _object({
+        'replace_item': {'type': 'array', 'maxItems': 80, 'items': _object(
+            {'heading': heading, 'item': _text(40), 'new': _text(EDIT_MAX, 0)}, ('heading', 'item', 'new'))},
         'replace_text': {'type': 'array', 'maxItems': 80, 'items': _object(
             {'heading': heading, 'old': _text(EDIT_MAX), 'new': _text(EDIT_MAX, 0), 'all': {'type': 'boolean'}},
             ('heading', 'old', 'new'))},
@@ -107,8 +177,51 @@ def resolution_packet(headings=None):
         ['resolutions'])
 
 
+def _strings(names, maximum=8000):
+    return _object({name: _text(maximum, 0) for name in names}, ())
+
+
+def _op(ids=None):
+    """One flat edit of the plan model (docs/plan-model.md): every value a string, so any grammar accepts it.
+    `ids`, when given, are the only ids the edit may name."""
+    from plan_model import FIELD_NAMES, OP_NAMES
+    pick = (lambda extra=(): {'type': 'string', 'enum': sorted(ids) + list(extra)}) if ids else (lambda extra=(): _text(120, 0))
+    step = ['title', 'text', 'owns', 'depends_on']
+    block = _object({'kind': {'type': 'string', 'enum': ['prose', 'heading', 'code', 'list']},
+                     'text': _text(EDIT_MAX, 0), 'level': _text(2, 0), 'lang': _text(30, 0),
+                     'items': {'type': 'array', 'maxItems': 60, 'items': _text(2000)}}, ('kind',))
+    return _object({
+        'op': {'type': 'string', 'enum': list(OP_NAMES)},
+        'id': pick(), 'target': pick(), 'after': pick(['']),
+        'fields': _strings(FIELD_NAMES + step), 'text': _text(EDIT_MAX, 0),
+        'new': _strings(['id', 'number'] + FIELD_NAMES + step, EDIT_MAX),
+        'block': block, 'heading': _text(300, 0), 'blocks': {'type': 'array', 'maxItems': 20, 'items': block},
+    }, ('op',))
+
+
+def edit_ops_packet(ids=None, owner=False):
+    owner = owner and os.environ.get('UNCLE_PLAN_KIND') != 'change-plan'
+    properties = {
+        'dispositions': {'type': 'array', 'maxItems': 40, 'items': _object({
+            'finding': _text(80), 'disposition': {'type': 'string', 'enum': list(DISPOSITIONS)},
+            'reason': _text(300), 'plan_change': _text(300)}, ('finding', 'disposition', 'reason', 'plan_change'))},
+        'ops': {'type': 'array', 'maxItems': 120, 'items': _op(ids)},
+        'commands_replace': _commands(),
+    }
+    if owner:
+        properties['protected_verification_paths'] = _text(4000)
+    return envelope(EDIT_OPS_KIND, properties, ['dispositions', 'ops'] + (['protected_verification_paths'] if owner else []))
+
+
+def resolution_ops_packet(ids=None):
+    return envelope(RESOLUTION_OPS_KIND, {'resolutions': {'type': 'array', 'minItems': 1, 'maxItems': 40, 'items': _object({
+        'group': _text(40), 'ops': {'type': 'array', 'maxItems': 60, 'items': _op(ids)}, 'commands_replace': _commands()},
+        ('group',))}}, ['resolutions'])
+
+
 # What a self-hosted adapter enforces when it knows only the kind named in the prompt.
-STATIC = {SECTION_KIND: section_packet(), EDIT_KIND: edit_packet(), RESOLUTION_KIND: resolution_packet()}
+STATIC = {SECTION_KIND: section_packet(), SECTION_MODEL_KIND: section_model_packet(), OUTLINE_KIND: outline_packet(), EDIT_KIND: edit_packet(), RESOLUTION_KIND: resolution_packet(),
+          EDIT_OPS_KIND: edit_ops_packet(), RESOLUTION_OPS_KIND: resolution_ops_packet()}
 
 
 def plan_headings(plan_json):
@@ -117,18 +230,45 @@ def plan_headings(plan_json):
     return [section['heading'] for section in split_sections(plan.get('narrative') or '')[1]]
 
 
+def plan_ids(plan_json):
+    """Every section, block, row, item and step id of the plan, which is what an edit may name."""
+    import plan_model
+    model = plan_model.load_model(plan_json)
+    return list(plan_model.index(model))
+
+
 def main(argv):
+    output = argv[2] if len(argv) > 2 else None
     try:
         if len(argv) == 3 and argv[0] == 'section':
             import project_plan_sections as sections
             schema = section_packet(sections.expected_headings(argv[1]), sections.trace_letters(argv[1]))
         elif len(argv) in (3, 4) and argv[0] == 'edit':
             schema = edit_packet(plan_headings(argv[1]), owner=len(argv) == 4)
+        elif len(argv) == 4 and argv[0] == 'synthesis':
+            # The single-call updated plan: the same patch object the local grammar holds a self-hosted model to
+            import self_hosted
+            schema = self_hosted.artifact_schema(argv[1], protected=argv[2] == 'protected', require_dispositions=True,
+                                                 synthesis=True)
+            if schema is None:
+                raise ValueError('no synthesis schema for %s' % argv[1])
+            output = argv[3]
+        elif len(argv) == 3 and argv[0] == 'section-model':
+            import project_plan_sections as sections
+            if argv[1] == 'outline':
+                schema = outline_packet()
+            else:
+                schema = section_model_packet([h[3:] for h in sections.expected_headings(argv[1])], sections.trace_letters(argv[1]),
+                                              sections.row_kinds_of(argv[1]), sections.allows_steps(argv[1]))
+        elif len(argv) in (3, 4) and argv[0] == 'edit-ops':
+            schema = edit_ops_packet(plan_ids(argv[1]), owner=len(argv) == 4)
+        elif len(argv) == 3 and argv[0] == 'resolve-ops':
+            schema = resolution_ops_packet(plan_ids(argv[1]))
         elif len(argv) == 3 and argv[0] == 'resolve':
             schema = resolution_packet(plan_headings(argv[1]))
         else:
             raise SystemExit(__doc__)
-        Path(argv[2]).write_text(json.dumps(schema, indent=2) + '\n', encoding='utf-8')
+        Path(output).write_text(json.dumps(schema, indent=2) + '\n', encoding='utf-8')
     except (OSError, ValueError, KeyError) as error:
         print('worker schemas: %s' % error, file=sys.stderr)
         return 1

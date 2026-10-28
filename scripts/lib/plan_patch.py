@@ -6,7 +6,7 @@ unaffected section too made its output proportional to the whole plan's size
 instead of to the size of the review -- the dominant cost on a slow model.
 
 A patch names only what changed: change a snippet inside an existing section
-(`replace_text`), replace a section's whole body by its exact heading text
+(`replace_text`, or `replace_item` for a row or entry that begins with a plan ID such as `T-33`), replace a section's whole body by its exact heading text
 (`edit_sections`), or insert a whole new section next to one that already
 exists (`insert_sections`). Sections are the plan's own
 `## ` headings, numbered or not; nested `### ` headings stay inside whichever
@@ -16,6 +16,10 @@ carried over from the base narrative byte for byte.
 import re
 
 HEADING_RE = re.compile(r'(?m)^## .+$')
+
+# A table row or list entry that begins with one of the plan's own IDs (`| T-33 | ...`, `- C-3 -> ...`, `B-7: ...`).
+ITEM_RE = re.compile(r'^\s*(?:[-*+]\s+|\|\s*|\d+\.\s+)?[*_`]*([A-Z]{1,4}-\d+)\b')
+UNRESOLVED = '\0unresolved item '   # an `old` no section contains: sends an unplaceable item edit down the "missing text" path
 
 
 def split_sections(narrative):
@@ -58,6 +62,43 @@ def _heading_and_body(content):
     return match.group().rstrip(), stripped[match.end():].rstrip('\n')
 
 
+def item_lines(body):
+    """[(id, line)] for every line of `body` that begins with a plan ID."""
+    return [(match.group(1), line) for line in body.split('\n') for match in [ITEM_RE.match(line)] if match]
+
+
+def expand_items(narrative, patch, strict=True):
+    """The patch with each `replace_item` turned into the `replace_text` that replaces that item's line.
+
+    `replace_item`: [{'heading': the section, 'item': an ID such as 'T-33', 'new': the whole replacement line}].
+    The ID names the line, so the writer has nothing to copy.  The section it names is only a hint: an ID that
+    begins exactly one line of that section is that line, else exactly one line anywhere in the plan.  An item
+    that cannot be placed raises ValueError when `strict`; otherwise it becomes an edit whose `old` text is in
+    no section, which the caller handles like any other edit of text that is not there."""
+    if not isinstance(patch, dict) or not patch.get('replace_item'):
+        return patch
+    sections = split_sections(narrative)[1]
+    placed = list(patch.get('replace_text') or [])
+    for op in patch['replace_item']:
+        if not isinstance(op, dict) or not isinstance(op.get('item'), str) or not isinstance(op.get('new'), str):
+            raise ValueError('replace_item entries need "item" and "new"')
+        wanted = op['item'].strip().strip('*_`').upper()
+        heading = (op.get('heading') or '').strip()
+        found = [(section['heading'], line) for section in sections if section['heading'] == heading
+                 for name, line in item_lines(section['body']) if name == wanted]
+        if len(found) != 1:
+            found = [(section['heading'], line) for section in sections
+                     for name, line in item_lines(section['body']) if name == wanted]
+        if len(found) == 1:
+            placed.append({'heading': found[0][0], 'old': found[0][1], 'new': op['new']})
+        elif strict:
+            raise ValueError('replace_item: %s %s in section %r; name an ID that begins exactly one line of the plan'
+                             % (wanted, 'begins %d lines' % len(found) if found else 'begins no line', heading))
+        else:
+            placed.append({'heading': heading, 'old': UNRESOLVED + wanted, 'new': op['new']})
+    return dict({key: value for key, value in patch.items() if key != 'replace_item'}, replace_text=placed)
+
+
 def apply_patch(narrative, patch):
     """Apply `{'edit_sections': [...], 'replace_text': [...], 'insert_sections': [...]}` to `narrative`.
 
@@ -77,6 +118,7 @@ def apply_patch(narrative, patch):
     content the review asked for."""
     if not isinstance(patch, dict):
         raise ValueError('patch must be an object')
+    patch = expand_items(narrative, patch)
     preamble, sections = split_sections(narrative)
     by_heading = {section['heading']: index for index, section in enumerate(sections)}
 

@@ -589,8 +589,10 @@ def _register_worker_packets():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     REVIEWER_SCHEMAS.update(module.STATIC)
+    WORKER_PACKET_KINDS.update(module.STATIC)
 
 
+WORKER_PACKET_KINDS = set()
 _register_worker_packets()
 REVIEWER_SCHEMAS['automated-test-report'] = _test_report('automated-test-report')
 REVIEWER_SCHEMAS['change-test-report'] = _test_report('change-test-report')
@@ -688,7 +690,10 @@ def patch_schema(kind, protected=False):
                   required=['content'], closed=True)
     replace = _obj({'heading': _str(300), 'old': _str(SECTION_MAX_LENGTH), 'new': _str(SECTION_MAX_LENGTH),
                     'all': {'type': 'boolean'}}, required=['heading', 'old', 'new'], closed=True)
-    patch = _obj({'edit_sections': {'type': 'array', 'items': edit, 'maxItems': 40},
+    item = _obj({'heading': _str(300), 'item': _str(40), 'new': _str(SECTION_MAX_LENGTH)},
+                required=['heading', 'item', 'new'], closed=True)
+    patch = _obj({'replace_item': {'type': 'array', 'items': item, 'maxItems': 80},
+                  'edit_sections': {'type': 'array', 'items': edit, 'maxItems': 40},
                   'replace_text': {'type': 'array', 'items': replace, 'maxItems': 80},
                   'insert_sections': {'type': 'array', 'items': insert, 'maxItems': 20}}, required=[], closed=True)
     properties = {'dispositions': DISPOSITIONS, 'patch': patch}
@@ -736,6 +741,11 @@ def _artifact_schema(kind, protected=False, require_dispositions=False):
 def reviewer_artifact_kind(prompt):
     """The one artifact kind a reviewer prompt's contract names, else None."""
     kinds = set(re.findall(r'"kind"\s*:\s*"([a-z-]+)"', prompt))
+    if len(kinds) > 1:
+        # A worker prompt quotes the base document it edits (`"kind": "plan"`) beside its own packet contract.  The
+        # packet is what the worker owes, so when exactly one named kind is a worker packet, that is the one.
+        packets = kinds & set(WORKER_PACKET_KINDS)
+        kinds = packets if len(packets) == 1 else kinds
     return next(iter(kinds)) if len(kinds) == 1 and next(iter(kinds)) in REVIEWER_SCHEMAS else None
 
 

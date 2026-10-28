@@ -13,6 +13,10 @@ import sys
 from pathlib import Path
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import plan_model
+
+
 def artifact_json():
     spec = importlib.util.spec_from_file_location('artifact_json', Path(__file__).with_name('artifact_json.py'))
     module = importlib.util.module_from_spec(spec)
@@ -43,16 +47,28 @@ def publish(project, delivery):
             raise ValueError('change-planning bundle is missing a canonical %s packet' % key)
         if item.get('kind') != kind:
             raise ValueError('change-planning bundle has wrong kind for %s: expected %s' % (key, kind))
+        model = None
+        if key == 'change_plan' and isinstance(item.get('sections'), list) and not item.get('narrative'):
+            # The plan written as typed blocks (docs/plan-model.md): the narrative is their rendering, and the
+            # model is kept beside the canonical JSON for the stages that edit the plan by id.
+            try:
+                model = plan_model.model_from_flat(item['sections'], item.get('title') or '')
+            except (plan_model.PlanError, KeyError, ValueError, TypeError) as error:
+                raise ValueError('invalid change_plan packet: %s' % error) from error
+            item = {k: v for k, v in item.items() if k not in ('sections', 'title')}
+            item['narrative'] = plan_model.render(model).rstrip('\n')
         try:
             rendered = getattr(module, renderer_name)(item)
         except (KeyError, ValueError, TypeError) as error:
             raise ValueError('invalid %s packet: %s' % (key, error)) from error
-        prepared.append((name, item, rendered))
+        prepared.append((name, item, rendered, model))
     # Do not publish a partial bundle: validation of every packet precedes all
     # writes, so a retry has one precise error rather than mixed old/new state.
     root = Path(project)
-    for name, item, rendered in prepared:
-        module.write(root, name, item)
+    for name, item, rendered, model in prepared:
+        target = module.write(root, name, item)
+        if model is not None:
+            plan_model.sidecar(target).write_text(json.dumps(model, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
         view = root / '.uncle/docs' / name
         view.parent.mkdir(parents=True, exist_ok=True)
         view.write_text(rendered + '\n', encoding='utf-8')

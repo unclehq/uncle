@@ -113,11 +113,46 @@ class Merge(unittest.TestCase):
         self.assertEqual(len(self.merge()['patch']['replace_text']), 1)
 
     def test_an_edit_for_a_section_that_does_not_exist_needs_a_resolution(self):
-        self.deliver({'replace_text': [{'heading': '## 9. Nowhere', 'old': 'Alpha line.', 'new': 'x'}]}, {})
+        self.deliver({'replace_text': [{'heading': '## 9. Nowhere', 'old': 'Text nobody has.', 'new': 'x'}]}, {})
         with self.assertRaises(edits.NeedsResolution) as caught:
             self.merge()
         self.assertEqual(caught.exception.groups[0]['kind'], 'missing')
         self.assertIn('## 3. Tests', caught.exception.groups[0]['context'])
+
+    def test_an_edit_labelled_with_a_subsection_heading_goes_to_the_section_holding_its_text(self):
+        # calculator-local: writers said `## 10.2 Test file inventory`; the plan has `### 10.2 ...` inside `## 10.`
+        self.deliver({'replace_text': [{'heading': '## 2.1 Sometimes', 'old': 'I-2 holds sometimes.', 'new': 'I-2 holds.'}]}, {})
+        patch = self.merge()['patch']['replace_text']
+        self.assertEqual([op['heading'] for op in patch], ['## 2. Invariants'])
+
+    def test_an_insert_that_is_not_a_section_goes_to_a_resolver_not_a_failed_merge(self):
+        # calculator-local: a writer "inserted" a numbered step (`0. Regression baseline ...`) after a section
+        self.deliver({'insert_sections': [{'after': '## 3. Tests', 'content': '0. Copy the baseline first.'}]}, {})
+        with self.assertRaises(edits.NeedsResolution) as caught:
+            self.merge()
+        group = caught.exception.groups[0]
+        self.assertEqual((group['kind'], group['heading']), ('missing', '## 3. Tests'))
+        self.assertIn('T-1 checks it.', group['context'])
+        resolution = {'resolutions': [{'group': group['id'], 'patch': {'replace_text': [
+            {'heading': '## 3. Tests', 'old': 'T-1 checks it.', 'new': '0. Copy the baseline first.\nT-1 checks it.'}]}}]}
+        out = self.dir / 'out.json'
+        (self.dir / 'res.json').write_text(json.dumps(resolution))
+        edits.merge(self.dir / 'plan.json', self.dir / 'slices.tsv', self.dir, out, self.dir / 'res.json')
+        patch = json.loads(out.read_text())['patch']
+        self.assertEqual(patch['insert_sections'], [])
+        self.assertIn('0. Copy the baseline first.', edits.apply_patch(NARRATIVE, patch))
+
+    def test_a_wrong_heading_is_not_retargeted_when_the_text_is_in_two_sections(self):
+        self.deliver({'replace_text': [{'heading': '## 9. Nowhere', 'old': 'holds', 'new': 'x'}]}, {})
+        with self.assertRaises(edits.NeedsResolution):
+            self.merge()
+
+    def test_a_resolver_answer_with_a_subsection_label_is_retargeted(self):
+        answer = {'resolutions': [{'group': 'G1', 'patch': {'replace_text': [
+            {'heading': '### 1.1 Lines', 'old': 'Beta line.', 'new': 'B'}]}}]}
+        (self.dir / 'resolutions-G1.json').write_text(json.dumps(answer))
+        rows = edits.read_resolutions(self.dir, NARRATIVE)['resolutions']
+        self.assertEqual(rows[0]['patch']['replace_text'][0]['heading'], '## 1. Overview')
 
     def test_missing_disposition_is_refused(self):
         self.deliver({}, {})
@@ -166,10 +201,16 @@ class Merge(unittest.TestCase):
         self.deliver({}, {}, {'2': {'verification_commands': COMMANDS}})
         self.assertEqual(self.merge()['verification_commands'], COMMANDS)
 
-    def test_a_command_edit_naming_text_that_is_not_there_is_refused(self):
+    def test_a_command_edit_naming_text_that_is_not_there_is_left_out_and_recorded(self):
         self.deliver({}, {}, {'1': {'commands_replace': [{'old': 'nothing', 'new': 'x'}]}})
-        with self.assertRaisesRegex(edits.Conflict, '0 times'):
-            self.merge()
+        result = self.merge()
+        self.assertEqual(result['verification_commands'], plan()['verification_commands'].strip())
+        self.assertIn('could not be placed', result['dispositions'][0]['reason'])
+
+    def test_a_command_edit_with_a_near_miss_quote_goes_to_the_line_it_meant(self):
+        commands = 'npm ci\nnpx vitest run --reporter=dot\nnpx playwright test'
+        placed, aside = edits.place_commands([('1', 'npx vitest run --reporter dot', 'npx vitest run')], commands)
+        self.assertEqual((placed, aside), ([('1', 'npx vitest run --reporter=dot', 'npx vitest run')], {}))
 
     def test_a_plan_without_protected_paths_needs_a_writer_to_supply_them(self):
         bare = plan()
@@ -334,6 +375,98 @@ class Resolve(unittest.TestCase):
             self.assertIn(word, edits.check_resolutions(self.dir / 'plan.json', self.dir)['G1'])
         (self.dir / 'resolutions-G1.json').unlink()
         self.assertIn('no valid answer', edits.check_resolutions(self.dir / 'plan.json', self.dir)['G1'])
+
+    def test_a_near_miss_copy_is_corrected_to_the_passage_it_meant(self):
+        with self.assertRaises(edits.NeedsResolution):
+            self.merge()
+        self.answer_file('G1', {'replace_text': [{'heading': '## 2. Invariants', 'old': 'I-1 holds always', 'new': 'x'}]})
+        self.assertEqual(edits.check_resolutions(self.dir / 'plan.json', self.dir), {})
+        plan_ = plan()
+        text = 'The calculator shows `Error` when dividing by zero, and clears it on the next key.'
+        narrative = '## 1. A\n\nFirst.\n\n%s\n\nLast.\n' % text
+        near = 'The calculator shows Error when dividing by zero, and clears it on the next key.'
+        fixed = edits.repair({'replace_text': [{'heading': 'Made up', 'old': near, 'new': 'n'}]}, narrative)
+        self.assertEqual(fixed['replace_text'][0]['old'], text)
+        self.assertEqual(fixed['replace_text'][0]['heading'], '## 1. A')
+
+    def test_a_loose_paraphrase_is_not_guessed_at(self):
+        narrative = '## 1. A\n\nThe calculator shows Error when dividing by zero.\n'
+        patch = {'replace_text': [{'heading': '## 1. A', 'old': 'Division by zero is shown as an error message.', 'new': 'n'}]}
+        self.assertEqual(edits.repair(patch, narrative), patch)
+
+    def test_the_retry_shows_the_closest_real_lines(self):
+        with self.assertRaises(edits.NeedsResolution):
+            self.merge()
+        self.answer_file('G1', {'replace_text': [{'heading': '## 2. Invariants', 'old': 'I-1 holds always, honestly.', 'new': 'x'}]})
+        edits.check_resolutions(self.dir / 'plan.json', self.dir)
+        self.assertIn('closest to what you quoted', (self.dir / 'prompts' / 'resolve-G1.retry.md').read_text())
+
+    def test_a_stray_insert_and_a_label_that_is_not_a_section_are_caught(self):
+        with self.assertRaises(edits.NeedsResolution):
+            self.merge()
+        self.answer_file('G1', {'insert_sections': [{'content': '#### 10.2.4 Tests\n\nrows'}]})
+        self.assertIn('must start with a "## "', edits.check_resolutions(self.dir / 'plan.json', self.dir)['G1'])
+
+    def test_after_the_retry_an_unplaceable_edit_is_left_out_and_recorded_not_the_whole_merge(self):
+        with self.assertRaises(edits.NeedsResolution):
+            self.merge()
+        self.answer_file('G1', {'replace_text': [
+            {'heading': '## 2. Invariants', 'old': 'I-1 holds always.', 'new': 'resolved'},
+            {'heading': 'Made up label', 'old': 'text nowhere in the plan', 'new': 'b'}]})
+        target = self.dir
+        edits.merge(self.dir / 'plan.json', self.dir / 'slices.tsv', self.dir, self.dir / 'out.json', target)
+        result = json.loads((self.dir / 'out.json').read_text())
+        applied = edits.apply_patch(NARRATIVE, result['patch'])
+        self.assertIn('resolved', applied)
+        self.assertNotIn('text nowhere', applied)
+        notes = [d for d in result['dispositions'] if 'could not be placed' in d['reason']]
+        self.assertTrue(notes)
+        self.assertEqual({d['disposition'] for d in notes}, {'Partially accepted'})
+
+    def test_item_edits_by_id_merge_without_any_quoted_text(self):
+        (self.dir / '1.json').write_text(json.dumps({'dispositions': [row('AR-1')], 'patch': {'replace_item': [
+            {'heading': '## 2. Invariants', 'item': 'I-2', 'new': 'I-2 holds mostly.'}]}}))
+        (self.dir / '2.json').write_text(json.dumps({'dispositions': [row('AR-2')], 'patch': {'replace_item': [
+            {'heading': '## 3. Tests', 'item': 'T-1', 'new': 'T-1 checks it well.'}]}}))
+        result = self.merge()
+        applied = edits.apply_patch(NARRATIVE, result['patch'])
+        self.assertIn('I-2 holds mostly.', applied)
+        self.assertIn('T-1 checks it well.', applied)
+
+    def test_two_writers_changing_the_same_item_need_a_resolution(self):
+        for name, finding, text in (('1', 'AR-1', 'I-1 first.'), ('2', 'AR-2', 'I-1 second.')):
+            (self.dir / ('%s.json' % name)).write_text(json.dumps({'dispositions': [row(finding)], 'patch': {'replace_item': [
+                {'heading': '## 2. Invariants', 'item': 'I-1', 'new': text}]}}))
+        with self.assertRaises(edits.NeedsResolution) as caught:
+            self.merge()
+        self.assertEqual(caught.exception.groups[0]['kind'], 'text')
+
+    def test_an_item_that_does_not_exist_goes_to_a_resolver_not_a_failed_merge(self):
+        (self.dir / '1.json').write_text(json.dumps({'dispositions': [row('AR-1')], 'patch': {'replace_item': [
+            {'heading': '## 2. Invariants', 'item': 'I-9', 'new': 'I-9 new.'}]}}))
+        (self.dir / '2.json').write_text(json.dumps({'dispositions': [row('AR-2')], 'patch': {}}))
+        with self.assertRaises(edits.NeedsResolution) as caught:
+            self.merge()
+        self.assertEqual(caught.exception.groups[0]['kind'], 'missing')
+        self.assertIn('I-1 holds always.', caught.exception.groups[0]['nearest'])
+
+    def test_a_resolver_answers_with_an_item_edit(self):
+        (self.dir / '1.json').write_text(json.dumps({'dispositions': [row('AR-1')], 'patch': {'replace_item': [
+            {'heading': '## 2. Invariants', 'item': 'I-9', 'new': 'I-9 new.'}]}}))
+        (self.dir / '2.json').write_text(json.dumps({'dispositions': [row('AR-2')], 'patch': {}}))
+        with self.assertRaises(edits.NeedsResolution):
+            self.merge()
+        result = self.merge(self.answer({'replace_item': [{'heading': '## 2. Invariants', 'item': 'I-2', 'new': 'I-2 resolved.'}]}))
+        self.assertIn('I-2 resolved.', edits.apply_patch(NARRATIVE, result['patch']))
+
+    def test_a_resolver_item_that_does_not_exist_is_caught_with_a_clear_reason(self):
+        (self.dir / '1.json').write_text(json.dumps({'dispositions': [row('AR-1')], 'patch': {'replace_item': [
+            {'heading': '## 2. Invariants', 'item': 'I-9', 'new': 'x'}]}}))
+        (self.dir / '2.json').write_text(json.dumps({'dispositions': [row('AR-2')], 'patch': {}}))
+        with self.assertRaises(edits.NeedsResolution):
+            self.merge()
+        self.answer_file('G1', {'replace_item': [{'heading': '## 2. Invariants', 'item': 'I-8', 'new': 'x'}]})
+        self.assertIn('I-8 begins no single line', edits.check_resolutions(self.dir / 'plan.json', self.dir)['G1'])
 
     def test_the_cli_check_exits_5_and_names_the_groups(self):
         with self.assertRaises(edits.NeedsResolution):

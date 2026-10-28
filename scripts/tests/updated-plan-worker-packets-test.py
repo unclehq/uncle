@@ -477,8 +477,9 @@ class WorkerPackets(unittest.TestCase):
         prompt = SYNTHESIS.prompt(plan, review, workers)
         self.assertIn('Do not read files, enumerate directories, inspect the repository', prompt)
         self.assertIn('## Base project plan JSON', prompt)
-        self.assertIn('## Collated specialist corrections (condensed)', prompt)
-        self.assertIn('## Adversarial review findings (every finding, condensed)', prompt)
+        self.assertIn('## Collated specialist corrections (JSON, condensed)', prompt)
+        self.assertIn('## Adversarial review findings (JSON, every finding, condensed)', prompt)
+        self.assertIn('"required_corrections"', prompt)     # JSON, not a Markdown table
         with self.assertRaisesRegex(ValueError, 'expected collated'):
             SYNTHESIS.prompt(plan, review, {'schema': 'uncle.artifact/v1', 'kind': 'wrong'})
         stagegate = (ROOT / 'scripts/stagegate.sh').read_text()

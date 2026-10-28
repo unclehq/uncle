@@ -175,5 +175,34 @@ class ReplaceText(unittest.TestCase):
         self.assertIn('row 7 | stronger | oracle', plan_patch.apply_patch('# P\n\n' + big, patch))
 
 
+class ReplaceItem(unittest.TestCase):
+    PLAN = '## 1. Tests\n| T-1 | a | x |\n| T-2 | b | y |\n- C-3 -> C-1 callbacks\n\n## 2. Other\nT-1 is mentioned here.\n- C-3 again\n'
+
+    def apply(self, *ops):
+        return plan_patch.apply_patch(self.PLAN, {'replace_item': list(ops)})
+
+    def test_an_id_names_the_line_so_nothing_is_copied(self):
+        out = self.apply({'heading': '## 1. Tests', 'item': 'T-2', 'new': '| T-2 | b | z |'})
+        self.assertIn('| T-2 | b | z |', out)
+        self.assertIn('| T-1 | a | x |', out)
+
+    def test_the_id_is_found_without_the_leading_markup_or_case(self):
+        self.assertIn('NEW', self.apply({'heading': '## 1. Tests', 'item': ' `c-3` ', 'new': 'NEW'}))
+
+    def test_a_wrong_section_is_forgiven_when_the_id_begins_one_line_in_the_plan(self):
+        self.assertIn('| T-2 | b | z |', self.apply({'heading': '## 2. Other', 'item': 'T-2', 'new': '| T-2 | b | z |'}))
+
+    def test_an_id_that_begins_no_line_or_several_is_refused(self):
+        for item, word in (('T-9', 'no line'), ('C-3', '2 lines')):
+            with self.assertRaisesRegex(ValueError, word):
+                self.apply({'heading': '## 3. Nowhere', 'item': item, 'new': 'x'})
+
+    def test_lenient_expansion_turns_an_unplaceable_item_into_text_that_is_not_there(self):
+        out = plan_patch.expand_items(self.PLAN, {'replace_item': [{'heading': '## 1. Tests', 'item': 'T-9', 'new': 'x'}]}, strict=False)
+        self.assertNotIn('replace_item', out)
+        self.assertTrue(out['replace_text'][0]['old'].startswith(plan_patch.UNRESOLVED))
+        self.assertNotIn(out['replace_text'][0]['old'], self.PLAN)
+
+
 if __name__ == '__main__':
     unittest.main()

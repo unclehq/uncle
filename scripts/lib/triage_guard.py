@@ -196,10 +196,13 @@ def copy_entry(src, dst):
         shutil.copy2(src, dst)
 
 
-def make_sandbox(project, sandbox):
-    """A mirror of the working tree: git worktree plus the dirty overlay, or a copy."""
+def make_sandbox(project, sandbox, extra_excludes=()):
+    """A mirror of the working tree: git worktree plus the dirty overlay, or a copy.
+
+    `extra_excludes` are project-relative paths left out as well (driver state a worker never reads)."""
     project = Path(project)
     sandbox = Path(sandbox)
+    excludes = SANDBOX_EXCLUDES + tuple(extra_excludes)
     drop_sandbox(project, sandbox)
     sandbox.parent.mkdir(parents=True, exist_ok=True)
     if git_ok(project):
@@ -220,7 +223,7 @@ def make_sandbox(project, sandbox):
             if 'R' in code or 'C' in code:
                 # rename: the next entry is the source path
                 i += 1
-            if any(rel == ex or rel.startswith(ex + '/') for ex in SANDBOX_EXCLUDES):
+            if any(rel == ex or rel.startswith(ex + '/') for ex in excludes):
                 continue
             src = project / rel
             dst = sandbox / rel
@@ -232,7 +235,7 @@ def make_sandbox(project, sandbox):
                 dst.unlink()
         # Ignored/untracked Markdown is still editable project content.
         # Overlay it before snapshotting so apply-back compares the actual bytes.
-        for rel in walk(project, excludes=SANDBOX_EXCLUDES):
+        for rel in walk(project, excludes=excludes):
             src = project / rel
             if (rel.lower().endswith('.md') or rel.startswith('.uncle/')) and not src.is_symlink():
                 copy_entry(src, sandbox / rel)
@@ -243,7 +246,7 @@ def make_sandbox(project, sandbox):
         skipped = []
         for name in names:
             rel = os.path.join(rel_dir, name) if rel_dir else name
-            if rel in SANDBOX_EXCLUDES or rel.startswith('.uncle/workflow/parallel') or name == '__pycache__':
+            if rel in excludes or rel.startswith('.uncle/workflow/parallel') or name == '__pycache__':
                 skipped.append(name)
         return set(skipped)
     shutil.copytree(project, sandbox, symlinks=True, ignore=ignore)

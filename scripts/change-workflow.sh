@@ -2485,6 +2485,14 @@ This file is the only authoritative handoff. Do not write or read generated
 Markdown views; the driver validates the three packets and renders those views
 afterward. Chat text is diagnostics only.
 CANONICAL_PLANNING_BUNDLE_CONTRACT
+                    # The plan as typed blocks instead of a Markdown narrative (docs/plan-model.md).  Off by default until a
+                    # live change run has shown a model writes them well; the publisher accepts either form.
+                    if [[ "${WORKFLOW_CHANGE_PLAN_BLOCKS:-0}" == 1 ]] && ! stage_uses_self_hosted change-plan AGENT; then
+                        {
+                            printf '\n## The change plan as blocks (binding; overrides `narrative` for `change_plan` above)\n\nIn `change_plan`, do not write `narrative`. Write `"sections":[{"heading":"<section title, without ##>","blocks":[...]}]` instead, and `"title"` for the plan title. The driver renders the Markdown plan from your blocks.\n\n'
+                            python3 -B "$ROOT/scripts/lib/project_plan_sections.py" blocks-reference
+                        } >> "$effective_prompt"
+                    fi
                     if [[ -n "$artifact_error" ]]; then
                         printf '\nThe previous canonical delivery was rejected: %s\nUse Write to replace the same delivery file with a complete corrected JSON bundle.\n' "$artifact_error" >> "$effective_prompt"
                     fi
@@ -2981,12 +2989,15 @@ run_updated_change_plan_panel() {
 # per-group resolvers; any problem returns nonzero with nothing published and the caller runs the single call.
 updated_change_plan_launch_writer() {
     local directory="$1" delivery="$2" name="$3" ids="$4" owner="$5" schema_file=""
-    python3 -B "$ROOT/scripts/lib/updated_plan_edits.py" prompt "$UPDATED_PLAN_PROMPT" "$ids" "$directory/prompts/$name.md" $owner || return 1
+    # The plan model (docs/plan-model.md): writers edit it by id.  WORKFLOW_UPDATED_PLAN_OPS=0 keeps the text patches.
+    local helper="$ROOT/scripts/lib/updated_plan_edits.py" schema_command=edit
+    if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; schema_command=edit-ops; fi
+    UNCLE_PLAN_JSON="$STATE_DIR/documents/CHANGE_PLAN.json" python3 -B "$helper" prompt "$UPDATED_PLAN_PROMPT" "$ids" "$directory/prompts/$name.md" $owner || return 1
     echo "Updated-plan edit writer $name: ${ids//,/, }"
     if [[ "$delivery" == hosted ]]; then
         mkdir -p "$directory/schemas"
         schema_file="$directory/schemas/$name.json"
-        python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit "$STATE_DIR/documents/CHANGE_PLAN.json" "$schema_file" $owner || return 1
+        python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/CHANGE_PLAN.json" "$schema_file" $owner || return 1
     fi
     rm -f "$directory/$name.json"
     ( [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
@@ -2995,10 +3006,12 @@ updated_change_plan_launch_writer() {
         > "$LOG_DIR/updated-change-plan-worker-edits-$name.log" 2>&1 &
 }
 
+UPDATED_PLAN_ADVISOR_PIDS=()
 run_updated_change_plan_edit_writers() {
-    local directory="$STATE_DIR/updated-change-plan-edits" helper="$ROOT/scripts/lib/updated_plan_edits.py" name ids pid failed=0
+    local directory="$STATE_DIR/updated-change-plan-edits" helper="$ROOT/scripts/lib/updated_plan_edits.py" name ids pid failed=0 resolve_command=resolve
     local -a pids=() names=()
     [[ "${WORKFLOW_UPDATED_PLAN_EDITS:-1}" == 1 ]] || return 1
+    if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; resolve_command=resolve-ops; fi
     export UNCLE_PLAN_KIND=change-plan     # the helpers write and merge a change-plan, with no commands or protected paths
     # Forced, schema-checked JSON wherever the runner can enforce it: hosted Claude through --json-schema, a
     # self-hosted model through the grammar its adapter derives from the packet kind named in the prompt.
@@ -3035,6 +3048,12 @@ run_updated_change_plan_edit_writers() {
             [[ "${finished[i]}" == 0 ]] || continue
             if ! kill -0 "${pids[i]}" 2>/dev/null; then
                 status=0; wait "${pids[i]}" || status=$?
+                # A writer can exit cleanly with a packet that does not parse (a local model dropped a comma): that
+                # is a failed writer, asked again per finding, not a reason to abandon every other writer's work.
+                if [[ "$status" == 0 ]] && ! python3 -B -c 'import json,sys; json.load(open(sys.argv[1]))' "$directory/${names[i]}.json" 2>/dev/null; then
+                    echo "Updated-plan edit writer ${names[i]} delivered a packet that is not valid JSON." >&2
+                    status=1
+                fi
                 if [[ "$status" == 0 ]]; then
                     finished[i]=1; left=$((left - 1))
                     [[ -z "${hedge[i]}" ]] || { pkill -P "${hedge[i]}" 2>/dev/null; kill "${hedge[i]}" 2>/dev/null; }
@@ -3089,8 +3108,22 @@ run_updated_change_plan_edit_writers() {
         done
         [[ "$failed" == 0 ]] || return 1
     fi
+    # When the specialists ran beside the writers (run_updated_change_plan_decide), one reconciler checks their corrections
+    # against what the writers decided, while the merge and the resolvers run; its edits are added last.
+    local reconcile_pid="" late_ops=""
+    if [[ "${#UPDATED_PLAN_ADVISOR_PIDS[@]}" -gt 0 ]]; then
+        late_ops="$directory/reconcile.json"
+        updated_change_plan_start_reconcile "$directory" "$delivery" "$late_ops"
+        reconcile_pid="$UPDATED_PLAN_RECONCILE_PID"
+    fi
     local merge_status=0
     python3 -B "$helper" merge "$STATE_DIR/documents/CHANGE_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" || merge_status=$?
+    if [[ "$merge_status" == 0 && -n "$reconcile_pid" ]]; then
+        wait "$reconcile_pid" 2>/dev/null || true
+        if [[ -s "$late_ops" ]]; then
+            UNCLE_LATE_OPS="$late_ops" python3 -B "$helper" merge "$STATE_DIR/documents/CHANGE_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" || return 1
+        fi
+    fi
     if [[ "$merge_status" == 3 ]]; then
         # Only the overlapping edits go to a model, with the text around them; the rest stays mechanical.
         echo "Updated-plan edits overlap; one small resolver call per overlapping group, all at once."
@@ -3102,7 +3135,7 @@ run_updated_change_plan_edit_writers() {
             if [[ "$delivery" == hosted ]]; then
                 resolver_schema="$directory/schemas/resolve-$group_id.json"
                 mkdir -p "$directory/schemas"
-                python3 -B "$ROOT/scripts/lib/worker_schemas.py" resolve "$STATE_DIR/documents/CHANGE_PLAN.json" "$resolver_schema" || return 1
+                python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/CHANGE_PLAN.json" "$resolver_schema" || return 1
             fi
             ( [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
               UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
@@ -3134,11 +3167,74 @@ run_updated_change_plan_edit_writers() {
             done
             [[ "$resolver_failed" == 0 ]] || return 1
         fi
-        python3 -B "$helper" merge "$STATE_DIR/documents/CHANGE_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || return 1
+        [[ -z "$reconcile_pid" ]] || wait "$reconcile_pid" 2>/dev/null || true
+        UNCLE_LATE_OPS="$late_ops" python3 -B "$helper" merge "$STATE_DIR/documents/CHANGE_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || return 1
     elif [[ "$merge_status" != 0 ]]; then
         return 1
     fi
     python3 "$ROOT/scripts/lib/publish_agent_artifact.py" updated-change-plan "$LOG_DIR/updated-change-plan.jsonl" . "$directory/merged.json" || return 1
+}
+
+# The specialists' corrections, checked once against what the deciders wrote (the new-application driver's
+# updated_plan_start_reconcile, for the change plan).  Background; any failure just means no extra edits.
+updated_change_plan_start_reconcile() {
+    local directory="$1" delivery="$2" late="$3" panel="$STATE_DIR/updated-plan-panel"
+    UPDATED_PLAN_RECONCILE_PID=""
+    rm -f "$late"
+    (
+        local pid
+        for pid in "${UPDATED_PLAN_ADVISOR_PIDS[@]}"; do
+            while kill -0 "$pid" 2>/dev/null; do sleep 0.5; done
+        done
+        python3 "$ROOT/scripts/lib/updated_plan_worker_packets.py" "$panel" "$STATE_DIR/documents/UPDATED_CHANGE_PLAN_WORKERS.json" \
+            --expected ownership verification scope > /dev/null 2>&1 || exit 0
+        UNCLE_PLAN_JSON="$STATE_DIR/documents/CHANGE_PLAN.json" python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" reconcile \
+            "$UPDATED_PLAN_PROMPT" "$directory/slices.tsv" "$directory" "$STATE_DIR/documents/UPDATED_CHANGE_PLAN_WORKERS.json" \
+            "$directory/prompts/reconcile.md" || exit 0
+        local schema_file=""
+        if [[ "$delivery" == hosted ]]; then
+            mkdir -p "$directory/schemas"
+            schema_file="$directory/schemas/reconcile.json"
+            python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit-ops "$STATE_DIR/documents/CHANGE_PLAN.json" "$schema_file" || exit 0
+        fi
+        [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$late"
+        UNCLE_WORKER_PACKET_PATH="$late" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+            run_claude "$directory/prompts/reconcile.md" updated-change-plan-worker-reconcile \
+            "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN"
+    ) > "$LOG_DIR/updated-change-plan-worker-reconcile.log" 2>&1 &
+    UPDATED_PLAN_RECONCILE_PID="$!"
+}
+
+# Decide and edit in one pass (see run_updated_plan_decide in stagegate.sh): the writers read the review themselves and answer with
+# their disposition and their ops, the three lens specialists run beside them, and one reconciler adds what the lenses asked for
+# and no writer did.  Nonzero leaves nothing published and the caller runs the specialist round as before.
+# WORKFLOW_UPDATED_PLAN_DECIDE=0 turns it off.
+run_updated_change_plan_decide() {
+    [[ "${WORKFLOW_UPDATED_PLAN_DECIDE:-1}" == 1 && "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 && "${WORKFLOW_UPDATED_PLAN_EDITS:-1}" == 1 ]] || return 1
+    require_file "$STATE_DIR/documents/CHANGE_PLAN.json" || return 1
+    require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" || return 1
+    local directory="$STATE_DIR/updated-plan-panel" lens prompt status=0 pid
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    UPDATED_PLAN_PROMPT="$directory/synthesis.md"
+    python3 -B "$ROOT/scripts/lib/updated_plan_synthesis_prompt.py" --change \
+        "$STATE_DIR/documents/CHANGE_PLAN.json" "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" - "$UPDATED_PLAN_PROMPT" || return 1
+    echo "Updated change plan: writers decide and edit from the review; the specialists check beside them."
+    UPDATED_PLAN_ADVISOR_PIDS=()
+    for lens in ownership verification scope; do
+        prompt="$directory/prompts/$lens.md"
+        cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
+        printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+        ( run_codex "$prompt" "$directory/$lens.json" "updated-change-plan-review-worker-$lens" "$CODEX_EFFORT_REVIEW" ) \
+            > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
+        UPDATED_PLAN_ADVISOR_PIDS+=("$!")
+    done
+    run_updated_change_plan_edit_writers || status=$?
+    for pid in ${UPDATED_PLAN_ADVISOR_PIDS[@]+"${UPDATED_PLAN_ADVISOR_PIDS[@]}"}; do
+        pkill -P "$pid" 2>/dev/null || true
+        kill "$pid" 2>/dev/null || true
+    done
+    UPDATED_PLAN_ADVISOR_PIDS=()
+    return "$status"
 }
 
 run_updated_change_plan_fast_path() {
@@ -3855,12 +3951,28 @@ while true; do
                 set_state VALIDATE_UPDATED_PLAN
                 continue
             fi
+            if run_updated_change_plan_decide; then
+                echo 'Updated change plan: written by deciding writers and checked by the specialists.'
+                set_state VALIDATE_UPDATED_PLAN
+                continue
+            fi
             run_updated_change_plan_panel || exit 1
             # One writer per finding, merged mechanically; the single call below is the fallback.
             if ! run_updated_change_plan_edit_writers; then
-                run_claude "$UPDATED_PLAN_PROMPT" updated-change-plan \
-                    "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \
-                    "$BUDGET_UPDATED_PLAN"
+                # Forced JSON here too, as for the edit writers: a schema-checked answer, not free text.
+                local synthesis_schema="$STATE_DIR/updated-plan-edits/schemas/synthesis.json"
+                if stage_supports_structured_output updated-change-plan \
+                    && mkdir -p "$STATE_DIR/artifact-delivery" "$STATE_DIR/updated-plan-edits/schemas" \
+                    && python3 -B "$ROOT/scripts/lib/worker_schemas.py" synthesis change-plan plain "$synthesis_schema"; then
+                    UNCLE_OUTPUT_SCHEMA_FILE="$synthesis_schema" \
+                        UNCLE_STRUCTURED_OUTPUT_PATH="$STATE_DIR/artifact-delivery/updated-change-plan.json" \
+                        run_claude "$UPDATED_PLAN_PROMPT" updated-change-plan \
+                        "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN"
+                else
+                    run_claude "$UPDATED_PLAN_PROMPT" updated-change-plan \
+                        "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 \
+                        "$BUDGET_UPDATED_PLAN"
+                fi
             fi
             set_state VALIDATE_UPDATED_PLAN
             ;;

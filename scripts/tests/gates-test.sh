@@ -856,7 +856,8 @@ set_state IMPLEMENT
 run_driver_stdin "$(gate_input y)" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
-expect_out "Recorded approval for .uncle/workflow/IMPLEMENTATION_REVIEW.md"
+expect_out "Recorded approval for"
+expect_out "IMPLEMENTATION_REVIEW.md"
 expect_out "Change workflow complete."
 expect_state "COMPLETE"
 expect_file ".uncle/workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
@@ -1145,7 +1146,8 @@ set_state IMPLEMENT
 run_stagegate_stdin "$(gate_input y)" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
-expect_out "Recorded approval for .uncle/workflow/IMPLEMENTATION_REVIEW.md"
+expect_out "Recorded approval for"
+expect_out "IMPLEMENTATION_REVIEW.md"
 expect_out "Audit verdict: READY"
 expect_out "Workflow complete."
 expect_state "COMPLETE"

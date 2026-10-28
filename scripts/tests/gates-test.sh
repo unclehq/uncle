@@ -875,6 +875,9 @@ cat > "$REPO/.uncle/docs/IMPLEMENTATION_NOTES.md" <<'DELIVERY'
 |---|---|---|---|
 | AC-1 | IMPLEMENTED | app/main.sh | app/test.sh PASS |
 DELIVERY
+jq -n '{schema:"uncle.artifact/v1",kind:"implementation-notes",
+    deliveries:[{id:"AC-1",status:"IMPLEMENTED",changed_code:"app/main.sh",observed_verification:"app/test.sh PASS"}]}' \
+    > "$REPO/.uncle/workflow/documents/IMPLEMENTATION_NOTES.json"
 printf 'not-the-digest-of-anything\n' \
     > "$REPO/.uncle/workflow/approvals/IMPLEMENTATION_REVIEW.sha256"
 printf '#!/bin/sh\necho edited\n' > "$REPO/app/main.sh"
@@ -897,7 +900,7 @@ run_driver FAKE_IMPL="printf 'x\n' > app/unplanned.py"
 expect_status 1
 expect_out "Files changed outside .uncle/docs/CHANGE_PLAN.md's change-impact table:"
 expect_out "app/unplanned.py"
-expect_out "Not recorded as deviations in .uncle/docs/IMPLEMENTATION_NOTES.md:"
+expect_out "Not recorded as deviations in canonical IMPLEMENTATION_NOTES.json:"
 expect_state "IMPLEMENT"
 
 # Going outside the plan is allowed; doing it silently is not. Naming the file
@@ -905,9 +908,9 @@ expect_state "IMPLEMENT"
 new_case new-file-recorded-as-a-deviation
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
-run_driver FAKE_IMPL="printf 'x\n' > app/unplanned.py; printf 'Deviation: app/unplanned.py was needed.\n' >> .uncle/docs/IMPLEMENTATION_NOTES.md"
+run_driver FAKE_IMPL="printf 'x\n' > app/unplanned.py; jq '.deviations=[{file:\"app/unplanned.py\",reason:\"was needed\"}]' .uncle/workflow/documents/IMPLEMENTATION_NOTES.json > .uncle/workflow/.tmp-notes.json && mv .uncle/workflow/.tmp-notes.json .uncle/workflow/documents/IMPLEMENTATION_NOTES.json"
 expect_status 0
-expect_out "(all recorded in .uncle/docs/IMPLEMENTATION_NOTES.md)"
+expect_out "(all recorded in canonical IMPLEMENTATION_NOTES.json)"
 expect_state "WAIT_IMPLEMENT_APPROVAL"
 
 # A file that was already sitting untracked in the checkout is not something

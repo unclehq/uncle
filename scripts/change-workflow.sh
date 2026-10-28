@@ -3960,7 +3960,7 @@ while true; do
             # One writer per finding, merged mechanically; the single call below is the fallback.
             if ! run_updated_change_plan_edit_writers; then
                 # Forced JSON here too, as for the edit writers: a schema-checked answer, not free text.
-                local synthesis_schema="$STATE_DIR/updated-plan-edits/schemas/synthesis.json"
+                synthesis_schema="$STATE_DIR/updated-plan-edits/schemas/synthesis.json"
                 if stage_supports_structured_output updated-change-plan \
                     && mkdir -p "$STATE_DIR/artifact-delivery" "$STATE_DIR/updated-plan-edits/schemas" \
                     && python3 -B "$ROOT/scripts/lib/worker_schemas.py" synthesis change-plan plain "$synthesis_schema"; then

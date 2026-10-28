@@ -11,6 +11,7 @@ against the live journal, stage, attempt and state digest before it happens,
 and one process owns the journal at a time through a kernel file lock.
 """
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -18,6 +19,12 @@ import sys
 import time
 import uuid
 from pathlib import Path
+
+
+def _artifact_json_module():
+    _spec = importlib.util.spec_from_file_location('artifact_json', Path(__file__).with_name('artifact_json.py'))
+    _module = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_module)
+    return _module
 
 SCHEMA = 1
 SUBDIR = 'supervision'
@@ -670,8 +677,17 @@ def validate_proposal(text, stage, attempt, run_id, evidence_ids, descriptions=N
     corrective proposal's diagnosis must equal the description of a cited
     id and its rationale must equal the template's fixed rationale (D-11).
     """
+    # A model that reasons before answering, or wraps its reply in a fenced
+    # code block, is not malformed -- that is ordinary chat-model behavior.
+    # Recover the real JSON object the same way every other JSON-contract
+    # response in this codebase does, rather than rejecting a correct answer
+    # for its presentation.
     try:
-        value = json.loads(text, object_pairs_hook=_no_duplicates)
+        candidate = _artifact_json_module().unfence_json(text)
+    except Exception:
+        candidate = text
+    try:
+        value = json.loads(candidate, object_pairs_hook=_no_duplicates)
     except (ValueError, TypeError) as exc:
         return None, 'malformed: ' + str(exc)[:120]
     if not isinstance(value, dict):
@@ -1383,7 +1399,11 @@ class Controller:
     def _sanitized(self, reply):
         """A bounded, redacted view of a proposal for the ledger: never the raw reply."""
         try:
-            value = json.loads(reply)
+            candidate = _artifact_json_module().unfence_json(reply)
+        except Exception:
+            candidate = reply
+        try:
+            value = json.loads(candidate)
         except (ValueError, TypeError):
             return {'raw': redact(str(reply))[:400]}
         if not isinstance(value, dict):

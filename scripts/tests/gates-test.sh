@@ -416,6 +416,7 @@ run_driver_stdin() {
         PATH="$CASE/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 \
         WORKFLOW_AGENT_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
+        WORKFLOW_CLAUDE_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_PARALLEL_CHECKLIST=0 \
         "$@" \
         bash -c 'cd "$1"; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/change-workflow.sh ${DRIVER_ARGS:-}' _ "$REPO" \
@@ -578,6 +579,7 @@ run_stagegate_stdin() {
     env PATH="$CASE/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 \
         WORKFLOW_AGENT_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
+        WORKFLOW_CLAUDE_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_SPECULATE=0 FAKE_WORKFLOW=stagegate \
         "$@" \
         bash -c 'cd "$1"; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/stagegate.sh' _ "$REPO" \

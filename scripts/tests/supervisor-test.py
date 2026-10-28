@@ -568,6 +568,19 @@ class ProposalTests(Base):
         value, reason = self.check(proposal('implementation', 1, self.run_id, 'ask', None, self.evidence, diagnosis='Only a person can decide this'))
         self.assertEqual(reason, '')
 
+    def test_valid_proposal_wrapped_in_a_markdown_fence_is_not_malformed(self):
+        # Seen live: the supervisor's own model reasons before answering, or
+        # wraps a correct proposal in a ```json fence -- ordinary chat-model
+        # behavior, not a malformed response. The same unfencing every other
+        # JSON-contract response in this codebase gets applies here too.
+        good = proposal('implementation', 1, self.run_id, 'retry', 'revisit_validator', self.evidence, vocab_of(self.ctl))
+        value, reason = self.check('```json\n' + good + '\n```')
+        self.assertEqual(reason, '')
+        self.assertEqual(value['action'], 'retry')
+        value, reason = self.check('Let me think this through.\n\n' + good)
+        self.assertEqual(reason, '')
+        self.assertEqual(value['action'], 'retry')
+
     def test_rejections(self):
         good = json.loads(proposal('implementation', 1, self.run_id, 'retry', 'revisit_validator', self.evidence, vocab_of(self.ctl)))
         cases = {

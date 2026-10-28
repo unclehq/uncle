@@ -595,9 +595,19 @@ if [[ "$out" == *.json ]]; then
         printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"test-review-worker-packet","rows":[]}' > "$delivery"
     elif [[ "$out" == *manual-checklist-panel/*.json ]]; then
         printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist-worker-packet","checks":[{"id":"MC-1","exact_action":"Open the page","expected_result":"Greeting visible"}]}' > "$delivery"
+    elif [[ "$out" == *documents/MANUAL_CHECKLIST.json ]]; then
+        # The primary (non-panel) manual-checklist reviewer delivers straight
+        # to the canonical path, not a Markdown view -- this is the real
+        # manual-checklist object, not a worker packet.
+        if [[ "${FAKE_MC_FORMAT:-0}" == MISSING_FIELDS_ONCE && "$review_prompt" != *'Required format retry'* ]]; then
+            printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1"}]}' > "$delivery"
+        else
+            printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist","checks":[{"id":"MC-1","exact_action":"Open the page","expected_result":"Greeting visible"}]}' > "$delivery"
+        fi
     else
         printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"review-worker-packet","findings":[]}' > "$delivery"
     fi
+    printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
     exit 0
 fi
 printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls

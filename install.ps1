@@ -41,6 +41,14 @@ try {
             if ($links) { throw "Symlink/junction in package input: $name" }
             Copy-Item $item $stage -Recurse
         }
+        # A source checkout can carry local workflow state, including under a
+        # directory copied by a platform-specific packaging helper.  It is
+        # never install payload: apart from leaking project information it
+        # would make a newly installed Uncle believe it inherited a run.
+        # Keep this explicit defense after the allowlisted copy rather than
+        # relying on hidden-file behaviour that differs between PowerShell 5
+        # and PowerShell 7.
+        Get-ChildItem $stage -Directory -Recurse -Force -Filter .uncle | Remove-Item -Recurse -Force
         Get-ChildItem $stage -Directory -Recurse -Filter __pycache__ | Remove-Item -Recurse -Force
         Get-ChildItem $stage -File -Recurse -Filter *.pyc | Remove-Item -Force
         Compress-Archive -Path $stage -DestinationPath $archive

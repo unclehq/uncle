@@ -21,7 +21,8 @@ function Assert-InstallerArchive($archivePath) {
         # Windows PowerShell 5.1 Compress-Archive can write backslashes, unlike
         # PowerShell 7 on Unix. Check the payload identically for either form.
         $names = @($zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-        Assert (@($names | Where-Object { $_ -match '(^|/)\.uncle/' }).Count -eq 0) 'Packaged workflow state'
+        $workflowEntries = @($names | Where-Object { $_ -match '(^|/)\.uncle/' })
+        Assert ($workflowEntries.Count -eq 0) ('Packaged workflow state: ' + ($workflowEntries -join ', '))
         Assert (@($names | Where-Object { $_ -eq 'uncle-package/packaging/windows/uncle.ps1' }).Count -eq 1) 'Launcher absent'
     } finally { $zip.Dispose() }
 }

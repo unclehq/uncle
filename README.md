@@ -275,7 +275,32 @@ The process isn't just documented here. It's used here.
 
 ## Quick start
 
-Install Uncle, open a repository, and run:
+The fastest way to see Uncle build something from a single sentence:
+
+**macOS / Linux / WSL**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/unclehq/uncle/main/install.sh -o install.sh && bash install.sh
+uncle --application 'build a groovy calculator react webapp with keyboard support'
+```
+
+**Windows (PowerShell)**
+
+```powershell
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/unclehq/uncle/main/install.ps1 -OutFile install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+uncle --application 'build a groovy calculator react webapp with keyboard support'
+```
+
+This walks through planning, implementation, independent review, and
+verification with you in the terminal the whole time — ask it questions,
+redirect it, or just watch. Add `--unattended` to skip every approval gate
+and let it run start to finish on its own; that's the fast way to see the
+output, but it also means skipping the human-in-the-loop approvals that are
+the actual point of Uncle, so it's worth watching the interactive run at
+least once first.
+
+Or, in an existing repository:
 
 ```sh
 cd my-project
@@ -423,7 +448,4 @@ Found a bug or have a concrete feature request? Open an [issue](../../issues).
 
 ---
 
-[Workflow documentation](docs/) · [GitHub integration](GITHUB_INTEGRATION.md) · [Attestations](ATTESTATIONS.md) · [Contributing](CONTRIBUTING.md) · [License](LICENSE)
-
-```
-```
+[Quickstart](docs/quickstart.md) · [Workflow documentation](docs/) · [GitHub integration](GITHUB_INTEGRATION.md) · [Attestations](ATTESTATIONS.md) · [Contributing](CONTRIBUTING.md) · [License](LICENSE)

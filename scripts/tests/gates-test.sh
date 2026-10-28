@@ -18,6 +18,48 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$ROOT/scripts/lib/sha256.sh"   # hash_file, portable across platforms
 
+# These fixtures predate the canonical-JSON-artifact migration and hand-author
+# the Markdown views (.uncle/docs/*.md) directly. The driver no longer treats
+# those views as authoritative for CHANGE_PLAN, CHANGE_SPEC, BASELINE_REPORT,
+# and ADVERSARIAL_REVIEW: plan_check_inputs, verify_approval, the green-check
+# baseline-source hash, and implementation_complete's acceptance-criteria
+# check all read (or hash) .uncle/workflow/documents/<NAME>.json instead.
+# sync_canonical regenerates that JSON from the current Markdown so a fixture
+# that writes or mutates one of these views keeps both in step; hash_canonical
+# does the sync and echoes the resulting canonical file's hash in one step,
+# the fixture equivalent of the approval hash the driver itself records.
+sync_canonical() {
+    local name="$1"
+    local md="$REPO/.uncle/docs/${name}.md"
+    mkdir -p "$REPO/.uncle/workflow/documents"
+    case "$name" in
+        CHANGE_SPEC)
+            jq -n --arg narrative "$(cat "$md")" \
+                '{schema:"uncle.artifact/v1",kind:"change-spec",narrative:$narrative,
+                  acceptance_criteria:[{id:"AC-1",criterion:"Change the greeting",verification:"app/test.sh"}]}' \
+                > "$REPO/.uncle/workflow/documents/${name}.json" ;;
+        ADVERSARIAL_REVIEW)
+            jq -n --arg narrative "$(cat "$md")" \
+                '{schema:"uncle.artifact/v1",kind:"adversarial-review",findings:[],
+                  overall_assessment:"No unresolved findings in this fixture."}' \
+                > "$REPO/.uncle/workflow/documents/${name}.json" ;;
+        BASELINE_REPORT)
+            jq -n --arg narrative "$(cat "$md")" \
+                '{schema:"uncle.artifact/v1",kind:"baseline-report",narrative:$narrative,
+                  verification_commands:"bash app/test.sh"}' \
+                > "$REPO/.uncle/workflow/documents/${name}.json" ;;
+        CHANGE_PLAN)
+            jq -n --arg narrative "$(cat "$md")" \
+                '{schema:"uncle.artifact/v1",kind:"change-plan",narrative:$narrative}' \
+                > "$REPO/.uncle/workflow/documents/${name}.json" ;;
+    esac
+}
+
+hash_canonical() {
+    sync_canonical "$1"
+    hash_file "$REPO/.uncle/workflow/documents/${1}.json"
+}
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -183,9 +225,8 @@ EOF
 EOF
 
     local f
-    for f in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN; do
-        hash_file "$REPO/.uncle/docs/${f}.md" \
-            > "$REPO/.uncle/workflow/approvals/${f}.sha256"
+    for f in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN ADVERSARIAL_REVIEW; do
+        hash_canonical "$f" > "$REPO/.uncle/workflow/approvals/${f}.sha256"
     done
 
     # The project under change: one script, one test that checks it.
@@ -246,17 +287,19 @@ case "$prompt" in
         ;;
     *STUB:implement*)
         : > .uncle/workflow/impl-agent-started
-        printf '# Implementation Notes\n\nChanged app/main.sh.\n' \
-            > .uncle/docs/IMPLEMENTATION_NOTES.md
-        cat >> .uncle/docs/IMPLEMENTATION_NOTES.md <<'DELIVERY'
-
-## Acceptance delivery
-| ID | Status | Changed code | Observed targeted verification |
-|---|---|---|---|
-| AC-1 | IMPLEMENTED | app/main.sh | app/test.sh PASS |
-DELIVERY
-        printf '# Change Test Report\n\nEverything passed. Trust me.\n' \
-            > .uncle/docs/CHANGE_TEST_REPORT.md
+        # implement-change.md's binding delivery contract (not the Markdown
+        # views it used to write): a single canonical JSON object at each of
+        # these two paths, which the driver validates, canonicalizes, and
+        # renders into .uncle/docs/IMPLEMENTATION_NOTES.md and
+        # .uncle/docs/CHANGE_TEST_REPORT.md itself.
+        mkdir -p .uncle/workflow/documents
+        jq -n '{schema:"uncle.artifact/v1",kind:"implementation-notes",
+            changed_files:[{path:"app/main.sh",purpose:"Changed app/main.sh."}],
+            deliveries:[{id:"AC-1",status:"IMPLEMENTED",changed_code:"app/main.sh",observed_verification:"app/test.sh PASS"}]}' \
+            > .uncle/workflow/documents/IMPLEMENTATION_NOTES.json
+        jq -n '{schema:"uncle.artifact/v1",kind:"change-test-report",
+            commands:[{command:"bash app/test.sh",status:"PASS",output:"ok"}]}' \
+            > .uncle/workflow/documents/CHANGE_TEST_REPORT.json
         if [[ -n "${FAKE_IMPL:-}" ]]; then
             bash -c "$FAKE_IMPL"
         fi
@@ -388,8 +431,7 @@ REV
 green_baseline() {
     printf '%s\t%s\n' "$1" "$2" > "$REPO/.uncle/workflow/green-check.baseline.tsv"
     printf '%s\n' "$2" > "$REPO/.uncle/workflow/green-check.commands"
-    hash_file "$REPO/.uncle/docs/BASELINE_REPORT.md" \
-        > "$REPO/.uncle/workflow/green-check.source"
+    hash_canonical BASELINE_REPORT > "$REPO/.uncle/workflow/green-check.source"
 }
 
 set_state() {
@@ -676,7 +718,7 @@ if [[ "${UNCLE_TEST_FIXTURES_ONLY:-0}" == 1 ]]; then return 0; fi
 # Independent suites plan-executability-test.py and plan-recovery-test.sh are
 # run by their normal suite runners, never nested here.
 # Each group owns its fixtures; resumes within a group remain sequential.
-partial_impl="printf '#!/bin/sh\necho goodbye\n' > app/main.sh; sed -i.bak 's/IMPLEMENTED/INCOMPLETE/' .uncle/docs/IMPLEMENTATION_NOTES.md; rm .uncle/docs/IMPLEMENTATION_NOTES.md.bak; echo attempt >> .uncle/workflow/attempts"
+partial_impl="printf '#!/bin/sh\necho goodbye\n' > app/main.sh; jq '.deliveries[0].status=\"INCOMPLETE\"' .uncle/workflow/documents/IMPLEMENTATION_NOTES.json > .uncle/workflow/.tmp-notes.json && mv .uncle/workflow/.tmp-notes.json .uncle/workflow/documents/IMPLEMENTATION_NOTES.json; echo attempt >> .uncle/workflow/attempts"
 
 gate_group_1() {
 new_case implement-stops-for-review
@@ -1669,7 +1711,7 @@ expect_file '.uncle/workflow/checklist-overlapped-implementation'
 new_case change-turns-limit-retries-once
 green_baseline 0 'bash app/test.sh'
 printf '\n## 20. Implementation sequence\n\n1. First step.\n2. Second step.\n' >> "$REPO/.uncle/docs/CHANGE_PLAN.md"
-hash_file "$REPO/.uncle/docs/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+hash_canonical CHANGE_PLAN > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
 set_state IMPLEMENT
 run_driver FAKE_TURNS_LIMIT=1 WORKFLOW_STEPWISE_IMPLEMENT=1 WORKFLOW_DIFF_GATE=0
 expect_out 'reached its turn limit'
@@ -1680,7 +1722,7 @@ expect_file .uncle/docs/IMPLEMENTATION_NOTES.md
 new_case change-budget-step-handoff
 green_baseline 0 'bash app/test.sh'
 printf '\n## 20. Implementation sequence\n\n1. First step.\n2. Second step.\n' >> "$REPO/.uncle/docs/CHANGE_PLAN.md"
-hash_file "$REPO/.uncle/docs/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+hash_canonical CHANGE_PLAN > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
 set_state IMPLEMENT
 run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh" WORKFLOW_STEPWISE_IMPLEMENT=1 WORKFLOW_DOC_MAX_BYTES_IMPLEMENTATION_NOTES=1
 expect_status 0
@@ -1716,7 +1758,7 @@ cat > "$REPO/.uncle/docs/CHANGE_PLAN.md" <<'EOF'
 |---|---|---|
 | `app/main.sh` | New greeting | `app/test.sh` |
 EOF
-hash_file "$REPO/.uncle/docs/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+hash_canonical CHANGE_PLAN > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
 set_state IMPLEMENT
 run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
@@ -1907,7 +1949,7 @@ gate_group_10() {
 new_case partial-delivery
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
-partial_impl="printf '#!/bin/sh\necho goodbye\n' > app/main.sh; sed -i.bak 's/IMPLEMENTED/INCOMPLETE/' .uncle/docs/IMPLEMENTATION_NOTES.md; rm .uncle/docs/IMPLEMENTATION_NOTES.md.bak; echo attempt >> .uncle/workflow/attempts"
+partial_impl="printf '#!/bin/sh\necho goodbye\n' > app/main.sh; jq '.deliveries[0].status=\"INCOMPLETE\"' .uncle/workflow/documents/IMPLEMENTATION_NOTES.json > .uncle/workflow/.tmp-notes.json && mv .uncle/workflow/.tmp-notes.json .uncle/workflow/documents/IMPLEMENTATION_NOTES.json; echo attempt >> .uncle/workflow/attempts"
 run_driver WORKFLOW_DIFF_GATE=0 FAKE_IMPL="$partial_impl"
 expect_status 1
 expect_state IMPLEMENT
@@ -1925,7 +1967,7 @@ COUNT=$((COUNT + 1))
 new_case repair-completes-delivery
 green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
-run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh; if [[ ! -e .uncle/workflow/first-attempt ]]; then touch .uncle/workflow/first-attempt; sed -i.bak 's/IMPLEMENTED/INCOMPLETE/' .uncle/docs/IMPLEMENTATION_NOTES.md; rm .uncle/docs/IMPLEMENTATION_NOTES.md.bak; fi"
+run_driver FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh; if [[ ! -e .uncle/workflow/first-attempt ]]; then touch .uncle/workflow/first-attempt; jq '.deliveries[0].status=\"INCOMPLETE\"' .uncle/workflow/documents/IMPLEMENTATION_NOTES.json > .uncle/workflow/.tmp-notes.json && mv .uncle/workflow/.tmp-notes.json .uncle/workflow/documents/IMPLEMENTATION_NOTES.json; fi"
 expect_status 0
 expect_state WAIT_IMPLEMENT_APPROVAL
 expect_out 'Attempting repair once'

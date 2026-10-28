@@ -21,7 +21,10 @@ plan_check_inputs() {
         plan=.uncle/docs/UPDATED_PROJECT_PLAN.md
     fi
     for document in "$plan" .uncle/docs/ADVERSARIAL_REVIEW.md; do
-        canonical="$(canonical_artifact_path "$document")"
+        # A persisted Markdown-only run predates the JSON migration (or, in
+        # a test fixture, was seeded directly as Markdown); approval_artifact_path's
+        # same fallback used for the approval-hash check applies here too.
+        canonical="$(approval_artifact_path "$document")"
         if [[ ! -s "$canonical" ]]; then
             echo "Missing canonical plan review input: $canonical" >&2
             return 1

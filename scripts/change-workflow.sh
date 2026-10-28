@@ -2000,6 +2000,7 @@ run_stepwise_implementation() {
                 "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" "$notes_ingest_error"
             return 1
         }
+        python3 "$ROOT/scripts/lib/implementation_notes.py" render . .uncle/docs/IMPLEMENTATION_NOTES.md
         python3 "$ROOT/scripts/lib/test_report.py" validate . change .uncle/workflow/documents/CHANGE_TEST_REPORT.json
         return 0
     fi
@@ -2132,12 +2133,14 @@ run_stepwise_implementation() {
 recover_missing_implementation_reports() {
     if [[ -s .uncle/workflow/documents/IMPLEMENTATION_NOTES.json && -s .uncle/workflow/documents/CHANGE_TEST_REPORT.json ]]; then
         python3 "$ROOT/scripts/lib/implementation_notes.py" validate . .uncle/workflow/documents/IMPLEMENTATION_NOTES.json --require-json
+        python3 "$ROOT/scripts/lib/implementation_notes.py" render . .uncle/docs/IMPLEMENTATION_NOTES.md
         python3 "$ROOT/scripts/lib/test_report.py" validate . change .uncle/workflow/documents/CHANGE_TEST_REPORT.json
         return 0
     fi
     echo 'Implementation reports missing; recording incomplete handoff evidence automatically.'
     python3 "$ROOT/scripts/lib/implementation_report_fallback.py" --project . --kind change --missing-only
     python3 "$ROOT/scripts/lib/implementation_notes.py" validate . .uncle/workflow/documents/IMPLEMENTATION_NOTES.json --require-json
+    python3 "$ROOT/scripts/lib/implementation_notes.py" render . .uncle/docs/IMPLEMENTATION_NOTES.md
     python3 "$ROOT/scripts/lib/test_report.py" validate . change .uncle/workflow/documents/CHANGE_TEST_REPORT.json
 }
 

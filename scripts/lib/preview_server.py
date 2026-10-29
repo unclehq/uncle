@@ -155,7 +155,7 @@ def _open_local_browser(url):
 
 
 def serve_live_preview(root, state):
-    """Serve and open the preview until the workflow explicitly stops it."""
+    """Serve the standalone preview, then hand off to Vite when it exists."""
     state = Path(state)
     state.mkdir(parents=True, exist_ok=True)
     server = PreviewServer(root)
@@ -167,12 +167,32 @@ def serve_live_preview(root, state):
     _open_local_browser(server.url)
     stopped = threading.Event()
     previous = signal.signal(signal.SIGTERM, lambda *_: stopped.set())
+    development = None
     try:
         while not stopped.wait(.2):
-            pass
+            # preview-build deliberately creates standalone HTML before the
+            # implementation has dependencies.  Once implementation installs
+            # Vite, serving its module index through SimpleHTTPServer produces
+            # a blank page.  The preview owner, not the TUI, owns this
+            # transition so it also works unattended.
+            spec = development_preview(root)
+            if spec is None:
+                continue
+            server.close()
+            server = None
+            development = DevelopmentPreview(root, spec)
+            if development.url is not None:
+                url_path.write_text(development.url, encoding='utf-8')
+            while not stopped.wait(.2):
+                if development.process is None or development.process.poll() is not None:
+                    break
+            break
     finally:
         signal.signal(signal.SIGTERM, previous)
-        server.close()
+        if server is not None:
+            server.close()
+        if development is not None:
+            development.close()
         pid_path.unlink(missing_ok=True)
         url_path.unlink(missing_ok=True)
     return 0

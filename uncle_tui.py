@@ -2588,20 +2588,11 @@ class UncleTUI:
         # A later development-server upgrade intentionally remains TUI-owned.
         driver_preview = Path(_project_root()) / ".uncle/workflow/preview-server.url"
         if driver_preview.is_file():
-            if kind == 'static':
-                self.early_preview_shown = True
-                return
-            # The preview-build page is standalone HTML. Once implementation
-            # has installed Vite and switched index.html to source modules,
-            # the static server would render an empty root forever. Hand off
-            # to DevelopmentPreview, which runs the real module server.
-            try:
-                subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'lib', 'preview_server.py'),
-                                'stop', os.path.join(_project_root(), '.uncle', 'workflow')],
-                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, check=False)
-            except OSError:
-                pass
+            # The workflow-owned preview server keeps the same responsibility
+            # through its static-to-development handoff. Do not race it or
+            # open a second stale browser tab from the TUI.
+            self.early_preview_shown = True
+            return
         if getattr(self, "early_preview_shown", False):
             # A page already opened. The only disruption worth it now is a
             # static-to-development upgrade: dependencies that were missing

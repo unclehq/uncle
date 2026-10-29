@@ -833,8 +833,9 @@ ensure_acceptance_canonical() {
 acceptance_transition() {
     local report="$1" next="$2" result ids canonical supervision_artifact
     canonical="$STATE_DIR/documents/$(basename "${report%.md}").json"
-    ensure_acceptance_canonical "$report"
-    [[ $? != 2 ]] || return 0
+    local ensure_rc=0
+    ensure_acceptance_canonical "$report" || ensure_rc=$?
+    [[ "$ensure_rc" != 2 ]] || return 0
     # Workflow control is JSON-only.  The Markdown path is an intentionally
     # disposable human view: never parse, repair, require, or hash it here.
     if [[ ! -s "$canonical" ]]; then
@@ -5468,7 +5469,7 @@ while true; do
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
-            ensure_acceptance_canonical .uncle/docs/TEST_REVIEW.md; ensure_rc=$?
+            ensure_rc=0; ensure_acceptance_canonical .uncle/docs/TEST_REVIEW.md || ensure_rc=$?
             if [[ "$ensure_rc" == 2 ]]; then continue; fi
             require_file "$STATE_DIR/documents/TEST_REVIEW.json"
             if [[ "$GREEN_CHECK" != 1 || ! -s "$GREEN_CLASS" ]]; then
@@ -5841,6 +5842,9 @@ PY
                 printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
                 set_state REPAIR
             else
+                ensure_rc=0
+                ensure_acceptance_canonical .uncle/docs/VERIFICATION_REPORT.md || ensure_rc=$?
+                if [[ "$ensure_rc" == 2 ]]; then continue; fi
                 checklist_acceptance="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/VERIFICATION_REPORT.json")"
                 # A checklist can report a missing human-only observation or
                 # an evidence/coverage concern after the driver has already
@@ -5850,9 +5854,14 @@ PY
                 # failing row for final audit, but continue in the same mode
                 # that already permits a failing green-check to be delivered
                 # with an explicit disposition.
+                # UNKNOWN is excluded: that is a format defect (malformed or
+                # missing canonical JSON, the retry above already spent its
+                # one attempt), not a real, judged acceptance outcome -- it
+                # must still stop through acceptance_transition's own path
+                # below, not be waved through as nonblocking evidence.
                 if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] \
                     && [[ "$(green_regressions "$GREEN_CLASS")" -eq 0 ]] \
-                    && [[ "$checklist_acceptance" != PASS ]]; then
+                    && [[ "$checklist_acceptance" != PASS && "$checklist_acceptance" != UNKNOWN ]]; then
                     echo 'Checklist findings are recorded as nonblocking evidence; continuing to final audit.'
                     record_nonblocking_failure VERIFICATION_REPORT.json "checklist acceptance $checklist_acceptance after passing driver green check"
                     set_state FINAL_AUDIT

@@ -282,6 +282,25 @@ args=("$@")
 for ((i=0; i<${#args[@]}; i++)); do
     [[ "${args[$i]}" == --output-last-message ]] && out="${args[$((i+1))]}"
 done
+# execute-checklist's isolated batch workers (checklist_worker_packets.py)
+# deliver through this env var directly, with no --output-last-message
+# path at all: write every check the prompt assigned as a trivial PASS.
+if [[ -n "${UNCLE_WORKER_PACKET_PATH:-}" ]]; then
+    ids=()
+    while IFS= read -r id; do ids+=("$id"); done < <(printf '%s\n' "$prompt" | sed -n "s/.*Execute \`\\([^\`]*\\)\`\\..*/\\1/p")
+    {
+        printf '{"schema":"uncle.artifact/v1","kind":"checklist-execution-worker-packet","results":['
+        first=1
+        for id in "${ids[@]}"; do
+            [[ "$first" == 1 ]] || printf ','
+            first=0
+            printf '{"id":"%s","action":"stub action","expected_result":"stub expected","actual_result":"stub actual","evidence":"stub evidence","status":"PASS"}' "$id"
+        done
+        printf ']}\n'
+    } > "$UNCLE_WORKER_PACKET_PATH"
+    printf '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"session_id":"stub"}\n'
+    exit 0
+fi
 case "$prompt" in
     *'adversarial-review-worker-packet'*) kind=adversarial-review-worker-packet ;;
     *'test-review-worker-packet'*) kind=test-review-worker-packet ;;
@@ -747,6 +766,25 @@ prompt="$(cat)"
 gate_report() {
     printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n| MC-1 | YES | %s | stub observation |\n' "$2" > "$1"
 }
+# execute-checklist's isolated batch workers (checklist_worker_packets.py)
+# deliver through this env var directly, with no prompt-content-matched
+# file write at all: write every check the prompt assigned as a trivial PASS.
+if [[ -n "${UNCLE_WORKER_PACKET_PATH:-}" ]]; then
+    ids=()
+    while IFS= read -r id; do ids+=("$id"); done < <(printf '%s\n' "$prompt" | sed -n "s/.*Execute \`\\([^\`]*\\)\`\\..*/\\1/p")
+    {
+        printf '{"schema":"uncle.artifact/v1","kind":"checklist-execution-worker-packet","results":['
+        first=1
+        for id in "${ids[@]}"; do
+            [[ "$first" == 1 ]] || printf ','
+            first=0
+            printf '{"id":"%s","action":"stub action","expected_result":"stub expected","actual_result":"stub actual","evidence":"stub evidence","status":"PASS"}' "$id"
+        done
+        printf ']}\n'
+    } > "$UNCLE_WORKER_PACKET_PATH"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1},"session_id":"stub"}'
+    exit 0
+fi
 case "$prompt" in
     *'Verification-only resume'*)
         if [[ -n "${FAKE_VERIFY_LIVE:-}" ]]; then bash -c "$FAKE_VERIFY_LIVE"; fi

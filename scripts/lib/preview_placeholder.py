@@ -93,6 +93,8 @@ def page(title, lines, colors):
     second = colors[1] if len(colors) > 1 else base
     ink = '#1b1b1b' if luminance(base) > 0.4 else '#fafafa'
     card = 'rgba(255,255,255,.88)' if ink == '#1b1b1b' else 'rgba(0,0,0,.32)'
+    accent = second if second != base else ink
+    logo_ink = '#1b1b1b' if luminance(accent) > 0.4 else '#fafafa'
     swatches = ''.join('<i style="background:%s"></i>' % c for c in colors)
     items = ''.join('<li>%s</li>' % html.escape(line) for line in lines)
     return ('<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
@@ -100,15 +102,27 @@ def page(title, lines, colors):
             '*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;'
             'font:16px/1.5 system-ui,sans-serif;color:%s;background:linear-gradient(135deg,%s,%s)}\n'
             'main{width:min(92vw,520px);padding:28px;border-radius:20px;background:%s;box-shadow:0 10px 40px rgba(0,0,0,.25)}\n'
+            '.brand{display:flex;align-items:center;gap:10px;margin-bottom:18px}'
+            '.brand svg{flex:none}.brand span{font-weight:700;letter-spacing:.02em;opacity:.85}\n'
+            '.building{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;'
+            'text-transform:uppercase;letter-spacing:.08em;opacity:.7;margin-bottom:14px}'
+            '.gear{display:inline-block;animation:spin 2.2s linear infinite}'
+            '@keyframes spin{to{transform:rotate(360deg)}}\n'
             'h1{margin:0 0 8px;font-size:28px}ul{margin:12px 0;padding-left:20px}'
             '.sw{display:flex;gap:8px;margin:16px 0}.sw i{flex:1;height:28px;border-radius:8px;border:1px solid rgba(0,0,0,.15)}\n'
             '.note{font-size:13px;opacity:.75;display:flex;align-items:center;gap:8px}'
             '.dot{width:10px;height:10px;border-radius:50%%;background:%s;animation:p 1s infinite alternate}'
-            '@keyframes p{to{opacity:.25}}\n</style></head>\n<body><main><h1>%s</h1><ul>%s</ul>'
+            '@keyframes p{to{opacity:.25}}\n</style></head>\n<body><main>'
+            '<div class="brand"><svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">'
+            '<rect width="28" height="28" rx="8" fill="%s"/>'
+            '<text x="14" y="20" font-size="16" font-weight="800" text-anchor="middle" '
+            'font-family="system-ui,sans-serif" fill="%s">u</text></svg><span>uncle</span></div>'
+            '<div class="building"><span class="gear">&#9881;</span>Building</div>'
+            '<h1>%s</h1><ul>%s</ul>'
             '<div class="sw">%s</div><div class="note"><span class="dot"></span>Building the first look&hellip; '
             'this page updates by itself.</div></main></body></html>\n'
-            % (html.escape(title), ink, base, second, card, second if second != base else ink,
-               html.escape(title), items, swatches))
+            % (html.escape(title), ink, base, second, card, accent,
+               accent, logo_ink, html.escape(title), items, swatches))
 
 
 def write_if_absent(root):

@@ -1,0 +1,4 @@
+default_model = "moonshot-ai/kimi-k2"
+
+[llm_models."moonshot-ai/kimi-k2"]
+provider = "moonshot"

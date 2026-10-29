@@ -16,6 +16,9 @@
 # Per-project local config (committed template lives at .uncle/config.example)
 .uncle/config
 
+# Local model catalog cache
+.uncle/model-catalog.json
+
 # Python bytecode
 __pycache__/
 *.pyc
@@ -34,4 +37,3 @@ DEFECTS.md
 IMPLEMENTATION_NOTES.md
 MANUAL_CHECKLIST.md
 VERIFICATION_REPORT.md
-.uncle

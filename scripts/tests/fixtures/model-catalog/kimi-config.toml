@@ -1,0 +1,12 @@
+default_model = "moonshot-ai/kimi-k2"
+
+[models."moonshot-ai/kimi-k2"]
+provider = "moonshot"
+max_context_size = 262144
+
+[models."moonshot-ai/kimi-k2-thinking"]
+provider = "moonshot"
+max_context_size = 262144
+
+[models."bad id with spaces"]
+provider = "moonshot"

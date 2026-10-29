@@ -63,6 +63,7 @@ from supervisor_chat import ChatRequest
 import build_memory
 import gate_answer
 import worktree_runs
+import model_catalog as model_catalog_lib
 
 CLINE_CONFIG = os.environ.get("CLINE_CONFIG", os.path.expanduser("~/.cline/data/settings/providers.json"))
 
@@ -1497,9 +1498,10 @@ class UncleTUI:
             # runner the stage does not use would be passed to a shim that
             # never heard of them.
             if runner in ("claude", "codex", "kimi"):
-                catalog = {"claude": MODEL_CATALOG_CLAUDE,
-                           "codex": MODEL_CATALOG_CODEX,
-                           "kimi": MODEL_CATALOG_KIMI}[runner]
+                static = {"claude": MODEL_CATALOG_CLAUDE,
+                          "codex": MODEL_CATALOG_CODEX,
+                          "kimi": MODEL_CATALOG_KIMI}
+                catalog = getattr(self, "model_catalogs", {}).get(runner) or static[runner]
                 rows = []
                 for group, entries in catalog:
                     rows.append(("header", group))
@@ -7326,6 +7328,7 @@ class UncleTUI:
         # while the homepage is being read instead of in front of the first
         # answer. A failure here is not an error -- the per-call path remains.
         threading.Thread(target=self._warm_supervisor, daemon=True).start()
+        self._start_model_refresh()
         try:
             self._run_loop()
         finally:
@@ -7344,6 +7347,88 @@ class UncleTUI:
                 self.stop_workflow()
             finally:
                 signal.signal(signal.SIGTERM, previous_term)
+
+    MODEL_PROVIDERS = ("claude", "codex", "kimi")
+
+    def _start_model_refresh(self, fetchers=None, now=None):
+        """Apply the disk cache, then start one daemon fetch thread per provider.
+
+        Workers only put results on a queue; poll_model_catalog applies them
+        on the UI thread. UNCLE_MODEL_REFRESH=0 starts nothing and reads nothing.
+        """
+        self.model_catalogs = getattr(self, "model_catalogs", {})
+        self.model_catalog_queue = queue.Queue()
+        if not model_catalog_lib.refresh_enabled():
+            return
+        cache_path = getattr(self, "model_cache_path", None) or os.path.join(
+            _project_root(), ".uncle", "model-catalog.json")
+        try:
+            cached = model_catalog_lib.load_cached_catalogs(cache_path)
+            for name, groups in (cached or {}).items():
+                if groups:
+                    self._apply_model_catalog(name, groups)
+        except Exception:
+            pass
+        taken = {mid for _g, entries in MODEL_CATALOG for _l, mid in entries}
+        fetchers = fetchers or getattr(self, "model_fetchers", None) or model_catalog_lib.default_fetchers(taken)
+        self._model_pending = {n for n in self.MODEL_PROVIDERS if fetchers.get(n)}
+        self._model_failed = []
+        self._model_failed_reported = False
+        for name in self.MODEL_PROVIDERS:
+            fetch = fetchers.get(name)
+            if fetch is None:
+                continue
+            threading.Thread(target=self._model_worker, args=(name, fetch, cache_path, now),
+                             daemon=True).start()
+
+    def _model_worker(self, name, fetch, cache_path, now=None):
+        try:
+            status, catalog, reason = fetch()
+            groups = model_catalog_lib.to_groups(name, catalog)
+        except Exception as exc:
+            status, groups, reason = "failed", [], str(exc)
+        if status == "ok" and groups:
+            try:
+                model_catalog_lib.save_provider(cache_path, name, groups, now=now)
+            except Exception:
+                pass
+        self.model_catalog_queue.put((name, status, groups, reason))
+
+    def _apply_model_catalog(self, name, groups):
+        if not groups:
+            return  # an empty result never replaces a known list
+        groups = [(g, [(e[0], e[1]) for e in entries]) for g, entries in groups]
+        self.model_catalogs[name] = groups
+        for _g, entries in groups:
+            for label, mid in entries:
+                MODEL_LABELS[mid] = label
+
+    def poll_model_catalog(self):
+        q = getattr(self, "model_catalog_queue", None)
+        if q is None:
+            return False
+        changed = False
+        failed = self.__dict__.setdefault("_model_failed", [])
+        pending = self.__dict__.get("_model_pending")
+        while True:
+            try:
+                name, status, groups, _reason = q.get_nowait()
+            except queue.Empty:
+                break
+            if pending is not None:
+                pending.discard(name)
+            if status == "ok" and groups:
+                self._apply_model_catalog(name, groups)
+                changed = True
+            elif status == "failed" and name not in failed:
+                failed.append(name)
+        # One line total, emitted once every started provider has reported.
+        if failed and not pending and not self.__dict__.get("_model_failed_reported"):
+            self._model_failed_reported = True
+            self.home_history.append(
+                ('system', 'Model list refresh failed for %s; using the previous list.' % ", ".join(failed)))
+            changed = True
+        return changed
 
     def _run_loop(self):
         curses.curs_set(0)
@@ -7375,6 +7460,7 @@ class UncleTUI:
             dirty = self.poll_delegation() or dirty
             dirty = self.poll_triage() or dirty
             dirty = self.poll_issue_picker() or dirty
+            dirty = self.poll_model_catalog() or dirty
             self._poll_workflow()
             dirty = self.poll_supervision() or dirty
             dirty = self.poll_status() or dirty

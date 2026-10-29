@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -171,6 +172,17 @@ class EarlyPreview(unittest.TestCase):
         self.assertEqual(len(self.opened), 1)
         self.assertTrue(self.opened[0].startswith('http://127.0.0.1:'))
         self.assertIn('<h1>calc</h1>', get(self.opened[0]))
+
+    def test_macos_open_fallback_keeps_a_valid_preview_when_python_has_no_browser(self):
+        """A missing Python browser registration must not discard preview-build."""
+        screen = self.make(project(**{'index.html': '<h1>calc</h1>'}))
+        self.tui.webbrowser = type('W', (), {'open': staticmethod(lambda _url: False)})()
+        with patch.object(self.tui.sys, 'platform', 'darwin'), \
+             patch.object(self.tui.subprocess, 'Popen') as opener:
+            self.settle(screen)
+        self.assertIsNotNone(screen.preview_server)
+        opener.assert_called_once()
+        self.assertEqual(opener.call_args.args[0][0], 'open')
 
     def test_no_finished_dialog_during_a_running_build(self):
         screen = self.make(project(**{'index.html': '<h1>calc</h1>'}))

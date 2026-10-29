@@ -39,6 +39,7 @@ run_case() {
     (
         cd "$dir"
         ROOT="$ROOT" STATE_DIR=".uncle/workflow" LOG_DIR=".uncle/workflow/logs"
+        WORKFLOW_PREVIEW_OPEN_BROWSER=0
         PREVIEW_VENDOR_PY="$TMP/vendor-stub.py"
         PROJECT_ROOT="$PWD" UNCLE_CONFIG="$PWD/.uncle/config"
         . "$ROOT/scripts/lib/stage-config.sh"
@@ -105,6 +106,7 @@ check "preview prompt forbids bundlers and CDN links" grep -qF 'No bundler, no `
 check "preview prompt loads React from the local vendor copies" grep -qF '.uncle/vendor/react.production.min.js' "$ROOT/prompts/preview-build.md"
 check "preview gets only Read and Write"           grep -qF 'preview-build|preview-build-part-*) fallback="Read,Write"' "$ROOT/scripts/stagegate.sh"
 check "preview gets a short turn limit"            grep -qF 'preview-build|preview-build-part-*) fallback=8' "$ROOT/scripts/stagegate.sh"
+check "preview opens its generated page through the live reload server" grep -qF 'preview_server.py" start "$PWD" "$STATE_DIR"' "$ROOT/scripts/lib/preview-build.sh"
 run_case capped REQUIREMENTS.md "$WEB_BRIEF"
 check "preview output is capped by default"        test "$(cat "$TMP/capped/.uncle/workflow/cap")" == 8000
 WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS=1234 run_case operator-cap REQUIREMENTS.md "$WEB_BRIEF"

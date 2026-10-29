@@ -66,6 +66,33 @@ import worktree_runs
 
 CLINE_CONFIG = os.environ.get("CLINE_CONFIG", os.path.expanduser("~/.cline/data/settings/providers.json"))
 
+
+def open_early_preview(url):
+    """Open the first-look page even when Python has no registered browser.
+
+    ``webbrowser.open`` returns False on some macOS terminal launches despite
+    the system ``open`` command being available.  That used to make us tear
+    down a healthy preview server and silently show no tab at all.  The
+    fallback is deliberately only for the local preview URL, never an
+    arbitrary model-provided address.
+    """
+    if webbrowser.open(url):
+        return True
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", url], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        if os.name == "nt":
+            os.startfile(url)  # type: ignore[attr-defined]
+            return True
+        subprocess.Popen(["xdg-open", url], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except OSError:
+        return False
+
+
 WORKFLOWS = [
     ("New application", [os.path.join(ROOT, "scripts", "stagegate.sh")]),
     ("From GitHub issue", [os.path.join(ROOT, "scripts", "from-issue.sh")]),
@@ -2489,6 +2516,20 @@ class UncleTUI:
         except (OSError, ValueError):
             return None
         if spec.get("kind") != "webpage":
+            # The early-preview builder deliberately does not create
+            # .uncle/launch.json: that manifest belongs to the implementation
+            # of record, while this page is only a disposable first look.
+            # launch_spec is conservative and therefore calls that project
+            # ``none``.  At this point _poll_early_preview has already
+            # restricted us to application-build stages, so an actual root
+            # index page is sufficient, safe evidence that there is something
+            # to show.  Without this branch preview-build successfully writes
+            # its placeholder but no browser tab is ever opened.
+            root = Path(_project_root())
+            page = root / "index.html"
+            if spec.get("kind") == "none" and page.is_file() and page.stat().st_size:
+                self._preview_page = "index.html"
+                return ('static', self._preview_page)
             return None
         url = spec.get("url", "")
         if not url.startswith("file://"):
@@ -2541,6 +2582,14 @@ class UncleTUI:
         if preview is None:
             return
         kind, value = preview
+        # preview-build owns the first static preview server.  It has already
+        # opened a live-reloading browser tab, so the TUI must not open a
+        # second copy when it notices the same index.html on its next poll.
+        # A later development-server upgrade intentionally remains TUI-owned.
+        driver_preview = Path(_project_root()) / ".uncle/workflow/preview-server.url"
+        if kind == 'static' and driver_preview.is_file():
+            self.early_preview_shown = True
+            return
         if getattr(self, "early_preview_shown", False):
             # A page already opened. The only disruption worth it now is a
             # static-to-development upgrade: dependencies that were missing
@@ -2563,7 +2612,7 @@ class UncleTUI:
             return
         self.preview_server = server
         self.early_preview_shown = True
-        if kind == 'static' and not webbrowser.open(server.url):
+        if kind == 'static' and not open_early_preview(server.url):
             server.close()
             self.preview_server = None
             self.early_preview_shown = False

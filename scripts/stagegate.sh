@@ -286,6 +286,7 @@ on_exit() {
     if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
     python3 -B "$ROOT/scripts/lib/app_server.py" stop "$STATE_DIR" > /dev/null 2>&1 || true
+    python3 -B "$ROOT/scripts/lib/preview_server.py" stop "$STATE_DIR" > /dev/null 2>&1 || true
     if [[ "$rc" != 0 ]] && declare -f green_background_cancel > /dev/null; then green_background_cancel; fi
     if [[ -n "${PARALLEL_PREWARM_PID:-}" ]] && kill -0 "$PARALLEL_PREWARM_PID" 2>/dev/null; then
         kill "$PARALLEL_PREWARM_PID" 2>/dev/null || true
@@ -1277,11 +1278,15 @@ unattended_prewarm_stage_for_state() {
     # start it without sending a prompt or opening a model turn.
     local -a warm_args env_args
     if [[ "$side" == reviewer ]]; then
-        warm_args=(exec --ephemeral --skip-git-repo-check --sandbox workspace-write)
-        [[ -z "$effort" ]] || warm_args+=(-c "model_reasoning_effort=$effort")
+        # Native Stage normalizes Claude reviewer invocations to this exact
+        # persistent protocol command.  Passing Codex-style `-c` settings
+        # here left `Stage.effort` empty, produced a different digest, and
+        # made the actual reviewer start a second pool instead of reusing the
+        # warm one.
+        warm_args=(-p --output-format stream-json --verbose --allowedTools Read,Glob,Grep,Write --strict-mcp-config)
+        [[ -z "$effort" ]] || warm_args+=(--effort "$effort")
         [[ -z "$model" ]] || warm_args+=(-m "$model")
-        warm_args+=(--output-last-message "$STATE_DIR/.prewarm-output.json" prewarm)
-        env_args=(UNCLE_ARTIFACT_DELIVERY="$STATE_DIR/.prewarm-delivery.json")
+        env_args=(-u UNCLE_ARTIFACT_DELIVERY)
     else
         warm_args=(-p)
         [[ -z "$model" ]] || warm_args+=(--model "$model")
@@ -1655,6 +1660,36 @@ green_failure_route() {
     else
         printf 'ask'
     fi
+}
+
+# A failed assertion can be useful delivery evidence when the application is
+# still usable.  A compile failure or a preview server that cannot start is
+# different: no browser worker can inspect the product at all, so treating it
+# as a nonblocking test result creates a blank-page checklist loop.
+green_application_not_runnable() {
+    local log="${1:-$LOG_DIR/green-check.log}"
+    [[ -s "$log" ]] || return 1
+    grep -qiE '(^|[^[:alpha:]])(build failed|failed to resolve import|is not exported by|could not resolve|error when starting (dev|preview) server|process from config\.webServer was not able to start|webserver.*exit code)' "$log"
+}
+
+# Return 0 when browser work is safe, 2 after scheduling the one bounded
+# implementation retry for an unattended run, and 1 when a person must
+# inspect the persistent runtime failure.  The retry is intentionally not the
+# generic test-repair loop: it has a concrete driver-owned compiler error and
+# re-enters IMPLEMENT with that evidence available in green-check.log.
+route_unrunnable_application() {
+    green_application_not_runnable || return 0
+    local marker="$STATE_DIR/runtime-readiness-repair-attempted"
+    if [[ "${UNATTENDED:-0}" == 1 && ! -e "$marker" ]]; then
+        touch "$marker"
+        printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
+        echo 'The application does not compile or its preview server cannot start; returning once to IMPLEMENT before any browser/checklist work.'
+        set_state IMPLEMENT
+        return 2
+    fi
+    echo 'Application is not runnable (compile or preview-server failure); browser/checklist work is not started.' >&2
+    echo "See $LOG_DIR/green-check.log and correct the implementation before resuming." >&2
+    return 1
 }
 
 # A race runs every candidate in its own copy of the project, and only the
@@ -3156,7 +3191,8 @@ run_test_review_panel() {
             UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens-retry" < /dev/null || true
         fi
     done
-    python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" "$STATE_DIR/documents/TEST_REVIEW.json" coverage assertions oracle || return 1
+    WORKFLOW_POSTFLIGHT_GREEN_CHECK="${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" \
+        python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" "$STATE_DIR/documents/TEST_REVIEW.json" coverage assertions oracle || return 1
     python3 "$ROOT/scripts/lib/acceptance_context.py" --validate-json "$STATE_DIR/documents/TEST_REVIEW.json" || return 1
     python3 "$ROOT/scripts/lib/acceptance_context.py" --render "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/TEST_REVIEW.md || return 1
     cp "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
@@ -3183,7 +3219,7 @@ run_manual_checklist_panel() {
             inputs='`.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
             printf '\n## Early speculative checklist\n\n`TEST_REVIEW.json` is intentionally not an input because it is being produced concurrently. Build checks from the approved plan, adversarial review, current tree, and driver evidence only. This packet is discarded unless the finished test review passes unchanged.\n' >> "$prompt"
         fi
-        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`, `.uncle/workflow/documents/PROJECT_PLAN.json`, `.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json`, %s. Do not inspect any rendered Markdown view or enumerate directories.\n\nUse current-tree snapshots, file hashes, and `.uncle/workflow/green-check.tsv` for regression evidence. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$range" >> "$prompt"
+        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`, `.uncle/workflow/documents/PROJECT_PLAN.json`, `.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json`, %s. Do not inspect any rendered Markdown view or enumerate directories.\n\nUse current-tree snapshots and file hashes for regression evidence. Driver green-check is postflight-only and is not an input here. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$range" >> "$prompt"
         ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/manual-checklist-worker-$lens.log" 2>&1 &
         pids+=("$!")
@@ -3247,7 +3283,7 @@ EARLY_STREAM_DIR="$STATE_DIR/checklist-stream"
 start_streamed_checklist_lens() {
     local directory="$1" lens="$2" partial="$EARLY_STREAM_DIR/$lens.checklist.json"
     local output="$EARLY_STREAM_DIR/$lens.results.json" pid_file="$EARLY_STREAM_DIR/$lens.pid"
-    local candidate
+    local candidate lane_file lane_count
     local -a ready_lenses=()
     mkdir -p "$EARLY_STREAM_DIR"
     [[ -s "$pid_file" ]] && return 0
@@ -3266,6 +3302,18 @@ start_streamed_checklist_lens() {
     [[ "${#ready_lenses[@]}" -gt 0 ]] || return 1
     python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$partial" "${ready_lenses[@]}" || return 1
     python3 -B "$ROOT/scripts/lib/checklist_document.py" --validate-json "$partial" || return 1
+    # The first completed lens is often the invariant/browser lens.  Its rows
+    # intentionally share browser:system, so immediately executing it creates
+    # one long serial worker and defeats the fan-out we are trying to overlap.
+    # Wait for another ready lens unless the panel has finished; the normal
+    # execution pass then starts several independent lanes from the collated
+    # checklist instead of pinning the stage behind this partial one.
+    lane_file="$EARLY_STREAM_DIR/$lens.lanes.txt"
+    lane_count="$(checklist_lane_batches "$partial" "$lane_file" 2>/dev/null || printf 0)"
+    [[ "$lane_count" =~ ^[0-9]+$ ]] || lane_count=0
+    if [[ "$lane_count" -lt 2 ]]; then
+        return 1
+    fi
     ensure_checklist_runner execute-checklist || return 1
     echo "Streaming ready checklist lenses (${ready_lenses[*]}) into execute-checklist."
     (
@@ -3312,6 +3360,17 @@ early_stream_collect() {
         "$STATE_DIR/documents/EXECUTE_CHECKLIST_STREAMED.json" "${packets[@]}"
 }
 
+prewarm_checklist_browser() {
+    [[ "${UNATTENDED:-0}" == 1 ]] || return 0
+    [[ "${WORKFLOW_CHECKLIST_APP_SERVER:-1}" == 1 ]] || return 0
+    # This is deliberately safe before a successful green check: app_server
+    # prewarm refuses to install, build, or navigate a page.  If a prior build
+    # is usable it leaves the local server warm; otherwise it returns without
+    # turning a compiler failure into browser worker churn.
+    python3 -B "$ROOT/scripts/lib/app_server.py" prewarm "$PWD" "$STATE_DIR" \
+        > "$LOG_DIR/app-server.prewarm.log" 2>&1 < /dev/null &
+}
+
 early_checklist_start() {
     [[ "${WORKFLOW_EARLY_CHECKLIST:-1}" == 1 ]] || return 0
     [[ -z "$EARLY_CHECKLIST_PID" ]] || return 0
@@ -3331,10 +3390,7 @@ early_checklist_start() {
     # Browser assertions still wait for the checklist's declared rows, but the
     # server can be ready while those rows are being composed.  Prewarm never
     # installs or builds, so it cannot contend with driver verification.
-    if [[ "${WORKFLOW_CHECKLIST_APP_SERVER:-1}" == 1 ]]; then
-        python3 -B "$ROOT/scripts/lib/app_server.py" prewarm "$PWD" "$STATE_DIR" \
-            > "$LOG_DIR/app-server.prewarm.log" 2>&1 < /dev/null &
-    fi
+    prewarm_checklist_browser
     (
         if UNCLE_CHECKLIST_EARLY=1 run_manual_checklist_panel; then
             touch "$STATE_DIR/checklist-early.ok"
@@ -5097,8 +5153,6 @@ while true; do
             verify_approval \
                 .uncle/docs/ADVERSARIAL_REVIEW.md \
                 ADVERSARIAL_REVIEW
-            # The first group's sandboxes can be made now; they are used only if the tree is unchanged when the group starts.
-            parallel_prewarm_start .uncle/docs/PROJECT_PLAN.md "$ROOT/scripts/lib"
             run_gated_stage UPDATED_PLAN \
                 .uncle/docs/ADVERSARIAL_REVIEW.md \
                 .uncle/docs/UPDATED_PROJECT_PLAN.md
@@ -5109,6 +5163,12 @@ while true; do
                     exit 1
                 }
             fi
+            # Prewarm only after the review has produced the final execution
+            # plan.  Prewarming from PROJECT_PLAN can create sandboxes for a
+            # different grouping/ownership layout; when UPDATED_PLAN then
+            # changes the schedule, stale mirrors can be falsely attributed
+            # with prior-step writes and force a costly serial fallback.
+            parallel_prewarm_start .uncle/docs/UPDATED_PROJECT_PLAN.md "$ROOT/scripts/lib"
             set_state VALIDATE_UPDATED_PLAN
             ;;
 
@@ -5364,11 +5424,9 @@ while true; do
             PREVIOUS_VERIFICATION_SNAPSHOT=""
             capture_verification_inputs
 
-            # Independent of the agent that just claimed its checks passed.
-            # The result is carried to the gate rather than ending the run: a
-            # failure is for the operator to weigh against the diff, and
-            # killing the run here would throw away the stage that produced it.
-            run_green_check_auto || true
+            # Verification is postflight evidence. Starting it here made every
+            # later worker inherit PENDING data and redo driver-owned checks.
+            echo 'Driver verification is deferred until final audit; earlier stages do not consume green-check evidence.'
             collect_background_preflight
             # The driver knows each command's result; record them as the test report in place of the implementation stage's
             # placeholder, so the test review reads real evidence once instead of failing it and sending the run back here.
@@ -5462,6 +5520,17 @@ while true; do
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
+            # Keep the inexpensive server/browser prerequisite warm even if
+            # the last build failed.  It never builds or opens a page.
+            prewarm_checklist_browser
+            # Never start speculative manual/browser evidence against an app
+            # the driver has already proved cannot compile or serve.
+            if ! green_pending; then
+                runtime_ready_rc=0
+                route_unrunnable_application || runtime_ready_rc=$?
+                if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
+                [[ "$runtime_ready_rc" == 0 ]] || exit 1
+            fi
             # Start once here even when the green check was synchronous (the
             # background verifier also calls this helper, and it is idempotent).
             early_checklist_start
@@ -5480,6 +5549,18 @@ while true; do
             ensure_rc=0; ensure_acceptance_canonical .uncle/docs/TEST_REVIEW.md || ensure_rc=$?
             if [[ "$ensure_rc" == 2 ]]; then continue; fi
             require_file "$STATE_DIR/documents/TEST_REVIEW.json"
+            # Test review is advisory until the one postflight driver run.
+            # Keep it as audit evidence; never replay implementation or repair
+            # merely because command-level evidence is not available yet.
+            if [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" == 1 ]]; then
+                test_review_status="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS)"
+                if [[ "$test_review_status" != PASS ]]; then
+                    record_nonblocking_failure TEST_REVIEW.json "canonical test-review acceptance $test_review_status; final audit will assess it with postflight verification"
+                fi
+                echo 'Test-review evidence recorded; green-check is deferred to final audit.'
+                set_state MANUAL_CHECKLIST
+                continue
+            fi
             if [[ "$GREEN_CHECK" != 1 || ! -s "$GREEN_CLASS" ]]; then
                 echo "Acceptance BLOCKED: the driver must run the approved verification suite."
                 echo "Enable WORKFLOW_GREEN_CHECK and rerun IMPLEMENT to capture its results."
@@ -5636,7 +5717,15 @@ while true; do
                     echo 'A verification finding is not eligible for another automatic repair; continuing it to final audit as unresolved evidence.'
                     record_nonblocking_failure "$(basename "$repair_source")" 'automatic repair not run; canonical finding remains unresolved'
                     record_test_failure_disposition
-                    set_state MANUAL_CHECKLIST
+                    # Postflight verification happens only after checklist
+                    # execution.  Returning to MANUAL_CHECKLIST here reruns
+                    # unchanged workers merely to regenerate evidence the
+                    # final audit can already read.
+                    if [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" == 1 ]]; then
+                        set_state FINAL_AUDIT
+                    else
+                        set_state MANUAL_CHECKLIST
+                    fi
                     continue
                 fi
                 echo 'Automatic repair is not eligible for this failure.'
@@ -5764,7 +5853,8 @@ while true; do
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
-            run_green_check_auto || true
+            # Execute-checklist owns manual/runtime observations only. It does
+            # not start or wait for postflight command verification.
             plan_delivery_summary
             check_verification_inputs
             # New applications may have no commits. A historical-baseline
@@ -5814,6 +5904,15 @@ PY
             fi
             python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('r','$ROOT/scripts/lib/checklist_report_fallback.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.render_from_json('.')" || exit 1
             require_file "$STATE_DIR/documents/EXECUTE_CHECKLIST.json"
+            if [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" == 1 ]]; then
+                checklist_acceptance="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/VERIFICATION_REPORT.json")"
+                if [[ "$checklist_acceptance" != PASS && "$checklist_acceptance" != UNKNOWN ]]; then
+                    record_nonblocking_failure VERIFICATION_REPORT.json "checklist acceptance $checklist_acceptance; final audit will assess it with postflight verification"
+                fi
+                echo 'Checklist evidence recorded; driver verification is deferred to final audit.'
+                set_state FINAL_AUDIT
+                continue
+            fi
             # A checklist may expose the implementation fallback after a
             # passing driver suite. That is stale evidence, not a code defect
             # and never belongs in REPAIR. Reconcile the implementation-owned
@@ -5880,24 +5979,33 @@ PY
             ;;
 
         FINAL_AUDIT)
-            # Use the same decisions as the preceding gates: human blockers
-            # and recorded waivers reach audit without becoming PASS. Testing
-            # only for PASS here sent those reports back around the pipeline.
-            continue_nonblocking_test_review FINAL_AUDIT || \
-                acceptance_transition .uncle/docs/TEST_REVIEW.md FINAL_AUDIT 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
-            [[ "$(get_state)" == FINAL_AUDIT ]] || continue
-            if has_nonblocking_failure VERIFICATION_REPORT.json; then
-                echo 'Checklist finding was already recorded as nonblocking evidence; final audit will assess the canonical report without reopening repair.'
-            else
-                acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT
+            if [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" != 1 ]]; then
+                # Legacy gated behavior remains available for operators who
+                # explicitly opt out of postflight-only verification.
+                continue_nonblocking_test_review FINAL_AUDIT || \
+                    acceptance_transition .uncle/docs/TEST_REVIEW.md FINAL_AUDIT 'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS'
+                [[ "$(get_state)" == FINAL_AUDIT ]] || continue
+                if has_nonblocking_failure VERIFICATION_REPORT.json; then
+                    echo 'Checklist finding was already recorded as nonblocking evidence; final audit will assess the canonical report without reopening repair.'
+                else
+                    acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT
+                fi
+                [[ "$(get_state)" == FINAL_AUDIT ]] || continue
             fi
-            [[ "$(get_state)" == FINAL_AUDIT ]] || continue
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
             fi
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
+            # The one synchronization point for driver verification. All
+            # earlier stages run without it; final audit receives the finished
+            # result as evidence rather than using it to reopen the workflow.
+            run_green_check_auto || true
+            green_wait_final || {
+                echo 'Driver postflight verification did not publish final evidence.' >&2
+                exit 1
+            }
             # Removed first so run_codex_review's require_file cannot read a
             # previous run's audit as this one's output.
             rm -f .uncle/docs/FINAL_AUDIT.md

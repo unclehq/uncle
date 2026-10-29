@@ -41,6 +41,20 @@ PREVIEW_BUILD="${WORKFLOW_PREVIEW_BUILD:-1}"
 PREVIEW_PID=""
 PREVIEW_STARTED=0
 
+# preview_open_page — serve the generated root page and open its loopback URL.
+# PreviewServer adds a reload snippet on the wire, so publishing the finished
+# index.html refreshes the tab that initially displayed the placeholder.
+preview_open_page() {
+    [[ "${WORKFLOW_PREVIEW_OPEN_BROWSER:-1}" == 1 ]] || return 0
+    [[ -s index.html ]] || return 0
+    if [[ -s "$STATE_DIR/preview-server.pid" ]] \
+        && kill -0 "$(cat "$STATE_DIR/preview-server.pid" 2>/dev/null)" 2>/dev/null; then
+        return 0
+    fi
+    python3 -B "$ROOT/scripts/lib/preview_server.py" start "$PWD" "$STATE_DIR" \
+        > "$LOG_DIR/preview-server.log" 2>&1 < /dev/null &
+}
+
 # preview_build_model — use the selected preview stage model. `preview-build`
 # resolves to the first configured model stage in stage-config.sh, so its
 # runner and model stay paired (e.g. an OpenCode `local/...` model runs through
@@ -151,6 +165,7 @@ preview_build_start() {
     rm -f .uncle/workflow/preview/index.html
     if [[ "$kind" == webpage ]]; then
         python3 -B "${PREVIEW_PLACEHOLDER_PY:-$ROOT/scripts/lib/preview_placeholder.py}" . > /dev/null 2>&1 || true
+        preview_open_page
     fi
     # The plan this was built from, so the later stage can tell whether the
     # review changed anything the code depends on. A preview built from the

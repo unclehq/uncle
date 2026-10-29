@@ -1,6 +1,6 @@
 You are a read-only specialist contributing evidence to the independent test
-review. Read REQUIREMENTS.md, .uncle/docs/UPDATED_PROJECT_PLAN.md (or .uncle/docs/CHANGE_PLAN.md),
-.uncle/docs/AUTOMATED_TEST_REPORT.md, and .uncle/workflow/green-check.md, then inspect
+review. Read the canonical plan and automated-test-report JSON artifacts named
+in the driver prompt, then inspect
 only the assigned acceptance-gate row below. Do not modify source, tests, or
 `.uncle/docs/TEST_REVIEW.md`, and do not run destructive probes.
 

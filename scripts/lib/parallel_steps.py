@@ -412,12 +412,20 @@ def tree_fingerprint(project):
 
 
 def refresh_overlay(project, sandbox):
-    """Copy the files a mirror takes from the driver's side again: Markdown and everything under `.uncle/`."""
+    """Synchronize a sandbox with current, non-generated project inputs.
+
+    A worktree has committed files plus an overlay of dirty application files.
+    That overlay can be stale when an earlier implementation group has just
+    merged (notably ``.gitignore``).  Copy every small, relevant input rather
+    than only Markdown and ``.uncle`` state, so the ownership baseline always
+    describes the tree a worker actually receives.  Generated directories and
+    the parallel sandboxes themselves remain excluded by ``excludes``.
+    """
     project, sandbox = Path(project), Path(sandbox)
     excludes = SANDBOX_EXCLUDES + STEP_EXCLUDES
     for rel in walk(project, excludes=excludes):
         src = project / rel
-        if (rel.lower().endswith('.md') or rel.startswith('.uncle/')) and not src.is_symlink():
+        if not src.is_symlink():
             copy_entry(src, sandbox / rel)
 
 
@@ -491,6 +499,11 @@ def main():
                 break
             try:
                 make_sandbox(project, sandbox, STEP_EXCLUDES)
+                # A freshly-created Git worktree can still miss an untracked
+                # or just-merged dirty overlay.  Normalize it before taking
+                # the ownership baseline; otherwise the next group can be
+                # blamed for a prior group's `.gitignore`/config write.
+                refresh_overlay(project, sandbox)
                 break
             except (OSError, ValueError):
                 if attempt == 2:      # git can refuse two worktree adds at the same instant; once more, alone

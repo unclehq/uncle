@@ -4,10 +4,10 @@ checklist, source, tests, or reports. Return exactly one JSON object with the
 executable checks for your lens: `{"schema":"uncle.artifact/v1","kind":"manual-checklist-worker-packet","checks":[{"id":"MC-001","section":"...","required":true,"exact_action":"...","expected_result":"...","evidence_to_capture":"...","exclusive_resources":[],"depends_on":[]}]}`. Use stable IDs and include every required field; no Markdown or prose. The driver validates and merges these packets directly into the canonical checklist.
 
 Write only the checks your lens owns, at most 8, and merge checks that exercise the same behavior.
-Write a check only for something the driver's automated verification (`.uncle/workflow/green-check.tsv`)
-cannot establish: a live observation, a service or CLI interaction, a file or hash comparison, or a
-property no test asserts. A behavior an automated test already proves is cited from that evidence, not
-checked again here, and three lenses must not each re-check the same screen.
+Write checks only for live observations, service or CLI interaction, file/hash
+comparisons, or properties that require direct inspection. Driver automated
+verification is deferred to final audit and is not an input to this stage;
+three lenses must not each re-check the same screen.
 
 `exclusive_resources` decides which checks may run at the same time, so declare one only when two checks
 running together would really collide. `[]` means the check can overlap with any other. A server that
@@ -22,6 +22,6 @@ dependency (this check reads what that one produced), never for topic or present
 Every proposed action must be executable in a zero-commit, fully-untracked
 project. Never require Git history, a commit, a prior checked-in revision, or
 a diff against an unspecified "version referenced" by a report. For regression
-evidence, use the approved current-file paths, driver verification records, and
-the workflow verification snapshot when it exists. An initial snapshot has no
-predecessor and is normal evidence, never a setup blocker.
+evidence, use approved current-file paths and the workflow verification snapshot
+when it exists. An initial snapshot has no predecessor and is normal evidence,
+never a setup blocker.

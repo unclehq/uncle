@@ -44,10 +44,24 @@ if "early_stream_collect" not in execute or "CHECKLIST_STREAM_PRECOMPLETED" not 
     raise SystemExit("execute checklist must adopt streamed worker evidence")
 if "executing only uncovered checks" not in execute:
     raise SystemExit("execute checklist must not replay streamed checks")
+if "green_wait_final" in execute:
+    raise SystemExit("execute checklist must not wait for postflight verification")
+
+audit = state("FINAL_AUDIT", "VALIDATE_AUDIT")
+if "green_wait_final" not in audit or "run_green_check_auto" not in audit:
+    raise SystemExit("final audit must be the only app-workflow green-check synchronization point")
+
+repair = state("REPAIR", "MANUAL_CHECKLIST")
+if 'set_state FINAL_AUDIT' not in repair or 'WORKFLOW_POSTFLIGHT_GREEN_CHECK' not in repair:
+    raise SystemExit("postflight test failures must bypass a duplicate manual checklist pass")
 
 stream_start = text[text.index("start_streamed_checklist_lens() {"):text.index("early_stream_join() {")]
 if "ready_lenses" not in stream_start or 'coverage invariants resources regressions' not in stream_start:
     raise SystemExit("early execute stream must include every already-valid checklist lens")
+if "green_pending" in stream_start:
+    raise SystemExit("early execute stream must not wait for postflight-only green evidence")
+if "checklist_lane_batches" not in stream_start or '"$lane_count" -lt 2' not in stream_start:
+    raise SystemExit("early execute stream must wait for enough lenses to preserve fan-out")
 if 'run_parallel_checklist_workers "$partial" "$output"' not in stream_start:
     raise SystemExit("ready checklist lenses must use one shared scheduler")
 
@@ -85,6 +99,12 @@ if "manual-checklist-base" in checklist or "manual-checklist-delta" in checklist
 execute = state("EXECUTE_CHECKLIST", "VALIDATE_CHECKLIST")
 if execute.count("run_parallel_checklist_workers") != 1:
     raise SystemExit("change execute checklist must launch its worker fan-out once")
+if "wait_green_check_bg" in execute or "start_green_check_bg" in execute:
+    raise SystemExit("change execute workers must not consume postflight verification")
+
+audit = state("FINAL_AUDIT", "VALIDATE_AUDIT")
+if "start_green_check_bg" not in audit or "wait_green_check_bg" not in audit:
+    raise SystemExit("change final audit must own the one green-check wait")
 
 print("OK")
 PY

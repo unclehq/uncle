@@ -19,6 +19,8 @@ import json
 import os
 import socket
 import subprocess
+import signal
+import sys
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -134,6 +136,57 @@ class PreviewServer:
             self.server = None
 
 
+def _open_local_browser(url):
+    """Open only the loopback preview URL, with an OS fallback."""
+    if webbrowser.open(url):
+        return True
+    try:
+        if sys.platform == 'darwin':
+            subprocess.Popen(['open', url], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif os.name == 'nt':
+            os.startfile(url)  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(['xdg-open', url], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except OSError:
+        return False
+
+
+def serve_live_preview(root, state):
+    """Serve and open the preview until the workflow explicitly stops it."""
+    state = Path(state)
+    state.mkdir(parents=True, exist_ok=True)
+    server = PreviewServer(root)
+    if server.url is None:
+        return 1
+    pid_path, url_path = state / 'preview-server.pid', state / 'preview-server.url'
+    pid_path.write_text(str(os.getpid()), encoding='utf-8')
+    url_path.write_text(server.url, encoding='utf-8')
+    _open_local_browser(server.url)
+    stopped = threading.Event()
+    previous = signal.signal(signal.SIGTERM, lambda *_: stopped.set())
+    try:
+        while not stopped.wait(.2):
+            pass
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        server.close()
+        pid_path.unlink(missing_ok=True)
+        url_path.unlink(missing_ok=True)
+    return 0
+
+
+def stop_live_preview(state):
+    state = Path(state)
+    try:
+        pid = int((state / 'preview-server.pid').read_text(encoding='utf-8'))
+        os.kill(pid, signal.SIGTERM)
+    except (OSError, ValueError):
+        pass
+
+
 def development_preview(root):
     """A local Vite preview spec for a React/Svelte source project, or None.
 
@@ -207,3 +260,16 @@ class DevelopmentPreview:
         self.cancelled.set()
         if self.process and self.process.poll() is None:
             kill_tree(self.process)
+
+
+def main(argv):
+    if argv[:1] == ['start'] and len(argv) == 3:
+        return serve_live_preview(argv[1], argv[2])
+    if argv[:1] == ['stop'] and len(argv) == 2:
+        stop_live_preview(argv[1])
+        return 0
+    raise SystemExit('usage: preview_server.py start PROJECT STATE_DIR | stop STATE_DIR')
+
+
+if __name__ == '__main__':
+    raise SystemExit(main(sys.argv[1:]))

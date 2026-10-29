@@ -149,6 +149,20 @@ run_green_check_auto() {
     green_check_background_start
 }
 
+# Wait for a final driver record at the one postflight evidence boundary.  A
+# failed result is still usable audit evidence; only PENDING is incomplete.
+green_wait_final() {
+    local pid="${GREEN_BG_PID:-}"
+    if green_pending; then
+        echo 'Waiting for the driver postflight green-check before final audit.'
+        wait "$pid" || true
+        GREEN_BG_PID=""
+    fi
+    # A completed failing check is still final evidence.  Only a live
+    # placeholder is unsafe for a worker to consume.
+    ! grep -q '^PENDING' "$GREEN_CLASS" 2>/dev/null
+}
+
 # A driver that starts after another one died mid-run finds the placeholder and no process behind it.
 green_background_recover() {
     if [[ -e "$STATE_DIR/green-background.pending" && -z "$GREEN_BG_PID" ]]; then

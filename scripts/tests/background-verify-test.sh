@@ -55,8 +55,13 @@ check "placeholder rows are PENDING" grep -q '^PENDING	npm test' "$GREEN_CLASS"
 check "no failures while pending" test "$(green_regressions "$GREEN_CLASS")" == 0
 check "the report says so" grep -q 'running in the background' "$GREEN_MD"
 
+# Evidence consumers may wait once for the published result.  A failed command
+# is still final evidence; only PENDING is prohibited.
+green_wait_final > /dev/null
+check "wait helper publishes final evidence" not grep -q '^PENDING' "$GREEN_CLASS"
+check "wait helper accepts final regression evidence" grep -q '^REGRESSION' "$GREEN_CLASS"
+
 # finish: real results replace the placeholder, in a copy with the port moved, and failures are recorded
-wait "$GREEN_BG_PID" 2>/dev/null
 check "not pending any more" not green_pending
 check "real rows replace the placeholder" grep -q '^REGRESSION	npm test' "$GREEN_CLASS"
 check "the failures are counted" test "$(green_regressions "$GREEN_CLASS")" == 2

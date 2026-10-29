@@ -716,7 +716,6 @@ unattended_prewarm_change_stage_for_state() {
         PLAN) stage=change-plan; model="$MODEL_CHANGE_PLAN"; turns=120; budget="$BUDGET_CHANGE_PLAN" ;;
         UPDATED_PLAN) stage=updated-change-plan; model="$MODEL_UPDATED_PLAN"; effort="$EFFORT_UPDATED_PLAN"; turns=60; budget="$BUDGET_UPDATED_PLAN" ;;
         IMPLEMENT) stage=implementation; model="$MODEL_IMPLEMENT"; turns=200; budget="$BUDGET_IMPLEMENT" ;;
-        EXECUTE_CHECKLIST) stage=execute-checklist; model="$MODEL_EXECUTE"; effort="$EFFORT_EXECUTE"; turns=200; budget="$BUDGET_EXECUTE" ;;
     esac
     [[ -n "$stage" ]] || return 0
     declare -f uncle_resolve_stage_runner >/dev/null || return 0
@@ -4247,11 +4246,10 @@ REPAIR
                 echo "Whitespace tidy reported issues; continuing."
             git diff --stat > "$STATE_DIR/change-stat.txt"
 
-            # Independent of the agent that just claimed its checks passed.
-            # The result is carried to the gate rather than ending the run: a
-            # regression is for the operator to weigh against the diff, and
-            # killing the run here would throw away the stage that produced it.
-            run_green_check || true
+            # Driver verification is postflight evidence.  Earlier reviews and
+            # checklist workers must not block on or rediscover command-level
+            # results; the final audit receives one completed driver record.
+            echo 'Driver verification is deferred until final audit.'
 
             # Probe only: records what a parallel implementation would have
             # done and whether the plan's file ownership matched the tree.
@@ -4477,7 +4475,6 @@ PY
                 set_state VALIDATE_CHECKLIST
                 continue
             fi
-            start_green_check_bg
             plan_delivery_summary
             snapshot_checklist_groups
             snapshot_checklist_checks
@@ -4491,7 +4488,6 @@ PY
                     python3 -B "$ROOT/scripts/lib/execute_checklist_reports.py" . || exit 1
                     echo 'Execute-checklist fast path: rendered authoritative worker results without parent synthesis.'
                     PROGRESS_TOTAL=0
-                    wait_green_check_bg || exit $?
                     set_state VALIDATE_CHECKLIST
                     continue
                 fi
@@ -4541,7 +4537,6 @@ PY
             fi
             rm -f "$STATE_DIR/execute-checklist-wait-retry"
             PROGRESS_TOTAL=0
-            wait_green_check_bg || exit $?
             set_state VALIDATE_CHECKLIST
             ;;
 
@@ -4554,6 +4549,10 @@ PY
             ;;
 
         FINAL_AUDIT)
+            # One postflight run after all review/checklist work.  Its result
+            # is final-audit evidence, not a trigger to replay earlier stages.
+            start_green_check_bg
+            wait_green_check_bg || exit $?
             # Remove any prior audit first: run_codex's require_file then treats
             # the file's existence as proof this invocation produced it, so a
             # reviewer call that exits 0 without writing cannot be read as fresh.

@@ -98,6 +98,24 @@ class ParallelImplementationTests(unittest.TestCase):
         self.assertEqual(text, 'rebuilt')
         self.assertFalse(marker)
 
+    def test_refresh_overlay_copies_dirty_application_inputs(self):
+        """A later group must baseline the previous group's dirty files.
+
+        In particular, a stale .gitignore used to be reported as a write by
+        every later test worker, aborting the fan-out and causing a full serial
+        implementation retry.
+        """
+        temp, root, _ = self.fixture()
+        with temp:
+            sys.path.insert(0, str(ROOT / 'scripts/lib'))
+            import parallel_steps
+            sandbox = root / 'sandbox'
+            sandbox.mkdir()
+            (root / '.gitignore').write_text('.test-out/\n')
+            (sandbox / '.gitignore').write_text('.uncle\n')
+            parallel_steps.refresh_overlay(root, sandbox)
+            self.assertEqual((sandbox / '.gitignore').read_text(), '.test-out/\n')
+
     def test_a_moved_head_discards_the_early_sandbox(self):
         def commit(root):
             (root / 'a.txt').write_text('base\n')

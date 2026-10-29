@@ -39,6 +39,8 @@ def merge_row(rows, row, source):
  rows[row['id']]=chosen
 
 def integrity_row():
+ if __import__('os').environ.get('WORKFLOW_POSTFLIGHT_GREEN_CHECK') == '1':
+  return {'id':'INTEGRITY','required':True,'status':'NOT RUN','evidence':'Driver verification is deferred to final audit; this review does not consume green-check evidence.'}
  path=Path('.uncle/workflow/green-check.tsv')
  try:
   records=[line.split('\t',1) for line in path.read_text().splitlines() if line.strip()]
@@ -66,7 +68,10 @@ def main(directory,out,*names):
    r=dict(r,id=normalized_id(r['id']))
    merge_row(rows,r,n)
  rows['INTEGRITY']=integrity_row()
- rows['RESULTS']={'id':'RESULTS','required':True,'status':'PASS','evidence':'Driver green-check completed; see .uncle/workflow/green-check.md.'}
+ if __import__('os').environ.get('WORKFLOW_POSTFLIGHT_GREEN_CHECK') == '1':
+  rows['RESULTS']={'id':'RESULTS','required':True,'status':'NOT RUN','evidence':'Driver verification is deferred to final audit.'}
+ else:
+  rows['RESULTS']={'id':'RESULTS','required':True,'status':'PASS','evidence':'Driver green-check completed; see .uncle/workflow/green-check.md.'}
  result={'schema':'uncle.artifact/v1','kind':'acceptance-report','rows':[rows[k] for k in sorted(rows)]}
  Path(out).write_text(json.dumps(result,indent=2)+'\n')
 if __name__=='__main__':

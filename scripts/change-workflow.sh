@@ -4689,6 +4689,17 @@ PY
                     audit_class=NOT_READY
                 fi
             fi
+            # A plain READY claims nothing was overlooked. That is false
+            # whenever something was deliberately waived through as
+            # nonblocking evidence -- the audit worker is told to read this
+            # ledger, but depends on it doing so and saying so unprompted.
+            # Make the gap visible deterministically: a build with an open
+            # nonblocking item is never reported as a plain, unqualified READY.
+            if [[ "$audit_class" == READY && -s "$STATE_DIR/nonblocking-test-failures.tsv" ]]; then
+                echo "Audit verdict READY, but $STATE_DIR/nonblocking-test-failures.tsv records at least one deliberately-waived failure."
+                echo "Downgrading the verdict to READY_WITH_NON_BLOCKING_ISSUES; it is not reported as a clean pass."
+                audit_class=READY_WITH_NON_BLOCKING_ISSUES
+            fi
             printf '%s\t%s\t%s\n' \
                 "${STAGEGATE_RUN_ID:--}" \
                 "$audit_class" \

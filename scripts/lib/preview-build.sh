@@ -88,6 +88,14 @@ preview_build_model() {
             return 0
         fi
     fi
+    # `haiku` is a Claude CLI alias, not a portable cheap-preview model.  A
+    # configured Codex/Kimi/Cline preview with no explicit model must invoke
+    # its runner without --model and let that runner select its own default.
+    # Passing haiku to Codex fails before preview generation begins.
+    if declare -f uncle_stage_runner > /dev/null 2>&1 \
+       && [[ "$(uncle_stage_runner preview-build)" != "claude" ]]; then
+        return 0
+    fi
     printf '%s' haiku
 }
 

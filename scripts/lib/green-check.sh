@@ -63,18 +63,56 @@ verify_parallel_groups() {
 }
 
 # The group declarations in one Markdown text: rows on stdout, nonzero when malformed.
+#
+# The canonical compact form is bare, consecutive one-based positions (`2 3`).
+# Accept the planner's equally unambiguous labelled form too (`Serial: 1`,
+# `Concurrent: 2, 3`): Serial declarations validate ordering but emit no
+# parallel row, while Concurrent declarations normalize to the compact form.
+# This keeps a prose-oriented model from accidentally disabling a valid speed
+# optimization solely over punctuation.
 verify_parallel_groups_text() {
     local plan="$1" commands="$2"
     awk -v count="$(wc -l < "$commands" | tr -d ' ')" '
+        function emit_group(label, text,    values,n,i,value,previous,row) {
+            gsub(/,/, " ", text)
+            gsub(/^[ \t\r]+|[ \t\r]+$/, "", text)
+            if (text == "") { bad=1; return }
+            n = split(text, values, /[ \t\r]+/)
+            if (label == "serial" && n != 1) { bad=1; return }
+            if (label == "concurrent" && n < 2) { bad=1; return }
+            previous = 0
+            row = ""
+            for (i = 1; i <= n; i++) {
+                value = values[i]
+                if (value !~ /^[0-9]+$/ || value < 1 || value > count \
+                    || value <= last || (i > 1 && value != previous + 1)) {
+                    bad=1; return
+                }
+                previous = value
+                last = value
+                row = row (row == "" ? "" : " ") value
+            }
+            declarations++
+            if (label == "concurrent") { print row; rows++ }
+        }
         /^## Parallel verification groups[ \t\r]*$/ { active=1; sections++; next }
         active && /^```/ { if (opened) { closed=1; active=0 } else opened=1; next }
         active && /^#/ { bad=1; active=0 }
         active && opened && NF {
-            if ($0 !~ /^[0-9 \t\r]+$/ || NF < 2 || $1 <= last || $NF > count) bad=1
-            for (i=2; i<=NF; i++) if ($i != $(i-1)+1) bad=1
-            last=$NF; rows++; print
+            line = $0
+            if (line ~ /^[Ss][Ee][Rr][Ii][Aa][Ll]:[ \t\r]*/) {
+                sub(/^[^:]*:[ \t\r]*/, "", line)
+                emit_group("serial", line)
+            } else if (line ~ /^[Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt]:[ \t\r]*/) {
+                sub(/^[^:]*:[ \t\r]*/, "", line)
+                emit_group("concurrent", line)
+            } else if (line ~ /^[0-9 \t\r]+$/) {
+                emit_group("concurrent", line)
+            } else {
+                bad=1
+            }
         }
-        END { if (sections && (sections != 1 || !closed || !rows || bad)) exit 1 }
+        END { if (sections && (sections != 1 || !closed || !declarations || bad)) exit 1 }
     ' "$plan"
 }
 

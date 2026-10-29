@@ -70,8 +70,10 @@ eq "a free model keeps the subscription setting" "$(uncle_stage_billing requirem
 printf 'implementation.runner cline\nimplementation.billing cline-usage\n' > "$UNCLE_CONFIG"
 eq "step variants inherit" "$(uncle_stage_billing implementation-step-3)" cline-usage
 
-# Billing means nothing to a runner that takes no model.
+# Codex accepts a configured model; billing remains irrelevant to it.
+printf 'requirements.runner codex\nrequirements.billing cline-usage\nrequirements.model gpt-6.1-terra\n' > "$UNCLE_CONFIG"
+eq "a codex stage receives its configured model" "$(uncle_stage_model requirements)" "gpt-6.1-terra"
 printf 'requirements.runner codex\nrequirements.billing cline-usage\n' > "$UNCLE_CONFIG"
-eq "a codex stage still gets no model" "$(uncle_stage_model requirements)" ""
+eq "an unconfigured codex stage uses the runner default" "$(uncle_stage_model requirements)" ""
 
 echo 'stage-billing-test.sh: defaults, spellings, global fallback, and model-wins-over-setting passed'

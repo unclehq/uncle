@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checklist construction and execution each have one canonical owner. Driver
-# verification may overlap test review, but both checklist stages consume its
-# completed result; they never run against a PENDING placeholder.
+# verification runs in the background while implementation settles, then
+# test-review and both checklist stages consume its completed result. No
+# evidence worker may be asked to judge a PENDING placeholder.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -21,6 +22,10 @@ def state(name, next_name):
 test_review = state("TEST_REVIEW", "VALIDATE_TEST_REVIEW")
 if "early_checklist_start" in test_review:
     raise SystemExit("test review must not start checklist workers before green evidence exists")
+if "green_wait_final" not in test_review:
+    raise SystemExit("test review workers must receive completed driver evidence")
+if test_review.index("green_wait_final") > test_review.index("run_stage TEST_REVIEW"):
+    raise SystemExit("test review must wait for green evidence before launching workers")
 
 implementation = state("IMPLEMENT", "WAIT_IMPLEMENT_APPROVAL")
 if "run_green_check_auto" not in implementation:

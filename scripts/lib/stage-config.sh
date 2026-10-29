@@ -73,6 +73,11 @@ uncle_first_configured_model_stage() {
         key="${line%% *}"
         value="${line#* }"
         [[ -n "$value" ]] || continue
+        # Supervision is a separate diagnostic conversation, not a workflow
+        # stage whose runner/model may build a preview.  It conventionally
+        # appears first in config, so including it made a supervisor choice
+        # silently select preview-build's model.
+        [[ "$key" == "supervision.model" ]] && continue
         printf '%s' "${key%.model}"
         return 0
     done < "$file"
@@ -252,8 +257,11 @@ uncle_stage_effort() {
     printf '%s' "$v"
 }
 
-# Cline and self-hosted stages use explicit models; other runners have their own default,
-# and a model uncle picked for them would be wrong more often than right.
+# A configured model is always an operator choice and must reach the runner.
+# An empty value deliberately lets that runner use its own default.  In
+# particular, Codex accepts `-m` and the Configure screen persists Codex model
+# ids, so discarding them here made preview-build fall through to Claude's
+# `haiku` alias when it inherited a Codex stage.
 uncle_stage_model() {
     local stage v runner
     stage="$(uncle_config_stage "$1")"
@@ -282,6 +290,13 @@ uncle_stage_model() {
         [[ -n "$v" ]] || v="$(uncle_config_get model)"
         [[ -n "$v" ]] && export WORKFLOW_KIMI_MODEL="$v"
         printf 'kimi'
+        return 0
+    fi
+    if [[ "$runner" == "codex" ]]; then
+        v="$(uncle_stage_key "$stage" model)"
+        [[ -n "$v" ]] || v="$(uncle_config_get "$stage")"
+        [[ -n "$v" ]] || v="$(uncle_config_get model)"
+        printf '%s' "$v"
         return 0
     fi
     [[ "$runner" == "cline" ]] || return 0

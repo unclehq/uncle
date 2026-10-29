@@ -1458,6 +1458,15 @@ class Controller:
         if action == 'none':
             self._finish(trigger, 'none', 'no action proposed', proposal=sanitized)
             return
+        # A diagnosis can finish after its stage has advanced.  An `ask` does
+        # not alter files, but it is still an operational interruption; a
+        # question about an old stage is misleading and has previously sent
+        # an unrelated preflight validation question to the requirements
+        # stage.  Treat it with the same stage/attempt freshness rule as a
+        # corrective action.
+        if trigger.stage != self.stage or trigger.attempt != self.attempt:
+            self._finish(trigger, 'rejected', 'stale: stage or attempt moved on before application', proposal=sanitized)
+            return
         if action == 'ask':
             self.host.ask('Supervisor asks (%s, %s): %s' % (trigger.stage, trigger.kind, redact(proposal['diagnosis'])[:1000]))
             self._finish(trigger, 'ask', 'question posted', proposal=sanitized)
@@ -1466,9 +1475,6 @@ class Controller:
         self.reload_config()
         if not self.enabled:
             self._finish(trigger, 'cancelled', 'supervision disabled before application', proposal=sanitized)
-            return
-        if trigger.stage != self.stage or trigger.attempt != self.attempt:
-            self._finish(trigger, 'rejected', 'stale: stage or attempt moved on before application', proposal=sanitized)
             return
         text, fields, excerpt = self._template_text(proposal, trigger)
         if text is None:

@@ -27,6 +27,11 @@ out="$(verify_parallel_groups "$TMP/valid.json" "$TMP/commands" 2>/dev/null)"; r
 check "valid groups: accepted"                 test "$rc" == 0
 check "valid groups: both rows are returned"   test "$out" == $'3 4\n5 6'
 
+plan_json labelled $'Serial: 1\nConcurrent: 2, 3\nConcurrent: 4, 5\nSerial: 6\nSerial: 7'
+out="$(verify_parallel_groups "$TMP/labelled.json" "$TMP/commands" 2>/dev/null)"; rc=$?
+check "labelled groups: accepted"              test "$rc" == 0
+check "labelled groups: normalized"            test "$out" == $'2 3\n4 5'
+
 plan_json none ''
 out="$(verify_parallel_groups "$TMP/none.json" "$TMP/commands" 2>/dev/null)"; rc=$?
 check "no groups: accepted, nothing returned"  bash -c 'test "$1" == 0 && test -z "$2"' _ "$rc" "$out"
@@ -48,6 +53,8 @@ verify_parallel_groups "$TMP/plan.md" "$TMP/commands" > /dev/null 2>&1
 check "a Markdown plan with bad groups is still rejected" test "$?" != 0
 printf '## Parallel verification groups\n\n```text\n3 4\n```\n' > "$TMP/plan.md"
 check "a Markdown plan with good groups is accepted"      test "$(verify_parallel_groups "$TMP/plan.md" "$TMP/commands")" == "3 4"
+printf '## Parallel verification groups\n\n```text\nSerial: 1\nConcurrent: 2, 3\n```\n' > "$TMP/plan.md"
+check "a Markdown plan with labelled groups is accepted"  test "$(verify_parallel_groups "$TMP/plan.md" "$TMP/commands")" == "2 3"
 
 # The prompts ask the planner and the implementer for a fast verification.
 for f in project-plan.md project-plan-investigate.md updated-plan.md updated-plan-investigate.md; do

@@ -2,7 +2,9 @@
 # The plan's verification commands, run wholly in the background.
 #
 # They never change the build, and in an unattended run a failure does not change what the run does next, so nothing waits for
-# them: they start when implementation ends and run beside the test review, the checklist and its execution.  They run in a
+# them: they start when implementation ends and run while the implementation
+# gate settles. Test-review and checklist workers consume the completed record,
+# never the PENDING placeholder. They run in a
 # private copy of the project (isolated_verify.py) with the project's port moved, because the checklist's workers start the same
 # application on the same port.  Until they finish, the result files say PENDING (a status no stage counts as a failure and none
 # reads as a pass); when they finish, the copy publishes real results over them.
@@ -10,6 +12,28 @@
 # On by default for an unattended run.  WORKFLOW_BACKGROUND_VERIFY=1 turns it on for any run, =0 off.
 
 GREEN_BG_PID=""
+
+# The driver process can be resumed while verification keeps running in its
+# detached child.  Keep that child's PID durably: an in-memory PID disappears
+# on resume, which used to make the new driver start a second Chromium
+# download against Playwright's per-user cache lock.
+green_background_pid_file() {
+    printf '%s' "$STATE_DIR/green-background.pid"
+}
+
+green_background_live_pid() {
+    local pid_file pid
+    pid_file="$(green_background_pid_file)"
+    if [[ -n "$GREEN_BG_PID" ]] && kill -0 "$GREEN_BG_PID" 2>/dev/null; then
+        printf '%s' "$GREEN_BG_PID"
+        return 0
+    fi
+    [[ -s "$pid_file" ]] || return 1
+    pid="$(cat "$pid_file" 2>/dev/null)"
+    [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
+    GREEN_BG_PID="$pid"
+    printf '%s' "$pid"
+}
 
 green_background_enabled() {
     [[ "${GREEN_CHECK:-1}" == 1 ]] || return 1
@@ -22,7 +46,7 @@ green_background_enabled() {
 
 # True while the background run for this driver is still going.
 green_pending() {
-    [[ -e "$STATE_DIR/green-background.pending" && -n "$GREEN_BG_PID" ]] && kill -0 "$GREEN_BG_PID" 2>/dev/null
+    [[ -e "$STATE_DIR/green-background.pending" ]] && green_background_live_pid >/dev/null
 }
 
 green_kill_tree() {
@@ -33,12 +57,14 @@ green_kill_tree() {
 
 # The code is about to change, or the run is ending: whatever is running is of no use.
 green_background_cancel() {
-    if [[ -n "$GREEN_BG_PID" ]] && kill -0 "$GREEN_BG_PID" 2>/dev/null; then
-        green_kill_tree "$GREEN_BG_PID"
-        wait "$GREEN_BG_PID" 2>/dev/null || true
+    local pid=""
+    pid="$(green_background_live_pid 2>/dev/null || true)"
+    if [[ -n "$pid" ]]; then
+        green_kill_tree "$pid"
+        wait "$pid" 2>/dev/null || true
     fi
     GREEN_BG_PID=""
-    rm -f "$STATE_DIR/green-background.pending"
+    rm -f "$STATE_DIR/green-background.pending" "$(green_background_pid_file)"
 }
 
 # Replace the result files with a placeholder that says what is happening.
@@ -95,6 +121,7 @@ green_check_background_start() {
         green_background_publish "$project" "$copy" "$status" "$background" "$real_class" "$real_md" "$real_cur" "$real_cmds"
     ) > "$LOG_DIR/green-background.log" 2>&1 < /dev/null &
     GREEN_BG_PID=$!
+    printf '%s\n' "$GREEN_BG_PID" > "$(green_background_pid_file)"
 }
 
 # The run finished: put its results where every stage looks, then clear the pending mark (last, so a reader never sees the
@@ -126,7 +153,7 @@ green_background_publish() {
         green_background_placeholder "NOT RUN" "NOT RUN: the verification commands could not run in the background (status $status). See $LOG_DIR/green-background.log."
         echo "Background verification did not produce results (status $status)."
     fi
-    rm -f "$STATE_DIR/green-background.pending"
+    rm -f "$STATE_DIR/green-background.pending" "$(green_background_pid_file)"
 }
 
 # What the stages call instead of run_green_check.  In the foreground (attended) it is run_green_check; in the background it
@@ -155,8 +182,15 @@ run_green_check_auto() {
 green_wait_final() {
     local pid="${GREEN_BG_PID:-}"
     if green_pending; then
+        pid="$GREEN_BG_PID"
         echo 'Waiting for the driver green-check before checklist work.'
-        wait "$pid" || true
+        # `wait` works for a child of this shell. After an unattended resume
+        # it is another driver's child, so poll its durable PID instead.
+        wait "$pid" 2>/dev/null || {
+            while [[ -e "$STATE_DIR/green-background.pending" ]] && kill -0 "$pid" 2>/dev/null; do
+                sleep 0.5
+            done
+        }
         GREEN_BG_PID=""
     fi
     # A completed failing check is still final evidence.  Only a live
@@ -166,8 +200,13 @@ green_wait_final() {
 
 # A driver that starts after another one died mid-run finds the placeholder and no process behind it.
 green_background_recover() {
-    if [[ -e "$STATE_DIR/green-background.pending" && -z "$GREEN_BG_PID" ]]; then
+    if [[ -e "$STATE_DIR/green-background.pending" ]] && green_pending; then
+        echo 'Background verification from this run is still active; reusing it.'
+        return 0
+    fi
+    if [[ -e "$STATE_DIR/green-background.pending" ]]; then
         rm -f "$STATE_DIR/green-background.pending"
+        rm -f "$(green_background_pid_file)"
         if grep -q '^PENDING' "$GREEN_CLASS" 2>/dev/null; then
             rm -f "$GREEN_CLASS" "$GREEN_MD"
             echo 'A background verification run was cut short; its placeholder was removed. Rerun the implementation stage to verify again.'

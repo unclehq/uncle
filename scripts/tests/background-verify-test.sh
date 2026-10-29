@@ -92,11 +92,15 @@ check "the second one published" grep -q '^PASS' "$GREEN_CLASS"
 
 # the same tree while running is not started twice
 FAKE_SECONDS=5; green_check_background_start > /dev/null; running="$GREEN_BG_PID"
+resumed_pid="$( ( GREEN_BG_PID=""; green_pending && printf '%s' "$GREEN_BG_PID" ) )"
+check "a resumed driver discovers the durable verifier pid" test "$resumed_pid" == "$running"
+check "the running verifier pid is persisted" test "$(cat "$STATE_DIR/green-background.pid")" == "$running"
 out="$(run_green_check_auto)"
 check "already running: not started again" bash -c 'grep -q "already running" <<< "$1"' _ "$out"
 check "same process" test "$GREEN_BG_PID" == "$running"
 green_background_cancel
 check "cancel clears the mark" not test -e "$STATE_DIR/green-background.pending"
+check "cancel clears the verifier pid" not test -e "$STATE_DIR/green-background.pid"
 
 # a placeholder left by a driver that died is removed at the next start
 GREEN_BG_PID=""; : > "$STATE_DIR/green-background.pending"; printf 'PENDING\tnpm test\n' > "$GREEN_CLASS"

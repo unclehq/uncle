@@ -633,6 +633,21 @@ class ProposalTests(Base):
         # ...and the ledger keeps a bounded, sanitized view of what was rejected (AR-017).
         self.assertIn('waive', self.ctl.journal.ledger_rows()[-1]['proposal']['diagnosis'])
 
+    def test_stale_ask_is_not_posted_after_stage_advances(self):
+        """A late diagnosis must not ask about an already-completed stage."""
+        self.ctl.tick()
+        self.ctl.stage = 'test-review'
+        self.host.workers[-1]._result = {
+            'status': 'reply',
+            'reply': proposal('implementation', 1, self.run_id, 'ask', None, self.evidence,
+                              diagnosis='A person should decide this'),
+            'elapsed': 1,
+        }
+        self.ctl.tick()
+        self.assertEqual(self.host.asks, [])
+        self.assertEqual(self.ctl.journal.ledger_rows()[-1]['outcome'], 'rejected')
+        self.assertIn('stale: stage or attempt moved on', self.ctl.journal.ledger_rows()[-1]['detail'])
+
     def test_templates_never_carry_untrusted_text(self):
         # AR-003 retained assertions: even when the evidence itself asks to
         # waive, the template text is fixed and the excerpt is quoted as data.

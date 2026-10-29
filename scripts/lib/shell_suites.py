@@ -26,6 +26,8 @@ def run(jobs, suites=()):
         print('FAIL: no shell test suites found', file=sys.stderr)
         return 1
     isolate_git()
+    # Keep suites off the network and the real model cache; model-catalog-test manages its own env.
+    os.environ.setdefault('UNCLE_MODEL_REFRESH', '0')
     return run_commands(jobs, {path: [bash_executable(), path] for path in files})
 
 

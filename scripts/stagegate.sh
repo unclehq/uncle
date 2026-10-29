@@ -4840,6 +4840,14 @@ adopt_speculation() {
     if [[ "$status" -ne 0 ]]; then
         echo "Speculative $stage failed (status $status). Running it again."
         echo "Log: $LOG_DIR/${stage}.speculative.log"
+        # A reviewer that exits nonzero can still have written an invalid
+        # artifact (e.g. run_codex_review's own validation rejected it)
+        # before returning that status. Leaving it behind made the real
+        # rerun's own fast path adopt it on sight, the same stale-content
+        # mistake the validation-failure branch below already guards
+        # against by moving its artifact out of the way first.
+        mv -f "$artifact" "$LOG_DIR/${stage}.speculative.rejected.json" 2>/dev/null || rm -f "$artifact"
+        rm -f "$STATE_DIR/envelopes/${stage}.json"
         return 1
     fi
 

@@ -620,7 +620,13 @@ if [[ "$out" == *.json ]]; then
         # The primary (non-panel) adversarial-review reviewer delivers
         # straight to the canonical path, not a Markdown view -- this is the
         # real review object, not a worker packet.
-        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"adversarial-review","findings":[],"overall_assessment":"No findings."}' > "$delivery"
+        if [[ "${FAKE_SPEC_REVIEW:-}" == fragment && "${UNCLE_SPECULATIVE:-}" == true ]]; then
+            # What a model cut off at its output limit leaves behind: a
+            # schema-shaped object missing the required overall_assessment.
+            printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"adversarial-review","findings":[{"id":"AR-001","title":"display does not reject Infinity","severity":"Medium","references":"I-1"}]}' > "$delivery"
+        else
+            printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"adversarial-review","findings":[],"overall_assessment":"No findings."}' > "$delivery"
+        fi
     elif [[ "$out" == *documents/MANUAL_CHECKLIST.json ]]; then
         # The primary (non-panel) manual-checklist reviewer delivers straight
         # to the canonical path, not a Markdown view -- this is the real
@@ -1596,13 +1602,17 @@ new_stagegate_case sg-speculative-fragment-is-rerun-not-adopted
 stagegate_agent
 cp "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md" "$REPO/.uncle/docs/PROJECT_PLAN.md"
 hash_canonical PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
+# The default seed's canonical ADVERSARIAL_REVIEW.json (valid, from
+# new_case's own setup) would otherwise make --validate-json pass on
+# stale content, masking the fresh fragment this case means to reject.
+rm -f "$REPO/.uncle/workflow/documents/ADVERSARIAL_REVIEW.json"
 set_state WAIT_PLAN_APPROVAL
-run_stagegate_stdin "$(gate_input y)" WORKFLOW_SPECULATE=1 FAKE_SPEC_REVIEW=fragment WORKFLOW_DIFF_GATE=0
-expect_out 'Speculative ADVERSARIAL_REVIEW produced a document that fails validation. Running it again.'
+run_stagegate_stdin "$(gate_input y)" WORKFLOW_SPECULATE=1 WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 FAKE_SPEC_REVIEW=fragment WORKFLOW_DIFF_GATE=0
+expect_out 'Speculative ADVERSARIAL_REVIEW failed (status 1). Running it again.'
 expect_not_out 'Review format invalid'
 expect_not_out 'Adopted speculative ADVERSARIAL_REVIEW'
-expect_file .uncle/workflow/logs/ADVERSARIAL_REVIEW.speculative.rejected.md
-expect_in_file .uncle/workflow/logs/ADVERSARIAL_REVIEW.speculative.rejected.md 'AR-001'
+expect_file .uncle/workflow/logs/ADVERSARIAL_REVIEW.speculative.rejected.json
+expect_in_file .uncle/workflow/logs/ADVERSARIAL_REVIEW.speculative.rejected.json 'AR-001'
 COUNT=$((COUNT + 1))
 case "$(cat "$REPO/.uncle/workflow/state")" in
     ADVERSARIAL_REVIEW|VALIDATE_ADVERSARIAL_REVIEW|WAIT_PLAN_APPROVAL) fail "run did not get past the review: $(cat "$REPO/.uncle/workflow/state")" ;;
@@ -1613,7 +1623,7 @@ new_stagegate_case sg-review-cannot-bless-failed-command
 stagegate_agent
 set_state IMPLEMENT
 run_stagegate_stdin "$(gate_input y)" FAKE_IMPL="printf 'exit 1\n' > app/test.sh" \
-    WORKFLOW_MAX_REPAIRS=0
+    WORKFLOW_MAX_REPAIRS=0 WORKFLOW_CONTINUE_ON_TEST_FAILURE=0
 expect_status 1
 expect_state REPAIR
 expect_in_file .uncle/workflow/repair-source green-check.md

@@ -1610,6 +1610,14 @@ wait_green_check_bg() {
     return 0
 }
 
+# Unlike an assertion failure, a compiler/module/server failure or an empty
+# test discovery means the changed application was never runnable or tested.
+# It must not be carried as a nonblocking audit finding in unattended mode.
+green_requires_implementation_repair() {
+    [[ -s "$LOG_DIR/green-check.log" ]] || return 1
+    grep -qiE '(^|[^[:alpha:]])(build failed|failed to resolve import|is not exported by|could not resolve|error when starting (dev|preview) server|process from config\.webServer was not able to start|webserver.*exit code|no test files found|testDir.*does not exist)' "$LOG_DIR/green-check.log"
+}
+
 # One checklist worker session for the lane runner (checklist-lanes.sh): run it with this driver's
 # model, effort and budget, check its packet, and give it one retry with the exact schema error.
 checklist_run_worker() {
@@ -4253,10 +4261,11 @@ REPAIR
                 echo "Whitespace tidy reported issues; continuing."
             git diff --stat > "$STATE_DIR/change-stat.txt"
 
-            # Driver verification is postflight evidence.  Earlier reviews and
-            # checklist workers must not block on or rediscover command-level
-            # results; the final audit receives one completed driver record.
-            echo 'Driver verification is deferred until final audit.'
+            # Start verification as soon as implementation is stable. It runs
+            # beside the implementation gate, but checklist workers wait for
+            # the completed driver result and cite it instead of re-running
+            # dependency, build, unit, or browser checks.
+            start_green_check_bg
 
             # Probe only: records what a parallel implementation would have
             # done and whether the plan's file ownership matched the tree.
@@ -4347,6 +4356,18 @@ REPAIR
         CHECKLIST)
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
+            fi
+            wait_green_check_bg || exit $?
+            if green_requires_implementation_repair; then
+                runtime_marker="$STATE_DIR/runtime-readiness-repair-attempted"
+                if [[ "${UNATTENDED:-0}" == 1 && ! -e "$runtime_marker" ]]; then
+                    touch "$runtime_marker"
+                    echo 'The changed application cannot render or its configured test runner executed no tests; returning once to IMPLEMENT before checklist work.'
+                    set_state IMPLEMENT
+                    continue
+                fi
+                echo 'Application or verification setup is not runnable; refusing checklist work without valid driver evidence.' >&2
+                exit 1
             fi
 
             # A malformed checklist gets one real re-run with the exact
@@ -4463,6 +4484,12 @@ REPAIR
             ;;
 
         EXECUTE_CHECKLIST)
+            wait_green_check_bg || exit $?
+            if green_requires_implementation_repair; then
+                echo 'Application or verification setup is not runnable; returning to implementation before EXECUTE_CHECKLIST.' >&2
+                set_state IMPLEMENT
+                continue
+            fi
             if ! python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json"; then
                 # A zero-commit project is valid. Regenerate a delta checklist
                 # that incorrectly made historical Git state a prerequisite.
@@ -4556,10 +4583,22 @@ PY
             ;;
 
         FINAL_AUDIT)
-            # One postflight run after all review/checklist work.  Its result
-            # is final-audit evidence, not a trigger to replay earlier stages.
+            # Reuse the completed verification record. `start_green_check_bg`
+            # fingerprints commands/tree and does no work if the checklist did
+            # not change source, tests, or configuration.
             start_green_check_bg
             wait_green_check_bg || exit $?
+            if green_requires_implementation_repair; then
+                runtime_marker="$STATE_DIR/runtime-readiness-repair-attempted"
+                if [[ "${UNATTENDED:-0}" == 1 && ! -e "$runtime_marker" ]]; then
+                    touch "$runtime_marker"
+                    echo 'The changed application cannot render or its configured test runner executed no tests; returning once to IMPLEMENT before final audit.'
+                    set_state IMPLEMENT
+                    continue
+                fi
+                echo 'Application or verification setup is not runnable; refusing to audit it as a nonblocking test failure.' >&2
+                exit 1
+            fi
             # Remove any prior audit first: run_codex's require_file then treats
             # the file's existence as proof this invocation produced it, so a
             # reviewer call that exits 0 without writing cannot be read as fresh.

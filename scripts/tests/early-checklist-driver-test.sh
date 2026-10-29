@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Checklist construction and execution each have one canonical owner.  Do not
-# restart either stage speculatively while another stage is still producing an
-# input: that duplicates worker/browser work and can create conflicting reports.
+# Checklist construction and execution each have one canonical owner. Driver
+# verification may overlap test review, but both checklist stages consume its
+# completed result; they never run against a PENDING placeholder.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -11,17 +11,6 @@ import sys
 
 text = open(sys.argv[1], encoding="utf-8").read()
 
-for required in (
-    "early_checklist_start",
-    "early_checklist_join",
-    "early_checklist_usable",
-    "start_streamed_checklist_lens",
-    "early_stream_collect",
-    "UNCLE_CHECKLIST_EARLY",
-):
-    if required not in text:
-        raise SystemExit(f"missing checklist performance path: {required}")
-
 def state(name, next_name):
     # The dispatcher and the durable workflow loop both have case labels.
     # The latter is the final occurrence and is the state machine under test.
@@ -30,48 +19,36 @@ def state(name, next_name):
     return text[start:end]
 
 test_review = state("TEST_REVIEW", "VALIDATE_TEST_REVIEW")
-if test_review.count("early_checklist_start") != 1:
-    raise SystemExit("test review must start exactly one speculative manual checklist")
+if "early_checklist_start" in test_review:
+    raise SystemExit("test review must not start checklist workers before green evidence exists")
+
+implementation = state("IMPLEMENT", "WAIT_IMPLEMENT_APPROVAL")
+if "run_green_check_auto" not in implementation:
+    raise SystemExit("application implementation must start driver verification")
+
+validate_review = state("VALIDATE_TEST_REVIEW", "MANUAL_CHECKLIST")
+if "green_wait_final" not in validate_review or "route_unrunnable_application" not in validate_review:
+    raise SystemExit("manual checklist must be preceded by completed runnable green evidence")
 
 manual = state("MANUAL_CHECKLIST", "VALIDATE_MANUAL_CHECKLIST")
-if "early_checklist_join" not in manual or "early_checklist_usable" not in manual:
-    raise SystemExit("manual checklist must adopt its completed speculative packet")
-if "run_stage MANUAL_CHECKLIST" in manual:
-    raise SystemExit("manual checklist must adopt the early packet, never rerun the panel")
+if "green_wait_final" not in manual or manual.count("run_stage MANUAL_CHECKLIST") != 1:
+    raise SystemExit("manual checklist must run once after green evidence is complete")
 
 execute = state("EXECUTE_CHECKLIST", "VALIDATE_CHECKLIST")
-if "early_stream_collect" not in execute or "CHECKLIST_STREAM_PRECOMPLETED" not in execute:
-    raise SystemExit("execute checklist must adopt streamed worker evidence")
-if "executing only uncovered checks" not in execute:
-    raise SystemExit("execute checklist must not replay streamed checks")
-if "green_wait_final" in execute:
-    raise SystemExit("execute checklist must not wait for postflight verification")
+if "early_stream_collect" in execute or "CHECKLIST_STREAM_PRECOMPLETED" in execute:
+    raise SystemExit("execute checklist must run the full checklist once, not stream partial evidence")
+if execute.count("run_stage EXECUTE_CHECKLIST") != 1:
+    raise SystemExit("execute checklist must launch its full worker fan-out once")
+if "green_wait_final" not in execute:
+    raise SystemExit("execute checklist must require completed green evidence")
 
 audit = state("FINAL_AUDIT", "VALIDATE_AUDIT")
 if "green_wait_final" not in audit or "run_green_check_auto" not in audit:
-    raise SystemExit("final audit must be the only app-workflow green-check synchronization point")
+    raise SystemExit("final audit must retain a green-check reuse guard")
 
-repair = state("REPAIR", "MANUAL_CHECKLIST")
-if 'set_state FINAL_AUDIT' not in repair or 'WORKFLOW_POSTFLIGHT_GREEN_CHECK' not in repair:
-    raise SystemExit("postflight test failures must bypass a duplicate manual checklist pass")
-
-stream_start = text[text.index("start_streamed_checklist_lens() {"):text.index("early_stream_join() {")]
-if "ready_lenses" not in stream_start or 'coverage invariants resources regressions' not in stream_start:
-    raise SystemExit("early execute stream must include every already-valid checklist lens")
-if "green_pending" in stream_start:
-    raise SystemExit("early execute stream must not wait for postflight-only green evidence")
-if "checklist_lane_batches" not in stream_start or '"$lane_count" -lt 2' not in stream_start:
-    raise SystemExit("early execute stream must wait for enough lenses to preserve fan-out")
-if 'run_parallel_checklist_workers "$partial" "$output"' not in stream_start:
-    raise SystemExit("ready checklist lenses must use one shared scheduler")
-
-manual_panel = text[text.index("run_manual_checklist_panel() {"):text.index("# Manual checklist construction is independent")]
-if 'start_streamed_checklist_lens "$directory" "first-ready"' not in manual_panel:
-    raise SystemExit("manual checklist must stream from the first valid worker packet")
-if '"$directory/workers-complete"' not in manual_panel:
-    raise SystemExit("manual checklist stream monitor must terminate after worker retries")
-if 'if [[ "$lens" == coverage' in manual_panel:
-    raise SystemExit("manual checklist must not wait specifically for coverage before streaming")
+manual_panel = text[text.index("run_manual_checklist_panel() {"):text.index("# Checklist work consumes a completed driver green-check")]
+if "start_streamed_checklist_lens" in manual_panel or "workers-complete" in manual_panel:
+    raise SystemExit("manual checklist must not start execute workers from partial lenses")
 
 print("OK")
 PY
@@ -99,12 +76,19 @@ if "manual-checklist-base" in checklist or "manual-checklist-delta" in checklist
 execute = state("EXECUTE_CHECKLIST", "VALIDATE_CHECKLIST")
 if execute.count("run_parallel_checklist_workers") != 1:
     raise SystemExit("change execute checklist must launch its worker fan-out once")
-if "wait_green_check_bg" in execute or "start_green_check_bg" in execute:
-    raise SystemExit("change execute workers must not consume postflight verification")
+if "wait_green_check_bg" not in execute:
+    raise SystemExit("change execute workers must require completed green evidence")
 
 audit = state("FINAL_AUDIT", "VALIDATE_AUDIT")
 if "start_green_check_bg" not in audit or "wait_green_check_bg" not in audit:
-    raise SystemExit("change final audit must own the one green-check wait")
+    raise SystemExit("change final audit must retain a green-check reuse guard")
+
+implementation = state("IMPLEMENT", "WAIT_IMPLEMENT_APPROVAL")
+if "start_green_check_bg" not in implementation:
+    raise SystemExit("change implementation must start driver verification")
+
+if "wait_green_check_bg" not in checklist:
+    raise SystemExit("change manual checklist must require completed green evidence")
 
 print("OK")
 PY

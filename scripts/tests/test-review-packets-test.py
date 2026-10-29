@@ -34,5 +34,20 @@ class TestReviewPacketTests(unittest.TestCase):
  def test_lowercase_known_id_is_normalized(self):
   rows={}; packets.merge_row(rows,{'id':packets.normalized_id('coverage'),'status':'PASS','evidence':'ok'},'coverage.json')
   self.assertIn('COVERAGE',rows)
+ def test_completed_green_check_is_rendered_as_authoritative_results(self):
+  with tempfile.TemporaryDirectory() as directory:
+   root=Path(directory); records=root/'.uncle/workflow'; records.mkdir(parents=True)
+   (records/'green-check.tsv').write_text('PASS\tnpm test\nPASS\tnpm run build\n')
+   old=os.getcwd(); os.chdir(root)
+   try:
+    self.assertEqual(packets.integrity_row()['status'],'PASS')
+    for name, rows in [('coverage',[{'id':'COVERAGE','status':'PASS','evidence':'ok'}]),
+                       ('assertions',[{'id':'ASSERTIONS','status':'PASS','evidence':'ok'}]),
+                       ('oracle',[{'id':'ORACLE','status':'PASS','evidence':'ok'},{'id':'NEGATIVE','status':'PASS','evidence':'ok'}])]:
+     (root/(name+'.json')).write_text(json.dumps({'schema':'uncle.artifact/v1','kind':'test-review-worker-packet','rows':rows}))
+    packets.main(root,root/'out.json','coverage','assertions','oracle')
+   finally: os.chdir(old)
+   output=json.loads((root/'out.json').read_text())['rows']
+   self.assertEqual(next(row for row in output if row['id']=='RESULTS')['status'],'PASS')
 
 if __name__=='__main__': unittest.main()

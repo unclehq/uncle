@@ -119,6 +119,7 @@ check "libraries are fetched beside the model, then rewritten after it" test "$(
 # Publishing: the placeholder is on screen at once, and the staged page replaces it in one step.
 STUB_STAGE_PAGE='<!doctype html><title>real</title><body>the real page</body>' run_case published REQUIREMENTS.md "$WEB_BRIEF"
 check "the staged page replaces the placeholder"   grep -q 'the real page' "$TMP/published/index.html"
+check "the styled preview fallback is snapshotted"  grep -q 'the real page' "$TMP/published/.uncle/workflow/preview/static-index.html"
 check "the placeholder text is gone"               bash -c '! grep -q "Building the first look" "$1"' _ "$TMP/published/index.html"
 check "no half-published file is left"             test ! -e "$TMP/published/index.html.publishing"
 STUB_FAIL=1 run_case failed-preview REQUIREMENTS.md "$WEB_BRIEF"

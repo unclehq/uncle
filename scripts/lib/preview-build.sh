@@ -55,6 +55,17 @@ preview_open_page() {
         > "$LOG_DIR/preview-server.log" 2>&1 < /dev/null &
 }
 
+# Keep a standalone, browser-ready fallback. Implementation can replace the
+# root index with a Vite source entrypoint before dependencies have arrived;
+# preview_server serves this snapshot until it can safely hand the tab to Vite.
+preview_snapshot_static() {
+    [[ -s index.html ]] || return 0
+    mkdir -p "$STATE_DIR/preview"
+    cp index.html "$STATE_DIR/preview/static-index.html.publishing" \
+        && mv -f "$STATE_DIR/preview/static-index.html.publishing" \
+            "$STATE_DIR/preview/static-index.html"
+}
+
 # preview_build_model — use the selected preview stage model. `preview-build`
 # resolves to the first configured model stage in stage-config.sh, so its
 # runner and model stay paired (e.g. an OpenCode `local/...` model runs through
@@ -165,6 +176,7 @@ preview_build_start() {
     rm -f .uncle/workflow/preview/index.html
     if [[ "$kind" == webpage ]]; then
         python3 -B "${PREVIEW_PLACEHOLDER_PY:-$ROOT/scripts/lib/preview_placeholder.py}" . > /dev/null 2>&1 || true
+        preview_snapshot_static
         preview_open_page
     fi
     # The plan this was built from, so the later stage can tell whether the
@@ -229,6 +241,7 @@ preview_build_start() {
             rm -f index.html      # the stage failed and only the placeholder exists: not a preview
         fi
         python3 -B "${PREVIEW_VENDOR_PY:-$ROOT/scripts/lib/preview_vendor.py}" rewrite . || true
+        preview_snapshot_static
         if [[ -n "$launch_before" ]]; then
             printf '%s' "$launch_before" > .uncle/launch.json
         else

@@ -17,6 +17,7 @@ outside the machine has any business reading it.
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import signal
@@ -27,11 +28,13 @@ from pathlib import Path
 import threading
 import time
 from urllib.request import urlopen
+from urllib.parse import urljoin
 import webbrowser
 from process_tree import group_options, kill_tree, launch_command
 from project_paths import project_files
 
 VERSION_PATH = '/__uncle_preview_version'
+HANDOFF_PATH = '/__uncle_preview_handoff'
 POLL_MS = 700
 
 _RELOAD = """
@@ -39,6 +42,10 @@ _RELOAD = """
 (function () {
   var current = null;
   function poll() {
+    fetch(%r, {cache: 'no-store'})
+      .then(function (r) { return r.text(); })
+      .then(function (target) { if (target) { location.replace(target); } })
+      .catch(function () {});
     fetch(%r, {cache: 'no-store'})
       .then(function (r) { return r.text(); })
       .then(function (v) {
@@ -51,7 +58,7 @@ _RELOAD = """
   setInterval(poll, %d);
 })();
 </script>
-""" % (VERSION_PATH, POLL_MS)
+""" % (HANDOFF_PATH, VERSION_PATH, POLL_MS)
 
 
 def tree_version(root):
@@ -68,10 +75,25 @@ def tree_version(root):
 
 
 class _Handler(SimpleHTTPRequestHandler):
+    # Set on the per-server subclass below.  It is the last known standalone
+    # page from preview-build, retained while implementation temporarily
+    # replaces index.html with a Vite source entrypoint.
+    fallback_html = None
+    handoff_url = ''
+
     def log_message(self, *args):
         pass                                    # curses owns the terminal
 
     def do_GET(self):
+        if self.path.split('?')[0] == HANDOFF_PATH:
+            body = self.handoff_url.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.split('?')[0] == VERSION_PATH:
             body = tree_version(self.directory).encode('ascii')
             self.send_response(200)
@@ -91,6 +113,14 @@ class _Handler(SimpleHTTPRequestHandler):
                 if os.path.isfile(os.path.join(path, index)):
                     path = os.path.join(path, index)
                     break
+        # A Vite entrypoint is not a static web page: it imports JSX/CSS from
+        # /src and needs Vite's transform pipeline.  During `npm install`, it
+        # can replace the styled standalone preview before Vite and the
+        # framework runtime are usable. Keep the visible, styled preview in
+        # place until serve_live_preview hands the tab to Vite.
+        if (self.fallback_html and self.path.split('?', 1)[0] in ('/', '/index.html')
+                and _needs_development_server(path)):
+            path = self.fallback_html
         if not path.endswith(('.html', '.htm')) or not os.path.isfile(path):
             return SimpleHTTPRequestHandler.send_head(self)
         try:
@@ -106,6 +136,16 @@ class _Handler(SimpleHTTPRequestHandler):
         return io.BytesIO(body)
 
 
+def _needs_development_server(path):
+    """Whether an HTML page imports application source needing Vite/etc."""
+    try:
+        body = Path(path).read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return False
+    return bool(re.search(r'<script[^>]+type=["\']module["\'][^>]+src=["\']/?src/',
+                          body, re.I))
+
+
 class PreviewServer:
     """A live-reloading view of `root`, or nothing at all.
 
@@ -113,18 +153,30 @@ class PreviewServer:
     running build. `url` is None when it did not come up.
     """
 
-    def __init__(self, root, page='index.html'):
+    def __init__(self, root, page='index.html', fallback_html=None):
         self.root = str(Path(root).resolve())
         self.url = None
         self.server = None
+        fallback = Path(fallback_html).resolve() if fallback_html else None
+        if fallback is not None and not fallback.is_file():
+            fallback = None
+        handler = type('PreviewHandler', (_Handler,), {
+            'fallback_html': str(fallback) if fallback else None,
+            'handoff_url': '',
+        })
+        self.handler = handler
         try:
             self.server = ThreadingHTTPServer(
-                ('127.0.0.1', 0), partial(_Handler, directory=self.root))
+                ('127.0.0.1', 0), partial(handler, directory=self.root))
         except OSError:
             return
         self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.url = 'http://127.0.0.1:%d/%s' % (self.server.server_address[1], page.lstrip('/'))
+
+    def handoff(self, url):
+        """Redirect the existing preview tab only after a usable replacement exists."""
+        self.handler.handoff_url = url or ''
 
     def close(self):
         if self.server is not None:
@@ -158,7 +210,7 @@ def serve_live_preview(root, state):
     """Serve the standalone preview, then hand off to Vite when it exists."""
     state = Path(state)
     state.mkdir(parents=True, exist_ok=True)
-    server = PreviewServer(root)
+    server = PreviewServer(root, fallback_html=state / 'preview/static-index.html')
     if server.url is None:
         return 1
     pid_path, url_path = state / 'preview-server.pid', state / 'preview-server.url'
@@ -168,6 +220,7 @@ def serve_live_preview(root, state):
     stopped = threading.Event()
     previous = signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     development = None
+    handed_off = False
     try:
         while not stopped.wait(.2):
             # preview-build deliberately creates standalone HTML before the
@@ -175,24 +228,44 @@ def serve_live_preview(root, state):
             # Vite, serving its module index through SimpleHTTPServer produces
             # a blank page.  The preview owner, not the TUI, owns this
             # transition so it also works unattended.
-            spec = development_preview(root)
-            if spec is None:
+            if development is None:
+                reused = existing_development_url(state)
+                if reused:
+                    server.handoff(reused)
+                    url_path.write_text(reused, encoding='utf-8')
+                    handed_off = True
+                    continue
+                spec = development_preview(root)
+                if spec is None:
+                    continue
+                development = DevelopmentPreview(root, spec)
                 continue
-            server.close()
-            server = None
-            development = DevelopmentPreview(root, spec)
-            if development.url is not None:
+            if development.process is None or development.process.poll() is not None:
+                development.close()
+                development = None
+                handed_off = False
+                server.handoff('')
+                for name in ('preview-vite.pid', 'preview-vite.url'):
+                    (state / name).unlink(missing_ok=True)
+                continue
+            # HTTP alone is insufficient: Vite can return index.html while a
+            # JSX import still fails. Require the entry module and, where the
+            # project already has Playwright, an actual mounted browser DOM
+            # before replacing the styled static preview.
+            if not handed_off and development.ready() and development.rendered():
+                (state / 'preview-vite.pid').write_text(str(development.process.pid), encoding='utf-8')
+                (state / 'preview-vite.url').write_text(development.url, encoding='utf-8')
+                server.handoff(development.url)
                 url_path.write_text(development.url, encoding='utf-8')
-            while not stopped.wait(.2):
-                if development.process is None or development.process.poll() is not None:
-                    break
-            break
+                handed_off = True
     finally:
         signal.signal(signal.SIGTERM, previous)
         if server is not None:
             server.close()
         if development is not None:
             development.close()
+        for name in ('preview-vite.pid', 'preview-vite.url'):
+            (state / name).unlink(missing_ok=True)
         pid_path.unlink(missing_ok=True)
         url_path.unlink(missing_ok=True)
     return 0
@@ -231,7 +304,14 @@ def development_preview(root):
     if not framework or not isinstance(scripts, dict):
         return None
     vite = root / 'node_modules' / '.bin' / 'vite'
-    if not vite.is_file():
+    # A Vite executable can appear before npm has finished installing the
+    # application's framework packages. Starting it at that point returns
+    # index.html successfully but fails module resolution in the browser,
+    # leaving an empty #root. Do not hand off the visible preview until the
+    # runtime named by package.json is actually present.
+    required_runtime = ('svelte',) if 'svelte' in deps and 'react' not in deps else ('react', 'react-dom')
+    if not vite.is_file() or any(not (root / 'node_modules' / name / 'package.json').is_file()
+                                 for name in required_runtime):
         return None
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
@@ -262,24 +342,74 @@ class DevelopmentPreview:
         except OSError:
             self.url = None
             return
-        threading.Thread(target=self._open_when_ready, daemon=True).start()
 
-    def _open_when_ready(self):
-        deadline = time.monotonic() + 30
-        while not self.cancelled.wait(.2):
-            if self.process.poll() is not None or time.monotonic() >= deadline:
-                return
-            try:
-                with urlopen(self.url, timeout=1):
-                    _open_local_browser(self.url)
-                    return
-            except OSError:
-                pass
+    def ready(self):
+        """True only when Vite serves both its document and source entry module."""
+        try:
+            body = urlopen(self.url, timeout=1).read().decode('utf-8', 'replace')
+            match = re.search(r'<script[^>]+type=["\']module["\'][^>]+src=["\']([^"\']+)', body, re.I)
+            if not match:
+                return True
+            urlopen(urljoin(self.url, match.group(1)), timeout=1).read(1)
+            return True
+        except OSError:
+            return False
+
+    def rendered(self):
+        """Require a mounted root and no browser/module error before handoff.
+
+        This uses the project's existing Playwright dependency only.  A
+        preview must never install a browser or dependency merely to check a
+        throwaway page; without Playwright we retain the known-good standalone
+        preview instead of gambling on an unverified Vite page.
+        """
+        root = Path(self.root)
+        package = next((name for name in ('playwright', '@playwright/test')
+                        if (root / 'node_modules' / name / 'package.json').is_file()), None)
+        if package is None:
+            return False
+        program = r'''
+import { chromium } from %r;
+const browser = await chromium.launch({headless: true});
+const page = await browser.newPage();
+const errors = [];
+page.on('pageerror', error => errors.push(error.message));
+page.on('console', item => { if (item.type() === 'error') errors.push(item.text()); });
+try {
+  await page.goto(%r, {waitUntil: 'networkidle', timeout: 8000});
+  const mounted = await page.locator('#root').evaluate(node => node.childElementCount > 0 || node.textContent.trim().length > 0);
+  await browser.close();
+  process.exit(mounted && errors.length === 0 ? 0 : 1);
+} catch (_) { await browser.close(); process.exit(1); }
+''' % (package, self.url)
+        try:
+            result = subprocess.run(['node', '--input-type=module', '-e', program], cwd=self.root,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=12)
+            return result.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
 
     def close(self):
         self.cancelled.set()
         if self.process and self.process.poll() is None:
             kill_tree(self.process)
+
+
+def existing_development_url(state):
+    """Reuse the driver-owned application server instead of spawning Vite twice."""
+    state = Path(state)
+    for prefix in ('app-server', 'preview-vite'):
+        try:
+            pid = int((state / (prefix + '.pid')).read_text(encoding='utf-8'))
+            os.kill(pid, 0)
+            url = (state / (prefix + '.url')).read_text(encoding='utf-8').strip()
+            if url:
+                urlopen(url, timeout=1).read(1)
+                return url
+        except (OSError, ValueError):
+            continue
+    return ''
 
 
 def main(argv):

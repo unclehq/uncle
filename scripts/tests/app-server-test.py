@@ -60,6 +60,18 @@ class AppServer(unittest.TestCase):
         self.assertEqual(app_server.start(root, self.state), first)
         self.assertEqual((self.state / 'app-server.pid').read_text(), pid)
 
+    def test_start_reuses_a_healthy_preview_vite_server(self):
+        port = free_port()
+        root = self.project({'kind': 'webpage', 'command': ['python3', '-c', 'raise SystemExit(1)'],
+                             'url': 'http://127.0.0.1:%d/' % port})
+        preview = subprocess.Popen(['python3', '-m', 'http.server', str(port), '--bind', '127.0.0.1'],
+                                   cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(preview.terminate)
+        (self.state / 'preview-vite.pid').write_text(str(preview.pid))
+        (self.state / 'preview-vite.url').write_text('http://127.0.0.1:%d/' % port)
+        self.assertEqual(app_server.start(root, self.state), 'http://127.0.0.1:%d/' % port)
+        self.assertFalse((self.state / 'app-server.pid').exists())
+
     def test_prewarm_refuses_to_install_or_build(self):
         port = free_port()
         root = self.project({'kind': 'webpage', 'command': ['npm', 'run', 'preview'],

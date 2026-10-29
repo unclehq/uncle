@@ -282,7 +282,6 @@ on_exit() {
     if declare -f cancel_speculation > /dev/null; then cancel_speculation; fi
     if declare -f early_checklist_cancel > /dev/null; then early_checklist_cancel; fi
     if declare -f early_execute_cancel > /dev/null; then early_execute_cancel; fi
-    if declare -f early_stream_cancel > /dev/null; then early_stream_cancel; fi
     if declare -f preview_build_cancel > /dev/null; then preview_build_cancel; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
     python3 -B "$ROOT/scripts/lib/app_server.py" stop "$STATE_DIR" > /dev/null 2>&1 || true
@@ -1663,31 +1662,51 @@ green_failure_route() {
 }
 
 # A failed assertion can be useful delivery evidence when the application is
-# still usable.  A compile failure or a preview server that cannot start is
-# different: no browser worker can inspect the product at all, so treating it
-# as a nonblocking test result creates a blank-page checklist loop.
+# still usable. A compile failure, a preview server that cannot start, or a
+# runner that discovered zero tests is different: the product or its promised
+# verification never actually ran. Treating either as a nonblocking result
+# created blank-page and "No tests found" completion paths.
 green_application_not_runnable() {
     local log="${1:-$LOG_DIR/green-check.log}"
     [[ -s "$log" ]] || return 1
-    grep -qiE '(^|[^[:alpha:]])(build failed|failed to resolve import|is not exported by|could not resolve|error when starting (dev|preview) server|process from config\.webServer was not able to start|webserver.*exit code)' "$log"
+    grep -qiE '(^|[^[:alpha:]])(build failed|failed to resolve import|is not exported by|could not resolve|error when starting (dev|preview) server|process from config\.webServer was not able to start|webserver.*exit code|no test files found|testDir.*does not exist)' "$log"
 }
 
-# Return 0 when browser work is safe, 2 after scheduling the one bounded
-# implementation retry for an unattended run, and 1 when a person must
-# inspect the persistent runtime failure.  The retry is intentionally not the
-# generic test-repair loop: it has a concrete driver-owned compiler error and
-# re-enters IMPLEMENT with that evidence available in green-check.log.
+# Return 0 when browser/verification work is safe, 2 after scheduling the one
+# bounded implementation retry for an unattended run, and 1 when a person
+# must inspect the persistent setup failure. The retry is intentionally not
+# the generic test-repair loop: it has a concrete driver-owned compiler or
+# runner-configuration error and re-enters IMPLEMENT with its log evidence.
 route_unrunnable_application() {
     green_application_not_runnable || return 0
     local marker="$STATE_DIR/runtime-readiness-repair-attempted"
     if [[ "${UNATTENDED:-0}" == 1 && ! -e "$marker" ]]; then
         touch "$marker"
+        touch "$STATE_DIR/runtime-readiness-force-implementation"
         printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
-        echo 'The application does not compile or its preview server cannot start; returning once to IMPLEMENT before any browser/checklist work.'
+        # IMPLEMENT normally treats these markers as a resume boundary: all
+        # isolated workers are already merged, so only their reports are
+        # reconciled.  That is exactly wrong after the driver has proved the
+        # merged application cannot build, serve, or discover tests.  Start a
+        # real, bounded repair pass instead.  Preserve the old green log and
+        # report as evidence; invalidate only results that would otherwise
+        # cause IMPLEMENT to skip its code workers or reuse the failed run.
+        rm -f "$STATE_DIR/parallel-implementation-complete" \
+              "$STATE_DIR/parallel-implementation-report-complete" \
+              "$STATE_DIR/parallel-implementation-serial-fallback" \
+              "$STATE_DIR/green-check.fingerprint" \
+              "$GREEN_OVERRIDE_FILE"
+        rm -rf "$STATE_DIR/parallel-implementation-groups" \
+               "$STATE_DIR/parallel/notes"
+        rm -f "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" \
+              "$STATE_DIR/documents/AUTOMATED_TEST_REPORT.json" \
+              .uncle/docs/IMPLEMENTATION_NOTES.md \
+              .uncle/docs/AUTOMATED_TEST_REPORT.md
+        echo 'The application cannot render or its configured test runner did not execute tests; returning once to IMPLEMENT before browser/checklist work.'
         set_state IMPLEMENT
         return 2
     fi
-    echo 'Application is not runnable (compile or preview-server failure); browser/checklist work is not started.' >&2
+    echo 'Application or verification setup is not runnable; browser/checklist work is not started.' >&2
     echo "See $LOG_DIR/green-check.log and correct the implementation before resuming." >&2
     return 1
 }
@@ -3191,15 +3210,14 @@ run_test_review_panel() {
             UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens-retry" < /dev/null || true
         fi
     done
-    WORKFLOW_POSTFLIGHT_GREEN_CHECK="${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" \
-        python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" "$STATE_DIR/documents/TEST_REVIEW.json" coverage assertions oracle || return 1
+    python3 "$ROOT/scripts/lib/test_review_packets.py" "$directory" "$STATE_DIR/documents/TEST_REVIEW.json" coverage assertions oracle || return 1
     python3 "$ROOT/scripts/lib/acceptance_context.py" --validate-json "$STATE_DIR/documents/TEST_REVIEW.json" || return 1
     python3 "$ROOT/scripts/lib/acceptance_context.py" --render "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/TEST_REVIEW.md || return 1
     cp "$STATE_DIR/documents/TEST_REVIEW.json" "$STATE_DIR/documents/TEST_REVIEW_WORKERS.json"
 }
 
 run_manual_checklist_panel() {
-    local directory="$STATE_DIR/manual-checklist-panel" lens prompt output pid stream_monitor_pid=""
+    local directory="$STATE_DIR/manual-checklist-panel" lens prompt output pid
     local -a pids=() pid_lenses=()
     [[ "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || return 0
     rm -rf "$directory"; mkdir -p "$directory/prompts"
@@ -3219,31 +3237,12 @@ run_manual_checklist_panel() {
             inputs='`.uncle/workflow/documents/ADVERSARIAL_REVIEW.json`'
             printf '\n## Early speculative checklist\n\n`TEST_REVIEW.json` is intentionally not an input because it is being produced concurrently. Build checks from the approved plan, adversarial review, current tree, and driver evidence only. This packet is discarded unless the finished test review passes unchanged.\n' >> "$prompt"
         fi
-        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`, `.uncle/workflow/documents/PROJECT_PLAN.json`, `.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json`, %s. Do not inspect any rendered Markdown view or enumerate directories.\n\nUse current-tree snapshots and file hashes for regression evidence. Driver green-check is postflight-only and is not an input here. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$range" >> "$prompt"
+        printf '\n## Canonical inputs (binding)\n\nRead only these canonical JSON artifacts: `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`, `.uncle/workflow/documents/PROJECT_PLAN.json`, `.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json`, %s, plus the completed driver record `.uncle/workflow/green-check.tsv`. Do not inspect any rendered Markdown view or enumerate directories.\n\nTreat the driver record as authoritative for dependency, build, unit, and automated-browser commands: cite it rather than proposing those commands again. Never require or mention Git history, commits, a prior revision, or a historical diff in any check field.\n\n## Assigned checklist lens\n\nFocus only on **%s**. Use IDs only in %s; no other worker owns that range.\n' "$inputs" "$lens" "$range" >> "$prompt"
         ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/manual-checklist-worker-$lens.log" 2>&1 &
         pids+=("$!")
         pid_lenses+=("$lens")
     done
-    # Do not make execute-checklist wait for an arbitrary lens (previously
-    # coverage) or for the entire manual-checklist panel.  The first complete
-    # packet is enough to form a partial checklist, and the shared scheduler
-    # below will immediately start its uncovered work.  It deliberately starts
-    # only one scheduler: starting one per lens would duplicate app/server
-    # setup and could violate exclusive-resource declarations.
-    if [[ "${UNCLE_CHECKLIST_EARLY:-0}" == 1 ]]; then
-        (
-            while true; do
-                start_streamed_checklist_lens "$directory" "first-ready" && exit 0
-                # The parent creates this sentinel only after retries have
-                # completed, so a missing/invalid panel exits cleanly rather
-                # than leaving a background monitor behind.
-                [[ -e "$directory/workers-complete" ]] && exit 0
-                sleep 0.1
-            done
-        ) > "$LOG_DIR/execute-checklist-stream-monitor.log" 2>&1 < /dev/null &
-        stream_monitor_pid=$!
-    fi
     local index=0
     for pid in "${pids[@]}"; do
         wait "$pid" || echo 'Manual-checklist worker failed; canonical packet validation will stop the panel.' >&2
@@ -3257,8 +3256,6 @@ run_manual_checklist_panel() {
         fi
         index=$((index + 1))
     done
-    touch "$directory/workers-complete"
-    [[ -z "$stream_monitor_pid" ]] || wait "$stream_monitor_pid" || true
     # Self-hosted models occasionally answer a checklist worker with a prose
     # question after seeing a stale rendered checklist.  Validate each compact
     # packet independently and give only that worker one explicit correction;
@@ -3269,97 +3266,14 @@ run_manual_checklist_panel() {
     cp "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
 }
 
-# Manual checklist construction is independent of the test-review *result*:
-# it uses the approved plan, adversarial findings, current tree and driver
-# evidence. Start it beside test review, but never adopt it unless that review
-# ends PASS. This hides its three worker calls behind the test-review panel
-# without letting a finding silently disappear from a checklist.
+# Checklist work consumes a completed driver green-check. The browser/server
+# may be prewarmed while test review runs, but manual or execute workers never
+# run against a PENDING verification placeholder.
 EARLY_CHECKLIST_PID=""
+EARLY_CHECKLIST_FINGERPRINT_FILE="$STATE_DIR/checklist-early.fingerprint"
 EARLY_EXECUTE_PID_FILE="$STATE_DIR/execute-checklist.early.pid"
 EARLY_EXECUTE_STATUS_FILE="$STATE_DIR/execute-checklist.early.status"
 EARLY_EXECUTE_OK_FILE="$STATE_DIR/execute-checklist.early.ok"
-EARLY_STREAM_DIR="$STATE_DIR/checklist-stream"
-
-start_streamed_checklist_lens() {
-    local directory="$1" lens="$2" partial="$EARLY_STREAM_DIR/$lens.checklist.json"
-    local output="$EARLY_STREAM_DIR/$lens.results.json" pid_file="$EARLY_STREAM_DIR/$lens.pid"
-    local candidate lane_file lane_count
-    local -a ready_lenses=()
-    mkdir -p "$EARLY_STREAM_DIR"
-    [[ -s "$pid_file" ]] && return 0
-    # The first complete worker packet is the trigger, not an artificial
-    # coverage boundary. Other lens packets often finish while it is running;
-    # include every already-valid packet in this first, single
-    # resource-aware scheduler so execute-checklist begins with more useful
-    # work without launching conflicting per-lens browser/service sessions.
-    # Packets that arrive later remain for the normal uncovered-check pass.
-    for candidate in coverage invariants resources regressions; do
-        if [[ -s "$directory/$candidate.json" ]] \
-           && python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" validate "$directory/$candidate.json" >/dev/null 2>&1; then
-            ready_lenses+=("$candidate")
-        fi
-    done
-    [[ "${#ready_lenses[@]}" -gt 0 ]] || return 1
-    python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$partial" "${ready_lenses[@]}" || return 1
-    python3 -B "$ROOT/scripts/lib/checklist_document.py" --validate-json "$partial" || return 1
-    # The first completed lens is often the invariant/browser lens.  Its rows
-    # intentionally share browser:system, so immediately executing it creates
-    # one long serial worker and defeats the fan-out we are trying to overlap.
-    # Wait for another ready lens unless the panel has finished; the normal
-    # execution pass then starts several independent lanes from the collated
-    # checklist instead of pinning the stage behind this partial one.
-    lane_file="$EARLY_STREAM_DIR/$lens.lanes.txt"
-    lane_count="$(checklist_lane_batches "$partial" "$lane_file" 2>/dev/null || printf 0)"
-    [[ "$lane_count" =~ ^[0-9]+$ ]] || lane_count=0
-    if [[ "$lane_count" -lt 2 ]]; then
-        return 1
-    fi
-    ensure_checklist_runner execute-checklist || return 1
-    echo "Streaming ready checklist lenses (${ready_lenses[*]}) into execute-checklist."
-    (
-        CHECKLIST_STREAM_PRECOMPLETED='' CHECKLIST_STREAM_LANE=1 \
-            run_parallel_checklist_workers "$partial" "$output"
-        printf '%s\n' "$?" > "$EARLY_STREAM_DIR/$lens.status"
-    ) > "$LOG_DIR/execute-checklist-stream-$lens.log" 2>&1 < /dev/null &
-    printf '%s\n' "$!" > "$pid_file"
-}
-
-early_stream_join() {
-    local pid
-    [[ -d "$EARLY_STREAM_DIR" ]] || return 0
-    for pid_file in "$EARLY_STREAM_DIR"/*.pid; do
-        [[ -s "$pid_file" ]] || continue
-        pid="$(cat "$pid_file")"
-        [[ "$pid" =~ ^[0-9]+$ ]] || continue
-        echo "Waiting for streamed execute-checklist lane ${pid_file##*/}..."
-        while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
-    done
-}
-
-early_stream_cancel() {
-    local pid
-    [[ -d "$EARLY_STREAM_DIR" ]] || return 0
-    for pid_file in "$EARLY_STREAM_DIR"/*.pid; do
-        [[ -s "$pid_file" ]] || continue
-        pid="$(cat "$pid_file")"
-        [[ "$pid" =~ ^[0-9]+$ ]] && kill "$pid" 2>/dev/null || true
-    done
-    rm -rf "$EARLY_STREAM_DIR"
-}
-
-early_stream_collect() {
-    local -a packets=()
-    [[ -d "$EARLY_STREAM_DIR" ]] || return 1
-    for packet in "$EARLY_STREAM_DIR"/*.results.json; do
-        [[ -s "$packet" ]] || continue
-        [[ "$(cat "${packet%.results.json}.status" 2>/dev/null)" == 0 ]] || continue
-        packets+=("$packet")
-    done
-    [[ "${#packets[@]}" -gt 0 ]] || return 1
-    python3 -B "$ROOT/scripts/lib/checklist_stream.py" merge \
-        "$STATE_DIR/documents/EXECUTE_CHECKLIST_STREAMED.json" "${packets[@]}"
-}
-
 prewarm_checklist_browser() {
     [[ "${UNATTENDED:-0}" == 1 ]] || return 0
     [[ "${WORKFLOW_CHECKLIST_APP_SERVER:-1}" == 1 ]] || return 0
@@ -3371,32 +3285,32 @@ prewarm_checklist_browser() {
         > "$LOG_DIR/app-server.prewarm.log" 2>&1 < /dev/null &
 }
 
+# The PID above only lives for this shell.  A test-review format retry, an
+# unattended resume, or a report-only reconciliation can re-enter
+# TEST_REVIEW after the speculative checklist has completed.  Keep a durable
+# identity for the packet so those control-flow retries do not spend the same
+# checklist workers a second time.  tree_fingerprint deliberately includes
+# untracked source/test files and excludes workflow artifacts, dependencies,
+# and Git metadata.
+early_checklist_fingerprint() {
+    python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" \
+        "$STATE_DIR/verification.manifest" 2>/dev/null
+}
+
+early_checklist_reusable() {
+    local current recorded
+    early_checklist_usable || return 1
+    [[ -s "$EARLY_CHECKLIST_FINGERPRINT_FILE" ]] || return 1
+    current="$(early_checklist_fingerprint)" || return 1
+    recorded="$(cat "$EARLY_CHECKLIST_FINGERPRINT_FILE")"
+    [[ -n "$current" && "$current" == "$recorded" ]]
+}
+
 early_checklist_start() {
-    [[ "${WORKFLOW_EARLY_CHECKLIST:-1}" == 1 ]] || return 0
-    [[ -z "$EARLY_CHECKLIST_PID" ]] || return 0
-    # Do not spend workers when a completed, interactive run already knows
-    # verification is failing. A pending green check is deliberately allowed:
-    # it and test review are the work this panel overlaps.
-    if [[ "${GREEN_CHECK:-1}" == 1 && -s "${GREEN_CLASS:-}" ]] \
-        && { ! declare -f green_pending > /dev/null || ! green_pending; } \
-        && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]] \
-        && [[ "${UNATTENDED:-0}" != 1 ]]; then
-        return 0
-    fi
-    rm -f "$STATE_DIR/checklist-early.ok" "$EARLY_EXECUTE_PID_FILE" \
-        "$EARLY_EXECUTE_STATUS_FILE" "$EARLY_EXECUTE_OK_FILE"
-    rm -rf "$EARLY_STREAM_DIR"
-    echo 'Starting MANUAL_CHECKLIST in the background while TEST_REVIEW runs.'
-    # Browser assertions still wait for the checklist's declared rows, but the
-    # server can be ready while those rows are being composed.  Prewarm never
-    # installs or builds, so it cannot contend with driver verification.
-    prewarm_checklist_browser
-    (
-        if UNCLE_CHECKLIST_EARLY=1 run_manual_checklist_panel; then
-            touch "$STATE_DIR/checklist-early.ok"
-        fi
-    ) > "$LOG_DIR/manual-checklist.early.log" 2>&1 < /dev/null &
-    EARLY_CHECKLIST_PID=$!
+    # Compatibility no-op for resumes carrying old marker files. Starting the
+    # panel before green evidence exists duplicated browser/test work and made
+    # its results impossible to ground in the driver verification result.
+    :
 }
 
 early_checklist_cancel() {
@@ -3471,10 +3385,11 @@ run_parallel_application_implementation() {
     local groups group step prompt result cmd model effort checkpoint_dir checkpoint step_line owned_paths
     local complete_marker="$STATE_DIR/parallel-implementation-complete"
     local serial_fallback_marker="$STATE_DIR/parallel-implementation-serial-fallback"
+    local runtime_repair_marker="$STATE_DIR/runtime-readiness-force-implementation"
     # Completion markers are deliberately empty `touch` files.  Existence is
     # the contract; testing size makes every completed fan-out look unfinished
     # after a resume and reruns already merged code.
-    if [[ -e "$complete_marker" ]]; then
+    if [[ -e "$complete_marker" && ! -e "$runtime_repair_marker" ]]; then
         echo 'Parallel implementation steps are already merged; reconciling their report only.'
         return 0
     fi
@@ -3544,6 +3459,20 @@ run_parallel_application_implementation() {
                 fi
                 echo; echo "Work only on this approved step and its declared owned files."
                 echo "Do not edit workflow documents."
+                if [[ -e "$runtime_repair_marker" && -s "$LOG_DIR/green-check.log" ]]; then
+                    cat <<'EOF'
+
+## Runtime repair (binding)
+
+The driver is running this implementation pass because the previously merged
+application could not build, serve, or discover tests. Fix the underlying
+source/configuration defect in your owned paths; do not merely change reports
+or tests to hide it. These are the most recent driver diagnostics:
+
+EOF
+                    tail -n 30 "$LOG_DIR/green-check.log" >> "$prompt"
+                    echo >> "$prompt"
+                fi
                 cat <<'EOF'
 
 ## Speed (binding)
@@ -3655,6 +3584,7 @@ EOF
     # limit, resuming retries just that small report stage rather than rerunning
     # already merged implementation steps.
     touch "$complete_marker"
+    rm -f "$runtime_repair_marker"
 }
 
 # Parallel workers produce isolated code and handoffs. One normal agent
@@ -3711,23 +3641,6 @@ checklist_run_worker() {
 run_parallel_checklist_workers() {
     local checklist_input="${1:-$STATE_DIR/documents/MANUAL_CHECKLIST.json}"
     local workers_output="${2:-$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json}"
-    local streamed_input="${CHECKLIST_STREAM_PRECOMPLETED:-}" remaining_input=""
-    # A streamed lens has already executed some IDs. Derive the rest by ID;
-    # never ask a later worker to repeat that evidence.
-    if [[ -s "$streamed_input" ]]; then
-        remaining_input="$STATE_DIR/checklist-stream.remaining.json"
-        python3 -B "$ROOT/scripts/lib/checklist_stream.py" remaining \
-            "$checklist_input" "$streamed_input" "$remaining_input" || return 1
-        checklist_input="$remaining_input"
-        if [[ "$(python3 - "$checklist_input" <<'PY'
-import json, sys
-print(len(json.load(open(sys.argv[1])).get('checks', [])))
-PY
-)" == 0 ]]; then
-            cp "$streamed_input" "$workers_output"
-            return 0
-        fi
-    fi
     local groups="$STATE_DIR/checklist-groups/groups.txt"
     # STATE_DIR is absolute in this driver; prefixing $PWD built /project//project/... and every
     # fan-out below returned early because that file never existed.
@@ -3770,7 +3683,6 @@ PY
         if lane_count="$(checklist_lane_batches "$checklist_input" "$lane_file")"; then
             if [[ "$lane_count" -lt 2 && "${CHECKLIST_STREAM_LANE:-0}" != 1 ]]; then
                 echo "Checklist runs as one agent: its checks do not split into independent lanes."
-                [[ -s "$streamed_input" ]] && cp "$streamed_input" "$workers_output"
                 return 0
             fi
             directory="$(mktemp -d "$STATE_DIR/checklist-workers.XXXXXX")" || return 1
@@ -3783,11 +3695,6 @@ PY
             checklist_run_lanes "$directory" "$lane_file" "$worker_template"
             python3 "$ROOT/scripts/lib/checklist_worker_packets.py" "$directory" \
                 "$workers_output" --expected "${packet_names[@]}" || return 1
-            if [[ -s "$streamed_input" ]]; then
-                python3 -B "$ROOT/scripts/lib/checklist_stream.py" merge \
-                    "$workers_output.merged" "$streamed_input" "$workers_output" \
-                    && mv "$workers_output.merged" "$workers_output" || return 1
-            fi
             CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"
             cp "$ROOT/prompts/execute-checklist.md" "$CHECKLIST_EXECUTE_PROMPT"
             printf '\n## Collated worker results (binding)\n\nRead only `%s/documents/EXECUTE_CHECKLIST_WORKERS.json` for worker execution results. Do not read the worker directory, README, individual worker prompts, or raw worker output. It is complete, validated, ordered, and is the authoritative worker handoff. Do not rerun checks already represented there merely to compose reports.\n' \
@@ -3936,11 +3843,6 @@ PY
     done < "$groups"
     python3 "$ROOT/scripts/lib/checklist_worker_packets.py" "$directory" \
         "$workers_output" --expected "${packet_names[@]}" || return 1
-    if [[ -s "$streamed_input" ]]; then
-        python3 -B "$ROOT/scripts/lib/checklist_stream.py" merge \
-            "$workers_output.merged" "$streamed_input" "$workers_output" \
-            && mv "$workers_output.merged" "$workers_output" || return 1
-    fi
     CHECKLIST_EXECUTE_PROMPT="$directory/execute-checklist-synthesis.md"
     cp "$ROOT/prompts/execute-checklist.md" "$CHECKLIST_EXECUTE_PROMPT"
     printf '\n## Collated worker results (binding)\n\nRead only `%s/documents/EXECUTE_CHECKLIST_WORKERS.json` for worker execution results. Do not read the worker directory, README, individual worker prompts, or raw worker output. It is complete, validated, ordered, and is the authoritative worker handoff. Do not rerun checks already represented there merely to compose reports.\n' \
@@ -4374,6 +4276,10 @@ run_stage() {
             fi
             require_artifact .uncle/docs/IMPLEMENTATION_NOTES.md
             require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
+            # A runtime-readiness repair applies to this implementation pass
+            # only. Keep its attempted marker (it bounds retries), but do not
+            # leak the repair prompt into later report-only reconciliations.
+            rm -f "$STATE_DIR/runtime-readiness-force-implementation"
             ;;
         PREFLIGHT)
             rm -f "$STATE_DIR/documents/PREFLIGHT_REPORT.json" .uncle/docs/PREFLIGHT_REPORT.md
@@ -5430,13 +5336,11 @@ while true; do
             PREVIOUS_VERIFICATION_SNAPSHOT=""
             capture_verification_inputs
 
-            # Verification is postflight evidence. Starting it here made every
-            # later worker inherit PENDING data and redo driver-owned checks.
-            echo 'Driver verification is deferred until final audit; earlier stages do not consume green-check evidence.'
+            # Start verification as soon as implementation is stable. It runs
+            # beside TEST_REVIEW, but checklist stages consume the published
+            # canonical result instead of re-running driver-owned commands.
+            run_green_check_auto || true
             collect_background_preflight
-            # The driver knows each command's result; record them as the test report in place of the implementation stage's
-            # placeholder, so the test review reads real evidence once instead of failing it and sending the run back here.
-            green_pending || python3 -B "$ROOT/scripts/lib/test_report.py" from-green . application "$STATE_DIR/green-check.current.tsv" "$LOG_DIR/green-check.log" 2>/dev/null || true
 
             # Probe only: records what a parallel implementation would have
             # done and whether the plan's file ownership matched the tree.
@@ -5529,17 +5433,14 @@ while true; do
             # Keep the inexpensive server/browser prerequisite warm even if
             # the last build failed.  It never builds or opens a page.
             prewarm_checklist_browser
-            # Never start speculative manual/browser evidence against an app
-            # the driver has already proved cannot compile or serve.
+            # Never start manual/browser evidence against an app the driver
+            # has already proved cannot compile or serve.
             if ! green_pending; then
                 runtime_ready_rc=0
                 route_unrunnable_application || runtime_ready_rc=$?
                 if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
                 [[ "$runtime_ready_rc" == 0 ]] || exit 1
             fi
-            # Start once here even when the green check was synchronous (the
-            # background verifier also calls this helper, and it is idempotent).
-            early_checklist_start
             run_stage TEST_REVIEW
             check_verification_inputs
             set_state VALIDATE_TEST_REVIEW
@@ -5555,32 +5456,23 @@ while true; do
             ensure_rc=0; ensure_acceptance_canonical .uncle/docs/TEST_REVIEW.md || ensure_rc=$?
             if [[ "$ensure_rc" == 2 ]]; then continue; fi
             require_file "$STATE_DIR/documents/TEST_REVIEW.json"
-            # Test review is advisory until the one postflight driver run.
-            # Keep it as audit evidence; never replay implementation or repair
-            # merely because command-level evidence is not available yet.
-            if [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" == 1 ]]; then
-                test_review_status="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS)"
-                if [[ "$test_review_status" != PASS ]]; then
-                    record_nonblocking_failure TEST_REVIEW.json "canonical test-review acceptance $test_review_status; final audit will assess it with postflight verification"
-                fi
-                echo 'Test-review evidence recorded; green-check is deferred to final audit.'
-                set_state MANUAL_CHECKLIST
-                continue
-            fi
             if [[ "$GREEN_CHECK" != 1 || ! -s "$GREEN_CLASS" ]]; then
                 echo "Acceptance BLOCKED: the driver must run the approved verification suite."
-                echo "Enable WORKFLOW_GREEN_CHECK and rerun IMPLEMENT to capture its results."
+                echo "Enable WORKFLOW_GREEN_CHECK and rerun IMPLEMENT to capture its results before checklist work."
                 exit 1
             fi
-            # The verification commands are still running in the background and nothing waits for them: take the review as it
-            # stands (rows that cite results say so), record it for the final audit, and go on.
-            if green_pending; then
-                if [[ "$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/TEST_REVIEW.json" COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS)" != PASS ]]; then
-                    record_nonblocking_failure TEST_REVIEW.json 'test review ran while the verification commands were still running in the background'
-                fi
-                echo 'Verification is still running in the background; the run continues without waiting for it.'
-                set_state MANUAL_CHECKLIST
-                continue
+            green_wait_final || { echo 'Driver verification did not publish final evidence before checklist work.' >&2; exit 1; }
+            runtime_ready_rc=0
+            route_unrunnable_application || runtime_ready_rc=$?
+            if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
+            [[ "$runtime_ready_rc" == 0 ]] || exit 1
+            python3 -B "$ROOT/scripts/lib/test_report.py" from-green . application "$STATE_DIR/green-check.current.tsv" "$LOG_DIR/green-check.log" 2>/dev/null || true
+            # Test-review workers may have run while green was still pending.
+            # Re-collate their immutable packets now so only driver-owned
+            # rows change from PENDING to the completed canonical result.
+            if [[ -d "$STATE_DIR/test-review-panel" ]]; then
+                python3 -B "$ROOT/scripts/lib/test_review_packets.py" "$STATE_DIR/test-review-panel" "$STATE_DIR/documents/TEST_REVIEW.json" coverage assertions oracle || exit 1
+                python3 -B "$ROOT/scripts/lib/acceptance_context.py" --render "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/TEST_REVIEW.md || exit 1
             fi
             # The direct worker fast path leaves the current acceptance report
             # TEST_REVIEW.json is produced and validated before this state;
@@ -5824,22 +5716,15 @@ while true; do
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
             fi
+            green_wait_final || { echo 'Driver verification did not publish final evidence before MANUAL_CHECKLIST.' >&2; exit 1; }
+            runtime_ready_rc=0
+            route_unrunnable_application || runtime_ready_rc=$?
+            if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
+            [[ "$runtime_ready_rc" == 0 ]] || exit 1
             # The checklist is written against what this machine was proved to
             # do, not against what the plan hoped for.
             snapshot_preflight_capabilities
-            early_checklist_join
-            if ! early_checklist_usable; then
-                # The early panel has already retried an invalid individual
-                # worker once. Do not restart the whole panel here: that was
-                # the duplicate manual-checklist run. Leave a clear durable
-                # failure for resume/recovery instead.
-                echo 'Speculative MANUAL_CHECKLIST did not deliver a valid canonical packet; not rerunning checklist workers.' >&2
-                exit 1
-            fi
-            # The early packet is the sole manual-checklist execution for
-            # this run. Test-review findings feed later acceptance, but do
-            # not trigger a second checklist generation pass.
-            echo 'Adopted speculative MANUAL_CHECKLIST as the canonical checklist.'
+            run_stage MANUAL_CHECKLIST
             set_state VALIDATE_MANUAL_CHECKLIST
             ;;
 
@@ -5859,8 +5744,14 @@ while true; do
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
-            # Execute-checklist owns manual/runtime observations only. It does
-            # not start or wait for postflight command verification.
+            # Green evidence is a prerequisite. Execute workers consume its
+            # canonical result and never repeat unit/build/browser checks the
+            # driver already ran.
+            green_wait_final || { echo 'Driver verification did not publish final evidence before EXECUTE_CHECKLIST.' >&2; exit 1; }
+            runtime_ready_rc=0
+            route_unrunnable_application || runtime_ready_rc=$?
+            if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
+            [[ "$runtime_ready_rc" == 0 ]] || exit 1
             plan_delivery_summary
             check_verification_inputs
             # New applications may have no commits. A historical-baseline
@@ -5881,14 +5772,11 @@ PY
             snapshot_checklist_checks
             snapshot_checklist_groups
             ensure_checklist_runner execute-checklist || exit 1
-            early_stream_join
-            if early_stream_collect; then
-                echo 'Adopted streamed execute-checklist lanes; executing only uncovered checks.'
-                CHECKLIST_STREAM_PRECOMPLETED="$STATE_DIR/documents/EXECUTE_CHECKLIST_STREAMED.json" \
-                    run_stage EXECUTE_CHECKLIST
-            else
-                run_stage EXECUTE_CHECKLIST
-            fi
+            # Execute once, after the complete checklist is collated.  A
+            # partial streamed checklist commits browser/resource rows into
+            # early serial lanes and prevents the final scheduler from seeing
+            # the full parallel fan-out.
+            run_stage EXECUTE_CHECKLIST
             check_verification_inputs
             # Execution and report validation are separate durable steps. A
             # malformed table must not replay browser checks on every resume.
@@ -5913,9 +5801,9 @@ PY
             if [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" == 1 ]]; then
                 checklist_acceptance="$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/VERIFICATION_REPORT.json")"
                 if [[ "$checklist_acceptance" != PASS && "$checklist_acceptance" != UNKNOWN ]]; then
-                    record_nonblocking_failure VERIFICATION_REPORT.json "checklist acceptance $checklist_acceptance; final audit will assess it with postflight verification"
+                    record_nonblocking_failure VERIFICATION_REPORT.json "checklist acceptance $checklist_acceptance after completed driver verification"
                 fi
-                echo 'Checklist evidence recorded; driver verification is deferred to final audit.'
+                echo 'Checklist evidence recorded against the completed driver verification result.'
                 set_state FINAL_AUDIT
                 continue
             fi
@@ -6012,6 +5900,16 @@ PY
                 echo 'Driver postflight verification did not publish final evidence.' >&2
                 exit 1
             }
+            # `WORKFLOW_CONTINUE_ON_TEST_FAILURE` applies to evidence such as
+            # a failing assertion in an otherwise usable app.  It must never
+            # waive a compiler/module/server failure discovered only by this
+            # deliberately late postflight check.  Route that concrete defect
+            # through the bounded implementation retry before asking an audit
+            # model to describe a page that cannot render.
+            runtime_ready_rc=0
+            route_unrunnable_application || runtime_ready_rc=$?
+            if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
+            [[ "$runtime_ready_rc" == 0 ]] || exit 1
             # Removed first so run_codex_review's require_file cannot read a
             # previous run's audit as this one's output.
             rm -f .uncle/docs/FINAL_AUDIT.md

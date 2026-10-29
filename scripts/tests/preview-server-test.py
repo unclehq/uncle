@@ -18,7 +18,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/lib'))
-from preview_server import PreviewServer, VERSION_PATH, development_preview, tree_version
+from preview_server import PreviewServer, VERSION_PATH, HANDOFF_PATH, DevelopmentPreview, development_preview, tree_version
 
 
 def get(url):
@@ -32,6 +32,14 @@ def project(**files):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
     return root
+
+
+def install_runtime(root, framework='react'):
+    names = ('svelte',) if framework == 'svelte' else ('react', 'react-dom')
+    for name in names:
+        package = root / 'node_modules' / name / 'package.json'
+        package.parent.mkdir(parents=True, exist_ok=True)
+        package.write_text('{}')
 
 
 class Server(unittest.TestCase):
@@ -74,6 +82,22 @@ class Server(unittest.TestCase):
         (self.root / 'index.html').write_text('<h1>final</h1>')
         self.assertIn('<h1>final</h1>', get(self.server.url))
 
+    def test_vite_source_entry_keeps_the_last_styled_standalone_page(self):
+        fallback = self.root / 'standalone.html'
+        fallback.write_text('<main style="color: rebeccapurple">styled preview</main>')
+        (self.root / 'index.html').write_text(
+            '<div id="root"></div><script type="module" src="/src/main.jsx"></script>')
+        server = PreviewServer(self.root, fallback_html=fallback)
+        self.addCleanup(server.close)
+        self.assertIn('styled preview', get(server.url))
+        self.assertNotIn('/src/main.jsx', get(server.url))
+
+    def test_handoff_redirect_is_published_only_after_the_replacement_is_ready(self):
+        self.assertEqual(get(self.base + HANDOFF_PATH), '')
+        self.server.handoff('http://127.0.0.1:5173/')
+        self.assertEqual(get(self.base + HANDOFF_PATH), 'http://127.0.0.1:5173/')
+        self.assertIn(HANDOFF_PATH, get(self.server.url))
+
     def test_close_stops_listening(self):
         self.server.close()
         with self.assertRaises(Exception):
@@ -93,6 +117,7 @@ class Server(unittest.TestCase):
                 vite = root / 'node_modules' / '.bin' / 'vite'
                 vite.parent.mkdir(parents=True)
                 vite.write_text('')
+                install_runtime(root, framework)
                 spec = development_preview(root)
                 self.assertEqual(spec['command'][:4], ['npm', 'run', 'dev', '--'])
                 self.assertTrue(spec['url'].startswith('http://127.0.0.1:'))
@@ -105,6 +130,7 @@ class Server(unittest.TestCase):
         vite = root / 'node_modules' / '.bin' / 'vite'
         vite.parent.mkdir(parents=True)
         vite.write_text('')
+        install_runtime(root)
         spec = development_preview(root)
         self.assertEqual(Path(spec['command'][0]).resolve(), vite.resolve())
         self.assertIn('--strictPort', spec['command'])
@@ -116,6 +142,7 @@ class Server(unittest.TestCase):
         vite = root / 'node_modules' / '.bin' / 'vite'
         vite.parent.mkdir(parents=True)
         vite.write_text('')
+        install_runtime(root)
         self.assertEqual(development_preview(root)['command'][:4], ['npm', 'run', 'dev', '--'])
 
     def test_a_framework_project_without_vite_gets_no_dev_server(self):
@@ -123,7 +150,14 @@ class Server(unittest.TestCase):
         vite = root / 'node_modules' / '.bin' / 'vite'
         vite.parent.mkdir(parents=True)
         vite.write_text('')
+        install_runtime(root)
         self.assertIsNone(development_preview(root))
+
+    def test_vite_handoff_keeps_static_preview_when_no_browser_checker_exists(self):
+        root = project(**{'index.html': '<div id="root"></div>'})
+        preview = DevelopmentPreview.__new__(DevelopmentPreview)
+        preview.root, preview.url = str(root), 'http://127.0.0.1:1/'
+        self.assertFalse(preview.rendered())
 
 
 class EarlyPreview(unittest.TestCase):
@@ -264,6 +298,7 @@ class EarlyPreview(unittest.TestCase):
         vite = root / 'node_modules' / '.bin' / 'vite'
         vite.parent.mkdir(parents=True)
         vite.write_text('')
+        install_runtime(root)
 
         opened_dev = []
         class StubDevelopmentPreview:
@@ -284,7 +319,7 @@ class EarlyPreview(unittest.TestCase):
         self.settle(screen)
         self.assertEqual(len(opened_dev), 1)
 
-    def test_driver_static_preview_hands_off_to_development_when_vite_is_ready(self):
+    def test_driver_preview_is_not_raced_by_tui_when_vite_is_ready(self):
         root = project(**{'index.html': '<script type="module" src="/src/main.jsx"></script>',
                           '.uncle__workflow__preview-server.url': 'http://127.0.0.1:12345/index.html'})
         screen = self.make(root)
@@ -295,18 +330,8 @@ class EarlyPreview(unittest.TestCase):
         vite = root / 'node_modules' / '.bin' / 'vite'
         vite.parent.mkdir(parents=True)
         vite.write_text('')
-        opened_dev = []
-        class StubDevelopmentPreview:
-            def __init__(self, _root, spec):
-                opened_dev.append(spec)
-                self.url = spec['url']
-            def close(self):
-                pass
-        self.tui.DevelopmentPreview = StubDevelopmentPreview
-        with patch.object(self.tui.subprocess, 'run') as stop:
-            self.settle(screen)
-        self.assertEqual(len(opened_dev), 1)
-        self.assertTrue(stop.called, 'the driver-owned static server is stopped')
+        self.settle(screen)
+        self.assertEqual(self.opened, [], 'the workflow server owns the Vite handoff too')
 
     def test_opens_on_first_sighting_and_corrects_itself(self):
         """A half-written page is opened, not waited out.

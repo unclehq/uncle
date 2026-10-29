@@ -53,19 +53,26 @@ def existing_url(state, wait=0):
     a second server on the same strict port.
     """
     state = Path(state)
-    try:
-        pid = int((state / 'app-server.pid').read_text())
-        os.kill(pid, 0)
-    except (OSError, ValueError):
-        return ''
     deadline = time.monotonic() + wait
     while True:
-        try:
-            url = (state / 'app-server.url').read_text().strip()
-        except OSError:
-            url = ''
-        if url and answers(url):
-            return url
+        # preview_server publishes its Vite process only after it has served
+        # the application entry module. Checklist work uses the same contract
+        # and must attach to that process rather than starting Vite again.
+        owner_seen = False
+        for prefix in ('app-server', 'preview-vite'):
+            try:
+                pid = int((state / (prefix + '.pid')).read_text())
+                os.kill(pid, 0)
+                owner_seen = True
+                url = (state / (prefix + '.url')).read_text().strip()
+            except (OSError, ValueError):
+                url = ''
+            if url and answers(url):
+                return url
+        # No process owns the server yet. Do not make the first caller wait
+        # for a server it has not launched; it should start it immediately.
+        if not owner_seen:
+            return ''
         if time.monotonic() >= deadline:
             return ''
         time.sleep(.1)

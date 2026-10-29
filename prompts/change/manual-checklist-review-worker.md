@@ -5,9 +5,10 @@ executable checks for your lens: `{"schema":"uncle.artifact/v1","kind":"manual-c
 
 Write only the checks your lens owns, at most 8, and merge checks that exercise the same behavior.
 Write checks only for live observations, service or CLI interaction, file/hash
-comparisons, or properties that require direct inspection. Driver automated
-verification is deferred to final audit and is not an input to this stage;
-three lenses must not each re-check the same screen.
+comparisons, or properties that require direct inspection. The completed driver
+green-check is authoritative for automated commands; cite it rather than
+re-running its tests, install, build, or browser suite. Three lenses must not
+each re-check the same screen.
 
 `exclusive_resources` decides which checks may run at the same time, so declare one only when two checks
 running together would really collide. `[]` means the check can overlap with any other. A server that

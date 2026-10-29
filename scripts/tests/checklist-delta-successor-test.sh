@@ -12,7 +12,9 @@
 # check-specific execution evidence was recorded." The final audit then read
 # those rows and returned NOT READY on a verification never attempted.
 #
-# Both exits from CHECKLIST must name the same successor.
+# The normal and fast paths must lead to validation. A fatal completed green
+# check may make the one bounded return to IMPLEMENT before any checklist
+# worker runs.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 driver="$ROOT/scripts/change-workflow.sh"
@@ -29,7 +31,7 @@ targets="$(printf '%s\n' "$body" | grep -oE 'set_state [A-Z_]+' | awk '{print $2
 
 while read -r target; do
     [[ -n "$target" ]] || continue
-    [[ "$target" == VALIDATE_MANUAL_CHECKLIST ]] \
+    [[ "$target" == VALIDATE_MANUAL_CHECKLIST || "$target" == IMPLEMENT ]] \
         || fail "CHECKLIST hands on to $target; the checklist would never be executed"
 done <<< "$targets"
 

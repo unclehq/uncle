@@ -21,12 +21,14 @@ grep -Fq 'Implementation fan-out ownership mismatch; no worker changes were merg
 grep -Fq 'Implementation fan-out ownership mismatch; no worker changes were merged.' "$ROOT/scripts/change-workflow.sh" || { echo 'FAIL: change fan-out does not fall back after a safe ownership rejection' >&2; exit 1; }
 
 parallel_groups() { printf '1\n2\n'; }
+parallel_prewarm_wait() { :; }
 uncle_resolve_stage_runner() { :; }
 stage_agent_cmd() { printf fake; }
 stage_model() { :; }
 stage_effort() { printf low; }
 stage_tools() { printf Read; }
 plan_steps() { printf 'one\ntwo\n'; }
+plan_step_owns() { printf '1\thandoff-1.py\n2\thandoff-2.py\n'; }
 supervision_validation_failed() { :; }
 parallel_run_group() {
     local _lib="$1" _logs="$2" _plan="$3" group="$4"
@@ -68,6 +70,9 @@ set -e
 [[ ! -e "$STATE_DIR/parallel-implementation-complete" ]] || { echo 'FAIL: rejected parallel work was marked complete' >&2; exit 1; }
 [[ -e "$STATE_DIR/parallel-implementation-serial-fallback" ]] || { echo 'FAIL: serial fallback was not persisted for resume' >&2; exit 1; }
 parallel_run_group() { echo 'FAIL: rejected parallel work was retried' >&2; return 99; }
+set +e
 run_parallel_application_implementation
-[[ $? == 2 ]] || { echo 'FAIL: persisted serial fallback was not reused' >&2; exit 1; }
+status=$?
+set -e
+[[ "$status" == 2 ]] || { echo 'FAIL: persisted serial fallback was not reused' >&2; exit 1; }
 echo 'parallel-implementation-checkpoint-test.sh: resumes at the first unmerged group'

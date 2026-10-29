@@ -70,9 +70,9 @@ green_check_background_start() {
     fingerprint="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$GREEN_CMDS" 2>/dev/null || true)"
     printf '%s\n' "$fingerprint" > "$background/start.fingerprint"
     rm -f "$GREEN_CUR" "$STATE_DIR/green-check.fingerprint" "$GREEN_OVERRIDE_FILE"
-    green_background_placeholder PENDING 'PENDING: the verification commands are running in the background. This file is replaced with their results when they finish; no stage waits for them.'
+    green_background_placeholder PENDING 'PENDING: the verification commands are running in the background. This file is replaced with their results before checklist work begins.'
     : > "$STATE_DIR/green-background.pending"
-    echo "Verification commands started in the background ($(wc -l < "$GREEN_CMDS" | tr -d ' ') command(s)); nothing waits for them."
+    echo "Verification commands started in the background ($(wc -l < "$GREEN_CMDS" | tr -d ' ') command(s)); test review may overlap, then checklist work waits for the published result."
     (
         local copy="$background/project" real_class="$GREEN_CLASS" real_md="$GREEN_MD" real_cur="$GREEN_CUR" real_cmds="$GREEN_CMDS" status=0
         local project="$PWD"
@@ -95,7 +95,6 @@ green_check_background_start() {
         green_background_publish "$project" "$copy" "$status" "$background" "$real_class" "$real_md" "$real_cur" "$real_cmds"
     ) > "$LOG_DIR/green-background.log" 2>&1 < /dev/null &
     GREEN_BG_PID=$!
-    declare -f early_checklist_start > /dev/null && early_checklist_start
 }
 
 # The run finished: put its results where every stage looks, then clear the pending mark (last, so a reader never sees the
@@ -149,12 +148,14 @@ run_green_check_auto() {
     green_check_background_start
 }
 
-# Wait for a final driver record at the one postflight evidence boundary.  A
-# failed result is still usable audit evidence; only PENDING is incomplete.
+# Wait for a completed driver record before a consumer needs verification
+# evidence. A failed result is still usable evidence; only PENDING is
+# incomplete. Callers decide whether a recorded failure is repairable,
+# nonblocking, or terminal.
 green_wait_final() {
     local pid="${GREEN_BG_PID:-}"
     if green_pending; then
-        echo 'Waiting for the driver postflight green-check before final audit.'
+        echo 'Waiting for the driver green-check before checklist work.'
         wait "$pid" || true
         GREEN_BG_PID=""
     fi

@@ -27,7 +27,6 @@ GREEN_CMDS="$STATE_DIR/green-check.commands"; GREEN_CUR="$STATE_DIR/green-check.
 GREEN_MD="$STATE_DIR/green-check.md"; GREEN_OVERRIDE_FILE="$STATE_DIR/green-check-override"
 . "$ROOT/scripts/lib/green-check.sh"
 . "$ROOT/scripts/lib/background-verify.sh"
-early_checklist_start() { echo started >> "$STATE_DIR/early-started"; }
 record_nonblocking_failure() { printf '%s\t%s\n' "$1" "$2" >> "$STATE_DIR/nonblocking.tsv"; }
 record_test_failure_disposition() { : > "$STATE_DIR/disposition"; }
 run_green_check() {   # the real one, reduced: runs in whatever directory it is called from, and writes the GREEN_* files it was given
@@ -72,7 +71,7 @@ check "failures recorded for the audit" grep -q '^green-check' "$STATE_DIR/nonbl
 check "and the override file written" test -s "$GREEN_OVERRIDE_FILE"
 check "the real commands file was published" grep -q 'npx playwright test' "$GREEN_CMDS"
 
-check "the early checklist is started from the foreground" test -s "$STATE_DIR/early-started"
+check "green verification does not start checklist workers" not test -e "$STATE_DIR/early-started"
 
 # a clean run records nothing and remembers the tree
 rm -f "$STATE_DIR/nonblocking.tsv" "$GREEN_OVERRIDE_FILE"; FAKE_CODE=0 FAKE_SECONDS=1
@@ -104,9 +103,10 @@ GREEN_BG_PID=""; : > "$STATE_DIR/green-background.pending"; printf 'PENDING\tnpm
 green_background_recover > /dev/null
 check "stale placeholder removed" not test -e "$GREEN_CLASS"
 
-# gated by the same stage code: the call sites use the wrapper, and the review is not bounced while pending
+# Gated by the same stage code: verification starts after implementation, and
+# the completed result is awaited before any checklist continuation route.
 check "no foreground call site left" bash -c '! grep -n "run_green_check || true" "$1"' _ "$ROOT/scripts/stagegate.sh"
-check "the pending branch precedes the evidence routes" bash -c 'a=$(grep -n "if green_pending; then" "$1" | head -1 | cut -d: -f1); b=$(grep -n "test-evidence-handoff-attempted\" \]\] && \[\[" "$1" | head -1 | cut -d: -f1); [ -n "$a" ] && [ "$a" -lt "$b" ]' _ "$ROOT/scripts/stagegate.sh"
+check "green wait precedes checklist evidence routes" bash -c 'a=$(grep -n "green_wait_final || { echo '\''Driver verification did not publish final evidence before checklist work" "$1" | head -1 | cut -d: -f1); b=$(grep -n "test-evidence-handoff-attempted\" \]\] && \[\[" "$1" | head -1 | cut -d: -f1); [ -n "$a" ] && [ "$a" -lt "$b" ]' _ "$ROOT/scripts/stagegate.sh"
 
 [[ "$fails" == 0 ]] && echo OK
 exit "$fails"

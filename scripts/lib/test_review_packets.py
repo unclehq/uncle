@@ -39,15 +39,15 @@ def merge_row(rows, row, source):
  rows[row['id']]=chosen
 
 def integrity_row():
- if __import__('os').environ.get('WORKFLOW_POSTFLIGHT_GREEN_CHECK') == '1':
-  return {'id':'INTEGRITY','required':True,'status':'NOT RUN','evidence':'Driver verification is deferred to final audit; this review does not consume green-check evidence.'}
  path=Path('.uncle/workflow/green-check.tsv')
  try:
   records=[line.split('\t',1) for line in path.read_text().splitlines() if line.strip()]
  except OSError as e:
   return {'id':'INTEGRITY','required':True,'status':'BLOCKED-SETUP','evidence':'Driver green-check record is unavailable: %s.'%e}
- if not records or any(len(record)!=2 or record[0]!='PASS' for record in records):
-  return {'id':'INTEGRITY','required':True,'status':'BLOCKED-SETUP','evidence':'Driver green-check has missing or non-passing command records; see .uncle/workflow/green-check.tsv.'}
+ if not records or any(len(record)!=2 or record[0] not in {'PASS','FIXED','PREEXISTING','REGRESSION'} for record in records):
+  return {'id':'INTEGRITY','required':True,'status':'BLOCKED-SETUP','evidence':'Driver green-check is incomplete or unavailable; see .uncle/workflow/green-check.tsv.'}
+ if any(record[0]=='REGRESSION' for record in records):
+  return {'id':'INTEGRITY','required':True,'status':'FAIL','evidence':'Driver green-check recorded one or more failed verification command(s); see .uncle/workflow/green-check.tsv.'}
  return {'id':'INTEGRITY','required':True,'status':'PASS','evidence':'Driver green-check recorded %d passing verification command(s); see .uncle/workflow/green-check.tsv.'%len(records)}
 
 def main(directory,out,*names):
@@ -68,10 +68,8 @@ def main(directory,out,*names):
    r=dict(r,id=normalized_id(r['id']))
    merge_row(rows,r,n)
  rows['INTEGRITY']=integrity_row()
- if __import__('os').environ.get('WORKFLOW_POSTFLIGHT_GREEN_CHECK') == '1':
-  rows['RESULTS']={'id':'RESULTS','required':True,'status':'NOT RUN','evidence':'Driver verification is deferred to final audit.'}
- else:
-  rows['RESULTS']={'id':'RESULTS','required':True,'status':'PASS','evidence':'Driver green-check completed; see .uncle/workflow/green-check.md.'}
+ driver=integrity_row()
+ rows['RESULTS']={'id':'RESULTS','required':True,'status':driver['status'],'evidence':driver['evidence']}
  result={'schema':'uncle.artifact/v1','kind':'acceptance-report','rows':[rows[k] for k in sorted(rows)]}
  Path(out).write_text(json.dumps(result,indent=2)+'\n')
 if __name__=='__main__':

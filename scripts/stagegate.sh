@@ -1694,7 +1694,16 @@ route_unrunnable_application() {
     local marker="$STATE_DIR/runtime-readiness-repair-attempted"
     if [[ "${UNATTENDED:-0}" == 1 && ! -e "$marker" ]]; then
         touch "$marker"
-        printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
+        # Deliberately not $GREEN_MD: REPAIR's own ineligibility fallback
+        # treats that source (and TEST_REVIEW.md) as "a verification finding
+        # already judged by a completed test-review/checklist pass; skip
+        # straight to FINAL_AUDIT" -- true for those two, false here. This
+        # fires from inside TEST_REVIEW itself, before test-review,
+        # manual-checklist or execute-checklist have run even once; if the
+        # repair budget is already spent, the run must stop for a person
+        # (the existing default branch below), not silently skip the whole
+        # checklist pipeline with zero evidence the app works at all.
+        printf '%s\n' "$STATE_DIR/runtime-unrunnable-application" > "$STATE_DIR/repair-source"
         echo 'The application cannot render or its configured test runner did not execute tests; repairing once before browser/checklist work.'
         set_state REPAIR
         return 2
@@ -5665,7 +5674,8 @@ while true; do
             fi
             if [[ "$WORKFLOW_AUTO_REPAIR" != 1 \
                     || ( "$repair_source" != "$GREEN_MD" && "$repair_source" != .uncle/docs/TEST_REVIEW.md \
-                         && "$repair_source" != .uncle/docs/FINAL_AUDIT.md ) \
+                         && "$repair_source" != .uncle/docs/FINAL_AUDIT.md \
+                         && "$repair_source" != "$STATE_DIR/runtime-unrunnable-application" ) \
                     || "$repair_count_existing" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
                 if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] \
                     && [[ "$repair_source" == "$GREEN_MD" || "$repair_source" == .uncle/docs/TEST_REVIEW.md ]]; then

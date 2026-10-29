@@ -54,7 +54,16 @@ fi
 # on top of the existing merged implementation rather than discarding it,
 # so none of that state should be touched.
 [[ "$(<"$STATE_DIR/next")" == REPAIR ]] || { echo 'runtime route did not go to the bounded REPAIR path' >&2; exit 1; }
-[[ "$(cat "$STATE_DIR/repair-source")" == "$GREEN_MD" ]] || { echo 'runtime repair did not record the green-check as its source' >&2; exit 1; }
+# Deliberately not $GREEN_MD: that source (and TEST_REVIEW.md) makes
+# REPAIR's own ineligibility fallback skip straight to FINAL_AUDIT on the
+# assumption that test-review/checklist already ran and judged the
+# evidence. That assumption is false here -- this fires from inside
+# TEST_REVIEW, before any of that pipeline has run even once -- so an
+# exhausted repair budget must stop for a person instead (see the static
+# check on REPAIR's own source code below), never silently skip the whole
+# checklist pipeline with zero evidence the app works at all.
+[[ "$(cat "$STATE_DIR/repair-source")" == "$STATE_DIR/runtime-unrunnable-application" ]] \
+    || { echo 'runtime repair recorded a source REPAIRs ineligibility fallback treats as already-judged evidence' >&2; exit 1; }
 [[ -e "$LOG_DIR/green-check.log" ]] || { echo 'runtime repair discarded green-check evidence' >&2; exit 1; }
 for kept in \
     "$STATE_DIR/parallel-implementation-complete" \
@@ -96,5 +105,24 @@ if route_unrunnable_application; then
 else
     [[ "$?" == 1 ]]
 fi
+
+# Static check on the real REPAIR state: an unrunnable-application repair
+# must be an eligible source (so it gets a real attempt when the budget
+# allows), but must NOT appear in the "continuing it to final audit as
+# unresolved evidence" fallback's source list -- that shortcut skips
+# straight to FINAL_AUDIT/MANUAL_CHECKLIST on the assumption test-review
+# already ran, which is never true for this failure.
+repair_block="$(sed -n '/^        REPAIR)$/,/^        [A-Z_]*)$/p' "$ROOT/scripts/stagegate.sh")"
+[[ "$repair_block" == *'runtime-unrunnable-application'* ]] \
+    || { echo 'REPAIR no longer accepts the unrunnable-application source at all' >&2; exit 1; }
+python3 - "$repair_block" <<'PY'
+import sys
+block = sys.argv[1]
+start = block.index('WORKFLOW_CONTINUE_ON_TEST_FAILURE')
+end = block.index('continuing it to final audit')
+fallback_condition = block[start:end]
+if 'runtime-unrunnable-application' in fallback_condition:
+    raise SystemExit('the unrunnable-application source must not take the skip-to-final-audit shortcut')
+PY
 
 echo 'runtime readiness tests passed'

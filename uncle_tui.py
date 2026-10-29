@@ -236,6 +236,7 @@ AGENT, REVIEWER = "agent", "reviewer"
 # counterparts and shared review/execution stages in execution order.
 STAGES = [
     ("derive-brief", AGENT),
+    ("requirements", AGENT),
     ("project-plan", AGENT),
     ("change-plan", AGENT),
     ("adversarial-review", REVIEWER),

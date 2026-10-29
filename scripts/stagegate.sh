@@ -5386,8 +5386,9 @@ while true; do
             capture_verification_inputs
 
             # Start verification as soon as implementation is stable. It runs
-            # beside TEST_REVIEW, but checklist stages consume the published
-            # canonical result instead of re-running driver-owned commands.
+            # while the implementation gate settles; later evidence workers
+            # consume its published canonical result instead of re-running
+            # driver-owned commands.
             run_green_check_auto || true
             collect_background_preflight
 
@@ -5479,17 +5480,28 @@ while true; do
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
+            # Every test-review panel row judges observed test evidence.  A
+            # worker launched against the background verifier's PENDING
+            # placeholder can only honestly emit NOT RUN, and its immutable
+            # packet cannot be repaired by publishing green-check results
+            # later.  Wait once before launching the workers, then materialize
+            # the driver-owned report they consume.  Checklist stages still
+            # reuse this completed result and never rerun these commands.
+            green_wait_final || {
+                echo 'Driver verification did not publish final evidence before test review.' >&2
+                exit 1
+            }
+            python3 -B "$ROOT/scripts/lib/test_report.py" from-green . application \
+                "$STATE_DIR/green-check.current.tsv" "$LOG_DIR/green-check.log" 2>/dev/null || true
             # Keep the inexpensive server/browser prerequisite warm even if
             # the last build failed.  It never builds or opens a page.
             prewarm_checklist_browser
             # Never start manual/browser evidence against an app the driver
             # has already proved cannot compile or serve.
-            if ! green_pending; then
-                runtime_ready_rc=0
-                route_unrunnable_application || runtime_ready_rc=$?
-                if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
-                [[ "$runtime_ready_rc" == 0 ]] || exit 1
-            fi
+            runtime_ready_rc=0
+            route_unrunnable_application || runtime_ready_rc=$?
+            if [[ "$runtime_ready_rc" == 2 ]]; then continue; fi
+            [[ "$runtime_ready_rc" == 0 ]] || exit 1
             run_stage TEST_REVIEW
             check_verification_inputs
             set_state VALIDATE_TEST_REVIEW
@@ -5964,9 +5976,13 @@ PY
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
-            # The one synchronization point for driver verification. All
-            # earlier stages run without it; final audit receives the finished
-            # result as evidence rather than using it to reopen the workflow.
+            # TEST_REVIEW is the first synchronization point (its workers
+            # must judge real evidence, never a PENDING placeholder); this is
+            # the last. Verification almost always finished long ago by here
+            # -- unless REPAIR changed the tree since, in which case this is
+            # a real rerun and a real wait, correctly. Either way, final
+            # audit receives the finished result as evidence rather than
+            # using it to reopen the workflow.
             run_green_check_auto || true
             green_wait_final || {
                 echo 'Driver postflight verification did not publish final evidence.' >&2

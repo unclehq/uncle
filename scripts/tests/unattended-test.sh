@@ -356,6 +356,73 @@ for driver in stagegate change-workflow; do
     else bad "$driver-audit-flag" "unattended audit branch missing"; fi
 done
 
+# test-review, manual-checklist, and execute-checklist exist to route a real
+# defect back to REPAIR, not to be rubber-stamped at the end -- an unattended
+# NOT READY audit must spend its bounded repair budget once before
+# audit-findings.py --unattended gets anywhere near waiving a finding nobody
+# looked at.
+d="$WORK/audit-repair-routes-first"
+mkdir -p "$d/.uncle/workflow/documents"
+echo '{"schema":"uncle.artifact/v1","kind":"final-audit","verdict":"NOT READY","findings":[
+    {"id":"FA-1","severity":"CRITICAL","evidence":"crash","required_correction":"fix it","blocks":"YES"}]}' \
+    > "$d/.uncle/workflow/documents/FINAL_AUDIT.json"
+cp "$ROOT/scripts/lib/audit-verdict.sh" "$d/fns.sh"
+arm="$d/arm.sh"
+awk '/^        WAIT_AUDIT_OVERRIDE\)$/ {p = 1; next} p && /^        COMPLETE\)$/ {exit} p {print}' \
+    "$ROOT/scripts/stagegate.sh" > "$arm"
+for scenario in first-attempt budget-exhausted; do
+    d2="$d/$scenario"; mkdir -p "$d2/.uncle/workflow/documents"
+    cp "$d/.uncle/workflow/documents/FINAL_AUDIT.json" "$d2/.uncle/workflow/documents/"
+    hash="$(cd "$d2" && . "$ROOT/scripts/lib/sha256.sh" && hash_file .uncle/workflow/documents/FINAL_AUDIT.json)"
+    printf 'NOT_READY\t%s\n' "$hash" > "$d2/.uncle/workflow/audit-verdict"
+    [[ "$scenario" == budget-exhausted ]] && printf '1' > "$d2/.uncle/workflow/repair-count"
+    cat > "$d2/run.sh" <<HARNESS
+set -uo pipefail
+ROOT='$ROOT'
+STATE_DIR='$d2/.uncle/workflow'
+VERDICT_FILE="\$STATE_DIR/audit-verdict"
+STATE_FILE="\$STATE_DIR/state"
+UNATTENDED_FILE="\$STATE_DIR/unattended-gates"
+AUDIT_OVERRIDE_FILE="\$STATE_DIR/audit-override"
+WORKFLOW_AUTO_REPAIR=1
+WORKFLOW_AUTO_REPAIR_ATTEMPTS=1
+UNATTENDED=1
+. "\$ROOT/scripts/lib/sha256.sh"
+require_file() { [[ -s "\$1" ]] || { echo "MISSING: \$1"; exit 1; }; }
+set_state() { echo "SET_STATE \$1"; }
+. "$d/fns.sh"
+# The real driver's \`continue\` returns to \`case "\$state" in\` in an
+# enclosing \`while true\`; this isolated arm has no such loop, so a bare
+# \`continue\` here would be a no-op and fall straight into the code the
+# routing decision was meant to skip. One real iteration gives it a loop
+# to actually continue out of, matching what \`continue\` does for real.
+# The extracted arm's own trailing ;; needs a case around it, same as it
+# has in the real state machine, not just the loop.
+for __once in once; do
+case 1 in
+1)
+$(cat "$arm")
+esac
+done
+HARNESS
+    out="$(cd "$d2" && timeout 30 bash "$d2/run.sh" < /dev/null 2>&1)"
+    if [[ "$scenario" == first-attempt ]]; then
+        if grep -q '^SET_STATE REPAIR$' <<< "$out"; then ok
+        else bad "audit-repair-routes-first" "did not route to REPAIR on the first NOT READY: $out"; fi
+        if [[ "$(cat "$d2/.uncle/workflow/repair-source" 2>/dev/null)" == .uncle/docs/FINAL_AUDIT.md ]]; then ok
+        else bad "audit-repair-source" "repair-source was not set to FINAL_AUDIT.md"; fi
+        if grep -q 'WAIVED WITHOUT HUMAN REVIEW' <<< "$out"; then
+            bad "audit-repair-no-waiver-yet" "waived before spending the repair budget: $out"
+        else ok; fi
+    else
+        if grep -q '^SET_STATE REPAIR$' <<< "$out"; then
+            bad "audit-repair-budget-exhausted" "routed to REPAIR again after the budget was spent: $out"
+        else ok; fi
+        if grep -q 'SET_STATE COMPLETE' <<< "$out"; then ok
+        else bad "audit-repair-falls-back-to-waiver" "did not fall back to the unattended waiver once repair was spent: $out"; fi
+    fi
+done
+
 echo
 if [[ "$FAIL" -gt 0 ]]; then
     echo "unattended-test.sh: $FAIL of $((PASS + FAIL)) checks FAILED"

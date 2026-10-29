@@ -5670,7 +5670,10 @@ while true; do
                 set_state WAIT_IMPLEMENT_APPROVAL
                 continue
             fi
-            if [[ "$WORKFLOW_AUTO_REPAIR" != 1 || ( "$repair_source" != "$GREEN_MD" && "$repair_source" != .uncle/docs/TEST_REVIEW.md ) || "$repair_count_existing" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
+            if [[ "$WORKFLOW_AUTO_REPAIR" != 1 \
+                    || ( "$repair_source" != "$GREEN_MD" && "$repair_source" != .uncle/docs/TEST_REVIEW.md \
+                         && "$repair_source" != .uncle/docs/FINAL_AUDIT.md ) \
+                    || "$repair_count_existing" -ge "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
                 if [[ "$WORKFLOW_CONTINUE_ON_TEST_FAILURE" == "1" ]] \
                     && [[ "$repair_source" == "$GREEN_MD" || "$repair_source" == .uncle/docs/TEST_REVIEW.md ]]; then
                     echo 'A verification finding is not eligible for another automatic repair; continuing it to final audit as unresolved evidence.'
@@ -5756,6 +5759,21 @@ while true; do
                             check_verification_inputs
                             set_state TEST_REVIEW
                             continue
+                        fi
+                        # A NOT_READY final audit sent here (see
+                        # WAIT_AUDIT_OVERRIDE) judged the pre-repair tree. Its
+                        # canonical packet, verdict, and dispositions all
+                        # describe findings this repair was meant to fix;
+                        # serving any of them again -- the FINAL_AUDIT state's
+                        # own fast path included -- would silently re-approve
+                        # or re-litigate evidence from before the fix. Clear
+                        # them and replay the whole post-implementation
+                        # pipeline, same as a GREEN_MD-sourced repair.
+                        if [[ "$(cat "$STATE_DIR/repair-source")" == .uncle/docs/FINAL_AUDIT.md ]]; then
+                            echo 'Repair changed the tree a NOT READY final audit judged; invalidating that audit and rerunning verification.'
+                            rm -f .uncle/docs/FINAL_AUDIT.md "$STATE_DIR/documents/FINAL_AUDIT.json" \
+                                "$STATE_DIR/documents/FINAL_AUDIT_WORKERS.json" \
+                                "$VERDICT_FILE" "$STATE_DIR/audit-verdict.original" "$AUDIT_OVERRIDE_FILE"
                         fi
                         ;;
                     3|5) continue ;;
@@ -6118,6 +6136,21 @@ PY
                     || [[ "$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")" != "$audit_hash" ]]; then
                     echo "The audit changed since its verdict was recorded; rerun FINAL_AUDIT."
                     exit 1
+                fi
+                # test-review, manual-checklist, and execute-checklist exist to
+                # route a real defect back to REPAIR, not to be rubber-stamped
+                # at the end. Unattended's audit-findings.py --unattended
+                # cannot ask a person, so left on its own it would waive every
+                # blocking finding sight-unseen -- a crashing app completing
+                # as READY with nothing but a scrollback line to say so. Spend
+                # the same bounded repair budget every other verification
+                # failure gets, once, before any unreviewed waiver.
+                if [[ "${UNATTENDED:-0}" == 1 ]] && [[ "$WORKFLOW_AUTO_REPAIR" == 1 ]] \
+                        && [[ "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" -lt "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]]; then
+                    echo 'Unattended final audit is NOT READY; repairing once before any unreviewed waiver.'
+                    printf '%s\n' .uncle/docs/FINAL_AUDIT.md > "$STATE_DIR/repair-source"
+                    set_state REPAIR
+                    continue
                 fi
                 # Attended: each finding needs an explicit decision and EOF leaves
                 # the review pending. Unattended (Issue 107): every blocker is

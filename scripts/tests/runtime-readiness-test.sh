@@ -47,10 +47,16 @@ if route_unrunnable_application; then
 else
     [[ "$?" == 2 ]]
 fi
-[[ "$(<"$STATE_DIR/next")" == IMPLEMENT ]]
-[[ -e "$STATE_DIR/runtime-readiness-force-implementation" ]] || { echo 'runtime repair did not force code execution' >&2; exit 1; }
+# A forced full IMPLEMENT re-entry used to discard every merged worker's
+# completion marker here, so IMPLEMENT reran the entire parallel fan-out
+# from scratch for what was usually a small, localized fix. REPAIR is the
+# bounded path every other green-check failure already uses -- it builds
+# on top of the existing merged implementation rather than discarding it,
+# so none of that state should be touched.
+[[ "$(<"$STATE_DIR/next")" == REPAIR ]] || { echo 'runtime route did not go to the bounded REPAIR path' >&2; exit 1; }
+[[ "$(cat "$STATE_DIR/repair-source")" == "$GREEN_MD" ]] || { echo 'runtime repair did not record the green-check as its source' >&2; exit 1; }
 [[ -e "$LOG_DIR/green-check.log" ]] || { echo 'runtime repair discarded green-check evidence' >&2; exit 1; }
-for stale in \
+for kept in \
     "$STATE_DIR/parallel-implementation-complete" \
     "$STATE_DIR/parallel-implementation-report-complete" \
     "$STATE_DIR/parallel-implementation-serial-fallback" \
@@ -59,11 +65,11 @@ for stale in \
     "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" \
     "$STATE_DIR/documents/AUTOMATED_TEST_REPORT.json" \
     .uncle/docs/IMPLEMENTATION_NOTES.md \
-    .uncle/docs/AUTOMATED_TEST_REPORT.md; do
-    [[ ! -e "$stale" ]] || { echo "runtime repair retained stale cache: $stale" >&2; exit 1; }
+    .uncle/docs/AUTOMATED_TEST_REPORT.md \
+    "$STATE_DIR/parallel-implementation-groups/group-1" \
+    "$STATE_DIR/parallel/notes/step-1.json"; do
+    [[ -e "$kept" ]] || { echo "runtime repair discarded completed implementation state: $kept" >&2; exit 1; }
 done
-[[ ! -d "$STATE_DIR/parallel-implementation-groups" ]] || { echo 'runtime repair retained merged worker checkpoints' >&2; exit 1; }
-[[ ! -d "$STATE_DIR/parallel/notes" ]] || { echo 'runtime repair retained stale worker notes' >&2; exit 1; }
 
 printf '%s\n' 'Error: No test files found' > "$LOG_DIR/green-check.log"
 green_application_not_runnable || { echo 'empty test discovery was incorrectly treated as nonblocking' >&2; exit 1; }

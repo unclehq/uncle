@@ -1673,37 +1673,30 @@ green_application_not_runnable() {
 }
 
 # Return 0 when browser/verification work is safe, 2 after scheduling the one
-# bounded implementation retry for an unattended run, and 1 when a person
-# must inspect the persistent setup failure. The retry is intentionally not
-# the generic test-repair loop: it has a concrete driver-owned compiler or
-# runner-configuration error and re-enters IMPLEMENT with its log evidence.
+# bounded repair attempt for an unattended run, and 1 when a person must
+# inspect the persistent setup failure.
+#
+# This used to force a full re-entry into IMPLEMENT: it discarded the
+# parallel-implementation completion markers so every plan step's worker
+# reran from scratch, on the theory that a provably unbuildable app needs
+# more than REPAIR can give it. In practice nearly every case seen (a
+# scaffold test-discovery glob, a missing export, a CSS mismatch) was a
+# small, localized fix -- and a full fan-out re-run burns the single most
+# expensive path available (minutes, every plan step, millions of tokens)
+# to get it. REPAIR is the bounded path every other green-check failure
+# already uses for exactly this kind of fix, $GREEN_MD is already an
+# eligible repair source, and REPAIR's own shared budget
+# (WORKFLOW_AUTO_REPAIR_ATTEMPTS) still bounds this the same as any other
+# repair -- this marker only prevents a second attempt at this specific
+# failure shape within the same run.
 route_unrunnable_application() {
     green_application_not_runnable || return 0
     local marker="$STATE_DIR/runtime-readiness-repair-attempted"
     if [[ "${UNATTENDED:-0}" == 1 && ! -e "$marker" ]]; then
         touch "$marker"
-        touch "$STATE_DIR/runtime-readiness-force-implementation"
         printf '%s\n' "$GREEN_MD" > "$STATE_DIR/repair-source"
-        # IMPLEMENT normally treats these markers as a resume boundary: all
-        # isolated workers are already merged, so only their reports are
-        # reconciled.  That is exactly wrong after the driver has proved the
-        # merged application cannot build, serve, or discover tests.  Start a
-        # real, bounded repair pass instead.  Preserve the old green log and
-        # report as evidence; invalidate only results that would otherwise
-        # cause IMPLEMENT to skip its code workers or reuse the failed run.
-        rm -f "$STATE_DIR/parallel-implementation-complete" \
-              "$STATE_DIR/parallel-implementation-report-complete" \
-              "$STATE_DIR/parallel-implementation-serial-fallback" \
-              "$STATE_DIR/green-check.fingerprint" \
-              "$GREEN_OVERRIDE_FILE"
-        rm -rf "$STATE_DIR/parallel-implementation-groups" \
-               "$STATE_DIR/parallel/notes"
-        rm -f "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" \
-              "$STATE_DIR/documents/AUTOMATED_TEST_REPORT.json" \
-              .uncle/docs/IMPLEMENTATION_NOTES.md \
-              .uncle/docs/AUTOMATED_TEST_REPORT.md
-        echo 'The application cannot render or its configured test runner did not execute tests; returning once to IMPLEMENT before browser/checklist work.'
-        set_state IMPLEMENT
+        echo 'The application cannot render or its configured test runner did not execute tests; repairing once before browser/checklist work.'
+        set_state REPAIR
         return 2
     fi
     echo 'Application or verification setup is not runnable; browser/checklist work is not started.' >&2

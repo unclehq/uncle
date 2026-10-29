@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import tempfile
@@ -17,6 +18,64 @@ import time
 from verification_manifest import manifest
 from shell_syntax import syntax_command
 import check_reuse
+
+
+# These are prerequisites, not an attempt to infer arbitrary application test
+# dependencies.  A browser suite that starts `vite preview` cannot give useful
+# evidence after its preceding build has failed; it otherwise waits for
+# Playwright's 60-second webServer timeout.  Mutation controls likewise have
+# no useful meaning after the ordinary unit suite is already red.
+BUILD = re.compile(r'\b(?:npm|yarn|pnpm)\s+(?:run\s+)?build\b|\bvite\s+build\b|\btsc\b|\bwebpack\b|\brollup\b|\besbuild\b', re.I)
+E2E = re.compile(r'\bplaywright\s+test\b|\bcypress\b|\be2e\b|\bwdio\b|\bselenium\b|\bpuppeteer\b|\bnightwatch\b', re.I)
+UNIT = re.compile(r'\b(?:vitest|jest|mocha|pytest)\b|\bgo\s+test\b|\bcargo\s+test\b|\bnode\s+--test\b', re.I)
+MUTATION = re.compile(r'mutat|defect|inject', re.I)
+
+
+def prerequisite_skip(command, failed_build, failed_unit, failed_e2e):
+    if E2E.search(command) and failed_build:
+        return 'NOT RUN: an earlier build command failed; browser tests require its build output.\n'
+    if MUTATION.search(command) and (failed_build or failed_unit or failed_e2e):
+        return 'NOT RUN: an earlier build, unit, or browser command failed; mutation controls would be unreliable.\n'
+    return ''
+
+
+def execution_command(command):
+    """Bound a known-bad browser suite without changing its approved evidence.
+
+    A blank application page makes every locator in a Playwright suite wait for
+    its timeout.  One such failure establishes that the browser baseline is
+    broken; continuing through the remaining cases and then mutation controls
+    only repeats the same failure.  Keep the command recorded in the report
+    unchanged, but give Playwright a small, overridable failure budget while it
+    executes.  Set WORKFLOW_GREEN_E2E_MAX_FAILURES=0 to retain Playwright's
+    normal unlimited behavior.
+    """
+    if not E2E.search(command) or not re.search(r'\bplaywright\s+test\b', command, re.I):
+        return command
+    if re.search(r'--max-failures(?:=|\s+)', command):
+        return command
+    configured = os.environ.get('WORKFLOW_GREEN_E2E_MAX_FAILURES', '1').strip()
+    if not configured.isdigit() or int(configured) <= 0:
+        return command
+    return f'{command} --max-failures={configured}'
+
+
+def browser_application_unrunnable(log):
+    """Recognize the browser's empty-root failure without parsing test prose.
+
+    A build can compile successfully while React crashes during its first
+    render.  In that case the browser suite records a number of selector
+    misses, including its root-mount check.  That is not an ordinary failed
+    assertion which an unattended run may carry to final audit: there is no
+    usable application.  Require both the explicit root reference and several
+    missing-element failures so one unrelated locator failure remains a normal
+    test result.
+    """
+    try:
+        text = Path(log).read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return False
+    return '#root' in text and text.count('element(s) not found') >= 2
 
 
 def _test_status(state):
@@ -68,6 +127,9 @@ def _run_checks(args):
     children = set()
     lock = threading.Lock()
     violations = []
+    failed_build = False
+    failed_unit = False
+    failed_e2e = False
 
     def intact():
         if expected is None:
@@ -113,9 +175,17 @@ def _run_checks(args):
 
     def check(index, directory):
         command = commands[index]
+        invoked = execution_command(command)
         started = time.monotonic()
         log = directory / str(index)
         with log.open("wb") as output:
+            # Commands in the same declared group have already started and
+            # remain genuinely independent. This only prunes *later* work.
+            reason = prerequisite_skip(command, failed_build, failed_unit, failed_e2e)
+            if reason:
+                output.write(reason.encode('utf-8'))
+                record(command, time.monotonic() - started, 125, args.log)
+                return 125, log
             if command in skip:
                 # Done in the background against this exact manifest (verify_prewarm.py).
                 output.write(b"PREWARMED: ran in the background during implementation and succeeded.\n")
@@ -139,7 +209,9 @@ def _run_checks(args):
                             'STAGEGATE_RUN_ID', 'STAGEGATE_ORIGIN_REPO', 'STAGEGATE_ORIGIN_ISSUE',
                             'DOCUMENT_BUDGET_SOURCE', 'UNCLE_STEERING', 'UNCLE_SUPERVISION_HOST'):
                     check_env.pop(key, None)
-                argv = syntax_command(command, args.jobs) or [bash_executable(), '-o', 'pipefail', '-c', command]
+                if invoked != command:
+                    output.write(f"EXECUTION: {invoked}\n".encode('utf-8'))
+                argv = syntax_command(invoked, args.jobs) or [bash_executable(), '-o', 'pipefail', '-c', invoked]
                 child = start_check(argv, env=check_env,
                                     stdout=output, stderr=subprocess.STDOUT)
                 children.add(child)
@@ -148,6 +220,11 @@ def _run_checks(args):
                 finish_check(child)
                 children.discard(child)
             intact()  # Check each command, even if a peer later restores bytes.
+        if status != 0 and E2E.search(command) and browser_application_unrunnable(log):
+            with log.open('ab') as output:
+                output.write(
+                    b'APPLICATION_RUNTIME_UNRUNNABLE: browser checks found no mounted application root; '
+                    b'return to implementation instead of treating this as a nonblocking test failure.\n')
         if status == 0 and not halted.is_set() and reuse_key == check_reuse.key(command):
             check_reuse.record(reuse_key, log)
         record(command, time.monotonic() - started, status, args.log)
@@ -178,6 +255,13 @@ def _run_checks(args):
                         passed += 1
                     else:
                         failed += 1
+                    if status != 0:
+                        if BUILD.search(commands[i]):
+                            failed_build = True
+                        if UNIT.search(commands[i]):
+                            failed_unit = True
+                        if E2E.search(commands[i]):
+                            failed_e2e = True
                     results.write(f"{status}\t{commands[i]}\n")
                     results.flush()
                     combined.write(f"\n$ {commands[i]}\n".encode())
@@ -185,7 +269,7 @@ def _run_checks(args):
                         for chunk in iter(lambda: source.read(1024 * 1024), b""):
                             combined.write(chunk)
                     combined.flush()
-                    label = 'INVALID' if halted.is_set() else ('PASS' if status == 0 else f'FAIL({status})')
+                    label = 'INVALID' if halted.is_set() else ('PASS' if status == 0 else ('SKIP' if status == 125 else f'FAIL({status})'))
                     print(f"  {label}      {commands[i]}", flush=True)
                 if halted.is_set():
                     Path(args.integrity_log).write_bytes(("\n".join(violations) + "\n").encode("utf-8"))

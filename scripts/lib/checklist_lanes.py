@@ -20,12 +20,28 @@ being run, makes the checklist one lane too.  Serial is always correct.
 usage: checklist_lanes.py MANUAL_CHECKLIST.json BATCH_SIZE MAX_WORKERS   (one batch of check IDs per line)
 """
 import json
+import os
 import re
 import sys
 
 
 def normalize(token):
     return re.sub(r'[\s:_-]+', ':', str(token).strip().strip('`*_').lower()).strip(':')
+
+
+def shared_worker_resource(token):
+    """Whether a declared resource is shareable by isolated worker sessions.
+
+    Execute-checklist workers drive separate browser contexts against one
+    driver-owned app server.  Serializing every row that says
+    ``browser:system`` turns a broad UI checklist into one long parent call,
+    even though the browser state is not shared.  Preserve serialization for
+    a real user profile/visible-session reservation and every write resource.
+    Set WORKFLOW_EXECUTE_CHECKLIST_BROWSER_FANOUT=0 for integrations that
+    really do have one non-isolatable browser.
+    """
+    return (token == 'browser:system'
+            and os.environ.get('WORKFLOW_EXECUTE_CHECKLIST_BROWSER_FANOUT', '1') == '1')
 
 
 def lanes(checklist):
@@ -47,13 +63,18 @@ def lanes(checklist):
     resources = {}
     serial = False
     for i, check in enumerate(checks):
+        # Older and weaker runner packets occasionally omit optional empty
+        # arrays despite the worker schema.  An absent declaration means the
+        # worker did not claim a write conflict; treating it as a global lock
+        # collapses every later row into one slow lane.  Preserve every
+        # explicit resource and dependency, but normalize omitted/invalid
+        # resource declarations to the schema's empty-list default.
         declared = check.get('exclusive_resources')
         if not isinstance(declared, list):
-            serial = True                               # never declared: conflicts with everything
-            continue
+            declared = []
         for token in declared:
             token = normalize(token)
-            if token:
+            if token and not shared_worker_resource(token):
                 resources.setdefault(token, []).append(i)
         for dep in check.get('depends_on') or []:
             if dep not in position:

@@ -61,13 +61,14 @@ class CompactGroups(unittest.TestCase):
         checks, by_id, _ = groups.parse(text)
         self.assertEqual([[c for c in run] for run in groups.runs(checks)], [['MC-001'], ['MC-002']])
 
-    def test_every_check_is_executed_and_over_serial_checklists_run_as_one_agent(self):
+    def test_every_check_is_executed_and_over_serial_checklists_can_use_parent_fallback(self):
         for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
             text = (ROOT / source).read_text()
             block = text[text.index('run_parallel_checklist_workers()'):text.index('\n}\n', text.index('run_parallel_checklist_workers()'))]
             self.assertNotIn('[[ "$n" -gt 1 ]] || continue', block)
             self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_MAX_GROUPS:-4', block)
             self.assertIn('Checklist runs as one agent', block)
+            self.assertIn('one shared-resource worker', block)
             self.assertIn('checklist_coverage.py', text)
 
     def test_coverage_lists_required_checks_no_worker_ran(self):

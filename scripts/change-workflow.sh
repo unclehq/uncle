@@ -1656,10 +1656,10 @@ run_parallel_checklist_workers() {
         case "$lane_file" in /*) ;; *) lane_file="$PROJECT_ROOT/$lane_file" ;; esac
         mkdir -p "$(dirname "$lane_file")"
         if lane_count="$(checklist_lane_batches "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$lane_file")"; then
-            if [[ "$lane_count" -lt 2 ]]; then
-                echo "Checklist runs as one agent: its checks do not split into independent lanes."
-                return 0
-            fi
+            # One shared-resource lane still belongs to an execution worker.
+            # The parent only collates its JSON packet; it must not rerun the
+            # checks merely because there was no parallel sibling.
+            [[ "$lane_count" -gt 1 ]] || echo "Checklist lanes: one shared-resource worker."
             lane_checks="$(wc -w < "$lane_file" | tr -d ' ')"
             # Reserve half of the stage cap for reconciliation and split the rest among the checks.
             synthesis_cap="$BUDGET_EXECUTE"
@@ -3423,6 +3423,9 @@ run_checklist_panel() {
     local target="$STATE_DIR/documents/MANUAL_CHECKLIST.json"
     [[ "$kind" == base ]] && target="$STATE_DIR/documents/MANUAL_CHECKLIST.base.json"
     python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$target" coverage invariants resources regressions || return 1
+    python3 -B "$ROOT/scripts/lib/checklist_driver_scope.py" "$target" \
+        --proposed "${target%.json}.proposed.json" \
+        --scope "${target%.json}.driver-scope.json" || return 1
     python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$target" || return 1
     # Both kinds need their rendered view on disk. The delta pass owns the
     # operator-facing document; the base pass owns the working copy that
@@ -4460,6 +4463,12 @@ REPAIR
             ;;
 
         VALIDATE_MANUAL_CHECKLIST)
+            # Keep static/automated evidence in the driver record. This is
+            # deliberately repeated here so the single-reviewer fallback has
+            # the same fast execution scope as the worker-panel path.
+            python3 -B "$ROOT/scripts/lib/checklist_driver_scope.py" \
+                "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
+                --scope "$STATE_DIR/documents/MANUAL_CHECKLIST_DRIVER_SCOPE.json" || exit 1
             checklist_validation_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" 2>&1)" || {
                 checklist_retry_marker="$STATE_DIR/manual-checklist-format-retry.md"
                 if [[ ! -e "$checklist_retry_marker" ]]; then

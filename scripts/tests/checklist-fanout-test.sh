@@ -79,13 +79,15 @@ sys.exit(0 if len(starts) >= 2 and max(starts.values()) < min(ends.values()) els
 PY
 check "lanes: nothing uncovered"                               test -z "$(python3 -B "$ROOT/scripts/lib/checklist_coverage.py" "$(state lanes)/documents/MANUAL_CHECKLIST.json" "$(state lanes)/documents/EXECUTE_CHECKLIST_WORKERS.json")"
 
-# --- a checklist that declared nothing runs as one agent -------------------------------------------------
+# --- a checklist that declared nothing is still executed by one packet worker ---------------------------
 run_case undeclared 1 'A|?' 'B|?' 'C|?'
-check "undeclared: one agent, no workers"                      bash -c 'grep -q "Checklist runs as one agent" "$1/out" && test ! -e "$1/calls"' _ "$(state undeclared)"
+check "undeclared: one worker runs its serial lane"             test -s "$(state undeclared)/calls"
+check "undeclared: every row is collated"                       test "$(collated undeclared)" == 3
 
-# --- everything conflicting is one lane too ---------------------------------------------------------------
+# --- everything conflicting is one lane, executed by one worker ------------------------------------------
 run_case allconflict 1 'A|p' 'B|p' 'C|p'
-check "all conflicting: one agent"                             grep -q 'Checklist runs as one agent' "$(state allconflict)/out"
+check "all conflicting: one worker"                            test -s "$(state allconflict)/calls"
+check "all conflicting: every row is collated"                 test "$(collated allconflict)" == 3
 
 # --- the old barrier path is still there behind the switch -----------------------------------------------
 run_case barrier 0 'A|' 'B|' 'C|' 'D|' 'E|'

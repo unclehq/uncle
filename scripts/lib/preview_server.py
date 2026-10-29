@@ -278,6 +278,12 @@ def stop_live_preview(state):
         os.kill(pid, signal.SIGTERM)
     except (OSError, ValueError):
         pass
+    # A completed run must not leave the TUI or a later invocation pointing at
+    # a terminated loopback server.  The owner normally removes these in its
+    # finally block, but a forced process shutdown bypasses that cleanup.
+    for name in ('preview-server.pid', 'preview-server.url',
+                 'preview-vite.pid', 'preview-vite.url'):
+        (state / name).unlink(missing_ok=True)
 
 
 def development_preview(root):

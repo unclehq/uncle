@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Checks that conflict share a lane and run in order; everything else runs beside them, with no barriers."""
 from pathlib import Path
+import os
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,21 @@ class Lanes(unittest.TestCase):
         multi, _ = lanes.lanes(plan(check('A', ['port:4173']), check('B', ['port-4173']), check('C', ['Port 4173'])))
         self.assertEqual(multi, [['A', 'B', 'C']])
 
+    def test_isolated_browser_workers_fan_out_by_default(self):
+        multi, free = lanes.lanes(plan(check('A', ['browser:system']),
+                                       check('B', ['browser:system']), check('C')))
+        self.assertEqual(multi, [])
+        self.assertEqual(free, ['A', 'B', 'C'])
+
+    def test_browser_fanout_can_be_disabled_for_one_real_shared_browser(self):
+        old = os.environ.get('WORKFLOW_EXECUTE_CHECKLIST_BROWSER_FANOUT')
+        self.addCleanup(lambda: os.environ.__setitem__('WORKFLOW_EXECUTE_CHECKLIST_BROWSER_FANOUT', old)
+                        if old is not None else os.environ.pop('WORKFLOW_EXECUTE_CHECKLIST_BROWSER_FANOUT', None))
+        os.environ['WORKFLOW_EXECUTE_CHECKLIST_BROWSER_FANOUT'] = '0'
+        multi, free = lanes.lanes(plan(check('A', ['browser:system']), check('B', ['browser:system'])))
+        self.assertEqual(multi, [['A', 'B']])
+        self.assertEqual(free, [])
+
     def test_a_dependency_keeps_both_checks_in_one_lane_in_order(self):
         multi, free = lanes.lanes(plan(check('A'), check('B', depends=['A']), check('C')))
         self.assertEqual(multi, [['A', 'B']])
@@ -42,9 +58,9 @@ class Lanes(unittest.TestCase):
         self.assertEqual(multi, [['A', 'B', 'C', 'D']])
         self.assertEqual(free, ['E'])
 
-    def test_a_check_that_declared_nothing_conflicts_with_everything(self):
+    def test_an_omitted_resource_array_defaults_to_no_declared_conflict(self):
         multi, free = lanes.lanes({'checks': [check('A'), {'id': 'B', 'required': True}, check('C')]})
-        self.assertEqual((multi, free), ([['A', 'B', 'C']], []))
+        self.assertEqual((multi, free), ([], ['A', 'B', 'C']))
 
     def test_a_forward_or_self_dependency_makes_it_serial(self):
         for deps in (['C'], ['B']):
@@ -122,17 +138,17 @@ class Defaults(unittest.TestCase):
         checks = plan(*[check('MC-%d' % n) for n in range(100, 114)])
         self.assertEqual(len(lanes.batches(checks, 4, 4)), 4)
 
-    def test_calculator_shape_uses_three_sessions_not_one_per_free_check(self):
-        # One browser/resource lane plus eight ordinary checks: this used to
-        # start ten model sessions. The defaults keep the resource lane whole
-        # and pool the remaining work into two sessions.
+    def test_calculator_shape_fans_out_isolated_browser_checks(self):
+        # Browser workers get independent contexts, so browser:system does
+        # not collapse an otherwise parallel calculator checklist into one
+        # long session. A real dependency still stays in one lane.
         checks = plan(
             check('MC-101', ['browser:system']), check('MC-206', ['browser:system']),
             check('MC-301', ['browser:system']), check('MC-304', depends=['MC-301']),
             *[check('MC-%d' % n) for n in (200, 201, 202, 203, 204, 205, 207, 302)])
         batches = lanes.batches(checks, 4, 4)
-        self.assertEqual(len(batches), 3)
-        self.assertEqual(batches[0], ['MC-101', 'MC-206', 'MC-301', 'MC-304'])
+        self.assertEqual(len(batches), 4)
+        self.assertEqual(batches[0], ['MC-301', 'MC-304'])
         self.assertEqual(sorted(c for batch in batches for c in batch),
                          sorted(c['id'] for c in checks['checks']))
 

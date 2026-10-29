@@ -18,7 +18,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/lib'))
-from preview_server import PreviewServer, VERSION_PATH, HANDOFF_PATH, DevelopmentPreview, development_preview, tree_version
+from preview_server import PreviewServer, VERSION_PATH, HANDOFF_PATH, DevelopmentPreview, development_preview, tree_version, stop_live_preview
 
 
 def get(url):
@@ -102,6 +102,14 @@ class Server(unittest.TestCase):
         self.server.close()
         with self.assertRaises(Exception):
             get(self.base + VERSION_PATH)
+
+    def test_stop_clears_a_stale_published_preview_url(self):
+        state = Path(tempfile.mkdtemp())
+        (state / 'preview-server.pid').write_text('99999999')
+        (state / 'preview-server.url').write_text('http://127.0.0.1:9/')
+        stop_live_preview(state)
+        self.assertFalse((state / 'preview-server.pid').exists())
+        self.assertFalse((state / 'preview-server.url').exists())
 
     def test_a_root_that_cannot_be_served_does_not_raise(self):
         PreviewServer('/nonexistent/nope').close()

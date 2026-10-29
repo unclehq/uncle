@@ -100,6 +100,38 @@ class Checks(unittest.TestCase):
         self.assertTrue((self.root/'results').read_text().startswith('7\t'), self.diagnostics())
         self.assertIn('Verification summary: 1 passed, 1 failed;', r.stdout)
         self.assertIn('Full output: log', r.stdout)
+    def test_failed_build_skips_later_browser_and_mutation_commands(self):
+        r=self.run_checks(['false # vite build', 'touch browser-ran # playwright test',
+                           'touch mutation-ran # mutation test'], '')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.root/'browser-ran').exists(), self.diagnostics())
+        self.assertFalse((self.root/'mutation-ran').exists(), self.diagnostics())
+        rows=(self.root/'results').read_text().splitlines()
+        self.assertEqual([row.split('\t', 1)[0] for row in rows], ['1', '125', '125'], self.diagnostics())
+        self.assertIn('earlier build command failed', (self.root/'log').read_text())
+    def test_failed_browser_suite_skips_mutation_controls(self):
+        r=self.run_checks(['true # vite build', 'false # playwright test',
+                           'touch mutation-ran # mutation test'], '')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.root/'mutation-ran').exists(), self.diagnostics())
+        self.assertEqual([row.split('\t', 1)[0] for row in
+                          (self.root/'results').read_text().splitlines()], ['0', '1', '125'])
+        self.assertIn('earlier build, unit, or browser command failed', (self.root/'log').read_text())
+    def test_browser_suites_default_to_one_failure_but_keep_the_reported_command(self):
+        r=self.run_checks(["printf '%s' \"$*\" > args # playwright test"], '')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # The helper's shell comment intentionally keeps this fixture command
+        # inert; validate the execution transformation directly instead.
+        import parallel_checks
+        self.assertEqual(parallel_checks.execution_command('npx playwright test'),
+                         'npx playwright test --max-failures=1')
+        self.assertEqual(parallel_checks.execution_command('npx playwright test --max-failures=3'),
+                         'npx playwright test --max-failures=3')
+        self.assertEqual(parallel_checks.execution_command('npx vitest run'), 'npx vitest run')
+    def test_missing_browser_root_is_reported_as_an_unrunnable_application(self):
+        r=self.run_checks(["printf '%s\\n' '#root element(s) not found element(s) not found' >&2; exit 1 # playwright test"], '')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('APPLICATION_RUNTIME_UNRUNNABLE', (self.root/'log').read_text())
     def test_invalid_groups_execute_nothing(self):
         for groups in ['0 1\n','2 1\n','1 3\n','1 2\n1 2\n']:
             r=self.run_checks(['touch ran','touch ran'],groups)

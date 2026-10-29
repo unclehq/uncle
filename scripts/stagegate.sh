@@ -1669,7 +1669,7 @@ green_failure_route() {
 green_application_not_runnable() {
     local log="${1:-$LOG_DIR/green-check.log}"
     [[ -s "$log" ]] || return 1
-    grep -qiE '(^|[^[:alpha:]])(build failed|failed to resolve import|is not exported by|could not resolve|error when starting (dev|preview) server|process from config\.webServer was not able to start|webserver.*exit code|no test files found|testDir.*does not exist)' "$log"
+    grep -qiE '(^|[^[:alpha:]])(build failed|failed to resolve import|is not exported by|could not resolve|error when starting (dev|preview) server|process from config\.webServer was not able to start|webserver.*exit code|no test files found|testDir.*does not exist|application_runtime_unrunnable)' "$log"
 }
 
 # Return 0 when browser/verification work is safe, 2 after scheduling the one
@@ -3261,6 +3261,10 @@ run_manual_checklist_panel() {
     # packet independently and give only that worker one explicit correction;
     # healthy packets stay intact and the full panel is never needlessly rerun.
     python3 "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$STATE_DIR/documents/MANUAL_CHECKLIST.json" $lenses || return 1
+    python3 -B "$ROOT/scripts/lib/checklist_driver_scope.py" \
+        "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
+        --proposed "$STATE_DIR/documents/MANUAL_CHECKLIST_PROPOSED.json" \
+        --scope "$STATE_DIR/documents/MANUAL_CHECKLIST_DRIVER_SCOPE.json" || return 1
     python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" || return 1
     python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" .uncle/docs/MANUAL_CHECKLIST.md || return 1
     cp "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
@@ -3681,10 +3685,12 @@ run_parallel_checklist_workers() {
         case "$lane_file" in /*) ;; *) lane_file="$PWD/$lane_file" ;; esac
         mkdir -p "$(dirname "$lane_file")"
         if lane_count="$(checklist_lane_batches "$checklist_input" "$lane_file")"; then
-            if [[ "$lane_count" -lt 2 && "${CHECKLIST_STREAM_LANE:-0}" != 1 ]]; then
-                echo "Checklist runs as one agent: its checks do not split into independent lanes."
-                return 0
-            fi
+            # A single lane is still execution work.  Sending it to the
+            # parent makes the stage appear workerless and asks a full-context
+            # synthesis agent to repeat the browser session.  Dispatch one
+            # worker instead; it writes the normal packet and the driver keeps
+            # the same JSON-only fast path.  Multiple lanes still fan out.
+            [[ "$lane_count" -gt 1 ]] || echo "Checklist lanes: one shared-resource worker."
             directory="$(mktemp -d "$STATE_DIR/checklist-workers.XXXXXX")" || return 1
             {
                 echo '# Parallel checklist worker evidence'
@@ -4305,6 +4311,14 @@ run_stage() {
                     fi
                 else
                     run_claude prompts/preflight.md preflight
+                    # Unlike the self-hosted investigation path above, this
+                    # hosted call has no canonical-JSON delivery contract
+                    # (preflight is not one of run_claude's special-cased
+                    # log_names) -- it only writes the Markdown view. Ingest
+                    # it the same way, or --validate-json below reads a
+                    # canonical file that was never written.
+                    python3 "$ROOT/scripts/lib/acceptance_context.py" --export-json \
+                        .uncle/docs/PREFLIGHT_REPORT.md . PREFLIGHT_REPORT || exit 1
                 fi
                 # A diagnosing reviewer writes the canonical packet directly.
                 # Markdown is rendered only after JSON validation below.
@@ -5729,6 +5743,13 @@ while true; do
             ;;
 
         VALIDATE_MANUAL_CHECKLIST)
+            # The panel is advisory about which observations look useful.
+            # Before execution, remove rows the driver can prove from its
+            # completed command record or deterministic environment facts.
+            # This also covers the single-reviewer fallback path.
+            python3 -B "$ROOT/scripts/lib/checklist_driver_scope.py" \
+                "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
+                --scope "$STATE_DIR/documents/MANUAL_CHECKLIST_DRIVER_SCOPE.json" || exit 1
             manual_checklist_validation_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" 2>&1)" || {
                 supervision_validation_failed manual-checklist "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$manual_checklist_validation_error"
                 printf '%s\n' "$manual_checklist_validation_error" >&2; exit 1

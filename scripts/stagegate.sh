@@ -3724,8 +3724,8 @@ run_parallel_checklist_workers() {
         python3 "$ROOT/scripts/lib/compact_groups.py" "$groups" "$checklist_input" > "$compact_groups" || return 1
         case "$compact_groups" in /*) groups="$compact_groups" ;; *) groups="$PWD/$compact_groups" ;; esac
         jobs=1
-        compact_batch_size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-2}"
-        [[ "$compact_batch_size" =~ ^[1-9][0-9]*$ ]] || compact_batch_size=2
+        compact_batch_size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-1}"
+        [[ "$compact_batch_size" =~ ^[1-9][0-9]*$ ]] || compact_batch_size=1
         # Workers running at once inside one group; a larger group's batches simply grow.
         compact_max_workers="${WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-8}"
         [[ "$compact_max_workers" =~ ^[1-9][0-9]*$ ]] || compact_max_workers=8

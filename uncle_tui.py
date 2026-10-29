@@ -2042,6 +2042,16 @@ class UncleTUI:
             elif ev.get("event") == "usage":
                 stats["live"][stage] = ev
         if ev.get("event") == "start":
+            incoming_stage = ev.get("stage", "")
+            previous_parent = parent_stage(getattr(self, "status_stage", ""))
+            incoming_parent = parent_stage(incoming_stage)
+            # The workflow joins a panel before starting its next parent
+            # stage. Native Codex/Kimi timing metrics can arrive later than
+            # that transition, so retire their old active entries here rather
+            # than showing ghost worker spinners through implementation.
+            # Sibling workers share a parent and are deliberately untouched.
+            if previous_parent and incoming_parent and previous_parent != incoming_parent:
+                self._retire_active_parent(previous_parent)
             if ev.get("stage", "") != self.status_stage and self.status_stage:
                 self.previous_stage = self.status_stage
                 # A web app is viewable the moment implementation stops writing
@@ -6342,6 +6352,22 @@ class UncleTUI:
                 stats["live"].pop(stage, None)
         stats.update(session_id=saved.get("id"), records=saved["records"],
                      seen=set(saved.get("seen", [])))
+
+    def _retire_active_parent(self, parent):
+        """Clear late status entries for a panel the workflow already joined.
+
+        Completion metrics are the normal lifecycle signal.  A later parent
+        start is also conclusive: the drivers wait for all panel workers
+        before advancing, while native Codex/Kimi metrics may be observed a
+        tick later by the TUI.
+        """
+        stats = getattr(self, "session_stats", None)
+        if not stats or not parent:
+            return
+        for raw in list(stats.get("active", {})):
+            if parent_stage(raw) == parent:
+                stats["active"].pop(raw, None)
+                stats.get("live", {}).pop(raw, None)
 
     def poll_session_stats(self):
         stats = getattr(self, "session_stats", None)

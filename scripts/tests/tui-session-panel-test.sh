@@ -94,6 +94,22 @@ class Panel(unittest.TestCase):
             self.assertNotIn('implementation',ui.session_stats['active'])
             self.assertEqual(len(ui.session_stats['records']),1)
 
+    def test_next_parent_stage_retires_stale_updated_plan_workers(self):
+        # Codex/Kimi can return a panel result before their timing metrics are
+        # visible. IMPLEMENT cannot start before the panel has been joined.
+        ui=self.ui(); ui.status_stage='updated-plan-review-worker-scope'
+        ui._preview_after_implementation=lambda *_: None
+        ui.session_stats['active']={
+            'updated-plan-review-worker-scope':time.time()-30,
+            'updated-plan-review-worker-dispositions':time.time()-30,
+        }
+        ui.session_stats['live']={name:{'total_tokens':1} for name in ui.session_stats['active']}
+        ui._apply_status(json.dumps(dict(event='start',stage='implementation',stage_index=6,stage_total=9)))
+        self.assertNotIn('updated-plan-review-worker-scope',ui.session_stats['active'])
+        self.assertNotIn('updated-plan-review-worker-dispositions',ui.session_stats['active'])
+        self.assertIn('implementation',ui.session_stats['active'])
+        self.assertNotIn('updated-plan-review-worker-scope',ui.session_stats['live'])
+
 
     def test_project_root_event_follows_the_driver_for_the_run(self):
         # from-issue.sh moves the run into a worktree it creates after launch.

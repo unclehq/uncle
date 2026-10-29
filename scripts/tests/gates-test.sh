@@ -632,7 +632,19 @@ if [[ "$out" == *.json ]]; then
     if [[ "$out" == *updated-plan-panel/*.json ]]; then
         printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"updated-plan-worker-packet","findings":[]}' > "$delivery"
     elif [[ "$out" == *test-review-panel/*.json ]]; then
-        printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"test-review-worker-packet","rows":[]}' > "$delivery"
+        # test_review_packets.py's packet_valid() requires each lens's own
+        # assigned acceptance-gate row IDs to be present (coverage:COVERAGE,
+        # assertions:ASSERTIONS, oracle:ORACLE+NEGATIVE) -- an empty rows
+        # array always failed validation, which this stub's own retry-once
+        # logic then (correctly) read as "the worker never recovered."
+        test_review_lens="$(basename "$out" .json)"; test_review_lens="${test_review_lens%-retry}"
+        case "$test_review_lens" in
+            coverage) test_review_rows='[{"id":"COVERAGE","status":"PASS","evidence":"stub evidence"}]' ;;
+            assertions) test_review_rows='[{"id":"ASSERTIONS","status":"PASS","evidence":"stub evidence"}]' ;;
+            oracle) test_review_rows='[{"id":"ORACLE","status":"PASS","evidence":"stub evidence"},{"id":"NEGATIVE","status":"PASS","evidence":"stub evidence"}]' ;;
+            *) test_review_rows='[]' ;;
+        esac
+        printf '{"schema":"uncle.artifact/v1","kind":"test-review-worker-packet","rows":%s}\n' "$test_review_rows" > "$delivery"
     elif [[ "$out" == *manual-checklist-panel/*.json ]]; then
         printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist-worker-packet","checks":[{"id":"MC-1","exact_action":"Open the page","expected_result":"Greeting visible"}]}' > "$delivery"
     elif [[ "$out" == *documents/ADVERSARIAL_REVIEW.json ]]; then
@@ -772,21 +784,31 @@ gate_report() {
 if [[ -n "${UNCLE_WORKER_PACKET_PATH:-}" ]]; then
     ids=()
     while IFS= read -r id; do ids+=("$id"); done < <(printf '%s\n' "$prompt" | sed -n "s/.*Execute \`\\([^\`]*\\)\`\\..*/\\1/p")
+    # FAKE_VERIFICATION's statuses (PASS, BLOCKED, 'NOT RUN', ...) are
+    # gate_report's shorthand, not the canonical worker-packet enum
+    # (PASS, FAIL, BLOCKED-SETUP, BLOCKED-HUMAN, BLOCKED-IMPOSSIBLE, NOT
+    # RUN) -- without this mapping, this fast path (which bypasses the
+    # single-call STUB:execute path below entirely once every check is
+    # covered by a worker) always reported every check PASS regardless of
+    # what the test asked to simulate.
+    worker_status="${FAKE_VERIFICATION:-PASS}"
+    case "$worker_status" in
+        BLOCKED) worker_status=BLOCKED-SETUP ;;
+        FAIL_ONCE) worker_status=PASS ;;
+        MALFORMED|NO_REPORT) worker_status=PASS ;;
+    esac
     {
         printf '{"schema":"uncle.artifact/v1","kind":"checklist-execution-worker-packet","results":['
         first=1
         for id in "${ids[@]}"; do
             [[ "$first" == 1 ]] || printf ','
             first=0
-            printf '{"id":"%s","action":"stub action","expected_result":"stub expected","actual_result":"stub actual","evidence":"stub evidence","status":"PASS"}' "$id"
+            printf '{"id":"%s","action":"stub action","expected_result":"stub expected","actual_result":"stub actual","evidence":"stub evidence","status":"%s"}' "$id" "$worker_status"
         done
         printf ']}\n'
     } > "$UNCLE_WORKER_PACKET_PATH"
-    # execute-checklist's fast path (run_parallel_checklist_workers) bypasses
-    # the single-call STUB:execute path below entirely once every check is
-    # covered by a worker, so a verifier that weakens a protected test during
-    # that call must simulate it here too -- otherwise this scenario can
-    # never fire once the fast path succeeds.
+    # Same fast-path bypass problem as FAKE_VERIFICATION above, for the
+    # verifier-weakens-a-protected-test scenario.
     if [[ -n "${FAKE_VERIFY_EDIT:-}" ]]; then bash -c "$FAKE_VERIFY_EDIT"; fi
     printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1},"session_id":"stub"}'
     exit 0
@@ -1638,7 +1660,14 @@ run_stagegate_stdin "$(gate_input y)" FAKE_IMPL="printf 'exit 1\n' > app/test.sh
     WORKFLOW_MAX_REPAIRS=0 WORKFLOW_CONTINUE_ON_TEST_FAILURE=0
 expect_status 1
 expect_state REPAIR
-expect_in_file .uncle/workflow/repair-source green-check.md
+# The driver failure now reaches REPAIR through TEST_REVIEW.md, not
+# green-check.md directly: test_review_packets.py synthesizes its
+# INTEGRITY/RESULTS rows itself from the real green-check result (never
+# from worker output), so a reviewer reporting every other row PASS still
+# cannot overrule it -- the acceptance table's own FAIL rows route here.
+expect_in_file .uncle/workflow/repair-source TEST_REVIEW.md
+expect_in_file .uncle/docs/TEST_REVIEW.md 'INTEGRITY'
+expect_in_file .uncle/docs/TEST_REVIEW.md 'green-check.tsv'
 expect_no_file .uncle/docs/FINAL_AUDIT.md
 
 new_stagegate_case sg-missing-driver-results-block

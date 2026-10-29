@@ -95,7 +95,7 @@ def lanes(checklist):
     return [g for g in ordered if len(g) > 1], [g[0] for g in ordered if len(g) == 1]
 
 
-def batches(checklist, size=2, workers=8):
+def batches(checklist, size=1, workers=8):
     size, workers = max(1, size), max(1, workers)
     multi, free = lanes(checklist)
     multi = [list(lane) for lane in multi]

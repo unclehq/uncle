@@ -5926,7 +5926,7 @@ PY
                         printf '%s\n' "$final_audit_ingest_error" > "$STATE_DIR/final-audit-format-retry.md"
                         echo "Retrying final-audit once with the format diagnostic."
                         set_state FINAL_AUDIT
-                        return 0
+                        continue
                     fi
                     echo 'Final audit was malformed; recording a blocking driver-owned audit without retrying the reviewer.'
                     python3 -B "$ROOT/scripts/lib/final-audit-context.py" --fallback .uncle/docs/FINAL_AUDIT.md "$final_audit_ingest_error"

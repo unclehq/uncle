@@ -1355,7 +1355,7 @@ fi
 new_stagegate_case sg-checklist-format-retry
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_MANUAL_CHECKLIST_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_MC_FORMAT=MISSING_FIELDS_ONCE
+run_stagegate WORKFLOW_MANUAL_CHECKLIST_PANEL=0 WORKFLOW_EARLY_CHECKLIST=0 WORKFLOW_DIFF_GATE=0 FAKE_MC_FORMAT=MISSING_FIELDS_ONCE
 expect_status 0
 expect_state COMPLETE
 expect_out 'Retrying manual-checklist once with the format diagnostic.'

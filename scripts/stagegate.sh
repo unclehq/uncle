@@ -3113,15 +3113,33 @@ run_updated_plan_compact() {
         "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" \
         - "$UPDATED_PLAN_PROMPT" || return 1
     echo 'Updated-plan compact path: one JSON patch compiler; skipping advisory and edit-writer fan-out.'
+    # run_claude exits the whole process on a stage it cannot recover (its
+    # retries are for transient/format problems, not for "this runner cannot
+    # satisfy this contract"). A subshell lets this one caller see that exit
+    # as a status instead of losing the entire driver to it.
+    local compact_status=0
     if stage_supports_structured_output updated-plan; then
         local schema="$directory/synthesis.json"
         python3 -B "$ROOT/scripts/lib/worker_schemas.py" synthesis plan protected "$schema" || return 1
-        UNCLE_OUTPUT_SCHEMA_FILE="$schema" \
-        UNCLE_STRUCTURED_OUTPUT_PATH="$STATE_DIR/artifact-delivery/updated-plan.json" \
-            run_claude "$UPDATED_PLAN_PROMPT" updated-plan
+        ( UNCLE_OUTPUT_SCHEMA_FILE="$schema" \
+          UNCLE_STRUCTURED_OUTPUT_PATH="$STATE_DIR/artifact-delivery/updated-plan.json" \
+            run_claude "$UPDATED_PLAN_PROMPT" updated-plan ) || compact_status=$?
     else
-        run_claude "$UPDATED_PLAN_PROMPT" updated-plan
+        ( run_claude "$UPDATED_PLAN_PROMPT" updated-plan ) || compact_status=$?
     fi
+    [[ "$compact_status" == 0 ]] && return 0
+    # A self-hosted model can fail the compact path's strict patch contract
+    # (replace_text only matches text already in the base plan) the same way
+    # on every retry and every resumed process -- nothing about restarting
+    # teaches it the mistake it keeps making. Escalate once per run to the
+    # full writer panel, which does not require an exact-match patch; a
+    # marker stops this from ping-ponging back and forth forever.
+    if stage_uses_self_hosted updated-plan AGENT && [[ ! -e "$STATE_DIR/updated-plan-compact-failed" ]]; then
+        touch "$STATE_DIR/updated-plan-compact-failed"
+        echo "Updated-plan compact path failed on a self-hosted model; falling back to the full writer panel."
+        return 2
+    fi
+    exit "$compact_status"
 }
 
 # A single compiler is fastest for a short review.  A long review is different:
@@ -4175,10 +4193,18 @@ run_stage() {
                 # Do not silently turn one rejected compact delivery into the
                 # old many-call committee.  That made a nominally fast stage
                 # unpredictably take minutes and hid the useful JSON schema
-                # error.  Operators can opt into the legacy path with
-                # WORKFLOW_UPDATED_PLAN_COMPACT=0 when diagnosing a runner.
-                run_updated_plan_adaptive
-                return $?
+                # error.  Operators can still opt in early with
+                # WORKFLOW_UPDATED_PLAN_COMPACT=0.  The one case this does
+                # escalate automatically: a self-hosted model whose compact
+                # delivery failed outright (status 2, see
+                # run_updated_plan_compact) is a capability mismatch with the
+                # strict exact-match patch contract, not a transient format
+                # slip -- resuming the process teaches it nothing, so it
+                # would otherwise fail identically forever. Fall through to
+                # the panel below exactly once for that case.
+                local adaptive_status=0
+                run_updated_plan_adaptive || adaptive_status=$?
+                [[ "$adaptive_status" == 2 ]] || return "$adaptive_status"
             fi
             # A non-empty review needs the panel.  Never continue into the
             # parent call if collation failed: the collated JSON is its only

@@ -1493,8 +1493,15 @@ run_green_check() {
     if [[ "${WORKFLOW_GREEN_CHECK_REUSE:-1}" == 1 ]]; then
         green_fingerprint="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$GREEN_CMDS" 2>/dev/null || true)"
         local remembered remembered_status
-        remembered="$(cut -d' ' -f1 "$STATE_DIR/green-check.fingerprint" 2>/dev/null)"
-        remembered_status="$(cut -d' ' -f2 "$STATE_DIR/green-check.fingerprint" 2>/dev/null)"
+        # A bare `var=$(cmd)` assignment is NOT exempt from this script's
+        # `set -e` the way a command substitution used as an argument is --
+        # `cut`'s own failure (this fingerprint file does not exist before
+        # the first run ever completes) killed this function, and the
+        # background job running it, before a single check ran: a known
+        # regression was then reported to nothing, with no evidence file
+        # for anything downstream to catch.
+        remembered="$(cut -d' ' -f1 "$STATE_DIR/green-check.fingerprint" 2>/dev/null)" || true
+        remembered_status="$(cut -d' ' -f2 "$STATE_DIR/green-check.fingerprint" 2>/dev/null)" || true
         if [[ -n "$green_fingerprint" && -s "$GREEN_MD" && -s "$GREEN_CLASS" && -f "$GREEN_CUR" \
               && "$remembered" == "$green_fingerprint" ]] \
            && [[ "$remembered_status" == clean || "${WORKFLOW_GREEN_CHECK_REUSE_FAILED:-1}" == 1 ]]; then
@@ -4614,6 +4621,35 @@ PY
                 python3 "$ROOT/scripts/lib/final-audit-context.py" --fallback .uncle/docs/FINAL_AUDIT.md "$audit_validation_error"
             }
             audit_class="$(classify_audit_verdict "$STATE_DIR/documents/FINAL_AUDIT.json")"
+            # Driver verification moved to the background (EXECUTE_CHECKLIST)
+            # so IMPLEMENT's human gate no longer sees a pass/fail result to
+            # act on; wait_green_check_bg's own comment promised "the gate
+            # and the final audit both see them" instead, but nothing ever
+            # enforced that -- a command that used to pass and now fails is
+            # the single most load-bearing signal this driver has, and until
+            # here it depended entirely on a model-written audit finding it
+            # unprompted. That is not an acceptable substitute for the
+            # deterministic check this replaced. Force the verdict closed
+            # whenever the driver's own command results disagree with it,
+            # the same way a malformed or missing audit already does above.
+            if [[ "$audit_class" == READY || "$audit_class" == READY_WITH_NON_BLOCKING_ISSUES ]] \
+                    && [[ "$GREEN_CHECK" == "1" && -s "$GREEN_CMDS" ]]; then
+                if [[ ! -s "$GREEN_CLASS" ]]; then
+                    # The background check (EXECUTE_CHECKLIST) never left a
+                    # result here at all -- it was killed, crashed, or never
+                    # ran. Absence of evidence is not evidence this is safe;
+                    # fail closed the same way a malformed audit does above,
+                    # rather than letting a verdict with nothing behind it
+                    # stand in for a verification that may never have happened.
+                    echo "No driver verification result on record ($GREEN_CLASS is missing or empty) despite WORKFLOW_GREEN_CHECK=1."
+                    echo "Overriding the verdict to NOT_READY; it cannot be silently approved without that evidence."
+                    audit_class=NOT_READY
+                elif [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then
+                    echo "Audit verdict $audit_class contradicts the driver's own verification: $(green_regressions "$GREEN_CLASS") command(s) regressed."
+                    echo "$GREEN_MD lists them. Overriding the verdict to NOT_READY; it cannot be silently approved."
+                    audit_class=NOT_READY
+                fi
+            fi
             printf '%s\t%s\t%s\n' \
                 "${STAGEGATE_RUN_ID:--}" \
                 "$audit_class" \

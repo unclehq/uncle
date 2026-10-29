@@ -4661,8 +4661,14 @@ run_green_check() {
     if [[ "${WORKFLOW_GREEN_CHECK_REUSE:-1}" == 1 ]]; then
         green_fingerprint="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$GREEN_CMDS" 2>/dev/null || true)"
         local remembered remembered_status
-        remembered="$(cut -d' ' -f1 "$STATE_DIR/green-check.fingerprint" 2>/dev/null)"
-        remembered_status="$(cut -d' ' -f2 "$STATE_DIR/green-check.fingerprint" 2>/dev/null)"
+        # A bare `var=$(cmd)` assignment is NOT exempt from this script's
+        # `set -e` the way a command substitution used as an argument is --
+        # `cut`'s own failure (this fingerprint file does not exist before
+        # the first run ever completes) silently killed this function
+        # before a single check ran, same bug as change-workflow.sh's
+        # run_green_check.
+        remembered="$(cut -d' ' -f1 "$STATE_DIR/green-check.fingerprint" 2>/dev/null)" || true
+        remembered_status="$(cut -d' ' -f2 "$STATE_DIR/green-check.fingerprint" 2>/dev/null)" || true
         if [[ -n "$green_fingerprint" && -s "$GREEN_MD" && -s "$GREEN_CLASS" && -f "$GREEN_CUR" \
               && "$remembered" == "$green_fingerprint" ]]; then
             # A clean run is always reusable.  A failing one is too, unless asked otherwise: the same code,
@@ -6052,6 +6058,25 @@ PY
                 python3 -B "$ROOT/scripts/lib/final-audit-context.py" --fallback .uncle/docs/FINAL_AUDIT.md "$final_audit_validation_error"
             }
             audit_class="$(classify_audit_verdict "$STATE_DIR/documents/FINAL_AUDIT.json")"
+            # A command that used to pass and now fails is the single most
+            # load-bearing signal this driver has, and nothing here
+            # cross-checks the audit's own self-reported verdict against
+            # it -- that depends entirely on a model-written audit finding
+            # it unprompted. Fail closed whenever the driver's own command
+            # results disagree, the same way a malformed or missing audit
+            # already does above.
+            if [[ "$audit_class" == READY || "$audit_class" == READY_WITH_NON_BLOCKING_ISSUES ]] \
+                    && [[ "$GREEN_CHECK" == "1" && -s "$GREEN_CMDS" ]]; then
+                if [[ ! -s "$GREEN_CLASS" ]]; then
+                    echo "No driver verification result on record ($GREEN_CLASS is missing or empty) despite WORKFLOW_GREEN_CHECK=1."
+                    echo "Overriding the verdict to NOT_READY; it cannot be silently approved without that evidence."
+                    audit_class=NOT_READY
+                elif [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then
+                    echo "Audit verdict $audit_class contradicts the driver's own verification: $(green_regressions "$GREEN_CLASS") command(s) regressed."
+                    echo "$GREEN_MD lists them. Overriding the verdict to NOT_READY; it cannot be silently approved."
+                    audit_class=NOT_READY
+                fi
+            fi
             printf '%s\t%s\n' "$audit_class" "$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")" \
                 > "$VERDICT_FILE"
             echo

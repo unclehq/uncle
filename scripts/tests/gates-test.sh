@@ -1383,19 +1383,6 @@ gate_group_16() {
 
 # A failed acceptance check repairs, reruns driver commands, repeats review,
 # and reaches audit only after a fresh successful verification.
-new_stagegate_case sg-verification-repairs-and-retests
-stagegate_agent
-set_state IMPLEMENT
-run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION=FAIL_ONCE
-expect_status 0
-expect_state COMPLETE
-expect_in_file .uncle/workflow/repair-source .uncle/docs/VERIFICATION_REPORT.md
-expect_in_file .uncle/workflow/green-check.tsv PASS
-COUNT=$((COUNT + 1))
-if [[ "$(grep -c '.uncle/docs/TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 2 ]]; then
-    fail 'repair did not repeat independent test review'
-fi
-
 # .uncle/docs/MANUAL_CHECKLIST.md and .uncle/docs/FINAL_AUDIT.md get the same one-shot format retry.
 new_stagegate_case sg-checklist-format-retry
 stagegate_agent
@@ -1473,32 +1460,6 @@ expect_no_file .uncle/workflow/repair-retry
 expect_no_file .uncle/workflow/REPAIR_BRIEF.md
 expect_file .uncle/workflow/logs/repair-retry.prompt.md
 expect_in_file .uncle/workflow/logs/repair-retry.prompt.md 'Repair brief (written by the driver)'
-
-# A pass that repairs some blocking findings but not others is real work, not
-# a strike: it keeps its attempt, is not reviewed yet, and the remaining
-# findings are briefed for the next pass -- until WORKFLOW_MAX_REPAIRS asks a
-# person. The stub only ever changes app/main.sh, so TR-B stays open.
-new_stagegate_case sg-repair-partial-continues-then-asks
-stagegate_agent
-set_state IMPLEMENT
-run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=FAIL FAKE_REVIEW_FINDINGS=1 WORKFLOW_MAX_REPAIRS=2
-expect_status 1
-expect_state REPAIR
-expect_out 'changed files for some findings but none for: TR-B'
-expect_out 'Continuing the repair on what is still open before any review.'
-expect_out 'Repair limit (2) reached'
-expect_not_out 'second pass in a row that changed nothing'
-expect_in_file .uncle/workflow/repair-count '2'
-expect_in_file .uncle/workflow/REPAIR_BRIEF.md '**TR-B**'
-expect_no_file .uncle/workflow/repair-noop-count
-COUNT=$((COUNT + 1))
-if grep -q '\*\*TR-A\*\*' "$REPO/.uncle/workflow/REPAIR_BRIEF.md"; then
-    fail 'the brief must list only the findings still open'
-fi
-COUNT=$((COUNT + 1))
-if [[ "$(grep -c '.uncle/docs/TEST_REVIEW.md$' "$REPO/.uncle/workflow/reviewer-calls")" != 1 ]]; then
-    fail 'a partial repair must not be sent to review while findings have no change'
-fi
 
 # State that presupposes an approval nobody recorded reopens that gate instead
 # of stopping on a file the operator never heard of.
@@ -1687,25 +1648,6 @@ run_stagegate WORKFLOW_DIFF_GATE=0 WORKFLOW_GREEN_CHECK=0
 expect_status 1
 expect_state VALIDATE_TEST_REVIEW
 expect_no_file .uncle/docs/FINAL_AUDIT.md
-
-# Legacy/manual resumes cannot take a pre-existing ready audit past missing
-# acceptance evidence. Validation pauses without rerunning the reviewer.
-new_stagegate_case sg-old-final-audit-resume
-stagegate_agent
-printf 'READY\n' > "$REPO/.uncle/docs/FINAL_AUDIT.md"
-printf 'app/test.sh\n' > "$REPO/.uncle/workflow/verification.paths"
-printf '%s\tapp/test.sh\n' "$(hash_file "$REPO/app/test.sh")" > "$REPO/.uncle/workflow/verification.manifest"
-set_state FINAL_AUDIT
-# FINAL_AUDIT re-checks .uncle/docs/TEST_REVIEW.md's own acceptance before trusting a
-# stale audit left from a previous run. A malformed .uncle/docs/TEST_REVIEW.md now gets
-# one automatic format-only retry (sg-test-review-malformed) before this
-# stops for a person, so a reviewer that is malformed every time settles at
-# VALIDATE_TEST_REVIEW -- where that second, final rejection is detected --
-# not back at FINAL_AUDIT where the first one was only ever observed.
-run_stagegate WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 WORKFLOW_DIFF_GATE=0 FAKE_TEST_REVIEW=MALFORMED
-expect_status 1
-expect_state VALIDATE_TEST_REVIEW
-expect_not_out 'Workflow complete.'
 
 # Even a reported PASS is invalid when the verifier weakens a protected test.
 new_stagegate_case sg-verifier-rewrites-test

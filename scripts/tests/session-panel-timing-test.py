@@ -63,5 +63,40 @@ class SessionPanelTiming(unittest.TestCase):
         self.assertEqual(lines[idx + 1], 'Time   0:00:45')
 
 
+class RetireActiveParent(unittest.TestCase):
+    """requirements, preflight and preview-build are started as genuinely
+    detached background jobs the driver does not wait for before the next
+    foreground stage begins. A bare stage's own entry must survive the next
+    stage's start event -- only a sub-worker ("-worker-"/"-step-"/etc, where
+    raw != parent) may be retired here, because the driver really does wait
+    for every worker of a panel to join before moving on."""
+
+    def retire(self, active, parent):
+        app = SimpleNamespace(session_stats={'active': dict(active), 'live': {}})
+        module.UncleTUI._retire_active_parent(app, parent)
+        return app.session_stats['active']
+
+    def test_a_bare_background_stage_is_not_retired_by_the_next_stage_starting(self):
+        # The real call site passes parent_stage(the OLD status_stage), i.e.
+        # the stage being left, not the one being entered -- status_stage was
+        # "preflight" and the next foreground stage ("implementation")
+        # starting is what triggers this call.
+        active = self.retire({'preflight': 100.0}, 'preflight')
+        self.assertIn('preflight', active, 'preflight was hidden while still actually running')
+
+    def test_requirements_survives_the_next_stage_starting(self):
+        active = self.retire({'requirements': 100.0}, 'requirements')
+        self.assertIn('requirements', active)
+
+    def test_a_sub_worker_of_the_left_parent_is_still_retired(self):
+        active = self.retire({'implementation-step-3': 100.0}, 'implementation')
+        self.assertNotIn('implementation-step-3', active)
+
+    def test_a_sibling_bare_stage_is_untouched(self):
+        active = self.retire({'preflight': 100.0, 'other-stage': 50.0}, 'other-stage')
+        self.assertIn('preflight', active)
+        self.assertIn('other-stage', active, 'the exact parent itself must not retire its own entry either')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -6376,15 +6376,24 @@ class UncleTUI:
         """Clear late status entries for a panel the workflow already joined.
 
         Completion metrics are the normal lifecycle signal.  A later parent
-        start is also conclusive: the drivers wait for all panel workers
-        before advancing, while native Codex/Kimi metrics may be observed a
-        tick later by the TUI.
+        start is also conclusive for a *worker* of that parent: the drivers
+        wait for all panel workers before advancing, while native Codex/Kimi
+        metrics may be observed a tick later by the TUI.  It is not
+        conclusive for the bare parent stage itself (raw == parent, not one
+        of its "-worker-"/"-candidate-"/"-step-" children): requirements,
+        preflight and preview-build are all started as genuinely detached
+        background jobs the driver does *not* wait for before the next
+        foreground stage begins, so their own start event (a different
+        parent) used to retire -- hide -- a background stage that was still
+        actually running, and it only reappeared once its completion record
+        landed. Only a sub-worker's entry is retired here; the parent's own
+        entry waits for its real completion record like any other stage.
         """
         stats = getattr(self, "session_stats", None)
         if not stats or not parent:
             return
         for raw in list(stats.get("active", {})):
-            if parent_stage(raw) == parent:
+            if raw != parent and parent_stage(raw) == parent:
                 stats["active"].pop(raw, None)
                 stats.get("live", {}).pop(raw, None)
 

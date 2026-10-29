@@ -782,6 +782,12 @@ if [[ -n "${UNCLE_WORKER_PACKET_PATH:-}" ]]; then
         done
         printf ']}\n'
     } > "$UNCLE_WORKER_PACKET_PATH"
+    # execute-checklist's fast path (run_parallel_checklist_workers) bypasses
+    # the single-call STUB:execute path below entirely once every check is
+    # covered by a worker, so a verifier that weakens a protected test during
+    # that call must simulate it here too -- otherwise this scenario can
+    # never fire once the fast path succeeds.
+    if [[ -n "${FAKE_VERIFY_EDIT:-}" ]]; then bash -c "$FAKE_VERIFY_EDIT"; fi
     printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1},"session_id":"stub"}'
     exit 0
 fi

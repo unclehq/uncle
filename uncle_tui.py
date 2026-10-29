@@ -3975,10 +3975,15 @@ class UncleTUI:
                 document = action['document']
                 if kind == 'app' and not re.search(r'^## ', document, re.M):
                     # Plain descriptions are valid app seeds; do not force users
-                    # to supply the internal Markdown section schema.
+                    # to supply the internal Markdown section schema. The bare
+                    # word "None" as placeholder body text read fine in the
+                    # Markdown file but surfaced as a literal "None" bullet in
+                    # the instant preview card, which lifts a section's first
+                    # few lines verbatim; every unfilled section gets the same
+                    # explanatory placeholder Open questions already used.
                     document = '# Application brief\n\n' + '\n\n'.join(
-                        '## ' + field + '\n' + (document.strip() if field == 'Summary' else
-                        'Not specified in the brief.' if field == 'Open questions' else 'None')
+                        '## ' + field + '\n' + (document.strip() if field == 'Summary'
+                        else 'Not specified in the brief.')
                         for field in Conversation.fields['app'])
                 draft.preview = sanitize(document)
                 target = Path(generated_input_path(filename, root))

@@ -2436,7 +2436,20 @@ class UncleTUI:
             return
         if finish_decision(getattr(self, "workflow_unattended", False),
                            getattr(self, "workflow_completed", False), code) == 'exit':
-            # Unattended and finished: nobody is here to dismiss a dialog.
+            # Unattended and finished: nobody is here to dismiss a dialog,
+            # but that is not the same as nobody being here to look at the
+            # app. CompletionPreview is event-driven (readiness polling, a
+            # background process, a `done` event this quit path never pumps)
+            # and _quit() would kill it mid-flight; _show_early_preview's
+            # fire-and-forget webbrowser.open is the one already proven safe
+            # to call without a dialog or any further loop turns.
+            family_marker = os.path.join(_project_root(), ".uncle", "workflow", "family")
+            try:
+                family = open(family_marker, encoding="utf-8").read().strip()
+            except OSError:
+                family = ""
+            if family == "app":
+                self._show_early_preview()
             self.unattended_finished = True
             self._quit()
             return

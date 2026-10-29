@@ -34,6 +34,14 @@ from step_groups import covers                                # noqa: E402
 
 SKIP = ('.uncle/', '.git/')
 
+# Most of `.uncle/` is driver state and must never be attributed to an
+# isolated implementation worker.  The launch manifest is the deliberate
+# exception: approved application plans assign it to the scaffold step and
+# completion/app-server code consumes it as the app's launch contract.  Treat
+# that one file like normal application output so a correct scaffold can be
+# merged instead of forcing an expensive serial fallback.
+MERGEABLE_WORKFLOW_FILES = frozenset({'.uncle/launch.json'})
+
 # Driver state a step never reads and that grows all run (the performance trace alone was 4,000 files, 21 MB, by the time
 # implementation began): copying it eleven times was most of the seconds each sandbox cost.
 STEP_EXCLUDES = tuple('.uncle/workflow/' + name for name in (
@@ -155,7 +163,7 @@ def snapshot(root, project):
         if not path.is_file() or path.is_symlink():
             continue
         rel = path.relative_to(root).as_posix()
-        if any(rel.startswith(prefix) for prefix in SKIP):
+        if any(rel.startswith(prefix) for prefix in SKIP) and rel not in MERGEABLE_WORKFLOW_FILES:
             continue
         if any(rel == prefix or rel.startswith(prefix.rstrip('/') + '/') for prefix in ignored):
             continue

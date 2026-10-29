@@ -3048,7 +3048,7 @@ run_test_review_panel() {
 }
 
 run_manual_checklist_panel() {
-    local directory="$STATE_DIR/manual-checklist-panel" lens prompt output pid
+    local directory="$STATE_DIR/manual-checklist-panel" lens prompt output pid stream_monitor_pid=""
     local -a pids=() pid_lenses=()
     [[ "${WORKFLOW_MANUAL_CHECKLIST_PANEL:-1}" == 1 ]] || return 0
     rm -rf "$directory"; mkdir -p "$directory/prompts"
@@ -3074,6 +3074,25 @@ run_manual_checklist_panel() {
         pids+=("$!")
         pid_lenses+=("$lens")
     done
+    # Do not make execute-checklist wait for an arbitrary lens (previously
+    # coverage) or for the entire manual-checklist panel.  The first complete
+    # packet is enough to form a partial checklist, and the shared scheduler
+    # below will immediately start its uncovered work.  It deliberately starts
+    # only one scheduler: starting one per lens would duplicate app/server
+    # setup and could violate exclusive-resource declarations.
+    if [[ "${UNCLE_CHECKLIST_EARLY:-0}" == 1 ]]; then
+        (
+            while true; do
+                start_streamed_checklist_lens "$directory" "first-ready" && exit 0
+                # The parent creates this sentinel only after retries have
+                # completed, so a missing/invalid panel exits cleanly rather
+                # than leaving a background monitor behind.
+                [[ -e "$directory/workers-complete" ]] && exit 0
+                sleep 0.1
+            done
+        ) > "$LOG_DIR/execute-checklist-stream-monitor.log" 2>&1 < /dev/null &
+        stream_monitor_pid=$!
+    fi
     local index=0
     for pid in "${pids[@]}"; do
         wait "$pid" || echo 'Manual-checklist worker failed; canonical packet validation will stop the panel.' >&2
@@ -3085,11 +3104,10 @@ run_manual_checklist_panel() {
             UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "manual-checklist-review-worker-$lens-retry" < /dev/null || true
             python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" validate "$output" || return 1
         fi
-        if [[ "$lens" == coverage && "${UNCLE_CHECKLIST_EARLY:-0}" == 1 ]]; then
-            start_streamed_checklist_lens "$directory" "$lens"
-        fi
         index=$((index + 1))
     done
+    touch "$directory/workers-complete"
+    [[ -z "$stream_monitor_pid" ]] || wait "$stream_monitor_pid" || true
     # Self-hosted models occasionally answer a checklist worker with a prose
     # question after seeing a stale rendered checklist.  Validate each compact
     # packet independently and give only that worker one explicit correction;
@@ -3114,12 +3132,27 @@ EARLY_STREAM_DIR="$STATE_DIR/checklist-stream"
 start_streamed_checklist_lens() {
     local directory="$1" lens="$2" partial="$EARLY_STREAM_DIR/$lens.checklist.json"
     local output="$EARLY_STREAM_DIR/$lens.results.json" pid_file="$EARLY_STREAM_DIR/$lens.pid"
+    local candidate
+    local -a ready_lenses=()
     mkdir -p "$EARLY_STREAM_DIR"
     [[ -s "$pid_file" ]] && return 0
-    python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$partial" "$lens" || return 1
+    # The first complete worker packet is the trigger, not an artificial
+    # coverage boundary. Other lens packets often finish while it is running;
+    # include every already-valid packet in this first, single
+    # resource-aware scheduler so execute-checklist begins with more useful
+    # work without launching conflicting per-lens browser/service sessions.
+    # Packets that arrive later remain for the normal uncovered-check pass.
+    for candidate in coverage invariants resources regressions; do
+        if [[ -s "$directory/$candidate.json" ]] \
+           && python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" validate "$directory/$candidate.json" >/dev/null 2>&1; then
+            ready_lenses+=("$candidate")
+        fi
+    done
+    [[ "${#ready_lenses[@]}" -gt 0 ]] || return 1
+    python3 -B "$ROOT/scripts/lib/manual_checklist_packets.py" "$directory" "$partial" "${ready_lenses[@]}" || return 1
     python3 -B "$ROOT/scripts/lib/checklist_document.py" --validate-json "$partial" || return 1
     ensure_checklist_runner execute-checklist || return 1
-    echo "Streaming checklist lens $lens into execute-checklist."
+    echo "Streaming ready checklist lenses (${ready_lenses[*]}) into execute-checklist."
     (
         CHECKLIST_STREAM_PRECOMPLETED='' CHECKLIST_STREAM_LANE=1 \
             run_parallel_checklist_workers "$partial" "$output"
@@ -3264,7 +3297,7 @@ run_final_audit_panel() {
 # The shared parallel runner verifies each worker's owned-file boundary before
 # merging, so this is enabled only for an explicit Owns:/Depends on schedule.
 run_parallel_application_implementation() {
-    local groups group step prompt result cmd model effort checkpoint_dir checkpoint step_line
+    local groups group step prompt result cmd model effort checkpoint_dir checkpoint step_line owned_paths
     local complete_marker="$STATE_DIR/parallel-implementation-complete"
     local serial_fallback_marker="$STATE_DIR/parallel-implementation-serial-fallback"
     # Completion markers are deliberately empty `touch` files.  Existence is
@@ -3299,6 +3332,13 @@ run_parallel_application_implementation() {
     # live in the driver-owned tree that sandboxes do not copy.
     export PARALLEL_PROMPT_DIR="$STATE_DIR/parallel/prompts"
     plan_steps .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-steps.txt"
+    # `plan_steps` deliberately produces concise prose for the panel, but it
+    # omits the machine-readable Owns fields.  Giving a worker only that prose
+    # made it guess a root `launch.json` when the approved step owned
+    # `.uncle/launch.json`; the ownership guard then threw away every parallel
+    # result and forced a long serial implementation pass.  Keep the compact
+    # prompt, while statefully attaching its exact file boundary.
+    plan_step_owns .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-owns.tsv"
     # Preserve worker handoffs in one canonical input for the report-only
     # reconciliation stage. A worker may record its narrow check here, but it
     # cannot truthfully attest to the whole merged application.
@@ -3324,6 +3364,13 @@ run_parallel_application_implementation() {
                 echo; echo "## Assigned isolated implementation step $step"
                 step_line="$(sed -n "${step}p" "$STATE_DIR/implement-steps.txt")"
                 printf '%s\n' "$step_line"
+                owned_paths="$(awk -F '\t' -v wanted="$step" '$1 == wanted { print "- `" $2 "`" }' "$STATE_DIR/implement-owns.tsv")"
+                echo; echo '## Exact owned paths (binding)'
+                if [[ -n "$owned_paths" ]]; then
+                    printf '%s\n' "$owned_paths"
+                else
+                    echo '- `*`'
+                fi
                 echo; echo "Work only on this approved step and its declared owned files."
                 echo "Do not edit workflow documents."
                 cat <<'EOF'

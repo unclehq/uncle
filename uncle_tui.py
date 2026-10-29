@@ -3965,10 +3965,19 @@ class UncleTUI:
                 # enters the running build view in this first UI frame.
                 self._startup_direct_action(self._startup_text, 'app')
             elif self._startup_action == 'github_issue':
+                # A direct `uncle --issue` launch bypasses the issue-mode
+                # picker.  Preserve the same change-first rule used for a
+                # typed issue-build request: an existing change request or a
+                # populated repository is a change, never a greenfield app.
+                root = _project_root()
+                change_request = generated_input_path('CHANGE_REQUEST.md', root)
+                issue_mode = ('--change' if os.path.isfile(change_request)
+                              or _project_already_populated(root) else '')
                 action = {
                     'uncle_action': 'github_issue',
                     'issue': self._startup_text,
                     'start': True,
+                    'issue_mode': issue_mode,
                     'message': 'Starting GitHub issue build'
                 }
                 self._home_action(action, replace_approved=True)

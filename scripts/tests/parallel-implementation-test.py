@@ -138,6 +138,31 @@ class ParallelImplementationTests(unittest.TestCase):
             self.assertFalse((root / '.uncle/workflow/parallel/step-1').exists())
             self.assertFalse((root / '.uncle/workflow/parallel/step-2').exists())
 
+    def test_merges_the_declared_uncle_launch_manifest(self):
+        """The launch manifest is application output, not disposable state.
+
+        Keeping all of `.uncle/` out of snapshots made a correctly declared
+        scaffold step look as though it had produced no launch manifest.  The
+        later serial fallback then repeated the whole implementation.
+        """
+        temp, root, _ = self.fixture()
+        with temp:
+            worker = root / 'launch-worker.sh'
+            worker.write_text(
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'mkdir -p .uncle\n'
+                "printf '{\\\"kind\\\":\\\"webpage\\\"}\\n' > .uncle/launch.json\n")
+            worker.chmod(0o755)
+            request = {'project': str(root), 'owned': {'1': ['.uncle/launch.json']}, 'steps': [
+                {'number': 1, 'log': str(root / 'launch.log'),
+                 'note': '.uncle/workflow/parallel/notes/step-1.json',
+                 'command': ['bash', str(worker)]}]}
+            path = root / 'request.json'; path.write_text(json.dumps(request))
+            result = subprocess.run([sys.executable, str(EXECUTOR), str(path)], cwd=root,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads((root / '.uncle/launch.json').read_text())['kind'], 'webpage')
+
     def test_many_sandboxes_are_made_together_and_leave_out_driver_state(self):
         sys.path.insert(0, str(ROOT / 'scripts/lib'))
         import parallel_steps
@@ -332,6 +357,8 @@ class ParallelImplementationTests(unittest.TestCase):
                        'unless this step has a deviation'):
             self.assertIn(phrase, block + driver[driver.index('Do not write an implementation-notes fragment'):][:400])
         self.assertNotIn('Run a narrow check', driver)
+        self.assertIn('## Exact owned paths (binding)', driver)
+        self.assertIn('plan_step_owns .uncle/docs/UPDATED_PROJECT_PLAN.md', driver)
 
     def test_inherited_dirty_gitignore_is_not_a_later_step_write(self):
         """A prior merged step may leave an uncommitted .gitignore behind.

@@ -11,13 +11,15 @@
 # checklist_lane_batches <manual-checklist.json> <output-file> — batches on stdout of python, count returned.
 checklist_lane_batches() {
     local checklist="$1" output="$2" size max
-    # One check per worker by default: a worker's time is mostly hidden reasoning that grows with the checks it
-    # holds (noinit: two checks, 5k tokens out for ~1k of answer, 73-96 s; the stage waits for the slowest), and
-    # the runner pool has 20 slots.  Checks sharing a resource or dependency stay together in one ordered lane.
-    size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-1}"
-    [[ "$size" =~ ^[1-9][0-9]*$ ]] || size=1
-    max="${WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-18}"
-    [[ "$max" =~ ^[1-9][0-9]*$ ]] || max=18
+    # An agent session's prompt/cache load is much larger than a handful of
+    # independent checklist rows.  Pool free rows into four-row sessions by
+    # default, capped at four workers. Resource- or dependency-linked rows
+    # still occupy one ordered lane and are never coalesced with another lane.
+    # This applies equally to browser, service, CLI, and filesystem checks.
+    size="${WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-4}"
+    [[ "$size" =~ ^[1-9][0-9]*$ ]] || size=4
+    max="${WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-4}"
+    [[ "$max" =~ ^[1-9][0-9]*$ ]] || max=4
     python3 -B "$ROOT/scripts/lib/checklist_lanes.py" "$checklist" "$size" "$max" > "$output" 2>/dev/null || return 1
     wc -l < "$output" | tr -d ' '
 }

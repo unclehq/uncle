@@ -72,7 +72,10 @@ import sys
 rows = [l.split(' | ') for l in open(sys.argv[1]).read().splitlines()]
 starts = {r[0]: float(r[1]) for r in rows if r[2].strip() != 'end'}
 ends = {r[0]: float(r[1]) for r in rows if r[2].strip() == 'end'}
-sys.exit(0 if len(starts) >= 3 and max(starts.values()) < min(ends.values()) else 1)
+# Free checks are pooled by the production defaults, so this fixture now has
+# a resource lane and one free-check batch. Both must overlap; requiring three
+# workers would reintroduce the one-check-per-session policy under test.
+sys.exit(0 if len(starts) >= 2 and max(starts.values()) < min(ends.values()) else 1)
 PY
 check "lanes: nothing uncovered"                               test -z "$(python3 -B "$ROOT/scripts/lib/checklist_coverage.py" "$(state lanes)/documents/MANUAL_CHECKLIST.json" "$(state lanes)/documents/EXECUTE_CHECKLIST_WORKERS.json")"
 

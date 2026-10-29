@@ -45,6 +45,20 @@ if "early_stream_collect" not in execute or "CHECKLIST_STREAM_PRECOMPLETED" not 
 if "executing only uncovered checks" not in execute:
     raise SystemExit("execute checklist must not replay streamed checks")
 
+stream_start = text[text.index("start_streamed_checklist_lens() {"):text.index("early_stream_join() {")]
+if "ready_lenses" not in stream_start or 'coverage invariants resources regressions' not in stream_start:
+    raise SystemExit("early execute stream must include every already-valid checklist lens")
+if 'run_parallel_checklist_workers "$partial" "$output"' not in stream_start:
+    raise SystemExit("ready checklist lenses must use one shared scheduler")
+
+manual_panel = text[text.index("run_manual_checklist_panel() {"):text.index("# Manual checklist construction is independent")]
+if 'start_streamed_checklist_lens "$directory" "first-ready"' not in manual_panel:
+    raise SystemExit("manual checklist must stream from the first valid worker packet")
+if '"$directory/workers-complete"' not in manual_panel:
+    raise SystemExit("manual checklist stream monitor must terminate after worker retries")
+if 'if [[ "$lens" == coverage' in manual_panel:
+    raise SystemExit("manual checklist must not wait specifically for coverage before streaming")
+
 print("OK")
 PY
 

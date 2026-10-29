@@ -113,14 +113,28 @@ class Batches(unittest.TestCase):
 
 
 class Defaults(unittest.TestCase):
-    def test_one_check_per_worker_by_default_with_room_in_the_pool(self):
+    def test_four_checks_per_worker_by_default_with_a_bounded_pool(self):
         text = (ROOT / 'scripts' / 'lib' / 'checklist-lanes.sh').read_text()
-        self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-1', text)
-        self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-18', text)
+        self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-4', text)
+        self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-4', text)
 
-    def test_fourteen_free_checks_make_fourteen_workers_at_the_defaults(self):
+    def test_fourteen_free_checks_make_four_workers_at_the_defaults(self):
         checks = plan(*[check('MC-%d' % n) for n in range(100, 114)])
-        self.assertEqual(len(lanes.batches(checks, 1, 18)), 14)
+        self.assertEqual(len(lanes.batches(checks, 4, 4)), 4)
+
+    def test_calculator_shape_uses_three_sessions_not_one_per_free_check(self):
+        # One browser/resource lane plus eight ordinary checks: this used to
+        # start ten model sessions. The defaults keep the resource lane whole
+        # and pool the remaining work into two sessions.
+        checks = plan(
+            check('MC-101', ['browser:system']), check('MC-206', ['browser:system']),
+            check('MC-301', ['browser:system']), check('MC-304', depends=['MC-301']),
+            *[check('MC-%d' % n) for n in (200, 201, 202, 203, 204, 205, 207, 302)])
+        batches = lanes.batches(checks, 4, 4)
+        self.assertEqual(len(batches), 3)
+        self.assertEqual(batches[0], ['MC-101', 'MC-206', 'MC-301', 'MC-304'])
+        self.assertEqual(sorted(c for batch in batches for c in batch),
+                         sorted(c['id'] for c in checks['checks']))
 
 
 if __name__ == '__main__':

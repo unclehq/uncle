@@ -306,6 +306,21 @@ class Actions(unittest.TestCase):
         self.assertEqual((self.ui.workflow_idx, self.ui.input_buf, self.ui.state), (1, '42', 'issue'))
         self.assertEqual(self.ui.issue_mode, '')
 
+    def test_direct_issue_start_uses_change_flow_when_request_exists(self):
+        request = self.root/'.uncle/docs/CHANGE_REQUEST.md'
+        request.parent.mkdir(parents=True)
+        request.write_text('# Change request\n\nRefresh model catalogs.\n')
+        self.ui._startup_action = 'github_issue'
+        self.ui._startup_text = '115'
+        self.ui._startup_text_file = None
+        self.ui._home_action = Mock()
+
+        self.ui._handle_startup_action()
+
+        action = self.ui._home_action.call_args.args[0]
+        self.assertEqual(action['issue_mode'], '--change')
+        self.assertEqual(action['issue'], '115')
+
     def test_explicit_issue_build_starts_auto_without_model(self):
         (self.root / 'CHANGE_REQUEST.md').write_text('Keep this request')
         for reference in ('https://github.com/unclehq/uncle/issues/34', '#34', '34'):

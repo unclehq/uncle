@@ -93,7 +93,18 @@ WORKFLOW_CONTINUE_ON_TEST_FAILURE="${WORKFLOW_CONTINUE_ON_TEST_FAILURE:-1}"
 # run stops insisting on it. This used to be one, so a suite with a dozen failures
 # was handed to a single bounded agent run, and whatever that run did not finish
 # was carried forward as "nonblocking evidence". Bounded by the repair limit.
-WORKFLOW_AUTO_REPAIR_ATTEMPTS="${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-0}"
+#
+# An attended run defaults to 0 (stop and let the person decide) because they
+# are right there to approve a repair attempt. An unattended run has nobody to
+# ask, so a 0 default means the very first ordinary code defect -- a build
+# error, a mismatched export, a failing unit test -- ends the run for good
+# with no attempt to self-heal at all; every other failure class in this
+# driver (audit findings, an unrunnable app) already gets a bounded repair
+# attempt before giving up, and this is the one knob that silently stayed at
+# "never try" for the mode that most needs it.
+if [[ -z "${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-}" ]]; then
+    WORKFLOW_AUTO_REPAIR_ATTEMPTS=$([[ "$UNATTENDED" == 1 ]] && echo 2 || echo 0)
+fi
 case "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" in
     ''|*[!0-9]*) echo "WORKFLOW_AUTO_REPAIR_ATTEMPTS must be an integer from 0 to 100." >&2; exit 1 ;;
 esac

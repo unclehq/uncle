@@ -356,6 +356,20 @@ for driver in stagegate change-workflow; do
     else bad "$driver-audit-flag" "unattended audit branch missing"; fi
 done
 
+# An attended run with nobody setting WORKFLOW_AUTO_REPAIR_ATTEMPTS stays at
+# 0 (stop and let the person decide); unattended has nobody to ask, so the
+# first ordinary code defect must not end the run for good with zero attempt
+# to self-heal.
+snippet="$(sed -n '/^WORKFLOW_CONTINUE_ON_TEST_FAILURE=/,/^esac$/p' "$ROOT/scripts/stagegate.sh")"
+for case in "0 0" "1 2"; do
+    set -- $case
+    out="$(UNATTENDED="$1" bash -c "$snippet"$'\n''echo "$WORKFLOW_AUTO_REPAIR_ATTEMPTS"')"
+    check "auto-repair-attempts-default-unattended=$1" "$2" "$out"
+done
+# An explicit setting is never overridden by the unattended default.
+out="$(UNATTENDED=1 WORKFLOW_AUTO_REPAIR_ATTEMPTS=5 bash -c "$snippet"$'\n''echo "$WORKFLOW_AUTO_REPAIR_ATTEMPTS"')"
+check "auto-repair-attempts-explicit-setting-kept" "5" "$out"
+
 # test-review, manual-checklist, and execute-checklist exist to route a real
 # defect back to REPAIR, not to be rubber-stamped at the end -- an unattended
 # NOT READY audit must spend its bounded repair budget once before

@@ -58,6 +58,29 @@ class Placeholder(unittest.TestCase):
         self.assertFalse(placeholder.write_if_absent(root))
         self.assertEqual((root / 'index.html').read_text(), '<h1>real</h1>')
 
+    def test_placeholder_only_sections_are_not_shown_as_bullets(self):
+        # A plain-text `uncle --application TEXT` launch fills every section
+        # the text didn't address with the same placeholder line. A card
+        # made of several repeats of it says nothing a blank card wouldn't.
+        brief = ('# Application brief\n\n'
+                 '## Summary\nbuild a groovy 1970s themed calculator\n\n'
+                 '## Problem\nNot specified in the brief.\n\n'
+                 '## Scope\nNot specified in the brief.\n\n'
+                 '## Non-goals\nNone\n\n'  # an older-format brief used the bare word
+                 '## Open questions\nNot specified in the brief.\n')
+        title, lines = placeholder.brief_parts(brief)
+        self.assertEqual(title, 'build a groovy 1970s themed calculator')
+        self.assertEqual(lines, [])
+
+    def test_a_real_section_survives_alongside_placeholder_ones(self):
+        brief = ('# Application brief\n\n'
+                 '## Summary\nbuild a groovy calculator\n\n'
+                 '## Problem\nNot specified in the brief.\n\n'
+                 '## Scope\nFour-function arithmetic with a 1970s theme.\n')
+        title, lines = placeholder.brief_parts(brief)
+        self.assertEqual(title, 'build a groovy calculator')
+        self.assertEqual(lines, ['Four-function arithmetic with a 1970s theme.'])
+
     def test_no_brief_and_no_palette_still_make_a_page(self):
         root = Path(tempfile.mkdtemp())
         self.assertTrue(placeholder.write_if_absent(root))

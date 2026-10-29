@@ -34,6 +34,9 @@ def read(root, names):
     return ''
 
 
+PLACEHOLDER_LINES = {'none', 'not specified in the brief.'}
+
+
 def brief_parts(text):
     """(title, [summary lines]) from a Markdown brief."""
     title, lines = '', []
@@ -48,6 +51,12 @@ def brief_parts(text):
             continue
         line = re.sub(r'^[-*+]\s+|^\d+[.)]\s+', '', line)
         line = re.sub(r'[*_`]', '', line)
+        # A quick-look card is for actual content: a plain-text launch fills
+        # every section the brief didn't address with the same placeholder
+        # text, and a card made of four repeats of "Not specified in the
+        # brief." says nothing a blank card wouldn't.
+        if line.strip().lower() in PLACEHOLDER_LINES:
+            continue
         if len(lines) < 5:
             lines.append(line[:150])
     generic = {'application brief', 'project brief', 'brief', 'requirements', 'project requirements', 'summary', 'overview'}

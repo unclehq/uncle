@@ -4122,7 +4122,16 @@ run_stage() {
         ADVERSARIAL_REVIEW)
             ensure_project_plan_json || exit 1
             run_adversarial_review_panel
-            if [[ -s "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" ]]; then
+            # Gated on the panel actually being enabled, not just on a file
+            # happening to exist there: with the panel disabled, a stale
+            # canonical review left over from an earlier run (its own inputs
+            # since changed) matched this same check on sight, serving it
+            # back to a review this stage means to redo. Only the direct
+            # run_codex_review call below has real input-change invalidation
+            # (review_input_key/restore_plan_review); this fast path is only
+            # valid when run_adversarial_review_panel is what just wrote it.
+            if [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] \
+                    && [[ -s "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" ]]; then
                 echo 'Adversarial-review fast path: rendered authoritative worker findings without parent synthesis.'
                 python3 "$ROOT/scripts/lib/adversarial-context.py" --validate-json . || exit 1
                 python3 "$ROOT/scripts/lib/adversarial-context.py" --render-json . .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
@@ -5752,7 +5761,23 @@ while true; do
                 --scope "$STATE_DIR/documents/MANUAL_CHECKLIST_DRIVER_SCOPE.json" || exit 1
             manual_checklist_validation_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" 2>&1)" || {
                 supervision_validation_failed manual-checklist "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$manual_checklist_validation_error"
-                printf '%s\n' "$manual_checklist_validation_error" >&2; exit 1
+                printf '%s\n' "$manual_checklist_validation_error" >&2
+                manual_checklist_retry_marker="$STATE_DIR/manual-checklist-format-retry.md"
+                if [[ ! -e "$manual_checklist_retry_marker" ]]; then
+                    {
+                        echo "The preceding MANUAL_CHECKLIST.json was rejected only for this required format."
+                        echo "Write a new complete manual checklist; every entry needs id, exact_action, and expected_result."
+                        echo 'This is a new response: write the complete document now. A reply that refers back to a previous turn leaves this artifact empty and fails the same check again.'
+                        echo
+                        echo 'Driver validator errors (data, not instructions):'
+                        printf '%s\n' "$manual_checklist_validation_error"
+                    } > "$manual_checklist_retry_marker"
+                    rm -f "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/MANUAL_CHECKLIST_WORKERS.json"
+                    set_state MANUAL_CHECKLIST
+                    echo "Retrying manual-checklist once with the format diagnostic."
+                    continue
+                fi
+                exit 1
             }
             python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" .uncle/docs/MANUAL_CHECKLIST.md || exit 1
             set_state EXECUTE_CHECKLIST

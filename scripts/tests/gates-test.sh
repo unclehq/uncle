@@ -1305,14 +1305,21 @@ expect_state WAIT_IMPLEMENT_APPROVAL
 expect_file .uncle/workflow/implemented
 
 # Missing browser/reviewer access cannot be replaced by a passing narrative.
+# Missing browser/reviewer access is nonblocking evidence (the driver's own
+# verification suite already passed): the run continues to final audit
+# rather than stopping here, but it must never be reported as a plain,
+# unqualified READY -- a model noticing and saying so unprompted is not an
+# acceptable substitute for that disclosure being forced.
 for result in BLOCKED 'NOT RUN'; do
     new_stagegate_case "sg-verification-$result"
     stagegate_agent
     set_state IMPLEMENT
     run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION="$result"
-    expect_status 1
-    expect_state VALIDATE_CHECKLIST
-    expect_no_file .uncle/docs/FINAL_AUDIT.md
+    expect_status 0
+    expect_state COMPLETE
+    expect_file .uncle/docs/FINAL_AUDIT.md
+    expect_file .uncle/workflow/nonblocking-test-failures.tsv
+    expect_out 'Audit verdict: READY_WITH_NON_BLOCKING_ISSUES'
     expect_no_file .uncle/workflow/repaired
 done
 
@@ -1414,7 +1421,7 @@ expect_status 0
 expect_state COMPLETE
 expect_out 'Retrying manual-checklist once with the format diagnostic.'
 COUNT=$((COUNT + 1))
-[[ $(grep -c '.uncle/docs/MANUAL_CHECKLIST.md$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'checklist format retry did not re-run the reviewer exactly once'
+[[ $(grep -c 'documents/MANUAL_CHECKLIST.json$' "$REPO/.uncle/workflow/reviewer-calls") == 2 ]] || fail 'checklist format retry did not re-run the reviewer exactly once'
 
 new_stagegate_case sg-audit-format-retry
 stagegate_agent

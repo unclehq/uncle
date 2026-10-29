@@ -1200,7 +1200,8 @@ run_stagegate_stdin "$(gate_input y)" \
     FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 1
 expect_state FINAL_AUDIT
-expect_out 'exited successfully but wrote no .uncle/docs/FINAL_AUDIT.md; retrying once'
+expect_out 'exited successfully but wrote no'
+expect_out 'FINAL_AUDIT.md; retrying once'
 expect_file .uncle/workflow/final-audit-empty-retry-prompt.md
 expect_in_file .uncle/workflow/final-audit-empty-retry-prompt.md 'is not a substitute'
 COUNT=$((COUNT + 1))

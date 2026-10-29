@@ -13,7 +13,17 @@ project, or inside a temp directory (a worker's disposable copy), is a leftover 
 this project's own run and is stopped.  Any other
 listener is never touched; it is named so the failure that follows is explained.
 
-usage: port_guard.py COMMANDS_FILE PROJECT_ROOT
+A background verification run executes from an isolated copy of the
+project (its port is deliberately different from the live checkout's), so
+PROJECT_ROOT here is that copy, not the project the operator actually
+works in. A leftover server still running from that original checkout --
+an earlier attended run, a hung webServer process, an operator's own `npm
+run dev` -- has a cwd under the original root, not the copy, and used to
+read as "not part of this project" for that reason alone even though it
+plainly is. ORIGINAL_ROOT lets a caller name that second, equally valid
+identity for the same project.
+
+usage: port_guard.py COMMANDS_FILE PROJECT_ROOT [ORIGINAL_ROOT]
 """
 import os
 import re
@@ -114,14 +124,17 @@ def stop(pid):
 
 
 def main(argv):
-    if len(argv) != 2:
+    if len(argv) not in (2, 3):
         print(__doc__, file=sys.stderr)
         return 2
-    commands, root = argv
+    commands, root = argv[0], argv[1]
+    roots = [root]
+    if len(argv) == 3 and argv[2] and argv[2] != root:
+        roots.append(argv[2])
     for port in declared_ports(commands, root):
         for pid in listeners(port):
             command, cwd = describe(pid)
-            if inside(root, cwd) or inside(root, command) or scratch(cwd) or scratch(command):
+            if any(inside(r, cwd) or inside(r, command) for r in roots) or scratch(cwd) or scratch(command):
                 print('port %d: stopped leftover server pid %d (%s, cwd %s)' % (port, pid, command, cwd or 'unknown'))
                 stop(pid)
             else:

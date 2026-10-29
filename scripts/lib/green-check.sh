@@ -244,7 +244,7 @@ green_run() {
     # A leftover server on a port the checks bind fails them at once and reads
     # as a test failure. Stop this project's own leftovers; name anyone else's.
     if [[ -f "$GREEN_LIB_DIR/port_guard.py" ]] && command -v python3 >/dev/null 2>&1; then
-        port_note="$(python3 -B "$GREEN_LIB_DIR/port_guard.py" "$cmds" "${UNCLE_PROJECT_ROOT:-$PWD}" 2>/dev/null || true)"
+        port_note="$(python3 -B "$GREEN_LIB_DIR/port_guard.py" "$cmds" "${UNCLE_PROJECT_ROOT:-$PWD}" "${UNCLE_ORIGINAL_PROJECT_ROOT:-}" 2>/dev/null || true)"
         [[ -z "$port_note" ]] || printf '%s\n' "$port_note" >&2
     fi
 

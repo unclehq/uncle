@@ -39,5 +39,43 @@ check "a server run from a temp copy is stopped" "free" "$(lsof -nP -iTCP:$S -sT
 rm -rf /tmp/port-guard-scratch-$$
 check "a clean tree prints nothing" "" "$(python3 -B "$GUARD" "$TMP/cmds" "$TMP/project" | grep "port $A")"
 
+# A background verification run executes from an isolated copy of the
+# project, not the operator's own checkout -- so a leftover server still
+# running from that original checkout (an earlier attended run, a hung
+# webServer, `npm run dev` the operator left open) has a cwd under the
+# original root, not the copy. Passing that original root as a third
+# argument must make it recognized as this project's own leftover too.
+# Neither side of this scenario may live under a directory scratch()
+# already treats as disposable (mktemp's $TMP resolves under
+# /var/folders on macOS) -- that would stop the leftover for an
+# unrelated reason and never exercise the original-root argument at
+# all, the same way the real project and its isolated copy are both
+# ordinary, non-tmp directories.
+ORIG="$HOME/.port-guard-test-orig-$$"
+COPY="$HOME/.port-guard-test-copy-$$"
+mkdir -p "$ORIG" "$COPY"
+trap 'cleanup; rm -rf "$ELSE" "$ORIG" "$COPY"' EXIT
+C="$(free_port)"
+(cd "$ORIG" && exec python3 -m http.server "$C" --bind 127.0.0.1 >/dev/null 2>&1) & PIDS+=($!)
+up "$C"
+printf 'npx playwright test\n' > "$TMP/copy-cmds"
+printf 'export default { webServer: { url: "http://127.0.0.1:%s" } }\n' "$C" > "$COPY/playwright.config.js"
+
+out="$(python3 -B "$GUARD" "$TMP/copy-cmds" "$COPY" "$ORIG")"
+sleep .3
+check "a leftover in the original (non-isolated) checkout is recognized with the original root" "yes" \
+    "$([[ "$out" == *"port $C: stopped leftover"* ]] && echo yes || echo no)"
+check "...and actually stopped" "free" "$(lsof -nP -iTCP:$C -sTCP:LISTEN >/dev/null 2>&1 && echo busy || echo free)"
+
+D="$(free_port)"
+(cd "$ORIG" && exec python3 -m http.server "$D" --bind 127.0.0.1 >/dev/null 2>&1) & PIDS+=($!)
+up "$D"
+printf 'npx playwright test\n' > "$TMP/copy-cmds2"
+printf 'export default { webServer: { url: "http://127.0.0.1:%s" } }\n' "$D" > "$COPY/playwright.config.js"
+out="$(python3 -B "$GUARD" "$TMP/copy-cmds2" "$COPY")"
+check "without the original root, the same leftover is only named, not stopped" "yes" \
+    "$([[ "$out" == *"port $D: held by pid"*"not stopped"* ]] && echo yes || echo no)"
+check "...and is left running" "busy" "$(lsof -nP -iTCP:$D -sTCP:LISTEN >/dev/null 2>&1 && echo busy || echo free)"
+
 if [[ "$FAILED" -ne 0 ]]; then echo "port-guard-test.sh: $FAILED of $COUNT checks failed"; exit 1; fi
 echo "port-guard-test.sh: $COUNT checks passed"

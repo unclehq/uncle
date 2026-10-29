@@ -82,7 +82,7 @@ green_check_background_start() {
                 cd "$copy" || exit 1
                 GREEN_CMDS="$background/green-check.commands"; GREEN_CUR="$background/green-check.current.tsv"
                 GREEN_CLASS="$background/green-check.tsv"; GREEN_MD="$background/green-check.md"
-                export UNCLE_PROJECT_ROOT="$copy" UNCLE_GREEN_BACKGROUND=1
+                export UNCLE_PROJECT_ROOT="$copy" UNCLE_GREEN_BACKGROUND=1 UNCLE_ORIGINAL_PROJECT_ROOT="$project"
                 # The protected files are checked where they live: the copy's port is moved on purpose, so its hashes differ from
                 # the approved ones (noinit: "protected inputs changed", REPAIR, implementation and the checklist run again).
                 # The project itself is not touched while this runs, and every later stage checks it.

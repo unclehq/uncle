@@ -360,7 +360,10 @@ done
 # defect back to REPAIR, not to be rubber-stamped at the end -- an unattended
 # NOT READY audit must spend its bounded repair budget once before
 # audit-findings.py --unattended gets anywhere near waiving a finding nobody
-# looked at.
+# looked at. But unattended mode has no person to do manual/visual testing by
+# definition, so a NOT READY whose only cause is that absence (no driver-
+# observed regression, just an unobserved human-only check) is not a defect a
+# repair pass could fix; that one still goes straight to the existing waiver.
 d="$WORK/audit-repair-routes-first"
 mkdir -p "$d/.uncle/workflow/documents"
 echo '{"schema":"uncle.artifact/v1","kind":"final-audit","verdict":"NOT READY","findings":[
@@ -370,12 +373,19 @@ cp "$ROOT/scripts/lib/audit-verdict.sh" "$d/fns.sh"
 arm="$d/arm.sh"
 awk '/^        WAIT_AUDIT_OVERRIDE\)$/ {p = 1; next} p && /^        COMPLETE\)$/ {exit} p {print}' \
     "$ROOT/scripts/stagegate.sh" > "$arm"
-for scenario in first-attempt budget-exhausted; do
+for scenario in first-attempt budget-exhausted human-only; do
     d2="$d/$scenario"; mkdir -p "$d2/.uncle/workflow/documents"
     cp "$d/.uncle/workflow/documents/FINAL_AUDIT.json" "$d2/.uncle/workflow/documents/"
     hash="$(cd "$d2" && . "$ROOT/scripts/lib/sha256.sh" && hash_file .uncle/workflow/documents/FINAL_AUDIT.json)"
     printf 'NOT_READY\t%s\n' "$hash" > "$d2/.uncle/workflow/audit-verdict"
     [[ "$scenario" == budget-exhausted ]] && printf '1' > "$d2/.uncle/workflow/repair-count"
+    # A clean driver-executed suite (no REGRESSION rows): the only thing
+    # NOT READY could be citing is something nobody automated could check.
+    if [[ "$scenario" == human-only ]]; then
+        printf 'PASS\tnpm test\n' > "$d2/.uncle/workflow/green-check.tsv"
+    else
+        printf 'REGRESSION\tnpm test\n' > "$d2/.uncle/workflow/green-check.tsv"
+    fi
     cat > "$d2/run.sh" <<HARNESS
 set -uo pipefail
 ROOT='$ROOT'
@@ -384,10 +394,13 @@ VERDICT_FILE="\$STATE_DIR/audit-verdict"
 STATE_FILE="\$STATE_DIR/state"
 UNATTENDED_FILE="\$STATE_DIR/unattended-gates"
 AUDIT_OVERRIDE_FILE="\$STATE_DIR/audit-override"
+GREEN_CHECK=1
+GREEN_CLASS="\$STATE_DIR/green-check.tsv"
 WORKFLOW_AUTO_REPAIR=1
 WORKFLOW_AUTO_REPAIR_ATTEMPTS=1
 UNATTENDED=1
 . "\$ROOT/scripts/lib/sha256.sh"
+. "\$ROOT/scripts/lib/green-check.sh"
 require_file() { [[ -s "\$1" ]] || { echo "MISSING: \$1"; exit 1; }; }
 set_state() { echo "SET_STATE \$1"; }
 . "$d/fns.sh"
@@ -408,18 +421,24 @@ HARNESS
     out="$(cd "$d2" && timeout 30 bash "$d2/run.sh" < /dev/null 2>&1)"
     if [[ "$scenario" == first-attempt ]]; then
         if grep -q '^SET_STATE REPAIR$' <<< "$out"; then ok
-        else bad "audit-repair-routes-first" "did not route to REPAIR on the first NOT READY: $out"; fi
+        else bad "audit-repair-routes-first" "did not route to REPAIR on a driver-observed regression: $out"; fi
         if [[ "$(cat "$d2/.uncle/workflow/repair-source" 2>/dev/null)" == .uncle/docs/FINAL_AUDIT.md ]]; then ok
         else bad "audit-repair-source" "repair-source was not set to FINAL_AUDIT.md"; fi
         if grep -q 'WAIVED WITHOUT HUMAN REVIEW' <<< "$out"; then
             bad "audit-repair-no-waiver-yet" "waived before spending the repair budget: $out"
         else ok; fi
-    else
+    elif [[ "$scenario" == budget-exhausted ]]; then
         if grep -q '^SET_STATE REPAIR$' <<< "$out"; then
             bad "audit-repair-budget-exhausted" "routed to REPAIR again after the budget was spent: $out"
         else ok; fi
         if grep -q 'SET_STATE COMPLETE' <<< "$out"; then ok
         else bad "audit-repair-falls-back-to-waiver" "did not fall back to the unattended waiver once repair was spent: $out"; fi
+    else
+        if grep -q '^SET_STATE REPAIR$' <<< "$out"; then
+            bad "audit-repair-skips-human-only" "routed a human-testing-only NOT READY to REPAIR with no driver-observed regression: $out"
+        else ok; fi
+        if grep -q 'SET_STATE COMPLETE' <<< "$out"; then ok
+        else bad "audit-human-only-still-completes" "a NOT READY with no driver-observed regression did not still reach COMPLETE: $out"; fi
     fi
 done
 

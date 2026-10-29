@@ -158,10 +158,44 @@ def preserve_updated_plan_fields(payload, project, stage):
     source = Path(__file__).with_name('updated_plan_fast_path.py')
     spec = spec_from_file_location('updated_plan_fast_path', source)
     fast_path = module_from_spec(spec); spec.loader.exec_module(fast_path)
-    try:
-        paths = fast_path.protected_paths(base)
-    except ValueError:
-        paths = fast_path.derive_protected_paths(base.get('narrative') or '', payload['verification_commands'])
+    # The compact compiler intentionally omits unchanged contract fields.  Do
+    # not recover those fields from the old plan's prose, though: old prose
+    # can mention a superseded filename beside the replacement (for example
+    # ``tests/calc.test.js`` and ``tests/calc.test.mjs``).  The reconstructed
+    # updated narrative is the current contract, and implementation-step
+    # ownership tells us which of its candidate test/config files can actually
+    # be created.  This keeps a driver-generated protected path from making an
+    # otherwise valid updated plan fail the ownership gate before IMPLEMENT.
+    paths = fast_path.derive_protected_paths(payload.get('narrative') or '', payload['verification_commands'])
+    if not paths:
+        try:
+            paths = fast_path.protected_paths(base)
+        except ValueError:
+            paths = ''
+    if paths:
+        plan_model = module('plan_model').model_of(payload)
+        step_groups = module('step_groups')
+        owned = set()
+
+        def collect(node):
+            if isinstance(node, dict):
+                values = node.get('owns')
+                if isinstance(values, list):
+                    owned.update(item for item in values if isinstance(item, str))
+                for child in node.values():
+                    collect(child)
+            elif isinstance(node, list):
+                for child in node:
+                    collect(child)
+
+        collect(plan_model)
+        candidates = [line.strip() for line in paths.splitlines() if line.strip()]
+        # Keep the broad legacy behavior if the plan has no explicit file
+        # ownership at all.  Once it does, retain only paths covered by an
+        # implementation step (including a declared directory or glob).
+        matching = [path for path in candidates if any(step_groups.covers({token}, path) for token in owned)]
+        if matching:
+            paths = '\n'.join(matching)
     if not paths:
         raise ValueError('updated plan: no protected verification paths were supplied or derivable from the approved plan')
     payload['protected_verification_paths'] = paths

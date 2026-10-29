@@ -105,6 +105,35 @@ class Publisher(unittest.TestCase):
             self.assertEqual(stored['verification_commands'], base['verification_commands'])
             self.assertEqual(stored['protected_verification_paths'], 'tests/calc.test.js')
 
+    def test_compact_updated_plan_discards_stale_unowned_protected_paths(self):
+        """A compact patch must not carry obsolete prose filenames into the gate."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'.uncle/workflow/documents').mkdir(parents=True)
+            narrative = '''## 1. Verification
+
+Run `tests/calc.test.js`, `tests/calc.test.mjs`, `playwright.config.js`, and `playwright.config.mjs`.
+
+## 2. Implementation sequence
+
+1. **Write the current test configuration**
+   Owns: `tests/calc.test.mjs`, `playwright.config.mjs`
+   Depends on: none
+'''
+            base = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': narrative,
+                    'verification_commands': 'node --test tests/calc.test.mjs'}
+            (root/'.uncle/workflow/documents/PROJECT_PLAN.json').write_text(json.dumps(base))
+            payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan',
+                       'dispositions': [{'finding': 'AR-001', 'disposition': 'Accepted',
+                                         'reason': 'x', 'plan_change': 'No contract change.'}],
+                       'patch': {'edit_sections': [{'heading': '## 1. Verification',
+                                                    'content': 'Run `tests/calc.test.js`, `tests/calc.test.mjs`, `playwright.config.js`, and `playwright.config.mjs`.'}]}}
+            delivery = root/'delivery.json'; delivery.write_text(json.dumps(payload))
+            self.assertTrue(publisher.publish('updated-plan', root/'unused.jsonl', root, delivery))
+            stored = json.loads((root/'.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json').read_text())
+            self.assertEqual(stored['protected_verification_paths'].splitlines(),
+                             ['tests/calc.test.mjs', 'playwright.config.mjs'])
+
     def test_a_response_with_no_patch_key_is_used_exactly_as_before(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -36,7 +36,7 @@ class CompactGroups(unittest.TestCase):
             text = (ROOT / source).read_text()
             start = text.index('run_parallel_checklist_workers()')
             block = text[start:text.index('\n}\n', start)]
-            self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-4', block)
+            self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-2', block)
             self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-8', block)
             self.assertEqual(block.count('batches="$compact_max_workers"'), 2)
 

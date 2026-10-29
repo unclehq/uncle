@@ -131,7 +131,7 @@ class Batches(unittest.TestCase):
 class Defaults(unittest.TestCase):
     def test_four_checks_per_worker_by_default_with_a_bounded_pool(self):
         text = (ROOT / 'scripts' / 'lib' / 'checklist-lanes.sh').read_text()
-        self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-4', text)
+        self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-2', text)
         self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-4', text)
 
     def test_fourteen_free_checks_make_four_workers_at_the_defaults(self):

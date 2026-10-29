@@ -284,6 +284,30 @@ class EarlyPreview(unittest.TestCase):
         self.settle(screen)
         self.assertEqual(len(opened_dev), 1)
 
+    def test_driver_static_preview_hands_off_to_development_when_vite_is_ready(self):
+        root = project(**{'index.html': '<script type="module" src="/src/main.jsx"></script>',
+                          '.uncle__workflow__preview-server.url': 'http://127.0.0.1:12345/index.html'})
+        screen = self.make(root)
+        self.settle(screen)
+        self.assertEqual(self.opened, [], 'driver owns the early static tab')
+
+        (root / 'package.json').write_text('{"scripts":{"dev":"vite"},"dependencies":{"react":"x"}}')
+        vite = root / 'node_modules' / '.bin' / 'vite'
+        vite.parent.mkdir(parents=True)
+        vite.write_text('')
+        opened_dev = []
+        class StubDevelopmentPreview:
+            def __init__(self, _root, spec):
+                opened_dev.append(spec)
+                self.url = spec['url']
+            def close(self):
+                pass
+        self.tui.DevelopmentPreview = StubDevelopmentPreview
+        with patch.object(self.tui.subprocess, 'run') as stop:
+            self.settle(screen)
+        self.assertEqual(len(opened_dev), 1)
+        self.assertTrue(stop.called, 'the driver-owned static server is stopped')
+
     def test_opens_on_first_sighting_and_corrects_itself(self):
         """A half-written page is opened, not waited out.
 

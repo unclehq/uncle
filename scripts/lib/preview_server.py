@@ -251,7 +251,7 @@ class DevelopmentPreview:
                 return
             try:
                 with urlopen(self.url, timeout=1):
-                    webbrowser.open(self.url)
+                    _open_local_browser(self.url)
                     return
             except OSError:
                 pass

@@ -175,16 +175,17 @@ def validate(path, project='.'):
     if blockers and last != 'NOT READY':
         raise ValueError('Ready verdict contradicts blocking findings')
     # Unlike the JSON branch above, a prose response's table never carries a
-    # severity column, so it cannot be losslessly promoted to the canonical
-    # schema's finding objects in general -- this writes none only when
-    # there are truly none to lose (no blocking findings, which blockers
-    # already excludes, true wherever this parses no finding row at all).
-    # A prose audit with non-blocking findings still has no canonical
-    # artifact after this; --validate-json, which everything after this
-    # reads, needs the richer JSON-first delivery for that case.
-    table_rows = [line for line in text.split('## Findings', 1)[-1].splitlines() if line.strip().startswith('|')]
-    if not blockers and len(table_rows) <= 2:  # header and separator only, no data row
-        export_json({'verdict': last, 'findings': []}, path, project)
+    # severity column -- audit-findings.findings() already discards
+    # non-blocking rows for the same reason (its caller only ever needed the
+    # blockers), so this canonical export is no less lossy than the table it
+    # came from. A placeholder severity keeps the schema's required field
+    # satisfied without inventing a judgment call this parser never made.
+    export_json(
+        {'verdict': last,
+         'findings': [{'id': item['id'], 'severity': 'blocking', 'evidence': item['evidence'],
+                        'required_correction': item['required correction'], 'blocks': 'YES'}
+                       for item in blockers]},
+        path, project)
 
 
 def validate_json(project='.'):

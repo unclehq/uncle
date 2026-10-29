@@ -58,9 +58,15 @@ sync_canonical() {
                 '{schema:"uncle.artifact/v1",kind:"change-plan",narrative:$narrative}' \
                 > "$REPO/.uncle/workflow/documents/${name}.json" ;;
         UPDATED_PROJECT_PLAN|PROJECT_PLAN)
-            jq -n --arg narrative "$(cat "$md")" \
+            # Extracted, not hardcoded: a fixture that deliberately omits the
+            # fenced command block (to exercise the "no commands" warning)
+            # must not have this canonical sibling silently supply one, same
+            # as BASELINE_REPORT above.
+            local commands
+            commands="$(awk '/^```/{c++; if(c==1){next}; if(c==2){exit}} c==1' "$md")"
+            jq -n --arg narrative "$(cat "$md")" --arg commands "$commands" \
                 '{schema:"uncle.artifact/v1",kind:"plan",
-                  narrative:$narrative,verification_commands:"bash app/test.sh",protected_verification_paths:"app/test.sh"}' \
+                  narrative:$narrative,verification_commands:$commands,protected_verification_paths:"app/test.sh"}' \
                 > "$REPO/.uncle/workflow/documents/${name}.json" ;;
         REQUIREMENTS_INTERPRETATION)
             jq -n '{schema:"uncle.artifact/v1",kind:"requirements-interpretation",
@@ -1115,7 +1121,8 @@ stagegate_agent
 set_state IMPLEMENT
 run_stagegate FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 0
-expect_out "HUMAN REVIEW REQUIRED: .uncle/workflow/IMPLEMENTATION_REVIEW.md"
+expect_out "HUMAN REVIEW REQUIRED:"
+expect_out "IMPLEMENTATION_REVIEW.md"
 expect_out "Green check: all verification commands passed."
 expect_state "WAIT_IMPLEMENT_APPROVAL"
 expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "echo goodbye"
@@ -1140,8 +1147,8 @@ hash_canonical UPDATED_PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/UPDATED_P
 set_state IMPLEMENT
 run_stagegate FAKE_IMPL="printf '#!/bin/sh\necho goodbye\n' > app/main.sh"
 expect_status 1
-expect_out "No Verification commands"
-expect_state PREFLIGHT
+expect_out "plan is missing verification_commands"
+expect_state IMPLEMENT
 expect_no_file ".uncle/workflow/implemented"
 
 # Approving carries the run through the remaining stages to COMPLETE.

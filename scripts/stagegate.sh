@@ -5732,6 +5732,26 @@ PY
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
             echo "Validating saved audit; the reviewer will not be rerun."
+            # The fast path (panel) writes canonical JSON directly and never
+            # reaches here with an unconverted .md. This fallback (panel
+            # disabled, or self-hosted) writes the legacy Markdown form,
+            # which require_artifact and --validate-json below read as the
+            # canonical JSON path directly, never the Markdown view -- ingest
+            # it first, same one-shot retry .uncle/docs/MANUAL_CHECKLIST.md gets, before
+            # ever falling back to a driver-owned blocking audit.
+            if [[ -s .uncle/docs/FINAL_AUDIT.md ]] \
+                    && ! python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate-json . >/dev/null 2>&1; then
+                final_audit_ingest_error="$(python3 -B "$ROOT/scripts/lib/final-audit-context.py" --validate .uncle/docs/FINAL_AUDIT.md 2>&1)" || {
+                    if [[ ! -s "$STATE_DIR/final-audit-format-retry.md" ]]; then
+                        printf '%s\n' "$final_audit_ingest_error" > "$STATE_DIR/final-audit-format-retry.md"
+                        echo "Retrying final-audit once with the format diagnostic."
+                        set_state FINAL_AUDIT
+                        return 0
+                    fi
+                    echo 'Final audit was malformed; recording a blocking driver-owned audit without retrying the reviewer.'
+                    python3 -B "$ROOT/scripts/lib/final-audit-context.py" --fallback .uncle/docs/FINAL_AUDIT.md "$final_audit_ingest_error"
+                }
+            fi
             require_artifact .uncle/docs/FINAL_AUDIT.md
             # A shape-only defect (missing `## Findings` heading, a
             # differently-named correction column) is normalized in place by

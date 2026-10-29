@@ -22,6 +22,34 @@ BRIEFS = ('REQUIREMENTS.md', '.uncle/docs/REQUIREMENTS.md')
 INTERPRETATION = '.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json'
 HEX = re.compile(r'#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b')
 
+# The same mark drawn on the TUI's main menu (uncle_tui.py LOGO), reused here
+# instead of importing uncle_tui itself: this generator is deliberately
+# dependency-free so it stays instant.
+LOGO = (
+    "                #@@@@@@##@@@@@@#",
+    "                @@@@@@@@@@@@@@@@",
+    "                @@@@@@@@@@@@@@@@",
+    "               #@@@@@@@@@@@@@@@@#",
+    "               @@@@@@@@@@@@@@@@@@",
+    "    #@@@@@@@@@ @@@@@@@@@@@@@@@@@@ @@@@@@@@@#",
+    "    @@@@@@@@@@                    @@@@@@@@@@",
+    "     @@@@@@@@@@@@@@##########@@@@@@@@@@@@@@",
+    "       #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#",
+    "          #@@##@@@@@@@@@@@@@@@@@@##@@#",
+    "       #@@@@@# @@@@@@@@##@@@@@@@@ #@@@@@#",
+    "     @@@@@@@@@  @@@@@@    @@@@@@  @@@@@@@@@",
+    "    @@@@@@@@@@@                  @@@@@@@@@@@",
+    "     @@@@@@@@@@@                @@@@@@@@@@@",
+    "      #@@@@@@@@@@              @@@@@@@@@@#",
+    "       ##@@@@@@@@@@          @@@@@@@@@@##",
+    "    #@@@@@@@@@@@@@@@@#    #@@@@@@@@@@@@@@@@#",
+    "  @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@",
+    "#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#",
+    " #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#",
+    "    #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#",
+    "       #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#",
+)
+
 
 def read(root, names):
     for name in names:
@@ -94,17 +122,18 @@ def page(title, lines, colors):
     ink = '#1b1b1b' if luminance(base) > 0.4 else '#fafafa'
     card = 'rgba(255,255,255,.88)' if ink == '#1b1b1b' else 'rgba(0,0,0,.32)'
     accent = second if second != base else ink
-    logo_ink = '#1b1b1b' if luminance(accent) > 0.4 else '#fafafa'
     swatches = ''.join('<i style="background:%s"></i>' % c for c in colors)
     items = ''.join('<li>%s</li>' % html.escape(line) for line in lines)
+    logo = '\n'.join(html.escape(line) for line in LOGO)
     return ('<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title>\n<style>\n'
             '*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;'
             'font:16px/1.5 system-ui,sans-serif;color:%s;background:linear-gradient(135deg,%s,%s)}\n'
             'main{width:min(92vw,520px);padding:28px;border-radius:20px;background:%s;box-shadow:0 10px 40px rgba(0,0,0,.25)}\n'
-            '.brand{display:flex;align-items:center;gap:10px;margin-bottom:18px}'
-            '.brand svg{flex:none}.brand span{font-weight:700;letter-spacing:.02em;opacity:.85}\n'
-            '.building{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;'
+            '.brand{text-align:center;margin-bottom:16px}'
+            '.logo{font:4px/3.6px ui-monospace,Menlo,Consolas,monospace;color:%s;white-space:pre;margin:0}'
+            '.word{display:block;margin-top:4px;font-size:12px;font-weight:700;letter-spacing:.2em;opacity:.85}\n'
+            '.building{display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;font-weight:600;'
             'text-transform:uppercase;letter-spacing:.08em;opacity:.7;margin-bottom:14px}'
             '.gear{display:inline-block;animation:spin 2.2s linear infinite}'
             '@keyframes spin{to{transform:rotate(360deg)}}\n'
@@ -113,16 +142,13 @@ def page(title, lines, colors):
             '.note{font-size:13px;opacity:.75;display:flex;align-items:center;gap:8px}'
             '.dot{width:10px;height:10px;border-radius:50%%;background:%s;animation:p 1s infinite alternate}'
             '@keyframes p{to{opacity:.25}}\n</style></head>\n<body><main>'
-            '<div class="brand"><svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">'
-            '<rect width="28" height="28" rx="8" fill="%s"/>'
-            '<text x="14" y="20" font-size="16" font-weight="800" text-anchor="middle" '
-            'font-family="system-ui,sans-serif" fill="%s">u</text></svg><span>uncle</span></div>'
+            '<div class="brand"><pre class="logo">%s</pre><span class="word">uncle</span></div>'
             '<div class="building"><span class="gear">&#9881;</span>Building</div>'
             '<h1>%s</h1><ul>%s</ul>'
             '<div class="sw">%s</div><div class="note"><span class="dot"></span>Building the first look&hellip; '
             'this page updates by itself.</div></main></body></html>\n'
             % (html.escape(title), ink, base, second, card, accent,
-               accent, logo_ink, html.escape(title), items, swatches))
+               accent, logo, html.escape(title), items, swatches))
 
 
 def write_if_absent(root):

@@ -223,6 +223,73 @@ class Stage:
                 self.events.put({'_eof':True})
         threading.Thread(target=read, daemon=True).start()
 
+    def pool_command(self):
+        """Return the exact long-lived native CLI command for a warm pool.
+
+        This deliberately has no prompt or protocol traffic.  Starting a turn
+        speculatively would cost tokens and could mutate the project.  The
+        runner pool owns only the process; the real stage still supplies its
+        prompt and begins the actual turn when it connects.
+        """
+        if self.runner == 'codex':
+            command = [os.environ.get('WORKFLOW_CODEX_CMD', 'codex'), 'app-server', '--listen', 'stdio://']
+            for i, arg in enumerate(self.args[:-1]):
+                if arg == '-c':
+                    command += ['-c', self.args[i + 1]]
+            return command
+        if self.runner == 'claude':
+            args = list(self.args)
+            if self.side == 'reviewer':
+                tools = 'Read,Glob,Grep,Write' if self.delivery else 'Read,Glob,Grep'
+                args = ['-p', '--output-format', 'stream-json', '--verbose', '--allowedTools', tools,
+                        '--strict-mcp-config']
+                if self.model:
+                    args += ['--model', self.model]
+                if self.effort:
+                    args += ['--effort', self.effort]
+            args += ['--input-format', 'stream-json', '--replay-user-messages']
+            return [os.environ.get('WORKFLOW_CLAUDE_CMD', 'claude')] + args
+        if self.runner == 'cline':
+            binary = Path(shutil.which(os.environ.get('WORKFLOW_CLINE_CMD', 'cline')) or '').resolve()
+            for parent in binary.parents:
+                sdk = parent / 'node_modules/@cline/sdk/dist/index.js'
+                if sdk.is_file():
+                    return [shutil.which('node') or 'node', str(Path(__file__).with_name('cline-native.mjs')), str(sdk)]
+            raise ValueError('Installed Cline SDK not found; install the current npm Cline package')
+        if self.runner == 'kimi':
+            help_text = subprocess.run([os.environ.get('WORKFLOW_KIMI_CMD', 'kimi'), '--help'],
+                                       capture_output=True, text=True, timeout=15).stdout
+            if '--wire' not in help_text:
+                return None
+            model = self.model
+            if model.startswith('kimi:'):
+                model = model[5:]
+            elif model == 'kimi':
+                model = os.environ.get('WORKFLOW_KIMI_MODEL', 'moonshot-ai/kimi-k2.7-code-highspeed')
+            command = [os.environ.get('WORKFLOW_KIMI_CMD', 'kimi'), '--wire', '--yolo']
+            if model:
+                command += ['--model', model]
+            if self.side == 'reviewer' and not self.delivery:
+                command += ['--agent-file', str(Path(__file__).resolve().parents[2] / 'lib/kimi/reviewer.md')]
+            return command
+        # Self-hosted owns a separate HTTP connection pool rather than a
+        # reusable native CLI, so it intentionally has no runner-pool warmup.
+        return None
+
+    def prewarm(self):
+        """Start an idle pooled runner, without submitting a stage request."""
+        owner = os.environ.get('UNCLE_RUNNER_POOL_OWNER_PID', '')
+        if not owner or os.environ.get('UNCLE_RUNNER_REUSE', '1') == '0':
+            return False
+        command = self.pool_command()
+        if not command:
+            return False
+        from runner_pool import ensure
+        pool = Path(os.getcwd()) / '.uncle' / 'workflow' / 'runner-pool'
+        ensure(str(pool), int(owner), self.runner, self.side, launch_command(command))
+        self.status('runner_prewarmed', pool=str(pool))
+        return True
+
     def send(self, message):
         self.child.stdin.write(json.dumps(message) + '\n')
         self.child.stdin.flush()
@@ -602,7 +669,18 @@ if __name__=='__main__':
     parser.add_argument('--runner',required=True,choices=['codex','claude','kimi','cline','self-hosted'])
     parser.add_argument('--side',required=True,choices=['agent','reviewer'])
     parser.add_argument('--stage',required=True)
+    parser.add_argument('--prewarm', action='store_true',
+                        help='start an idle native runner pool without submitting a turn')
     parser.add_argument('args',nargs=argparse.REMAINDER)
     opts=parser.parse_args()
     args=opts.args[1:] if opts.args[:1]==['--'] else opts.args
-    sys.exit(Stage(opts.runner,opts.side,opts.stage,args).run())
+    stage = Stage(opts.runner, opts.side, opts.stage, args, prompt='' if opts.prewarm else None)
+    if opts.prewarm:
+        try:
+            stage.prewarm()
+        except (OSError, ValueError, RuntimeError) as exc:
+            # Prewarming is strictly an optimization.  The real stage has the
+            # normal startup and error path if an executable is unavailable.
+            print('runner prewarm skipped: ' + str(exc), file=sys.stderr)
+        sys.exit(0)
+    sys.exit(stage.run())

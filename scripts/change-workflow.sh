@@ -705,7 +705,45 @@ if [[ -n "${STAGEGATE_ORIGIN_REPO:-$(origin_field "$ORIGIN_FILE" 1)}" ]]; then
     uncle_title_begin "$(current_issue)"
 fi
 
+# Warm only destinations with a single, known agent command.  Review panels
+# and checklist fan-outs select their own worker commands, so guessing one
+# here would produce a non-reusable process and defeat the purpose.
+unattended_prewarm_change_stage_for_state() {
+    [[ "${UNATTENDED:-0}" == 1 ]] || return 0
+    [[ "${UNCLE_RUNNER_REUSE:-1}" != 0 ]] || return 0
+    local target="$1" stage="" model="" effort="" turns="" budget=""
+    case "$target" in
+        PLAN) stage=change-plan; model="$MODEL_CHANGE_PLAN"; turns=120; budget="$BUDGET_CHANGE_PLAN" ;;
+        UPDATED_PLAN) stage=updated-change-plan; model="$MODEL_UPDATED_PLAN"; effort="$EFFORT_UPDATED_PLAN"; turns=60; budget="$BUDGET_UPDATED_PLAN" ;;
+        IMPLEMENT) stage=implementation; model="$MODEL_IMPLEMENT"; turns=200; budget="$BUDGET_IMPLEMENT" ;;
+        EXECUTE_CHECKLIST) stage=execute-checklist; model="$MODEL_EXECUTE"; effort="$EFFORT_EXECUTE"; turns=200; budget="$BUDGET_EXECUTE" ;;
+    esac
+    [[ -n "$stage" ]] || return 0
+    declare -f uncle_resolve_stage_runner >/dev/null || return 0
+    local cmd
+    uncle_resolve_stage_runner "$stage" AGENT >/dev/null 2>&1 || return 0
+    [[ "${UNCLE_RESOLVED_RUNNER:-}" != self-hosted && -n "${UNCLE_RESOLVED_RUNNER:-}" ]] || return 0
+    stage_command_overridden AGENT "$stage" && return 0
+    cmd="$(stage_agent_cmd "$stage")" || return 0
+    model="$(stage_model_for "$stage" "$model")"
+    effort="$(stage_effort_for "$stage")"
+    local -a warm_args=(-p --max-turns "$turns" --output-format stream-json --verbose
+                         --strict-mcp-config --exclude-dynamic-system-prompt-sections
+                         --allowedTools "$CLAUDE_TOOLS")
+    [[ -z "$model" ]] || warm_args+=(--model "$model")
+    [[ -z "$effort" ]] || warm_args+=(--effort "$effort")
+    [[ -z "$budget" ]] || warm_args+=(--max-budget-usd "$budget")
+    env -u UNCLE_ARTIFACT_DELIVERY \
+        python3 "$ROOT/scripts/lib/native_stage.py" --prewarm \
+            --runner "$UNCLE_RESOLVED_RUNNER" --side agent --stage "$stage" -- \
+            "${warm_args[@]}" >/dev/null 2>&1 || true
+}
+
 set_state() {
+    # Do this before publishing the state.  An unattended run can attach its
+    # next stage to this idle process immediately; attended runs never start a
+    # runner before the operator has advanced the workflow.
+    unattended_prewarm_change_stage_for_state "$1" &
     state_write "$STATE_FILE" "$1" "$(current_issue)"
 }
 

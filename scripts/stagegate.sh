@@ -6337,9 +6337,9 @@ PY
                 # just burn the budget and land back here with the same
                 # unreviewed waiver this is trying to earn first. Route to
                 # REPAIR only when the driver itself observed a real failure.
-                if [[ "${UNATTENDED:-0}" == 1 ]] && [[ "$WORKFLOW_AUTO_REPAIR" == 1 ]] \
-                        && [[ "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" -lt "$WORKFLOW_AUTO_REPAIR_ATTEMPTS" ]] \
-                        && [[ "$GREEN_CHECK" == 1 && -s "$GREEN_CLASS" ]] \
+                if [[ "${UNATTENDED:-0}" == 1 ]] && [[ "${WORKFLOW_AUTO_REPAIR:-1}" == 1 ]] \
+                        && [[ "$(cat "$STATE_DIR/repair-count" 2>/dev/null || printf 0)" -lt "${WORKFLOW_AUTO_REPAIR_ATTEMPTS:-2}" ]] \
+                        && [[ "${GREEN_CHECK:-1}" == 1 && -s "${GREEN_CLASS:-}" ]] \
                         && [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then
                     echo 'Unattended final audit is NOT READY with a driver-observed verification failure; repairing once before any unreviewed waiver.'
                     printf '%s\n' .uncle/docs/FINAL_AUDIT.md > "$STATE_DIR/repair-source"

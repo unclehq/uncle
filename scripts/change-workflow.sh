@@ -1897,63 +1897,29 @@ verify_implementation_review() {
     fi
 }
 
-# Run plan-declared independent implementation steps in temporary worktrees.
-# The supervisor's schedule is intentionally mechanical: it may only use the
-# approved plan's Owns:/Depends on: data.  The driver, not the model, creates,
-# merges and removes worktrees.
-run_supervised_parallel_implementation() {
-    local base="$1" groups group step prompt cmd model effort result step_line
-    local module_interfaces_section=""
-    local serial_fallback_marker="$STATE_DIR/parallel-implementation-serial-fallback"
-    if [[ -e "$serial_fallback_marker" ]]; then
-        echo 'Parallel implementation was previously rejected for this plan; using serial implementation.'
-        return 2
-    fi
-    groups="$(parallel_groups .uncle/docs/CHANGE_PLAN.md "$ROOT/scripts/lib")" || return 2
-    [[ -n "$groups" ]] || return 2
-    [[ ! -s "$STATE_DIR/implement-step-done" ]] || return 2
-    if derive_module_interfaces .uncle/docs/CHANGE_PLAN.md; then
-        module_interfaces_section="$(python3 -B "$ROOT/scripts/lib/module_interfaces.py" --render-section \
-            "$STATE_DIR/documents/MODULE_INTERFACES.json" 2>/dev/null || true)"
-    fi
-
-    uncle_resolve_stage_runner implementation AGENT || return 1
-    cmd="$(stage_agent_cmd implementation)" || return 1
-    model="$(stage_model_for implementation "$MODEL_IMPLEMENT")"
-    effort="$(stage_effort_for implementation)"
-    export PARALLEL_AGENT_CMD="$cmd" PARALLEL_AGENT_MODEL="$model"
-    export PARALLEL_AGENT_EFFORT="$effort" PARALLEL_AGENT_BUDGET="$BUDGET_IMPLEMENT"
-    export PARALLEL_AGENT_TOOLS="$CLAUDE_TOOLS"
-
-    mkdir -p "$STATE_DIR/parallel/prompts" "$STATE_DIR/parallel/notes"
-    # STATE_DIR is already absolute ("$PROJECT_ROOT/.uncle/workflow"), so
-    # prefixing $PWD built a path with the project root in it twice --
-    # /project//project/.uncle/workflow/parallel/prompts -- which exists
-    # nowhere. Every isolated worker then died before doing any work with
-    # "parallel worker prompt missing", and the fan-out reported "Steps
-    # failed: 1" with no report to point at. The path has to stay absolute:
-    # workers run with their sandbox as cwd, and the prompts deliberately
-    # live in the driver-owned tree that sandboxes do not copy.
-    export PARALLEL_PROMPT_DIR="$STATE_DIR/parallel/prompts"
-    while IFS= read -r group; do
-        [[ -n "$group" ]] || continue
-        for step in $group; do
-            prompt="$STATE_DIR/parallel/prompts/step-$step.md"
-            compose_implementation_prompt "$base" "$prompt"
-            {
-                echo
-                echo "## Isolated parallel implementation step $step"
-                step_line="$(sed -n "${step}p" "$STATE_DIR/implement-steps.txt")"
-                printf '%s\n' "$step_line"
-                echo
-                echo "Work only on this approved step and its declared owned files."
-                echo "Do not edit workflow documents in the project root. Do not write"
-                echo ".uncle/docs/IMPLEMENTATION_NOTES.md or .uncle/docs/CHANGE_TEST_REPORT.md;"
-                echo "the driver merges the notes and reconciles the test report after merging."
-                if [[ -n "$module_interfaces_section" ]]; then
-                    printf '%s\n' "$module_interfaces_section"
-                fi
-                cat <<'EOF'
+# Per-step worker prompt for run_supervised_parallel_implementation, called by
+# the shared parallel_implement_run_groups (scripts/lib/parallel-implement.sh)
+# as "$1"=step "$2"=group "$3"=prompt path "$4"=module-interfaces section.
+# References `base` from the caller's frame (bash dynamic scoping: a `local`
+# stays visible to anything called while it is still on the stack).
+_changeworkflow_parallel_build_step_prompt() {
+    local step="$1" group="$2" prompt="$3" module_interfaces_section="$4"
+    local step_line
+    compose_implementation_prompt "$base" "$prompt"
+    {
+        echo
+        echo "## Isolated parallel implementation step $step"
+        step_line="$(sed -n "${step}p" "$STATE_DIR/implement-steps.txt")"
+        printf '%s\n' "$step_line"
+        echo
+        echo "Work only on this approved step and its declared owned files."
+        echo "Do not edit workflow documents in the project root. Do not write"
+        echo ".uncle/docs/IMPLEMENTATION_NOTES.md or .uncle/docs/CHANGE_TEST_REPORT.md;"
+        echo "the driver merges the notes and reconciles the test report after merging."
+        if [[ -n "$module_interfaces_section" ]]; then
+            printf '%s\n' "$module_interfaces_section"
+        fi
+        cat <<'EOF'
 
 ## Speed (binding)
 
@@ -1964,13 +1930,13 @@ Steps run at the same time and the slowest one sets the stage's time, so every t
 - Make every edit in your next response, as parallel Edit/Write calls, then stop.
 - Do not run tests, builds or checks. The driver runs the whole verification right after the merge.
 EOF
-                echo "- Do not write an implementation-notes fragment unless this step has a deviation from the"
-                echo "  plan, an unresolved concern or a plan blocker to report: the driver records the routine"
-                echo "  fragment from the files you changed. When you do have one, write it as one JSON object"
-                echo "  matching the contract given earlier in this prompt, to"
-                echo "  .uncle/workflow/parallel/notes/step-$step.json."
-                if [[ "$step_line" =~ ^[[:space:]]*[Rr]econcile:|Owns:[[:space:]]*\* ]]; then
-                    cat <<'EOF'
+        echo "- Do not write an implementation-notes fragment unless this step has a deviation from the"
+        echo "  plan, an unresolved concern or a plan blocker to report: the driver records the routine"
+        echo "  fragment from the files you changed. When you do have one, write it as one JSON object"
+        echo "  matching the contract given earlier in this prompt, to"
+        echo "  .uncle/workflow/parallel/notes/step-$step.json."
+        if [[ "$step_line" =~ ^[[:space:]]*[Rr]econcile:|Owns:[[:space:]]*\* ]]; then
+            cat <<'EOF'
 
 ## Reconciliation execution boundary (binding)
 
@@ -1985,47 +1951,49 @@ targeted smoke check. Perform an isolated defect injection only for a newly
 introduced integration invariant not covered by its owning step. Record that
 narrow evidence, or `DRIVER PENDING` for full verification, in your fragment.
 EOF
-                fi
-            } >> "$prompt"
-        done
-        echo "Supervisor schedule: isolated parallel steps $group."
-        # Exit 3 means the isolated merge rejected undeclared writes and did
-        # not touch the project tree.  Continue through the established
-        # serial implementation path rather than asking an operator to edit
-        # a plan solely because an agent needed an integration boundary.
-        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" .uncle/docs/CHANGE_PLAN.md $group)" || {
-            parallel_status=$?
-            if [[ "$parallel_status" == 3 ]]; then
-                touch "$serial_fallback_marker"
-                echo 'Implementation fan-out ownership mismatch; no worker changes were merged. Falling back to serial implementation.'
-                return 2
-            fi
-            return "$parallel_status"
-        }
-        PARALLEL_RESULT="$result" python3 - "$group" <<'PY'
-import json, os, sys
-group = sys.argv[1]
-data = json.loads(os.environ['PARALLEL_RESULT'])
-elapsed = float(data.get('elapsed_seconds', 0))
-total = sum(float(v) for v in (data.get('step_seconds') or {}).values())
-saved = max(0.0, total - elapsed)
-files = len(data.get('files') or [])
-print('Parallel group %s complete: %.1fs wall time; %.1fs worker time; '
-      'estimated %.1fs saved; %d files merged; worktrees %s.' %
-      (group, elapsed, total, saved, files, data.get('worktrees', 'preserved')))
-PY
-        for step in $group; do
-            require_file "$STATE_DIR/parallel/notes/step-$step.json"
-            python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
-                "$STATE_DIR/parallel/notes/step-$step.json" .uncle/docs/IMPLEMENTATION_NOTES.md \
-                "Step $step" || {
-                supervision_validation_failed implementation-notes \
-                    .uncle/docs/IMPLEMENTATION_NOTES.md "malformed fragment for step $step"
-                return 1
-            }
-            printf '%s\n' "$step" > "$STATE_DIR/implement-step-done"
-        done
-    done <<< "$groups"
+        fi
+    } >> "$prompt"
+}
+
+# Per-group resume marker. change-workflow.sh resumes at the whole-function
+# level (the `[[ ! -s "$STATE_DIR/implement-step-done" ]] || return 2` guard
+# below), not per group, so there is no matching skip_group_fn -- see
+# parallel_implement_run_groups's header comment in parallel-implement.sh.
+_changeworkflow_parallel_mark_group_done() {
+    local group="$1" step
+    for step in $group; do
+        printf '%s\n' "$step" > "$STATE_DIR/implement-step-done"
+    done
+}
+
+# Run plan-declared independent implementation steps in temporary worktrees.
+# The supervisor's schedule is intentionally mechanical: it may only use the
+# approved plan's Owns:/Depends on: data.  The driver, not the model, creates,
+# merges and removes worktrees.
+run_supervised_parallel_implementation() {
+    local base="$1" cmd model effort
+    local serial_fallback_marker="$STATE_DIR/parallel-implementation-serial-fallback"
+    if [[ -e "$serial_fallback_marker" ]]; then
+        echo 'Parallel implementation was previously rejected for this plan; using serial implementation.'
+        return 2
+    fi
+    [[ ! -s "$STATE_DIR/implement-step-done" ]] || return 2
+
+    uncle_resolve_stage_runner implementation AGENT || return 1
+    cmd="$(stage_agent_cmd implementation)" || return 1
+    model="$(stage_model_for implementation "$MODEL_IMPLEMENT")"
+    effort="$(stage_effort_for implementation)"
+    export PARALLEL_AGENT_CMD="$cmd" PARALLEL_AGENT_MODEL="$model"
+    export PARALLEL_AGENT_EFFORT="$effort" PARALLEL_AGENT_BUDGET="$BUDGET_IMPLEMENT"
+    export PARALLEL_AGENT_TOOLS="$CLAUDE_TOOLS"
+
+    local groups_status=0
+    parallel_implement_run_groups \
+        .uncle/docs/CHANGE_PLAN.md \
+        _changeworkflow_parallel_build_step_prompt \
+        "Step" \
+        _changeworkflow_parallel_mark_group_done || groups_status=$?
+    [[ "$groups_status" == 0 ]] || return "$groups_status"
     rm -rf "$STATE_DIR/parallel"
     return 0
 }

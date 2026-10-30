@@ -117,6 +117,30 @@ if [[ "${UNCLE_DRIVER_SUPERVISED:-}" != 1 ]] || ! python3 "$ROOT/scripts/lib/pla
 fi
 python3 "$ROOT/scripts/lib/workflow_family.py" app
 unset UNCLE_NEW_WORKFLOW
+
+# Family-conditional document names for states shared with change-workflow.sh
+# (IMPLEMENT, WAIT_IMPLEMENT_APPROVAL, MANUAL_CHECKLIST, EXECUTE_CHECKLIST,
+# VALIDATE_CHECKLIST, FINAL_AUDIT, WAIT_AUDIT_OVERRIDE). This script is always
+# the app family; change-workflow.sh sets WORKFLOW_FAMILY=change and overrides
+# these before sourcing any shared stage function. Defaults here MUST stay
+# byte-identical to the historical app-family hardcoded paths -- see
+# scripts/tests/stagegate-family-doc-defaults-test.sh.
+WORKFLOW_FAMILY="${WORKFLOW_FAMILY:-app}"
+if [[ "$WORKFLOW_FAMILY" == "change" ]]; then
+    PLAN_DOC=".uncle/docs/CHANGE_PLAN.md"
+    PLAN_DOC_NAME="CHANGE_PLAN"
+    TEST_REPORT_DOC=".uncle/docs/CHANGE_TEST_REPORT.md"
+else
+    PLAN_DOC=".uncle/docs/UPDATED_PROJECT_PLAN.md"
+    PLAN_DOC_NAME="UPDATED_PROJECT_PLAN"
+    TEST_REPORT_DOC=".uncle/docs/AUTOMATED_TEST_REPORT.md"
+fi
+# NOTE: FINAL_AUDIT's TEST_REVIEW.md ingestion (app family only) is not a
+# simple path swap -- change-workflow.sh has no TEST_REVIEW stage and reads
+# ADVERSARIAL_REVIEW.md through separate, differently-shaped control flow
+# (continue_nonblocking_test_review has no change-family analogue). Left
+# hardcoded here; phase (c) decides whether it becomes a branch or stays
+# wrapper logic around the shared FINAL_AUDIT function.
 . "$ROOT/scripts/lib/project-git.sh"
 . "$ROOT/scripts/lib/preview-build.sh"
 . "$ROOT/scripts/lib/install-warm.sh"
@@ -3553,94 +3577,34 @@ run_final_audit_panel() {
 # Execute plan-declared independent application steps in isolated worktrees.
 # The shared parallel runner verifies each worker's owned-file boundary before
 # merging, so this is enabled only for an explicit Owns:/Depends on schedule.
-run_parallel_application_implementation() {
-    local groups group step prompt result cmd model effort checkpoint_dir checkpoint step_line owned_paths
-    local module_interfaces_section=""
-    local complete_marker="$STATE_DIR/parallel-implementation-complete"
-    local serial_fallback_marker="$STATE_DIR/parallel-implementation-serial-fallback"
-    local runtime_repair_marker="$STATE_DIR/runtime-readiness-force-implementation"
-    # Completion markers are deliberately empty `touch` files.  Existence is
-    # the contract; testing size makes every completed fan-out look unfinished
-    # after a resume and reruns already merged code.
-    if [[ -e "$complete_marker" && ! -e "$runtime_repair_marker" ]]; then
-        echo 'Parallel implementation steps are already merged; reconciling their report only.'
-        return 0
-    fi
-    if [[ -e "$serial_fallback_marker" ]]; then
-        echo 'Parallel implementation was previously rejected for this plan; using serial implementation.'
-        return 2
-    fi
-    parallel_prewarm_wait
-    groups="$(parallel_groups .uncle/docs/UPDATED_PROJECT_PLAN.md "$ROOT/scripts/lib")" || return 2
-    [[ -n "$groups" ]] || return 2
-    if derive_module_interfaces; then
-        module_interfaces_section="$(python3 -B "$ROOT/scripts/lib/module_interfaces.py" --render-section \
-            "$STATE_DIR/documents/MODULE_INTERFACES.json" 2>/dev/null || true)"
-    fi
-    uncle_resolve_stage_runner implementation AGENT || return 1
-    cmd="$(stage_agent_cmd implementation)" || return 1
-    model="$(stage_model implementation)"
-    effort="$(stage_effort implementation)"
-    export PARALLEL_AGENT_CMD="$cmd" PARALLEL_AGENT_MODEL="$model"
-    export PARALLEL_AGENT_EFFORT="$effort" PARALLEL_AGENT_TOOLS="$(stage_tools implementation)"
-    checkpoint_dir="$STATE_DIR/parallel-implementation-groups"
-    mkdir -p "$STATE_DIR/parallel/prompts" "$STATE_DIR/parallel/notes" "$checkpoint_dir"
-    # STATE_DIR is already absolute ("$PROJECT_ROOT/.uncle/workflow"), so
-    # prefixing $PWD built a path with the project root in it twice --
-    # /project//project/.uncle/workflow/parallel/prompts -- which exists
-    # nowhere. Every isolated worker then died before doing any work with
-    # "parallel worker prompt missing", and the fan-out reported "Steps
-    # failed: 1" with no report to point at. The path has to stay absolute:
-    # workers run with their sandbox as cwd, and the prompts deliberately
-    # live in the driver-owned tree that sandboxes do not copy.
-    export PARALLEL_PROMPT_DIR="$STATE_DIR/parallel/prompts"
-    plan_steps .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-steps.txt"
-    # `plan_steps` deliberately produces concise prose for the panel, but it
-    # omits the machine-readable Owns fields.  Giving a worker only that prose
-    # made it guess a root `launch.json` when the approved step owned
-    # `.uncle/launch.json`; the ownership guard then threw away every parallel
-    # result and forced a long serial implementation pass.  Keep the compact
-    # prompt, while statefully attaching its exact file boundary.
-    plan_step_owns .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-owns.tsv"
-    # Preserve worker handoffs in one canonical input for the report-only
-    # reconciliation stage. A worker may record its narrow check here, but it
-    # cannot truthfully attest to the whole merged application.
-    # Do not erase handoffs for groups which have already merged.  A later
-    # group can fail for a transient runner reason; its resume must continue
-    # at that group, not ask completed workers to reapply their changes.
-    if ! find "$checkpoint_dir" -type f -print -quit 2>/dev/null | grep -q .; then
-        python3 "$ROOT/scripts/lib/implementation_notes.py" reset .
-        rm -f .uncle/docs/IMPLEMENTATION_NOTES.md
-    fi
-    while IFS= read -r group; do
-        [[ -n "$group" ]] || continue
-        checkpoint="$checkpoint_dir/group-$(printf '%s' "$group" | tr ' ' '_')"
-        if [[ -e "$checkpoint" ]]; then
-            echo "Implementation fan-out group $group is already merged; skipping."
-            continue
+# Per-step worker prompt for run_parallel_application_implementation, called
+# by the shared parallel_implement_run_groups (scripts/lib/parallel-implement.sh)
+# as "$1"=step "$2"=group "$3"=prompt path "$4"=module-interfaces section.
+# References checkpoint_dir/runtime_repair_marker from the caller's frame
+# (bash dynamic scoping: a `local` stays visible to anything called while it
+# is still on the stack).
+_stagegate_parallel_build_step_prompt() {
+    local step="$1" group="$2" prompt="$3" module_interfaces_section="$4"
+    local step_line owned_paths
+    cat "$ROOT/prompts/implement.md" > "$prompt"
+    {
+        echo; echo "## Assigned isolated implementation step $step"
+        step_line="$(sed -n "${step}p" "$STATE_DIR/implement-steps.txt")"
+        printf '%s\n' "$step_line"
+        owned_paths="$(awk -F '\t' -v wanted="$step" '$1 == wanted { print "- `" $2 "`" }' "$STATE_DIR/implement-owns.tsv")"
+        echo; echo '## Exact owned paths (binding)'
+        if [[ -n "$owned_paths" ]]; then
+            printf '%s\n' "$owned_paths"
+        else
+            echo '- `*`'
         fi
-        echo "Implementation fan-out: isolated parallel steps $group."
-        for step in $group; do
-            prompt="$STATE_DIR/parallel/prompts/step-$step.md"
-            cat "$ROOT/prompts/implement.md" > "$prompt"
-            {
-                echo; echo "## Assigned isolated implementation step $step"
-                step_line="$(sed -n "${step}p" "$STATE_DIR/implement-steps.txt")"
-                printf '%s\n' "$step_line"
-                owned_paths="$(awk -F '\t' -v wanted="$step" '$1 == wanted { print "- `" $2 "`" }' "$STATE_DIR/implement-owns.tsv")"
-                echo; echo '## Exact owned paths (binding)'
-                if [[ -n "$owned_paths" ]]; then
-                    printf '%s\n' "$owned_paths"
-                else
-                    echo '- `*`'
-                fi
-                echo; echo "Work only on this approved step and its declared owned files."
-                echo "Do not edit workflow documents."
-                if [[ -n "$module_interfaces_section" ]]; then
-                    printf '%s\n' "$module_interfaces_section"
-                fi
-                if [[ -e "$runtime_repair_marker" && -s "$LOG_DIR/green-check.log" ]]; then
-                    cat <<'EOF'
+        echo; echo "Work only on this approved step and its declared owned files."
+        echo "Do not edit workflow documents."
+        if [[ -n "$module_interfaces_section" ]]; then
+            printf '%s\n' "$module_interfaces_section"
+        fi
+        if [[ -e "$runtime_repair_marker" && -s "$LOG_DIR/green-check.log" ]]; then
+            cat <<'EOF'
 
 ## Runtime repair (binding)
 
@@ -3650,10 +3614,10 @@ source/configuration defect in your owned paths; do not merely change reports
 or tests to hide it. These are the most recent driver diagnostics:
 
 EOF
-                    tail -n 30 "$LOG_DIR/green-check.log" >> "$prompt"
-                    echo >> "$prompt"
-                fi
-                cat <<'EOF'
+            tail -n 30 "$LOG_DIR/green-check.log" >> "$prompt"
+            echo >> "$prompt"
+        fi
+        cat <<'EOF'
 
 ## Speed (binding)
 
@@ -3670,13 +3634,13 @@ Your assigned step declaration below is the compact execution contract.
 - Write every file you own in your first response, as parallel Write calls, then stop.
 - Do not run tests, builds or checks. The driver runs the whole verification right after the merge.
 EOF
-                echo "- Do not write an implementation-notes fragment unless this step has a deviation from the"
-                echo "  plan, an unresolved concern or a plan blocker to report: the driver records the routine"
-                echo "  fragment from the files you wrote. When you do have one, write it as one JSON object"
-                echo "  matching the contract given earlier in this prompt, to"
-                echo "  .uncle/workflow/parallel/notes/step-$step.json."
-                if [[ ! "$step_line" =~ Owns:[[:space:]]*\* ]]; then
-                    cat <<'EOF'
+        echo "- Do not write an implementation-notes fragment unless this step has a deviation from the"
+        echo "  plan, an unresolved concern or a plan blocker to report: the driver records the routine"
+        echo "  fragment from the files you wrote. When you do have one, write it as one JSON object"
+        echo "  matching the contract given earlier in this prompt, to"
+        echo "  .uncle/workflow/parallel/notes/step-$step.json."
+        if [[ ! "$step_line" =~ Owns:[[:space:]]*\* ]]; then
+            cat <<'EOF'
 
 ## Isolated ownership boundary (binding)
 
@@ -3687,9 +3651,9 @@ create, delete, or modify any file outside this step's `Owns:` list. If a
 framework scaffold is necessary, stop before creating it and record that the
 approved plan must assign a whole-tree scaffold step; never guess its files.
 EOF
-                fi
-                if [[ "$step_line" =~ ^[[:space:]]*[Rr]econcile:|Owns:[[:space:]]*\* ]]; then
-                    cat <<'EOF'
+        fi
+        if [[ "$step_line" =~ ^[[:space:]]*[Rr]econcile:|Owns:[[:space:]]*\* ]]; then
+            cat <<'EOF'
 
 ## Reconciliation execution boundary (binding)
 
@@ -3708,57 +3672,92 @@ invariant not already owned by an earlier step, using a disposable copy; do
 not repeat the baseline suite after it. In the fragment, record the targeted
 check or `DRIVER PENDING` for full verification.
 EOF
-                fi
-            } >> "$prompt"
-            # Do not embed the whole approved plan in every isolated coding
-            # worker. On a modest application that turned one 60 KB plan into
-            # hundreds of KB of repeated prefill, and the slowest worker then
-            # dictated implementation latency. The declared step is the
-            # compact contract; a worker can make one targeted Read only when
-            # it genuinely needs a missing detail. Set this to 0 for an
-            # unusually underspecified legacy plan that needs old embedding.
-            if [[ "${WORKFLOW_COMPACT_IMPLEMENTATION_STEPS:-1}" != 1 \
-                  && -f "$ROOT/scripts/lib/worker_prompt.py" ]]; then
-                local -a shared_inputs=()
-                local shared
-                for shared in REQUIREMENTS.md .uncle/docs/REQUIREMENTS_INTERPRETATION.md \
-                              .uncle/docs/UPDATED_PROJECT_PLAN.md .uncle/docs/PREFLIGHT_REPORT.md; do
-                    [[ -s "$shared" ]] && shared_inputs+=("$shared")
-                done
-                if [[ ${#shared_inputs[@]} -gt 0 ]] \
-                   && python3 -B "$ROOT/scripts/lib/worker_prompt.py" --contract implementation "$prompt" "$prompt.shared" "${shared_inputs[@]}" 2>/dev/null; then
-                    mv "$prompt.shared" "$prompt"
-                fi
-            fi
+        fi
+    } >> "$prompt"
+    # Do not embed the whole approved plan in every isolated coding
+    # worker. On a modest application that turned one 60 KB plan into
+    # hundreds of KB of repeated prefill, and the slowest worker then
+    # dictated implementation latency. The declared step is the
+    # compact contract; a worker can make one targeted Read only when
+    # it genuinely needs a missing detail. Set this to 0 for an
+    # unusually underspecified legacy plan that needs old embedding.
+    if [[ "${WORKFLOW_COMPACT_IMPLEMENTATION_STEPS:-1}" != 1 \
+          && -f "$ROOT/scripts/lib/worker_prompt.py" ]]; then
+        local -a shared_inputs=()
+        local shared
+        for shared in REQUIREMENTS.md .uncle/docs/REQUIREMENTS_INTERPRETATION.md \
+                      .uncle/docs/UPDATED_PROJECT_PLAN.md .uncle/docs/PREFLIGHT_REPORT.md; do
+            [[ -s "$shared" ]] && shared_inputs+=("$shared")
         done
-        # A boundary violation is safe to recover from: parallel_steps.py
-        # leaves the project untouched when it returns 3, so abandon only the
-        # speculative fan-out and let the normal serial implementation stage
-        # own the whole tree.  Stopping here made a model's harmless
-        # integration edit (for example wiring an entry point) strand an
-        # otherwise buildable project behind a plan-edit ceremony.
-        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" .uncle/docs/UPDATED_PROJECT_PLAN.md $group)" || {
-            parallel_status=$?
-            if [[ "$parallel_status" == 3 ]]; then
-                touch "$serial_fallback_marker"
-                echo 'Implementation fan-out ownership mismatch; no worker changes were merged. Falling back to one serial implementation pass.'
-                return 2
-            fi
-            return "$parallel_status"
-        }
-        for step in $group; do
-            [[ -s "$STATE_DIR/parallel/notes/step-$step.json" ]] || return 1
-            python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
-                "$STATE_DIR/parallel/notes/step-$step.json" .uncle/docs/IMPLEMENTATION_NOTES.md \
-                "Isolated step $step" || {
-                supervision_validation_failed implementation-notes \
-                    .uncle/docs/IMPLEMENTATION_NOTES.md "malformed fragment for step $step"
-                return 1
-            }
-        done
-        echo "Implementation fan-out group $group merged."
-        touch "$checkpoint"
-    done <<< "$groups"
+        if [[ ${#shared_inputs[@]} -gt 0 ]] \
+           && python3 -B "$ROOT/scripts/lib/worker_prompt.py" --contract implementation "$prompt" "$prompt.shared" "${shared_inputs[@]}" 2>/dev/null; then
+            mv "$prompt.shared" "$prompt"
+        fi
+    fi
+}
+
+# Per-group resume check: a group already merged under checkpoint_dir is
+# skipped by parallel_implement_run_groups without rebuilding its prompts or
+# calling parallel_run_group again.
+_stagegate_parallel_group_already_merged() {
+    local group="$1"
+    [[ -e "$checkpoint_dir/group-$(printf '%s' "$group" | tr ' ' '_')" ]]
+}
+
+# Per-group resume marker, called by parallel_implement_run_groups once a
+# group's notes have merged successfully.
+_stagegate_parallel_mark_group_done() {
+    local group="$1"
+    touch "$checkpoint_dir/group-$(printf '%s' "$group" | tr ' ' '_')"
+}
+
+run_parallel_application_implementation() {
+    local cmd model effort checkpoint_dir
+    local complete_marker="$STATE_DIR/parallel-implementation-complete"
+    local runtime_repair_marker="$STATE_DIR/runtime-readiness-force-implementation"
+    # Completion markers are deliberately empty `touch` files.  Existence is
+    # the contract; testing size makes every completed fan-out look unfinished
+    # after a resume and reruns already merged code.
+    if [[ -e "$complete_marker" && ! -e "$runtime_repair_marker" ]]; then
+        echo 'Parallel implementation steps are already merged; reconciling their report only.'
+        return 0
+    fi
+    parallel_prewarm_wait
+    uncle_resolve_stage_runner implementation AGENT || return 1
+    cmd="$(stage_agent_cmd implementation)" || return 1
+    model="$(stage_model implementation)"
+    effort="$(stage_effort implementation)"
+    export PARALLEL_AGENT_CMD="$cmd" PARALLEL_AGENT_MODEL="$model"
+    export PARALLEL_AGENT_EFFORT="$effort" PARALLEL_AGENT_TOOLS="$(stage_tools implementation)"
+    checkpoint_dir="$STATE_DIR/parallel-implementation-groups"
+    mkdir -p "$checkpoint_dir"
+    plan_steps .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-steps.txt"
+    # `plan_steps` deliberately produces concise prose for the panel, but it
+    # omits the machine-readable Owns fields.  Giving a worker only that prose
+    # made it guess a root `launch.json` when the approved step owned
+    # `.uncle/launch.json`; the ownership guard then threw away every parallel
+    # result and forced a long serial implementation pass.  Keep the compact
+    # prompt, while statefully attaching its exact file boundary.
+    plan_step_owns .uncle/docs/UPDATED_PROJECT_PLAN.md > "$STATE_DIR/implement-owns.tsv"
+    # Preserve worker handoffs in one canonical input for the report-only
+    # reconciliation stage. A worker may record its narrow check here, but it
+    # cannot truthfully attest to the whole merged application.
+    # Do not erase handoffs for groups which have already merged.  A later
+    # group can fail for a transient runner reason; its resume must continue
+    # at that group, not ask completed workers to reapply their changes.
+    if ! find "$checkpoint_dir" -type f -print -quit 2>/dev/null | grep -q .; then
+        python3 "$ROOT/scripts/lib/implementation_notes.py" reset .
+        rm -f .uncle/docs/IMPLEMENTATION_NOTES.md
+    fi
+
+    local groups_status=0
+    parallel_implement_run_groups \
+        .uncle/docs/UPDATED_PROJECT_PLAN.md \
+        _stagegate_parallel_build_step_prompt \
+        "Isolated step" \
+        _stagegate_parallel_mark_group_done \
+        _stagegate_parallel_group_already_merged || groups_status=$?
+    [[ "$groups_status" == 0 ]] || return "$groups_status"
 
     # This marker is a recovery boundary. If report synthesis reaches a runner
     # limit, resuming retries just that small report stage rather than rerunning
@@ -5482,8 +5481,8 @@ while true; do
 
         IMPLEMENT)
             verify_approval \
-                .uncle/docs/UPDATED_PROJECT_PLAN.md \
-                UPDATED_PROJECT_PLAN
+                "$PLAN_DOC" \
+                "$PLAN_DOC_NAME"
             if [[ -e "$STATE_DIR/test-evidence-reconcile" ]]; then
                 echo 'Implementation report reconciliation: preserving source and regenerating implementation-owned evidence.'
                 # This is the existing implementation stage in a narrow
@@ -5495,7 +5494,7 @@ while true; do
                 python3 "$ROOT/scripts/lib/implementation_notes.py" render . .uncle/docs/IMPLEMENTATION_NOTES.md
                 python3 "$ROOT/scripts/lib/test_report.py" validate . application \
                     .uncle/workflow/documents/AUTOMATED_TEST_REPORT.json
-                require_artifact .uncle/docs/AUTOMATED_TEST_REPORT.md
+                require_artifact "$TEST_REPORT_DOC"
                 require_artifact .uncle/docs/IMPLEMENTATION_NOTES.md
                 rm -f "$STATE_DIR/test-evidence-reconcile"
                 set_state TEST_REVIEW
@@ -5539,7 +5538,7 @@ while true; do
             plan_status=0
             plan_after_write || plan_status=$?
             case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
-            verify_approval .uncle/docs/UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
+            verify_approval "$PLAN_DOC" "$PLAN_DOC_NAME"
             PREVIOUS_VERIFICATION_SNAPSHOT=""
             capture_verification_inputs
 
@@ -5553,7 +5552,7 @@ while true; do
             # Probe only: records what a parallel implementation would have
             # done and whether the plan's file ownership matched the tree.
             # Runs nothing in parallel and cannot fail the stage.
-            python3 -B "$ROOT/scripts/lib/step_groups.py" .uncle/docs/UPDATED_PROJECT_PLAN.md . \
+            python3 -B "$ROOT/scripts/lib/step_groups.py" "$PLAN_DOC" . \
                 > "$STATE_DIR/step-groups.json" 2>/dev/null || true
             plan_delivery_summary
             check_verification_inputs
@@ -5966,7 +5965,7 @@ while true; do
             plan_status=0
             plan_after_write || plan_status=$?
             case "$plan_status" in 0) ;; 27) continue ;; 10) plan_revise; continue ;; *) exit 1 ;; esac
-            verify_approval .uncle/docs/UPDATED_PROJECT_PLAN.md UPDATED_PROJECT_PLAN
+            verify_approval "$PLAN_DOC" "$PLAN_DOC_NAME"
             capture_verification_inputs
             run_green_check_auto || true
             plan_delivery_summary

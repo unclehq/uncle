@@ -137,3 +137,134 @@ parallel_prewarm_wait() {
     wait "$PARALLEL_PREWARM_PID" 2>/dev/null || true
     PARALLEL_PREWARM_PID=""
 }
+
+# parallel_implement_run_groups <plan_doc> <prompt_builder_fn> <notes_label_prefix> [<post_group_fn>]
+#
+# The group-at-a-time fan-out + merge that stagegate.sh's
+# run_parallel_application_implementation and change-workflow.sh's
+# run_supervised_parallel_implementation each implemented independently
+# before this extraction (uncle consolidation phase (b), scoped to this path
+# only -- see .uncle/docs/, module-interfaces-stage.sh precedent). Both
+# callers' per-step prompt bodies differ too much in wording to share (app's
+# carries scaffold/ownership-boundary language that has no change-family
+# analogue), so prompt construction stays a caller-supplied callback; this
+# function owns exactly the risk-bearing part both drivers had copy-pasted:
+# group scheduling, the parallel_run_group call, ownership-mismatch/serial-
+# fallback handling, the module-interfaces derivation+injection, and the
+# per-step notes-fragment merge into .uncle/docs/IMPLEMENTATION_NOTES.md.
+#
+# prompt_builder_fn is called once per step, as:
+#     "$prompt_builder_fn" "$step" "$group" "$prompt_path" "$module_interfaces_section"
+# and must write that step's complete worker prompt to $prompt_path.
+#
+# notes_label_prefix becomes "$notes_label_prefix $step" in the
+# implementation_notes.py append label (stagegate.sh used "Isolated step $step",
+# change-workflow.sh used "Step $step" -- preserved verbatim by the caller).
+#
+# post_group_fn, if given, is called once after each group's notes merge, as
+# "$post_group_fn" "$group", so each driver records its own resume marker at
+# its own existing granularity (stagegate.sh's per-group checkpoint touch,
+# change-workflow.sh's per-step implement-step-done file) without this
+# function assuming either family's resume semantics -- those were never
+# simple path-literal differences and are deliberately left alone here.
+#
+# skip_group_fn, if given, is called as "$skip_group_fn" "$group" before that
+# group's prompts are built; a zero return means the group was already merged
+# by an earlier attempt at this same resume point and must be skipped
+# entirely (no prompt rebuild, no parallel_run_group call). stagegate.sh uses
+# this for its per-group checkpoint directory; change-workflow.sh resumes at
+# the whole-function level instead (see its own guard before calling in) and
+# passes none.
+#
+# Returns 0 once every group in the plan's partition has merged, 2 when there
+# is no usable parallel partition at all (the caller falls back to serial
+# implementation -- no groups, or the plan does not declare ownership), or
+# parallel_steps.py's own nonzero exit status otherwise. A group exiting 3
+# (ownership mismatch; parallel_run_group's contract: nothing was merged)
+# always becomes 2 here and leaves $STATE_DIR/parallel-implementation-serial-fallback
+# behind, exactly as both callers already did independently.
+parallel_implement_run_groups() {
+    local plan_doc="$1" prompt_builder_fn="$2" notes_label_prefix="$3" post_group_fn="${4:-}" skip_group_fn="${5:-}"
+    local groups group step prompt result module_interfaces_section=""
+    local serial_fallback_marker="$STATE_DIR/parallel-implementation-serial-fallback"
+
+    if [[ -e "$serial_fallback_marker" ]]; then
+        echo 'Parallel implementation was previously rejected for this plan; using serial implementation.'
+        return 2
+    fi
+    groups="$(parallel_groups "$plan_doc" "$ROOT/scripts/lib")" || return 2
+    [[ -n "$groups" ]] || return 2
+
+    if derive_module_interfaces "$plan_doc"; then
+        module_interfaces_section="$(python3 -B "$ROOT/scripts/lib/module_interfaces.py" --render-section \
+            "$STATE_DIR/documents/MODULE_INTERFACES.json" 2>/dev/null || true)"
+    fi
+
+    mkdir -p "$STATE_DIR/parallel/prompts" "$STATE_DIR/parallel/notes"
+    # STATE_DIR is already absolute; see the identical note both callers used
+    # to carry here independently -- a relative prefix built a doubled path
+    # when a worker's sandbox cwd differed from the driver's.
+    export PARALLEL_PROMPT_DIR="$STATE_DIR/parallel/prompts"
+
+    while IFS= read -r group; do
+        [[ -n "$group" ]] || continue
+        if [[ -n "$skip_group_fn" ]] && "$skip_group_fn" "$group"; then
+            echo "Implementation fan-out group $group is already merged; skipping."
+            continue
+        fi
+        for step in $group; do
+            prompt="$STATE_DIR/parallel/prompts/step-$step.md"
+            "$prompt_builder_fn" "$step" "$group" "$prompt" "$module_interfaces_section" || return 1
+        done
+        echo "Implementation fan-out: isolated parallel steps $group."
+        # A boundary violation (exit 3) is safe to recover from:
+        # parallel_steps.py leaves the project untouched when it returns 3, so
+        # abandon only the speculative fan-out and let serial implementation
+        # own the whole tree.
+        result="$(parallel_run_group "$ROOT/scripts/lib" "$LOG_DIR" "$plan_doc" $group)" || {
+            local parallel_status=$?
+            if [[ "$parallel_status" == 3 ]]; then
+                touch "$serial_fallback_marker"
+                echo 'Implementation fan-out ownership mismatch; no worker changes were merged. Falling back to serial implementation.'
+                return 2
+            fi
+            return "$parallel_status"
+        }
+        # Diagnostic only, and guarded unconditionally with `|| true`: this
+        # must never be able to affect control flow, no matter what calling
+        # context (an `if`, a `||`, or in the future a bare call) this
+        # function itself runs under. Before this extraction, change-
+        # workflow.sh ran the equivalent block bare with no such guard, the
+        # one documented latent defect this consolidation found and closed --
+        # see scripts/tests/parallel-implement-metrics-guard-test.sh.
+        PARALLEL_RESULT="$result" python3 - "$group" <<'PY' || true
+import json, os, sys
+group = sys.argv[1]
+try:
+    data = json.loads(os.environ['PARALLEL_RESULT'])
+except ValueError:
+    print('Parallel group %s complete (result summary unavailable).' % group)
+    raise SystemExit(0)
+elapsed = float(data.get('elapsed_seconds', 0))
+total = sum(float(v) for v in (data.get('step_seconds') or {}).values())
+saved = max(0.0, total - elapsed)
+files = len(data.get('files') or [])
+print('Parallel group %s complete: %.1fs wall time; %.1fs worker time; '
+      'estimated %.1fs saved; %d files merged; worktrees %s.' %
+      (group, elapsed, total, saved, files, data.get('worktrees', 'preserved')))
+PY
+        for step in $group; do
+            require_file "$STATE_DIR/parallel/notes/step-$step.json"
+            python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
+                "$STATE_DIR/parallel/notes/step-$step.json" .uncle/docs/IMPLEMENTATION_NOTES.md \
+                "$notes_label_prefix $step" || {
+                supervision_validation_failed implementation-notes \
+                    .uncle/docs/IMPLEMENTATION_NOTES.md "malformed fragment for step $step"
+                return 1
+            }
+        done
+        echo "Implementation fan-out group $group merged."
+        [[ -z "$post_group_fn" ]] || "$post_group_fn" "$group"
+    done <<< "$groups"
+    return 0
+}

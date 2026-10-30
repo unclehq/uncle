@@ -167,8 +167,7 @@ done
 
 ic="$WORK/ic"
 mkdir -p "$ic/.uncle/workflow/approvals"
-extract_fns "$ROOT/scripts/change-workflow.sh" "$ic/driver-fns.sh" implementation_incomplete_choice
-workflow_fixture_write "$ic/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ic/driver-fns.sh" "$ROOT/scripts/lib/waivers.sh"
+workflow_fixture_write "$ic/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ROOT/scripts/lib/implementation-gates.sh" "$ROOT/scripts/lib/implementation-gates-change.sh" "$ROOT/scripts/lib/waivers.sh"
 cat > "$ic/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -176,8 +175,10 @@ ROOT="/nonexistent-so-the-popup-is-skipped"
 STATE_DIR="$PWD/.uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
 UNATTENDED_FILE="$STATE_DIR/unattended-gates"
-envelope_invalidate() { :; }
-set_state() { :; }
+envelope_invalidate() { echo "INVALIDATE $*" >> "$STATE_DIR/hooks"; }
+set_state() { echo "STATE $*" >> "$STATE_DIR/hooks"; }
+plan_executability_enabled() { return 0; }
+plan_tool() { echo "PLAN $*" >> "$STATE_DIR/hooks"; }
 . ./fns.sh
 status=0
 implementation_incomplete_choice || status=$?
@@ -248,6 +249,36 @@ case "$out" in
 esac
 if [[ -e "$ic/.uncle/workflow/waivers" ]]; then bad "ic-no-rows-no-waiver-file" "a waiver was written with no rows"
 else ok; fi
+
+# Attended routing retains retry/stop/repair codes and the order of side effects.
+: > "$ic/.uncle/workflow/hooks"
+printf 'AC-1: requires IMPLEMENTED, missing\n' > "$ic/.uncle/workflow/implementation-completion.txt"
+touch "$ic/.uncle/workflow/implementation-completion-repair"
+out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< retry 2>&1)"
+check "ic-retry-returns" "CHOICE_RETURNED 0" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+check "ic-retry-plan-hook" "PLAN retry" "$(cat "$ic/.uncle/workflow/hooks")"
+if [[ -e "$ic/.uncle/workflow/implementation-completion-repair" ]]; then
+    bad "ic-retry-clears-repair" "the retry digest was not cleared"
+else ok; fi
+out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< stop 2>&1)"
+check "ic-stop-returns" "CHOICE_RETURNED 1" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+out="$(cd "$ic" && UNATTENDED=0 bash gate.sh < /dev/null 2>&1)"
+check "ic-eof-returns" "CHOICE_RETURNED 1" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+out="$(cd "$ic" && printf 'waive\nfixture reason\n' | UNATTENDED=0 bash gate.sh 2>&1)"
+check "ic-attended-waiver-returns" "CHOICE_RETURNED 2" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+check "ic-attended-waiver-reason" "reason: fixture reason" "$(grep '^reason:' "$ic/.uncle/workflow/waivers/AC-1")"
+printf 'bad row\n' > "$ic/.uncle/workflow/implementation-completion.txt"
+touch "$ic/.uncle/workflow/approvals/CHANGE_SPEC.sha256" "$ic/.uncle/workflow/approvals/CHANGE_PLAN.sha256" \
+    "$ic/.uncle/workflow/implementation-completion-repair"
+: > "$ic/.uncle/workflow/hooks"
+out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< repair 2>&1)"
+check "ic-attended-repair-order" "INVALIDATE CHANGE_SPEC
+STATE ANALYZE
+CHOICE_RETURNED 3" "$(cat "$ic/.uncle/workflow/hooks"; printf '%s' "$out" | grep '^CHOICE_RETURNED ')"
+for cleared in approvals/CHANGE_SPEC.sha256 approvals/CHANGE_PLAN.sha256 implementation-completion-repair; do
+    if [[ -e "$ic/.uncle/workflow/$cleared" ]]; then bad "ic-repair-clears-$cleared" "stale file remains"
+    else ok; fi
+done
 
 # --- the issue stays open ---------------------------------------------------
 

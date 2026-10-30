@@ -36,6 +36,12 @@ run_case() {   # name mode fixture
         if [[ "${JSON_MODE:-}" == hosted ]]; then stage_supports_structured_output() { return 0; }; fi
         if [[ "${JSON_MODE:-}" == local ]]; then stage_uses_self_hosted() { return 0; }; fi
         run_claude() {   # prompt stage
+            if [[ "$2" == project-plan-stage-duties ]]; then   # the once-per-stage duty step: real .gitignore, real verification
+                printf '%s\n' .env .env.local .DS_Store node_modules/ dist/ build/ .svelte-kit/ .next/ out/ .venv/ __pycache__/ '*.pyc' .pytest_cache/ target/ vendor/ test-results/ playwright-report/ blob-report/ .pw-browsers/ > .gitignore
+                printf '%s\n' '{"type":"result","result":"PROJECT_PLAN_STAGE_COMPLETE"}' > "$LOG_DIR/project-plan-stage-duties.jsonl"
+                echo stage-duties >> "$STATE_DIR/stage-duties-calls"
+                return 0
+            fi
             local worker="${2#project-plan-section-}" parts="$STATE_DIR/project-plan-sections"
             printf '%s %s\n' "$worker" "$(python3 -c 'import time; print("%.2f" % time.time())')" >> "$STATE_DIR/order"
             case "$worker" in
@@ -95,6 +101,8 @@ check "success: returns 0"                         test "$(cat "$w/rc")" == 0
 check "success: plan assembled"                    grep -q '^# Project plan' "$TMP/ok/plan.md"
 check "success: the outline started with the early workers"  bash -c 'head -n8 <<< "$1" | grep -qx outline' _ "$(starts "$TMP/ok")"
 check "success: twenty-two workers ran, no model trace"   bash -c 'test "$(grep -vc " end " "$1")" == 22 && ! grep -q "^trace " "$1"' _ "$w/order"
+check "success: stage duties ran exactly once" test "$(wc -l < "$w/stage-duties-calls" | tr -d " ")" == 1
+check "success: stage duties recorded a receipt" test -s "$w/project-plan-sections/stage-duties.json"
 check "success: section 13 was built by the driver" grep -q '| R-1 | B-1, B-2 | I-1 | C-1 | T-1 | none |' "$TMP/ok/plan.md"
 check "success: nothing started before the outline" test ! -e "$w/violations"
 check "success: phase two ran concurrently"        python3 - "$w/order" <<'PY'

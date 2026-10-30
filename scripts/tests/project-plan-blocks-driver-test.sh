@@ -31,6 +31,12 @@ run_case() {   # name mode [hosted|local]
         if [[ "$runner" == hosted ]]; then stage_supports_structured_output() { return 0; }; fi
         if [[ "$runner" == local ]]; then stage_uses_self_hosted() { return 0; }; fi
         run_claude() {   # prompt stage
+            if [[ "$2" == project-plan-stage-duties ]]; then   # the once-per-stage duty step: real .gitignore, real verification
+                printf '%s\n' .env .env.local .DS_Store node_modules/ dist/ build/ .svelte-kit/ .next/ out/ .venv/ __pycache__/ '*.pyc' .pytest_cache/ target/ vendor/ test-results/ playwright-report/ blob-report/ .pw-browsers/ > .gitignore
+                printf '%s\n' '{"type":"result","result":"PROJECT_PLAN_STAGE_COMPLETE"}' > "$LOG_DIR/project-plan-stage-duties.jsonl"
+                echo stage-duties >> "$STATE_DIR/stage-duties-calls"
+                return 0
+            fi
             local worker="${2#project-plan-section-}"
             printf '%s\n' "$worker" >> "$STATE_DIR/order"
             echo "$worker schema=${UNCLE_OUTPUT_SCHEMA_FILE:-none} out=${UNCLE_STRUCTURED_OUTPUT_PATH:-none} kinds=$(grep -o 'project-plan-[a-z]*-[a-z]*-packet\|project-plan-outline-packet' "$1" | sort -u | tr '\n' ' ')" >> "$STATE_DIR/calls"

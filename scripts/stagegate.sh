@@ -4038,6 +4038,8 @@ run_project_plan_sections() {
         project_plan_section_finish trace "$directory" "$delivery" || { echo "Project plan section trace wrote nothing." >&2; return 1; }
     fi
     python3 -B "$helper" assemble "$directory" "$output" || return 1
+    # Stage-wide duties (.gitignore, whole-plan consistency) run once here, not in every section worker.
+    . "$ROOT/scripts/lib/project-plan-stage.sh"; project_plan_stage_finish "$directory" "$output" || return 1
     # The same plan as a model, from the workers' typed blocks; kept beside the plan JSON when it agrees with it.
     python3 -B "$helper" assemble-model "$directory" "$directory/model.json" 2>/dev/null || rm -f "$directory/model.json"
     # The assembled plan must pass the checks a single-pass plan does before it is believed.

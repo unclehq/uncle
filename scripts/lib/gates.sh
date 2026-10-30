@@ -153,6 +153,19 @@ gated_prompt() {
     local log_name="$2"
     local role="${3:-agent}"
 
+    # Section prompts already contain canonical requirements and their owned
+    # planning rules. Execution instructions (writing project files, launching
+    # the app, etc.) belong to the parent stage, not every section. This only
+    # selects prompt context; all parent gates and validators still run.
+    case "$log_name" in
+        project-plan-section-*)
+            local section_prompt="$LOG_DIR/${log_name}.gated-prompt.md"
+            cp "$prompt_file" "$section_prompt" || return 1
+            printf '%s\n' "$section_prompt"
+            return 0
+            ;;
+    esac
+
     # Specialist workers return a tiny machine-validated packet. Giving each
     # one the full document rules, output gates, evidence index and supervisor
     # prompt can add >100k input tokens while contributing nothing to its

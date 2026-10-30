@@ -607,6 +607,10 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     deadline = time.monotonic() + seconds
     prompt += prefetch_context(prompt, policy, read_cache)
     messages = [{'role': 'system', 'content': SYSTEM.format(root=policy.root)}, {'role': 'user', 'content': prompt}]
+    if final_schema is not None:
+        messages[0]['content'] += (' Collect any missing inputs with tools before composing the artifact. '
+                                  'Do not draft the artifact in commentary or alongside a tool call. '
+                                  'Deliver it once, as the final JSON answer; it will be schema-validated locally.')
     steered, requests, nudged, text = [], 0, False, ''
     tools = policy.tools()
 

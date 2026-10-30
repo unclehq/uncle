@@ -138,7 +138,7 @@ def config_stage(stage, values):
         return 'manual-checklist'
     if stage == 'final-audit-investigate':
         return 'final-audit'
-    if stage == 'project-plan-investigate' or stage.startswith('project-plan-section-'):
+    if stage in ('project-plan-investigate', 'project-plan-stage-duties') or stage.startswith('project-plan-section-'):
         return 'project-plan'
     if stage in ('requirements', 'requirements-investigate'):
         # New-app requirements deliberately inherit the project-plan picker.
@@ -774,6 +774,11 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
     policy = Policy(root, write=side == 'agent' or bool(delivery), shell=side == 'agent' and allow_shell,
                     writable=([delivery] if delivery else []) if side == 'reviewer' else None,
                     schema_for=document_schema_for(delivery, prompt))
+    if schema_kind in ('project-plan-section-worker-packet', 'project-plan-section-model-packet', 'project-plan-outline-packet'):
+        # Section packets are final answers. Whole-stage writes have one owner;
+        # offering Write/Bash here invites drafting the packet through tools and
+        # then generating it again as the final answer. Reads remain available.
+        policy = Policy(root)
     return (request, policy, schema, (schema_kind or 'artifact').replace('-', '_'), output_token_limit(stage_name),
             int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))
 

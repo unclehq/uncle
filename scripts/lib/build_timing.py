@@ -351,6 +351,7 @@ def render(directory):
              f"Elapsed wall time: {metadata.get('elapsed_seconds', end - metadata['started_at']):.3f}s", '',
              f"Process sampling interval: {metadata['sample_interval_seconds']}s; sampling errors: {metadata.get('sampling_errors', 0)}.", '',
              'Token and cost coverage shows known records/records in each row; partial sums are not complete totals. Unknown prices or usage remain unavailable.',
+             'Token and cost tables are overlapping views, not additive totals. Agent/Reviewer rows are attempt totals; Workflow Stage, Model API Continuation and tool/check rows show the same usage again. Never sum stage totals with their steps. Use Agent/Reviewer attempt totals once for run usage.',
              'Interval token attribution is shared usage reported while the interval was active; it is not an exclusive charge for a tool/check and is never prorated from duration.',
              'Times overlap across stages, subprocesses, and parallel work; do not add categories together.',
              'Sampled process spans are approximate observed lifetimes. Short processes may be missed; CPU is unavailable on Windows.',

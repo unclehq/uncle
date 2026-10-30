@@ -18,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 
 import self_hosted_http as transport
 from self_hosted_http import OutputTruncated, add_usage, chat, conforms, constrained_completion
@@ -503,6 +504,27 @@ def publish_usage(values, usage, side='agent'):
         pass  # progress reporting never interrupts a stage
 
 
+def record_turn(identity, number, message, usage, finish_reason, phase='tools'):
+    """Metadata only: never serialize tool arguments, content or reasoning.
+
+    This is deliberately not a runner usage event: result usage remains the
+    authoritative cumulative total, so consumers cannot count it twice.
+    Bytes measure the raw UTF-8 argument string received from the server.
+    """
+    calls = []
+    for call in message.get('tool_calls') or []:
+        function = call.get('function') or {}
+        arguments = function.get('arguments') or ''
+        calls.append({'name': function.get('name'), 'argument_bytes': len(arguments.encode('utf-8'))})
+    event = dict(type='self_hosted_turn', request_group=identity, turn=number,
+                 stage=os.environ.get('UNCLE_STATUS_STAGE', ''), phase=phase,
+                 tools=calls, output_tokens=(usage or {}).get('completion_tokens'), finish_reason=finish_reason)
+    try:
+        print(json.dumps(event), flush=True)
+    except OSError:
+        pass
+
+
 def prefetch_context(prompt, policy, read_cache=None):
     """Supply bounded, explicitly requested inputs before the first model turn.
 
@@ -612,6 +634,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                                   'Do not draft the artifact in commentary or alongside a tool call. '
                                   'Deliver it once, as the final JSON answer; it will be schema-validated locally.')
     steered, requests, nudged, text = [], 0, False, ''
+    request_group = uuid.uuid4().hex
     tools = policy.tools()
 
     def steer(note, identifier):
@@ -621,6 +644,8 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         steered.append(identifier)
 
     def tally(data):
+        choice = data['choices'][0]
+        record_turn(request_group, requests, choice['message'], data.get('usage'), choice.get('finish_reason'))
         add_usage(usage, data.get('usage') or {})
         if stage is not None:
             stage.tokens(usage, inclusive=True)
@@ -783,6 +808,8 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     for attempt, (skip, cap) in enumerate(attempts):
         final, reason, final_usage, mode = constrained_completion(values, messages, final_schema, final_name, cap,
                                                                   effort, timeout, skip=skip)
+        requests += 1
+        record_turn(request_group, requests, {}, final_usage, reason, 'final')
         add_usage(usage, final_usage)
         if stage is not None:
             stage.tokens(usage, inclusive=True)
@@ -812,7 +839,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         raise ValueError('Model response violates the artifact schema (%s constraint): %s' % (mode, error)) from None
     if stage is not None:
         stage.final_answer = final
-    return final, requests + 1
+    return final, requests
 
 
 def run_document(values, prompt, root, schema, name, limit, turns=40, usage=None, explore_first=True, read_cache=None, seconds=3600):

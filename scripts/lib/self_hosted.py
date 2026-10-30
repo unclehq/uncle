@@ -180,12 +180,10 @@ def config_stage(stage, values):
 
 
 def settings(config, stage):
-    values = {}
-    if Path(config).exists():
-        for line in Path(config).read_text(encoding='utf-8').splitlines():
-            parts = line.split('#', 1)[0].split(None, 1)
-            if len(parts) == 2:
-                values.setdefault(*parts)
+    from self_hosted_http import _config_values, request_options
+    values = _config_values(config)
+    options = request_options(stage, values)  # validate before credential lookup
+    requested_stage = stage
     stage = config_stage(stage, values)
     result = {}
     for field in ('base_url', 'model'):
@@ -212,6 +210,12 @@ def settings(config, stage):
         raise ValueError('API key must be a single line')
     if not result['api_key']:
         raise ValueError('Self hosted requires an API key (use a placeholder for a server without authentication)')
+    # Callers such as home chat can pass a config path without exporting it.
+    # Carry even an explicit {} with that connection, so it cannot accidentally
+    # be replaced by options from a different config when the loop starts.
+    if (any(key.endswith('.request-options') for key in values) or
+            any(key.startswith('WORKFLOW_SELF_HOSTED_REQUEST_OPTIONS') for key in os.environ)):
+        result.update(_request_options=options, _request_options_stage=requested_stage)
     return result
 
 
@@ -1698,6 +1702,8 @@ def main(side, args):
         stage = Path(output).stem.lower().replace('_','-')
     config = os.environ.get('UNCLE_CONFIG', str(Path.cwd()/'.uncle/config'))
     values = settings(config, stage)
+    from self_hosted_http import configure_request_options, _config_values
+    values = configure_request_options(values, stage, _config_values(config))
     values['max_turns'] = _turns
     if effort:
         values['effort'] = effort

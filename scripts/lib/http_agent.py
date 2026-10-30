@@ -38,7 +38,7 @@ SYSTEM = ('You are an automated engineering agent. The project is at {root} -- t
           'under {root}. Use the tools to inspect and change files. Work until the task is complete, then give your final '
           'response without calling a tool. Request all independent file reads and searches together as multiple tool calls '
           'in one assistant message. All calls in a message run in order before your next turn; wait for results '
-          'before dependent work. Batch independent verification commands too, preserving every required check. '
+          'before dependent work. '
           'Reuse supplied file context; reread after changes or when freshness is uncertain.')
 
 

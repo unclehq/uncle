@@ -277,7 +277,7 @@ CONTEXT_TOKENS_ENV = 'WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS'
 # by path (tests and tools do), not only when scripts/lib is already on sys.path.
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-from self_hosted_http import OutputTruncated  # noqa: E402  (shared with the direct HTTP transport)
+from self_hosted_http import OutputTruncated, strip_reasoning  # noqa: E402  (shared with the direct HTTP transport)
 
 
 def output_token_limit(stage=''):
@@ -335,6 +335,7 @@ def canonical_response_from_texts(texts, kind):
     artifact_json = _artifact_json_module()
     decoder = json.JSONDecoder()
     for text in reversed(texts):
+        text = strip_reasoning(text)
         candidates = [text]
         for match in re.finditer(r'\{', text):
             try:
@@ -358,7 +359,7 @@ def response_from_events(path, artifact_kind=None):
     events = opencode_events(path)
     if any(event.get('type') == 'error' for event in events):
         raise ValueError('OpenCode reported a model or session error')
-    texts = [event.get('part', {}).get('text', '') for event in events if event.get('type') == 'text']
+    texts = [strip_reasoning(event.get('part', {}).get('text', '')) for event in events if event.get('type') == 'text']
     finished = [event for event in events if event.get('type') == 'step_finish']
     if not texts or not texts[-1].strip() or not finished:
         raise ValueError('OpenCode returned no complete final response')
@@ -940,7 +941,7 @@ def validate_reviewer_document(output, document):
 
 def reviewer_packet(response, output):
     """Return a strict JSON worker packet without Markdown document extraction."""
-    text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    text = strip_reasoning(response).strip()
     artifact_json = _artifact_json_module()
     payload_text = artifact_json.unfence_json(text)
     try:
@@ -990,7 +991,7 @@ def reviewer_json_artifact(response, output):
     ``*-worker-packet`` kind.  The stage driver owns kind-specific validation
     after this boundary; here we only reject prose or an invalid envelope.
     """
-    text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    text = strip_reasoning(response).strip()
     artifact_json = _artifact_json_module()
     payload_text = artifact_json.unfence_json(text)
     try:
@@ -1026,7 +1027,7 @@ def reviewer_document(response):
     real checklist fenced in full below it -- and the naive first-heading scan
     published the whole thing, fence markers included, as the document.
     """
-    text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    text = strip_reasoning(response).strip()
     lines = text.splitlines()
 
     def first_heading(candidate):
@@ -1130,7 +1131,7 @@ def is_json_response(text):
 
 
 def document_response(response, artifact, expected_kind='plan', require_dispositions=False):
-    text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    text = strip_reasoning(response).strip()
     _artifact_json = _artifact_json_module()
     unfenced = _artifact_json.unfence_json(text)
     if expected_kind == 'change-planning-bundle' and unfenced.startswith('{'):

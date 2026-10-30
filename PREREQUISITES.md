@@ -67,6 +67,80 @@ The model must support tool calls for implementation and file inspection. Uncle 
 
 Recommended starting settings are `low` for mechanical extraction, section formatting, checklist assembly and requirements investigation; `medium` for architecture and implementation; and `high` for adversarial review, repair and final audit. These are recommendations, not new automatic stage overrides: existing stage config and environment settings remain authoritative. For example, set `project-plan.effort medium`, `implementation.effort medium`, `adversarial-review.effort high`, `repair.effort high`, and `final-audit.effort high`. Use `WORKFLOW_EFFORT_REQUIREMENTS_INVESTIGATE=low` to override the inherited planning setting for requirements alone. Validate quality and latency on your model before raising every stage to high.
 
+**Extra request options (direct HTTP).** Uncle stays model-agnostic: to supply
+server-specific fields, set `self-hosted.request-options <json object>` for all
+self-hosted stages, or `<stage>.request-options <json object>` for one stage in
+`.uncle/config`. The default is no options. The value must be a single-line JSON
+object of at most 4,096 UTF-8 bytes; invalid values fail stage startup. Quoted
+`#` characters and whitespace inside JSON strings are preserved; an unquoted
+`#` starts a trailing config comment.
+
+Precedence is `WORKFLOW_SELF_HOSTED_REQUEST_OPTIONS_<STAGE>`, then
+`WORKFLOW_SELF_HOSTED_REQUEST_OPTIONS`, then `<stage>.request-options`, then
+`self-hosted.request-options`. Uppercase the stage name and replace dashes with
+underscores for its environment variable. Derived stages look up their own
+name, then the existing model/effort parent mapping within each level:
+`project-plan-section-*` and requirements inherit `project-plan`, review and
+other workers inherit their parent, and investigation stages inherit their
+configured stage. Preview parts inherit preview's selected model stage.
+Each selected object **replaces** the less-specific object; `{}` opts out.
+For example, a global environment override wins over a stage's config `{}`;
+use the stage environment variable to opt out in that case.
+
+Options apply to tool turns, closing answers, schema/reviewer requests, and
+retries. When both existing and supplied top-level values are objects, Uncle
+merges their immediate members, with supplied members winning (no recursive
+merge). Otherwise, an existing Uncle value wins. These top-level keys are
+protected and rejected at config read: `model`, `messages`, `tools`,
+`tool_choice`, `stream`, `stream_options`, `response_format`,
+`structured_outputs`, `guided_json`, `format`, `options`, `max_tokens`,
+`max_completion_tokens`, `max_output_tokens`, and `num_predict`. This preserves
+schema enforcement and token limits, including Ollama's native containers.
+
+A 4xx error naming an applied option key (including a nested key) triggers one
+retry without options. A generic 400 triggers a probe without options; Uncle
+disables them only if that otherwise-identical request succeeds. Rejections
+are remembered per Base URL for the runner process, independently of effort
+and schema support. The stage log records applied top-level key names and one
+warning when options are disabled, without recording option values. This
+setting does not affect Claude, Codex, Kimi, or Cline.
+
+For DeepSeek on vLLM, a server-specific example is:
+
+```text
+self-hosted.request-options {"chat_template_kwargs":{"thinking":false}}
+adversarial-review.request-options {}
+```
+
+For Qwen servers that accept `enable_thinking`, use this instead:
+
+```text
+self-hosted.request-options {"chat_template_kwargs":{"enable_thinking":false}}
+```
+
+As a starting recommendation, turn thinking off for mechanical stages:
+requirements, project-plan, preview-build, updated-plan, preflight,
+execute-checklist, and implementation for small changes. Leave the server's
+thinking behavior enabled for judgment stages: adversarial-review, repair,
+test-review, and final-audit. This is a recommendation, not a default; `{}`
+leaves the server's behavior unchanged rather than forcing thinking on. For
+example, this DeepSeek configuration uses explicit stage choices:
+
+```text
+self-hosted.request-options {}
+requirements.request-options {"chat_template_kwargs":{"thinking":false}}
+project-plan.request-options {"chat_template_kwargs":{"thinking":false}}
+preview-build.request-options {"chat_template_kwargs":{"thinking":false}}
+updated-plan.request-options {"chat_template_kwargs":{"thinking":false}}
+preflight.request-options {"chat_template_kwargs":{"thinking":false}}
+execute-checklist.request-options {"chat_template_kwargs":{"thinking":false}}
+implementation.request-options {"chat_template_kwargs":{"thinking":false}}
+adversarial-review.request-options {}
+repair.request-options {}
+test-review.request-options {}
+final-audit.request-options {}
+```
+
 **Tool turns and input context (direct HTTP).** The model is prompted to request independent reads/searches together. Every tool call in an assistant message executes in order, including calls after a tool error, before the next model request; writes and shell commands retain their ordering and permissions. Affirmative read directives with backtick-quoted paths can supply small text files and authoritative `.uncle/workflow/documents/*.json` inputs at stage start. Prefetch shares the read cache's 24 KiB result/context bounds, excludes secrets and symlinks, and does not enumerate the repository. Already embedded or cached inputs are not duplicated. Cached ranges remain explicit and changed files are invalidated; supplied context never replaces verification. `self-hosted.prefetch` / `WORKFLOW_SELF_HOSTED_PREFETCH` default to `on`; `off` disables prefetch, and the existing `WORKFLOW_READ_CACHE=0` also disables it. Environment settings win over config. Leading `<think>...</think>` blocks and separately returned `reasoning_content` / `reasoning` are kept out of answers and outgoing history; a reasoning field is replayed only if the server explicitly rejects a continuation because it requires that field. Other runners are unaffected.
 
 **Schema enforcement.** When a stage owes a known JSON artifact, its final answer is a request that carries the artifact's JSON schema. Uncle asks the server to enforce it in the strongest form it accepts, and falls back cleanly when a server rejects one: Ollama's native `format`, then OpenAI-style `response_format` (JSON schema), vLLM's `structured_outputs` and `guided_json`, then plain JSON-object mode, then prompt-only. Every answer is also checked against the schema locally, and a workflow document the model writes itself is refused at the write if it does not match. Stages whose answer is prose, such as chat, have no schema and are not constrained.

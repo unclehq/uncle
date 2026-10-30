@@ -30,6 +30,153 @@ REJECTED = (400, 404, 405, 415, 422, 501)
 _capabilities = {}
 _request_features = {}          # optional fields learned per Base URL, like schema modes
 
+# Includes the native Ollama schema and token-budget containers. Keep this in
+# step with _final_call/chat: request options cannot weaken their contracts.
+PROTECTED_REQUEST_KEYS = frozenset({
+    'model', 'messages', 'tools', 'tool_choice', 'stream', 'stream_options',
+    'response_format', 'structured_outputs', 'guided_json', 'format', 'options',
+    'max_tokens', 'max_completion_tokens', 'max_output_tokens', 'num_predict',
+})
+
+
+def _parse_request_options(text, source):
+    if '\n' in text or '\r' in text:
+        raise ValueError('%s must be a single-line JSON object' % source)
+    if len(text.encode('utf-8')) > 4096:
+        raise ValueError('%s must be at most 4096 bytes (4 KB)' % source)
+    try:
+        result = json.loads(text)
+        # Python accepts NaN/Infinity (including overflowing exponents); JSON
+        # does not. Never let these produce a malformed request body.
+        json.dumps(result, allow_nan=False)
+    except (ValueError, RecursionError):
+        raise ValueError('%s must be a valid JSON object' % source) from None
+    if not isinstance(result, dict):
+        raise ValueError('%s must be a JSON object' % source)
+    for key in result:
+        if key in PROTECTED_REQUEST_KEYS:
+            raise ValueError('%s contains protected request key %s' % (source, key))
+    return result
+
+
+def request_options(stage=None, config=None):
+    """Resolve one whole object; {} explicitly opts out of inherited options."""
+    from self_hosted import config_stage
+    stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
+    config = _config_values() if config is None else config
+    names = list(dict.fromkeys([stage, config_stage(stage, config)]))
+    for name in names + ['']:
+        var = 'WORKFLOW_SELF_HOSTED_REQUEST_OPTIONS'
+        if name:
+            var += '_' + re.sub(r'[^A-Z0-9]', '_', name.upper())
+        if var in os.environ:
+            return _parse_request_options(os.environ[var], var)
+    for name in names + ['self-hosted']:
+        key = name + '.request-options'
+        if key in config:
+            return _parse_request_options(config[key], key)
+    return {}
+
+
+def configure_request_options(values, stage=None, config=None):
+    """Snapshot and validate at stage start, before tools or server discovery."""
+    if '_request_options' in values:
+        return values
+    stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
+    return dict(values, _request_options=request_options(stage, config), _request_options_stage=stage)
+
+
+def merge_request_options(body, options):
+    """One-level object merge; Uncle owns existing non-object top-level keys."""
+    result, applied = dict(body), {}
+    for key, value in options.items():
+        if key in PROTECTED_REQUEST_KEYS:
+            raise ValueError('request-options contains protected request key %s' % key)
+        if isinstance(result.get(key), dict) and isinstance(value, dict):
+            result[key] = dict(result[key], **value)
+            applied[key] = value
+        elif key not in result:
+            result[key] = value
+            applied[key] = value
+    return result, applied
+
+
+def _error_detail(error):
+    if not hasattr(error, '_uncle_detail'):
+        error._uncle_detail = error.read().decode('utf-8', errors='replace').lower()
+    return error._uncle_detail
+
+
+def _names_option(detail, options):
+    for key, value in options.items():
+        if key and re.search(r'(?<![\w])' + re.escape(key.lower()) + r'(?![\w])', detail):
+            return True
+        if isinstance(value, dict) and _names_option(detail, value):
+            return True
+    return False
+
+
+def compatible_post(values, body, timeout, url=None):
+    """Apply extras to every turn, with fallback separate from effort/schema."""
+    values = configure_request_options(values)
+    base = values['base_url'].rstrip('/')
+    url = url or base + '/chat/completions'
+    features = _request_features.setdefault(base, {})
+    options = values['_request_options'] if features.get('request_options') is not False else {}
+    request, applied = merge_request_options(body, options)
+    stage = values['_request_options_stage'] or 'self-hosted'
+    keys = ', '.join(json.dumps(key) for key in sorted(applied))
+    if applied:
+        logged = features.setdefault('request_options_logged', set())
+        identity = (stage, tuple(sorted(applied)))
+        if identity not in logged:
+            print('Self hosted [%s]: request options applied: %s.' % (stage, keys), file=sys.stderr)
+            logged.add(identity)
+
+    def disabled():
+        if features.get('request_options') is not False:
+            print('Self hosted [%s]: server rejected request options %s; using a retry without options '
+                  'and omitting them for this Base URL for this process.' % (stage, keys), file=sys.stderr)
+        features['request_options'] = False
+
+    def without_options(candidate):
+        clean = dict(candidate)
+        for key in applied:
+            if key in body:
+                clean[key] = body[key]
+            else:
+                clean.pop(key, None)
+        return clean
+
+    def send(candidate):
+        clean = without_options(candidate)
+        if not applied or features.get('request_options') is False:
+            return post(url, values['api_key'], clean, timeout)
+        try:
+            return post(url, values['api_key'], candidate, timeout)
+        except HTTPError as error:
+            detail = _error_detail(error)
+            if not 400 <= error.code < 500:
+                raise
+            if _names_option(detail, applied):
+                disabled()
+                return post(url, values['api_key'], clean, timeout)
+            # Explicit errors about a different protocol feature belong to
+            # its own fallback. A generic 400 warrants an otherwise-identical
+            # A/B probe, without changing effort or schema during that probe.
+            if error.code != 400 or _names_option(detail, dict.fromkeys((
+                    'reasoning_effort', 'reasoning_content', 'response_format', 'json_schema',
+                    'structured_outputs', 'guided_json', 'tools', 'tool_choice', 'format'))):
+                raise
+            try:
+                result = post(url, values['api_key'], clean, timeout)
+            except HTTPError:
+                raise error from None  # no evidence against options; retain support
+            disabled()
+            return result
+
+    return _compatible_post(values, request, send)
+
 
 def option(name, default):
     """Self-hosted-only option: WORKFLOW_SELF_HOSTED_* overrides .uncle/config."""
@@ -88,14 +235,13 @@ def clean_message(message):
     return result
 
 
-def compatible_post(values, body, timeout, url=None):
+def _compatible_post(values, body, send):
     """Retry optional effort independently of schemas/tools, remembering proven support.
 
     Reasoning fields stay local unless a server explicitly requires one on tool
     continuations. Generic errors never opt a server into reasoning replay.
     """
     base = values['base_url'].rstrip('/')
-    url = url or base + '/chat/completions'
     features = _request_features.setdefault(base, {})
     original = body
 
@@ -111,11 +257,11 @@ def compatible_post(values, body, timeout, url=None):
     while True:
         request = prepared()
         try:
-            return post(url, values['api_key'], request, timeout)
+            return send(request)
         except HTTPError as error:
             if error.code not in REJECTED:
                 raise
-            detail = error.read().decode('utf-8', errors='replace').lower()
+            detail = _error_detail(error)
             required = next((field for field in ('reasoning_content', 'reasoning')
                              if re.search(r'\b' + field + r'\b', detail) and
                              re.search(r'missing|required|must (?:include|provide)', detail) and
@@ -132,7 +278,7 @@ def compatible_post(values, body, timeout, url=None):
             # A successful otherwise-identical retry proves that effort caused
             # the rejection. If it also fails, keep the original capability.
             request.pop('reasoning_effort')
-            result = post(url, values['api_key'], request, timeout)
+            result = send(request)
             features['effort'] = False
             return result
 
@@ -188,12 +334,31 @@ def stage_names(stage):
     return list(dict.fromkeys(names))
 
 
-def _config_values():
-    path = os.environ.get('UNCLE_CONFIG') or os.path.join(os.getcwd(), '.uncle', 'config')
+def _config_values(path=None):
+    path = path or os.environ.get('UNCLE_CONFIG') or os.path.join(os.getcwd(), '.uncle', 'config')
     values = {}
     try:
         with open(path, encoding='utf-8') as stream:
             for line in stream:
+                # JSON strings may contain # and significant whitespace. Only
+                # these new keys use quote-aware comments; other keys retain
+                # their historical parser behavior.
+                parts = line.split(None, 1)
+                if parts and parts[0].endswith('.request-options'):
+                    value = parts[1].rstrip('\r\n') if len(parts) == 2 else ''
+                    quoted = escaped = False
+                    for index, char in enumerate(value):
+                        if escaped:
+                            escaped = False
+                        elif char == '\\' and quoted:
+                            escaped = True
+                        elif char == '"':
+                            quoted = not quoted
+                        elif char == '#' and not quoted:
+                            value = value[:index]
+                            break
+                    values.setdefault(parts[0], value)
+                    continue
                 parts = line.split('#', 1)[0].split(None, 1)
                 if len(parts) == 2:
                     values.setdefault(parts[0], parts[1].strip())
@@ -664,6 +829,7 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
 
 def constrained_completion(values, messages, schema, name, limit, effort=None, timeout=3600, skip=()):
     """Ask for `schema`-shaped output; returns (text, reason, usage, mode)."""
+    values = configure_request_options(values)
     caps = capabilities(values['base_url'], values['api_key'])
     effort = reasoning_effort(values, effort)
     last = None

@@ -600,6 +600,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     steering; `read_cache` learns which files were read.
     """
     usage = usage if usage is not None else {}
+    values = transport.configure_request_options(values)
     effort = transport.reasoning_effort(values)
     timeout = transport.request_seconds(seconds)
     turn_limit = transport.turn_output_tokens(limit)

@@ -1067,39 +1067,8 @@ stage_model() {
     stage_setting_opt MODEL "$lookup_stage" "$fallback"
 }
 
-# Which CLI runs one stage. An explicit variable always wins over the config
-# file — a driver invoked with WORKFLOW_AGENT_CMD set means it — and the
-# built-in default applies only when the project has no config at all.
-stage_agent_cmd() {
-    local var
-    var="WORKFLOW_AGENT_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
-    if [[ -n "${!var:-}" ]]; then
-        printf '%s' "${!var}"
-    elif [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
-        printf '%s' "$WORKFLOW_AGENT_CMD"
-    else
-        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
-    fi
-}
 
-stage_reviewer_cmd() {
-    local var
-    var="WORKFLOW_REVIEWER_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
-    if [[ -n "${!var:-}" ]]; then
-        printf '%s' "${!var}"
-    elif [[ -n "${WORKFLOW_REVIEWER_CMD:-}" ]]; then
-        printf '%s' "$WORKFLOW_REVIEWER_CMD"
-    else
-        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
-    fi
-}
 
-stage_command_overridden() {
-    local side="$1" stage="$2" var global
-    var="WORKFLOW_${side}_CMD_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
-    global="WORKFLOW_${side}_CMD"
-    [[ -n "${!var:-}" || -n "${!global:-}" ]]
-}
 
 stage_effort() {
     uncle_effective_stage_effort "$(stage_runner_config_name "$1")"

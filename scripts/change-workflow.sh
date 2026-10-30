@@ -327,42 +327,8 @@ stage_var() {
         "$(printf '%s' "$2" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
 }
 
-# Precedence, for every per-stage setting: an explicit WORKFLOW_* variable
-# wins, then the project's .uncle/config, then what the call site asked for.
-# The config file is read at the moment the stage starts, so an edit made at a
-# human gate applies to the stages after it.
-# An explicit variable always wins over the config file; the built-in default
-# applies only when the project has no config at all.
-stage_agent_cmd() {
-    local var
-    var="WORKFLOW_AGENT_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
-    if [[ -n "${!var:-}" ]]; then
-        printf '%s' "${!var}"
-    elif [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
-        printf '%s' "$WORKFLOW_AGENT_CMD"
-    else
-        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
-    fi
-}
 
-stage_reviewer_cmd() {
-    local var
-    var="WORKFLOW_REVIEWER_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
-    if [[ -n "${!var:-}" ]]; then
-        printf '%s' "${!var}"
-    elif [[ -n "${WORKFLOW_REVIEWER_CMD:-}" ]]; then
-        printf '%s' "$WORKFLOW_REVIEWER_CMD"
-    else
-        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
-    fi
-}
 
-stage_command_overridden() {
-    local side="$1" stage="$2" var global
-    var="WORKFLOW_${side}_CMD_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
-    global="WORKFLOW_${side}_CMD"
-    [[ -n "${!var:-}" || -n "${!global:-}" ]]
-}
 
 stage_effort_for() {
     uncle_effective_stage_effort "$1"

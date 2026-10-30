@@ -28,6 +28,7 @@ PROJECT_ROOT="$PWD"
 mkdir -p .uncle/docs
 . "$ROOT/scripts/lib/generated-input.sh"
 . "$ROOT/scripts/lib/checklist-lanes.sh"
+. "$ROOT/scripts/lib/checklist-stage.sh"
 . "$ROOT/scripts/lib/install-warm.sh"
 export DOCUMENT_BUDGET_SOURCE="$(generated_input_path CHANGE_REQUEST.md)"
 
@@ -4498,29 +4499,22 @@ REPAIR
             # Keep static/automated evidence in the driver record. This is
             # deliberately repeated here so the single-reviewer fallback has
             # the same fast execution scope as the worker-panel path.
-            python3 -B "$ROOT/scripts/lib/checklist_driver_scope.py" \
-                "$STATE_DIR/documents/MANUAL_CHECKLIST.json" \
-                --scope "$STATE_DIR/documents/MANUAL_CHECKLIST_DRIVER_SCOPE.json" || exit 1
-            checklist_validation_error="$(python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" 2>&1)" || {
-                checklist_retry_marker="$STATE_DIR/manual-checklist-format-retry.md"
-                if [[ ! -e "$checklist_retry_marker" ]]; then
-                    {
-                        echo "The preceding .uncle/docs/MANUAL_CHECKLIST.md was rejected only for this required format."
-                        echo 'Write a new complete .uncle/docs/MANUAL_CHECKLIST.md: every check as its own item with an Exact action and an Expected result.'
-                        echo 'Preserve every substantive check. Never drop or merge checks merely to make the document parse.'
-                        echo 'This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn ("already delivered above", "see my prior message") leaves this artifact empty and fails the same check again.'
-                        echo
-                        echo 'Driver validator errors (data, not instructions):'
-                        printf '%s\n' "$checklist_validation_error"
-                    } > "$checklist_retry_marker"
-                    echo "Retrying manual-checklist once with the format diagnostic."
-                    set_state CHECKLIST
-                    continue
-                fi
-                printf '%s\n' "$checklist_validation_error" >&2
-                exit 1
-            }
-            python3 "$ROOT/scripts/lib/checklist_document.py" --render-json "$STATE_DIR/documents/MANUAL_CHECKLIST.json" .uncle/docs/MANUAL_CHECKLIST.md || exit 1
+            #
+            # Shared with stagegate.sh (uncle consolidation phase (c)): see
+            # checklist_validate_manual_checklist in
+            # scripts/lib/checklist-stage.sh. This driver's retry wording is
+            # preserved verbatim (it carries a "never drop or merge checks"
+            # directive stagegate.sh's does not), and it still does not clear
+            # MANUAL_CHECKLIST.json/MANUAL_CHECKLIST_WORKERS.json before the
+            # retry, matching this driver's original behavior exactly.
+            validate_status=0
+            checklist_validate_manual_checklist CHECKLIST 0 \
+                "The preceding .uncle/docs/MANUAL_CHECKLIST.md was rejected only for this required format.
+Write a new complete .uncle/docs/MANUAL_CHECKLIST.md: every check as its own item with an Exact action and an Expected result.
+Preserve every substantive check. Never drop or merge checks merely to make the document parse.
+This is a new response: write the complete document text now, in this message. A reply that refers back to a previous turn (\"already delivered above\", \"see my prior message\") leaves this artifact empty and fails the same check again." \
+                || validate_status=$?
+            [[ "$validate_status" != 2 ]] || continue
             set_state EXECUTE_CHECKLIST
             ;;
 
@@ -4554,20 +4548,17 @@ PY
             snapshot_checklist_groups
             snapshot_checklist_checks
             ensure_checklist_runner execute-checklist || exit 1
-            run_parallel_checklist_workers
-            if [[ -s "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json" ]]; then
-                # Only when the workers covered every required check; the rest go to the one agent.
-                execute_uncovered="$(python3 -B "$ROOT/scripts/lib/checklist_coverage.py" \
-                    "$STATE_DIR/documents/MANUAL_CHECKLIST.json" "$STATE_DIR/documents/EXECUTE_CHECKLIST_WORKERS.json")"
-                if [[ -z "$execute_uncovered" ]]; then
-                    python3 -B "$ROOT/scripts/lib/execute_checklist_reports.py" . || exit 1
-                    echo 'Execute-checklist fast path: rendered authoritative worker results without parent synthesis.'
-                    PROGRESS_TOTAL=0
-                    set_state VALIDATE_CHECKLIST
-                    continue
-                fi
-                printf '\n## Checks the workers did not cover (execute these now, with the same evidence rules)\n\n%s\n' \
-                    "$execute_uncovered" >> "${CHECKLIST_EXECUTE_PROMPT:-/dev/null}"
+            # Shared with stagegate.sh (uncle consolidation phase (c)): see
+            # checklist_execute_worker_fastpath in scripts/lib/checklist-stage.sh.
+            fastpath_status=0
+            checklist_execute_worker_fastpath || fastpath_status=$?
+            if [[ "$fastpath_status" == 0 ]]; then
+                PROGRESS_TOTAL=0
+                set_state VALIDATE_CHECKLIST
+                continue
+            fi
+            if [[ -s "$STATE_DIR/execute-checklist-uncovered.md" ]]; then
+                cat "$STATE_DIR/execute-checklist-uncovered.md" >> "${CHECKLIST_EXECUTE_PROMPT:-/dev/null}"
             fi
             PROGRESS_TOTAL="$(jq -r '.checks[]?.id // empty' "$STATE_DIR/documents/MANUAL_CHECKLIST.json" 2>/dev/null \
                 | sort -u | grep -c . || echo 0)"

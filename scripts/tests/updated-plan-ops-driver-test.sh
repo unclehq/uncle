@@ -7,7 +7,7 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fails=0
 export WORKFLOW_UPDATED_PLAN_OPS=1 WORKFLOW_UPDATED_PLAN_EDITS=1 WORKFLOW_UPDATED_PLAN_EDIT_SLICE=3 WORKFLOW_UPDATED_PLAN_HEDGE_SECONDS=300
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
-awk '/^(updated_plan_launch_writer|updated_plan_warm_prefix|run_updated_plan_edit_writers)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
+awk '/^(updated_plan_launch_writer|updated_plan_warm_prefix|run_updated_plan_edit_writers|run_updated_plan_adaptive)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
 check "function extracted" test -s "$TMP/fn.sh"
 
 run_case() {   # name mode [hosted|local]
@@ -34,7 +34,9 @@ PY
         UPDATED_PLAN_ADVISOR_PIDS=()      # a top-level array in the driver; the extracted functions read it
         stage_uses_self_hosted() { [[ "$runner" == local ]]; }
         stage_supports_structured_output() { [[ "$runner" == hosted ]]; }
-        run_claude() {   # prompt stage
+        run_claude() (   # prompt stage; record completion even on an early failure
+            printf "start\n" >> "$STATE_DIR/concurrency"
+            trap 'printf "end\n" >> "$STATE_DIR/concurrency"' EXIT
             local n="${2#updated-plan-worker-edits-}"; [[ "$2" != updated-plan-worker-resolve-* ]] || n=resolve
             printf '%s\n' "$n" >> "$STATE_DIR/starts"
             echo "$2 schema=${UNCLE_OUTPUT_SCHEMA_FILE:-none} out=${UNCLE_STRUCTURED_OUTPUT_PATH:-none} packet=${UNCLE_WORKER_PACKET_PATH:-none} kinds=$(grep -o '"kind":"[a-z-]*"' "$1" | sort -u | tr '\n' ' ')" >> "$STATE_DIR/calls"
@@ -60,9 +62,16 @@ if n in ('1', '1-1'):
     body['protected_verification_paths'] = 'tests/a.test.js'
 json.dump(body, open(target, 'w'))
 PY2
-        }
+        )
         . "$TMP/fn.sh"
-        run_updated_plan_edit_writers > "$STATE_DIR/out" 2>&1; echo $? > "$STATE_DIR/rc"
+        if [[ "$name" == adaptive ]]; then
+            ensure_project_plan_json() { :; }
+            require_file() { [[ -s "$1" ]]; }
+            run_updated_plan_compact() { echo 'unexpected compact fallback' >&2; return 99; }
+            run_updated_plan_adaptive > "$STATE_DIR/out" 2>&1; echo $? > "$STATE_DIR/rc"
+        else
+            run_updated_plan_edit_writers > "$STATE_DIR/out" 2>&1; echo $? > "$STATE_DIR/rc"
+        fi
     )
 }
 
@@ -78,6 +87,39 @@ run_case failonce failonce
 w="$TMP/failonce/.uncle/workflow"
 check "failed writer: asked again, returns 0"    test "$(cat "$w/rc")" == 0
 check "failed writer: one writer per finding"    bash -c 'for s in 2-1 2-2 2-3; do grep -q "edits-$s " "$1" || exit 1; done' _ "$w/calls"
+
+# Three resplit retries must reuse two slots; a one-slot run remains serial.
+for jobs in 1 2; do
+    WORKFLOW_SELF_HOSTED_STAGE_JOBS="$jobs" run_case "bounded-$jobs" failonce local
+    w="$TMP/bounded-$jobs/.uncle/workflow"
+    check "bounded retries $jobs: published" test "$(cat "$w/rc")" == 0
+    check "bounded retries $jobs: concurrency cap" python3 - "$w/concurrency" "$jobs" <<'PYBOUND'
+import sys
+active = peak = 0
+for line in open(sys.argv[1]):
+    active += 1 if line.strip() == 'start' else -1
+    assert active >= 0
+    peak = max(active, peak)
+assert active == 0
+assert peak == int(sys.argv[2]), (peak, sys.argv[2])
+PYBOUND
+    check "bounded retries $jobs: all retried findings retained" bash -c 'for s in 2-1 2-2 2-3; do grep -q "edits-$s " "$1" || exit 1; done' _ "$w/calls"
+done
+
+WORKFLOW_SELF_HOSTED_STAGE_JOBS=2 run_case adaptive resolve local
+w="$TMP/adaptive/.uncle/workflow"
+check "adaptive self-hosted: real merge publishes plan" test "$(cat "$w/rc")" == 0
+check "adaptive self-hosted: conflicts still require resolver" test "$(wc -l < "$w/resolver-calls")" -eq 1
+check "adaptive self-hosted: resolved edit is published" grep -q 'MERGED' "$TMP/adaptive/.uncle/docs/UPDATED_PROJECT_PLAN.md"
+check "adaptive self-hosted: all findings retained" bash -c 'for n in 1 2 3 4 5 6; do grep -q "AR-$n" "$1" || exit 1; done' _ "$TMP/adaptive/.uncle/docs/UPDATED_PROJECT_PLAN.md"
+check "adaptive self-hosted: bounded concurrency" python3 - "$w/concurrency" <<'PYADAPT'
+import sys
+active = peak = 0
+for line in open(sys.argv[1]):
+    active += 1 if line.strip() == 'start' else -1
+    peak = max(peak, active)
+assert active == 0 and peak == 2, (active, peak)
+PYADAPT
 
 run_case fail fail
 check "writer failure: nonzero, nothing published" bash -c 'test "$(cat "$1/.uncle/workflow/rc")" != 0 && test ! -e "$1/.uncle/docs/UPDATED_PROJECT_PLAN.md"' _ "$TMP/fail"

@@ -70,6 +70,30 @@ PY
 )
 check "long hosted review uses bounded file-backed deterministic patch batches" grep -qx 'slice=2 delivery=file fast_merge=1 driver_contract=1 warm=0 advisors=0' "$TMP/.uncle/workflow/adaptive"
 
+# Self-hosted long reviews use the same packets with bounded scheduling and
+# the conflict resolver retained. One worker restores the compact path.
+(
+    cd "$TMP"
+    ROOT="$ROOT"; STATE_DIR=.uncle/workflow; LOG_DIR=.uncle/workflow/logs
+    stage_uses_self_hosted() { return 0; }
+    ensure_project_plan_json() { :; }
+    require_file() { [[ -s "$1" ]]; }
+    run_updated_plan_edit_writers() {
+        printf 'jobs=%s merge=%s slice=%s\n' "$(workflow_model_jobs updated-plan)" "$WORKFLOW_UPDATED_PLAN_FAST_MERGE" "$WORKFLOW_UPDATED_PLAN_EDIT_SLICE" > "$STATE_DIR/local-adaptive"
+    }
+    run_updated_plan_compact() { touch "$STATE_DIR/local-compact"; }
+    . "$TMP/adaptive.sh"
+    WORKFLOW_SELF_HOSTED_STAGE_JOBS=2 run_updated_plan_adaptive
+    WORKFLOW_SELF_HOSTED_STAGE_JOBS=1 run_updated_plan_adaptive
+    WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD=99 run_updated_plan_adaptive
+    rm -f "$STATE_DIR/local-compact"
+    run_updated_plan_edit_writers() { return 9; }
+    WORKFLOW_SELF_HOSTED_STAGE_JOBS=2 run_updated_plan_adaptive
+    [[ -e "$STATE_DIR/local-compact" ]]
+)
+check "self-hosted batches retain conflict resolution" grep -qx 'jobs=2 merge=0 slice=2' "$TMP/.uncle/workflow/local-adaptive"
+check "one slot or short review keeps compact path" test -e "$TMP/.uncle/workflow/local-compact"
+
 state_block="$(awk '/^        UPDATED_PLAN\)/,/^        IMPLEMENT\)/' "$ROOT/scripts/stagegate.sh")"
 check "adaptive path runs before legacy committee" bash -c 'a=$(grep -n "run_updated_plan_adaptive" <<< "$1" | head -1 | cut -d: -f1); b=$(grep -n "run_updated_plan_decide" <<< "$1" | head -1 | cut -d: -f1); [[ -n "$a" && -n "$b" && "$a" -lt "$b" ]]' _ "$state_block"
 check "compact failure does not enter committee" bash -c 'a=$(grep -n "run_updated_plan_adaptive" <<< "$1" | head -1 | cut -d: -f1); r=$(grep -n "return \$?" <<< "$1" | head -1 | cut -d: -f1); b=$(grep -n "run_updated_plan_decide" <<< "$1" | head -1 | cut -d: -f1); [[ -n "$a" && -n "$r" && -n "$b" && "$a" -lt "$r" && "$r" -lt "$b" ]]' _ "$state_block"

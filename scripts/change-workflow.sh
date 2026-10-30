@@ -1949,21 +1949,9 @@ CHANGE_REQUEST_SOURCE
     printf '%s\n' "$bound_prompt"
 }
 
-# Whether this stage's agent can be forced to answer in schema-checked JSON (see run_claude): the direct Claude
-# CLI only -- also when it runs through native_stage.py, which relays the validated object.  Codex, self-hosted
-# models and a custom command keep the file contract.
-stage_supports_structured_output() {
-    local stage="$1" UNCLE_RESOLVED_RUNNER
-    [[ "${WORKFLOW_STRUCTURED_OUTPUT:-1}" == 1 ]] || return 1
-    uncle_resolve_stage_runner "$stage" AGENT 2>/dev/null || return 1
-    [[ "$UNCLE_RESOLVED_RUNNER" == claude ]] && [[ "$(stage_agent_cmd "$stage" 2>/dev/null)" == *claude ]]
-}
+. "$ROOT/scripts/lib/stage-runtime.sh"
+. "$ROOT/scripts/lib/stage-runtime-change.sh"
 
-stage_uses_self_hosted() {
-    local stage="$1" side="$2" UNCLE_RESOLVED_RUNNER
-    uncle_resolve_stage_runner "$stage" "$side" 2>/dev/null || true
-    [[ "$UNCLE_RESOLVED_RUNNER" == self-hosted ]]
-}
 
 run_claude() {
     local prompt_file

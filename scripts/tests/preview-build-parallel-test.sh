@@ -130,14 +130,9 @@ check "=0 forbids parts on a self-hosted runner"     test "$(WORKFLOW_PREVIEW_BU
 runner_gate() {   # config text
     local dir; dir="$(mktemp -d "$TMP/gate.XXXXXX")"; mkdir -p "$dir/.uncle"; printf '%b' "$1" > "$dir/.uncle/config"
     ( cd "$dir"; ROOT="$ROOT"; PROJECT_ROOT="$PWD"; UNCLE_CONFIG="$PWD/.uncle/config"
-      . "$ROOT/scripts/lib/stage-config.sh"
-      stage_runner_config_name() { case "$1" in preview-build-part-*) echo preview-build ;; *) echo "$1" ;; esac; }
-      stage_uses_self_hosted() {
-          local stage="$1" side="$2" UNCLE_RESOLVED_RUNNER
-          stage="$(stage_runner_config_name "$stage")"
-          uncle_resolve_stage_runner "$stage" "$side" 2>/dev/null || true
-          [[ "$UNCLE_RESOLVED_RUNNER" == self-hosted ]]
-      }
+      . "$ROOT/scripts/tests/workflow_fixture.sh"
+      workflow_fixture_source "$ROOT/scripts/lib/stage-config.sh" \
+          "$ROOT/scripts/lib/stage-runtime.sh" "$ROOT/scripts/lib/stage-runtime-app.sh"
       . "$ROOT/scripts/lib/preview-build.sh"
       preview_build_use_parts && echo parts || echo single )
 }

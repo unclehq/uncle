@@ -4763,35 +4763,6 @@ run_green_check() {
 . "$ROOT/scripts/lib/implementation-gates.sh"
 . "$ROOT/scripts/lib/implementation-gates-app.sh"
 
-# Regenerate the document and compare it with what was approved. A mismatch
-# means the code moved after the operator read it, so the gate re-opens on the
-# current tree rather than the pipeline carrying a stale approval forward.
-verify_implementation_review() {
-    local approval="$APPROVAL_DIR/IMPLEMENTATION_REVIEW.sha256"
-
-    require_file "$approval"
-    if [[ -f "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.inputs.json" ]]; then
-        if WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" check "$STATE_DIR"; then
-            return 0
-        fi
-        build_implementation_review
-        reapprove_implementation_unattended && return 0
-        set_state WAIT_IMPLEMENT_APPROVAL
-        echo "Approved inputs changed; review the current implementation again."
-        exit 0
-    fi
-    build_implementation_review
-
-    if [[ "$(hash_file "$REVIEW_FILE")" != "$(cat "$approval")" ]]; then
-        echo
-        echo "The working tree changed after the implementation was approved."
-        echo "$REVIEW_FILE has been rebuilt from the current tree."
-        reapprove_implementation_unattended && return 0
-        set_state WAIT_IMPLEMENT_APPROVAL
-        echo "Re-run the driver to review and approve what is there now."
-        exit 0
-    fi
-}
 
 # Unattended, nobody is there to review the implementation again, and stopping at
 # a reopened gate ended the run for good: the driver exits and nothing restarts

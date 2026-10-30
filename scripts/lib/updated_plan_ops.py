@@ -114,8 +114,8 @@ def write_prompt(base_path, ids, output, owns_fields=False, note=None):
     if note is None:
         note = SLICE_NOTE % (', '.join(ids), notes)
         if 'Collated specialist corrections' not in text:      # deciding writers: nobody has reviewed the findings first
-            note += DECIDE_NOTE
-    Path(output).write_text(text + note, encoding='utf-8')
+            text += DECIDE_NOTE
+    Path(output).write_text(base.defer_reply_example(text) + note, encoding='utf-8')
 
 
 RECONCILE_NOTE = '''

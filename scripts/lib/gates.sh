@@ -226,19 +226,19 @@ gated_prompt() {
                 return 0
             fi
             {
-                cat "$prompt_file"
                 # Do not use an expanding here-document: the literal backticks
                 # in the Markdown path would be treated as shell command
                 # substitution, producing a misleading "is a directory"
                 # error in every compact worker log.
-                printf '%s\n' '' \
+                printf '%s\n' \
                     '## Compact worker contract (binding)' '' \
                     'Read only '"$worker_inputs"'. Do not enumerate `.uncle/workflow/documents/`,' \
                     'inspect the repository, or make exploratory tool calls. Do not read rendered' \
                     'Markdown approvals, worker directories, output rules, or gates.' \
                     'Return exactly the one JSON worker packet requested by the prompt, with no' \
                     'analysis, Markdown fence, or duplicate draft. The parent stage collates and' \
-                    'validates all evidence, dispositions, and final documents.'
+                    'validates all evidence, dispositions, and final documents.' ''
+                cat "$prompt_file"
             } > "$worker_prompt"
             printf '%s\n' "$worker_prompt"
             return 0
@@ -337,7 +337,8 @@ COMPACT_INVESTIGATION
 
     local combined="$LOG_DIR/${log_name}.gated-prompt.md"
     {
-        cat "$prompt_file"
+        # The stage and evidence index contain paths, hashes and assignments.
+        # Keep the identical rules ahead of both for cross-stage prefix reuse.
         cat <<'PROVENANCE'
 
 ## Acceptance provenance
@@ -366,15 +367,16 @@ stage, and never repeat a successful read unless the file changed. A supplied
 excerpt is navigation rather than verification evidence, so obtain the exact
 assertion or command result only when that evidence is actually required.
 TOOL_ECONOMY
+        if [[ -f "$GATES_LIB_DIR/../../lib/gates/EXECUTION_RULES.md" ]]; then
+            printf '\n\n'
+            cat "$GATES_LIB_DIR/../../lib/gates/EXECUTION_RULES.md"
+        fi
+        cat "$prompt_file"
         if [[ -f "$GATES_LIB_DIR/evidence_index.py" ]]; then
             local evidence_family=app
             [[ "$prompt_file" != */change/* ]] || evidence_family=change
             python3 -B "$GATES_LIB_DIR/evidence_index.py" "$PWD" "${STATE_DIR:-.uncle/workflow}" "$log_name" --family "$evidence_family" \
                 || printf '\nShared evidence index unavailable; read required inputs directly.\n'
-        fi
-        if [[ -f "$GATES_LIB_DIR/../../lib/gates/EXECUTION_RULES.md" ]]; then
-            printf '\n\n'
-            cat "$GATES_LIB_DIR/../../lib/gates/EXECUTION_RULES.md"
         fi
         if [[ "$log_name" == execute-checklist ]]; then
             printf '\nReusable checklist runner: python3 "%s/checklist_batch.py" .uncle/workflow/check-commands.json\n' "$GATES_LIB_DIR"

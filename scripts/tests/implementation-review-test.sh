@@ -228,6 +228,29 @@ check_not_contains "a non-repository never claims nothing was built" \
 
 cd "$ROOT"
 
+# Driver policy bindings keep family arguments and snapshot preparation order.
+for family in app change; do
+    trace="$(
+        . "$ROOT/scripts/tests/workflow_fixture.sh"
+        workflow_fixture_source "$ROOT/scripts/lib/implementation-gates.sh" \
+            "$ROOT/scripts/lib/implementation-gates-$family.sh"
+        STATE_DIR=state; DIFF_FILE=diff; REVIEW_FILE=review; GREEN_MD=green
+        WORKFLOW_UNTRACKED_BASELINE=baseline
+        write_change_diff() { printf 'diff <%s>\n' "$@"; }
+        write_implementation_review() { printf review; printf ' <%s>' "$@"; printf '\n'; }
+        python3() { printf 'snapshot baseline=%s' "$WORKFLOW_UNTRACKED_BASELINE"; printf ' <%s>' "$@"; printf '\n'; }
+        build_implementation_review
+    )"
+    if [[ "$family" == app ]]; then
+        review_args='<.uncle/docs/AUTOMATED_TEST_REPORT.md> <state/verification.paths> <state/verification.manifest> <state/verification-snapshot> <state/TEST_CHANGES.diff>'
+    else
+        review_args='<.uncle/docs/CHANGE_TEST_REPORT.md>'
+    fi
+    check_eq "$family review arguments and side-effect order" "diff <diff>
+review <review> <diff> <green> <.uncle/docs/IMPLEMENTATION_NOTES.md> $review_args
+snapshot baseline=baseline <-B> <$ROOT/scripts/lib/approval_snapshot.py> <prepare> <state>" "$trace"
+done
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "implementation-review-test.sh: $FAILED of $COUNT checks failed"
     exit 1

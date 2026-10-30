@@ -144,3 +144,25 @@ change_implementation_incomplete_choice() {
         esac
     done
 }
+
+# Rebuilt from the working tree every time the gate opens, so the approval
+# digest attests to the tree rather than to a file somebody could edit.
+app_build_implementation_review() {
+    write_change_diff "$DIFF_FILE"
+    write_implementation_review "$REVIEW_FILE" "$DIFF_FILE" "$GREEN_MD" \
+        .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/AUTOMATED_TEST_REPORT.md \
+        "$STATE_DIR/verification.paths" "$STATE_DIR/verification.manifest" \
+        "$STATE_DIR/verification-snapshot" "$STATE_DIR/TEST_CHANGES.diff"
+    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" prepare "$STATE_DIR"
+
+}
+
+# Rebuilt from the working tree every time the gate opens, so the approval
+# digest attests to the tree rather than to a file somebody could edit.
+change_build_implementation_review() {
+    write_change_diff "$DIFF_FILE"
+    write_implementation_review "$REVIEW_FILE" "$DIFF_FILE" "$GREEN_MD" \
+        .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/CHANGE_TEST_REPORT.md
+    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" prepare "$STATE_DIR"
+
+}

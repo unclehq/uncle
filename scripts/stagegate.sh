@@ -4760,17 +4760,8 @@ run_green_check() {
 
 # --- Post-implementation review document ------------------------------------
 
-# Rebuilt from the working tree every time the gate opens, so the approval
-# digest attests to the tree rather than to a file somebody could edit.
-build_implementation_review() {
-    write_change_diff "$DIFF_FILE"
-    write_implementation_review "$REVIEW_FILE" "$DIFF_FILE" "$GREEN_MD" \
-        .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/AUTOMATED_TEST_REPORT.md \
-        "$STATE_DIR/verification.paths" "$STATE_DIR/verification.manifest" \
-        "$STATE_DIR/verification-snapshot" "$STATE_DIR/TEST_CHANGES.diff"
-    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" prepare "$STATE_DIR"
-
-}
+. "$ROOT/scripts/lib/implementation-gates.sh"
+. "$ROOT/scripts/lib/implementation-gates-app.sh"
 
 # Regenerate the document and compare it with what was approved. A mismatch
 # means the code moved after the operator read it, so the gate re-opens on the

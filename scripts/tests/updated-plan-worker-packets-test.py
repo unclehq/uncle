@@ -356,7 +356,7 @@ class WorkerPackets(unittest.TestCase):
         change = (ROOT/'scripts/change-workflow.sh').read_text()
         self.assertIn('change-plan|updated-change-plan)', change)
         self.assertIn('UNCLE_WORKER_PACKET_PATH', change)
-        self.assertNotIn('recover_worker_packet.py', change[change.index('run_parallel_checklist_workers()'):change.index('build_implementation_review()')])
+        self.assertNotIn('recover_worker_packet.py', re.search(r'^run_parallel_checklist_workers\(\) \{.*?^}', change, re.M | re.S).group(0))
         self.assertIn(
             '*-worker-*|updated-plan|adversarial-review|test-review|manual-checklist|final-audit)',
             (ROOT/'scripts/stagegate.sh').read_text(),

@@ -4,3 +4,7 @@
 implementation_incomplete_choice() {
     change_implementation_incomplete_choice "$@"
 }
+
+build_implementation_review() {
+    change_build_implementation_review "$@"
+}

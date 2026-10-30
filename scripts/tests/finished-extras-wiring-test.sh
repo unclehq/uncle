@@ -38,9 +38,9 @@ need cw-onexit-stopped "$CW" 'run-started-at" ]]; then'
 need cw-onexit-print "$CW" 'finished_extras print --kind change --reason "$(change_pr_extras_reason'
 
 # new-app driver: Finished build line unchanged, extras after it, stop path
-need sg-build "$SG" "Finished build: verdict=%s skipped=%s path=%s"
+need sg-build "$ROOT/scripts/lib/workflow-records.sh" "Finished build: verdict=%s skipped=%s path=%s"
 need sg-stop "$SG" 'finished_extras print --kind new --reason not-applicable --stopped'
-before build-then-extras "$SG" 'Finished build: verdict=' 'finished_extras print --kind new --reason not-applicable \${UNATTENDED'
+before build-then-extras "$SG" 'finished_build_line "$(completed_verdict)"' 'finished_extras print --kind new --reason not-applicable \${UNATTENDED'
 
 # reason precedence helper exists in change-pr.sh
 need reason-fn "$CP" 'change_pr_extras_reason()'

@@ -4,18 +4,12 @@ set -uo pipefail
 # Hermetic coverage of the Y/N human-approval gates:
 #
 #   G1  scripts/workflow.sh    approve_file        (real script, temp checkout)
-#   G2  scripts/change-workflow.sh human_gate      (extracted function harness)
-#   G3  scripts/stagegate.sh   review_and_approve  (extracted function harness)
+#   G2  scripts/change-workflow.sh human_gate      (sourceable library harness)
+#   G3  scripts/stagegate.sh   review_and_approve  (sourceable library harness)
 #   G4  prompt styling (non-TTY / TERM=dumb / PTY)
 #   G5  whitespace strictness
 #
-# change-workflow.sh and stagegate.sh are state machines that need agent CLIs,
-# a lock, and an origin binding before they reach a gate, and neither exposes a
-# source-only test hook. Rather than add one (that would widen the change
-# surface), G2 and G3 lift the gate function verbatim out of the script with
-# awk and run it against the same argument lists as the real call sites. The
-# extraction is asserted non-empty and `bash -n`-clean, so a silent extraction
-# failure fails the suite instead of passing vacuously.
+# Production libraries are sourced explicitly; neither driver is sourced.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$ROOT/scripts/lib/sha256.sh"   # hash_file, portable across platforms
@@ -102,38 +96,11 @@ expect_no_ansi() {
 }
 
 # ---------------------------------------------------------------------------
-# Function extraction harness
+# Library harness
 # ---------------------------------------------------------------------------
 
-# extract_fns <script> <outfile> <fn>...
-extract_fns() {
-    local script="$1" out="$2"
-    shift 2
-    : > "$out"
-    local fn
-    for fn in "$@"; do
-        awk -v fn="$fn" '
-            $0 == fn "() {" { p = 1 }
-            p { print }
-            p && /^\}$/ { exit }
-        ' "$script" >> "$out"
-        printf '\n' >> "$out"
-    done
-    if ! grep -q "^${1}() {" "$out"; then
-        echo "FATAL: extraction from $script produced no function bodies"
-        exit 2
-    fi
-    for fn in "$@"; do
-        if ! grep -q "^${fn}() {" "$out"; then
-            echo "FATAL: could not extract $fn from $script"
-            exit 2
-        fi
-    done
-    if ! bash -n "$out"; then
-        echo "FATAL: extracted functions from $script are not valid bash"
-        exit 2
-    fi
-}
+# State and fault-injection hooks stay explicit in each harness.
+. "$ROOT/scripts/tests/workflow_fixture.sh"
 
 # new_case <name> — scratch working tree with the gated documents present.
 new_case() {
@@ -184,9 +151,7 @@ PRELUDE
 )
 
 write_cw_harness() {
-    extract_fns "$ROOT/scripts/change-workflow.sh" "$CASE/fns.sh" \
-        gate_prompt legacy_word_notice canonical_artifact_path \
-        approval_artifact_path require_file human_gate
+    workflow_fixture_write "$CASE/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-change.sh" "$ROOT/scripts/lib/workflow-paths-change.sh" "$ROOT/scripts/lib/approval-gates-change.sh"
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail
@@ -202,10 +167,7 @@ HARNESS
 }
 
 write_sg_harness() {
-    extract_fns "$ROOT/scripts/stagegate.sh" "$CASE/fns.sh" \
-        gate_prompt legacy_word_notice upper lower canonical_artifact_path \
-        approval_artifact_path require_file \
-        review_and_approve
+    workflow_fixture_write "$CASE/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-app.sh" "$ROOT/scripts/lib/workflow-paths-app.sh" "$ROOT/scripts/lib/approval-gates-app.sh"
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail

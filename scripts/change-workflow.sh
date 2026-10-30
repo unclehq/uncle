@@ -36,14 +36,7 @@ export DOCUMENT_BUDGET_SOURCE="$(generated_input_path CHANGE_REQUEST.md)"
 # wins, otherwise the prompt that shipped with uncle. An absolute path or a
 # path that exists in the project is returned untouched, which is what keeps
 # composed prompts under .uncle/workflow working.
-resolve_prompt() {
-    local p="$1"
-    if [[ "$p" == /* || -e "$p" ]]; then
-        printf '%s' "$p"
-    else
-        printf '%s' "$ROOT/$p"
-    fi
-}
+. "$ROOT/scripts/lib/workflow-paths-change.sh"
 
 STAGEGATE_VERSION="0.1.0"
 # The PR attestation reads these rather than guessing from the cwd.
@@ -115,12 +108,7 @@ APPROVAL_DIR="$STATE_DIR/approvals"
 # of the flag in one file.
 UNATTENDED_FILE="$STATE_DIR/unattended-gates"
 
-record_unattended_gate() {
-    local what="$1" detail="$2"
-    mkdir -p "$STATE_DIR" 2>/dev/null || true
-    printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$what" "$detail" \
-        >> "$UNATTENDED_FILE" 2>/dev/null || true
-}
+. "$ROOT/scripts/lib/workflow-records.sh"
 
 # An unattended run says so up front and ledgers what enabled it, so a mode
 # inherited from a wrapper is visible in the run's own record.
@@ -140,18 +128,6 @@ completed_verdict() {
     printf '%s' "$verdict"
 }
 
-# One stable line for wrappers and the TUI; format is asserted by tests.
-finished_build_line() {
-    local verdict="$1" skipped=0
-    if [[ -s "$UNATTENDED_FILE" ]]; then
-        skipped="$(grep -c $'\taudit-finding-skipped\t' "$UNATTENDED_FILE" || true)"
-    fi
-    printf 'Finished build: verdict=%s skipped=%s path=%s\n' "$verdict" "${skipped:-0}" "$PROJECT_ROOT"
-    if [[ "$verdict" == READY && "${skipped:-0}" != 0 ]]; then
-        echo "READY - ${skipped} blocking findings WAIVED WITHOUT HUMAN REVIEW (the auditor said NOT READY)"
-    fi
-}
-
 record_nonblocking_failure() {
     local source="$1" detail="$2"
     mkdir -p "$STATE_DIR" 2>/dev/null || true
@@ -159,11 +135,6 @@ record_nonblocking_failure() {
         >> "$STATE_DIR/nonblocking-test-failures.tsv" 2>/dev/null || true
 }
 
-record_test_failure_disposition() {
-    local review_json="$STATE_DIR/documents/TEST_REVIEW.json"
-    python3 -B "$ROOT/scripts/lib/test_failure_disposition.py" \
-        "$GREEN_CLASS" "$review_json" "$STATE_DIR/documents/TEST_FAILURES.json"
-}
 LOG_DIR="$STATE_DIR/logs"
 STATE_FILE="$STATE_DIR/state"
 SESSION_FILE="$STATE_DIR/session-head"
@@ -436,25 +407,12 @@ CLAUDE_TOOLS="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
 # One bold prompt line. `read -p` suppresses its prompt when stdin is not a
 # terminal, so the text is printed separately. Escapes are emitted only for a
 # real terminal: piped captures and TERM=dumb stay free of control bytes.
-gate_prompt() {
-    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$1"; fi
-    if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
-        printf '%s%s%s' $'\033[1m' "$1" $'\033[0m'
-    else
-        printf '%s' "$1"
-    fi
-}
+. "$ROOT/scripts/lib/prompt-io.sh"
 
 # The gate used to require the words APPROVE/ACKNOWLEDGE. Automation that still
 # pipes them now declines; say so, so the break is visible in the output rather
 # than silent.
-legacy_word_notice() {
-    case "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')" in
-        APPROVE|ACKNOWLEDGE)
-            echo "This gate now requires 'y' to approve."
-            ;;
-    esac
-}
+. "$ROOT/scripts/lib/prompt-io-change.sh"
 
 # Pure .uncle/docs/FINAL_AUDIT.md verdict classifier, shared with scripts/tests/. Sourced
 # self-relative so the driver still runs from any CWD.
@@ -639,35 +597,6 @@ implementation_incomplete_choice() {
             *) echo "Answer retry, waive, or stop." ;;
         esac
     done
-}
-
-
-require_file() {
-    local requested="$1" canonical
-    canonical="$(canonical_artifact_path "$requested")"
-    if [[ ! -s "$canonical" ]]; then
-        supervision_validation_failed require_file "$canonical" "Required file missing or empty: $canonical"
-        echo "Required file missing or empty: $canonical"
-        exit 1
-    fi
-}
-
-canonical_artifact_path() {
-    local path="$1" stem
-    case "$path" in
-        .uncle/docs/BASELINE_REPORT.md|.uncle/docs/CHANGE_SPEC.md|.uncle/docs/CHANGE_TEST_REPORT.md|.uncle/docs/IMPLEMENTATION_NOTES.md|.uncle/docs/MANUAL_CHECKLIST.md|.uncle/docs/TEST_REVIEW.md|.uncle/docs/VERIFICATION_REPORT.md|.uncle/docs/DEFECTS.md|.uncle/docs/FINAL_AUDIT.md|.uncle/docs/CHANGE_PLAN.md|.uncle/docs/ADVERSARIAL_REVIEW.md)
-            stem="${path##*/}"; stem="${stem%.md}"
-            printf '%s/documents/%s.json\n' "${STATE_DIR:-.uncle/workflow}" "$stem" ;;
-        *) printf '%s\n' "$path" ;;
-    esac
-}
-
-# Markdown-only state is accepted solely to resume a run created before the
-# canonical-artifact migration. New/current runs always approve JSON.
-approval_artifact_path() {
-    local view="$1" canonical
-    canonical="$(canonical_artifact_path "$view")"
-    [[ -s "$canonical" ]] && printf '%s\n' "$canonical" || printf '%s\n' "$view"
 }
 
 # The issue number written into .uncle/workflow/state is informational only;
@@ -1054,144 +983,7 @@ triage_reopen_gate() {
 # pipeline twice for two documents that are read together anyway.
 #
 # Usage: human_gate ACTION file1 approval_name1 [file2 approval_name2 ...]
-human_gate() {
-    local gate_start="$SECONDS"
-    local action="$1"
-    shift
-
-    local -a files=() views=()
-    local -a names=()
-    local gate_by
-
-    while [[ "$#" -gt 0 ]]; do
-        case "$2" in
-            CHANGE_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-change-plan-unreviewed "$1" . || return 1 ;;
-        esac
-        local view="$1" canonical
-        canonical="$(approval_artifact_path "$view")"
-        [[ -s "$canonical" ]] || { echo "Required approval artifact missing: $canonical"; exit 1; }
-        views+=("$view")
-        files+=("$canonical")
-        names+=("$2")
-        shift 2
-    done
-
-    # Unattended: record each approval against the bytes on disk and log that
-    # nobody read them. The digests must still be real -- later stages compare
-    # against them to catch a document changing underneath an approval.
-    if [[ "${UNATTENDED:-0}" == 1 ]]; then
-        local j act
-        act="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
-        for j in "${!files[@]}"; do
-            printf '%s\n' "$(hash_file "${files[$j]}")" > "$APPROVAL_DIR/${names[$j]}.sha256"
-            gate_by="$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)"
-            # A human name goes to `.approved-by`; `unattended` and supervisor
-            # receipts go to `.delegated-by` with `.approved-by` left empty, so
-            # nothing downstream reads a delegated answer as a keystroke.
-            # `.gate-action` records what the gate asked for (Issue 59).
-            case "$gate_by" in
-                unattended|supervisor:*)
-                    printf '%s\n' "$gate_by" > "$APPROVAL_DIR/${names[$j]}.delegated-by"
-                    printf '\n' > "$APPROVAL_DIR/${names[$j]}.approved-by"
-                    ;;
-                *)
-                    printf '%s\n' "$gate_by" > "$APPROVAL_DIR/${names[$j]}.approved-by"
-                    printf '\n' > "$APPROVAL_DIR/${names[$j]}.delegated-by"
-                    ;;
-            esac
-            printf '%s\n' "$action" > "$APPROVAL_DIR/${names[$j]}.gate-action"
-            record_unattended_gate "${names[$j]}" "$act ${views[$j]} without human review"
-        done
-        echo "Unattended: recorded $act of ${files[*]} with no human review."
-        if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi
-        return 0
-    fi
-
-    echo
-    echo "=================================================="
-    echo "HUMAN REVIEW REQUIRED"
-    local f
-    for f in "${views[@]}"; do
-        echo "  $f"
-    done
-    echo "=================================================="
-    echo
-    echo "Review with:"
-    echo "  less ${views[*]}"
-    echo
-    echo "Edit with:"
-    echo "  code ${views[*]}"
-    echo
-    echo "Edits you make now are picked up by the next stage."
-    show_spend
-    echo
-
-    # Digests are captured before the prompt and recorded afterwards, so each
-    # approval attests to the bytes the operator was shown.
-    local -a digests=()
-    local i
-    for i in "${!files[@]}"; do
-        digests+=("$(hash_file "${files[$i]}")")
-    done
-
-    local verb targets response=""
-    verb="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
-    targets="$(printf '%s, ' "${views[@]}")"
-    targets="${targets%, }"
-
-    echo
-    UNCLE_GATE_FILE="${views[0]}"
-    gate_prompt "Ready to $verb $targets? [Y/N] "
-    UNCLE_GATE_FILE=""
-    # IFS= keeps surrounding whitespace, so " y" is not an approval. `|| true`
-    # keeps EOF from tripping `set -e` before the decline path runs. The
-    # wrapper attributes the line (human, or a supervisor receipt) and closes
-    # the gate; the answer itself is validated exactly as before.
-    if declare -f gate_read > /dev/null; then gate_read response || true; else IFS= read -r response || true; fi
-
-    case "$response" in
-        y|Y) ;;
-        *)
-            if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 1; fi
-            echo "Gate not accepted. Workflow remains paused."
-            legacy_word_notice "$response"
-            exit 0
-            ;;
-    esac
-
-    # Every file is re-checked before any approval is written, so a mutated
-    # document cannot leave a half-approved gate behind.
-    for i in "${!files[@]}"; do
-        if [[ "$(hash_file "${files[$i]}")" != "${digests[$i]}" ]]; then
-            if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 1; fi
-            echo "${views[$i]}'s canonical JSON changed after it was shown for approval."
-            echo "Gate not accepted. Workflow remains paused."
-            exit 0
-        fi
-    done
-
-    for i in "${!files[@]}"; do
-        printf '%s\n' "${digests[$i]}" > "$APPROVAL_DIR/${names[$i]}.sha256"
-        gate_by="$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)"
-        # A human name goes to `.approved-by`; `unattended` and supervisor
-        # receipts go to `.delegated-by` with `.approved-by` left empty, so
-        # nothing downstream reads a delegated answer as a keystroke.
-        # `.gate-action` records what the gate asked for (Issue 59).
-        case "$gate_by" in
-            unattended|supervisor:*)
-                printf '%s\n' "$gate_by" > "$APPROVAL_DIR/${names[$i]}.delegated-by"
-                printf '\n' > "$APPROVAL_DIR/${names[$i]}.approved-by"
-                ;;
-            *)
-                printf '%s\n' "$gate_by" > "$APPROVAL_DIR/${names[$i]}.approved-by"
-                printf '\n' > "$APPROVAL_DIR/${names[$i]}.delegated-by"
-                ;;
-        esac
-        printf '%s\n' "$action" > "$APPROVAL_DIR/${names[$i]}.gate-action"
-        echo "Recorded approval for ${views[$i]}"
-    done
-    if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi
-}
+. "$ROOT/scripts/lib/approval-gates-change.sh"
 
 # Render Claude's streaming JSON event feed as readable progress. Startup
 # warnings and other non-JSON lines are ignored rather than making jq fail.

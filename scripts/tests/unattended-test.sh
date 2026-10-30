@@ -19,23 +19,7 @@ check() { # check <name> <expected> <actual>
     if [[ "$2" == "$3" ]]; then ok; else bad "$1" "expected '$2', got '$3'"; fi
 }
 
-extract_fns() {
-    local script="$1" out="$2"
-    shift 2
-    : > "$out"
-    local fn
-    for fn in "$@"; do
-        awk -v fn="$fn" '
-            $0 == fn "() {" { p = 1 }
-            p { print }
-            p && /^\}$/ { exit }
-        ' "$script" >> "$out"
-        printf '\n' >> "$out"
-    done
-    for fn in "$@"; do
-        grep -q "^${fn}() {" "$out" || { echo "FATAL: could not extract $fn"; exit 2; }
-    done
-}
+. "$ROOT/scripts/tests/workflow_fixture.sh"
 
 # --- argument handling ------------------------------------------------------
 
@@ -54,9 +38,7 @@ done
 
 sg="$WORK/sg"
 mkdir -p "$sg/.uncle/workflow/approvals"
-extract_fns "$ROOT/scripts/stagegate.sh" "$sg/fns.sh" \
-    gate_prompt legacy_word_notice upper lower require_file \
-    record_unattended_gate canonical_artifact_path approval_artifact_path review_and_approve
+workflow_fixture_write "$sg/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-app.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ROOT/scripts/lib/workflow-paths-app.sh" "$ROOT/scripts/lib/approval-gates-app.sh"
 cat > "$sg/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -111,21 +93,14 @@ else ok; fi
 
 wv="$WORK/wv"
 mkdir -p "$wv/.uncle/workflow"
-extract_fns "$ROOT/scripts/stagegate.sh" "$wv/fns.sh" \
-    gate_prompt record_unattended_gate
-# The waiver writers moved to a shared lib so both drivers use one copy.
-# extract_fns truncates its output, so collect the lib half separately.
-extract_fns "$ROOT/scripts/lib/waivers.sh" "$wv/fns-waivers.sh" \
-    write_waivers record_waiver
-cat "$wv/fns-waivers.sh" >> "$wv/fns.sh"
+# Source the complete waiver dependency graph, including its read fallback.
+workflow_fixture_write "$wv/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ROOT/scripts/lib/waivers.sh"
 cat > "$wv/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="/nonexistent-so-the-popup-is-skipped"
 STATE_DIR="$PWD/.uncle/workflow"
 UNATTENDED_FILE="$STATE_DIR/unattended-gates"
-# One-liner in the driver, so it is restated rather than extracted.
-waive_file() { printf '%s/waivers/%s' "$STATE_DIR" "$1"; }
 . ./fns.sh
 record_waiver "$@"
 echo "WAIVER_RETURNED"
@@ -155,8 +130,7 @@ else ok; fi
 
 cw="$WORK/cw"
 mkdir -p "$cw/.uncle/workflow/approvals"
-extract_fns "$ROOT/scripts/change-workflow.sh" "$cw/fns.sh" \
-    gate_prompt legacy_word_notice require_file record_unattended_gate canonical_artifact_path approval_artifact_path human_gate
+workflow_fixture_write "$cw/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-change.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ROOT/scripts/lib/workflow-paths-change.sh" "$ROOT/scripts/lib/approval-gates-change.sh"
 cat > "$cw/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -193,11 +167,8 @@ done
 
 ic="$WORK/ic"
 mkdir -p "$ic/.uncle/workflow/approvals"
-extract_fns "$ROOT/scripts/change-workflow.sh" "$ic/fns.sh" \
-    gate_prompt record_unattended_gate implementation_incomplete_choice
-extract_fns "$ROOT/scripts/lib/waivers.sh" "$ic/fns-waivers.sh" \
-    write_waivers record_waiver
-cat "$ic/fns-waivers.sh" >> "$ic/fns.sh"
+extract_fns "$ROOT/scripts/change-workflow.sh" "$ic/driver-fns.sh" implementation_incomplete_choice
+workflow_fixture_write "$ic/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ic/driver-fns.sh" "$ROOT/scripts/lib/waivers.sh"
 cat > "$ic/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -205,7 +176,6 @@ ROOT="/nonexistent-so-the-popup-is-skipped"
 STATE_DIR="$PWD/.uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
 UNATTENDED_FILE="$STATE_DIR/unattended-gates"
-waive_file() { printf '%s/waivers/%s' "$STATE_DIR" "$1"; }
 envelope_invalidate() { :; }
 set_state() { :; }
 . ./fns.sh
@@ -297,7 +267,8 @@ for driver in stagegate change-workflow; do
         chmod +x "$d/bin/$tool"
     done
     if [[ "$driver" == stagegate ]]; then col=1; else col=2; fi
-    extract_fns "$ROOT/scripts/$driver.sh" "$d/fns.sh" record_unattended_gate completed_verdict finished_build_line
+    extract_fns "$ROOT/scripts/$driver.sh" "$d/driver-fns.sh" completed_verdict
+    workflow_fixture_write "$d/fns.sh" "$ROOT/scripts/lib/workflow-records.sh" "$d/driver-fns.sh"
     arm="$d/arm.sh"
     awk '/^        COMPLETE\)$/ {p = 1; next} p && /^        \*\)$/ {exit} p {print}' "$ROOT/scripts/$driver.sh" > "$arm"
     cat > "$d/run.sh" <<HARNESS

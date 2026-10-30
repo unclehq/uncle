@@ -26,7 +26,8 @@ WORKFLOW_AUTO_REPAIR_ATTEMPTS=1
 . "$ROOT/scripts/lib/gates.sh"
 . "$ROOT/scripts/lib/triage.sh"
 . "$ROOT/scripts/lib/waivers.sh"
-for fn in get_state set_state require_file canonical_artifact_path ensure_acceptance_canonical acceptance_json_ids unattended_prewarm_stage_for_state acceptance_setup_pause acceptance_human_continue acceptance_after_waiver acceptance_transition continue_nonblocking_test_review green_failure_route; do
+. "$ROOT/scripts/lib/workflow-paths-app.sh"
+for fn in get_state set_state ensure_acceptance_canonical acceptance_json_ids unattended_prewarm_stage_for_state acceptance_setup_pause acceptance_human_continue acceptance_after_waiver acceptance_transition continue_nonblocking_test_review green_failure_route; do
     eval "$(awk -v start="^${fn}\\(\\)" '$0 ~ start {active=1} active {print} active && /^}$/ {exit}' "$ROOT/scripts/stagegate.sh")"
 done
 supervision_validation_failed() { :; }

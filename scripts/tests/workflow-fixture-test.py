@@ -92,6 +92,7 @@ answer
     def test_production_layers_source_without_runtime_state_or_executables(self):
         for name in ('prompt-io.sh', 'prompt-io-app.sh', 'prompt-io-change.sh',
                      'workflow-paths-app.sh', 'approval-gates-app.sh',
+                     'workflow-paths-change.sh', 'approval-gates-change.sh',
                      'workflow-records.sh'):
             with self.subTest(module=name):
                 result = subprocess.run(['/bin/bash', '-eu', '-c', '''
@@ -115,7 +116,7 @@ before_traps=$(trap -p)
         (self.tmp / 'project local.md').write_text('project\n')
         install.chmod(0o555)
         try:
-            for name in ('workflow-paths-app.sh',):
+            for name in ('workflow-paths-app.sh', 'workflow-paths-change.sh'):
                 with self.subTest(module=name):
                     result = self.run_bash(
                         '. ' + shlex.quote(str(ROOT / 'scripts/lib' / name)) + '\n' +

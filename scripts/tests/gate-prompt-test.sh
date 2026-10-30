@@ -4,13 +4,12 @@ set -uo pipefail
 # Hermetic coverage of the Y/N human-approval gates:
 #
 #   G1  scripts/workflow.sh    approve_file        (real script, temp checkout)
-#   G2  scripts/change-workflow.sh human_gate      (sourceable modules and transitional driver harness)
-#   G3  scripts/stagegate.sh   review_and_approve  (sourceable modules and transitional driver harness)
+#   G2  scripts/change-workflow.sh human_gate      (sourceable library harness)
+#   G3  scripts/stagegate.sh   review_and_approve  (sourceable library harness)
 #   G4  prompt styling (non-TTY / TERM=dumb / PTY)
 #   G5  whitespace strictness
 #
-# Production libraries are sourced explicitly. Functions still owned by the
-# drivers use checked extraction until their corresponding library move.
+# Production libraries are sourced explicitly; neither driver is sourced.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$ROOT/scripts/lib/sha256.sh"   # hash_file, portable across platforms
@@ -97,10 +96,10 @@ expect_no_ansi() {
 }
 
 # ---------------------------------------------------------------------------
-# Function extraction harness
+# Library harness
 # ---------------------------------------------------------------------------
 
-# extract_fns <script> <outfile> <fn>...
+# State and fault-injection hooks stay explicit in each harness.
 . "$ROOT/scripts/tests/workflow_fixture.sh"
 
 # new_case <name> — scratch working tree with the gated documents present.
@@ -152,8 +151,7 @@ PRELUDE
 )
 
 write_cw_harness() {
-    extract_fns "$ROOT/scripts/change-workflow.sh" "$CASE/driver-fns.sh" canonical_artifact_path approval_artifact_path require_file human_gate
-    workflow_fixture_write "$CASE/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-change.sh" "$CASE/driver-fns.sh"
+    workflow_fixture_write "$CASE/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-change.sh" "$ROOT/scripts/lib/workflow-paths-change.sh" "$ROOT/scripts/lib/approval-gates-change.sh"
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail

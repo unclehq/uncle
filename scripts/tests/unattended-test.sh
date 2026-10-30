@@ -130,8 +130,7 @@ else ok; fi
 
 cw="$WORK/cw"
 mkdir -p "$cw/.uncle/workflow/approvals"
-extract_fns "$ROOT/scripts/change-workflow.sh" "$cw/driver-fns.sh" require_file canonical_artifact_path approval_artifact_path human_gate
-workflow_fixture_write "$cw/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-change.sh" "$ROOT/scripts/lib/workflow-records.sh" "$cw/driver-fns.sh"
+workflow_fixture_write "$cw/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-change.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ROOT/scripts/lib/workflow-paths-change.sh" "$ROOT/scripts/lib/approval-gates-change.sh"
 cat > "$cw/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -169,8 +168,7 @@ done
 ic="$WORK/ic"
 mkdir -p "$ic/.uncle/workflow/approvals"
 extract_fns "$ROOT/scripts/change-workflow.sh" "$ic/driver-fns.sh" implementation_incomplete_choice
-extract_fns "$ROOT/scripts/lib/waivers.sh" "$ic/fns-waivers.sh" write_waivers record_waiver
-workflow_fixture_write "$ic/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ic/driver-fns.sh" "$ic/fns-waivers.sh"
+workflow_fixture_write "$ic/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ic/driver-fns.sh" "$ROOT/scripts/lib/waivers.sh"
 cat > "$ic/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -178,7 +176,6 @@ ROOT="/nonexistent-so-the-popup-is-skipped"
 STATE_DIR="$PWD/.uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
 UNATTENDED_FILE="$STATE_DIR/unattended-gates"
-waive_file() { printf '%s/waivers/%s' "$STATE_DIR" "$1"; }
 envelope_invalidate() { :; }
 set_state() { :; }
 . ./fns.sh

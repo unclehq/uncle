@@ -12,3 +12,7 @@ stage_supports_structured_output() {
 stage_uses_self_hosted() {
     app_stage_uses_self_hosted "$@"
 }
+
+status_stage_context() {
+    app_status_stage_context "$@"
+}

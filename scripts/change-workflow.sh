@@ -1884,39 +1884,6 @@ progress_tap() {
 # normalized to the base stage before lookup.
 STATUS_STAGE_SEQ="change-plan adversarial-review updated-change-plan implementation manual-checklist execute-checklist final-audit"
 
-# Report the current stage to the TUI status channel. The exports feed the
-# agent shims' own status writes; the start event written here covers every
-# stage directly, including runners with no shim (plain claude, reviewers).
-status_stage_context() {
-    local log_name="$1"
-    local turns="${2:-0}"
-    local model="${3:-(runner default)}"
-    local mode="${4:-act}"
-    local base="${log_name%%-step-*}"     # implementation-step-3 -> implementation
-    base="${base%-base}"                   # manual-checklist-base -> manual-checklist
-    base="${base%-delta}"                  # manual-checklist-delta -> manual-checklist
-    local s i=1 index=0 n=0
-    for s in $STATUS_STAGE_SEQ; do
-        n=$((n + 1))
-        if [[ "$s" == "$base" ]]; then
-            index=$i
-        fi
-        i=$((i + 1))
-    done
-    export UNCLE_STATUS_STAGE="$log_name"
-    export UNCLE_STATUS_STAGE_INDEX="$index"
-    export UNCLE_STATUS_STAGE_TOTAL="$n"
-    export UNCLE_STATUS_STAGE_TURNS="$turns"
-    # Keyed on the normalized name, so a -step-/-base/-delta variant inherits
-    # the setting its parent stage was configured with.
-    UNCLE_STAGE_NETWORK="$(uncle_stage_network "$base")"
-    export UNCLE_STAGE_NETWORK
-    if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
-        printf '{"event":"start","model":"%s","mode":"%s","stage":"%s","stage_index":%s,"stage_total":%s,"stage_turns":%s}\n' \
-            "$model" "$mode" "$log_name" "$index" "$n" "$turns" \
-            >> "$UNCLE_STATUS_FILE"
-    fi
-}
 
 # Change stages must receive the exact driver-selected request, not merely an
 # instruction to find CHANGE_REQUEST.md.  In particular self-hosted/OpenCode

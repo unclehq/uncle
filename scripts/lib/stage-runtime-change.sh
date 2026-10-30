@@ -8,3 +8,7 @@ stage_supports_structured_output() {
 stage_uses_self_hosted() {
     change_stage_uses_self_hosted "$@"
 }
+
+status_stage_context() {
+    change_status_stage_context "$@"
+}

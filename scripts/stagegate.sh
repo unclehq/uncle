@@ -1119,37 +1119,6 @@ stage_tools() {
 # Matches run_stage's case arms.
 STATUS_STAGE_SEQ="derive-brief requirements project-plan adversarial-review updated-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
 
-# Report the current stage to the TUI status channel. The exports feed the
-# agent shims' own status writes; the start event written here covers every
-# stage directly, including runners with no shim (plain claude, reviewers).
-status_stage_context() {
-    local log_name="$1"
-    local model="${2:-(runner default)}"
-    local mode="${3:-act}"
-    local s i=1 index=0 n=0
-    for s in $STATUS_STAGE_SEQ; do
-        n=$((n + 1))
-        if [[ "$s" == "$log_name" ]]; then
-            index=$i
-        fi
-        i=$((i + 1))
-    done
-    local turns
-    turns="$(stage_turns "$log_name")"
-    export UNCLE_STATUS_STAGE="$log_name"
-    export UNCLE_STATUS_STAGE_INDEX="$index"
-    export UNCLE_STATUS_STAGE_TOTAL="$n"
-    export UNCLE_STATUS_STAGE_TURNS="$turns"
-    # Read per stage, like every other setting: an operator who discovers at a
-    # gate that verification needs a local server can turn it on there.
-    UNCLE_STAGE_NETWORK="$(uncle_stage_network "$log_name")"
-    export UNCLE_STAGE_NETWORK
-    if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
-        printf '{"event":"start","model":"%s","mode":"%s","stage":"%s","stage_index":%s,"stage_total":%s,"stage_turns":%s}\n' \
-            "$model" "$mode" "$log_name" "$index" "$n" "$turns" \
-            >> "$UNCLE_STATUS_FILE"
-    fi
-}
 
 # Map state-machine destinations which immediately launch an agent to the
 # matching configured stage.  Gates and deterministic validation states do

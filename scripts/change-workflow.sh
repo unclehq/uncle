@@ -1577,6 +1577,7 @@ GREEN_BG_PID=""
 
 start_green_check_bg() {
     if [[ "$GREEN_CHECK" != "1" || ! -s "$GREEN_CMDS" ]]; then
+        run_green_check
         return 0
     fi
     echo
@@ -4305,13 +4306,16 @@ REPAIR
             # Runs nothing in parallel and cannot fail the stage.
             python3 -B "$ROOT/scripts/lib/step_groups.py" .uncle/docs/CHANGE_PLAN.md . \
                 > "$STATE_DIR/step-groups.json" 2>/dev/null || true
-            write_verification_envelope
             plan_delivery_summary
 
             set_state WAIT_IMPLEMENT_APPROVAL
             ;;
 
         WAIT_IMPLEMENT_APPROVAL)
+            # The approval and verification envelope must describe completed
+            # checks, not a previous result or a still-running background job.
+            wait_green_check_bg || exit $?
+            write_verification_envelope
             green_regressed="$(green_regressions "$GREEN_CLASS")"
 
             if [[ "$DIFF_GATE" != "1" ]]; then
@@ -4644,7 +4648,7 @@ PY
             envelope_invalidate FINAL_AUDIT
             envelope_write --stage audit --result unavailable --reason 'reviewer did not complete'
             if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine freeze || exit 1; fi
-            rm -f .uncle/docs/FINAL_AUDIT.md
+            rm -f .uncle/docs/FINAL_AUDIT.md "$STATE_DIR/documents/FINAL_AUDIT.json"
             run_final_audit_panel
             if [[ -s "$STATE_DIR/documents/FINAL_AUDIT.json" ]]; then
                 echo 'Final-audit fast path: rendered authoritative worker findings without parent synthesis.'
@@ -4791,8 +4795,10 @@ PY
 
             if [[ "$audit_class" == NOT_READY ]]; then
                 audit_hash="$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")"
-                if [[ "$(classify_audit_verdict "$STATE_DIR/documents/FINAL_AUDIT.json")" != NOT_READY ]] \
-                    || [[ "$(awk -F'\t' 'NR == 1 {print $3}' "$VERDICT_FILE")" != "$audit_hash" ]]; then
+                # VALIDATE_AUDIT may downgrade a reviewer's READY based on
+                # driver evidence. The recorded digest, not agreement with
+                # that reviewer's verdict, proves the artifact is unchanged.
+                if [[ "$(awk -F'\t' 'NR == 1 {print $3}' "$VERDICT_FILE")" != "$audit_hash" ]]; then
                     echo "The audit changed since its verdict was recorded; rerun FINAL_AUDIT."
                     exit 1
                 fi

@@ -6078,6 +6078,15 @@ PY
             echo "Validating saved checklist reports; checks will not be rerun."
             echo "Correct report errors in place, then resume this validation step."
             if [[ ! -s "$STATE_DIR/documents/EXECUTE_CHECKLIST.json" ]]; then
+                # In gated mode a delivered but malformed report gets the
+                # existing bounded format retry before fallback can replace
+                # its evidence. A missing report still gets no model retry.
+                if [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" != 1 && -s .uncle/docs/VERIFICATION_REPORT.md ]]; then
+                    ensure_rc=0
+                    ensure_acceptance_canonical .uncle/docs/VERIFICATION_REPORT.md || ensure_rc=$?
+                    if [[ "$ensure_rc" == 2 ]]; then continue; fi
+                    require_file "$STATE_DIR/documents/VERIFICATION_REPORT.json"
+                fi
                 echo 'Checklist reports missing; recording incomplete evidence automatically.'
                 python3 "$ROOT/scripts/lib/checklist_report_fallback.py" --project . --missing-only || exit 1
             fi

@@ -3826,6 +3826,27 @@ sys.exit(0 if all(isinstance(f, dict) and f.get("driver_fallback") is True for f
              "not complete (turn budget, a stuck agent, etc.) and rerun."
         exit 1
     fi
+    # Two isolated parallel steps, each unable to see the other's output, can
+    # independently conclude they are the one satisfying the same acceptance
+    # criterion -- a plan-ownership gap, not a defect in either step's own
+    # work. Retrying the single step supervision picks (whichever one the
+    # validator happened to name) can never resolve a conflict that exists
+    # *between* two steps' claims: on issue 116, AC-3 was claimed by both
+    # step 2 (pointing at runner-default-deny-test.sh) and step 5 (its own,
+    # separately real work on cline-removal-gate-test.sh), and five retries
+    # of step 5 alone left the same duplicate every time. Stop for a person
+    # to reconcile the claim instead of burning the retry budget on a
+    # failure class no single-step retry can fix.
+    if [[ "$UNATTENDED" == 1 ]] && grep -q '^Duplicate delivery criterion ' "$completion" 2>/dev/null; then
+        echo
+        echo "$completion reports a delivery criterion claimed by more than one implementation" \
+             "step. That is a conflict between two steps' own output, not a defect retrying" \
+             "either one alone can fix."
+        cat "$completion"
+        echo "Stopping the unattended run here instead of retrying; reconcile which step's claim" \
+             "is authoritative (or merge both as evidence for one row) in $notes, then rerun."
+        exit 1
+    fi
     supervision_validation_failed implementation_completion "$notes" \
         "$(head -n 3 "$completion" 2>/dev/null | tr '\n' ' ')" 0
     # Keep rejection evidence intact. Only explicitly waived delivery rows may

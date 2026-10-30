@@ -621,9 +621,15 @@ def record_turn(identity, number, message, usage, finish_reason, phase='tools'):
         function = call.get('function') or {}
         arguments = function.get('arguments') or ''
         calls.append({'name': function.get('name'), 'argument_bytes': len(arguments.encode('utf-8'))})
+    # Sizes only, so a turn's output tokens can be split between chat text,
+    # reasoning and tool arguments without recording any of them.
+    def size(value):
+        return len(value.encode('utf-8')) if isinstance(value, str) else 0
     event = dict(type='self_hosted_turn', request_group=identity, turn=number,
                  stage=os.environ.get('UNCLE_STATUS_STAGE', ''), phase=phase,
-                 tools=calls, output_tokens=(usage or {}).get('completion_tokens'), finish_reason=finish_reason)
+                 tools=calls, text_bytes=size(message.get('content')),
+                 reasoning_bytes=size(message.get('reasoning_content')) + size(message.get('reasoning')),
+                 output_tokens=(usage or {}).get('completion_tokens'), finish_reason=finish_reason)
     try:
         print(json.dumps(event), flush=True)
     except OSError:

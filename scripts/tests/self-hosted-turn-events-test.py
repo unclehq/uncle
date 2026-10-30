@@ -59,6 +59,19 @@ class TurnEvents(unittest.TestCase):
         self.assertTrue(all('usage' not in e and e['type'] == 'self_hosted_turn' for e in events))
         self.assertEqual(usage['output_tokens'], 25)
 
+    def test_turn_records_text_and_reasoning_sizes_not_contents(self):
+        first = self.reply(calls=[self.call('read_file', path='a.txt')], tokens=9)
+        first['choices'][0]['message'].update(content='Draft plan ✓', reasoning_content='thinking-secret')
+        second = self.reply(tokens=3)
+        second['choices'][0]['message'].update(content='done', reasoning='more-secret')
+        with patch.object(agent, 'interruptible_chat', side_effect=[first, second]):
+            agent.run_agent(self.values, 'go', agent.Policy(self.root, write=True), 4096, usage={})
+        events = self.events()
+        self.assertEqual([e['text_bytes'] for e in events], [len('Draft plan ✓'.encode()), 4])
+        self.assertEqual([e['reasoning_bytes'] for e in events], [len('thinking-secret'), len('more-secret')])
+        for secret in ('Draft plan', 'thinking-secret', 'more-secret'):
+            self.assertNotIn(secret, self.output.getvalue())
+
     def test_final_fallback_and_truncated_turn_are_logged(self):
         schema = {'type': 'object', 'required': ['ok'], 'properties': {'ok': {'type': 'boolean'}}}
         with patch.object(agent, 'interruptible_chat', return_value=self.reply('ready', tokens=2)), \

@@ -98,16 +98,16 @@ class Efficiency(unittest.TestCase):
         self.assertIn('Deliver it once', chat.call_args.args[2][0]['content'])
         self.assertEqual(http_agent.prefetch_context(prompt, policy), '')
 
-    def test_invalid_packet_still_uses_constraint_path_and_is_rejected(self):
+    def test_invalid_packet_is_retained_for_repair_and_still_rejected(self):
         packet, (prompt, policy, schema, name, limit, _) = self.setup_packet()
         bad = json.dumps(dict(packet, sections="not an array"))
         reply = {'choices': [{'message': {'content': bad}, 'finish_reason': 'stop'}]}
         with patch.object(http_agent, 'interruptible_chat', return_value=reply), \
-                patch.object(http_agent, 'constrained_completion', return_value=(bad, 'stop', {}, 'json_schema')) as closing:
-            with self.assertRaisesRegex(ValueError, 'violates the artifact schema'):
+                patch.object(http_agent, 'constrained_completion', side_effect=AssertionError('duplicate generation')) as closing:
+            with self.assertRaisesRegex(ValueError, 'Unrepaired draft.*sections must be array'):
                 http_agent.run_agent({}, prompt, policy, limit, final_schema=schema, final_name=name)
-        self.assertEqual(closing.call_count, 1)
-        self.assertIs(closing.call_args.args[2], schema)
+        self.assertEqual(closing.call_count, 0)
+        self.assertEqual((self.root / '.uncle/workflow/http-answer-repair.json').exists(), False)
 
     def test_all_section_kinds_are_read_only_other_stages_keep_write_tools(self):
         for kind in (worker_schemas.SECTION_KIND, worker_schemas.SECTION_MODEL_KIND, worker_schemas.OUTLINE_KIND):

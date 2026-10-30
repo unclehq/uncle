@@ -25,6 +25,7 @@ import tempfile
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
+from self_hosted_stream import StreamStopped, assemble as assemble_stream
 
 REJECTED = (400, 404, 405, 415, 422, 501)
 _capabilities = {}
@@ -165,8 +166,8 @@ def compatible_post(values, body, timeout, url=None):
             # its own fallback. A generic 400 warrants an otherwise-identical
             # A/B probe, without changing effort or schema during that probe.
             if error.code != 400 or _names_option(detail, dict.fromkeys((
-                    'reasoning_effort', 'reasoning_content', 'response_format', 'json_schema',
-                    'structured_outputs', 'guided_json', 'tools', 'tool_choice', 'format'))):
+                    'reasoning_effort', 'reasoning_content', 'reasoning', 'response_format', 'json_schema',
+                    'structured_outputs', 'guided_json', 'tools', 'tool_choice', 'format', 'stream', 'stream_options'))):
                 raise
             try:
                 result = post(url, values['api_key'], clean, timeout)
@@ -175,13 +176,67 @@ def compatible_post(values, body, timeout, url=None):
             disabled()
             return result
 
-    return _compatible_post(values, request, send)
+    return _compatible_post(values, request, lambda candidate: streaming_post(
+        url, values['api_key'], candidate, timeout, features, send=send))
 
 
 def option(name, default):
     """Self-hosted-only option: WORKFLOW_SELF_HOSTED_* overrides .uncle/config."""
     return os.environ.get('WORKFLOW_SELF_HOSTED_' + name.upper().replace('-', '_'),
                           _config_values().get('self-hosted.' + name, default)).strip().lower()
+
+
+def positive_option(name, default, minimum=1):
+    value = int(option(name, str(default)))
+    if value < minimum:
+        raise ValueError('self-hosted.%s must be at least %d' % (name, minimum))
+    return value
+
+
+def streaming_post(url, key, body, timeout, features, send=None):
+    """Negotiate SSE and usage independently; never confuse schema rejection with streaming.
+
+    Generic 400s use otherwise-identical probes, and only a successful probe
+    teaches a fallback. Memory is per Base URL for the life of this process.
+    Native Ollama /api/chat keeps its native non-streaming wire format.
+    """
+    send = send or (lambda candidate: post(url, key, candidate, timeout))
+    if not url.endswith('/chat/completions') or features.get('stream') is False:
+        return send(body)
+    candidate = dict(body, stream=True)
+    if features.get('stream_usage') is not False:
+        candidate['stream_options'] = {'include_usage': True}
+    try:
+        return send(candidate)
+    except HTTPError as original:
+        detail = _error_detail(original)
+        if original.code not in REJECTED:
+            raise
+        named = _names_option(detail, {'stream': None, 'stream_options': None, 'include_usage': None})
+        if not named and (original.code != 400 or _names_option(detail, dict.fromkeys((
+                'response_format', 'json_schema', 'structured_outputs', 'guided_json', 'reasoning_effort',
+                'reasoning_content', 'reasoning', 'tools', 'tool_choice', 'format')))):
+            raise
+        if 'stream_options' in candidate:
+            candidate.pop('stream_options')
+            try:
+                result = send(candidate)
+            except StreamStopped:
+                # HTTP/SSE was accepted even though generation itself failed.
+                features['stream_usage'] = False
+                raise
+            except HTTPError as probe:
+                if probe.code not in REJECTED:
+                    raise
+            else:
+                features['stream_usage'] = False
+                return result
+        try:
+            result = send(dict(body, stream=False))
+        except HTTPError:
+            raise original from None
+        features['stream'] = False
+        return result
 
 
 def reasoning_effort(values=None, effort=None):
@@ -296,15 +351,14 @@ def _no_answer(timeout, limit):
 def request_seconds(stage_seconds=3600):
     """Seconds one model request may take (WORKFLOW_SELF_HOSTED_REQUEST_SECONDS, default 1200).
 
-    Requests are not streamed, so the server says nothing until it has finished:
-    a generation that never stops looked exactly like a hung stage for the whole of
-    the stage timeout.  Twenty minutes covers a large prompt and a long answer.
+    The timeout also covers native/non-streaming fallback and pauses between
+    streamed chunks. Twenty minutes allows a large prompt and a long answer.
     """
     configured = os.environ.get('WORKFLOW_SELF_HOSTED_REQUEST_SECONDS', '').strip()
     return int(configured) if configured else min(int(stage_seconds), 1200)
 
 
-def turn_output_tokens(limit):
+def turn_output_tokens(limit, name=''):
     """Output cap for one tool-loop turn (WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS, default 32768).
 
     A turn is a tool call or a short note.  Using the whole-stage ceiling (64k) let
@@ -313,8 +367,33 @@ def turn_output_tokens(limit):
     call, so the cap must hold a full plan: 16k cut one off mid-document
     (calculator-local, updated-plan); 32k matches the closing-answer cap.
     """
-    configured = os.environ.get('WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS', '').strip()
-    return min(int(limit), int(configured) if configured else 32768)
+    return output_cap(limit, 'turn-output-tokens', name)
+
+
+def output_cap(limit, option_name, artifact=''):
+    """Environment (stage, parent, global), config in the same order, then defaults."""
+    stage = os.environ.get('UNCLE_STATUS_STAGE', '')
+    config = _config_values()
+    from self_hosted import config_stage
+    names = list(dict.fromkeys(stage_names(stage) + [config_stage(stage, config)]))
+    prefix = 'WORKFLOW_SELF_HOSTED_' + option_name.upper().replace('-', '_')
+    value = None
+    for name in names + ['']:
+        key = prefix + ('_' + re.sub(r'[^A-Z0-9]', '_', name.upper()) if name else '')
+        if os.environ.get(key, '').strip():
+            value = os.environ[key]
+            break
+    if value is None:
+        for name in names + ['self-hosted']:
+            if config.get(name + '.' + option_name):
+                value = config[name + '.' + option_name]
+                break
+    small = (artifact.endswith(('worker_packet', 'ops_packet', 'outline_packet')) or
+             bool(re.search(r'(?:-review-worker-|-worker-(?:edits|resolution|resolve|lens)-)', stage)))
+    cap = int(value) if value is not None else (4096 if small else 32768)
+    if cap <= 0:
+        raise ValueError(option_name + ' must be a positive integer')
+    return min(int(limit), cap)
 
 
 # Stages that run hotter than the default.  Requirements interpretation is
@@ -530,8 +609,8 @@ NETWORK_ERRNOS = {errno.ECONNRESET, errno.ECONNABORTED, errno.EPIPE, errno.EHOST
 def tune_socket(sock):
     """Make a dead path show up in about a minute, not at the end of a 20-minute read.
 
-    A request is not streamed, so a connection can be silent for many minutes while the
-    server generates.  If the network under it dies (a dropped VPN), nothing says so: the
+    A connection can be silent for many minutes during prompt processing or
+    non-streaming fallback. If the network under it dies (a dropped VPN), nothing says so: the
     kernel retransmits into the void and the stage looks hung (three preflight workers sat
     with 100 KB unsent in their sockets).  Keepalive probes and a bound on how long sent
     data may go unacknowledged turn that into a connection error the caller can act on.
@@ -682,7 +761,17 @@ def _via_http1(method, url, data, headers, timeout):
             tune_socket(connection.sock)
             connection.request(method, target, body=data, headers=dict(headers, Connection='keep-alive'))
             response = connection.getresponse()
-            raw = response.read()
+            if 200 <= response.status < 300 and response.headers.get_content_type() == 'text/event-stream':
+                try:
+                    raw = assemble_stream(iter(response.readline, b''))
+                finally:
+                    # [DONE] need not consume the HTTP body terminator. Closing
+                    # also cancels generation immediately on an early stop.
+                    response.close()
+                    connection.close()
+                    connections.pop(key, None)
+            else:
+                raw = response.read()
         except ServerUnreachable:
             raise
         except STALE as error:
@@ -718,8 +807,12 @@ def _via_http2(method, url, data, headers, timeout):
                 client = pool.http2[key] = httpx.Client(
                     http1=parts.scheme == 'https', http2=True, follow_redirects=False)
         try:
-            response = client.request(method, url, content=data, headers=headers,
-                                      timeout=httpx.Timeout(timeout, connect=connect_timeout()))
+            with client.stream(method, url, content=data, headers=headers,
+                               timeout=httpx.Timeout(timeout, connect=connect_timeout())) as response:
+                if response.is_success and response.headers.get('content-type', '').split(';')[0] == 'text/event-stream':
+                    raw = assemble_stream(response.iter_lines())
+                else:
+                    raw = response.read()
         except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError) as error:
             with pool.lock:
                 pool.http2.pop(key, None)
@@ -735,7 +828,7 @@ def _via_http2(method, url, data, headers, timeout):
         except httpx.TransportError as error:
             raise _failure(url, OSError(str(error))) from None
         PROTOCOLS.add(response.http_version)
-        return response.status_code, response.reason_phrase, response.headers, response.content
+        return response.status_code, response.reason_phrase, response.headers, raw
 
 
 def _request(url, api_key, body=None, timeout=30):
@@ -751,7 +844,7 @@ def _request(url, api_key, body=None, timeout=30):
     status, reason, response_headers, raw = transport(method, url, data, headers, timeout)
     if not 200 <= status < 300:
         raise HTTPError(url, status, reason, response_headers, io.BytesIO(raw))
-    return json.loads(raw or b'null')
+    return raw if isinstance(raw, dict) else json.loads(raw or b'null')
 
 
 def detect_flavor(base_url, api_key):

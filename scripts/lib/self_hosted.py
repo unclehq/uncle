@@ -774,9 +774,12 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
     policy = Policy(root, write=side == 'agent' or bool(delivery), shell=side == 'agent' and allow_shell,
                     writable=([delivery] if delivery else []) if side == 'reviewer' else None,
                     schema_for=document_schema_for(delivery, prompt))
-    if stage_name == 'project-plan-investigate' and side == 'agent':
-        policy.draft_checks[policy.root / '.uncle/workflow/project-plan-investigation.md'] = (
-            lambda text: validate_plan(text, protected=False))
+    if stage_name in INVESTIGATION_DOCUMENTS:
+        relative, document = INVESTIGATION_DOCUMENTS[stage_name]
+        policy.draft_checks[policy.root / relative] = lambda text: validate_investigation(document, text)
+        if side == 'reviewer':
+            policy.write = True
+            policy.writable.add(policy.root / relative)
     if schema_kind in ('project-plan-section-worker-packet', 'project-plan-section-model-packet', 'project-plan-outline-packet',
                        'updated-plan-edit-ops-packet', 'updated-plan-resolution-ops-packet',
                        'plan', 'change-plan', 'change-planning-bundle'):
@@ -899,10 +902,61 @@ def validate_plan(text, protected=True):
 
 
 REVIEW_VALIDATORS = {
+    'REQUIREMENTS_INTERPRETATION.md': 'requirements-context.py',
     'ADVERSARIAL_REVIEW.md': 'adversarial-context.py',
     'FINAL_AUDIT.md': 'final-audit-context.py',
     'MANUAL_CHECKLIST.md': 'checklist_document.py',
 }
+
+
+INVESTIGATION_DOCUMENTS = {
+    'project-plan-investigate': ('.uncle/workflow/project-plan-investigation.md', 'PROJECT_PLAN.md'),
+    'updated-plan-investigate': ('.uncle/workflow/updated-plan-investigation.md', 'UPDATED_PROJECT_PLAN.md'),
+    'requirements-investigate': ('.uncle/workflow/requirements-investigation.md', 'REQUIREMENTS_INTERPRETATION.md'),
+    'adversarial-review-investigate': ('.uncle/workflow/adversarial-review-investigation.md', 'ADVERSARIAL_REVIEW.md'),
+    'final-audit-investigate': ('.uncle/workflow/final-audit-investigation.md', 'FINAL_AUDIT.md'),
+    'manual-checklist-investigate': ('.uncle/workflow/manual-checklist-investigation.md', 'MANUAL_CHECKLIST.md'),
+    'preflight-investigate': ('.uncle/workflow/preflight-investigation.md', 'PREFLIGHT_REPORT.md'),
+    'implementation-investigate': ('.uncle/workflow/implementation-notes-investigation.md', 'IMPLEMENTATION_NOTES.md'),
+    'repair-investigate': ('.uncle/workflow/repair-notes-investigation.md', 'REPAIR_NOTES.md'),
+}
+
+
+def validate_investigation(document, text):
+    """Use the destination's checks, isolating validators' canonical exports.
+
+    Probing a candidate must not publish any side effects. The driver still
+    exports and validates the adopted file through its ordinary handoff.
+    """
+    if document in ('PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md'):
+        return validate_plan(text, protected=document == 'UPDATED_PROJECT_PLAN.md')
+    if document in ('IMPLEMENTATION_NOTES.md', 'REPAIR_NOTES.md'):
+        # These handoffs are preserved as Markdown fragments by the driver.
+        # Use their explicit section contract for both tool writes and capture;
+        # a heading-only status message is not complete notes.
+        from reviewer_output import check
+        check(text, 'self-hosted investigation')
+        headings = ('Changed files', 'Deviations', 'Unresolved concerns', 'Plan blockers')
+        if document == 'REPAIR_NOTES.md':
+            headings += ('Findings not fixed',)
+        for heading in headings:
+            if not re.search(r'^##[ \t]+' + re.escape(heading) + r'[ \t]*\n(?:[ \t]*\n)*(?!#)\S', text, re.M):
+                raise ValueError('Missing or empty investigation section: ' + heading)
+        return
+    with tempfile.TemporaryDirectory(prefix='uncle-capture-check-') as directory:
+        candidate = Path(directory) / document
+        candidate.write_text(text, encoding='utf-8')
+        if document == 'PREFLIGHT_REPORT.md':
+            import acceptance_context
+            acceptance_context.export_json(candidate, directory)
+            acceptance_context.validate_canonical(Path(directory) / '.uncle/workflow/documents/PREFLIGHT_REPORT.json')
+            return
+        from process_tree import python3_executable
+        result = subprocess.run([python3_executable(), '-B', str(Path(__file__).parent / REVIEW_VALIDATORS[document]),
+                                 '--validate', str(candidate)], cwd=directory, capture_output=True, text=True, timeout=60)
+        if result.returncode:
+            reason = (result.stderr or result.stdout).strip().splitlines()
+            raise ValueError(reason[0] if reason else 'Invalid ' + document)
 
 
 class InvalidReviewerDocument(ValueError):

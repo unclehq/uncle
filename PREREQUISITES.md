@@ -165,11 +165,53 @@ it is per pool, not a server-wide cap. Preview work, other existing panels,
 and optional candidate racing can add concurrent requests. No new API fields
 or server-specific features are required.
 
-**Connections.** Uncle keeps one persistent connection per server and reuses it for every request in a stage, reconnecting once if the server closed it while idle. HTTP/2 is used when it can be negotiated: over `https` (via ALPN) when the optional `httpx` and `h2` Python packages are installed. Plain `http` servers speak HTTP/1.1 keep-alive. Most local servers do not accept HTTP/2 without TLS; if yours does (for example Hypercorn), set `WORKFLOW_SELF_HOSTED_HTTP2=h2c`. `WORKFLOW_SELF_HOSTED_HTTP2=off` forces HTTP/1.1.
+**Connections.** Uncle keeps connections per server, reconnecting once if the server closed one while idle. HTTP/2 is used when it can be negotiated: over `https` (via ALPN) when the optional `httpx` and `h2` Python packages are installed. Plain `http` servers speak HTTP/1.1; SSE responses close their connection after completion or cancellation so unread stream bytes cannot contaminate another request. Most local servers do not accept HTTP/2 without TLS; if yours does (for example Hypercorn), set `WORKFLOW_SELF_HOSTED_HTTP2=h2c`. `WORKFLOW_SELF_HOSTED_HTTP2=off` forces HTTP/1.1.
 
 OpenCode is no longer needed. To return to the OpenCode CLI for a run, set `WORKFLOW_SELF_HOSTED_TRANSPORT=opencode`. Existing self-hosted credentials and model selections migrate automatically; the old `openai/` catalog prefix is removed during migration.
 
 The default model limits are 65,536 context tokens and 8,192 output tokens. Match your server with `WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS` and `WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS`. One tool-loop turn is capped at 32,768 output tokens (`WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS`); a stage that writes its whole delivery in one turn needs room for it, and a turn that reaches the cap fails as incomplete. Set `WORKFLOW_SELF_HOSTED_SECONDS` for the stage timeout (default 3,600 seconds), or `WORKFLOW_SELF_HOSTED_REQUEST_SECONDS` for a separate API timeout. `WORKFLOW_OPENCODE_CMD` selects an alternate CLI executable.
+
+OpenAI-compatible requests stream with usage when supported. Rejected usage
+options fall back to SSE without usage; rejected streaming falls back to JSON.
+These capabilities are remembered separately for each Base URL during the
+process, without removing schemas, tool contracts, or local validators. Native
+Ollama `/api/chat` remains non-streaming. A server returning ordinary JSON
+cannot be stopped by the streaming guards.
+
+`self-hosted.stream-whitespace-chars` (default 2000) stops consecutive whitespace
+in text, reasoning, or a tool argument. `self-hosted.stream-repetition-count`
+(default 8, minimum 2) stops consecutive identical lines of at least 16
+characters or repeating chunks of 16–256 characters. Detection does not depend
+on the server's delta boundaries. Environment overrides are
+`WORKFLOW_SELF_HOSTED_STREAM_WHITESPACE_CHARS` and
+`WORKFLOW_SELF_HOSTED_STREAM_REPETITION_COUNT`. Stopped fragments are never
+published; tool turns get one recovery attempt per loop, and constrained final
+answers may retry once without grammar while keeping local validation.
+`self_hosted_stream_stop` records the reason and character/byte counts;
+`self_hosted_turn` records the early stop. Token usage remains unknown when the
+server has not reported it. Neither diagnostic includes output content.
+
+Small worker packets, edit/resolution ops, and outline packets default to 4096
+tokens for both tool turns and final answers. Other artifacts retain 32768.
+Use `<stage>.turn-output-tokens` and `<stage>.final-output-tokens`, or the
+`self-hosted.*` equivalents, in `.uncle/config`. Environment equivalents are
+`WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS[_<STAGE>]` and
+`WORKFLOW_SELF_HOSTED_FINAL_OUTPUT_TOKENS[_<STAGE>]`. Precedence is stage, parent,
+global environment, then stage, parent, global config, then default. Stage names
+are uppercased with punctuation replaced by underscores in environment keys.
+All caps must be positive and remain bounded by the stage's output budget.
+
+The HTTP adapter captures already-generated deliverables from every turn.
+Investigation documents use their destination validators; JSON uses the same
+schema and downstream canonical checks as an ordinary final answer. Valid chat
+wins over a same-turn delivery write, regardless of size, so a stub cannot
+replace it. A previously validated document is retained. Invalid chat never
+replaces a valid file; the largest recognizable invalid document is retained
+privately and repaired using unique `old_string` edits and exact validator
+feedback. JSON drafts use the same repair path. Ordinary status text keeps the
+normal delivery behavior. Unrelated tool work still runs. `self_hosted_capture`
+records the adopted byte count and whether it was a document, packet, or private
+draft, never its content.
 
 ### Candidate racing (multiple concurrent requests)
 

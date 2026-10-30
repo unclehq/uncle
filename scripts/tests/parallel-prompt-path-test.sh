@@ -23,26 +23,39 @@ FAILED=0
 note() { echo "  $1"; }
 fail() { echo "  FAIL: $1" >&2; FAILED=1; }
 
-for driver in change-workflow.sh stagegate.sh; do
-    line="$(grep -n 'export PARALLEL_PROMPT_DIR=' "$ROOT/scripts/$driver" | head -1)"
-    [[ -n "$line" ]] || { fail "$driver no longer exports PARALLEL_PROMPT_DIR"; continue; }
+# uncle consolidation phase (b): both drivers' own copies of this assignment
+# were extracted into the shared parallel_implement_run_groups (scripts/lib/
+# parallel-implement.sh), used by both stagegate.sh and change-workflow.sh, so
+# it is checked once there instead of once per driver. Neither driver file
+# assigns PARALLEL_PROMPT_DIR directly any more -- confirmed absent below,
+# which is now correct rather than a regression.
+shared_lib="$ROOT/scripts/lib/parallel-implement.sh"
+line="$(grep -n 'export PARALLEL_PROMPT_DIR=' "$shared_lib" | head -1)"
+[[ -n "$line" ]] || fail "the shared parallel_implement_run_groups no longer exports PARALLEL_PROMPT_DIR"
 
-    # The assignment, evaluated with the same shape the driver gives it.
+if [[ -n "$line" ]]; then
+    # The assignment, evaluated with the same shape the shared function gives it.
     value="$(PROJECT_ROOT=/tmp/proj \
              STATE_DIR=/tmp/proj/.uncle/workflow \
              PWD=/tmp/proj \
-             bash -c 'eval "$(grep -o "PARALLEL_PROMPT_DIR=.*" "$1" | head -1)"; printf "%s" "$PARALLEL_PROMPT_DIR"' _ "$ROOT/scripts/$driver")"
+             bash -c 'eval "$(grep -o "PARALLEL_PROMPT_DIR=.*" "$1" | head -1)"; printf "%s" "$PARALLEL_PROMPT_DIR"' _ "$shared_lib")"
 
     case "$value" in
         /*) ;;
-        *) fail "$driver builds a relative prompt dir ($value); workers run from a sandbox" ;;
+        *) fail "the shared function builds a relative prompt dir ($value); workers run from a sandbox" ;;
     esac
     if [[ "$value" == *"/tmp/proj/tmp/proj"* || "$value" == *"//tmp/proj"* ]]; then
-        fail "$driver doubles the project root: $value"
+        fail "the shared function doubles the project root: $value"
     fi
     [[ "$value" == "/tmp/proj/.uncle/workflow/parallel/prompts" ]] \
-        && note "ok: $driver -> $value" \
-        || fail "$driver built an unexpected path: $value"
+        && note "ok: parallel_implement_run_groups -> $value" \
+        || fail "the shared function built an unexpected path: $value"
+fi
+
+for driver in change-workflow.sh stagegate.sh; do
+    grep -Fq '. "$ROOT/scripts/lib/parallel-implement.sh"' "$ROOT/scripts/$driver" \
+        && note "ok: $driver sources the shared parallel-implement.sh" \
+        || fail "$driver does not source parallel-implement.sh"
 done
 
 # And the worker resolves what it is given, rather than re-deriving it.

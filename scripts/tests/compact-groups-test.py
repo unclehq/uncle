@@ -69,7 +69,13 @@ class CompactGroups(unittest.TestCase):
             self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_MAX_GROUPS:-4', block)
             self.assertIn('Checklist runs as one agent', block)
             self.assertIn('one shared-resource worker', block)
-            self.assertIn('checklist_coverage.py', text)
+            # uncle consolidation phase (c): the worker-coverage fast path
+            # (and its checklist_coverage.py call) moved into the shared
+            # checklist_execute_worker_fastpath (scripts/lib/checklist-stage.sh),
+            # used by both drivers, so it is checked there instead of in each
+            # driver's own text.
+            shared = (ROOT / 'scripts/lib/checklist-stage.sh').read_text()
+            self.assertIn('checklist_coverage.py', shared)
 
     def test_coverage_lists_required_checks_no_worker_ran(self):
         import checklist_coverage as coverage
@@ -80,10 +86,15 @@ class CompactGroups(unittest.TestCase):
         self.assertEqual(coverage.uncovered(checklist, {'results': [{'id': i} for i in ('MC-1', 'MC-2', 'MC-4')]}), [])
 
     def test_the_fast_path_runs_only_when_every_required_check_was_covered(self):
+        # uncle consolidation phase (c): this whole fast path is now the
+        # shared checklist_execute_worker_fastpath (scripts/lib/checklist-stage.sh),
+        # used by both drivers, rather than duplicated per-driver text.
+        shared = (ROOT / 'scripts/lib/checklist-stage.sh').read_text()
+        self.assertIn('Checks the workers did not cover', shared)
+        self.assertLess(shared.index('checklist_coverage.py'), shared.index('Execute-checklist fast path'))
         for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
             text = (ROOT / source).read_text()
-            self.assertIn('Checks the workers did not cover', text)
-            self.assertLess(text.index('checklist_coverage.py'), text.index('Execute-checklist fast path'))
+            self.assertIn('checklist_execute_worker_fastpath', text)
 
     def test_the_panel_workers_are_told_what_a_resource_is_and_to_write_few_checks(self):
         text = (ROOT / 'prompts' / 'change' / 'manual-checklist-review-worker.md').read_text()

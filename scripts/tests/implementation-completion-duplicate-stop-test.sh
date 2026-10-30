@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# implementation_complete(): a delivery criterion claimed by two different
-# isolated parallel steps is a conflict between their own outputs, not a
-# defect retrying either step alone can fix. An unattended run must stop for
-# a person to reconcile it instead of burning the retry budget retrying the
-# one step supervision happens to name -- observed live on issue 116: five
-# retries of the same step left the same duplicate every time.
+# implementation_complete(): a delivery criterion two different isolated
+# parallel steps actively disagree on (one says IMPLEMENTED, the other does
+# not) is a conflict between their own outputs, not a defect retrying either
+# step alone can fix. An unattended run must stop for a person to reconcile
+# it instead of burning the retry budget retrying the one step supervision
+# happens to name. (Two steps that *agree* a criterion is done -- issue 116's
+# original AC-3 case, where five retries of the same step left the same
+# duplicate every time -- are now merged automatically by
+# implementation-completion.py and never reach this stop at all; see
+# implementation-completion-test.py for that case.)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 temp="$(mktemp -d)"
@@ -23,7 +27,7 @@ mkdir -p "$STATE_DIR/documents" "$temp/project/.uncle/docs" "$temp/project/.uncl
 cd "$temp/project"
 printf '{"schema":"uncle.artifact/v1","kind":"change-spec","acceptance_criteria":[{"id":"AC-3","criterion":"no Cline residue","verification":"bash scripts/tests/cline-removal-gate-test.sh"}]}' \
     > "$STATE_DIR/documents/CHANGE_SPEC.json"
-printf '{"schema":"uncle.artifact/v1","kind":"implementation-notes","fragments":[{"schema":"uncle.artifact/v1","kind":"implementation-notes","deliveries":[{"id":"AC-3","status":"IMPLEMENTED","changed_code":"step2","observed_verification":"e"}]},{"schema":"uncle.artifact/v1","kind":"implementation-notes","deliveries":[{"id":"AC-3","status":"IMPLEMENTED","changed_code":"step5","observed_verification":"e"}]}]}' \
+printf '{"schema":"uncle.artifact/v1","kind":"implementation-notes","fragments":[{"schema":"uncle.artifact/v1","kind":"implementation-notes","deliveries":[{"id":"AC-3","status":"IMPLEMENTED","changed_code":"step2","observed_verification":"e"}]},{"schema":"uncle.artifact/v1","kind":"implementation-notes","deliveries":[{"id":"AC-3","status":"INCOMPLETE","changed_code":"step5","observed_verification":"e"}]}]}' \
     > "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json"
 
 verify_approval() { :; }
@@ -38,7 +42,7 @@ UNATTENDED=1
 status=0
 output="$(implementation_complete 2>&1)" || status=$?
 check "unattended stops (does not return 1 for a retry)" "1" "$status"
-check "the stop message names the duplicate" "yes" "$(printf '%s' "$output" | grep -q 'Duplicate delivery criterion AC-3' && echo yes || echo no)"
+check "the stop message names the conflict" "yes" "$(printf '%s' "$output" | grep -q 'Conflicting delivery status for AC-3' && echo yes || echo no)"
 check "the stop message explains it is a cross-step conflict" "yes" \
     "$(printf '%s' "$output" | grep -q 'conflict between two steps' && echo yes || echo no)"
 check "supervision is never invoked for this failure class" "" "$(cat "$temp/calls" 2>/dev/null)"

@@ -241,7 +241,10 @@ def streaming_post(url, key, body, timeout, features, send=None):
 
 def reasoning_effort(values=None, effort=None):
     """Resolve Uncle effort to portable OpenAI low/medium/high; off omits the field."""
-    enabled = option('reasoning-effort', 'on')
+    # Off by default: on DeepSeek V4 any reasoning_effort value switches thinking
+    # back on even when a stage's request options turn it off, and the hint showed
+    # no measurable benefit on tool-using requests. Opt in per project.
+    enabled = option('reasoning-effort', 'off')
     if enabled in ('off', '0', 'false'):
         return None
     if enabled not in ('on', '1', 'true'):
@@ -388,8 +391,16 @@ def output_cap(limit, option_name, artifact=''):
             if config.get(name + '.' + option_name):
                 value = config[name + '.' + option_name]
                 break
-    small = (artifact.endswith(('worker_packet', 'ops_packet', 'outline_packet')) or
-             bool(re.search(r'(?:-review-worker-|-worker-(?:edits|resolution|resolve|lens)-)', stage)))
+    # Small caps are for mechanical packets only. Judgment workers (review
+    # lenses, test review, audit, checklist) may think at length before they
+    # answer, and a small cap cut every lens off mid-thought (run 10).
+    # Applies to tool-loop turns, where the thinking happens; the final
+    # answer keeps upstream's small packet ceiling.
+    judgment = option_name == 'turn-output-tokens' and (
+        artifact.startswith(('adversarial_review', 'test_review', 'final_audit', 'manual_checklist')) or
+        bool(re.search(r'(?:adversarial-review|test-review|final-audit|manual-checklist)', stage)))
+    small = not judgment and (artifact.endswith(('worker_packet', 'ops_packet', 'outline_packet')) or
+                              bool(re.search(r'-worker-(?:edits|resolution|resolve)-', stage)))
     cap = int(value) if value is not None else (4096 if small else 32768)
     if cap <= 0:
         raise ValueError(option_name + ' must be a positive integer')

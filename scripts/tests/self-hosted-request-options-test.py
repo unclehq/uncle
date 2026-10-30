@@ -29,6 +29,7 @@ class RequestOptions(unittest.TestCase):
         self.root = Path(tmp.name)
         self.config = self.root / 'config'
         env = patch.dict(os.environ, {'UNCLE_CONFIG': str(self.config),
+                                     'WORKFLOW_SELF_HOSTED_REASONING_EFFORT': 'on',  # opt-in hint under test
                                      'UNCLE_STATUS_STAGE': 'project-plan',
                                      'UNCLE_PROJECT_ROOT': str(self.root)}, clear=True)
         env.start()

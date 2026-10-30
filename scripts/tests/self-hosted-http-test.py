@@ -104,7 +104,8 @@ class SelfHostedHttp(unittest.TestCase):
         http_transport.close_connections()
         self.addCleanup(http_transport.close_connections)
         # What the driver learns about the server is stored in the project; keep it in this test's.
-        isolate = patch.dict(os.environ, {'UNCLE_PROJECT_ROOT': str(self.root)})
+        isolate = patch.dict(os.environ, {'UNCLE_PROJECT_ROOT': str(self.root),
+                                           'WORKFLOW_SELF_HOSTED_REASONING_EFFORT': 'on'})   # opt-in hint under test
         isolate.start()
         self.addCleanup(isolate.stop)
 

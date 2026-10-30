@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -80,5 +81,17 @@ class UsageTests(unittest.TestCase):
             self.assertIn('0.010000',report)
             self.assertIn('## Model API Continuation',report)
             self.assertIn('not independent user turns',report)
+            self.assertIn('overlapping views, not additive totals', report)
+            self.assertIn('Never sum stage totals with their steps', report)
+            self.assertIn('Use Agent/Reviewer attempt totals once for run usage', report)
+            project = Path(directory) / 'project'
+            metrics = project / '.uncle/workflow/metrics'
+            metrics.mkdir(parents=True)
+            (metrics / 'attempt.json').write_text(json.dumps(dict(kind='agent', stage='plan',
+                elapsed_seconds=1, input_tokens=100, output_tokens=20, input_includes_cache=True)))
+            result = subprocess.run(['bash', str(Path(__file__).resolve().parents[1] / 'performance-report.sh'),
+                                     str(project)], capture_output=True, text=True, check=True)
+            self.assertIn('never add stage totals to per-step totals', result.stdout)
+            self.assertIn('| 100 | 20 |', result.stdout)
 
 if __name__=='__main__': unittest.main()

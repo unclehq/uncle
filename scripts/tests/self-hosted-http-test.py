@@ -157,13 +157,18 @@ class SelfHostedHttp(unittest.TestCase):
                                        final_schema=artifact_schema('plan'), final_name='plan')
         self.assertEqual(json.loads(text)['verification_commands'].splitlines(), ['npm ci', 'npm test', 'npm run build'])
 
-    def test_a_message_that_breaks_the_schema_still_gets_the_closing_request(self):
+    def test_a_plan_that_breaks_the_schema_gets_a_targeted_repair_request(self):
         broken = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': 'x'}   # no verification_commands
-        server = self.serve(PLAN, tool_script=[{'role': 'assistant', 'content': json.dumps(broken)}])
+        server = self.serve('unused', tool_script=[{'role': 'assistant', 'content': json.dumps(broken)},
+            self.call('edit_file', {'path': '.uncle/workflow/http-answer-repair.json',
+                                   'old_string': '"narrative": "x"',
+                                   'new_string': '"narrative": "x", "verification_commands": "true"'}),
+            {'role': 'assistant', 'content': 'Fixed.'}])
         text, _ = http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 4096, usage={},
                                        final_schema=artifact_schema('plan'), final_name='plan')
-        self.assertEqual(json.loads(text), PLAN)
-        self.assertEqual(len([1 for _path, body in server.requests if not body.get('tools')]), 1)
+        self.assertEqual(json.loads(text), dict(broken, verification_commands='true'))
+        self.assertEqual(len([1 for _path, body in server.requests if not body.get('tools')]), 0)
+        self.assertIn('missing required field verification_commands', server.requests[1][1]['messages'][1]['content'])
 
     def test_a_message_that_is_only_prose_gets_the_closing_request(self):
         server = self.serve(PLAN, tool_script=[{'role': 'assistant', 'content': 'All done, the work is finished.'}])

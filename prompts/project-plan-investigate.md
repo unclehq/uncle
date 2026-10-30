@@ -291,6 +291,13 @@ Write only `.uncle/workflow/project-plan-investigation.md`, in a single Write
 call, then stop -- except for the `.gitignore` write above, which belongs in
 this pass.
 
+Resolve coverage and consistency before that write. If a validator reports a
+specific defect afterward, use Edit (`edit_file`) with a unique text anchor to
+correct only the affected lines or insert the missing block. Keep every other
+section unchanged. Do not regenerate the complete plan to add a table, repair
+a fence, or adjust an implementation step. A failed check still must pass
+before completion; report completion briefly without repeating the plan.
+
 <!-- section-context: stage-consistency -->
 ## Compact first draft
 

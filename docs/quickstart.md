@@ -7,7 +7,7 @@ application brief and watch it work.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/unclehq/uncle/main/install.sh -o install.sh && bash install.sh
-uncle --application 'build a groovy calculator react webapp with keyboard support'
+uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support'
 ```
 
 ## Windows (PowerShell)
@@ -15,7 +15,7 @@ uncle --application 'build a groovy calculator react webapp with keyboard suppor
 ```powershell
 Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/unclehq/uncle/main/install.ps1 -OutFile install.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-uncle --application 'build a groovy calculator react webapp with keyboard support'
+uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support'
 ```
 
 ## What you'll see
@@ -39,7 +39,7 @@ Add `--unattended` to skip every approval gate and let the whole build run
 start to finish without you:
 
 ```sh
-uncle --application 'build a groovy calculator react webapp with keyboard support' --unattended
+uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support' --unattended
 ```
 
 This is the fastest way to get straight to a finished result, but it also

@@ -8,12 +8,15 @@
 
 </div>
 
-**Give Uncle an issue. Talk to it while it works. Get a verified pull request.**
+**Describe an app or give Uncle an issue. Watch a preview in seconds. Get a verified build in minutes.**
 
-Uncle is a terminal-native supervisor and integrity layer for AI coding agents.
+Uncle is a terminal-native build system and integrity layer for AI coding
+agents. Describe what you want, and it plans, implements, independently
+reviews, verifies, and ships it — a live preview on screen in seconds, a
+complete, verified application in minutes.
 
-Use Claude, Codex, Self hosted models, Cline, Kimi, or the agents you already have.
-Uncle coordinates the change while keeping implementation, independent
+Use Claude, Codex, self-hosted models, Cline, Kimi, or the agents you already have.
+Uncle coordinates the work while keeping implementation, independent
 review, verification, human authority, and publication separate.
 
 **Delegate the work, not the responsibility.**
@@ -44,6 +47,51 @@ review, verification, human authority, and publication separate.
                      ▼
               change evidence
 ````
+
+## Quick start
+
+See Uncle build something from a single sentence, start to finish, on its
+own — a live preview opens in seconds, and the complete, verified
+application is usually done in minutes:
+
+**macOS / Linux / WSL**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/unclehq/uncle/main/install.sh -o install.sh && bash install.sh
+uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support' --unattended
+```
+
+**Windows (PowerShell)**
+
+```powershell
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/unclehq/uncle/main/install.ps1 -OutFile install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+uncle --application 'build a groovy 1970s themed calculator react webapp with a groovy 1970s theme background and keyboard support' --unattended
+```
+
+`--unattended` runs the whole thing — planning, implementation, independent
+review, and verification — straight through with no approval gates, so you
+can just watch it build. You'll need at least one AI client configured; see
+[Prerequisites](PREREQUISITES.md).
+
+Drop `--unattended` if you'd rather review each stage yourself as it goes.
+
+Or, in an existing repository:
+
+```sh
+cd my-project
+uncle --unattended
+```
+
+Give Uncle a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue.
+
+To start a change from a prepared request, pipe it in:
+
+```sh
+cat request.md | uncle --change-request --unattended
+```
+
+`--change-request` reads all of stdin (UTF-8, at most 1 MiB, no NUL or control characters), writes it unchanged (CRLF becomes LF) to `CHANGE_REQUEST.md`, and starts the change workflow. It refuses to overwrite an existing `CHANGE_REQUEST.md` and cannot be combined with `--application` or `--issue`. Treat piped text as untrusted input to tool-using agents, especially with `--unattended`.
 
 ## Why Uncle?
 
@@ -272,52 +320,6 @@ pull request
 As Uncle's change-attestation support lands, Uncle's own changes will also produce the same portable integrity evidence it provides to other repositories.
 
 The process isn't just documented here. It's used here.
-
-## Quick start
-
-The fastest way to see Uncle build something from a single sentence:
-
-**macOS / Linux / WSL**
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/unclehq/uncle/main/install.sh -o install.sh && bash install.sh
-uncle --application 'build a groovy calculator react webapp with keyboard support'
-```
-
-**Windows (PowerShell)**
-
-```powershell
-Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/unclehq/uncle/main/install.ps1 -OutFile install.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-uncle --application 'build a groovy calculator react webapp with keyboard support'
-```
-
-This walks through planning, implementation, independent review, and
-verification with you in the terminal the whole time — ask it questions,
-redirect it, or just watch. Add `--unattended` to skip every approval gate
-and let it run start to finish on its own; that's the fast way to see the
-output, but it also means skipping the human-in-the-loop approvals that are
-the actual point of Uncle, so it's worth watching the interactive run at
-least once first.
-
-Or, in an existing repository:
-
-```sh
-cd my-project
-uncle
-```
-
-Give Uncle a `REQUIREMENTS.md`, `CHANGE_REQUEST.md`, or GitHub issue.
-
-To start a change from a prepared request, pipe it in:
-
-```sh
-cat request.md | uncle --change-request [--unattended]
-```
-
-`--change-request` reads all of stdin (UTF-8, at most 1 MiB, no NUL or control characters), writes it unchanged (CRLF becomes LF) to `CHANGE_REQUEST.md`, and starts the change workflow. It refuses to overwrite an existing `CHANGE_REQUEST.md` and cannot be combined with `--application` or `--issue`. Treat piped text as untrusted input to tool-using agents, especially with `--unattended`.
-
-Then work with Uncle while it works.
 
 ## Install
 

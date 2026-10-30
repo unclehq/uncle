@@ -13,9 +13,8 @@ ok()  { PASS=$((PASS + 1)); }
 bad() { FAIL=$((FAIL + 1)); echo "FAIL [$1] $2" >&2; }
 check() { if [[ "$2" == "$3" ]]; then ok; else bad "$1" "expected [$2] got [$3]"; fi; }
 
-sed -n '/^derive_module_interfaces() {/,/^run_parallel_application_implementation() {/p' "$ROOT/scripts/stagegate.sh" \
-    | sed '$d' > "$temp/fn.sh"
-grep -q '^derive_module_interfaces() {' "$temp/fn.sh" || { echo 'FATAL: could not extract derive_module_interfaces'; exit 2; }
+cp "$ROOT/scripts/lib/module-interfaces-stage.sh" "$temp/fn.sh"
+grep -q '^derive_module_interfaces() {' "$temp/fn.sh" || { echo 'FATAL: could not find derive_module_interfaces'; exit 2; }
 
 STATE_DIR="$temp/state"
 LOG_DIR="$temp/logs"

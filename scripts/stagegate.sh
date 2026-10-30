@@ -126,6 +126,7 @@ uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-recovery.sh"
 . "$ROOT/scripts/lib/plan-scope.sh"
 . "$ROOT/scripts/lib/parallel-implement.sh"
+. "$ROOT/scripts/lib/module-interfaces-stage.sh"
 . "$ROOT/scripts/lib/state.sh"
 
 # Absolute, not "$PROJECT_ROOT"-relative: this value is embedded verbatim
@@ -3549,40 +3550,6 @@ run_final_audit_panel() {
 # starts, and hand every worker the identical binding text. Non-fatal and
 # cached by plan hash: a failure here still lets steps run exactly as they
 # did before this existed, just without the shared contract.
-derive_module_interfaces() {
-    [[ "${WORKFLOW_MODULE_INTERFACES:-1}" == 1 ]] || return 1
-    local plan=".uncle/docs/UPDATED_PROJECT_PLAN.md" canonical="$STATE_DIR/documents/MODULE_INTERFACES.json"
-    local hash_file="$STATE_DIR/module-interfaces-plan.sha256" plan_hash
-    [[ -s "$plan" ]] || return 1
-    plan_hash="$(hash_file "$plan")"
-    if [[ -s "$canonical" && -s "$hash_file" && "$(cat "$hash_file")" == "$plan_hash" ]] \
-            && python3 -B "$ROOT/scripts/lib/module_interfaces.py" --validate-json "$canonical" >/dev/null 2>&1; then
-        return 0
-    fi
-    local directory="$STATE_DIR/module-interfaces" prompt canonical_abs
-    rm -rf "$directory"; mkdir -p "$directory" "$(dirname "$canonical")"
-    canonical_abs="$(cd "$(dirname "$canonical")" && pwd)/$(basename "$canonical")"
-    prompt="$directory/prompt.md"
-    sed "s#{{CANONICAL_PATH}}#$canonical_abs#" "$ROOT/prompts/module-interfaces.md" > "$prompt"
-    cat "$plan" >> "$prompt"
-    rm -f "$canonical"
-    # A subshell: run_claude exits the whole process on a failure it judges
-    # unrecoverable (a crashed agent, turns exhausted after its own retry).
-    # This stage is explicitly optional and must never take the run down
-    # with it -- only the validity check below decides whether it worked.
-    ( UNCLE_WORKER_PACKET_PATH="$canonical" run_claude "$prompt" module-interfaces ) \
-        > "$LOG_DIR/module-interfaces.log" 2>&1 || true
-    if [[ ! -s "$canonical" ]] \
-            || ! python3 -B "$ROOT/scripts/lib/module_interfaces.py" --validate-json "$canonical" 2>"$directory/error.txt"; then
-        echo "Module interfaces could not be derived; parallel steps will run without a shared contract. See $LOG_DIR/module-interfaces.log." >&2
-        rm -f "$canonical" "$hash_file"
-        return 1
-    fi
-    printf '%s' "$plan_hash" > "$hash_file"
-    echo "Module interfaces derived: parallel steps share one exact contract for cross-file exports."
-    return 0
-}
-
 # Execute plan-declared independent application steps in isolated worktrees.
 # The shared parallel runner verifies each worker's owned-file boundary before
 # merging, so this is enabled only for an explicit Owns:/Depends on schedule.

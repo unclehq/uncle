@@ -495,6 +495,7 @@ change_pr_extras_print() {
 . "$ROOT/scripts/lib/performance.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
 . "$ROOT/scripts/lib/parallel-implement.sh"
+. "$ROOT/scripts/lib/module-interfaces-stage.sh"
 . "$ROOT/scripts/lib/triage.sh"
 
 # The implementation stage can end with acceptance rows the agent could not
@@ -1902,6 +1903,7 @@ verify_implementation_review() {
 # merges and removes worktrees.
 run_supervised_parallel_implementation() {
     local base="$1" groups group step prompt cmd model effort result step_line
+    local module_interfaces_section=""
     local serial_fallback_marker="$STATE_DIR/parallel-implementation-serial-fallback"
     if [[ -e "$serial_fallback_marker" ]]; then
         echo 'Parallel implementation was previously rejected for this plan; using serial implementation.'
@@ -1910,6 +1912,10 @@ run_supervised_parallel_implementation() {
     groups="$(parallel_groups .uncle/docs/CHANGE_PLAN.md "$ROOT/scripts/lib")" || return 2
     [[ -n "$groups" ]] || return 2
     [[ ! -s "$STATE_DIR/implement-step-done" ]] || return 2
+    if derive_module_interfaces .uncle/docs/CHANGE_PLAN.md; then
+        module_interfaces_section="$(python3 -B "$ROOT/scripts/lib/module_interfaces.py" --render-section \
+            "$STATE_DIR/documents/MODULE_INTERFACES.json" 2>/dev/null || true)"
+    fi
 
     uncle_resolve_stage_runner implementation AGENT || return 1
     cmd="$(stage_agent_cmd implementation)" || return 1
@@ -1944,6 +1950,9 @@ run_supervised_parallel_implementation() {
                 echo "Do not edit workflow documents in the project root. Do not write"
                 echo ".uncle/docs/IMPLEMENTATION_NOTES.md or .uncle/docs/CHANGE_TEST_REPORT.md;"
                 echo "the driver merges the notes and reconciles the test report after merging."
+                if [[ -n "$module_interfaces_section" ]]; then
+                    printf '%s\n' "$module_interfaces_section"
+                fi
                 cat <<'EOF'
 
 ## Speed (binding)

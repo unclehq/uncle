@@ -778,6 +778,7 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
         policy.draft_checks[policy.root / '.uncle/workflow/project-plan-investigation.md'] = (
             lambda text: validate_plan(text, protected=False))
     if schema_kind in ('project-plan-section-worker-packet', 'project-plan-section-model-packet', 'project-plan-outline-packet',
+                       'updated-plan-edit-ops-packet', 'updated-plan-resolution-ops-packet',
                        'plan', 'change-plan', 'change-planning-bundle'):
         # Plans and packets are final answers. Whole-stage writes have one owner;
         # offering Write/Bash here invites drafting the packet through tools and
@@ -786,7 +787,9 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
         request += ('\n\nHTTP delivery contract (overrides file-delivery instructions above): '
                     'Return the packet exactly once as your final JSON answer. The adapter validates and writes '
                     'that answer to the driver delivery path. Do not call write_file, edit_file or bash, '
-                    'and do not draft the packet in a tool call or commentary.')
+                    'and do not draft the packet in a tool call or commentary. '
+                    'For edit ops, return only the assigned dispositions and changed fields/insertions; '
+                    'unchanged plan content is carried forward mechanically.')
     return (request, policy, schema, (schema_kind or 'artifact').replace('-', '_'), output_token_limit(stage_name),
             int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))
 

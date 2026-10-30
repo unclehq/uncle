@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline write-once delivery, repair and metadata contracts; no model or signer."""
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -15,6 +16,15 @@ sys.path.insert(0, str(ROOT / 'scripts/lib'))
 import http_agent as agent
 import self_hosted as hosted
 import self_hosted_http as transport
+import updated_plan_ops as ops
+import updated_plan_synthesis_prompt as synthesis
+import worker_schemas
+from plan_patch import apply_patch
+
+spec = importlib.util.spec_from_file_location('ops_fixture', Path(__file__).with_name('updated-plan-ops-test.py'))
+fixture = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fixture)
+
 
 class WriteOnce(unittest.TestCase):
     def setUp(self):
@@ -115,7 +125,48 @@ class WriteOnce(unittest.TestCase):
         self.assertEqual(requests, 3)
         self.assertEqual([t['name'] for e in self.events() for t in e['tools']], ['edit_file'])
 
+    def test_edit_writer_generates_ops_once_and_assembly_is_identical(self):
+        narrative = fixture.NARRATIVE + '\n## 4. Untouched reference\n\n' + 'Preserve every requirement. ' * 2000 + '\n'
+        plan = dict(fixture.PLAN, narrative=narrative)
+        base = self.root / 'base.md'
+        base.write_text(synthesis.prompt(plan, {'findings': []}, None))
+        prompt_file = self.root / 'writer.md'
+        ops.write_prompt(base, ['AR-1', 'AR-2'], prompt_file)
+        packet = {'schema': 'uncle.artifact/v1', 'kind': worker_schemas.EDIT_OPS_KIND,
+                  'dispositions': [fixture.row('AR-1'), fixture.row('AR-2')],
+                  'ops': [fixture.set_fields('B-1', failure='Shows NaN'), fixture.set_fields('B-2', result='Digit replaced')]}
+        delivery = self.root / '.uncle/workflow/edits/1.json'
+        with patch.dict(os.environ, UNCLE_ARTIFACT_DELIVERY=str(delivery), UNCLE_STATUS_STAGE='updated-plan-worker-edits-1'), \
+                patch.object(agent, 'interruptible_chat', return_value=self.reply(json.dumps(packet), tokens=125)) as chat, \
+                patch.object(agent, 'constrained_completion', side_effect=AssertionError('second generation')):
+            answer, turns = hosted.run_opencode('agent', self.values, prompt_file.read_text(), self.root)
+        self.assertEqual((turns, chat.call_count), (1, 1))
+        self.assertEqual(json.loads(answer), packet)
+        self.assertEqual(json.loads(delivery.read_text()), packet)
+        self.assertEqual({t['function']['name'] for t in chat.call_args.args[3]}, {'read_file', 'list_dir', 'grep'})
+        self.assertIn('HTTP delivery contract', chat.call_args.args[2][1]['content'])
+        self.assertNotIn('narrative', packet)
+        self.assertLess(len(json.dumps(packet['ops'])), 200)
+        (self.root / 'plan.json').write_text(json.dumps(plan))
+        (delivery.parent / 'slices.tsv').write_text('1\tAR-1,AR-2\n')
+        merged = self.root / 'merged.json'
+        ops.merge(self.root / 'plan.json', delivery.parent / 'slices.tsv', delivery.parent, merged)
+        result = json.loads(merged.read_text())
+        # B-2 columns are trigger, result, failure; replace only the result.
+        expected = narrative.replace('| Display unchanged |', '| Shows NaN |').replace('| User presses a key | Same as B-1 |', '| User presses a key | Digit replaced |')
+        self.assertEqual(apply_patch(narrative, result['patch']), expected)
+        self.assertEqual(result['verification_commands'], fixture.COMMANDS)
+        self.assertEqual(result['protected_verification_paths'], fixture.PLAN['protected_verification_paths'])
 
+    def test_invalid_ops_packet_is_not_published(self):
+        packet = {'schema': 'uncle.artifact/v1', 'kind': worker_schemas.EDIT_OPS_KIND, 'ops': 'wrong', 'dispositions': []}
+        delivery = self.root / '.uncle/workflow/edits/1.json'
+        with patch.dict(os.environ, UNCLE_ARTIFACT_DELIVERY=str(delivery)), \
+                patch.object(agent, 'interruptible_chat', return_value=self.reply(json.dumps(packet))), \
+                patch.object(agent, 'constrained_completion', return_value=(json.dumps(packet), 'stop', {}, 'json_schema')):
+            with self.assertRaisesRegex(ValueError, 'violates the artifact schema'):
+                hosted.run_opencode('agent', self.values, json.dumps(packet), self.root)
+        self.assertFalse(delivery.exists())
 
 
 if __name__ == '__main__':

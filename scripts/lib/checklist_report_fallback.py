@@ -195,6 +195,7 @@ def main(argv):
             rows = None
     if rows is None:
         rows = [{'id': identifier, 'required': True, 'status': 'NOT RUN',
+                 'defect_ids': ['CHECKLIST-EVIDENCE-MISSING'],
                  'evidence': 'No check-specific execution evidence was recorded.'}
                 for identifier in ids]
         artifact.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'execute-checklist',

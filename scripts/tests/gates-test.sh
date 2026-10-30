@@ -331,7 +331,19 @@ case "$prompt" in
         if [[ -n "${FAKE_VERIFY_LIVE:-}" ]]; then bash -c "$FAKE_VERIFY_LIVE"; fi
         ;;
     *'Revise the failed design'*)
-        printf '\nisolated-context revision\n' >> .uncle/docs/CHANGE_PLAN.md
+        python3 - <<'PYREVISE'
+import json
+from pathlib import Path
+p = Path('.uncle/workflow/documents/CHANGE_PLAN.json')
+data = json.loads(p.read_text())
+data['narrative'] += '\nisolated-context revision\n'
+data.setdefault('dispositions', [])
+p.write_text(json.dumps(data))
+PYREVISE
+        python3 scripts/lib/plan_context.py render-change-plan-unreviewed .uncle/docs/CHANGE_PLAN.md .
+        if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" ]]; then
+            cp .uncle/workflow/documents/CHANGE_PLAN.json "$UNCLE_ARTIFACT_DELIVERY"
+        fi
         ;;
     *STUB:revise*)
         if [[ -n "${FAKE_REVISE:-}" ]]; then bash -c "$FAKE_REVISE"; fi
@@ -453,7 +465,8 @@ if [[ "$out" == *assessment.json ]]; then
     # A read-only reviewer returns JSON; the runner persists its final response.
     [[ "$review_prompt" == *"Return the assessment JSON as your final response."* ]] || exit 90
     [[ "$review_prompt" == *"do not write that file yourself."* ]] || exit 91
-    python3 -B scripts/tests/plan-executability-test.py --review "$PWD"
+    python3 -B scripts/tests/plan-executability-test.py --review "$PWD" || exit $?
+    cp .uncle/workflow/plan-executability/assessment.json "${UNCLE_ARTIFACT_DELIVERY:-$out}"
     exit $?
 fi
 printf '%s\n' "$out" >> .uncle/workflow/reviewer-calls
@@ -623,7 +636,8 @@ if [[ "$out" == *assessment.json ]]; then
     # A read-only reviewer returns JSON; the runner persists its final response.
     [[ "$review_prompt" == *"Return the assessment JSON as your final response."* ]] || exit 90
     [[ "$review_prompt" == *"do not write that file yourself."* ]] || exit 91
-    python3 -B scripts/tests/plan-executability-test.py --review "$PWD"
+    python3 -B scripts/tests/plan-executability-test.py --review "$PWD" || exit $?
+    cp .uncle/workflow/plan-executability/assessment.json "${UNCLE_ARTIFACT_DELIVERY:-$out}"
     exit $?
 fi
 # Stagegate's review panels write strict worker packets before the primary
@@ -823,7 +837,19 @@ case "$prompt" in
         if [[ -n "${FAKE_VERIFY_LIVE:-}" ]]; then bash -c "$FAKE_VERIFY_LIVE"; fi
         ;;
     *'Revise the failed design'*)
-        printf '\nisolated-context revision\n' >> .uncle/docs/UPDATED_PROJECT_PLAN.md
+        python3 - <<'PYREVISE'
+import json
+from pathlib import Path
+p = Path('.uncle/workflow/documents/UPDATED_PROJECT_PLAN.json')
+data = json.loads(p.read_text())
+data['narrative'] += '\nisolated-context revision\n'
+data.setdefault('dispositions', [])
+p.write_text(json.dumps(data))
+PYREVISE
+        python3 scripts/lib/plan_context.py render-plan .uncle/docs/UPDATED_PROJECT_PLAN.md .
+        if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" ]]; then
+            cp .uncle/workflow/documents/UPDATED_PROJECT_PLAN.json "$UNCLE_ARTIFACT_DELIVERY"
+        fi
         ;;
     *STUB:revise*) cp .uncle/docs/PROJECT_PLAN.md .uncle/docs/UPDATED_PROJECT_PLAN.md ;;
     *STUB:plan-investigate*)
@@ -1058,7 +1084,7 @@ green_baseline 0 'bash app/test.sh'
 set_state IMPLEMENT
 # A blank answer declines the gate; the wording of that prompt is what this
 # case is about.
-run_driver_stdin "$(gate_input '')" FAKE_IMPL="printf 'exit 1\n' > app/test.sh"
+run_driver_stdin "$(gate_input '')" FAKE_IMPL="printf 'sleep 1\nexit 1\n' > app/test.sh"
 expect_status 0
 expect_out "GREEN CHECK FAILED: 1 regression(s)"
 expect_out "Approving here is an override, and it is recorded."
@@ -1077,6 +1103,15 @@ expect_out "Change workflow complete."
 expect_out "Completed with a failing green check, by human override:"
 expect_file ".uncle/workflow/green-check-override"
 expect_in_file ".uncle/workflow/green-check-override" "1 regression(s) overridden"
+
+# A driver-downgraded verdict accepts its original artifact, but an actual
+# edit must still fail the exact digest check when that gate is resumed.
+cp "$REPO/.uncle/workflow/audit-verdict.original" "$REPO/.uncle/workflow/audit-verdict"
+printf '\n' >> "$REPO/.uncle/workflow/documents/FINAL_AUDIT.json"
+set_state WAIT_AUDIT_OVERRIDE
+run_driver
+expect_status 1
+expect_out 'The audit changed since its verdict was recorded; rerun FINAL_AUDIT.'
 
 # A check that was already failing before the change is not this change's
 # regression, and does not turn the gate into an override.
@@ -1355,7 +1390,7 @@ fi
 new_stagegate_case sg-verification-report-malformed
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION=MALFORMED
+run_stagegate WORKFLOW_POSTFLIGHT_GREEN_CHECK=0 WORKFLOW_PARALLEL_CHECKLIST_WORKERS=0 WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION=MALFORMED
 expect_status 1
 expect_state VALIDATE_CHECKLIST
 expect_no_file .uncle/docs/FINAL_AUDIT.md
@@ -1373,7 +1408,7 @@ fi
 new_stagegate_case sg-verification-report-missing-entirely
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION=NO_REPORT
+run_stagegate WORKFLOW_POSTFLIGHT_GREEN_CHECK=0 WORKFLOW_PARALLEL_CHECKLIST_WORKERS=0 WORKFLOW_CONTINUE_ON_TEST_FAILURE=0 WORKFLOW_DIFF_GATE=0 FAKE_VERIFICATION=NO_REPORT
 expect_status 1
 expect_state VALIDATE_CHECKLIST
 expect_no_file .uncle/docs/FINAL_AUDIT.md
@@ -1389,7 +1424,7 @@ fi
 new_stagegate_case sg-test-failure-repairs-and-regates
 stagegate_agent
 set_state IMPLEMENT
-run_stagegate_stdin "$(gate_input y)" WORKFLOW_TEST_REVIEW_PANEL=0 FAKE_TEST_REVIEW=FAIL_ONCE \
+run_stagegate_stdin "$(gate_input y)" WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 FAKE_TEST_REVIEW=FAIL_ONCE \
     FAKE_IMPL="printf 'new source\n' > app/new.sh" \
     FAKE_REPAIR="printf '#!/bin/sh\nsh app/main.sh | grep -qx hello\n' > app/test.sh"
 expect_status 0
@@ -1400,7 +1435,7 @@ expect_in_file .uncle/workflow/TEST_CHANGES.diff '-sh app/main.sh | grep -q . ||
 expect_in_file .uncle/workflow/IMPLEMENTATION_REVIEW.md '+sh app/main.sh | grep -qx hello'
 expect_no_file .uncle/docs/VERIFICATION_REPORT.md
 expect_no_file .uncle/docs/FINAL_AUDIT.md
-run_stagegate_stdin "$(gate_input y)" WORKFLOW_TEST_REVIEW_PANEL=0 FAKE_TEST_REVIEW=FAIL_ONCE
+run_stagegate_stdin "$(gate_input y)" WORKFLOW_AUTO_REPAIR_ATTEMPTS=4 WORKFLOW_TEST_REVIEW_PANEL=0 FAKE_TEST_REVIEW=FAIL_ONCE
 expect_status 0
 expect_state COMPLETE
 expect_in_file .uncle/workflow/repair-count '1'
@@ -1756,13 +1791,14 @@ exit 7
 EOF
 hash_canonical UPDATED_PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
-run_stagegate WORKFLOW_DIFF_GATE=0
+# Exercise both real executions, including the final audit refresh.
+run_stagegate WORKFLOW_GREEN_CHECK_REUSE=0 WORKFLOW_DIFF_GATE=0
 expect_status 0
 expect_state COMPLETE
 expect_in_file .uncle/workflow/green-check.tsv PASS
 COUNT=$((COUNT+1))
 if [[ "$(find "$REPO/.uncle/workflow/metrics" -name '*.json' -exec cat {} + | jq -s '[.[]|select(.kind=="check")]|length')" != 6 ]]; then
-    fail 'driver did not record each check at implementation and checklist execution'
+    fail 'driver did not record each check at implementation and final audit'
 fi
 
 new_stagegate_case sg-invalid-parallel-plan
@@ -1770,10 +1806,10 @@ stagegate_agent
 printf '\n## Parallel verification groups\n```\n1 3\n```\n' >> "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md"
 hash_canonical UPDATED_PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state IMPLEMENT
-run_stagegate
+run_stagegate WORKFLOW_DIFF_GATE=0
 expect_status 0
 expect_state COMPLETE
-expect_out 'Invalid Parallel verification groups; running the verification commands in order.'
+expect_out 'Invalid parallel verification groups in the plan; running the verification commands in order.'
 expect_in_file .uncle/workflow/green-check.tsv PASS
 
 

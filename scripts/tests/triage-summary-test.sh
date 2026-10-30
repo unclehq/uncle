@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 # No stage may reach a real runner from a test: every stage command is a stub that fails.
-export UNCLE_CONFIG=/dev/null WORKFLOW_AGENT_CMD=/usr/bin/false WORKFLOW_REVIEWER_CMD=/usr/bin/false WORKFLOW_CODEX_CMD=/usr/bin/false
+export UNCLE_CONFIG=/dev/null WORKFLOW_AGENT_CMD=/usr/bin/false WORKFLOW_REVIEWER_CMD=/usr/bin/false WORKFLOW_CODEX_CMD=/usr/bin/false WORKFLOW_CLAUDE_CMD=/usr/bin/false
 unset UNCLE_STATUS_STAGE UNCLE_DRIVER_SUPERVISED UNCLE_PROJECT_ROOT 2>/dev/null || true
 
 FAILED=0
@@ -50,7 +50,7 @@ for driver in change-workflow.sh stagegate.sh; do
     complete_run "$driver" "$TMP/with" yes
     out="$TMP/with/out.txt"
     check_contains "$driver: complete banner" "complete" "$out"
-    check_contains "$driver: heading" "Triage actions (.uncle/workflow/triage-actions.tsv):" "$out"
+    check_contains "$driver: heading" "Triage actions ($TMP/with/.uncle/workflow/triage-actions.tsv):" "$out"
     check_contains "$driver: header row" "ts	turn	proposal	outcome	path	before	after" "$out"
     check_contains "$driver: APPLIED row" "1	Proposal 1: fix	APPLIED	src/x	aaaa	bbbb" "$out"
     check_contains "$driver: REFUSED row" "REFUSED	.uncle/workflow/approvals/CHANGE_PLAN.sha256	cccc	dddd" "$out"

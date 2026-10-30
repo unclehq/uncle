@@ -20,11 +20,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SUITE="$ROOT/scripts/tests/worktree-run-test.sh"
 work="$(mktemp -d)"
-LIVE=""
-trap 'if [[ -n "$LIVE" ]]; then kill "$LIVE" 2>/dev/null; fi; rm -rf "$work"' EXIT
 
 FAILED=0
-work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 note() { echo "  ok: $1"; }
 fail() { echo "  FAIL: $1" >&2; FAILED=1; }
@@ -35,9 +32,13 @@ fail() { echo "  FAIL: $1" >&2; FAILED=1; }
 verdict() {
     local code
     env -u UNCLE_UNATTENDED -u UNCLE_STATUS_STAGE -u UNCLE_TEST_ALLOW_NESTED "$@" \
-        timeout 6 bash "$SUITE" > "$work/out" 2>&1
+        python3 "$ROOT/scripts/tests/run_with_timeout.py" 6 bash "$SUITE" > "$work/out" 2>&1
     code=$?
-    if [[ "$code" == 77 ]]; then echo skipped; else echo ran; fi
+    case "$code" in
+        77) echo skipped ;;
+        0|124) echo ran ;;
+        *) cat "$work/out" >&2; echo "unexpected-exit-$code" ;;
+    esac
 }
 
 # Set by both drivers, unconditionally, for the life of a build.
@@ -53,7 +54,7 @@ verdict() {
     && note 'UNCLE_STATUS_STAGE skips' || fail 'UNCLE_STATUS_STAGE did not skip'
 
 env -u UNCLE_UNATTENDED -u UNCLE_TEST_ALLOW_NESTED UNCLE_STATUS_STAGE=change-plan \
-    timeout 6 bash "$SUITE" > "$work/out" 2>&1
+    python3 "$ROOT/scripts/tests/run_with_timeout.py" 6 bash "$SUITE" > "$work/out" 2>&1
 grep -q 'stage change-plan' "$work/out" \
     && note 'the message names the stage' || fail 'message does not name the stage'
 grep -q 'UNCLE_TEST_ALLOW_NESTED=1' "$work/out" \

@@ -56,7 +56,7 @@ sg="$WORK/sg"
 mkdir -p "$sg/.uncle/workflow/approvals"
 extract_fns "$ROOT/scripts/stagegate.sh" "$sg/fns.sh" \
     gate_prompt legacy_word_notice upper lower require_file \
-    record_unattended_gate approval_artifact_path review_and_approve
+    record_unattended_gate canonical_artifact_path approval_artifact_path review_and_approve
 cat > "$sg/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -156,7 +156,7 @@ else ok; fi
 cw="$WORK/cw"
 mkdir -p "$cw/.uncle/workflow/approvals"
 extract_fns "$ROOT/scripts/change-workflow.sh" "$cw/fns.sh" \
-    gate_prompt legacy_word_notice require_file record_unattended_gate approval_artifact_path human_gate
+    gate_prompt legacy_word_notice require_file record_unattended_gate canonical_artifact_path approval_artifact_path human_gate
 cat > "$cw/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -315,7 +315,7 @@ DIFF_FILE=DIFF
 GREEN_MD=GREEN
 UNATTENDED=\${UNATTENDED:-0}
 triage_print_actions() { :; }
-change_pr_complete() { echo "change_pr_complete CALLED"; git commit; }
+change_pr_complete() { echo "change_pr_complete CALLED"; git commit --no-gpg-sign; }
 . "\$(dirname "\$0")/fns.sh"
 $(cat "$arm")
 HARNESS
@@ -327,7 +327,7 @@ HARNESS
     for id in FA-1 FA-2; do
         printf '2026-01-01T00:00:00Z\taudit-finding-skipped\t%s accepted without human review (audit abc)\n' "$id" >> "$d/.uncle/workflow/unattended-gates"
     done
-    out="$(cd "$d" && UNATTENDED=1 PATH="$d/bin:$PATH" timeout 60 bash "$d/run.sh" < /dev/null 2>&1)"; rc=$?
+    out="$(cd "$d" && UNATTENDED=1 PATH="$d/bin:$PATH" python3 "$ROOT/scripts/tests/run_with_timeout.py" 60 bash "$d/run.sh" < /dev/null 2>&1)"; rc=$?
     check "$driver-unattended-complete-rc" "0" "$rc"
     if grep -qF "Finished build: verdict=READY skipped=2 path=$d" <<< "$out"; then ok
     else bad "$driver-finished-line" "golden Finished line missing: $out"; fi
@@ -342,7 +342,7 @@ HARNESS
         bad "$driver-no-publish" "git/gh/PR handoff invoked unattended: $(cat "$d/calls.log" 2>/dev/null) $out"
     else ok; fi
     # Attended: no Finished line; the PR handoff still runs (change-workflow).
-    out="$(cd "$d" && UNATTENDED=0 PATH="$d/bin:$PATH" timeout 60 bash "$d/run.sh" < /dev/null 2>&1)" || true
+    out="$(cd "$d" && UNATTENDED=0 PATH="$d/bin:$PATH" python3 "$ROOT/scripts/tests/run_with_timeout.py" 60 bash "$d/run.sh" < /dev/null 2>&1)" || true
     if grep -q "Finished build:" <<< "$out"; then bad "$driver-attended-silent" "attended run printed the unattended line"; else ok; fi
     if [[ "$driver" == change-workflow ]]; then
         if grep -q "change_pr_complete CALLED" <<< "$out"; then ok
@@ -432,7 +432,7 @@ $(cat "$arm")
 esac
 done
 HARNESS
-    out="$(cd "$d2" && timeout 30 bash "$d2/run.sh" < /dev/null 2>&1)"
+    out="$(cd "$d2" && python3 "$ROOT/scripts/tests/run_with_timeout.py" 30 bash "$d2/run.sh" < /dev/null 2>&1)"
     if [[ "$scenario" == first-attempt ]]; then
         if grep -q '^SET_STATE REPAIR$' <<< "$out"; then ok
         else bad "audit-repair-routes-first" "did not route to REPAIR on a driver-observed regression: $out"; fi

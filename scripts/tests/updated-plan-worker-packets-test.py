@@ -91,6 +91,9 @@ class WorkerPackets(unittest.TestCase):
             self.assertIn('reviewer_output.py', (ROOT / 'scripts' / runner).read_text())
         for driver in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
             text = (ROOT / driver).read_text()
+            self.assertIn('. "$ROOT/scripts/lib/reviewer-artifacts.sh"', text)
+            self.assertIn('normalize_reviewer_packet "$output_file"', text)
+            text = (ROOT / 'scripts/lib/reviewer-artifacts.sh').read_text()
             self.assertIn('reviewer_output.py" --packet', text)
             # Parent artifacts are JSON too.  Packet normalization must be
             # scoped to panel output rather than every JSON filename.
@@ -356,7 +359,7 @@ class WorkerPackets(unittest.TestCase):
         change = (ROOT/'scripts/change-workflow.sh').read_text()
         self.assertIn('change-plan|updated-change-plan)', change)
         self.assertIn('UNCLE_WORKER_PACKET_PATH', change)
-        self.assertNotIn('recover_worker_packet.py', change[change.index('run_parallel_checklist_workers()'):change.index('build_implementation_review()')])
+        self.assertNotIn('recover_worker_packet.py', re.search(r'^run_parallel_checklist_workers\(\) \{.*?^}', change, re.M | re.S).group(0))
         self.assertIn(
             '*-worker-*|updated-plan|adversarial-review|test-review|manual-checklist|final-audit)',
             (ROOT/'scripts/stagegate.sh').read_text(),

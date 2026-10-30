@@ -1,6 +1,9 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location('reviewer_output', Path(__file__).resolve().parents[1]/'lib/reviewer_output.py')
@@ -9,6 +12,51 @@ spec.loader.exec_module(module)
 
 
 class ReviewerOutput(unittest.TestCase):
+    def test_sourceable_shell_filters_preserve_bytes_and_clean_temporary_files(self):
+        root = Path(__file__).resolve().parents[2]
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review-worker-packet', 'findings': []}
+        checklist = {'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist', 'checks': [
+            {'id': 'MC-1', 'exact_action': 'Click', 'expected_result': 'Visible'}]}
+        cases = (
+            ('normalize_reviewer_packet', 'review-panel/reply one.json', 'Narration ' + json.dumps(packet), 0, packet),
+            ('normalize_reviewer_packet', 'review-panel/reply.json', 'not a packet', 1, None),
+            ('normalize_reviewer_packet', 'parent.json', 'not a packet', 0, None),
+            ('normalize_reviewer_packet', 'review-panel/reply.md', 'not a packet', 0, None),
+            ('normalize_reviewer_packet', 'review-panel/empty.json', '', 0, None),
+            ('normalize_reviewer_packet', 'review-panel/missing.json', None, 0, None),
+            ('validate_reviewer_artifact', 'MANUAL_CHECKLIST.md', '```json\n' + json.dumps(checklist) + '\n```', 0, checklist),
+            ('validate_reviewer_artifact', 'MANUAL_CHECKLIST.md', 'I wrote it', 1, None),
+            ('validate_reviewer_artifact', 'MANUAL_CHECKLIST.md', '', 0, None),
+            ('validate_reviewer_artifact', 'OTHER.md', 'I wrote it', 0, None),
+        )
+        for function, name, content, status, normalized in cases:
+            with self.subTest(function=function, name=name, content=content), tempfile.TemporaryDirectory(prefix='reviewer artifacts ') as directory:
+                work = Path(directory)
+                state = work / 'state space'
+                state.mkdir()
+                output = work / 'artifacts' / name
+                output.parent.mkdir(parents=True)
+                if content is not None:
+                    output.write_text(content)
+                result = subprocess.run([
+                    'bash', '-eu', '-c',
+                    '. "$ROOT/scripts/tests/workflow_fixture.sh"\n'
+                    'workflow_fixture_source "$ROOT/scripts/lib/reviewer-artifacts.sh"\n'
+                    '"$1" "$2" fixture-runner', '_', function, str(output)],
+                    env=dict(os.environ, ROOT=str(root), STATE_DIR=str(state)), capture_output=True, text=True)
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertEqual(result.stdout, '')
+                if status:
+                    self.assertIn('fixture-runner', result.stderr)
+                else:
+                    self.assertEqual(result.stderr, '')
+                if content is None:
+                    self.assertFalse(output.exists())
+                else:
+                    expected = json.dumps(normalized, indent=2, sort_keys=True) + '\n' if normalized else content
+                    self.assertEqual(output.read_text(), expected)
+                self.assertEqual(list(state.iterdir()), [])
+
     def test_heading_or_table_row_is_a_document(self):
         self.assertTrue(module.looks_like_document('## Findings\n\nSomething.'))
         self.assertTrue(module.looks_like_document('| ID | Status |\n|---|---|\n| A | PASS |'))

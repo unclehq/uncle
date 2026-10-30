@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import subprocess
 import unittest
 
 
@@ -18,11 +19,33 @@ class CompactProjectPlanPrompt(unittest.TestCase):
 
     def test_requirements_runner_inherits_project_plan_runner_with_its_model(self):
         stagegate = (ROOT / 'scripts/stagegate.sh').read_text(encoding='utf-8')
-        self.assertIn('requirements|requirements-investigate) printf', stagegate)
+        self.assertIn('. "$ROOT/scripts/lib/stage-runtime.sh"', stagegate)
+        self.assertIn('. "$ROOT/scripts/lib/stage-runtime-app.sh"', stagegate)
+        self.assertIn('app_stage_runner_config_name "$@"', (ROOT / 'scripts/lib/stage-runtime-app.sh').read_text())
+        self.assertIn('requirements|requirements-investigate) printf', (ROOT / 'scripts/lib/stage-runtime.sh').read_text())
         self.assertIn('requirements|requirements-investigate) lookup_stage="project-plan"', stagegate)
         self.assertIn('uncle_effective_stage_effort "$(stage_runner_config_name "$1")"', stagegate)
         self.assertIn('runner_stage="$(stage_runner_config_name "$log_name")"', stagegate)
         self.assertIn('uncle_resolve_stage_runner "$runner_stage" AGENT', stagegate)
+
+    def test_sourceable_app_stage_names_preserve_aliases_and_variants(self):
+        for stage, expected in (
+            ('requirements', 'project-plan'),
+            ('requirements-investigate', 'project-plan'),
+            ('preview-build-part-contract', 'preview-build'),
+            ('implementation-step-3', 'implementation-step-3'),
+            ('final-audit', 'final-audit'),
+        ):
+            with self.subTest(stage=stage):
+                result = subprocess.run([
+                    'bash', '-eu', '-c',
+                    '. "$1/scripts/tests/workflow_fixture.sh"\n'
+                    'workflow_fixture_source "$1/scripts/lib/stage-runtime.sh" "$1/scripts/lib/stage-runtime-app.sh"\n'
+                    'stage_runner_config_name "$2"', '_', str(ROOT), stage], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected + '\n')
+                self.assertEqual(result.stderr, '')
+
     def test_requirements_prompts_embed_the_selected_brief(self):
         stagegate = (ROOT / 'scripts/stagegate.sh').read_text(encoding='utf-8')
         start = stagegate.index('bind_requirements_source()')

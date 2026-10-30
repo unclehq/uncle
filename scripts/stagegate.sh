@@ -1067,39 +1067,8 @@ stage_model() {
     stage_setting_opt MODEL "$lookup_stage" "$fallback"
 }
 
-# Which CLI runs one stage. An explicit variable always wins over the config
-# file — a driver invoked with WORKFLOW_AGENT_CMD set means it — and the
-# built-in default applies only when the project has no config at all.
-stage_agent_cmd() {
-    local var
-    var="WORKFLOW_AGENT_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
-    if [[ -n "${!var:-}" ]]; then
-        printf '%s' "${!var}"
-    elif [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
-        printf '%s' "$WORKFLOW_AGENT_CMD"
-    else
-        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
-    fi
-}
 
-stage_reviewer_cmd() {
-    local var
-    var="WORKFLOW_REVIEWER_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
-    if [[ -n "${!var:-}" ]]; then
-        printf '%s' "${!var}"
-    elif [[ -n "${WORKFLOW_REVIEWER_CMD:-}" ]]; then
-        printf '%s' "$WORKFLOW_REVIEWER_CMD"
-    else
-        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
-    fi
-}
 
-stage_command_overridden() {
-    local side="$1" stage="$2" var global
-    var="WORKFLOW_${side}_CMD_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
-    global="WORKFLOW_${side}_CMD"
-    [[ -n "${!var:-}" || -n "${!global:-}" ]]
-}
 
 stage_effort() {
     uncle_effective_stage_effort "$(stage_runner_config_name "$1")"
@@ -1150,37 +1119,6 @@ stage_tools() {
 # Matches run_stage's case arms.
 STATUS_STAGE_SEQ="derive-brief requirements project-plan adversarial-review updated-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
 
-# Report the current stage to the TUI status channel. The exports feed the
-# agent shims' own status writes; the start event written here covers every
-# stage directly, including runners with no shim (plain claude, reviewers).
-status_stage_context() {
-    local log_name="$1"
-    local model="${2:-(runner default)}"
-    local mode="${3:-act}"
-    local s i=1 index=0 n=0
-    for s in $STATUS_STAGE_SEQ; do
-        n=$((n + 1))
-        if [[ "$s" == "$log_name" ]]; then
-            index=$i
-        fi
-        i=$((i + 1))
-    done
-    local turns
-    turns="$(stage_turns "$log_name")"
-    export UNCLE_STATUS_STAGE="$log_name"
-    export UNCLE_STATUS_STAGE_INDEX="$index"
-    export UNCLE_STATUS_STAGE_TOTAL="$n"
-    export UNCLE_STATUS_STAGE_TURNS="$turns"
-    # Read per stage, like every other setting: an operator who discovers at a
-    # gate that verification needs a local server can turn it on there.
-    UNCLE_STAGE_NETWORK="$(uncle_stage_network "$log_name")"
-    export UNCLE_STAGE_NETWORK
-    if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
-        printf '{"event":"start","model":"%s","mode":"%s","stage":"%s","stage_index":%s,"stage_total":%s,"stage_turns":%s}\n' \
-            "$model" "$mode" "$log_name" "$index" "$n" "$turns" \
-            >> "$UNCLE_STATUS_FILE"
-    fi
-}
 
 # Map state-machine destinations which immediately launch an agent to the
 # matching configured stage.  Gates and deterministic validation states do
@@ -1395,40 +1333,10 @@ format_claude_stream() {
 # Never use --dangerously-skip-permissions (CLAUDE.md rule 8).
 # Pass a third argument to run_claude to override the grant for one stage.
 
-# The investigate/format split (test-review, updated-plan) exists for weak
-# self-hosted models that lose an exact JSON schema over a long, read-heavy
-# turn. Proprietary models (claude, codex, ...) do not show that failure, and
-# the split only adds an extra call and an extra place to fail, so it is
-# gated on the stage's actually-configured runner rather than applied
-# unconditionally.
-# Requirements intentionally inherit the project-plan configuration so users
-# configure this coupled early-planning pair once.  Keep runner lookup aligned
-# with the existing model lookup; otherwise a local model reaches the default
-# Claude command after the self-hosted paths are split.
-stage_runner_config_name() {
-    case "$1" in
-        requirements|requirements-investigate) printf '%s\n' project-plan ;;
-        preview-build-part-*) printf '%s\n' preview-build ;;
-        *) printf '%s\n' "$1" ;;
-    esac
-}
+. "$ROOT/scripts/lib/stage-runtime.sh"
+. "$ROOT/scripts/lib/stage-runtime-app.sh"
 
-# Whether this stage's agent can be forced to answer in schema-checked JSON (see run_claude): the direct
-# Claude CLI only.  Codex, self-hosted models and a custom command keep the drivers' file contracts.
-stage_supports_structured_output() {
-    local stage="$1" UNCLE_RESOLVED_RUNNER
-    [[ "${WORKFLOW_STRUCTURED_OUTPUT:-1}" == 1 ]] || return 1
-    stage="$(stage_runner_config_name "$stage")"
-    uncle_resolve_stage_runner "$stage" AGENT 2>/dev/null || return 1
-    [[ "$UNCLE_RESOLVED_RUNNER" == claude ]] && [[ "$(stage_agent_cmd "$stage" 2>/dev/null)" == *claude ]]
-}
 
-stage_uses_self_hosted() {
-    local stage="$1" side="$2" UNCLE_RESOLVED_RUNNER
-    stage="$(stage_runner_config_name "$stage")"
-    uncle_resolve_stage_runner "$stage" "$side" 2>/dev/null || true
-    [[ "$UNCLE_RESOLVED_RUNNER" == self-hosted ]]
-}
 
 # issue 103: how many isolated candidates race for one self-hosted stage
 # attempt. Per-stage WORKFLOW_SELF_HOSTED_CANDIDATES_<STAGE> wins over the
@@ -2083,33 +1991,8 @@ STRUCTURED_OUTPUT_CONTRACT
     done
 }
 
-normalize_reviewer_packet() {
-    local output_file="$1" runner="$2" normalized
-    # Only specialist panel responses use the worker-packet envelope. Stage
-    # artifacts are also JSON now, but have their own schemas (for example
-    # `adversarial-review`) and must not be forced through that envelope.
-    [[ "$output_file" == *-panel/*.json && -s "$output_file" ]] || return 0
-    normalized="$(mktemp "$STATE_DIR/.reviewer-packet.XXXXXX")" || return 1
-    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --packet "$runner" < "$output_file" > "$normalized"; then
-        rm -f "$normalized"
-        return 1
-    fi
-    mv "$normalized" "$output_file"
-}
+. "$ROOT/scripts/lib/reviewer-artifacts.sh"
 
-validate_reviewer_artifact() {
-    local output_file="$1" runner="$2" normalized
-    # MANUAL_CHECKLIST is JSON-authoritative. Validate its actual semantic
-    # minimum at the runner boundary so a conversational "I wrote it" reply
-    # never reaches the later execution gate as a successful artifact.
-    [[ "${output_file##*/}" == MANUAL_CHECKLIST.md && -s "$output_file" ]] || return 0
-    normalized="$(mktemp "$STATE_DIR/.reviewer-artifact.XXXXXX")" || return 1
-    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --artifact "$output_file" "$runner" < "$output_file" > "$normalized"; then
-        rm -f "$normalized"
-        return 1
-    fi
-    mv "$normalized" "$output_file"
-}
 
 # Reviewer-side counterpart to race_self_hosted_candidates, for
 # run_codex_review's self-hosted branch (adversarial-review, test-review,
@@ -4762,64 +4645,10 @@ run_green_check() {
 
 # --- Post-implementation review document ------------------------------------
 
-# Rebuilt from the working tree every time the gate opens, so the approval
-# digest attests to the tree rather than to a file somebody could edit.
-build_implementation_review() {
-    write_change_diff "$DIFF_FILE"
-    write_implementation_review "$REVIEW_FILE" "$DIFF_FILE" "$GREEN_MD" \
-        .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/AUTOMATED_TEST_REPORT.md \
-        "$STATE_DIR/verification.paths" "$STATE_DIR/verification.manifest" \
-        "$STATE_DIR/verification-snapshot" "$STATE_DIR/TEST_CHANGES.diff"
-    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" prepare "$STATE_DIR"
+. "$ROOT/scripts/lib/implementation-gates.sh"
+. "$ROOT/scripts/lib/implementation-gates-app.sh"
 
-}
 
-# Regenerate the document and compare it with what was approved. A mismatch
-# means the code moved after the operator read it, so the gate re-opens on the
-# current tree rather than the pipeline carrying a stale approval forward.
-verify_implementation_review() {
-    local approval="$APPROVAL_DIR/IMPLEMENTATION_REVIEW.sha256"
-
-    require_file "$approval"
-    if [[ -f "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.inputs.json" ]]; then
-        if WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" check "$STATE_DIR"; then
-            return 0
-        fi
-        build_implementation_review
-        reapprove_implementation_unattended && return 0
-        set_state WAIT_IMPLEMENT_APPROVAL
-        echo "Approved inputs changed; review the current implementation again."
-        exit 0
-    fi
-    build_implementation_review
-
-    if [[ "$(hash_file "$REVIEW_FILE")" != "$(cat "$approval")" ]]; then
-        echo
-        echo "The working tree changed after the implementation was approved."
-        echo "$REVIEW_FILE has been rebuilt from the current tree."
-        reapprove_implementation_unattended && return 0
-        set_state WAIT_IMPLEMENT_APPROVAL
-        echo "Re-run the driver to review and approve what is there now."
-        exit 0
-    fi
-}
-
-# Unattended, nobody is there to review the implementation again, and stopping at
-# a reopened gate ended the run for good: the driver exits and nothing restarts
-# it. A later stage re-runs the green check, which rewrites a file the approval
-# covers, so a check that failed when the implementation was approved and passes
-# now (a stray process released its port) was enough to strand the run after
-# every stage had worked. Re-approve the current tree in place, record it in the
-# unattended ledger like any other unreviewed approval, and carry on with the
-# stage that was running. Attended runs still stop and ask.
-reapprove_implementation_unattended() {
-    [[ "${UNATTENDED:-0}" == 1 ]] || return 1
-    review_and_approve "$REVIEW_FILE" IMPLEMENTATION_REVIEW approve || return 1
-    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" record "$STATE_DIR" || return 1
-    record_unattended_gate IMPLEMENTATION_REVIEW "re-approved the current implementation after its inputs changed, without human review"
-    echo "Unattended: the approved implementation inputs changed after approval; re-approved the current tree and continuing."
-    return 0
-}
 
 # --- Speculative execution across human gates -------------------------------
 #

@@ -70,8 +70,28 @@ PY
 )
 check "long hosted review uses bounded file-backed deterministic patch batches" grep -qx 'slice=2 delivery=file fast_merge=1 driver_contract=1 warm=0 advisors=0' "$TMP/.uncle/workflow/adaptive"
 
-state_block="$(awk '/^        UPDATED_PLAN\)/,/^        IMPLEMENT\)/' "$ROOT/scripts/stagegate.sh")"
-check "adaptive path runs before legacy committee" bash -c 'a=$(grep -n "run_updated_plan_adaptive" <<< "$1" | head -1 | cut -d: -f1); b=$(grep -n "run_updated_plan_decide" <<< "$1" | head -1 | cut -d: -f1); [[ -n "$a" && -n "$b" && "$a" -lt "$b" ]]' _ "$state_block"
-check "compact failure does not enter committee" bash -c 'a=$(grep -n "run_updated_plan_adaptive" <<< "$1" | head -1 | cut -d: -f1); r=$(grep -n "return \$?" <<< "$1" | head -1 | cut -d: -f1); b=$(grep -n "run_updated_plan_decide" <<< "$1" | head -1 | cut -d: -f1); [[ -n "$a" && -n "$r" && -n "$b" && "$a" -lt "$r" && "$r" -lt "$b" ]]' _ "$state_block"
+# Exercise the real dispatcher: a normal compact failure must propagate
+# without entering the committee. Status 2 is the documented self-hosted
+# capability fallback and must enter it, after trying the adaptive path.
+awk '/^run_stage\(\) \{/,/^}$/' "$ROOT/scripts/stagegate.sh" > "$TMP/dispatch.sh"
+for adaptive_rc in 0 1 2; do
+    (
+        STATE_DIR="$TMP/.uncle/workflow"
+        calls="$TMP/dispatch-$adaptive_rc"
+        run_updated_plan_fast_path() { return 1; }
+        run_updated_plan_adaptive() { echo adaptive >> "$calls"; return "$adaptive_rc"; }
+        run_updated_plan_decide() { echo committee >> "$calls"; return 0; }
+        . "$TMP/dispatch.sh"
+        status=0
+        run_stage UPDATED_PLAN || status=$?
+        printf '%s\n' "$status" > "$calls.status"
+    )
+done
+check "adaptive success returns before legacy committee" test "$(cat "$TMP/dispatch-0")" = adaptive
+check "adaptive success returns zero" test "$(cat "$TMP/dispatch-0.status")" = 0
+check "compact failure does not enter committee" test "$(cat "$TMP/dispatch-1")" = adaptive
+check "compact failure propagates" test "$(cat "$TMP/dispatch-1.status")" = 1
+check "capability fallback tries adaptive before committee" test "$(cat "$TMP/dispatch-2")" = "$(printf 'adaptive\ncommittee')"
+check "capability fallback succeeds" test "$(cat "$TMP/dispatch-2.status")" = 0
 
 [[ "$fail" == 0 ]] && echo 'updated-plan-compact-driver-test.sh: all checks passed' || exit 1

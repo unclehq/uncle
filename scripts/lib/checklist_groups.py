@@ -263,7 +263,10 @@ def parse_json(path):
         raise ValueError('invalid manual checklist JSON')
     checks, by_id = [], {}
     for item in payload['checks']:
-        check = Check(item['id'], len(checks)); check.resources = set(item.get('exclusive_resources', [])); check.depends = item.get('depends_on', [])
+        check = Check(item['id'], len(checks))
+        if 'exclusive_resources' in item:
+            check.resources = set(item['exclusive_resources'])
+        check.depends = item.get('depends_on', [])
         checks.append(check); by_id[check.id] = check
     return checks, by_id, []
 

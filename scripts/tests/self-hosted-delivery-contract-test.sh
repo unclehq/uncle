@@ -23,7 +23,7 @@ bad() { FAIL=$((FAIL + 1)); echo "FAIL [$1] $2" >&2; }
 extract_case() {
     local script="$1" anchor="$2" start end
     start="$(awk -v a="$anchor" '
-        index($0, a) { print start; exit }
+        start && index($0, a) { print start; exit }
         /case "\$log_name" in/ { start = NR }
     ' "$ROOT/scripts/$script")"
     end="$(awk -v s="$start" 'NR>=s && /^        esac$/ { print NR; exit }' "$ROOT/scripts/$script")"
@@ -41,6 +41,7 @@ run_block() { # run_block <script> <anchor> <runner> <log_name>
         printf 'agent_delivery=%q\n' "$work/agent-delivery.json"
         printf 'artifact_error=%q\n' "previous rejection reason"
         printf 'UNCLE_RESOLVED_RUNNER=%q\n' "$runner"
+        printf 'schema_args=()\n'
         printf 'effective_prompt=%q\n' "$work/prompt.md"
         printf ': > "$effective_prompt"\n'
         extract_case "$script" "$anchor"

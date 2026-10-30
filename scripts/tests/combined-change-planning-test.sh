@@ -6,7 +6,17 @@ for edited in 0 1; do
     new_case "combined-planning-$edited"
     cp "$ROOT/prompts/change/change-spec.md" "$REPO/prompts/change/change-spec.md"
     printf 'STUB:baseline\n' > "$REPO/prompts/change/baseline.md"
-    cp "$REPO/.uncle/docs/CHANGE_SPEC.md" "$CASE/spec-template"
+    # The combined pass produces a bundle, while this scenario deliberately
+    # uses the real spec prompt (without the shared stub's STUB:spec token).
+    jq -n --slurpfile baseline "$REPO/.uncle/workflow/documents/BASELINE_REPORT.json" \
+        --slurpfile spec "$REPO/.uncle/workflow/documents/CHANGE_SPEC.json" \
+        --slurpfile plan "$REPO/.uncle/workflow/documents/CHANGE_PLAN.json" \
+        '{schema:"uncle.artifact/v1",kind:"change-planning-bundle",
+          baseline_report:$baseline[0],change_spec:$spec[0],change_plan:$plan[0]}' > "$CASE/bundle-template.json"
+    # Executability review is disabled here. The shared launcher seeds that
+    # unrelated fixture before the plan exists; it must not read a future plan.
+    printf 'import sys\nassert sys.argv[1] == "--fixture"\n' > "$REPO/scripts/tests/plan-executability-test.py"
+    rm "$REPO/.uncle/workflow/documents/CHANGE_SPEC.json" "$REPO/.uncle/workflow/documents/CHANGE_PLAN.json"
     rm "$REPO/.uncle/docs/CHANGE_SPEC.md" "$REPO/.uncle/docs/CHANGE_PLAN.md"
     mv "$CASE/bin/fake-agent" "$CASE/bin/original-agent"
     cat > "$CASE/bin/fake-agent" <<'AGENT'
@@ -17,8 +27,10 @@ case "$prompt" in
 esac
 case "$prompt" in
     *'Combined change specification and planning'*)
-        cp "$(dirname "$0")/../spec-template" .uncle/docs/CHANGE_SPEC.md
         printf '%s' "$prompt" > .uncle/workflow/combined-prompt
+        cp "$(dirname "$0")/../bundle-template.json" "$UNCLE_ARTIFACT_DELIVERY"
+        printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":5,"total_cost_usd":0}'
+        exit 0
         ;;
 esac
 printf '%s' "$prompt" | "$(dirname "$0")/original-agent" "$@"
@@ -31,17 +43,27 @@ AGENT
     expect_file .uncle/docs/CHANGE_SPEC.md
     expect_file .uncle/docs/CHANGE_PLAN.md
     expect_file .uncle/workflow/change-plan.draft-key
-    expect_in_file .uncle/workflow/combined-prompt '.uncle/docs/CHANGE_SPEC.md: at most'
-    expect_in_file .uncle/workflow/combined-prompt '.uncle/docs/CHANGE_PLAN.md: at most'
-    # This scenario's fake-agent matches the spec-and-plan-only prompt (an
-    # already-written .uncle/docs/BASELINE_REPORT.md), which only claims "the same
-    # context" for spec+plan together -- "the same model and context" is the
-    # with-baseline branch's own wording, for when one pass does all three
-    # documents and model continuity across them is the actual guarantee.
-    expect_in_file .uncle/workflow/combined-prompt 'the same context, write .uncle/docs/CHANGE_SPEC.md'
+    # Compact canonical synthesis no longer appends presentation budgets to
+    # its prompt. Keep checking that the combined stage budgets both rendered
+    # documents through the budget helper used by the driver's checks.
+    (
+        cd "$REPO"
+        . "$ROOT/scripts/lib/gates.sh"
+        DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md
+        UNCLE_COMBINED_CHANGE_PLAN=1 document_budget_prompt change-plan
+    ) > "$REPO/.uncle/workflow/combined-budgets"
+    expect_in_file .uncle/workflow/combined-budgets '.uncle/docs/CHANGE_SPEC.md: at most'
+    expect_in_file .uncle/workflow/combined-budgets '.uncle/docs/CHANGE_PLAN.md: at most'
+    # The driver now renders the same spec and plan from a single canonical
+    # bundle. Assert both packet contracts and their shared-context instruction.
+    expect_in_file .uncle/workflow/combined-prompt '"change_spec":{"schema":"uncle.artifact/v1","kind":"change-spec"'
+    expect_in_file .uncle/workflow/combined-prompt '"change_plan":{"schema":"uncle.artifact/v1","kind":"change-plan"'
+    expect_in_file .uncle/workflow/combined-prompt 'the same context, provide a complete replacement canonical bundle'
+    expect_in_file .uncle/workflow/combined-prompt 'are rendered by the driver afterwards, from the bundle.'
     expect_not_out ': change-spec'
     if [[ "$edited" == 1 ]]; then
         printf '\nUser clarification at approval.\n' >> "$REPO/.uncle/docs/CHANGE_SPEC.md"
+        sync_canonical CHANGE_SPEC
     fi
     run_driver_stdin "$(gate_input y)"
     expect_status 0

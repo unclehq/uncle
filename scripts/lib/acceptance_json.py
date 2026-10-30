@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Workflow routing verdicts from canonical acceptance JSON, never Markdown."""
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -14,7 +15,9 @@ def result(path, expected=()):
         return 'UNKNOWN'
     seen, required = set(), {}
     for row in rows:
-        if not isinstance(row, dict) or not row.get('id') or row['id'] in seen or not row.get('evidence'):
+        if (not isinstance(row, dict) or not isinstance(row.get('id'), str)
+                or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]*', row['id'])
+                or row['id'] in seen or not row.get('evidence')):
             return 'UNKNOWN'
         seen.add(row['id'])
         if row.get('required') is True:

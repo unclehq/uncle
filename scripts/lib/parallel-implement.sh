@@ -195,7 +195,13 @@ parallel_implement_run_groups() {
     groups="$(parallel_groups "$plan_doc" "$ROOT/scripts/lib")" || return 2
     [[ -n "$groups" ]] || return 2
 
-    if derive_module_interfaces "$plan_doc"; then
+    # Derivation itself now runs once in the dedicated MODULE_INTERFACES state
+    # (scripts/lib/module-interfaces-stage.sh), always before IMPLEMENT is
+    # reached, so this only renders whatever that state already produced
+    # (or wrote nothing for, if derivation was disabled or failed -- the
+    # section then stays empty, exactly as a failed/disabled derivation
+    # always meant here).
+    if [[ -s "$STATE_DIR/documents/MODULE_INTERFACES.json" ]]; then
         module_interfaces_section="$(python3 -B "$ROOT/scripts/lib/module_interfaces.py" --render-section \
             "$STATE_DIR/documents/MODULE_INTERFACES.json" 2>/dev/null || true)"
     fi

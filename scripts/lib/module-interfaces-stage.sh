@@ -47,3 +47,26 @@ derive_module_interfaces() {
     echo "Module interfaces derived: parallel steps share one exact contract for cross-file exports."
     return 0
 }
+
+# module_interfaces_stage <plan_doc> -- the shared MODULE_INTERFACES state body
+# for both drivers' main loops. Runs once, right after the approved plan is
+# in hand and before IMPLEMENT begins, so a dedicated, resumable, triage-
+# visible state exists for what used to be a side-effect buried inside
+# run_stepwise_implementation's serial path and parallel_implement_run_groups.
+#
+# Deliberately fail-open, matching derive_module_interfaces's own documented
+# contract: this state unconditionally transitions to IMPLEMENT whether
+# derivation succeeded, failed, or was disabled
+# (WORKFLOW_MODULE_INTERFACES=0). It must never gate or block the run -- that
+# was an explicit choice (a real distinct state, not a non-optional one), not
+# an oversight.
+#
+# A dying/restarted process re-enters this state on resume (set_state only
+# advances past it on return), and derive_module_interfaces's own plan-hash
+# idempotency check means re-running it here costs nothing when the prior
+# attempt already succeeded.
+module_interfaces_stage() {
+    local plan_doc="$1"
+    derive_module_interfaces "$plan_doc" || true
+    set_state IMPLEMENT
+}

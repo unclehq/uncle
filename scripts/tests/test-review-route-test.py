@@ -21,7 +21,11 @@ class TestReviewRoute(unittest.TestCase):
         self.assertIn('acceptance_json.py', block)
         self.assertIn('documents/AUTOMATED_TEST_REPORT.json', block)
         self.assertNotIn('test_review_route.py" "$STATE_DIR/documents/TEST_REVIEW.json" .uncle/docs/AUTOMATED_TEST_REPORT.md', block)
-        transition = driver[driver.index('acceptance_transition() {'):driver.index('\n}\n', driver.index('acceptance_transition() {'))]
+        # uncle consolidation item 1: acceptance_transition moved from
+        # stagegate.sh into the shared scripts/lib/acceptance-gate.sh so
+        # change-workflow.sh could reuse it for its own TEST_REVIEW.md.
+        gate_lib = (ROOT / 'scripts/lib/acceptance-gate.sh').read_text()
+        transition = gate_lib[gate_lib.index('acceptance_transition() {'):gate_lib.index('\n}\n', gate_lib.index('acceptance_transition() {'))]
         self.assertIn('canonical="$STATE_DIR/documents/$(basename "${report%.md}").json"', transition)
         self.assertIn('acceptance_json.py', transition)
         self.assertIn('supervision_artifact="$canonical"', transition)

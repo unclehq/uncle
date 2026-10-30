@@ -29,7 +29,10 @@ class AcceptanceJsonOrder(unittest.TestCase):
             self.assertNotIn('stale | table', rendered)
 
     def test_transition_is_json_only(self):
-        source = (ROOT/'scripts/stagegate.sh').read_text()
+        # uncle consolidation item 1: acceptance_transition moved from
+        # stagegate.sh into the shared scripts/lib/acceptance-gate.sh so
+        # change-workflow.sh could reuse it for its own TEST_REVIEW.md.
+        source = (ROOT/'scripts/lib/acceptance-gate.sh').read_text()
         block = source[source.index('acceptance_transition() {'):source.index('\n}', source.index('acceptance_transition() {'))]
         self.assertIn('acceptance_json.py', block)
         self.assertNotIn('repair_document_format.py', block)

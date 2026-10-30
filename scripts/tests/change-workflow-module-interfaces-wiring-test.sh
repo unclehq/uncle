@@ -43,27 +43,36 @@ block="$(sed -n "/^${prompt_fn:-_no_such_fn_}() {/,/^}/p" "$ROOT/scripts/change-
 if printf '%s' "$block" | grep -q 'module_interfaces_section'; then ok
 else bad "injects-into-prompt" "the change-workflow.sh prompt-builder callback never references module_interfaces_section"; fi
 
-# The shared function itself must still derive against whatever plan_doc its
-# caller passed (not a hardcoded UPDATED_PROJECT_PLAN.md default), and must do
-# so before the per-group loop that calls the prompt-builder callback -- or
-# the section handed to every family's callback would always be empty.
+# uncle consolidation phase (d): derivation itself moved out of this function
+# entirely, into the dedicated MODULE_INTERFACES state both drivers now visit
+# once, before IMPLEMENT -- see module-interfaces-stage-test.sh for that. This
+# function only renders whatever MODULE_INTERFACES.json that state already
+# produced (if any), and must still do so before the per-group loop that
+# calls the prompt-builder callback -- or the section handed to every
+# family's callback would always be empty.
 shared_block="$(sed -n '/^parallel_implement_run_groups() {/,/^}/p' "$ROOT/scripts/lib/parallel-implement.sh")"
 [[ -n "$shared_block" ]] || { echo 'FATAL: could not extract the shared parallel_implement_run_groups'; exit 2; }
 
-if printf '%s' "$shared_block" | grep -q 'derive_module_interfaces "\$plan_doc"'; then ok
-else bad "shared-derives-against-plan-doc" "parallel_implement_run_groups does not derive module interfaces against its plan_doc argument"; fi
+if printf '%s' "$shared_block" | grep -q 'derive_module_interfaces'; then
+    bad "no-redundant-derive" "parallel_implement_run_groups still calls derive_module_interfaces directly; it should only render from the MODULE_INTERFACES state's own output"
+else
+    ok
+fi
+
+if printf '%s' "$shared_block" | grep -q '\[\[ -s "\$STATE_DIR/documents/MODULE_INTERFACES\.json" \]\]'; then ok
+else bad "shared-checks-existing-json" "parallel_implement_run_groups does not check for an already-derived MODULE_INTERFACES.json"; fi
 
 if printf '%s' "$shared_block" | grep -q 'module_interfaces_section='; then ok
 else bad "shared-renders-section" "parallel_implement_run_groups does not render the module-interfaces section"; fi
 
-derive_line="$(printf '%s' "$shared_block" | grep -n 'derive_module_interfaces "\$plan_doc"' | head -1 | cut -d: -f1)"
+render_line="$(printf '%s' "$shared_block" | grep -n '\[\[ -s "\$STATE_DIR/documents/MODULE_INTERFACES\.json" \]\]' | head -1 | cut -d: -f1)"
 loop_line="$(printf '%s' "$shared_block" | grep -n 'while IFS= read -r group' | head -1 | cut -d: -f1)"
-if [[ -n "$derive_line" && -n "$loop_line" && "$derive_line" -lt "$loop_line" ]]; then ok
-else bad "runs-before-loop" "derive_module_interfaces (line $derive_line) does not precede the group loop (line $loop_line)"; fi
+if [[ -n "$render_line" && -n "$loop_line" && "$render_line" -lt "$loop_line" ]]; then ok
+else bad "runs-before-loop" "the MODULE_INTERFACES.json check (line $render_line) does not precede the group loop (line $loop_line)"; fi
 
 callback_line="$(printf '%s' "$shared_block" | grep -n '"\$prompt_builder_fn"' | head -1 | cut -d: -f1)"
-if [[ -n "$derive_line" && -n "$callback_line" && "$derive_line" -lt "$callback_line" ]]; then ok
-else bad "callback-after-derive" "the prompt-builder callback (line $callback_line) is invoked before derive_module_interfaces (line $derive_line)"; fi
+if [[ -n "$render_line" && -n "$callback_line" && "$render_line" -lt "$callback_line" ]]; then ok
+else bad "callback-after-render" "the prompt-builder callback (line $callback_line) is invoked before the MODULE_INTERFACES.json check (line $render_line)"; fi
 
 bash -n "$ROOT/scripts/lib/parallel-implement.sh" && ok || bad "syntax-shared" "parallel-implement.sh fails bash -n"
 grep -Fq '. "$ROOT/scripts/lib/parallel-implement.sh"' "$ROOT/scripts/stagegate.sh" \
@@ -74,24 +83,25 @@ grep -Fq '. "$ROOT/scripts/lib/parallel-implement.sh"' "$ROOT/scripts/change-wor
 bash -n "$ROOT/scripts/change-workflow.sh" && ok || bad "syntax" "change-workflow.sh fails bash -n"
 bash -n "$ROOT/scripts/lib/module-interfaces-stage.sh" && ok || bad "syntax-lib" "module-interfaces-stage.sh fails bash -n"
 
-# run_supervised_parallel_implementation returns before deriving module
-# interfaces on every serial trigger (no ownership partitions, a resume, or
-# the ownership-mismatch fallback marker), so the serial per-step loop in
-# run_stepwise_implementation must derive and inject its own copy instead of
-# relying on the parallel function's local variable.
+# uncle consolidation phase (d): run_stepwise_implementation no longer derives
+# either -- it renders from whatever MODULE_INTERFACES.json the dedicated
+# MODULE_INTERFACES state already produced, same as parallel_implement_run_groups.
 serial_block="$(sed -n '/^run_stepwise_implementation() {/,/^}/p' "$ROOT/scripts/change-workflow.sh")"
 [[ -n "$serial_block" ]] || { echo 'FATAL: could not extract run_stepwise_implementation'; exit 2; }
 
-if printf '%s' "$serial_block" | grep -q 'derive_module_interfaces .uncle/docs/CHANGE_PLAN.md'; then ok
-else bad "serial-derives" "run_stepwise_implementation does not call derive_module_interfaces"; fi
+if printf '%s' "$serial_block" | grep -q 'derive_module_interfaces'; then
+    bad "no-redundant-serial-derive" "run_stepwise_implementation still calls derive_module_interfaces directly; it should only render from the MODULE_INTERFACES state's own output"
+else
+    ok
+fi
 
-derive_line2="$(printf '%s' "$serial_block" | grep -n 'derive_module_interfaces .uncle/docs/CHANGE_PLAN.md' | head -1 | cut -d: -f1)"
+derive_line2="$(printf '%s' "$serial_block" | grep -n '\[\[ -s "\$STATE_DIR/documents/MODULE_INTERFACES\.json" \]\]' | head -1 | cut -d: -f1)"
 single_stage_line="$(printf '%s' "$serial_block" | grep -n 'running implementation as a single stage' | head -1 | cut -d: -f1)"
 loop_line2="$(printf '%s' "$serial_block" | grep -n 'while IFS= read -r step' | head -1 | cut -d: -f1)"
 if [[ -n "$derive_line2" && -n "$single_stage_line" && "$derive_line2" -lt "$single_stage_line" ]]; then ok
-else bad "serial-derives-before-single-stage" "derive_module_interfaces (line $derive_line2) does not precede the single-stage path (line $single_stage_line)"; fi
+else bad "serial-renders-before-single-stage" "the MODULE_INTERFACES.json check (line $derive_line2) does not precede the single-stage path (line $single_stage_line)"; fi
 if [[ -n "$derive_line2" && -n "$loop_line2" && "$derive_line2" -lt "$loop_line2" ]]; then ok
-else bad "serial-derives-before-loop" "derive_module_interfaces (line $derive_line2) does not precede the per-step loop (line $loop_line2)"; fi
+else bad "serial-renders-before-loop" "the MODULE_INTERFACES.json check (line $derive_line2) does not precede the per-step loop (line $loop_line2)"; fi
 
 single_stage_block="$(printf '%s' "$serial_block" | sed -n "/running implementation as a single stage/,/return 0/p")"
 if printf '%s' "$single_stage_block" | grep -q 'module_interfaces_section'; then ok

@@ -137,7 +137,7 @@ fi
 # the effective one and says out loud, on the next line, that findings were waived unreviewed.
 completed_verdict() {
     local verdict
-    verdict="$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE" 2>/dev/null)"
+    verdict="$(verdict_file_field "$VERDICT_FILE" audit_class 2>/dev/null)"
     printf '%s' "$verdict"
 }
 
@@ -492,6 +492,8 @@ change_pr_extras_print() {
 . "$ROOT/scripts/lib/implementation-review.sh"
 . "$ROOT/scripts/lib/gates.sh"
 . "$ROOT/scripts/lib/waivers.sh"
+. "$ROOT/scripts/lib/acceptance.sh"
+. "$ROOT/scripts/lib/acceptance-gate.sh"
 . "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/performance.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
@@ -2015,16 +2017,19 @@ run_stepwise_implementation() {
     local total
     total="$(grep -c . "$steps_file" || true)"
 
-    # Derived once here so every implementation path -- single-stage, serial
-    # per-step, and (via run_supervised_parallel_implementation's own copy)
-    # parallel -- sees the same cross-file contract. Previously this was only
-    # computed inside the parallel function, which returns before reaching it
-    # on every serial trigger: no ownership partitions in the plan, a resume,
-    # or an ownership-mismatch fallback. Serial steps then had no visibility
-    # into other steps' interfaces at all, which is a plausible contributor to
-    # the undeclared-write ownership conflicts that trigger that very fallback.
+    # Derivation itself now runs once in the dedicated MODULE_INTERFACES state
+    # (scripts/lib/module-interfaces-stage.sh), always before IMPLEMENT is
+    # reached on the path that starts this function fresh from plan approval.
+    # This still renders the section for every implementation path here --
+    # single-stage, serial per-step, and (via parallel_implement_run_groups)
+    # parallel -- from whatever MODULE_INTERFACES already produced, rather
+    # than re-deriving. A legacy in-flight run resumed from a state file
+    # written before this change may reach here with no MODULE_INTERFACES.json
+    # yet; that run simply gets no section, the same practical effect a failed
+    # derivation always had -- an expected one-time transition gap, not
+    # something resolved retroactively.
     local module_interfaces_section=""
-    if derive_module_interfaces .uncle/docs/CHANGE_PLAN.md; then
+    if [[ -s "$STATE_DIR/documents/MODULE_INTERFACES.json" ]]; then
         module_interfaces_section="$(python3 -B "$ROOT/scripts/lib/module_interfaces.py" --render-section \
             "$STATE_DIR/documents/MODULE_INTERFACES.json" 2>/dev/null || true)"
     fi
@@ -4166,7 +4171,11 @@ while true; do
                 --dispositions .uncle/docs/CHANGE_PLAN.md ${plan_review_input[@]+"${plan_review_input[@]}"} \
                 --approval CHANGE_PLAN ADVERSARIAL_REVIEW --reapprovals \
                 --producer-stage updated-change-plan --producer-kind agent
-            set_state IMPLEMENT
+            set_state MODULE_INTERFACES
+            ;;
+
+        MODULE_INTERFACES)
+            module_interfaces_stage .uncle/docs/CHANGE_PLAN.md
             ;;
 
         IMPLEMENT)
@@ -4346,7 +4355,7 @@ REPAIR
                 printf 'disabled:WORKFLOW_DIFF_GATE=0\n' > "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.delegated-by"
                 printf '\n' > "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.approved-by"
                 write_implementation_envelope unavailable 'WORKFLOW_DIFF_GATE=0: no human read the diff'
-                set_state CHECKLIST
+                set_state TEST_REVIEW
                 continue
             fi
 
@@ -4386,7 +4395,62 @@ REPAIR
                 rm -f "$GREEN_OVERRIDE_FILE"
             fi
 
-            set_state CHECKLIST
+            set_state TEST_REVIEW
+            ;;
+
+        TEST_REVIEW)
+            # uncle consolidation item 1: a change-family equivalent of
+            # stagegate.sh's TEST_REVIEW, reviewing CHANGE_TEST_REPORT.md
+            # against the same CLAUDE.md Stage 6 criteria (coverage,
+            # integrity, assertions, oracle provenance, defect-injection
+            # evidence, results) before checklist work -- see
+            # prompts/change/test-review.md. Modeled on this driver's own
+            # ADVERSARIAL_REVIEW/VALIDATE_ADVERSARIAL_REVIEW pair (a single
+            # reviewer call, not app's multi-lens worker panel; see the item 1
+            # report for that scope decision) rather than a byte-for-byte port.
+            if [[ "$DIFF_GATE" == "1" ]]; then
+                verify_implementation_review
+            fi
+            wait_green_check_bg || exit $?
+            python3 "$ROOT/scripts/lib/test_report.py" from-green . change \
+                "$STATE_DIR/green-check.current.tsv" "$LOG_DIR/green-check.log" 2>/dev/null || true
+            test_review_prompt="${TEST_REVIEW_PROMPT:-prompts/change/test-review.md}"
+            # A malformed review gets one real re-run with the exact validator
+            # diagnosis appended, the same one-shot recovery pattern every
+            # other acceptance-gate document in this driver gets.
+            if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then
+                test_review_prompt="$STATE_DIR/test-review-format-retry-prompt.md"
+                {
+                    cat "${TEST_REVIEW_PROMPT:-$ROOT/prompts/change/test-review.md}"
+                    printf '\n\n## Required format retry\n\n'
+                    cat "$STATE_DIR/test-review-format-retry.md"
+                } > "$test_review_prompt"
+            fi
+            run_codex \
+                "$test_review_prompt" \
+                "$PROJECT_ROOT/.uncle/docs/TEST_REVIEW.md" \
+                test-review \
+                "$CODEX_EFFORT_REVIEW"
+            set_state VALIDATE_TEST_REVIEW
+            ;;
+
+        VALIDATE_TEST_REVIEW)
+            if [[ "$DIFF_GATE" == "1" ]]; then
+                verify_implementation_review
+            fi
+            wait_green_check_bg || exit $?
+            if green_requires_implementation_repair; then
+                echo 'Application or verification setup is not runnable; returning to implementation before test review.' >&2
+                set_state IMPLEMENT
+                continue
+            fi
+            # change-workflow.sh has no REPAIR state (see acceptance_transition's
+            # repair_target parameter in scripts/lib/acceptance-gate.sh): a FAIL
+            # finding here re-enters IMPLEMENT directly, the same destination
+            # every other "this needs fixing" signal in this driver already
+            # uses, rather than a state that does not exist.
+            acceptance_transition .uncle/docs/TEST_REVIEW.md CHECKLIST \
+                'COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS' IMPLEMENT
             ;;
 
         CHECKLIST)
@@ -4611,7 +4675,16 @@ PY
             recover_missing_checklist_reports || exit $?
             python3 -c "import importlib.util; s=importlib.util.spec_from_file_location('r','$ROOT/scripts/lib/checklist_report_fallback.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.render_from_json('.')" || exit 1
             require_file "$STATE_DIR/documents/EXECUTE_CHECKLIST.json"
-            set_state FINAL_AUDIT
+            # uncle consolidation item 3: this used to go straight to
+            # FINAL_AUDIT with no routing for a failing checklist result at
+            # all -- change-workflow.sh has no REPAIR state (confirmed: zero
+            # `set_state REPAIR` anywhere in it, from its first commit
+            # onward; see scripts/lib/acceptance-gate.sh's acceptance_transition
+            # repair_target parameter, proven first for TEST_REVIEW). A
+            # REPAIR-worthy VERIFICATION_REPORT.md now re-enters IMPLEMENT,
+            # the same destination every other "this needs fixing" signal in
+            # this driver already uses.
+            acceptance_transition .uncle/docs/VERIFICATION_REPORT.md FINAL_AUDIT '' IMPLEMENT
             ;;
 
         FINAL_AUDIT)
@@ -4667,180 +4740,44 @@ PY
 
         VALIDATE_AUDIT)
             echo "Validating saved audit; the reviewer will not be rerun."
-            # The fast path (panel) writes canonical JSON directly and never
-            # reaches here with an unconverted .md. This fallback (panel
-            # disabled) writes the legacy Markdown form, which --validate-json
-            # below cannot read -- ingest it first, same one-shot retry
-            # .uncle/docs/ADVERSARIAL_REVIEW.md and .uncle/docs/MANUAL_CHECKLIST.md get, before
-            # ever falling back to a driver-owned blocking audit.
-            if [[ -s .uncle/docs/FINAL_AUDIT.md ]] \
-                    && ! python3 "$ROOT/scripts/lib/final-audit-context.py" --validate-json . >/dev/null 2>&1; then
-                audit_ingest_error="$(python3 "$ROOT/scripts/lib/final-audit-context.py" --validate .uncle/docs/FINAL_AUDIT.md 2>&1)" || {
-                    if [[ ! -s "$STATE_DIR/final-audit-format-retry.md" ]]; then
-                        printf '%s\n' "$audit_ingest_error" > "$STATE_DIR/final-audit-format-retry.md"
-                        echo "Retrying final-audit once with the format diagnostic."
-                        set_state FINAL_AUDIT
-                        continue
-                    fi
-                    echo 'Final audit was malformed; recording a blocking driver-owned audit without retrying the reviewer.'
-                    python3 "$ROOT/scripts/lib/final-audit-context.py" --fallback .uncle/docs/FINAL_AUDIT.md "$audit_ingest_error"
-                }
-            fi
-            require_file "$STATE_DIR/documents/FINAL_AUDIT.json"
-            audit_validation_error="$(python3 "$ROOT/scripts/lib/final-audit-context.py" --validate-json . 2>&1)" || {
-                echo 'Final audit was malformed; recording a blocking driver-owned audit without retrying the reviewer.'
-                python3 "$ROOT/scripts/lib/final-audit-context.py" --fallback .uncle/docs/FINAL_AUDIT.md "$audit_validation_error"
-            }
-            audit_class="$(classify_audit_verdict "$STATE_DIR/documents/FINAL_AUDIT.json")"
-            # Driver verification moved to the background (EXECUTE_CHECKLIST)
-            # so IMPLEMENT's human gate no longer sees a pass/fail result to
-            # act on; wait_green_check_bg's own comment promised "the gate
-            # and the final audit both see them" instead, but nothing ever
-            # enforced that -- a command that used to pass and now fails is
-            # the single most load-bearing signal this driver has, and until
-            # here it depended entirely on a model-written audit finding it
-            # unprompted. That is not an acceptable substitute for the
-            # deterministic check this replaced. Force the verdict closed
-            # whenever the driver's own command results disagree with it,
-            # the same way a malformed or missing audit already does above.
-            if [[ "$audit_class" == READY || "$audit_class" == READY_WITH_NON_BLOCKING_ISSUES ]] \
-                    && [[ "$GREEN_CHECK" == "1" && -s "$GREEN_CMDS" ]]; then
-                if [[ ! -s "$GREEN_CLASS" ]]; then
-                    # The background check (EXECUTE_CHECKLIST) never left a
-                    # result here at all -- it was killed, crashed, or never
-                    # ran. Absence of evidence is not evidence this is safe;
-                    # fail closed the same way a malformed audit does above,
-                    # rather than letting a verdict with nothing behind it
-                    # stand in for a verification that may never have happened.
-                    echo "No driver verification result on record ($GREEN_CLASS is missing or empty) despite WORKFLOW_GREEN_CHECK=1."
-                    echo "Overriding the verdict to NOT_READY; it cannot be silently approved without that evidence."
-                    audit_class=NOT_READY
-                elif [[ "$(green_regressions "$GREEN_CLASS")" -gt 0 ]]; then
-                    echo "Audit verdict $audit_class contradicts the driver's own verification: $(green_regressions "$GREEN_CLASS") command(s) regressed."
-                    echo "$GREEN_MD lists them. Overriding the verdict to NOT_READY; it cannot be silently approved."
-                    audit_class=NOT_READY
-                fi
-            fi
-            # A plain READY claims nothing was overlooked. That is false
-            # whenever something was deliberately waived through as
-            # nonblocking evidence -- the audit worker is told to read this
-            # ledger, but depends on it doing so and saying so unprompted.
-            # Make the gap visible deterministically: a build with an open
-            # nonblocking item is never reported as a plain, unqualified READY.
-            if [[ "$audit_class" == READY && -s "$STATE_DIR/nonblocking-test-failures.tsv" ]]; then
-                echo "Audit verdict READY, but $STATE_DIR/nonblocking-test-failures.tsv records at least one deliberately-waived failure."
-                echo "Downgrading the verdict to READY_WITH_NON_BLOCKING_ISSUES; it is not reported as a clean pass."
-                audit_class=READY_WITH_NON_BLOCKING_ISSUES
-            fi
-            printf '%s\t%s\t%s\n' \
-                "${STAGEGATE_RUN_ID:--}" \
-                "$audit_class" \
-                "$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")" \
-                > "$VERDICT_FILE"
+            # Shared with stagegate.sh (uncle consolidation item 2): see
+            # final_audit_validate/final_audit_route_verdict in
+            # scripts/lib/audit-verdict.sh.
+            audit_validate_status=0
+            final_audit_validate require_file "${STAGEGATE_RUN_ID:--}" || audit_validate_status=$?
+            [[ "$audit_validate_status" != 2 ]] || continue
             if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine bind || exit 1; fi
             # The audit claim: pass only for a READY verdict. An override
             # recorded later never rewrites it; release reads this file.
             audit_result=fail
-            case "$audit_class" in READY|READY_WITH_NON_BLOCKING_ISSUES) audit_result=pass ;; esac
+            case "$FINAL_AUDIT_CLASS" in READY|READY_WITH_NON_BLOCKING_ISSUES) audit_result=pass ;; esac
             audit_artifact="$(change_artifact)"
-            envelope_write --stage audit --result "$audit_result" --reason "$audit_class" \
+            envelope_write --stage audit --result "$audit_result" --reason "$FINAL_AUDIT_CLASS" \
                 ${audit_artifact:+--input "artifact=$audit_artifact"} \
                 --evidence .uncle/docs/FINAL_AUDIT.md .uncle/docs/VERIFICATION_REPORT.md \
                 --producer-stage final-audit --producer-kind reviewer
-            echo "Audit verdict: $audit_class"
             VERDICT_WRITTEN_THIS_RUN=1
-
-            # The verdict was already computed here; it just did not decide
-            # anything. A run that ends on NOT READY — or on an audit whose
-            # last line cannot be read as a verdict at all — reached COMPLETE
-            # and reported success.
-            case "$audit_class" in
-                READY|READY_WITH_NON_BLOCKING_ISSUES)
-                    set_state COMPLETE
-                    ;;
-                *)
-                    if [[ "$AUDIT_GATE" == "1" ]]; then
-                        set_state WAIT_AUDIT_OVERRIDE
-                    else
-                        echo "Audit gate disabled (WORKFLOW_AUDIT_GATE=0);" \
-                             "completing on a $audit_class verdict."
-                        set_state COMPLETE
-                    fi
-                    ;;
-            esac
+            final_audit_route_verdict "$FINAL_AUDIT_CLASS"
             ;;
 
         WAIT_AUDIT_OVERRIDE)
             require_file "$VERDICT_FILE"
-            audit_class="$(awk -F'\t' 'NR == 1 {print $2}' "$VERDICT_FILE")"
+            audit_class="$(verdict_file_field "$VERDICT_FILE" audit_class)"
 
-            # Recover an interruption after saving READY but before COMPLETE.
-            if [[ "$audit_class" == READY ]]; then
-                [[ "$(awk -F'\t' 'NR == 1 {print $3}' "$VERDICT_FILE")" == "$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")" ]] || exit 1
-                python3 "$ROOT/scripts/lib/audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" --check $([[ "${UNATTENDED:-0}" == 1 ]] && printf %s --unattended) || exit 1
-                set_state COMPLETE
-                continue
-            fi
+            # Shared with stagegate.sh (uncle consolidation item 2): see
+            # final_audit_override_recovery/final_audit_override_gate in
+            # scripts/lib/audit-verdict.sh. change-workflow.sh has no
+            # unattended repair-before-waiver route (enable_unattended_repair_route=0;
+            # stagegate.sh's original had one -- see that function's header
+            # comment for why this stays a parameter rather than a pick).
+            audit_recovery_status=0
+            final_audit_override_recovery "$audit_class" "${STAGEGATE_RUN_ID:--}" 0 || audit_recovery_status=$?
+            [[ "$audit_recovery_status" != 0 ]] || continue
 
-            if [[ "$audit_class" == NOT_READY ]]; then
-                audit_hash="$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")"
-                if [[ "$(classify_audit_verdict "$STATE_DIR/documents/FINAL_AUDIT.json")" != NOT_READY ]] \
-                    || [[ "$(awk -F'\t' 'NR == 1 {print $3}' "$VERDICT_FILE")" != "$audit_hash" ]]; then
-                    echo "The audit changed since its verdict was recorded; rerun FINAL_AUDIT."
-                    exit 1
-                fi
-                # Attended: each finding needs an explicit decision and EOF leaves
-                # the review pending. Unattended (Issue 107): every blocker is
-                # skipped, labelled and ledgered by audit-findings.py.
-                if [[ "${UNATTENDED:-0}" == 1 ]]; then
-                    python3 "$ROOT/scripts/lib/audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" --unattended --ledger "$UNATTENDED_FILE" </dev/null || exit 1
-                else
-                    python3 "$ROOT/scripts/lib/audit-findings.py" "$STATE_DIR/documents/FINAL_AUDIT.json" "$STATE_DIR" || exit 1
-                fi
-                [[ "$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")" == "$audit_hash" ]] || exit 1
-                cp "$VERDICT_FILE" "$STATE_DIR/audit-verdict.original"
-                printf '%s\t%s\t%s\n' "${STAGEGATE_RUN_ID:--}" "READY" "$audit_hash" > "$VERDICT_FILE"
-                if [[ -f "$AUDIT_OVERRIDE_FILE" ]]; then
-                    mv "$AUDIT_OVERRIDE_FILE" "$AUDIT_OVERRIDE_FILE.previous"
-                fi
-                set_state COMPLETE
-                continue
-            fi
-
-            echo
-            echo "=================================================="
-            echo "FINAL AUDIT: $audit_class"
-            echo "=================================================="
-            echo
-
-            if [[ "$audit_class" == "NOT_READY" ]]; then
-                echo "The independent auditor says this change is not ready."
-            else
-                echo ".uncle/docs/FINAL_AUDIT.md does not end in one of the three verdict"
-                echo "phrases, so the auditor's conclusion could not be read."
-                echo "An unreadable verdict is not a pass."
-            fi
-
-            echo
-            echo "This run does not finish on that by itself. Either fix what"
-            echo "the audit found and re-run the implementation stage:"
-            echo
-            echo "  printf '%s\\n' IMPLEMENT > $STATE_FILE"
-            echo "  ./scripts/change-workflow.sh"
-            echo
-            echo "or record an explicit decision to finish anyway. An override"
-            echo "is written to $AUDIT_OVERRIDE_FILE, reported at COMPLETE, and"
-            echo "never closes the originating issue."
-
-            human_gate OVERRIDE .uncle/docs/FINAL_AUDIT.md FINAL_AUDIT_OVERRIDE
-
-            printf '%s\t%s\t%s\n' \
-                "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-                "$audit_class" \
-                "$(hash_file .uncle/docs/FINAL_AUDIT.md)" \
-                > "$AUDIT_OVERRIDE_FILE"
-
-            set_state COMPLETE
+            final_audit_override_gate "$audit_class" human_gate \
+                "  printf '%s\\n' IMPLEMENT > $STATE_FILE
+  ./scripts/change-workflow.sh" \
+                change
             ;;
 
         COMPLETE)

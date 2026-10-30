@@ -139,6 +139,19 @@ def _project_root():
     return os.getcwd()
 
 
+def _workflow_family():
+    """The driver's own record of which state machine ran ('app' or
+    'change'), regardless of how this TUI session got here. The new-app and
+    change-request drivers share stage names like "implementation" and
+    "repair", so anything that gates on the current stage name alone cannot
+    tell them apart; this is the authoritative source for that distinction."""
+    marker = os.path.join(_project_root(), ".uncle", "workflow", "family")
+    try:
+        return open(marker, encoding="utf-8").read().strip()
+    except OSError:
+        return ""
+
+
 # Mirrors from-issue.sh's own auto-classification allowlist exactly: tracked
 # files beyond this scaffolding mean the repo is a real, populated project,
 # not a fresh template. Kept here too so a "build #<issue>" request can
@@ -2443,12 +2456,7 @@ class UncleTUI:
             # and _quit() would kill it mid-flight; _show_early_preview's
             # fire-and-forget webbrowser.open is the one already proven safe
             # to call without a dialog or any further loop turns.
-            family_marker = os.path.join(_project_root(), ".uncle", "workflow", "family")
-            try:
-                family = open(family_marker, encoding="utf-8").read().strip()
-            except OSError:
-                family = ""
-            if family == "app":
+            if _workflow_family() == "app":
                 self._show_early_preview()
             self.unattended_finished = True
             self._quit()
@@ -2463,12 +2471,7 @@ class UncleTUI:
         # workflow_family.py regardless of how this TUI session got here;
         # trust it over self.workflow_idx, which only reflects the menu
         # choice that started this specific session.
-        family_marker = os.path.join(_project_root(), ".uncle", "workflow", "family")
-        try:
-            family = open(family_marker, encoding="utf-8").read().strip()
-        except OSError:
-            family = ""
-        if family == "app":
+        if _workflow_family() == "app":
             self.completion_preview = CompletionPreview(_project_root())
         self.chat_focus = "chat"
 
@@ -2493,6 +2496,31 @@ class UncleTUI:
     _PREVIEW_UPGRADE_STAGES = _PREVIEW_STAGES + ("test-review", "manual-checklist",
                                                   "execute-checklist", "final-audit")
 
+    def _early_preview_allowed(self):
+        """Never open a browser tab for a change request -- not once, not
+        racily, not ever. The new-app and change-request drivers share stage
+        names ("implementation", "repair", ...), so the stage check alone
+        cannot tell apart a change request against an existing, often
+        non-web project (uncle's own repo, worked on via its own change
+        workflow, has an incidental index.html at its root that is its own
+        build-status dashboard, not a web app, and is a CLI tool) from a new
+        web application build.
+
+        self.workflow_idx is set to 2 (change) by every path that starts a
+        change-request or existing-repo run -- a direct CLI launch, the
+        interactive menu, or an issue auto-classified as a change -- before
+        the child process is ever spawned, so it is known with certainty at
+        this point and carries no race. .uncle/workflow/family is the
+        child's own record, written moments after it starts; reading it
+        before that write lands is a real, observed race (a stale "app"
+        marker left over from an earlier, unrelated run in the same
+        directory was read and treated as current), and reading it again on
+        every tick is cheap enough that nothing here caches a prior answer.
+        """
+        if getattr(self, "workflow_idx", None) == 2:
+            return False
+        return _workflow_family() == "app"
+
     def _poll_early_preview(self):
         """Open the page the moment one exists, from whichever stage wrote it.
 
@@ -2504,6 +2532,8 @@ class UncleTUI:
         empty file is still skipped, which is the only case worth waiting for.
         """
         if getattr(self, "completion_preview", None) is not None:
+            return
+        if not self._early_preview_allowed():
             return
         # Kept polling even once a page is open: a static preview (the only
         # option before a React/Svelte project's dependencies exist) can
@@ -2589,6 +2619,8 @@ class UncleTUI:
         if finished_stage not in ("implementation", "implementation-step"):
             if not finished_stage.startswith("implementation-step-"):
                 return
+        if not self._early_preview_allowed():
+            return
         preview = self._previewable_page()
         if preview is None:
             return

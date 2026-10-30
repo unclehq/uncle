@@ -19,6 +19,9 @@ chmod +x "$TMP/reviewer"
 # Exercise the actual background launch function with a temporary runner.
 awk '/^start_codex_bg\(\)/ { copy=1 } /^wait_codex_bg\(\)/ { exit } copy' \
     "$ROOT/scripts/change-workflow.sh" > "$TMP/function.sh"
+# Keep the prompt-binding dependency with the extracted launch function.
+awk '/^bind_change_request_source\(\)/ { copy=1 } copy { print } copy && /^}$/ { exit }' \
+    "$ROOT/scripts/change-workflow.sh" >> "$TMP/function.sh"
 resolve_prompt() { printf '%s' "$1"; }
 uncle_resolve_stage_runner() { printf '%s' "$TMP/reviewer"; }
 stage_reviewer_cmd() { printf '%s' "$TMP/reviewer"; }

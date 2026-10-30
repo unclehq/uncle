@@ -20,7 +20,7 @@ GUARD="$ROOT/scripts/lib/triage_guard.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 # No stage may reach a real runner from a test: every stage command is a stub that fails.
-export UNCLE_CONFIG=/dev/null WORKFLOW_AGENT_CMD=/usr/bin/false WORKFLOW_REVIEWER_CMD=/usr/bin/false WORKFLOW_CODEX_CMD=/usr/bin/false WORKFLOW_SPECULATE=0
+export UNCLE_CONFIG=/dev/null WORKFLOW_AGENT_CMD=/usr/bin/false WORKFLOW_REVIEWER_CMD=/usr/bin/false WORKFLOW_CODEX_CMD=/usr/bin/false WORKFLOW_CLAUDE_CMD=/usr/bin/false WORKFLOW_SPECULATE=0 WORKFLOW_TEST_REVIEW_PANEL=0
 unset UNCLE_STATUS_STAGE UNCLE_DRIVER_SUPERVISED UNCLE_PROJECT_ROOT 2>/dev/null || true
 
 FAILED=0
@@ -46,15 +46,29 @@ check_absent() {
 project() {
     local dir="$TMP/$1"
     rm -rf "$dir"
-    mkdir -p "$dir/.uncle/workflow/approvals" "$dir/tests"
+    mkdir -p "$dir/.uncle/workflow/approvals" "$dir/.uncle/workflow/documents" "$dir/.uncle/docs" "$dir/tests"
     printf 'assert actual == expected\n' > "$dir/tests/test.txt"
     for doc in CHANGE_REQUEST BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN ADVERSARIAL_REVIEW \
                REQUIREMENTS REQUIREMENTS_INTERPRETATION PROJECT_PLAN UPDATED_PROJECT_PLAN; do
         printf '# %s\n\napproved text\n' "$doc" > "$dir/$doc.md"
-        hash_file "$dir/$doc.md" > "$dir/.uncle/workflow/approvals/$doc.sha256"
+        python3 - "$dir" "$doc" <<'PACKET'
+import json, sys
+from pathlib import Path
+root, name = Path(sys.argv[1]), sys.argv[2]
+kind = {'PROJECT_PLAN': 'plan', 'UPDATED_PROJECT_PLAN': 'plan'}.get(name, name.lower().replace('_', '-'))
+payload = dict(schema='uncle.artifact/v1', kind=kind, narrative='# ' + name + '\n\napproved text\n',
+               verification_commands='true', protected_verification_paths='tests/test.txt',
+               dispositions=[], findings=[], overall_assessment='No findings.')
+if name == 'ADVERSARIAL_REVIEW':
+    payload['findings'] = [dict(id='AR-1', severity='LOW', required_correction='Clarify the plan.', evidence='Fixture review.', blocks='NO')]
+(root / '.uncle/workflow/documents' / (name + '.json')).write_text(json.dumps(payload))
+(root / '.uncle/docs' / (name + '.md')).write_text(payload['narrative'])
+PACKET
+        hash_file "$dir/.uncle/workflow/documents/$doc.json" > "$dir/.uncle/workflow/approvals/$doc.sha256"
         printf 'tester\n' > "$dir/.uncle/workflow/approvals/$doc.approved-by"
     done
     git -C "$dir" init -q .
+    git -C "$dir" config commit.gpgsign false
     printf '.uncle/workflow/\n' > "$dir/.gitignore"
     git -C "$dir" add -A
     git -C "$dir" -c user.email=t@t -c user.name=t commit --no-gpg-sign -qm init
@@ -67,7 +81,18 @@ triage_edit() {
     digest="$(cd "$dir" && python3 "$GUARD" begin --state-dir .uncle/workflow --project "$dir" --root "$TMP/install" --turn 1 --mode execute \
         | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')"
     mkdir -p "$(dirname "$dir/.uncle/workflow/triage/sandbox/$path")"
-    printf '%s\n' "$text" > "$dir/.uncle/workflow/triage/sandbox/$path"
+    if [[ "$path" == *.json ]]; then
+        python3 - "$dir/.uncle/workflow/triage/sandbox/$path" "$text" <<'EDIT'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+payload = json.loads(path.read_text())
+payload['narrative'] = sys.argv[2]
+path.write_text(json.dumps(payload))
+EDIT
+    else
+        printf '%s\n' "$text" > "$dir/.uncle/workflow/triage/sandbox/$path"
+    fi
     (cd "$dir" && python3 "$GUARD" end --state-dir .uncle/workflow --project "$dir" --root "$TMP/install" --turn 1 --mode execute --digest "$digest" --proposal "Proposal 1: edit $path" > /dev/null)
     COUNT=$((COUNT + 1))
     grep -q "	APPLIED	$path	" "$dir/.uncle/workflow/triage-actions.tsv" || fail "APPLIED row for $path"
@@ -88,10 +113,10 @@ printf 'x\n' > "$TMP/install/marker"
 P="$(project cw-plan)"
 printf 'UPDATED_PLAN\n' > "$P/.uncle/workflow/state"
 old="$(cat "$P/.uncle/workflow/approvals/CHANGE_PLAN.sha256")"
-triage_edit "$P" CHANGE_PLAN.md '# CHANGE_PLAN edited by triage'
+triage_edit "$P" .uncle/workflow/documents/CHANGE_PLAN.json '# CHANGE_PLAN edited by triage'
 drive change-workflow.sh "$P" ''
 check_eq "cw: plan drift exits 0" 0 "$STATUS"
-check_contains "cw: says changed after approval" "CHANGE_PLAN.md changed after approval." "$P/out.txt"
+check_contains "cw: says changed after approval" ".uncle/docs/CHANGE_PLAN.md's canonical JSON changed after approval." "$P/out.txt"
 check_contains "cw: names the reopened gate" "Reopening WAIT_PLAN_APPROVAL" "$P/out.txt"
 check_eq "cw: state is the plan gate" WAIT_PLAN_APPROVAL "$(cat "$P/.uncle/workflow/state")"
 check_eq "cw: digest untouched by the driver" "$old" "$(cat "$P/.uncle/workflow/approvals/CHANGE_PLAN.sha256")"
@@ -102,21 +127,21 @@ check_eq "cw: decline exits 0" 0 "$STATUS"
 check_eq "cw: decline leaves the digest" "$old" "$(cat "$P/.uncle/workflow/approvals/CHANGE_PLAN.sha256")"
 check_eq "cw: decline leaves the state" WAIT_PLAN_APPROVAL "$(cat "$P/.uncle/workflow/state")"
 drive change-workflow.sh "$P" $'y\ny\n'
-check_eq "cw: accept records the new digest" "$(hash_file "$P/CHANGE_PLAN.md")" "$(cat "$P/.uncle/workflow/approvals/CHANGE_PLAN.sha256")"
+check_eq "cw: accept records the new digest" "$(hash_file "$P/.uncle/workflow/documents/CHANGE_PLAN.json")" "$(cat "$P/.uncle/workflow/approvals/CHANGE_PLAN.sha256")"
 check_eq "cw: accept advances to the next stage (stub runner fails there)" UPDATED_PLAN "$(cat "$P/.uncle/workflow/state")"
 
 # The route file sends a plan edited after the second plan gate back there.
 P="$(project cw-route)"
 printf 'IMPLEMENT\n' > "$P/.uncle/workflow/state"
 printf 'WAIT_UPDATED_PLAN_APPROVAL\n' > "$P/.uncle/workflow/approval-route"
-triage_edit "$P" CHANGE_PLAN.md '# CHANGE_PLAN edited at IMPLEMENT'
+triage_edit "$P" .uncle/workflow/documents/CHANGE_PLAN.json '# CHANGE_PLAN edited at IMPLEMENT'
 drive change-workflow.sh "$P" ''
 check_eq "cw: routed drift exits 0" 0 "$STATUS"
 check_eq "cw: routed to the updated-plan gate" WAIT_UPDATED_PLAN_APPROVAL "$(cat "$P/.uncle/workflow/state")"
 
 P="$(project cw-spec)"
 printf 'PLAN\n' > "$P/.uncle/workflow/state"
-triage_edit "$P" CHANGE_SPEC.md '# CHANGE_SPEC edited by triage'
+triage_edit "$P" .uncle/workflow/documents/CHANGE_SPEC.json '# CHANGE_SPEC edited by triage'
 drive change-workflow.sh "$P" ''
 check_eq "cw: spec drift exits 0" 0 "$STATUS"
 check_eq "cw: spec drift reopens analysis gate" WAIT_ANALYSIS_APPROVAL "$(cat "$P/.uncle/workflow/state")"
@@ -126,10 +151,10 @@ check_eq "cw: spec drift reopens analysis gate" WAIT_ANALYSIS_APPROVAL "$(cat "$
 P="$(project sg-plan)"
 printf 'ADVERSARIAL_REVIEW\n' > "$P/.uncle/workflow/state"
 old="$(cat "$P/.uncle/workflow/approvals/PROJECT_PLAN.sha256")"
-triage_edit "$P" PROJECT_PLAN.md '# PROJECT_PLAN edited by triage'
+triage_edit "$P" .uncle/workflow/documents/PROJECT_PLAN.json '# PROJECT_PLAN edited by triage'
 drive stagegate.sh "$P" ''
 check_eq "sg: plan drift exits 0" 0 "$STATUS"
-check_contains "sg: says changed after approval" "PROJECT_PLAN.md changed after approval." "$P/out.txt"
+check_contains "sg: says changed after approval" ".uncle/docs/PROJECT_PLAN.md's canonical JSON changed after approval." "$P/out.txt"
 check_eq "sg: state is the plan gate" WAIT_PLAN_APPROVAL "$(cat "$P/.uncle/workflow/state")"
 check_eq "sg: digest untouched by the driver" "$old" "$(cat "$P/.uncle/workflow/approvals/PROJECT_PLAN.sha256")"
 check_absent "sg: exit 0 writes no bundle" "$P/.uncle/workflow/TRIAGE.md"
@@ -137,12 +162,12 @@ drive stagegate.sh "$P" $'n\n'
 check_eq "sg: decline exits 0" 0 "$STATUS"
 check_eq "sg: decline leaves the digest" "$old" "$(cat "$P/.uncle/workflow/approvals/PROJECT_PLAN.sha256")"
 drive stagegate.sh "$P" $'y\n'
-check_eq "sg: accept records the new digest" "$(hash_file "$P/PROJECT_PLAN.md")" "$(cat "$P/.uncle/workflow/approvals/PROJECT_PLAN.sha256")"
+check_eq "sg: accept records the new digest" "$(hash_file "$P/.uncle/workflow/documents/PROJECT_PLAN.json")" "$(cat "$P/.uncle/workflow/approvals/PROJECT_PLAN.sha256")"
 check_eq "sg: accept advances to the next stage (stub runner fails there)" ADVERSARIAL_REVIEW "$(cat "$P/.uncle/workflow/state")"
 
 P="$(project sg-updated)"
 printf 'PREFLIGHT\n' > "$P/.uncle/workflow/state"
-triage_edit "$P" UPDATED_PROJECT_PLAN.md '# UPDATED_PROJECT_PLAN edited by triage'
+triage_edit "$P" .uncle/workflow/documents/UPDATED_PROJECT_PLAN.json '# UPDATED_PROJECT_PLAN edited by triage'
 drive stagegate.sh "$P" ''
 check_eq "sg: updated plan drift exits 0" 0 "$STATUS"
 check_eq "sg: updated plan drift reopens its gate" WAIT_UPDATED_PLAN_APPROVAL "$(cat "$P/.uncle/workflow/state")"
@@ -159,7 +184,7 @@ WORKFLOW_DIFF_GATE=0 drive stagegate.sh "$P" ''
 check_eq "sg: protected drift exits 1" 1 "$STATUS"
 check_contains "sg: integrity path names the change" "Verification inputs changed or are unavailable" "$P/out.txt"
 check_eq "sg: routes to REPAIR" REPAIR "$(cat "$P/.uncle/workflow/state")"
-check_eq "sg: repair source is the integrity report" ".uncle/workflow/VERIFICATION_INTEGRITY.md" "$(cat "$P/.uncle/workflow/repair-source")"
+check_eq "sg: repair source is the integrity report" "$P/.uncle/workflow/VERIFICATION_INTEGRITY.md" "$(cat "$P/.uncle/workflow/repair-source")"
 check_contains "sg: integrity report records the file" "tests/test.txt" "$P/.uncle/workflow/VERIFICATION_INTEGRITY.md"
 check_contains "sg: failure writes the bundle" "- state: REPAIR" "$P/.uncle/workflow/TRIAGE.md"
 

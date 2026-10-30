@@ -12,6 +12,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+export WORKFLOW_CLAUDE_CMD=/usr/bin/false
+export UNCLE_TEST_ARTIFACT_FIXTURE="$ROOT/scripts/tests/stage_artifact_fixture.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -51,7 +53,7 @@ with tempfile.TemporaryDirectory() as tmp:
     for driver in ("stagegate.sh", "change-workflow.sh"):
         source = (root / "scripts" / driver).read_text()
         names = ("upper", "stage_var", "stage_setting", "stage_setting_opt",
-                 "stage_agent_cmd", "stage_command_overridden", "stage_model", "stage_model_for",
+                 "stage_runner_config_name", "stage_agent_cmd", "stage_command_overridden", "stage_model", "stage_model_for",
                  "stage_effort", "stage_effort_for", "stage_tools", "stage_turns", "run_claude")
         functions = "\n".join(match.group(0) for name in names
             for match in re.finditer(r"^" + name + r"\(\) \{.*?^}", source, re.M | re.S))
@@ -113,31 +115,7 @@ make_agent_stub() {
 #!/usr/bin/env bash
 printf '$tag %s\n' "\$*" >> "\$ARGV_LOG"
 cat > /dev/null
-cat > REQUIREMENTS_INTERPRETATION.md <<'DOC'
-## Required functionality
-Required.
-## Optional functionality
-None.
-## Constraints
-None.
-## User-visible behaviors
-Visible.
-## System behaviors
-System behavior.
-## Failure behaviors
-Fail clearly.
-## Ambiguities
-None.
-## Assumptions
-None.
-## Explicit non-goals
-None.
-## Definition of done
-Done.
-DOC
-printf '# baseline\n\n## 8. Verification commands\n\n\`\`\`sh\ntrue\n\`\`\`\n' > BASELINE_REPORT.md
-printf '# spec\n' > CHANGE_SPEC.md
-printf '# plan\n' > CHANGE_PLAN.md
+python3 "\$UNCLE_TEST_ARTIFACT_FIXTURE" 1
 echo '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":1,"total_cost_usd":0}'
 EOF
     chmod +x "$path"
@@ -150,6 +128,9 @@ make_agent_stub "$TMP/agent-stage" "STAGE"
 
 PROJ="$TMP/newapp"
 mkdir -p "$PROJ"
+# Give both byte-for-byte candidate comparisons the same initialized checkout.
+git -C "$PROJ" init -q
+git -C "$PROJ" config commit.gpgsign false
 printf '# Project brief\n\n## Summary\nToy.\n' > "$PROJ/REQUIREMENTS.md"
 ARGV="$TMP/sg.argv"
 : > "$ARGV"
@@ -317,12 +298,16 @@ check_contains "explicit WORKFLOW_AGENT_CMD wins over the file's runner" \
 # Reviewer effort/model settings must reach the actual command as well.
 . "$ROOT/scripts/lib/sha256.sh"
 RPROJ="$TMP/reviewer-settings"
-mkdir -p "$RPROJ/.uncle/workflow/approvals"
-printf 'plan\n' > "$RPROJ/PROJECT_PLAN.md"
-hash_file "$RPROJ/PROJECT_PLAN.md" > "$RPROJ/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
+mkdir -p "$RPROJ/.uncle/workflow/approvals" "$RPROJ/.uncle/docs" "$RPROJ/.uncle/workflow/documents"
+printf '# Plan\n\n## Verification commands\n\n```sh\ntrue\n```\n' > "$RPROJ/.uncle/docs/PROJECT_PLAN.md"
+printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"plan","narrative":"# Plan","verification_commands":"true"}' > "$RPROJ/.uncle/workflow/documents/PROJECT_PLAN.json"
+hash_file "$RPROJ/.uncle/workflow/documents/PROJECT_PLAN.json" > "$RPROJ/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
 cat > "$TMP/config-reviewer" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$ARGV_LOG"
+if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" ]]; then
+    printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"adversarial-review","overall_assessment":"No findings.","findings":[]}' > "$UNCLE_ARTIFACT_DELIVERY"
+fi
 while [[ $# -gt 0 ]]; do
     if [[ "$1" == --output-last-message ]]; then
         cat > "$2" <<'DOC'
@@ -341,15 +326,15 @@ chmod +x "$TMP/config-reviewer"
 printf 'adversarial-review.runner cline\nadversarial-review.model vendor/reviewer\nadversarial-review.effort low\n' > "$RPROJ/.uncle/config"
 printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workflow/state"
 UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \
-    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null
+    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null
 argv="$(cat "$TMP/reviewer.argv")"
 check_contains 'reviewer: configured model is used' '-m vendor/reviewer' "$argv"
 check_contains 'reviewer: configured effort is used' 'model_reasoning_effort=low' "$argv"
-check_contains 'reviewer: sandbox is retained' '--sandbox read-only' "$argv"
+check_contains 'reviewer: canonical delivery uses the required sandbox' '--sandbox workspace-write' "$argv"
 printf 'adversarial-review.runner codex\nadversarial-review.effort high\n' > "$RPROJ/.uncle/config"
 printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workflow/state"
 UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \
-    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_EFFORT_ADVERSARIAL_REVIEW=low \
+    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_EFFORT_ADVERSARIAL_REVIEW=low \
     bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null
 argv="$(cat "$TMP/reviewer.argv")"
 check_contains 'reviewer: explicit effort wins' 'model_reasoning_effort=low' "$argv"

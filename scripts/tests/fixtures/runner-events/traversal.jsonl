@@ -1,0 +1,7 @@
+{"content": "first", "ignored": "invisible", "result": {"text": "nested"}, "text": ["invisible", {"content": "list text"}], "tail": {"result": "last", "text": ""}}
+[{"text": "array"}, {"content": [{"result": "deep"}]}]
+"scalar"
+12
+false
+null
+{"TEXT": "invisible", "other": {"result": "é\nline\tend"}}

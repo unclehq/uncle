@@ -10,6 +10,16 @@ import json
 import sys
 from pathlib import Path
 
+try:
+    from runner_events import texts
+except ModuleNotFoundError:
+    # Direct-file importlib callers need not put scripts/lib on sys.path.
+    import importlib.util as _importlib_util
+    _spec = _importlib_util.spec_from_file_location('runner_events', Path(__file__).with_name('runner_events.py'))
+    _runner_events = _importlib_util.module_from_spec(_spec)
+    _spec.loader.exec_module(_runner_events)
+    texts = _runner_events.texts
+
 
 def module(name):
     import importlib.util
@@ -36,18 +46,6 @@ PATCH_BASE = {
     'updated-plan': 'PROJECT_PLAN.md',
     'updated-change-plan': 'CHANGE_PLAN.md',
 }
-
-
-def texts(value):
-    if isinstance(value, dict):
-        for key, child in value.items():
-            if key in ('text', 'result', 'content') and isinstance(child, str):
-                yield child
-            else:
-                yield from texts(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from texts(child)
 
 
 def response(log, kind):

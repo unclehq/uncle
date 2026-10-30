@@ -28,6 +28,18 @@ import sys
 import tempfile
 import time
 
+try:
+    from evidence_io import _read, _records, sha256_file
+except ModuleNotFoundError:
+    # Direct-file importlib callers need not put scripts/lib on sys.path.
+    import importlib.util as _importlib_util
+    _spec = _importlib_util.spec_from_file_location('evidence_io', Path(__file__).with_name('evidence_io.py'))
+    _evidence_io = _importlib_util.module_from_spec(_spec)
+    _spec.loader.exec_module(_evidence_io)
+    _read = _evidence_io._read
+    _records = _evidence_io._records
+    sha256_file = _evidence_io.sha256_file
+
 SCHEMA_VERSION = '1'
 STATEMENT_TYPE = 'https://in-toto.io/Statement/v1'
 PREDICATE_TYPE = 'https://uncle.dev/attestation/v1'
@@ -174,13 +186,6 @@ def check_keys(value):
             check_keys(item)
 
 
-def sha256_file(path):
-    try:
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    except OSError:
-        return ''
-
-
 def utc_now():
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 
@@ -243,15 +248,6 @@ def _record_attempt(state, name):
     rows[name] = rows.get(name, 0) + 1
     path.write_text(''.join('%s\t%d\n' % item for item in sorted(rows.items())))
     return rows[name]
-
-
-def _records(state):
-    try:
-        saved = json.loads((Path(state) / 'session-totals.json').read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return []
-    rows = saved.get('records') if isinstance(saved, dict) else None
-    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
 
 def producer(state, stage, log_name='', kind=''):
@@ -385,13 +381,6 @@ def write_envelope(state, stage, result, reason='', artifact='', inputs=None, ev
     check_keys(body)
     _atomic_write(envelope_path(state, stage), canonical(body))
     return body
-
-
-def _read(path):
-    try:
-        return Path(path).read_text(encoding='utf-8', errors='replace')
-    except OSError:
-        return ''
 
 
 def invalidate(state, name):

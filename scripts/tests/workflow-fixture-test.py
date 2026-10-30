@@ -91,6 +91,7 @@ answer
 
     def test_production_layers_source_without_runtime_state_or_executables(self):
         for name in ('prompt-io.sh', 'prompt-io-app.sh', 'prompt-io-change.sh',
+                     'workflow-paths-app.sh', 'approval-gates-app.sh',
                      'workflow-records.sh'):
             with self.subTest(module=name):
                 result = subprocess.run(['/bin/bash', '-eu', '-c', '''
@@ -106,6 +107,34 @@ before_traps=$(trap -p)
                 self.assertEqual(result.stdout, '')
                 self.assertEqual(result.stderr, '')
                 self.assertEqual(list(self.tmp.iterdir()), [])
+
+    def test_prompt_paths_preserve_project_and_install_identity(self):
+        install = self.tmp / 'read only install'
+        (install / 'prompts').mkdir(parents=True)
+        (install / 'prompts/template.md').write_text('installed\n')
+        (self.tmp / 'project local.md').write_text('project\n')
+        install.chmod(0o555)
+        try:
+            for name in ('workflow-paths-app.sh',):
+                with self.subTest(module=name):
+                    result = self.run_bash(
+                        '. ' + shlex.quote(str(ROOT / 'scripts/lib' / name)) + '\n' +
+                        'ROOT=' + shlex.quote(str(install)) + '\n' + '''
+for prompt in '/missing absolute/prompt.md' 'project local.md' 'prompts/template.md' 'missing.md'; do
+    resolve_prompt "$prompt"
+    printf '\\n'
+done
+''')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, '\n'.join([
+                        '/missing absolute/prompt.md', 'project local.md',
+                        str(install / 'prompts/template.md'), str(install / 'missing.md'), '']))
+                    self.assertEqual(result.stderr, '')
+                    self.assertEqual(sorted(p.relative_to(install).as_posix() for p in install.rglob('*')),
+                                     ['prompts', 'prompts/template.md'])
+        finally:
+            install.chmod(0o755)
+
 
 
 if __name__ == '__main__':

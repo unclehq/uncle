@@ -36,18 +36,7 @@ export DOCUMENT_BUDGET_SOURCE="$(generated_input_path REQUIREMENTS.md)"
 # wins, otherwise the prompt that shipped with uncle. An absolute path or a
 # path that exists in the project is returned untouched, which is what keeps
 # composed prompts under .uncle/workflow working.
-resolve_prompt() {
-    local p="$1"
-    # A caller can materialize a temporary absolute prompt immediately before
-    # invoking us. Preserve that identity even if another process has removed
-    # it by the time this check runs: prefixing it with ROOT turns
-    # /var/.../batch-4.md into an impossible Cellar-relative pathname.
-    if [[ "$p" == /* || -e "$p" ]]; then
-        printf '%s' "$p"
-    else
-        printf '%s' "$ROOT/$p"
-    fi
-}
+. "$ROOT/scripts/lib/workflow-paths-app.sh"
 
 STAGEGATE_VERSION="0.1.0"
 
@@ -1276,16 +1265,6 @@ get_state() {
     state_read "$STATE_FILE" DERIVE_BRIEF
 }
 
-require_file() {
-    local requested="$1" canonical
-    canonical="$(canonical_artifact_path "$requested")"
-    if [[ ! -s "$canonical" ]]; then
-        supervision_validation_failed require_file "$canonical" "Required file is missing or empty: $canonical"
-        echo "Required file is missing or empty: $canonical"
-        exit 1
-    fi
-}
-
 # Used after an agent stage: a missing artifact here usually means a denied
 # tool, not a refusal to work.
 require_artifact() {
@@ -1310,26 +1289,6 @@ require_artifact() {
     # A presentation budget warning must never fail an otherwise valid JSON
     # artifact or send the workflow into repair.
     [[ "$requested" == "$canonical" ]] && check_document_budget "$requested" || true
-}
-
-# Only workflow artifacts are mapped.  Prompts, source requirements, and
-# ordinary project Markdown retain their literal paths.
-canonical_artifact_path() {
-    local path="$1" stem
-    case "$path" in
-        .uncle/docs/REQUIREMENTS_INTERPRETATION.md|.uncle/docs/PREFLIGHT_REPORT.md|.uncle/docs/TEST_REVIEW.md|.uncle/docs/VERIFICATION_REPORT.md|.uncle/docs/DEFECTS.md|.uncle/docs/MANUAL_CHECKLIST.md|.uncle/docs/FINAL_AUDIT.md|.uncle/docs/IMPLEMENTATION_NOTES.md|.uncle/docs/AUTOMATED_TEST_REPORT.md|.uncle/docs/PROJECT_PLAN.md|.uncle/docs/UPDATED_PROJECT_PLAN.md|.uncle/docs/ADVERSARIAL_REVIEW.md)
-            stem="${path##*/}"; stem="${stem%.md}"
-            printf '%s/documents/%s.json\n' "${STATE_DIR:-.uncle/workflow}" "$stem" ;;
-        *) printf '%s\n' "$path" ;;
-    esac
-}
-
-# A persisted Markdown-only run predates the JSON migration. Keep it
-# resumable, but never choose Markdown when the canonical artifact exists.
-approval_artifact_path() {
-    local view="$1" canonical
-    canonical="$(canonical_artifact_path "$view")"
-    [[ -s "$canonical" ]] && printf '%s\n' "$canonical" || printf '%s\n' "$view"
 }
 
 ensure_project_plan_json() {
@@ -1402,99 +1361,7 @@ triage_reopen_gate() {
     exit 0
 }
 
-review_and_approve() {
-    local gate_start="$SECONDS"
-    local view="$1" file
-    local name="$2"
-    local wording
-    wording="$(lower "${3:-approve}")"
-
-    case "$name" in
-        UPDATED_PROJECT_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-plan "$view" . || return 1 ;;
-    esac
-    file="$(approval_artifact_path "$view")"
-    [[ -s "$file" ]] || { echo "Required approval artifact missing: $file"; exit 1; }
-
-    local before
-    local response
-
-    # Unattended: record the approval against the bytes on disk, and record in
-    # the run's own ledger that nobody read them. The digest still has to be
-    # real -- later stages compare against it, and an approval attesting to
-    # nothing would let a document change underneath them unnoticed.
-    if [[ "${UNATTENDED:-0}" == 1 ]]; then
-        before="$(hash_file "$file")"
-        printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
-        printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${name}.approved-by"
-        # The canonical packet was the item approved; never reverse-parse the
-        # rendered view after recording that approval.
-        record_unattended_gate "$name" "$wording $view without human review"
-        echo "Unattended: recorded $wording of $view with no human review."
-        if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
-        return 0
-    fi
-
-    while true; do
-        before="$(hash_file "$file")"
-
-        echo
-        echo "=================================================="
-        echo "HUMAN REVIEW REQUIRED: $view"
-        echo "=================================================="
-        echo
-        echo "Review in another terminal with:"
-        echo
-        echo "  less $view"
-        echo
-        echo "or:"
-        echo
-        echo "  code $view"
-        echo
-
-        UNCLE_GATE_FILE="$view"
-        gate_prompt "Ready to $wording $view? [Y/N] "
-        UNCLE_GATE_FILE=""
-        # IFS= keeps surrounding whitespace, so " y" is not an approval.
-        # `|| true` keeps EOF from tripping `set -e` before the decline path
-        # runs. The wrapper attributes the line (human, or a supervisor
-        # receipt) and closes the gate; the answer is validated as before.
-        response=""
-        if declare -f gate_read > /dev/null; then gate_read response || true; else IFS= read -r response || true; fi
-
-        case "$response" in
-            y|Y) ;;
-            *)
-                if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 1; fi
-                echo "Gate not accepted. Workflow paused."
-                legacy_word_notice "$response"
-                exit 0
-                ;;
-        esac
-
-        # The approval must attest to the bytes that were actually read. If the
-        # file moved during review — a human edit, or a speculative stage that
-        # ignored its instructions and wrote here — re-open the gate instead of
-        # recording an approval for content nobody reviewed.
-        if [[ "$(hash_file "$file")" == "$before" ]]; then
-            break
-        fi
-
-        echo
-        echo "$view's canonical JSON changed while you were reviewing it."
-        echo "Re-opening the gate so the approval covers what you read."
-        cancel_speculation
-    done
-
-    # `before` is the digest that was just validated against the file, so it is
-    # what gets recorded. Re-hashing here would attest to bytes that could have
-    # landed after the check.
-    printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
-    printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${name}.approved-by"
-    # Markdown is a rendered view.  An edit to it cannot silently rewrite the
-    # authoritative packet after the human has approved that packet.
-    echo "Recorded approval for $file"
-    if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
-}
+. "$ROOT/scripts/lib/approval-gates-app.sh"
 
 # Render the stream-json event feed as readable progress lines.
 # Non-JSON lines (startup warnings) are dropped rather than fataling jq.

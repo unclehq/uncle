@@ -38,8 +38,7 @@ done
 
 sg="$WORK/sg"
 mkdir -p "$sg/.uncle/workflow/approvals"
-extract_fns "$ROOT/scripts/stagegate.sh" "$sg/driver-fns.sh" require_file canonical_artifact_path approval_artifact_path review_and_approve
-workflow_fixture_write "$sg/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-app.sh" "$ROOT/scripts/lib/workflow-records.sh" "$sg/driver-fns.sh"
+workflow_fixture_write "$sg/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-app.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ROOT/scripts/lib/workflow-paths-app.sh" "$ROOT/scripts/lib/approval-gates-app.sh"
 cat > "$sg/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -94,18 +93,14 @@ else ok; fi
 
 wv="$WORK/wv"
 mkdir -p "$wv/.uncle/workflow"
-# The waiver writers moved to a shared lib so both drivers use one copy.
-# Keep the two modules explicit while the driver functions await extraction.
-extract_fns "$ROOT/scripts/lib/waivers.sh" "$wv/fns-waivers.sh" write_waivers record_waiver
-workflow_fixture_write "$wv/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/workflow-records.sh" "$wv/fns-waivers.sh"
+# Source the complete waiver dependency graph, including its read fallback.
+workflow_fixture_write "$wv/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ROOT/scripts/lib/waivers.sh"
 cat > "$wv/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="/nonexistent-so-the-popup-is-skipped"
 STATE_DIR="$PWD/.uncle/workflow"
 UNATTENDED_FILE="$STATE_DIR/unattended-gates"
-# One-liner in the driver, so it is restated rather than extracted.
-waive_file() { printf '%s/waivers/%s' "$STATE_DIR" "$1"; }
 . ./fns.sh
 record_waiver "$@"
 echo "WAIVER_RETURNED"

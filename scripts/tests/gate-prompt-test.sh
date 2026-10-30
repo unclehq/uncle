@@ -169,8 +169,7 @@ HARNESS
 }
 
 write_sg_harness() {
-    extract_fns "$ROOT/scripts/stagegate.sh" "$CASE/driver-fns.sh" canonical_artifact_path approval_artifact_path require_file review_and_approve
-    workflow_fixture_write "$CASE/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-app.sh" "$CASE/driver-fns.sh"
+    workflow_fixture_write "$CASE/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-app.sh" "$ROOT/scripts/lib/workflow-paths-app.sh" "$ROOT/scripts/lib/approval-gates-app.sh"
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail

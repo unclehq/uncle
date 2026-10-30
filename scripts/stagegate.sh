@@ -3266,22 +3266,74 @@ PY
     run_updated_plan_compact
 }
 
+# Phase 1: kicked off the moment implementation finishes, before the driver's
+# background verification has published final results. Judges only what the
+# plan and source/test files can already tell on their own -- never opens the
+# result files, so there is nothing here that must be thrown away once real
+# results exist. Non-blocking: starts the workers and returns at once, so this
+# investigation and the driver's verification run run concurrently instead of
+# one stage sitting idle waiting for the other to finish first.
+run_test_review_investigate() {
+    local directory="$STATE_DIR/test-review-panel" lens prompt
+    [[ "${WORKFLOW_TEST_REVIEW_PANEL:-1}" == 1 ]] || return 0
+    [[ "${WORKFLOW_TEST_REVIEW_PRESTART:-1}" == 1 ]] || return 0
+    [[ ! -e "$directory/investigate-started" ]] || return 0
+    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    : > "$directory/investigate-started"
+    : > "$directory/investigate.pids"
+    for lens in coverage assertions oracle; do
+        prompt="$directory/prompts/investigate-$lens.md"
+        cp "$ROOT/prompts/change/test-review-worker-investigate.md" "$prompt"
+        if [[ "$lens" == oracle ]]; then
+            printf 'Focus only on **ORACLE** and **NEGATIVE**: whether expected values are independently grounded, and whether critical tests target a representative defect.\n' >> "$prompt"
+        else
+            printf 'Focus only on **%s**.\n' "$(upper "$lens")" >> "$prompt"
+        fi
+        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$directory/investigate-$lens.md" "test-review-worker-$lens-investigate" < /dev/null ) \
+            > "$LOG_DIR/test-review-worker-$lens-investigate.log" 2>&1 &
+        echo "$!" >> "$directory/investigate.pids"
+    done
+}
+
 run_test_review_panel() {
     local directory="$STATE_DIR/test-review-panel" lens prompt output pid
     local -a pids=()
     [[ "${WORKFLOW_TEST_REVIEW_PANEL:-1}" == 1 ]] || return 0
-    rm -rf "$directory"; mkdir -p "$directory/prompts"
+    # A safety net for any caller that reaches here without having started
+    # phase 1 early (a resumed run, WORKFLOW_TEST_REVIEW_PRESTART=0): starts
+    # it now, synchronously, with no loss beyond the overlap this exists to
+    # get. If phase 1 already started, this is a no-op.
+    run_test_review_investigate
+    if [[ -s "$directory/investigate.pids" ]]; then
+        while IFS= read -r pid; do
+            [[ -n "$pid" ]] || continue
+            wait "$pid" 2>/dev/null || echo 'Test-review investigation worker failed; the finalize pass will judge from results alone.' >&2
+        done < "$directory/investigate.pids"
+    fi
+    mkdir -p "$directory/prompts"
     # INTEGRITY is a driver-owned fact: the green-check TSV is the canonical
     # execution record, so asking a reviewer to rediscover it is both slower
     # and less reliable.  The remaining three lenses are judgement calls.
     # oracle/negative merge because both judge whether tests are trustworthy.
     for lens in coverage assertions oracle; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
-        cp "$ROOT/prompts/change/test-review-worker.md" "$prompt"
-        if [[ "$lens" == oracle ]]; then
-            printf '\n## Assigned acceptance-gate rows\n\nFocus only on **ORACLE** and **NEGATIVE**: whether expected values are independently grounded, and whether critical tests have evidence of failing for representative defects and passing after restoration.\n' >> "$prompt"
+        cp "$ROOT/prompts/change/test-review-worker-finalize.md" "$prompt"
+        # The investigation is untrusted model output, not driver-written
+        # text: on calculator4 a worker ignored the "plain prose" instruction
+        # and returned a JSON-wrapped, self-contradicting blob instead, which
+        # then confused the finalize pass into answering with the wrong row
+        # id entirely. The instructed format is a Markdown document starting
+        # with a heading; anything else is unusable and must not reach the
+        # finalize prompt, rather than being pasted in and trusted.
+        if [[ -s "$directory/investigate-$lens.md" ]] && head -n 5 "$directory/investigate-$lens.md" | grep -qE '^[[:space:]]*#'; then
+            cat "$directory/investigate-$lens.md" >> "$prompt"
         else
-            printf '\n## Assigned acceptance-gate row\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
+            printf '(No usable investigation: it either did not complete before results were ready, or did not return the required plain-text report. Judge from the plan, source, and results alone.)\n' >> "$prompt"
+        fi
+        if [[ "$lens" == oracle ]]; then
+            printf '\n## Assigned acceptance-gate rows\n\nFocus only on **ORACLE** and **NEGATIVE**: whether expected values are independently grounded, and whether critical tests have evidence of failing for representative defects and passing after restoration. Use exactly these ids, "ORACLE" and "NEGATIVE", in your JSON output -- never substitute a different row name from the investigation above.\n' >> "$prompt"
+        else
+            printf '\n## Assigned acceptance-gate row\n\nFocus only on **%s**. Use exactly this id, "%s", in your JSON output -- never substitute a different row name from the investigation above.\n' "$(upper "$lens")" "$(upper "$lens")" >> "$prompt"
         fi
         ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "test-review-worker-$lens" < /dev/null ) \
             > "$LOG_DIR/test-review-worker-$lens.log" 2>&1 &
@@ -5602,17 +5654,26 @@ while true; do
             ;;
 
         TEST_REVIEW)
+            # Start the plan/source-only half of test review now, before
+            # anything else in this stage, so it runs concurrently with the
+            # driver's background verification instead of waiting for it to
+            # publish first. See run_test_review_investigate: it never opens
+            # a result file, so nothing it produces is invalidated by
+            # verification still being in flight.
+            run_test_review_investigate
             if [[ "$DIFF_GATE" == "1" ]]; then
                 verify_implementation_review
             fi
             require_file "$STATE_DIR/verification.manifest"
             EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest")"
             check_verification_inputs
-            # Every test-review panel row judges observed test evidence.  A
-            # worker launched against the background verifier's PENDING
-            # placeholder can only honestly emit NOT RUN, and its immutable
-            # packet cannot be repaired by publishing green-check results
-            # later.  Wait once before launching the workers, then materialize
+            # Every test-review panel row's final status judges observed test
+            # evidence.  A worker launched against the background verifier's
+            # PENDING placeholder can only honestly emit NOT RUN, and its
+            # immutable packet cannot be repaired by publishing green-check
+            # results later.  Wait once before launching the finalize pass
+            # (the plan/source investigation above already ran concurrently
+            # with this wait), then materialize
             # the driver-owned report they consume.  Checklist stages still
             # reuse this completed result and never rerun these commands.
             green_wait_final || {

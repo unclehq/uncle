@@ -203,6 +203,11 @@ new_case() {
     printf 'STUB:worker\n' > "$REPO/prompts/change/adversarial-review-worker.md"
     printf 'STUB:worker\n' > "$REPO/prompts/change/updated-plan-review-worker.md"
     printf 'STUB:worker\n' > "$REPO/prompts/change/test-review-worker.md"
+    # The plan/source-only phase 1 and results-only phase 2 of test review
+    # (run_test_review_investigate / run_test_review_panel) read these two
+    # instead of the single worker template above.
+    printf 'STUB:worker-investigate\n' > "$REPO/prompts/change/test-review-worker-investigate.md"
+    printf 'STUB:worker-finalize\n' > "$REPO/prompts/change/test-review-worker-finalize.md"
     printf 'STUB:worker\n' > "$REPO/prompts/change/manual-checklist-review-worker.md"
     printf 'STUB:worker\n' > "$REPO/prompts/change/final-audit-review-worker.md"
     printf 'STUB:worker\n' > "$REPO/prompts/change/execute-checklist-worker.md"

@@ -185,7 +185,8 @@ PRELUDE
 
 write_cw_harness() {
     extract_fns "$ROOT/scripts/change-workflow.sh" "$CASE/fns.sh" \
-        gate_prompt legacy_word_notice require_file human_gate
+        gate_prompt legacy_word_notice canonical_artifact_path \
+        approval_artifact_path require_file human_gate
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail
@@ -202,7 +203,8 @@ HARNESS
 
 write_sg_harness() {
     extract_fns "$ROOT/scripts/stagegate.sh" "$CASE/fns.sh" \
-        gate_prompt legacy_word_notice upper lower require_file \
+        gate_prompt legacy_word_notice upper lower canonical_artifact_path \
+        approval_artifact_path require_file \
         review_and_approve
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash

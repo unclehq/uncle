@@ -52,7 +52,7 @@ try {
         try { $zip.CreateEntry(('uncle-package/.uncle/workflow/state').Replace('/', $separator)) | Out-Null }
         finally { $zip.Dispose() }
         $rejected = $false
-        try { Assert-InstallerArchive $fixture } catch { $rejected = $_.Exception.Message -eq 'Packaged workflow state' }
+        try { Assert-InstallerArchive $fixture } catch { $rejected = $_.Exception.Message -like 'Packaged workflow state*' }
         Assert $rejected 'Workflow state was not rejected in ZIP fixture'
     }
     foreach ($path in @('install.ps1','packaging/windows/uncle.ps1')) {

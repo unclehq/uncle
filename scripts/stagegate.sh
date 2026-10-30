@@ -3274,13 +3274,24 @@ PY
 # investigation and the driver's verification run run concurrently instead of
 # one stage sitting idle waiting for the other to finish first.
 run_test_review_investigate() {
-    local directory="$STATE_DIR/test-review-panel" lens prompt
+    local directory="$STATE_DIR/test-review-panel" lens prompt current
     [[ "${WORKFLOW_TEST_REVIEW_PANEL:-1}" == 1 ]] || return 0
     [[ "${WORKFLOW_TEST_REVIEW_PRESTART:-1}" == 1 ]] || return 0
-    [[ ! -e "$directory/investigate-started" ]] || return 0
+    # One-shot per *tree*, not per run: a repair that changes source and
+    # re-enters TEST_REVIEW must get a fresh investigation of the repaired
+    # code, not the marker silently reusing the pre-repair one. Fingerprint
+    # the source the same way early-checklist and green-check already do,
+    # so a tree that has not changed since the last investigation still
+    # skips relaunching it.
+    current="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" 2>/dev/null)"
+    if [[ -e "$directory/investigate-started" && -n "$current" \
+            && "$current" == "$(cat "$directory/investigate.fingerprint" 2>/dev/null)" ]]; then
+        return 0
+    fi
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     : > "$directory/investigate-started"
     : > "$directory/investigate.pids"
+    printf '%s' "$current" > "$directory/investigate.fingerprint"
     for lens in coverage assertions oracle; do
         prompt="$directory/prompts/investigate-$lens.md"
         cp "$ROOT/prompts/change/test-review-worker-investigate.md" "$prompt"

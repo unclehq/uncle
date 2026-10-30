@@ -75,6 +75,14 @@ check "investigate started all three lenses" "3" "$(grep -c -- '-investigate	' "
 run_test_review_investigate
 check "a second investigate call is a one-shot no-op" "3" "$(grep -c -- '-investigate	' "$calls_file")"
 
+# A repair that changes source and re-enters TEST_REVIEW must get a fresh
+# investigation of the repaired tree, not the stale pre-repair one -- this
+# exact gap made a repair cycle look like it never started the overlap at
+# all, reported live against calculator4.
+mkdir -p src && echo '// a repair touched this file' >> src/engine.js
+run_test_review_investigate
+check "a changed tree re-investigates instead of reusing the stale marker" "6" "$(grep -c -- '-investigate	' "$calls_file")"
+
 # --- phase 2 reuses the investigation and never re-investigates ------------
 : > "$calls_file"
 run_test_review_panel

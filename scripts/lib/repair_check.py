@@ -37,7 +37,11 @@ SOURCE_EXTENSIONS = ('js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'sh', 'bash',
                       'css', 'scss', 'json', 'yaml', 'yml', 'toml', 'txt', 'go', 'rs', 'java',
                       'rb', 'php', 'c', 'h', 'cpp', 'hpp', 'swift', 'kt', 'sql', 'vue', 'svelte')
 PATH_TOKEN = re.compile(
-    r'(?<![\w/.-])((?:[\w.-]+/)+[\w.-]+|[\w-]+\.(?:' + '|'.join(SOURCE_EXTENSIONS) + r'))'
+    # A `$` is excluded from the lookbehind too: `$HOME/.config/app.json`
+    # otherwise matched starting right after the `$` as `HOME/.config/app.json`,
+    # a path that is never repo-relative and can never exist, silently
+    # defeating change detection the same way `4/4.` and the lstrip bug did.
+    r'(?<![\w/.$-])((?:[\w.-]+/)+[\w.-]+|[\w-]+\.(?:' + '|'.join(SOURCE_EXTENSIONS) + r'))'
     r'(?::\d+(?:-\d+)?)?(?![\w/])')
 TREE_FALLBACK = '(source tree)'
 
@@ -64,8 +68,18 @@ def tree_digest(root):
 def paths_in(text, root):
     found = []
     for match in PATH_TOKEN.finditer(text):
-        token = match.group(1).strip('`').lstrip('./')
-        if not token or token in found or token.startswith('.uncle/') or token in REPORTS:
+        token = match.group(1).strip('`')
+        # Strip one leading "./" the way a path is normally written, not
+        # every leading '.' or '/' character: `str.lstrip('./')` on
+        # `.uncle/launch.json` -- a real, trackable project file, not driver
+        # state -- silently ate its leading dot down to `uncle/launch.json`,
+        # a path that can never exist. The driver's own repair brief then
+        # cited that corrupted name, and a repair that genuinely fixed
+        # `.uncle/launch.json` was judged as having changed nothing because
+        # the tracked (wrong) path's hash was unchanged -- live on calculator.
+        if token.startswith('./'):
+            token = token[2:]
+        if not token or token in found or token.startswith('.uncle/workflow/') or token in REPORTS:
             continue
         if token.endswith('/') or '..' in token.split('/'):
             continue

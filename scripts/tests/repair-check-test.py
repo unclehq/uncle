@@ -148,6 +148,53 @@ class RepairCheck(unittest.TestCase):
         code, ids = self.judge()
         self.assertEqual((code, ids), (0, []))
 
+    def test_a_project_dotfile_is_tracked_with_its_leading_dot_intact(self):
+        # A real stuck run (calculator, 2026-10-29): `.uncle/launch.json` is a
+        # real, trackable project file (not driver state under
+        # .uncle/workflow/), but a naive `.lstrip('./')` ate its leading dot
+        # down to `uncle/launch.json` -- a path that can never exist. The
+        # driver's own repair brief then cited that corrupted name, and a
+        # repair that genuinely fixed `.uncle/launch.json` was judged as
+        # having changed nothing because the wrong path's hash never moves.
+        review = REVIEW.replace(
+            '| COVERAGE | YES | FAIL | TR-1 untested |',
+            '| COVERAGE | YES | FAIL | fix `.uncle/launch.json`, it has the wrong shape |')
+        (self.root / 'TEST_REVIEW.md').write_text(review)
+        (self.root / '.uncle/launch.json').write_text('{"kind":"webpage"}\n')
+        self.snapshot()
+        import json
+        data = json.loads(self.snap.read_text())
+        self.assertEqual(data['findings']['COVERAGE']['paths'], ['.uncle/launch.json'])
+        (self.root / '.uncle/launch.json').write_text('{"kind":"webpage","command":["npm","start"]}\n')
+        (self.root / 'src/calc.js').write_text('fixed\n')
+        (self.root / 'tests/defects/inject.js').write_text('fixed\n')
+        code, ids = self.judge()
+        self.assertEqual((code, ids), (0, []))
+
+    def test_driver_workflow_state_is_still_excluded(self):
+        review = REVIEW.replace(
+            '| COVERAGE | YES | FAIL | TR-1 untested |',
+            '| COVERAGE | YES | FAIL | see `.uncle/workflow/green-check.md` |')
+        (self.root / 'TEST_REVIEW.md').write_text(review)
+        self.snapshot()
+        import json
+        data = json.loads(self.snap.read_text())
+        self.assertEqual(data['findings']['COVERAGE']['paths'], [])
+
+    def test_a_shell_variable_expansion_is_not_mistaken_for_a_file(self):
+        # Same bug class as `4/4.` and the lstrip corruption: `$HOME/x.json`
+        # has no `$` exclusion in the lookbehind, so it matched starting right
+        # after the `$` as `HOME/x.json` -- a path that is never repo-relative
+        # and can never exist, silently defeating change detection again.
+        review = REVIEW.replace(
+            '| COVERAGE | YES | FAIL | TR-1 untested |',
+            '| COVERAGE | YES | FAIL | uses $HOME/.config/app/settings.json for config |')
+        (self.root / 'TEST_REVIEW.md').write_text(review)
+        self.snapshot()
+        import json
+        data = json.loads(self.snap.read_text())
+        self.assertEqual(data['findings']['COVERAGE']['paths'], [])
+
     def test_unstructured_report_is_judged_by_the_tree(self):
         (self.root / 'green-check.md').write_text('## Green check\n\nFAIL npm test\n')
         self.snapshot('green-check.md')
@@ -168,6 +215,38 @@ class RepairCheck(unittest.TestCase):
         self.assertNotIn('**TR-1**', text)
         self.assertIn('not as evidence', text)
         self.assertIn('| TR-2 | YES | FAIL |', text)
+
+    def test_paths_in_audit_sweep(self):
+        # A systematic sweep of prose shapes that look path-like but are not,
+        # run directly after a session that found three independent false
+        # positives in this function reactively, one live incident at a
+        # time. Each case documents a real way evidence text phrases a
+        # non-path, so the next one is caught here instead of live.
+        import importlib.util
+        sys.path.insert(0, str(TOOL.parent))
+        spec = importlib.util.spec_from_file_location('repair_check', TOOL)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        root = self.root
+        non_paths = [
+            'controls 4/4 passed and 10/10 mutants caught',
+            'violates DEC-9/I-5 in an untested branch',
+            'version bumped to 1.2.3/stable for release',
+            'server listens on localhost:5173/api/users and returns 200',
+            '95/100 coverage achieved this run',
+            'the file ../../etc/passwd should never be read',
+            'uses $HOME/.config/app/settings.json for config',
+            'fetches https://cdn.example.com/lib/react.production.min.js successfully',
+        ]
+        for text in non_paths:
+            self.assertEqual(module.paths_in(text, root), [], 'false positive on: %r' % text)
+        real_paths = [
+            ('see [the fix](src/App.jsx) for details', ['src/App.jsx']),
+            ('src/App.jsx:42-51 has the bug', ['src/App.jsx']),
+            ('edited .uncle/launch.json and .uncle/workflow/state', ['.uncle/launch.json']),
+        ]
+        for text, expected in real_paths:
+            self.assertEqual(module.paths_in(text, root), expected, 'false negative on: %r' % text)
 
 
 if __name__ == '__main__':

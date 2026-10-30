@@ -427,9 +427,41 @@ EOF
 
 # Run a workflow command, report a non-zero exit, and always return success so
 # the menu keeps looping after a driver fails.
+#
+# An unattended driver process can vanish mid-run for reasons that have
+# nothing to do with the work itself -- the machine slept, a parent shell was
+# killed, anything that takes the process out from under it without it ever
+# getting to write why. That leaves a project parked mid-stage with nothing
+# to notice or resume it, which defeats the point of "unattended" as surely
+# as a crash would. Distinguish that from a stop the driver chose on purpose:
+# CLAUDE.md's human gates, a repair budget running out, or simply finishing
+# (COMPLETE) all write their own reason or reach a terminal state, and none
+# of those get retried here -- only "the process is gone and nothing says
+# why" does, and only up to a small bound, so a run that is genuinely and
+# repeatedly broken still surfaces to a person instead of spinning forever.
 launch() {
-    local status=0
-    "$@" || status=$?
+    local status=0 attempts=0 max_attempts=5 state_dir=".uncle/workflow" unattended=0 arg
+    for arg in "$@"; do [[ "$arg" != --unattended ]] || { unattended=1; break; }; done
+    while true; do
+        status=0
+        "$@" || status=$?
+        [[ "$unattended" == 1 ]] || break
+        local state="" stop_reason=""
+        [[ -s "$state_dir/state" ]] && state="$(cat "$state_dir/state" 2>/dev/null)"
+        [[ -s "$state_dir/stop-reason" ]] && stop_reason="$(cat "$state_dir/stop-reason" 2>/dev/null)"
+        if [[ "$state" == COMPLETE || -n "$stop_reason" ]]; then
+            break
+        fi
+        attempts=$((attempts + 1))
+        if [[ "$attempts" -ge "$max_attempts" ]]; then
+            printf '\n%sThe run stopped %d time(s) in state "%s" with no reason recorded; not resuming automatically again. Something is likely wrong beyond a dropped process.%s\n' \
+                "$C_YELLOW" "$attempts" "${state:-unknown}" "$C_RESET"
+            break
+        fi
+        printf '\n%s%s exited (status %s) while still in state "%s", with no stop reason recorded -- resuming automatically (attempt %d/%d).%s\n' \
+            "$C_YELLOW" "$1" "$status" "${state:-unknown}" "$attempts" "$max_attempts" "$C_RESET"
+        sleep "${UNCLE_LAUNCH_RETRY_DELAY:-2}"
+    done
     if [[ "$status" -ne 0 ]]; then
         printf '\n%s%s exited with status %s.%s\n' "$C_RED" "$1" "$status" "$C_RESET"
     fi

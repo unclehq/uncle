@@ -225,6 +225,26 @@ class TriggerTests(Base):
         self.assertEqual(len(self.host.workers), 1)
         self.assertIn('deduplicated', self.outcomes())
 
+    def test_stage_less_validation_failure_does_not_pollute_the_real_stage(self):
+        # Live incident: a caller that never exported its own
+        # UNCLE_STATUS_STAGE (e.g. an ad hoc model-resolution failure with
+        # no stage context of its own) emitted validation_failed with no
+        # 'stage' field. The old fallback (`event.get('stage','') or
+        # self.stage`) glued it onto whatever real stage ran last --
+        # "requirements" here -- inflating its attempt count and producing a
+        # diagnosis claiming requirements itself had failed many times, when
+        # it never ran more than once.
+        self.controller()
+        self.start('requirements')
+        self.fail('requirements', text='Stage produced no artifact: REQUIREMENTS.md')
+        signature_before = self.ctl.journal.data['signatures']['requirements']['signature']
+        self.ctl.observe({'event': 'validation_failed', 'validator': 'stage_end',
+                          'diagnostic': 'model vendor/kimi-k3 unrecognized', 'exit': 1})
+        self.assertEqual(self.ctl.journal.data['signatures']['requirements']['signature'], signature_before,
+                         "an unrelated stage-less failure must not overwrite requirements' own recorded failure")
+        self.assertIn('(unattributed)', self.ctl.journal.data['signatures'])
+        self.assertNotIn('kimi', self.ctl.journal.data['signatures']['requirements'].get('signature', ''))
+
     def test_t1_plain_exit_without_validator_does_not_fire(self):
         self.controller()
         self.start()

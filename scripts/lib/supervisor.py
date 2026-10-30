@@ -1126,7 +1126,16 @@ class Controller:
                               % (record['action_id'], stage))
 
     def _validation_failed(self, event):
-        stage = event.get('stage', '') or self.stage
+        # Unlike 'usage'/'stage_end' (dispatched only when the event's stage
+        # already matches self.stage, so a missing/stale fallback is
+        # harmless there), this is reached unconditionally. Falling back to
+        # self.stage silently glued an unrelated caller's failure -- one
+        # that never exported its own UNCLE_STATUS_STAGE -- onto whatever
+        # real stage happened to run last, inflating its attempt count and
+        # producing a false "attempt 38 of the requirements stage" diagnosis
+        # for a stage that never actually failed that many times. A stage-less
+        # event gets its own bucket instead of corrupting a real one's history.
+        stage = event.get('stage') or '(unattributed)'
         if stage != self.stage:
             self._begin_stage(stage)
         if event.get('artifact'):

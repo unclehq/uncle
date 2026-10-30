@@ -41,7 +41,7 @@ for mode in fail empty; do
 done
 # A Kimi selection without a stage model must invoke Kimi, never Claude.
 printf 'prompt' | WORKFLOW_CLAUDE_CMD=/nonexistent bash "$ROOT/scripts/agent-kimi.sh" -p > "$tmp/log"
-grep -Fx -- 'moonshot-ai/kimi-k2.7-code-highspeed' "$KIMI_ARGS"
+grep -Fx -- 'moonshotai/kimi-k2.7-code-highspeed' "$KIMI_ARGS"
 . "$ROOT/scripts/lib/stage-config.sh"
 [[ $(uncle_runner_cmd kimi reviewer) == "$ROOT/scripts/reviewer-kimi.sh" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 echo 'reviewer-kimi-test: passed'

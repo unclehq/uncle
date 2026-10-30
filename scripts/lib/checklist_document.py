@@ -120,9 +120,27 @@ def validate_text(text):
 def export_json(path, project='.'):
     import json
     checks = validate(path)
-    payload = {'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist',
-               'checks': [{'id': check.id, 'exclusive_resources': sorted(check.resources or []),
-                           'depends_on': check.depends} for check in checks]}
+    rows = []
+    for check in checks:
+        row = {'id': check.id, 'depends_on': check.depends}
+        # Restored by explicit user decision: check.resources is None means a
+        # reviewer never wrote an "Exclusive resources" line at all (a real,
+        # meaningful "I don't know" that checklist_groups.py's scheduler
+        # treats conservatively -- run it alone rather than guess); an empty
+        # set means the line was written and said none. Both used to collapse
+        # to the same JSON shape ("exclusive_resources": []), which silently
+        # turned every "never declared" check into "declared empty" the
+        # moment it passed through canonical JSON -- the one thing this
+        # scheduler was built to treat differently. Precedent for "field
+        # omitted means not stated" elsewhere in this module:
+        # render_from_json's optional per-check fields (action/expected/
+        # actual/defects) use `.get(...) or 'Not recorded.'`, a similar
+        # omitted-means-unstated convention; the key itself is only ever
+        # present here when there is a real answer to put in it.
+        if check.resources is not None:
+            row['exclusive_resources'] = sorted(check.resources)
+        rows.append(row)
+    payload = {'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist', 'checks': rows}
     target = Path(project) / '.uncle/workflow/documents/MANUAL_CHECKLIST.json'
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')

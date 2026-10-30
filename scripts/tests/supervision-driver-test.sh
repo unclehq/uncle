@@ -61,6 +61,35 @@ DOC
     printf '# baseline\n\n## 8. Verification commands\n\n```sh\ntrue\n```\n' > .uncle/docs/BASELINE_REPORT.md
     printf '# spec\n' > .uncle/docs/CHANGE_SPEC.md
     printf '# plan\n' > .uncle/docs/CHANGE_PLAN.md
+    # The driver now requires a canonical uncle.artifact/v1 JSON delivery, not
+    # just the rendered Markdown written above (that Markdown alone used to be
+    # the whole contract; it is now only a view the driver renders from the
+    # JSON). Write the matching canonical packet at $UNCLE_ARTIFACT_DELIVERY,
+    # inferring which one from its filename since this one stub plays every
+    # stage used by both drivers.
+    if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" ]]; then
+        mkdir -p "$(dirname "$UNCLE_ARTIFACT_DELIVERY")"
+        case "$UNCLE_ARTIFACT_DELIVERY" in
+            */requirements.json)
+                jq -n '{schema:"uncle.artifact/v1",kind:"requirements-interpretation",sections:{
+                    required_functionality:"Required.",optional_functionality:"None.",constraints:"None.",
+                    user_visible_behaviors:"Visible.",system_behaviors:"System behavior.",failure_behaviors:"Fail clearly.",
+                    ambiguities:"None.",assumptions:"None.",explicit_non_goals:"None.",definition_of_done:"Done."}}' \
+                    > "$UNCLE_ARTIFACT_DELIVERY" ;;
+            */change-planning-bundle.json)
+                jq -n '{schema:"uncle.artifact/v1",kind:"change-planning-bundle",
+                    baseline_report:{schema:"uncle.artifact/v1",kind:"baseline-report",narrative:"",verification_commands:"true"},
+                    change_spec:{schema:"uncle.artifact/v1",kind:"change-spec",narrative:"",
+                        acceptance_criteria:[{id:"AC-1",criterion:"stub",verification:"true"}]},
+                    change_plan:{schema:"uncle.artifact/v1",kind:"change-plan",
+                        narrative:"## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n"}}' \
+                    > "$UNCLE_ARTIFACT_DELIVERY" ;;
+            */change-plan.json|*/updated-change-plan.json)
+                jq -n '{schema:"uncle.artifact/v1",kind:"change-plan",
+                    narrative:"## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n"}' \
+                    > "$UNCLE_ARTIFACT_DELIVERY" ;;
+        esac
+    fi
 fi
 echo '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":1,"total_cost_usd":0}'
 EOF

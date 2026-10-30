@@ -263,7 +263,18 @@ def parse_json(path):
         raise ValueError('invalid manual checklist JSON')
     checks, by_id = [], {}
     for item in payload['checks']:
-        check = Check(item['id'], len(checks)); check.resources = set(item.get('exclusive_resources', [])); check.depends = item.get('depends_on', [])
+        check = Check(item['id'], len(checks))
+        # Restored by explicit user decision: "exclusive_resources" absent
+        # (or explicitly null) means the field was never declared -- Check's
+        # own `declared` property (resources is not None) is exactly the
+        # signal the scheduler uses to fall back to running a check alone
+        # rather than guess. A present key, even an empty list, means a
+        # reviewer wrote the line and said none; that is a real answer, not a
+        # missing one, and must not be folded into the same "undeclared"
+        # bucket export_json used to collapse it into.
+        resources = item.get('exclusive_resources')
+        check.resources = None if resources is None else set(resources)
+        check.depends = item.get('depends_on', [])
         checks.append(check); by_id[check.id] = check
     return checks, by_id, []
 

@@ -22,8 +22,15 @@ bad() { FAIL=$((FAIL + 1)); echo "FAIL [$1] $2" >&2; }
 # that encloses the unique line ANCHOR.
 extract_case() {
     local script="$1" anchor="$2" start end
+    # The anchor substring must match inside a "case $log_name in" block, not
+    # merely anywhere earlier in the file -- a later, unrelated guard clause
+    # (prewarm_checklist_browser's own runner check, added since this test
+    # was last verified) happens to contain the exact same substring and sits
+    # before the real case block, so matching the first occurrence anywhere
+    # silently grabbed the wrong (empty) start and broke extraction. Only an
+    # anchor seen after a case block has opened counts.
     start="$(awk -v a="$anchor" '
-        index($0, a) { print start; exit }
+        index($0, a) && start { print start; exit }
         /case "\$log_name" in/ { start = NR }
     ' "$ROOT/scripts/$script")"
     end="$(awk -v s="$start" 'NR>=s && /^        esac$/ { print NR; exit }' "$ROOT/scripts/$script")"
@@ -42,6 +49,7 @@ run_block() { # run_block <script> <anchor> <runner> <log_name>
         printf 'artifact_error=%q\n' "previous rejection reason"
         printf 'UNCLE_RESOLVED_RUNNER=%q\n' "$runner"
         printf 'effective_prompt=%q\n' "$work/prompt.md"
+        printf 'schema_args=()\n'
         printf ': > "$effective_prompt"\n'
         extract_case "$script" "$anchor"
         printf 'cat "$effective_prompt"\n'

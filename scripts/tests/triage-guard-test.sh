@@ -51,7 +51,8 @@ project() {
     printf 'review\n' > "$dir/ADVERSARIAL_REVIEW.md"
     printf 'IMPLEMENT\n' > "$dir/.uncle/workflow/state"
     printf 'approved-hash\n' > "$dir/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
-    printf '# notes\n' > "$dir/IMPLEMENTATION_NOTES.md"
+    mkdir -p "$dir/.uncle/docs"
+    printf '# notes\n' > "$dir/.uncle/docs/IMPLEMENTATION_NOTES.md"
     if [[ "$kind" != plain ]]; then
         git -C "$dir" init -q .
         git -C "$dir" config commit.gpgsign false
@@ -119,7 +120,7 @@ check_file_is "install file restored" installed "$INSTALL/scripts/lib/thing.sh"
 check_eq "install modification taints" true "$(printf '%s' "$res" | json_field tainted)"
 check_file_is "allowed edit still applied" "ok" src/x
 check_row "allowed edit applied" APPLIED src/x "$TSV"
-COUNT=$((COUNT + 1)); grep -q 'Deviation (triage): `src/x`' IMPLEMENTATION_NOTES.md || fail "deviation line appended"
+COUNT=$((COUNT + 1)); grep -q 'Deviation (triage): `src/x`' .uncle/docs/IMPLEMENTATION_NOTES.md || fail "deviation line appended"
 check_absent "sandbox dropped" "$SB"
 printf 'installed\n' > "$INSTALL/scripts/lib/thing.sh"
 

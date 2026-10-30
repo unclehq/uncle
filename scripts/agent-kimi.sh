@@ -13,7 +13,7 @@ set -euo pipefail
 
 CLAUDE_CMD="${WORKFLOW_CLAUDE_CMD:-claude}"
 KIMI_CMD="${WORKFLOW_KIMI_CMD:-kimi}"
-KIMI_MODEL="${WORKFLOW_KIMI_MODEL:-moonshot-ai/kimi-k2.7-code-highspeed}"
+KIMI_MODEL="${WORKFLOW_KIMI_MODEL:-moonshotai/kimi-k2.7-code-highspeed}"
 
 # Find --model without disturbing the argument list.
 model="kimi"

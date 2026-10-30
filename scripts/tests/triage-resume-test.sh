@@ -159,7 +159,7 @@ WORKFLOW_DIFF_GATE=0 drive stagegate.sh "$P" ''
 check_eq "sg: protected drift exits 1" 1 "$STATUS"
 check_contains "sg: integrity path names the change" "Verification inputs changed or are unavailable" "$P/out.txt"
 check_eq "sg: routes to REPAIR" REPAIR "$(cat "$P/.uncle/workflow/state")"
-check_eq "sg: repair source is the integrity report" ".uncle/workflow/VERIFICATION_INTEGRITY.md" "$(cat "$P/.uncle/workflow/repair-source")"
+check_eq "sg: repair source is the integrity report" "$P/.uncle/workflow/VERIFICATION_INTEGRITY.md" "$(cat "$P/.uncle/workflow/repair-source")"
 check_contains "sg: integrity report records the file" "tests/test.txt" "$P/.uncle/workflow/VERIFICATION_INTEGRITY.md"
 check_contains "sg: failure writes the bundle" "- state: REPAIR" "$P/.uncle/workflow/TRIAGE.md"
 

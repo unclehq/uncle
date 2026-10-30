@@ -31,9 +31,14 @@ target, rows = sys.argv[1], sys.argv[2:]
 checks = []
 for row in rows:
     ident, resources, deps = row.split(':', 2)
-    checks.append({'id': ident,
-                   'exclusive_resources': [] if resources == 'none' else resources.split(','),
-                   'depends_on': [] if deps == 'none' else deps.split(',')})
+    check = {'id': ident, 'depends_on': [] if deps == 'none' else deps.split(',')}
+    # "none" means explicitly declared empty (the key is present, []);
+    # "undeclared" means the key is omitted entirely -- a reviewer never
+    # wrote an Exclusive resources line at all. Collapsing both into the
+    # same JSON shape was the exact regression restored this round.
+    if resources != 'undeclared':
+        check['exclusive_resources'] = [] if resources == 'none' else resources.split(',')
+    checks.append(check)
 with open(target, 'w', encoding='utf-8') as stream:
     json.dump({'schema': 'uncle.artifact/v1', 'kind': 'manual-checklist', 'checks': checks}, stream)
 PY
@@ -77,7 +82,7 @@ printf 'MC-900 MC-901\n' > "$DIR/groups.txt"
     echo '# Manual checklist'
     printf '\n### MC-001\n- Exact action: run it\n'
 } > .uncle/docs/MANUAL_CHECKLIST.md
-packet MC-001:none:none
+packet MC-001:undeclared:none
 snapshot_checklist_groups > /dev/null
 [[ "$(cat "$DIR/groups.txt")" == "MC-001" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 grep -q 'scheduled alone' "$DIR/README.md"

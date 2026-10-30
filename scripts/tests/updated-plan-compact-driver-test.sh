@@ -70,8 +70,21 @@ PY
 )
 check "long hosted review uses bounded file-backed deterministic patch batches" grep -qx 'slice=2 delivery=file fast_merge=1 driver_contract=1 warm=0 advisors=0' "$TMP/.uncle/workflow/adaptive"
 
-state_block="$(awk '/^        UPDATED_PLAN\)/,/^        IMPLEMENT\)/' "$ROOT/scripts/stagegate.sh")"
+# "        UPDATED_PLAN)"/"        IMPLEMENT)" also appear as case labels
+# for an unrelated per-stage document-generation dispatch inside
+# run_gated_stage, much earlier in the file than the real state-machine
+# arm this test means (the one that actually calls run_updated_plan_adaptive/
+# run_updated_plan_decide). A bare `/UPDATED_PLAN\)/,/IMPLEMENT\)/` range grabs
+# from the first (wrong, single-line, unrelated) match all the way to a much
+# later IMPLEMENT), pulling in thousands of unrelated lines. Anchor on the
+# comment immediately preceding the real UPDATED_PLAN) arm instead.
+state_block="$(awk '/A review with findings falls through to the normal collated/,/^        IMPLEMENT\)/' "$ROOT/scripts/stagegate.sh")"
 check "adaptive path runs before legacy committee" bash -c 'a=$(grep -n "run_updated_plan_adaptive" <<< "$1" | head -1 | cut -d: -f1); b=$(grep -n "run_updated_plan_decide" <<< "$1" | head -1 | cut -d: -f1); [[ -n "$a" && -n "$b" && "$a" -lt "$b" ]]' _ "$state_block"
-check "compact failure does not enter committee" bash -c 'a=$(grep -n "run_updated_plan_adaptive" <<< "$1" | head -1 | cut -d: -f1); r=$(grep -n "return \$?" <<< "$1" | head -1 | cut -d: -f1); b=$(grep -n "run_updated_plan_decide" <<< "$1" | head -1 | cut -d: -f1); [[ -n "$a" && -n "$r" && -n "$b" && "$a" -lt "$r" && "$r" -lt "$b" ]]' _ "$state_block"
+# The early-return used to read the bare "return $?" of the adaptive call
+# directly; it now stores the status in a named variable first
+# (adaptive_status) so it can also be compared against 2 (the "fall through
+# to the panel once" sentinel) before deciding whether to return at all --
+# same early-exit invariant, different (and more precise) literal text.
+check "compact failure does not enter committee" bash -c 'a=$(grep -n "run_updated_plan_adaptive" <<< "$1" | head -1 | cut -d: -f1); r=$(grep -n "return \"\$adaptive_status\"" <<< "$1" | head -1 | cut -d: -f1); b=$(grep -n "run_updated_plan_decide" <<< "$1" | head -1 | cut -d: -f1); [[ -n "$a" && -n "$r" && -n "$b" && "$a" -lt "$r" && "$r" -lt "$b" ]]' _ "$state_block"
 
 [[ "$fail" == 0 ]] && echo 'updated-plan-compact-driver-test.sh: all checks passed' || exit 1

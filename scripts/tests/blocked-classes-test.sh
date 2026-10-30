@@ -25,10 +25,15 @@ gate_prompt() { printf '%s' "$1"; }
 eval "$(grep '^provided_file()' "$ROOT/scripts/stagegate.sh")"
 eval "$(awk '/^record_provided\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
 ROOT="$ROOT"   # record_waiver looks for the popup helper under it
-eval "$(awk '/^acceptance_setup_pause\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
-eval "$(awk '/^acceptance_human_continue\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
-eval "$(awk '/^acceptance_after_waiver\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
-eval "$(awk '/^acceptance_transition\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+# acceptance_setup_pause/acceptance_human_continue/acceptance_after_waiver/
+# acceptance_transition moved out of stagegate.sh into the shared
+# scripts/lib/acceptance-gate.sh during the stagegate/change-workflow
+# consolidation (so change-workflow.sh could reuse them); the awk extraction
+# that used to pull them from stagegate.sh found nothing there any more and
+# silently evaluated to nothing. Source the real lib instead.
+. "$ROOT/scripts/lib/acceptance-gate.sh"
+supervision_validation_failed() { :; }
+triage_stop_reason() { :; }
 
 # The transition both sets state and, on some paths, exits the shell. Run it in
 # a subshell so its exit cannot end this test, and have that subshell hand back
@@ -46,6 +51,28 @@ run_transition() {
 }
 report() {
     printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n%s\n' "$1" > report.md
+    # acceptance_transition only reads the canonical JSON mirror now
+    # (ensure_acceptance_canonical only auto-derives it for the two
+    # document names stagegate.sh/change-workflow.sh actually use --
+    # .uncle/docs/TEST_REVIEW.md and .uncle/docs/VERIFICATION_REPORT.md --
+    # so this test's generic "report.md" fixture has to write its own JSON
+    # mirror directly, the same shape acceptance_json.py expects.
+    mkdir -p "$STATE_DIR/documents"
+    python3 - "$1" "$STATE_DIR/documents/report.json" <<'PY'
+import json, sys
+rows = []
+for line in sys.argv[1].splitlines():
+    line = line.strip()
+    if not line.startswith('|'):
+        continue
+    cells = [c.strip() for c in line.strip('|').split('|')]
+    if len(cells) != 4:
+        continue
+    rows.append({'id': cells[0], 'required': cells[1] == 'YES',
+                 'status': cells[2], 'evidence': cells[3]})
+json.dump({'schema': 'uncle.artifact/v1', 'kind': 'acceptance-report', 'rows': rows},
+          open(sys.argv[2], 'w'))
+PY
 }
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
@@ -200,8 +227,11 @@ printf 'id: P-9\n' > "$STATE_DIR/provided/P-9"
 preflight_settled BLOCKED-SETUP && fail "a record for another id must not settle P-2"
 cd "$ROOT"
 
-# The two gates that ask the question must ask it the same way.
-grep -q 'preflight_settled "$(acceptance_result .uncle/docs/PREFLIGHT_REPORT.md)"' \
+# The two gates that ask the question must ask it the same way. Workflow
+# control moved from the Markdown acceptance_result helper to the canonical
+# JSON classifier (acceptance_json.py) during the JSON migration; the
+# invocation text this checks moved with it.
+grep -q 'preflight_settled "\$(python3 -B "\$ROOT/scripts/lib/acceptance_json.py" "\$STATE_DIR/documents/PREFLIGHT_REPORT.json")"' \
     "$ROOT/scripts/stagegate.sh" \
     || fail "the IMPLEMENT re-check must use the same predicate as the PREFLIGHT gate"
 

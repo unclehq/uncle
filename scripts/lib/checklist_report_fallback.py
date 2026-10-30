@@ -116,18 +116,39 @@ def render_from_json(project):
         for r in blockers)), encoding='utf-8')
 
 
+# The same "plain identifier" shape scripts/lib/acceptance.sh's awk table
+# validator has always required for the legacy TEST_REVIEW.md/
+# VERIFICATION_REPORT.md ingestion path (acceptance_context.py --export-json).
+# That path and this one are two different ingestion routes to the same
+# "## Acceptance gate" table shape -- the postflight-default route this
+# function serves had no ID-shape check at all, so a row like
+# "REQ-71 `:71` mutation validity" (free text, never typed by a reviewer as a
+# real check ID) was accepted verbatim as if it were one. Keeping the same
+# regex and message here (rather than inventing a second standard) means a
+# malformed ID is caught the same way regardless of which ingestion route a
+# given document takes.
+_PLAIN_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_./-]*$')
+
+
 def export_from_markdown(project):
     project = Path(project).resolve(); text = (project/'.uncle/docs/VERIFICATION_REPORT.md').read_text()
     findings = _findings_by_id(text)
     rows = []
+    seen = set()
     active = False
     for line in text.splitlines():
         if line.strip() == '## Acceptance gate': active = True; continue
         if active and line.startswith('|'):
             cells = [x.strip() for x in line.strip('|').split('|')]
             if len(cells) == 4 and cells[0] not in ('ID', '---') and not cells[0].startswith('---'):
-                row = {'id': cells[0], 'required': cells[1] == 'YES', 'status': cells[2], 'evidence': cells[3]}
-                row.update(findings.get(cells[0], {}))
+                identifier = cells[0]
+                if not _PLAIN_ID.match(identifier):
+                    raise ValueError('id "%s" is not a plain identifier' % identifier)
+                if identifier in seen:
+                    raise ValueError('id "%s" appears twice' % identifier)
+                seen.add(identifier)
+                row = {'id': identifier, 'required': cells[1] == 'YES', 'status': cells[2], 'evidence': cells[3]}
+                row.update(findings.get(identifier, {}))
                 rows.append(row)
     if not rows: raise ValueError('verification report has no acceptance rows')
     target = project/'.uncle/workflow/documents/EXECUTE_CHECKLIST.json'; target.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +200,7 @@ def main(argv):
     artifact = project / '.uncle/workflow/documents/EXECUTE_CHECKLIST.json'
     artifact.parent.mkdir(parents=True, exist_ok=True)
     rows = None
+    malformed = False
     if delivered:
         # The canonical artifact must be derived from that report, never
         # fabricated over it. These three writes used to be unconditional, so
@@ -193,10 +215,25 @@ def main(argv):
         except (OSError, ValueError, KeyError) as error:
             print(f'Could not read the execution report ({error}); recording NOT RUN.', file=sys.stderr)
             rows = None
+            # A report that exists and is non-placeholder but failed to parse
+            # (a malformed ID, a duplicate, a missing evidence cell -- see
+            # export_from_markdown's _PLAIN_ID check) is a format defect, not
+            # absent evidence. Treating it like "nothing was delivered" would
+            # silently launder a defective report into well-formed NOT RUN
+            # rows that classify as the ordinary, waivable BLOCKED-SETUP --
+            # the caller (VALIDATE_CHECKLIST) specifically needs to tell the
+            # two apart, so this writes something acceptance_json.py's own
+            # validity check (truthy id, non-duplicate, non-empty evidence)
+            # rejects as UNKNOWN, rather than a clean-looking placeholder.
+            malformed = True
     if rows is None:
-        rows = [{'id': identifier, 'required': True, 'status': 'NOT RUN',
-                 'evidence': 'No check-specific execution evidence was recorded.'}
-                for identifier in ids]
+        if malformed:
+            rows = [{'id': '', 'required': True, 'status': 'NOT RUN',
+                     'evidence': 'The execution stage report could not be parsed as a checklist acceptance table.'}]
+        else:
+            rows = [{'id': identifier, 'required': True, 'status': 'NOT RUN',
+                     'evidence': 'No check-specific execution evidence was recorded.'}
+                    for identifier in ids]
         artifact.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'execute-checklist',
                                         'results': rows}, indent=2) + '\n', encoding='utf-8')
     state = project / '.uncle/workflow/documents'
@@ -209,6 +246,19 @@ def main(argv):
         indent=2) + '\n', encoding='utf-8')
     (state / 'DEFECTS.json').write_text(json.dumps(
         {'schema': 'uncle.artifact/v1', 'kind': 'defects', 'defects': []}, indent=2) + '\n', encoding='utf-8')
+    # A marker, not an exit code: callers that already invoke this with
+    # `|| exit 1` must not start treating a handled, recorded format defect
+    # as a hard failure. VALIDATE_CHECKLIST checks for this file to skip
+    # re-rendering .uncle/docs/VERIFICATION_REPORT.md from the degenerate
+    # placeholder just written -- that render step exists to turn worker-
+    # panel JSON into a human-readable view, and doing it here would
+    # overwrite the very report a person needs to see and correct with a
+    # blank-id placeholder, destroying the evidence of what went wrong.
+    marker = state / '.execute-checklist-malformed'
+    if malformed:
+        marker.touch()
+    else:
+        marker.unlink(missing_ok=True)
     return 0
 
 

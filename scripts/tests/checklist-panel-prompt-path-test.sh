@@ -21,13 +21,17 @@ cat > harness.sh <<'EOF'
 set -euo pipefail
 STATE_DIR=.uncle/workflow
 LOG_DIR=.uncle/workflow/logs
+mkdir -p "$STATE_DIR/documents"
 CODEX_EFFORT_CHECKLIST=low
-run_codex() {
-    # Return a valid worker packet; prompt resolution is asserted from the
-    # resulting synthesis template below.
-    local prompt_file="$1" output_file="$2"
-    printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"manual-checklist-worker-packet","findings":[]}' > "$output_file"
-}
+# The worker-packet panel (WORKFLOW_MANUAL_CHECKLIST_PANEL=1, the default)
+# no longer does prompt-template synthesis at all for the "base" pass -- it
+# renders a JSON checklist document directly (CHECKLIST_PANEL_DIRECT=1) and
+# never touches CHECKLIST_PANEL_PROMPT as a Markdown template; that is what
+# the panel's own worker/packet tests cover. The relative-path bug this test
+# exists for is the one line in run_checklist_panel that runs unconditionally
+# before that fork: resolve_prompt(source). Disabling the panel isolates
+# exactly that line, which is all this test is about.
+WORKFLOW_MANUAL_CHECKLIST_PANEL=0
 EOF
 awk '/^resolve_prompt\(\)/{p=1} p{print} p && /^}$/{exit}' "$ROOT/scripts/change-workflow.sh" >> harness.sh
 awk '/^run_checklist_panel\(\)/{p=1} p{print} p && /^}$/{exit}' "$ROOT/scripts/change-workflow.sh" >> harness.sh
@@ -38,7 +42,5 @@ EOF
 
 bash harness.sh
 grep -q '.' synthesis-out.md
-head -n1 "$ROOT/prompts/change/manual-checklist-base.md" > expected-first-line
-diff <(head -n1 synthesis-out.md) expected-first-line
-grep -q 'Collated specialist findings' synthesis-out.md
+diff synthesis-out.md "$ROOT/prompts/change/manual-checklist-base.md"
 echo 'checklist-panel-prompt-path-test.sh: run_checklist_panel resolves its template against ROOT, not cwd'

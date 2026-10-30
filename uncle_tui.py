@@ -340,19 +340,17 @@ NETWORK_CHOICES = ["false", "true"]
 MODEL_CATALOG_CLINEPASS = [
     ("Subscribed (ClinePass)", [
         ("Qwen3.8 Max", "cline-pass/qwen3.8-max"),
-        ("GLM-5.2", "cline-pass/glm-5.2"),
         ("DeepSeek V4 Pro", "cline-pass/deepseek-v4-pro"),
         ("GLM-5.3-Flash", "cline-pass/glm-5.3-flash"),
         ("Kimi K3", "cline-pass/kimi-k3"),
         ("GLM-5.3", "cline-pass/glm-5.3"),
-        ("Kimi K2.7 Code", "cline-pass/kimi-k2.7-code"),
-        ("DeepSeek V4 Flash", "cline-pass/deepseek-v4-flash"),
-        ("Kimi K2.6", "cline-pass/kimi-k2.6"),
+        ("Kimi K3.1 Pro", "cline-pass/kimi-k3.1-pro"),
+        ("DeepSeek V4.1 Flash", "cline-pass/deepseek-v4.1-flash"),
         ("Qwen3.7 Plus", "cline-pass/qwen3.7-plus"),
         ("Qwen3.7 Max", "cline-pass/qwen3.7-max"),
         ("MiniMax-M3", "cline-pass/minimax-m3"),
-        ("MiMo-V2.5-Pro", "cline-pass/mimo-v2.5-pro"),
-        ("MiMo-V2.5", "cline-pass/mimo-v2.5"),
+        ("MiMo-V2.6-Pro", "cline-pass/mimo-v2.6-pro"),
+        ("MiMo-V2.6-Flash", "cline-pass/mimo-v2.6-flash"),
     ]),
 ]
 
@@ -381,9 +379,9 @@ MODEL_CATALOG_CODEX = [
 # hands agent-kimi.sh the dispatch token instead (stage-config.sh).
 MODEL_CATALOG_KIMI = [
     ("Kimi", [
-        ("Kimi K2.7 Code Highspeed", "moonshot-ai/kimi-k2.7-code-highspeed"),
-        ("Kimi K2.6", "moonshot-ai/kimi-k2.6"),
-        # `moonshot-ai/kimi-k3` is already in MODEL_CATALOG_USAGE_PAID; one
+        ("Kimi K2.7 Code Highspeed", "moonshotai/kimi-k2.7-code-highspeed"),
+        ("Kimi K2.6", "moonshotai/kimi-k2.6"),
+        # `moonshotai/kimi-k3` is already in MODEL_CATALOG_USAGE_PAID; one
         # id gets one label, so it is not repeated here.
     ]),
 ]
@@ -412,7 +410,7 @@ MODEL_CATALOG_KIMI = [
 # through the picker's Custom row until they exist locally.
 MODEL_CATALOG_USAGE_PAID = [
     ("Recommended", [
-        ("Kimi K3", "moonshot-ai/kimi-k3"),
+        ("Kimi K3", "moonshotai/kimi-k3"),
         ("Claude Opus 5", "anthropic/claude-opus-5"),
         ("Grok 4.5", "x-ai/grok-4.5"),
     ]),
@@ -452,7 +450,7 @@ DEFAULT_MODEL_FOR_BILLING = {
 DEFAULT_MODEL_FOR_RUNNER = {
     "claude": "claude-sonnet-5",
     "codex": "codex default",
-    "kimi": "moonshot-ai/kimi-k2.7-code-highspeed",
+    "kimi": "moonshotai/kimi-k2.7-code-highspeed",
 }
 
 

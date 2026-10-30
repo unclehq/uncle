@@ -29,13 +29,35 @@ trap 'rm -rf "$work"' EXIT
 note() { echo "  ok: $1"; }
 fail() { echo "  FAIL: $1" >&2; FAILED=1; }
 
+# Neither `timeout` nor `gtimeout` ships on a default macOS install; a bare
+# `timeout 6 ...` then fails with "command not found" (127), which verdict()
+# below would misread as "ran" instead of recognizing the guard's exit 77 --
+# falsifying every skip assertion. Matches the fallback already used in
+# scripts/lib/issue-close.sh and scripts/tests/unattended-test.sh.
+TIMEOUT_CMD="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+run_timeout() {
+    local secs="$1"; shift
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        "$TIMEOUT_CMD" "$secs" "$@"
+    else
+        "$@"
+    fi
+}
+
 # The guard exits before the suite does any work, so proving it let something
 # through needs only a couple of seconds -- not a full battery run, which would
 # call a loaded machine a failure.
 verdict() {
     local code
-    env -u UNCLE_UNATTENDED -u UNCLE_STATUS_STAGE -u UNCLE_TEST_ALLOW_NESTED "$@" \
-        timeout 6 bash "$SUITE" > "$work/out" 2>&1
+    # `env` execs a real binary; it cannot invoke the run_timeout shell
+    # function directly the way `env ... timeout 6 bash ...` could invoke a
+    # real `timeout` binary. Clear/set the variables in this subshell instead
+    # and call run_timeout from inside it.
+    (
+        unset UNCLE_UNATTENDED UNCLE_STATUS_STAGE UNCLE_TEST_ALLOW_NESTED
+        export "$@"
+        run_timeout 6 bash "$SUITE"
+    ) > "$work/out" 2>&1
     code=$?
     if [[ "$code" == 77 ]]; then echo skipped; else echo ran; fi
 }
@@ -52,8 +74,11 @@ verdict() {
 [[ "$(verdict UNCLE_STATUS_STAGE=change-plan)" == skipped ]] \
     && note 'UNCLE_STATUS_STAGE skips' || fail 'UNCLE_STATUS_STAGE did not skip'
 
-env -u UNCLE_UNATTENDED -u UNCLE_TEST_ALLOW_NESTED UNCLE_STATUS_STAGE=change-plan \
-    timeout 6 bash "$SUITE" > "$work/out" 2>&1
+(
+    unset UNCLE_UNATTENDED UNCLE_TEST_ALLOW_NESTED
+    export UNCLE_STATUS_STAGE=change-plan
+    run_timeout 6 bash "$SUITE"
+) > "$work/out" 2>&1
 grep -q 'stage change-plan' "$work/out" \
     && note 'the message names the stage' || fail 'message does not name the stage'
 grep -q 'UNCLE_TEST_ALLOW_NESTED=1' "$work/out" \

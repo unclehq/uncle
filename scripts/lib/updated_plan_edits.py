@@ -95,6 +95,23 @@ CHANGE_EXAMPLE = (
 EXAMPLE_BLOCK = re.compile(r'```json\n\{"schema":"uncle\.artifact/v1","kind":"(?:plan|change-plan)".*?\n```', re.S)
 
 
+def defer_reply_example(text):
+    """Move the writer-specific example behind shared inputs, without changing bytes.
+
+    The protected-path owner has one extra field in its example. Leaving it
+    near the beginning splits the prefix before the entire approved plan.
+    Move its introductory instructions with it; unknown prompt shapes stay put.
+    """
+    start = text.find('\n\nDo not write a top-level `narrative` key')
+    if start < 0:
+        return text
+    example = re.search(r'```json\n\{"schema":"uncle\.artifact/v1","kind":"[^"\n]+"[^\n]*\n```', text[start:])
+    if example is None:
+        return text
+    end = start + example.end()
+    return text[:start] + text[end:] + text[start:end]
+
+
 def write_prompt(base, ids, output, owns_fields=False):
     """The sealed synthesis prompt, re-pointed at this writer's packet.
 
@@ -108,7 +125,7 @@ def write_prompt(base, ids, output, owns_fields=False):
         example = WRITER_EXAMPLE % (EDIT_KIND, ',"protected_verification_paths":"..."' if owns_fields else '')
         note = SLICE_NOTE % (', '.join(ids), (FIELDS_OWNER if owns_fields else FIELDS_OTHER) + COMMANDS_NOTE)
     text = EXAMPLE_BLOCK.sub(lambda _: '```json\n' + example + '\n```', text)
-    Path(output).write_text(text + note, encoding='utf-8')
+    Path(output).write_text(defer_reply_example(text) + note, encoding='utf-8')
 
 
 def read_json(path):

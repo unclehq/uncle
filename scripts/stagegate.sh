@@ -2401,10 +2401,35 @@ run_codex_review() {
     save_plan_review "$output_file" "$review_key"
 }
 
-# Read-only specialist packets improve review coverage. The primary reviewer
-# remains the sole writer and verdict owner; a missing packet is non-blocking.
+# Validate and, if necessary, retry a lens as soon as its packet exists.
+# This stays inside the speculative stage: no partial review is published or
+# handed to plan writers. Collation and all approval checks remain barriers.
+run_adversarial_review_lens() {
+    local directory="$1" lens="$2" output retry_output packet_error reviewer_pid
+    # Keep the original reviewer in its own unguarded subprocess: guarding a
+    # shell function with || true disables errexit throughout that function.
+    ( UNCLE_NONINTERACTIVE=1 run_codex_review "$directory/prompts/$lens.md" \
+        "$directory/$lens.json" "adversarial-review-worker-$lens" < /dev/null ) &
+    reviewer_pid=$!
+    wait "$reviewer_pid" || true
+    output="$directory/$lens.json"
+    retry_output="$directory/$lens.validated.json"
+    if ! packet_error="$(python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$retry_output" \
+            --kind adversarial-review-worker-packet --expected "$lens" 2>&1)"; then
+        echo "Adversarial-review worker $lens returned an invalid packet; retrying that worker once."
+        printf '\n## Required retry\n\nYour preceding private packet was rejected: %s\nUse Write to replace the assigned packet path with one complete `adversarial-review-worker-packet` JSON object. Do not return Markdown, prose, or a draft in chat.\n' "$packet_error" >> "$directory/prompts/$lens.md"
+        rm -f "$output" "$output.delivery.json" "$retry_output"
+        UNCLE_NONINTERACTIVE=1 run_codex_review "$directory/prompts/$lens.md" "$output" "adversarial-review-worker-$lens-retry" < /dev/null || true
+        python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$retry_output" \
+            --kind adversarial-review-worker-packet --expected "$lens" || return 1
+    fi
+    rm -f "$retry_output"
+}
+
+# Read-only specialist packets improve review coverage. Only the complete,
+# validated panel can produce the canonical review.
 run_adversarial_review_panel() {
-    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid packet_error retry_output
+    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid failed=0
     local -a pids=()
     [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
     ensure_project_plan_json || return 1
@@ -2423,33 +2448,17 @@ run_adversarial_review_panel() {
         output="$directory/$lens.json"
         cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
         printf '\n## Canonical inputs (binding)\n\nRead only `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json` and `%s`.%s\n\n## Assigned review lens\n\nFocus only on **%s**.\n' "$plan_input" "$plan_input_note" "$lens" >> "$prompt"
-        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "adversarial-review-worker-$lens" < /dev/null ) \
+        ( run_adversarial_review_lens "$directory" "$lens" ) \
             > "$LOG_DIR/adversarial-review-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do
-        wait "$pid" || echo 'Adversarial-review worker failed; canonical packet validation will stop the panel.' >&2
-    done
-    # A file-backed local reviewer can finish its analysis yet make a small
-    # JSON escaping error in its private packet. Do not discard the healthy
-    # lenses or restart the entire speculative review: validate each packet
-    # independently and give only the failed worker one exact, bounded retry.
-    # This is especially important for small local models, where a panel-wide
-    # restart costs four full plan reads for one malformed response.
-    for lens in requirements regression security testability; do
-        output="$directory/$lens.json"
-        retry_output="$directory/$lens.validated.json"
-        if ! packet_error="$(python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$retry_output" \
-                --kind adversarial-review-worker-packet --expected "$lens" 2>&1)"; then
-            echo "Adversarial-review worker $lens returned an invalid packet; retrying that worker once."
-            printf '\n## Required retry\n\nYour preceding private packet was rejected: %s\nUse Write to replace the assigned packet path with one complete `adversarial-review-worker-packet` JSON object. Do not return Markdown, prose, or a draft in chat.\n' "$packet_error" >> "$directory/prompts/$lens.md"
-            rm -f "$output" "$output.delivery.json" "$retry_output"
-            UNCLE_NONINTERACTIVE=1 run_codex_review "$directory/prompts/$lens.md" "$output" "adversarial-review-worker-$lens-retry" < /dev/null || true
-            python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$retry_output" \
-                --kind adversarial-review-worker-packet --expected "$lens" || return 1
+        if ! wait "$pid"; then
+            echo 'Adversarial-review worker failed validation; stopping the panel.' >&2
+            failed=1
         fi
-        rm -f "$retry_output"
     done
+    [[ "$failed" == 0 ]] || return 1
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
     # Worker packets are already validated, complete, and deduplicated by
     # stable finding ID.  Rendering them directly makes the collated JSON the

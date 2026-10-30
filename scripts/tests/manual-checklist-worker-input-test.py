@@ -43,7 +43,7 @@ class ManualChecklistWorkerInputs(unittest.TestCase):
 
     def test_adversarial_panel_retries_only_the_invalid_packet(self):
         text = (ROOT / 'scripts/stagegate.sh').read_text()
-        start = text.index('run_adversarial_review_panel()')
+        start = text.index('run_adversarial_review_lens()')
         block = text[start:text.index('\n}\n', start) + 2]
         self.assertIn('Adversarial-review worker $lens returned an invalid packet; retrying that worker once.', block)
         self.assertIn('--expected "$lens"', block)

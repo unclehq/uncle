@@ -22,6 +22,21 @@ import time
 import self_hosted_http as transport
 from self_hosted_http import OutputTruncated, add_usage, chat, conforms, constrained_completion
 
+def strip_thinking(text):
+    """Drop a reasoning model's <think>...</think> preamble from its message content.
+
+    A server without a reasoning parser configured (common for a local DeepSeek-class
+    deployment) returns the model's thinking inline in `message.content` rather than in
+    a separate field, and answer_already_given / the final JSON-schema path already strip
+    it there. The turn-by-turn text extracted here was not: it leaked into the live stage
+    log, back into the conversation history as the model's own prior turn (which a
+    reasoning model is not meant to see again, and which inflates every later request),
+    and -- for a plain-text stage with no final_schema -- straight into stage.final_answer,
+    the value the rest of the driver treats as the stage's actual output.
+    """
+    return re.sub(r'<think>.*?</think>', '', text or '', flags=re.S).strip()
+
+
 READ_LIMIT = 200_000
 OUTPUT_LIMIT = 30_000
 SKIP_DIRS = {'.git', 'node_modules', '.venv', 'venv', '__pycache__'}
@@ -358,7 +373,7 @@ def answer_already_given(text, schema):
     schema check the grammar answer would face is the answer; anything else falls through to the
     closing request as before.
     """
-    body = re.sub(r'<think>.*?</think>', '', text or '', flags=re.S).strip()
+    body = strip_thinking(text)
     if not body:
         return None
     candidates = [match.group(1) for match in re.finditer(r'```(?:json)?\s*(\{.*?\})\s*```', body, re.S)][::-1]
@@ -586,7 +601,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         choice = data['choices'][0]
         message = choice['message']
         calls = message.get('tool_calls') or []
-        text = message.get('content') or ''
+        text = strip_thinking(message.get('content') or '')
         if choice.get('finish_reason') == 'length':
             saved = save_truncated('turn', turn_limit, text, calls, data.get('usage'))
             raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete.%s'
@@ -641,7 +656,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         requests += 1
         tally(data)
         choice = data['choices'][0]
-        text = choice['message'].get('content') or ''
+        text = strip_thinking(choice['message'].get('content') or '')
         if choice.get('finish_reason') == 'length':
             saved = save_truncated('closing-turn', turn_limit, text, None, data.get('usage'))
             raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete.%s'
@@ -654,7 +669,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             if data is not None:
                 requests += 1
                 tally(data)
-                text = data['choices'][0]['message'].get('content') or ''
+                text = strip_thinking(data['choices'][0]['message'].get('content') or '')
         messages.append({'role': 'assistant', 'content': text})
     if final_schema is None:
         if stage is not None:
@@ -716,7 +731,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         print('Self hosted: the %s-constrained answer hit the %d-token limit (it ended with: %s); asking once more '
               'without the grammar.' % (mode, cap, tail), file=sys.stderr)
         messages.append({'role': 'user', 'content': 'That was cut off. ' + COMPACT_JSON_REQUEST})
-    final = re.sub(r'<think>.*?</think>', '', final, flags=re.S).strip()
+    final = strip_thinking(final)
     try:
         conforms(json.loads(final), final_schema)
     except json.JSONDecodeError as error:

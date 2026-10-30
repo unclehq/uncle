@@ -919,6 +919,12 @@ snapshot_checklist_groups() {
     # The rendered checklist is for human review only.  Scheduling from it
     # lets an edit to Markdown silently change the executable test plan.
     if [[ ! -s "$STATE_DIR/documents/MANUAL_CHECKLIST.json" ]]; then
+        {
+            echo '# Parallel execution groups for checklist execution'
+            echo
+            echo 'NOT DECLARED: canonical MANUAL_CHECKLIST.json is missing; no grouping was derived.'
+            echo 'Run the checklist one check at a time, in document order.'
+        } > "$directory/README.md"
         echo 'Checklist grouping: canonical MANUAL_CHECKLIST.json is missing; no worker schedule was derived.'
         return 0
     fi

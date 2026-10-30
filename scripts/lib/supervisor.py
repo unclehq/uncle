@@ -727,7 +727,13 @@ def validate_proposal(text, stage, attempt, run_id, evidence_ids, descriptions=N
         # quoting a path silently discarded every "this needs a person" verdict
         # a repair judge produced and let the driver fall through to another
         # automatic retry or a full re-plan instead of actually stopping.
-        if _TOOL_REQUEST.search(prose) or _ABSOLUTE_PATH.search(prose):
+        # Artifact paths now come from the driver's absolute STATE_DIR. A
+        # diagnosis copied verbatim from cited evidence must remain usable;
+        # invented paths and paths in model-authored rationales are forbidden.
+        cited_diagnosis = any(value['diagnosis'] == (descriptions or {}).get(item)
+                              for item in evidence)
+        if (_TOOL_REQUEST.search(prose) or _ABSOLUTE_PATH.search(value['rationale'])
+                or (_ABSOLUTE_PATH.search(value['diagnosis']) and not cited_diagnosis)):
             return None, 'authority: proposal text carries a tool request or absolute path'
         if template not in TEMPLATES:
             return None, 'unsupported template: %r' % (template,)

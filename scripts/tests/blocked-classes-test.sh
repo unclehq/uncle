@@ -29,6 +29,10 @@ eval "$(awk '/^acceptance_setup_pause\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
 eval "$(awk '/^acceptance_human_continue\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
 eval "$(awk '/^acceptance_after_waiver\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
 eval "$(awk '/^acceptance_transition\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+eval "$(awk '/^acceptance_json_ids\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+eval "$(awk '/^ensure_acceptance_canonical\(\)/,/^}$/' "$ROOT/scripts/stagegate.sh")"
+. "$ROOT/scripts/lib/triage.sh"
+supervision_validation_failed() { :; }
 
 # The transition both sets state and, on some paths, exits the shell. Run it in
 # a subshell so its exit cannot end this test, and have that subshell hand back
@@ -46,6 +50,11 @@ run_transition() {
 }
 report() {
     printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n%s\n' "$1" > report.md
+    # The transition consumes canonical JSON; keep the same rows and verdicts
+    # in both representations instead of asking it to parse the human view.
+    python3 "$ROOT/scripts/lib/acceptance_context.py" --export-json report.md . report
+    mkdir -p "$STATE_DIR/documents"
+    cp .uncle/workflow/documents/report.json "$STATE_DIR/documents/report.json"
 }
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
@@ -201,7 +210,7 @@ preflight_settled BLOCKED-SETUP && fail "a record for another id must not settle
 cd "$ROOT"
 
 # The two gates that ask the question must ask it the same way.
-grep -q 'preflight_settled "$(acceptance_result .uncle/docs/PREFLIGHT_REPORT.md)"' \
+grep -q 'preflight_settled "$(python3 -B "$ROOT/scripts/lib/acceptance_json.py" "$STATE_DIR/documents/PREFLIGHT_REPORT.json")"' \
     "$ROOT/scripts/stagegate.sh" \
     || fail "the IMPLEMENT re-check must use the same predicate as the PREFLIGHT gate"
 

@@ -65,6 +65,8 @@ check "$(grep -c 'envelopes/' "$STATE/envelope-tamper.log")" 6 "log appended, ne
 python3 - "$ROOT/scripts/change-workflow.sh" <<'PY' || FAILED=$((FAILED + 1))
 import re, sys
 text = open(sys.argv[1], encoding='utf-8').read()
+# State names also occur in runner configuration helpers before the loop.
+text = text[text.index('\nwhile true; do\n'):]
 branch = text[text.index('        IMPLEMENT)'):text.index('        WAIT_IMPLEMENT_APPROVAL)')]
 runs = [m.start() for m in re.finditer(r'run_(?:claude|stepwise_implementation) ', branch)]
 begins = [m.start() for m in re.finditer(r'envelope_guard_begin', branch)]
@@ -85,7 +87,7 @@ text = open(sys.argv[1], encoding='utf-8').read()
 body = text[text.index('adopt_speculation() {'):]
 body = body[:body.index('\n}\n')]
 discard = body.index('Discarding speculative $stage')
-rm = body.index('rm -f "$STATE_DIR/envelopes/${stage}.json"')
+rm = body.index('rm -f "$STATE_DIR/envelopes/${stage}.json"', discard)
 if not discard < rm < body.index('return 1', discard) + 20:
     print('FAIL: the discarded speculative stage keeps its envelope')
     raise SystemExit(1)

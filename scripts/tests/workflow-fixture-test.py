@@ -89,6 +89,24 @@ answer
         self.assertEqual(result.stdout, 'ready')
         self.assertFalse(log.exists(), 'ordinary fixture creation invoked the fake signer')
 
+    def test_production_layers_source_without_runtime_state_or_executables(self):
+        for name in ('prompt-io.sh', 'prompt-io-app.sh', 'prompt-io-change.sh',
+                     'workflow-records.sh'):
+            with self.subTest(module=name):
+                result = subprocess.run(['/bin/bash', '-eu', '-c', '''
+PATH=/no-executables
+before_pwd=$PWD
+before_options=$-
+before_traps=$(trap -p)
+. "$1"
+[[ "$PWD" == "$before_pwd" && "$-" == "$before_options" && "$(trap -p)" == "$before_traps" ]]
+''', '_', str(ROOT / 'scripts/lib' / name)], cwd=self.tmp,
+                    env=fixture_repo.isolated_env(), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, '')
+                self.assertEqual(result.stderr, '')
+                self.assertEqual(list(self.tmp.iterdir()), [])
+
 
 if __name__ == '__main__':
     unittest.main()

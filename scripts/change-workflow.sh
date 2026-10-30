@@ -115,12 +115,7 @@ APPROVAL_DIR="$STATE_DIR/approvals"
 # of the flag in one file.
 UNATTENDED_FILE="$STATE_DIR/unattended-gates"
 
-record_unattended_gate() {
-    local what="$1" detail="$2"
-    mkdir -p "$STATE_DIR" 2>/dev/null || true
-    printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$what" "$detail" \
-        >> "$UNATTENDED_FILE" 2>/dev/null || true
-}
+. "$ROOT/scripts/lib/workflow-records.sh"
 
 # An unattended run says so up front and ledgers what enabled it, so a mode
 # inherited from a wrapper is visible in the run's own record.
@@ -140,18 +135,6 @@ completed_verdict() {
     printf '%s' "$verdict"
 }
 
-# One stable line for wrappers and the TUI; format is asserted by tests.
-finished_build_line() {
-    local verdict="$1" skipped=0
-    if [[ -s "$UNATTENDED_FILE" ]]; then
-        skipped="$(grep -c $'\taudit-finding-skipped\t' "$UNATTENDED_FILE" || true)"
-    fi
-    printf 'Finished build: verdict=%s skipped=%s path=%s\n' "$verdict" "${skipped:-0}" "$PROJECT_ROOT"
-    if [[ "$verdict" == READY && "${skipped:-0}" != 0 ]]; then
-        echo "READY - ${skipped} blocking findings WAIVED WITHOUT HUMAN REVIEW (the auditor said NOT READY)"
-    fi
-}
-
 record_nonblocking_failure() {
     local source="$1" detail="$2"
     mkdir -p "$STATE_DIR" 2>/dev/null || true
@@ -159,11 +142,6 @@ record_nonblocking_failure() {
         >> "$STATE_DIR/nonblocking-test-failures.tsv" 2>/dev/null || true
 }
 
-record_test_failure_disposition() {
-    local review_json="$STATE_DIR/documents/TEST_REVIEW.json"
-    python3 -B "$ROOT/scripts/lib/test_failure_disposition.py" \
-        "$GREEN_CLASS" "$review_json" "$STATE_DIR/documents/TEST_FAILURES.json"
-}
 LOG_DIR="$STATE_DIR/logs"
 STATE_FILE="$STATE_DIR/state"
 SESSION_FILE="$STATE_DIR/session-head"
@@ -436,25 +414,12 @@ CLAUDE_TOOLS="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
 # One bold prompt line. `read -p` suppresses its prompt when stdin is not a
 # terminal, so the text is printed separately. Escapes are emitted only for a
 # real terminal: piped captures and TERM=dumb stay free of control bytes.
-gate_prompt() {
-    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$1"; fi
-    if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
-        printf '%s%s%s' $'\033[1m' "$1" $'\033[0m'
-    else
-        printf '%s' "$1"
-    fi
-}
+. "$ROOT/scripts/lib/prompt-io.sh"
 
 # The gate used to require the words APPROVE/ACKNOWLEDGE. Automation that still
 # pipes them now declines; say so, so the break is visible in the output rather
 # than silent.
-legacy_word_notice() {
-    case "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')" in
-        APPROVE|ACKNOWLEDGE)
-            echo "This gate now requires 'y' to approve."
-            ;;
-    esac
-}
+. "$ROOT/scripts/lib/prompt-io-change.sh"
 
 # Pure .uncle/docs/FINAL_AUDIT.md verdict classifier, shared with scripts/tests/. Sourced
 # self-relative so the driver still runs from any CWD.

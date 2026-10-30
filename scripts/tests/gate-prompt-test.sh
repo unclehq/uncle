@@ -4,18 +4,13 @@ set -uo pipefail
 # Hermetic coverage of the Y/N human-approval gates:
 #
 #   G1  scripts/workflow.sh    approve_file        (real script, temp checkout)
-#   G2  scripts/change-workflow.sh human_gate      (extracted function harness)
-#   G3  scripts/stagegate.sh   review_and_approve  (extracted function harness)
+#   G2  scripts/change-workflow.sh human_gate      (sourceable modules and transitional driver harness)
+#   G3  scripts/stagegate.sh   review_and_approve  (sourceable modules and transitional driver harness)
 #   G4  prompt styling (non-TTY / TERM=dumb / PTY)
 #   G5  whitespace strictness
 #
-# change-workflow.sh and stagegate.sh are state machines that need agent CLIs,
-# a lock, and an origin binding before they reach a gate, and neither exposes a
-# source-only test hook. Rather than add one (that would widen the change
-# surface), G2 and G3 lift the gate function verbatim out of the script with
-# awk and run it against the same argument lists as the real call sites. The
-# extraction is asserted non-empty and `bash -n`-clean, so a silent extraction
-# failure fails the suite instead of passing vacuously.
+# Production libraries are sourced explicitly. Functions still owned by the
+# drivers use checked extraction until their corresponding library move.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$ROOT/scripts/lib/sha256.sh"   # hash_file, portable across platforms
@@ -157,10 +152,8 @@ PRELUDE
 )
 
 write_cw_harness() {
-    extract_fns "$ROOT/scripts/change-workflow.sh" "$CASE/driver-fns.sh" \
-        gate_prompt legacy_word_notice canonical_artifact_path \
-        approval_artifact_path require_file human_gate
-    workflow_fixture_write "$CASE/fns.sh" "$CASE/driver-fns.sh"
+    extract_fns "$ROOT/scripts/change-workflow.sh" "$CASE/driver-fns.sh" canonical_artifact_path approval_artifact_path require_file human_gate
+    workflow_fixture_write "$CASE/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-change.sh" "$CASE/driver-fns.sh"
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail
@@ -176,11 +169,8 @@ HARNESS
 }
 
 write_sg_harness() {
-    extract_fns "$ROOT/scripts/stagegate.sh" "$CASE/driver-fns.sh" \
-        gate_prompt legacy_word_notice upper lower canonical_artifact_path \
-        approval_artifact_path require_file \
-        review_and_approve
-    workflow_fixture_write "$CASE/fns.sh" "$CASE/driver-fns.sh"
+    extract_fns "$ROOT/scripts/stagegate.sh" "$CASE/driver-fns.sh" canonical_artifact_path approval_artifact_path require_file review_and_approve
+    workflow_fixture_write "$CASE/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-app.sh" "$CASE/driver-fns.sh"
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail

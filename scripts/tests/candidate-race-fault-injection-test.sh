@@ -35,7 +35,7 @@ import os, re
 from pathlib import Path
 root = Path(os.environ["ROOT"])
 source = (root / "scripts" / "stagegate.sh").read_text()
-names = ("upper", "stage_setting", "stage_setting_opt", "self_hosted_candidate_count",
+names = ("stage_setting", "stage_setting_opt", "self_hosted_candidate_count",
           "promote_winner_work", "race_self_hosted_candidates", "format_claude_stream")
 functions = "\n".join(m.group(0) for name in names
     for m in re.finditer(r"^" + name + r"\(\) \{.*?^}", source, re.M | re.S))
@@ -78,6 +78,7 @@ EOF
         cd "$PROJ"
         . "$ROOT/scripts/lib/stage-config.sh"
         . "$ROOT/scripts/lib/performance.sh"
+        . "$ROOT/scripts/lib/prompt-io.sh"
         . "$FUNCS"
         STATE_DIR="$PROJ/.uncle/workflow"
         LOG_DIR="$TMP/$scenario-logs"

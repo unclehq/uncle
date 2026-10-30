@@ -38,10 +38,8 @@ done
 
 sg="$WORK/sg"
 mkdir -p "$sg/.uncle/workflow/approvals"
-extract_fns "$ROOT/scripts/stagegate.sh" "$sg/driver-fns.sh" \
-    gate_prompt legacy_word_notice upper lower require_file \
-    record_unattended_gate canonical_artifact_path approval_artifact_path review_and_approve
-workflow_fixture_write "$sg/fns.sh" "$sg/driver-fns.sh"
+extract_fns "$ROOT/scripts/stagegate.sh" "$sg/driver-fns.sh" require_file canonical_artifact_path approval_artifact_path review_and_approve
+workflow_fixture_write "$sg/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-app.sh" "$ROOT/scripts/lib/workflow-records.sh" "$sg/driver-fns.sh"
 cat > "$sg/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -96,13 +94,10 @@ else ok; fi
 
 wv="$WORK/wv"
 mkdir -p "$wv/.uncle/workflow"
-extract_fns "$ROOT/scripts/stagegate.sh" "$wv/driver-fns.sh" \
-    gate_prompt record_unattended_gate
 # The waiver writers moved to a shared lib so both drivers use one copy.
 # Keep the two modules explicit while the driver functions await extraction.
-extract_fns "$ROOT/scripts/lib/waivers.sh" "$wv/fns-waivers.sh" \
-    write_waivers record_waiver
-workflow_fixture_write "$wv/fns.sh" "$wv/driver-fns.sh" "$wv/fns-waivers.sh"
+extract_fns "$ROOT/scripts/lib/waivers.sh" "$wv/fns-waivers.sh" write_waivers record_waiver
+workflow_fixture_write "$wv/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/workflow-records.sh" "$wv/fns-waivers.sh"
 cat > "$wv/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -140,9 +135,8 @@ else ok; fi
 
 cw="$WORK/cw"
 mkdir -p "$cw/.uncle/workflow/approvals"
-extract_fns "$ROOT/scripts/change-workflow.sh" "$cw/driver-fns.sh" \
-    gate_prompt legacy_word_notice require_file record_unattended_gate canonical_artifact_path approval_artifact_path human_gate
-workflow_fixture_write "$cw/fns.sh" "$cw/driver-fns.sh"
+extract_fns "$ROOT/scripts/change-workflow.sh" "$cw/driver-fns.sh" require_file canonical_artifact_path approval_artifact_path human_gate
+workflow_fixture_write "$cw/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-change.sh" "$ROOT/scripts/lib/workflow-records.sh" "$cw/driver-fns.sh"
 cat > "$cw/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -179,11 +173,9 @@ done
 
 ic="$WORK/ic"
 mkdir -p "$ic/.uncle/workflow/approvals"
-extract_fns "$ROOT/scripts/change-workflow.sh" "$ic/driver-fns.sh" \
-    gate_prompt record_unattended_gate implementation_incomplete_choice
-extract_fns "$ROOT/scripts/lib/waivers.sh" "$ic/fns-waivers.sh" \
-    write_waivers record_waiver
-workflow_fixture_write "$ic/fns.sh" "$ic/driver-fns.sh" "$ic/fns-waivers.sh"
+extract_fns "$ROOT/scripts/change-workflow.sh" "$ic/driver-fns.sh" implementation_incomplete_choice
+extract_fns "$ROOT/scripts/lib/waivers.sh" "$ic/fns-waivers.sh" write_waivers record_waiver
+workflow_fixture_write "$ic/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ic/driver-fns.sh" "$ic/fns-waivers.sh"
 cat > "$ic/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -283,8 +275,8 @@ for driver in stagegate change-workflow; do
         chmod +x "$d/bin/$tool"
     done
     if [[ "$driver" == stagegate ]]; then col=1; else col=2; fi
-    extract_fns "$ROOT/scripts/$driver.sh" "$d/driver-fns.sh" record_unattended_gate completed_verdict finished_build_line
-    workflow_fixture_write "$d/fns.sh" "$d/driver-fns.sh"
+    extract_fns "$ROOT/scripts/$driver.sh" "$d/driver-fns.sh" completed_verdict
+    workflow_fixture_write "$d/fns.sh" "$ROOT/scripts/lib/workflow-records.sh" "$d/driver-fns.sh"
     arm="$d/arm.sh"
     awk '/^        COMPLETE\)$/ {p = 1; next} p && /^        \*\)$/ {exit} p {print}' "$ROOT/scripts/$driver.sh" > "$arm"
     cat > "$d/run.sh" <<HARNESS

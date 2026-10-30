@@ -354,12 +354,7 @@ record_provided() {
 # An unattended run is still accountable for what it skipped. Each gate it
 # passed without a person is appended here, dated, so the summary can say what
 # nobody looked at rather than reporting a clean run.
-record_unattended_gate() {
-    local what="$1" detail="$2"
-    mkdir -p "$STATE_DIR" 2>/dev/null || true
-    printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$what" "$detail" \
-        >> "$UNATTENDED_FILE" 2>/dev/null || true
-}
+. "$ROOT/scripts/lib/workflow-records.sh"
 
 # An unattended run says so up front and ledgers what enabled it, so a mode
 # inherited from a wrapper is visible in the run's own record.
@@ -377,18 +372,6 @@ completed_verdict() {
     local verdict
     verdict="$(awk -F'\t' 'NR == 1 {print $1}' "$VERDICT_FILE" 2>/dev/null)"
     printf '%s' "$verdict"
-}
-
-# One stable line for wrappers and the TUI; format is asserted by tests.
-finished_build_line() {
-    local verdict="$1" skipped=0
-    if [[ -s "$UNATTENDED_FILE" ]]; then
-        skipped="$(grep -c $'\taudit-finding-skipped\t' "$UNATTENDED_FILE" || true)"
-    fi
-    printf 'Finished build: verdict=%s skipped=%s path=%s\n' "$verdict" "${skipped:-0}" "$PROJECT_ROOT"
-    if [[ "$verdict" == READY && "${skipped:-0}" != 0 ]]; then
-        echo "READY - ${skipped} blocking findings WAIVED WITHOUT HUMAN REVIEW (the auditor said NOT READY)"
-    fi
 }
 
 
@@ -435,12 +418,6 @@ has_nonblocking_failure() {
     local source="$1" ledger="$STATE_DIR/nonblocking-test-failures.tsv"
     [[ -s "$ledger" ]] || return 1
     awk -F'\t' -v source="$source" '$2 == source { found=1 } END { exit !found }' "$ledger"
-}
-
-record_test_failure_disposition() {
-    local review_json="$STATE_DIR/documents/TEST_REVIEW.json"
-    python3 -B "$ROOT/scripts/lib/test_failure_disposition.py" \
-        "$GREEN_CLASS" "$review_json" "$STATE_DIR/documents/TEST_FAILURES.json"
 }
 
 # A report-level test-review finding is evidence for the final audit, not
@@ -1050,37 +1027,12 @@ check_verification_inputs() {
 }
 
 # bash 3.2 (macOS system bash) has no ${var^^}.
-upper() {
-    printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
-}
-
-# ...nor ${var,,}.
-lower() {
-    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
-}
-
-# One bold prompt line. `read -p` suppresses its prompt when stdin is not a
-# terminal, so the text is printed separately. Escapes are emitted only for a
-# real terminal: piped captures and TERM=dumb stay free of control bytes.
-gate_prompt() {
-    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$1"; fi
-    if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
-        printf '%s%s%s' $'\033[1m' "$1" $'\033[0m'
-    else
-        printf '%s' "$1"
-    fi
-}
+. "$ROOT/scripts/lib/prompt-io.sh"
 
 # The gate used to require the words APPROVE/ACKNOWLEDGE. Automation that still
 # pipes them now declines; say so, so the break is visible in the output rather
 # than silent.
-legacy_word_notice() {
-    case "$(upper "$1")" in
-        APPROVE|ACKNOWLEDGE)
-            echo "This gate now requires 'y' to approve."
-            ;;
-    esac
-}
+. "$ROOT/scripts/lib/prompt-io-app.sh"
 
 # bash 3.2 has no associative arrays, so per-stage settings are a case table
 # with an environment override resolved through the variable name.

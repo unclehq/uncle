@@ -52,7 +52,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (bindir / "tr").symlink_to(shutil.which("tr"))
     for driver in ("stagegate.sh", "change-workflow.sh"):
         source = (root / "scripts" / driver).read_text()
-        names = ("upper", "stage_var", "stage_setting", "stage_setting_opt",
+        names = ("stage_var", "stage_setting", "stage_setting_opt",
                  "stage_runner_config_name", "stage_agent_cmd", "stage_command_overridden", "stage_model", "stage_model_for",
                  "stage_effort", "stage_effort_for", "stage_tools", "stage_turns", "run_claude")
         functions = "\n".join(match.group(0) for name in names
@@ -68,7 +68,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 # operator-configured default runner; isolate from that so
                 # "nothing installed" still resolves to nothing, not a
                 # hardcoded assumption that fails later with a raw shell error.
-                '. "$ROOT/scripts/lib/stage-config.sh"; UNCLE_DEFAULT_RUNNER=; ' + functions +
+                '. "$ROOT/scripts/lib/prompt-io.sh"; . "$ROOT/scripts/lib/stage-config.sh"; UNCLE_DEFAULT_RUNNER=; ' + functions +
                 '\nresolve_prompt() { printf "%s" "$1"; }\n'
                 'require_file() { printf "%s|%s" "$cmd" "$model"; exit 0; }\n'
                 # Rename the real resolver, then remove Claude after command selection.

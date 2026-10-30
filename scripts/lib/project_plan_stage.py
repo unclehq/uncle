@@ -27,14 +27,16 @@ def required_paths(plan):
     """
     paths = ['.env', '.env.local', '.DS_Store']
     groups = [
-        (r'node|npm|pnpm|yarn|javascript|typescript|vite|react|svelte|next[. /-]|package\.json',
+        # Whole words only: ordinary prose ("the next step", "trust") must not
+        # demand another ecosystem's outputs.
+        (r'\b(?:node|npm|pnpm|yarn|javascript|typescript|vite|react|svelte|next\.?js|package\.json)\b',
          ['node_modules/probe', 'dist/probe', 'build/probe']),
-        (r'svelte', ['.svelte-kit/probe']),
-        (r'next[. /-]', ['.next/probe', 'out/probe']),
-        (r'python|pytest|pip\b|pyproject', ['.venv/probe', '__pycache__/probe.pyc', '.pytest_cache/probe', 'probe.pyc']),
-        (r'cargo|rust', ['target/probe']),
-        (r'composer|php', ['vendor/probe']),
-        (r'playwright', ['test-results/probe', 'playwright-report/probe', 'blob-report/probe', '.pw-browsers/probe']),
+        (r'\bsvelte(?:kit)?\b', ['.svelte-kit/probe']),
+        (r'\bnext\.?js\b|"next"\s*:', ['.next/probe', 'out/probe']),
+        (r'\b(?:python|pytest|pip|pyproject)\b', ['.venv/probe', '__pycache__/probe.pyc', '.pytest_cache/probe', 'probe.pyc']),
+        (r'\b(?:cargo|rust)\b', ['target/probe']),
+        (r'\b(?:composer|php)\b', ['vendor/probe']),
+        (r'\bplaywright\b', ['test-results/probe', 'playwright-report/probe', 'blob-report/probe', '.pw-browsers/probe']),
     ]
     for pattern, probes in groups:
         if re.search(pattern, plan, re.I):

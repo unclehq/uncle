@@ -67,11 +67,16 @@ def _shell_tools(root):
 class Policy:
     """What a stage may do.  `writable` limits writes to exact paths when given."""
 
-    def __init__(self, root, write=False, shell=False, writable=None, schema_for=None):
+    def __init__(self, root, write=False, shell=False, writable=None, schema_for=None, drafts=None):
         self.root = Path(root).resolve()
         self.write, self.shell = write, shell
         self.writable = {(self.root / p).resolve() for p in writable} if writable is not None else None
         self.schema_for = schema_for or (lambda relative: None)
+        # Private drafts survive validation errors so repairs need only exact
+        # text edits. Invalid drafts never replace the delivered file.
+        self.draft_checks = {(self.root / p).resolve(): check for p, check in (drafts or {}).items()}
+        self.drafts = {}
+        self.draft_errors = {}
         self.shell_children = []   # every shell command started, so its leftovers can be cleaned up
         self.shell_results = {}    # (command, tree fingerprint, live background processes) -> output
 
@@ -95,6 +100,13 @@ class Policy:
 
     def tools(self):
         return READ_TOOLS + (WRITE_TOOLS if self.write else []) + (_shell_tools(self.root) if self.shell else [])
+
+    def complete(self):
+        for path in self.draft_checks:
+            if path in self.draft_errors:
+                raise ValueError('Unrepaired draft: ' + self.draft_errors[path])
+            if path not in self.drafts:
+                raise ValueError('Required draft was not delivered: ' + path.relative_to(self.root).as_posix())
 
     def hidden(self, parts):
         if parts[:1] == ('.uncle',):
@@ -225,9 +237,10 @@ def run_tool(policy, name, arguments):
     try:
         if name == 'read_file':
             path = policy.resolve(arguments.get('path'))
-            if not path.is_file():
+            if path not in policy.drafts and not path.is_file():
                 return 'error: not a file'
-            lines = path.read_bytes()[:READ_LIMIT].decode('utf-8', errors='replace').splitlines()
+            raw = policy.drafts[path].encode('utf-8') if path in policy.drafts else path.read_bytes()
+            lines = raw[:READ_LIMIT].decode('utf-8', errors='replace').splitlines()
             start = max(int(arguments.get('offset') or 0), 0)
             count = int(arguments.get('limit') or 2000)
             return '\n'.join('%d\t%s' % (n, text) for n, text in enumerate(lines[start:start + count], start + 1))
@@ -257,18 +270,29 @@ def run_tool(policy, name, arguments):
         if name in ('write_file', 'edit_file'):
             path = policy.resolve(arguments.get('path'), writing=True)
             if name == 'write_file':
+                if path in policy.drafts:
+                    return 'error: draft already supplied; use edit_file with unique old_string and only the replacement text'
                 content = arguments['content']
                 if not isinstance(content, str):
                     return 'error: content must be a string'
             else:
                 old, new = arguments['old_string'], arguments['new_string']
-                text = path.read_text(encoding='utf-8')
+                text = policy.drafts[path] if path in policy.drafts else path.read_text(encoding='utf-8')
                 count = text.count(old)
                 if not old or count == 0:
                     return 'error: old_string was not found'
                 if count > 1 and not arguments.get('replace_all'):
                     return 'error: old_string matches %d places; add context or set replace_all' % count
                 content = text.replace(old, new) if arguments.get('replace_all') else text.replace(old, new, 1)
+            if path in policy.draft_checks:
+                policy.drafts[path] = content
+                try:
+                    policy.draft_checks[path](content)
+                except ValueError as error:
+                    policy.draft_errors[path] = str(error)
+                    return ('error: draft retained, not published: %s. Use edit_file on this path with a unique '
+                            'old_string and the minimal replacement; read_file reads the retained draft.' % error)
+                policy.draft_errors.pop(path, None)
             schema = policy.schema_for(path.relative_to(policy.root).as_posix())
             if schema is not None:
                 try:
@@ -604,11 +628,14 @@ def run_agent(values, prompt, policy, limit, turns=80, usage=None, final_schema=
     """
     try:
         if transport.in_scope():
-            return _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache,
-                              seconds, tools_required, side)
-        with transport.connection_scope():
-            return _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache,
-                              seconds, tools_required, side)
+            result = _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache,
+                                seconds, tools_required, side)
+        else:
+            with transport.connection_scope():
+                result = _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache,
+                                    seconds, tools_required, side)
+        policy.complete()
+        return result
     finally:
         policy.cleanup()
 
@@ -629,6 +656,11 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     deadline = time.monotonic() + seconds
     prompt += prefetch_context(prompt, policy, read_cache)
     messages = [{'role': 'system', 'content': SYSTEM.format(root=policy.root)}, {'role': 'user', 'content': prompt}]
+    if policy.draft_checks:
+        messages[0]['content'] += (' Compose each required document completely before its first write_file. '
+                                  'After that, use edit_file for corrections, including validation failures. '
+                                  'Never repeat the full document in another write or in your final response. '
+                                  'A rejected draft is retained for edits but is not published.')
     if final_schema is not None:
         messages[0]['content'] += (' Collect any missing inputs with tools before composing the artifact. '
                                   'Do not draft the artifact in commentary or alongside a tool call. '
@@ -778,6 +810,34 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         if stage is not None:
             stage.final_answer = given
         return given, requests
+    # A full plan already exists even when one field violates the schema.
+    # Keep it as a private draft instead of asking the grammar to copy it all.
+    # Plain status text still falls through to the initial constrained answer.
+    if final_name in ('plan', 'change_plan', 'change_planning_bundle'):
+        draft = re.sub(r'^```(?:json)?\s*\n?|\n?```$', '', text.strip()).strip()
+        if draft.startswith('{'):
+            def validate(candidate):
+                conforms(json.loads(candidate), final_schema)
+
+            try:
+                validate(draft)
+            except ValueError as error:
+                relative = '.uncle/workflow/http-answer-repair.json'
+                repair = Policy(policy.root, write=True, writable=[relative], drafts={relative: validate})
+                path = repair.root / relative
+                repair.drafts[path], repair.draft_errors[path] = draft, str(error)
+                repair_prompt = (prompt + '\n\nTargeted schema repair (overrides final-output instructions): '
+                                 'The existing JSON draft is at ' + relative + '. Validation failed: ' + str(error) +
+                                 '. Read the affected lines with read_file and use edit_file to fix only that defect. '
+                                 'Do not regenerate the document. Finish with a brief status; the adapter delivers the repaired JSON.')
+                _, count = run_agent(values, repair_prompt, repair, limit, turns=max(1, turns - requests), usage=usage,
+                                     stage=stage, seconds=max(1, int(deadline - time.monotonic())), side=side)
+                given = path.read_text(encoding='utf-8')
+                validate(given)
+                usage['constraint_mode'] = 'targeted schema repair (locally validated)'
+                if stage is not None:
+                    stage.final_answer = given
+                return given, requests + count
     # Compact, single-line JSON: a grammar permits whitespace anywhere, and a model that
     # starts pretty-printing (newline, indent, newline...) can keep going until the token
     # limit without ever writing a character of JSON.

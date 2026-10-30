@@ -774,11 +774,19 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
     policy = Policy(root, write=side == 'agent' or bool(delivery), shell=side == 'agent' and allow_shell,
                     writable=([delivery] if delivery else []) if side == 'reviewer' else None,
                     schema_for=document_schema_for(delivery, prompt))
-    if schema_kind in ('project-plan-section-worker-packet', 'project-plan-section-model-packet', 'project-plan-outline-packet'):
-        # Section packets are final answers. Whole-stage writes have one owner;
+    if stage_name == 'project-plan-investigate' and side == 'agent':
+        policy.draft_checks[policy.root / '.uncle/workflow/project-plan-investigation.md'] = (
+            lambda text: validate_plan(text, protected=False))
+    if schema_kind in ('project-plan-section-worker-packet', 'project-plan-section-model-packet', 'project-plan-outline-packet',
+                       'plan', 'change-plan', 'change-planning-bundle'):
+        # Plans and packets are final answers. Whole-stage writes have one owner;
         # offering Write/Bash here invites drafting the packet through tools and
         # then generating it again as the final answer. Reads remain available.
         policy = Policy(root)
+        request += ('\n\nHTTP delivery contract (overrides file-delivery instructions above): '
+                    'Return the packet exactly once as your final JSON answer. The adapter validates and writes '
+                    'that answer to the driver delivery path. Do not call write_file, edit_file or bash, '
+                    'and do not draft the packet in a tool call or commentary.')
     return (request, policy, schema, (schema_kind or 'artifact').replace('-', '_'), output_token_limit(stage_name),
             int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))
 
@@ -786,11 +794,11 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
 def run_http_stage(stage, directory, values, root, allow_shell=True):
     """Drive a native Stage (live steering) over direct HTTP; the stage's prompt is complete."""
     from http_agent import run_agent
-    _, policy, schema, name, limit, seconds = _http_setup(stage.side, values, stage.prompt, root, allow_shell,
+    request, policy, schema, name, limit, seconds = _http_setup(stage.side, values, stage.prompt, root, allow_shell,
                                                           reviewer_artifact_kind(stage.prompt))
     stage.model = values['model']
     stage.ready(directory)
-    run_agent(values, stage.prompt, policy, limit, turns=int(values.get('max_turns') or 80), usage={}, final_schema=schema,
+    run_agent(values, request, policy, limit, turns=int(values.get('max_turns') or 80), usage={}, final_schema=schema,
               final_name=name, stage=stage, seconds=seconds)
 
 
@@ -1300,6 +1308,39 @@ def publish_file_delivery(root, raw, expected_kind):
 
 
 
+def repair_http_plan(values, prompt, root, raw, error, artifact, kind, usage,
+                     protected=False, require_dispositions=False):
+    """Keep the rejected JSON and ask only for anchored corrections, once.
+
+    This is still the existing bounded retry. Both the repair tool and the
+    caller run the normal validators; no repaired draft is trusted implicitly.
+    """
+    from http_agent import Policy, run_agent
+    from self_hosted_http import conforms
+    relative = '.uncle/workflow/plan-repair.json'
+    schema = artifact_schema(kind, protected, require_dispositions)
+
+    def validate(text):
+        conforms(json.loads(text), schema)
+        document = document_response(text, artifact, kind, require_dispositions)
+        if kind == 'plan':
+            validate_plan(document, protected=protected)
+
+    policy = Policy(root, write=True, writable=[relative], drafts={relative: validate})
+    path = policy.root / relative
+    policy.drafts[path] = raw
+    policy.draft_errors[path] = str(error)
+    request = (prompt + '\n\nTargeted validation repair (overrides delivery instructions above):\n'
+               'The existing JSON draft is retained at ' + relative + '. Validation failed: ' + str(error) +
+               '\nUse read_file to inspect only the needed lines, then edit_file with a unique old_string and '
+               'the minimal replacement. Keep all unaffected content. Do not write or return the full JSON '
+               'again. The tools validate every edit. Finish with a brief status only after the error is fixed.')
+    _, turns = run_agent(values, request, policy, output_token_limit(os.environ.get('UNCLE_STATUS_STAGE', '')),
+                         turns=int(values.get('max_turns') or 80), usage=usage,
+                         seconds=int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))
+    return path.read_text(encoding='utf-8'), turns
+
+
 def run_opencode(side, values, prompt, root, stage=None, usage=None):
     # The normal OpenCode CLI has no observer attached while it runs.  Supply
     # validated reads from earlier stages up front, then ingest its canonical
@@ -1465,11 +1506,16 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
             request = (prompt + '\nCreate one JSON object matching this contract; do not return Markdown:\n'
                        '`{"schema":"uncle.artifact/v1",' + kind_fields + '}`.\n' + tail + delivery_notice)
             turns = 0
+            repair = None
             for attempt in range(2):
                 attempt_usage = {}
                 canonical_response = None
                 try:
-                    if use_http:
+                    if use_http and repair is not None:
+                        response, count = repair_http_plan(values, request, staged, *repair, artifact, expected_kind,
+                                                           attempt_usage, protected=Path(artifact).name == 'UPDATED_PROJECT_PLAN.md',
+                                                           require_dispositions=require_dispositions)
+                    elif use_http:
                         response, count = run_http_agent(side, values, request, staged, allow_shell=False, usage=attempt_usage,
                                                          schema_kind=expected_kind, read_cache=read_cache,
                                                          protected=Path(artifact).name == 'UPDATED_PROJECT_PLAN.md',
@@ -1532,9 +1578,11 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                     if candidate.exists():
                         candidate.unlink()
                     print('Plan response format rejected; retrying once. Response saved to ' + rejected, file=sys.stderr)
-                    request += ('\nThe previous response was rejected: ' + str(error) +
-                                ('\nReturn the complete JSON object again, exactly matching the contract above.' if use_http else
-                                 '\nUse Write to replace the required isolated delivery file with the complete JSON object again, exactly matching the contract above. Do not write Markdown or any other file.'))
+                    if use_http:
+                        repair = (canonical_response or response, str(error))
+                    else:
+                        request += ('\nThe previous response was rejected: ' + str(error) +
+                                    '\nUse Write to replace the required isolated delivery file with the complete JSON object again, exactly matching the contract above. Do not write Markdown or any other file.')
                     continue
                 break
         if not candidate.is_file() or candidate.is_symlink():

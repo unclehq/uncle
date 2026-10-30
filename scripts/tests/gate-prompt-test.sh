@@ -106,34 +106,7 @@ expect_no_ansi() {
 # ---------------------------------------------------------------------------
 
 # extract_fns <script> <outfile> <fn>...
-extract_fns() {
-    local script="$1" out="$2"
-    shift 2
-    : > "$out"
-    local fn
-    for fn in "$@"; do
-        awk -v fn="$fn" '
-            $0 == fn "() {" { p = 1 }
-            p { print }
-            p && /^\}$/ { exit }
-        ' "$script" >> "$out"
-        printf '\n' >> "$out"
-    done
-    if ! grep -q "^${1}() {" "$out"; then
-        echo "FATAL: extraction from $script produced no function bodies"
-        exit 2
-    fi
-    for fn in "$@"; do
-        if ! grep -q "^${fn}() {" "$out"; then
-            echo "FATAL: could not extract $fn from $script"
-            exit 2
-        fi
-    done
-    if ! bash -n "$out"; then
-        echo "FATAL: extracted functions from $script are not valid bash"
-        exit 2
-    fi
-}
+. "$ROOT/scripts/tests/workflow_fixture.sh"
 
 # new_case <name> — scratch working tree with the gated documents present.
 new_case() {
@@ -184,9 +157,10 @@ PRELUDE
 )
 
 write_cw_harness() {
-    extract_fns "$ROOT/scripts/change-workflow.sh" "$CASE/fns.sh" \
+    extract_fns "$ROOT/scripts/change-workflow.sh" "$CASE/driver-fns.sh" \
         gate_prompt legacy_word_notice canonical_artifact_path \
         approval_artifact_path require_file human_gate
+    workflow_fixture_write "$CASE/fns.sh" "$CASE/driver-fns.sh"
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail
@@ -202,10 +176,11 @@ HARNESS
 }
 
 write_sg_harness() {
-    extract_fns "$ROOT/scripts/stagegate.sh" "$CASE/fns.sh" \
+    extract_fns "$ROOT/scripts/stagegate.sh" "$CASE/driver-fns.sh" \
         gate_prompt legacy_word_notice upper lower canonical_artifact_path \
         approval_artifact_path require_file \
         review_and_approve
+    workflow_fixture_write "$CASE/fns.sh" "$CASE/driver-fns.sh"
     cat > "$REPO/gate.sh" <<HARNESS
 #!/usr/bin/env bash
 set -euo pipefail

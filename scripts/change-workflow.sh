@@ -2046,10 +2046,27 @@ run_stepwise_implementation() {
     local total
     total="$(grep -c . "$steps_file" || true)"
 
+    # Derived once here so every implementation path -- single-stage, serial
+    # per-step, and (via run_supervised_parallel_implementation's own copy)
+    # parallel -- sees the same cross-file contract. Previously this was only
+    # computed inside the parallel function, which returns before reaching it
+    # on every serial trigger: no ownership partitions in the plan, a resume,
+    # or an ownership-mismatch fallback. Serial steps then had no visibility
+    # into other steps' interfaces at all, which is a plausible contributor to
+    # the undeclared-write ownership conflicts that trigger that very fallback.
+    local module_interfaces_section=""
+    if derive_module_interfaces .uncle/docs/CHANGE_PLAN.md; then
+        module_interfaces_section="$(python3 -B "$ROOT/scripts/lib/module_interfaces.py" --render-section \
+            "$STATE_DIR/documents/MODULE_INTERFACES.json" 2>/dev/null || true)"
+    fi
+
     if [[ "${total:-0}" -lt 2 ]]; then
         echo ".uncle/docs/CHANGE_PLAN.md has no usable implementation sequence;" \
              "running implementation as a single stage."
         compose_implementation_prompt "$base" "$STATE_DIR/implement-change.resolved.md"
+        if [[ -n "$module_interfaces_section" ]]; then
+            printf '%s\n' "$module_interfaces_section" >> "$STATE_DIR/implement-change.resolved.md"
+        fi
         run_claude "$STATE_DIR/implement-change.resolved.md" implementation \
             "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
         if [[ ! -s "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" || ! -s "$STATE_DIR/documents/CHANGE_TEST_REPORT.json" ]]; then
@@ -2108,6 +2125,9 @@ run_stepwise_implementation() {
         local notes_frag="$STATE_DIR/implement-step-$i-notes.json"
 
         {
+            if [[ -n "$module_interfaces_section" ]]; then
+                printf '%s\n' "$module_interfaces_section"
+            fi
             echo
             echo "## This invocation: step $i of $total"
             echo
@@ -3792,8 +3812,19 @@ implementation_complete() {
     local completion="$STATE_DIR/implementation-completion.txt" line id waiver
     local spec="$STATE_DIR/documents/CHANGE_SPEC.json"
     local notes="$STATE_DIR/documents/IMPLEMENTATION_NOTES.json"
+    # WAIT_IMPLEMENT_APPROVAL is the first of this check's call sites, right
+    # after implementation and before the driver's own full-suite
+    # verification has ever run. A step told (prompts/change/implement.md) to
+    # record DRIVER PENDING and defer a check it does not own cannot pass the
+    # strict check this early -- the driver has not produced the result yet
+    # to defer to. Rejecting that outright sent the whole implementation
+    # phase back to redo every step from scratch, every cycle (issue 119).
+    # Every later call site (CHECKLIST, FINAL_AUDIT, ...) runs after driver
+    # verification and still requires the real row.
+    local -a pending_flag=()
+    [[ "${1:-}" != WAIT_IMPLEMENT_APPROVAL ]] || pending_flag=(--allow-driver-pending)
     if python3 "$ROOT/scripts/lib/implementation-completion.py" \
-        "$spec" "$notes" > "$completion"; then
+        "$spec" "$notes" "${pending_flag[@]+"${pending_flag[@]}"}" > "$completion"; then
         return 0
     fi
     # A driver-synthesized fallback (implementation_report_fallback.py) can
@@ -3829,19 +3860,22 @@ sys.exit(0 if all(isinstance(f, dict) and f.get("driver_fallback") is True for f
     # Two isolated parallel steps, each unable to see the other's output, can
     # independently conclude they are the one satisfying the same acceptance
     # criterion -- a plan-ownership gap, not a defect in either step's own
-    # work. Retrying the single step supervision picks (whichever one the
-    # validator happened to name) can never resolve a conflict that exists
-    # *between* two steps' claims: on issue 116, AC-3 was claimed by both
-    # step 2 (pointing at runner-default-deny-test.sh) and step 5 (its own,
-    # separately real work on cline-removal-gate-test.sh), and five retries
-    # of step 5 alone left the same duplicate every time. Stop for a person
-    # to reconcile the claim instead of burning the retry budget on a
+    # work. implementation-completion.py now merges two fragments that agree
+    # on status, so this no longer fires for issue 116's original case; it
+    # remains for what cannot be merged automatically -- a true same-fragment
+    # duplicate (a single step's own mistake) or two fragments that actively
+    # disagree on whether a criterion is done. Retrying the single step
+    # supervision picks can never resolve either: the first is one step's own
+    # error a revisit might fix, but the second is a conflict *between* two
+    # steps' claims that a third step's retry cannot adjudicate. Stop for a
+    # person to reconcile it instead of burning the retry budget on a
     # failure class no single-step retry can fix.
-    if [[ "$UNATTENDED" == 1 ]] && grep -q '^Duplicate delivery criterion ' "$completion" 2>/dev/null; then
+    if [[ "$UNATTENDED" == 1 ]] \
+        && grep -qE '^(Duplicate delivery criterion |Conflicting delivery status for )' "$completion" 2>/dev/null; then
         echo
         echo "$completion reports a delivery criterion claimed by more than one implementation" \
-             "step. That is a conflict between two steps' own output, not a defect retrying" \
-             "either one alone can fix."
+             "step, in a way that cannot be merged automatically. That is a conflict between" \
+             "two steps' own output, not a defect retrying either one alone can fix."
         cat "$completion"
         echo "Stopping the unattended run here instead of retrying; reconcile which step's claim" \
              "is authoritative (or merge both as evidence for one row) in $notes, then rerun."
@@ -3885,7 +3919,7 @@ while true; do
     # Older drivers could advance despite an explicitly partial delivery.
     case "$state" in
         WAIT_IMPLEMENT_APPROVAL|CHECKLIST|EXECUTE_CHECKLIST|VALIDATE_CHECKLIST|FINAL_AUDIT|VALIDATE_AUDIT)
-            if ! implementation_complete; then
+            if ! implementation_complete "$state"; then
                 echo "Incomplete acceptance delivery; returning to IMPLEMENT."
                 cat "$STATE_DIR/implementation-completion.txt"
                 rm -f "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.sha256"

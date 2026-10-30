@@ -4413,6 +4413,31 @@ run_stage() {
                 repair_notes_investigation=".uncle/workflow/repair-notes-investigation.md"
                 rm -f "$repair_notes_investigation"
                 run_claude "$REPAIR_PROMPT" repair-investigate
+                # Some models answer with the completed notes as their final
+                # message instead of writing the file (the same gap
+                # requirements-investigate already covers for OpenCode
+                # models); recover it deterministically before treating the
+                # pass as having produced nothing.
+                if [[ ! -s "$repair_notes_investigation" ]]; then
+                    python3 "$ROOT/scripts/lib/recover_investigation.py" \
+                        "$LOG_DIR/repair-investigate.jsonl" "$repair_notes_investigation" \
+                        --heading '## Changed files' \
+                        && echo 'Repair-notes investigation recovered from final runner output.'
+                fi
+                # require_file below exits the whole driver immediately on a
+                # real miss here, and its own EXIT-trap triage write is
+                # best-effort (failures are swallowed to stderr, which an
+                # unattended run with no captured driver log never sees). A
+                # repair-investigate pass that returns without the notes --
+                # for any reason, recoverable or not -- otherwise strands the
+                # run with no durable trace of why: no stop-reason, and a
+                # TRIAGE.md that depends on a trap actually completing before
+                # whatever ends the process (signal, crash, host kill) does.
+                # Record the reason here, synchronously, before that happens.
+                if [[ ! -s "$repair_notes_investigation" ]]; then
+                    printf '%s\n' "repair-investigate: $repair_notes_investigation was not produced by the agent call or its recovery fallback; see $LOG_DIR/repair-investigate.jsonl for the transcript." \
+                        > "$STATE_DIR/stop-reason"
+                fi
                 require_file "$repair_notes_investigation"
                 python3 "$ROOT/scripts/lib/implementation_notes.py" append . \
                     "$repair_notes_investigation" \

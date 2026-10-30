@@ -206,6 +206,53 @@ printf 'stage\n' > .uncle/workflow/stop-reason
 bash "$hook_script" 1 || true
 check_contains "non-human stop-reason still bundles" "- stop reason: stage" .uncle/workflow/TRIAGE.md
 
+# --- AC-5: unattended runs don't get the attended Ctrl-C exemption --------
+#
+# Confirmed live (calculator run, 2026-10-30): an unattended REPAIR stage's
+# agent call exited 130 with no stop-reason ever written -- nobody was at a
+# terminal to have pressed Ctrl-C -- and the blanket 130/143/137 exemption
+# below discarded the only record of why. The exemption is correct for an
+# attended run (AC-4 above keeps covering that); an unattended run must
+# still get a triage bundle for the same codes, since there is no human
+# stop-reason to confirm the signal was deliberate.
+unattended_hook="$TMP/unattended-hook.sh"
+cat > "$unattended_hook" <<EOF
+#!/usr/bin/env bash
+. "$ROOT/scripts/lib/triage.sh"
+STATE_DIR=.uncle/workflow
+UNATTENDED=1
+on_exit() { local rc=\$?; triage_on_exit "\$rc"; }
+trap on_exit EXIT
+exit "\$1"
+EOF
+
+for rc in 130 143 137; do
+    P="$(fresh "unattended-exit$rc")"; cd "$P"
+    printf 'x\n' > .uncle/workflow/logs/baseline.jsonl
+    bash "$unattended_hook" "$rc" || true
+    COUNT=$((COUNT + 1))
+    [[ -e .uncle/workflow/TRIAGE.md ]] || fail "unattended exit $rc did not write TRIAGE.md"
+    check_contains "unattended exit $rc records the real exit status" "- exit status: $rc" .uncle/workflow/TRIAGE.md
+done
+
+# An unattended run a human DID explicitly stop (stop-reason=human) is still
+# exempt -- UNATTENDED alone must not override an explicit human stop-reason.
+P="$(fresh unattended-human)"; cd "$P"
+printf 'human\n' > .uncle/workflow/stop-reason
+bash "$unattended_hook" 130 || true
+COUNT=$((COUNT + 1))
+[[ ! -e .uncle/workflow/TRIAGE.md ]] || fail "unattended + stop-reason=human wrote TRIAGE.md"
+
+# An attended run (no UNATTENDED) keeps the old exemption exactly as before --
+# the fix only narrows the exemption for --unattended, it does not remove it.
+for rc in 130 143 137; do
+    P="$(fresh "attended-exit$rc")"; cd "$P"
+    printf 'x\n' > .uncle/workflow/logs/baseline.jsonl
+    bash "$hook_script" "$rc" || true
+    COUNT=$((COUNT + 1))
+    [[ ! -e .uncle/workflow/TRIAGE.md ]] || fail "attended exit $rc wrote TRIAGE.md (exemption regressed)"
+done
+
 # The write cannot change the exit status: an unwritable state dir is one
 # stderr line and the same status.
 P="$(fresh ro)"; cd "$P"

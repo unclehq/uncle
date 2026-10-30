@@ -100,6 +100,7 @@ class SelfHostedHttp(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         http_transport._capabilities.clear()
+        http_transport._request_features.clear()
         http_transport.close_connections()
         self.addCleanup(http_transport.close_connections)
         # What the driver learns about the server is stored in the project; keep it in this test's.
@@ -186,6 +187,7 @@ class SelfHostedHttp(unittest.TestCase):
                 self.plan(server, explore_first=False)
         ollama = self.serve(PLAN, version=('/api/version',))
         http_transport._capabilities.clear()
+        http_transport._request_features.clear()
         self.plan(ollama, explore_first=False)
         self.assertEqual(ollama.requests[-1][1]['options']['temperature'], 0.0)
 
@@ -713,7 +715,10 @@ class SelfHostedHttp(unittest.TestCase):
         usage = {}
         self.plan(server, usage=usage, explore_first=False)
         self.assertEqual(usage['constraint_mode'], 'json_object')
-        self.assertEqual([(c.get('response_format') or {}).get('type') for c in calls], ['json_schema', 'json_object'])
+        self.assertEqual([(c.get('response_format') or {}).get('type') for c in calls],
+                         ['json_schema', 'json_schema', 'json_object'])
+        # A generic 400 is retried without effort before downgrading the schema.
+        self.assertEqual([c.get('reasoning_effort') for c in calls], ['low', None, 'low'])
         # The refusal is remembered for the next stage.
         calls.clear()
         self.plan(server, explore_first=False)

@@ -28,6 +28,113 @@ from urllib.parse import urlsplit, urlunsplit
 
 REJECTED = (400, 404, 405, 415, 422, 501)
 _capabilities = {}
+_request_features = {}          # optional fields learned per Base URL, like schema modes
+
+
+def option(name, default):
+    """Self-hosted-only option: WORKFLOW_SELF_HOSTED_* overrides .uncle/config."""
+    return os.environ.get('WORKFLOW_SELF_HOSTED_' + name.upper().replace('-', '_'),
+                          _config_values().get('self-hosted.' + name, default)).strip().lower()
+
+
+def reasoning_effort(values=None, effort=None):
+    """Resolve Uncle effort to portable OpenAI low/medium/high; off omits the field."""
+    enabled = option('reasoning-effort', 'on')
+    if enabled in ('off', '0', 'false'):
+        return None
+    if enabled not in ('on', '1', 'true'):
+        raise ValueError('self-hosted.reasoning-effort must be on or off')
+    config = _config_values()
+    from self_hosted import config_stage
+    stage = os.environ.get('UNCLE_STATUS_STAGE', '')
+    parent = config_stage(stage, config)
+    for name in dict.fromkeys([stage, parent]):
+        override = os.environ.get('WORKFLOW_EFFORT_' + re.sub(r'[^A-Z0-9]', '_', name.upper()))
+        if override:
+            effort = override
+            break
+    else:
+        effort = (effort or (values or {}).get('effort') or config.get(stage + '.effort') or
+                  config.get(parent + '.effort') or config.get('effort') or 'low')
+    mapping = {'none': 'low', 'minimal': 'low', 'low': 'low', 'medium': 'medium',
+               'high': 'high', 'xhigh': 'high', 'max': 'high'}
+    try:
+        return mapping[effort.strip().lower()]
+    except KeyError:
+        raise ValueError('Unsupported self-hosted effort: %s' % effort) from None
+
+
+def strip_reasoning(text):
+    """Remove only leading thinking, including servers that omit the opening tag."""
+    text = text or ''
+    while text.lstrip().startswith('<think>'):
+        end = text.find('</think>')
+        if end < 0:
+            return ''         # unfinished thinking is never an answer
+        text = text[end + len('</think>'):].lstrip()
+    # Some chat templates already supply <think> to the decoder. Do not strip
+    # a literal tag embedded in an answer (JSON, code or ordinary prose).
+    if re.search(r'(?m)(?:^[ \t]*|\S)</think>', text) and not text.lstrip().startswith(('{', '[', '```')):
+        text = text.split('</think>', 1)[1].lstrip()
+    return text
+
+
+def clean_message(message):
+    result = dict(message)
+    result['content'] = strip_reasoning(result.get('content'))
+    if result.get('tool_calls'):
+        result['tool_calls'] = [dict(call, function=dict(call['function'], arguments=strip_reasoning(
+            call['function'].get('arguments')))) for call in result['tool_calls']]
+    return result
+
+
+def compatible_post(values, body, timeout, url=None):
+    """Retry optional effort independently of schemas/tools, remembering proven support.
+
+    Reasoning fields stay local unless a server explicitly requires one on tool
+    continuations. Generic errors never opt a server into reasoning replay.
+    """
+    base = values['base_url'].rstrip('/')
+    url = url or base + '/chat/completions'
+    features = _request_features.setdefault(base, {})
+    original = body
+
+    def prepared():
+        request = dict(original)
+        if features.get('effort') is False:
+            request.pop('reasoning_effort', None)
+        request['messages'] = [{k: v for k, v in message.items()
+                                if k not in ('reasoning', 'reasoning_content') or features.get(k)}
+                               for message in original['messages']]
+        return request
+
+    while True:
+        request = prepared()
+        try:
+            return post(url, values['api_key'], request, timeout)
+        except HTTPError as error:
+            if error.code not in REJECTED:
+                raise
+            detail = error.read().decode('utf-8', errors='replace').lower()
+            required = next((field for field in ('reasoning_content', 'reasoning')
+                             if re.search(r'\b' + field + r'\b', detail) and
+                             re.search(r'missing|required|must (?:include|provide)', detail) and
+                             not features.get(field) and
+                             any(field in m for m in original['messages'])), None)
+            if required:
+                features[required] = True
+                continue
+            if ('reasoning_effort' not in detail and any(field in detail for field in
+                    ('response_format', 'json_schema', 'structured_outputs', 'guided_json', 'tools'))):
+                raise
+            if 'reasoning_effort' not in request:
+                raise
+            # A successful otherwise-identical retry proves that effort caused
+            # the rejection. If it also fails, keep the original capability.
+            request.pop('reasoning_effort')
+            result = post(url, values['api_key'], request, timeout)
+            features['effort'] = False
+            return result
 
 
 class OutputTruncated(ValueError):
@@ -532,10 +639,12 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
     if mode == 'ollama_format':
         body = {'model': values['model'], 'messages': _flatten(messages), 'stream': False, 'format': schema,
                 'options': {'num_predict': limit, 'temperature': temperature()}}
-        data = post(_origin(base_url) + '/api/chat', key, body, timeout)
+        if effort:
+            body['reasoning_effort'] = effort
+        data = compatible_post(values, body, timeout, url=_origin(base_url) + '/api/chat')
         usage = {'prompt_tokens': data.get('prompt_eval_count', 0), 'completion_tokens': data.get('eval_count', 0)}
         reason = 'length' if data.get('done_reason') == 'length' else 'stop'
-        return data['message']['content'], reason, usage
+        return strip_reasoning(data['message']['content']), reason, usage
     body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False,
             'temperature': temperature()}
     if effort:
@@ -548,32 +657,29 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
         body['guided_json'] = schema
     elif mode == 'json_object':
         body['response_format'] = {'type': 'json_object'}
-    data = post(base_url + '/chat/completions', key, body, timeout)
+    data = compatible_post(values, body, timeout)
     choice = data['choices'][0]
-    return choice['message'].get('content') or '', choice.get('finish_reason'), data.get('usage') or {}
+    return strip_reasoning(choice['message'].get('content')), choice.get('finish_reason'), data.get('usage') or {}
 
 
-def constrained_completion(values, messages, schema, name, limit, effort='none', timeout=3600, skip=()):
+def constrained_completion(values, messages, schema, name, limit, effort=None, timeout=3600, skip=()):
     """Ask for `schema`-shaped output; returns (text, reason, usage, mode)."""
     caps = capabilities(values['base_url'], values['api_key'])
+    effort = reasoning_effort(values, effort)
     last = None
-    # The effort option is not universal either: if every mode refuses the
-    # request with it, ask again without it before giving up.
-    for with_effort in ([effort, ''] if effort else ['']):
-        for mode in caps['modes']:
-            if mode in caps['rejected'] or mode in skip:
-                continue
-            try:
-                text, reason, usage = _final_call(values, messages, schema, name, mode, limit, with_effort, timeout)
-                return text, reason, usage, mode
-            except HTTPError as error:
-                if error.code not in REJECTED:
-                    raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None
-                caps['rejected'].add(mode)
-                last = error
-            except TimeoutError:
-                raise _no_answer(timeout, limit) from None
-        caps['rejected'].clear()
+    for mode in caps['modes']:
+        if mode in caps['rejected'] or mode in skip:
+            continue
+        try:
+            text, reason, usage = _final_call(values, messages, schema, name, mode, limit, effort, timeout)
+            return text, reason, usage, mode
+        except HTTPError as error:
+            if error.code not in REJECTED:
+                raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None
+            caps['rejected'].add(mode)
+            last = error
+        except TimeoutError:
+            raise _no_answer(timeout, limit) from None
     raise ValueError('Model API rejected every request form (HTTP %s); check the model name' % getattr(last, 'code', '?'))
 
 
@@ -649,24 +755,23 @@ def conforms(value, schema, path='$'):
             conforms(item, schema.get('items', {}), '%s[%d]' % (path, index))
 
 
-def chat(values, messages, tools, limit, effort='none', timeout=3600):
-    """One tool-capable turn at the configured temperature.
-
-    Returns the raw response, or None when the server refuses the request in
-    every form (typically: no tool calling).  Other failures raise.
-    """
-    for with_effort in ([effort, ''] if effort else ['']):
-        body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False,
-                'temperature': temperature()}
-        if tools:
-            body['tools'] = tools
-        if with_effort:
-            body['reasoning_effort'] = with_effort
-        try:
-            return post(values['base_url'].rstrip('/') + '/chat/completions', values['api_key'], body, timeout)
-        except HTTPError as error:
-            if error.code not in REJECTED:
-                raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None
-        except TimeoutError:
-            raise _no_answer(timeout, limit) from None
+def chat(values, messages, tools, limit, effort=None, timeout=3600):
+    """One tool-capable turn; None means the server rejected tool calling."""
+    body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False,
+            'temperature': temperature()}
+    if tools:
+        body['tools'] = tools
+    effort = reasoning_effort(values, effort)
+    if effort:
+        body['reasoning_effort'] = effort
+    try:
+        data = compatible_post(values, body, timeout)
+        for choice in data.get('choices', []):
+            choice['message'] = clean_message(choice['message'])
+        return data
+    except HTTPError as error:
+        if error.code not in REJECTED:
+            raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None
+    except TimeoutError:
+        raise _no_answer(timeout, limit) from None
     return None

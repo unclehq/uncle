@@ -10,7 +10,7 @@ fails=0
 export WORKFLOW_PLAN_BLOCKS=0     # this suite covers the Markdown-body packets; project-plan-blocks-driver-test.sh covers typed blocks
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
 
-awk '/^(project_plan_section_run|project_plan_section_finish|project_plan_section_settle|run_project_plan_sections)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
+awk '/^(project_plan_section_run|project_plan_section_finish|project_plan_section_settle|run_project_plan_sections_bounded|run_project_plan_sections)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
 check "function extracted" test -s "$TMP/fn.sh"
 
 # Section files a well-behaved worker would write, from the test's own fixture: with trace lines, and without.
@@ -171,6 +171,18 @@ JSON_MODE=local run_case jlocal ok
 w="$TMP/jlocal/.uncle/workflow"
 check "local json: plan assembled"                test "$(cat "$w/rc")" == 0
 check "local json: packet path, no schema flag"   bash -c '! grep -q "schema=/\|schema=.*schemas" "$1" && grep -q "out=none" "$1"' _ "$w/json-calls"
+
+# Bounded scheduling must render exactly the same canonical artifact, including
+# the one-slot setting and retry/failure paths.
+for jobs in 1 2; do
+    WORKFLOW_SELF_HOSTED_STAGE_JOBS="$jobs" JSON_MODE=local run_case "bounded-$jobs" ok
+    check "bounded $jobs: same assembled artifact" cmp "$TMP/jlocal/plan.md" "$TMP/bounded-$jobs/plan.md"
+done
+WORKFLOW_SELF_HOSTED_STAGE_JOBS=2 JSON_MODE=local run_case localretry silentpacket
+check "bounded retry: plan assembled" test "$(cat "$TMP/localretry/.uncle/workflow/rc")" == 0
+WORKFLOW_SELF_HOSTED_STAGE_JOBS=2 JSON_MODE=local run_case localbad badpacket
+check "bounded invalid packet: no publication" test ! -e "$TMP/localbad/plan.md"
+check "bounded invalid packet: failed" test "$(cat "$TMP/localbad/.uncle/workflow/rc")" != 0
 
 JSON_MODE=hosted run_case jsilent silentpacket
 w="$TMP/jsilent/.uncle/workflow"

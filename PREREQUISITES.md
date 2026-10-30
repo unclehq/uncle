@@ -71,6 +71,26 @@ Recommended starting settings are `low` for mechanical extraction, section forma
 
 **Schema enforcement.** When a stage owes a known JSON artifact, its final answer is a request that carries the artifact's JSON schema. Uncle asks the server to enforce it in the strongest form it accepts, and falls back cleanly when a server rejects one: Ollama's native `format`, then OpenAI-style `response_format` (JSON schema), vLLM's `structured_outputs` and `guided_json`, then plain JSON-object mode, then prompt-only. Every answer is also checked against the schema locally, and a workflow document the model writes itself is refused at the write if it does not match. Stages whose answer is prose, such as chat, have no schema and are not constrained.
 
+**Planning concurrency.** Self-hosted project-plan sections and updated-plan edit
+writers run with at most four workers per pool. Set `self-hosted.stage-jobs 1`
+in `.uncle/config`, or `WORKFLOW_SELF_HOSTED_STAGE_JOBS=1`, for a server that
+serves one request at a time. Values 1–8 are accepted; the environment overrides
+the config and invalid values warn and use 4. This changes only self-hosted
+planning; Claude, Codex, Kimi and Cline retain their existing scheduling.
+Project-plan sections wait for their outline when needed, retain one retry,
+and assemble in canonical order. Updated-plan reviews with at least five
+findings use two findings per writer; conflicting edits still go through the
+resolver and all publication checks remain in place. Failed batches fall back
+to the compact writer after workers finish. One worker keeps the
+single compact updated-plan call. The existing
+`WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD` (5) and
+`WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE` (2) adjust that split;
+`WORKFLOW_UPDATED_PLAN_COMPACT=0` selects the existing full panel path.
+The worker limit includes section retries and edit-writer/resolver retries;
+it is per pool, not a server-wide cap. Preview work, other existing panels,
+and optional candidate racing can add concurrent requests. No new API fields
+or server-specific features are required.
+
 **Connections.** Uncle keeps one persistent connection per server and reuses it for every request in a stage, reconnecting once if the server closed it while idle. HTTP/2 is used when it can be negotiated: over `https` (via ALPN) when the optional `httpx` and `h2` Python packages are installed. Plain `http` servers speak HTTP/1.1 keep-alive. Most local servers do not accept HTTP/2 without TLS; if yours does (for example Hypercorn), set `WORKFLOW_SELF_HOSTED_HTTP2=h2c`. `WORKFLOW_SELF_HOSTED_HTTP2=off` forces HTTP/1.1.
 
 OpenCode is no longer needed. To return to the OpenCode CLI for a run, set `WORKFLOW_SELF_HOSTED_TRANSPORT=opencode`. Existing self-hosted credentials and model selections migrate automatically; the old `openai/` catalog prefix is removed during migration.

@@ -8,7 +8,7 @@ trap 'rm -rf "$TMP"' EXIT
 fails=0
 export WORKFLOW_PLAN_BLOCKS=1
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
-awk '/^(project_plan_section_run|project_plan_section_finish|project_plan_section_settle|run_project_plan_sections)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
+awk '/^(project_plan_section_run|project_plan_section_finish|project_plan_section_settle|run_project_plan_sections_bounded|run_project_plan_sections)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
 check "function extracted" test -s "$TMP/fn.sh"
 
 export ROOT_DIR="$ROOT"

@@ -2794,7 +2794,7 @@ run_updated_plan_panel() {
 
 # Resolve the findings in parallel, one writer per run of findings, and merge their patches without a
 # model (see updated_plan_edits.py).  Any problem returns nonzero before anything is published, and the
-# caller runs the single synthesis call.  Hosted runners only: a local model keeps one call.
+# caller runs the single synthesis call. Self-hosted work uses a bounded pool.
 # Edits that overlap go to one short resolver call (WORKFLOW_UPDATED_PLAN_EDITS=0 turns the whole thing off).
 # Start one updated-plan edit writer in the background (see run_updated_plan_edit_writers); `owner` is passed
 # for the writer that also owns the protected verification paths.
@@ -2842,6 +2842,9 @@ UPDATED_PLAN_ADVISOR_PIDS=()
 run_updated_plan_edit_writers() {
     local directory="$STATE_DIR/updated-plan-edits" helper="$ROOT/scripts/lib/updated_plan_edits.py" name ids pid failed=0 resolve_command=resolve
     local -a pids=() names=()
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    local jobs
+    jobs="$(workflow_model_jobs updated-plan)"
     [[ "${WORKFLOW_UPDATED_PLAN_EDITS:-1}" == 1 ]] || return 1
     if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; resolve_command=resolve-ops; fi
     # Forced, schema-checked JSON wherever the runner can enforce it: hosted Claude through --json-schema, a
@@ -2885,7 +2888,10 @@ run_updated_plan_edit_writers() {
             owner_of[index]=''
         fi
         ids_of[index]="$ids"
-        updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "${owner_of[index]}" || return 1
+        workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
+        updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "${owner_of[index]}" || {
+            workflow_model_drain "$jobs" ${pids[@]+"${pids[@]}"}; return 1
+        }
         pids+=("$!"); names+=("$name"); started[index]="$SECONDS"; hedge[index]=""; finished[index]=0
         # The writers' prompts are the same for 97% of their length, and a prefix cache (hosted Claude's, or vLLM's) can only
         # serve a prefix a finished request has already computed.  Started all at once, every writer computes (and a hosted one
@@ -2898,8 +2904,8 @@ run_updated_plan_edit_writers() {
     done < "$directory/slices.tsv"
     local -a failed_names=()
     local total="${#pids[@]}" left="${#pids[@]}" i status hedge_after="${WORKFLOW_UPDATED_PLAN_HEDGE_SECONDS:-35}"
-    # A self-hosted model is one shared server: a twin only queues behind the writer it duplicates (calculator-local:
-    # twins doubled the load and the slowest writer still took 200-400 s), so hedge only on hosted runners.
+    # Duplicate attempts consume the self-hosted pool's capacity without covering
+    # another finding. Keep hedging restricted to hosted runners.
     if stage_uses_self_hosted updated-plan AGENT; then hedge_after=999999; fi
     # Join the writers.  A writer is mostly hidden reasoning and a few run several times longer than the rest
     # (noinit: one finding, no output at all for 80+ s while its 19 siblings finished in 8-20 s), and the stage
@@ -2966,7 +2972,10 @@ run_updated_plan_edit_writers() {
             if [[ "$name" == 1 || "$name" == 1-1 ]]; then
                 retry_owner=owner
             fi
-            updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$retry_owner" || return 1
+            workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
+            updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$retry_owner" || {
+                workflow_model_drain "$jobs" ${pids[@]+"${pids[@]}"}; return 1
+            }
             pids+=("$!"); names+=("$name")
         done <<< "$rows"
         for pid in "${!pids[@]}"; do
@@ -3003,6 +3012,7 @@ run_updated_plan_edit_writers() {
                 mkdir -p "$directory/schemas"
                 python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$resolver_schema" || return 1
             fi
+            workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
             ( [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
               UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                 run_claude "$group_prompt" "updated-plan-worker-resolve-$group_id" ) \
@@ -3022,6 +3032,7 @@ run_updated_plan_edit_writers() {
             for group_id in $bad_groups; do
                 local retry_schema=""
                 [[ "$delivery" != hosted ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
+                workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
                 ( [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
                   UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                     run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-plan-worker-resolve-$group_id-retry" ) \
@@ -3222,11 +3233,13 @@ run_updated_plan_compact() {
 # reviewers and no reconciliation round; the existing typed-op merge is
 # deterministic, and asks a resolver only for a genuine conflicting edit.
 #
-# Local/self-hosted servers share one decoder, so parallel requests only queue
-# there.  Keep their one-call path. Hosted runners decode the bounded batches
-# concurrently and generally finish near the slowest batch, not their sum.
+# Independent finding batches can use continuous batching on self-hosted servers.
+# Keep their concurrency bounded and retain conflict resolution before publication.
 run_updated_plan_adaptive() {
-    local count threshold slice directory
+    local count threshold slice directory fast_merge=1 jobs=0 writer_status=0
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    jobs="$(workflow_model_jobs updated-plan)"
+    if [[ "$jobs" != 0 ]]; then fast_merge=0; fi
     [[ "${WORKFLOW_UPDATED_PLAN_COMPACT:-1}" == 1 ]] || return 1
     count="$(python3 -B - "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" <<'PY'
 import json, sys
@@ -3244,8 +3257,7 @@ PY
     threshold="${WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD:-5}"
     slice="${WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE:-2}"
     if [[ "$count" =~ ^[0-9]+$ && "$threshold" =~ ^[0-9]+$ && "$slice" =~ ^[0-9]+$ ]] \
-        && (( count >= threshold && slice > 0 )) \
-        && ! stage_uses_self_hosted updated-plan AGENT; then
+        && (( count >= threshold && slice > 0 && jobs != 1 )); then
         ensure_project_plan_json || return 1
         require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" || return 1
         directory="$STATE_DIR/updated-plan-adaptive"
@@ -3260,9 +3272,14 @@ PY
         # Do not use the nested structured-output protocol here.  Each child
         # writes one JSON packet at its private path; run_claude verifies the
         # path exists and this function parses/merges it before publication.
-        WORKFLOW_UPDATED_PLAN_EDIT_SLICE="$slice" WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY=file WORKFLOW_UPDATED_PLAN_FAST_MERGE=1 WORKFLOW_UPDATED_PLAN_DRIVER_CONTRACT=1 WORKFLOW_PREFIX_WARM_SECONDS=0 \
-            run_updated_plan_edit_writers
-        return $?
+        WORKFLOW_UPDATED_PLAN_EDIT_SLICE="$slice" WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY=file WORKFLOW_UPDATED_PLAN_FAST_MERGE="$fast_merge" WORKFLOW_UPDATED_PLAN_DRIVER_CONTRACT=1 WORKFLOW_PREFIX_WARM_SECONDS=0 \
+            run_updated_plan_edit_writers || writer_status=$?
+        if [[ "$writer_status" != 0 && "$jobs" != 0 ]]; then
+            echo 'Updated-plan batches failed validation or delivery; falling back to the compact writer.'
+            run_updated_plan_compact
+            return $?
+        fi
+        return "$writer_status"
     fi
     run_updated_plan_compact
 }
@@ -4082,10 +4099,10 @@ project_plan_section_finish() {
         && echo "Project plan section $name was answered in chat; used that answer."
 }
 
-# Wait for one section worker and take its section; a worker that delivered nothing usable gets one more run, alone.
+# Take a completed section (optionally waiting for its PID); an unusable delivery gets one retry.
 project_plan_section_settle() {
-    local name="$1" directory="$2" delivery="$3" pid="$4"
-    wait "$pid" || { echo "Project plan section $name did not complete." >&2; return 1; }
+    local name="$1" directory="$2" delivery="$3" pid="${4:-}"
+    [[ -z "$pid" ]] || wait "$pid" || { echo "Project plan section $name did not complete." >&2; return 1; }
     project_plan_section_finish "$name" "$directory" "$delivery" && return 0
     echo "Project plan section $name delivered nothing usable; running that worker once more."
     # Keep the failed attempt's logs: the rerun overwrites them, and why it failed is the evidence.
@@ -4095,10 +4112,67 @@ project_plan_section_settle() {
     project_plan_section_finish "$name" "$directory" "$delivery" || { echo "Project plan section $name wrote nothing." >&2; return 1; }
 }
 
+# Self-hosted sections form a small dependency graph: only outline gates the
+# second phase. Each slot includes recovery/validation and the existing retry,
+# so a slow or malformed sibling never holds an otherwise ready section back.
+run_project_plan_sections_bounded() {
+    local directory="$1" delivery="$2" jobs="$3" phase name index active failed=0 gate=0 next=0
+    local -a pending=() dependent=() pids=() names=()
+    while IFS= read -r phase; do
+        if [[ "${#pending[@]}" == 0 ]]; then
+            for name in $phase; do pending+=("$name"); done
+        else
+            for name in $phase; do dependent+=("$name"); done
+        fi
+    done < <(python3 -B "$ROOT/scripts/lib/project_plan_sections.py" phases)
+    [[ "${#pending[@]}" -gt 0 ]] || return 1
+    while :; do
+        active=0
+        for index in "${!pids[@]}"; do
+            if kill -0 "${pids[$index]}" 2>/dev/null; then
+                active=$((active + 1))
+            else
+                if wait "${pids[$index]}"; then
+                    if [[ "${names[$index]}" == outline ]]; then gate=1; fi
+                else
+                    failed=1
+                fi
+                unset "pids[$index]" "names[$index]"
+            fi
+        done
+        if [[ "$gate" == 1 ]]; then
+            pending+=("${dependent[@]}"); dependent=(); gate=2
+        fi
+        # On failure, drain only our workers before allowing the single-pass
+        # fallback to start. No worker may keep writing into its fallback.
+        if [[ "$failed" == 1 ]]; then
+            for index in "${!pids[@]}"; do wait "${pids[$index]}" || true; done
+            return 1
+        fi
+        while (( active < jobs && next < ${#pending[@]} )); do
+            name="${pending[$next]}"
+            echo "Project plan section worker: $name"
+            (
+                project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || exit 1
+                project_plan_section_settle "$name" "$directory" "$delivery"
+            ) &
+            pids+=("$!"); names+=("$name")
+            next=$((next + 1)); active=$((active + 1))
+        done
+        if (( active == 0 && next == ${#pending[@]} )); then
+            [[ "$gate" == 2 ]]; return
+        fi
+        sleep 0.05
+    done
+}
+
 run_project_plan_sections() {
     local output="$1" directory="$STATE_DIR/project-plan-sections"
     local helper="$ROOT/scripts/lib/project_plan_sections.py" phase name failed delivery=file index gate=1
     local -a pids=() names=()
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    local jobs
+    jobs="$(workflow_model_jobs project-plan)"
     # Forced, schema-checked JSON wherever the runner can enforce it.
     if stage_supports_structured_output project-plan-section-outline; then
         delivery=hosted
@@ -4106,32 +4180,36 @@ run_project_plan_sections() {
         delivery=local
     fi
     rm -rf "$directory"; mkdir -p "$directory/prompts"
-    # The first phase holds the outline and the workers that need only the requirements. The next phase starts when the
-    # outline is done, whether or not those are; everything still running is collected at the end.
-    while IFS= read -r phase; do
-        for name in $phase; do
-            echo "Project plan section worker: $name"
-            ( project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
-            pids+=("$!"); names+=("$name")
-        done
-        if [[ "$gate" == 1 ]]; then
-            gate=0
-            for index in "${!names[@]}"; do
-                [[ "${names[$index]}" == outline ]] || continue
-                if ! project_plan_section_settle outline "$directory" "$delivery" "${pids[$index]}"; then
-                    kill "${pids[@]}" 2>/dev/null || true
-                    wait 2>/dev/null || true
-                    return 1
-                fi
-                unset "pids[$index]" "names[$index]"
+    if [[ "$jobs" != 0 ]]; then
+        run_project_plan_sections_bounded "$directory" "$delivery" "$jobs" || return 1
+    else
+        # The first phase holds the outline and the workers that need only the requirements. The next phase starts when the
+        # outline is done, whether or not those are; everything still running is collected at the end.
+        while IFS= read -r phase; do
+            for name in $phase; do
+                echo "Project plan section worker: $name"
+                ( project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
+                pids+=("$!"); names+=("$name")
             done
-        fi
-    done < <(python3 -B "$helper" phases)
-    failed=0
-    for index in "${!pids[@]}"; do
-        project_plan_section_settle "${names[$index]}" "$directory" "$delivery" "${pids[$index]}" || failed=1
-    done
-    [[ "$failed" == 0 ]] || return 1
+            if [[ "$gate" == 1 ]]; then
+                gate=0
+                for index in "${!names[@]}"; do
+                    [[ "${names[$index]}" == outline ]] || continue
+                    if ! project_plan_section_settle outline "$directory" "$delivery" "${pids[$index]}"; then
+                        kill "${pids[@]}" 2>/dev/null || true
+                        wait 2>/dev/null || true
+                        return 1
+                    fi
+                    unset "pids[$index]" "names[$index]"
+                done
+            fi
+        done < <(python3 -B "$helper" phases)
+        failed=0
+        for index in "${!pids[@]}"; do
+            project_plan_section_settle "${names[$index]}" "$directory" "$delivery" "${pids[$index]}" || failed=1
+        done
+        [[ "$failed" == 0 ]] || return 1
+    fi
     # The traceability table is built here from the workers' own mapping lines.  Only a plan whose workers
     # left too little behind needs the model, and then one worker reads everything and writes it.
     if ! python3 -B "$helper" trace-ready "$directory"; then

@@ -70,6 +70,31 @@ PY
 )
 check "long hosted review uses bounded file-backed deterministic patch batches" grep -qx 'slice=2 delivery=file fast_merge=1 driver_contract=1 warm=0 advisors=0' "$TMP/.uncle/workflow/adaptive"
 
+# Self-hosted long reviews use the same packets with bounded scheduling and
+# the conflict resolver retained. One worker restores the compact path.
+(
+    cd "$TMP"
+    ROOT="$ROOT"; STATE_DIR=.uncle/workflow; LOG_DIR=.uncle/workflow/logs
+    stage_uses_self_hosted() { return 0; }
+    ensure_project_plan_json() { :; }
+    require_file() { [[ -s "$1" ]]; }
+    run_updated_plan_edit_writers() {
+        printf 'jobs=%s merge=%s slice=%s\n' "$(workflow_model_jobs updated-plan)" "$WORKFLOW_UPDATED_PLAN_FAST_MERGE" "$WORKFLOW_UPDATED_PLAN_EDIT_SLICE" > "$STATE_DIR/local-adaptive"
+    }
+    run_updated_plan_compact() { touch "$STATE_DIR/local-compact"; }
+    . "$TMP/adaptive.sh"
+    WORKFLOW_SELF_HOSTED_STAGE_JOBS=2 run_updated_plan_adaptive
+    WORKFLOW_SELF_HOSTED_STAGE_JOBS=1 run_updated_plan_adaptive
+    WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD=99 run_updated_plan_adaptive
+    rm -f "$STATE_DIR/local-compact"
+    run_updated_plan_edit_writers() { return 9; }
+    WORKFLOW_SELF_HOSTED_STAGE_JOBS=2 run_updated_plan_adaptive
+    [[ -e "$STATE_DIR/local-compact" ]]
+)
+check "self-hosted batches retain conflict resolution" grep -qx 'jobs=2 merge=0 slice=2' "$TMP/.uncle/workflow/local-adaptive"
+check "one slot or short review keeps compact path" test -e "$TMP/.uncle/workflow/local-compact"
+
+
 # Exercise the real dispatcher: a normal compact failure must propagate
 # without entering the committee. Status 2 is the documented self-hosted
 # capability fallback and must enter it, after trying the adaptive path.

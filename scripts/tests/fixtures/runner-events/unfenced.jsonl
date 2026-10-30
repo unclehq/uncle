@@ -1,0 +1,2 @@
+{"type": "assistant", "text": "```markdown\n# Investigation fenced assistant\n\n## Required functionality\n\nCafé.\n```"}
+{"type": "result", "result": "# Final\n\n## Required functionality\n\nUnfenced."}

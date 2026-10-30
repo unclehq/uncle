@@ -14,7 +14,6 @@ FAILED=0; COUNT=0
 check() { COUNT=$((COUNT + 1)); [[ "$3" == "$2" ]] || { echo "FAIL: $1 — expected '$2', got '$3'"; FAILED=$((FAILED + 1)); }; }
 
 . "$ROOT_REAL/scripts/tests/workflow_fixture.sh"
-extract_fns "$ROOT_REAL/scripts/stagegate.sh" "$TMP/reapprove.sh" reapprove_implementation_unattended
 
 # A fake approval_snapshot: `check` says the inputs changed, `record` notes the call.
 mkdir -p "$TMP/root/scripts/lib" "$TMP/approvals" "$TMP/state"
@@ -30,7 +29,7 @@ printf '{}\n' > "$TMP/approvals/IMPLEMENTATION_REVIEW.inputs.json"
 run() {  # $1 = UNATTENDED value; prints the trace and the exit status
     (
         workflow_fixture_source "$ROOT_REAL/scripts/lib/implementation-gates.sh" \
-            "$ROOT_REAL/scripts/lib/implementation-gates-app.sh" "$TMP/reapprove.sh"
+            "$ROOT_REAL/scripts/lib/implementation-gates-app.sh"
         ROOT="$TMP/root"; APPROVAL_DIR="$TMP/approvals"; STATE_DIR="$TMP/state"; REVIEW_FILE="$TMP/review.md"
         UNATTENDED="$1"; WORKFLOW_UNTRACKED_BASELINE=""
         require_file() { :; }
@@ -63,7 +62,7 @@ check "attended: it does not carry on" no "$([[ "$out" == *continued* ]] && echo
 run_policy() {
     (
         workflow_fixture_source "$ROOT_REAL/scripts/lib/implementation-gates.sh" \
-            "$ROOT_REAL/scripts/lib/implementation-gates-$1.sh" "$TMP/reapprove.sh"
+            "$ROOT_REAL/scripts/lib/implementation-gates-$1.sh"
         ROOT="$TMP/root"; APPROVAL_DIR="$TMP/approvals"; STATE_DIR="$TMP/state"; REVIEW_FILE="$TMP/review.md"
         UNATTENDED="$2"; WORKFLOW_UNTRACKED_BASELINE=""
         if [[ "$3" == snapshot ]]; then

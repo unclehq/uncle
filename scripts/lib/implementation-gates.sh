@@ -224,3 +224,20 @@ change_verify_implementation_review() {
         exit 0
     fi
 }
+
+# Unattended, nobody is there to review the implementation again, and stopping at
+# a reopened gate ended the run for good: the driver exits and nothing restarts
+# it. A later stage re-runs the green check, which rewrites a file the approval
+# covers, so a check that failed when the implementation was approved and passes
+# now (a stray process released its port) was enough to strand the run after
+# every stage had worked. Re-approve the current tree in place, record it in the
+# unattended ledger like any other unreviewed approval, and carry on with the
+# stage that was running. Attended runs still stop and ask.
+app_reapprove_implementation_unattended() {
+    [[ "${UNATTENDED:-0}" == 1 ]] || return 1
+    review_and_approve "$REVIEW_FILE" IMPLEMENTATION_REVIEW approve || return 1
+    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" record "$STATE_DIR" || return 1
+    record_unattended_gate IMPLEMENTATION_REVIEW "re-approved the current implementation after its inputs changed, without human review"
+    echo "Unattended: the approved implementation inputs changed after approval; re-approved the current tree and continuing."
+    return 0
+}

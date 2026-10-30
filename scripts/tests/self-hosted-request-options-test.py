@@ -67,8 +67,10 @@ class RequestOptions(unittest.TestCase):
     def test_default_is_empty_and_preserves_original_body(self):
         self.assertEqual(transport.request_options(), {})
         self.chat()
-        self.assertEqual(set(self.bodies[0]), {'model', 'messages', 'tools', 'max_tokens', 'stream',
+        self.assertEqual(set(self.bodies[0]), {'model', 'messages', 'tools', 'max_tokens', 'stream', 'stream_options',
                                               'temperature', 'reasoning_effort'})
+        self.assertTrue(self.bodies[0]['stream'])
+        self.assertEqual(self.bodies[0]['stream_options'], {'include_usage': True})
         self.assertEqual(self.logs.getvalue(), '')
 
     def test_precedence_and_replacement(self):

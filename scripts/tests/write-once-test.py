@@ -49,7 +49,8 @@ class WriteOnce(unittest.TestCase):
                              'finish_reason': reason}], 'usage': {'prompt_tokens': 10, 'completion_tokens': tokens}}
 
     def events(self):
-        return [json.loads(line) for line in self.output.getvalue().splitlines() if line.startswith('{')]
+        return [event for line in self.output.getvalue().splitlines() if line.startswith('{')
+                if (event := json.loads(line)).get('type') == 'self_hosted_turn']
 
     def test_planner_one_write_then_precise_edit_and_identical_document(self):
         path = '.uncle/workflow/project-plan-investigation.md'
@@ -164,7 +165,7 @@ class WriteOnce(unittest.TestCase):
         with patch.dict(os.environ, UNCLE_ARTIFACT_DELIVERY=str(delivery)), \
                 patch.object(agent, 'interruptible_chat', return_value=self.reply(json.dumps(packet))), \
                 patch.object(agent, 'constrained_completion', return_value=(json.dumps(packet), 'stop', {}, 'json_schema')):
-            with self.assertRaisesRegex(ValueError, 'violates the artifact schema'):
+            with self.assertRaisesRegex(ValueError, 'Unrepaired draft.*ops must be array'):
                 hosted.run_opencode('agent', self.values, json.dumps(packet), self.root)
         self.assertFalse(delivery.exists())
 

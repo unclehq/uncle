@@ -108,6 +108,79 @@ class Policy:
             if path not in self.drafts:
                 raise ValueError('Required draft was not delivered: ' + path.relative_to(self.root).as_posix())
 
+    def capture(self, text, calls):
+        """Adopt only an unambiguous document using the ordinary write/edit path.
+
+        Valid prior deliveries win. Otherwise valid chat beats same-turn
+        delivery writes regardless of byte size. Among invalid
+        drafts keep the largest recognizable candidate privately for edits.
+        """
+        if len(self.draft_checks) != 1:
+            return set(), ''
+        path, check = next(iter(self.draft_checks.items()))
+        try:
+            relative = path.relative_to(self.root).as_posix()
+            if self.resolve(relative, writing=True) != path:
+                return set(), ''
+        except ValueError:
+            return set(), ''
+        if path.suffix == '.json':
+            candidates = answer_candidates(text)
+        else:
+            heading = re.search(r'(?m)^#{1,6}\s+', text)
+            candidates = [text[heading.start():]] if heading else []
+            match = re.search(r'(?m)^```(?:markdown|md)\s*\n(.*)\n```[ \t]*(?:\n|$)', text, re.S | re.I)
+            if match:
+                candidates.insert(0, match[1] + '\n')
+        if not candidates:
+            return set(), ''
+
+        def valid(candidate):
+            try:
+                check(candidate)
+                schema = self.schema_for(relative)
+                if schema is not None:
+                    conforms(json.loads(candidate), schema)
+                return True
+            except ValueError:
+                return False
+
+        if path in self.drafts and path not in self.draft_errors:
+            return set(), ''
+        if path.is_file() and path not in self.draft_errors:
+            existing = path.read_text(encoding='utf-8')
+            if valid(existing):
+                self.drafts[path] = existing
+                return set(), ''
+        candidate = next((candidate for candidate in candidates if valid(candidate)), None)
+        accepted = candidate is not None
+        if not accepted:
+            candidate = max(candidates, key=lambda value: len(value.encode('utf-8')))
+        rival_sizes = [len(self.drafts.get(path, '').encode('utf-8'))]
+        for call in ([] if accepted else calls):
+            try:
+                args = json.loads(call['function'].get('arguments') or '{}')
+                if call['function']['name'] != 'write_file' or self.resolve(args.get('path'), True) != path:
+                    continue
+                rival = args['content']
+                if valid(rival):
+                    return set(), ''
+                rival_sizes.append(len(rival.encode('utf-8')))
+            except (ValueError, KeyError, TypeError):
+                continue
+        if not accepted and len(candidate.encode('utf-8')) <= max(rival_sizes):
+            return set(), ''
+        # A retained invalid stub can be replaced by captured text, but all
+        # validation and publication still belongs to run_tool.
+        previous = self.drafts.pop(path, None)
+        result = run_tool(self, 'write_file', {'path': relative, 'content': candidate})
+        if result.startswith('error:') and path not in self.drafts:
+            if previous is not None:
+                self.drafts[path] = previous
+            return set(), ''
+        record_capture(candidate, 'document' if accepted else 'draft')
+        return {path}, ('' if accepted else result)
+
     def hidden(self, parts):
         if parts[:1] == ('.uncle',):
             if len(parts) < 2 or parts[1] not in UNCLE_OPEN:
@@ -292,15 +365,19 @@ def run_tool(policy, name, arguments):
                     policy.draft_errors[path] = str(error)
                     return ('error: draft retained, not published: %s. Use edit_file on this path with a unique '
                             'old_string and the minimal replacement; read_file reads the retained draft.' % error)
-                policy.draft_errors.pop(path, None)
             schema = policy.schema_for(path.relative_to(policy.root).as_posix())
             if schema is not None:
                 try:
                     conforms(json.loads(content), schema)
                 except json.JSONDecodeError as error:
+                    if path in policy.drafts:
+                        policy.draft_errors[path] = str(error)
                     return 'error: not written; this document must be one valid JSON object (%s)' % error
                 except ValueError as error:
+                    if path in policy.drafts:
+                        policy.draft_errors[path] = str(error)
                     return 'error: not written; the document violates its schema: %s' % error
+            policy.draft_errors.pop(path, None)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding='utf-8', newline='')
             return 'wrote %s' % path.relative_to(policy.root).as_posix()
@@ -386,16 +463,7 @@ def answer_already_given(text, schema):
     schema check the grammar answer would face is the answer; anything else falls through to the
     closing request as before.
     """
-    body = re.sub(r'<think>.*?</think>', '', text or '', flags=re.S).strip()
-    if not body:
-        return None
-    candidates = [match.group(1) for match in re.finditer(r'```(?:json)?\s*(\{.*?\})\s*```', body, re.S)][::-1]
-    if body.startswith('{'):
-        candidates.append(body)
-    first, last = body.find('{'), body.rfind('}')
-    if 0 <= first < last:
-        candidates.append(body[first:last + 1])
-    for candidate in candidates:
+    for candidate in answer_candidates(text):
         try:
             value = json.loads(candidate)
             conforms(value, schema)
@@ -403,6 +471,19 @@ def answer_already_given(text, schema):
             continue
         return json.dumps(value, ensure_ascii=False)
     return None
+
+
+def answer_candidates(text):
+    body = transport.strip_reasoning(text).strip()
+    if not body:
+        return []
+    candidates = [match.group(1) for match in re.finditer(r'```(?:json)?\s*(\{.*?\})\s*```', body, re.S)][::-1]
+    if body.startswith('{'):
+        candidates.append(body)
+    first, last = body.find('{'), body.rfind('}')
+    if 0 <= first < last:
+        candidates.append(body[first:last + 1])
+    return candidates
 
 
 TRUNCATED_KEEP_CHARS = 4 * 1024 * 1024
@@ -549,6 +630,11 @@ def record_turn(identity, number, message, usage, finish_reason, phase='tools'):
         pass
 
 
+def record_capture(text, kind):
+    print(json.dumps(dict(type='self_hosted_capture', stage=os.environ.get('UNCLE_STATUS_STAGE', ''),
+                          kind=kind, bytes=len(text.encode('utf-8')))), flush=True)
+
+
 def prefetch_context(prompt, policy, read_cache=None):
     """Supply bounded, explicitly requested inputs before the first model turn.
 
@@ -652,7 +738,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     values = transport.configure_request_options(values)
     effort = transport.reasoning_effort(values)
     timeout = transport.request_seconds(seconds)
-    turn_limit = transport.turn_output_tokens(limit)
+    turn_limit = transport.turn_output_tokens(limit, final_name)
     deadline = time.monotonic() + seconds
     prompt += prefetch_context(prompt, policy, read_cache)
     messages = [{'role': 'system', 'content': SYSTEM.format(root=policy.root)}, {'role': 'user', 'content': prompt}]
@@ -668,6 +754,27 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     steered, requests, nudged, text = [], 0, False, ''
     request_group = uuid.uuid4().hex
     tools = policy.tools()
+    early_stops = 0
+    captured_packet = None
+    pending_json = None
+
+    def request_turn(offered_tools=tools, interruptible=True):
+        nonlocal requests, early_stops
+        while True:
+            try:
+                budget = min(timeout, max(1, deadline - time.monotonic()))
+                if interruptible:
+                    return interruptible_chat(stage, values, messages, offered_tools, turn_limit, effort, budget)
+                return chat(values, messages, offered_tools, turn_limit, effort, budget)
+            except transport.StreamStopped as error:
+                requests += 1
+                record_turn(request_group, requests, {}, error.usage, 'early_stop:' + error.reason)
+                add_usage(usage, error.usage)
+                early_stops += 1
+                if early_stops > 1 or time.monotonic() >= deadline:
+                    raise
+                messages.append({'role': 'user', 'content': 'The last generation was stopped for ' + error.reason +
+                                 '. Continue from the existing files. Use compact output; do not repeat completed work.'})
 
     def steer(note, identifier):
         messages.append({'role': 'user', 'content': note})
@@ -702,15 +809,15 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             raise ValueError('Self hosted stage exceeded its %d-second time limit' % seconds)
         if stage is not None:
             stage.incoming(steer)
-        data = interruptible_chat(stage, values, messages, tools, turn_limit, effort, timeout)
+        data = request_turn()
         if data is INTERRUPTED:
             # The operator wrote while the model was thinking: take the message in
             # and ask again, without counting a turn.
             stage.incoming(steer)
-            data = interruptible_chat(stage, values, messages, tools, turn_limit, effort, timeout)
+            data = request_turn()
             while data is INTERRUPTED:
                 stage.incoming(steer)
-                data = interruptible_chat(stage, values, messages, tools, turn_limit, effort, timeout)
+                data = request_turn()
         if data is None:
             if tools_required and (policy.write or policy.shell):
                 raise ValueError('The model server does not support tool calling, which this stage needs; '
@@ -734,6 +841,17 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                 for identifier in steered:
                     stage.answered(identifier, str(requests))
                 steered.clear()
+        captured, feedback = policy.capture(text, calls)
+        packet = answer_already_given(text, final_schema) if final_schema is not None else None
+        json_drafts = answer_candidates(text) if final_schema is not None else []
+        if json_drafts:
+            pending_json = packet or json_drafts[0]
+        if packet is not None and calls:
+            record_capture(packet, 'packet')
+            captured_packet = packet
+        if feedback and not calls:
+            messages.extend([{'role': 'assistant', 'content': text}, {'role': 'user', 'content': feedback}])
+            continue
         if not calls:
             if not text.strip() and not nudged:
                 nudged = True
@@ -750,6 +868,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         # Retain fields locally for endpoints that explicitly require replay.
         history.update({key: message[key] for key in ('reasoning_content', 'reasoning') if key in message})
         messages.append(history)
+        remaining_calls = False
         for call in calls:
             name = call['function']['name']
             try:
@@ -757,6 +876,19 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             except json.JSONDecodeError:
                 arguments = {}
             arguments = arguments if isinstance(arguments, dict) else {}
+            superseded = False
+            if name in ('write_file', 'edit_file'):
+                try:
+                    target = policy.resolve(arguments.get('path'), True)
+                    delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY')
+                    superseded = target in captured or (packet is not None and delivery and
+                                                        target == policy.resolve(delivery, True))
+                except (ValueError, TypeError):
+                    pass
+            if superseded:
+                result = feedback or 'The validated assistant document was captured and published at this path.'
+                messages.append({'role': 'tool', 'tool_call_id': call.get('id', ''), 'content': result})
+                continue
             if name == 'bash':
                 announce(stage, '$ %s  (up to %ds)' % (arguments.get('command', ''), bash_timeout(arguments.get('timeout'))), side)
             identity = call.get('id') or 'call-%d-%d' % (requests, len(messages))
@@ -771,15 +903,30 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                 except (OSError, ValueError):
                     pass
             result = run_tool(policy, name, arguments)
+            # Shell output may require interpretation even on exit zero.
+            # Other tools have an explicit success/error result. Execute all
+            # of them, but do not spend a summary turn after successful work.
+            if name == 'bash' or result.startswith('error:'):
+                remaining_calls = True
             if read_cache is not None and name == 'read_file':
                 read_cache.end(identity, result, failed=result.startswith('error:'))
             messages.append({'role': 'tool', 'tool_call_id': call.get('id', ''), 'content': result})
+        if captured:
+            messages.append({'role': 'user', 'content': feedback or
+                             'The required document is already validated and published. Do not reproduce it. '
+                             'Continue only unresolved work; use edit_file for any necessary document correction.'})
+        if ((captured or packet is not None) and not feedback and not remaining_calls) or (
+                json_drafts and not policy.write and not policy.shell and not remaining_calls):
+            # All requested tool work finished successfully. Read-only JSON
+            # drafts can also leave the loop for targeted schema repair.
+            # The caller still runs its canonical validators/publication.
+            break
     else:
         exhausted = turns > 0
     if exhausted:
         # Out of turns: ask for the answer without offering more tools.
         messages.append({'role': 'user', 'content': 'You have used every allowed turn. Stop using tools and give your final response.'})
-        data = chat(values, messages, None, turn_limit, effort, timeout)
+        data = request_turn(None, interruptible=False)
         if data is None:
             raise ValueError('Model API rejected every request form; check the model name')
         requests += 1
@@ -794,18 +941,26 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             # An empty closing message gives the driver nothing to recover a result from.
             messages.append({'role': 'user', 'content': 'Your last reply was empty. Reply now with what you found, what you '
                              'changed and what is still unresolved, in a few plain sentences.'})
-            data = chat(values, messages, None, turn_limit, effort, timeout)
+            data = request_turn(None, interruptible=False)
             if data is not None:
                 requests += 1
                 tally(data)
                 text = transport.strip_reasoning(data['choices'][0]['message'].get('content'))
+                if data['choices'][0].get('finish_reason') == 'length':
+                    raise OutputTruncated('Model output reached the limit of %d tokens for one turn; '
+                                          'the response is incomplete.' % turn_limit)
         messages.append({'role': 'assistant', 'content': text})
+        policy.capture(text, [])
     if final_schema is None:
         if stage is not None:
             stage.final_answer = text
         return text, requests
+    if pending_json is not None and not answer_candidates(text):
+        text = pending_json
     given = answer_already_given(text, final_schema)
     if given is not None:
+        if given != captured_packet:
+            record_capture(given, 'packet')
         usage['constraint_mode'] = 'model answer (already valid; not regenerated)'
         if stage is not None:
             stage.final_answer = given
@@ -813,31 +968,35 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     # A full plan already exists even when one field violates the schema.
     # Keep it as a private draft instead of asking the grammar to copy it all.
     # Plain status text still falls through to the initial constrained answer.
-    if final_name in ('plan', 'change_plan', 'change_planning_bundle'):
-        draft = re.sub(r'^```(?:json)?\s*\n?|\n?```$', '', text.strip()).strip()
-        if draft.startswith('{'):
-            def validate(candidate):
-                conforms(json.loads(candidate), final_schema)
+    def validate(candidate):
+        conforms(json.loads(candidate), final_schema)
 
-            try:
-                validate(draft)
-            except ValueError as error:
-                relative = '.uncle/workflow/http-answer-repair.json'
-                repair = Policy(policy.root, write=True, writable=[relative], drafts={relative: validate})
-                path = repair.root / relative
-                repair.drafts[path], repair.draft_errors[path] = draft, str(error)
-                repair_prompt = (prompt + '\n\nTargeted schema repair (overrides final-output instructions): '
-                                 'The existing JSON draft is at ' + relative + '. Validation failed: ' + str(error) +
-                                 '. Read the affected lines with read_file and use edit_file to fix only that defect. '
-                                 'Do not regenerate the document. Finish with a brief status; the adapter delivers the repaired JSON.')
-                _, count = run_agent(values, repair_prompt, repair, limit, turns=max(1, turns - requests), usage=usage,
-                                     stage=stage, seconds=max(1, int(deadline - time.monotonic())), side=side)
-                given = path.read_text(encoding='utf-8')
-                validate(given)
-                usage['constraint_mode'] = 'targeted schema repair (locally validated)'
-                if stage is not None:
-                    stage.final_answer = given
-                return given, requests + count
+    def repair_answer(draft, error):
+        relative = '.uncle/workflow/http-answer-repair.json'
+        repair = Policy(policy.root, write=True, writable=[relative], drafts={relative: validate})
+        path = repair.root / relative
+        repair.drafts[path], repair.draft_errors[path] = draft, str(error)
+        record_capture(draft, 'draft')
+        repair_prompt = (prompt + '\n\nTargeted schema repair (overrides final-output instructions): '
+                         'The existing JSON draft is at ' + relative + '. Validation failed: ' + str(error) +
+                         '. Read the affected lines with read_file and use edit_file to fix only that defect. '
+                         'Do not regenerate the document. Finish with a brief status; the adapter delivers the repaired JSON.')
+        _, count = run_agent(values, repair_prompt, repair, limit, turns=max(1, turns - requests), usage=usage,
+                             stage=stage, seconds=max(1, int(deadline - time.monotonic())), side=side,
+                             final_name=final_name)
+        given = path.read_text(encoding='utf-8')
+        validate(given)
+        usage['constraint_mode'] = 'targeted schema repair (locally validated)'
+        if stage is not None:
+            stage.final_answer = given
+        return given, requests + count
+
+    drafts = answer_candidates(text)
+    if drafts:
+        try:
+            validate(drafts[0])
+        except ValueError as error:
+            return repair_answer(drafts[0], error)
     # Compact, single-line JSON: a grammar permits whitespace anywhere, and a model that
     # starts pretty-printing (newline, indent, newline...) can keep going until the token
     # limit without ever writing a character of JSON.
@@ -845,8 +1004,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     # The closing answer is one artifact, never the size of a whole session's
     # budget; a runaway generation should fail at this cap, not at 64k tokens.
     # A worker packet is a few findings: it gets a much smaller one.
-    default_cap = 8192 if final_name.endswith('worker_packet') else 32768
-    final_limit = min(limit, int(os.environ.get('WORKFLOW_SELF_HOSTED_FINAL_OUTPUT_TOKENS') or default_cap))
+    final_limit = transport.output_cap(limit, 'final-output-tokens', final_name)
     # Grammar-constrained decoding has a known failure: the grammar allows
     # whitespace anywhere between tokens, and a model can emit newlines until the
     # token limit without ever producing a character of JSON (seen live: three
@@ -855,7 +1013,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     # the local schema check; the mode actually used is recorded.
     worker_packet = final_name.endswith('worker_packet')
     # A packet is a few findings (about 1-2k tokens in practice), so the grammar-constrained
-    # try gets half the cap and fails fast; the unconstrained retry gets all of it.  A server
+    # try gets at most 4k; the unconstrained retry honors the configured final cap. A server
     # that has already looped on whitespace twice in this project starts without the grammar.
     health = constraint_health(values)
     # Any answer, not only a packet, gets a first try sized to what real answers need: the largest
@@ -866,8 +1024,19 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     if worker_packet and health.get('whitespace_runaways', 0) >= 2:
         attempts = attempts[1:]
     for attempt, (skip, cap) in enumerate(attempts):
-        final, reason, final_usage, mode = constrained_completion(values, messages, final_schema, final_name, cap,
-                                                                  effort, timeout, skip=skip)
+        try:
+            final, reason, final_usage, mode = constrained_completion(values, messages, final_schema, final_name, cap,
+                                                                      effort, timeout, skip=skip)
+        except transport.StreamStopped as error:
+            requests += 1
+            record_turn(request_group, requests, {}, error.usage, 'early_stop:' + error.reason, 'final')
+            add_usage(usage, error.usage)
+            if error.reason == 'whitespace':
+                record_whitespace_runaway(values)
+            if attempt >= len(attempts) - 1:
+                raise
+            messages.append({'role': 'user', 'content': 'Generation stopped for ' + error.reason + '. ' + COMPACT_JSON_REQUEST})
+            continue
         requests += 1
         record_turn(request_group, requests, {}, final_usage, reason, 'final')
         add_usage(usage, final_usage)
@@ -892,10 +1061,14 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         messages.append({'role': 'user', 'content': 'That was cut off. ' + COMPACT_JSON_REQUEST})
     final = transport.strip_reasoning(final).strip()
     try:
-        conforms(json.loads(final), final_schema)
+        validate(final)
     except json.JSONDecodeError as error:
+        if final.startswith('{'):
+            return repair_answer(final, 'Model response is not valid JSON (%s constraint): %s' % (mode, error))
         raise ValueError('Model response is not valid JSON (%s constraint): %s' % (mode, error)) from None
     except ValueError as error:
+        if final.startswith('{'):
+            return repair_answer(final, 'Model response violates the artifact schema (%s constraint): %s' % (mode, error))
         raise ValueError('Model response violates the artifact schema (%s constraint): %s' % (mode, error)) from None
     if stage is not None:
         stage.final_answer = final

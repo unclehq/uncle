@@ -96,8 +96,9 @@ class Efficiency(unittest.TestCase):
             result = transport.constrained_completion(self.values, [], fixture.artifact_schema('plan'), 'plan', 4096)
             self.assertEqual(result[3], 'json_schema')
         transport.chat(self.values, [], [], 4096)
-        self.assertEqual(len(server.requests), 4)
-        self.assertEqual(sum('reasoning_effort' in body for _, body in server.requests), 1)
+        # The generic 400 first probes SSE/usage without changing effort.
+        self.assertEqual(len(server.requests), 6)
+        self.assertEqual(sum('reasoning_effort' in body for _, body in server.requests), 3)
         self.assertEqual(transport.capabilities(server.url, 'fixture')['rejected'], set())
         other = self.server()
         transport.chat(self.values, [], [], 4096)

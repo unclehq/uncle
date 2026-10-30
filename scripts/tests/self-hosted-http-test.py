@@ -721,9 +721,11 @@ class SelfHostedHttp(unittest.TestCase):
         self.plan(server, usage=usage, explore_first=False)
         self.assertEqual(usage['constraint_mode'], 'json_object')
         self.assertEqual([(c.get('response_format') or {}).get('type') for c in calls],
-                         ['json_schema', 'json_schema', 'json_object'])
-        # A generic 400 is retried without effort before downgrading the schema.
-        self.assertEqual([c.get('reasoning_effort') for c in calls], ['low', None, 'low'])
+                         ['json_schema'] * 6 + ['json_object'])
+        # A generic 400 probes streaming/usage, then effort, without dropping
+        # the schema until all otherwise-identical probes have failed.
+        self.assertEqual([c.get('reasoning_effort') for c in calls], ['low'] * 3 + [None] * 3 + ['low'])
+        self.assertEqual([c['stream'] for c in calls], [True, True, False] * 2 + [True])
         # The refusal is remembered for the next stage.
         calls.clear()
         self.plan(server, explore_first=False)
@@ -903,7 +905,7 @@ class SelfHostedHttp(unittest.TestCase):
         http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
                              final_schema=artifact_schema('adversarial-review-worker-packet'),
                              final_name='adversarial_review_worker_packet')
-        # The grammar-constrained try is capped lower than the unconstrained retry.
+        # Both paths honor the small packet ceiling.
         self.assertEqual(self.final(server)['max_tokens'], 4096)
 
     def test_a_worker_packet_asks_for_compact_json_and_retries_with_the_full_cap(self):
@@ -918,7 +920,7 @@ class SelfHostedHttp(unittest.TestCase):
             http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
                                  final_schema=artifact_schema('adversarial-review-worker-packet'),
                                  final_name='adversarial_review_worker_packet')
-        self.assertEqual([(m, l) for m, l, _ in caps], [('json_schema', 4096), ('prompt', 8192)])
+        self.assertEqual([(m, l) for m, l, _ in caps], [('json_schema', 4096), ('prompt', 4096)])
         self.assertIn('Write it compactly', caps[0][2])
 
     def test_a_server_that_keeps_looping_on_whitespace_skips_the_grammar_for_packets(self):

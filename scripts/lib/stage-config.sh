@@ -113,7 +113,7 @@ uncle_config_stage() {
         adversarial-review-investigate) printf 'adversarial-review' ;;
         manual-checklist-investigate) printf 'manual-checklist' ;;
         final-audit-investigate) printf 'final-audit' ;;
-        project-plan-investigate|project-plan-section-*) printf 'project-plan' ;;
+        project-plan-investigate|project-plan-section-*|project-plan-stage-duties) printf 'project-plan' ;;
         requirements-investigate) printf 'requirements' ;;
         preflight-investigate) printf 'preflight' ;;
         implementation-investigate) printf 'implementation' ;;

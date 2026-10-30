@@ -357,7 +357,7 @@ class Layout(unittest.TestCase):
     def test_the_steps_worker_may_not_change_the_outlines_ownership(self):
         text = sections.contract('steps', 'd')
         self.assertIn('do not add, drop or move a file or a dependency', text)
-        self.assertIn('.gitignore', text)
+        self.assertNotIn('Also write `.gitignore`', text)
 
     def test_the_invariant_worker_does_not_need_the_test_ids_it_cannot_see(self):
         text = sections.contract('invariants', 'd')

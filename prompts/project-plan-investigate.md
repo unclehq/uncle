@@ -1,3 +1,4 @@
+<!-- section-context: shared -->
 You are the primary system architect.
 
 Source files already at the repository root -- a web page and its assets, a
@@ -30,15 +31,18 @@ agent to make before it can start. Apply these rules before finalizing:
 - Reserve implementation stop conditions for newly discovered contradictions,
   missing external prerequisites, or changes requiring new authority. Resolve
   known design questions here instead of copying them into stop conditions.
+<!-- section-context: stage-consistency -->
 - Perform a final consistency pass across decisions, steps, scope, acceptance
   criteria, prerequisites, and stop conditions. Every required step must be
   actionable on the current evidence. Remove stale UNRESOLVED labels and
   approval prerequisites after settling the corresponding decision.
 
+<!-- section-context: shared -->
 Read only `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`.
 It is the authoritative requirements handoff. Do not read `REQUIREMENTS.md`,
 rendered Markdown views, or a previous plan.
 
+<!-- section-context: outline commands tests defects obligations -->
 The driver runs the plan's verification commands twice -- once now, against the
 unmodified tree, and once after the change -- and compares the two results.
 Write each command so the second run is cheap when nothing relevant changed:
@@ -53,6 +57,7 @@ it must never skip verification itself, only skip work that is already done.
 implementation step may install anything, so its install fallback must be `npm install` (which creates the lockfile), not `npm ci`;
 use `npm ci` only when the repository already has a lockfile.
 
+<!-- section-context: stage-outline -->
 Your plan must cover:
 
 1. Architecture
@@ -71,16 +76,19 @@ Your plan must cover:
 14. Explicit non-goals
 15. Risks and unresolved questions
 
+<!-- section-context: invariants guards -->
 Use this invariant table:
 
 | ID | Invariant | Scope | Enforcement point | Automated test | Violation impact |
 |---|---|---|---|---|---|
 
+<!-- section-context: trace -->
 Use this traceability table:
 
 | Requirement | Behavior | Invariant | Component | Automated test | Manual check |
 |---|---|---|---|---|---|
 
+<!-- section-context: outline tests defects obligations -->
 For each mandatory acceptance criterion, the testing strategy must name the
 observable assertion, independently grounded expected result, prerequisites,
 and evidence to retain. Plan representative defect injections for critical
@@ -89,6 +97,7 @@ Include development/update tooling and input/provenance failures where these
 are delivered. Avoid testing only the happy path or copying implementation
 logic into the oracle.
 
+<!-- section-context: outline commands tests defects obligations checks -->
 The Verification commands block must reach every required automated check,
 including browser checks when applicable. Automated local browsers and test
 servers are allowed. Commands must run unattended, fail on missing mandatory
@@ -99,6 +108,7 @@ Identify the test, fixture, helper, configuration, and source-oracle paths that
 the plan will freeze during verification. Keep generated test outputs outside
 those protected paths.
 
+<!-- section-context: outline commands tests defects obligations -->
 ## Make verification fast
 
 Verification runs more than once, so its slowest command sets the build's pace. On a typical web
@@ -120,6 +130,7 @@ sharing ports, writable fixtures, generated outputs, or ordered state must stay
 sequential. Use isolated output directories and local test-server ports where
 concurrency is appropriate; do not weaken checks to make them parallel.
 
+<!-- section-context: shared -->
 Write densely. Five later stages read this document, so length here is paid
 for repeatedly:
 
@@ -135,6 +146,7 @@ Do not invoke another agent.
 
 Use one canonical row per behavior, invariant, and acceptance obligation. Later strategy and implementation sections reference those IDs instead of repeating the rows. Keep rationale only where it explains a decision or constraint.
 
+<!-- section-context: restrictions limits bounds decisions steps sequence outline -->
 Every restriction, including carried-forward review mitigations, needs an R- ID,
 source_kind USER/REPOSITORY/PLATFORM/DESIGN, source location, requirement IDs,
 required property, selected mechanism, rationale and CAP- capability IDs.
@@ -146,6 +158,7 @@ Inventory steps with IDs, paths, requirements, dependencies, capability IDs and 
 Separate unavailable live authentication from coding prerequisites; include approved live
 check IDs/commands and non-secret prerequisite evidence paths for verification resume.
 
+<!-- section-context: shared -->
 ## Proportional implementation and verification
 
 Choose the smallest architecture and toolchain that meets the actual requested
@@ -155,11 +168,13 @@ formatter, build system, browser matrix, or test dependency solely to populate a
 plan section. Reuse existing suitable tools. Retain required browser-grounded
 checks, negative cases, and acceptance evidence; simplicity does not waive them.
 
+<!-- section-context: outline commands tests defects obligations steps sequence -->
 Plan setup separately from verification. Allow reuse of dependencies and browser
 binaries only after checking version/lockfile compatibility and actual usability.
 Require fresh installation only when testing installation, when reuse is invalid,
 or when explicitly requested. State cache invalidation inputs in the setup step.
 
+<!-- section-context: outline steps sequence -->
 Shape the steps so they can run together. The driver runs *adjacent* steps at the same
 time when they share no owned file and none depends on another in the group, so a plan that
 reads as one long chain wastes most of its implementation time:
@@ -215,6 +230,7 @@ claiming a file the step does not write is worse than claiming none, and a step
 whose files genuinely overlap another's should say so by naming the same file,
 not by omitting the field.
 
+<!-- section-context: outline behaviors invariants guards tests defects obligations checks commands -->
 Put every behavior a browser can check into the protected automated suite, not
 into the manual checklist. For a web application that means rendering, theme,
 keyboard input, and error states: each gets a browser test in the directory the
@@ -225,6 +241,7 @@ failure and goes to repair; a check that only the later checklist stage writes
 and runs ad hoc is never repaired. Keep the manual checklist for what cannot be
 automated.
 
+<!-- section-context: behaviors invariants guards tests obligations outline -->
 A style assumption in the requirements interpretation (for example what "groovy"
 means) is binding, not a suggestion: carry its exact values into the plan as a
 behavior and an invariant, and give it an automated check against the computed
@@ -232,6 +249,7 @@ styles of the running page. Do not substitute generic defaults such as a stock
 purple-blue gradient, and do not define the theme as whatever the existing CSS
 already contains.
 
+<!-- section-context: stage-ignore -->
 Before finishing this stage, write or update `.gitignore` at the project root
 yourself, now, using the tools available to you -- do not merely describe it in
 the plan. Include every entry the chosen stack usually needs: its dependency
@@ -250,6 +268,7 @@ implementation step runs, means no later step has to discover it by failing.
 Name `.gitignore` in whichever step's `Owns:` covers project scaffolding, the
 same as any other file it writes.
 
+<!-- section-context: stage-output -->
 ## This is an investigation, not the final document
 
 A second, separate pass converts this investigation into the required JSON
@@ -272,6 +291,7 @@ Write only `.uncle/workflow/project-plan-investigation.md`, in a single Write
 call, then stop -- except for the `.gitignore` write above, which belongs in
 this pass.
 
+<!-- section-context: stage-consistency -->
 ## Compact first draft
 
 Build the required heading skeleton and canonical rows before drafting prose.

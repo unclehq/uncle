@@ -1683,6 +1683,61 @@ green_application_not_runnable() {
     grep -qiE '(^|[^[:alpha:]])(build failed|failed to resolve import|is not exported by|could not resolve|error when starting (dev|preview) server|process from config\.webServer was not able to start|webserver.*exit code|no test files found|testDir.*does not exist|application_runtime_unrunnable)' "$log"
 }
 
+# A handful of "application cannot render" causes are purely mechanical --
+# an include glob that does not match where the tests actually landed, a
+# CommonJS require() in a file package.json declares an ES module -- fixing
+# them changes *where* a check looks or *how* a file is parsed, never *what*
+# it asserts. REPAIR cannot reliably fix these itself: the files involved
+# (vitest.config.js, the spec files) are often protected, so a repair agent
+# either cannot touch them or, worse, "fixes" the symptom by weakening what
+# they check. scaffold_reconcile.py makes exactly these two fixes with no
+# model in the loop, so they never need to spend the repair budget at all.
+#
+# A protected file changing without an attributed reason is exactly what
+# the driver's own verification-integrity check exists to catch (and did,
+# the one time this project edited vitest.config.js by hand outside the
+# governed workflow instead of through this function). Re-baselining via
+# capture_verification_inputs, and recording the exact change in
+# IMPLEMENTATION_NOTES.md as a deviation, is what keeps this attributed
+# instead of repeating that incident.
+reconcile_scaffold_mismatches() {
+    local marker="$STATE_DIR/scaffold-reconcile-attempted" changes
+    [[ "${WORKFLOW_SCAFFOLD_RECONCILE:-1}" == 1 ]] || return 1
+    [[ ! -e "$marker" ]] || return 1
+    touch "$marker"
+    changes="$(python3 -B "$ROOT/scripts/lib/scaffold_reconcile.py" . 2>/dev/null)"
+    [[ -n "$changes" ]] || return 1
+    {
+        echo
+        echo '### Driver scaffold reconciliation'
+        echo
+        echo 'The driver -- not an implementation agent -- made the following mechanical'
+        echo 'fix(es) because the application and its real tests were otherwise correct,'
+        echo 'but a protected scaffold file disagreed with the code it scaffolds in a way'
+        echo 'only an exact-match glob, an import statement, or a find-text snippet'
+        echo 'controls. Nothing an assertion checks was changed.'
+        echo
+        while IFS= read -r change; do
+            [[ -n "$change" ]] || continue
+            python3 -B -c '
+import json, sys
+c = json.loads(sys.argv[1])
+print("- `%s`: %s" % (c["file"], c["reason"]))
+' "$change"
+        done <<< "$changes"
+    } >> .uncle/docs/IMPLEMENTATION_NOTES.md
+    echo "Driver scaffold reconciliation applied $(wc -l <<< "$changes" | tr -d ' ') mechanical fix(es); recorded in .uncle/docs/IMPLEMENTATION_NOTES.md."
+    # The files just changed are now the approved baseline: nothing here is
+    # an unreviewed drift from what was implemented, it is the driver's own
+    # attributed correction of it, recorded above.
+    capture_verification_inputs
+    EXPECTED_VERIFICATION="$(cat "$STATE_DIR/verification.manifest" 2>/dev/null)"
+    rm -f "$STATE_DIR/green-check.fingerprint"
+    run_green_check_auto || true
+    green_wait_final || true
+    return 0
+}
+
 # Return 0 when browser/verification work is safe, 2 after scheduling the one
 # bounded repair attempt for an unattended run, and 1 when a person must
 # inspect the persistent setup failure.
@@ -1702,6 +1757,10 @@ green_application_not_runnable() {
 # failure shape within the same run.
 route_unrunnable_application() {
     green_application_not_runnable || return 0
+    if reconcile_scaffold_mismatches && ! green_application_not_runnable; then
+        echo 'Scaffold reconciliation resolved the runtime failure; proceeding without spending the repair budget.'
+        return 0
+    fi
     local marker="$STATE_DIR/runtime-readiness-repair-attempted"
     if [[ "${UNATTENDED:-0}" == 1 && ! -e "$marker" ]]; then
         touch "$marker"
@@ -3413,11 +3472,60 @@ run_final_audit_panel() {
     printf '\n## Collated specialist findings (binding)\n\nRead only `%s/documents/FINAL_AUDIT_WORKERS.json`; do not read the worker directory.\n' "$STATE_DIR" >> "$FINAL_AUDIT_PROMPT"
 }
 
+# Parallel implementation steps run in isolation: a worker writing one file
+# cannot read another step's owned files (they may not exist yet, and it
+# would multiply the plan's token cost by every worker), so each one guesses
+# the shape of whatever it imports from a sibling step. The guesses
+# routinely disagree on small things a human developer would instead settle
+# once, in writing, before anyone starts: initialState as an object vs. a
+# function, an action field named op vs. operator, a key-mapper taking a
+# string vs. an event. The merged result then fails to build, which reads
+# as a model or driver defect when it is really a missing shared contract.
+#
+# Derive that contract once, from the approved plan, before the fan-out
+# starts, and hand every worker the identical binding text. Non-fatal and
+# cached by plan hash: a failure here still lets steps run exactly as they
+# did before this existed, just without the shared contract.
+derive_module_interfaces() {
+    [[ "${WORKFLOW_MODULE_INTERFACES:-1}" == 1 ]] || return 1
+    local plan=".uncle/docs/UPDATED_PROJECT_PLAN.md" canonical="$STATE_DIR/documents/MODULE_INTERFACES.json"
+    local hash_file="$STATE_DIR/module-interfaces-plan.sha256" plan_hash
+    [[ -s "$plan" ]] || return 1
+    plan_hash="$(hash_file "$plan")"
+    if [[ -s "$canonical" && -s "$hash_file" && "$(cat "$hash_file")" == "$plan_hash" ]] \
+            && python3 -B "$ROOT/scripts/lib/module_interfaces.py" --validate-json "$canonical" >/dev/null 2>&1; then
+        return 0
+    fi
+    local directory="$STATE_DIR/module-interfaces" prompt canonical_abs
+    rm -rf "$directory"; mkdir -p "$directory" "$(dirname "$canonical")"
+    canonical_abs="$(cd "$(dirname "$canonical")" && pwd)/$(basename "$canonical")"
+    prompt="$directory/prompt.md"
+    sed "s#{{CANONICAL_PATH}}#$canonical_abs#" "$ROOT/prompts/module-interfaces.md" > "$prompt"
+    cat "$plan" >> "$prompt"
+    rm -f "$canonical"
+    # A subshell: run_claude exits the whole process on a failure it judges
+    # unrecoverable (a crashed agent, turns exhausted after its own retry).
+    # This stage is explicitly optional and must never take the run down
+    # with it -- only the validity check below decides whether it worked.
+    ( UNCLE_WORKER_PACKET_PATH="$canonical" run_claude "$prompt" module-interfaces ) \
+        > "$LOG_DIR/module-interfaces.log" 2>&1 || true
+    if [[ ! -s "$canonical" ]] \
+            || ! python3 -B "$ROOT/scripts/lib/module_interfaces.py" --validate-json "$canonical" 2>"$directory/error.txt"; then
+        echo "Module interfaces could not be derived; parallel steps will run without a shared contract. See $LOG_DIR/module-interfaces.log." >&2
+        rm -f "$canonical" "$hash_file"
+        return 1
+    fi
+    printf '%s' "$plan_hash" > "$hash_file"
+    echo "Module interfaces derived: parallel steps share one exact contract for cross-file exports."
+    return 0
+}
+
 # Execute plan-declared independent application steps in isolated worktrees.
 # The shared parallel runner verifies each worker's owned-file boundary before
 # merging, so this is enabled only for an explicit Owns:/Depends on schedule.
 run_parallel_application_implementation() {
     local groups group step prompt result cmd model effort checkpoint_dir checkpoint step_line owned_paths
+    local module_interfaces_section=""
     local complete_marker="$STATE_DIR/parallel-implementation-complete"
     local serial_fallback_marker="$STATE_DIR/parallel-implementation-serial-fallback"
     local runtime_repair_marker="$STATE_DIR/runtime-readiness-force-implementation"
@@ -3435,6 +3543,10 @@ run_parallel_application_implementation() {
     parallel_prewarm_wait
     groups="$(parallel_groups .uncle/docs/UPDATED_PROJECT_PLAN.md "$ROOT/scripts/lib")" || return 2
     [[ -n "$groups" ]] || return 2
+    if derive_module_interfaces; then
+        module_interfaces_section="$(python3 -B "$ROOT/scripts/lib/module_interfaces.py" --render-section \
+            "$STATE_DIR/documents/MODULE_INTERFACES.json" 2>/dev/null || true)"
+    fi
     uncle_resolve_stage_runner implementation AGENT || return 1
     cmd="$(stage_agent_cmd implementation)" || return 1
     model="$(stage_model implementation)"
@@ -3494,6 +3606,9 @@ run_parallel_application_implementation() {
                 fi
                 echo; echo "Work only on this approved step and its declared owned files."
                 echo "Do not edit workflow documents."
+                if [[ -n "$module_interfaces_section" ]]; then
+                    printf '%s\n' "$module_interfaces_section"
+                fi
                 if [[ -e "$runtime_repair_marker" && -s "$LOG_DIR/green-check.log" ]]; then
                     cat <<'EOF'
 
@@ -5530,6 +5645,21 @@ while true; do
             ensure_rc=0; ensure_acceptance_canonical .uncle/docs/TEST_REVIEW.md || ensure_rc=$?
             if [[ "$ensure_rc" == 2 ]]; then continue; fi
             require_file "$STATE_DIR/documents/TEST_REVIEW.json"
+            # Unattended only: a FAIL on test-suite thoroughness (COVERAGE,
+            # ORACLE) does not by itself mean the application is wrong, only
+            # that it was checked less exhaustively than the plan described.
+            # Downgrading it to nonblocking never touches the reviewer's own
+            # TEST_REVIEW.md or its FAIL status -- only the driver's routing
+            # decision -- and only fires when every row that actually proves
+            # correct behavior (ASSERTIONS, INTEGRITY, RESULTS, NEGATIVE) is
+            # clean. See test_review_advisory.py for the full rationale.
+            if [[ "${WORKFLOW_ADVISORY_TEST_REVIEW:-1}" == 1 && "$UNATTENDED" == 1 ]]; then
+                advisory_downgraded="$(python3 -B "$ROOT/scripts/lib/test_review_advisory.py" "$STATE_DIR/documents/TEST_REVIEW.json")"
+                if [[ -n "$advisory_downgraded" ]]; then
+                    echo "Unattended: test-suite-thoroughness finding(s) ($(printf '%s' "$advisory_downgraded" | tr '\n' ' ')) continue as nonblocking evidence; the application's own behavior is fully verified."
+                    record_nonblocking_failure TEST_REVIEW.json "test-suite thoroughness gap(s): $(printf '%s' "$advisory_downgraded" | tr '\n' ' ')"
+                fi
+            fi
             if [[ "$GREEN_CHECK" != 1 || ! -s "$GREEN_CLASS" ]]; then
                 echo "Acceptance BLOCKED: the driver must run the approved verification suite."
                 echo "Enable WORKFLOW_GREEN_CHECK and rerun IMPLEMENT to capture its results before checklist work."

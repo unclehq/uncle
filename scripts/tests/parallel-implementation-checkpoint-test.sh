@@ -30,6 +30,7 @@ stage_tools() { printf Read; }
 plan_steps() { printf 'one\ntwo\n'; }
 plan_step_owns() { printf '1\thandoff-1.py\n2\thandoff-2.py\n'; }
 supervision_validation_failed() { :; }
+derive_module_interfaces() { return 1; }  # not under test here; an optional, non-fatal extra
 parallel_run_group() {
     local _lib="$1" _logs="$2" _plan="$3" group="$4"
     printf '%s\n' "$group" >> "$WORK/calls"

@@ -122,6 +122,32 @@ class RepairCheck(unittest.TestCase):
         code, ids = self.judge()
         self.assertEqual((code, ids), (0, []))
 
+    def test_a_test_count_ratio_is_not_mistaken_for_a_file(self):
+        # A real stuck run (calculator, 2026-10-29): COVERAGE's evidence said
+        # "controls 4/4 passed", and "4/4" matched the same word/word shape as
+        # a real repository path. Tracked as one ("4/4."), it never exists and
+        # its hash is always None before and after, so a repair that genuinely
+        # added new files (and left no existing named file touched) was judged
+        # unrepaired even though the coverage gap it described was closed.
+        review = REVIEW.replace(
+            '| COVERAGE | YES | FAIL | TR-1 untested |',
+            '| COVERAGE | YES | FAIL | mutation runner caught 10 of 10 (DI-1..DI-10) with controls 4/4. '
+            'Playwright ran only 11 tests, no spec for T-12..T-16 |')
+        (self.root / 'TEST_REVIEW.md').write_text(review)
+        self.snapshot()
+        import json
+        data = json.loads(self.snap.read_text())
+        self.assertEqual(data['findings']['COVERAGE']['paths'], [])
+        # The real fix is a brand-new file the finding's own text never
+        # names -- only the pathless tree-wide fallback can see it. TR-1 and
+        # TR-2 are fixed too, the ordinary way, so the whole pass judges clean.
+        (self.root / 'tests/browser/robust.test.js').parent.mkdir(parents=True, exist_ok=True)
+        (self.root / 'tests/browser/robust.test.js').write_text('new coverage spec\n')
+        (self.root / 'src/calc.js').write_text('fixed\n')
+        (self.root / 'tests/defects/inject.js').write_text('fixed\n')
+        code, ids = self.judge()
+        self.assertEqual((code, ids), (0, []))
+
     def test_unstructured_report_is_judged_by_the_tree(self):
         (self.root / 'green-check.md').write_text('## Green check\n\nFAIL npm test\n')
         self.snapshot('green-check.md')

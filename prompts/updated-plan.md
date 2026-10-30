@@ -127,6 +127,11 @@ files at verification time (a defect-injection runner, an integration script) de
 Do not add a final step that re-checks everything: the driver runs the verification commands itself. A serial
 tail starts after every other step and adds its whole duration to the build.
 
+The driver separately derives a binding export contract from the plan -- exact names, kinds, and call
+signatures for every cross-file interface -- and hands it to every parallel step verbatim. A step importing
+what another step writes is not by itself a reason for `Depends on:` or for merging two steps into one;
+only a real runtime or build order is.
+
 ## Make verification fast
 
 Verification runs more than once, so its slowest command sets the build's pace. On a typical web

@@ -171,6 +171,12 @@ reads as one long chain wastes most of its implementation time:
   selectors or `data-testid` names, the file layout, the state shape. Steps that build to the
   same written interface do not depend on each other. Tests are written from the plan's
   behaviors and interfaces, so a test step needs no earlier code step.
+- The driver separately derives a binding export contract from this plan -- exact names, kinds,
+  and call signatures for every cross-file interface -- and hands it to every parallel step
+  verbatim, so a step does not need this plan's own prose to be perfectly precise to safely
+  import from a sibling step's file. Do not add `Depends on:` or merge steps merely because one
+  imports what another writes; only a real runtime or build order (one step's generated output,
+  a migration, a lockfile) justifies that.
 - One owner per file. Two steps that name the same file cannot run together, so split a
   shared file or assign it to one step.
 - Prefer several small steps of one to three files to a few large ones, and list independent

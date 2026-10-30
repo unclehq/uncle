@@ -33,9 +33,12 @@ REPORTS = {'IMPLEMENTATION_NOTES.md', 'AUTOMATED_TEST_REPORT.md', 'CHANGE_TEST_R
            'CHANGE_SPEC.md', 'CHANGE_PLAN.md', 'BASELINE_REPORT.md'}
 # A repository-relative path: directories and a file, or a bare file with a
 # source-like extension. Optional `:12` / `:12-20` line references are dropped.
+SOURCE_EXTENSIONS = ('js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'sh', 'bash', 'html', 'htm',
+                      'css', 'scss', 'json', 'yaml', 'yml', 'toml', 'txt', 'go', 'rs', 'java',
+                      'rb', 'php', 'c', 'h', 'cpp', 'hpp', 'swift', 'kt', 'sql', 'vue', 'svelte')
 PATH_TOKEN = re.compile(
-    r'(?<![\w/.-])((?:[\w.-]+/)+[\w.-]+|[\w-]+\.(?:js|mjs|cjs|ts|tsx|jsx|py|sh|bash|html|htm|css|scss|json|ya?ml|toml|'
-    r'txt|go|rs|java|rb|php|c|h|cpp|hpp|swift|kt|sql|vue|svelte))(?::\d+(?:-\d+)?)?(?![\w/])')
+    r'(?<![\w/.-])((?:[\w.-]+/)+[\w.-]+|[\w-]+\.(?:' + '|'.join(SOURCE_EXTENSIONS) + r'))'
+    r'(?::\d+(?:-\d+)?)?(?![\w/])')
 TREE_FALLBACK = '(source tree)'
 
 
@@ -71,12 +74,17 @@ def paths_in(text, root):
         # citation like "DEC-9/I-5" matches the same shape as a real
         # repository path and is never a file; tracking it as one leaves a
         # finding waiting on a file that can never be written, stuck open
-        # forever. Require either the file to already exist, or its last
-        # segment to look file-shaped (has an extension), so a real
-        # not-yet-created file is still tracked while a bare ID
-        # cross-reference is not.
+        # forever. A test-count ratio like "4/4" or "16/16" matches the same
+        # shape too -- on one build "controls 4/4 passed" was tracked as a
+        # path named `4/4.`, which never exists and never changes, so a
+        # finding whose row merely repeats a passing test count was judged
+        # unrepaired even after the real fix landed. Require either the file
+        # to already exist, or its last segment to end in a recognized source
+        # extension (not just any dot), so a real not-yet-created file is
+        # still tracked while a bare ID cross-reference or a number-over-
+        # number ratio is not.
         last = token.rsplit('/', 1)[-1]
-        file_shaped = '.' in last and not last.startswith('.')
+        file_shaped = bool(re.fullmatch(r'[\w-]+\.(?:' + '|'.join(SOURCE_EXTENSIONS) + r')', last))
         if (root / token).is_file() or ('/' in token and file_shaped):
             found.append(token)
     return found

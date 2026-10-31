@@ -321,10 +321,10 @@ PY
 WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY=file run_case hostedfile ok hosted
 w="$TMP/hostedfile/.uncle/workflow"
 check "forced file delivery: hosted writer returns 0" test "$(cat "$w/rc")" == 0
-check "forced file delivery: no schema, private packet path" bash -c '! grep -q "schema=.*schemas/" "$1" && grep -q "out=none" "$1" && ! grep -q "packet=none" "$1"' _ "$w/calls"
+check "forced file delivery: no schema, private packet path" bash -c '! grep -q "schema=[^ ]*schemas/" "$1" && grep -q "out=none" "$1" && ! grep -q "packet=none" "$1"' _ "$w/calls"
 
 run_case hostedresolve resolve hosted
-check "hosted resolver: schema and answer path"  bash -c 'grep -q "resolve-G1 schema=.*schemas/resolve-G1.json out=.*/resolutions-G1.json" "$1"' _ "$TMP/hostedresolve/.uncle/workflow/calls"
+check "hosted resolver: schema and answer path"  bash -c 'grep -q "resolve-G1 schema=[^ ]*schemas/resolve-G1.json out=.*/resolutions-G1.json" "$1"' _ "$TMP/hostedresolve/.uncle/workflow/calls"
 check "ops mode is the default"                  grep -qF 'WORKFLOW_UPDATED_PLAN_OPS:-1' "$ROOT/scripts/stagegate.sh"
 check "non-owner batches are set-e safe"         bash -c '! grep -q '\''owner_of\[index\]="\$(\[\['\'' "$1" && ! grep -q '\''"\$(\[\[ "\$name" == 1 || "\$name" == 1-1 \]\] && echo owner)"'\'' "$1"' _ "$ROOT/scripts/stagegate.sh"
 

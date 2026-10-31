@@ -14,6 +14,16 @@ import worker_schemas
 
 
 class RunnerSchema(unittest.TestCase):
+    def test_help_probe_keeps_workflow_channels_private(self):
+        with patch.dict(os.environ, {'UNCLE_STATUS_FILE': '/private/status', 'UNCLE_CONFIG': '/private/config'}), \
+                patch.object(runner.subprocess, 'run') as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = '--output-schema --output-last-message'
+            self.assertTrue(runner.supported())
+            self.assertNotIn('UNCLE_STATUS_FILE', run.call_args.kwargs['env'])
+            self.assertNotIn('UNCLE_CONFIG', run.call_args.kwargs['env'])
+            self.assertEqual(run.call_args.kwargs['stdin'], runner.subprocess.DEVNULL)
+
     def test_every_worker_schema_can_be_constrained(self):
         for schema in (worker_schemas.section_packet(), worker_schemas.section_model_packet(),
                        worker_schemas.outline_packet(), worker_schemas.edit_packet(),

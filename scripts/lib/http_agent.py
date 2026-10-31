@@ -344,10 +344,12 @@ def _bash(policy, command, timeout):
 
 
 def _preflight_bash(policy, command, timeout, env):
-    from preflight_readonly import copy_project, probe_command, Violation
+    from preflight_readonly import copy_project, probe_command, temp_parent, Violation
     from process_tree import start_check, launch_command, kill_tree, finish_check
     if policy.preflight_scratch is None:
-        policy.preflight_scratch = tempfile.TemporaryDirectory(prefix='uncle-preflight-probe-')
+        parent = (policy.root.parent if policy.root.name == 'project' and
+                  policy.root.parent.name.startswith('uncle-preflight-') else temp_parent(policy.root))
+        policy.preflight_scratch = tempfile.TemporaryDirectory(prefix='uncle-preflight-probe-', dir=parent)
         directory = Path(policy.preflight_scratch.name).resolve()
         copy_project(policy.root, directory / 'project')
         for name in ('home', 'tmp', 'cache'):
@@ -366,7 +368,7 @@ def _preflight_bash(policy, command, timeout, env):
     env.update(HOME=str(directory / 'home'), TMPDIR=str(directory / 'tmp'),
                XDG_CACHE_HOME=str(directory / 'cache'), npm_config_cache=str(directory / 'cache/npm'),
                PLAYWRIGHT_BROWSERS_PATH=str(directory / 'cache/ms-playwright'))
-    with tempfile.TemporaryFile() as log:
+    with tempfile.TemporaryFile(dir=directory) as log:
         child = start_check(launch_command(probe_command(command, directory)),
                             cwd=directory / 'project', env=env, stdout=log, stderr=subprocess.STDOUT)
         try:
@@ -390,7 +392,6 @@ def _preflight_bash(policy, command, timeout, env):
 def run_tool(policy, name, arguments):
     if (policy.preflight_worker and name in ('write_file', 'edit_file')
             and (policy.root / arguments.get('path', '')).resolve() != policy.preflight_delivery):
-        from preflight_readonly import Violation
         policy.preflight_violation = '%s: read-only preflight refused %s on %s' % (
             policy.preflight_worker, name, arguments.get('path', ''))
         return 'error: ' + policy.preflight_violation

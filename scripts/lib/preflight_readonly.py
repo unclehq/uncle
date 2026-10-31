@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import sys
 import tempfile
 
@@ -12,8 +13,23 @@ class Violation(ValueError):
     pass
 
 
+def temp_parent(source):
+    source = Path(source).resolve()
+    for candidate in (tempfile.gettempdir(), '/tmp', '/var/tmp', Path.home()):
+        parent = Path(candidate).resolve()
+        if parent.is_dir() and not parent.is_relative_to(source):
+            return parent
+    raise ValueError('Preflight requires a temporary directory outside the project')
+
+
+def allocate(source):
+    return Path(tempfile.mkdtemp(prefix='uncle-preflight-', dir=temp_parent(source))).resolve() / 'project'
+
+
 def copy_project(source, target):
-    source, target = Path(source).resolve(), Path(target)
+    source, target = Path(source).resolve(), Path(target).resolve()
+    if target.is_relative_to(source):
+        raise ValueError('Preflight scratch copy must be outside the project')
     def ignore(directory, names):
         skipped = {name for name in names if name in ('.git', '.uncle', '__pycache__')}
         for name in names:
@@ -40,6 +56,7 @@ def snapshot(root):
     result = {}
     for directory, names, files in os.walk(root):
         relative = Path(directory).relative_to(root).parts
+        result[Path(directory).relative_to(root).as_posix() + '/'] = ['directory', stat.S_IMODE(Path(directory).stat().st_mode)]
         if relative == ('.uncle',):
             names[:] = [n for n in names if n in ('docs', 'workflow')]
             files = []
@@ -49,13 +66,16 @@ def snapshot(root):
         names.sort()
         for name in sorted(files + [n for n in names if (Path(directory) / n).is_symlink()]):
             path = Path(directory) / name
-            result[path.relative_to(root).as_posix()] = (os.readlink(path) if path.is_symlink() else
-                                                       hashlib.sha256(path.read_bytes()).hexdigest())
+            result[path.relative_to(root).as_posix()] = [stat.S_IMODE(path.lstat().st_mode),
+                os.readlink(path) if path.is_symlink() else hashlib.sha256(path.read_bytes()).hexdigest()]
     return result
 
 
-def prepare(source):
-    directory = Path(tempfile.mkdtemp(prefix='uncle-preflight-')).resolve()
+def prepare(source, root=None):
+    root = Path(root).resolve() if root is not None else allocate(source)
+    if root.is_relative_to(Path(source).resolve()):
+        raise ValueError('Preflight scratch copy must be outside the project')
+    directory = root.parent
     try:
         copy_project(source, directory / 'project')
         (directory / 'snapshot.json').write_text(json.dumps(snapshot(directory / 'project')))
@@ -91,15 +111,18 @@ def probe_command(command, directory):
 
 
 def main(argv):
-    if argv[0] == 'prepare':
-        print(prepare(argv[1]))
+    if argv[0] == 'allocate':
+        print(allocate(argv[1]))
+    elif argv[0] == 'prepare':
+        print(prepare(argv[1], argv[2] if len(argv) > 2 else None))
     elif argv[0] == 'check':
         check(argv[1], argv[2])
     elif argv[0] == 'remove':
         root = Path(argv[1]).resolve()
         if root.name != 'project' or not root.parent.name.startswith('uncle-preflight-'):
             raise ValueError('invalid preflight scratch path')
-        shutil.rmtree(root.parent)
+        if root.parent.exists():
+            shutil.rmtree(root.parent)
 
 
 if __name__ == '__main__':

@@ -1451,9 +1451,9 @@ def _run_stage(side, values, prompt, root, stage=None, usage=None):
     # JSON tool events below for the next stage.  Live sessions already do
     # this through native_stage, so never append the packet twice.
     if (stage or os.environ.get('UNCLE_STATUS_STAGE', '')) == 'preflight-investigate':
-        from preflight_readonly import copy_project
+        from preflight_readonly import copy_project, temp_parent
         relative, document = INVESTIGATION_DOCUMENTS['preflight-investigate']
-        with tempfile.TemporaryDirectory(prefix='uncle-preflight-investigation-') as temporary:
+        with tempfile.TemporaryDirectory(prefix='uncle-preflight-investigation-', dir=temp_parent(root)) as temporary:
             staged = Path(temporary).resolve() / 'project'
             copy_project(root, staged)
             response, turns = run_http_agent(side, values, prompt, staged, usage=usage)
@@ -1491,7 +1491,8 @@ def _run_stage(side, values, prompt, root, stage=None, usage=None):
     if stage_name == 'project-plan' and 'You perform two consecutive roles in a single pass' in prompt:
         artifact = PLAN_ARTIFACTS['requirements']
     if not artifact:
-        if http_transport() or stage_name.startswith('preflight-worker-'):
+        if (http_transport() or stage_name.startswith('preflight-worker-')
+                or os.environ.get('UNCLE_UPDATED_PLAN_CHEAP_RETRY') == '1'):
             kind = reviewer_artifact_kind(prompt)
             text, turns = run_http_agent(side, values, prompt, root, usage=usage, schema_kind=kind, read_cache=read_cache)
             delivery = os.environ.get('UNCLE_ARTIFACT_DELIVERY', '')

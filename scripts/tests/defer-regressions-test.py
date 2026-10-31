@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/lib'))
@@ -299,6 +300,20 @@ packet['ops'] = [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/cor
                 self.assert_published(root, result, change, cause='wall', deferred=('AR-003', 'AR-022'))
                 self.assertLess(elapsed, 12)
                 self.assertEqual(sum('AR-022' in c['ids'] for c in calls), 1)
+
+
+
+class FindingBudget(unittest.TestCase):
+    def test_worker_specific_deadline_cannot_grow_on_private_retry(self):
+        import updated_plan_defer as defer
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+                'UNCLE_CONFIG': temp + '/config',
+                'WORKFLOW_UPDATED_PLAN_FINDING_SECONDS_UPDATED_PLAN_WORKER_EDITS_4': '2'}, clear=True):
+            with patch.object(defer.time, 'monotonic', return_value=100):
+                self.assertEqual(defer.remaining(temp, 'AR-022', 'updated-plan-worker-edits-4'), 2)
+            with patch.object(defer.time, 'monotonic', return_value=103):
+                self.assertEqual(defer.remaining(temp, 'AR-022', 'updated-plan-worker-edits-4-retry'), 0)
+                self.assertEqual(defer.remaining(temp, 'AR-022', 'updated-plan-worker-resolve-G1'), 0)
 
 
 

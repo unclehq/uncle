@@ -546,7 +546,8 @@
         "s6",
         "s6.2"
       ],
-      "before_bytes": 15130
+      "before_bytes": 15130,
+      "before_wire_bytes": 5155
     },
     {
       "writer": 2,
@@ -617,7 +618,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 3,
@@ -688,7 +690,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 4,
@@ -759,7 +762,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 5,
@@ -776,7 +780,8 @@
         "s6",
         "s6.2"
       ],
-      "before_bytes": 14898
+      "before_bytes": 14898,
+      "before_wire_bytes": 5020
     },
     {
       "writer": 6,
@@ -847,7 +852,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 7,
@@ -865,7 +871,8 @@
         "s6",
         "s6.2"
       ],
-      "before_bytes": 14979
+      "before_bytes": 14979,
+      "before_wire_bytes": 5044
     },
     {
       "writer": 8,
@@ -936,7 +943,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 9,
@@ -1007,7 +1015,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 10,
@@ -1078,7 +1087,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 11,
@@ -1149,7 +1159,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 12,
@@ -1167,7 +1178,8 @@
         "s6",
         "s6.2"
       ],
-      "before_bytes": 14979
+      "before_bytes": 14979,
+      "before_wire_bytes": 5044
     },
     {
       "writer": 13,
@@ -1238,7 +1250,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 14,
@@ -1256,7 +1269,8 @@
         "s6",
         "s6.2"
       ],
-      "before_bytes": 14976
+      "before_bytes": 14976,
+      "before_wire_bytes": 5041
     },
     {
       "writer": 15,
@@ -1327,7 +1341,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 16,
@@ -1398,7 +1413,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 17,
@@ -1469,7 +1485,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 18,
@@ -1540,7 +1557,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 19,
@@ -1557,7 +1575,8 @@
         "s6",
         "s6.2"
       ],
-      "before_bytes": 14898
+      "before_bytes": 14898,
+      "before_wire_bytes": 5020
     },
     {
       "writer": 20,
@@ -1628,7 +1647,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 21,
@@ -1646,7 +1666,8 @@
         "s6",
         "s6.2"
       ],
-      "before_bytes": 14979
+      "before_bytes": 14979,
+      "before_wire_bytes": 5044
     },
     {
       "writer": 22,
@@ -1717,7 +1738,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     },
     {
       "writer": 23,
@@ -1735,7 +1757,8 @@
         "s6",
         "s6.2"
       ],
-      "before_bytes": 14979
+      "before_bytes": 14979,
+      "before_wire_bytes": 5044
     },
     {
       "writer": 24,
@@ -1806,7 +1829,8 @@
         "s6.6.r4",
         "s6.7"
       ],
-      "before_bytes": 38117
+      "before_bytes": 38117,
+      "before_wire_bytes": 11902
     }
   ]
 }

@@ -42,13 +42,14 @@ def generate(root, fixture):
     result = []
     for row in fixture['writers']:
         output = root / ('%s.md' % row['writer'])
-        ops.write_prompt(base, [f['id'] for f in row['findings']], output)
+        ops.write_prompt(base, [f['id'] for f in row['findings']], output, owns_fields=row['writer'] == 1)
         scope_file = output.with_suffix('.scope.json')
         scope = json.loads(scope_file.read_text())
         if isinstance(scope, dict):
             scope = scope['ids']
         schema_file = root / ('%s.schema.json' % row['writer'])
-        status = ws.main(['edit-ops', str(plan), str(schema_file), '--scope', str(scope_file)])
+        args = ['edit-ops', str(plan), str(schema_file)] + (['owner'] if row['writer'] == 1 else [])
+        status = ws.main(args + ['--scope', str(scope_file)])
         if status:
             raise AssertionError('schema generation failed: %s' % row['writer'])
         schema = json.loads(schema_file.read_text())
@@ -105,6 +106,8 @@ class Run19(unittest.TestCase):
                         operation = {'op': 'set_text', 'id': target, 'text': 'Required correction.'}
                     packet = {'schema': ws.ENVELOPE, 'kind': ws.EDIT_OPS_KIND,
                               'dispositions': [], 'ops': [operation]}
+                    if row['writer'] == 1:
+                        packet['protected_verification_paths'] = 'tests/'
                     conforms(packet, row['schema'])
                     pm.apply_ops(model, [pm.typed_op(model, operation)])
 
@@ -113,9 +116,12 @@ class Run19(unittest.TestCase):
             for operation in ({'op': 'set_text', 'id': 'does-not-exist', 'text': 'x'},
                               {'op': 'set_fields', 'id': 'MC-1', 'fields': {'invented': 'x'}}):
                 with self.subTest(writer=row['writer'], operation=operation):
+                    packet = {'schema': ws.ENVELOPE, 'kind': ws.EDIT_OPS_KIND,
+                              'dispositions': [], 'ops': [operation]}
+                    if row['writer'] == 1:
+                        packet['protected_verification_paths'] = 'tests/'
                     with self.assertRaises(ValueError):
-                        conforms({'schema': ws.ENVELOPE, 'kind': ws.EDIT_OPS_KIND,
-                                  'dispositions': [], 'ops': [operation]}, row['schema'])
+                        conforms(packet, row['schema'])
 
 
 if __name__ == '__main__':

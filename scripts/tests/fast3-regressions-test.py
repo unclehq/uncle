@@ -309,6 +309,26 @@ class WriterFallback(unittest.TestCase):
             self.assertFalse(args[0]['_request_options']['chat_template_kwargs']['enable_thinking'])
             self.assertEqual(complete.call_args.kwargs.get('skip', ()), ())
 
+    def test_opencode_transport_uses_http_only_for_cheap_retry(self):
+        packet = json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-edit-ops-packet',
+                             'dispositions': [], 'ops': []})
+        for stage in ('updated-plan-worker-edits-3-1', 'updated-change-plan-worker-edits-3-1'):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temp, \
+                    patch.dict(os.environ, {'UNCLE_CONFIG': str(Path(temp) / 'config'),
+                        'UNCLE_PROJECT_ROOT': temp, 'UNCLE_STATUS_STAGE': stage,
+                        'WORKFLOW_SELF_HOSTED_TRANSPORT': 'opencode'}, clear=True), \
+                    patch.object(self_hosted, '_run_opencode', return_value=(packet, 1)) as opencode, \
+                    patch.object(self_hosted, 'run_http_agent', return_value=(packet, 1)) as http:
+                values = {'base_url': 'http://unused.invalid/v1', 'api_key': 'stub', 'model': 'stub'}
+                for marker in ('0', '1', '0'):
+                    with patch.dict(os.environ, UNCLE_UPDATED_PLAN_CHEAP_RETRY=marker):
+                        self.assertEqual(self_hosted.run_opencode('agent', values, packet, Path(temp), stage=stage),
+                                         (packet, 1))
+                self.assertEqual(http.call_count, 1)
+                self.assertEqual(opencode.call_count, 2)
+                self.assertEqual(http.call_args.args[1], values)
+                self.assertEqual(http.call_args.kwargs['schema_kind'], 'updated-plan-edit-ops-packet')
+
     def test_writer_budget_defaults_and_config_precedence(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

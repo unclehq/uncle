@@ -286,8 +286,15 @@ REVIEWER_RUNNERS = ["cline", "codex", "claude", "kimi", "self-hosted"]
 DEFAULT_RUNNER = "claude"
 DEFAULT_EFFORT = "low"
 
+def public_stage_label(stage):
+    """Private review slices retain the existing lens labels and indicators."""
+    return re.sub(r"^(adversarial-review-worker-(?:requirements|regression|security|testability))-slice-\d+(?=-|$)",
+                  r"\1", stage)
+
+
 def parent_stage(stage):
     """Return the configured parent for a driver-created stage name."""
+    stage = public_stage_label(stage)
     # issue 103: a raced stage's own candidates (`<stage>-candidate-<n>`) fold
     # back only as far as `<stage>` itself, not past it -- checked first so
     # a raced worker (`adversarial-review-worker-requirements-candidate-2`)
@@ -6273,7 +6280,7 @@ class UncleTUI:
             model_label = (model or runner or model_label) + ' (' + effort + ')'
         stage_status = ''
         if build and getattr(self, 'status_stage', ''):
-            stage_status = self.status_stage
+            stage_status = public_stage_label(self.status_stage)
             if getattr(self, 'status_stage_index', 0) and getattr(self, 'status_stage_total', 0):
                 stage_status += ' (%d/%d)' % (self.status_stage_index, self.status_stage_total)
             stage_status += '  ·  '
@@ -6590,8 +6597,19 @@ class UncleTUI:
                 statuses = group.get("_worker_statuses", {})
                 indicator_styles = []
                 indicator_chars = []
+                visible_statuses = {}
                 for raw in sorted(raw_stages):
+                    label = public_stage_label(raw)
                     ws = statuses.get(raw, {})
+                    if label not in visible_statuses:
+                        visible_statuses[label] = dict(ws)
+                    else:
+                        merged = visible_statuses[label]
+                        merged["active"] = merged.get("active") or ws.get("active")
+                        merged["failed"] = merged.get("failed") or ws.get("failed")
+                        if ws.get("failed") or merged.get("exit") == 130:
+                            merged["exit"] = ws.get("exit")
+                for raw, ws in sorted(visible_statuses.items()):
                     # issue 103: a raced candidate gets one of 4 states, not
                     # the plain worker's 2 (running/failed) -- winner (exit
                     # 0), stopped (exit 130: killed once another candidate

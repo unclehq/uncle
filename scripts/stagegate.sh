@@ -2453,7 +2453,7 @@ run_adversarial_review_panel() {
     slices="$(python3 -B "$ROOT/scripts/lib/adversarial_slices.py" count "$(workflow_model_runner adversarial-review REVIEWER)")" || return 1
     if [[ "$slices" -gt 1 ]]; then
         . "$ROOT/scripts/lib/adversarial-slices.sh"
-        run_adversarial_review_slices "$directory" "$STATE_DIR/documents/PROJECT_PLAN.json" \
+        run_adversarial_review_slices "$directory" "$plan_input" \
             "$STATE_DIR/documents/REQUIREMENTS_INTERPRETATION.json" "$slices" new || return 1
     else
     for lens in requirements regression security testability; do

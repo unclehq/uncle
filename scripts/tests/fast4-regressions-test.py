@@ -385,7 +385,8 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
 ''' + 'run_' + prefix + '_edit_writers\n'
         result = subprocess.run(['bash', '-c', script], cwd=root, env=environment(root,
             SCHEMA_TEST_MODE='resolver-invalid' if semantic else 'resolver-transport', WORKFLOW_UPDATED_PLAN_EDIT_SLICE='3',
-            WORKFLOW_SELF_HOSTED_GRANULARITY=granularity, WORKFLOW_PREFIX_WARM_SECONDS='0'),
+            WORKFLOW_SELF_HOSTED_GRANULARITY=granularity, WORKFLOW_PREFIX_WARM_SECONDS='0',
+            WORKFLOW_UPDATED_PLAN_DEFER_UNAPPLIED='off'),
             capture_output=True, text=True, timeout=30)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return state, result

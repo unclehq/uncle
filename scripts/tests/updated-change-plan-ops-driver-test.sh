@@ -2,6 +2,8 @@
 # run_updated_change_plan_edit_writers (the change workflow) in ops mode: writers receive the plan model and answer with ops that name ids;
 # the merge publishes the same section patch, and every failure still returns nonzero with nothing published.
 set -uo pipefail
+# Retain the explicit stop-on-exhaustion compatibility contract.
+export WORKFLOW_UPDATED_PLAN_DEFER_UNAPPLIED=off
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fails=0

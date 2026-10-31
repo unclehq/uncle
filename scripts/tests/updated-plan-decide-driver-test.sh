@@ -4,6 +4,8 @@
 # caller then runs the specialist round and the writers as before), except a failed specialist or reconciler, which costs only
 # the extra edits.
 set -uo pipefail
+# Retain the explicit stop-on-exhaustion compatibility contract.
+export WORKFLOW_UPDATED_PLAN_DEFER_UNAPPLIED=off
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fails=0

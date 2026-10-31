@@ -403,6 +403,15 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
                 self.assertEqual(ops.read_answers(directory, [{'id': 'G1'}, {'id': 'G2'}]), {'G2': live})
             with self.subTest(kind='text-edits'):
                 self.assertEqual(edits.read_resolutions(directory)['resolutions'], [live])
+            plan = directory / 'plan.json'
+            plan.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': 'plan',
+                                         'narrative': order.NARRATIVE, 'verification_commands': 'true'}))
+            (directory / 'conflicts.json').write_text(json.dumps([{'id': 'G1', 'kind': 'ops', 'heading': 'Notes'}]))
+            (directory / 'prompts').mkdir()
+            (directory / 'prompts/resolve-G1.md').write_text('Resolve G1.')
+            for helper in (ops, edits):
+                with self.subTest(validator=helper.__name__):
+                    self.assertIn('G1', helper.check_resolutions(plan, directory))
 
     def test_exhausted_resolvers_record_terminal_failure_and_keep_sibling(self):
         for change in (False, True):

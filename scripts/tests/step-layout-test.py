@@ -299,6 +299,15 @@ Owns: `also-not-owned.py`
                     self.assertEqual([s['owns'] for s in pm.steps_of(pm.import_markdown(view.read_text()))], EXPECTED[run])
                     self.assertEqual(gap.unowned_protected_paths(view, self.root, PROTECTED[run]), [])
 
+    def test_numbered_ownership_lists_outside_implementation_are_not_steps(self):
+        outside = '\n## Component notes\n\n1. Example metadata\n   Owns: `example.py`\n'
+        text = '## Implementation order\n\n1. Core\n   Owns: `core.py`\n' + outside
+        self.assert_readers(text, [['core.py']])
+        published = pm.publish_records(dict(narrative=text), self.root)
+        self.assertEqual([s['owns'] for s in pm.steps_of(published)], [['core.py']])
+        self.assertTrue(published['narrative'].endswith(outside))
+        self.assertIn('example.py', pm.render(pm.model_of(published)))
+
 
 if __name__ == '__main__':
     unittest.main()

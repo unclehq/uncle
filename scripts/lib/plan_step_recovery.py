@@ -28,6 +28,8 @@ def settings(root, stage):
     config = _config_values(os.environ.get('UNCLE_CONFIG') or str(Path(root) / '.uncle/config'))
     parent = config_stage(stage, config)
     runner = config.get(stage + '.runner', config.get(parent + '.runner', config.get('runner', 'claude')))
+    if runner in ('opencode', 'aider'):
+        runner = 'self-hosted'
     return runner, config, lambda name, default: option(runner, stage, name, default, config)
 
 
@@ -83,12 +85,25 @@ def request_steps(section, root, stage, runner, config, limit, seconds):
             command = ['bash', str(adapter), '-p', '--max-turns', '1']
             env['UNCLE_OUTPUT_SCHEMA_FILE'] = str(schema)
             env['UNCLE_STRUCTURED_OUTPUT_PATH'] = str(output)
+            prompt += '\nRequired JSON schema:\n' + json.dumps(SCHEMA)
         if model:
             command += ['--model', model]
         done = subprocess.run(command, input=prompt, text=True, capture_output=True,
                               cwd=directory, env=env, timeout=seconds, check=True)
         if output.is_file():
             return json.loads(output.read_text(encoding='utf-8'))
+        if runner not in ('claude', 'codex'):
+            from structured_output import extract, reply_texts
+            log = Path(directory) / 'events.jsonl'
+            log.write_text(done.stdout, encoding='utf-8')
+            value = extract(log)
+            if value is not None:
+                return value
+            for reply in reply_texts(log):
+                try:
+                    return json.loads(reply)
+                except ValueError:
+                    continue
         value = json.loads(done.stdout)
         return value.get('structured_output', value)
 

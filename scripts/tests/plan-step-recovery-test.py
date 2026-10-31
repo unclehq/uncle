@@ -134,6 +134,25 @@ class Recovery(unittest.TestCase):
                 self.assertEqual(recovery.request_steps(BODY, self.root, 'project-plan', runner, {}, 1024, 12), ANSWER)
                 call.assert_called_once()
 
+    def test_other_runner_adapters_receive_schema_and_return_event_json(self):
+        def run(command, **kwargs):
+            self.assertIn('Required JSON schema:', kwargs['input'])
+            self.assertEqual(json.loads(kwargs['input'].split('Required JSON schema:\n')[1]), recovery.SCHEMA)
+            events = [{'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': json.dumps(ANSWER)}]}},
+                      {'type': 'result', 'result': json.dumps(ANSWER)}]
+            return subprocess.CompletedProcess(command, 0, '\n'.join(json.dumps(event) for event in events))
+        for runner in ('kimi', 'cline'):
+            with self.subTest(runner=runner), patch.object(recovery.subprocess, 'run', side_effect=run) as call:
+                self.assertEqual(recovery.request_steps(BODY, self.root, 'project-plan', runner, {}, 1024, 12), ANSWER)
+                call.assert_called_once()
+
+    def test_self_hosted_aliases_use_self_hosted_option_precedence(self):
+        for runner in ('opencode', 'aider'):
+            self.config.write_text('runner ' + runner + '\nself-hosted.plan-step-recovery off\n')
+            with self.subTest(runner=runner), patch.object(recovery, 'request_steps') as request:
+                self.assertEqual(recovery.normalize_publication(self.text, self.root, 'project-plan'), self.text)
+                request.assert_not_called()
+
     def test_http_uses_one_constrained_completion_without_agent_turns(self):
         with patch('self_hosted.settings', return_value={'base_url': 'http://stub', 'api_key': 'fake', 'model': 'fake'}), \
                 patch('self_hosted_http.constrained_completion', return_value=(json.dumps(ANSWER), 'stop', {}, 'json_schema')) as call:

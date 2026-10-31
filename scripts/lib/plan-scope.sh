@@ -207,12 +207,15 @@ plan_step_blocks_as_list() {
                 head = n ". " title; have = 1
                 next
             }
-            if (have && t ~ /^[-*+][ \t]+(\*\*)?[Oo]wns(\*\*)?[ \t]*:/) {
-                v = t; sub(/^[-*+][ \t]+/, "", v); gsub(/\*\*/, "", v); owns = (owns != "" ? owns ", " : "") v; next
+            # The field may be a bullet or a bold paragraph of its own ("**Owns:** `a`",
+            # "**Owns (additional):** `b`"): a plan laid out that way had every step read as
+            # owning nothing and stopped at the approval gate with its tests "unowned".
+            f = t; sub(/^[-*+][ \t]+/, "", f); gsub(/\*\*|__/, "", f)
+            if (have && (t ~ /^[-*+][ \t]/ || t ~ /^(\*\*|__)/) && f ~ /^[Oo]wns([ \t]*\([^)]*\))?[ \t]*:/) {
+                sub(/^[Oo]wns([ \t]*\([^)]*\))?[ \t]*:/, "Owns:", f); owns = (owns != "" ? owns ", " : "") f; next
             }
-            if (have && t ~ /^[-*+][ \t]+(\*\*)?[Dd]epends[ \t]+on(\*\*)?[ \t]*:/) {
-                v = t; sub(/^[-*+][ \t]+/, "", v); gsub(/\*\*/, "", v)
-                gsub(/\(none\)/, "none", v); dep = v; next
+            if (have && (t ~ /^[-*+][ \t]/ || t ~ /^(\*\*|__)/) && f ~ /^[Dd]epends[ \t]+on[ \t]*:/) {
+                gsub(/\(none\)/, "none", f); dep = f; next
             }
             if (have) { body[++nbody] = line; next }
             print line

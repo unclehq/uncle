@@ -82,6 +82,17 @@ class NewSteps(unittest.TestCase):
         self.assertEqual(steps[5]['depends_on'], [5])
         self.assertEqual(steps[6]['depends_on'], [6])
 
+    def test_model_ids_are_normalized_before_rendering(self):
+        original = copy.deepcopy(self.model)
+        operations = [self.insert(), {'op': 'set_step', 'id': 'step-6', 'fields': {'depends_on': ['new:1']}}]
+        typed = pm.namespace_steps([pm.typed_op(self.model, operation) for operation in operations], 'writer-1')
+        revised = pm.apply_ops(self.model, typed)
+        steps = pm.steps_of(revised)
+        self.assertEqual([step['id'] for step in steps], ['step-%d' % n for n in range(1, 8)])
+        self.assertEqual([step['number'] for step in steps], list(range(1, 8)))
+        self.assertEqual(steps[-1]['depends_on'], [4])
+        self.assertEqual(self.model, original)
+
     def test_legacy_insert_item_accepts_unnumbered_new_step(self):
         operation = self.insert()
         operation.update(op='insert_item', target=self.target)

@@ -2782,6 +2782,7 @@ run_updated_change_plan_edit_writers() {
         if [[ "$failed" != 0 ]]; then
             if stage_uses_self_hosted updated-change-plan AGENT; then
                 : > "$STATE_DIR/updated-plan-writers-exhausted"
+                printf '%s\n' 'updated-change-plan: writer attempts exhausted' > "$STATE_DIR/stop-reason"
                 echo 'Updated-plan writer attempts exhausted; completed packets retained for diagnosis.' >&2
             fi
             return 1

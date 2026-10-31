@@ -40,6 +40,41 @@ run_preflight_readonly_worker "$PWD/prompt" preflight-worker-browser "$STATE_DIR
             self.assertIn('tests/app.spec.js', result.stderr)
             self.assertEqual((project / 'tests/app.spec.js').read_text(), 'protected')
             self.assertTrue((state / 'preflight-readonly-violation').exists())
+            self.assertTrue((state / 'stop-reason').exists())
+            self.assertEqual((state / 'stop-reason').read_text(),
+                             'preflight-worker-browser: read-only preflight violation\n')
+
+    def test_unattended_launcher_does_not_restart_exhausted_writers(self):
+        launcher = re.search(r'^launch\(\) \{\n.*?^}', (ROOT / 'uncle').read_text(), re.M | re.S)[0]
+        for driver in ('stagegate.sh', 'change-workflow.sh'):
+            with self.subTest(driver=driver), tempfile.TemporaryDirectory() as temp:
+                source = (ROOT / 'scripts' / driver).read_text()
+                exhausted = re.search(r'^        if \[\[ "\$failed" != 0 \]\]; then\n'
+                                      r'            if stage_uses_self_hosted updated-(?:change-)?plan AGENT; then\n'
+                                      r'.*?^        fi', source, re.M | re.S)[0]
+                state = Path(temp) / '.uncle/workflow'
+                state.mkdir(parents=True)
+                (state / 'state').write_text('UPDATED_PLAN')
+                (state / 'completed-packet.json').write_text('{"kept":true}')
+                script = launcher + '''
+stage_uses_self_hosted() { return 0; }
+driver() {
+    local failed=1
+    echo attempt >> attempts
+''' + exhausted + '''
+}
+C_RED= C_YELLOW= C_RESET= UNCLE_LAUNCH_RETRY_DELAY=0
+launch driver --unattended
+'''
+                env = dict(os.environ, STATE_DIR=str(state))
+                result = subprocess.run(['bash', '-c', script], cwd=temp, env=env,
+                                        capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((Path(temp) / 'attempts').read_text(), 'attempt\n')
+                stage = 'updated-plan' if driver == 'stagegate.sh' else 'updated-change-plan'
+                self.assertEqual((state / 'stop-reason').read_text(), stage + ': writer attempts exhausted\n')
+                self.assertEqual((state / 'completed-packet.json').read_text(), '{"kept":true}')
+                self.assertNotIn('resuming automatically', result.stdout)
 
     def test_writer_watchdog_kills_descendants_and_returns_to_caller(self):
         with tempfile.TemporaryDirectory() as temp:

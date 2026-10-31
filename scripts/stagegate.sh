@@ -2853,7 +2853,12 @@ run_updated_plan_decide() {
 # whole panel and the caller falls back to the single-agent investigation.
 run_preflight_readonly_worker() {
     local prompt="$1" worker="$2" output="$3" scratch status=0 source="$PWD"
-    scratch="$(python3 -B "$ROOT/scripts/lib/preflight_readonly.py" prepare "$PWD")" || return 1
+    if [[ -n "${4:-}" ]]; then
+        scratch="$4"
+        python3 -B "$ROOT/scripts/lib/preflight_readonly.py" prepare "$PWD" "$scratch" > /dev/null || return 1
+    else
+        scratch="$(python3 -B "$ROOT/scripts/lib/preflight_readonly.py" prepare "$PWD")" || return 1
+    fi
     ( cd "$scratch" && UNCLE_PREFLIGHT_READONLY=1 UNCLE_CONFIG="${UNCLE_CONFIG:-$source/.uncle/config}" \
       UNCLE_WORKER_PACKET_PATH="$output" run_claude "$prompt" "$worker" "Read,Glob,Grep,Bash" ) || status=$?
     if grep -q 'read-only preflight refused' "$LOG_DIR/$worker.jsonl" "$LOG_DIR/$worker.log" 2>/dev/null; then
@@ -2870,10 +2875,9 @@ run_preflight_readonly_worker() {
 }
 
 run_preflight_investigation_panel() {
-    local directory="$STATE_DIR/preflight-panel" lens prompt output pid
-    local -a pids=() names=() done_workers=()
+    local directory="$STATE_DIR/preflight-panel" lens prompt output pid scratch
+    local -a pids=() names=() done_workers=() scratches=()
     [[ "${WORKFLOW_PREFLIGHT_PANEL:-1}" == 1 ]] || return 1
-    local tools; tools="$(stage_tools preflight-investigate)"
     rm -f "$STATE_DIR/preflight-readonly-violation"
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     echo "Preflight investigation panel: launching 3 workers in parallel (tooling, data, reviewers); browser follows serially."
@@ -2881,7 +2885,9 @@ run_preflight_investigation_panel() {
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/preflight-investigate-worker.md" "$prompt"
         printf '\n## Assigned lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
-        ( run_preflight_readonly_worker "$prompt" "preflight-worker-$lens" "$output" ) \
+        scratch="$(python3 -B "$ROOT/scripts/lib/preflight_readonly.py" allocate "$PWD")" || return 1
+        scratches+=("$scratch")
+        ( run_preflight_readonly_worker "$prompt" "preflight-worker-$lens" "$output" "$scratch" ) \
             > "$LOG_DIR/preflight-worker-$lens.log" 2>&1 &
         pids+=("$!"); names+=("$lens"); done_workers+=(0)
     done
@@ -2896,6 +2902,9 @@ run_preflight_investigation_panel() {
                         [[ "$sibling" == "$index" || "${done_workers[sibling]}" == 1 ]] && continue
                         python3 -B "$ROOT/scripts/lib/writer_deadline.py" stop "${pids[sibling]}" 2>/dev/null || true
                         wait "${pids[sibling]}" 2>/dev/null || true
+                    done
+                    for scratch in "${scratches[@]}"; do
+                        python3 -B "$ROOT/scripts/lib/preflight_readonly.py" remove "$scratch" || true
                     done
                     return 1
                 fi

@@ -122,10 +122,11 @@ updated_plan_start_reconcile() {
     ( : ) &
     UPDATED_PLAN_RECONCILE_PID=$!
 }''')
+            script = script.replace('updated_plan_start_reconcile()', prefix + '_start_reconcile()')
         if mode == 'structure':
             name = 'CHANGE_PLAN' if change else 'UPDATED_PROJECT_PLAN'
             stage = 'updated-change-plan' if change else 'updated-plan'
-            (root / 'structure.py').write_text("""import json, sys
+            (root / 'structure.py').write_text("""import json, os, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1] + '/scripts/lib')
 import artifact_json, plan_model
@@ -143,7 +144,11 @@ rendered = artifact_json.render_change_plan(plan, require_dispositions=True) if 
 Path('.uncle/docs/' + name + '.md').write_text(rendered)
 directory = state / ('updated-change-plan-edits' if change else 'updated-plan-edits')
 packet = json.loads((directory / '4.json').read_text())
-packet['ops'] = [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/core.js']}}]
+if os.environ.get('WORKFLOW_UPDATED_PLAN_OPS') == '0':
+    packet['patch'] = {'replace_text': [{'heading': '## Implementation order',
+        'old': '`src/core.js`, `tests/a.test.js`', 'new': '`src/core.js`'}]}
+else:
+    packet['ops'] = [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/core.js']}}]
 (directory / '4.json').write_text(json.dumps(packet))
 """)
             script += 'python3 -I structure.py "$ROOT" ' + name + ' ' + ('1' if change else '0') + ' || exit $?\n'
@@ -256,6 +261,13 @@ packet['ops'] = [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/cor
                 root, result, _, _ = self.run_driver(change=change, mode='structure', reconcile=True)
                 _, markdown = self.assert_published(root, result, change, cause='structur')
                 self.assertIn('LATE-KEPT', markdown)
+
+    def test_structural_rollback_preserves_unrelated_text_packet(self):
+        for change in (False, True):
+            with self.subTest(change=change):
+                root, result, _, _ = self.run_driver(change=change, mode='structure',
+                    overrides={'WORKFLOW_UPDATED_PLAN_OPS': '0'})
+                self.assert_published(root, result, change, cause='structur')
 
     def test_publication_structural_failure_reports_each_deferral_once(self):
         root, result, calls, _ = self.run_driver(mode='publication-structure')

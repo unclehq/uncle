@@ -46,9 +46,10 @@ def remaining(directory, ids, stage):
         now = time.monotonic()
         for finding in ids.split(','):
             if finding:
-                starts.setdefault(finding, now)
+                record = starts.setdefault(finding, dict(start=now, deadline=now + limit))
+                record['deadline'] = min(record['deadline'], record['start'] + limit)
         path.write_text(json.dumps(starts) + '\n')
-        return max(0, min((starts[i] + limit - now for i in ids.split(',') if i), default=limit))
+        return max(0, min((starts[i]['deadline'] - now for i in ids.split(',') if i), default=limit))
 
 
 def owners(directory):
@@ -102,7 +103,7 @@ def defer(directory, names, stage, reason):
         raise ValueError('automatic deferral is disabled')
     if mode == 'non-critical':
         review = json.loads((directory.parent / 'documents/ADVERSARIAL_REVIEW.json').read_text())
-        critical = {row['id'] for row in review.get('findings', []) if str(row.get('severity', '')).upper() == 'CRITICAL'}
+        critical = {row['id'] for row in review.get('findings', []) if re.match(r'critical\b', str(row.get('severity', '')), re.I)}
         if any(critical.intersection(ids) for _, ids in assigned):
             raise ValueError('automatic deferral is disabled for CRITICAL findings')
     saved = directory / 'deferred.json'
@@ -133,8 +134,14 @@ def defer(directory, names, stage, reason):
 def merge_remaining(directory, stage, plan, helper):
     import updated_plan_edits as edits
     import updated_plan_ops as ops
-    module = ops if helper.endswith('updated_plan_ops.py') else edits
     directory = Path(directory)
+    recorded = directory / 'merge-helper'
+    if recorded.exists():
+        helper = recorded.read_text().strip()
+    module = ops if helper.endswith('updated_plan_ops.py') else edits
+    late = os.environ.get('UNCLE_LATE_OPS') or str(directory / 'reconcile.json')
+    if Path(late).is_file():
+        os.environ['UNCLE_LATE_OPS'] = late
     conflicts = directory / 'conflicts.json'
     old_groups = json.loads(conflicts.read_text()) if conflicts.exists() else []
     answers = {}
@@ -172,11 +179,13 @@ def resolver_defer(directory, groups, stage, plan, helper):
 def structure_writers(directory, repair):
     scope = json.loads(Path(repair, 'scope.json').read_text())
     ids = set(scope['ids'])
+    base = json.loads(Path(directory, 'base-plan.json').read_text())
     names = set()
     for name, _ in owners(directory):
         packet = json.loads(Path(directory, name + '.json').read_text())
         if (any((op.get('id') or op.get('target')) in ids for op in packet.get('ops', []))
-                or packet.get('patch') or packet.get('commands_replace') or packet.get('protected_verification_paths')):
+                or packet.get('patch') or packet.get('commands_replace')
+                or (packet.get('protected_verification_paths') and packet['protected_verification_paths'] != base.get('protected_verification_paths'))):
             names.add(name)
     # Preserve atomic resolver results: a failed structural edit cannot keep
     # another packet's half of the same resolved conflict.

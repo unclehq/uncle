@@ -214,6 +214,7 @@ workflow_publish_updated_plan() {
     if [[ "$status" == 3 ]]; then
         . "$ROOT/scripts/lib/updated-plan-repair.sh"
         run_updated_plan_structure_repair "$directory/publication-candidate.json" "$(cat "$directory/publication-error.log")" "$stage" || return 1
+        return 0
     elif [[ "$status" != 0 ]]; then
         return "$status"
     else

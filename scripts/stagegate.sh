@@ -2551,6 +2551,7 @@ run_updated_plan_edit_writers() {
     [[ -f "${UPDATED_PLAN_PROMPT:-}" ]] || return 1
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     cp "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/base-plan.json" || return 1
+    printf '%s\n' "${helper##*/}" > "$directory/merge-helper"
     python3 -B "$helper" slices "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" > "$directory/slices.tsv" || return 1
     [[ -s "$directory/slices.tsv" ]] || return 1
     local -a ids_of=() owner_of=() started=() hedge=() finished=()
@@ -2812,12 +2813,7 @@ run_updated_plan_edit_writers() {
                     break
                 fi
                 if bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory")"; then break; fi
-                if [[ "$resolver_attempt" == alternate ]]; then
-                    for group_id in $bad_groups; do
-                        workflow_writer_failure "updated-plan-worker-resolve-$group_id-retry" 5 "schema rejection" "$directory/prompts/resolve-$group_id.retry.md"
-                    done
-                    break
-                fi
+                if [[ "$resolver_attempt" == alternate ]]; then break; fi
             done
         fi
         [[ -z "$reconcile_pid" ]] || wait "$reconcile_pid" 2>/dev/null || true
@@ -2825,7 +2821,7 @@ run_updated_plan_edit_writers() {
             for group_id in $bad_groups; do
                 workflow_writer_failure "updated-plan-worker-resolve-$group_id-retry" 5 "schema rejection" "$directory/prompts/resolve-$group_id.retry.md"
             done
-            python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" resolvers "$directory" "$bad_groups" updated-plan "$STATE_DIR/documents/PROJECT_PLAN.json" "$helper" || { workflow_writer_exhausted updated-plan; return 1; }
+            UNCLE_LATE_OPS="$late_ops" python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" resolvers "$directory" "$bad_groups" updated-plan "$STATE_DIR/documents/PROJECT_PLAN.json" "$helper" || { workflow_writer_exhausted updated-plan; return 1; }
         else
             UNCLE_LATE_OPS="$late_ops" python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || { workflow_writer_exhausted updated-plan; return 1; }
         fi

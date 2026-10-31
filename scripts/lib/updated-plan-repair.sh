@@ -17,7 +17,9 @@ run_updated_plan_structure_repair() {
         fi
         local writer_turns answer_tokens attempt prompt="$directory/prompt.md"
         read -r writer_turns answer_tokens < <(python3 -B "$helper" budget structure)
+        local repair_status
         for attempt in 1 2; do
+            repair_status=0
             rm -f "$directory/packet.json"
             ( export UNCLE_UPDATED_PLAN_ATTEMPTS_DIR="$attempts" UNCLE_UPDATED_PLAN_FINDINGS="$finding_ids"
               export UNCLE_WORKER_SCHEMA_FILE="$directory/schema.json"
@@ -32,15 +34,17 @@ run_updated_plan_structure_repair() {
               else
                   workflow_model_writer "$stage" run_claude "$prompt" "$stage-worker-edits-structure"
               fi
-            ) || true
-            if python3 -B "$helper" repair-apply "$directory" "$PWD" 2>"$directory/apply-error.log"; then
+            ) || repair_status=$?
+            if [[ "$repair_status" != 124 && "$repair_status" != 137 ]] && python3 -B "$helper" repair-apply "$directory" "$PWD" 2>"$directory/apply-error.log"; then
                 break
+            fi
+            if [[ "$repair_status" == 124 || "$repair_status" == 137 ]]; then
+                echo 'structural repair finding wall-time deadline exhausted' > "$directory/apply-error.log"
             fi
             if [[ "$attempt" == 2 ]]; then
                 cat "$directory/apply-error.log" >&2
                 [[ -n "$finding_ids" ]] || return 1
                 python3 -B "$ROOT/scripts/lib/updated_plan_defer.py" structure "$attempts" "$directory" "$stage" "$helper" || { workflow_writer_exhausted "$stage"; return 1; }
-                workflow_deferred_report "$attempts"
                 break
             fi
             prompt="$directory/retry.md"
@@ -52,5 +56,6 @@ run_updated_plan_structure_repair() {
     elif [[ "$status" != 0 ]]; then
         return "$status"
     fi
-    python3 -B "$ROOT/scripts/lib/publish_agent_artifact.py" "$stage" "$LOG_DIR/$stage.jsonl" . "$directory/repaired.json"
+    python3 -B "$ROOT/scripts/lib/publish_agent_artifact.py" "$stage" "$LOG_DIR/$stage.jsonl" . "$directory/repaired.json" || return 1
+    workflow_deferred_report "$attempts"
 }

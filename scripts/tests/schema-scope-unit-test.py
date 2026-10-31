@@ -74,6 +74,12 @@ class ScopeControls(unittest.TestCase):
     def test_numeric_section_citation_preserves_contents(self):
         self.assertEqual(ops.finding_scope(MODEL, [{'location': 'section 2'}]), ['s2', 's2.1'])
 
+    def test_alphanumeric_step_citation_does_not_select_its_numeric_prefix(self):
+        model = {'sections': [
+            {'id': 's1', 'heading': 'Step 3: UI', 'blocks': [{'id': 's1.1', 'kind': 'prose', 'text': 'Build UI.'}]},
+            {'id': 's2', 'heading': 'Step 3b: Tests', 'blocks': [{'id': 's2.1', 'kind': 'prose', 'text': 'Test UI.'}]}]}
+        self.assertEqual(ops.finding_scope(model, [{'location': 'Step 3b'}]), ['s2', 's2.1'])
+
     def test_extensionless_file_location_finds_its_declared_owner(self):
         model = {'sections': [
             {'id': 's1', 'heading': 'Step 1: Container — Owns: `Dockerfile`, `.gitignore`', 'blocks': [

@@ -47,6 +47,8 @@ Goals
   Schemas remain inline for runner compatibility, omit redundant keywords and use compact JSON. Per-kind operations, field
   types, existing-id constraints and parent-specific insertion anchors remain enforced.
   Ownership repair reads legacy heading-form assignments without changing their layout and compares `./path` with `path`.
+  Heading steps under any level of Implementation order/steps/sequence share the same records across ownership, shell and
+  scheduling readers; alphanumeric labels such as `3b` retain their display label and use positional identities internally.
   Its grammar lists all candidate typed steps and permits removing only unresolved protected paths; rejected packets receive
   one retry carrying the exact validation error. Existing ownership, unrelated protected paths and verification commands remain fixed.
 - Overlap between writers is exact (same id, same field), not substring matching.

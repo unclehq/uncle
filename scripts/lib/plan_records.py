@@ -88,8 +88,10 @@ def lines(model, field):
         return ['%d\t%d' % (n, dep) for n, refs in deps.items() for dep in sorted(refs)]
     if field == 'steps':
         # Keep the task text the shell callers expect, but take fields from records.
+        tasks = [dict(step, title='Step %s: %s' % (step['label'], step['title'])) if step.get('_heading') else step
+                 for step in steps]
         return [re.sub(r'^\d+\.\s*', '', pm.render_block({'kind': 'steps', 'items': [step]}).splitlines()[0])
-                for step in steps]
+                for step in tasks]
     raise ValueError('unknown record field: ' + field)
 
 
@@ -107,6 +109,17 @@ def main(argv):
             print(payload['narrative'])
             return 0
         model = load(argv[1], argv[2] if len(argv) > 2 and argv[2] else None)
+        if model is None and argv[0] in ('steps', 'owns', 'depends'):
+            path = canonical_path(argv[1], argv[2] if len(argv) > 2 and argv[2] else None)
+            narrative = (json.loads(path.read_text(encoding='utf-8')).get('narrative', '') if path else
+                         Path(argv[1]).read_text(encoding='utf-8') if Path(argv[1]).is_file() else '')
+            # Existing Markdown forms keep their established awk reader. Only
+            # forms it cannot represent need the shared heading-step records.
+            new_form = (re.search(r'^(?:#|#{3,6})\s+(?:\d+\.\s*)?Implementation (?:order|steps|sequence)\b', narrative, re.M | re.I)
+                        or re.search(r'^#{1,6}\s+(?:Step\s+)?\d+[a-z]+[:.)-]', narrative, re.M | re.I)
+                        or re.search(r'^##\s+Step\s+\d+[:.)-]', narrative, re.M | re.I))
+            if new_form and pm.heading_steps(narrative):
+                model = pm.import_markdown(narrative)
         result = lines(model, argv[0]) if model is not None else None
         if result is None:
             return 3

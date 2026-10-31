@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from step_groups import covers, owns
 from plan_records import canonical_path, load, step_data
-from plan_model import protected_paths, owned_path
+from plan_model import protected_paths
 
 
 def normalized_path(path):
@@ -58,15 +58,6 @@ def specifically_owned(plan, state_dir=None):
     model = load(plan, state_dir)
     owned = step_data(model)[1] if model is not None else owns(sh('plan_step_owns'))
     specific = list(owned.values())
-    # Legacy plans put Owns on a Step heading rather than in a typed steps block.
-    # Read those assignments without rewriting the approved document's layout.
-    headings = ([section['heading'] for section in model['sections']] if model is not None else
-                re.findall(r'^#{1,6}\s+(.+)$', Path(plan).read_text(encoding='utf-8'), re.M))
-    for heading in headings:
-        if re.match(r'Step\s+\d+[a-z]?\b', heading, re.I):
-            match = re.search(r'Owns:\s*(.+?)(?:\s+Depends on:|$)', heading, re.I)
-            if match:
-                specific.append({owned_path(path) for path in match[1].split(',')})
     return [{normalized_path(path) for path in paths if path and normalized_path(path) != '*'}
             for paths in specific if paths]
 

@@ -229,6 +229,49 @@ run_updated_plan_structure_repair "$STATE_DIR/documents/UPDATED_PROJECT_PLAN.jso
         self.assertIn('outside its scope: missing-step', result.stderr)
         self.assertEqual((self.state / 'calls').read_text().splitlines(), ['call', 'call'])
 
+    def test_heading_candidate_repair_preserves_labels_and_layout(self):
+        plan = self.typed_plan()
+        plan['narrative'] = ('# Implementation order\n\n'
+                             '## Step 1: Core — Owns: `src/core.js`\n\nBuild core.\n\n'
+                             '## Step 3b: UI — Owns: `src/ui.js` Depends on: 1\n\nBuild UI.\n')
+        self.write_plan(plan)
+        self.assertEqual(ops.prepare_structure_repair(self.plan, self.root, self.repair, 'no owning implementation step'), 3)
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-edit-ops-packet', 'dispositions': [],
+                  'ops': [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/ui.js', 'tests/unknown.test.js']}}]}
+        conforms(packet, json.loads((self.repair / 'schema.json').read_text()))
+        (self.repair / 'packet.json').write_text(json.dumps(packet))
+        ops.apply_structure_repair(self.repair, self.root)
+        repaired = json.loads((self.repair / 'repaired.json').read_text())
+        self.assertEqual(repaired['narrative'], plan['narrative'].replace(
+            'Owns: `src/ui.js`', 'Owns: `src/ui.js`, `tests/unknown.test.js`'))
+        steps = pm.steps_of(pm.model_of(repaired))
+        self.assertEqual(steps[1]['label'], '3b')
+        self.assertEqual(steps[1]['depends_on'], [1])
+        self.assertIn('tests/unknown.test.js', steps[1]['owns'])
+
+    def test_shell_readers_agree_at_every_implementation_heading_level(self):
+        for level in range(1, 7):
+            with self.subTest(level=level):
+                heading = '#' * level
+                step_heading = '#' * min(level + 1, 6)
+                narrative = (f'{heading} Implementation sequence\n\n'
+                             f'{step_heading} Step 1: Core — Owns: `src/core.js`\n\n'
+                             f'{step_heading} Step 3b: UI — Owns: `src/ui.js` Depends on: Step 1\n\n'
+                             f'{heading} Risks\n\nDo not treat this as a step.\n')
+                plan = self.root / 'legacy.md'
+                plan.write_text(narrative)
+                steps = pm.steps_of(pm.import_markdown(narrative))
+                self.assertEqual([s['label'] for s in steps], ['1', '3b'])
+                result = subprocess.run(['bash', '-c', '. "$1/scripts/lib/plan-scope.sh"; plan_steps "$2"; '
+                                         'plan_step_owns "$2"; plan_step_depends "$2"', 'test', str(ROOT), str(plan)],
+                                        cwd=self.root, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('Step 3b: UI', result.stdout)
+                self.assertIn('1\tsrc/core.js', result.stdout)
+                self.assertIn('2\tsrc/ui.js', result.stdout)
+                self.assertIn('2\t1', result.stdout)
+                self.assertEqual(len(result.stdout.splitlines()), 5)
+
 
 if __name__ == '__main__':
     unittest.main()

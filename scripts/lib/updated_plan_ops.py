@@ -858,6 +858,11 @@ def repair_plan(plan, model, operations):
                 if 'text' in block:
                     block['text'] = pattern.sub(lambda _: new, block['text'])
         model['intro'] = pattern.sub(lambda _: new, model.get('intro', ''))
+        # Imported heading steps now have typed records as well as source anchors.
+        # Keep those records current without re-rendering the legacy approval view.
+        step['owns'] = paths
+        step['_heading_line'] = new
+        step['_heading'] = re.sub(r'^#+\s+', '', new)
     typed = [pm.typed_op(model, operation) for operation in ordinary]
     revised = pm.apply_ops(model, typed)
     result = dict(plan, narrative=apply_patch(plan['narrative'], to_patch(model, revised)))

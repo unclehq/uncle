@@ -181,6 +181,10 @@ def extract_body(body):
             current = dict(id='step-' + label, number=int(label) if label.isdigit() else len(steps) + 1,
                            label=label, title=title, text='', owns=[], depends_on=[], _body=[text] if text else [],
                            _task=task + ''.join(' ' + ('Owns: ' if key == 'owns' else 'Depends on: ') + value for key, value in metadata if (key, value) not in inline), _line=line)
+            if not re.match(r'^\s*\d+\.\s', line) and i not in rows:
+                current['_heading'] = re.sub(r'^#+\s*', '', line.strip())
+                current['_heading_line'] = line
+                current['_task'] = 'Step %s: %s' % (label, current['_task'])
             current['_body'].extend(extra)
             steps.append(current)
             continuation = False

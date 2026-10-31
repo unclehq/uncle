@@ -57,4 +57,15 @@ out="$(bash "$ROOT/scripts/run-shell-tests.sh" --project-root "$S" 2>&1)"
 check "shell runner: its announcement is unchanged" grep -Eq '^Running 1 shell suites with up to [0-9]+ workers\.$' <<< "$out"
 check "shell runner: its summary is unchanged" grep -q '^Shell suites: 1 passed, 0 failed, 0 skipped\.$' <<< "$out"
 
+# A suite must not inherit the launching workflow's own variables: the baseline and green-check runners execute these suites
+# inside a live run, and a test that drives a driver with a stub agent would otherwise write its stage events into that run's
+# status file (a second change-plan, requirements, preview-build ...) or follow its agent command and project root.
+L="$TMP/leak"; mkdir -p "$L/scripts/tests"
+printf '#!/usr/bin/env bash\n[[ -z "${UNCLE_STATUS_FILE:-}${WORKFLOW_AGENT_CMD:-}${UNCLE_PROJECT_ROOT:-}${STAGEGATE_RUN_ID:-}" ]] || { echo "leaked: $UNCLE_STATUS_FILE $WORKFLOW_AGENT_CMD"; exit 1; }\n[[ "${UNCLE_TEST_KEEP:-}" == yes ]] || exit 1\n' > "$L/scripts/tests/env-test.sh"
+printf 'import os, sys\nsys.exit(1 if any(os.environ.get(k) for k in ("UNCLE_STATUS_FILE", "WORKFLOW_AGENT_CMD", "UNCLE_PROJECT_ROOT")) else 0)\n' > "$L/scripts/tests/env-test.py"
+out="$(UNCLE_STATUS_FILE=/x WORKFLOW_AGENT_CMD=real UNCLE_PROJECT_ROOT=/y STAGEGATE_RUN_ID=z UNCLE_TEST_KEEP=yes bash "$ROOT/scripts/run-shell-tests.sh" --project-root "$L" 2>&1)"
+check "shell suites do not inherit the launching run's variables (UNCLE_TEST_* is kept)" grep -q '^Shell suites: 1 passed' <<< "$out"
+out="$(UNCLE_STATUS_FILE=/x WORKFLOW_AGENT_CMD=real UNCLE_PROJECT_ROOT=/y bash "$ROOT/scripts/run-python-tests.sh" --project-root "$L" 2>&1)"
+check "python suites do not inherit the launching run's variables" grep -q '^Python suites: 1 passed' <<< "$out"
+
 [[ "$fails" == 0 ]] && echo "python-suites-test.sh: all checks passed" || { echo "python-suites-test.sh: $fails failure(s)"; exit 1; }

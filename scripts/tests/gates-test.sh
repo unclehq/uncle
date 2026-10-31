@@ -599,7 +599,7 @@ run_driver_stdin() {
         WORKFLOW_PARALLEL_CHECKLIST=0 \
         UNCLE_SUPERVISION_HOST=gates-test \
         "$@" \
-        bash -c 'cd "$1"; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/change-workflow.sh ${DRIVER_ARGS:-}' _ "$REPO" \
+        bash -c 'cd "${1:?scratch repo is not set}" || exit 1; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/change-workflow.sh ${DRIVER_ARGS:-}' _ "$REPO" \
         < "$stdin_file" > "$OUT" 2>&1
     RC=$?
 }
@@ -812,7 +812,7 @@ run_stagegate_stdin() {
         WORKFLOW_SPECULATE=0 FAKE_WORKFLOW=stagegate WORKFLOW_REPAIR=1 \
         UNCLE_SUPERVISION_HOST=gates-test \
         "$@" \
-        bash -c 'cd "$1"; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/stagegate.sh' _ "$REPO" \
+        bash -c 'cd "${1:?scratch repo is not set}" || exit 1; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/stagegate.sh' _ "$REPO" \
         < "$stdin_file" > "$OUT" 2>&1
     RC=$?
 }
@@ -1606,29 +1606,26 @@ expect_status 0
 expect_state WAIT_PLAN_APPROVAL
 expect_out '.uncle/docs/CHANGE_PLAN.md has no approval on record'
 
-# Planning is judged by the documents it leaves. A pass that runs out of
-# context after the baseline keeps it; the rest is written in a fresh pass.
-new_case analyze-keeps-the-baseline-and-finishes-in-a-second-pass
+# Planning is judged by the documents it leaves, and it is invoked once. A pass that runs out of context after the baseline
+# keeps the baseline, reports what is missing, and stops: change-plan is never started a second time.
+new_case analyze-keeps-the-baseline-and-stops-after-one-pass
 [[ -s "$REPO/CHANGE_REQUEST.md" ]] || printf '# Change request\n\nFix the greeting.\n' > "$REPO/CHANGE_REQUEST.md"
 rm -f "$REPO/.uncle/docs/BASELINE_REPORT.md" "$REPO/.uncle/docs/CHANGE_SPEC.md" "$REPO/.uncle/docs/CHANGE_PLAN.md" \
     "$REPO/.uncle/workflow/documents/BASELINE_REPORT.json" "$REPO/.uncle/workflow/documents/CHANGE_SPEC.json" "$REPO/.uncle/workflow/documents/CHANGE_PLAN.json"
 set_state ANALYZE
 run_driver FAKE_ANALYZE=baseline-only FAKE_INPUT_TOKENS=198597
+expect_status 1
+expect_state ANALYZE
 expect_out 'ran out of context (198597 tokens) before writing: .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md'
-expect_out 'Whatever it wrote is kept'
-expect_file .uncle/docs/BASELINE_REPORT.md
-expect_file .uncle/docs/CHANGE_SPEC.md
-expect_file .uncle/docs/CHANGE_PLAN.md
-expect_state WAIT_ANALYSIS_APPROVAL
+expect_out 'Planning is not retried'
+expect_not_out 'written in a fresh context'
 COUNT=$((COUNT + 1))
-if [[ "$(wc -l < "$REPO/.uncle/workflow/agent-calls")" -ne 2 ]]; then
-    fail 'expected exactly two planning passes'
+if [[ "$(wc -l < "$REPO/.uncle/workflow/agent-calls")" -ne 1 ]]; then
+    fail 'expected exactly one planning pass'
 fi
-expect_in_file .uncle/workflow/logs/change-planning.prompt.md '.uncle/workflow/documents/BASELINE_REPORT.json is already written'
-expect_in_file .uncle/workflow/logs/change-planning.prompt.md 'Context note from the driver'
 
-# Two passes that write nothing stop with the cause, not "Required file missing".
-new_case analyze-exhausted-twice-stops-with-the-cause
+# A pass that writes nothing stops with the cause, not "Required file missing".
+new_case analyze-exhausted-stops-with-the-cause
 [[ -s "$REPO/CHANGE_REQUEST.md" ]] || printf '# Change request\n\nFix the greeting.\n' > "$REPO/CHANGE_REQUEST.md"
 rm -f "$REPO/.uncle/docs/BASELINE_REPORT.md" "$REPO/.uncle/docs/CHANGE_SPEC.md" "$REPO/.uncle/docs/CHANGE_PLAN.md" \
     "$REPO/.uncle/workflow/documents/BASELINE_REPORT.json" "$REPO/.uncle/workflow/documents/CHANGE_SPEC.json" "$REPO/.uncle/workflow/documents/CHANGE_PLAN.json"
@@ -1637,11 +1634,11 @@ run_driver FAKE_ANALYZE=exhaust FAKE_INPUT_TOKENS=198597
 expect_status 1
 expect_state ANALYZE
 expect_out 'ran out of context (198597 tokens) before writing: .uncle/docs/BASELINE_REPORT.md .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md'
-expect_out 'Planning did not complete in two passes'
+expect_out 'Planning is not retried'
 expect_not_out 'Required file is missing or empty: .uncle/docs/BASELINE_REPORT.md'
 COUNT=$((COUNT + 1))
-if [[ "$(wc -l < "$REPO/.uncle/workflow/agent-calls")" -ne 2 ]]; then
-    fail 'expected exactly two planning passes before stopping'
+if [[ "$(wc -l < "$REPO/.uncle/workflow/agent-calls")" -ne 1 ]]; then
+    fail 'expected exactly one planning pass before stopping'
 fi
 
 # The review response revises .uncle/docs/CHANGE_PLAN.md in place after it was

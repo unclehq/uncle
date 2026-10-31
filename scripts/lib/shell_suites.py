@@ -40,6 +40,23 @@ def isolate_git():
         os.close(fd)
         os.environ['GIT_CONFIG_GLOBAL'] = path
     os.environ.setdefault('GIT_CONFIG_NOSYSTEM', '1')
+    isolate_environment()
+
+
+# What a suite may inherit from the run that launched it. The baseline and green-check runners execute this suite
+# *inside a live workflow*, so without this a test that drives stagegate.sh or change-workflow.sh with a stub agent
+# writes its stage events (a second change-plan, requirements, preview-build, adversarial-review) into the live run's
+# UNCLE_STATUS_FILE, and one that honours WORKFLOW_AGENT_CMD or UNCLE_PROJECT_ROOT would run against the real thing.
+KEEP_ENV = ('UNCLE_MODEL_REFRESH', 'WORKFLOW_VERIFY_JOBS', 'WORKFLOW_TEST_JOBS', 'WORKFLOW_PYTHON_TESTS_RUNNER',
+            'WORKFLOW_SHELL_SUITE_TIMEOUT_SECONDS')
+LEAKY_PREFIXES = ('UNCLE_', 'STAGEGATE_', 'WORKFLOW_')
+
+
+def isolate_environment():
+    """Drop the launching workflow's own variables from this process, so every suite starts from a clean slate."""
+    for name in list(os.environ):
+        if name.startswith(LEAKY_PREFIXES) and name not in KEEP_ENV and not name.startswith('UNCLE_TEST_'):
+            del os.environ[name]
 
 
 def run_commands(jobs, commands, kind='shell'):

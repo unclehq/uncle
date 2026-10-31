@@ -212,12 +212,21 @@ class EditGrammarTests(unittest.TestCase):
 
     def test_strict_schema_environment_override_wins_over_config(self):
         (self.root / 'config').write_text('updated-plan.strict-op-schemas 1\n')
-        operation = {'op': 'set_fields', 'id': 'B-1', 'fields': {'title': 'Legacy generic fields'}}
+        operation = {'op': 'set_fields', 'id': 'B-1', 'fields': {'title': 'Invalid behavior field'}}
         with patch.dict(os.environ, {'WORKFLOW_UPDATED_PLAN_STRICT_OP_SCHEMAS': '0'}):
             for command in self.schemas:
                 output = self.root / 'legacy.json'
                 self.assertEqual(ws.main([command, str(self.plan), str(output)]), 0)
-                conforms(self.packet(command, operation), json.loads(output.read_text()))
+                schema = json.loads(output.read_text())
+                # The environment still selects generic operation delivery, but
+                # generic row fields must now obey their actual row kind too.
+                ops = (schema['properties']['ops'] if command == 'edit-ops' else
+                       schema['properties']['resolutions']['items']['properties']['ops'])
+                self.assertTrue(any('enum' in v['properties']['op'] for v in ops['items']['anyOf']))
+                with self.assertRaises(ValueError):
+                    conforms(self.packet(command, operation), schema)
+                conforms(self.packet(command, {'op': 'set_fields', 'id': 'B-1',
+                                               'fields': {'result': 'Valid generic field'}}), schema)
 
     def test_every_plan_row_kind_uses_its_own_field_names_and_types(self):
         for kind, fields in pm.ROW_KINDS.items():

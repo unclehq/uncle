@@ -108,3 +108,19 @@ workflow_model_cancel() {
     [[ -d "$STATE_DIR/model-units/$$" ]] || return 0
     python3 -B "$ROOT/scripts/lib/unit_scheduler.py" cancel "$STATE_DIR/model-units/$$" || true
 }
+
+# Bound the whole runner call, including streaming, retries and child processes.
+workflow_model_writer() {
+    local stage="$1"; shift
+    if ! stage_uses_self_hosted "$stage" AGENT; then "$@"; return $?; fi
+    local limit pid guard status=0
+    limit="$(UNCLE_STATUS_STAGE="$stage-worker-edits" python3 -B "$ROOT/scripts/lib/writer_deadline.py" seconds)" || return 1
+    ( "$@" ) &
+    pid=$!
+    python3 -B "$ROOT/scripts/lib/writer_deadline.py" watch "$pid" "$limit" "$3" &
+    guard=$!
+    wait "$pid" || status=$?
+    kill "$guard" 2>/dev/null || true
+    wait "$guard" 2>/dev/null || true
+    return "$status"
+}

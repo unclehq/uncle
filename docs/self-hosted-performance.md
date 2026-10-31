@@ -223,3 +223,21 @@ values before config values. They default on only within the small profile.
 Checks: `python3 -I scripts/tests/project-plan-speed-test.py`,
 `python3 -I scripts/tests/plan-numbering-test.py`, and
 `bash scripts/run-shell-tests.sh`.
+
+### Read-only preflight probes
+
+Preflight workers read private snapshots of the current files, including
+untracked inputs. Their tools cannot edit or write project files. Shell probes
+run in a separate, persistent temporary copy per worker, with private package
+and browser caches. Installed browser binaries may be read through read-only
+links; installs cannot change the shared cache. Background probe processes are
+terminated before scratch cleanup.
+
+Shell probes require `sandbox-exec` on macOS or Bubblewrap (`bwrap`) on Linux.
+Without an available OS write boundary, the command is refused and the worker
+can record the missing prerequisite in its existing acceptance rows. A denied
+write or a changed worker snapshot identifies the worker and refuses its
+output immediately. Concurrent implementation edits are never rolled back.
+The single-investigation fallback is isolated too, and only its validated
+investigation document is published. Report names, shapes and approval gates
+are unchanged.

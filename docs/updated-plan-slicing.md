@@ -29,14 +29,23 @@ and `WORKFLOW_UPDATED_PLAN_TOKENS_PER_OP`. Change workflows accept corresponding
 remain supported when the new group-size environment setting is absent.
 Values must be positive integers.
 
-Self-hosted writers and resolvers start with the generic edit-op schema. When a
+Self-hosted writers and resolvers start with the generic edit-op schema, with
+row fields restricted to the actual kind of each target in the plan model. When a
 local plan validator rejects a packet, only that group retries with its scoped,
-per-kind schema and the precise rejection. Missing or interrupted replies keep
-the generic schema. `updated-plan.strict-schema` selects `retry` (default),
+per-kind schema and the precise rejection. A failed or interrupted writer is
+retried one finding at a time with a scoped schema and thinking disabled. This
+retry uses constrained final delivery even when the first attempt was configured
+for tools. Only a finding that still fails gets the final tool-loop attempt. `updated-plan.strict-schema` selects `retry` (default),
 `first` (strict on the first attempt only), or `always`. Its environment override
 is `WORKFLOW_UPDATED_PLAN_STRICT_SCHEMA`, with the same change-stage inheritance
 and precedence above. `updated-plan.strict-op-schemas 0` disables strict schemas
 on both attempts. Claude and Codex retain their existing schema selection.
+
+Each self-hosted writer attempt has a 150-second wall-clock budget, including
+streaming, tool calls and protocol retries. Set `self-hosted.writer-seconds` in
+`.uncle/config`, or override it with `WORKFLOW_SELF_HOSTED_WRITER_SECONDS` (a
+positive integer). The driver terminates the attempt's descendants on timeout;
+successful sibling packets remain available. Claude and Codex are unchanged.
 
 New implementation steps use `insert_step` with `after` or `before` naming an
 existing step (`after: "end"` appends). The `new` object contains `title`, `text`,

@@ -2446,7 +2446,7 @@ updated_plan_launch_writer() {
         schema_file="$directory/schemas/$name.json"
         local scope_args=()
         [[ "$schema_command" != edit-ops ]] || scope_args=(--scope "$directory/prompts/$name.scope.json")
-        if [[ "$schema_command" == edit-ops ]] && stage_uses_self_hosted updated-plan AGENT; then scope_args+=(--attempt first); fi
+        if [[ "$schema_command" == edit-ops ]] && stage_uses_self_hosted updated-plan AGENT; then scope_args+=(--attempt "${UNCLE_UPDATED_PLAN_SCHEMA_ATTEMPT:-first}"); fi
         python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" $owner ${scope_args[@]+"${scope_args[@]}"} || return 1
     fi
     local writer_turns answer_tokens
@@ -2458,7 +2458,7 @@ updated_plan_launch_writer() {
       export UNCLE_WORKER_MAX_TURNS="$writer_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
       local writer_status=0
       ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-        run_claude "$directory/prompts/$name.md" "updated-plan-worker-edits-$name" ) || writer_status=$?
+        workflow_model_writer updated-plan run_claude "$directory/prompts/$name.md" "updated-plan-worker-edits-$name" ) || writer_status=$?
       if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then
           if [[ ! -s "$directory/$name.json" ]]; then
               python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-plan-worker-edits-$name.jsonl" "$directory/$name.json" 2>/dev/null || true
@@ -2477,7 +2477,7 @@ updated_plan_launch_writer() {
               rm -f "$directory/$name.json"
               writer_status=0
               ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-                run_claude "$directory/prompts/$name.retry.md" "updated-plan-worker-edits-$name-retry" ) || writer_status=$?
+                UNCLE_UPDATED_PLAN_CHEAP_RETRY=1 workflow_model_writer updated-plan run_claude "$directory/prompts/$name.retry.md" "updated-plan-worker-edits-$name-retry" ) || writer_status=$?
               if [[ ! -s "$directory/$name.json" ]]; then
                   python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-plan-worker-edits-$name-retry.jsonl" "$directory/$name.json" 2>/dev/null || true
               fi
@@ -2522,6 +2522,7 @@ run_updated_plan_edit_writers() {
             return 1
             ;;
     esac
+    rm -f "$STATE_DIR/updated-plan-writers-exhausted"
     [[ -f "${UPDATED_PLAN_PROMPT:-}" ]] || return 1
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     python3 -B "$helper" slices "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" > "$directory/slices.tsv" || return 1
@@ -2624,7 +2625,8 @@ run_updated_plan_edit_writers() {
                 retry_owner=owner
             fi
             workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
-            updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$retry_owner" || {
+            UNCLE_UPDATED_PLAN_CHEAP_RETRY="$(stage_uses_self_hosted updated-plan AGENT && echo 1)" \
+            UNCLE_UPDATED_PLAN_SCHEMA_ATTEMPT=retry updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$retry_owner" || {
                 workflow_model_drain "$jobs" ${pids[@]+"${pids[@]}"}; return 1
             }
             pids+=("$!"); names+=("$name"); retry_ids+=("$ids")
@@ -2639,7 +2641,8 @@ run_updated_plan_edit_writers() {
             # run 14 two such findings discarded eighteen good packets and restarted the stage twice.
             local previous="${WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST-}" had_previous=0 last_pids=() last_names=() index
             [[ -n "${WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST+x}" ]] && had_previous=1
-            if [[ "${previous:-on}" == off ]]; then export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=on
+            if stage_uses_self_hosted updated-plan AGENT; then export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=off
+            elif [[ "${previous:-on}" == off ]]; then export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=on
             else export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST=off; fi
             echo "Updated-plan edit writer(s) failed again; one last try each by the other delivery path."
             for index in "${again[@]}"; do
@@ -2652,7 +2655,13 @@ run_updated_plan_edit_writers() {
             if [[ "$had_previous" == 1 ]]; then export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST="$previous"
             else unset WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST; fi
         fi
-        [[ "$failed" == 0 ]] || return 1
+        if [[ "$failed" != 0 ]]; then
+            if stage_uses_self_hosted updated-plan AGENT; then
+                : > "$STATE_DIR/updated-plan-writers-exhausted"
+                echo 'Updated-plan writer attempts exhausted; completed packets retained for diagnosis.' >&2
+            fi
+            return 1
+        fi
     fi
     # When the specialists ran beside the writers (run_updated_plan_decide), one reconciler checks their corrections
     # against what the writers decided, while the merge and the resolvers run; its edits are added last.
@@ -2842,31 +2851,63 @@ run_updated_plan_decide() {
 # authoritative source for its own rows; unlike the review panels there is no
 # separate synthesis agent to fall back on, so any worker failure fails the
 # whole panel and the caller falls back to the single-agent investigation.
+run_preflight_readonly_worker() {
+    local prompt="$1" worker="$2" output="$3" scratch status=0 source="$PWD"
+    scratch="$(python3 -B "$ROOT/scripts/lib/preflight_readonly.py" prepare "$PWD")" || return 1
+    ( cd "$scratch" && UNCLE_PREFLIGHT_READONLY=1 UNCLE_CONFIG="${UNCLE_CONFIG:-$source/.uncle/config}" \
+      UNCLE_WORKER_PACKET_PATH="$output" run_claude "$prompt" "$worker" "Read,Glob,Grep,Bash" ) || status=$?
+    if grep -q 'read-only preflight refused' "$LOG_DIR/$worker.jsonl" "$LOG_DIR/$worker.log" 2>/dev/null; then
+        : > "$STATE_DIR/preflight-readonly-violation"
+        status=1
+    fi
+    if ! python3 -B "$ROOT/scripts/lib/preflight_readonly.py" check "$scratch" "$worker"; then
+        printf '%s: read-only preflight violation; refusing worker output.\n' "$worker" >&2
+        : > "$STATE_DIR/preflight-readonly-violation"
+        status=1
+    fi
+    python3 -B "$ROOT/scripts/lib/preflight_readonly.py" remove "$scratch" || status=1
+    return "$status"
+}
+
 run_preflight_investigation_panel() {
     local directory="$STATE_DIR/preflight-panel" lens prompt output pid
-    local -a pids=()
+    local -a pids=() names=() done_workers=()
     [[ "${WORKFLOW_PREFLIGHT_PANEL:-1}" == 1 ]] || return 1
     local tools; tools="$(stage_tools preflight-investigate)"
+    rm -f "$STATE_DIR/preflight-readonly-violation"
     rm -rf "$directory"; mkdir -p "$directory/prompts"
     echo "Preflight investigation panel: launching 3 workers in parallel (tooling, data, reviewers); browser follows serially."
     for lens in tooling data reviewers; do
         prompt="$directory/prompts/$lens.md"; output="$directory/$lens.json"
         cp "$ROOT/prompts/preflight-investigate-worker.md" "$prompt"
         printf '\n## Assigned lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
-        if [[ "$lens" == data ]]; then
-            printf '\nAlso write the pre-implementation input files that `Files the plan says to create` requires you to derive -- this lens, and only this lens, owns that work.\n' >> "$prompt"
-        fi
-        ( UNCLE_WORKER_PACKET_PATH="$output" run_claude "$prompt" "preflight-worker-$lens" "$tools" ) \
+        ( run_preflight_readonly_worker "$prompt" "preflight-worker-$lens" "$output" ) \
             > "$LOG_DIR/preflight-worker-$lens.log" 2>&1 &
-        pids+=("$!")
+        pids+=("$!"); names+=("$lens"); done_workers+=(0)
     done
-    for pid in "${pids[@]}"; do
-        wait "$pid" || { echo 'Preflight worker failed; falling back to the single-agent investigation.' >&2; return 1; }
+    local left=3 index sibling
+    while (( left > 0 )); do
+        for index in "${!pids[@]}"; do
+            [[ "${done_workers[index]}" == 0 ]] || continue
+            if ! kill -0 "${pids[index]}" 2>/dev/null; then
+                if ! wait "${pids[index]}"; then
+                    echo "Preflight worker preflight-worker-${names[index]} failed; refusing its output." >&2
+                    for sibling in "${!pids[@]}"; do
+                        [[ "$sibling" == "$index" || "${done_workers[sibling]}" == 1 ]] && continue
+                        python3 -B "$ROOT/scripts/lib/writer_deadline.py" stop "${pids[sibling]}" 2>/dev/null || true
+                        wait "${pids[sibling]}" 2>/dev/null || true
+                    done
+                    return 1
+                fi
+                done_workers[index]=1; left=$((left - 1))
+            fi
+        done
+        (( left == 0 )) || sleep 0.1
     done
     prompt="$directory/prompts/browser.md"; output="$directory/browser.json"
     cp "$ROOT/prompts/preflight-investigate-worker.md" "$prompt"
     printf '\n## Assigned lens\n\nFocus only on **browser**.\n' >> "$prompt"
-    UNCLE_WORKER_PACKET_PATH="$output" run_claude "$prompt" "preflight-worker-browser" "$tools" \
+    run_preflight_readonly_worker "$prompt" "preflight-worker-browser" "$output" \
         > "$LOG_DIR/preflight-worker-browser.log" 2>&1 \
         || { echo 'Preflight browser worker failed; falling back to the single-agent investigation.' >&2; return 1; }
     python3 "$ROOT/scripts/lib/preflight_worker_packets.py" "$directory" "$STATE_DIR/documents/PREFLIGHT_REPORT.json" \
@@ -2992,6 +3033,7 @@ PY
         # path exists and this function parses/merges it before publication.
         WORKFLOW_UPDATED_PLAN_EDIT_SLICE="$slice" WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY=file WORKFLOW_UPDATED_PLAN_FAST_MERGE="$fast_merge" WORKFLOW_UPDATED_PLAN_DRIVER_CONTRACT=1 WORKFLOW_PREFIX_WARM_SECONDS=0 \
             run_updated_plan_edit_writers || writer_status=$?
+        [[ ! -e "$STATE_DIR/updated-plan-writers-exhausted" ]] || return "$writer_status"
         if [[ "$writer_status" != 0 && "$jobs" != 0 ]]; then
             echo 'Updated-plan batches failed validation or delivery; falling back to the compact writer.'
             run_updated_plan_compact
@@ -4191,6 +4233,7 @@ run_stage() {
                 echo 'Updated plan: written by deciding writers and checked by the specialists.'
                 return 0
             fi
+            [[ ! -e "$STATE_DIR/updated-plan-writers-exhausted" ]] || return 1
             run_updated_plan_panel || return 1
             # The panel has already collated every specialist finding into
             # canonical JSON. Every runner gets the sealed compact prompt;
@@ -4202,6 +4245,7 @@ run_stage() {
                 single_call=1   # a rejected plan is repaired by one call that sees the whole problem
             fi
             if [[ "$single_call" == 1 ]] || ! run_updated_plan_edit_writers; then
+                [[ ! -e "$STATE_DIR/updated-plan-writers-exhausted" ]] || return 1
                 # Forced JSON here too: the whole-plan call answers through a schema-checked StructuredOutput
                 # call (hosted Claude) or the local grammar, never free text the driver has to dig a plan out of.
                 if stage_supports_structured_output updated-plan; then
@@ -4312,6 +4356,7 @@ run_stage() {
                     if run_preflight_investigation_panel; then
                         echo 'Preflight investigation panel: canonical JSON collated from parallel worker packets.'
                     else
+                        [[ ! -e "$STATE_DIR/preflight-readonly-violation" ]] || exit 1
                         preflight_investigation=".uncle/workflow/preflight-investigation.md"
                         rm -f "$preflight_investigation"
                         run_claude prompts/preflight-investigate.md preflight-investigate

@@ -182,23 +182,39 @@ def _strings(names, maximum=8000):
     return _object({name: _text(maximum, 0) for name in names}, ())
 
 
-def _op(ids=None):
+def _op(ids=None, model=None):
     """One flat edit of the plan model (docs/plan-model.md): every value a string, so any grammar accepts it.
     `ids`, when given, are the only ids the edit may name."""
-    from plan_model import FIELD_NAMES, OP_NAMES
+    from plan_model import FIELD_NAMES, OP_NAMES, ROW_KINDS
     pick = (lambda extra=(): {'type': 'string', 'enum': sorted(ids) + list(extra)}) if ids else (lambda extra=(): _text(120, 0))
     step = ['title', 'text', 'owns', 'depends_on']
     block = _object({'kind': {'type': 'string', 'enum': ['prose', 'heading', 'code', 'list']},
                      'text': _text(EDIT_MAX, 0), 'level': _text(2, 0), 'lang': _text(30, 0),
                      'items': {'type': 'array', 'maxItems': 60, 'items': _text(2000)}}, ('kind',))
     generic = _object({
-        'op': {'type': 'string', 'enum': [name for name in OP_NAMES if name != 'insert_step']},
+        'op': {'type': 'string', 'enum': [name for name in OP_NAMES if name not in ('insert_step', 'set_fields') and (model is None or name != 'insert_row')]},
         'id': pick(), 'target': pick(), 'after': pick(['']),
         'fields': _strings(FIELD_NAMES + step), 'text': _text(EDIT_MAX, 0),
         'new': _strings(['id'] + FIELD_NAMES + step, EDIT_MAX),
         'block': block, 'heading': _text(300, 0), 'blocks': {'type': 'array', 'maxItems': 20, 'items': block},
     }, ('op',))
-    return {'anyOf': [generic, _new_step(ids)]}
+    variants = [generic, _new_step(ids)]
+    if model is None:
+        # Kind-only callers lack a plan index. Canonical behavior/invariant IDs
+        # still have unambiguous fields; driver schemas use the actual model.
+        known = {'B': 'behavior', 'INV': 'invariant'}
+        for kind, specs in ROW_KINDS.items():
+            keys = [key for key in ids or [] if known.get(key.split('-')[0], kind) == kind]
+            if ids is not None and not keys:
+                continue
+            variants.append(_object({'op': {'const': 'set_fields'},
+                                     'id': _choice(keys) if ids is not None else _text(120),
+                                     'fields': _strings([f[0] for f in specs if f[0] != 'id'])},
+                                    ('op', 'id', 'fields')))
+    if model is not None:
+        variants.extend(v for v in model_op(model, ids).get('anyOf', [])
+                        if v['properties']['op']['const'] in ('set_fields', 'insert_row'))
+    return {'anyOf': variants}
 
 
 def _new_step(ids=None):
@@ -331,18 +347,18 @@ def _minimal(schema):
     return result
 
 
-def _ops(ids, model, maximum):
-    item = model_op(model, ids) if model is not None else _op(ids)
+def _ops(ids, model, maximum, generic_model=None):
+    item = model_op(model, ids) if model is not None else _op(ids, generic_model)
     return {'type': 'array', 'maxItems': maximum if item else 0, 'items': item}
 
 
-def edit_ops_packet(ids=None, owner=False, model=None):
+def edit_ops_packet(ids=None, owner=False, model=None, generic_model=None):
     owner = owner and os.environ.get('UNCLE_PLAN_KIND') != 'change-plan'
     properties = {
         'dispositions': {'type': 'array', 'maxItems': 40, 'items': _object({
             'finding': _text(80), 'disposition': {'type': 'string', 'enum': list(DISPOSITIONS)},
             'reason': _text(300), 'plan_change': _text(300)}, ('finding', 'disposition', 'reason', 'plan_change'))},
-        'ops': _ops(ids, model, 120),
+        'ops': _ops(ids, model, 120, generic_model),
         'commands_replace': _commands(),
     }
     if owner or os.environ.get('UNCLE_UPDATED_PLAN_STRUCTURE_REPAIR') == '1':
@@ -351,9 +367,9 @@ def edit_ops_packet(ids=None, owner=False, model=None):
     return _minimal(packet) if model is not None else packet
 
 
-def resolution_ops_packet(ids=None, model=None):
+def resolution_ops_packet(ids=None, model=None, generic_model=None):
     packet = envelope(RESOLUTION_OPS_KIND, {'resolutions': {'type': 'array', 'minItems': 1, 'maxItems': 40, 'items': _object({
-        'group': _text(40), 'ops': _ops(ids, model, 60), 'commands_replace': _commands()},
+        'group': _text(40), 'ops': _ops(ids, model, 60, generic_model), 'commands_replace': _commands()},
         ('group',))}}, ['resolutions'])
     return _minimal(packet) if model is not None else packet
 
@@ -420,12 +436,12 @@ def main(argv):
             from plan_model import load_model
             from updated_plan_ops import strict_schema_attempt
             model = load_model(argv[1]) if strict_schema_attempt(attempt) else None
-            schema = edit_ops_packet(scope if scope is not None else plan_ids(argv[1]), owner=len(argv) == 4, model=model)
+            schema = edit_ops_packet(scope if scope is not None else plan_ids(argv[1]), owner=len(argv) == 4, model=model, generic_model=load_model(argv[1]))
         elif len(argv) == 3 and argv[0] == 'resolve-ops':
             from plan_model import load_model
             from updated_plan_ops import strict_schema_attempt
             model = load_model(argv[1]) if strict_schema_attempt(attempt) else None
-            schema = resolution_ops_packet(scope if scope is not None else plan_ids(argv[1]), model=model)
+            schema = resolution_ops_packet(scope if scope is not None else plan_ids(argv[1]), model=model, generic_model=load_model(argv[1]))
         elif len(argv) == 3 and argv[0] == 'resolve':
             schema = resolution_packet(plan_headings(argv[1]))
         else:

@@ -418,6 +418,7 @@ change_pr_extras_print() {
 . "$ROOT/scripts/lib/checklist-capability.sh"
 . "$ROOT/scripts/lib/performance.sh"
 . "$ROOT/scripts/lib/stage-config.sh"
+. "$ROOT/scripts/lib/model-jobs.sh"
 . "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/module-interfaces-stage.sh"
 . "$ROOT/scripts/lib/triage.sh"
@@ -444,6 +445,7 @@ current_issue() {
 # a cancel, or a stop a person chose.
 on_exit() {
     local rc=$?
+    if declare -f workflow_model_cancel > /dev/null; then workflow_model_cancel; fi
     if declare -f progress_end > /dev/null; then progress_end; fi
     if declare -f cleanup_bg > /dev/null; then cleanup_bg; fi
     if declare -f install_warm_cancel > /dev/null; then install_warm_cancel; fi
@@ -2535,6 +2537,7 @@ run_adversarial_review_panel() {
         cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
         printf '\n## Canonical inputs (binding)\n\nRead only `.uncle/workflow/documents/CHANGE_PLAN.json` and `.uncle/workflow/documents/CHANGE_SPEC.json` when it exists. Use the baseline only through facts embedded in those artifacts; do not inspect the repository.\n\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
         (
+            . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter adversarial-review REVIEWER || exit 1
             run_codex "$prompt" "$output" "adversarial-review-worker-$lens" \
                 "$CODEX_EFFORT_REVIEW"
         ) > "$LOG_DIR/adversarial-review-worker-$lens.log" 2>&1 &
@@ -2568,7 +2571,7 @@ run_updated_change_plan_panel() {
         cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
         printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "${lens%%-*}" >> "$prompt"
         [[ -z "$ids" ]] || printf '\nYour findings: %s. Report only these finding IDs.\n' "${ids//,/, }" >> "$prompt"
-        ( run_codex "$prompt" "$output" "updated-change-plan-review-worker-$lens" "$CODEX_EFFORT_REVIEW" ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
+        ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-change-plan REVIEWER || exit 1; run_codex "$prompt" "$output" "updated-change-plan-review-worker-$lens" "$CODEX_EFFORT_REVIEW" ) > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done < <(python3 -B "$ROOT/scripts/lib/updated_plan_slices.py" "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json")
     for pid in "${pids[@]}"; do wait "$pid" || echo 'Updated-change-plan worker failed; canonical packet validation will stop the panel.' >&2; done
@@ -2600,7 +2603,7 @@ updated_change_plan_launch_writer() {
         python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/CHANGE_PLAN.json" "$schema_file" $owner || return 1
     fi
     rm -f "$directory/$name.json"
-    ( [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
+    ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-change-plan AGENT || exit 1; [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
       UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
         run_claude "$directory/prompts/$name.md" "updated-change-plan-worker-edits-$name" "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN" ) \
         > "$LOG_DIR/updated-change-plan-worker-edits-$name.log" 2>&1 &
@@ -2737,7 +2740,7 @@ run_updated_change_plan_edit_writers() {
                 mkdir -p "$directory/schemas"
                 python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/CHANGE_PLAN.json" "$resolver_schema" || return 1
             fi
-            ( [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+            ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-change-plan AGENT || exit 1; [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
               UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                 run_claude "$group_prompt" "updated-change-plan-worker-resolve-$group_id" "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN" ) \
                 > "$LOG_DIR/updated-change-plan-worker-resolve-$group_id.log" 2>&1 &
@@ -2756,7 +2759,7 @@ run_updated_change_plan_edit_writers() {
             for group_id in $bad_groups; do
                 local retry_schema=""
                 [[ "$delivery" != hosted ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
-                ( [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+                ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-change-plan AGENT || exit 1; [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
                   UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                     run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-change-plan-worker-resolve-$group_id-retry" "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN" ) \
                     > "$LOG_DIR/updated-change-plan-worker-resolve-$group_id-retry.log" 2>&1 &
@@ -2798,6 +2801,7 @@ updated_change_plan_start_reconcile() {
             python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit-ops "$STATE_DIR/documents/CHANGE_PLAN.json" "$schema_file" || exit 0
         fi
         [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$late"
+        . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-change-plan || exit 1
         UNCLE_WORKER_PACKET_PATH="$late" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
             run_claude "$directory/prompts/reconcile.md" updated-change-plan-worker-reconcile \
             "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN"
@@ -2824,7 +2828,7 @@ run_updated_change_plan_decide() {
         prompt="$directory/prompts/$lens.md"
         cp "$ROOT/prompts/change/updated-plan-review-worker.md" "$prompt"
         printf '\n## Assigned review lens\n\nFocus only on **%s**.\n' "$lens" >> "$prompt"
-        ( run_codex "$prompt" "$directory/$lens.json" "updated-change-plan-review-worker-$lens" "$CODEX_EFFORT_REVIEW" ) \
+        ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-change-plan REVIEWER || exit 1; run_codex "$prompt" "$directory/$lens.json" "updated-change-plan-review-worker-$lens" "$CODEX_EFFORT_REVIEW" ) \
             > "$LOG_DIR/updated-plan-worker-$lens.log" 2>&1 &
         UPDATED_PLAN_ADVISOR_PIDS+=("$!")
     done

@@ -130,3 +130,55 @@ Tests use loopback stub servers and temporary files, with no model or signing
 key. Run the focused regression with
 `python3 scripts/tests/self-hosted-budget-reuse-test.py`; run the shell regression
 with `bash scripts/run-shell-tests.sh`.
+
+## Continuous model-unit scheduling
+
+Parallel plan writers, conflict resolvers, project-plan sections, adversarial
+lenses, and test-review workers share a provider pool within one driver run.
+A finished unit releases its slot immediately; unrelated slow units do not
+hold a batch open. Packet paths, validation, per-unit retries, and deterministic
+collation remain owned by the stages. Dependent plan sections still wait for
+outline validation, and publication still waits for complete valid artifacts.
+
+Set `self-hosted.max-concurrency 24` in `.uncle/config` (24 is the default).
+`WORKFLOW_SELF_HOSTED_MAX_CONCURRENCY` overrides the file. Explicit
+`self-hosted.stage-jobs` / `WORKFLOW_SELF_HOSTED_STAGE_JOBS` values retain their
+legacy 1–8 pool when the new option is absent. The new capacity accepts 1–256;
+an invalid new setting fails before starting a unit. Claude, Codex, Kimi, and
+other runners retain their existing launch behavior unless their own
+`<runner>.max-concurrency` / `WORKFLOW_<RUNNER>_MAX_CONCURRENCY` is set.
+Capacities count whole agent units, not individual HTTP turns. Separate driver
+runs have separate pools; this is not a server-wide rate limiter.
+
+`<runner>.granularity small|large` is the common unit-sizing profile. Its default
+is `small` for self-hosted and `large` for other providers. Environment overrides
+use `WORKFLOW_<RUNNER>_GRANULARITY`, with dashes replaced by underscores.
+For both settings, worker-specific environment values win over parent-stage
+values, then provider-wide environment values; these win over worker, parent,
+and provider config keys, respectively. Stage names map through `config_stage`.
+For example, `WORKFLOW_SELF_HOSTED_MAX_CONCURRENCY_UPDATED_PLAN=16` overrides
+`updated-plan.max-concurrency 12` and `self-hosted.max-concurrency 24`.
+
+Stages read `workflow_model_granularity STAGE` in Bash or
+`unit_scheduler.granularity(runner, stage)` in Python. The Python
+`group_size(runner, stage, small=1, large=2)` accessor lets each stage supply its
+own sizes without putting grouping policy in the scheduler. Updated-plan's
+adaptive writer path uses this accessor for its default: one finding for small,
+two for large. `WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE` remains authoritative.
+Explicit legacy `stage-jobs` pools retain their previous two-finding adaptive
+size until a granularity setting is selected. Direct writer grouping remains
+with the existing slicing helpers; the slicing lane can consume the accessor.
+
+`workflow_model_enter STAGE [AGENT|REVIEWER]` runs inside each background unit.
+It acquires a lease from `scripts/lib/unit_scheduler.py` and releases it on exit.
+Overlapping registered fan-outs share the pool, while providers remain separate.
+The drivers cancel registered active and queued units and their descendants on
+exit. PID birth stamps prevent stale leases from targeting recycled processes.
+The implementation uses POSIX process inspection and file locks, including
+macOS's Bash 3.2; it does not need `wait -n`, a model SDK, or network access.
+
+Hermetic checks: `python3 -I scripts/tests/unit-scheduler-test.py` and
+`bash scripts/run-shell-tests.sh`. The stub tests assert that later work starts
+while the oldest unit is still blocked, a capacity of two is never exceeded,
+only a failed unit retries, results retain input order, and cancellation removes
+active workers, queued workers, and a descendant that ignores SIGTERM.

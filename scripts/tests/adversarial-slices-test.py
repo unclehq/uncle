@@ -364,7 +364,7 @@ class TuiTests(unittest.TestCase):
         cls.tui = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.tui)
 
-    def panel(self, sliced=False, active=False, candidates=False, mixed=False, lenses=LENSES):
+    def panel(self, sliced=False, active=False, candidates=False, mixed=False, lenses=LENSES, failed=False):
         app = self.tui.UncleTUI.__new__(self.tui.UncleTUI)
         records, live = [], {}
         for lens in lenses:
@@ -376,14 +376,15 @@ class TuiTests(unittest.TestCase):
                         live[stage] = 1000
                     else:
                         records.append({'stage': stage, 'started_at': 1000, 'ended_at': 1100,
-                                        'elapsed_seconds': 100, 'process_exit': 0,
+                                        'elapsed_seconds': 100,
+                                        'process_exit': 1 if failed and lens == 'security' and number in (0, 1) else 0,
                                         'total_tokens': 25 if sliced else 100})
         app.session_stats = {'records': records, 'active': live,
                              'live': {name: {'total_tokens': 25 if sliced else 100}
                                       for name in live} if mixed else {}}
         with patch.object(self.tui.time, 'time', return_value=1100):
             lines = app._session_panel_lines()
-        return lines, app._panel_indicator_styles
+        return lines, app._panel_indicator_styles, app._panel_stage_styles
 
     def test_slices_keep_four_visible_lens_indicators(self):
         for active in (False, True):
@@ -404,6 +405,12 @@ class TuiTests(unittest.TestCase):
             with self.subTest(active=active):
                 self.assertEqual(self.panel(sliced=True, active=active, lenses=('security',)),
                                  self.panel(active=active, lenses=('security',)))
+
+    def test_failed_slice_keeps_lens_failure_visible(self):
+        for lenses in (LENSES, ('security',)):
+            with self.subTest(lenses=lenses):
+                self.assertEqual(self.panel(sliced=True, failed=True, lenses=lenses),
+                                 self.panel(failed=True, lenses=lenses))
 
     def test_footer_keeps_existing_lens_name(self):
         def draw(stage, root):

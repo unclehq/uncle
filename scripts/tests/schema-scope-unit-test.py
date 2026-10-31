@@ -42,6 +42,11 @@ class ScopeControls(unittest.TestCase):
         self.config.write_text('updated-plan.scope-sections 1\n')
         self.assertEqual(ops.finding_scope(MODEL, [{'failure': 'Storage retry failed'}]), ['s1', 's1.1'])
 
+    def test_each_finding_gets_a_scope_even_when_another_finding_names_an_id(self):
+        self.config.write_text('updated-plan.scope-sections 1\n')
+        scope = ops.finding_scope(MODEL, [{'location': 's1.1'}, {'failure': 'Rendering dashboard is missing.'}])
+        self.assertEqual(scope, ['s1', 's1.1', 's3', 's3.1'])
+
     def test_stage_environment_overrides_family_environment_and_config(self):
         self.config.write_text('updated-change-plan.scope-sections 3\nupdated-plan.scope-sections 3\n')
         with patch.dict(os.environ, {'UNCLE_PLAN_KIND': 'change-plan',
@@ -68,6 +73,22 @@ class ScopeControls(unittest.TestCase):
 
     def test_numeric_section_citation_preserves_contents(self):
         self.assertEqual(ops.finding_scope(MODEL, [{'location': 'section 2'}]), ['s2', 's2.1'])
+
+    def test_extensionless_file_location_finds_its_declared_owner(self):
+        model = {'sections': [
+            {'id': 's1', 'heading': 'Step 1: Container — Owns: `Dockerfile`, `.gitignore`', 'blocks': [
+                {'id': 's1.1', 'kind': 'prose', 'text': 'Configure the image.'}]},
+            MODEL['sections'][1]]}
+        for path in ('Dockerfile', '.gitignore'):
+            self.assertEqual(ops.finding_scope(model, [{'location': {'path': path}}]), ['s1', 's1.1'])
+
+    def test_step_heading_includes_its_whole_body_but_not_closing_sections(self):
+        model = {'sections': [{'id': 's1', 'heading': 'Step 1: Storage', 'blocks': [
+            {'id': 's1.1', 'kind': 'prose', 'text': 'Create storage.'},
+            {'id': 's1.2', 'kind': 'code', 'text': 'save()', 'lang': 'python'},
+            {'id': 's1.3', 'kind': 'prose', 'text': '# Non-goals'},
+            {'id': 's1.4', 'kind': 'prose', 'text': 'Remote storage.'}]}]}
+        self.assertEqual(ops.finding_scope(model, [{'failure': 'Step 1 needs a retry.'}]), ['s1', 's1.1', 's1.2'])
 
     def test_unplaceable_resolver_uses_evidence_without_unlocking_every_section(self):
         group = ops.op_group([('writer', {'op': 'invalid', 'why': 'missing id',

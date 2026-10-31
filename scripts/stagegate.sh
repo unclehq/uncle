@@ -2446,6 +2446,7 @@ updated_plan_launch_writer() {
         schema_file="$directory/schemas/$name.json"
         local scope_args=()
         [[ "$schema_command" != edit-ops ]] || scope_args=(--scope "$directory/prompts/$name.scope.json")
+        if [[ "$schema_command" == edit-ops ]] && stage_uses_self_hosted updated-plan AGENT; then scope_args+=(--attempt first); fi
         python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" $owner ${scope_args[@]+"${scope_args[@]}"} || return 1
     fi
     local writer_turns answer_tokens
@@ -2463,6 +2464,25 @@ updated_plan_launch_writer() {
               python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-plan-worker-edits-$name.jsonl" "$directory/$name.json" 2>/dev/null || true
           fi
           python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" capture "$directory/$name.json" || exit "$((writer_status == 0 ? 1 : writer_status))"
+          local validation_status=0
+          if stage_uses_self_hosted updated-plan AGENT; then
+              python3 -B "$helper" check-writer "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/$name.json" "$ids" 2> "$directory/prompts/$name.rejection" || validation_status=$?
+          fi
+          [[ "$validation_status" == 0 || "$validation_status" == 5 ]] || exit "$validation_status"
+          if [[ "$validation_status" == 5 ]]; then
+              cp "$directory/prompts/$name.md" "$directory/prompts/$name.retry.md"
+              printf '\n\n## Your previous answer was rejected\n\n' >> "$directory/prompts/$name.retry.md"
+              cat "$directory/prompts/$name.rejection" >> "$directory/prompts/$name.retry.md"
+              python3 -B "$ROOT/scripts/lib/worker_schemas.py" edit-ops "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" $owner --scope "$directory/prompts/$name.scope.json" --attempt retry || exit 1
+              rm -f "$directory/$name.json"
+              writer_status=0
+              ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                run_claude "$directory/prompts/$name.retry.md" "updated-plan-worker-edits-$name-retry" ) || writer_status=$?
+              if [[ ! -s "$directory/$name.json" ]]; then
+                  python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-plan-worker-edits-$name-retry.jsonl" "$directory/$name.json" 2>/dev/null || true
+              fi
+              python3 -B "$helper" capture "$directory/$name.json" || exit "$((writer_status == 0 ? 1 : writer_status))"
+          fi
       else
           [[ "$writer_status" == 0 ]] || exit "$writer_status"
       fi ) \
@@ -2665,6 +2685,7 @@ run_updated_plan_edit_writers() {
                 mkdir -p "$directory/schemas"
                 local scope_args=()
                 [[ "$resolve_command" != resolve-ops ]] || scope_args=(--scope "$directory/prompts/resolve-$group_id.scope.json")
+                if [[ "$resolve_command" == resolve-ops ]] && stage_uses_self_hosted updated-plan AGENT; then scope_args+=(--attempt first); fi
                 python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$resolver_schema" ${scope_args[@]+"${scope_args[@]}"} || return 1
             fi
             workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
@@ -2703,6 +2724,11 @@ run_updated_plan_edit_writers() {
                 for group_id in $bad_groups; do
                     local retry_schema=""
                     [[ "$delivery" != hosted && "$resolve_command" != resolve-ops ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
+                    if [[ "$resolve_command" == resolve-ops ]] && stage_uses_self_hosted updated-plan AGENT; then
+                        local schema_attempt=first
+                        [[ ! -f "$directory/prompts/resolve-$group_id.validator-rejected" ]] || schema_attempt=retry
+                        python3 -B "$ROOT/scripts/lib/worker_schemas.py" resolve-ops "$STATE_DIR/documents/PROJECT_PLAN.json" "$retry_schema" --scope "$directory/prompts/resolve-$group_id.scope.json" --attempt "$schema_attempt" || return 1
+                    fi
                     workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
                     ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$retry_schema" ]] || export UNCLE_WORKER_SCHEMA_FILE="$retry_schema"; [[ "$delivery" != hosted || -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
                       if [[ "$resolver_granularity" == small ]]; then

@@ -128,7 +128,10 @@ print(json.dumps(steps))' "$logdir" "$plan" "$lib" "$@")"
     python3 -B "$lib/parallel_steps.py" "$request" || rc=$?
     rm -f "$request"
     if [[ "$rc" == 0 ]]; then
-        implementation_fast_check "group-$*" >&2 || return 1
+        # Guarded like the drivers' calls: a caller that loads only the fan-out has no step checks.
+        if declare -f implementation_fast_check > /dev/null; then
+            implementation_fast_check "group-$*" >&2 || return 1
+        fi
     fi
     return "$rc"
 }

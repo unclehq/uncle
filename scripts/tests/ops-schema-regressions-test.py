@@ -261,6 +261,22 @@ class EditGrammarTests(unittest.TestCase):
                 self_hosted._http_setup('agent', {'model': 'stub'}, 'Return the packet.',
                                        self.root, False, ws.EDIT_OPS_KIND)
 
+    def test_insertion_ancestors_cannot_delete_out_of_scope_siblings(self):
+        identifiers = ws.scoped_ids(self.model, ['B-1'])
+        for command, factory in (('edit-ops', ws.edit_ops_packet), ('resolve-ops', ws.resolution_ops_packet)):
+            schema = factory(ids=identifiers, model=self.model)
+            for target in ('s1', self.behavior):
+                with self.subTest(command=command, target=target), self.assertRaises(ValueError):
+                    conforms(self.packet(command, {'op': 'delete', 'id': target}), schema)
+            conforms(self.packet(command, {'op': 'delete', 'id': 'B-1'}), schema)
+
+    def test_section_insertion_requires_an_existing_section_anchor(self):
+        for operation in ({'op': 'insert_section', 'heading': 'New', 'blocks': []},
+                          {'op': 'insert_section', 'after': '', 'heading': 'New', 'blocks': []}):
+            self.assert_rejected(operation)
+        self.assert_accepted({'op': 'insert_section', 'after': 's4', 'heading': 'New',
+                              'blocks': [{'kind': 'prose', 'text': 'New note.'}]})
+
 
 class LensJudgmentTests(unittest.TestCase):
     def setUp(self):
@@ -392,6 +408,33 @@ class LensJudgmentTests(unittest.TestCase):
             self.assertEqual(len(findings), 1)
             self.assertEqual(findings[0]['severity'], 'Critical')
             self.assertIn('negative quantity -1 reaches storage', findings[0]['evidence'])
+
+    def test_distinct_failure_modes_with_same_target_and_category_do_not_merge(self):
+        for lens in adversarial_slices.AREAS:
+            for number in range(1, 5):
+                self.packet(lens, number, [
+                    {'id': 'AR-001', 'summary': lens + ' validation accepts NaN and corrupts numeric totals',
+                     'evidence': 'B-1: non-finite quantities reach arithmetic', 'severity': 'High'},
+                    {'id': 'AR-002', 'summary': lens + ' validation has no payload size limit',
+                     'evidence': 'B-1: oversized descriptions exhaust memory', 'severity': 'High'}])
+        adversarial_slices.merge(self.root, 4)
+        for lens in adversarial_slices.AREAS:
+            findings = json.loads((self.root / (lens + '.json')).read_text())['findings']
+            self.assertEqual(len(findings), 2)
+
+    def test_large_runner_preserves_existing_evidence_order(self):
+        for lens in adversarial_slices.AREAS:
+            for number in range(1, 5):
+                self.packet(lens, number, [{
+                    'id': 'AR-001', 'summary': lens + ' boundary validation gap',
+                    'evidence': 'B-1: original evidence' if number < 4 else 'B-1: stronger later evidence',
+                    'severity': 'Low' if number < 4 else 'Critical'}])
+        adversarial_slices.merge(self.root, 4, runner='claude')
+        for lens in adversarial_slices.AREAS:
+            findings = json.loads((self.root / (lens + '.json')).read_text())['findings']
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0]['evidence'], 'B-1: original evidence; B-1: stronger later evidence')
+            self.assertEqual(findings[0]['severity'], 'Critical')
 
 
 if __name__ == '__main__':

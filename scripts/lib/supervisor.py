@@ -1810,6 +1810,8 @@ def supervised_lock_run(run_once, command, state_dir, root, environ=None):
                     stop.set()
                     thread.join(timeout=5)
                 host.exit_code = rc
+                # A completed reply may be consumed by this poll, before settle.
+                host.running = False
                 host.poll()
                 retry = host.settle(host.controller.config.call_timeout_seconds + 5)
                 if not retry:

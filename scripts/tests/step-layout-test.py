@@ -267,6 +267,15 @@ Owns: `also-not-owned.py`
         self.assertIn('preserve existing dependency versions', published['narrative'])
         self.assertEqual(pm.steps_of(published)[0]['owns'], ['package.json'])
 
+    def test_bare_paths_in_ownership_bullets(self):
+        self.assert_readers('## Implementation order\n### Step 1: Scaffold\n'
+                            'Owns:\n- package.json\n- vite.config.js\n',
+                            [['package.json', 'vite.config.js']])
+
+    def test_explicit_extensionless_owners(self):
+        self.assert_readers('## Implementation order\n### Step 1: Scaffold\n'
+                            'Owns: Makefile, Dockerfile\n', [['Makefile', 'Dockerfile']])
+
 
 if __name__ == '__main__':
     unittest.main()

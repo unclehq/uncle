@@ -20,23 +20,29 @@ app_stage_runner_config_name() {
     esac
 }
 
-# Whether this stage's agent can be forced to answer in schema-checked JSON (see run_claude): the direct
-# Claude CLI only.  Codex, self-hosted models and a custom command keep the drivers' file contracts.
+# Whether the stage's adapter can deliver schema-checked JSON (see run_claude).
+# Self-hosted owns its separate HTTP schema path; custom commands keep their file contracts.
 app_stage_supports_structured_output() {
     local stage="$1" UNCLE_RESOLVED_RUNNER
     [[ "${WORKFLOW_STRUCTURED_OUTPUT:-1}" == 1 ]] || return 1
     stage="$(stage_runner_config_name "$stage")"
     uncle_resolve_stage_runner "$stage" AGENT 2>/dev/null || return 1
+    if [[ "$UNCLE_RESOLVED_RUNNER" == codex && "$(stage_agent_cmd "$stage" 2>/dev/null)" == */agent-codex.sh ]]; then
+        python3 -B "$ROOT/scripts/lib/runner_schema.py" enabled "$1"
+        return $?
+    fi
     [[ "$UNCLE_RESOLVED_RUNNER" == claude ]] && [[ "$(stage_agent_cmd "$stage" 2>/dev/null)" == *claude ]]
 }
 
-# Whether this stage's agent can be forced to answer in schema-checked JSON (see run_claude): the direct Claude
-# CLI only -- also when it runs through native_stage.py, which relays the validated object.  Codex, self-hosted
-# models and a custom command keep the file contract.
+# The change workflow uses the same adapter contract, including native steering sessions.
 change_stage_supports_structured_output() {
     local stage="$1" UNCLE_RESOLVED_RUNNER
     [[ "${WORKFLOW_STRUCTURED_OUTPUT:-1}" == 1 ]] || return 1
     uncle_resolve_stage_runner "$stage" AGENT 2>/dev/null || return 1
+    if [[ "$UNCLE_RESOLVED_RUNNER" == codex && "$(stage_agent_cmd "$stage" 2>/dev/null)" == */agent-codex.sh ]]; then
+        python3 -B "$ROOT/scripts/lib/runner_schema.py" enabled "$stage"
+        return $?
+    fi
     [[ "$UNCLE_RESOLVED_RUNNER" == claude ]] && [[ "$(stage_agent_cmd "$stage" 2>/dev/null)" == *claude ]]
 }
 

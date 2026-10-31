@@ -1966,6 +1966,8 @@ run_claude() {
     if [[ -n "${UNCLE_OUTPUT_SCHEMA_FILE:-}" ]]; then
         if [[ "${cmd##*/}" == claude && "$UNCLE_RESOLVED_RUNNER" == claude && -n "${UNCLE_STRUCTURED_OUTPUT_PATH:-}" ]]; then
             schema_args=(--json-schema "$(cat "$UNCLE_OUTPUT_SCHEMA_FILE")")
+        elif [[ "$UNCLE_RESOLVED_RUNNER" == codex && "${cmd##*/}" == agent-codex.sh ]]; then
+            : # Codex adapters constrain the final answer and deliver the restored object.
         else
             echo "Stage $log_name asked for schema-checked output, which this runner cannot give." >&2
             return 1

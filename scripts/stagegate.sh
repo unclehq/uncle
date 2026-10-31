@@ -4201,6 +4201,7 @@ run_stage() {
             ;;
         IMPLEMENT)
             green_background_cancel
+            implementation_scaffold_template .uncle/docs/UPDATED_PROJECT_PLAN.md || return $?
             parallel_status=0
             run_parallel_application_implementation || parallel_status=$?
             if [[ "$parallel_status" != 0 ]]; then
@@ -4236,6 +4237,7 @@ run_stage() {
                 else
                     run_claude prompts/implement.md implementation
                 fi
+                implementation_fast_check serial || return $?
                 # A serial implementation agent can finish code while omitting
                 # one or both reports.  Ingest a valid JSON-first test report
                 # when one was supplied, but never spend a second model turn

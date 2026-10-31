@@ -18,9 +18,13 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+
+from browser_install import install_lock
+from process_tree import start_check, wait_check, kill_tree, finish_check
 
 NAME = r'(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*'      # npm names are lowercase
 SPEC = re.compile(r'^(%s)(?:@[\w.^~<>=*|-]+)?$' % NAME)
@@ -112,9 +116,21 @@ def fingerprint(names):
 
 def run(command, cwd, timeout):
     try:
-        return subprocess.run(command, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL, timeout=timeout).returncode
-    except (OSError, subprocess.TimeoutExpired):
+        with tempfile.TemporaryFile() as output, install_lock(output):
+            env = dict(os.environ, PLAYWRIGHT_SKIP_BROWSER_GC='1')
+            process = start_check(command, cwd=cwd, env=env, stdout=output, stderr=subprocess.STDOUT)
+            try:
+                status = wait_check(process, timeout, output)
+                if status in (123, 124):
+                    output.seek(0)
+                    print('Install warm-up: ' + output.read().decode('utf-8', errors='replace')[-2000:],
+                          file=sys.stderr, flush=True)
+                return status
+            finally:
+                kill_tree(process)
+                process.wait()
+                finish_check(process)
+    except OSError:
         return 1
 
 
@@ -143,11 +159,12 @@ def warm(names, state_dir=None):
             if known and known != names:
                 names = known
                 status = run(install + names, folder, 900)
+        browser = 1
         summary = ['%d package(s) %s' % (len(names), 'cached' if status == 0 else 'not fully cached')]
         if wants_playwright(names) and status == 0 and shutil.which('npx'):
             browser = run(['npx', '--no-install', 'playwright', 'install', 'chromium'], folder, 1200)
             summary.append('chromium %s' % ('ready' if browser == 0 else 'not downloaded'))
-        if marker and status == 0:
+        if marker and status == 0 and (not wants_playwright(names) or browser == 0):
             try:
                 marker.write_text('\n'.join(names) + '\n')
             except OSError:
@@ -170,4 +187,7 @@ def main(argv):
 
 
 if __name__ == '__main__':
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, interrupted)
     sys.exit(main(sys.argv[1:]))

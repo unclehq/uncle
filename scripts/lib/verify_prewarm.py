@@ -115,10 +115,17 @@ def run(commands, root, state):
         print('$ %s' % command, flush=True)
         began = time.monotonic()
         try:
-            status = subprocess.run(['bash', '-o', 'pipefail', '-c', command], cwd=root, stdin=subprocess.DEVNULL,
-                                    timeout=TIMEOUT).returncode
-        except subprocess.TimeoutExpired:
-            status = 124
+            from process_tree import start_check, wait_check, kill_tree, finish_check, python3_executable
+            child = start_check([python3_executable(), '-B', str(Path(__file__).with_name('run_check.py')),
+                                 '--shell-command', command, '--', 'bash', '-o', 'pipefail', '-c', command],
+                                cwd=root, env=dict(os.environ, WORKFLOW_CHECK_TIMEOUT_SECONDS=str(TIMEOUT)),
+                                stdout=sys.stdout.buffer, stderr=subprocess.STDOUT)
+            try:
+                status = wait_check(child, TIMEOUT + 10, sys.stdout.buffer, idle=0)
+            finally:
+                kill_tree(child)
+                child.wait()
+                finish_check(child)
         except OSError:
             status = 127
         print('  exit %d after %.0fs' % (status, time.monotonic() - began), flush=True)

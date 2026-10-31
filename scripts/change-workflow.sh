@@ -1640,6 +1640,9 @@ run_stepwise_implementation() {
         if [[ ! -s "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" || ! -s "$STATE_DIR/documents/CHANGE_TEST_REPORT.json" ]]; then
             python3 "$ROOT/scripts/lib/implementation_report_fallback.py" --project . --kind change --missing-only
         fi
+        if declare -f implementation_fast_check > /dev/null; then
+            implementation_fast_check serial || return $?
+        fi
         local notes_ingest_error
         notes_ingest_error="$(python3 "$ROOT/scripts/lib/implementation_notes.py" validate . \
             "$STATE_DIR/documents/IMPLEMENTATION_NOTES.json" --require-json 2>&1)" || {
@@ -1748,6 +1751,9 @@ run_stepwise_implementation() {
                 .uncle/docs/IMPLEMENTATION_NOTES.md "malformed fragment for step $i"
             return 1
         }
+        if declare -f implementation_fast_check > /dev/null; then
+            implementation_fast_check "step-$i" || return $?
+        fi
         check_document_budget .uncle/docs/IMPLEMENTATION_NOTES.md || exit 1
         printf '%s\n' "$i" > "$done_file"
     done < "$steps_file"
@@ -3696,6 +3702,7 @@ while true; do
             plan_status=0
             plan_before_write || plan_status=$?
             case "$plan_status" in 0|22) ;; 10) continue ;; *) exit 1 ;; esac
+            implementation_scaffold_template .uncle/docs/CHANGE_PLAN.md || exit $?
 
             # Re-entering implementation withdraws every claim made about
             # the previous one; the directory itself turns attestation on.
@@ -3731,6 +3738,7 @@ while true; do
                 run_claude "$STATE_DIR/implement-change.resolved.md" implementation \
                     "$MODEL_IMPLEMENT" "" 200 "$BUDGET_IMPLEMENT"
                 envelope_guard_end
+                implementation_fast_check serial || exit $?
             fi
             plan_status=0
             plan_after_write || plan_status=$?

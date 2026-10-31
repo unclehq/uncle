@@ -75,6 +75,7 @@ triage_stage_reports() {
         updated-plan|plan-recovery) printf '%s\n' .uncle/docs/UPDATED_PROJECT_PLAN.md ;;
         updated-change-plan) printf '%s\n' .uncle/docs/CHANGE_PLAN.md ;;
         preflight) printf '%s\n' .uncle/docs/PREFLIGHT_REPORT.md ;;
+        module-interfaces) printf '%s\n' .uncle/workflow/documents/MODULE_INTERFACES.json ;;
         implementation*) printf '%s\n' .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/AUTOMATED_TEST_REPORT.md .uncle/docs/CHANGE_TEST_REPORT.md ;;
         repair*) printf '%s\n' .uncle/docs/IMPLEMENTATION_NOTES.md ;;
         test-review) printf '%s\n' .uncle/docs/TEST_REVIEW.md ;;
@@ -250,9 +251,26 @@ write_triage() {
 # changed here: a bundle that could not be written is one stderr line.
 triage_on_exit() {
     local rc="${1:-0}" state_dir="${STATE_DIR:-.uncle/workflow}"
-    case "$rc" in 0|130|143|137) return 0 ;; esac
+    case "$rc" in 0) return 0 ;; esac
     if [[ -s "$state_dir/stop-reason" ]] && [[ "$(head -n 1 "$state_dir/stop-reason")" == human ]]; then
         return 0
+    fi
+    # 130/143/137 (SIGINT/SIGTERM/SIGKILL) used to be exempted unconditionally
+    # here, on the theory that a signal-shaped exit code means a person chose
+    # to stop. That is a reasonable default for an attended run sitting at a
+    # terminal. It is not reasonable for --unattended: there is no one at the
+    # keyboard to have pressed Ctrl-C, so the same codes there mean something
+    # else reached in from outside (a closing terminal/session propagating
+    # SIGHUP/SIGINT to the process group, a supervisor forwarding a signal it
+    # received itself, a host killing the process) -- and with no stop-reason
+    # ever written to say so, this exemption discarded the one record that
+    # could explain it. Confirmed live: an unattended REPAIR stage's agent
+    # call exited 130 with no stop-reason and no TRIAGE.md, and the run was
+    # never heard from again. Keep the exemption for attended runs only; an
+    # unattended run always gets a triage bundle, so an external kill is at
+    # least visible afterward instead of a silent disappearance.
+    if [[ "${UNATTENDED:-0}" != 1 ]]; then
+        case "$rc" in 130|143|137) return 0 ;; esac
     fi
     [[ -d "$state_dir" ]] || return 0
     if ! TRIAGE_EXIT_STATUS="$rc" write_triage "$state_dir" "$state_dir/TRIAGE.md" 2>/dev/null; then

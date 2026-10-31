@@ -79,8 +79,20 @@ if "manual-checklist-base" in checklist or "manual-checklist-delta" in checklist
     raise SystemExit("change workflow must not use base/delta checklist passes")
 
 execute = state("EXECUTE_CHECKLIST", "VALIDATE_CHECKLIST")
-if execute.count("run_parallel_checklist_workers") != 1:
-    raise SystemExit("change execute checklist must launch its worker fan-out once")
+# uncle consolidation phase (c): the worker fan-out + fast-path check moved
+# into the shared checklist_execute_worker_fastpath (scripts/lib/checklist-stage.sh),
+# used by both stagegate.sh and change-workflow.sh, so the literal
+# run_parallel_checklist_workers call itself is checked once, in the shared
+# function, rather than once per driver.
+call_lines = [line for line in execute.splitlines()
+              if "checklist_execute_worker_fastpath" in line and not line.strip().startswith("#")]
+if len(call_lines) != 1:
+    raise SystemExit("change execute checklist must call the shared worker fan-out once")
+shared_lib = open(f"{sys.argv[1].rsplit('/', 1)[0]}/lib/checklist-stage.sh", encoding="utf-8").read()
+fastpath = shared_lib[shared_lib.index("checklist_execute_worker_fastpath() {"):]
+fastpath = fastpath[:fastpath.index("\n}\n")]
+if fastpath.count("run_parallel_checklist_workers") != 1:
+    raise SystemExit("the shared worker fan-out must launch run_parallel_checklist_workers once")
 if "wait_green_check_bg" not in execute:
     raise SystemExit("change execute workers must require completed green evidence")
 

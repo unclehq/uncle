@@ -205,9 +205,19 @@ def publish(stage, log, project, delivery=None):
     name, kind = ARTIFACT[stage]
     try:
         payload = delivered(delivery, kind) if delivery else response(log, kind)
-    except ValueError:
+    except ValueError as missing:
         if delivery:
-            raise
+            # Capture, don't regenerate: a complete packet the model already printed is
+            # adopted through the same schema/kind check and the validators below, rather
+            # than discarding it and paying for the whole document a second time.
+            try:
+                payload = response(log, kind)
+            except (OSError, ValueError):
+                raise missing
+            print('Adopted the %s packet the runner printed instead of writing it.' % kind, file=sys.stderr)
+        else:
+            payload = None
+    if payload is None:
         # Compatibility only.  Once published below, the view is immediately
         # overwritten with a deterministic rendering and cannot remain an
         # operational JSON input.

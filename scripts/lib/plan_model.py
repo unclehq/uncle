@@ -109,6 +109,17 @@ def strip_ticks(text):
     return text[1:-1].strip() if len(text) > 2 and text[0] == text[-1] == '`' and '`' not in text[1:-1] else text
 
 
+def owned_path(text):
+    """One `Owns:` entry without its backticks or a trailing sentence period.
+
+    Only the trailing period goes. `strip('`. ')` also ate the leading dot of
+    `.gitignore` and `.uncle/launch.json`, so a step's declared files no longer
+    matched what its worker wrote and the whole parallel implementation fan-out
+    was discarded for an "ownership mismatch" (live, calculator).
+    """
+    return strip_ticks(text.strip().rstrip('.')).strip('` ')
+
+
 def cells_of(line):
     parts = re.split(r'(?<!\\)\|(?=(?:[^`]*`[^`]*`)*[^`]*$)', line.strip())   # not a | inside a `code span`
     if parts and not parts[0].strip():
@@ -259,7 +270,7 @@ def parse_list(lines, block_id):
             step_owns, depends = [], []
             for extra in item['lines'][1:]:
                 if OWNS.match(extra):
-                    step_owns.extend(split_list(OWNS.match(extra).group(1)))
+                    step_owns.extend(owned for owned in map(owned_path, re.split(r',\s*', OWNS.match(extra).group(1))) if owned)
                 elif DEPENDS.match(extra):
                     depends = [int(n) for n in re.findall(r'\d+', DEPENDS.match(extra).group(1))]
                 else:

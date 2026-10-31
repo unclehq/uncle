@@ -296,11 +296,22 @@ def publish_worker_end(spec, result):
 
 
 def run_step(spec, results):
-    """One step in its own mirror of the tree. Never raises into the caller."""
+    """One step in its own mirror of the tree. Never raises into the caller:
+    this runs on a bare `threading.Thread` (not a ThreadPoolExecutor future),
+    so an exception that escapes here does not propagate anywhere -- it only
+    prints a traceback via the default thread excepthook and leaves `results`
+    with no entry at all for this step number. `main()` below then treats a
+    missing entry the same as a reported success (`results.get(n, {}).get
+    ('exit')` is falsy), so the caller believed every step passed while one
+    silently never finished, and the later `merge()` KeyErrors on the missing
+    entry instead of reporting a clean per-step failure. A narrower
+    `except (OSError, ValueError)` used to leave that gap open for any other
+    exception type (a KeyError from a malformed spec, a MemoryError, ...).
+    """
     number, sandbox = spec['number'], spec['sandbox']
     started = time.monotonic()
-    publish_worker_start(spec)
     try:
+        publish_worker_start(spec)
         # Captured by the coordinator immediately after this sandbox was
         # created, before *any* worker starts.  Do not derive a baseline in a
         # worker thread: inherited dirty files from an earlier merged group
@@ -311,10 +322,16 @@ def run_step(spec, results):
         results[number] = {'exit': proc.returncode,
                            'seconds': round(time.monotonic() - started, 3),
                            'wrote': sorted(changed(before, snapshot(sandbox, spec['project']), spec['project']))}
-    except (OSError, ValueError) as error:
+    except Exception as error:  # noqa: BLE001 - see docstring: must never leave results[number] unset.
         results[number] = {'exit': 1, 'seconds': round(time.monotonic() - started, 3),
                            'wrote': [], 'detail': str(error)}
-    publish_worker_end(spec, results[number])
+    # results[number] is now always set above; a metrics-publishing failure
+    # past this point must not re-open the same hole by raising out of
+    # run_step itself.
+    try:
+        publish_worker_end(spec, results[number])
+    except Exception:
+        pass
 
 
 def merge(project, steps, results, owned, allowlist=()):

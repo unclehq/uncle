@@ -37,9 +37,18 @@ run_case() {   # name mode fixture
         if [[ "${JSON_MODE:-}" == local ]]; then stage_uses_self_hosted() { return 0; }; fi
         run_claude() {   # prompt stage
             if [[ "$2" == project-plan-stage-duties ]]; then   # the once-per-stage duty step: real .gitignore, real verification
+                local duties_calls=0
+                [[ ! -e "$STATE_DIR/stage-duties-calls" ]] || duties_calls="$(wc -l < "$STATE_DIR/stage-duties-calls" | tr -d ' ')"
+                cp "$1" "$STATE_DIR/stage-duties-prompt-$((duties_calls + 1)).md"
+                echo stage-duties >> "$STATE_DIR/stage-duties-calls"
+                # duties-fix: the first pass reports a contradiction and stops, the repair pass finishes.
+                # duties-stuck: neither pass finishes.
+                if [[ "$mode" == duties-stuck || ( "$mode" == duties-fix && "$duties_calls" == 0 ) ]]; then
+                    printf '%s\n' '{"type":"result","result":"The plan has contradictions. Which resolution do you want for the stylesheet name?"}' > "$LOG_DIR/project-plan-stage-duties.jsonl"
+                    return 0
+                fi
                 printf '%s\n' .env .env.local .DS_Store node_modules/ dist/ build/ .svelte-kit/ .next/ out/ .venv/ __pycache__/ '*.pyc' .pytest_cache/ target/ vendor/ test-results/ playwright-report/ blob-report/ .pw-browsers/ > .gitignore
                 printf '%s\n' '{"type":"result","result":"PROJECT_PLAN_STAGE_COMPLETE"}' > "$LOG_DIR/project-plan-stage-duties.jsonl"
-                echo stage-duties >> "$STATE_DIR/stage-duties-calls"
                 return 0
             fi
             local worker="${2#project-plan-section-}" parts="$STATE_DIR/project-plan-sections"
@@ -48,7 +57,8 @@ run_case() {   # name mode fixture
                 outline) ;;
                 trace) for f in outline design state domain components flow steps sequence decisions restrictions limits bounds behaviors handling checks invariants guards tests defects obligations commands closing; do [[ -s "$parts/$f.md" ]] || echo "trace started before $f" >> "$STATE_DIR/violations"; done ;;
                 behaviors|handling|checks|decisions|restrictions|limits|bounds) ;;      # written from the requirements alone: they start with the outline
-                *) [[ -s "$parts/outline.md" ]] || echo "$worker started before the outline" >> "$STATE_DIR/violations" ;;
+                *) [[ -s "$parts/outline.md" ]] || echo "$worker started before the outline" >> "$STATE_DIR/violations"
+                   [[ -s "$parts/decisions.md" ]] || echo "$worker started before the decisions" >> "$STATE_DIR/violations" ;;
             esac
             sleep 0.4
             [[ "$mode:$worker" != fail:tests ]] || return 1
@@ -121,6 +131,13 @@ ends = {r[0]: float(r[2]) for r in rows if r[1] == 'end'}
 starts = {r[0]: float(r[1]) for r in rows if r[1] != 'end'}
 sys.exit(0 if all(starts[n] >= ends['outline'] - 0.05 for n in starts if n not in ('outline', 'behaviors', 'handling', 'checks', 'decisions', 'restrictions', 'limits', 'bounds')) else 1)
 PY
+check "success: phase two began after the decision record finished" python3 - "$w/order" <<'PY'
+import sys
+rows = [line.split() for line in open(sys.argv[1])]
+ends = {r[0]: float(r[2]) for r in rows if r[1] == 'end'}
+starts = {r[0]: float(r[1]) for r in rows if r[1] != 'end'}
+sys.exit(0 if all(starts[n] >= ends['decisions'] - 0.05 for n in starts if n not in ('outline', 'behaviors', 'handling', 'checks', 'decisions', 'restrictions', 'limits', 'bounds')) else 1)
+PY
 check "success: the early workers started before the outline finished" python3 - "$w/order" <<'PY'
 import sys
 rows = [line.split() for line in open(sys.argv[1])]
@@ -146,6 +163,24 @@ run_case silent silent
 w="$TMP/silent/.uncle/workflow"
 check "silent worker: assembled after one retry"     test "$(cat "$w/rc")" == 0
 check "silent worker: it was run a second time"      test "$(grep -v ' end ' "$w/order" | grep -c '^commands ')" == 2
+
+# The stage step reports a contradiction instead of finishing: one repair pass, told what the first said, keeps the
+# assembled plan; a step that still does not finish falls back to the single-pass plan; the repair can be turned off.
+run_case dutiesfix duties-fix
+w="$TMP/dutiesfix/.uncle/workflow"
+check "stage repair: the plan is kept"              test "$(cat "$w/rc")" == 0
+check "stage repair: two passes, no more"           test "$(wc -l < "$w/stage-duties-calls" | tr -d ' ')" == 2
+check "stage repair: a receipt is recorded"         test -s "$w/project-plan-sections/stage-duties.json"
+check "stage repair: the repair was told the first pass's finding" grep -q 'Which resolution do you want for the stylesheet name' "$w/stage-duties-prompt-2.md"
+check "stage repair: the first pass may fix by editing" grep -q 'Fix a contradiction yourself with Edit' "$w/stage-duties-prompt-1.md"
+run_case dutiesstuck duties-stuck
+w="$TMP/dutiesstuck/.uncle/workflow"
+check "stage repair fails: falls back (nonzero)"    test "$(cat "$w/rc")" != 0
+check "stage repair fails: exactly one repair"      test "$(wc -l < "$w/stage-duties-calls" | tr -d ' ')" == 2
+WORKFLOW_PLAN_STAGE_REPAIR=0 run_case dutiesoff duties-fix
+w="$TMP/dutiesoff/.uncle/workflow"
+check "repair off: falls back (nonzero)"            test "$(cat "$w/rc")" != 0
+check "repair off: only the first pass ran"         test "$(wc -l < "$w/stage-duties-calls" | tr -d ' ')" == 1
 
 run_case failed fail
 w="$TMP/failed/.uncle/workflow"

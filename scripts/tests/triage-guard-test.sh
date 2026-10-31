@@ -51,6 +51,7 @@ project() {
     printf 'review\n' > "$dir/ADVERSARIAL_REVIEW.md"
     printf 'IMPLEMENT\n' > "$dir/.uncle/workflow/state"
     printf 'approved-hash\n' > "$dir/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+    mkdir -p "$dir/.uncle/docs"
     printf '# notes\n' > "$dir/.uncle/docs/IMPLEMENTATION_NOTES.md"
     if [[ "$kind" != plain ]]; then
         git -C "$dir" init -q .

@@ -395,7 +395,14 @@ PYREVISE
             > .uncle/docs/VERIFICATION_REPORT.md
         printf '# Defects\n\nNo defects found.\n' > .uncle/docs/DEFECTS.md
         ;;
-    *STUB:baseline*|*STUB:spec*)
+    *STUB:baseline*|*STUB:spec*|*'change-planning-bundle'*)
+        # The combined-planning contract text (appended to whichever
+        # prompt_file the combined pass happens to use -- often the plain
+        # change-plan.md template, whose fixture content is literally
+        # "STUB:plan") always embeds the schema name "change-planning-bundle"
+        # in its worked example. Matching on that text, not just the
+        # STUB:baseline/STUB:spec markers, is what keeps a combined call from
+        # falling through to the single-document *STUB:plan* case below.
         # The combined planning pass delivers one canonical JSON bundle (not
         # separate Markdown files) at the path the driver names inside the
         # prompt itself (the "Use your Write tool to create exactly one JSON

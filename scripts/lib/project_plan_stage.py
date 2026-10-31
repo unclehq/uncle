@@ -80,6 +80,21 @@ def verify(directory, plan, record=False):
         raise ValueError('stage duties have no successful receipt')
 
 
+def known_inconsistencies(plan):
+    """Cross-section file-name conflicts found without a model (plan_consistency.py)."""
+    try:
+        from plan_consistency import findings
+        return findings(Path(plan).read_text(encoding='utf-8'))
+    except (ImportError, OSError, ValueError):
+        return []
+
+
+FIX_RULES = ('Fix a contradiction yourself with Edit on the assembled plan only, using a unique text anchor, and change the '
+             'fewest places: keep the choice the requirements, the outline and most of the plan already use. Do not rewrite '
+             'the plan, and do not touch its packets or any other file except `.gitignore`. Report and stop only if a '
+             'contradiction needs a decision the requirements do not make.')
+
+
 def prepare(directory, plan, output):
     base = Path(__file__).resolve().parents[2] / 'prompts' / 'project-plan-investigate.md'
     contexts = prompt_contexts(base.read_text())
@@ -88,11 +103,35 @@ def prepare(directory, plan, output):
     text = ('Finish the sectioned project-plan stage once. The workers have finished; the driver assembled their plan.\n'
             'Read the assembled plan at `%s` and the authoritative requirements at '
             '`.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`.\n'
-            'Check consistency before updating .gitignore. If a contradiction remains, report it and stop; '
-            'do not claim completion. Do not rewrite the plan or its packets.\n\n' % Path(plan).resolve())
+            'Check consistency before updating .gitignore. %s\n\n' % (Path(plan).resolve(), FIX_RULES))
+    known = known_inconsistencies(plan)
+    if known:
+        text += ('The driver already found these, by comparing every file the plan mentions with the files its steps own. '
+                 'Resolve each one:\n' + ''.join('- %s\n' % line for line in known) + '\n')
     text += consistency + '\n' + duties
     text += ('\nPreserve existing project ignore rules. You own the stage file update; workers do not. '
              'When both duties are complete, reply with exactly %s and nothing else.\n' % COMPLETE)
+    Path(output).write_text(text)
+
+
+def prepare_repair(directory, plan, output, reason=''):
+    """The one second attempt: what the first attempt said, what the driver still finds, and the fix rules."""
+    directory = Path(directory)
+    previous = final_text(directory / 'stage-duties.jsonl').strip()
+    text = ('The first pass over the assembled project plan did not finish. Do not start over and do not give up on the '
+            'plan: repair it now, once.\n'
+            'The assembled plan is `%s`; the requirements are `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json`.\n\n'
+            '%s\n\n' % (Path(plan).resolve(), FIX_RULES))
+    if reason:
+        text += 'The driver rejected the result because: %s\n\n' % reason
+    if previous:
+        text += 'The first pass said:\n\n%s\n\n' % previous[:6000]
+    known = known_inconsistencies(plan)
+    if known:
+        text += 'The driver still finds:\n' + ''.join('- %s\n' % line for line in known) + '\n'
+    text += ('Fix every contradiction listed, choosing for each the option that fits the requirements and most of the plan, '
+             'then complete the `.gitignore` duties. When the plan is consistent and `.gitignore` is updated, reply with '
+             'exactly %s and nothing else.\n' % COMPLETE)
     Path(output).write_text(text)
 
 
@@ -100,6 +139,8 @@ def main(argv):
     try:
         if len(argv) == 4 and argv[0] == 'prepare':
             prepare(*argv[1:])
+        elif argv[0] == 'prepare-repair' and len(argv) in (4, 5):
+            prepare_repair(*argv[1:])
         elif len(argv) in (3, 4) and argv[0] == 'verify' and argv[3:] in ([], ['--record']):
             verify(*argv[1:3], record=bool(argv[3:]))
         else:

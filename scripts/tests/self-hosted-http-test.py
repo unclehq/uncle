@@ -181,6 +181,40 @@ class SelfHostedHttp(unittest.TestCase):
         message = '<think>maybe {"schema": "decoy"}</think>' + json.dumps(PLAN)
         self.assertEqual(json.loads(http_agent.answer_already_given(message, artifact_schema('plan'))), PLAN)
 
+    def test_reasoning_think_tags_do_not_leak_into_a_plain_text_final_answer(self):
+        # Most agent stages have no final_schema (that path is for the driver-owned JSON
+        # artifacts only); a reasoning model's <think> preamble used to reach stage.final_answer
+        # verbatim there, because only the JSON-schema closing path stripped it.
+        message = '<think>I should keep this short and just answer plainly.</think>The task is done.'
+        server = self.serve('unused', tool_script=[{'role': 'assistant', 'content': message}])
+        text, _ = self.agent(server, http_agent.Policy(self.root))
+        self.assertEqual(text, 'The task is done.')
+        self.assertNotIn('<think>', text)
+
+    def test_reasoning_think_tags_do_not_leak_into_live_stage_text_or_history(self):
+        # The leaked text reached three places: the live stage log (stage.text), the
+        # conversation history fed back to the model on the next turn, and the final
+        # answer. All three must see the same stripped text.
+        message = '<think>Planning my next move here.</think>Investigating now.'
+        seen = []
+
+        class FakeStage:
+            correlation = ''
+            pending = {}
+            final_answer = ''
+            def incoming(inner, steer): pass
+            def tokens(inner, usage, **kw): pass
+            def text(inner, text): seen.append(text)
+
+        server = self.serve('unused', tool_script=[self.call('list_dir', {}), {'role': 'assistant', 'content': message}])
+        stage = FakeStage()
+        text, _ = self.agent(server, http_agent.Policy(self.root), stage=stage)
+        self.assertEqual(text, 'Investigating now.')
+        self.assertEqual(stage.final_answer, 'Investigating now.')
+        self.assertNotIn('<think>', ''.join(seen))
+        history = [m['content'] for m in server.requests[-1][1]['messages'] if m['role'] == 'assistant']
+        self.assertTrue(all('<think>' not in (c or '') for c in history))
+
     def test_final_call_defaults_to_temperature_zero_and_honours_override(self):
         server = self.serve(PLAN)
         self.plan(server, explore_first=False)

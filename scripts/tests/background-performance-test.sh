@@ -29,6 +29,7 @@ stage_effort_for() { printf low; }
 stage_model_for() { :; }
 require_file() { [[ -s "$1" ]]; }
 gated_prompt() { printf '%s' "$1"; }
+bind_change_request_source() { printf '%s' "$1"; }
 status_stage_context() { :; }
 . "$ROOT/scripts/lib/performance.sh"
 . "$TMP/function.sh"

@@ -82,6 +82,10 @@ PHASES = (('outline',) + EARLY,
           ('design', 'state', 'domain', 'components', 'flow', 'steps', 'sequence', 'invariants', 'guards', 'tests', 'defects', 'obligations',
            'commands', 'closing'))
 FALLBACK = ('trace',)
+# The second phase starts when these are done, not when the outline alone is. `decisions` fixes the choices the other sections
+# would otherwise make independently (the stylesheet's name, how the launch works) and used to finish beside them, so two workers
+# could name one file two ways. It needs only the requirements and is as quick as the outline, so waiting for it costs seconds.
+GATE = ('outline', 'decisions')
 
 # A section more than one worker writes (their parts are joined in WORKERS order).
 WRITERS = {n: sum(n in spec['sections'] or n in spec['extra'] for spec in WORKERS.values()) for n in list(TITLES) + list(EXTRA)}
@@ -274,7 +278,8 @@ def readable(name, directory):
         for phase in PHASES:
             if name in phase:
                 break
-            names.extend(n for n in phase if n not in EARLY)       # an early worker may still be writing when this one starts
+            # an early worker may still be writing when this one starts, except the gate: it is finished by then
+            names.extend(n for n in phase if n not in EARLY or n in GATE)
     return ['%s/%s.md' % (directory, earlier) for earlier in names]
 
 
@@ -420,6 +425,15 @@ def embedded_outline(directory):
         return ''
 
 
+def embedded_decisions(directory, limit=8000):
+    """The decisions worker's section as it was rendered, for a prompt that carries it; '' when absent."""
+    try:
+        text = (Path(directory) / 'decisions.md').read_text(encoding='utf-8').strip()
+    except OSError:
+        return ''
+    return text if len(text) <= limit else text[:limit].rsplit('\n', 1)[0] + '\n...'
+
+
 def block_contract(name, directory):
     """The Section mode text for a worker that answers with typed blocks (a `project-plan-section-model-packet`)."""
     spec = WORKERS[name]
@@ -481,6 +495,10 @@ def block_contract(name, directory):
     elif outline:
         lines += ['', 'The outline follows. It is binding; do not contradict it. It is already here: do not read any file for it.',
                   '', '```json', outline, '```']
+        decisions = embedded_decisions(directory)
+        if decisions:
+            lines += ['', 'The decision record follows. It is binding too: use the file names, tools and policies it chooses and '
+                      'do not name a different one. It is already here: do not read any file for it.', '', '```markdown', decisions, '```']
     else:
         lines += ['', 'Read this first. It is binding; do not contradict it:', '', '- `%s/outline.json`' % directory]
     if name in TRACE_KINDS:
@@ -1008,6 +1026,8 @@ def main(argv):
         if argv[:1] == ['phases']:
             for phase in PHASES:
                 print(' '.join(phase))
+        elif argv[:1] == ['gate']:
+            print(' '.join(GATE))
         elif argv[:1] == ['prompt'] and len(argv) in (5, 6):
             _, name, directory, base, output = argv[:5]
             Path(output).write_text(build_prompt(name, directory, Path(base).read_text(encoding='utf-8'),

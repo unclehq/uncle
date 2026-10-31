@@ -18,6 +18,7 @@ import fnmatch
 from functools import lru_cache
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -129,6 +130,70 @@ def group(total, owned, deps, ignore_deps=False):
     return groups
 
 
+# What a step is for, from the files it owns. Tests are written by their own workers on purpose (a test written by the
+# agent that wrote the code can encode that code's bugs), and scaffold and config files change for different reasons than the
+# application does. The application's own files, though, refer to each other by string -- a component's `className`, the
+# stylesheet's selector for it, the state a view reads -- and workers that cannot see one another's files name those things
+# differently (live: `className="keypad"` in one step, no `.keypad` rule in the stylesheet step).
+TEST_PATH = re.compile(r'(^|/)(tests?|e2e|specs?|__tests__|cypress)(/|$)|\.(test|spec)\.[A-Za-z]+$|(^|/)[^/]*(mutat|defect-inject)[^/]*$', re.I)
+SCAFFOLD_PATH = re.compile(r'(^|/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|index\.html|README(\.md)?|'
+                           r'\.gitignore|\.uncle/.*|tsconfig[^/]*\.json|[^/]*\.config\.[cm]?[jt]s|\.eslintrc[^/]*|\.prettierrc[^/]*|\.env[^/]*)$', re.I)
+
+
+def role(paths):
+    """'test', 'scaffold' or 'app' when every owned path agrees; 'mixed' for anything else, including a step that owns `*`."""
+    paths = {p for p in paths if p}
+    if not paths or '*' in paths:
+        return 'mixed'
+    kinds = {'test' if TEST_PATH.search(p) else 'scaffold' if SCAFFOLD_PATH.search(p) else 'app' for p in paths}
+    return kinds.pop() if len(kinds) == 1 else 'mixed'
+
+
+# A step that owns nothing but the defect-injection runner is not model-written: the driver supplies that file (parallel-provided.sh),
+# so folding it into another worker would make a model write what the driver already provides. Same test as parallel-implement.sh.
+RUNNER_NAMES = {'run', 'runner', 'mutate', 'run-mutations', 'run_mutations', 'runmutations', 'mutation-runner', 'mutation_runner',
+                'run-defects', 'defect-runner', 'run-injections', 'inject'}
+
+
+def provided_runner(paths):
+    paths = [p.strip() for p in paths if p and p.strip()]
+    if len(paths) != 1:
+        return False
+    match = re.match(r'^(?:.*/)?([^/]+)\.m?js$', paths[0])
+    return bool(match and match.group(1).lower() in RUNNER_NAMES and re.search(r'mutat|defect|inject', paths[0].lower()))
+
+
+MERGE_MODES = ('0', '1', '2')
+
+
+def merge_mode():
+    mode = os.environ.get('WORKFLOW_IMPLEMENT_MERGE_APP', '2').strip()
+    return mode if mode in MERGE_MODES else '2'
+
+
+def merge_map(owned, group):
+    """{primary: [absorbed, ...]}: the steps of one parallel group that a single worker writes.
+
+    WORKFLOW_IMPLEMENT_MERGE_APP: 0 = every step its own worker (the old fan-out); 1 = the application steps share one worker;
+    2 (the default) = two workers: one for the application's source, one for everything that builds and verifies it (scaffold,
+    config, tests, the defect-injection list). Both halves were failing at their seams: a stylesheet written without the
+    component's class names, a `package.json` without the packages the tests import, an include glob that matched no test, a
+    mutation list naming tests that do not exist. Tests stay out of the application's worker so that nobody checks code against
+    tests it wrote itself.
+
+    A step that mixes roles, declares nothing or owns `*`, and the driver-supplied mutation runner, stay on their own. A unit of
+    fewer than two steps has nothing to merge.
+    """
+    mode = merge_mode()
+    if mode == '0':
+        return {}
+    roles = {step: role(owned.get(step, ())) for step in group}
+    units = [[s for s in group if roles[s] == 'app']]
+    if mode == '2':
+        units.append([s for s in group if roles[s] in ('test', 'scaffold') and not provided_runner(owned.get(s, ()))])
+    return {unit[0]: unit[1:] for unit in units if len(unit) > 1}
+
+
 WORKFLOW_DOCS = {
     'REQUIREMENTS.md', 'REQUIREMENTS_INTERPRETATION.md', 'PROJECT_PLAN.md',
     'UPDATED_PROJECT_PLAN.md', 'ADVERSARIAL_REVIEW.md', 'PREFLIGHT_REPORT.md',
@@ -155,7 +220,17 @@ def changed_files(root):
             yield name
 
 
+def merge_map_main(plan, group):
+    lib = Path(__file__).resolve().parent
+    rows = subprocess.run(['bash', '-c', '. "%s/plan-scope.sh"; plan_step_owns "%s"' % (lib, plan)],
+                          capture_output=True, text=True).stdout.splitlines()
+    print(json.dumps({str(k): v for k, v in merge_map(owns(rows), [int(n) for n in group]).items()}))
+    return 0
+
+
 def main():
+    if sys.argv[1:2] == ['merge-map']:
+        return merge_map_main(sys.argv[2], sys.argv[3:])
     plan, root = sys.argv[1], sys.argv[2]
     lib = Path(__file__).resolve().parent
 
@@ -190,6 +265,7 @@ def main():
         'steps': total,
         'steps_declaring_ownership': len(owned),
         'groups': groups,
+        'merged_steps': {str(k): v for g in groups for k, v in merge_map(owned, g).items()},
         'largest_group': max((len(g) for g in groups), default=0),
         'declared_paths': declared,
         'changed_files': actual,

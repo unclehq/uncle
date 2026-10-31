@@ -196,7 +196,7 @@ class FindingsTests(unittest.TestCase):
         self.assertIn('FA-1', self.record()['decisions'])
 
     def test_driver_gates_both_formats_and_resume(self):
-        for driver, prefix, column in [('stagegate.sh', '', 0), ('change-workflow.sh', 'run-123\t', 1)]:
+        for driver, prefix, column in [('stagegate.sh', '', 1), ('change-workflow.sh', 'run-123\t', 1)]:
             with self.subTest(driver=driver):
                 shutil.rmtree(self.state / 'audit-dispositions', ignore_errors=True)
                 # Execute the production WAIT arm, avoiding external agents,
@@ -260,7 +260,7 @@ done
                 canonical.write_text(canonical.read_text().rstrip() + '\n')
 
     def test_driver_unattended_skips_and_completes_both_drivers(self):
-        for driver, prefix, column in [('stagegate.sh', '', 0), ('change-workflow.sh', 'run-123\t', 1)]:
+        for driver, prefix, column in [('stagegate.sh', '', 1), ('change-workflow.sh', 'run-123\t', 1)]:
             with self.subTest(driver=driver):
                 shutil.rmtree(self.state, ignore_errors=True)
                 source = (ROOT / 'scripts' / driver).read_text(encoding='utf-8')

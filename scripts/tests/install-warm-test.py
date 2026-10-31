@@ -139,6 +139,58 @@ class Warm(unittest.TestCase):
         self.assertEqual(warm.main(['/nonexistent/plan.md']), 0)
 
 
+class Timeout(unittest.TestCase):
+    """A timed-out command must not leave anything running behind it.
+
+    `npm`/`npx` routinely fork a further process (the browser download `npx playwright
+    install` launches is exactly this shape) that outlives a SIGKILL sent only to the
+    direct child.  A survivor from this warm-up can hold Playwright's own installer lock in
+    the shared, machine-wide cache, and a *later, real* `playwright install` -- the one an
+    actual build depends on -- then blocks forever waiting for a lock that orphan never
+    released.  warm.run() must kill the whole process tree it started, not just the pid it
+    is directly tracking.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.pidfile = self.tmp / 'grandchild.pid'
+        # The direct child backgrounds a grandchild in its own process group (exactly how a
+        # shell's `&` behaves) and then itself sleeps past the timeout, so the timeout fires
+        # while the grandchild is still alive and only reachable through the child's group.
+        script = self.tmp / 'spawn-and-hang.sh'
+        script.write_text('#!/bin/sh\nsleep 30 &\necho $! > "%s"\nsleep 30\n' % self.pidfile)
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        self.command = [str(script)]
+
+    def grandchild_pid(self):
+        for _ in range(50):
+            if self.pidfile.exists() and self.pidfile.read_text().strip():
+                return int(self.pidfile.read_text().strip())
+            import time
+            time.sleep(0.1)
+        self.fail('grandchild never started')
+
+    def grandchild_alive(self, pid):
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def test_timeout_kills_the_whole_process_tree_not_just_the_direct_child(self):
+        status = warm.run(self.command, str(self.tmp), 1)
+        self.assertEqual(status, 1)
+        pid = self.grandchild_pid()
+        import time
+        deadline = time.time() + 5
+        while time.time() < deadline and self.grandchild_alive(pid):
+            time.sleep(0.1)
+        self.assertFalse(self.grandchild_alive(pid),
+                          'a grandchild of the timed-out command survived -- it can hold a shared '
+                          'installer lock (e.g. Playwright\'s) forever, hanging a later, real install')
+        self.addCleanup(lambda: os.kill(pid, 9) if self.grandchild_alive(pid) else None)
+
+
 class Driver(unittest.TestCase):
     def run_script(self, body):
         return subprocess.run(['bash', '-c', body], capture_output=True, text=True, timeout=60)

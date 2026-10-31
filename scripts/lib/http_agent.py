@@ -23,6 +23,21 @@ import uuid
 import self_hosted_http as transport
 from self_hosted_http import OutputTruncated, add_usage, chat, conforms, constrained_completion
 
+def strip_thinking(text):
+    """Drop a reasoning model's <think>...</think> preamble from its message content.
+
+    A server without a reasoning parser configured (common for a local DeepSeek-class
+    deployment) returns the model's thinking inline in `message.content` rather than in
+    a separate field, and answer_already_given / the final JSON-schema path already strip
+    it there. The turn-by-turn text extracted here was not: it leaked into the live stage
+    log, back into the conversation history as the model's own prior turn (which a
+    reasoning model is not meant to see again, and which inflates every later request),
+    and -- for a plain-text stage with no final_schema -- straight into stage.final_answer,
+    the value the rest of the driver treats as the stage's actual output.
+    """
+    return re.sub(r'<think>.*?</think>', '', text or '', flags=re.S).strip()
+
+
 READ_LIMIT = 200_000
 OUTPUT_LIMIT = 30_000
 SKIP_DIRS = {'.git', 'node_modules', '.venv', 'venv', '__pycache__'}
@@ -960,7 +975,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         choice = data['choices'][0]
         message = transport.clean_message(choice['message'])
         calls = message.get('tool_calls') or []
-        text = message.get('content') or ''
+        text = strip_thinking(message.get('content') or '')
         if choice.get('finish_reason') == 'length':
             saved = save_truncated('turn', turn_limit, text, calls, data.get('usage'))
             raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete.%s'

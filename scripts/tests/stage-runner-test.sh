@@ -53,7 +53,8 @@ with tempfile.TemporaryDirectory() as tmp:
     for driver in ("stagegate.sh", "change-workflow.sh"):
         source = (root / "scripts" / driver).read_text()
         family = "app" if driver == "stagegate.sh" else "change"
-        names = ("stage_var", "stage_setting", "stage_setting_opt",
+        names = ("upper", "stage_var", "stage_setting", "stage_setting_opt",
+                 "stage_agent_cmd", "stage_command_overridden", "stage_runner_config_name",
                  "stage_model", "stage_model_for",
                  "stage_effort", "stage_effort_for", "stage_tools", "stage_turns", "run_claude")
         functions = "\n".join(match.group(0) for name in names
@@ -118,6 +119,9 @@ make_agent_stub() {
 printf '$tag %s\n' "\$*" >> "\$ARGV_LOG"
 cat > /dev/null
 python3 "\$UNCLE_TEST_ARTIFACT_FIXTURE" 1
+printf '# baseline\n\n## 8. Verification commands\n\n\`\`\`sh\ntrue\n\`\`\`\n' > BASELINE_REPORT.md
+printf '# spec\n' > CHANGE_SPEC.md
+printf '# plan\n' > CHANGE_PLAN.md
 echo '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":1,"total_cost_usd":0}'
 EOF
     chmod +x "$path"
@@ -136,7 +140,6 @@ git -C "$PROJ" config commit.gpgsign false
 printf '# Project brief\n\n## Summary\nToy.\n' > "$PROJ/REQUIREMENTS.md"
 ARGV="$TMP/sg.argv"
 : > "$ARGV"
-
 out="$(cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
     UNCLE_PROJECT_ROOT="$PROJ" \
     WORKFLOW_AGENT_CMD="$TMP/agent-global" \
@@ -144,8 +147,14 @@ out="$(cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
     WORKFLOW_MODEL_PROJECT_PLAN= \
     WORKFLOW_EFFORT_PROJECT_PLAN=low \
     WORKFLOW_SPECULATE=0 \
-    bash "$ROOT/scripts/stagegate.sh" 2>&1)"
-
+    bash "$ROOT/scripts/stagegate.sh" 2>&1)" || true
+# The piped "n" declines the approval gate, which is the expected outcome
+# here (this scenario only checks which agent command ran and with what
+# flags, never the exit status) -- exactly like the three other declined-gate
+# captures below already do. Without `|| true` this assignment's nonzero
+# status silently aborts the whole script under `set -e`, truncating every
+# check after it with no FAIL printed; confirmed by file-diff-swap (removing
+# this reproduces the truncation, cutting the suite off after one line).
 argv="$(cat "$ARGV")"
 check_contains "stagegate: stage command ran" "STAGE " "$argv"
 check_absent "stagegate: global command did not run" "GLOBAL " "$argv"
@@ -161,7 +170,12 @@ check_contains "stagegate: banner names the runner default" "(runner default)" "
 # engage racing at all -- proven two ways: the output is byte-identical to
 # the same run without it, and race_self_hosted_candidates' own work_dir
 # (which it always mkdir -p's, win or lose) is never created.
-rm -rf "$PROJ/.uncle" "$PROJ/REQUIREMENTS_INTERPRETATION.md"
+# .git must be reset too, not just .uncle: stagegate.sh now prints
+# "Initialized Git repository in ..." the first time it creates one, and
+# silently does nothing on a repo that already exists, so leaving .git behind
+# made the two comparison runs differ by exactly that one line -- a sequencing
+# artifact, not the agent-routing behavior this check exists to prove.
+rm -rf "$PROJ/.uncle" "$PROJ/REQUIREMENTS_INTERPRETATION.md" "$PROJ/.git"
 : > "$ARGV"
 out_candidates="$(cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
     UNCLE_PROJECT_ROOT="$PROJ" \
@@ -171,7 +185,10 @@ out_candidates="$(cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
     WORKFLOW_EFFORT_PROJECT_PLAN=low \
     WORKFLOW_SELF_HOSTED_CANDIDATES=4 \
     WORKFLOW_SPECULATE=0 \
-    bash "$ROOT/scripts/stagegate.sh" 2>&1)"
+    bash "$ROOT/scripts/stagegate.sh" 2>&1)" || true
+# Same declined-gate exit-status issue as the first capture above: without
+# `|| true` this assignment's nonzero status silently truncates the rest of
+# the suite under `set -e`.
 COUNT=$((COUNT + 1))
 [[ "$out_candidates" == "$out" ]] || fail "BH-6: a non-self-hosted stage's output changed when WORKFLOW_SELF_HOSTED_CANDIDATES was set"
 check_absent "BH-6: race_self_hosted_candidates' own work_dir was never created" \
@@ -218,7 +235,8 @@ if command -v git > /dev/null 2>&1; then
         WORKFLOW_AGENT_CMD="$TMP/agent-global" \
         WORKFLOW_MODEL_CHANGE_PLAN=cline-pass/glm-5.3 \
         WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
-        bash "$ROOT/scripts/change-workflow.sh" 2>&1)"
+        bash "$ROOT/scripts/change-workflow.sh" 2>&1)" || true
+    # Same declined-gate exit-status issue as the stagegate.sh captures above.
 
     spec_argv="$(grep '^GLOBAL ' "$ARGV" || true)"
     check_absent "change: driver baseline does not launch a phantom agent stage" \
@@ -300,10 +318,13 @@ check_contains "explicit WORKFLOW_AGENT_CMD wins over the file's runner" \
 # Reviewer effort/model settings must reach the actual command as well.
 . "$ROOT/scripts/lib/sha256.sh"
 RPROJ="$TMP/reviewer-settings"
-mkdir -p "$RPROJ/.uncle/workflow/approvals" "$RPROJ/.uncle/docs" "$RPROJ/.uncle/workflow/documents"
-printf '# Plan\n\n## Verification commands\n\n```sh\ntrue\n```\n' > "$RPROJ/.uncle/docs/PROJECT_PLAN.md"
-printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"plan","narrative":"# Plan","verification_commands":"true"}' > "$RPROJ/.uncle/workflow/documents/PROJECT_PLAN.json"
-hash_file "$RPROJ/.uncle/workflow/documents/PROJECT_PLAN.json" > "$RPROJ/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
+mkdir -p "$RPROJ/.uncle/workflow/approvals" "$RPROJ/.uncle/docs"
+# The approval gate now verifies the canonical .uncle/docs/ path, not a plan
+# left at the project root (the old pre-canonical-path convention); seeding
+# only the old path left ADVERSARIAL_REVIEW's require_file() unable to find
+# it ("Required approval artifact missing: .uncle/docs/PROJECT_PLAN.md").
+printf '# Project plan\n\nplan\n\n## Verification commands\n\n```sh\ntrue\n```\n' > "$RPROJ/.uncle/docs/PROJECT_PLAN.md"
+hash_file "$RPROJ/.uncle/docs/PROJECT_PLAN.md" > "$RPROJ/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
 cat > "$TMP/config-reviewer" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$ARGV_LOG"
@@ -328,7 +349,7 @@ chmod +x "$TMP/config-reviewer"
 printf 'adversarial-review.runner cline\nadversarial-review.model vendor/reviewer\nadversarial-review.effort low\n' > "$RPROJ/.uncle/config"
 printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workflow/state"
 UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \
-    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null
+    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null 2>&1
 argv="$(cat "$TMP/reviewer.argv")"
 check_contains 'reviewer: configured model is used' '-m vendor/reviewer' "$argv"
 check_contains 'reviewer: configured effort is used' 'model_reasoning_effort=low' "$argv"

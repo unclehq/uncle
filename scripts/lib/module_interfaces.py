@@ -29,7 +29,12 @@ def validate(payload):
             or payload.get('kind') != 'module-interfaces':
         raise ValueError('Invalid module-interfaces JSON: wrong schema/kind')
     modules = payload.get('modules')
-    if not isinstance(modules, list) or not modules:
+    # Sanitized in place: an unusable ui_contract entry is dropped, it does not invalidate the exports beside it.
+    if 'ui_contract' in payload:
+        payload['ui_contract'] = clean_ui_contract(payload['ui_contract'])
+    contract = payload.get('ui_contract')
+    # A plan whose only shared surface is the page (no JS export crosses a file boundary) has an empty module list.
+    if not isinstance(modules, list) or (not modules and not contract):
         raise ValueError('module-interfaces: "modules" must be a non-empty list')
     seen = set()
     for entry in modules:
@@ -61,6 +66,65 @@ def validate(payload):
     return payload
 
 
+UI_KINDS = ('class', 'data-attribute', 'test-id', 'id', 'aria', 'key')
+# What a model writes for the same thing. `aria-label` once made a whole contract invalid, and with it the exports the
+# parallel steps needed: the contract is a help to the workers, and a spelling must never cost them the rest of it.
+UI_KIND_ALIASES = {'css-class': 'class', 'classname': 'class', 'class-name': 'class', 'css': 'class',
+                   'data': 'data-attribute', 'data-attr': 'data-attribute', 'dataattribute': 'data-attribute',
+                   'data_attribute': 'data-attribute', 'attribute': 'data-attribute',
+                   'testid': 'test-id', 'data-testid': 'test-id', 'test_id': 'test-id', 'data-test-id': 'test-id',
+                   'element-id': 'id', 'dom-id': 'id',
+                   'aria-label': 'aria', 'aria-attribute': 'aria', 'label': 'aria', 'role': 'aria',
+                   'keyboard': 'key', 'keyboard-key': 'key', 'keycode': 'key', 'key-value': 'key'}
+
+
+def clean_ui_contract(contract):
+    """The usable entries of a ui_contract, spelled canonically; whatever cannot be understood is dropped, never fatal."""
+    if not isinstance(contract, list):
+        return []
+    usable, seen = [], set()
+    for item in contract:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get('kind') or '').strip().lower()
+        kind = UI_KIND_ALIASES.get(kind, kind)
+        name = item.get('name')
+        used_by = item.get('used_by')
+        if isinstance(used_by, str) and used_by.strip():
+            used_by = [part.strip() for part in used_by.split(',') if part.strip()]
+        if kind not in UI_KINDS or not isinstance(name, str) or not name.strip():
+            continue
+        if not isinstance(used_by, list) or not used_by or not all(isinstance(f, str) and f.strip() for f in used_by):
+            continue
+        if (kind, name.strip()) in seen:
+            continue
+        seen.add((kind, name.strip()))
+        usable.append(dict(item, kind=kind, name=name.strip(), used_by=[f.strip() for f in used_by]))
+    return usable
+
+
+def render_ui_contract(contract):
+    lines = [
+        '',
+        '## Fixed UI contract (binding)',
+        '',
+        'These names are shared by string between files that different steps write: the component sets them, '
+        'the stylesheet styles them, the tests select them. Nothing checks them until the merged page is run, '
+        'and a mismatch there reads as a broken screen, not a bad name. Use exactly these names and no others '
+        'for the things listed: a component applies every one it is listed for, a stylesheet defines a rule '
+        'for every `class` listed (and for no class this contract does not list or the component does not set), '
+        'and a test selects by these names only. Do not rename one, and do not invent a second name for the same element.',
+        '',
+    ]
+    for item in contract:
+        note = ' -- %s' % item['note'] if isinstance(item.get('note'), str) and item['note'].strip() else ''
+        element = ' on %s' % item['element'] if isinstance(item.get('element'), str) and item['element'].strip() else ''
+        lines.append('- %s `%s`%s; used by %s%s' % (item['kind'], item['name'], element,
+                                                  ', '.join('`%s`' % f for f in item['used_by']), note))
+    lines.append('')
+    return '\n'.join(lines)
+
+
 def render_section(payload):
     """The exact text embedded, unchanged, into every parallel worker's prompt."""
     lines = [
@@ -79,7 +143,10 @@ def render_section(payload):
         for item in module['exports']:
             lines.append('- `%s` (%s): %s' % (item['name'], item['kind'], item['signature']))
     lines.append('')
-    return '\n'.join(lines)
+    text = '\n'.join(lines) if payload['modules'] else ''
+    if payload.get('ui_contract'):
+        text += render_ui_contract(payload['ui_contract'])
+    return text
 
 
 def main(argv):

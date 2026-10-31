@@ -18,7 +18,14 @@ Do not modify source, tests, or `.uncle/docs/TEST_REVIEW.md`, and do not run
 destructive probes.
 
 Write a short, plain-text report (not JSON, not the final document) covering
-your assigned row(s) only:
+your assigned row(s) only. The whole report is at most 250 words: a second pass
+reads it next to the driver's results and decides the row, so it needs your
+conclusions and the one thing the execution run must confirm, not a walkthrough.
+One short paragraph or at most three bullets per assigned row; name each defect
+once, by test or file and ID; do not restate the plan, do not write tables, and
+do not list what you read test by test. Length is the cost of this call: a
+report five times this long took five times as long to write and decided nothing
+more.
 
 - what you read and checked;
 - for each assigned row, what you can already conclude from source alone

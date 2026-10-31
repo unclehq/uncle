@@ -72,13 +72,22 @@ wait "$first_checker"
 [[ "$(wc -l < "$TMP/gh.log")" -eq 1 ]] || fail 'concurrent startup performed more than one release fetch'
 
 # Same versions do not prompt, while a declined newer version leaves installation untouched.
-same_output="$(printf 'n\n' | GH_TAG=v0.0.1 TEST_MARKER="$TMP/marker" ROOT="$TMP/root" PATH="$TMP/bin:$PATH" bash -c '
+# Both calls below must pin their own UNCLE_UPGRADE_LOCK_DIR: unlike every
+# other invocation in this file, these two never set it, so they fell through
+# to upgrade-check.sh's real-world default (the host's $TMPDIR/uncle-upgrade.lock,
+# not this test's own $TMP sandbox). That path is shared with every other
+# process on the machine and with every other run of this same test, so one
+# interrupted run -- or just bad luck sharing a host with a concurrent run --
+# leaves the lock held forever and silently short-circuits upgrade_check_and_run
+# (no prompt, no output, no indication why) on every later run until someone
+# notices and removes it by hand. Isolate the same way the rest of the file does.
+same_output="$(printf 'n\n' | GH_TAG=v0.0.1 TEST_MARKER="$TMP/marker" ROOT="$TMP/root" UNCLE_UPGRADE_LOCK_DIR="$TMP/same.lock" PATH="$TMP/bin:$PATH" bash -c '
   . "$ROOT/scripts/lib/upgrade-check.sh"
   upgrade_should_check() { return 0; }
   upgrade_check_and_run
 ')"
 [[ "$same_output" != *'Install? [y/N]'* ]] || fail 'same version showed an upgrade prompt'
-decline_output="$(printf 'n\n' | TEST_MARKER="$TMP/marker" ROOT="$TMP/root" PATH="$TMP/bin:$PATH" bash -c '
+decline_output="$(printf 'n\n' | TEST_MARKER="$TMP/marker" ROOT="$TMP/root" UNCLE_UPGRADE_LOCK_DIR="$TMP/decline.lock" PATH="$TMP/bin:$PATH" bash -c '
   . "$ROOT/scripts/lib/upgrade-check.sh"
   upgrade_should_check() { return 0; }
   upgrade_check_and_run
@@ -156,7 +165,7 @@ grep -q 'UNCLE_SKIP_UPGRADE=1 skips the interactive startup upgrade check' "$TMP
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$TMP/bin/python3"
 chmod +x "$TMP/bin/python3"
 rm -f "$TMP/gh.log"
-if ! printf 'n\n' | script -q "$TMP/pty.out" env GH_LOG="$TMP/gh.log" PATH="$TMP/bin:$PATH" bash "$ROOT/uncle" >/dev/null 2>&1; then
+if ! printf 'n\n' | script -q "$TMP/pty.out" env GH_LOG="$TMP/gh.log" UNCLE_UPGRADE_LOCK_DIR="$TMP/pty.lock" PATH="$TMP/bin:$PATH" bash "$ROOT/uncle" >/dev/null 2>&1; then
   fail 'interactive startup under a pseudoterminal failed'
 fi
 grep -q 'Install? \[y/N\]' "$TMP/pty.out" || fail 'pseudoterminal startup did not show upgrade prompt'

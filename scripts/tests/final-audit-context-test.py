@@ -179,7 +179,14 @@ class Audit(unittest.TestCase):
                 (path/'.uncle/docs').mkdir(parents=True)
                 (path/'verification.manifest').write_text('snapshot')
                 preamble = f'ROOT="{root}"\nSTATE_DIR=.\nVERDICT_FILE=verdict\nDIFF_GATE=0\nAUDIT_GATE=1\n'
-                preamble += 'require_file() { test -s "$1"; }; check_verification_inputs() { :; }; hash_file() { echo hash; }; classify_audit_verdict() { echo READY; }; set_state() { echo "$1" > state; }; change_pr_engine() { :; }; git() { return 1; }; run_codex() { exit 99; }; run_stage() { exit 99; };\n'
+                # uncle consolidation item 2: VALIDATE_AUDIT's body now calls
+                # the shared final_audit_validate/final_audit_route_verdict
+                # (scripts/lib/audit-verdict.sh) instead of doing all of this
+                # inline, so the harness needs to source it; the stubs below
+                # still override require_file/hash_file/classify_audit_verdict/
+                # etc. for this harness's own purposes.
+                preamble += f'. "{root}/scripts/lib/audit-verdict.sh"\n'
+                preamble += 'require_file() { test -s "$1"; }; check_verification_inputs() { :; }; hash_file() { echo hash; }; classify_audit_verdict() { echo READY; }; set_state() { echo "$1" > state; }; change_pr_engine() { :; }; git() { return 1; }; run_codex() { exit 99; }; run_stage() { exit 99; }; supervision_validation_failed() { :; };\n'
                 harness = preamble + 'case VALIDATE_AUDIT in\nVALIDATE_AUDIT)\n' + block + 'esac\n'
                 audit = path/'.uncle/docs/FINAL_AUDIT.md'
                 audit.write_text('malformed')

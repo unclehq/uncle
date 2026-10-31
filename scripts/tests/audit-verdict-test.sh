@@ -73,6 +73,31 @@ check "unrelated prose"            UNKNOWN    'The audit did not reach a conclus
 check_missing "absent file"        UNKNOWN    "$TMP/does-not-exist"
 check_missing "empty argument"     UNKNOWN    ""
 
+# verdict_file_field: version-tolerant VERDICT_FILE reader (uncle
+# consolidation item 2b). stagegate.sh now writes 3 columns ("-" for run-id)
+# like change-workflow.sh always has, but a VERDICT_FILE an in-flight
+# app-family run wrote in the old 2-column format before this change must
+# still read correctly after an upgrade mid-run.
+field_check() {
+    local name="$1" field="$2" expected="$3" contents="$4"
+    local file="$TMP/verdict-fixture"
+    COUNT=$((COUNT + 1))
+    printf '%s' "$contents" > "$file"
+    local actual
+    actual="$(verdict_file_field "$file" "$field")"
+    if [[ "$actual" != "$expected" ]]; then
+        echo "FAIL: $name — expected [$expected], got [$actual]"
+        FAILED=$((FAILED + 1))
+    fi
+}
+
+field_check "new 3-column: audit_class" audit_class READY        $'-\tREADY\tabc123\n'
+field_check "new 3-column: hash"        hash        abc123       $'-\tREADY\tabc123\n'
+field_check "new 3-column with real run-id: audit_class" audit_class NOT_READY $'42\tNOT_READY\tdeadbeef\n'
+field_check "new 3-column with real run-id: hash"        hash        deadbeef  $'42\tNOT_READY\tdeadbeef\n'
+field_check "old 2-column (pre-upgrade app-family): audit_class" audit_class READY  $'READY\tabc123\n'
+field_check "old 2-column (pre-upgrade app-family): hash"        hash        abc123 $'READY\tabc123\n'
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo "audit-verdict-test.sh: $FAILED of $COUNT checks failed"
     exit 1

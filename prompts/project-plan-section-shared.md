@@ -18,3 +18,11 @@ Use supplied canonical JSON as the requirements source. The driver retains all
 schema validation, lane checks, assembled-plan checks, reviews and gates.
 Use complete evidence for an assertion; excerpts and planning assumptions are
 not verification results. Do not enumerate workflow state or read credentials.
+
+## Counts and totals
+
+Never write a total you derived from a list as a literal ("19 keys", "all 12 mutants"). Point at the list
+instead ("every key in A-2"), so the number cannot disagree with its own enumeration. When a count has to
+appear, write the items out and count them one by one before you write the number. A plan once said
+"19 keys (digits, decimal, four operators, equals, clear, backspace)" for a list that adds up to 18; a test
+copied the 19, and the correct implementation failed it.

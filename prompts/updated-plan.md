@@ -132,6 +132,18 @@ signatures for every cross-file interface -- and hands it to every parallel step
 what another step writes is not by itself a reason for `Depends on:` or for merging two steps into one;
 only a real runtime or build order is.
 
+The step that owns the defect-injection list (`tests/mutations/list.mjs` or
+equivalent) runs isolated and compact: the driver hands it only its own
+Implementation-order line, never the full plan, so the defect-injection table
+you wrote elsewhere in this document is invisible to it unless this line
+repeats it. State that step's line as the complete, closed list: name every
+DI id it must encode (e.g. "Define DI-1 through DI-16 as data entries: ..."),
+not a generic description like "define the defect-injection list" that lets
+the worker invent its own shorter list. A step whose line does not enumerate
+every assigned DI id by name will under-implement it on the first pass and
+cost a repair cycle discovering the gap later -- list every id here even when
+it repeats the earlier table.
+
 ## Make verification fast
 
 Verification runs more than once, so its slowest command sets the build's pace. On a typical web

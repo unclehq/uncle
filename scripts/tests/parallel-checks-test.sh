@@ -127,6 +127,11 @@ class Checks(unittest.TestCase):
                          'npx playwright test --max-failures=1')
         self.assertEqual(parallel_checks.execution_command('npx playwright test --max-failures=3'),
                          'npx playwright test --max-failures=3')
+        self.assertEqual(parallel_checks.execution_command('npx playwright test e2e/a.spec.js'),
+                         'npx playwright test --max-failures=1 e2e/a.spec.js')
+        # The flag goes on Playwright, never on the trailing `wait` of a compound command.
+        self.assertEqual(parallel_checks.execution_command('(npx vitest run) & (PORT=4180 npx playwright test) & wait'),
+                         '(npx vitest run) & (PORT=4180 npx playwright test --max-failures=1) & wait')
         self.assertEqual(parallel_checks.execution_command('npx vitest run'), 'npx vitest run')
     def test_missing_browser_root_is_reported_as_an_unrunnable_application(self):
         r=self.run_checks(["printf '%s\\n' '#root element(s) not found element(s) not found' >&2; exit 1 # playwright test"], '')

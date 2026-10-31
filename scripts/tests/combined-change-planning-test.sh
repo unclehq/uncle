@@ -43,27 +43,37 @@ AGENT
     expect_file .uncle/docs/CHANGE_SPEC.md
     expect_file .uncle/docs/CHANGE_PLAN.md
     expect_file .uncle/workflow/change-plan.draft-key
-    # Compact canonical synthesis no longer appends presentation budgets to
-    # its prompt. Keep checking that the combined stage budgets both rendered
-    # documents through the budget helper used by the driver's checks.
-    (
-        cd "$REPO"
-        . "$ROOT/scripts/lib/gates.sh"
-        DOCUMENT_BUDGET_SOURCE=CHANGE_REQUEST.md
-        UNCLE_COMBINED_CHANGE_PLAN=1 document_budget_prompt change-plan
-    ) > "$REPO/.uncle/workflow/combined-budgets"
-    expect_in_file .uncle/workflow/combined-budgets '.uncle/docs/CHANGE_SPEC.md: at most'
-    expect_in_file .uncle/workflow/combined-budgets '.uncle/docs/CHANGE_PLAN.md: at most'
-    # The driver now renders the same spec and plan from a single canonical
-    # bundle. Assert both packet contracts and their shared-context instruction.
-    expect_in_file .uncle/workflow/combined-prompt '"change_spec":{"schema":"uncle.artifact/v1","kind":"change-spec"'
-    expect_in_file .uncle/workflow/combined-prompt '"change_plan":{"schema":"uncle.artifact/v1","kind":"change-plan"'
+    expect_in_file .uncle/workflow/combined-prompt 'BASELINE_REPORT.json is already written'
+    expect_in_file .uncle/workflow/combined-prompt 'do not redo the baseline'
+    # This scenario's fake-agent matches the spec-and-plan-only prompt (an
+    # already-written .uncle/docs/BASELINE_REPORT.md), which only claims "the same
+    # context" for spec+plan together -- "the same model and context" is the
+    # with-baseline branch's own wording, for when one pass does all three
+    # documents and model continuity across them is the actual guarantee.
     expect_in_file .uncle/workflow/combined-prompt 'the same context, provide a complete replacement canonical bundle'
-    expect_in_file .uncle/workflow/combined-prompt 'are rendered by the driver afterwards, from the bundle.'
+    grep -q 'the same model and context' "$REPO/.uncle/workflow/combined-prompt" && fail 'spec-and-plan-only prompt wrongly claims "the same model and context" (that wording is reserved for the with-baseline combined pass)'
     expect_not_out ': change-spec'
     if [[ "$edited" == 1 ]]; then
-        printf '\nUser clarification at approval.\n' >> "$REPO/.uncle/docs/CHANGE_SPEC.md"
-        sync_canonical CHANGE_SPEC
+        # Under the canonical-JSON contract, approval and plan-reuse both hash
+        # .uncle/workflow/documents/CHANGE_SPEC.json, not the rendered
+        # .uncle/docs/CHANGE_SPEC.md view -- editing only the Markdown view
+        # (the old pre-canonical-JSON contract's edit path) is invisible to
+        # both checks. Edit the canonical packet itself, the same thing a real
+        # "user clarification at approval" would have to change, then
+        # re-render the view the way publish_change_planning_bundle.py does.
+        python3 - "$REPO" <<'PY'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, "scripts/lib")
+import artifact_json
+repo = Path(sys.argv[1])
+spec_path = repo / ".uncle/workflow/documents/CHANGE_SPEC.json"
+payload = json.loads(spec_path.read_text(encoding="utf-8"))
+payload["narrative"] = payload.get("narrative", "") + "\n\nUser clarification at approval.\n"
+spec_path.write_text(json.dumps(payload), encoding="utf-8")
+rendered = artifact_json.render_change_spec(payload)
+(repo / ".uncle/docs/CHANGE_SPEC.md").write_text(rendered, encoding="utf-8")
+PY
     fi
     run_driver_stdin "$(gate_input y)"
     expect_status 0
@@ -71,7 +81,7 @@ AGENT
     expect_file .uncle/docs/ADVERSARIAL_REVIEW.md
     expect_file .uncle/workflow/approvals/CHANGE_SPEC.sha256
     COUNT=$((COUNT + 1))
-    [[ $(wc -l < "$REPO/.uncle/workflow/planning-calls") -eq $((1 + edited)) ]] || fail 'incorrect number of planning sessions'
+    [[ $(wc -l < "$REPO/.uncle/workflow/planning-calls") -eq $((1 + edited)) ]] || fail "incorrect number of planning sessions: got $(wc -l < "$REPO/.uncle/workflow/planning-calls"), wanted $((1 + edited))"
     if [[ "$edited" == 0 ]]; then
         expect_out 'Using the plan drafted with the approved change specification.'
     fi

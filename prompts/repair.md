@@ -97,3 +97,11 @@ question and alternatives. DESIGN means an unsupported generated mechanism, not 
 ordinary coding defect. LIVE_VERIFICATION means only dependent approved live checks
 remain unavailable or failing; preserve INCOMPLETE/BLOCKED delivery rows until they pass.
 Never remove acceptance IDs, weaken protected tests, suppress findings, or auto-waive.
+
+## A count that disagrees with its own list
+
+If a failing assertion expects a count (keys, rows, items) that differs from the number of items the plan
+itself lists, the list is right and the count is the defect. Do not change the implementation to produce the
+wrong number. Fix the assertion to derive its count from the list when the test is yours to change; when the
+test is a protected path, leave the implementation alone and report which side the plan's list supports.
+

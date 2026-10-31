@@ -1205,7 +1205,7 @@ def is_json_response(text):
     return _artifact_json_module().unfence_json(text).startswith('{')
 
 
-def document_response(response, artifact, expected_kind='plan', require_dispositions=False):
+def document_response(response, artifact, expected_kind='plan', require_dispositions=False, root=None):
     text = strip_reasoning(response).strip()
     _artifact_json = _artifact_json_module()
     unfenced = _artifact_json.unfence_json(text)
@@ -1236,6 +1236,10 @@ def document_response(response, artifact, expected_kind='plan', require_disposit
         if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != expected_kind:
             raise ValueError('wrong plan JSON schema')
         try:
+            from plan_model import plan_stage, publish_records, renumber_enabled
+            stage = plan_stage(payload, artifact)
+            if renumber_enabled(payload, root or Path.cwd(), stage):
+                payload = publish_records(payload, root or Path.cwd(), stage=stage)
             if expected_kind == 'change-plan':
                 return _artifact_json.render_change_plan(payload, require_dispositions=require_dispositions) + '\n'
             protected = Path(artifact).name == 'UPDATED_PROJECT_PLAN.md'
@@ -1380,7 +1384,7 @@ def repair_http_plan(values, prompt, root, raw, error, artifact, kind, usage,
 
     def validate(text):
         conforms(json.loads(text), schema)
-        document = document_response(text, artifact, kind, require_dispositions)
+        document = document_response(text, artifact, kind, require_dispositions, root=root)
         if kind == 'plan':
             validate_plan(document, protected=protected)
 
@@ -1596,7 +1600,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                             if Path(artifact).name == 'UPDATED_PROJECT_PLAN.md':
                                 file_text = preserve_updated_plan_contract(file_text, root)
                             canonical_response = file_text
-                            candidate.write_text(document_response(file_text, artifact, expected_kind, require_dispositions), encoding='utf-8', newline='\n')
+                            candidate.write_text(document_response(file_text, artifact, expected_kind, require_dispositions, root=root), encoding='utf-8', newline='\n')
                     elif not require_file_delivery or is_json_response(response):
                         # Either compatibility mode, or a complete, schema-shaped
                         # response that never reached the Write tool -- seen live,
@@ -1612,7 +1616,7 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                         # JSON, not a fence -- candidate.exists() always held bare
                         # text because a model that used Write never fenced it.
                         canonical_response = _artifact_json_module().unfence_json(response) if is_json_response(response) else response
-                        candidate.write_text(document_response(response, artifact, expected_kind, require_dispositions), encoding='utf-8', newline='\n')
+                        candidate.write_text(document_response(response, artifact, expected_kind, require_dispositions, root=root), encoding='utf-8', newline='\n')
                     else:
                         raise ValueError('plan agent did not write canonical JSON delivery: ' + str(candidate))
                     if expected_kind == 'plan':

@@ -52,11 +52,13 @@ def publish(project, delivery):
             # The plan written as typed blocks (docs/plan-model.md): the narrative is their rendering, and the
             # model is kept beside the canonical JSON for the stages that edit the plan by id.
             try:
-                model = plan_model.model_from_flat(item['sections'], item.get('title') or '')
+                model = plan_model.model_from_flat(item['sections'], item.get('title') or '', root=project, stage='change-plan')
             except (plan_model.PlanError, KeyError, ValueError, TypeError) as error:
                 raise ValueError('invalid change_plan packet: %s' % error) from error
             item = {k: v for k, v in item.items() if k not in ('sections', 'title')}
             item['narrative'] = plan_model.render(model).rstrip('\n')
+        if key == 'change_plan':
+            item = plan_model.publish_records(item, project, model=model, stage='change-plan')
         try:
             rendered = getattr(module, renderer_name)(item)
         except (KeyError, ValueError, TypeError) as error:

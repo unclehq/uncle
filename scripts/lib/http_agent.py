@@ -894,9 +894,14 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
 
     if stage is not None:
         stage.correlation = 'message'
+    # A bounded updated-plan writer has every input in its prompt. Its packet comes
+    # straight from one schema-constrained request: valid by construction, with no
+    # free-form chat draft to repair (run 13: 10 of 22 writers failed repairing one).
+    schema_first = (final_schema is not None and bool(os.environ.get('UNCLE_UPDATED_PLAN_ANSWER_TOKENS'))
+                    and transport.option('writer-schema-first', 'on') not in ('off', '0', 'false'))
     exhausted = False
     warned = False
-    for turn_number in range(turns):
+    for turn_number in range(0 if schema_first else turns):
         # Tell the model when its budget is nearly spent.  A repair stage ran all of its
         # 40 turns probing and ended with an empty message, so the file the driver needs was
         # never written and the run stopped; a model that does not know the end is near
@@ -1037,7 +1042,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             exhausted = True
             break
     else:
-        exhausted = turns > 0
+        exhausted = turns > 0 and not schema_first
     if exhausted:
         # Out of turns: ask for the answer without offering more tools.
         messages.append({'role': 'user', 'content': 'Stop using tools. Return only the final deliverable, reusing completed work.'})

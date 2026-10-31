@@ -174,6 +174,7 @@ class Slicing(unittest.TestCase):
 
     def test_tool_turn_cap_delivers_once_after_three_tools(self):
         values = {'base_url': 'http://unused.invalid/v1', 'api_key': 'stub', 'model': 'stub'}
+        os.environ['WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST'] = 'off'  # the tool-loop fallback
         (self.root / 'input').write_text('data')
         responses = []
         for i in range(3):
@@ -191,6 +192,7 @@ class Slicing(unittest.TestCase):
 
     def test_exhausted_writer_does_not_open_another_schema_repair_loop(self):
         values = {'base_url': 'http://unused.invalid/v1', 'api_key': 'stub', 'model': 'stub'}
+        os.environ['WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST'] = 'off'  # the tool-loop fallback
         (self.root / 'input').write_text('data')
         responses = [
             {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [
@@ -211,6 +213,34 @@ class Slicing(unittest.TestCase):
                 http_agent.run_agent(values, 'Deliver', http_agent.Policy(self.root), 32768,
                                      turns=1, final_schema=edit_ops_packet())
             self.assertEqual(chat.call_count, 2)
+
+    def test_bounded_writer_answers_with_one_schema_constrained_request(self):
+        # Run 13: 10 of 22 writers wrote off-schema chat drafts and failed repairing them.
+        # With every input prefetched, the packet comes from one grammar-constrained request.
+        values = {'base_url': 'http://unused.invalid/v1', 'api_key': 'stub', 'model': 'stub'}
+        usage = {'prompt_tokens': 10, 'completion_tokens': 5}
+        with patch.dict(os.environ, {'UNCLE_UPDATED_PLAN_ANSWER_TOKENS': '4096'}), \
+                patch.object(http_agent, 'chat') as chat, \
+                patch.object(http_agent, 'constrained_completion',
+                             return_value=(json.dumps(self.packet()), 'stop', usage, 'json_schema')) as constrained:
+            text, turns = http_agent.run_agent(values, 'Deliver', http_agent.Policy(self.root), 32768,
+                                               turns=3, final_schema=edit_ops_packet())
+        self.assertEqual(json.loads(text), self.packet())
+        self.assertEqual((turns, chat.call_count, constrained.call_count), (1, 0, 1))
+        self.assertEqual(constrained.call_args.kwargs.get('skip', ()), ())  # grammar modes first
+
+    def test_schema_first_is_only_for_bounded_writers_and_can_be_turned_off(self):
+        values = {'base_url': 'http://unused.invalid/v1', 'api_key': 'stub', 'model': 'stub'}
+        reply = {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(self.packet())},
+                              'finish_reason': 'stop'}]}
+        for env in ({}, {'UNCLE_UPDATED_PLAN_ANSWER_TOKENS': '4096', 'WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST': 'off'}):
+            with self.subTest(env=env), patch.dict(os.environ, env), \
+                    patch.object(http_agent, 'chat', return_value=reply) as chat, \
+                    patch.object(http_agent, 'constrained_completion') as constrained:
+                text, _ = http_agent.run_agent(values, 'Deliver', http_agent.Policy(self.root), 32768,
+                                               turns=3, final_schema=edit_ops_packet())
+            self.assertEqual(json.loads(text), self.packet())
+            self.assertEqual((chat.call_count, constrained.call_count), (1, 0))
 
     def test_disposition_assignment_beats_source_pair_and_preserves_contract(self):
         self.assertEqual(self.prepare(), 0)

@@ -7,6 +7,7 @@ from pathlib import Path
 import shlex
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -84,6 +85,19 @@ class PreflightIsolation(unittest.TestCase):
         self.assertIn('preflight-worker-browser', result)
 
 
+    def test_probe_subprocess_cannot_write_through_symlink_to_project(self):
+        (self.root / 'project-link').symlink_to(self.root / 'tests', target_is_directory=True)
+        policy = self.policy('tooling')
+        before = self.snapshot()
+        code = "from pathlib import Path; Path('project-link/app.spec.js').write_text('changed')"
+        try:
+            result = agent.run_tool(policy, 'bash', {'command': shlex.quote(sys.executable) + ' -c ' + shlex.quote(code)})
+        except ValueError as error:
+            result = str(error)
+        self.assertEqual(before, self.snapshot())
+        self.assertIn('preflight-worker-tooling', result)
+
+
 class GenericFields(unittest.TestCase):
     def test_run22_wrong_fields_are_not_accepted_by_generic_packet_schemas(self):
         for factory in (worker_schemas.edit_ops_packet, worker_schemas.resolution_ops_packet):
@@ -105,6 +119,35 @@ class GenericFields(unittest.TestCase):
                   'ops': [{'op': 'set_fields', 'id': 'INV-4', 'fields': {'test': 'assert invariant'}},
                           {'op': 'set_fields', 'id': 'B-1', 'fields': {'result': 'display value'}}]}
         transport.conforms(packet, schema)
+
+
+class WriterDeadline(unittest.TestCase):
+    def test_trickling_stream_cannot_outlive_writer_budget(self):
+        spec = importlib.util.spec_from_file_location('stream_fixture', ROOT / 'scripts/tests/self-hosted-capture-stream-test.py')
+        stream = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(stream)
+        def events(body):
+            for number in range(40):
+                yield stream.delta(content=str(number) + ',')
+                time.sleep(.1)
+            yield stream.delta(reason='stop')
+            yield '[DONE]'
+        server = stream.Server(events)
+        self.addCleanup(server.close)
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+                'UNCLE_CONFIG': str(Path(temp) / 'config'), 'UNCLE_PROJECT_ROOT': temp,
+                'UNCLE_STATUS_STAGE': 'updated-plan-worker-edits-3',
+                'UNCLE_UPDATED_PLAN_ANSWER_TOKENS': '4096',
+                'WORKFLOW_SELF_HOSTED_WRITER_SECONDS': '1',
+                'WORKFLOW_SELF_HOSTED_RESULT_REUSE': 'off',
+                'WORKFLOW_SELF_HOSTED_HTTP2': 'off'}, clear=True):
+            start = time.monotonic()
+            with self.assertRaisesRegex(Exception, 'time|budget|deadline'):
+                self_hosted.run_http_agent('agent', server.values, 'Deliver the packet.', Path(temp),
+                                          schema_kind='updated-plan-edit-ops-packet')
+            elapsed = time.monotonic() - start
+            self.assertLess(elapsed, 3, 'writer stream exceeded its one-second budget')
+            self.assertEqual(len(server.requests), 1, 'timeout must return to driver before another request')
 
 
 class WriterFallback(unittest.TestCase):

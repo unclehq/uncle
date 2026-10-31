@@ -617,6 +617,7 @@ class SelfHostedHttp(unittest.TestCase):
             (connection,) = pool.http1.values()
             self.assertNotEqual(connection.sock.getsockopt(socket_module.SOL_SOCKET, socket_module.SO_KEEPALIVE), 0)
 
+    @patch.dict(os.environ, WORKFLOW_SELF_HOSTED_LEARNED_BUDGETS='off')
     def test_the_model_is_warned_when_three_turns_are_left(self):
         # A repair stage spent all 40 turns probing, ended with an empty message, and the run stopped.
         seen = []
@@ -694,6 +695,7 @@ class SelfHostedHttp(unittest.TestCase):
         with patch.object(http_transport, 'http2_available', lambda: False):
             self.assertFalse(http_transport.wants_http2('https'))
 
+    @patch.dict(os.environ, WORKFLOW_SELF_HOSTED_RESULT_REUSE='off')
     def test_falls_back_to_json_object_then_prompt_only(self):
         server = self.serve(PLAN, reject={'structured_outputs', 'guided_json'})
         server.reject = set()

@@ -1,5 +1,6 @@
 """OpenAI SSE assembly and bounded, content-free runaway diagnostics."""
 import json
+import math
 import os
 
 
@@ -57,12 +58,17 @@ def assemble(lines):
     calls, guards, usage, fields = {}, {}, {}, []
     reason = None
     done = False
+    from self_hosted_performance import ACTIVE
+    budget = ACTIVE.get()
+    generated_bytes = 0
 
     def append(channel, fragment):
+        nonlocal generated_bytes
         if not isinstance(fragment, str):
             raise ValueError('Invalid streamed text delta')
         if channel not in guards:
             guards[channel] = Guard()
+        generated_bytes += len(fragment.encode('utf-8'))
         guards[channel].feed(fragment)
         return fragment
 
@@ -97,6 +103,16 @@ def assemble(lines):
                         call['function'][key] += append(('tool', index, key), fragment)
             if choice.get('finish_reason') is not None:
                 reason = choice['finish_reason']
+        # Servers usually report tokens only after completion. Bytes / 4 is an
+        # explicitly approximate, model-agnostic early signal across ALL output
+        # channels, not a tokenizer or a count of SSE packets.
+        if budget is not None and budget.enabled and not budget.soft:
+            estimate = max(generated_bytes / 4, usage.get('completion_tokens') or 0)
+            if estimate > budget.threshold:
+                budget.estimates.append(math.ceil(estimate))
+                error = StreamStopped('learned_budget')
+                error.message = dict(message, tool_calls=[calls[i] for i in sorted(calls)])
+                raise error
 
     try:
         for raw in lines:

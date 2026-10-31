@@ -79,6 +79,17 @@ class Policy:
         self.draft_errors = {}
         self.shell_children = []   # every shell command started, so its leftovers can be cleaned up
         self.shell_results = {}    # (command, tree fingerprint, live background processes) -> output
+        self.input_digests = {}
+        self.reuse_observations = []
+        self.reuse_unsafe = False
+
+    def observe_input(self, path, raw):
+        if self.write or self.shell:
+            return
+        value = hashlib.sha256(raw).hexdigest()
+        if path in self.input_digests and self.input_digests[path] != value:
+            self.reuse_unsafe = True
+        self.input_digests[path] = value
 
     def cleanup(self):
         """End whatever the stage's shell commands left running (dev servers started with `&`).
@@ -313,6 +324,7 @@ def run_tool(policy, name, arguments):
             if path not in policy.drafts and not path.is_file():
                 return 'error: not a file'
             raw = policy.drafts[path].encode('utf-8') if path in policy.drafts else path.read_bytes()
+            policy.observe_input(path, raw)
             lines = raw[:READ_LIMIT].decode('utf-8', errors='replace').splitlines()
             start = max(int(arguments.get('offset') or 0), 0)
             count = int(arguments.get('limit') or 2000)
@@ -334,7 +346,9 @@ def run_tool(policy, name, arguments):
                 if not path.is_file() or policy.hidden(relative.parts) or SECRET.search(relative.as_posix()):
                     continue
                 try:
-                    for number, text in enumerate(path.read_bytes()[:READ_LIMIT].decode('utf-8').splitlines(), 1):
+                    raw = path.read_bytes()
+                    policy.observe_input(path, raw)
+                    for number, text in enumerate(raw[:READ_LIMIT].decode('utf-8').splitlines(), 1):
                         if pattern.search(text):
                             found.append('%s:%d:%s' % (relative.as_posix(), number, text[:300]))
                 except (UnicodeDecodeError, OSError):
@@ -616,6 +630,9 @@ def record_turn(identity, number, message, usage, finish_reason, phase='tools'):
     authoritative cumulative total, so consumers cannot count it twice.
     Bytes measure the raw UTF-8 argument string received from the server.
     """
+    from self_hosted_performance import ACTIVE
+    if ACTIVE.get() is not None:
+        ACTIVE.get().observe(usage, finish_reason)
     calls = []
     for call in message.get('tool_calls') or []:
         function = call.get('function') or {}
@@ -687,6 +704,7 @@ def prefetch_context(prompt, policy, read_cache=None):
                 if not path.is_file() or path.stat().st_size > cache.RESULT_LIMIT:
                     continue
                 data = path.read_bytes()
+                policy.observe_input(path, data)
                 if b'\0' in data or len(data) > cache.RESULT_LIMIT:
                     continue
                 text = data.decode('utf-8')
@@ -718,6 +736,27 @@ def run_agent(values, prompt, policy, limit, turns=80, usage=None, final_schema=
     stage makes, retries included, reuses one connection.  A subagent run in the
     same process opens its own scope and so never shares that socket.
     """
+    from self_hosted_performance import ACTIVE, REPLAY, Budget, Reuse, event, replay
+    values = transport.configure_request_options(values)
+    # Include the exact prefetched bytes in both the live prompt and reuse key.
+    prompt += prefetch_context(prompt, policy, read_cache)
+    reuse = Reuse(values, prompt, policy, final_schema, final_name, limit, turns, seconds, stage, tools_required, side)
+    cached = reuse.get()
+    cached_data = None
+    if cached is not None:
+        try:
+            conforms(json.loads(cached), final_schema)
+            cached_data = replay(cached)
+        except ValueError:
+            reuse.discard()
+            cached = None
+    parent_budget = ACTIVE.get()
+    budget = parent_budget or Budget(policy.root, final_name, transport.turn_output_tokens(limit, final_name))
+    budget_token = ACTIVE.set(budget)
+    replay_token = REPLAY.set(cached_data)
+    outcome, delivered = 'invalid', ''
+    if cached is not None:
+        turns = max(1, turns)
     try:
         if transport.in_scope():
             result = _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache,
@@ -727,8 +766,20 @@ def run_agent(values, prompt, policy, limit, turns=80, usage=None, final_schema=
                 result = _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_name, stage, read_cache,
                                     seconds, tools_required, side)
         policy.complete()
+        delivered = result[0]
+        if policy.drafts:
+            delivered = '\n'.join(policy.drafts.values())
+        outcome = 'valid'
+        if cached is not None:
+            event('reuse', key=reuse.key, bytes=len(result[0].encode('utf-8')), action='hit')
+            return result[0], 0
+        reuse.put(result[0])
         return result
     finally:
+        if cached is None and parent_budget is None:
+            budget.finish(delivered, outcome)
+        REPLAY.reset(replay_token)
+        ACTIVE.reset(budget_token)
         policy.cleanup()
 
 
@@ -746,7 +797,6 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     timeout = transport.request_seconds(seconds)
     turn_limit = transport.turn_output_tokens(limit, final_name)
     deadline = time.monotonic() + seconds
-    prompt += prefetch_context(prompt, policy, read_cache)
     messages = [{'role': 'system', 'content': SYSTEM.format(root=policy.root)}, {'role': 'user', 'content': prompt}]
     if policy.draft_checks:
         messages[0]['content'] += (' Compose each required document completely before its first write_file. '
@@ -763,9 +813,15 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     early_stops = 0
     captured_packet = None
     pending_json = None
+    from self_hosted_performance import ACTIVE, REPLAY
+    learned = ACTIVE.get()
 
     def request_turn(offered_tools=tools, interruptible=True):
         nonlocal requests, early_stops
+        cached = REPLAY.get()
+        if cached is not None:
+            REPLAY.set(None)
+            return dict(cached, _reused=True)
         while True:
             try:
                 budget = min(timeout, max(1, deadline - time.monotonic()))
@@ -776,8 +832,30 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                 requests += 1
                 record_turn(request_group, requests, {}, error.usage, 'early_stop:' + error.reason)
                 add_usage(usage, error.usage)
+                if error.reason == 'learned_budget':
+                    learned.intervene(error.reason)
+                    partial = getattr(error, 'message', {})
+                    content = transport.strip_reasoning(partial.get('content'))
+                    # Never execute a partial tool call. A complete, independently
+                    # valid deliverable can use the existing capture path.
+                    if not partial.get('tool_calls'):
+                        packet = answer_already_given(content, final_schema) if final_schema is not None else None
+                        captured, feedback = policy.capture(content, [])
+                        if (not policy.shell and len(policy.draft_checks) == 1 and
+                                policy.writable == set(policy.draft_checks) and
+                                set(policy.drafts) == set(policy.draft_checks) and not policy.draft_errors):
+                            content = next(iter(policy.drafts.values()))
+                            captured, feedback = set(policy.drafts), ''
+                        if packet is not None or (captured and not feedback):
+                            return {'choices': [{'message': {'role': 'assistant', 'content': packet or content},
+                                                 'finish_reason': 'stop'}], 'usage': {}, '_captured_stop': True}
+                    messages.append({'role': 'user', 'content': 'The output budget was exceeded. Return only the final '
+                                     'deliverable now. Reuse completed work; do not regenerate a valid document.'})
+                    if not policy.write and not policy.shell:
+                        offered_tools = None
+                    continue
                 early_stops += 1
-                if early_stops > 1 or time.monotonic() >= deadline:
+                if early_stops > 1 or learned.soft or time.monotonic() >= deadline:
                     raise
                 messages.append({'role': 'user', 'content': 'The last generation was stopped for ' + error.reason +
                                  '. Continue from the existing files. Use compact output; do not repeat completed work.'})
@@ -829,8 +907,9 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                 raise ValueError('The model server does not support tool calling, which this stage needs; '
                                  'select a tool-capable model')
             break  # read-only stage on a server without tools: go straight to the answer
-        requests += 1
-        tally(data)
+        if not data.get('_captured_stop') and not data.get('_reused'):
+            requests += 1
+            tally(data)
         choice = data['choices'][0]
         message = transport.clean_message(choice['message'])
         calls = message.get('tool_calls') or []
@@ -849,6 +928,8 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                 steered.clear()
         captured, feedback = policy.capture(text, calls)
         packet = answer_already_given(text, final_schema) if final_schema is not None else None
+        if learned.soft and calls and not policy.write and not policy.shell and packet is None:
+            learned.intervene('tools_after_final_request')
         json_drafts = answer_candidates(text) if final_schema is not None else []
         if json_drafts:
             pending_json = packet or json_drafts[0]
@@ -875,6 +956,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         history.update({key: message[key] for key in ('reasoning_content', 'reasoning') if key in message})
         messages.append(history)
         remaining_calls = False
+        observations = []
         for call in calls:
             name = call['function']['name']
             try:
@@ -909,6 +991,12 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                 except (OSError, ValueError):
                     pass
             result = run_tool(policy, name, arguments)
+            if name in ('read_file', 'list_dir', 'grep') and not policy.write and not policy.shell:
+                policy.reuse_observations.append((name, arguments, hashlib.sha256(result.encode()).hexdigest()))
+            if name in ('read_file', 'list_dir', 'grep') and len(json.dumps(arguments)) <= 1024:
+                observations.append([name, arguments, hashlib.sha256(result.encode()).hexdigest()])
+            else:
+                observations.append(['progress', uuid.uuid4().hex])
             # Shell output may require interpretation even on exit zero.
             # Other tools have an explicit success/error result. Execute all
             # of them, but do not spend a summary turn after successful work.
@@ -927,17 +1015,24 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             # drafts can also leave the loop for targeted schema repair.
             # The caller still runs its canonical validators/publication.
             break
+        if learned.repeated(observations):
+            learned.intervene('repeated_tools_without_progress')
+            exhausted = True
+            break
     else:
         exhausted = turns > 0
     if exhausted:
         # Out of turns: ask for the answer without offering more tools.
-        messages.append({'role': 'user', 'content': 'You have used every allowed turn. Stop using tools and give your final response.'})
+        messages.append({'role': 'user', 'content': 'Stop using tools. Return only the final deliverable, reusing completed work.'})
         data = request_turn(None, interruptible=False)
         if data is None:
             raise ValueError('Model API rejected every request form; check the model name')
-        requests += 1
-        tally(data)
+        if not data.get('_captured_stop'):
+            requests += 1
+            tally(data)
         choice = data['choices'][0]
+        if learned.soft and choice['message'].get('tool_calls'):
+            learned.intervene('tools_after_final_request')
         text = transport.strip_reasoning(choice['message'].get('content'))
         if choice.get('finish_reason') == 'length':
             saved = save_truncated('closing-turn', turn_limit, text, None, data.get('usage'))
@@ -978,6 +1073,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         conforms(json.loads(candidate), final_schema)
 
     def repair_answer(draft, error):
+        learned.retried = True
         relative = '.uncle/workflow/http-answer-repair.json'
         repair = Policy(policy.root, write=True, writable=[relative], drafts={relative: validate})
         path = repair.root / relative
@@ -1037,6 +1133,19 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             requests += 1
             record_turn(request_group, requests, {}, error.usage, 'early_stop:' + error.reason, 'final')
             add_usage(usage, error.usage)
+            if error.reason == 'learned_budget':
+                learned.intervene(error.reason)
+                partial = getattr(error, 'message', {})
+                given = answer_already_given(partial.get('content', ''), final_schema)
+                if given is not None and not partial.get('tool_calls'):
+                    record_capture(given, 'packet')
+                    if stage is not None:
+                        stage.final_answer = given
+                    return given, requests
+                if attempt == len(attempts) - 1:
+                    attempts.append((transport.GRAMMAR_MODES, final_limit))
+            elif learned.soft:
+                raise
             if error.reason == 'whitespace':
                 record_whitespace_runaway(values)
             if attempt >= len(attempts) - 1:
@@ -1059,7 +1168,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         if not final.strip() or (len(final) > 2000 and not final[-2000:].strip()):
             record_whitespace_runaway(values)
         saved = save_truncated('final-%s' % mode, cap, final, None, final_usage)
-        if attempt >= len(attempts) - 1 or mode == 'prompt':
+        if learned.soft or attempt >= len(attempts) - 1 or mode == 'prompt':
             raise OutputTruncated('Model output reached the limit of %d tokens; the response is incomplete. '
                                   'It ended with: %s.%s' % (cap, tail, truncation_note(saved)))
         print('Self hosted: the %s-constrained answer hit the %d-token limit (it ended with: %s); asking once more '

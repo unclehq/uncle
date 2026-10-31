@@ -705,7 +705,10 @@ plan_structure_feedback() {
     printf 'The driver rejected the plan you just wrote: it has %s.\n\n' "$problem"
     case "$problem" in
         'a protected verification path with no owning implementation step')
-            gaps="$(python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" "$plan" "$PWD" "${STATE_DIR:-.uncle/workflow}" 2>/dev/null | sed 's/^/- `/; s/$/`/')"
+            # The checker exits 1 when it finds gaps -- the case being reported here.
+            # Under errexit and pipefail that status ended the driver before the
+            # one-retry below could send the plan back (runs 11 and 12).
+            gaps="$(python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" "$plan" "$PWD" "${STATE_DIR:-.uncle/workflow}" 2>/dev/null | sed 's/^/- `/; s/$/`/' || true)"
             printf 'These Protected verification paths do not exist yet and no implementation step names them in its `Owns:`:\n\n%s\n\n' "$gaps"
             printf 'Fix it one of two ways: add each path to the `Owns:` of the step that creates it (a reconcile step'"'"'s `Owns: *` does not count), or, if nothing will create a path, remove it from Protected verification paths. Only list a path as protected when it already exists or a step explicitly owns it. Return the complete corrected plan.\n'
             ;;
@@ -5069,7 +5072,7 @@ while true; do
                     echo 'tasked with creating them (a Reconcile step'"'"'s Owns: * does not'
                     echo 'count; name the file explicitly in the step that creates it):'
                     python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" \
-                        .uncle/docs/UPDATED_PROJECT_PLAN.md "$PWD" "$STATE_DIR" 2>/dev/null | sed 's/^/  /'
+                        .uncle/docs/UPDATED_PROJECT_PLAN.md "$PWD" "$STATE_DIR" 2>/dev/null | sed 's/^/  /' || true
                 fi
                 # Nobody is asked to approve a plan the next stage would reject, and a
                 # dead stop here ended unattended runs for good. Give the planner the

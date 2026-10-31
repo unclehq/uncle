@@ -36,6 +36,13 @@ check "an owned path is not listed" no "$([[ "$out" == *'`src/calc.js`'* ]] && e
 has "both fixes are offered" "add each path to the \`Owns:\` of the step that creates it" "$out"
 has "removal is offered" "remove it from Protected verification paths" "$out"
 
+# The driver runs under errexit and pipefail, where the checker's exit 1 (gaps
+# found) ended the run before the retry. A command substitution hides that, so
+# call it the way the driver does.
+check "feedback survives errexit when gaps exist" survived \
+    "$(ROOT="$ROOT" FUNC="$FUNC" bash -c 'set -euo pipefail; eval "$FUNC"; plan_structure_feedback "a protected verification path with no owning implementation step" PLAN.md > feedback.md; echo survived' 2>/dev/null || true)"
+has "feedback written under errexit lists the gap" '- `tests/calc.test.js`' "$(cat feedback.md 2>/dev/null)"
+
 has "a missing commands block is explained" 'one fenced block of shell commands' "$(plan_structure_feedback 'no Verification commands block' PLAN.md)"
 has "an unknown problem still gets a message" 'return the delivery again in the same shape' "$(plan_structure_feedback 'something else' PLAN.md)"
 
@@ -50,6 +57,8 @@ PY
 )"
 has "the gate retries the planner once" 'updated-plan-structure-retried' "$body"
 has "the retry returns to UPDATED_PLAN" 'set_state UPDATED_PLAN' "$body"
+check "the gate's gap listing cannot end the driver" yes \
+    "$(grep -A1 'plan_ownership_gap.py' <<<"$body" | grep -q "sed 's/^/  /' || true" && echo yes || echo no)"
 check "the retry is followed by a continue, not an exit" yes \
     "$(python3 - "$DRIVER" <<'PY'
 import sys

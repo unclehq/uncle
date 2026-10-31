@@ -32,3 +32,14 @@ Do not generate or recommend a sequential `for t in scripts/tests/*-test.sh`
 loop. The runner defaults to four workers, preserves per-suite output, and
 aggregates failures; `WORKFLOW_VERIFY_JOBS` selects 1–8 workers. Do not run the
 whole runner concurrently with individual suites it already includes.
+
+# Python regression execution
+
+The Python suites are `scripts/tests/<name>-test.py`, hyphenated, and the shell
+runner does not run them. Run them with `bash scripts/run-python-tests.sh`: one
+process per suite, four at once, the same output and exit-status conventions as
+the shell runner. Do not use `python3 -m unittest discover -p "*-test.py"`: it
+cannot import hyphenated file names and runs zero tests ("NO TESTS RAN"). A new
+Python test named `<name>_test.py` (underscore) is never collected by anything.
+The shell and Python runners are independent and may run at the same time; in a
+baseline report, record both and declare them as one parallel group.

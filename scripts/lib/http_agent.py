@@ -143,7 +143,7 @@ class Policy:
             candidates = answer_candidates(text)
         else:
             heading = re.search(r'(?m)^#{1,6}\s+', text)
-            candidates = [text[heading.start():]] if heading else []
+            candidates = [text[heading.start():].rstrip() + '\n'] if heading else []
             match = re.search(r'(?m)^```(?:markdown|md)\s*\n(.*)\n```[ \t]*(?:\n|$)', text, re.S | re.I)
             if match:
                 candidates.insert(0, match[1] + '\n')

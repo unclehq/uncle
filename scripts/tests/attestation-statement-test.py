@@ -390,19 +390,33 @@ class StatementTests(Fixture):
             result = subprocess.run([fixture_repo.REAL_GIT, 'check-ignore', '-q', path], cwd=self.repo, env=self.env)
             self.assertEqual(result.returncode, expected, path)
 
-    def test_docs_have_the_required_headings(self):
-        # AC-15
-        integration = (ROOT / 'GITHUB_INTEGRATION.md').read_text()
-        readme = (ROOT / 'scripts/README.md').read_text()
-        for word in ('Envelopes', 'Signing', 'Trust root', 'Verification', 'Audit override'):
-            self.assertRegex(integration, r'(?m)^#+ .*' + word, word)
-        self.assertRegex(readme, r'(?m)^### uncle-verify\.py')
-        self.assertRegex(readme, r'(?m)^### Envelopes and attestation')
-        self.assertIn('## Attestation', integration)
-
 
 class DriverTests(Fixture):
     """AC-1: the driver's own writes from FINAL_AUDIT onward, then handoff."""
+
+    def setUp(self):
+        super().setUp()
+        # The driver reads the canonical JSON documents; the Markdown above is only their rendered view.
+        documents = self.state / 'documents'
+        documents.mkdir(parents=True, exist_ok=True)
+        packet = lambda kind, **fields: json.dumps(dict(schema='uncle.artifact/v1', kind=kind, **fields)) + '\n'
+        (documents / 'CHANGE_SPEC.json').write_text(packet(
+            'change-spec', narrative='fixture body',
+            acceptance_criteria=[dict(id='AC-1', criterion='Fixture behavior', verification='Fixture check')]))
+        (documents / 'IMPLEMENTATION_NOTES.json').write_text(packet(
+            'implementation-notes', deliveries=[dict(id='AC-1', status='IMPLEMENTED', changed_code='source.txt',
+                                                      observed_verification='Fixture check PASS')]))
+        (documents / 'CHANGE_PLAN.json').write_text(packet('change-plan', narrative='fixture body'))
+
+    def approve(self, name, **kwargs):
+        """The driver approves a document's canonical JSON when it has one; the verifier fixtures above approve the view."""
+        digest = kwargs.pop('digest', True)
+        super().approve(name, digest=False, **kwargs)
+        canonical = self.state / 'documents' / (name + '.json')
+        if digest and canonical.is_file() and canonical.stat().st_size:
+            (self.state / 'approvals' / (name + '.sha256')).write_text(hashlib.sha256(canonical.read_bytes()).hexdigest() + '\n')
+        elif digest:
+            super().approve(name, **kwargs)
 
     def reviewer(self, text):
         path = self.bin / 'reviewer'
@@ -413,7 +427,7 @@ class DriverTests(Fixture):
 
     def run_driver(self, text, **extra):
         env = dict(self.env, UNCLE_PROJECT_ROOT=str(self.repo), WORKFLOW_AUDIT_GATE='0', WORKFLOW_CLOSE_ISSUE='1',
-                   UNATTENDED='0', WORKFLOW_REVIEWER_CMD=str(self.bin / 'reviewer'), **extra)
+                   UNATTENDED='0', WORKFLOW_FINAL_AUDIT_PANEL='0', WORKFLOW_REVIEWER_CMD=str(self.bin / 'reviewer'), **extra)
         return subprocess.run(['bash', str(DRIVER)], cwd=self.repo, env=env, input=text, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
 

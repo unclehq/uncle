@@ -670,8 +670,10 @@ class TriageTests(unittest.TestCase):
         self.assertEqual(kinds[-1], 'reply')
         self.assertLess(kinds.index('delta'), kinds.index('reply'))
         deltas = [value for kind, value in events if kind == 'delta']
+        # The first text is shown while the runner is still going; the last one is guaranteed only as the reply,
+        # since the stream is polled and a slow machine can see both lines at once.
         self.assertEqual(deltas[0], 'part one')
-        self.assertEqual(deltas[-1], 'part two and done')
+        self.assertEqual(events[-1][1], 'part two and done')
 
     def test_poll_triage_streams_and_clears(self):
         ui = self.ui()
@@ -838,6 +840,74 @@ class TriageTests(unittest.TestCase):
         gates = (self.project / '.uncle/workflow/unattended-gates').read_text()
         self.assertIn('Auto-resuming the build after /do 1.', gates)
         self.assertNotIn('Unattended: auto-resuming past triage', ' '.join(self.system_lines(ui)))
+
+    # ---- issue 117: an unattended run must not be resumed into the same stop forever ----
+
+    def repeating_ui(self, *output):
+        ui = self.ui()
+        ui.workflow_unattended = True
+        ui._triage_init()
+        ui.triage_offer_resume = True
+        ui.triage_classification = 'tool bug'
+        ui.status_stage = 'IMPLEMENT'
+        ui.output = list(output)
+        ui.triage_resume = Mock()
+        return ui
+
+    def resumes(self, ui, times):
+        """How many of `times` auto-resume attempts actually resumed."""
+        before = ui.triage_resume.call_count
+        for _ in range(times):
+            ui._maybe_auto_resume_triage()
+        return ui.triage_resume.call_count - before
+
+    CONFLICT = ("Conflicting delivery status for AC-2: 'INCOMPLETE' vs 'IMPLEMENTED'",
+                'Workflow stopped (exit code 1).')
+
+    def test_an_unattended_run_resumes_up_to_the_limit_into_the_same_stop_and_then_stops(self):
+        ui = self.repeating_ui(*self.CONFLICT)
+        self.assertEqual(self.resumes(ui, 9), 5, 'default limit: five resumes, then it declines')
+        self.assertIn('not auto-resuming', ' '.join(self.system_lines(ui)))
+        gates = (self.project / '.uncle/workflow/unattended-gates').read_text()
+        self.assertIn('Unattended: not auto-resuming', gates, 'the refusal is on the unattended ledger')
+        self.assertIn('same message 6 times in a row', gates)
+
+    def test_a_failure_that_moves_on_starts_the_count_again(self):
+        ui = self.repeating_ui(*self.CONFLICT)
+        self.assertEqual(self.resumes(ui, 4), 4)
+        ui.output = ["Conflicting delivery status for AC-4: 'INCOMPLETE' vs 'IMPLEMENTED'", 'Workflow stopped (exit code 1).']
+        self.assertEqual(self.resumes(ui, 5), 5, 'AC-4 is a different stop: its own five resumes')
+        self.assertEqual(self.resumes(ui, 1), 0)
+
+    def test_clock_times_and_durations_do_not_hide_a_repeat(self):
+        ui = self.repeating_ui()
+        total = 0
+        for attempt in range(8):
+            ui.output = ['[02:%02d:%02d] stage IMPLEMENT took %d.%ds' % (29 + attempt, 10 + attempt, 20 + attempt, attempt),
+                         "Conflicting delivery status for AC-2: 'INCOMPLETE' vs 'IMPLEMENTED' (run 9%04d)" % (1000 + attempt),
+                         'Workflow stopped (exit code 1).']
+            total += self.resumes(ui, 1)
+        self.assertEqual(total, 5)
+
+    def test_with_no_driver_output_to_go_on_the_run_still_resumes_as_it_always_did(self):
+        ui = self.repeating_ui()
+        self.assertEqual(self.resumes(ui, 12), 12, 'a loop it cannot recognise is not stopped on a guess')
+
+    def test_the_limit_can_be_set_and_turned_off(self):
+        ui = self.repeating_ui(*self.CONFLICT)
+        with patch.dict(os.environ, {'WORKFLOW_TRIAGE_AUTO_RESUME_LIMIT': '2'}):
+            self.assertEqual(self.resumes(ui, 6), 2)
+        ui = self.repeating_ui(*self.CONFLICT)
+        with patch.dict(os.environ, {'WORKFLOW_TRIAGE_AUTO_RESUME_LIMIT': '0'}):
+            self.assertEqual(self.resumes(ui, 20), 20)
+        ui = self.repeating_ui(*self.CONFLICT)
+        with patch.dict(os.environ, {'WORKFLOW_TRIAGE_AUTO_RESUME_LIMIT': 'junk'}):
+            self.assertEqual(self.resumes(ui, 9), 5, 'an unreadable limit falls back to the default')
+
+    def test_an_attended_run_is_never_limited(self):
+        ui = self.repeating_ui(*self.CONFLICT)
+        ui.workflow_unattended = False
+        self.assertEqual(self.resumes(ui, 9), 0, 'attended runs never auto-resume at all; a person types /resume')
 
     def test_hold_reason_families_tags_and_negatives(self):  # T-8a
         positives = ['Stop the build until the owner decides', 'Halt the run', 'Abort the workflow',

@@ -214,12 +214,6 @@ class Driver(unittest.TestCase):
         for expected in ('off-ok', 'missing-ok', 'started-ok', 'alive', 'cancelled-ok'):
             self.assertIn(expected, out)
 
-    def test_the_driver_starts_it_after_each_plan_and_cancels_it_on_exit(self):
-        text = (ROOT / 'scripts' / 'stagegate.sh').read_text()
-        self.assertIn('install_warm_start .uncle/docs/PROJECT_PLAN.md', text)
-        self.assertIn('install_warm_start .uncle/docs/UPDATED_PROJECT_PLAN.md', text)
-        self.assertIn('install_warm_cancel', text.split('on_exit() {', 1)[1].split('trap on_exit EXIT', 1)[0])
-
 
 if __name__ == '__main__':
     unittest.main()

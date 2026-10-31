@@ -40,7 +40,7 @@ PY
         run_claude() {   # prompt stage
             local ids; ids="$(grep -o 'Execute `[^`]*`' "$1" | sed 's/Execute `//; s/`//' | tr '\n' ' ')"
             printf '%s | %s | %s\n' "$2" "$(python3 -c 'import time; print("%.2f" % time.time())')" "$ids" >> "$STATE_DIR/calls"
-            sleep 0.3
+            sleep 1.5
             printf '%s | %s | %s\n' "$2" "$(python3 -c 'import time; print("%.2f" % time.time())')" "end" >> "$STATE_DIR/calls"
             python3 - "$UNCLE_WORKER_PACKET_PATH" $ids <<'PY'
 import json, sys

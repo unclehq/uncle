@@ -179,7 +179,9 @@ run_driver() {
         printf 'supervision.max_interventions 2\n'
     } > "$proj/.uncle/config"
     local status=0
-    (cd "$proj" && echo "$answer" | AGENT_WRITE="$write" AGENT_WRITE_ON_CALL="${AGENT_WRITE_ON_CALL:-0}" \
+    # The "no api key leaked when unset" check below is about the driver, not the operator's shell:
+    # a developer or CI environment that has the key exported must not turn it into a failure.
+    (cd "$proj" && unset ANTHROPIC_API_KEY && echo "$answer" | AGENT_WRITE="$write" AGENT_WRITE_ON_CALL="${AGENT_WRITE_ON_CALL:-0}" \
         UNCLE_PROJECT_ROOT="$proj" UNCLE_CONFIG="$proj/.uncle/config" UNCLE_STATUS_FILE="$proj/status.jsonl" \
         WORKFLOW_AGENT_CMD="$AGENT" WORKFLOW_CLAUDE_CMD="$SUPERVISOR" WORKFLOW_SPECULATE=0 WORKFLOW_CLOSE_ISSUE=0 \
         GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_NOSYSTEM=1 \

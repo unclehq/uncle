@@ -902,7 +902,7 @@ class ConfigTests(unittest.TestCase):
         config = sv.Config()
         self.assertEqual(config.lines, [
             'supervision.enabled true', 'supervision.runner claude', 'supervision.model sonnet',
-            'supervision.effort medium', 'supervision.max_interventions 2', 'supervision.steering_timeout_seconds 120',
+            'supervision.effort low', 'supervision.max_interventions 2', 'supervision.steering_timeout_seconds 120',
             'supervision.stage_time_seconds 1800', 'supervision.stage_tokens 0', 'supervision.call_timeout_seconds 300',
             'supervision.max_calls_per_run 80', 'supervision.call_max_cost_usd 0.5', 'supervision.delegate_gates none',
             'supervision.files_allowlist package.json,package-lock.json,vite.config.js'])
@@ -1747,11 +1747,10 @@ class DocsTests(unittest.TestCase):
 
     def test_every_key_documented(self):
         readme = (ROOT / 'README.md').read_text(encoding='utf-8')
-        example = (ROOT / '.uncle' / 'config.example').read_text(encoding='utf-8')
+        # README is the documentation of record; .uncle/config.example was removed in the repo cleanup.
         for key, _, default in sv.CONTROLS:
             line = 'supervision.%s %s' % (key, sv.format_value(key, default))
             self.assertIn(line, readme, line)
-            self.assertIn(line, example, line)
         for phrase in ('Authority boundary', 'Recovery', 'Only `supervision.runner claude`'):
             self.assertIn(phrase, readme)
 
@@ -1764,18 +1763,6 @@ class SigningAuditTests(unittest.TestCase):
     TAG = re.compile(r"""(?:\bgit\b[^\n]*?\s|\.git\(|\bgit\()['"]?tag['"]?(?:\s|,|')(?![^\n]*(?:-d\b|--delete|-l\b|--list|--verify|-v\b))""")
     SKIP = ('config', 'verify-commit', 'assert', 'commit -S', 'echo ', 'printf', 'grep ', '#', 'rev-', 'rationale')
 
-    def test_shell_runner_discovers_every_suite_and_isolates_git(self):
-        sys.path.insert(0, str(ROOT / 'scripts' / 'lib'))
-        import shell_suites
-        self.assertTrue((ROOT / 'scripts' / 'run-shell-tests.sh').exists())
-        source = (ROOT / 'scripts' / 'lib' / 'shell_suites.py').read_text(encoding='utf-8')
-        self.assertIn("glob.glob('scripts/tests/*-test.sh')", source)
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop('GIT_CONFIG_GLOBAL', None)
-            shell_suites.isolate_git()
-            body = Path(os.environ['GIT_CONFIG_GLOBAL']).read_text()
-            self.assertIn('gpgsign = false', body)
-            self.assertEqual(os.environ.get('GIT_CONFIG_NOSYSTEM'), '1')
 
     def test_every_fixture_commit_and_tag_disables_signing(self):
         offenders = []

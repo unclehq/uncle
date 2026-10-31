@@ -103,9 +103,20 @@ def json_delivered(payload):
     # criterion is IMPLEMENTED are merged into one row instead, combining
     # the evidence rather than picking one arbitrarily. Fragments disagreeing
     # on status (one claims IMPLEMENTED, another does not) is a genuine
-    # conflict neither side can resolve by itself, so that still fails.
+    # conflict neither side can resolve by itself, so that still fails --
+    # with one exception, below: a LATER step finishing what an EARLIER step
+    # reported as not done yet. Steps run in order and each reports honestly
+    # for the tree it saw: step 1 builds the module and marks the criterion
+    # INCOMPLETE because "the TUI is not built", step 3 builds the TUI and
+    # marks it IMPLEMENTED. That is progress, not a disagreement (issue 117:
+    # AC-2, then AC-4, each stopped the run at IMPLEMENT, and unattended triage
+    # auto-resumed into the same stop six times, one criterion per pass).
     seen_in_fragment = {}
     merged = {}
+    # Rows an earlier fragment called IMPLEMENTED that a later one called INCOMPLETE. Parallel steps cannot
+    # see each other, so a test step may say "handler test pending step 3" between two IMPLEMENTED claims
+    # (issue 117, AC-1). Only a row that is still INCOMPLETE once every fragment has spoken is a conflict.
+    reopened = set()
     for fragment_index, fragment in enumerate(_fragments(payload)):
         for row in fragment.get('deliveries') or []:
             if not isinstance(row, dict) or not re.fullmatch(ACCEPTANCE_ID, str(row.get('id', ''))):
@@ -132,11 +143,27 @@ def json_delivered(payload):
             if existing is None:
                 merged[identifier] = [status, changed_code, observed]
                 continue
+            if existing[0] == 'INCOMPLETE' and status == 'IMPLEMENTED':
+                # The later claim stands. Its evidence is what establishes the row; the earlier row's evidence
+                # describes what was still missing, so it is dropped, not appended ("TUI not built; tests pass").
+                # What each step changed accumulates: the later step built on the earlier one's code.
+                existing[0] = 'IMPLEMENTED'
+                existing[1] = '; '.join(part for part in (existing[1], changed_code) if part)
+                existing[2] = observed
+                continue
+            if existing[0] == 'IMPLEMENTED' and status == 'INCOMPLETE':
+                reopened.add(identifier)
+                existing[0] = 'INCOMPLETE'
+                existing[1] = '; '.join(part for part in (existing[1], changed_code) if part)
+                continue
             if existing[0] != status:
                 raise ValueError(
                     f'Conflicting delivery status for {identifier}: {existing[0]!r} vs {status!r}')
             existing[1] = '; '.join(part for part in (existing[1], changed_code) if part)
             existing[2] = '; '.join(part for part in (existing[2], observed) if part)
+    for identifier in sorted(reopened):
+        if merged[identifier][0] != 'IMPLEMENTED':
+            raise ValueError(f"Conflicting delivery status for {identifier}: 'IMPLEMENTED' vs 'INCOMPLETE'")
     if not merged:
         raise ValueError('implementation-notes has no acceptance delivery rows')
     return merged

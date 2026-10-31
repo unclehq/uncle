@@ -89,6 +89,14 @@ The gate and close-flow suites also run independent groups internally. Set
 `WORKFLOW_TEST_JOBS` from 1 to 8 (default 4) to control those workers; use 1
 when diagnosing a failure serially. Resume steps within each group remain serial.
 
+The Python suites (`scripts/tests/*-test.py`) have their own runner with the same
+options and conventions: `bash scripts/run-python-tests.sh`, one process per suite,
+four at once (`WORKFLOW_VERIFY_JOBS` from 1 to 16, `-- suite ...` to select by name).
+Name a new Python test `scripts/tests/<name>-test.py` with a hyphen; `<name>_test.py`
+is never collected. Do not use `python3 -m unittest discover -p "*-test.py"`, which
+cannot import hyphenated names and runs zero tests. The two runners are independent:
+together they take about as long as the shell runner alone.
+
 The workflow driver and Windows regression job use this entry point too.
 Do not replace this command with a sequential shell loop. Python tests are
 separate; this command runs the shell suites only.

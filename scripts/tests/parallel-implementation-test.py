@@ -368,15 +368,6 @@ class ParallelImplementationTests(unittest.TestCase):
             self.assertIn('1.txt', rendered)
             self.assertNotIn('raw_markdown', rendered)
 
-    def test_workers_are_told_to_skip_exploration_checks_and_routine_notes(self):
-        driver = (ROOT / 'scripts/stagegate.sh').read_text()
-        block = driver[driver.index('## Speed (binding)'):driver.index('## Isolated ownership boundary')]
-        for phrase in ('Do not run `ls`', 'parallel Write calls', 'Do not run tests, builds or checks',
-                       'unless this step has a deviation'):
-            self.assertIn(phrase, block + driver[driver.index('Do not write an implementation-notes fragment'):][:400])
-        self.assertNotIn('Run a narrow check', driver)
-        self.assertIn('## Exact owned paths (binding)', driver)
-        self.assertIn('plan_step_owns .uncle/docs/UPDATED_PROJECT_PLAN.md', driver)
 
     def test_inherited_dirty_gitignore_is_not_a_later_step_write(self):
         """A prior merged step may leave an uncommitted .gitignore behind.

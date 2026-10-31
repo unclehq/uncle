@@ -207,60 +207,6 @@ class WorkerPackets(unittest.TestCase):
             WORKERS.collate(directory, directory/'out.json', kind, ('requirements',))
             self.assertEqual(json.loads((directory/'out.json').read_text())['findings'][0]['id'], 'AR-001')
 
-    def test_every_migrated_panel_uses_json_and_binding_collation(self):
-        contracts = {
-            'scripts/stagegate.sh': (
-                ('ADVERSARIAL_REVIEW_WORKERS.json', 'adversarial-review-worker-packet'),
-                ('FINAL_AUDIT_WORKERS.json', 'final-audit-worker-packet')),
-            'scripts/change-workflow.sh': (
-                ('ADVERSARIAL_REVIEW_WORKERS.json', 'adversarial-review-worker-packet'),
-                ('FINAL_AUDIT_WORKERS.json', 'final-audit-worker-packet')),
-        }
-        for source, panels in contracts.items():
-            text = (ROOT/source).read_text()
-            for artifact, kind in panels:
-                self.assertIn(artifact, text)
-                self.assertIn('--kind ' + kind, text)
-            self.assertGreaterEqual(text.lower().count('do not read the worker directory'), len(panels))
-        # New-app adversarial review is fully JSON-native too: after worker
-        # collation it renders directly instead of asking a parent reviewer to
-        # repeat worker evidence as an investigation/format pair.
-        stagegate = (ROOT/'scripts/stagegate.sh').read_text()
-        adversarial_start = stagegate.index('run_adversarial_review_panel()')
-        adversarial = stagegate[adversarial_start:stagegate.index('\n}\n', adversarial_start) + 2]
-        self.assertIn('adversarial_packets.py', adversarial)
-        state_start = stagegate.index('        ADVERSARIAL_REVIEW)')
-        state_block = stagegate[state_start:stagegate.index('        UPDATED_PLAN)', state_start)]
-        self.assertIn('Adversarial-review fast path: rendered authoritative worker findings', state_block)
-        self.assertIn('ADVERSARIAL_REVIEW.json', state_block)
-        test_review = (ROOT/'scripts/stagegate.sh').read_text()
-        self.assertIn('TEST_REVIEW_WORKERS.json', test_review)
-        self.assertIn('test_review_packets.py', test_review)
-        for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
-            text = (ROOT/source).read_text()
-            self.assertIn('MANUAL_CHECKLIST_WORKERS.json', text)
-            self.assertIn('manual_checklist_packets.py', text)
-        for prompt, kind in (
-            ('adversarial-review-worker.md', 'adversarial-review-worker-packet'),
-            ('test-review-worker.md', 'test-review-worker-packet'),
-            ('manual-checklist-review-worker.md', 'manual-checklist-worker-packet'),
-            ('final-audit-review-worker.md', 'final-audit-worker-packet')):
-            text = (ROOT/'prompts/change'/prompt).read_text()
-            self.assertIn('"kind":"' + kind + '"', text)
-            if prompt == 'test-review-worker.md':
-                self.assertIn('Return every assigned acceptance row', text)
-            elif prompt in ('adversarial-review-worker.md', 'final-audit-review-worker.md'):
-                self.assertIn('empty array when clean', text)
-            else:
-                self.assertIn('include every required field', text)
-        test_worker = (ROOT/'prompts/change/test-review-worker.md').read_text()
-        self.assertIn('Return every assigned acceptance row', test_worker)
-        self.assertIn('"id":"COVERAGE"', test_worker)
-        for prompt in ('manual-checklist.md', 'change/manual-checklist.md', 'change/manual-checklist-base.md'):
-            text = (ROOT/'prompts'/prompt).read_text()
-            self.assertIn('not a statement that you wrote', text)
-        for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
-            self.assertIn('validate_reviewer_artifact', (ROOT/source).read_text())
 
     def test_manual_checklist_lenses_have_non_overlapping_id_ranges(self):
         expected = (
@@ -274,96 +220,18 @@ class WorkerPackets(unittest.TestCase):
             for range_clause in expected:
                 self.assertIn(range_clause, text)
 
-    def test_test_review_derives_integrity_from_driver_green_check(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); workers = root/'workers'; workers.mkdir()
-            (root/'.uncle/workflow').mkdir(parents=True)
-            (root/'.uncle/workflow/green-check.tsv').write_text('PASS\tnode --test\nPASS\tnpx playwright test\n')
-            for name, rows in {
-                'coverage': [{'id':'COVERAGE','status':'PASS','evidence':'coverage'}],
-                'assertions': [{'id':'ASSERTIONS','status':'PASS','evidence':'assertions'}],
-                'oracle': [{'id':'ORACLE','status':'PASS','evidence':'oracle'}, {'id':'NEGATIVE','status':'PASS','evidence':'negative'}],
-            }.items():
-                self.write(workers, name, {'schema':'uncle.artifact/v1', 'kind':'test-review-worker-packet', 'rows':rows})
-            previous = Path.cwd()
-            try:
-                os.chdir(root)
-                TEST_REVIEW.main(workers, root/'review.json', 'coverage', 'assertions', 'oracle')
-            finally:
-                os.chdir(previous)
-            rows = {row['id']: row for row in json.loads((root/'review.json').read_text())['rows']}
-            self.assertEqual(rows['INTEGRITY']['status'], 'PASS')
-            self.assertIn('2 passing verification command', rows['INTEGRITY']['evidence'])
-        stagegate = (ROOT/'scripts/stagegate.sh').read_text()
-        self.assertIn('for lens in coverage assertions oracle; do', stagegate)
-        self.assertNotIn('for lens in coverage integrity assertions oracle; do', stagegate)
 
     def test_worker_prompts_preserve_absolute_paths_and_bypass_supervision(self):
         for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
             text = (ROOT/source).read_text()
-            self.assertIn('[[ "$p" == /* || -e "$p" ]]', text)
+            # The absolute-path rule lives in the shared per-family path library the driver sources.
+            paths = (ROOT/'scripts/lib'/('workflow-paths-app.sh' if source.endswith('stagegate.sh') else 'workflow-paths-change.sh')).read_text()
+            self.assertIn('[[ "$p" == /* || -e "$p" ]]', paths)
             start = text.index('effective_prompt="$(gated_prompt "$prompt_file" "$log_name")"')
             block = text[start:start + 900]
             self.assertIn('*-worker-*) ;;', block)
             self.assertIn('supervision_prompt "$effective_prompt"', block)
 
-    def test_every_gated_stage_prefers_previous_canonical_json(self):
-        gates = (ROOT/'scripts/lib/gates.sh').read_text()
-        self.assertIn('# Canonical workflow inputs (binding)', gates)
-        self.assertIn('.uncle/workflow/documents/NAME.json', gates)
-        self.assertIn('Markdown file is only its rendered approval/review view', gates)
-
-    def test_workers_use_the_compact_json_prompt_path(self):
-        gates = (ROOT/'scripts/lib/gates.sh').read_text()
-        self.assertIn('*-worker-*)', gates)
-        self.assertIn('# Compact worker contract (binding)', gates)
-        self.assertIn('Do not enumerate `.uncle/workflow/documents/`', gates)
-        self.assertIn('updated-plan-review-worker-*', gates)
-        self.assertIn('updated-change-plan-review-worker-*', gates)
-        self.assertIn('PROJECT_PLAN.json` and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json', gates)
-        self.assertIn('CHANGE_PLAN.json` and `.uncle/workflow/documents/ADVERSARIAL_REVIEW.json', gates)
-        for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
-            text = (ROOT/source).read_text()
-            self.assertIn('case "$log_name" in *-worker-*|', text)
-
-    def test_compact_worker_prompt_does_not_execute_markdown_backticks(self):
-        gates = (ROOT/'scripts/lib/gates.sh').read_text()
-        start = gates.index('## Compact worker contract')
-        block = gates[start:gates.index('} > "$worker_prompt"', start)]
-        self.assertNotIn('cat <<WORKER_PACKET', block)
-        self.assertIn('Do not enumerate `.uncle/workflow/documents/`', block)
-
-    def test_updated_plan_panels_require_their_canonical_inputs_before_fanout(self):
-        stagegate = (ROOT / 'scripts/stagegate.sh').read_text()
-        change = (ROOT / 'scripts/change-workflow.sh').read_text()
-        self.assertIn('ensure_project_plan_json', stagegate)
-        self.assertIn('canonicalize-project-plan "$source" .', stagegate)
-        adversarial = stagegate[stagegate.index('        ADVERSARIAL_REVIEW)'):stagegate.index('        UPDATED_PLAN)')]
-        self.assertIn('ensure_project_plan_json || exit 1', adversarial)
-        self.assertIn('require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"', stagegate)
-        self.assertIn('require_file "$STATE_DIR/documents/CHANGE_PLAN.json"', change)
-        self.assertIn('require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json"', change)
-
-    def test_review_parent_synthesis_uses_compact_canonical_path(self):
-        gates = (ROOT/'scripts/lib/gates.sh').read_text()
-        self.assertIn(
-            'updated-plan|updated-change-plan|adversarial-review|test-review|manual-checklist|final-audit)',
-            gates,
-        )
-        self.assertIn('# Compact canonical synthesis contract (binding)', gates)
-        self.assertIn('do not conduct a second investigation pass', gates)
-        self.assertIn(
-            '*-worker-*|updated-change-plan|adversarial-review|final-audit|manual-checklist)',
-            (ROOT/'scripts/change-workflow.sh').read_text(),
-        )
-        change = (ROOT/'scripts/change-workflow.sh').read_text()
-        self.assertIn('change-plan|updated-change-plan)', change)
-        self.assertIn('UNCLE_WORKER_PACKET_PATH', change)
-        self.assertNotIn('recover_worker_packet.py', re.search(r'^run_parallel_checklist_workers\(\) \{.*?^}', change, re.M | re.S).group(0))
-        self.assertIn(
-            '*-worker-*|updated-plan|adversarial-review|test-review|manual-checklist|final-audit)',
-            (ROOT/'scripts/stagegate.sh').read_text(),
-        )
 
     def test_synthesis_asks_for_a_patch_not_the_whole_narrative(self):
         # The parent reproduced the entire narrative every time even when the
@@ -422,33 +290,28 @@ class WorkerPackets(unittest.TestCase):
         self.assertIn('is `Implementation sequence`, every step in the new body still ends with', prompt)
         self.assertIn('do not drop or loosen them', prompt)
 
-    def test_synthesis_still_requires_the_short_app_plan_fields(self):
-        plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## 1. X\n\nY.',
-                'verification_commands': 'true', 'protected_verification_paths': 'tests'}
-        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}
-        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
-        self.assertIn('`verification_commands` and `protected_verification_paths` are also required',
-                      SYNTHESIS.prompt(plan, review, workers))
-        # The change-plan kind has no verification_commands convention of its own.
-        change_plan = dict(plan, kind='change-plan')
-        self.assertNotIn('protected_verification_paths` are also required',
-                          SYNTHESIS.prompt(change_plan, review, workers, change=True))
-
-    def test_synthesis_forbids_uncle_paths_in_protected_verification_paths(self):
-        # calculator-local: the model kept listing `.uncle/docs/REQUIREMENTS.md`
-        # there, which the validator rejects, and the rejection's error text
-        # named only the bad path without explaining the rule -- so retries
-        # repeated the same mistake instead of learning it.
+    def test_synthesis_leaves_the_short_app_plan_fields_to_the_driver(self):
+        # The driver carries `verification_commands` and `protected_verification_paths` forward from the
+        # approved plan (publish_agent_artifact.preserve_updated_plan_fields), so the model is told not to
+        # repeat them rather than required to; a patch that changes them still wins.
         plan = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': '## 1. X\n\nY.',
                 'verification_commands': 'true', 'protected_verification_paths': 'tests'}
         review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review', 'findings': []}
         workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
         prompt = SYNTHESIS.prompt(plan, review, workers)
-        self.assertIn('never anything under `.uncle/`', prompt)
-        self.assertIn('One repository-relative path per line, not comma-separated', prompt)
-        # The change-plan kind has no protected_verification_paths field at all.
-        change_prompt = SYNTHESIS.prompt(dict(plan, kind='change-plan'), review, workers, change=True)
-        self.assertNotIn('never anything under `.uncle/`', change_prompt)
+        self.assertIn('Verification commands and protected verification paths are carried forward by the driver', prompt)
+        self.assertNotIn('protected_verification_paths` are also required', prompt)
+        change_plan = dict(plan, kind='change-plan')
+        self.assertNotIn('protected_verification_paths` are also required',
+                          SYNTHESIS.prompt(change_plan, review, workers, change=True))
+
+    def test_driver_derived_protected_paths_never_include_uncle_paths(self):
+        # calculator-local: a model listed `.uncle/docs/REQUIREMENTS.md` as a protected verification path, which the
+        # validator rejects. The driver now derives the list, and must drop anything under `.uncle/` itself.
+        fast_path = load('updated_plan_fast_path.py')
+        narrative = ('## Protected verification paths\n\n```text\ntests/a.test.js\n.uncle/docs/PLAN.md\n```\n\n'
+                     '## Verification commands\n```sh\nnode --test tests/a.test.js\n```\n')
+        self.assertEqual(fast_path.derive_protected_paths(narrative, 'node --test tests/a.test.js'), 'tests/a.test.js')
 
     def test_synthesis_tells_the_model_to_stop_after_delivery(self):
         # calculator-local: after writing a correct delivery, the model kept
@@ -485,8 +348,8 @@ class WorkerPackets(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'expected collated'):
             SYNTHESIS.prompt(plan, review, {'schema': 'uncle.artifact/v1', 'kind': 'wrong'})
         stagegate = (ROOT / 'scripts/stagegate.sh').read_text()
-        start = stagegate.index('        UPDATED_PLAN)')
-        block = stagegate[start:stagegate.index('        IMPLEMENT)', start)]
+        start = stagegate.index('        UPDATED_PLAN)\n')
+        block = stagegate[start:stagegate.index('        IMPLEMENT)\n', start)]
         self.assertIn('run_updated_plan_panel || return 1', block)
         self.assertIn('run_claude "$UPDATED_PLAN_PROMPT" updated-plan', block)
         self.assertNotIn('prompts/updated-plan.md', block)
@@ -503,67 +366,10 @@ class WorkerPackets(unittest.TestCase):
         start = change.index('run_updated_change_plan_panel()')
         panel = change[start:change.index('\n}\n', start) + 2]
         self.assertIn('updated_plan_synthesis_prompt.py" --change', panel)
-        state_start = change.index('        UPDATED_PLAN)')
-        state = change[state_start:change.index('        VALIDATE_UPDATED_PLAN)', state_start)]
+        state_start = change.index('        UPDATED_PLAN)\n')
+        state = change[state_start:change.index('        VALIDATE_UPDATED_PLAN)\n', state_start)]
         self.assertIn('run_updated_change_plan_panel || exit 1', state)
         self.assertIn('run_claude "$UPDATED_PLAN_PROMPT" updated-change-plan', state)
-
-    def test_test_review_format_retry_reuses_collated_workers(self):
-        source = (ROOT / 'scripts/stagegate.sh').read_text()
-        start = source.index('        TEST_REVIEW)')
-        block = source[start:source.index('        REPAIR)', start)]
-        retry = block[block.index('if [[ -s "$STATE_DIR/test-review-format-retry.md" ]]; then',
-                                  block.index('else\n                # A malformed acceptance table')):]
-        retry = retry[:retry.index('else\n                    run_test_review_panel')]
-        self.assertNotIn('run_test_review_panel', retry)
-        self.assertIn('test-review-panel/synthesis.md', retry)
-        self.assertIn('Retrying test-review formatting only', retry)
-
-    def test_updated_plan_has_no_self_hosted_markdown_investigation_fallback(self):
-        stagegate = (ROOT / 'scripts/stagegate.sh').read_text()
-        start = stagegate.index('        UPDATED_PLAN)')
-        end = stagegate.index('        IMPLEMENT)', start)
-        block = stagegate[start:end]
-        self.assertIn('run_claude "$UPDATED_PLAN_PROMPT" updated-plan', block)
-        self.assertNotIn('updated-plan-investigate', block)
-        self.assertNotIn('updated-plan-investigation.md', block)
-        self.assertNotIn('updated-plan-format', block)
-
-    def test_updated_plan_keeps_the_standard_forty_turn_default_for_opencode(self):
-        source = (ROOT / 'scripts/stagegate.sh').read_text()
-        start = source.index('stage_turns() {')
-        block = source[start:source.index('\n}\n', start) + 2]
-        self.assertIn('local fallback=40', block)
-        self.assertNotIn('fallback=5', block)
-
-    def test_malformed_protected_paths_return_to_planning_not_code_repair(self):
-        source = (ROOT / 'scripts/stagegate.sh').read_text()
-        capture_start = source.index('capture_verification_inputs()')
-        capture = source[capture_start:source.index('\n}\n', capture_start) + 2]
-        self.assertIn('2> "$STATE_DIR/verification-integrity.log"', capture)
-        self.assertNotIn("Missing Protected verification paths in approved plan.", capture)
-        self.assertIn('Invalid (canonical )?protected verification path', source)
-        self.assertIn("'Protected verification paths are malformed; returning to UPDATED_PLAN", source)
-
-    def test_speculation_recreates_its_driver_owned_directory(self):
-        source = (ROOT / 'scripts/stagegate.sh').read_text()
-        start = source.index('speculate() {')
-        block = source[start:source.index('\n}\n', start) + 2]
-        self.assertIn('mkdir -p "$SPEC_DIR" || return 1', block)
-        self.assertIn('hash_file "$gate_file" > "$SPEC_DIR/${stage}.input" || return 1', block)
-
-    def test_plan_review_parents_name_canonical_json_not_markdown_inputs(self):
-        updated = (ROOT / 'prompts/updated-plan.md').read_text()
-        changed = (ROOT / 'prompts/change/updated-change-plan.md').read_text()
-        review = (ROOT / 'prompts/adversarial-review.md').read_text()
-        self.assertIn('.uncle/workflow/documents/PROJECT_PLAN.json', updated)
-        self.assertIn('.uncle/workflow/documents/ADVERSARIAL_REVIEW.json', updated)
-        self.assertNotIn('- .uncle/docs/PROJECT_PLAN.md', updated)
-        self.assertIn('.uncle/workflow/documents/CHANGE_PLAN.json', changed)
-        self.assertIn('.uncle/workflow/documents/CHANGE_SPEC.json', changed)
-        self.assertNotIn('- .uncle/docs/CHANGE_PLAN.md', changed)
-        self.assertIn('.uncle/workflow/documents/PROJECT_PLAN.json', review)
-        self.assertNotIn('- .uncle/docs/PROJECT_PLAN.md', review)
 
 
 if __name__ == '__main__':

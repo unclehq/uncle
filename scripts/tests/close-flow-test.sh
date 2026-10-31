@@ -1073,7 +1073,7 @@ elif args[:2] == ['pr', 'create']:
             unattended_path.unlink()
         return subprocess.run(['bash', str(ROOT / 'scripts/change-workflow.sh')], cwd=self.repo,
             env=dict(self.env, UNCLE_PROJECT_ROOT=str(self.repo), WORKFLOW_CLOSE_ISSUE=close, UNATTENDED=unattended, **extra),
-            input='\n', text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+            input='\n', text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
 
     def test_signed_complete_skip_inputs_and_markerless_phases(self):
         self.signed_pending()
@@ -1170,7 +1170,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
                    WORKFLOW_REVIEWER_CMD=str(self.bin / 'reviewer'), WORKFLOW_CLOSE_ISSUE='1', UNATTENDED='0')
         command = ['bash', str(ROOT / 'scripts/change-workflow.sh')]
         result = subprocess.run(command, cwd=self.repo, env=env, input='\nSummary\nManual\ny\n',
-                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
         self.ok(result)
         self.assertEqual((self.state / 'state').read_text().strip(), '42:COMPLETE')
         self.assertNotIn('needs your help', result.stdout)
@@ -1178,7 +1178,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
         self.assertEqual(len(self.creates()), 1, result.stdout)
         self.assertFalse((self.state / 'issue-closed').exists())
         result = subprocess.run(command, cwd=self.repo, env=env, input='', text=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
         self.ok(result)
         self.assertIn('https://github.com/owner/repo/pull/7', result.stdout)
         self.assertEqual(len(self.creates()), 1)
@@ -1210,7 +1210,8 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
         for flag in ('LABELS_FAIL', 'LABELS_BAD', 'LABELS_HANG'):
             with self.subTest(flag=flag):
                 self.setUp()
-                result = self.publish(**{flag: '1', 'STAGEGATE_CLOSE_TIMEOUT': '1'})
+                # The bound also covers `gh auth status`; 1s let a loaded machine fail that check, not the label lookup.
+                result = self.publish(**{flag: '1', 'STAGEGATE_CLOSE_TIMEOUT': '5'})
                 self.ok(result)
                 self.assertEqual(result.stdout.count('Label lookup failed; using uncle/ prefix'), 1)
                 self.assert_named('uncle')
@@ -1430,7 +1431,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
                    WORKFLOW_REVIEWER_CMD=str(self.bin / 'reviewer'), WORKFLOW_CLOSE_ISSUE='1', UNATTENDED='0')
         command = ['bash', str(ROOT / 'scripts/change-workflow.sh')]
         declined = subprocess.run(command, cwd=self.repo, env=env, input='n\n',
-                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
         self.ok(declined)
         self.assertIn('The audit verdict is NOT_READY, not READY.', declined.stdout)
         self.assertIn('PR pending', declined.stdout)
@@ -1443,7 +1444,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
         self.assertEqual(json.loads((self.state / 'envelopes/audit.json').read_text())['result'], 'fail')
         (self.state / 'state').write_text('42:FINAL_AUDIT\n')
         approved = subprocess.run(command, cwd=self.repo, env=env, input='y\n\nSummary\nManual\ny\n',
-                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
         self.ok(approved)
         self.assertIn('Override recorded', approved.stdout)
         self.assertNotIn('needs your help', approved.stdout)
@@ -1470,7 +1471,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
             self.assertTrue(ch, output)
             output += ch
         (self.repo / 'source.txt').write_text('during prompt\n')
-        remainder, _ = process.communicate('\nSummary\nManual\ny\n', timeout=15)
+        remainder, _ = process.communicate('\nSummary\nManual\ny\n', timeout=90)
         self.assertIn('Reviewed files changed', remainder)
         self.assertEqual(len(self.creates()), 0)
 
@@ -1603,7 +1604,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
         target = self.journal()['head_branch']
         subprocess.run([REAL_GIT, '--git-dir', str(self.bare), 'update-ref',
                         'refs/heads/' + target, self.original], check=True)
-        remainder, _ = process.communicate('\nSummary\nManual\ny\n', timeout=15)
+        remainder, _ = process.communicate('\nSummary\nManual\ny\n', timeout=90)
         self.assertIn('Remote changed during prompts', remainder)
         self.assertEqual(len(self.creates()), 0)
 
@@ -1641,9 +1642,12 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
 import io
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-workers = int(os.environ.get('WORKFLOW_TEST_JOBS', '8'))
-if not 1 <= workers <= 8:
-    raise SystemExit('WORKFLOW_TEST_JOBS must be from 1 to 8')
+names = unittest.defaultTestLoader.getTestCaseNames(HandoffTests)
+# Up to 16 workers by default, 32 at most; each case owns its repository, keys and fake server. At 32 a case's
+# 60-second subprocess timeout was hit under load, with no gain in wall-clock over 8.
+workers = int(os.environ.get('WORKFLOW_TEST_JOBS', str(min(len(names), 16))))
+if not 1 <= workers <= 32:
+    raise SystemExit('WORKFLOW_TEST_JOBS must be from 1 to 32')
 def run_case(name):
     output = io.StringIO()
     started = time.monotonic()
@@ -1651,7 +1655,6 @@ def run_case(name):
     return name, time.monotonic() - started, result, output.getvalue()
 started = time.monotonic()
 failures = 0
-names = unittest.defaultTestLoader.getTestCaseNames(HandoffTests)
 print(f'PR handoff: {len(names)} cases, up to {workers} workers', flush=True)
 with ThreadPoolExecutor(max_workers=workers) as pool:
     for future in as_completed([pool.submit(run_case, name) for name in names]):

@@ -1008,10 +1008,8 @@ class DocsTests(Base):
 
     def test_keys_documented(self):
         readme = (ROOT / 'README.md').read_text(encoding='utf-8')
-        example = (ROOT / '.uncle' / 'config.example').read_text(encoding='utf-8')
         for line in ('supervision.delegate_gates none',):
             self.assertIn(line, readme)
-            self.assertIn(line, example)
         for phrase in ('supervisor:explicit:<name>', 'supervisor:standing:<name>', 'gate-answers.jsonl', "usage_scope 'supervisor chat'",
                        'signing, publication and waiver', '/delegate', '/app-input', 'answer this one', 'tell it to'):
             self.assertIn(phrase, readme, phrase)

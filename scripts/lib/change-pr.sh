@@ -4,9 +4,12 @@
 
 # Whether a person can answer the handoff prompts: a terminal, or the TUI
 # relay (uncle_tui.py sets UNCLE_STATUS_FILE and types answers down the pipe).
-# A bare pipe grants nothing, so a headless run keeps the skip below.
+# A bare pipe grants nothing, so a headless run keeps the skip below. The status file
+# the headless supervisor creates for itself (UNCLE_SUPERVISION_HOST=headless) is the
+# driver talking to its own supervisor, not a person, so it grants nothing either.
 change_pr_person_channel() {
-    [[ -t 0 || -n "${UNCLE_STATUS_FILE:-}" ]]
+    [[ -t 0 ]] && return 0
+    [[ -n "${UNCLE_STATUS_FILE:-}" && "${UNCLE_SUPERVISION_HOST:-}" != headless ]]
 }
 
 # Reason for a missing PR, read by the driver's finished-extras block. Set by
@@ -513,9 +516,13 @@ def snapshot(audit=False, excludes=(), attestation=False):
         git('read-tree', '--empty', env=env)
         paths = set(subprocess.check_output(
             ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z']).split(b'\0'))
-        paths.update(subprocess.check_output(
+        head_paths = set(subprocess.check_output(
             ['git', 'ls-tree', '-rz', '--name-only', 'HEAD']).split(b'\0'))
+        paths.update(head_paths)
         paths.discard(b'')
+        # The trust root is the one .uncle/ file a person force-adds on purpose. It is ignored and under
+        # .uncle/, so the rules below would drop it and the commit would delete a tracked trust root.
+        trust_root = {b'.uncle/allowed_signers'} & head_paths
         # Whatever .gitignore covers is not hashed, tracked or not.
         # `ls-files --others --exclude-standard` above already drops ignored
         # *untracked* files; a tracked file is never reported as ignored
@@ -531,7 +538,7 @@ def snapshot(audit=False, excludes=(), attestation=False):
             if ignored.returncode not in (0, 1):
                 raise ValueError('git check-ignore failed: '
                                  + ignored.stderr.decode('utf-8', 'replace').strip())
-            paths -= set(ignored.stdout.split(b'\0'))
+            paths -= set(ignored.stdout.split(b'\0')) - trust_root
         entries = []
         batched = []
         for raw in sorted(paths):
@@ -551,7 +558,7 @@ def snapshot(audit=False, excludes=(), attestation=False):
             # FINAL_AUDIT.md is skipped here and appended under the `audit`
             # flag instead, so a snapshot can be taken with or without it.
             if (not raw
-                    or (raw.startswith(b'.uncle/') and not raw.startswith(b'.uncle/docs/'))
+                    or (raw.startswith(b'.uncle/') and not raw.startswith(b'.uncle/docs/') and raw not in trust_root)
                     or raw == b'.uncle/docs/FINAL_AUDIT.md'):
                 continue
             name = os.fsdecode(raw)

@@ -104,6 +104,17 @@ class StructureScope(unittest.TestCase):
                 self.assertIn('`src/ui.js`', repaired['narrative'])
                 self.assertNotIn('./tests/unknown.test.js', repaired['narrative'])
 
+    def test_legacy_ownership_packet_cannot_hide_unrelated_operation_fields(self):
+        self.write_plan(self.typed_plan())
+        self.assertEqual(ops.prepare_structure_repair(self.plan, self.root, self.repair,
+                         'a protected verification path with no owning implementation step'), 3)
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-edit-ops-packet',
+                  'dispositions': [], 'ops': [{'op': 'set_step', 'id': 'step-1',
+                  'fields': {'owns': 'src/core.js, tests/unknown.test.js'}, 'text': 'Unrelated replacement'}]}
+        (self.repair / 'packet.json').write_text(json.dumps(packet))
+        with self.assertRaises(ops.Conflict):
+            ops.apply_structure_repair(self.repair, self.root)
+
     def test_only_unowned_protected_paths_can_be_removed_during_repair(self):
         plan = self.typed_plan()
         plan['protected_verification_paths'] = 'src/core.js\ntests/unknown.test.js'

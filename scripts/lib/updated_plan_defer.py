@@ -177,14 +177,23 @@ def resolver_defer(directory, groups, stage, plan, helper):
 
 
 def structure_writers(directory, repair):
+    import plan_model as pm
+    import updated_plan_edits as edits
     scope = json.loads(Path(repair, 'scope.json').read_text())
     ids = set(scope['ids'])
+    model = json.loads(Path(repair, 'model.json').read_text())
+    headings = {section['heading'] for section in model['sections']
+                if ids.intersection(set(pm.index(dict(model, sections=[section])))
+                                    | {step['id'] for step in pm.steps_of(dict(model, sections=[section]))})}
     base = json.loads(Path(directory, 'base-plan.json').read_text())
     names = set()
     for name, _ in owners(directory):
         packet = json.loads(Path(directory, name + '.json').read_text())
+        text_patch = edits.retarget(packet.get('patch') or {}, base['narrative'])
+        structural_patch = any(isinstance(row, dict) and (row.get('heading') or '').lstrip('# ').strip() in headings
+                               for rows in text_patch.values() if isinstance(rows, list) for row in rows)
         if (any((op.get('id') or op.get('target')) in ids for op in packet.get('ops', []))
-                or packet.get('patch') or packet.get('commands_replace')
+                or structural_patch or packet.get('commands_replace')
                 or (packet.get('protected_verification_paths') and packet['protected_verification_paths'] != base.get('protected_verification_paths'))):
             names.add(name)
     # Preserve atomic resolver results: a failed structural edit cannot keep

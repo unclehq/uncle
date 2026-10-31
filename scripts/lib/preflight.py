@@ -98,6 +98,8 @@ def probe(name):
 
 
 def run(commands, report):
+    from dependency_versions import check
+    check()
     names = prerequisites(Path(commands).read_text())
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(probe, names))

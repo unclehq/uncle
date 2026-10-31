@@ -10,6 +10,7 @@ import tempfile
 import time
 
 from execution_options import option, seconds
+from dependency_versions import check as check_dependency_versions
 from process_tree import start_check, wait_check, kill_tree, finish_check
 
 
@@ -179,9 +180,11 @@ def ensure_browser(root, output, env, cancelled=None):
 @contextmanager
 def prepare(command, output, env, cancelled=None):
     install, browser, root = command_needs(command)
+    check_dependency_versions(root, installing=install and not browser,
+                              prefer_lock=install and browser)
     browser = browser and option('playwright-preflight', '1').lower() in ('1', 'true')
-    # One command that installs and then tests runs exactly as before: its browser
-    # revision is only known after its own install, so there is nothing to check first.
+    # Browser binaries may change during a compound install/test command. Check
+    # known dependency versions above, but inspect binaries only for separate tests.
     if browser and not install:
         with install_lock(output, cancelled):
             ensure_browser(root, output, env, cancelled)
@@ -189,3 +192,5 @@ def prepare(command, output, env, cancelled=None):
         if install:
             env['PLAYWRIGHT_SKIP_BROWSER_GC'] = '1'
         yield
+        if install:
+            check_dependency_versions(root)

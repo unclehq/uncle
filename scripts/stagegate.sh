@@ -2556,7 +2556,7 @@ updated_plan_launch_writer() {
         schema_file="$directory/schemas/$name.json"
         local scope_args=()
         [[ "$schema_command" != edit-ops ]] || scope_args=(--scope "$directory/prompts/$name.scope.json")
-        python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" $owner "${scope_args[@]}" || return 1
+        python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" $owner ${scope_args[@]+"${scope_args[@]}"} || return 1
     fi
     local writer_turns answer_tokens
     read -r writer_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" budget "$ids" "$(. "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_granularity updated-plan)")
@@ -2775,7 +2775,7 @@ run_updated_plan_edit_writers() {
                 mkdir -p "$directory/schemas"
                 local scope_args=()
                 [[ "$resolve_command" != resolve-ops ]] || scope_args=(--scope "$directory/prompts/resolve-$group_id.scope.json")
-                python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$resolver_schema" "${scope_args[@]}" || return 1
+                python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$resolver_schema" ${scope_args[@]+"${scope_args[@]}"} || return 1
             fi
             workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
             ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"

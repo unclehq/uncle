@@ -2267,28 +2267,14 @@ STRUCTURED_OUTPUT_CONTRACT
                     if [[ ! -s "$agent_delivery" ]]; then
                         # Nothing to validate or retry: the pass ended (e.g.
                         # ran out of context) before writing anything at all.
-                        # run_planning_stage's own two-pass loop already
-                        # reads the documents directly to decide what is
-                        # missing and whether to retry in a fresh context;
+                        # run_planning_stage reads the documents directly
+                        # to decide what is missing and reports the cause;
                         # treating an empty delivery as a schema failure here
-                        # would waste a same-context retry that cannot help
-                        # and, on the second pass, hard-exit the whole
-                        # process instead of reporting the cause.
+                        # would hard-exit the whole process instead.
                         :
                     elif ! artifact_error="$(python3 "$ROOT/scripts/lib/publish_change_planning_bundle.py" . "$agent_delivery" 2>&1)"; then
-                        if [[ -z "$artifact_retried" ]]; then
-                            artifact_retried=1
-                            rm -f "$agent_delivery"
-                            echo "Canonical planning bundle rejected; retrying $log_name once with the exact schema error."
-                            printf '%s\n' "$artifact_error"
-                            continue
-                        fi
-                        # Unlike every other hard failure here, the combined
-                        # planning pass has an outer caller (run_planning_stage)
-                        # built to treat "wrote nothing twice" as a cause to
-                        # report, not a crash: exiting the whole process here
-                        # would skip its context-exhaustion retry and its
-                        # "Planning did not complete in two passes" message.
+                        # Planning is invoked once. A rejected bundle is reported with the exact schema error and the
+                        # stage stops; it is not asked again (run_planning_stage turns this into the stage's failure).
                         printf '%s\n' "$artifact_error" >&2
                         return 1
                     fi
@@ -3192,9 +3178,8 @@ change_plan_draft_key() {
 # on disk. Three such passes cost twenty minutes and 600k tokens on one issue.
 #
 # So the stage is judged by the documents it left, not by its exit. Whatever
-# was written is kept; a second pass writes only what is missing, in a fresh
-# context, with a note saying what happened. Two passes that write nothing
-# stop with the cause, which is the request pointing at too much repository.
+# was written is kept. There is one pass: if documents are missing the stage stops
+# with the cause, which is the request pointing at too much repository.
 PLANNING_CONTEXT_LIMIT="${WORKFLOW_CONTEXT_EXHAUSTED_TOKENS:-150000}"
 
 planning_context_used() {
@@ -3208,7 +3193,7 @@ planning_documents_complete() {
     [[ -s "$STATE_DIR/documents/BASELINE_REPORT.json" && -s "$STATE_DIR/documents/CHANGE_SPEC.json" && -s "$STATE_DIR/documents/CHANGE_PLAN.json" ]]
 }
 
-# run_planning_pass with-baseline|spec-and-plan [note-file]
+# run_planning_pass with-baseline|spec-and-plan
 run_planning_pass() {
     local prompt="$LOG_DIR/change-planning.prompt.md"
     {
@@ -3248,15 +3233,17 @@ run_planning_pass() {
 }
 
 run_planning_stage() {
-    local pass used missing f note="$STATE_DIR/planning-context-note.md"
-    rm -f "$note"
-    for pass in 1 2; do
-        if [[ -s "$STATE_DIR/documents/BASELINE_REPORT.json" ]]; then
-            run_planning_pass spec-and-plan "$note" || return $?
-        else
-            run_planning_pass with-baseline "$note" || return $?
-        fi
-        planning_documents_complete && break
+    local used missing f
+    # Exactly one invocation. A second pass of this stage -- a "fresh context" retry for whatever the first left unwritten --
+    # was a second change-plan run on the same request: it doubled the cost of the most expensive planning call, and an
+    # operator watching the run saw "change-plan" start over. When the first pass leaves a document unwritten the run stops
+    # here with the cause; the request is what has to change (or the operator reruns the stage deliberately).
+    if [[ -s "$STATE_DIR/documents/BASELINE_REPORT.json" ]]; then
+        run_planning_pass spec-and-plan || return $?
+    else
+        run_planning_pass with-baseline || return $?
+    fi
+    if ! planning_documents_complete; then
         missing=""
         for f in BASELINE_REPORT CHANGE_SPEC CHANGE_PLAN; do
             [[ -s "$STATE_DIR/documents/${f}.json" ]] || missing="$missing.uncle/docs/${f}.md "
@@ -3270,23 +3257,10 @@ run_planning_stage() {
         else
             echo "The planning stage ended without writing: $missing"
         fi
-        if [[ "$pass" == 1 ]]; then
-            echo "Whatever it wrote is kept; the rest is written in a fresh context."
-            {
-                printf '## Context note from the driver\n\n'
-                printf 'The previous pass of this stage ended after %s tokens without writing: %s\n' "$used" "$missing"
-                printf 'Documents already on disk are kept and are not rewritten; write only the missing ones.\n'
-                printf 'Grep for the symbols CHANGE_REQUEST.md names instead of reading large files end to end,\n'
-                printf 'and write each document as soon as its inputs are in hand.\n'
-            } > "$note"
-        fi
-    done
-    rm -f "$note"
-    if ! planning_documents_complete; then
-        echo "Planning did not complete in two passes. Narrow CHANGE_REQUEST.md, or name the files"
+        echo "Planning is not retried. Narrow CHANGE_REQUEST.md, or name the files"
         echo "the change touches so the baseline can go straight to them, then re-run."
         supervision_validation_failed change-plan "$STATE_DIR/documents/BASELINE_REPORT.json" \
-            "planning stage ended twice without completing its documents (context used: $used tokens)" 1 || true
+            "planning stage ended without completing its documents (context used: $used tokens)" 1 || true
         return 1
     fi
     # The bundle publisher already schema-validates all packets before writing

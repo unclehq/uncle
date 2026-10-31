@@ -201,6 +201,27 @@ class NewSteps(unittest.TestCase):
         self.assertTrue(any({e['writer'] for e in group['edits']} == {'1', '2'}
                             for group in caught.exception.groups))
 
+    def test_resolver_keeps_new_step_and_its_conflicting_consumer_together(self):
+        insertion = self.insert('Baseline snapshot', 'step-5')
+        consumer = {'op': 'set_step', 'id': 'step-6', 'fields': {'depends_on': ['new:1']}}
+        self.packet('1', [insertion, consumer])
+        self.packet('2', [{'op': 'set_step', 'id': 'step-6', 'fields': {'depends_on': [4]}}])
+        with self.assertRaises(ops.NeedsResolution) as caught:
+            self.merge()
+        self.assertEqual(len(caught.exception.groups), 1)
+        group = caught.exception.groups[0]
+        self.assertTrue(any(edit['op']['op'] == 'insert_step' for edit in group['edits']))
+        prompt = (self.directory / 'prompts' / ('resolve-' + group['id'] + '.md')).read_text()
+        self.assertIn('new:1', prompt)
+        self.assertNotIn('new:1:1', prompt)
+        self.assertNotIn('_step_key', prompt)
+        reply = {'resolutions': [{'group': group['id'], 'ops': [insertion, consumer]}]}
+        (self.directory / ('resolutions-' + group['id'] + '.json')).write_text(json.dumps(reply))
+        self.assertEqual(ops.check_resolutions(self.directory / 'plan.json', self.directory), {})
+        steps, _ = self.merge(self.directory)
+        self.assertEqual([s['title'] for s in steps].count('Baseline snapshot'), 1)
+        self.assertEqual(steps[6]['depends_on'], [6])
+
 
 if __name__ == '__main__':
     unittest.main()

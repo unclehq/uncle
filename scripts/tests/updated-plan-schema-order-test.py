@@ -56,6 +56,9 @@ if resolver:
     invalid = mode == 'resolver-invalid' and group == 'G1' and not stage.endswith('-retry')
     if mode == 'resolver-transport' and group == 'G1' and not stage.endswith('-retry'):
         sys.exit(1)
+    if mode == 'resolver-malformed' and group == 'G1' and not stage.endswith('-retry'):
+        Path(os.environ['UNCLE_WORKER_PACKET_PATH']).write_text('{"resolutions":')
+        sys.exit(0)
     body = {'resolutions': [{'group': group, 'ops': [{'op': 'set_fields', 'id': 'B-999' if invalid else 'B-' + group[1:],
              'fields': {'failure': 'RESOLVED'}}]}]}
 else:
@@ -63,6 +66,9 @@ else:
     n = stage.split('-edits-')[1]
     if mode == 'writer-transport' and n == '1' and not prior:
         sys.exit(1)
+    if mode == 'writer-malformed' and n == '1' and not prior:
+        Path(os.environ['UNCLE_WORKER_PACKET_PATH']).write_text('{"ops":')
+        sys.exit(0)
     row = 'B-1' if 'AR-1' in ids else 'B-2'
     invalid = mode == 'writer-invalid' and 'AR-1' in ids and not prior and '-retry' not in stage
     if invalid:
@@ -183,7 +189,7 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
 
     def test_transport_failures_do_not_enable_strict_schema(self):
         for change in (False, True):
-            for mode in ('writer-transport', 'resolver-transport'):
+            for mode in ('writer-transport', 'resolver-transport', 'writer-malformed', 'resolver-malformed'):
                 with self.subTest(change=change, mode=mode):
                     rows = self.run_driver(mode=mode, change=change)
                     self.assertGreater(len(rows), 2)
@@ -215,6 +221,17 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
         rows = self.run_driver(change=True, config=config, overrides={
             'WORKFLOW_UPDATED_PLAN_STRICT_SCHEMA': 'always', 'WORKFLOW_UPDATED_CHANGE_PLAN_STRICT_SCHEMA': 'retry'})
         self.assertTrue(all(not row['strict'] for row in rows))
+
+    def test_first_always_and_disabled_modes_preserve_attempt_policy(self):
+        for change in (False, True):
+            for policy, expected in [('first', [True, False]), ('always', [True, True]), ('disabled', [False, False])]:
+                for mode in ('writer-invalid', 'resolver-invalid'):
+                    with self.subTest(change=change, policy=policy, mode=mode):
+                        config = ('updated-plan.strict-op-schemas 0\n' if policy == 'disabled'
+                                  else 'updated-plan.strict-schema ' + policy + '\n')
+                        rows = self.run_driver(change=change, mode=mode, config=config)
+                        target = '-edits-1' if mode == 'writer-invalid' else '-resolve-G1'
+                        self.assertEqual([row['strict'] for row in rows if target in row['stage']], expected)
 
 
 if __name__ == '__main__':

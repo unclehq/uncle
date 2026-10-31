@@ -170,12 +170,8 @@ check_contains "stagegate: banner names the runner default" "(runner default)" "
 # engage racing at all -- proven two ways: the output is byte-identical to
 # the same run without it, and race_self_hosted_candidates' own work_dir
 # (which it always mkdir -p's, win or lose) is never created.
-# .git must be reset too, not just .uncle: stagegate.sh now prints
-# "Initialized Git repository in ..." the first time it creates one, and
-# silently does nothing on a repo that already exists, so leaving .git behind
-# made the two comparison runs differ by exactly that one line -- a sequencing
-# artifact, not the agent-routing behavior this check exists to prove.
-rm -rf "$PROJ/.uncle" "$PROJ/REQUIREMENTS_INTERPRETATION.md" "$PROJ/.git"
+# Keep the initialized checkout for both runs; only generated artifacts reset.
+rm -rf "$PROJ/.uncle" "$PROJ/REQUIREMENTS_INTERPRETATION.md"
 : > "$ARGV"
 out_candidates="$(cd "$PROJ" && echo n | ARGV_LOG="$ARGV" \
     UNCLE_PROJECT_ROOT="$PROJ" \
@@ -319,12 +315,11 @@ check_contains "explicit WORKFLOW_AGENT_CMD wins over the file's runner" \
 . "$ROOT/scripts/lib/sha256.sh"
 RPROJ="$TMP/reviewer-settings"
 mkdir -p "$RPROJ/.uncle/workflow/approvals" "$RPROJ/.uncle/docs"
-# The approval gate now verifies the canonical .uncle/docs/ path, not a plan
-# left at the project root (the old pre-canonical-path convention); seeding
-# only the old path left ADVERSARIAL_REVIEW's require_file() unable to find
-# it ("Required approval artifact missing: .uncle/docs/PROJECT_PLAN.md").
+# Approve the canonical packet, as the current gate does. Hashing only the
+# legacy Markdown lets the first run migrate it and invalidate its own approval.
 printf '# Project plan\n\nplan\n\n## Verification commands\n\n```sh\ntrue\n```\n' > "$RPROJ/.uncle/docs/PROJECT_PLAN.md"
-hash_file "$RPROJ/.uncle/docs/PROJECT_PLAN.md" > "$RPROJ/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
+python3 "$ROOT/scripts/lib/plan_context.py" export-project-plan "$RPROJ/.uncle/docs/PROJECT_PLAN.md" "$RPROJ"
+hash_file "$RPROJ/.uncle/workflow/documents/PROJECT_PLAN.json" > "$RPROJ/.uncle/workflow/approvals/PROJECT_PLAN.sha256"
 cat > "$TMP/config-reviewer" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$ARGV_LOG"
@@ -354,6 +349,9 @@ argv="$(cat "$TMP/reviewer.argv")"
 check_contains 'reviewer: configured model is used' '-m vendor/reviewer' "$argv"
 check_contains 'reviewer: configured effort is used' 'model_reasoning_effort=low' "$argv"
 check_contains 'reviewer: canonical delivery uses the required sandbox' '--sandbox workspace-write' "$argv"
+# Require a fresh invocation record; a paused approval gate must not let a
+# stale argv file stand in for the newly configured reviewer.
+rm -f "$TMP/reviewer.argv"
 printf 'adversarial-review.runner codex\nadversarial-review.effort high\n' > "$RPROJ/.uncle/config"
 printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workflow/state"
 UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \

@@ -23,15 +23,20 @@ STATE_DIR=.uncle/workflow
 LOG_DIR=.uncle/workflow/logs
 mkdir -p "$STATE_DIR/documents"
 CODEX_EFFORT_CHECKLIST=low
-# The worker-packet panel (WORKFLOW_MANUAL_CHECKLIST_PANEL=1, the default)
-# no longer does prompt-template synthesis at all for the "base" pass -- it
-# renders a JSON checklist document directly (CHECKLIST_PANEL_DIRECT=1) and
-# never touches CHECKLIST_PANEL_PROMPT as a Markdown template; that is what
-# the panel's own worker/packet tests cover. The relative-path bug this test
-# exists for is the one line in run_checklist_panel that runs unconditionally
-# before that fork: resolve_prompt(source). Disabling the panel isolates
-# exactly that line, which is all this test is about.
-WORKFLOW_MANUAL_CHECKLIST_PANEL=0
+# Stub only the external runner; exercise template resolution and packet
+# collation with the real panel code from a separate project directory.
+uncle_stage_runner() { echo codex; }
+run_codex() {
+    local id
+    case "$3" in
+        *coverage) id=MC-100 ;;
+        *invariants) id=MC-200 ;;
+        *resources) id=MC-300 ;;
+        *regressions) id=MC-400 ;;
+        *) return 1 ;;
+    esac
+    printf '{"schema":"uncle.artifact/v1","kind":"manual-checklist-worker-packet","checks":[{"id":"%s","exact_action":"Check %s","expected_result":"Greeting visible"}]}\n' "$id" "$id" > "$2"
+}
 EOF
 printf '%s\n' '. "$ROOT/scripts/lib/workflow-paths-change.sh"' >> harness.sh
 awk '/^checklist_worker_codex\(\)/{p=1} p{print} p && /^}$/{exit}' "$ROOT/scripts/change-workflow.sh" >> harness.sh
@@ -42,7 +47,7 @@ WORKFLOW_MANUAL_CHECKLIST_PANEL=0 run_checklist_panel base prompts/change/manual
 cp "$CHECKLIST_PANEL_PROMPT" synthesis-out.md
 # With a panel, workers now deliver collated canonical JSON, not a synthesis
 # prompt. Both paths must work with cwd outside the installation.
-run_checklist_panel base prompts/change/manual-checklist-base.md
+WORKFLOW_MANUAL_CHECKLIST_PANEL=1 run_checklist_panel base prompts/change/manual-checklist-base.md
 [[ "$CHECKLIST_PANEL_DIRECT" == 1 ]]
 cp "$CHECKLIST_PANEL_PROMPT" panel-out.json
 EOF
@@ -50,4 +55,6 @@ EOF
 bash harness.sh
 grep -q '.' synthesis-out.md
 diff synthesis-out.md "$ROOT/prompts/change/manual-checklist-base.md"
+python3 "$ROOT/scripts/lib/checklist_document.py" --validate-json panel-out.json
+[[ "$(jq '.checks | length' panel-out.json)" == 4 ]]
 echo 'checklist-panel-prompt-path-test.sh: run_checklist_panel resolves its template against ROOT, not cwd'

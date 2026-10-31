@@ -1547,6 +1547,45 @@ class DisableTests(Base):
         self.assertIn('max_interventions', self.ctl.journal.ledger_rows()[-1]['detail'])
 
 
+class HeadlessLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='supervisor-headless-')
+        self.addCleanup(tmp.cleanup)
+        self.state = Path(tmp.name) / '.uncle' / 'workflow'
+        self.state.mkdir(parents=True)
+        self.host = FakeHost()
+        self.config = sv.Config(dict(enabled=True))
+        self.ctl = sv.Controller(self.state, self.config, self.host, CONTRACT)
+        self.addCleanup(self.ctl.close)
+
+    def test_completed_driver_allows_retry_before_final_response_poll(self):
+        self.host.controller = self.ctl
+        record = {'state_digest': sv.state_digest(self.state)}
+        permitted = []
+        self.host.poll = lambda: permitted.append(self.ctl._retry_permitted(record))
+
+        def settle(deadline):
+            self.host.running = False
+            return False
+
+        self.host.settle = settle
+
+        def run_once(command):
+            self.assertTrue(self.host.running)
+            self.host.poll()  # A response while the driver is live must not retry.
+            return 7
+
+        # Control the observer so the second response is consumed exactly at
+        # the post-exit poll, before settle gets a chance to change the state.
+        with patch.object(sv, 'load_config', return_value=self.config), \
+                patch.object(sv, 'HeadlessHost', return_value=self.host), \
+                patch('threading.Thread'):
+            status = sv.supervised_lock_run(run_once, ['driver'], self.state, ROOT,
+                                           {'UNCLE_STATUS_FILE': str(self.state / 'status.jsonl')})
+        self.assertEqual(status, 7)
+        self.assertEqual(permitted, [False, True])
+
+
 class ContextTests(Base):
     """AR-005 / AR-016 / D-12: bounded, terminating context that carries the stage task and report."""
 

@@ -1598,6 +1598,26 @@ fi
 # of their size.
 gate_group_17() {
 
+# CLASSIFY sits between planning and review, runs as its own state, and never blocks the build: the fake agent writes no
+# classification, so the stage falls back to the deterministic profile and the run goes on to review.
+new_case classify-stage-runs-and-fails-open
+set_state CLASSIFY
+run_driver
+expect_out 'Build class:'
+expect_file .uncle/workflow/change-class.json
+expect_in_file .uncle/workflow/change-class.json '"source": "fallback"'
+expect_state WAIT_PLAN_APPROVAL
+
+# The new-application driver classifies too, and before the plan-approval gate where the speculative review starts.
+new_stagegate_case sg-classify-stage-runs-and-fails-open
+stagegate_agent
+cp "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md" "$REPO/.uncle/docs/PROJECT_PLAN.md"
+set_state CLASSIFY
+run_stagegate
+expect_out 'Build class:'
+expect_in_file .uncle/workflow/change-class.json '"family": "app"'
+expect_state WAIT_PLAN_APPROVAL
+
 new_case missing-approval-reopens-gate
 set_state UPDATED_PLAN
 rm -f "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"

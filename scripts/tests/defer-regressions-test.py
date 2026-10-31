@@ -250,6 +250,13 @@ packet['ops'] = [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/cor
                 self.assertEqual(sum('AR-001' in c['ids'] for c in calls), 1)
                 self.assertEqual(sum('AR-022' in c['ids'] for c in calls), 1)
 
+    def test_structural_rollback_preserves_successful_reconciler_edits(self):
+        for change in (False, True):
+            with self.subTest(change=change):
+                root, result, _, _ = self.run_driver(change=change, mode='structure', reconcile=True)
+                _, markdown = self.assert_published(root, result, change, cause='structur')
+                self.assertIn('LATE-KEPT', markdown)
+
     def test_publication_structural_failure_reports_each_deferral_once(self):
         root, result, calls, _ = self.run_driver(mode='publication-structure')
         _, markdown = self.assert_published(root, result, cause='structur')

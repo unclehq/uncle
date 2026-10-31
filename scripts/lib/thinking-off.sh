@@ -28,7 +28,7 @@ uncle_stage_thinking_off() {
     case "$stage" in
         requirements|requirements-investigate|project-plan|project-plan-investigate|project-plan-section-*) return 0 ;;
         updated-plan|updated-plan-*|updated-change-plan|updated-change-plan-*) return 0 ;;
-        preflight|preflight-*|preview-build|preview-build-*|module-interfaces) return 0 ;;
+        preflight|preflight-*|preview-build|preview-build-*|module-interfaces|classify-change) return 0 ;;
         execute-checklist|execute-checklist-*) return 0 ;;
     esac
     # The operator's extra globs must not expand against the working directory.

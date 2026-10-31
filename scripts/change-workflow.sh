@@ -423,6 +423,7 @@ change_pr_extras_print() {
 . "$ROOT/scripts/lib/stage-config.sh"
 . "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/module-interfaces-stage.sh"
+. "$ROOT/scripts/lib/change-class-stage.sh"
 . "$ROOT/scripts/lib/triage.sh"
 
 . "$ROOT/scripts/lib/implementation-gates.sh"
@@ -1111,9 +1112,22 @@ run_green_check() {
     # implementation and again before the checklist, and nothing changes in between.  The fingerprint covers the
     # tree and the commands; a clean result is always reusable, a failing one too unless asked otherwise (any
     # repair or edit changes the fingerprint and runs the commands again).
+    # Impacted-tests scope (scripts/lib/test_scope.py): decided by the build class, and by the operator for a standard
+    # change. Only this final run is scoped; the baseline above ran the full commands. A scoped command is new to the
+    # classifier, so a failure of it is a REGRESSION, never excused by a failing baseline.
+    local green_cmds_run="$GREEN_CMDS" green_scoped=0
+    rm -f "$STATE_DIR/test-scope.json"
+    if [[ "$(change_class_test_scope)" == impacted ]]; then
+        python3 -B "$ROOT/scripts/lib/test_scope.py" rewrite . "$GREEN_CMDS" "$STATE_DIR/green-check.scoped.commands" \
+            "$STATE_DIR/test-scope.json" "$(python3 -B "$ROOT/scripts/lib/change_class.py" get . class standard)" || true
+        if grep -q '"applied": true' "$STATE_DIR/test-scope.json" 2>/dev/null; then
+            green_cmds_run="$STATE_DIR/green-check.scoped.commands"; green_scoped=1
+            echo "Final check scope: impacted tests only (see 'Test scope' in the green check report)."
+        fi
+    fi
     local green_fingerprint="" green_reused=0
     if [[ "${WORKFLOW_GREEN_CHECK_REUSE:-1}" == 1 ]]; then
-        green_fingerprint="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$GREEN_CMDS" 2>/dev/null || true)"
+        green_fingerprint="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$green_cmds_run" 2>/dev/null || true)"
         local remembered remembered_status
         # A bare `var=$(cmd)` assignment is NOT exempt from this script's
         # `set -e` the way a command substitution used as an argument is --
@@ -1140,11 +1154,18 @@ run_green_check() {
         rm -f "$STATE_DIR/green-check.fingerprint"
         echo
         echo "Re-running this project's checks from the driver:"
-        resolve_baseline_parallel_groups .uncle/docs/BASELINE_REPORT.md "$GREEN_CMDS" "$STATE_DIR/green-check.groups" || exit $?
-        green_run "$GREEN_CMDS" "$GREEN_CUR" "$LOG_DIR/green-check.log" "" "$STATE_DIR/green-check.groups" || exit $?
+        if [[ "$green_scoped" == 1 ]]; then
+            : > "$STATE_DIR/green-check.groups"      # the plan's groups index the full command list; a scoped run is short
+        else
+            resolve_baseline_parallel_groups .uncle/docs/BASELINE_REPORT.md "$GREEN_CMDS" "$STATE_DIR/green-check.groups" || exit $?
+        fi
+        green_run "$green_cmds_run" "$GREEN_CUR" "$LOG_DIR/green-check.log" "" "$STATE_DIR/green-check.groups" || exit $?
         green_classify "$GREEN_BASE" "$GREEN_CUR" > "$GREEN_CLASS"
         green_report "$GREEN_CLASS" "$GREEN_MD" .uncle/docs/BASELINE_REPORT.md \
             "$LOG_DIR/green-check.log"
+        if [[ "$green_scoped" == 1 ]]; then
+            { echo; python3 -B "$ROOT/scripts/lib/test_scope.py" report "$STATE_DIR/test-scope.json"; } >> "$GREEN_MD"
+        fi
     fi
 
     local regressions
@@ -1153,7 +1174,7 @@ run_green_check() {
     if [[ "$green_reused" == 0 && -n "$green_fingerprint" ]]; then
         local green_after green_outcome=clean
         [[ "$regressions" == 0 ]] || green_outcome=failed
-        green_after="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$GREEN_CMDS" 2>/dev/null || true)"
+        green_after="$(python3 -B "$ROOT/scripts/lib/tree_fingerprint.py" "$PWD" "$green_cmds_run" 2>/dev/null || true)"
         if [[ -n "$green_after" ]]; then
             printf '%s %s\n' "$green_after" "$green_outcome" > "$STATE_DIR/green-check.fingerprint"
         fi
@@ -2519,12 +2540,14 @@ run_codex() {
 # receives the original evidence and produces the only binding verdict.
 run_adversarial_review_panel() {
     local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid status
+    local lenses
+    lenses="$(change_class_lenses 'requirements regression security testability')"
     local -a pids=()
     [[ "${UNCLE_TEST_FIXTURES_ONLY:-0}" != 1 ]] || return 0
     [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
     rm -rf "$directory"
     mkdir -p "$directory/prompts"
-    for lens in requirements regression security testability; do
+    for lens in $lenses; do
         prompt="$directory/prompts/$lens.md"
         output="$directory/$lens.json"
         cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
@@ -2538,7 +2561,7 @@ run_adversarial_review_panel() {
     for pid in "${pids[@]}"; do
         wait "$pid" || echo "Adversarial-review worker failed; canonical packet validation will stop the panel." >&2
     done
-    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
+    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected $lenses || return 1
     python3 -B "$ROOT/scripts/lib/adversarial_packets.py" . || return 1
     ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"
     cp "$ROOT/prompts/change/adversarial-review.md" "$ADVERSARIAL_REVIEW_PROMPT"
@@ -2608,6 +2631,10 @@ run_updated_change_plan_edit_writers() {
     [[ "${WORKFLOW_UPDATED_PLAN_EDITS:-1}" == 1 ]] || return 1
     if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; resolve_command=resolve-ops; fi
     export UNCLE_PLAN_KIND=change-plan     # the helpers write and merge a change-plan, with no commands or protected paths
+    # Findings per writer come from the build class (small changes batch more); an explicit setting wins.
+    local slice_for_class
+    slice_for_class="$(change_class_edit_slice '' "${WORKFLOW_UPDATED_PLAN_EDIT_SLICE:-}")"
+    [[ -z "$slice_for_class" ]] || export WORKFLOW_UPDATED_PLAN_EDIT_SLICE="$slice_for_class"
     # Forced, schema-checked JSON wherever the runner can enforce it: hosted Claude through --json-schema, a
     # self-hosted model through the grammar its adapter derives from the packet kind named in the prompt.
     local delivery=file
@@ -3482,6 +3509,12 @@ while true; do
             envelope_write --stage plan --result pass \
                 --evidence .uncle/docs/CHANGE_PLAN.md \
                 --producer-stage change-plan --producer-kind agent
+            set_state CLASSIFY
+            ;;
+
+        CLASSIFY)
+            # How much review this plan needs; its own timed stage, fail-open (scripts/lib/change-class-stage.sh).
+            classify_change_stage change .uncle/docs/CHANGE_PLAN.md || true
             set_state ADVERSARIAL_REVIEW
             ;;
 

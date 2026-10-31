@@ -293,6 +293,54 @@ Uncle is the supervisor and integrity layer.
 
 GitHub remains the system of record.
 
+### Build classification
+
+Right after a plan exists, a short `CLASSIFY` stage decides how much review it needs, so a one-line fix does not pay for the
+same review as a change to publication or signing. It is its own stage, so its time shows up separately, and it runs for both
+change requests (between `PLAN` and `ADVERSARIAL_REVIEW`) and new applications (before plan approval, ahead of the speculative
+review).
+
+The driver computes cheap features (owned files, step and criterion counts, risk keywords), a model proposes a class
+(`docs`, `test-only`, `small`, `standard`, `large` or `risky`) and a review profile, and the driver clamps the proposal to a
+safety floor before anything uses it: the class can only be raised, `requirements` and `regression` always run, `security`
+runs whenever a risk keyword matched, and every standard, large or risky plan keeps all four lenses. The class sets which
+adversarial-review lenses run and how many findings each edit writer resolves (`edit_slice`). The result is
+`.uncle/workflow/change-class.json`.
+
+It runs on the supervisor's runner, model and effort (`supervision.*`) unless `classify-change.runner`, `.model` or `.effort` is
+set. If the supervisor's runner is not installed it uses the stage that planned the build, so Claude, Codex, Kimi, Cline and
+self-hosted setups all classify. The answer is read from a file or from the runner's final text. A runner that fails or answers
+badly gets the deterministic profile and the build continues; the stage never blocks a run.
+
+| Setting | Effect |
+|---|---|
+| `WORKFLOW_CLASSIFY=0` | Skip the stage; every review lens runs as before. |
+| `WORKFLOW_CHANGE_CLASS=<class>` | Force a class, with no model call. |
+| `WORKFLOW_ADVERSARIAL_LENSES="a b"` | Force the lens list. |
+| `WORKFLOW_UPDATED_PLAN_EDIT_SLICE` / `WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE` | Force findings per edit writer. |
+| Stage rerun of `classify-change` | Re-classify the current plan. |
+
+#### Test scope
+
+The class also decides how much of the test suite the **final** check runs. The baseline always runs the full approved commands,
+and the driver's own result is what a change is judged on, so scoping only shortens the final run, and only where it is
+defensible:
+
+| Class | Final check |
+|---|---|
+| `docs`, `test-only`, `small` | Impacted suites only, when the mapping is confident. |
+| `standard` | **Asks you** (attended runs): "verify with only the N suites it can affect (of M)? [Y/N]". Anything but yes runs the full suite. Unattended runs never ask and run the full suite. |
+| `large`, `risky`, and every new application | The full suite. |
+
+Impact is mapped from the files the change touches: a test maps to itself, and any other file maps to the suites that name it. A
+file no suite names, or a hot file named by more than 12 suites, is not "impacted tests", so the full suite runs. Only Uncle's two
+runners (`scripts/run-python-tests.sh`, `scripts/run-shell-tests.sh`) are scoped, by adding `-- suite ...`; every other command
+runs exactly as approved. A runner with no impacted suite is omitted and reported **NOT RUN**, never replaced by something that
+passes. A scoped command is new to the green check, so a failure of it is a regression, never excused by a failing baseline. The
+green check report gains a `Test scope` section naming what ran and what did not.
+
+`WORKFLOW_TEST_SCOPE=full` runs everything; `WORKFLOW_TEST_SCOPE=impacted` forces the scope.
+
 ## Uncle builds Uncle
 
 Uncle is developed using Uncle.

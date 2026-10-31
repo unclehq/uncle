@@ -18,6 +18,8 @@ import json, sys
 sys.path.insert(0, sys.argv[2] + '/scripts/lib')
 import updated_plan_synthesis_prompt as P
 d = sys.argv[1] + '/.uncle/workflow/documents/'
+if sys.argv[3] == 'resolver-last-config':
+    open(sys.argv[1] + '/.uncle/config', 'w').write('self-hosted.writer-schema-first off\n')
 narrative = ('# Project plan\n\n## 1. Observable behaviors\n\n| ID | Trigger | Observable result | Failure behavior | Requirement IDs |\n'
              '|---|---|---|---|---|\n| B-1 | click | appended | unchanged | UB-1 |\n| B-2 | key | same | same | UB-2 |\n\n## 2. Notes\n\nKept.\n')
 if sys.argv[3] == 'resolver-last':
@@ -53,10 +55,12 @@ PY
             if [[ "$2" == updated-plan-worker-resolve-* ]]; then
                 echo resolver >> "$STATE_DIR/resolver-calls"
                 printf '%s %s %s\n' "$2" "${UNCLE_WORKER_MAX_TURNS:-none}" "${UNCLE_UPDATED_PLAN_ANSWER_TOKENS:-none}" >> "$STATE_DIR/resolver-budgets"
-                if [[ "$mode" == resolver-last ]]; then
-                    local group="$(awk '/^## Group / {print $3; exit}' "$1")"
-                    printf '%s %s\n' "$group" "${WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST:-on}" >> "$STATE_DIR/resolver-paths"
-                    if [[ "$group" == G30 && "${WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST:-on}" == on ]]; then
+                if [[ "$mode" == resolver-last || "$mode" == resolver-last-config ]]; then
+                    local group="$(awk '/^## Group / {print $3; exit}' "$1")" failed_group=G30 initial_mode=on
+                    [[ "$mode" != resolver-last-config ]] || { failed_group=G1; initial_mode=off; }
+                    local effective_mode="${WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST:-$initial_mode}"
+                    printf '%s %s\n' "$group" "$effective_mode" >> "$STATE_DIR/resolver-paths"
+                    if [[ "$group" == "$failed_group" && "$effective_mode" == "$initial_mode" ]]; then
                         echo 'Unrepaired draft: Extra data' >&2; return 1
                     fi
                     printf '{"resolutions":[{"group":"%s","ops":[{"op":"set_fields","id":"B-%s","fields":{"failure":"MERGED"}}]}]}' "$group" "${group#G}" > "$UNCLE_WORKER_PACKET_PATH"
@@ -89,7 +93,7 @@ if n in ('1', '1-1'):
     body['protected_verification_paths'] = 'tests/a.test.js'
 if mode == 'resolver-last':
     body['ops'] = [{'op': 'set_fields', 'id': 'B-%d' % i, 'fields': {'failure': 'X' + n}} for i in range(1, 36)]
-if mode in ('resolver-cap', 'resolver-dead'):
+if mode in ('resolver-cap', 'resolver-dead', 'resolver-last-config'):
     body['ops'] = [{'op': 'set_fields', 'id': row, 'fields': {'failure': 'X' + n}} for row in ('B-1', 'B-2')]
 json.dump(body, open(target, 'w'))
 if mode in ('trailing', 'salvage'):
@@ -104,7 +108,7 @@ PY2
             [[ "$mode" != salvage && "$mode" != printed ]] || return 1
         )
         . "$TMP/fn.sh"
-        if [[ "$name" == adaptive || "$mode" == resolver-last ]]; then
+        if [[ "$name" == adaptive || "$mode" == resolver-last* ]]; then
             ensure_project_plan_json() { :; }
             require_file() { [[ -s "$1" ]]; }
             run_updated_plan_compact() { echo 'unexpected compact fallback' >&2; echo compact > "$STATE_DIR/fallback"; return 99; }
@@ -251,6 +255,19 @@ import json, sys
 packet = json.load(open(sys.argv[1]))
 assert sorted(row['finding'] for row in packet['dispositions']) == ['AR-%d' % i for i in range(1, 7)]
 assert open(sys.argv[2]).read().count('MERGED') == 35
+PYLAST
+
+run_case resolverconfig resolver-last-config local
+w="$TMP/resolverconfig/.uncle/workflow"
+check "resolver config off: alternate schema-first path publishes" test "$(cat "$w/rc")" == 0
+check "resolver config off: no stage fallback" test ! -e "$w/fallback"
+check "resolver config off: environment override remains unset" grep -qx unset "$w/returned-mode"
+check "resolver config off: failed group uses other configured path" python3 - "$w/resolver-paths" <<'PYLAST'
+from collections import Counter
+import sys
+rows = [line.split() for line in open(sys.argv[1])]
+assert Counter(row[0] for row in rows) == Counter({'G1': 3, 'G2': 1}), rows
+assert [row[1] for row in rows if row[0] == 'G1'] == ['off', 'off', 'on'], rows
 PYLAST
 
 run_case clash resolve-fail

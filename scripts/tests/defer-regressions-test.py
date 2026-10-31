@@ -34,9 +34,13 @@ text, stage = Path(sys.argv[1]).read_text(), sys.argv[2]
 state = Path('.uncle/workflow')
 mode = os.environ['DEFER_TEST_MODE']
 resolver = '-resolve-' in stage
-ids = [] if resolver else re.search(r'You own exactly these findings: ([^.]*)\.', text).group(1).split(', ')
+structure = stage.endswith('-structure')
+ids = [] if resolver or structure else re.search(r'You own exactly these findings: ([^.]*)\.', text).group(1).split(', ')
 with (state / 'calls.jsonl').open('a') as f:
     f.write(json.dumps({'stage': stage, 'ids': ids, 'time': time.monotonic()}) + '\n')
+if structure:
+    print('structural ownership repair cannot apply the edit', flush=True)
+    sys.exit(2)
 if resolver:
     if mode == 'resolver':
         print('B-999: resolver cannot apply the overlapping edit', flush=True)
@@ -51,7 +55,9 @@ if 'AR-022' in ids:
     if mode in ('transport', 'slow'):
         print('s3.1 is not a typed rows block', flush=True)
         sys.exit(2)
-    if mode == 'semantic':
+    if mode == 'structure':
+        ops = []
+    elif mode == 'semantic':
         ops = [{'op': 'insert_row', 'target': 's3.1', 'after': '', 'new': {'id': 'T-022', 'text': 'Add defect injection'}}]
     else:
         ops = [{'op': 'set_fields', 'id': 'B-1', 'fields': {'failure': 'CONFLICT-022'}}]
@@ -103,7 +109,35 @@ UPDATED_PLAN_ADVISOR_PIDS=()
 stage_uses_self_hosted() { [[ "$DEFER_TEST_RUNNER" == local ]]; }
 stage_supports_structured_output() { [[ "$DEFER_TEST_RUNNER" == hosted ]]; }
 run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
-''' + 'run_' + prefix + '_edit_writers\n'
+''' + 'run_' + prefix + '_edit_writers || exit $?\n'
+        if mode == 'structure':
+            name = 'CHANGE_PLAN' if change else 'UPDATED_PROJECT_PLAN'
+            stage = 'updated-change-plan' if change else 'updated-plan'
+            (root / 'structure.py').write_text("""import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1] + '/scripts/lib')
+import artifact_json, plan_model
+name, change = sys.argv[2], sys.argv[3] == '1'
+state = Path('.uncle/workflow')
+path = state / ('documents/' + name + '.json')
+plan = json.loads(path.read_text())
+model = plan_model.model_of(plan)
+plan_model.steps_of(model)[1]['owns'] = ['src/core.js']
+plan['narrative'] = plan_model.render(model)
+plan.update(model)
+plan['protected_verification_paths'] = 'tests/a.test.js'
+path.write_text(json.dumps(plan))
+rendered = artifact_json.render_change_plan(plan, require_dispositions=True) if change else artifact_json.render_plan(plan, protected=True)
+Path('.uncle/docs/' + name + '.md').write_text(rendered)
+directory = state / ('updated-change-plan-edits' if change else 'updated-plan-edits')
+packet = json.loads((directory / '4.json').read_text())
+packet['ops'] = [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/core.js']}}]
+(directory / '4.json').write_text(json.dumps(packet))
+""")
+            script += 'python3 -I structure.py "$ROOT" ' + name + ' ' + ('1' if change else '0') + ' || exit $?\n'
+            script += '. "$ROOT/scripts/lib/updated-plan-repair.sh"\n'
+            script += 'run_updated_plan_structure_repair "$STATE_DIR/documents/' + name + '.json" '
+            script += '"a protected verification path with no owning implementation step" ' + stage + '\n'
         env = {k: v for k, v in os.environ.items() if not k.startswith(('WORKFLOW_', 'UNCLE_'))}
         env.update(ROOT=str(ROOT), STATE_DIR=str(state), LOG_DIR=str(state / 'logs'),
                    UNCLE_PROJECT_ROOT=str(root), UNCLE_CONFIG=str(root / '.uncle/config'),
@@ -177,6 +211,17 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
                 self.assert_published(root, result, change, cause='resolver', deferred=('AR-022', 'AR-023'))
                 self.assertEqual(sum('AR-001' in c['ids'] for c in calls), 1)
                 self.assertEqual(sum('-resolve-' in c['stage'] for c in calls), 3)
+
+    def test_exhausted_structural_repair_rolls_back_only_the_causal_packet(self):
+        for change in (False, True):
+            with self.subTest(change=change):
+                root, result, calls, _ = self.run_driver(change=change, mode='structure')
+                _, markdown = self.assert_published(root, result, change, cause='structur')
+                steps = plan_model.steps_of(plan_model.import_markdown(markdown))
+                self.assertIn('tests/a.test.js', steps[1]['owns'])
+                self.assertEqual(sum(c['stage'].endswith('-structure') for c in calls), 2)
+                self.assertEqual(sum('AR-001' in c['ids'] for c in calls), 1)
+                self.assertEqual(sum('AR-022' in c['ids'] for c in calls), 1)
 
     def test_critical_deferred_rows_pass_the_existing_disposition_gate(self):
         for change in (False, True):

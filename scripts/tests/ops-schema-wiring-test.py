@@ -54,9 +54,9 @@ class Wiring(unittest.TestCase):
         model = {'sections': [{'id': 's1', 'heading': 'Steps', 'blocks': [
             {'id': 's1.1', 'kind': 'steps', 'items': []}]}]}
         schema = ws.edit_ops_packet(['s1.1'], model=model)
-        new = {'id': 'step-1', 'number': 1}
+        new = {'title': 'Scaffold', 'text': 'Create package.json.', 'depends_on': []}
         packet = {'schema': ws.ENVELOPE, 'kind': ws.EDIT_OPS_KIND, 'dispositions': [],
-                  'ops': [{'op': 'insert_item', 'target': 's1.1', 'new': new}]}
+                  'ops': [{'op': 'insert_step', 'after': 'end', 'new': new}]}
         with self.assertRaises(ValueError):
             conforms(packet, schema)
         new['owns'] = ['package.json']

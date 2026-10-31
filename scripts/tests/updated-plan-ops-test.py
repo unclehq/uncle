@@ -369,6 +369,36 @@ class Schemas(unittest.TestCase):
         self.assertIn('B-2', item['id']['enum'])
 
 
+class NewStepIsolation(unittest.TestCase):
+    def insertion(self, title, deps=None):
+        return {'op': 'insert_step', 'after': 'step-1',
+                'new': {'title': title, 'text': 'Implement.', 'owns': ['src/' + title + '.js'],
+                        'depends_on': deps if deps is not None else ['step-1']}}
+
+    def test_one_invalid_new_step_packet_preserves_other_packets_and_their_order(self):
+        model = pm.import_markdown(NARRATIVE)
+        attributed = []
+        for name, flat in [('first', self.insertion('first')), ('bad', self.insertion('bad', ['new:1'])),
+                           ('last', self.insertion('last'))]:
+            attributed.extend(({name}, op) for op in ops.ops_of({'ops': [flat]}, model, name))
+        revised, dropped = ops.apply_leniently(model, attributed)
+        revised = pm.renumber_steps(revised, assign_ids=True)
+        self.assertEqual([step['title'] for step in pm.steps_of(revised)], ['Scaffold', 'first', 'last', 'Core'])
+        self.assertEqual([writers for _, _, writers in dropped], [{'bad'}])
+        self.assertEqual(pm.validate(revised)[0], [])
+
+    def test_lenient_merge_keeps_new_step_and_existing_dependency_edit_atomic(self):
+        model = pm.import_markdown(NARRATIVE)
+        packet = {'ops': [self.insertion('first'),
+                          {'op': 'set_step', 'id': 'step-2', 'fields': {'depends_on': [1, 'new:1']}}]}
+        attributed = [({'first'}, op) for op in ops.ops_of(packet, model, 'first')]
+        revised, dropped = ops.apply_leniently(model, attributed)
+        revised = pm.renumber_steps(revised, assign_ids=True)
+        self.assertEqual(dropped, [])
+        self.assertEqual(pm.steps_of(revised)[2]['depends_on'], [1, 2])
+        self.assertEqual(pm.validate(revised)[0], [])
+
+
 class Reconcile(Base):
     """The deciders edit first; one reconciler then adds only what the specialists asked for and no edit meets."""
 

@@ -191,13 +191,24 @@ def _op(ids=None):
     block = _object({'kind': {'type': 'string', 'enum': ['prose', 'heading', 'code', 'list']},
                      'text': _text(EDIT_MAX, 0), 'level': _text(2, 0), 'lang': _text(30, 0),
                      'items': {'type': 'array', 'maxItems': 60, 'items': _text(2000)}}, ('kind',))
-    return _object({
-        'op': {'type': 'string', 'enum': list(OP_NAMES)},
+    generic = _object({
+        'op': {'type': 'string', 'enum': [name for name in OP_NAMES if name != 'insert_step']},
         'id': pick(), 'target': pick(), 'after': pick(['']),
         'fields': _strings(FIELD_NAMES + step), 'text': _text(EDIT_MAX, 0),
-        'new': _strings(['id', 'number'] + FIELD_NAMES + step, EDIT_MAX),
+        'new': _strings(['id'] + FIELD_NAMES + step, EDIT_MAX),
         'block': block, 'heading': _text(300, 0), 'blocks': {'type': 'array', 'maxItems': 20, 'items': block},
     }, ('op',))
+    return {'anyOf': [generic, _new_step(ids)]}
+
+
+def _new_step(ids=None):
+    steps = [key for key in ids if key.startswith('step-')] if ids is not None else None
+    anchor = _choice(steps) if steps else _text(120)
+    strings = {'type': 'array', 'maxItems': 150, 'items': _text(4000)}
+    return _object({'op': {'const': 'insert_step'}, 'after': _choice(steps + ['end']) if steps else _text(120),
+                    'before': anchor,
+                    'new': _object({'title': _text(EDIT_MAX, 0), 'text': _text(EDIT_MAX, 0), 'owns': strings,
+                                    'depends_on': strings}, ('title', 'text', 'owns', 'depends_on'))}, ('op', 'new'))
 
 
 def scoped_ids(model, targets):
@@ -222,14 +233,17 @@ def scoped_ids(model, targets):
 
 def model_op(model, ids=None):
     """Closed operation variants, grouped by actual row kind instead of by individual id."""
-    from plan_model import ROW_KINDS, index
+    from plan_model import ROW_KINDS, index, steps_of
     allowed = set(index(model))
     if ids is not None:
         allowed.intersection_update(ids)
     variants, rows, texts, steps = [], {}, [], []
+    step_blocks = False
     strings = {'type': 'array', 'maxItems': 150, 'items': _text(4000)}
+    references = _choice([step['id'] for step in steps_of(model)] + ['new:%d' % n for n in range(1, 121)])
     step_fields = {'title': _text(EDIT_MAX, 0), 'text': _text(EDIT_MAX, 0), 'owns': strings,
-                   'depends_on': {'type': 'array', 'maxItems': 150, 'items': {'type': 'integer', 'minimum': 0}}}
+                   'depends_on': {'type': 'array', 'maxItems': 150,
+                                  'items': {'anyOf': [{'type': 'integer', 'minimum': 0}, references]}}}
 
     def fields(kind, new=False):
         properties = {name: strings if is_list else _text(EDIT_MAX, 0)
@@ -265,16 +279,15 @@ def model_op(model, ids=None):
                 rows.setdefault(node['row_kind'], []).extend(member_ids)
             elif kind == 'steps':
                 steps.extend(member_ids)
+                step_blocks = step_blocks or node['id'] in allowed
             elif kind == 'list':
                 texts.extend(member_ids)
             if node['id'] not in allowed:
                 continue
             if kind in ('prose', 'heading', 'code'):
                 texts.append(node['id'])
-            if kind in ('rows', 'steps', 'list'):
+            if kind in ('rows', 'list'):
                 new = (fields(node['row_kind'], new=True) if kind == 'rows' else
-                       _object(dict(id=_text(120), number={'type': 'integer', 'minimum': 1}, **step_fields),
-                               ('id', 'number', 'owns')) if kind == 'steps' else
                        _object({'id': _text(120), 'text': _text(EDIT_MAX, 0)}, ('text',)))
                 add('insert_row' if kind == 'rows' else 'insert_item',
                     {'target': pick([node['id']]), 'after': pick([''] + member_ids), 'new': new}, ('target', 'new'))
@@ -283,6 +296,8 @@ def model_op(model, ids=None):
             add('set_fields', {'id': pick(keys), 'fields': fields(kind)}, ('id', 'fields'))
     if steps:
         add('set_step', {'id': pick(steps), 'fields': _object(step_fields, ())}, ('id', 'fields'))
+    if steps or step_blocks:
+        variants.append(_new_step(steps))
     if texts:
         add('set_text', {'id': pick(texts), 'text': _text(EDIT_MAX, 0)}, ('id', 'text'))
     deletable = []
@@ -364,6 +379,11 @@ def plan_ids(plan_json):
 def main(argv):
     argv = list(argv)
     scope = None
+    attempt = None
+    if '--attempt' in argv:
+        at = argv.index('--attempt')
+        attempt = argv[at + 1]
+        del argv[at:at + 2]
     if '--scope' in argv:
         at = argv.index('--scope')
         scope = json.loads(Path(argv[at + 1]).read_text(encoding='utf-8'))
@@ -398,13 +418,13 @@ def main(argv):
                                               sections.row_kinds_of(argv[1]), sections.allows_steps(argv[1]))
         elif len(argv) in (3, 4) and argv[0] == 'edit-ops':
             from plan_model import load_model
-            from updated_plan_ops import option
-            model = load_model(argv[1]) if option('strict-op-schemas', 1) else None
+            from updated_plan_ops import strict_schema_attempt
+            model = load_model(argv[1]) if strict_schema_attempt(attempt) else None
             schema = edit_ops_packet(scope if scope is not None else plan_ids(argv[1]), owner=len(argv) == 4, model=model)
         elif len(argv) == 3 and argv[0] == 'resolve-ops':
             from plan_model import load_model
-            from updated_plan_ops import option
-            model = load_model(argv[1]) if option('strict-op-schemas', 1) else None
+            from updated_plan_ops import strict_schema_attempt
+            model = load_model(argv[1]) if strict_schema_attempt(attempt) else None
             schema = resolution_ops_packet(scope if scope is not None else plan_ids(argv[1]), model=model)
         elif len(argv) == 3 and argv[0] == 'resolve':
             schema = resolution_packet(plan_headings(argv[1]))

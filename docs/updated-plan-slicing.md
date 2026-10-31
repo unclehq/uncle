@@ -29,6 +29,25 @@ and `WORKFLOW_UPDATED_PLAN_TOKENS_PER_OP`. Change workflows accept corresponding
 remain supported when the new group-size environment setting is absent.
 Values must be positive integers.
 
+Self-hosted writers and resolvers start with the generic edit-op schema. When a
+local plan validator rejects a packet, only that group retries with its scoped,
+per-kind schema and the precise rejection. Missing or interrupted replies keep
+the generic schema. `updated-plan.strict-schema` selects `retry` (default),
+`first` (strict on the first attempt only), or `always`. Its environment override
+is `WORKFLOW_UPDATED_PLAN_STRICT_SCHEMA`, with the same change-stage inheritance
+and precedence above. `updated-plan.strict-op-schemas 0` disables strict schemas
+on both attempts. Claude and Codex retain their existing schema selection.
+
+New implementation steps use `insert_step` with `after` or `before` naming an
+existing step (`after: "end"` appends). The `new` object contains `title`, `text`,
+`owns`, and `depends_on`, never a number or id. Dependencies name existing step
+ids or `new:N`, the Nth inserted step in that packet. Existing `set_step` edits
+can also reference `new:N`. The driver isolates these references per packet,
+merges in slice order, and assigns consecutive numbers and ids while rewriting
+dependencies. Two writers inserting after the same anchor keep slice order
+without requiring a resolver. Rendered plans and their approval gates retain
+the same shape.
+
 The derived self-hosted answer cap is
 `max(4096, 1024 + findings * (512 + ops_per_finding * tokens_per_op))`:
 4,096 tokens for one finding, 6,144 for two, 8,704 for three. Existing explicit

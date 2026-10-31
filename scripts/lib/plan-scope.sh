@@ -20,27 +20,17 @@
 # packet, never the rendered approval view.  Markdown remains only as a
 # compatibility fallback for runs paused before canonical plan publication.
 plan_text() {
-    local plan="$1" stem candidate
-    case "$plan" in
-        .uncle/docs/PROJECT_PLAN.md|.uncle/docs/UPDATED_PROJECT_PLAN.md|.uncle/docs/CHANGE_PLAN.md)
-            stem="${plan##*/}"; stem="${stem%.md}"
-            candidate="${STATE_DIR:-.uncle/workflow}/documents/$stem.json"
-            [[ -s "$candidate" ]] && plan="$candidate"
-            ;;
-    esac
-    if [[ "$plan" == *.json ]]; then
-        python3 - "$plan" <<'PY'
-import json, sys
-try:
-    value = json.load(open(sys.argv[1], encoding='utf-8')).get('narrative', '')
-    if not isinstance(value, str): raise ValueError()
-    print(value)
-except Exception:
-    raise SystemExit(1)
-PY
-    else
-        cat "$plan"
-    fi
+    local plan="$1" records_status=0
+    plan_record_lines text "$plan" || records_status=$?
+    [[ "$records_status" == 3 ]] || return "$records_status"
+    cat "$plan"
+}
+
+# Return 3 only for legacy plans; corrupt records must fail closed.
+plan_record_lines() {
+    local helper
+    helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/plan_records.py"
+    python3 -B "$helper" "$1" "$2" "${STATE_DIR:-}"
 }
 
 # plan_scope_files <plan> — repo-relative paths from the change-impact table,
@@ -54,6 +44,10 @@ PY
 # the same cell is ignored rather than treated as a file.
 plan_scope_files() {
     local plan="$1" json
+
+    local records_status=0
+    plan_record_lines scope "$plan" || records_status=$?
+    [[ "$records_status" == 3 ]] || return "$records_status"
 
     [[ -s "$plan" ]] || return 0
 
@@ -336,6 +330,10 @@ plan_table_steps_as_list() {
 plan_steps() {
     local plan="$1"
 
+    local records_status=0
+    plan_record_lines steps "$plan" || records_status=$?
+    [[ "$records_status" == 3 ]] || return "$records_status"
+
     [[ -s "$plan" ]] || return 0
 
     plan_text "$plan" | plan_table_steps_as_list | awk '
@@ -375,6 +373,10 @@ plan_steps() {
 # writing exactly what it was told to.
 plan_step_owns() {
     local plan="$1"
+
+    local records_status=0
+    plan_record_lines owns "$plan" || records_status=$?
+    [[ "$records_status" == 3 ]] || return "$records_status"
 
     [[ -s "$plan" ]] || return 0
 
@@ -476,6 +478,10 @@ plan_step_owns() {
 # position is already known by the time a later step's "Depends on" is read.
 plan_step_depends() {
     local plan="$1"
+
+    local records_status=0
+    plan_record_lines depends "$plan" || records_status=$?
+    [[ "$records_status" == 3 ]] || return "$records_status"
 
     [[ -s "$plan" ]] || return 0
 

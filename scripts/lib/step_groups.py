@@ -15,6 +15,7 @@ consecutive runs that share no declared resource, dependencies respected, and
 any doubt collapsing to one unit per group.
 """
 import fnmatch
+from functools import lru_cache
 import json
 import os
 import subprocess
@@ -71,9 +72,15 @@ def _glob_matches(token, path):
     `scripts/tests/*.sh` reach into subdirectories no plan writer intended."""
     token_parts = token.split('/')
     path_parts = path.split('/')
-    if len(token_parts) != len(path_parts):
-        return False
-    return all(fnmatch.fnmatchcase(p, t) for t, p in zip(token_parts, path_parts))
+    @lru_cache(None)
+    def match(i, j):
+        if i == len(token_parts):
+            return j == len(path_parts)
+        if token_parts[i] == '**':
+            return match(i + 1, j) or (j < len(path_parts) and match(i, j + 1))
+        return (j < len(path_parts) and fnmatch.fnmatchcase(path_parts[j], token_parts[i])
+                and match(i + 1, j + 1))
+    return match(0, 0)
 
 
 def covers(owned, path):
@@ -153,11 +160,17 @@ def main():
     lib = Path(__file__).resolve().parent
 
     def sh(fn):
-        return subprocess.run(['bash', '-c', '. "%s/plan-scope.sh"; %s "%s"' % (lib, fn, plan)],
-                              capture_output=True, text=True).stdout.splitlines()
+        return subprocess.run(['bash', '-c', '. "$1/plan-scope.sh"; "$2" "$3"', 'step-groups', str(lib), fn, str(plan)],
+                              capture_output=True, text=True, check=True).stdout.splitlines()
 
-    steps = [s for s in sh('plan_steps') if s.strip()]
-    owned, deps = owns(sh('plan_step_owns')), depends(sh('plan_step_depends'))
+    sys.path.insert(0, str(lib))
+    from plan_records import load, step_data
+    model = load(plan)
+    if model is not None:
+        steps, owned, deps = step_data(model)
+    else:
+        steps = [s for s in sh('plan_steps') if s.strip()]
+        owned, deps = owns(sh('plan_step_owns')), depends(sh('plan_step_depends'))
     total = len(steps)
     ignore_deps = os.environ.get('WORKFLOW_IMPLEMENT_IGNORE_DEPENDS', '1') == '1'
     groups = group(total, owned, deps, ignore_deps) if total else []

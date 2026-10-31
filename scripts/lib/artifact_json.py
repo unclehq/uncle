@@ -254,6 +254,11 @@ def path(project, name):
     return Path(project) / '.uncle/workflow/documents' / (Path(name).stem + '.json')
 
 def write(project, name, payload):
+    if payload.get('kind') in ('plan', 'change-plan'):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from plan_model import publish_records
+        payload = publish_records(payload, project)
     target = path(project, name); target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     return target

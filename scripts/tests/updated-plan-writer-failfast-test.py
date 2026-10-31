@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -228,6 +229,29 @@ class BoundedWriter(unittest.TestCase):
                     self.assertEqual(delivery.read_text(), 'previous packet')
                     self.assertIn(request.call_count, (1, 2))
                     self.assert_no_repair()
+
+    def test_resolver_budget_scales_with_group_and_uses_existing_config(self):
+        (self.root / 'conflicts.json').write_text(json.dumps([
+            {'id': 'G1', 'edits': [{'writer': '1'}, {'writer': '2'}]},
+            {'id': 'G2', 'edits': [{'writer': str(i)} for i in range(12)]}]))
+        def budget(group):
+            result = subprocess.run([sys.executable, '-B', ops.__file__, 'resolver-budget', str(self.root), group],
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return tuple(map(int, result.stdout.split()))
+        small, large = budget('G1'), budget('G2')
+        self.assertEqual((small[0], large[0]), (3, 3))
+        self.assertGreaterEqual(small[1], 4096)
+        self.assertGreater(large[1], small[1])
+        (self.root / 'config').write_text('updated-plan.writer-turns 2\nupdated-plan.tokens-per-op 2048\n'
+                                        'updated-change-plan.writer-turns 1\n')
+        configured = budget('G2')
+        self.assertEqual(configured[0], 2)
+        self.assertGreater(configured[1], large[1])
+        with patch.dict(os.environ, UNCLE_PLAN_KIND='change-plan'):
+            self.assertEqual(budget('G1')[0], 1)
+            with patch.dict(os.environ, WORKFLOW_UPDATED_PLAN_WRITER_TURNS='4'):
+                self.assertEqual(budget('G1')[0], 4)
 
 
 if __name__ == '__main__':

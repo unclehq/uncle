@@ -31,7 +31,7 @@ expect_in_file .uncle/workflow/plan-recovery.json '"design_count": 1'
 
 new_case denial-revised-from-plan
 set_state PLAN
-run_driver_stdin "$(gate_input y y y y y n)" FAKE_ASSESS_NO_APPROVAL=1 FAKE_CAP_STATUS=UNSUPPORTED FAKE_PLAN_DENIAL=1 FAKE_IMPL='echo alternative > app/main.sh'
+run_driver_stdin "$(gate_input y y y y y n)" FAKE_ASSESS_NO_APPROVAL=1 FAKE_CAP_STATUS=UNSUPPORTED FAKE_PLAN_DENIAL=1 FAKE_IMPL="printf '#!/bin/sh\necho alternative\n' > app/main.sh"
 expect_status 0
 expect_state COMPLETE
 expect_in_file app/main.sh alternative
@@ -45,7 +45,7 @@ sync_canonical PROJECT_PLAN
 printf '\nR-1: DESIGN blanket denial, required property mediated access.\n' >> "$REPO/.uncle/docs/UPDATED_PROJECT_PLAN.md"
 hash_canonical UPDATED_PROJECT_PLAN > "$REPO/.uncle/workflow/approvals/UPDATED_PROJECT_PLAN.sha256"
 set_state WAIT_UPDATED_PLAN_APPROVAL
-run_stagegate_stdin "$(gate_input y y y y n)" FAKE_ASSESS_NO_APPROVAL=1 FAKE_CAP_STATUS=UNSUPPORTED FAKE_IMPL='echo alternative > app/main.sh'
+run_stagegate_stdin "$(gate_input y y y y n)" FAKE_ASSESS_NO_APPROVAL=1 FAKE_CAP_STATUS=UNSUPPORTED FAKE_IMPL="printf '#!/bin/sh\necho alternative\n' > app/main.sh"
 expect_status 0
 expect_in_file app/main.sh alternative
 expect_in_file .uncle/workflow/plan-recovery.json '"design_count": 1'

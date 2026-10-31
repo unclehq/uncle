@@ -11,6 +11,8 @@ set -euo pipefail
 MODEL_EXECUTE=fake EFFORT_EXECUTE=low BUDGET_EXECUTE=1
 STATE_DIR=.uncle/workflow
 LOG_DIR=$STATE_DIR/logs
+. "$ROOT/scripts/lib/checklist-stage.sh"
+. "$ROOT/scripts/lib/acceptance-gate.sh"
 run_green_check() { echo green >> calls; }
 # The checks now run beside the stage; the contract is that they are still
 # started exactly once and their result is still collected exactly once.

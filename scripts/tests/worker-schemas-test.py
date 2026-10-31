@@ -322,8 +322,9 @@ class SynthesisSchema(unittest.TestCase):
 
     def test_the_single_call_updated_plan_is_schema_forced(self):
         schema = self.build('plan', 'protected')
-        self.assertEqual(set(schema['required']), {'schema', 'kind', 'dispositions', 'patch', 'verification_commands',
-                                                   'protected_verification_paths'})
+        self.assertEqual(set(schema['required']), {'schema', 'kind', 'dispositions', 'patch'})
+        self.assertNotIn('verification_commands', schema['properties'])
+        self.assertNotIn('protected_verification_paths', schema['properties'])
         self.assertNotIn('narrative', schema['properties'])        # a patch, never the whole plan again
         self.assertNotIn('"pattern"', json.dumps(schema))
 

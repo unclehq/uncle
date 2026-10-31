@@ -195,6 +195,7 @@ new_case() {
     printf 'review the plan\n'   > "$REPO/prompts/change/adversarial-review.md"
     printf '# Adversarial review\n\nNo unresolved findings in this fixture.\n' > "$REPO/.uncle/docs/ADVERSARIAL_REVIEW.md"
     printf 'write a checklist\n' > "$REPO/prompts/change/manual-checklist.md"
+    printf 'review tests\n' > "$REPO/prompts/change/test-review.md"
     printf 'audit it\n'          > "$REPO/prompts/change/final-audit.md"
 
     # Read-only specialist templates the review/checklist panels fan out to.
@@ -438,6 +439,21 @@ PYREVISE
         fi
         ;;
     *STUB:plan*)
+        # Keep the PLAN-stage baseline assertion independent of model latency:
+        # the real background capture must finish before this stub returns.
+        if [[ "${FAKE_WAIT_BASELINE:-0}" == 1 ]]; then
+            python3 - <<'WAIT'
+import time
+from pathlib import Path
+result = Path('.uncle/workflow/green-check.baseline.tsv')
+deadline = time.monotonic() + 30
+while not (result.exists() and result.stat().st_size):
+    if time.monotonic() >= deadline:
+        raise SystemExit('baseline did not finish while the planning agent was running')
+    time.sleep(0.05)
+WAIT
+            [[ "$?" == 0 ]] || exit 1
+        fi
         # The plain (non-combined) change-plan delivery: a single canonical
         # JSON object at the path named inside the prompt, same contract
         # style as the combined bundle and every other canonical delivery.
@@ -531,6 +547,11 @@ if [[ "$out" == *.uncle/docs/FINAL_AUDIT.md && "${FAKE_AUDIT_FORMAT:-0}" == MISS
 fi
 case "$out" in
     *.uncle/docs/ADVERSARIAL_REVIEW.md) printf '## Overall assessment\nNo findings.\n' >> "$out" ;;
+    *.uncle/docs/TEST_REVIEW.md)
+        printf '## Acceptance gate\n\n| ID | Required | Status | Evidence |\n|---|---|---|---|\n' >> "$out"
+        for id in COVERAGE INTEGRITY ASSERTIONS ORACLE NEGATIVE RESULTS; do
+            printf '| %s | YES | PASS | stub evidence |\n' "$id" >> "$out"
+        done ;;
     *.uncle/docs/FINAL_AUDIT.md) printf '## Findings\n\n| ID | Evidence | Required correction | Blocks |\n|---|---|---|---|\n\nREADY\n' >> "$out" ;;
     # reviewer_output.py's MANUAL_CHECKLIST.md check requires the canonical
     # JSON contract with no legacy-Markdown fallback (unlike ADVERSARIAL_REVIEW.md
@@ -783,11 +804,12 @@ run_stagegate_stdin() {
     shift
 
     cp "$ROOT/scripts/stagegate.sh" "$REPO/scripts/stagegate.sh"
+    # This suite exercises repair gates; the product defaults to repair off.
     env PATH="$CASE/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 \
         WORKFLOW_AGENT_CMD="$CASE/bin/fake-agent" \
         WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" \
         WORKFLOW_CLAUDE_CMD="$CASE/bin/fake-agent" \
-        WORKFLOW_SPECULATE=0 FAKE_WORKFLOW=stagegate \
+        WORKFLOW_SPECULATE=0 FAKE_WORKFLOW=stagegate WORKFLOW_REPAIR=1 \
         UNCLE_SUPERVISION_HOST=gates-test \
         "$@" \
         bash -c 'cd "$1"; python3 -B scripts/tests/plan-executability-test.py --fixture "$PWD"; exec bash scripts/stagegate.sh' _ "$REPO" \
@@ -1202,7 +1224,7 @@ expect_in_file ".uncle/workflow/IMPLEMENTATION_REVIEW.md" "unverified account"
 gate_group_3() {
 new_case baseline-is-captured-at-plan
 set_state PLAN
-run_driver
+run_driver FAKE_WAIT_BASELINE=1
 expect_status 0
 expect_out "Recording the green-check baseline in the background while planning runs."
 expect_file ".uncle/workflow/green-check.baseline.tsv"

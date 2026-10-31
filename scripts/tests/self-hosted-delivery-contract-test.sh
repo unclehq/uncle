@@ -46,6 +46,7 @@ run_block() { # run_block <script> <anchor> <runner> <log_name>
         printf 'set -euo pipefail\n'
         printf 'log_name=%q\n' "$log_name"
         printf 'agent_delivery=%q\n' "$work/agent-delivery.json"
+        printf 'anchored_repair=\n'
         printf 'artifact_error=%q\n' "previous rejection reason"
         printf 'UNCLE_RESOLVED_RUNNER=%q\n' "$runner"
         printf 'schema_args=()\n'

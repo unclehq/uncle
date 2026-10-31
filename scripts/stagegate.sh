@@ -2792,28 +2792,47 @@ run_updated_plan_edit_writers() {
         local bad_groups
         if ! bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory")"; then
             echo "Updated-plan resolver answer(s) could not be applied; asking again: $(echo $bad_groups)"
-            pids=(); names=()
-            for group_id in $bad_groups; do
-                local retry_schema=""
-                [[ "$delivery" != hosted ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
-                workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
-                ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
-                  if [[ "$resolver_granularity" == small ]]; then
-                      local resolver_turns answer_tokens
-                      read -r resolver_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" resolver-budget "$directory" "$group_id")
-                      [[ -n "$resolver_turns" && -n "$answer_tokens" ]] || exit 1
-                      (( resolver_turns > 0 )) || resolver_turns=""
-                      export UNCLE_WORKER_MAX_TURNS="$resolver_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
-                  fi
-                  UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-                    run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-plan-worker-resolve-$group_id-retry" ) \
-                    > "$LOG_DIR/updated-plan-worker-resolve-$group_id-retry.log" 2>&1 &
-                pids+=("$!"); names+=("$group_id")
+            # Keep successful groups; only a still-invalid small resolver gets the other delivery path.
+            local resolver_attempt
+            for resolver_attempt in retry alternate; do
+                resolver_failed=0
+                pids=(); names=()
+                for group_id in $bad_groups; do
+                    local retry_schema=""
+                    [[ "$delivery" != hosted ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
+                    workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
+                    ( . "$ROOT/scripts/lib/model-jobs.sh"; workflow_model_enter updated-plan AGENT || exit 1; [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
+                      if [[ "$resolver_granularity" == small ]]; then
+                          local resolver_turns answer_tokens
+                          read -r resolver_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" resolver-budget "$directory" "$group_id")
+                          [[ -n "$resolver_turns" && -n "$answer_tokens" ]] || exit 1
+                          (( resolver_turns > 0 )) || resolver_turns=""
+                          export UNCLE_WORKER_MAX_TURNS="$resolver_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
+                          if [[ "$resolver_attempt" == alternate ]]; then
+                              local alternate_mode
+                              alternate_mode="$(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" resolver-fallback-mode)" || exit 1
+                              export WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST="$alternate_mode"
+                          fi
+                      fi
+                      UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+                        run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-plan-worker-resolve-$group_id-retry" ) \
+                        > "$LOG_DIR/updated-plan-worker-resolve-$group_id-retry.log" 2>&1 &
+                    pids+=("$!"); names+=("$group_id")
+                done
+                for pid in "${!pids[@]}"; do
+                    wait "${pids[$pid]}" || {
+                        echo "Updated-plan resolver retry ${names[$pid]} did not complete." >&2
+                        resolver_failed=1
+                        if [[ "$resolver_granularity" == small ]]; then rm -f "$directory/resolutions-${names[$pid]}.json"; fi
+                    }
+                done
+                if [[ "$resolver_granularity" != small ]]; then
+                    [[ "$resolver_failed" == 0 ]] || return 1
+                    break
+                fi
+                if bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory")"; then break; fi
+                [[ "$resolver_attempt" != alternate ]] || return 1
             done
-            for pid in "${!pids[@]}"; do
-                wait "${pids[$pid]}" || { echo "Updated-plan resolver retry ${names[$pid]} did not complete." >&2; resolver_failed=1; }
-            done
-            [[ "$resolver_failed" == 0 ]] || return 1
         fi
         [[ -z "$reconcile_pid" ]] || wait "$reconcile_pid" 2>/dev/null || true
         UNCLE_LATE_OPS="$late_ops" python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || return 1

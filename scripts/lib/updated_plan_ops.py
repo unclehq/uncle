@@ -802,6 +802,9 @@ def main(argv):
             print('%s %s' % writer_budget([i for i in rest[0].split(',') if i], *rest[1:]))
         elif command == 'resolver-budget' and len(rest) == 2:
             print('%s %s' % resolver_budget(*rest))
+        elif command == 'resolver-fallback-mode' and not rest:
+            from self_hosted_http import option as http_option
+            print('on' if http_option('writer-schema-first', 'on') in ('off', '0', 'false') else 'off')
         elif command == 'capture' and len(rest) == 1:
             capture_packet(rest[0])
         elif command == 'prompt' and len(rest) in (3, 4):

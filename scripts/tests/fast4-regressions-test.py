@@ -250,6 +250,16 @@ class ProgressDeadline(unittest.TestCase):
             self.run_stream(events)
         self.assertLess(time.monotonic() - started, 3)
 
+    def test_nested_runner_deadlines_cannot_extend_aggregate_allowance(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+                'UNCLE_CONFIG': str(Path(temp) / 'config'),
+                'WORKFLOW_SELF_HOSTED_WRITER_NO_PROGRESS_SECONDS': '5'}, clear=True):
+            with self.assertRaisesRegex(Exception, 'ceiling|wall-clock budget'):
+                with writer_deadline.deadline(.5):
+                    time.sleep(.3)
+                    with writer_deadline.deadline(2):
+                        time.sleep(.4)
+
     def test_stream_progress_does_not_reset_absolute_ceiling(self):
         def events(body):
             for index in range(80):

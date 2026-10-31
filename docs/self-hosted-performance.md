@@ -201,3 +201,25 @@ Hermetic checks: `python3 -I scripts/tests/unit-scheduler-test.py` and
 while the oldest unit is still blocked, a capacity of two is never exceeded,
 only a failed unit retries, results retain input order, and cancellation removes
 active workers, queued workers, and a descendant that ignores SIGTERM.
+
+Single-pass project-plan investigation on self-hosted small-granularity runners
+prefetches the canonical requirements and existing `.gitignore` (or its absence).
+Prototype files and the superseded requirements investigation are excluded, as
+the planner prompt requires. The existing read-size limits and general prefetch
+switch still apply. `project-plan.project-plan-prefetch off` or
+`WORKFLOW_SELF_HOSTED_PROJECT_PLAN_PREFETCH=off` disables this addition.
+The Markdown investigation and `.gitignore` remain the same two deliverables;
+there is no final-answer JSON schema on this path. Sectioned planning selection,
+native Claude/Codex prompts, and approval controls are unchanged.
+
+Plan publication on self-hosted small-granularity runners also repairs step
+numbers by position when every dependency has exactly one possible target and
+the resulting plan passes the existing validator. Step IDs, prose, spacing,
+commands and protected paths are preserved. Ambiguous dependencies and unrelated
+errors follow the existing correction path. `self-hosted.plan-renumber off` or
+`WORKFLOW_SELF_HOSTED_PLAN_RENUMBER=off` disables repair. Both options use the
+scheduler's exact-stage, parent-stage and provider precedence, with environment
+values before config values. They default on only within the small profile.
+Checks: `python3 -I scripts/tests/project-plan-speed-test.py`,
+`python3 -I scripts/tests/plan-numbering-test.py`, and
+`bash scripts/run-shell-tests.sh`.

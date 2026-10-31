@@ -919,7 +919,7 @@ def authored_section(heading, flat_blocks, section_id):
     return {'id': section_id, 'heading': heading, 'blocks': blocks}
 
 
-def model_from_flat(flat_sections, title=''):
+def model_from_flat(flat_sections, title='', root=None, stage=None):
     """A model from sections written as flat blocks, in any order and under any headings (a change plan)."""
     sections = []
     for n, row in enumerate(flat_sections, 1):
@@ -933,6 +933,8 @@ def model_from_flat(flat_sections, title=''):
     if not sections:
         raise PlanError('the plan has no sections')
     model = dedupe({'title': title, 'intro': '', 'sections': sections})
+    if renumber_enabled({}, root or Path.cwd(), stage):
+        model = renumber_steps(model, root or Path.cwd())
     errors, _ = validate(model)
     if errors:
         raise PlanError('; '.join(errors))
@@ -953,7 +955,103 @@ def records_enabled(root=None):
     return value.strip().lower() in ('1', 'true')
 
 
-def publish_records(plan, root='.', model=None):
+def renumber_steps(model, root=None):
+    """Repair only numbering, leaving ambiguous references for the normal correction round."""
+    steps = steps_of(model)
+    if not steps or all(step.get('number') == n for n, step in enumerate(steps, 1)):
+        return model
+    if any(type(step.get('number')) is not int or step['number'] < 0 for step in steps):
+        return model
+    revised = copy.deepcopy(model)
+    for position, step in enumerate(steps_of(revised), 1):
+        deps = step.get('depends_on')
+        if not isinstance(deps, list) or any(type(dep) is not int for dep in deps):
+            return model
+        mapped = []
+        for dep in deps:
+            targets = [n for n, old in enumerate(steps, 1) if old['number'] == dep and n != position]
+            if len(targets) != 1:
+                return model
+            mapped.append(targets[0])
+        step['number'], step['depends_on'] = position, mapped
+    return model if validate(revised, root=root)[0] else revised
+
+
+def renumber_narrative(narrative, before, after):
+    """Change only step markers and Depends on numbers; unfamiliar layouts fall back."""
+    fields = ('number', 'title', 'text', 'owns', 'depends_on')
+    original_steps = steps_of(before)
+    imported_steps = steps_of(import_markdown(narrative))
+    if [[s.get(f) for f in fields] for s in original_steps] != [[s.get(f) for f in fields] for s in imported_steps]:
+        return None
+    headings = list(re.finditer(r'^## .+$', narrative, re.M))
+    if len(headings) != len(before['sections']):
+        return None
+    edits = []
+    for index, section in enumerate(before['sections']):
+        old = [s for b in section['blocks'] if b['kind'] == 'steps' for s in b['items']]
+        if not old:
+            continue
+        new = [s for b in after['sections'][index]['blocks'] if b['kind'] == 'steps' for s in b['items']]
+        start = headings[index].end()
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(narrative)
+        body = narrative[start:end]
+        pattern = r'^[ \t]*(\d+)\.[ \t]+'
+        if re.search(r'Implementation (?:order|sequence|steps)', section['heading'], re.I) and re.search(
+                r'^#{3,6}\s+(?:Step\s+)?\d+[:.)-]\s*', body, re.M | re.I):
+            pattern = r'^#{3,6}\s+(?:Step\s+)?(\d+)[:.)-]\s*'
+        markers = list(re.finditer(pattern, body, re.M | re.I))
+        if len(markers) != len(old):
+            return None
+        for n, (marker, previous, revised) in enumerate(zip(markers, old, new)):
+            if int(marker[1]) != previous['number']:
+                return None
+            edits.append((start + marker.start(1), start + marker.end(1), str(revised['number'])))
+            stop = markers[n + 1].start() if n + 1 < len(markers) else len(body)
+            chunk = body[marker.end():stop]
+            refs = list(re.finditer(r'(?im)\bDepends on:?\**[ \t]*([\d ,]+)', chunk))
+            if len(refs) > 1 or (bool(refs) != bool(previous['depends_on'])):
+                return None
+            if refs:
+                ref = refs[0]
+                digits = list(re.finditer(r'\d+', ref[1]))
+                if [int(d[0]) for d in digits] != previous['depends_on']:
+                    return None
+                for digit, value in zip(digits, revised['depends_on']):
+                    offset = start + marker.end() + ref.start(1)
+                    edits.append((offset + digit.start(), offset + digit.end(), str(value)))
+    for start, end, value in sorted(edits, reverse=True):
+        narrative = narrative[:start] + value + narrative[end:]
+    return narrative
+
+
+def plan_stage(plan, name=''):
+    if Path(name).stem == 'UPDATED_PROJECT_PLAN':
+        return 'updated-plan'
+    if Path(name).stem == 'PROJECT_PLAN':
+        return 'project-plan'
+    if plan.get('kind') == 'change-plan':
+        return 'updated-change-plan' if 'dispositions' in plan else 'change-plan'
+    return 'updated-plan' if 'dispositions' in plan else 'project-plan'
+
+
+def renumber_enabled(plan, root, stage=None):
+    from self_hosted import config_stage
+    from self_hosted_http import _config_values
+    from unit_scheduler import granularity, option
+    config = _config_values(os.environ.get('UNCLE_CONFIG') or str(Path(root) / '.uncle/config'))
+    stage = stage or os.environ.get('UNCLE_STATUS_STAGE') or plan_stage(plan)
+    parent = config_stage(stage, config)
+    runner = config.get(parent + '.runner', config.get('runner', 'claude'))
+    if runner not in ('self-hosted', 'opencode', 'aider') or granularity('self-hosted', stage, config) != 'small':
+        return False
+    value = option('self-hosted', stage, 'plan-renumber', 'on', config)
+    if value not in ('on', 'off', '1', '0', 'true', 'false'):
+        raise PlanError('self-hosted.plan-renumber must be on or off')
+    return value in ('on', '1', 'true')
+
+
+def publish_records(plan, root='.', model=None, stage=None):
     """Validate and retain records on a plan write; leave legacy untyped plans alone.
 
     Also usable by the edit-op merger after it has chosen its protected paths:
@@ -964,6 +1062,15 @@ def publish_records(plan, root='.', model=None):
     model = with_protected(model_of(plan) if model is None else model, plan)
     if not steps_of(model) and not plan.get('sections'):
         return plan
+    if renumber_enabled(plan, root, stage):
+        revised = renumber_steps(model, root)
+        if revised is not model:
+            if not plan.get('narrative'):
+                model = revised
+            else:
+                narrative = renumber_narrative(plan['narrative'], model, revised)
+                if narrative is not None:
+                    plan, model = dict(plan, narrative=narrative), revised
     errors, _ = validate(model, root=root)
     if errors:
         raise PlanError(errors[0])

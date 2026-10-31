@@ -434,8 +434,9 @@ def read_answers(directory, groups):
 def merge(plan_path, slices_path, directory, output, resolutions=None):
     plan = base.read_json(plan_path)
     model = plan_model_of(plan, plan_path)
+    numbering = pm.renumber_enabled(plan, Path.cwd(), 'updated-change-plan' if CHANGE else 'updated-plan')
     errors, _ = pm.validate(model)
-    if errors:
+    if errors and not (numbering and pm.renumber_steps(model, Path.cwd()) is not model):
         raise Conflict('the base plan does not validate: %s' % '; '.join(errors))
     owners = []
     for line in Path(slices_path).read_text(encoding='utf-8').splitlines():
@@ -563,6 +564,8 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
                 base.leave_out(dispositions, owners, writers, 1)
     else:
         new_model = pm.apply_ops(model, [op for _, op in final_ops])
+    if numbering:
+        new_model = pm.renumber_steps(new_model, Path.cwd())
     errors, _ = pm.validate(new_model)
     if errors:
         raise Conflict('the revised plan does not validate: %s' % '; '.join(errors))

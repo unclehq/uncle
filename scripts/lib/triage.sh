@@ -70,7 +70,7 @@ triage_stage_reports() {
         requirements) printf '%s\n' .uncle/docs/REQUIREMENTS_INTERPRETATION.md ;;
         baseline) printf '%s\n' .uncle/docs/BASELINE_REPORT.md ;;
         project-plan) printf '%s\n' .uncle/docs/PROJECT_PLAN.md ;;
-        change-plan|change-spec) printf '%s\n' .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md ;;
+        change-plan|change-spec|change-plan-stage-duties) printf '%s\n' .uncle/docs/CHANGE_SPEC.md .uncle/docs/CHANGE_PLAN.md ;;
         adversarial-review|plan-executability) printf '%s\n' .uncle/docs/ADVERSARIAL_REVIEW.md ;;
         updated-plan|plan-recovery) printf '%s\n' .uncle/docs/UPDATED_PROJECT_PLAN.md ;;
         updated-change-plan) printf '%s\n' .uncle/docs/CHANGE_PLAN.md ;;

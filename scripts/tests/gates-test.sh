@@ -1598,6 +1598,14 @@ fi
 # of their size.
 gate_group_17() {
 
+# CHANGE_PLAN_DUTIES is its own state between planning and the analysis approval gate; a consistent plan costs no model call.
+new_case change-plan-duties-runs-between-analysis-and-approval
+set_state CHANGE_PLAN_DUTIES
+run_driver
+expect_out 'Change plan duties:'
+expect_file .uncle/workflow/change-plan-duties.json
+expect_state WAIT_ANALYSIS_APPROVAL
+
 new_case missing-approval-reopens-gate
 set_state UPDATED_PLAN
 rm -f "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"

@@ -114,6 +114,7 @@ uncle_config_stage() {
         manual-checklist-investigate) printf 'manual-checklist' ;;
         final-audit-investigate) printf 'final-audit' ;;
         project-plan-investigate|project-plan-section-*|project-plan-stage-duties) printf 'project-plan' ;;
+        change-plan-stage-duties) printf 'change-plan' ;;
         requirements-investigate) printf 'requirements' ;;
         preflight-investigate) printf 'preflight' ;;
         implementation-investigate) printf 'implementation' ;;

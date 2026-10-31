@@ -304,6 +304,26 @@ run_claude() {
                         self.assertTrue(any('evidence-%d' % n in text for text in contents), (paths, contents))
                     self.assertGreaterEqual(len(paths), 3)
 
+    def test_schema_rejection_reason_is_retained_after_successful_private_retry(self):
+        original_run = subprocess.run
+        for change in (False, True):
+            with self.subTest(change=change):
+                captured = {}
+                def run(*args, **kwargs):
+                    result = original_run(*args, **kwargs)
+                    if args and args[0] == ['bash', 'run.sh']:
+                        logs = Path(kwargs['cwd']) / '.uncle/workflow/logs'
+                        captured.update({p.name: p.read_text() for p in logs.glob('*.log')})
+                    return result
+                harness = order.AttemptOrder()
+                with patch.object(order.subprocess, 'run', side_effect=run):
+                    rows = harness.run_driver(mode='writer-invalid', change=change)
+                self.assertEqual(sum('edits-1' in row['stage'] for row in rows), 2)
+                for name in ('UPDATED_PLAN.log', 'UPDATED_PLAN.speculative.log'):
+                    self.assertIn(name, captured)
+                    self.assertIn('B-999', captured[name])
+                    self.assertRegex(captured[name], r'(?i)writer.*(?:reject|schema|invalid|unknown)')
+
     def test_failed_writer_reason_reaches_stage_and_speculative_logs(self):
         for change in (False, True):
             with self.subTest(change=change):

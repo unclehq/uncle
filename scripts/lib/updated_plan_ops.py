@@ -489,10 +489,19 @@ def op_group(writer_ops, model):
     for key in scope:
         node = where[key][0]
         context[key] = {field: value for field, value in node.items() if field not in ('blocks', 'rows', 'items')}
+    edits = []
+    for writer, op in writer_ops:
+        shown = copy.deepcopy(op.get('flat', op))
+        shown.pop('_step_key', None)
+        for fields in (shown, shown.get('new', {})):
+            if 'depends_on' in fields and isinstance(fields['depends_on'], list):
+                fields['depends_on'] = ['new:' + dep.rsplit(':', 1)[-1]
+                                        if isinstance(dep, str) and dep.startswith('new:') else dep
+                                        for dep in fields['depends_on']]
+        edits.append({'writer': writer, 'op': shown, **({'problem': op['why']} if op.get('op') == 'invalid' else {})})
     return {'kind': 'ops', 'heading': ', '.join(touched[:4]) or '(the plan)',
             'context': json.dumps(context, ensure_ascii=False, indent=1),
-            'edits': [{'writer': w, 'op': op.get('flat', op), **({'problem': op['why']} if op.get('op') == 'invalid' else {})}
-                      for w, op in writer_ops],
+            'edits': edits,
             'refs': [op for _, op in writer_ops]}
 
 

@@ -160,6 +160,7 @@ uncle_ensure_project_git || exit 1
 . "$ROOT/scripts/lib/plan-scope.sh"
 . "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/module-interfaces-stage.sh"
+. "$ROOT/scripts/lib/change-class-stage.sh"
 . "$ROOT/scripts/lib/state.sh"
 
 # Absolute, not "$PROJECT_ROOT"-relative: this value is embedded verbatim
@@ -2327,7 +2328,8 @@ run_adversarial_review_lens() {
 # Read-only specialist packets improve review coverage. Only the complete,
 # validated panel can produce the canonical review.
 run_adversarial_review_panel() {
-    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid failed=0
+    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid failed=0 lenses
+    lenses="$(change_class_lenses 'requirements regression security testability')"
     local -a pids=()
     [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
     ensure_project_plan_json || return 1
@@ -2341,7 +2343,7 @@ run_adversarial_review_panel() {
         plan_input="$directory/plan-view.json"
         plan_input_note=' That file is the plan as JSON: sections of blocks, with rows, list items and steps that each have an `id`. Cite those ids.'
     fi
-    for lens in requirements regression security testability; do
+    for lens in $lenses; do
         prompt="$directory/prompts/$lens.md"
         output="$directory/$lens.json"
         cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
@@ -2357,7 +2359,7 @@ run_adversarial_review_panel() {
         fi
     done
     [[ "$failed" == 0 ]] || return 1
-    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
+    python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected $lenses || return 1
     # Worker packets are already validated, complete, and deduplicated by
     # stable finding ID.  Rendering them directly makes the collated JSON the
     # sole authoritative review and avoids asking a weak parent model to
@@ -2864,7 +2866,8 @@ PY
     # response (rather than the sum), without the 20-way request burst of a
     # one-finding fan-out.
     threshold="${WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD:-5}"
-    slice="${WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE:-2}"
+    # Findings per writer: an explicit setting wins, then the build class (small builds batch more), then 2.
+    slice="${WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE:-$(python3 -B "$ROOT/scripts/lib/change_class.py" get . edit_slice 2)}"
     if [[ "$count" =~ ^[0-9]+$ && "$threshold" =~ ^[0-9]+$ && "$slice" =~ ^[0-9]+$ ]] \
         && (( count >= threshold && slice > 0 && jobs != 1 )); then
         ensure_project_plan_json || return 1
@@ -4890,6 +4893,13 @@ while true; do
             # packet.  Hydrate it before opening the approval gate: the
             # speculative adversarial review consumes only this JSON file.
             ensure_project_plan_json || exit 1
+            set_state CLASSIFY
+            ;;
+
+        CLASSIFY)
+            # How much review this plan needs; its own timed stage, fail-open, and it runs before the speculative review
+            # that starts at WAIT_PLAN_APPROVAL so that review already uses the classified lens set.
+            classify_change_stage app .uncle/docs/PROJECT_PLAN.md || true
             set_state WAIT_PLAN_APPROVAL
             ;;
 

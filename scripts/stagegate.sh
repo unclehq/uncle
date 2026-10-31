@@ -2166,6 +2166,10 @@ run_codex_review() {
     local status=0
     local started retry_answer empty_retried="" schema_error=""
     while true; do
+        case "$log_name" in
+            updated-plan*|preflight*)
+                (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt "$LOG_DIR/${log_name}.log") || return 1 ;;
+        esac
         started="$SECONDS"
         local reviewer_candidates raced=0
         reviewer_candidates="$(self_hosted_candidate_count "$log_name")"
@@ -2378,6 +2382,7 @@ run_adversarial_review_panel() {
 }
 
 run_updated_plan_panel() {
+    (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_stage updated-plan) || return 1
     local directory="$STATE_DIR/updated-plan-panel" lens prompt output pid
     local -a pids=()
     [[ "${WORKFLOW_UPDATED_PLAN_PANEL:-1}" == 1 ]] || return 0
@@ -2466,7 +2471,7 @@ updated_plan_launch_writer() {
       trap 'writer_status=$?; if [[ "$writer_status" != 0 ]]; then workflow_writer_failure "updated-plan-worker-edits-$name" "$writer_status"; fi; workflow_model_leave; exit "$writer_status"' EXIT
       ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
         workflow_model_writer updated-plan run_claude "$directory/prompts/$name.md" "updated-plan-worker-edits-$name" ) || writer_status=$?
-      if [[ "$writer_status" != 0 ]] && stage_uses_self_hosted updated-plan AGENT; then exit "$writer_status"; fi
+      if [[ "$writer_status" == 124 || "$writer_status" == 137 ]] && stage_uses_self_hosted updated-plan AGENT; then exit "$writer_status"; fi
       if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then
           if [[ ! -s "$directory/$name.json" ]]; then
               python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-plan-worker-edits-$name.jsonl" "$directory/$name.json" 2>/dev/null || true
@@ -2489,7 +2494,7 @@ updated_plan_launch_writer() {
               writer_status=0
               ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                 UNCLE_UPDATED_PLAN_CHEAP_RETRY=1 workflow_model_writer updated-plan run_claude "$directory/prompts/$name.retry.md" "updated-plan-worker-edits-$name-retry" ) || writer_status=$?
-              if [[ "$writer_status" != 0 ]] && stage_uses_self_hosted updated-plan AGENT; then exit "$writer_status"; fi
+              if [[ "$writer_status" == 124 || "$writer_status" == 137 ]] && stage_uses_self_hosted updated-plan AGENT; then exit "$writer_status"; fi
               if [[ ! -s "$directory/$name.json" ]]; then
                   python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-plan-worker-edits-$name-retry.jsonl" "$directory/$name.json" 2>/dev/null || true
               fi
@@ -2793,11 +2798,26 @@ run_updated_plan_edit_writers() {
                     break
                 fi
                 if bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory")"; then break; fi
-                [[ "$resolver_attempt" != alternate ]] || { workflow_writer_exhausted updated-plan; return 1; }
+                if [[ "$resolver_attempt" == alternate ]]; then
+                    for group_id in $bad_groups; do
+                        workflow_writer_failure "updated-plan-worker-resolve-$group_id-retry" 5 "schema rejection" "$directory/prompts/resolve-$group_id.retry.md"
+                    done
+                    workflow_writer_exhausted updated-plan
+                    return 1
+                fi
             done
         fi
+        if [[ "$resolver_granularity" != small ]] && stage_uses_self_hosted updated-plan AGENT; then
+            if ! bad_groups="$(python3 -B "$helper" check "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory")"; then
+                for group_id in $bad_groups; do
+                    workflow_writer_failure "updated-plan-worker-resolve-$group_id-retry" 5 "schema rejection" "$directory/prompts/resolve-$group_id.retry.md"
+                done
+                workflow_writer_exhausted updated-plan
+                return 1
+            fi
+        fi
         [[ -z "$reconcile_pid" ]] || wait "$reconcile_pid" 2>/dev/null || true
-        UNCLE_LATE_OPS="$late_ops" python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || return 1
+        UNCLE_LATE_OPS="$late_ops" python3 -B "$helper" merge "$STATE_DIR/documents/PROJECT_PLAN.json" "$directory/slices.tsv" "$directory" "$directory/merged.json" "$directory" || { workflow_writer_exhausted updated-plan; return 1; }
     elif [[ "$merge_status" != 0 ]]; then
         return 1
     fi
@@ -2860,8 +2880,8 @@ run_updated_plan_decide() {
     run_updated_plan_edit_writers || status=$?
     # Stop any specialist still running (a failed decide falls back to the specialist round, which reuses these files).
     for pid in ${UPDATED_PLAN_ADVISOR_PIDS[@]+"${UPDATED_PLAN_ADVISOR_PIDS[@]}"}; do
-        pkill -P "$pid" 2>/dev/null || true
-        kill "$pid" 2>/dev/null || true
+        python3 -B "$ROOT/scripts/lib/writer_deadline.py" stop "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
     done
     UPDATED_PLAN_ADVISOR_PIDS=()
     return "$status"
@@ -4821,7 +4841,7 @@ spec_stage=""
 cancel_speculation() {
     if [[ -n "$spec_pid" ]] && kill -0 "$spec_pid" 2>/dev/null; then
         echo "Cancelling speculative $spec_stage..."
-        kill "$spec_pid" 2>/dev/null || true
+        python3 -B "$ROOT/scripts/lib/writer_deadline.py" stop "$spec_pid" 2>/dev/null || true
         wait "$spec_pid" 2>/dev/null || true
     fi
     spec_pid=""
@@ -5288,6 +5308,7 @@ while true; do
                 echo
                 echo "Probing prerequisites in the background; implementation starts now."
                 echo "A problem is reported through the supervisor, not by stopping here."
+                (. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt "$LOG_DIR/preflight.background.log") || exit 1
                 (
                     status=0
                     run_stage PREFLIGHT || status=$?

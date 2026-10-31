@@ -4533,9 +4533,6 @@ class UncleTUI:
         to the transcript and screen. Returns True: the outcome is handled and
         the unattended diagnosis resume must not run on top of it.
         """
-        if self._bounded_stage_stop():
-            self.triage_offer_resume = True
-            return True
         number = proposal[0] if proposal else 0
         unattended = getattr(self, 'workflow_unattended', False)
         problem = ('runner error' if failed else 'guard refused' if summary.get('refused')
@@ -4543,6 +4540,9 @@ class UncleTUI:
         if problem:
             self.triage_offer_resume = False
             self.triage_history.append(('system', 'Not resuming: %s.' % problem))
+            return True
+        if self._bounded_stage_stop():
+            self.triage_offer_resume = True
             return True
         reason = triage_hold_reason(proposal[1] if proposal else '')
         if reason:

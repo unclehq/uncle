@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Progress watchdog and evidence regressions without model calls."""
 import os
+import json
+import re
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/lib'))
@@ -50,6 +52,35 @@ workflow_model_writer updated-plan run_claude prompt writer
             self.assertNotIn('deadline: ceiling', result.stderr)
             self.assertFalse((root / 'leaked').exists())
 
+    def test_inner_deadline_is_not_hidden_by_runner_recovery(self):
+        with tempfile.TemporaryDirectory() as temp:
+            script = '''
+. "$ROOT/scripts/lib/model-jobs.sh"
+stage_uses_self_hosted() { return 0; }
+run_claude() {
+    python3 -c 'import sys,time;sys.path.insert(0,sys.argv[1]);from writer_deadline import deadline
+try:
+ with deadline(.2):time.sleep(1)
+except ValueError:pass' "$ROOT/scripts/lib"
+}
+workflow_model_writer updated-plan run_claude prompt updated-plan-worker-edits-1
+'''
+            result = subprocess.run(['bash', '-c', script], cwd=temp, env=dict(os.environ,
+                ROOT=str(ROOT), UNCLE_CONFIG=str(Path(temp) / 'config')), capture_output=True, text=True, timeout=4)
+            self.assertEqual(result.returncode, 124, result.stderr)
+            self.assertIn('deadline: ceiling', result.stderr)
+
+    def test_archived_packets_are_outside_live_resolution_globs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            packet = root / 'resolutions-G1.json'
+            packet.write_text('old')
+            subprocess.run(['bash', '-ec', '. "$ROOT/scripts/lib/model-jobs.sh"; workflow_archive_attempt resolutions-G1.json'],
+                cwd=root, env=dict(os.environ, ROOT=str(ROOT)), check=True)
+            packet.write_text('new')
+            self.assertEqual(list(root.glob('resolutions-*.json')), [packet])
+            self.assertEqual((root / 'attempts/resolutions-G1-r1.json').read_text(), 'old')
+
     def test_archive_keeps_packets_and_directory_inputs_across_rounds(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -67,24 +98,64 @@ printf third > edits/packet.json
             self.assertEqual((root / 'edits-r2/packet.json').read_text(), 'second')
             self.assertEqual((root / 'edits/packet.json').read_text(), 'third')
 
-    def test_stage_archive_retains_advisor_resolver_and_prior_rounds(self):
+    def test_cancelled_speculation_cannot_keep_writing_attempt_logs(self):
+        source = (ROOT / 'scripts/stagegate.sh').read_text()
+        cancel = re.search(r'^cancel_speculation\(\) \{\n.*?^}', source, re.M | re.S)[0]
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            names = ['updated-plan-worker-review.log', 'updated-plan-worker-resolve-G1.jsonl', 'UPDATED_PLAN.log']
-            for name in names:
-                (root / name).write_text('first')
-            script = '''
-. "$ROOT/scripts/lib/model-jobs.sh"
-workflow_archive_stage updated-plan
-printf second > "$LOG_DIR/updated-plan-worker-review.log"
-workflow_archive_stage updated-plan
+            script = cancel + '''
+run_stage() { (sleep .7; echo leaked > "$STATE_DIR/leaked") & wait; }
+run_stage &
+spec_pid=$!; spec_stage=UPDATED_PLAN
+sleep .1
+cancel_speculation
+sleep 1
 '''
-            subprocess.run(['bash', '-ec', script], cwd=root, env=dict(os.environ,
-                ROOT=str(ROOT), LOG_DIR=str(root)), check=True)
-            self.assertEqual((root / 'updated-plan-worker-review-r1.log').read_text(), 'first')
-            self.assertEqual((root / 'updated-plan-worker-review-r2.log').read_text(), 'second')
-            self.assertEqual((root / 'updated-plan-worker-resolve-G1-r1.jsonl').read_text(), 'first')
-            self.assertFalse(list(root.glob('*-r1-r*')))
+            subprocess.run(['bash', '-c', script], cwd=temp, env=dict(os.environ,
+                ROOT=str(ROOT), STATE_DIR=temp), capture_output=True, text=True, check=True, timeout=5)
+            self.assertFalse((Path(temp) / 'leaked').exists())
+
+    def test_stage_archive_retains_advisor_resolver_and_prior_rounds(self):
+        for stage in ('updated-plan', 'updated-change-plan'):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                names = ['updated-plan-worker-review.log', 'updated-plan-worker-resolve-G1.jsonl', 'UPDATED_PLAN.log']
+                for name in names:
+                    (root / name).write_text('first')
+                script = '''
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    workflow_archive_stage "$ARCHIVE_STAGE"
+    printf second > "$LOG_DIR/updated-plan-worker-review.log"
+    workflow_archive_stage "$ARCHIVE_STAGE"
+    '''
+                subprocess.run(['bash', '-ec', script], cwd=root, env=dict(os.environ,
+                    ROOT=str(ROOT), LOG_DIR=str(root), ARCHIVE_STAGE=stage), check=True)
+                self.assertEqual((root / 'updated-plan-worker-review-r1.log').read_text(), 'first')
+                self.assertEqual((root / 'updated-plan-worker-review-r2.log').read_text(), 'second')
+                self.assertEqual((root / 'updated-plan-worker-resolve-G1-r1.jsonl').read_text(), 'first')
+                self.assertFalse(list(root.glob('*-r1-r*')))
+
+    def test_triage_includes_last_delta_when_runner_exits_between_polls(self):
+        import triage_chat
+        with tempfile.TemporaryDirectory() as temp:
+            def launch(*args, **kwargs):
+                output = kwargs['stdout']
+                def say(text):
+                    output.write((json.dumps({'type': 'assistant', 'message': {
+                        'content': [{'type': 'text', 'text': text}]}}) + '\n').encode())
+                    output.flush()
+                say('part one')
+                child = Mock()
+                child.wait.side_effect = lambda **kw: (say('part two and done'), 0)[1]
+                return child
+            with patch.object(triage_chat.subprocess, 'Popen', side_effect=launch), \
+                    patch.object(triage_chat, 'kill_tree'):
+                request = triage_chat.TriageRequest(['stub'], 'prompt', {}, temp, str(Path(temp) / 'log.jsonl'))
+                request.thread.join(timeout=3)
+                self.assertFalse(request.thread.is_alive())
+                events = list(request.events.queue)
+            self.assertEqual([value for kind, value in events if kind == 'delta'],
+                             ['part one', 'part two and done'])
+            self.assertEqual(events[-1], ('reply', 'part two and done'))
 
     def test_writer_jobs_respects_smaller_provider_pool_and_hosted_defaults(self):
         with tempfile.TemporaryDirectory() as temp:

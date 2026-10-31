@@ -14,6 +14,7 @@ sys.path.insert(0, str(LIB))
 import adversarial_packets
 import adversarial_slices
 import plan_model as pm
+import self_hosted
 from self_hosted_http import conforms as local_conforms
 import worker_packets
 import worker_schemas as ws
@@ -242,6 +243,23 @@ class EditGrammarTests(unittest.TestCase):
                         with self.assertRaises(ValueError):
                             conforms(self.packet(command, {'op': 'set_fields', 'id': 'row-1',
                                                            'fields': {field: 'renamed'}}), schema)
+
+    def test_self_hosted_uses_the_per_call_schema_for_writers_and_resolvers(self):
+        for command, kind in (('edit-ops', ws.EDIT_OPS_KIND), ('resolve-ops', ws.RESOLUTION_OPS_KIND)):
+            path = self.root / (command + '.json')
+            for family in ('updated-plan', 'updated-change-plan'):
+                with self.subTest(command=command, family=family), patch.dict(os.environ, {
+                        'UNCLE_OUTPUT_SCHEMA_FILE': str(path),
+                        'UNCLE_STATUS_STAGE': family + '-worker-' + ('edits-1' if command == 'edit-ops' else 'resolve-G1')}):
+                    setup = self_hosted._http_setup('agent', {'model': 'stub'}, 'Return the packet.',
+                                                    self.root, False, kind)
+                    self.assertEqual(setup[2], self.schemas[command])
+
+    def test_missing_per_call_schema_does_not_silently_use_generic_grammar(self):
+        with patch.dict(os.environ, {'UNCLE_OUTPUT_SCHEMA_FILE': str(self.root / 'missing-schema.json')}):
+            with self.assertRaises((OSError, ValueError)):
+                self_hosted._http_setup('agent', {'model': 'stub'}, 'Return the packet.',
+                                       self.root, False, ws.EDIT_OPS_KIND)
 
 
 class LensJudgmentTests(unittest.TestCase):

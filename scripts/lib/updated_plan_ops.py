@@ -174,6 +174,115 @@ def plan_model_of(plan, path=None):
     return pm.load_model(path) if path else pm.model_of(plan)
 
 
+def finding_scope(model, findings):
+    """Find editable locations from review evidence, without expanding their ancestors."""
+    from worker_schemas import scoped_ids
+    where = pm.index(model)
+    context = json.dumps(findings, ensure_ascii=False)
+    limit = option('scope-sections', 2)
+    if limit < 1:
+        raise Conflict('updated-plan.scope-sections must be positive')
+    if not option('finding-scopes', 1):
+        return list(where)
+
+    def mentions(value, text=None):
+        text = context if text is None else text
+        return bool(re.search(r'(?<![\w.-])' + re.escape(value) + r'(?![\w.-])', text, re.I))
+
+    def words(text):
+        ignored = {'the', 'and', 'for', 'with', 'from', 'that', 'this', 'plan', 'project', 'json',
+                   'table', 'section', 'step', 'file', 'test', 'tests', 'none', 'has', 'not', 'its',
+                   'are', 'but', 'all', 'only', 'does', 'through', 'says', 'should', 'required',
+                   'change', 'address', 'verify', 'check', 'run', 'evidence', 'severity', 'critical', 'high'}
+        text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+        return {w for w in re.findall(r'[a-z][a-z0-9]+', text.lower()) if len(w) > 2 and w not in ignored}
+
+    def own_text(node):
+        return json.dumps({k: v for k, v in node.items() if k not in ('id', 'blocks', 'rows', 'items')}, ensure_ascii=False)
+
+    # Ranges in evidence (MC-1 through MC-10, Steps 2-3) cite every member, not just endpoints.
+    for match in list(re.finditer(r'\b([A-Z][A-Z0-9]*-)(\d+)\s*(?:through|to|[–-])\s*(?:\1)?(\d+)\b', context)):
+        prefix, start, end = match.groups()
+        if 0 <= int(end) - int(start) <= 300:
+            context += ' ' + ' '.join(prefix + str(i) for i in range(int(start), int(end) + 1))
+    step_numbers = set()
+    for match in re.finditer(r'\bsteps?\s+(\d+)(?:\s*(?:through|to|[–-])\s*(?:steps?\s+)?(\d+))?', context, re.I):
+        start, end = int(match[1]), int(match[2] or match[1])
+        if 0 <= end - start <= 300:
+            step_numbers.update(range(start, end + 1))
+    references = set(re.findall(r'\b[A-Z][A-Z0-9]*-\d+\b', context))
+    paths = set(re.findall(r'(?<![\w./-])(?:[.\w-]+/)*[.\w-]+\.[a-zA-Z][a-zA-Z0-9]*', context))
+    # Legacy intro tables have no editable ids; follow their component/file links to the owning step.
+    cited_intro = '\n'.join(line for line in model.get('intro', '').splitlines()
+                            if any(mentions(ref, line) for ref in references - set(where)))
+    query = words(context + ' ' + cited_intro)
+    for line in model.get('intro', '').splitlines():
+        if line.startswith('|'):
+            cells = pm.cells_of(line)
+            if len(cells) >= 3 and re.fullmatch(r'`?[\w.-]+/[\w./-]+`?', cells[1]):
+                component = words(cells[0])
+                if ((re.search(r'[a-z][A-Z]', cells[0]) and component & query)
+                        or cells[0] in context):
+                    paths.add(cells[1].strip('`'))
+    symbols = set(re.findall(r'\b[a-z]+[A-Z][a-zA-Z]+\b', context))
+    paths -= {'PROJECT_PLAN.json', 'PROJECT_PLAN.md', 'REQUIREMENTS_INTERPRETATION.json', 'REQUIREMENTS_INTERPRETATION.md'}
+    targets = {key for key in where if mentions(key)}
+    # Prefer owners to incidental mentions (e.g. an injection row mentioning a source file).
+    owned_paths = set()
+    for path in paths:
+        for key, (node, _, _) in where.items():
+            ownership = json.dumps({field: node[field] for field in ('owns', 'files') if field in node})
+            heading = node.get('heading', '')
+            if mentions(path, ownership) or ('Owns:' in heading and mentions(path, heading)):
+                targets.add(node['blocks'][0]['id'] if node.get('blocks') else key)
+                owned_paths.add(path)
+    paths -= owned_paths
+    for key, (node, _, _) in where.items():
+        text = own_text(node)
+        if 'blocks' not in node and any(mentions(ref, text) for ref in references | paths):
+            targets.add(key)
+        if node.get('kind') in ('prose', 'code') and any(mentions(symbol, text) for symbol in symbols):
+            targets.add(key)
+        if 'blocks' in node:
+            heading = node['heading']
+            title = re.split(r'\s+[—–]\s+Owns:', heading, flags=re.I)[0]
+            title = re.sub(r'^\d+\.\s*', '', title)
+            step = re.match(r'Step\s+(\d+)\b', title, re.I)
+            if step and (int(step[1]) in step_numbers or any(mentions(path, heading) for path in paths)):
+                # A legacy step section may also contain the closing tables; only the step body belongs here.
+                targets.add(node['blocks'][0]['id'] if node['blocks'] else key)
+            elif (mentions(title) or any(mentions(path, heading) for path in paths)
+                  or (re.match(r'^(\d+)\.', heading) and re.search(
+                      r'\bsection\s+' + re.escape(heading.split('.')[0]) + r'\b', context, re.I))):
+                targets.add(key)
+            # Imported single-# headings live in prose blocks. Include their following table/list.
+            for pos, block in enumerate(node['blocks']):
+                for heading_match in re.finditer(r'(?:^|\n)#+\s+([^\n]+)', block.get('text', '')):
+                    title = heading_match[1].strip()
+                    if mentions(title) or mentions(title.split(' and ')[0]):
+                        targets.add(block['id'])
+                        for following in node['blocks'][pos + 1:]:
+                            if re.search(r'(?:^|\n)#+\s+', following.get('text', '')):
+                                break
+                            targets.add(following['id'])
+
+    if not targets:
+        query = words(context)
+        ranked = []
+        section_words = [words(json.dumps(section, ensure_ascii=False)) for section in model['sections']]
+        for section in model['sections']:
+            heading = words(section['heading'])
+            body = words(json.dumps(section, ensure_ascii=False))
+            score = 4 * len(query & heading) + sum(1 / sum(word in section for section in section_words) for word in query & body)
+            if score:
+                ranked.append((score, section['id']))
+        targets = {key for _, key in sorted(ranked, key=lambda item: (-item[0], item[1]))[:limit]}
+    if not targets and where:
+        print('updated-plan ops: no relevant scope found; using whole-plan scope', file=sys.stderr)
+        return list(where)
+    return scoped_ids(model, targets)
+
+
 def write_prompt(base_path, ids, output, owns_fields=False, note=None):
     """The sealed prompt with the patch instructions and the plan text replaced by the ops instructions and the model."""
     text = Path(base_path).read_text(encoding='utf-8')
@@ -212,10 +321,7 @@ def write_prompt(base_path, ids, output, owns_fields=False, note=None):
             text += DECIDE_NOTE
     if assigned_context:
         note += '\n\n## Assigned findings and corrections\n```json\n' + json.dumps(assigned_context, ensure_ascii=False) + '\n```\n'
-    from worker_schemas import scoped_ids
-    context = json.dumps(assigned_context, ensure_ascii=False)
-    targets = [key for key in pm.index(model) if re.search(r'(?<![\w.-])' + re.escape(key) + r'(?![\w.-])', context)]
-    scope = scoped_ids(model, targets) if targets else list(pm.index(model))
+    scope = finding_scope(model, assigned_context)
     Path(output).with_suffix('.scope.json').write_text(json.dumps(scope) + '\n', encoding='utf-8')
     note += '\n\nAssigned edit scope (ids): ' + ', '.join(scope) + '.\n'
     Path(output).write_text(base.defer_reply_example(text) + note, encoding='utf-8')
@@ -322,7 +428,7 @@ def op_group(writer_ops, model):
             if isinstance(value, str) and value in where and value not in touched:
                 touched.append(value)
     from worker_schemas import scoped_ids
-    scope = scoped_ids(model, touched)
+    scope = scoped_ids(model, touched) if touched else finding_scope(model, [op.get('flat', op) for _, op in writer_ops])
     context = {}
     for key in scope:
         node = where[key][0]

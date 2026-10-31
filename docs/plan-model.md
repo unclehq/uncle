@@ -36,6 +36,16 @@ runner's grammar can enforce that the id exists.
 Goals
 - Plan edits address blocks by id. No quoted text, no heading matching, no line numbers.
 - The per-call schema lists the ids and columns that exist, so a wrong target cannot be written.
+  Edit writers derive their ids from assigned finding citations, review locations, headings, requirement links and file owners.
+  Cited containers include their contents; ancestors provide insertion targets without unlocking unrelated siblings. Legacy
+  intro component/file links lead to the owning step. If no direct location matches, heading/keyword relevance selects at most
+  `updated-plan.scope-sections` sections (default 2); only an unmatchable finding falls back to the full plan, with one diagnostic.
+  `updated-plan.finding-scopes 0` restores the full writer scope. These settings use stage environment, family environment,
+  stage config, then family config precedence (`WORKFLOW_UPDATED_CHANGE_PLAN_SCOPE_SECTIONS`,
+  `WORKFLOW_UPDATED_PLAN_SCOPE_SECTIONS`, and the corresponding `.finding-scopes` settings).
+  Resolver scopes use the conflicting targets and their ancestors, with the same evidence fallback for missing targets.
+  Schemas remain inline for runner compatibility, omit redundant keywords and use compact JSON. Per-kind operations, field
+  types, existing-id constraints and parent-specific insertion anchors remain enforced.
 - Overlap between writers is exact (same id, same field), not substring matching.
 - Markdown is rendered from the data, deterministically, for humans only.
 - Every stage that reads the plan (review, implementation, checklists, audits) receives plan JSON, whole or

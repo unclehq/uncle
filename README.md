@@ -293,6 +293,19 @@ Uncle is the supervisor and integrity layer.
 
 GitHub remains the system of record.
 
+### Baseline at the start of a change request
+
+A change request's baseline (the green check's "before" picture) used to start only after the plan's command list was approved, so
+`IMPLEMENT` often waited on a suite that had barely begun. It now starts **when the flow starts**, in the background and niced so
+planning is not slowed: Uncle detects the project's own test commands from the repository (its `scripts/run-python-tests.sh` and
+`scripts/run-shell-tests.sh`, a real `npm test` script, a `make test` target, `go.mod`, `Cargo.toml`, or a pytest config) and runs
+them against the unmodified tree.
+
+The result is only reused when it is safe. When the approved baseline is recorded, each approved command the early run already ran
+takes its result from it, **only if** the early run finished cleanly and the tree is byte-identical to the one it started from; any
+approved command it did not run is run then, and only that one. A changed tree, a failed early run, or a run that dirtied the tree
+discards it and the approved list runs as before. `WORKFLOW_EARLY_BASELINE=0` turns it off.
+
 ## Uncle builds Uncle
 
 Uncle is developed using Uncle.

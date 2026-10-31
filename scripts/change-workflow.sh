@@ -423,6 +423,7 @@ change_pr_extras_print() {
 . "$ROOT/scripts/lib/stage-config.sh"
 . "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/module-interfaces-stage.sh"
+. "$ROOT/scripts/lib/early-baseline.sh"
 . "$ROOT/scripts/lib/triage.sh"
 
 . "$ROOT/scripts/lib/implementation-gates.sh"
@@ -1004,6 +1005,13 @@ capture_green_baseline() {
     echo "Commands from the .uncle/docs/BASELINE_REPORT.md you approved:"
     sed 's/^/  /' "$GREEN_CMDS"
     echo
+
+    # The baseline already started when the flow did (scripts/lib/early-baseline.sh): reuse its results for every approved
+    # command it ran, against this same unmodified tree, and run only the rest.
+    if early_baseline_reuse "$GREEN_CMDS" "$GREEN_BASE" "$LOG_DIR/green-check-baseline.log"; then
+        hash_file "$baseline_json" > "$GREEN_SOURCE"
+        return 0
+    fi
 
     resolve_baseline_parallel_groups .uncle/docs/BASELINE_REPORT.md "$GREEN_CMDS" "$STATE_DIR/green-check.groups" || exit $?
     green_run "$GREEN_CMDS" "$GREEN_BASE" "$LOG_DIR/green-check-baseline.log" "" "$STATE_DIR/green-check.groups" || exit $?
@@ -3387,6 +3395,12 @@ change_pr_engine start || exit 1
 
 [[ -e "$STATE_FILE" ]] || finished_extras reset
 finished_extras start
+
+# The baseline is a baseline: it describes the tree before this run touches it, so it starts now, in the background, before any
+# stage (the approved command list is not needed to know what the project's own suites are). A resume past planning skips it.
+case "$(get_state)" in
+    *DERIVE_BRIEF|*ANALYZE) early_baseline_start || true ;;
+esac
 
 while true; do
     python3 "$ROOT/scripts/lib/rerun_stage.py" change || exit 1

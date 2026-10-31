@@ -46,7 +46,7 @@ json_field() { python3 -c 'import json,sys; v=json.load(sys.stdin)[sys.argv[1]];
 project() {
     local dir="$TMP/$1" kind="${2:-git}"
     rm -rf "$dir"
-    mkdir -p "$dir/src" "$dir/.uncle/workflow/approvals" "$dir/.uncle/workflow/waivers"
+    mkdir -p "$dir/.uncle/docs" "$dir/src" "$dir/.uncle/workflow/approvals" "$dir/.uncle/workflow/waivers"
     printf 'live\n' > "$dir/src/x"
     printf 'review\n' > "$dir/ADVERSARIAL_REVIEW.md"
     printf 'IMPLEMENT\n' > "$dir/.uncle/workflow/state"

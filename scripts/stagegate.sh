@@ -36,18 +36,7 @@ export DOCUMENT_BUDGET_SOURCE="$(generated_input_path REQUIREMENTS.md)"
 # wins, otherwise the prompt that shipped with uncle. An absolute path or a
 # path that exists in the project is returned untouched, which is what keeps
 # composed prompts under .uncle/workflow working.
-resolve_prompt() {
-    local p="$1"
-    # A caller can materialize a temporary absolute prompt immediately before
-    # invoking us. Preserve that identity even if another process has removed
-    # it by the time this check runs: prefixing it with ROOT turns
-    # /var/.../batch-4.md into an impossible Cellar-relative pathname.
-    if [[ "$p" == /* || -e "$p" ]]; then
-        printf '%s' "$p"
-    else
-        printf '%s' "$ROOT/$p"
-    fi
-}
+. "$ROOT/scripts/lib/workflow-paths-app.sh"
 
 STAGEGATE_VERSION="0.1.0"
 
@@ -380,12 +369,7 @@ record_provided() {
 # An unattended run is still accountable for what it skipped. Each gate it
 # passed without a person is appended here, dated, so the summary can say what
 # nobody looked at rather than reporting a clean run.
-record_unattended_gate() {
-    local what="$1" detail="$2"
-    mkdir -p "$STATE_DIR" 2>/dev/null || true
-    printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$what" "$detail" \
-        >> "$UNATTENDED_FILE" 2>/dev/null || true
-}
+. "$ROOT/scripts/lib/workflow-records.sh"
 
 # An unattended run says so up front and ledgers what enabled it, so a mode
 # inherited from a wrapper is visible in the run's own record.
@@ -403,18 +387,6 @@ completed_verdict() {
     local verdict
     verdict="$(verdict_file_field "$VERDICT_FILE" audit_class 2>/dev/null)"
     printf '%s' "$verdict"
-}
-
-# One stable line for wrappers and the TUI; format is asserted by tests.
-finished_build_line() {
-    local verdict="$1" skipped=0
-    if [[ -s "$UNATTENDED_FILE" ]]; then
-        skipped="$(grep -c $'\taudit-finding-skipped\t' "$UNATTENDED_FILE" || true)"
-    fi
-    printf 'Finished build: verdict=%s skipped=%s path=%s\n' "$verdict" "${skipped:-0}" "$PROJECT_ROOT"
-    if [[ "$verdict" == READY && "${skipped:-0}" != 0 ]]; then
-        echo "READY - ${skipped} blocking findings WAIVED WITHOUT HUMAN REVIEW (the auditor said NOT READY)"
-    fi
 }
 
 
@@ -461,12 +433,6 @@ has_nonblocking_failure() {
     local source="$1" ledger="$STATE_DIR/nonblocking-test-failures.tsv"
     [[ -s "$ledger" ]] || return 1
     awk -F'\t' -v source="$source" '$2 == source { found=1 } END { exit !found }' "$ledger"
-}
-
-record_test_failure_disposition() {
-    local review_json="$STATE_DIR/documents/TEST_REVIEW.json"
-    python3 -B "$ROOT/scripts/lib/test_failure_disposition.py" \
-        "$GREEN_CLASS" "$review_json" "$STATE_DIR/documents/TEST_FAILURES.json"
 }
 
 # A report-level test-review finding is evidence for the final audit, not
@@ -869,37 +835,12 @@ check_verification_inputs() {
 }
 
 # bash 3.2 (macOS system bash) has no ${var^^}.
-upper() {
-    printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
-}
-
-# ...nor ${var,,}.
-lower() {
-    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
-}
-
-# One bold prompt line. `read -p` suppresses its prompt when stdin is not a
-# terminal, so the text is printed separately. Escapes are emitted only for a
-# real terminal: piped captures and TERM=dumb stay free of control bytes.
-gate_prompt() {
-    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$1"; fi
-    if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
-        printf '%s%s%s' $'\033[1m' "$1" $'\033[0m'
-    else
-        printf '%s' "$1"
-    fi
-}
+. "$ROOT/scripts/lib/prompt-io.sh"
 
 # The gate used to require the words APPROVE/ACKNOWLEDGE. Automation that still
 # pipes them now declines; say so, so the break is visible in the output rather
 # than silent.
-legacy_word_notice() {
-    case "$(upper "$1")" in
-        APPROVE|ACKNOWLEDGE)
-            echo "This gate now requires 'y' to approve."
-            ;;
-    esac
-}
+. "$ROOT/scripts/lib/prompt-io-app.sh"
 
 # bash 3.2 has no associative arrays, so per-stage settings are a case table
 # with an environment override resolved through the variable name.
@@ -945,39 +886,8 @@ stage_model() {
     stage_setting_opt MODEL "$lookup_stage" "$fallback"
 }
 
-# Which CLI runs one stage. An explicit variable always wins over the config
-# file — a driver invoked with WORKFLOW_AGENT_CMD set means it — and the
-# built-in default applies only when the project has no config at all.
-stage_agent_cmd() {
-    local var
-    var="WORKFLOW_AGENT_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
-    if [[ -n "${!var:-}" ]]; then
-        printf '%s' "${!var}"
-    elif [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
-        printf '%s' "$WORKFLOW_AGENT_CMD"
-    else
-        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
-    fi
-}
 
-stage_reviewer_cmd() {
-    local var
-    var="WORKFLOW_REVIEWER_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
-    if [[ -n "${!var:-}" ]]; then
-        printf '%s' "${!var}"
-    elif [[ -n "${WORKFLOW_REVIEWER_CMD:-}" ]]; then
-        printf '%s' "$WORKFLOW_REVIEWER_CMD"
-    else
-        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
-    fi
-}
 
-stage_command_overridden() {
-    local side="$1" stage="$2" var global
-    var="WORKFLOW_${side}_CMD_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
-    global="WORKFLOW_${side}_CMD"
-    [[ -n "${!var:-}" || -n "${!global:-}" ]]
-}
 
 stage_effort() {
     uncle_effective_stage_effort "$(stage_runner_config_name "$1")"
@@ -1028,37 +938,6 @@ stage_tools() {
 # Matches run_stage's case arms.
 STATUS_STAGE_SEQ="derive-brief requirements project-plan adversarial-review updated-plan preflight implementation test-review manual-checklist execute-checklist final-audit"
 
-# Report the current stage to the TUI status channel. The exports feed the
-# agent shims' own status writes; the start event written here covers every
-# stage directly, including runners with no shim (plain claude, reviewers).
-status_stage_context() {
-    local log_name="$1"
-    local model="${2:-(runner default)}"
-    local mode="${3:-act}"
-    local s i=1 index=0 n=0
-    for s in $STATUS_STAGE_SEQ; do
-        n=$((n + 1))
-        if [[ "$s" == "$log_name" ]]; then
-            index=$i
-        fi
-        i=$((i + 1))
-    done
-    local turns
-    turns="$(stage_turns "$log_name")"
-    export UNCLE_STATUS_STAGE="$log_name"
-    export UNCLE_STATUS_STAGE_INDEX="$index"
-    export UNCLE_STATUS_STAGE_TOTAL="$n"
-    export UNCLE_STATUS_STAGE_TURNS="$turns"
-    # Read per stage, like every other setting: an operator who discovers at a
-    # gate that verification needs a local server can turn it on there.
-    UNCLE_STAGE_NETWORK="$(uncle_stage_network "$log_name")"
-    export UNCLE_STAGE_NETWORK
-    if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
-        printf '{"event":"start","model":"%s","mode":"%s","stage":"%s","stage_index":%s,"stage_total":%s,"stage_turns":%s}\n' \
-            "$model" "$mode" "$log_name" "$index" "$n" "$turns" \
-            >> "$UNCLE_STATUS_FILE"
-    fi
-}
 
 # Map state-machine destinations which immediately launch an agent to the
 # matching configured stage.  Gates and deterministic validation states do
@@ -1143,16 +1022,6 @@ get_state() {
     state_read "$STATE_FILE" DERIVE_BRIEF
 }
 
-require_file() {
-    local requested="$1" canonical
-    canonical="$(canonical_artifact_path "$requested")"
-    if [[ ! -s "$canonical" ]]; then
-        supervision_validation_failed require_file "$canonical" "Required file is missing or empty: $canonical"
-        echo "Required file is missing or empty: $canonical"
-        exit 1
-    fi
-}
-
 # Used after an agent stage: a missing artifact here usually means a denied
 # tool, not a refusal to work.
 require_artifact() {
@@ -1177,26 +1046,6 @@ require_artifact() {
     # A presentation budget warning must never fail an otherwise valid JSON
     # artifact or send the workflow into repair.
     [[ "$requested" == "$canonical" ]] && check_document_budget "$requested" || true
-}
-
-# Only workflow artifacts are mapped.  Prompts, source requirements, and
-# ordinary project Markdown retain their literal paths.
-canonical_artifact_path() {
-    local path="$1" stem
-    case "$path" in
-        .uncle/docs/REQUIREMENTS_INTERPRETATION.md|.uncle/docs/PREFLIGHT_REPORT.md|.uncle/docs/TEST_REVIEW.md|.uncle/docs/VERIFICATION_REPORT.md|.uncle/docs/DEFECTS.md|.uncle/docs/MANUAL_CHECKLIST.md|.uncle/docs/FINAL_AUDIT.md|.uncle/docs/IMPLEMENTATION_NOTES.md|.uncle/docs/AUTOMATED_TEST_REPORT.md|.uncle/docs/PROJECT_PLAN.md|.uncle/docs/UPDATED_PROJECT_PLAN.md|.uncle/docs/ADVERSARIAL_REVIEW.md)
-            stem="${path##*/}"; stem="${stem%.md}"
-            printf '%s/documents/%s.json\n' "${STATE_DIR:-.uncle/workflow}" "$stem" ;;
-        *) printf '%s\n' "$path" ;;
-    esac
-}
-
-# A persisted Markdown-only run predates the JSON migration. Keep it
-# resumable, but never choose Markdown when the canonical artifact exists.
-approval_artifact_path() {
-    local view="$1" canonical
-    canonical="$(canonical_artifact_path "$view")"
-    [[ -s "$canonical" ]] && printf '%s\n' "$canonical" || printf '%s\n' "$view"
 }
 
 ensure_project_plan_json() {
@@ -1269,99 +1118,7 @@ triage_reopen_gate() {
     exit 0
 }
 
-review_and_approve() {
-    local gate_start="$SECONDS"
-    local view="$1" file
-    local name="$2"
-    local wording
-    wording="$(lower "${3:-approve}")"
-
-    case "$name" in
-        UPDATED_PROJECT_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-plan "$view" . || return 1 ;;
-    esac
-    file="$(approval_artifact_path "$view")"
-    [[ -s "$file" ]] || { echo "Required approval artifact missing: $file"; exit 1; }
-
-    local before
-    local response
-
-    # Unattended: record the approval against the bytes on disk, and record in
-    # the run's own ledger that nobody read them. The digest still has to be
-    # real -- later stages compare against it, and an approval attesting to
-    # nothing would let a document change underneath them unnoticed.
-    if [[ "${UNATTENDED:-0}" == 1 ]]; then
-        before="$(hash_file "$file")"
-        printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
-        printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${name}.approved-by"
-        # The canonical packet was the item approved; never reverse-parse the
-        # rendered view after recording that approval.
-        record_unattended_gate "$name" "$wording $view without human review"
-        echo "Unattended: recorded $wording of $view with no human review."
-        if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
-        return 0
-    fi
-
-    while true; do
-        before="$(hash_file "$file")"
-
-        echo
-        echo "=================================================="
-        echo "HUMAN REVIEW REQUIRED: $view"
-        echo "=================================================="
-        echo
-        echo "Review in another terminal with:"
-        echo
-        echo "  less $view"
-        echo
-        echo "or:"
-        echo
-        echo "  code $view"
-        echo
-
-        UNCLE_GATE_FILE="$view"
-        gate_prompt "Ready to $wording $view? [Y/N] "
-        UNCLE_GATE_FILE=""
-        # IFS= keeps surrounding whitespace, so " y" is not an approval.
-        # `|| true` keeps EOF from tripping `set -e` before the decline path
-        # runs. The wrapper attributes the line (human, or a supervisor
-        # receipt) and closes the gate; the answer is validated as before.
-        response=""
-        if declare -f gate_read > /dev/null; then gate_read response || true; else IFS= read -r response || true; fi
-
-        case "$response" in
-            y|Y) ;;
-            *)
-                if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 1; fi
-                echo "Gate not accepted. Workflow paused."
-                legacy_word_notice "$response"
-                exit 0
-                ;;
-        esac
-
-        # The approval must attest to the bytes that were actually read. If the
-        # file moved during review — a human edit, or a speculative stage that
-        # ignored its instructions and wrote here — re-open the gate instead of
-        # recording an approval for content nobody reviewed.
-        if [[ "$(hash_file "$file")" == "$before" ]]; then
-            break
-        fi
-
-        echo
-        echo "$view's canonical JSON changed while you were reviewing it."
-        echo "Re-opening the gate so the approval covers what you read."
-        cancel_speculation
-    done
-
-    # `before` is the digest that was just validated against the file, so it is
-    # what gets recorded. Re-hashing here would attest to bytes that could have
-    # landed after the check.
-    printf '%s\n' "$before" > "$APPROVAL_DIR/${name}.sha256"
-    printf '%s\n' "$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)" > "$APPROVAL_DIR/${name}.approved-by"
-    # Markdown is a rendered view.  An edit to it cannot silently rewrite the
-    # authoritative packet after the human has approved that packet.
-    echo "Recorded approval for $file"
-    if declare -f perf_record > /dev/null; then perf_record approval "$name" "$((SECONDS-gate_start))" 0; fi
-}
+. "$ROOT/scripts/lib/approval-gates-app.sh"
 
 # Render the stream-json event feed as readable progress lines.
 # Non-JSON lines (startup warnings) are dropped rather than fataling jq.
@@ -1395,40 +1152,10 @@ format_claude_stream() {
 # Never use --dangerously-skip-permissions (CLAUDE.md rule 8).
 # Pass a third argument to run_claude to override the grant for one stage.
 
-# The investigate/format split (test-review, updated-plan) exists for weak
-# self-hosted models that lose an exact JSON schema over a long, read-heavy
-# turn. Proprietary models (claude, codex, ...) do not show that failure, and
-# the split only adds an extra call and an extra place to fail, so it is
-# gated on the stage's actually-configured runner rather than applied
-# unconditionally.
-# Requirements intentionally inherit the project-plan configuration so users
-# configure this coupled early-planning pair once.  Keep runner lookup aligned
-# with the existing model lookup; otherwise a local model reaches the default
-# Claude command after the self-hosted paths are split.
-stage_runner_config_name() {
-    case "$1" in
-        requirements|requirements-investigate) printf '%s\n' project-plan ;;
-        preview-build-part-*) printf '%s\n' preview-build ;;
-        *) printf '%s\n' "$1" ;;
-    esac
-}
+. "$ROOT/scripts/lib/stage-runtime.sh"
+. "$ROOT/scripts/lib/stage-runtime-app.sh"
 
-# Whether this stage's agent can be forced to answer in schema-checked JSON (see run_claude): the direct
-# Claude CLI only.  Codex, self-hosted models and a custom command keep the drivers' file contracts.
-stage_supports_structured_output() {
-    local stage="$1" UNCLE_RESOLVED_RUNNER
-    [[ "${WORKFLOW_STRUCTURED_OUTPUT:-1}" == 1 ]] || return 1
-    stage="$(stage_runner_config_name "$stage")"
-    uncle_resolve_stage_runner "$stage" AGENT 2>/dev/null || return 1
-    [[ "$UNCLE_RESOLVED_RUNNER" == claude ]] && [[ "$(stage_agent_cmd "$stage" 2>/dev/null)" == *claude ]]
-}
 
-stage_uses_self_hosted() {
-    local stage="$1" side="$2" UNCLE_RESOLVED_RUNNER
-    stage="$(stage_runner_config_name "$stage")"
-    uncle_resolve_stage_runner "$stage" "$side" 2>/dev/null || true
-    [[ "$UNCLE_RESOLVED_RUNNER" == self-hosted ]]
-}
 
 # issue 103: how many isolated candidates race for one self-hosted stage
 # attempt. Per-stage WORKFLOW_SELF_HOSTED_CANDIDATES_<STAGE> wins over the
@@ -2099,33 +1826,8 @@ STRUCTURED_OUTPUT_CONTRACT
     done
 }
 
-normalize_reviewer_packet() {
-    local output_file="$1" runner="$2" normalized
-    # Only specialist panel responses use the worker-packet envelope. Stage
-    # artifacts are also JSON now, but have their own schemas (for example
-    # `adversarial-review`) and must not be forced through that envelope.
-    [[ "$output_file" == *-panel/*.json && -s "$output_file" ]] || return 0
-    normalized="$(mktemp "$STATE_DIR/.reviewer-packet.XXXXXX")" || return 1
-    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --packet "$runner" < "$output_file" > "$normalized"; then
-        rm -f "$normalized"
-        return 1
-    fi
-    mv "$normalized" "$output_file"
-}
+. "$ROOT/scripts/lib/reviewer-artifacts.sh"
 
-validate_reviewer_artifact() {
-    local output_file="$1" runner="$2" normalized
-    # MANUAL_CHECKLIST is JSON-authoritative. Validate its actual semantic
-    # minimum at the runner boundary so a conversational "I wrote it" reply
-    # never reaches the later execution gate as a successful artifact.
-    [[ "${output_file##*/}" == MANUAL_CHECKLIST.md && -s "$output_file" ]] || return 0
-    normalized="$(mktemp "$STATE_DIR/.reviewer-artifact.XXXXXX")" || return 1
-    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --artifact "$output_file" "$runner" < "$output_file" > "$normalized"; then
-        rm -f "$normalized"
-        return 1
-    fi
-    mv "$normalized" "$output_file"
-}
 
 # Reviewer-side counterpart to race_self_hosted_candidates, for
 # run_codex_review's self-hosted branch (adversarial-review, test-review,
@@ -2534,10 +2236,35 @@ run_codex_review() {
     save_plan_review "$output_file" "$review_key"
 }
 
-# Read-only specialist packets improve review coverage. The primary reviewer
-# remains the sole writer and verdict owner; a missing packet is non-blocking.
+# Validate and, if necessary, retry a lens as soon as its packet exists.
+# This stays inside the speculative stage: no partial review is published or
+# handed to plan writers. Collation and all approval checks remain barriers.
+run_adversarial_review_lens() {
+    local directory="$1" lens="$2" output retry_output packet_error reviewer_pid
+    # Keep the original reviewer in its own unguarded subprocess: guarding a
+    # shell function with || true disables errexit throughout that function.
+    ( UNCLE_NONINTERACTIVE=1 run_codex_review "$directory/prompts/$lens.md" \
+        "$directory/$lens.json" "adversarial-review-worker-$lens" < /dev/null ) &
+    reviewer_pid=$!
+    wait "$reviewer_pid" || true
+    output="$directory/$lens.json"
+    retry_output="$directory/$lens.validated.json"
+    if ! packet_error="$(python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$retry_output" \
+            --kind adversarial-review-worker-packet --expected "$lens" 2>&1)"; then
+        echo "Adversarial-review worker $lens returned an invalid packet; retrying that worker once."
+        printf '\n## Required retry\n\nYour preceding private packet was rejected: %s\nUse Write to replace the assigned packet path with one complete `adversarial-review-worker-packet` JSON object. Do not return Markdown, prose, or a draft in chat.\n' "$packet_error" >> "$directory/prompts/$lens.md"
+        rm -f "$output" "$output.delivery.json" "$retry_output"
+        UNCLE_NONINTERACTIVE=1 run_codex_review "$directory/prompts/$lens.md" "$output" "adversarial-review-worker-$lens-retry" < /dev/null || true
+        python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$retry_output" \
+            --kind adversarial-review-worker-packet --expected "$lens" || return 1
+    fi
+    rm -f "$retry_output"
+}
+
+# Read-only specialist packets improve review coverage. Only the complete,
+# validated panel can produce the canonical review.
 run_adversarial_review_panel() {
-    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid packet_error retry_output
+    local directory="$STATE_DIR/adversarial-review-panel" lens prompt output pid failed=0
     local -a pids=()
     [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
     ensure_project_plan_json || return 1
@@ -2556,33 +2283,17 @@ run_adversarial_review_panel() {
         output="$directory/$lens.json"
         cp "$ROOT/prompts/change/adversarial-review-worker.md" "$prompt"
         printf '\n## Canonical inputs (binding)\n\nRead only `.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json` and `%s`.%s\n\n## Assigned review lens\n\nFocus only on **%s**.\n' "$plan_input" "$plan_input_note" "$lens" >> "$prompt"
-        ( UNCLE_NONINTERACTIVE=1 run_codex_review "$prompt" "$output" "adversarial-review-worker-$lens" < /dev/null ) \
+        ( run_adversarial_review_lens "$directory" "$lens" ) \
             > "$LOG_DIR/adversarial-review-worker-$lens.log" 2>&1 &
         pids+=("$!")
     done
     for pid in "${pids[@]}"; do
-        wait "$pid" || echo 'Adversarial-review worker failed; canonical packet validation will stop the panel.' >&2
-    done
-    # A file-backed local reviewer can finish its analysis yet make a small
-    # JSON escaping error in its private packet. Do not discard the healthy
-    # lenses or restart the entire speculative review: validate each packet
-    # independently and give only the failed worker one exact, bounded retry.
-    # This is especially important for small local models, where a panel-wide
-    # restart costs four full plan reads for one malformed response.
-    for lens in requirements regression security testability; do
-        output="$directory/$lens.json"
-        retry_output="$directory/$lens.validated.json"
-        if ! packet_error="$(python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$retry_output" \
-                --kind adversarial-review-worker-packet --expected "$lens" 2>&1)"; then
-            echo "Adversarial-review worker $lens returned an invalid packet; retrying that worker once."
-            printf '\n## Required retry\n\nYour preceding private packet was rejected: %s\nUse Write to replace the assigned packet path with one complete `adversarial-review-worker-packet` JSON object. Do not return Markdown, prose, or a draft in chat.\n' "$packet_error" >> "$directory/prompts/$lens.md"
-            rm -f "$output" "$output.delivery.json" "$retry_output"
-            UNCLE_NONINTERACTIVE=1 run_codex_review "$directory/prompts/$lens.md" "$output" "adversarial-review-worker-$lens-retry" < /dev/null || true
-            python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$retry_output" \
-                --kind adversarial-review-worker-packet --expected "$lens" || return 1
+        if ! wait "$pid"; then
+            echo 'Adversarial-review worker failed validation; stopping the panel.' >&2
+            failed=1
         fi
-        rm -f "$retry_output"
     done
+    [[ "$failed" == 0 ]] || return 1
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
     # Worker packets are already validated, complete, and deduplicated by
     # stable finding ID.  Rendering them directly makes the collated JSON the
@@ -2629,7 +2340,7 @@ run_updated_plan_panel() {
 
 # Resolve the findings in parallel, one writer per run of findings, and merge their patches without a
 # model (see updated_plan_edits.py).  Any problem returns nonzero before anything is published, and the
-# caller runs the single synthesis call.  Hosted runners only: a local model keeps one call.
+# caller runs the single synthesis call. Self-hosted work uses a bounded pool.
 # Edits that overlap go to one short resolver call (WORKFLOW_UPDATED_PLAN_EDITS=0 turns the whole thing off).
 # Start one updated-plan edit writer in the background (see run_updated_plan_edit_writers); `owner` is passed
 # for the writer that also owns the protected verification paths.
@@ -2677,6 +2388,9 @@ UPDATED_PLAN_ADVISOR_PIDS=()
 run_updated_plan_edit_writers() {
     local directory="$STATE_DIR/updated-plan-edits" helper="$ROOT/scripts/lib/updated_plan_edits.py" name ids pid failed=0 resolve_command=resolve
     local -a pids=() names=()
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    local jobs
+    jobs="$(workflow_model_jobs updated-plan)"
     [[ "${WORKFLOW_UPDATED_PLAN_EDITS:-1}" == 1 ]] || return 1
     if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then helper="$ROOT/scripts/lib/updated_plan_ops.py"; resolve_command=resolve-ops; fi
     # Forced, schema-checked JSON wherever the runner can enforce it: hosted Claude through --json-schema, a
@@ -2720,7 +2434,10 @@ run_updated_plan_edit_writers() {
             owner_of[index]=''
         fi
         ids_of[index]="$ids"
-        updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "${owner_of[index]}" || return 1
+        workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
+        updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "${owner_of[index]}" || {
+            workflow_model_drain "$jobs" ${pids[@]+"${pids[@]}"}; return 1
+        }
         pids+=("$!"); names+=("$name"); started[index]="$SECONDS"; hedge[index]=""; finished[index]=0
         # The writers' prompts are the same for 97% of their length, and a prefix cache (hosted Claude's, or vLLM's) can only
         # serve a prefix a finished request has already computed.  Started all at once, every writer computes (and a hosted one
@@ -2733,8 +2450,8 @@ run_updated_plan_edit_writers() {
     done < "$directory/slices.tsv"
     local -a failed_names=()
     local total="${#pids[@]}" left="${#pids[@]}" i status hedge_after="${WORKFLOW_UPDATED_PLAN_HEDGE_SECONDS:-35}"
-    # A self-hosted model is one shared server: a twin only queues behind the writer it duplicates (calculator-local:
-    # twins doubled the load and the slowest writer still took 200-400 s), so hedge only on hosted runners.
+    # Duplicate attempts consume the self-hosted pool's capacity without covering
+    # another finding. Keep hedging restricted to hosted runners.
     if stage_uses_self_hosted updated-plan AGENT; then hedge_after=999999; fi
     # Join the writers.  A writer is mostly hidden reasoning and a few run several times longer than the rest
     # (noinit: one finding, no output at all for 80+ s while its 19 siblings finished in 8-20 s), and the stage
@@ -2801,7 +2518,10 @@ run_updated_plan_edit_writers() {
             if [[ "$name" == 1 || "$name" == 1-1 ]]; then
                 retry_owner=owner
             fi
-            updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$retry_owner" || return 1
+            workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
+            updated_plan_launch_writer "$directory" "$delivery" "$name" "$ids" "$retry_owner" || {
+                workflow_model_drain "$jobs" ${pids[@]+"${pids[@]}"}; return 1
+            }
             pids+=("$!"); names+=("$name")
         done <<< "$rows"
         for pid in "${!pids[@]}"; do
@@ -2838,6 +2558,7 @@ run_updated_plan_edit_writers() {
                 mkdir -p "$directory/schemas"
                 python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$resolve_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$resolver_schema" || return 1
             fi
+            workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
             ( [[ -z "$resolver_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$resolver_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
               UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                 run_claude "$group_prompt" "updated-plan-worker-resolve-$group_id" ) \
@@ -2857,6 +2578,7 @@ run_updated_plan_edit_writers() {
             for group_id in $bad_groups; do
                 local retry_schema=""
                 [[ "$delivery" != hosted ]] || retry_schema="$directory/schemas/resolve-$group_id.json"
+                workflow_model_slot "$jobs" ${pids[@]+"${pids[@]}"}
                 ( [[ -z "$retry_schema" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$retry_schema" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/resolutions-$group_id.json"
                   UNCLE_WORKER_PACKET_PATH="$directory/resolutions-$group_id.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
                     run_claude "$directory/prompts/resolve-$group_id.retry.md" "updated-plan-worker-resolve-$group_id-retry" ) \
@@ -3057,11 +2779,13 @@ run_updated_plan_compact() {
 # reviewers and no reconciliation round; the existing typed-op merge is
 # deterministic, and asks a resolver only for a genuine conflicting edit.
 #
-# Local/self-hosted servers share one decoder, so parallel requests only queue
-# there.  Keep their one-call path. Hosted runners decode the bounded batches
-# concurrently and generally finish near the slowest batch, not their sum.
+# Independent finding batches can use continuous batching on self-hosted servers.
+# Keep their concurrency bounded and retain conflict resolution before publication.
 run_updated_plan_adaptive() {
-    local count threshold slice directory
+    local count threshold slice directory fast_merge=1 jobs=0 writer_status=0
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    jobs="$(workflow_model_jobs updated-plan)"
+    if [[ "$jobs" != 0 ]]; then fast_merge=0; fi
     [[ "${WORKFLOW_UPDATED_PLAN_COMPACT:-1}" == 1 ]] || return 1
     count="$(python3 -B - "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" <<'PY'
 import json, sys
@@ -3079,8 +2803,7 @@ PY
     threshold="${WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD:-5}"
     slice="${WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE:-2}"
     if [[ "$count" =~ ^[0-9]+$ && "$threshold" =~ ^[0-9]+$ && "$slice" =~ ^[0-9]+$ ]] \
-        && (( count >= threshold && slice > 0 )) \
-        && ! stage_uses_self_hosted updated-plan AGENT; then
+        && (( count >= threshold && slice > 0 && jobs != 1 )); then
         ensure_project_plan_json || return 1
         require_file "$STATE_DIR/documents/ADVERSARIAL_REVIEW.json" || return 1
         directory="$STATE_DIR/updated-plan-adaptive"
@@ -3095,9 +2818,14 @@ PY
         # Do not use the nested structured-output protocol here.  Each child
         # writes one JSON packet at its private path; run_claude verifies the
         # path exists and this function parses/merges it before publication.
-        WORKFLOW_UPDATED_PLAN_EDIT_SLICE="$slice" WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY=file WORKFLOW_UPDATED_PLAN_FAST_MERGE=1 WORKFLOW_UPDATED_PLAN_DRIVER_CONTRACT=1 WORKFLOW_PREFIX_WARM_SECONDS=0 \
-            run_updated_plan_edit_writers
-        return $?
+        WORKFLOW_UPDATED_PLAN_EDIT_SLICE="$slice" WORKFLOW_UPDATED_PLAN_WRITER_DELIVERY=file WORKFLOW_UPDATED_PLAN_FAST_MERGE="$fast_merge" WORKFLOW_UPDATED_PLAN_DRIVER_CONTRACT=1 WORKFLOW_PREFIX_WARM_SECONDS=0 \
+            run_updated_plan_edit_writers || writer_status=$?
+        if [[ "$writer_status" != 0 && "$jobs" != 0 ]]; then
+            echo 'Updated-plan batches failed validation or delivery; falling back to the compact writer.'
+            run_updated_plan_compact
+            return $?
+        fi
+        return "$writer_status"
     fi
     run_updated_plan_compact
 }
@@ -3899,10 +3627,10 @@ project_plan_section_finish() {
         && echo "Project plan section $name was answered in chat; used that answer."
 }
 
-# Wait for one section worker and take its section; a worker that delivered nothing usable gets one more run, alone.
+# Take a completed section (optionally waiting for its PID); an unusable delivery gets one retry.
 project_plan_section_settle() {
-    local name="$1" directory="$2" delivery="$3" pid="$4"
-    wait "$pid" || { echo "Project plan section $name did not complete." >&2; return 1; }
+    local name="$1" directory="$2" delivery="$3" pid="${4:-}"
+    [[ -z "$pid" ]] || wait "$pid" || { echo "Project plan section $name did not complete." >&2; return 1; }
     project_plan_section_finish "$name" "$directory" "$delivery" && return 0
     echo "Project plan section $name delivered nothing usable; running that worker once more."
     # Keep the failed attempt's logs: the rerun overwrites them, and why it failed is the evidence.
@@ -3912,10 +3640,67 @@ project_plan_section_settle() {
     project_plan_section_finish "$name" "$directory" "$delivery" || { echo "Project plan section $name wrote nothing." >&2; return 1; }
 }
 
+# Self-hosted sections form a small dependency graph: only outline gates the
+# second phase. Each slot includes recovery/validation and the existing retry,
+# so a slow or malformed sibling never holds an otherwise ready section back.
+run_project_plan_sections_bounded() {
+    local directory="$1" delivery="$2" jobs="$3" phase name index active failed=0 gate=0 next=0
+    local -a pending=() dependent=() pids=() names=()
+    while IFS= read -r phase; do
+        if [[ "${#pending[@]}" == 0 ]]; then
+            for name in $phase; do pending+=("$name"); done
+        else
+            for name in $phase; do dependent+=("$name"); done
+        fi
+    done < <(python3 -B "$ROOT/scripts/lib/project_plan_sections.py" phases)
+    [[ "${#pending[@]}" -gt 0 ]] || return 1
+    while :; do
+        active=0
+        for index in "${!pids[@]}"; do
+            if kill -0 "${pids[$index]}" 2>/dev/null; then
+                active=$((active + 1))
+            else
+                if wait "${pids[$index]}"; then
+                    if [[ "${names[$index]}" == outline ]]; then gate=1; fi
+                else
+                    failed=1
+                fi
+                unset "pids[$index]" "names[$index]"
+            fi
+        done
+        if [[ "$gate" == 1 ]]; then
+            pending+=("${dependent[@]}"); dependent=(); gate=2
+        fi
+        # On failure, drain only our workers before allowing the single-pass
+        # fallback to start. No worker may keep writing into its fallback.
+        if [[ "$failed" == 1 ]]; then
+            for index in "${!pids[@]}"; do wait "${pids[$index]}" || true; done
+            return 1
+        fi
+        while (( active < jobs && next < ${#pending[@]} )); do
+            name="${pending[$next]}"
+            echo "Project plan section worker: $name"
+            (
+                project_plan_section_run "$name" "$directory" "$delivery" > "$LOG_DIR/project-plan-section-$name.log" 2>&1 || exit 1
+                project_plan_section_settle "$name" "$directory" "$delivery"
+            ) &
+            pids+=("$!"); names+=("$name")
+            next=$((next + 1)); active=$((active + 1))
+        done
+        if (( active == 0 && next == ${#pending[@]} )); then
+            [[ "$gate" == 2 ]]; return
+        fi
+        sleep 0.05
+    done
+}
+
 run_project_plan_sections() {
     local output="$1" directory="$STATE_DIR/project-plan-sections"
     local helper="$ROOT/scripts/lib/project_plan_sections.py" phase name failed delivery=file index gate=1
     local -a pids=() names=()
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    local jobs
+    jobs="$(workflow_model_jobs project-plan)"
     # Forced, schema-checked JSON wherever the runner can enforce it.
     if stage_supports_structured_output project-plan-section-outline; then
         delivery=hosted
@@ -3923,32 +3708,36 @@ run_project_plan_sections() {
         delivery=local
     fi
     rm -rf "$directory"; mkdir -p "$directory/prompts"
-    # The first phase holds the outline and the workers that need only the requirements. The next phase starts when the
-    # outline is done, whether or not those are; everything still running is collected at the end.
-    while IFS= read -r phase; do
-        for name in $phase; do
-            echo "Project plan section worker: $name"
-            ( project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
-            pids+=("$!"); names+=("$name")
-        done
-        if [[ "$gate" == 1 ]]; then
-            gate=0
-            for index in "${!names[@]}"; do
-                [[ "${names[$index]}" == outline ]] || continue
-                if ! project_plan_section_settle outline "$directory" "$delivery" "${pids[$index]}"; then
-                    kill "${pids[@]}" 2>/dev/null || true
-                    wait 2>/dev/null || true
-                    return 1
-                fi
-                unset "pids[$index]" "names[$index]"
+    if [[ "$jobs" != 0 ]]; then
+        run_project_plan_sections_bounded "$directory" "$delivery" "$jobs" || return 1
+    else
+        # The first phase holds the outline and the workers that need only the requirements. The next phase starts when the
+        # outline is done, whether or not those are; everything still running is collected at the end.
+        while IFS= read -r phase; do
+            for name in $phase; do
+                echo "Project plan section worker: $name"
+                ( project_plan_section_run "$name" "$directory" "$delivery" ) > "$LOG_DIR/project-plan-section-$name.log" 2>&1 &
+                pids+=("$!"); names+=("$name")
             done
-        fi
-    done < <(python3 -B "$helper" phases)
-    failed=0
-    for index in "${!pids[@]}"; do
-        project_plan_section_settle "${names[$index]}" "$directory" "$delivery" "${pids[$index]}" || failed=1
-    done
-    [[ "$failed" == 0 ]] || return 1
+            if [[ "$gate" == 1 ]]; then
+                gate=0
+                for index in "${!names[@]}"; do
+                    [[ "${names[$index]}" == outline ]] || continue
+                    if ! project_plan_section_settle outline "$directory" "$delivery" "${pids[$index]}"; then
+                        kill "${pids[@]}" 2>/dev/null || true
+                        wait 2>/dev/null || true
+                        return 1
+                    fi
+                    unset "pids[$index]" "names[$index]"
+                done
+            fi
+        done < <(python3 -B "$helper" phases)
+        failed=0
+        for index in "${!pids[@]}"; do
+            project_plan_section_settle "${names[$index]}" "$directory" "$delivery" "${pids[$index]}" || failed=1
+        done
+        [[ "$failed" == 0 ]] || return 1
+    fi
     # The traceability table is built here from the workers' own mapping lines.  Only a plan whose workers
     # left too little behind needs the model, and then one worker reads everything and writes it.
     if ! python3 -B "$helper" trace-ready "$directory"; then
@@ -3958,6 +3747,8 @@ run_project_plan_sections() {
         project_plan_section_finish trace "$directory" "$delivery" || { echo "Project plan section trace wrote nothing." >&2; return 1; }
     fi
     python3 -B "$helper" assemble "$directory" "$output" || return 1
+    # Stage-wide duties (.gitignore, whole-plan consistency) run once here, not in every section worker.
+    . "$ROOT/scripts/lib/project-plan-stage.sh"; project_plan_stage_finish "$directory" "$output" || return 1
     # The same plan as a model, from the workers' typed blocks; kept beside the plan JSON when it agrees with it.
     python3 -B "$helper" assemble-model "$directory" "$directory/model.json" 2>/dev/null || rm -f "$directory/model.json"
     # The assembled plan must pass the checks a single-pass plan does before it is believed.
@@ -4702,64 +4493,10 @@ run_green_check() {
 
 # --- Post-implementation review document ------------------------------------
 
-# Rebuilt from the working tree every time the gate opens, so the approval
-# digest attests to the tree rather than to a file somebody could edit.
-build_implementation_review() {
-    write_change_diff "$DIFF_FILE"
-    write_implementation_review "$REVIEW_FILE" "$DIFF_FILE" "$GREEN_MD" \
-        .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/AUTOMATED_TEST_REPORT.md \
-        "$STATE_DIR/verification.paths" "$STATE_DIR/verification.manifest" \
-        "$STATE_DIR/verification-snapshot" "$STATE_DIR/TEST_CHANGES.diff"
-    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" prepare "$STATE_DIR"
+. "$ROOT/scripts/lib/implementation-gates.sh"
+. "$ROOT/scripts/lib/implementation-gates-app.sh"
 
-}
 
-# Regenerate the document and compare it with what was approved. A mismatch
-# means the code moved after the operator read it, so the gate re-opens on the
-# current tree rather than the pipeline carrying a stale approval forward.
-verify_implementation_review() {
-    local approval="$APPROVAL_DIR/IMPLEMENTATION_REVIEW.sha256"
-
-    require_file "$approval"
-    if [[ -f "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.inputs.json" ]]; then
-        if WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" check "$STATE_DIR"; then
-            return 0
-        fi
-        build_implementation_review
-        reapprove_implementation_unattended && return 0
-        set_state WAIT_IMPLEMENT_APPROVAL
-        echo "Approved inputs changed; review the current implementation again."
-        exit 0
-    fi
-    build_implementation_review
-
-    if [[ "$(hash_file "$REVIEW_FILE")" != "$(cat "$approval")" ]]; then
-        echo
-        echo "The working tree changed after the implementation was approved."
-        echo "$REVIEW_FILE has been rebuilt from the current tree."
-        reapprove_implementation_unattended && return 0
-        set_state WAIT_IMPLEMENT_APPROVAL
-        echo "Re-run the driver to review and approve what is there now."
-        exit 0
-    fi
-}
-
-# Unattended, nobody is there to review the implementation again, and stopping at
-# a reopened gate ended the run for good: the driver exits and nothing restarts
-# it. A later stage re-runs the green check, which rewrites a file the approval
-# covers, so a check that failed when the implementation was approved and passes
-# now (a stray process released its port) was enough to strand the run after
-# every stage had worked. Re-approve the current tree in place, record it in the
-# unattended ledger like any other unreviewed approval, and carry on with the
-# stage that was running. Attended runs still stop and ask.
-reapprove_implementation_unattended() {
-    [[ "${UNATTENDED:-0}" == 1 ]] || return 1
-    review_and_approve "$REVIEW_FILE" IMPLEMENTATION_REVIEW approve || return 1
-    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" record "$STATE_DIR" || return 1
-    record_unattended_gate IMPLEMENTATION_REVIEW "re-approved the current implementation after its inputs changed, without human review"
-    echo "Unattended: the approved implementation inputs changed after approval; re-approved the current tree and continuing."
-    return 0
-}
 
 # --- Speculative execution across human gates -------------------------------
 #
@@ -5905,6 +5642,15 @@ PY
             echo "Validating saved checklist reports; checks will not be rerun."
             echo "Correct report errors in place, then resume this validation step."
             if [[ ! -s "$STATE_DIR/documents/EXECUTE_CHECKLIST.json" ]]; then
+                # In gated mode a delivered but malformed report gets the
+                # existing bounded format retry before fallback can replace
+                # its evidence. A missing report still gets no model retry.
+                if [[ "${WORKFLOW_POSTFLIGHT_GREEN_CHECK:-1}" != 1 && -s .uncle/docs/VERIFICATION_REPORT.md ]]; then
+                    ensure_rc=0
+                    ensure_acceptance_canonical .uncle/docs/VERIFICATION_REPORT.md || ensure_rc=$?
+                    if [[ "$ensure_rc" == 2 ]]; then continue; fi
+                    require_file "$STATE_DIR/documents/VERIFICATION_REPORT.json"
+                fi
                 echo 'Checklist reports missing; recording incomplete evidence automatically.'
                 python3 "$ROOT/scripts/lib/checklist_report_fallback.py" --project . --missing-only || exit 1
             fi

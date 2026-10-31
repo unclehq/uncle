@@ -29,6 +29,7 @@ find "$dir" -name '*.json' -type f -exec cat {} + | jq -s -r '
     "",
     "Unavailable means the runner did not supply the value. N/A means a non-model step, such as approval or a shell check.",
     "Total tokens include cached tokens once. Coverage shows attempts with a complete total; subtotals can be partial when coverage is incomplete.",
+    "The build-timing tables below repeat this usage by stage, continuation and interval. These are overlapping views; never add stage totals to per-step totals.",
     "Reported USD excludes estimates. Unavailable cost does not mean free. Estimated USD prices recovered tokens at API list rates; it is not an invoice.",
     "Work seconds overlap for concurrent stages; do not sum them as end-to-end latency. Counts cover completed attempts; killed attempts may be absent."
 '

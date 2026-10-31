@@ -63,13 +63,155 @@ The server must support the requested context size and return responses within t
 
 The model must support tool calls for implementation and file inspection. Uncle runs its own tool loop (read, search, write, edit and shell tools confined to the project) with a fresh conversation per stage, at temperature 0. The requirements stage (`requirements` and `requirements-investigate`) is the exception and runs at temperature 1. Change either with `<stage>.temperature` (or `self-hosted.temperature` for all stages) in `.uncle/config`, or with `WORKFLOW_SELF_HOSTED_TEMPERATURE_<STAGE>` / `WORKFLOW_SELF_HOSTED_TEMPERATURE` in the environment (0 to 2; environment wins over config, a stage's own setting wins over the global one, and workers inherit from their stage).
 
+**Reasoning effort (direct HTTP).** Requests send the stage's effort as `reasoning_effort`. The existing `WORKFLOW_EFFORT_<STAGE>` override wins, followed by the runner's explicit effort argument, `<stage>.effort`, the inherited parent stage's effort, global `effort`, then `low`. Workers inherit their parent; requirements and plan-section workers inherit `project-plan`. Uncle's `none` and `minimal` map to `low`, `medium` stays `medium`, and `high`, `xhigh`, and `max` map to `high`. This portable mapping does not disable model thinking. Set `self-hosted.reasoning-effort off` in `.uncle/config`, or `WORKFLOW_SELF_HOSTED_REASONING_EFFORT=off`, to omit the field and use the server default. The switch defaults to `off` (opt in with `on`); the environment wins. On DeepSeek V4, any `reasoning_effort` value re-enables thinking even when a stage's request options turn it off, and the hint showed no measurable benefit on tool-using requests. Unsupported fields are retried without effort, independently of schema enforcement, and remembered per Base URL for the lifetime of the runner process. A server may accept but ignore the hint, including Ollama's native schema endpoint.
+
+Recommended starting settings are `low` for mechanical extraction, section formatting, checklist assembly and requirements investigation; `medium` for architecture and implementation; and `high` for adversarial review, repair and final audit. These are recommendations, not new automatic stage overrides: existing stage config and environment settings remain authoritative. For example, set `project-plan.effort medium`, `implementation.effort medium`, `adversarial-review.effort high`, `repair.effort high`, and `final-audit.effort high`. Use `WORKFLOW_EFFORT_REQUIREMENTS_INVESTIGATE=low` to override the inherited planning setting for requirements alone. Validate quality and latency on your model before raising every stage to high.
+
+**Extra request options (direct HTTP).** Uncle stays model-agnostic: to supply
+server-specific fields, set `self-hosted.request-options <json object>` for all
+self-hosted stages, or `<stage>.request-options <json object>` for one stage in
+`.uncle/config`. The default is no options. The value must be a single-line JSON
+object of at most 4,096 UTF-8 bytes; invalid values fail stage startup. Quoted
+`#` characters and whitespace inside JSON strings are preserved; an unquoted
+`#` starts a trailing config comment.
+
+Precedence is `WORKFLOW_SELF_HOSTED_REQUEST_OPTIONS_<STAGE>`, then
+`WORKFLOW_SELF_HOSTED_REQUEST_OPTIONS`, then `<stage>.request-options`, then
+`self-hosted.request-options`. Uppercase the stage name and replace dashes with
+underscores for its environment variable. Derived stages look up their own
+name, then the existing model/effort parent mapping within each level:
+`project-plan-section-*` and requirements inherit `project-plan`, review and
+other workers inherit their parent, and investigation stages inherit their
+configured stage. Preview parts inherit preview's selected model stage.
+Each selected object **replaces** the less-specific object; `{}` opts out.
+For example, a global environment override wins over a stage's config `{}`;
+use the stage environment variable to opt out in that case.
+
+Options apply to tool turns, closing answers, schema/reviewer requests, and
+retries. When both existing and supplied top-level values are objects, Uncle
+merges their immediate members, with supplied members winning (no recursive
+merge). Otherwise, an existing Uncle value wins. These top-level keys are
+protected and rejected at config read: `model`, `messages`, `tools`,
+`tool_choice`, `stream`, `stream_options`, `response_format`,
+`structured_outputs`, `guided_json`, `format`, `options`, `max_tokens`,
+`max_completion_tokens`, `max_output_tokens`, and `num_predict`. This preserves
+schema enforcement and token limits, including Ollama's native containers.
+
+A 4xx error naming an applied option key (including a nested key) triggers one
+retry without options. A generic 400 triggers a probe without options; Uncle
+disables them only if that otherwise-identical request succeeds. Rejections
+are remembered per Base URL for the runner process, independently of effort
+and schema support. The stage log records applied top-level key names and one
+warning when options are disabled, without recording option values. This
+setting does not affect Claude, Codex, Kimi, or Cline.
+
+For DeepSeek on vLLM, a server-specific example is:
+
+```text
+self-hosted.request-options {"chat_template_kwargs":{"thinking":false}}
+adversarial-review.request-options {}
+```
+
+For Qwen servers that accept `enable_thinking`, use this instead:
+
+```text
+self-hosted.request-options {"chat_template_kwargs":{"enable_thinking":false}}
+```
+
+As a starting recommendation, turn thinking off for mechanical stages:
+requirements, project-plan, preview-build, updated-plan, preflight,
+execute-checklist, and implementation for small changes. Leave the server's
+thinking behavior enabled for judgment stages: adversarial-review, repair,
+test-review, and final-audit. This is a recommendation, not a default; `{}`
+leaves the server's behavior unchanged rather than forcing thinking on. For
+example, this DeepSeek configuration uses explicit stage choices:
+
+```text
+self-hosted.request-options {}
+requirements.request-options {"chat_template_kwargs":{"thinking":false}}
+project-plan.request-options {"chat_template_kwargs":{"thinking":false}}
+preview-build.request-options {"chat_template_kwargs":{"thinking":false}}
+updated-plan.request-options {"chat_template_kwargs":{"thinking":false}}
+preflight.request-options {"chat_template_kwargs":{"thinking":false}}
+execute-checklist.request-options {"chat_template_kwargs":{"thinking":false}}
+implementation.request-options {"chat_template_kwargs":{"thinking":false}}
+adversarial-review.request-options {}
+repair.request-options {}
+test-review.request-options {}
+final-audit.request-options {}
+```
+
+**Tool turns and input context (direct HTTP).** The model is prompted to request independent reads/searches together. Every tool call in an assistant message executes in order, including calls after a tool error, before the next model request; writes and shell commands retain their ordering and permissions. Affirmative read directives with backtick-quoted paths can supply small text files and authoritative `.uncle/workflow/documents/*.json` inputs at stage start. Prefetch shares the read cache's 24 KiB result/context bounds, excludes secrets and symlinks, and does not enumerate the repository. Already embedded or cached inputs are not duplicated. Cached ranges remain explicit and changed files are invalidated; supplied context never replaces verification. `self-hosted.prefetch` / `WORKFLOW_SELF_HOSTED_PREFETCH` default to `on`; `off` disables prefetch, and the existing `WORKFLOW_READ_CACHE=0` also disables it. Environment settings win over config. Leading `<think>...</think>` blocks and separately returned `reasoning_content` / `reasoning` are kept out of answers and outgoing history; a reasoning field is replayed only if the server explicitly rejects a continuation because it requires that field. Other runners are unaffected.
+
 **Schema enforcement.** When a stage owes a known JSON artifact, its final answer is a request that carries the artifact's JSON schema. Uncle asks the server to enforce it in the strongest form it accepts, and falls back cleanly when a server rejects one: Ollama's native `format`, then OpenAI-style `response_format` (JSON schema), vLLM's `structured_outputs` and `guided_json`, then plain JSON-object mode, then prompt-only. Every answer is also checked against the schema locally, and a workflow document the model writes itself is refused at the write if it does not match. Stages whose answer is prose, such as chat, have no schema and are not constrained.
 
-**Connections.** Uncle keeps one persistent connection per server and reuses it for every request in a stage, reconnecting once if the server closed it while idle. HTTP/2 is used when it can be negotiated: over `https` (via ALPN) when the optional `httpx` and `h2` Python packages are installed. Plain `http` servers speak HTTP/1.1 keep-alive. Most local servers do not accept HTTP/2 without TLS; if yours does (for example Hypercorn), set `WORKFLOW_SELF_HOSTED_HTTP2=h2c`. `WORKFLOW_SELF_HOSTED_HTTP2=off` forces HTTP/1.1.
+**Planning concurrency.** Self-hosted project-plan sections and updated-plan edit
+writers run with at most four workers per pool. Set `self-hosted.stage-jobs 1`
+in `.uncle/config`, or `WORKFLOW_SELF_HOSTED_STAGE_JOBS=1`, for a server that
+serves one request at a time. Values 1–8 are accepted; the environment overrides
+the config and invalid values warn and use 4. This changes only self-hosted
+planning; Claude, Codex, Kimi and Cline retain their existing scheduling.
+Project-plan sections wait for their outline when needed, retain one retry,
+and assemble in canonical order. Updated-plan reviews with at least five
+findings use two findings per writer; conflicting edits still go through the
+resolver and all publication checks remain in place. Failed batches fall back
+to the compact writer after workers finish. One worker keeps the
+single compact updated-plan call. The existing
+`WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD` (5) and
+`WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE` (2) adjust that split;
+`WORKFLOW_UPDATED_PLAN_COMPACT=0` selects the existing full panel path.
+The worker limit includes section retries and edit-writer/resolver retries;
+it is per pool, not a server-wide cap. Preview work, other existing panels,
+and optional candidate racing can add concurrent requests. No new API fields
+or server-specific features are required.
+
+**Connections.** Uncle keeps connections per server, reconnecting once if the server closed one while idle. HTTP/2 is used when it can be negotiated: over `https` (via ALPN) when the optional `httpx` and `h2` Python packages are installed. Plain `http` servers speak HTTP/1.1; SSE responses close their connection after completion or cancellation so unread stream bytes cannot contaminate another request. Most local servers do not accept HTTP/2 without TLS; if yours does (for example Hypercorn), set `WORKFLOW_SELF_HOSTED_HTTP2=h2c`. `WORKFLOW_SELF_HOSTED_HTTP2=off` forces HTTP/1.1.
 
 OpenCode is no longer needed. To return to the OpenCode CLI for a run, set `WORKFLOW_SELF_HOSTED_TRANSPORT=opencode`. Existing self-hosted credentials and model selections migrate automatically; the old `openai/` catalog prefix is removed during migration.
 
 The default model limits are 65,536 context tokens and 8,192 output tokens. Match your server with `WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS` and `WORKFLOW_SELF_HOSTED_OUTPUT_TOKENS`. One tool-loop turn is capped at 32,768 output tokens (`WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS`); a stage that writes its whole delivery in one turn needs room for it, and a turn that reaches the cap fails as incomplete. Set `WORKFLOW_SELF_HOSTED_SECONDS` for the stage timeout (default 3,600 seconds), or `WORKFLOW_SELF_HOSTED_REQUEST_SECONDS` for a separate API timeout. `WORKFLOW_OPENCODE_CMD` selects an alternate CLI executable.
+
+OpenAI-compatible requests stream with usage when supported. Rejected usage
+options fall back to SSE without usage; rejected streaming falls back to JSON.
+These capabilities are remembered separately for each Base URL during the
+process, without removing schemas, tool contracts, or local validators. Native
+Ollama `/api/chat` remains non-streaming. A server returning ordinary JSON
+cannot be stopped by the streaming guards.
+
+`self-hosted.stream-whitespace-chars` (default 2000) stops consecutive whitespace
+in text, reasoning, or a tool argument. `self-hosted.stream-repetition-count`
+(default 8, minimum 2) stops consecutive identical lines of at least 16
+characters or repeating chunks of 16–256 characters. Detection does not depend
+on the server's delta boundaries. Environment overrides are
+`WORKFLOW_SELF_HOSTED_STREAM_WHITESPACE_CHARS` and
+`WORKFLOW_SELF_HOSTED_STREAM_REPETITION_COUNT`. Stopped fragments are never
+published; tool turns get one recovery attempt per loop, and constrained final
+answers may retry once without grammar while keeping local validation.
+`self_hosted_stream_stop` records the reason and character/byte counts;
+`self_hosted_turn` records the early stop. Token usage remains unknown when the
+server has not reported it. Neither diagnostic includes output content.
+
+Small worker packets, edit/resolution ops, and outline packets default to 4096
+tokens for both tool turns and final answers. Other artifacts retain 32768.
+Use `<stage>.turn-output-tokens` and `<stage>.final-output-tokens`, or the
+`self-hosted.*` equivalents, in `.uncle/config`. Environment equivalents are
+`WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS[_<STAGE>]` and
+`WORKFLOW_SELF_HOSTED_FINAL_OUTPUT_TOKENS[_<STAGE>]`. Precedence is stage, parent,
+global environment, then stage, parent, global config, then default. Stage names
+are uppercased with punctuation replaced by underscores in environment keys.
+All caps must be positive and remain bounded by the stage's output budget.
+
+The HTTP adapter captures already-generated deliverables from every turn.
+Investigation documents use their destination validators; JSON uses the same
+schema and downstream canonical checks as an ordinary final answer. Valid chat
+wins over a same-turn delivery write, regardless of size, so a stub cannot
+replace it. A previously validated document is retained. Invalid chat never
+replaces a valid file; the largest recognizable invalid document is retained
+privately and repaired using unique `old_string` edits and exact validator
+feedback. JSON drafts use the same repair path. Ordinary status text keeps the
+normal delivery behavior. Unrelated tool work still runs. `self_hosted_capture`
+records the adopted byte count and whether it was a document, packet, or private
+draft, never its content.
 
 ### Candidate racing (multiple concurrent requests)
 

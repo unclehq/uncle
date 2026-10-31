@@ -138,7 +138,7 @@ def config_stage(stage, values):
         return 'manual-checklist'
     if stage == 'final-audit-investigate':
         return 'final-audit'
-    if stage == 'project-plan-investigate' or stage.startswith('project-plan-section-'):
+    if stage in ('project-plan-investigate', 'project-plan-stage-duties') or stage.startswith('project-plan-section-'):
         return 'project-plan'
     if stage in ('requirements', 'requirements-investigate'):
         # New-app requirements deliberately inherit the project-plan picker.
@@ -180,12 +180,10 @@ def config_stage(stage, values):
 
 
 def settings(config, stage):
-    values = {}
-    if Path(config).exists():
-        for line in Path(config).read_text(encoding='utf-8').splitlines():
-            parts = line.split('#', 1)[0].split(None, 1)
-            if len(parts) == 2:
-                values.setdefault(*parts)
+    from self_hosted_http import _config_values, request_options
+    values = _config_values(config)
+    options = request_options(stage, values)  # validate before credential lookup
+    requested_stage = stage
     stage = config_stage(stage, values)
     result = {}
     for field in ('base_url', 'model'):
@@ -212,6 +210,12 @@ def settings(config, stage):
         raise ValueError('API key must be a single line')
     if not result['api_key']:
         raise ValueError('Self hosted requires an API key (use a placeholder for a server without authentication)')
+    # Callers such as home chat can pass a config path without exporting it.
+    # Carry even an explicit {} with that connection, so it cannot accidentally
+    # be replaced by options from a different config when the loop starts.
+    if (any(key.endswith('.request-options') for key in values) or
+            any(key.startswith('WORKFLOW_SELF_HOSTED_REQUEST_OPTIONS') for key in os.environ)):
+        result.update(_request_options=options, _request_options_stage=requested_stage)
     return result
 
 
@@ -277,7 +281,7 @@ CONTEXT_TOKENS_ENV = 'WORKFLOW_SELF_HOSTED_CONTEXT_TOKENS'
 # by path (tests and tools do), not only when scripts/lib is already on sys.path.
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-from self_hosted_http import OutputTruncated  # noqa: E402  (shared with the direct HTTP transport)
+from self_hosted_http import OutputTruncated, strip_reasoning  # noqa: E402  (shared with the direct HTTP transport)
 
 
 def output_token_limit(stage=''):
@@ -335,6 +339,7 @@ def canonical_response_from_texts(texts, kind):
     artifact_json = _artifact_json_module()
     decoder = json.JSONDecoder()
     for text in reversed(texts):
+        text = strip_reasoning(text)
         candidates = [text]
         for match in re.finditer(r'\{', text):
             try:
@@ -358,7 +363,7 @@ def response_from_events(path, artifact_kind=None):
     events = opencode_events(path)
     if any(event.get('type') == 'error' for event in events):
         raise ValueError('OpenCode reported a model or session error')
-    texts = [event.get('part', {}).get('text', '') for event in events if event.get('type') == 'text']
+    texts = [strip_reasoning(event.get('part', {}).get('text', '')) for event in events if event.get('type') == 'text']
     finished = [event for event in events if event.get('type') == 'step_finish']
     if not texts or not texts[-1].strip() or not finished:
         raise ValueError('OpenCode returned no complete final response')
@@ -769,6 +774,25 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
     policy = Policy(root, write=side == 'agent' or bool(delivery), shell=side == 'agent' and allow_shell,
                     writable=([delivery] if delivery else []) if side == 'reviewer' else None,
                     schema_for=document_schema_for(delivery, prompt))
+    if stage_name in INVESTIGATION_DOCUMENTS:
+        relative, document = INVESTIGATION_DOCUMENTS[stage_name]
+        policy.draft_checks[policy.root / relative] = lambda text: validate_investigation(document, text)
+        if side == 'reviewer':
+            policy.write = True
+            policy.writable.add(policy.root / relative)
+    if schema_kind in ('project-plan-section-worker-packet', 'project-plan-section-model-packet', 'project-plan-outline-packet',
+                       'updated-plan-edit-ops-packet', 'updated-plan-resolution-ops-packet',
+                       'plan', 'change-plan', 'change-planning-bundle'):
+        # Plans and packets are final answers. Whole-stage writes have one owner;
+        # offering Write/Bash here invites drafting the packet through tools and
+        # then generating it again as the final answer. Reads remain available.
+        policy = Policy(root)
+        request += ('\n\nHTTP delivery contract (overrides file-delivery instructions above): '
+                    'Return the packet exactly once as your final JSON answer. The adapter validates and writes '
+                    'that answer to the driver delivery path. Do not call write_file, edit_file or bash, '
+                    'and do not draft the packet in a tool call or commentary. '
+                    'For edit ops, return only the assigned dispositions and changed fields/insertions; '
+                    'unchanged plan content is carried forward mechanically.')
     return (request, policy, schema, (schema_kind or 'artifact').replace('-', '_'), output_token_limit(stage_name),
             int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))
 
@@ -776,11 +800,11 @@ def _http_setup(side, values, prompt, root, allow_shell, schema_kind, protected=
 def run_http_stage(stage, directory, values, root, allow_shell=True):
     """Drive a native Stage (live steering) over direct HTTP; the stage's prompt is complete."""
     from http_agent import run_agent
-    _, policy, schema, name, limit, seconds = _http_setup(stage.side, values, stage.prompt, root, allow_shell,
+    request, policy, schema, name, limit, seconds = _http_setup(stage.side, values, stage.prompt, root, allow_shell,
                                                           reviewer_artifact_kind(stage.prompt))
     stage.model = values['model']
     stage.ready(directory)
-    run_agent(values, stage.prompt, policy, limit, turns=int(values.get('max_turns') or 80), usage={}, final_schema=schema,
+    run_agent(values, request, policy, limit, turns=int(values.get('max_turns') or 80), usage={}, final_schema=schema,
               final_name=name, stage=stage, seconds=seconds)
 
 
@@ -878,10 +902,61 @@ def validate_plan(text, protected=True):
 
 
 REVIEW_VALIDATORS = {
+    'REQUIREMENTS_INTERPRETATION.md': 'requirements-context.py',
     'ADVERSARIAL_REVIEW.md': 'adversarial-context.py',
     'FINAL_AUDIT.md': 'final-audit-context.py',
     'MANUAL_CHECKLIST.md': 'checklist_document.py',
 }
+
+
+INVESTIGATION_DOCUMENTS = {
+    'project-plan-investigate': ('.uncle/workflow/project-plan-investigation.md', 'PROJECT_PLAN.md'),
+    'updated-plan-investigate': ('.uncle/workflow/updated-plan-investigation.md', 'UPDATED_PROJECT_PLAN.md'),
+    'requirements-investigate': ('.uncle/workflow/requirements-investigation.md', 'REQUIREMENTS_INTERPRETATION.md'),
+    'adversarial-review-investigate': ('.uncle/workflow/adversarial-review-investigation.md', 'ADVERSARIAL_REVIEW.md'),
+    'final-audit-investigate': ('.uncle/workflow/final-audit-investigation.md', 'FINAL_AUDIT.md'),
+    'manual-checklist-investigate': ('.uncle/workflow/manual-checklist-investigation.md', 'MANUAL_CHECKLIST.md'),
+    'preflight-investigate': ('.uncle/workflow/preflight-investigation.md', 'PREFLIGHT_REPORT.md'),
+    'implementation-investigate': ('.uncle/workflow/implementation-notes-investigation.md', 'IMPLEMENTATION_NOTES.md'),
+    'repair-investigate': ('.uncle/workflow/repair-notes-investigation.md', 'REPAIR_NOTES.md'),
+}
+
+
+def validate_investigation(document, text):
+    """Use the destination's checks, isolating validators' canonical exports.
+
+    Probing a candidate must not publish any side effects. The driver still
+    exports and validates the adopted file through its ordinary handoff.
+    """
+    if document in ('PROJECT_PLAN.md', 'UPDATED_PROJECT_PLAN.md'):
+        return validate_plan(text, protected=document == 'UPDATED_PROJECT_PLAN.md')
+    if document in ('IMPLEMENTATION_NOTES.md', 'REPAIR_NOTES.md'):
+        # These handoffs are preserved as Markdown fragments by the driver.
+        # Use their explicit section contract for both tool writes and capture;
+        # a heading-only status message is not complete notes.
+        from reviewer_output import check
+        check(text, 'self-hosted investigation')
+        headings = ('Changed files', 'Deviations', 'Unresolved concerns', 'Plan blockers')
+        if document == 'REPAIR_NOTES.md':
+            headings += ('Findings not fixed',)
+        for heading in headings:
+            if not re.search(r'^##[ \t]+' + re.escape(heading) + r'[ \t]*\n(?:[ \t]*\n)*(?!#)\S', text, re.M):
+                raise ValueError('Missing or empty investigation section: ' + heading)
+        return
+    with tempfile.TemporaryDirectory(prefix='uncle-capture-check-') as directory:
+        candidate = Path(directory) / document
+        candidate.write_text(text, encoding='utf-8')
+        if document == 'PREFLIGHT_REPORT.md':
+            import acceptance_context
+            acceptance_context.export_json(candidate, directory)
+            acceptance_context.validate_canonical(Path(directory) / '.uncle/workflow/documents/PREFLIGHT_REPORT.json')
+            return
+        from process_tree import python3_executable
+        result = subprocess.run([python3_executable(), '-B', str(Path(__file__).parent / REVIEW_VALIDATORS[document]),
+                                 '--validate', str(candidate)], cwd=directory, capture_output=True, text=True, timeout=60)
+        if result.returncode:
+            reason = (result.stderr or result.stdout).strip().splitlines()
+            raise ValueError(reason[0] if reason else 'Invalid ' + document)
 
 
 class InvalidReviewerDocument(ValueError):
@@ -940,7 +1015,7 @@ def validate_reviewer_document(output, document):
 
 def reviewer_packet(response, output):
     """Return a strict JSON worker packet without Markdown document extraction."""
-    text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    text = strip_reasoning(response).strip()
     artifact_json = _artifact_json_module()
     payload_text = artifact_json.unfence_json(text)
     try:
@@ -990,7 +1065,7 @@ def reviewer_json_artifact(response, output):
     ``*-worker-packet`` kind.  The stage driver owns kind-specific validation
     after this boundary; here we only reject prose or an invalid envelope.
     """
-    text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    text = strip_reasoning(response).strip()
     artifact_json = _artifact_json_module()
     payload_text = artifact_json.unfence_json(text)
     try:
@@ -1026,7 +1101,7 @@ def reviewer_document(response):
     real checklist fenced in full below it -- and the naive first-heading scan
     published the whole thing, fence markers included, as the document.
     """
-    text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    text = strip_reasoning(response).strip()
     lines = text.splitlines()
 
     def first_heading(candidate):
@@ -1130,7 +1205,7 @@ def is_json_response(text):
 
 
 def document_response(response, artifact, expected_kind='plan', require_dispositions=False):
-    text = re.sub(r'<think>.*?</think>', '', response, flags=re.S).strip()
+    text = strip_reasoning(response).strip()
     _artifact_json = _artifact_json_module()
     unfenced = _artifact_json.unfence_json(text)
     if expected_kind == 'change-planning-bundle' and unfenced.startswith('{'):
@@ -1288,6 +1363,39 @@ def publish_file_delivery(root, raw, expected_kind):
         if os.path.exists(pending):
             os.unlink(pending)
 
+
+
+def repair_http_plan(values, prompt, root, raw, error, artifact, kind, usage,
+                     protected=False, require_dispositions=False):
+    """Keep the rejected JSON and ask only for anchored corrections, once.
+
+    This is still the existing bounded retry. Both the repair tool and the
+    caller run the normal validators; no repaired draft is trusted implicitly.
+    """
+    from http_agent import Policy, run_agent
+    from self_hosted_http import conforms
+    relative = '.uncle/workflow/plan-repair.json'
+    schema = artifact_schema(kind, protected, require_dispositions)
+
+    def validate(text):
+        conforms(json.loads(text), schema)
+        document = document_response(text, artifact, kind, require_dispositions)
+        if kind == 'plan':
+            validate_plan(document, protected=protected)
+
+    policy = Policy(root, write=True, writable=[relative], drafts={relative: validate})
+    path = policy.root / relative
+    policy.drafts[path] = raw
+    policy.draft_errors[path] = str(error)
+    request = (prompt + '\n\nTargeted validation repair (overrides delivery instructions above):\n'
+               'The existing JSON draft is retained at ' + relative + '. Validation failed: ' + str(error) +
+               '\nUse read_file to inspect only the needed lines, then edit_file with a unique old_string and '
+               'the minimal replacement. Keep all unaffected content. Do not write or return the full JSON '
+               'again. The tools validate every edit. Finish with a brief status only after the error is fixed.')
+    _, turns = run_agent(values, request, policy, output_token_limit(os.environ.get('UNCLE_STATUS_STAGE', '')),
+                         turns=int(values.get('max_turns') or 80), usage=usage,
+                         seconds=int(os.environ.get('WORKFLOW_SELF_HOSTED_SECONDS', '3600')))
+    return path.read_text(encoding='utf-8'), turns
 
 
 def run_opencode(side, values, prompt, root, stage=None, usage=None):
@@ -1455,11 +1563,16 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
             request = (prompt + '\nCreate one JSON object matching this contract; do not return Markdown:\n'
                        '`{"schema":"uncle.artifact/v1",' + kind_fields + '}`.\n' + tail + delivery_notice)
             turns = 0
+            repair = None
             for attempt in range(2):
                 attempt_usage = {}
                 canonical_response = None
                 try:
-                    if use_http:
+                    if use_http and repair is not None:
+                        response, count = repair_http_plan(values, request, staged, *repair, artifact, expected_kind,
+                                                           attempt_usage, protected=Path(artifact).name == 'UPDATED_PROJECT_PLAN.md',
+                                                           require_dispositions=require_dispositions)
+                    elif use_http:
                         response, count = run_http_agent(side, values, request, staged, allow_shell=False, usage=attempt_usage,
                                                          schema_kind=expected_kind, read_cache=read_cache,
                                                          protected=Path(artifact).name == 'UPDATED_PROJECT_PLAN.md',
@@ -1522,9 +1635,11 @@ def run_opencode(side, values, prompt, root, stage=None, usage=None):
                     if candidate.exists():
                         candidate.unlink()
                     print('Plan response format rejected; retrying once. Response saved to ' + rejected, file=sys.stderr)
-                    request += ('\nThe previous response was rejected: ' + str(error) +
-                                ('\nReturn the complete JSON object again, exactly matching the contract above.' if use_http else
-                                 '\nUse Write to replace the required isolated delivery file with the complete JSON object again, exactly matching the contract above. Do not write Markdown or any other file.'))
+                    if use_http:
+                        repair = (canonical_response or response, str(error))
+                    else:
+                        request += ('\nThe previous response was rejected: ' + str(error) +
+                                    '\nUse Write to replace the required isolated delivery file with the complete JSON object again, exactly matching the contract above. Do not write Markdown or any other file.')
                     continue
                 break
         if not candidate.is_file() or candidate.is_symlink():
@@ -1697,6 +1812,8 @@ def main(side, args):
         stage = Path(output).stem.lower().replace('_','-')
     config = os.environ.get('UNCLE_CONFIG', str(Path.cwd()/'.uncle/config'))
     values = settings(config, stage)
+    from self_hosted_http import configure_request_options, _config_values
+    values = configure_request_options(values, stage, _config_values(config))
     values['max_turns'] = _turns
     if effort:
         values['effort'] = effort

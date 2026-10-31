@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_checklist_panel's synthesis prompt names its source template as a bare
+# run_checklist_panel's fallback prompt names its source template as a bare
 # relative path ("prompts/change/manual-checklist-base.md"), which is only
 # meaningful relative to the uncle installation (ROOT). change-workflow.sh
 # runs with the project under change (PROJECT_ROOT) as its cwd throughout,
@@ -14,7 +14,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 export ROOT
 
-mkdir -p "$work/project" "$work/project/.uncle/workflow/logs"
+mkdir -p "$work/project" "$work/project/.uncle/workflow/logs" "$work/project/.uncle/workflow/documents"
 cd "$work/project"
 
 cat > harness.sh <<'EOF'
@@ -33,11 +33,18 @@ CODEX_EFFORT_CHECKLIST=low
 # exactly that line, which is all this test is about.
 WORKFLOW_MANUAL_CHECKLIST_PANEL=0
 EOF
-awk '/^resolve_prompt\(\)/{p=1} p{print} p && /^}$/{exit}' "$ROOT/scripts/change-workflow.sh" >> harness.sh
+printf '%s\n' '. "$ROOT/scripts/lib/workflow-paths-change.sh"' >> harness.sh
+awk '/^checklist_worker_codex\(\)/{p=1} p{print} p && /^}$/{exit}' "$ROOT/scripts/change-workflow.sh" >> harness.sh
 awk '/^run_checklist_panel\(\)/{p=1} p{print} p && /^}$/{exit}' "$ROOT/scripts/change-workflow.sh" >> harness.sh
 cat >> harness.sh <<'EOF'
-run_checklist_panel base prompts/change/manual-checklist-base.md
+# Without a panel, the parent consumes the resolved template directly.
+WORKFLOW_MANUAL_CHECKLIST_PANEL=0 run_checklist_panel base prompts/change/manual-checklist-base.md
 cp "$CHECKLIST_PANEL_PROMPT" synthesis-out.md
+# With a panel, workers now deliver collated canonical JSON, not a synthesis
+# prompt. Both paths must work with cwd outside the installation.
+run_checklist_panel base prompts/change/manual-checklist-base.md
+[[ "$CHECKLIST_PANEL_DIRECT" == 1 ]]
+cp "$CHECKLIST_PANEL_PROMPT" panel-out.json
 EOF
 
 bash harness.sh

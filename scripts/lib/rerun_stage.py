@@ -24,6 +24,12 @@ def consume(root, family):
     step=STEP.fullmatch(name)
     if not supports(name, family): raise ValueError('Unsupported stage for '+family+': '+name)
     target='implementation' if step else name
+    if (family == 'change' and name == 'change-plan' and data.get('source') == 'supervisor-retry'
+            and (state/'state').read_text().strip().split(':')[-1] == 'ANALYZE'):
+        # Combined planning also reports the stage name change-plan, but its
+        # baseline/spec have not reached approval yet. Resume that producer,
+        # rather than PLAN, which requires their already-recorded approvals.
+        target='baseline'
     step_number=0
     if step:
         steps=state/'implement-steps.txt'

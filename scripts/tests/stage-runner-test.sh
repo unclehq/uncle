@@ -12,6 +12,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+export WORKFLOW_CLAUDE_CMD=/usr/bin/false
+export UNCLE_TEST_ARTIFACT_FIXTURE="$ROOT/scripts/tests/stage_artifact_fixture.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -50,6 +52,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (bindir / "tr").symlink_to(shutil.which("tr"))
     for driver in ("stagegate.sh", "change-workflow.sh"):
         source = (root / "scripts" / driver).read_text()
+        family = "app" if driver == "stagegate.sh" else "change"
         names = ("upper", "stage_var", "stage_setting", "stage_setting_opt",
                  "stage_agent_cmd", "stage_command_overridden", "stage_runner_config_name",
                  "stage_model", "stage_model_for",
@@ -67,7 +70,8 @@ with tempfile.TemporaryDirectory() as tmp:
                 # operator-configured default runner; isolate from that so
                 # "nothing installed" still resolves to nothing, not a
                 # hardcoded assumption that fails later with a raw shell error.
-                '. "$ROOT/scripts/lib/stage-config.sh"; UNCLE_DEFAULT_RUNNER=; ' + functions +
+                '. "$ROOT/scripts/tests/workflow_fixture.sh"; workflow_fixture_source "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/stage-config.sh" "$ROOT/scripts/lib/stage-runtime.sh" '
+                f'"$ROOT/scripts/lib/stage-runtime-{family}.sh"; UNCLE_DEFAULT_RUNNER=; ' + functions +
                 '\nresolve_prompt() { printf "%s" "$1"; }\n'
                 'require_file() { printf "%s|%s" "$cmd" "$model"; exit 0; }\n'
                 # Rename the real resolver, then remove Claude after command selection.
@@ -114,38 +118,7 @@ make_agent_stub() {
 #!/usr/bin/env bash
 printf '$tag %s\n' "\$*" >> "\$ARGV_LOG"
 cat > /dev/null
-# The requirements stage now reads a canonical requirements-interpretation
-# JSON delivery (UNCLE_ARTIFACT_DELIVERY), not the rendered Markdown view
-# directly; publish_agent_artifact.py renders REQUIREMENTS_INTERPRETATION.md
-# from it. Writing only the Markdown (the old contract) left the delivery
-# file missing, which run_claude now treats as a rejected artifact and
-# retries forever.
-if [[ -n "\${UNCLE_ARTIFACT_DELIVERY:-}" ]]; then
-    mkdir -p "\$(dirname "\$UNCLE_ARTIFACT_DELIVERY")"
-    # change-workflow.sh's combined planning pass delivers one
-    # change-planning-bundle packet, not the requirements-interpretation
-    # schema every other canonical delivery here uses; writing the wrong
-    # schema at that path is rejected as "canonical change-planning bundle
-    # has the wrong schema" and the stage never completes. Branch on the
-    # delivery filename the same way the other fixed stubs this session do.
-    case "\$UNCLE_ARTIFACT_DELIVERY" in
-        */change-planning-bundle.json)
-            cat > "\$UNCLE_ARTIFACT_DELIVERY" <<'JSON'
-{"schema":"uncle.artifact/v1","kind":"change-planning-bundle","baseline_report":{"schema":"uncle.artifact/v1","kind":"baseline-report","narrative":"","verification_commands":"true"},"change_spec":{"schema":"uncle.artifact/v1","kind":"change-spec","narrative":"","acceptance_criteria":[{"id":"AC-1","criterion":"stub","verification":"true"}]},"change_plan":{"schema":"uncle.artifact/v1","kind":"change-plan","narrative":"## Change-impact table\n\n| Component |\n|---|\n| \`app/main.sh\` |\n"}}
-JSON
-            ;;
-        */change-plan.json|*/updated-change-plan.json)
-            cat > "\$UNCLE_ARTIFACT_DELIVERY" <<'JSON'
-{"schema":"uncle.artifact/v1","kind":"change-plan","narrative":"## Change-impact table\n\n| Component |\n|---|\n| \`app/main.sh\` |\n"}
-JSON
-            ;;
-        *)
-            cat > "\$UNCLE_ARTIFACT_DELIVERY" <<'JSON'
-{"schema":"uncle.artifact/v1","kind":"requirements-interpretation","sections":{"required_functionality":"Required.","optional_functionality":"None.","constraints":"None.","user_visible_behaviors":"Visible.","system_behaviors":"System behavior.","failure_behaviors":"Fail clearly.","ambiguities":"None.","assumptions":"None.","explicit_non_goals":"None.","definition_of_done":"Done."}}
-JSON
-            ;;
-    esac
-fi
+python3 "\$UNCLE_TEST_ARTIFACT_FIXTURE" 1
 printf '# baseline\n\n## 8. Verification commands\n\n\`\`\`sh\ntrue\n\`\`\`\n' > BASELINE_REPORT.md
 printf '# spec\n' > CHANGE_SPEC.md
 printf '# plan\n' > CHANGE_PLAN.md
@@ -161,6 +134,9 @@ make_agent_stub "$TMP/agent-stage" "STAGE"
 
 PROJ="$TMP/newapp"
 mkdir -p "$PROJ"
+# Give both byte-for-byte candidate comparisons the same initialized checkout.
+git -C "$PROJ" init -q
+git -C "$PROJ" config commit.gpgsign false
 printf '# Project brief\n\n## Summary\nToy.\n' > "$PROJ/REQUIREMENTS.md"
 ARGV="$TMP/sg.argv"
 : > "$ARGV"
@@ -352,6 +328,9 @@ hash_file "$RPROJ/.uncle/docs/PROJECT_PLAN.md" > "$RPROJ/.uncle/workflow/approva
 cat > "$TMP/config-reviewer" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$ARGV_LOG"
+if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" ]]; then
+    printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"adversarial-review","overall_assessment":"No findings.","findings":[]}' > "$UNCLE_ARTIFACT_DELIVERY"
+fi
 while [[ $# -gt 0 ]]; do
     if [[ "$1" == --output-last-message ]]; then
         cat > "$2" <<'DOC'
@@ -370,15 +349,15 @@ chmod +x "$TMP/config-reviewer"
 printf 'adversarial-review.runner cline\nadversarial-review.model vendor/reviewer\nadversarial-review.effort low\n' > "$RPROJ/.uncle/config"
 printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workflow/state"
 UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \
-    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null 2>&1
+    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null 2>&1
 argv="$(cat "$TMP/reviewer.argv")"
 check_contains 'reviewer: configured model is used' '-m vendor/reviewer' "$argv"
 check_contains 'reviewer: configured effort is used' 'model_reasoning_effort=low' "$argv"
-check_contains 'reviewer: sandbox is retained' '--sandbox read-only' "$argv"
+check_contains 'reviewer: canonical delivery uses the required sandbox' '--sandbox workspace-write' "$argv"
 printf 'adversarial-review.runner codex\nadversarial-review.effort high\n' > "$RPROJ/.uncle/config"
 printf 'ADVERSARIAL_REVIEW\n' > "$RPROJ/.uncle/workflow/state"
 UNCLE_PROJECT_ROOT="$RPROJ" WORKFLOW_REVIEWER_CMD="$TMP/config-reviewer" \
-    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_EFFORT_ADVERSARIAL_REVIEW=low \
+    ARGV_LOG="$TMP/reviewer.argv" WORKFLOW_SPECULATE=0 WORKFLOW_ADVERSARIAL_REVIEW_PANEL=0 WORKFLOW_EFFORT_ADVERSARIAL_REVIEW=low \
     bash "$ROOT/scripts/stagegate.sh" < /dev/null > /dev/null
 argv="$(cat "$TMP/reviewer.argv")"
 check_contains 'reviewer: explicit effort wins' 'model_reasoning_effort=low' "$argv"

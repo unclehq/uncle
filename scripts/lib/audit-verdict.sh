@@ -288,8 +288,10 @@ final_audit_override_recovery() {
 
     if [[ "$audit_class" == NOT_READY ]]; then
         audit_hash="$(hash_file "$STATE_DIR/documents/FINAL_AUDIT.json")"
-        if [[ "$(classify_audit_verdict "$STATE_DIR/documents/FINAL_AUDIT.json")" != NOT_READY ]] \
-            || [[ "$(verdict_file_field "$VERDICT_FILE" hash)" != "$audit_hash" ]]; then
+        # VALIDATE_AUDIT may downgrade a reviewer's READY based on driver
+        # evidence. The recorded digest, not agreement with that reviewer's
+        # verdict, proves the artifact is unchanged.
+        if [[ "$(verdict_file_field "$VERDICT_FILE" hash)" != "$audit_hash" ]]; then
             echo "The audit changed since its verdict was recorded; rerun FINAL_AUDIT."
             exit 1
         fi

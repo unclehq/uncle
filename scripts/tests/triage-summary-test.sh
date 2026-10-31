@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 # No stage may reach a real runner from a test: every stage command is a stub that fails.
-export UNCLE_CONFIG=/dev/null WORKFLOW_AGENT_CMD=/usr/bin/false WORKFLOW_REVIEWER_CMD=/usr/bin/false WORKFLOW_CODEX_CMD=/usr/bin/false
+export UNCLE_CONFIG=/dev/null WORKFLOW_AGENT_CMD=/usr/bin/false WORKFLOW_REVIEWER_CMD=/usr/bin/false WORKFLOW_CODEX_CMD=/usr/bin/false WORKFLOW_CLAUDE_CMD=/usr/bin/false
 unset UNCLE_STATUS_STAGE UNCLE_DRIVER_SUPERVISED UNCLE_PROJECT_ROOT 2>/dev/null || true
 
 FAILED=0

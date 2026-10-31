@@ -100,10 +100,12 @@ class SelfHostedHttp(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         http_transport._capabilities.clear()
+        http_transport._request_features.clear()
         http_transport.close_connections()
         self.addCleanup(http_transport.close_connections)
         # What the driver learns about the server is stored in the project; keep it in this test's.
-        isolate = patch.dict(os.environ, {'UNCLE_PROJECT_ROOT': str(self.root)})
+        isolate = patch.dict(os.environ, {'UNCLE_PROJECT_ROOT': str(self.root),
+                                           'WORKFLOW_SELF_HOSTED_REASONING_EFFORT': 'on'})   # opt-in hint under test
         isolate.start()
         self.addCleanup(isolate.stop)
 
@@ -156,13 +158,18 @@ class SelfHostedHttp(unittest.TestCase):
                                        final_schema=artifact_schema('plan'), final_name='plan')
         self.assertEqual(json.loads(text)['verification_commands'].splitlines(), ['npm ci', 'npm test', 'npm run build'])
 
-    def test_a_message_that_breaks_the_schema_still_gets_the_closing_request(self):
+    def test_a_plan_that_breaks_the_schema_gets_a_targeted_repair_request(self):
         broken = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': 'x'}   # no verification_commands
-        server = self.serve(PLAN, tool_script=[{'role': 'assistant', 'content': json.dumps(broken)}])
+        server = self.serve('unused', tool_script=[{'role': 'assistant', 'content': json.dumps(broken)},
+            self.call('edit_file', {'path': '.uncle/workflow/http-answer-repair.json',
+                                   'old_string': '"narrative": "x"',
+                                   'new_string': '"narrative": "x", "verification_commands": "true"'}),
+            {'role': 'assistant', 'content': 'Fixed.'}])
         text, _ = http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 4096, usage={},
                                        final_schema=artifact_schema('plan'), final_name='plan')
-        self.assertEqual(json.loads(text), PLAN)
-        self.assertEqual(len([1 for _path, body in server.requests if not body.get('tools')]), 1)
+        self.assertEqual(json.loads(text), dict(broken, verification_commands='true'))
+        self.assertEqual(len([1 for _path, body in server.requests if not body.get('tools')]), 0)
+        self.assertIn('missing required field verification_commands', server.requests[1][1]['messages'][1]['content'])
 
     def test_a_message_that_is_only_prose_gets_the_closing_request(self):
         server = self.serve(PLAN, tool_script=[{'role': 'assistant', 'content': 'All done, the work is finished.'}])
@@ -220,6 +227,7 @@ class SelfHostedHttp(unittest.TestCase):
                 self.plan(server, explore_first=False)
         ollama = self.serve(PLAN, version=('/api/version',))
         http_transport._capabilities.clear()
+        http_transport._request_features.clear()
         self.plan(ollama, explore_first=False)
         self.assertEqual(ollama.requests[-1][1]['options']['temperature'], 0.0)
 
@@ -747,7 +755,12 @@ class SelfHostedHttp(unittest.TestCase):
         usage = {}
         self.plan(server, usage=usage, explore_first=False)
         self.assertEqual(usage['constraint_mode'], 'json_object')
-        self.assertEqual([(c.get('response_format') or {}).get('type') for c in calls], ['json_schema', 'json_object'])
+        self.assertEqual([(c.get('response_format') or {}).get('type') for c in calls],
+                         ['json_schema'] * 6 + ['json_object'])
+        # A generic 400 probes streaming/usage, then effort, without dropping
+        # the schema until all otherwise-identical probes have failed.
+        self.assertEqual([c.get('reasoning_effort') for c in calls], ['low'] * 3 + [None] * 3 + ['low'])
+        self.assertEqual([c['stream'] for c in calls], [True, True, False] * 2 + [True])
         # The refusal is remembered for the next stage.
         calls.clear()
         self.plan(server, explore_first=False)
@@ -927,7 +940,7 @@ class SelfHostedHttp(unittest.TestCase):
         http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
                              final_schema=artifact_schema('adversarial-review-worker-packet'),
                              final_name='adversarial_review_worker_packet')
-        # The grammar-constrained try is capped lower than the unconstrained retry.
+        # Both paths honor the small packet ceiling.
         self.assertEqual(self.final(server)['max_tokens'], 4096)
 
     def test_a_worker_packet_asks_for_compact_json_and_retries_with_the_full_cap(self):
@@ -942,7 +955,7 @@ class SelfHostedHttp(unittest.TestCase):
             http_agent.run_agent(self.values(server), 'Go.', http_agent.Policy(self.root), 64512, turns=0, usage={},
                                  final_schema=artifact_schema('adversarial-review-worker-packet'),
                                  final_name='adversarial_review_worker_packet')
-        self.assertEqual([(m, l) for m, l, _ in caps], [('json_schema', 4096), ('prompt', 8192)])
+        self.assertEqual([(m, l) for m, l, _ in caps], [('json_schema', 4096), ('prompt', 4096)])
         self.assertIn('Write it compactly', caps[0][2])
 
     def test_a_server_that_keeps_looping_on_whitespace_skips_the_grammar_for_packets(self):

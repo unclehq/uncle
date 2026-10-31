@@ -13,7 +13,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 # No stage may reach a real runner from a test: every stage command is a stub that fails.
-export UNCLE_CONFIG=/dev/null WORKFLOW_AGENT_CMD=/usr/bin/false WORKFLOW_REVIEWER_CMD=/usr/bin/false WORKFLOW_CODEX_CMD=/usr/bin/false
+export UNCLE_CONFIG=/dev/null WORKFLOW_AGENT_CMD=/usr/bin/false WORKFLOW_REVIEWER_CMD=/usr/bin/false WORKFLOW_CODEX_CMD=/usr/bin/false WORKFLOW_CLAUDE_CMD=/usr/bin/false
 unset UNCLE_STATUS_STAGE UNCLE_DRIVER_SUPERVISED UNCLE_PROJECT_ROOT 2>/dev/null || true
 
 FAILED=0
@@ -297,11 +297,11 @@ fixture() {
     [[ -z "$report" ]] || printf '%s\n' "$text" > "$report"
 }
 
-fixture F1 adversarial-review 'jq: error (at <stdin>:12): Cannot iterate over null' ADVERSARIAL_REVIEW.md '# review'
+fixture F1 adversarial-review 'jq: error (at <stdin>:12): Cannot iterate over null' .uncle/docs/ADVERSARIAL_REVIEW.md '# review'
 write_triage .uncle/workflow "$B"
 check_contains "F1 jq parse error" "jq: error (at <stdin>:12): Cannot iterate over null" "$B"
 
-fixture F2 final-audit 'commit 3f2a9c signed with wrong parent; retrying signature (attempt 4)' FINAL_AUDIT.md '# audit'
+fixture F2 final-audit 'commit 3f2a9c signed with wrong parent; retrying signature (attempt 4)' .uncle/docs/FINAL_AUDIT.md '# audit'
 write_triage .uncle/workflow "$B"
 check_contains "F2 wrong-parent commit loop" "signed with wrong parent; retrying signature (attempt 4)" "$B"
 
@@ -309,7 +309,7 @@ fixture F3 baseline 'ConnectionRefusedError: [Errno 61] Connection refused (http
 write_triage .uncle/workflow "$B"
 check_contains "F3 self-hosted endpoint refused" "Connection refused (http://127.0.0.1:11434/v1)" "$B"
 
-fixture F4 requirements "early-prerequisites: REQUIREMENTS.md row 'Goal' is empty (EMPTY ROW)" REQUIREMENTS_INTERPRETATION.md '| Goal | EMPTY ROW |' REQUIREMENTS
+fixture F4 requirements "early-prerequisites: REQUIREMENTS.md row 'Goal' is empty (EMPTY ROW)" .uncle/docs/REQUIREMENTS_INTERPRETATION.md '| Goal | EMPTY ROW |' REQUIREMENTS
 write_triage .uncle/workflow "$B"
 check_contains "F4 empty requirement rows" "row 'Goal' is empty (EMPTY ROW)" "$B"
 

@@ -9,6 +9,12 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$ROOT/scripts/lib/sha256.sh"   # hash_file, portable across platforms
 
+# The driver must never launch a real supervisor from these stubbed workflows.
+export UNCLE_SUPERVISION_HOST=close-flow-test
+export PYTHONDONTWRITEBYTECODE=1
+# These fixtures model the single reviewer, not specialist worker packets.
+export WORKFLOW_FINAL_AUDIT_PANEL=0
+
 TMP="$(mktemp -d)"
 trap 'if [[ "${UNCLE_KEEP_TEST_TMP:-0}" == 1 ]]; then echo "Kept close-flow fixtures: $TMP"; else rm -rf "$TMP"; fi' EXIT
 
@@ -95,7 +101,7 @@ new_case() {
     OUT="$CASE/out.txt"
     GH_LOG="$CASE/gh.log"
 
-    mkdir -p "$REPO/scripts/lib" "$REPO/.uncle/workflow" "$CASE/bin"
+    mkdir -p "$REPO/scripts/lib" "$REPO/.uncle/workflow" "$REPO/.uncle/docs" "$CASE/bin"
     cp "$ROOT/scripts/from-issue.sh" "$REPO/scripts/from-issue.sh"
     cp "$ROOT"/scripts/lib/*.sh "$REPO/scripts/lib/"
     cp "$ROOT"/scripts/lib/*.py "$REPO/scripts/lib/"
@@ -130,12 +136,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 mkdir -p .uncle/workflow
 echo "ran" >> .uncle/workflow/driver.log
+printf '%s\n' "${FAKE_DRIVER_STATE:-COMPLETE}" > .uncle/workflow/state
 if [[ -n "${FAKE_DRIVER_VERDICT_TEXT:-}" ]]; then
-    printf '%s\n' "$FAKE_DRIVER_VERDICT_TEXT" > FINAL_AUDIT.md
+    printf '%s\n' "$FAKE_DRIVER_VERDICT_TEXT" > .uncle/docs/FINAL_AUDIT.md
     . "$ROOT/scripts/lib/audit-verdict.sh"
     . "$ROOT/scripts/lib/sha256.sh"
-    class="$(classify_audit_verdict FINAL_AUDIT.md)"
-    hash="$(hash_file FINAL_AUDIT.md)"
+    class="$(classify_audit_verdict .uncle/docs/FINAL_AUDIT.md)"
+    hash="$(hash_file .uncle/docs/FINAL_AUDIT.md)"
     printf '%s\t%s\t%s\n' \
         "${STAGEGATE_RUN_ID:--}" "$class" "$hash" \
         > .uncle/workflow/audit-verdict
@@ -216,7 +223,7 @@ gate_input() {
 }
 
 # Prepares the scratch repo to run the real driver's FINAL_AUDIT stage with a
-# reviewer stub that writes <verdict text> into FINAL_AUDIT.md.
+# reviewer stub that writes <verdict text> into .uncle/docs/FINAL_AUDIT.md.
 setup_audit_stage() {
     local verdict="$1" finding=""
     if [[ "$verdict" == "NOT READY" ]]; then
@@ -224,21 +231,36 @@ setup_audit_stage() {
     fi
     mkdir -p "$REPO/prompts/change"
     mkdir -p "$REPO/.uncle/workflow/approvals"
-    printf 'Approved fixture plan\n' > "$REPO/CHANGE_PLAN.md"
-    cat > "$REPO/CHANGE_SPEC.md" <<'SPEC'
+    printf 'Approved fixture plan\n' > "$REPO/.uncle/docs/CHANGE_PLAN.md"
+    cat > "$REPO/.uncle/docs/CHANGE_SPEC.md" <<'SPEC'
 ## Acceptance criteria
+
 | ID | Criterion | Verification |
 |---|---|---|
 | AC-1 | Fixture behavior | Fixture check |
 SPEC
-    cat > "$REPO/IMPLEMENTATION_NOTES.md" <<'NOTES'
+    cat > "$REPO/.uncle/docs/IMPLEMENTATION_NOTES.md" <<'NOTES'
 ## Acceptance delivery
 | ID | Status | Changed code | Observed targeted verification |
 |---|---|---|---|
 | AC-1 | IMPLEMENTED | Fixture code | Fixture check PASS |
 NOTES
-    hash_file "$REPO/CHANGE_SPEC.md" > "$REPO/.uncle/workflow/approvals/CHANGE_SPEC.sha256"
-    hash_file "$REPO/CHANGE_PLAN.md" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
+    python3 - "$ROOT" "$REPO" <<'CANONICAL'
+import json
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(sys.argv[1]) / 'scripts/lib'))
+from plan_context import export_change_plan, export_change_spec
+repo = Path(sys.argv[2])
+for name, export in [('CHANGE_SPEC', export_change_spec), ('CHANGE_PLAN', export_change_plan)]:
+    export(repo / '.uncle/docs' / (name + '.md'), repo)
+(repo / '.uncle/workflow/documents/IMPLEMENTATION_NOTES.json').write_text(json.dumps({
+    'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
+    'deliveries': [{'id': 'AC-1', 'status': 'IMPLEMENTED', 'changed_code': 'Fixture code',
+                    'observed_verification': 'Fixture check PASS'}]}))
+CANONICAL
+    hash_file "$REPO/.uncle/workflow/documents/CHANGE_SPEC.json" > "$REPO/.uncle/workflow/approvals/CHANGE_SPEC.sha256"
+    hash_file "$REPO/.uncle/workflow/documents/CHANGE_PLAN.json" > "$REPO/.uncle/workflow/approvals/CHANGE_PLAN.sha256"
     cp "$ROOT/prompts/change/final-audit.md" "$REPO/prompts/change/final-audit.md"
     cat > "$CASE/bin/fake-reviewer" <<REV
 #!/usr/bin/env bash
@@ -436,11 +458,13 @@ new_case stale-audit-rejected
 setup_audit_stage READY
 mkdir -p "$REPO/prompts/change"
 cp "$ROOT/prompts/change/final-audit.md" "$REPO/prompts/change/final-audit.md"
-printf 'READY\n' > "$REPO/FINAL_AUDIT.md"
+printf 'READY\n' > "$REPO/.uncle/docs/FINAL_AUDIT.md"
+printf '%s\n' '{"schema":"uncle.artifact/v1","kind":"final-audit","findings":[],"verdict":"READY"}' \
+    > "$REPO/.uncle/workflow/documents/FINAL_AUDIT.json"
 printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
 run_driver WORKFLOW_REVIEWER_CMD=/usr/bin/true STAGEGATE_RUN_ID=run-1
 expect_status 1
-expect_out "Required file missing or empty: FINAL_AUDIT.md"
+expect_out "Required file missing or empty: $REPO/.uncle/docs/FINAL_AUDIT.md"
 COUNT=$((COUNT + 1))
 if [[ -e "$REPO/.uncle/workflow/audit-verdict" ]]; then
     fail "no verdict may be recorded when the audit was not produced"
@@ -469,7 +493,7 @@ run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-
 expect_status 0
 expect_out "Audit verdict: READY"
 COUNT=$((COUNT + 1))
-expected_record="$(printf 'run-1\tREADY\t%s' "$(hash_file "$REPO/FINAL_AUDIT.md")")"
+expected_record="$(printf 'run-1\tREADY\t%s' "$(hash_file "$REPO/.uncle/workflow/documents/FINAL_AUDIT.json")")"
 if [[ "$(cat "$REPO/.uncle/workflow/audit-verdict")" != "$expected_record" ]]; then
     fail "verdict record mismatch: $(cat "$REPO/.uncle/workflow/audit-verdict")"
 fi
@@ -581,7 +605,8 @@ expect_not_closed
 expect_no_marker
 
 for setting in WORKFLOW_CLOSE_ISSUE=0 UNATTENDED=1; do
-    new_case "git-disabled-$setting"
+    # env treats a command path containing '=' as another assignment.
+    new_case "git-disabled-${setting%%=*}"
     setup_audit_stage READY
     git -C "$REPO" init -q
     git -C "$REPO" add -A
@@ -631,7 +656,7 @@ expect_not_closed
 expect_no_marker
 
 # An audit whose last line is not one of the three verdict phrases is rejected
-# by deterministic validation before it can reach the audit gate.
+# by deterministic validation and represented as a blocking format finding.
 new_case direct-run-unknown-verdict-stops-at-gate
 setup_audit_stage "probably fine, ship it"
 printf 'FINAL_AUDIT\n' > "$REPO/.uncle/workflow/state"
@@ -640,7 +665,9 @@ run_driver WORKFLOW_REVIEWER_CMD="$CASE/bin/fake-reviewer" STAGEGATE_RUN_ID=run-
     STAGEGATE_ORIGIN_REPO=owner/repo STAGEGATE_ORIGIN_ISSUE=42
 expect_status 1
 expect_out "Audit format invalid: Missing final audit verdict"
-expect_state "42:VALIDATE_AUDIT"
+expect_state "42:WAIT_AUDIT_OVERRIDE"
+expect_out 'AUDIT-FORMAT'
+expect_not_out 'Change workflow complete.'
 expect_not_closed
 
 # Per-finding acceptance produces effective READY; retained blockers deny close.
@@ -778,11 +805,11 @@ expect_no_marker
 expect_close_count 0
 
 new_case direct-run-stale-sentinel-run-id-no-retry
-printf 'READY\n' > "$REPO/FINAL_AUDIT.md"
+printf 'READY\n' > "$REPO/.uncle/docs/FINAL_AUDIT.md"
 printf '42:COMPLETE\n' > "$REPO/.uncle/workflow/state"
 printf 'owner/repo\t42\tgh\n' > "$REPO/.uncle/workflow/origin"
 printf -- '-\tREADY\t%s\n' \
-    "$(hash_file "$REPO/FINAL_AUDIT.md")" \
+    "$(hash_file "$REPO/.uncle/docs/FINAL_AUDIT.md")" \
     > "$REPO/.uncle/workflow/audit-verdict"
 run_driver
 expect_status 0
@@ -969,6 +996,7 @@ elif args[:2] == ['pr', 'create']:
         self.git('push', '-q', 'origin', 'main')
         self.state = self.repo / '.uncle/workflow'
         self.state.mkdir(parents=True)
+        (self.repo / '.uncle/docs').mkdir(parents=True)
         (self.state / 'origin').write_text('owner/repo\t42\tgh\n')
         (self.repo / 'source.txt').write_text('audited\n')
         self.freeze()
@@ -995,8 +1023,8 @@ elif args[:2] == ['pr', 'create']:
 
     def freeze(self):
         self.ok(self.engine('freeze'))
-        (self.repo / 'FINAL_AUDIT.md').write_text('READY\n')
-        sha = hashlib.sha256((self.repo / 'FINAL_AUDIT.md').read_bytes()).hexdigest()
+        (self.repo / '.uncle/docs/FINAL_AUDIT.md').write_text('READY\n')
+        sha = hashlib.sha256((self.repo / '.uncle/docs/FINAL_AUDIT.md').read_bytes()).hexdigest()
         (self.state / 'audit-verdict').write_text('-\tREADY\t' + sha + '\n')
         self.ok(self.engine('bind'))
 
@@ -1022,7 +1050,7 @@ elif args[:2] == ['pr', 'create']:
         self.git('config', 'user.signingkey', str(key))
         self.git('config', 'gpg.ssh.allowedSignersFile', str(allowed))
         self.git('config', 'commit.gpgsign', 'true')
-        (self.repo / '.gitignore').write_text('FINAL_AUDIT.md\n')
+        (self.repo / '.gitignore').write_text('.uncle/docs/FINAL_AUDIT.md\n')
         (self.state / 'tracked').write_text('tracked state\n')
         self.git('add', '-f', '.uncle/workflow/tracked')
         self.git('commit', '--no-gpg-sign', '-qm', 'tracked workflow state')
@@ -1107,14 +1135,21 @@ elif args[:2] == ['pr', 'create']:
         self.assertEqual(len(self.creates()), 0)
 
     def test_driver_audit_to_pr_and_rerun(self):
-        (self.repo / 'CHANGE_SPEC.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Fixture behavior | Fixture check |\n')
-        (self.repo / 'CHANGE_PLAN.md').write_text('Approved fixture plan\n')
-        (self.repo / 'IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | IMPLEMENTED | source.txt | Fixture check PASS |\n')
+        (self.repo / '.uncle/docs/CHANGE_SPEC.md').write_text('## Acceptance criteria\n\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Fixture behavior | Fixture check |\n')
+        (self.repo / '.uncle/docs/CHANGE_PLAN.md').write_text('Approved fixture plan\n')
+        (self.repo / '.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | IMPLEMENTED | source.txt | Fixture check PASS |\n')
         approvals = self.state / 'approvals'
         approvals.mkdir(exist_ok=True)
-        for artifact in ('CHANGE_SPEC', 'CHANGE_PLAN'):
-            digest = hashlib.sha256((self.repo / (artifact + '.md')).read_bytes()).hexdigest()
+        sys.path.insert(0, str(ROOT / 'scripts/lib'))
+        from plan_context import export_change_plan, export_change_spec
+        for artifact, export in [('CHANGE_SPEC', export_change_spec), ('CHANGE_PLAN', export_change_plan)]:
+            export(self.repo / '.uncle/docs' / (artifact + '.md'), self.repo)
+            digest = hashlib.sha256((self.state / 'documents' / (artifact + '.json')).read_bytes()).hexdigest()
             (approvals / (artifact + '.sha256')).write_text(digest + '\n')
+        (self.state / 'documents/IMPLEMENTATION_NOTES.json').write_text(json.dumps({
+            'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
+            'deliveries': [{'id': 'AC-1', 'status': 'IMPLEMENTED', 'changed_code': 'source.txt',
+                            'observed_verification': 'Fixture check PASS'}]}))
         self.exe('reviewer', """#!/usr/bin/env python3
 from pathlib import Path
 import sys
@@ -1122,6 +1157,14 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
     '## Findings\\n\\n| ID | Evidence | Required correction | Blocks |\\n'
     '|---|---|---|---|\\n\\nREADY\\n')
 """)
+        # The real FINAL_AUDIT stage enforces release envelopes. Seed the
+        # completed earlier stages, bound to this exact working-file artifact.
+        from envelope import write_envelope
+        artifact = self.engine('artifact').stdout.strip()
+        self.assertRegex(artifact, r'^[0-9a-f]{40,64}$')
+        for stage in ('review', 'implementation', 'verification'):
+            write_envelope(self.state, stage, 'pass', artifact=artifact,
+                           inputs={'artifact': artifact}, root=self.repo)
         (self.state / 'state').write_text('42:FINAL_AUDIT\n')
         env = dict(self.env, UNCLE_PROJECT_ROOT=str(self.repo),
                    WORKFLOW_REVIEWER_CMD=str(self.bin / 'reviewer'), WORKFLOW_CLOSE_ISSUE='1', UNATTENDED='0')
@@ -1359,14 +1402,21 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
         self.assertEqual(self.engine('validate').returncode, 3)
 
     def test_complete_driver_verdict_override(self):
-        (self.repo / 'CHANGE_SPEC.md').write_text('## Acceptance criteria\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Fixture behavior | Fixture check |\n')
-        (self.repo / 'CHANGE_PLAN.md').write_text('Approved fixture plan\n')
-        (self.repo / 'IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | IMPLEMENTED | source.txt | Fixture check PASS |\n')
+        (self.repo / '.uncle/docs/CHANGE_SPEC.md').write_text('## Acceptance criteria\n\n| ID | Criterion | Verification |\n|---|---|---|\n| AC-1 | Fixture behavior | Fixture check |\n')
+        (self.repo / '.uncle/docs/CHANGE_PLAN.md').write_text('Approved fixture plan\n')
+        (self.repo / '.uncle/docs/IMPLEMENTATION_NOTES.md').write_text('## Acceptance delivery\n| ID | Status | Changed code | Observed targeted verification |\n|---|---|---|---|\n| AC-1 | IMPLEMENTED | source.txt | Fixture check PASS |\n')
         approvals = self.state / 'approvals'
         approvals.mkdir(exist_ok=True)
-        for artifact in ('CHANGE_SPEC', 'CHANGE_PLAN'):
-            digest = hashlib.sha256((self.repo / (artifact + '.md')).read_bytes()).hexdigest()
+        sys.path.insert(0, str(ROOT / 'scripts/lib'))
+        from plan_context import export_change_plan, export_change_spec
+        for artifact, export in [('CHANGE_SPEC', export_change_spec), ('CHANGE_PLAN', export_change_plan)]:
+            export(self.repo / '.uncle/docs' / (artifact + '.md'), self.repo)
+            digest = hashlib.sha256((self.state / 'documents' / (artifact + '.json')).read_bytes()).hexdigest()
             (approvals / (artifact + '.sha256')).write_text(digest + '\n')
+        (self.state / 'documents/IMPLEMENTATION_NOTES.json').write_text(json.dumps({
+            'schema': 'uncle.artifact/v1', 'kind': 'implementation-notes',
+            'deliveries': [{'id': 'AC-1', 'status': 'IMPLEMENTED', 'changed_code': 'source.txt',
+                            'observed_verification': 'Fixture check PASS'}]}))
         # A NOT READY audit the validator accepts: one explicit blocking finding.
         self.exe('reviewer', """#!/usr/bin/env python3
 from pathlib import Path
@@ -1568,8 +1618,8 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
 
     def test_symlink_audit_denies_binding(self):
         self.ok(self.engine('freeze'))
-        (self.repo / 'FINAL_AUDIT.md').unlink()
-        (self.repo / 'FINAL_AUDIT.md').symlink_to('source.txt')
+        (self.repo / '.uncle/docs/FINAL_AUDIT.md').unlink()
+        (self.repo / '.uncle/docs/FINAL_AUDIT.md').symlink_to('../../source.txt')
         self.assertIn('regular file', self.engine('bind').stdout)
 
     def test_worktree_git_file(self):
@@ -1578,6 +1628,7 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
         self.repo = worktree
         self.state = self.repo / '.uncle/workflow'
         self.state.mkdir(parents=True)
+        (self.repo / '.uncle/docs').mkdir(parents=True)
         (self.state / 'origin').write_text('owner/repo\t42\tgh\n')
         (self.repo / 'source.txt').write_text('worktree edit\n')
         self.assertTrue((self.repo / '.git').is_file())

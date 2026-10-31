@@ -1737,6 +1737,7 @@ class UncleTUI:
     LEGACY_REVIEWER_KEY = "reviewer"
 
     def load_config(self):
+        self.self_hosted_request_options = {}
         exists = os.path.exists(CONFIG_PATH)
         self.misc = {}
         self.supervision = {}
@@ -1763,6 +1764,13 @@ class UncleTUI:
             with open(CONFIG_PATH) as fh:
                 for line in fh:
                     raw = line.rstrip("\r\n")
+                    option_parts = raw.split(None, 1)
+                    if option_parts and option_parts[0].endswith('.request-options'):
+                        # Preserve hand-edited JSON, including # in strings
+                        # and invalid values that the runner must diagnose.
+                        self.self_hosted_request_options.setdefault(
+                            option_parts[0], option_parts[1] if len(option_parts) == 2 else '')
+                        continue
                     viewer_key = "misc.markdown_viewer"
                     if raw.startswith(viewer_key) and len(raw) > len(viewer_key) and raw[len(viewer_key)].isspace():
                         value = raw[len(viewer_key) + 1:]
@@ -1891,6 +1899,8 @@ class UncleTUI:
         try:
             with open(CONFIG_PATH, "w") as fh:
                 fh.write(header)
+                for key, value in getattr(self, 'self_hosted_request_options', {}).items():
+                    fh.write('%s %s\n' % (key, value))
                 for key, value in getattr(self, "misc", {}).items():
                     fh.write("misc.%s %s\n" % (key, value))
                 for key, value in getattr(self, "supervision", {}).items():

@@ -52,6 +52,7 @@ def project(name):
     p = tmp / name
     p.mkdir()
     subprocess.run(['git', 'init', '-q', str(p)], check=True)
+    subprocess.run(['git', '-C', str(p), 'config', 'commit.gpgsign', 'false'], check=True)
     # A worktree (the --change default) needs a real ref to branch from; an
     # unborn repo with no commits at all cannot provide one.
     subprocess.run(['git', '-c', 'commit.gpgsign=false', '-C', str(p), 'commit', '-q', '--allow-empty', '--no-gpg-sign', '-m', 'baseline'],
@@ -90,10 +91,13 @@ seed = (p / '.uncle/docs/REQUIREMENTS.md').read_text()
 assert seed.startswith('# Project brief\n') and seed.endswith('\n')
 for text in ('Selected issue', 'Exact issue body\n\n## Details\nKeep this text.', url):
     assert text in seed, text
-# Compare the generated contract with the repository's requirements guidance.
-for heading in (root / 'REQUIREMENTS.md').read_text().splitlines():
-    if heading.startswith('## '):
-        assert heading in seed, heading
+# Pin the brief template, independent of this checkout's current issue brief.
+# Its issue body may contain arbitrary additional headings.
+for heading in ('Summary', 'Problem', 'Scope', 'Non-goals', 'Functional requirements',
+                'User-visible behavior', 'Domain rules and invariants', 'Data and state',
+                'Interfaces', 'Constraints', 'Failure behavior', 'Verification',
+                'Definition of done', 'Open questions'):
+    assert '\n## ' + heading + '\n' in seed, heading
 assert (p / 'CHANGE_REQUEST.md').read_text() == 'Change sentinel\n'
 assert (script.parents[1] / 'REQUIREMENTS.md').read_text() == 'Install requirements sentinel\n'
 assert (tmp / 'calls').read_text() == 'driver\n'

@@ -392,6 +392,15 @@ def alive(pid):
     except ProcessLookupError:
         return False
     except PermissionError:
+        # Darwin can return EPERM for an empty process group after its
+        # leader was reaped. Do not mistake that for a surviving workflow;
+        # retain the conservative answer if the process table is unavailable.
+        if pid < 0 and sys.platform == 'darwin':
+            try:
+                groups = subprocess.check_output(['ps', '-axo', 'pgid='], text=True)
+                return str(-pid) in groups.split()
+            except (OSError, subprocess.SubprocessError):
+                pass
         return True
 
 
@@ -466,6 +475,9 @@ def _lock_run_once(command):
                 os.killpg(child.pid, signum)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                if alive(-child.pid):
+                    raise
         old = {s: signal.signal(s, stop) for s in (signal.SIGINT, signal.SIGTERM)}
         os.write(wfd, b'1'); os.close(wfd)
         try:
@@ -668,6 +680,15 @@ def runtime(action, args=()):
         # rendered requirements view and could send a completed build back to
         # implementation or plan revision. Change workflow delivery is checked
         # by ``implementation-completion.py`` against CHANGE_SPEC.json above.
+        # Do not infer required rows for applications, but honor an explicit
+        # incomplete delivery reported in the canonical implementation notes.
+        notes = STATE / 'documents' / 'IMPLEMENTATION_NOTES.json'
+        pending = [read(notes)] if notes.exists() else []
+        while pending:
+            fragment = pending.pop()
+            pending.extend(fragment.get('fragments') or [])
+            if any(row.get('status') == 'INCOMPLETE' for row in fragment.get('deliveries') or []):
+                return 24
         if j.get('phase') == 'VERIFYING':
             j['phase'] = 'VERIFIED'; atomic(JOURNAL, j)
         return 0

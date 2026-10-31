@@ -29,7 +29,11 @@ WORKFLOW_CONTINUE_ON_TEST_FAILURE=0
 # out of stagegate.sh itself), so the per-function awk extraction below never
 # finds them there.
 . "$ROOT/scripts/lib/acceptance-gate.sh"
-for fn in get_state set_state require_file canonical_artifact_path record_nonblocking_failure has_nonblocking_failure green_failure_route; do
+# require_file/canonical_artifact_path moved out of stagegate.sh into the
+# shared workflow-paths-app.sh during a later refactor; the per-function awk
+# extraction below never finds them there either.
+. "$ROOT/scripts/lib/workflow-paths-app.sh"
+for fn in get_state set_state record_nonblocking_failure has_nonblocking_failure green_failure_route; do
     eval "$(awk -v start="^${fn}\\(\\)" '$0 ~ start {active=1} active {print} active && /^}$/ {exit}' "$ROOT/scripts/stagegate.sh")"
 done
 unattended_prewarm_stage_for_state() { :; }

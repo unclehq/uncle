@@ -37,14 +37,7 @@ export DOCUMENT_BUDGET_SOURCE="$(generated_input_path CHANGE_REQUEST.md)"
 # wins, otherwise the prompt that shipped with uncle. An absolute path or a
 # path that exists in the project is returned untouched, which is what keeps
 # composed prompts under .uncle/workflow working.
-resolve_prompt() {
-    local p="$1"
-    if [[ "$p" == /* || -e "$p" ]]; then
-        printf '%s' "$p"
-    else
-        printf '%s' "$ROOT/$p"
-    fi
-}
+. "$ROOT/scripts/lib/workflow-paths-change.sh"
 
 STAGEGATE_VERSION="0.1.0"
 # The PR attestation reads these rather than guessing from the cwd.
@@ -116,12 +109,7 @@ APPROVAL_DIR="$STATE_DIR/approvals"
 # of the flag in one file.
 UNATTENDED_FILE="$STATE_DIR/unattended-gates"
 
-record_unattended_gate() {
-    local what="$1" detail="$2"
-    mkdir -p "$STATE_DIR" 2>/dev/null || true
-    printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$what" "$detail" \
-        >> "$UNATTENDED_FILE" 2>/dev/null || true
-}
+. "$ROOT/scripts/lib/workflow-records.sh"
 
 # An unattended run says so up front and ledgers what enabled it, so a mode
 # inherited from a wrapper is visible in the run's own record.
@@ -141,18 +129,6 @@ completed_verdict() {
     printf '%s' "$verdict"
 }
 
-# One stable line for wrappers and the TUI; format is asserted by tests.
-finished_build_line() {
-    local verdict="$1" skipped=0
-    if [[ -s "$UNATTENDED_FILE" ]]; then
-        skipped="$(grep -c $'\taudit-finding-skipped\t' "$UNATTENDED_FILE" || true)"
-    fi
-    printf 'Finished build: verdict=%s skipped=%s path=%s\n' "$verdict" "${skipped:-0}" "$PROJECT_ROOT"
-    if [[ "$verdict" == READY && "${skipped:-0}" != 0 ]]; then
-        echo "READY - ${skipped} blocking findings WAIVED WITHOUT HUMAN REVIEW (the auditor said NOT READY)"
-    fi
-}
-
 record_nonblocking_failure() {
     local source="$1" detail="$2"
     mkdir -p "$STATE_DIR" 2>/dev/null || true
@@ -160,11 +136,6 @@ record_nonblocking_failure() {
         >> "$STATE_DIR/nonblocking-test-failures.tsv" 2>/dev/null || true
 }
 
-record_test_failure_disposition() {
-    local review_json="$STATE_DIR/documents/TEST_REVIEW.json"
-    python3 -B "$ROOT/scripts/lib/test_failure_disposition.py" \
-        "$GREEN_CLASS" "$review_json" "$STATE_DIR/documents/TEST_FAILURES.json"
-}
 LOG_DIR="$STATE_DIR/logs"
 STATE_FILE="$STATE_DIR/state"
 SESSION_FILE="$STATE_DIR/session-head"
@@ -357,42 +328,8 @@ stage_var() {
         "$(printf '%s' "$2" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
 }
 
-# Precedence, for every per-stage setting: an explicit WORKFLOW_* variable
-# wins, then the project's .uncle/config, then what the call site asked for.
-# The config file is read at the moment the stage starts, so an edit made at a
-# human gate applies to the stages after it.
-# An explicit variable always wins over the config file; the built-in default
-# applies only when the project has no config at all.
-stage_agent_cmd() {
-    local var
-    var="WORKFLOW_AGENT_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
-    if [[ -n "${!var:-}" ]]; then
-        printf '%s' "${!var}"
-    elif [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
-        printf '%s' "$WORKFLOW_AGENT_CMD"
-    else
-        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
-    fi
-}
 
-stage_reviewer_cmd() {
-    local var
-    var="WORKFLOW_REVIEWER_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
-    if [[ -n "${!var:-}" ]]; then
-        printf '%s' "${!var}"
-    elif [[ -n "${WORKFLOW_REVIEWER_CMD:-}" ]]; then
-        printf '%s' "$WORKFLOW_REVIEWER_CMD"
-    else
-        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
-    fi
-}
 
-stage_command_overridden() {
-    local side="$1" stage="$2" var global
-    var="WORKFLOW_${side}_CMD_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
-    global="WORKFLOW_${side}_CMD"
-    [[ -n "${!var:-}" || -n "${!global:-}" ]]
-}
 
 stage_effort_for() {
     uncle_effective_stage_effort "$1"
@@ -437,25 +374,12 @@ CLAUDE_TOOLS="Read,Glob,Grep,Write,Edit,TodoWrite,Bash"
 # One bold prompt line. `read -p` suppresses its prompt when stdin is not a
 # terminal, so the text is printed separately. Escapes are emitted only for a
 # real terminal: piped captures and TERM=dumb stay free of control bytes.
-gate_prompt() {
-    if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$1"; fi
-    if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
-        printf '%s%s%s' $'\033[1m' "$1" $'\033[0m'
-    else
-        printf '%s' "$1"
-    fi
-}
+. "$ROOT/scripts/lib/prompt-io.sh"
 
 # The gate used to require the words APPROVE/ACKNOWLEDGE. Automation that still
 # pipes them now declines; say so, so the break is visible in the output rather
 # than silent.
-legacy_word_notice() {
-    case "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')" in
-        APPROVE|ACKNOWLEDGE)
-            echo "This gate now requires 'y' to approve."
-            ;;
-    esac
-}
+. "$ROOT/scripts/lib/prompt-io-change.sh"
 
 # Pure .uncle/docs/FINAL_AUDIT.md verdict classifier, shared with scripts/tests/. Sourced
 # self-relative so the driver still runs from any CWD.
@@ -501,177 +425,8 @@ change_pr_extras_print() {
 . "$ROOT/scripts/lib/module-interfaces-stage.sh"
 . "$ROOT/scripts/lib/triage.sh"
 
-# The implementation stage can end with acceptance rows the agent could not
-# deliver. Exiting there is right when someone is about to go fix it, and wrong
-# when nobody is: the run stops, the issue stays open, and the operator is left
-# to work out which files to edit and how to resume. Offer the decision instead.
-#
-# Retry and stop are the honest answers. Waive is the third, for a row no
-# further attempt can deliver -- and it never becomes a pass: the rejected rows
-# stay in implementation-completion.txt, the waiver records who accepted what,
-# and the final audit reads both.
-implementation_incomplete_choice() {
-    local completion="$STATE_DIR/implementation-completion.txt" ids="" answer
-    # A malformed acceptance contract is not an implementation failure.  There
-    # are no rows a person can waive and another implementation attempt reads
-    # exactly the same broken contract, so offering the normal choices creates
-    # an infinite, misleading prompt loop.  Send it back through the existing
-    # specification-and-plan approval path instead.
-    #
-    # [a-z]?: one optional trailing letter for a closely related sub-criterion
-    # (AC-4b) -- implementation-completion.py accepts the same id shape (issue
-    # 97: rejecting it here sent an otherwise-evaluable, ordinary rejected row
-    # through this same "cannot be evaluated" branch, a full ANALYZE restart,
-    # every time this one id recurred).
-    if [[ -s "$completion" ]] && grep -qvE '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion"; then
-        echo
-        echo 'The approved acceptance contract cannot be evaluated; implementation cannot repair it.'
-        echo 'Repair rebuilds .uncle/docs/CHANGE_SPEC.md and .uncle/docs/CHANGE_PLAN.md from the request and baseline, then asks for approval again.'
-        if [[ "${UNATTENDED:-0}" == 1 ]]; then
-            # Auto mode means human gates do not block progress. Repair is the
-            # corrective action here, not a concession like a waiver -- it
-            # rebuilds the contract and the rebuilt spec/plan still pass
-            # through human_gate's own unattended path, so nothing here skips
-            # review, it just avoids parking the run on a malformed contract
-            # nobody is present to answer for.
-            record_unattended_gate implementation-incomplete "repair the unevaluable acceptance contract without human review"
-            echo "Unattended: repairing the acceptance contract; no person authorized this."
-            rm -f "$APPROVAL_DIR/CHANGE_SPEC.sha256" "$APPROVAL_DIR/CHANGE_PLAN.sha256" \
-                "$STATE_DIR/implementation-completion-repair"
-            envelope_invalidate CHANGE_SPEC
-            set_state ANALYZE
-            return 3
-        fi
-        while true; do
-            UNCLE_GATE_CLASS="sensitive:waiver"
-            gate_prompt "Repair the acceptance contract or stop? [repair/stop]: "
-            UNCLE_GATE_CLASS=""
-            if ! { if declare -f gate_read > /dev/null; then gate_read answer; else IFS= read -r answer; fi; }; then
-                echo
-                echo "No answer; the run remains pending at IMPLEMENT."
-                return 1
-            fi
-            case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
-                repair|r|retry)
-                    # `retry` remains an alias for people responding from an
-                    # older dialog, but it deliberately repairs the contract
-                    # instead of wasting another implementation attempt.
-                    rm -f "$APPROVAL_DIR/CHANGE_SPEC.sha256" "$APPROVAL_DIR/CHANGE_PLAN.sha256" \
-                        "$STATE_DIR/implementation-completion-repair"
-                    envelope_invalidate CHANGE_SPEC
-                    set_state ANALYZE
-                    echo 'Repairing the acceptance contract before implementation can continue.'
-                    return 3
-                    ;;
-                s|stop|'')
-                    echo "Run remains pending at IMPLEMENT."
-                    return 1
-                    ;;
-                *) echo "Answer repair or stop." ;;
-            esac
-        done
-    fi
-    echo
-    echo "The implementation did not deliver every acceptance row."
-    if [[ -s "$completion" ]]; then
-        echo "Rejected rows:"
-        sed 's/^/  /' "$completion"
-        # Format errors cannot be waived as acceptance rows.
-        if ! grep -qvE '^AC-[0-9]+[a-z]?: requires IMPLEMENTED,' "$completion"; then
-            ids="$(awk -F: '{ printf "%s ", $1 }' "$completion")"
-        fi
-    fi
-    echo
-    if [[ "${UNATTENDED:-0}" == 1 && -z "${ids// /}" ]]; then
-        # No rejected rows means nothing on the record to waive: the stage
-        # delivered no change, or no acceptance report. Waiving an empty set
-        # would be dishonest (and crashed record_waiver on bash 3.2).
-        record_unattended_gate implementation-incomplete "stopped: no rejected acceptance rows to waive"
-        echo "Unattended: no rejected acceptance rows to waive; the run remains pending at IMPLEMENT."
-        return 1
-    fi
-    if [[ "${UNATTENDED:-0}" == 1 ]]; then
-        # Auto mode means human gates do not block progress. `retry` reruns
-        # the same plan unchanged and this same choice is reached again next
-        # time it is still incomplete -- an unbounded loop with nobody there
-        # to stop it -- so waive is the one terminating, honest option: the
-        # rows stay rejected on the record and the final audit still reads
-        # them, matching how a waiver behaves everywhere else in this driver.
-        record_unattended_gate implementation-incomplete "waive rejected acceptance rows without human review: $ids"
-        echo "Unattended: waiving rejected rows ($ids); no person authorized this. The audit still reads them."
-        # shellcheck disable=SC2086
-        if record_waiver "$completion" $ids; then
-            return 2
-        fi
-        echo "Could not record the waiver; the run remains pending at IMPLEMENT."
-        return 1
-    fi
-    while true; do
-        UNCLE_GATE_CLASS="sensitive:waiver"
-        gate_prompt "Retry the implementation, waive the rows above, or stop? [retry/waive/stop]: "
-        UNCLE_GATE_CLASS=""
-        if ! { if declare -f gate_read > /dev/null; then gate_read answer; else IFS= read -r answer; fi; }; then
-            echo
-            echo "No answer; the run remains pending at IMPLEMENT."
-            return 1
-        fi
-        case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
-            r|retry)
-                # Clearing the digest is what lets the repair path run again for
-                # this plan; without it the next pass repeats the same refusal.
-                rm -f "$STATE_DIR/implementation-completion-repair"
-                if plan_executability_enabled; then plan_tool retry; fi
-                echo "Retrying implementation."
-                return 0
-                ;;
-            w|waive)
-                if [[ -z "${ids// /}" ]]; then
-                    echo "No row ids to waive; edit the plan or retry instead."
-                    continue
-                fi
-                # shellcheck disable=SC2086
-                if record_waiver "$completion" $ids; then
-                    echo "Waived. The rows stay rejected on the record; the audit still reads them."
-                    return 2
-                fi
-                ;;
-            s|stop|'')
-                echo "Run remains pending at IMPLEMENT."
-                return 1
-                ;;
-            *) echo "Answer retry, waive, or stop." ;;
-        esac
-    done
-}
-
-
-require_file() {
-    local requested="$1" canonical
-    canonical="$(canonical_artifact_path "$requested")"
-    if [[ ! -s "$canonical" ]]; then
-        supervision_validation_failed require_file "$canonical" "Required file missing or empty: $canonical"
-        echo "Required file missing or empty: $canonical"
-        exit 1
-    fi
-}
-
-canonical_artifact_path() {
-    local path="$1" stem
-    case "$path" in
-        .uncle/docs/BASELINE_REPORT.md|.uncle/docs/CHANGE_SPEC.md|.uncle/docs/CHANGE_TEST_REPORT.md|.uncle/docs/IMPLEMENTATION_NOTES.md|.uncle/docs/MANUAL_CHECKLIST.md|.uncle/docs/TEST_REVIEW.md|.uncle/docs/VERIFICATION_REPORT.md|.uncle/docs/DEFECTS.md|.uncle/docs/FINAL_AUDIT.md|.uncle/docs/CHANGE_PLAN.md|.uncle/docs/ADVERSARIAL_REVIEW.md)
-            stem="${path##*/}"; stem="${stem%.md}"
-            printf '%s/documents/%s.json\n' "${STATE_DIR:-.uncle/workflow}" "$stem" ;;
-        *) printf '%s\n' "$path" ;;
-    esac
-}
-
-# Markdown-only state is accepted solely to resume a run created before the
-# canonical-artifact migration. New/current runs always approve JSON.
-approval_artifact_path() {
-    local view="$1" canonical
-    canonical="$(canonical_artifact_path "$view")"
-    [[ -s "$canonical" ]] && printf '%s\n' "$canonical" || printf '%s\n' "$view"
-}
+. "$ROOT/scripts/lib/implementation-gates.sh"
+. "$ROOT/scripts/lib/implementation-gates-change.sh"
 
 # The issue number written into .uncle/workflow/state is informational only;
 # .uncle/workflow/origin stays the sole identity source (INV-1).
@@ -1057,144 +812,7 @@ triage_reopen_gate() {
 # pipeline twice for two documents that are read together anyway.
 #
 # Usage: human_gate ACTION file1 approval_name1 [file2 approval_name2 ...]
-human_gate() {
-    local gate_start="$SECONDS"
-    local action="$1"
-    shift
-
-    local -a files=() views=()
-    local -a names=()
-    local gate_by
-
-    while [[ "$#" -gt 0 ]]; do
-        case "$2" in
-            CHANGE_PLAN) python3 "$ROOT/scripts/lib/plan_context.py" render-change-plan-unreviewed "$1" . || return 1 ;;
-        esac
-        local view="$1" canonical
-        canonical="$(approval_artifact_path "$view")"
-        [[ -s "$canonical" ]] || { echo "Required approval artifact missing: $canonical"; exit 1; }
-        views+=("$view")
-        files+=("$canonical")
-        names+=("$2")
-        shift 2
-    done
-
-    # Unattended: record each approval against the bytes on disk and log that
-    # nobody read them. The digests must still be real -- later stages compare
-    # against them to catch a document changing underneath an approval.
-    if [[ "${UNATTENDED:-0}" == 1 ]]; then
-        local j act
-        act="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
-        for j in "${!files[@]}"; do
-            printf '%s\n' "$(hash_file "${files[$j]}")" > "$APPROVAL_DIR/${names[$j]}.sha256"
-            gate_by="$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)"
-            # A human name goes to `.approved-by`; `unattended` and supervisor
-            # receipts go to `.delegated-by` with `.approved-by` left empty, so
-            # nothing downstream reads a delegated answer as a keystroke.
-            # `.gate-action` records what the gate asked for (Issue 59).
-            case "$gate_by" in
-                unattended|supervisor:*)
-                    printf '%s\n' "$gate_by" > "$APPROVAL_DIR/${names[$j]}.delegated-by"
-                    printf '\n' > "$APPROVAL_DIR/${names[$j]}.approved-by"
-                    ;;
-                *)
-                    printf '%s\n' "$gate_by" > "$APPROVAL_DIR/${names[$j]}.approved-by"
-                    printf '\n' > "$APPROVAL_DIR/${names[$j]}.delegated-by"
-                    ;;
-            esac
-            printf '%s\n' "$action" > "$APPROVAL_DIR/${names[$j]}.gate-action"
-            record_unattended_gate "${names[$j]}" "$act ${views[$j]} without human review"
-        done
-        echo "Unattended: recorded $act of ${files[*]} with no human review."
-        if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi
-        return 0
-    fi
-
-    echo
-    echo "=================================================="
-    echo "HUMAN REVIEW REQUIRED"
-    local f
-    for f in "${views[@]}"; do
-        echo "  $f"
-    done
-    echo "=================================================="
-    echo
-    echo "Review with:"
-    echo "  less ${views[*]}"
-    echo
-    echo "Edit with:"
-    echo "  code ${views[*]}"
-    echo
-    echo "Edits you make now are picked up by the next stage."
-    show_spend
-    echo
-
-    # Digests are captured before the prompt and recorded afterwards, so each
-    # approval attests to the bytes the operator was shown.
-    local -a digests=()
-    local i
-    for i in "${!files[@]}"; do
-        digests+=("$(hash_file "${files[$i]}")")
-    done
-
-    local verb targets response=""
-    verb="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
-    targets="$(printf '%s, ' "${views[@]}")"
-    targets="${targets%, }"
-
-    echo
-    UNCLE_GATE_FILE="${views[0]}"
-    gate_prompt "Ready to $verb $targets? [Y/N] "
-    UNCLE_GATE_FILE=""
-    # IFS= keeps surrounding whitespace, so " y" is not an approval. `|| true`
-    # keeps EOF from tripping `set -e` before the decline path runs. The
-    # wrapper attributes the line (human, or a supervisor receipt) and closes
-    # the gate; the answer itself is validated exactly as before.
-    if declare -f gate_read > /dev/null; then gate_read response || true; else IFS= read -r response || true; fi
-
-    case "$response" in
-        y|Y) ;;
-        *)
-            if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 1; fi
-            echo "Gate not accepted. Workflow remains paused."
-            legacy_word_notice "$response"
-            exit 0
-            ;;
-    esac
-
-    # Every file is re-checked before any approval is written, so a mutated
-    # document cannot leave a half-approved gate behind.
-    for i in "${!files[@]}"; do
-        if [[ "$(hash_file "${files[$i]}")" != "${digests[$i]}" ]]; then
-            if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 1; fi
-            echo "${views[$i]}'s canonical JSON changed after it was shown for approval."
-            echo "Gate not accepted. Workflow remains paused."
-            exit 0
-        fi
-    done
-
-    for i in "${!files[@]}"; do
-        printf '%s\n' "${digests[$i]}" > "$APPROVAL_DIR/${names[$i]}.sha256"
-        gate_by="$(if declare -f supervision_approved_by > /dev/null; then supervision_approved_by; elif [[ "${UNATTENDED:-0}" == 1 ]]; then printf unattended; else printf '%s' "${UNCLE_APPROVAL_NAME:-}"; fi)"
-        # A human name goes to `.approved-by`; `unattended` and supervisor
-        # receipts go to `.delegated-by` with `.approved-by` left empty, so
-        # nothing downstream reads a delegated answer as a keystroke.
-        # `.gate-action` records what the gate asked for (Issue 59).
-        case "$gate_by" in
-            unattended|supervisor:*)
-                printf '%s\n' "$gate_by" > "$APPROVAL_DIR/${names[$i]}.delegated-by"
-                printf '\n' > "$APPROVAL_DIR/${names[$i]}.approved-by"
-                ;;
-            *)
-                printf '%s\n' "$gate_by" > "$APPROVAL_DIR/${names[$i]}.approved-by"
-                printf '\n' > "$APPROVAL_DIR/${names[$i]}.delegated-by"
-                ;;
-        esac
-        printf '%s\n' "$action" > "$APPROVAL_DIR/${names[$i]}.gate-action"
-        echo "Recorded approval for ${views[$i]}"
-    done
-    if declare -f perf_record > /dev/null; then perf_record approval "${names[*]}" "$((SECONDS-gate_start))" 0; fi
-}
+. "$ROOT/scripts/lib/approval-gates-change.sh"
 
 # Render Claude's streaming JSON event feed as readable progress. Startup
 # warnings and other non-JSON lines are ignored rather than making jq fail.
@@ -1580,6 +1198,7 @@ GREEN_BG_PID=""
 
 start_green_check_bg() {
     if [[ "$GREEN_CHECK" != "1" || ! -s "$GREEN_CMDS" ]]; then
+        run_green_check
         return 0
     fi
     echo
@@ -1862,43 +1481,7 @@ run_parallel_checklist_workers() {
 
 # --- Post-implementation review document ------------------------------------
 
-# Rebuilt from the working tree every time the gate opens, so the approval
-# digest attests to the tree rather than to a file somebody could edit.
-build_implementation_review() {
-    write_change_diff "$DIFF_FILE"
-    write_implementation_review "$REVIEW_FILE" "$DIFF_FILE" "$GREEN_MD" \
-        .uncle/docs/IMPLEMENTATION_NOTES.md .uncle/docs/CHANGE_TEST_REPORT.md
-    WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" prepare "$STATE_DIR"
 
-}
-
-# Regenerate the document and compare it with what was approved. A mismatch
-# means the code moved after the operator read it, so the gate re-opens on the
-# current tree rather than the pipeline carrying a stale approval forward.
-verify_implementation_review() {
-    local approval="$APPROVAL_DIR/IMPLEMENTATION_REVIEW.sha256"
-
-    require_file "$approval"
-    if [[ -f "$APPROVAL_DIR/IMPLEMENTATION_REVIEW.inputs.json" ]]; then
-        if WORKFLOW_UNTRACKED_BASELINE="$WORKFLOW_UNTRACKED_BASELINE" python3 -B "$ROOT/scripts/lib/approval_snapshot.py" check "$STATE_DIR"; then
-            return 0
-        fi
-        build_implementation_review
-        set_state WAIT_IMPLEMENT_APPROVAL
-        echo "Approved inputs changed; review the current implementation again."
-        exit 0
-    fi
-    build_implementation_review
-
-    if [[ "$(hash_file "$REVIEW_FILE")" != "$(cat "$approval")" ]]; then
-        echo
-        echo "The working tree changed after the implementation was approved."
-        echo "$REVIEW_FILE has been rebuilt from the current tree."
-        set_state WAIT_IMPLEMENT_APPROVAL
-        echo "Re-run the driver to review and approve what is there now."
-        exit 0
-    fi
-}
 
 # Per-step worker prompt for run_supervised_parallel_implementation, called by
 # the shared parallel_implement_run_groups (scripts/lib/parallel-implement.sh)
@@ -2295,39 +1878,6 @@ progress_tap() {
 # normalized to the base stage before lookup.
 STATUS_STAGE_SEQ="change-plan adversarial-review updated-change-plan implementation manual-checklist execute-checklist final-audit"
 
-# Report the current stage to the TUI status channel. The exports feed the
-# agent shims' own status writes; the start event written here covers every
-# stage directly, including runners with no shim (plain claude, reviewers).
-status_stage_context() {
-    local log_name="$1"
-    local turns="${2:-0}"
-    local model="${3:-(runner default)}"
-    local mode="${4:-act}"
-    local base="${log_name%%-step-*}"     # implementation-step-3 -> implementation
-    base="${base%-base}"                   # manual-checklist-base -> manual-checklist
-    base="${base%-delta}"                  # manual-checklist-delta -> manual-checklist
-    local s i=1 index=0 n=0
-    for s in $STATUS_STAGE_SEQ; do
-        n=$((n + 1))
-        if [[ "$s" == "$base" ]]; then
-            index=$i
-        fi
-        i=$((i + 1))
-    done
-    export UNCLE_STATUS_STAGE="$log_name"
-    export UNCLE_STATUS_STAGE_INDEX="$index"
-    export UNCLE_STATUS_STAGE_TOTAL="$n"
-    export UNCLE_STATUS_STAGE_TURNS="$turns"
-    # Keyed on the normalized name, so a -step-/-base/-delta variant inherits
-    # the setting its parent stage was configured with.
-    UNCLE_STAGE_NETWORK="$(uncle_stage_network "$base")"
-    export UNCLE_STAGE_NETWORK
-    if [[ -n "${UNCLE_STATUS_FILE:-}" ]]; then
-        printf '{"event":"start","model":"%s","mode":"%s","stage":"%s","stage_index":%s,"stage_total":%s,"stage_turns":%s}\n' \
-            "$model" "$mode" "$log_name" "$index" "$n" "$turns" \
-            >> "$UNCLE_STATUS_FILE"
-    fi
-}
 
 # Change stages must receive the exact driver-selected request, not merely an
 # instruction to find CHANGE_REQUEST.md.  In particular self-hosted/OpenCode
@@ -2360,21 +1910,9 @@ CHANGE_REQUEST_SOURCE
     printf '%s\n' "$bound_prompt"
 }
 
-# Whether this stage's agent can be forced to answer in schema-checked JSON (see run_claude): the direct Claude
-# CLI only -- also when it runs through native_stage.py, which relays the validated object.  Codex, self-hosted
-# models and a custom command keep the file contract.
-stage_supports_structured_output() {
-    local stage="$1" UNCLE_RESOLVED_RUNNER
-    [[ "${WORKFLOW_STRUCTURED_OUTPUT:-1}" == 1 ]] || return 1
-    uncle_resolve_stage_runner "$stage" AGENT 2>/dev/null || return 1
-    [[ "$UNCLE_RESOLVED_RUNNER" == claude ]] && [[ "$(stage_agent_cmd "$stage" 2>/dev/null)" == *claude ]]
-}
+. "$ROOT/scripts/lib/stage-runtime.sh"
+. "$ROOT/scripts/lib/stage-runtime-change.sh"
 
-stage_uses_self_hosted() {
-    local stage="$1" side="$2" UNCLE_RESOLVED_RUNNER
-    uncle_resolve_stage_runner "$stage" "$side" 2>/dev/null || true
-    [[ "$UNCLE_RESOLVED_RUNNER" == self-hosted ]]
-}
 
 run_claude() {
     local prompt_file
@@ -2814,29 +2352,8 @@ record_codex_cost() {
     fi
 }
 
-normalize_reviewer_packet() {
-    local output_file="$1" runner="$2" normalized
-    # Only specialist panel responses use the worker-packet envelope. Parent
-    # stage artifacts are canonical JSON with their own schemas.
-    [[ "$output_file" == *-panel/*.json && -s "$output_file" ]] || return 0
-    normalized="$(mktemp "$STATE_DIR/.reviewer-packet.XXXXXX")" || return 1
-    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --packet "$runner" < "$output_file" > "$normalized"; then
-        rm -f "$normalized"
-        return 1
-    fi
-    mv "$normalized" "$output_file"
-}
+. "$ROOT/scripts/lib/reviewer-artifacts.sh"
 
-validate_reviewer_artifact() {
-    local output_file="$1" runner="$2" normalized
-    [[ "${output_file##*/}" == MANUAL_CHECKLIST.md && -s "$output_file" ]] || return 0
-    normalized="$(mktemp "$STATE_DIR/.reviewer-artifact.XXXXXX")" || return 1
-    if ! python3 "$ROOT/scripts/lib/reviewer_output.py" --artifact "$output_file" "$runner" < "$output_file" > "$normalized"; then
-        rm -f "$normalized"
-        return 1
-    fi
-    mv "$normalized" "$output_file"
-}
 
 run_codex() {
     local prompt_file
@@ -4317,13 +3834,16 @@ REPAIR
             # Runs nothing in parallel and cannot fail the stage.
             python3 -B "$ROOT/scripts/lib/step_groups.py" .uncle/docs/CHANGE_PLAN.md . \
                 > "$STATE_DIR/step-groups.json" 2>/dev/null || true
-            write_verification_envelope
             plan_delivery_summary
 
             set_state WAIT_IMPLEMENT_APPROVAL
             ;;
 
         WAIT_IMPLEMENT_APPROVAL)
+            # The approval and verification envelope must describe completed
+            # checks, not a previous result or a still-running background job.
+            wait_green_check_bg || exit $?
+            write_verification_envelope
             green_regressed="$(green_regressions "$GREEN_CLASS")"
 
             if [[ "$DIFF_GATE" != "1" ]]; then
@@ -4710,7 +4230,7 @@ PY
             envelope_invalidate FINAL_AUDIT
             envelope_write --stage audit --result unavailable --reason 'reviewer did not complete'
             if git rev-parse --verify HEAD >/dev/null 2>&1; then change_pr_engine freeze || exit 1; fi
-            rm -f .uncle/docs/FINAL_AUDIT.md
+            rm -f .uncle/docs/FINAL_AUDIT.md "$STATE_DIR/documents/FINAL_AUDIT.json"
             run_final_audit_panel
             if [[ -s "$STATE_DIR/documents/FINAL_AUDIT.json" ]]; then
                 echo 'Final-audit fast path: rendered authoritative worker findings without parent synthesis.'

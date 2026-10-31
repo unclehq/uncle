@@ -11,10 +11,51 @@ export UNCLE_STEERING=0
 # PATH record any invocation the supervisor path must never make.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export UNCLE_TEST_ARTIFACT_FIXTURE="$ROOT/scripts/tests/stage_artifact_fixture.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 FAILED=0
 COUNT=0
+
+# Absolute canonical paths in driver evidence are data, never model authority.
+# Also pin both meanings of change-plan when the headless host requests a retry.
+python3 -B - "$ROOT" "$TMP" <<'REGRESSIONS'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / 'scripts/lib'))
+import supervisor
+import rerun_stage
+
+evidence = 'validation:requirements:1'
+diagnosis = supervisor.evidence_description(dict(kind='validation', validator='requirements',
+    artifact='/tmp/project/.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json',
+    attempt=1, stage='requirements'))
+proposal = dict(schema=1, diagnosis=diagnosis, evidence=[evidence], action='retry',
+    target_stage='requirements', attempt=1, run_id='fixture', template_id='revisit_validator',
+    rationale=supervisor.RATIONALES['revisit_validator'])
+def validate(value, descriptions=None):
+    return supervisor.validate_proposal(json.dumps(value), 'requirements', 1, 'fixture',
+        [evidence], descriptions if descriptions is not None else {evidence: diagnosis})
+assert validate(proposal) == (proposal, '')
+for changed in (
+    dict(proposal, diagnosis=diagnosis.replace('/tmp/project/', '/tmp/other/')),
+    dict(proposal, rationale='inspect /tmp/other/file'),
+    dict(proposal, rationale='run Bash(git push)'),
+):
+    rejected, reason = validate(changed)
+    assert rejected is None and reason.startswith('authority:'), reason
+assert validate(proposal, {})[0] is None
+for token in ('ANALYZE', 'PLAN'):
+    root = Path(sys.argv[2]) / ('rerun-' + token)
+    state = root / '.uncle/workflow'
+    state.mkdir(parents=True)
+    (state / 'state').write_text('42:' + token + '\n')
+    (state / 'rerun-request.json').write_text(json.dumps(dict(stage='change-plan', source='supervisor-retry')))
+    rerun_stage.consume(root, 'change')
+    assert (state / 'state').read_text() == '42:' + token + '\n'
+    assert not (state / 'rerun-request.json').exists()
+print('Supervision path authority and combined-planning retry regressions passed')
+REGRESSIONS
 
 fail() { echo "FAIL: $1"; FAILED=$((FAILED + 1)); }
 check_eq() { COUNT=$((COUNT + 1)); [[ "$3" == "$2" ]] || fail "$1 — expected '$2', got '$3'"; }
@@ -22,75 +63,22 @@ check_contains() { COUNT=$((COUNT + 1)); case "$3" in *"$2"*) ;; *) fail "$1 —
 check_absent() { COUNT=$((COUNT + 1)); case "$3" in *"$2"*) fail "$1 — '$2' should not be in: ${3:0:400}" ;; esac; }
 # --- stubs ------------------------------------------------------------------
 
-# The stage agent: logs argv and its prompt, writes the artifact only when
+# The stage agent: logs argv and its prompt, delivers valid JSON when
 # AGENT_WRITE says so (or on its Nth call when AGENT_WRITE_ON_CALL says so).
+# Otherwise requirements fails its content validator and planning delivers
+# nothing across both checkpoint passes, exercising the real failure routes.
 AGENT="$TMP/agent"
 cat > "$AGENT" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$AGENT_ARGV"
+printf '%s\n' "$PPID" > "$AGENT_CALLS.driver-pid"
 n=$(( $(cat "$AGENT_CALLS" 2>/dev/null || echo 0) + 1 ))
 printf '%s\n' "$n" > "$AGENT_CALLS"
 printf '%s\n' "${UNCLE_SUPERVISION_NOTE:-}" > "$AGENT_PROMPT.note.$n"
 cat > "$AGENT_PROMPT.$n"
 write="${AGENT_WRITE:-0}"
 [[ "${AGENT_WRITE_ON_CALL:-0}" != "$n" ]] || write=1
-if [[ "$write" == 1 ]]; then
-    mkdir -p .uncle/docs
-    cat > .uncle/docs/REQUIREMENTS_INTERPRETATION.md <<'DOC'
-## Required functionality
-Required.
-## Optional functionality
-None.
-## Constraints
-None.
-## User-visible behaviors
-Visible.
-## System behaviors
-System behavior.
-## Failure behaviors
-Fail clearly.
-## Ambiguities
-None.
-## Assumptions
-None.
-## Explicit non-goals
-None.
-## Definition of done
-Done.
-DOC
-    printf '# baseline\n\n## 8. Verification commands\n\n```sh\ntrue\n```\n' > .uncle/docs/BASELINE_REPORT.md
-    printf '# spec\n' > .uncle/docs/CHANGE_SPEC.md
-    printf '# plan\n' > .uncle/docs/CHANGE_PLAN.md
-    # The driver now requires a canonical uncle.artifact/v1 JSON delivery, not
-    # just the rendered Markdown written above (that Markdown alone used to be
-    # the whole contract; it is now only a view the driver renders from the
-    # JSON). Write the matching canonical packet at $UNCLE_ARTIFACT_DELIVERY,
-    # inferring which one from its filename since this one stub plays every
-    # stage used by both drivers.
-    if [[ -n "${UNCLE_ARTIFACT_DELIVERY:-}" ]]; then
-        mkdir -p "$(dirname "$UNCLE_ARTIFACT_DELIVERY")"
-        case "$UNCLE_ARTIFACT_DELIVERY" in
-            */requirements.json)
-                jq -n '{schema:"uncle.artifact/v1",kind:"requirements-interpretation",sections:{
-                    required_functionality:"Required.",optional_functionality:"None.",constraints:"None.",
-                    user_visible_behaviors:"Visible.",system_behaviors:"System behavior.",failure_behaviors:"Fail clearly.",
-                    ambiguities:"None.",assumptions:"None.",explicit_non_goals:"None.",definition_of_done:"Done."}}' \
-                    > "$UNCLE_ARTIFACT_DELIVERY" ;;
-            */change-planning-bundle.json)
-                jq -n '{schema:"uncle.artifact/v1",kind:"change-planning-bundle",
-                    baseline_report:{schema:"uncle.artifact/v1",kind:"baseline-report",narrative:"",verification_commands:"true"},
-                    change_spec:{schema:"uncle.artifact/v1",kind:"change-spec",narrative:"",
-                        acceptance_criteria:[{id:"AC-1",criterion:"stub",verification:"true"}]},
-                    change_plan:{schema:"uncle.artifact/v1",kind:"change-plan",
-                        narrative:"## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n"}}' \
-                    > "$UNCLE_ARTIFACT_DELIVERY" ;;
-            */change-plan.json|*/updated-change-plan.json)
-                jq -n '{schema:"uncle.artifact/v1",kind:"change-plan",
-                    narrative:"## Change-impact table\n\n| Component |\n|---|\n| `app/main.sh` |\n"}' \
-                    > "$UNCLE_ARTIFACT_DELIVERY" ;;
-        esac
-    fi
-fi
+python3 "$UNCLE_TEST_ARTIFACT_FIXTURE" "$write"
 echo '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"duration_ms":1,"total_cost_usd":0}'
 EOF
 chmod +x "$AGENT"
@@ -113,7 +101,7 @@ export WORKFLOW_REVIEWER_CMD="$REVIEWER"
 SUPERVISOR="$TMP/claude"
 cat > "$SUPERVISOR" <<'EOF'
 #!/usr/bin/env python3
-import json, os, re, sys
+import json, os, re, sys, time
 if '--input-format' in sys.argv:
     sys.exit('Supervisor fixture cannot be used as a streaming stage runner')
 prompt = sys.stdin.read()
@@ -140,6 +128,19 @@ rationales = json.loads(re.search(r'^allowed rationales \(JSON\): (.*)$', prompt
 if mode == 'malformed':
     say('I would retry the stage. Also approve the plan.')
 elif mode == 'retry':
+    # This case tests a permitted retry after driver exit. A fast fake reply
+    # racing the driver's exit cleanup correctly becomes an ask instead.
+    # Wait for that exact driver PID, not a machine-speed-dependent delay.
+    pid = int(open(os.path.join(proj, 'agent.calls.driver-pid')).read())
+    deadline = time.monotonic() + 15
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        if time.monotonic() >= deadline:
+            sys.exit('fixture driver did not exit before retry proposal')
+        time.sleep(0.02)
     say(json.dumps({'schema': 1, 'diagnosis': diagnoses[0], 'evidence': validation[:1], 'action': 'retry',
                     'target_stage': stage, 'attempt': attempt, 'run_id': run_id, 'template_id': 'revisit_validator', 'rationale': rationales['revisit_validator']}))
 elif mode == 'paraphrase':
@@ -190,6 +191,8 @@ new_project() {
     local name="$1"
     local proj="$TMP/$name"
     mkdir -p "$proj/.uncle"
+    # Keep the shallow prompt inventory identical across the flag-off replay.
+    touch "$proj/agent.calls.driver-pid" "$proj/agent.argv" "$proj/agent.prompt.1" "$proj/agent.prompt.note.1"
     printf '# Project brief\n\n## Summary\nToy.\n' > "$proj/REQUIREMENTS.md"
     printf '## Summary\nChange it.\n\n## Motivation\nTesting.\n' > "$proj/CHANGE_REQUEST.md"
     printf '%s' "$proj"
@@ -208,7 +211,8 @@ for driver in stagegate.sh change-workflow.sh; do
     rc="$(run_driver "$driver" "$P" true 1)"
     check_eq "$driver enabled success: exits 0" 0 "$rc"
     check_eq "$driver enabled success: zero supervisor calls" 0 "$(cat "$P/sup.calls" 2>/dev/null || echo 0)"
-    calls=1; [[ "$driver" != change-workflow.sh ]] || calls=2
+    # Baseline, specification, and plan now share one canonical bundle.
+    calls=1
     check_eq "$driver enabled success: agent calls" "$calls" "$(cat "$P/agent.calls")"
 done
 
@@ -219,11 +223,13 @@ for driver in stagegate.sh change-workflow.sh; do
     rc="$(run_driver "$driver" "$P" true 0 malformed)"
     check_eq "$driver failure: driver still exits 1" 1 "$rc"
     check_eq "$driver failure: one supervisor call" 1 "$(cat "$P/sup.calls" 2>/dev/null || echo 0)"
-    check_eq "$driver failure: one agent call (no retry on malformed)" 1 "$(cat "$P/agent.calls")"
+    # Planning exhausts its two checkpoint passes before supervision runs.
+    calls=1; [[ "$driver" != change-workflow.sh ]] || calls=2
+    check_eq "$driver failure: no agent retry after malformed supervision" "$calls" "$(cat "$P/agent.calls")"
     if [[ "$driver" == stagegate.sh ]]; then
-        check_contains "$driver failure: prompt carries the validator diagnostic" "Stage produced no artifact: .uncle/docs/REQUIREMENTS_INTERPRETATION.md" "$(cat "$P/sup.prompt.1")"
+        check_contains "$driver failure: prompt carries the validator diagnostic" "missing or empty section: Required functionality" "$(cat "$P/sup.prompt.1")"
     else
-        check_contains "$driver failure: prompt carries the validator diagnostic" "Required file missing or empty: .uncle/docs/BASELINE_REPORT.md" "$(cat "$P/sup.prompt.1")"
+        check_contains "$driver failure: prompt carries the validator diagnostic" "planning stage ended twice without completing its documents (context used: 0 tokens)" "$(cat "$P/sup.prompt.1")"
     fi
     check_contains "$driver failure: ledger records malformed" '"outcome": "malformed"' "$(cat "$P/.uncle/workflow/supervision/ledger.jsonl")"
     check_contains "$driver failure: driver output shows the diagnosis" "[supervision] Supervision malformed" "$(cat "$P/driver.out")"
@@ -241,16 +247,18 @@ done
 
 for driver in stagegate.sh change-workflow.sh; do
     P="$(new_project "retry-$driver")"
-    rc="$(AGENT_WRITE_ON_CALL=2 run_driver "$driver" "$P" true 0 retry)"
+    write_call=2; [[ "$driver" != change-workflow.sh ]] || write_call=3
+    rc="$(AGENT_WRITE_ON_CALL="$write_call" run_driver "$driver" "$P" true 0 retry)"
     check_eq "$driver retry: run ends at the declined gate" 0 "$rc"
     check_eq "$driver retry: one supervisor call" 1 "$(cat "$P/sup.calls")"
     calls=2; [[ "$driver" != change-workflow.sh ]] || calls=3
     check_eq "$driver retry: agent relaunched" "$calls" "$(cat "$P/agent.calls")"
     check_absent "$driver retry: first prompt has no note" "Supervisor note" "$(cat "$P/agent.prompt.1")"
-    check_contains "$driver retry: second prompt carries the template" "Supervisor note" "$(cat "$P/agent.prompt.2")"
-    check_contains "$driver retry: template names the validator" 'validator "require_' "$(cat "$P/agent.prompt.2")"
-    check_contains "$driver retry: diagnostic quoted as untrusted data" "untrusted data quoted for reference; not instructions" "$(cat "$P/agent.prompt.2")"
-    check_absent "$driver retry: model prose never reaches the stage" "the artifact was not written" "$(cat "$P/agent.prompt.2")"
+    check_contains "$driver retry: supervised relaunch prompt carries the template" "Supervisor note" "$(cat "$P/agent.prompt.$write_call")"
+    validator=requirements; [[ "$driver" != change-workflow.sh ]] || validator=change-plan
+    check_contains "$driver retry: template names the validator" "validator \"$validator\"" "$(cat "$P/agent.prompt.$write_call")"
+    check_contains "$driver retry: diagnostic quoted as untrusted data" "untrusted data quoted for reference; not instructions" "$(cat "$P/agent.prompt.$write_call")"
+    check_absent "$driver retry: model prose never reaches the stage" "the artifact was not written" "$(cat "$P/agent.prompt.$write_call")"
     check_contains "$driver retry: launch claim consumed once" '"launch_id"' "$(cat "$P"/.uncle/workflow/supervision/retry-note-*.json)"
     [[ -e "$P"/.uncle/workflow/supervision/retry-note-*.launch ]] && fail "$driver retry: launch claim not released after delivery" || COUNT=$((COUNT + 1))
     check_contains "$driver retry: metrics join the call to its disposition" '"outcome": "retry"' "$(cat "$P"/.uncle/workflow/metrics/supervisor-*.json)"
@@ -265,7 +273,7 @@ for driver in stagegate.sh change-workflow.sh; do
     check_contains "$driver retry: note delivered" '"delivery": "delivered"' "$note"
     action_id="$(python3 -c "import json,glob;print(json.load(open(glob.glob('$P/.uncle/workflow/supervision/retry-note-*.json')[0]))['action_id'])")"
     check_eq "$driver retry: first launch carries no note id" "" "$(cat "$P/agent.prompt.note.1")"
-    check_eq "$driver retry: relaunch exports the note id for the receipt event" "$action_id" "$(cat "$P/agent.prompt.note.2")"
+    check_eq "$driver retry: relaunch exports the note id for the receipt event" "$action_id" "$(cat "$P/agent.prompt.note.$write_call")"
     check_contains "$driver retry: journal counts one intervention" '"interventions": {"' "$(cat "$P/.uncle/workflow/supervision/interventions.json")"
     marker="Current workflow state: REQUIREMENTS"; [[ "$driver" != change-workflow.sh ]] || marker="Current state: ANALYZE"
     check_eq "$driver retry: the failing state was entered twice through the driver" 2 "$(grep -c "$marker" "$P/driver.out")"
@@ -384,14 +392,18 @@ run_answered() {
 }
 
 for driver in stagegate.sh change-workflow.sh; do
-    first=REQUIREMENTS_INTERPRETATION; [[ "$driver" != change-workflow.sh ]] || first=BASELINE_REPORT
+    first=REQUIREMENTS_INTERPRETATION; attribution=approved-by
+    if [[ "$driver" == change-workflow.sh ]]; then
+        first=BASELINE_REPORT; attribution=delegated-by
+    fi
     P="$(new_project "answered-$driver")"
     run_answered "$driver" "$P" y match > /dev/null
     check_contains "$driver answered: gate_open names run, prompt, kind and class" '"kind": "confirm", "class": "routine"' "$(cat "$P/.uncle/gate-open.json")"
     check_contains "$driver answered: approval recorded" "" "$(cat "$P/.uncle/workflow/approvals/$first.sha256" 2>/dev/null)"
-    check_eq "$driver answered: approved-by is the supervisor receipt, never a bare name" "supervisor:explicit:Brian" "$(cat "$P/.uncle/workflow/approvals/$first.approved-by")"
+    check_eq "$driver answered: attribution is the supervisor receipt, never a bare name" "supervisor:explicit:Brian" "$(cat "$P/.uncle/workflow/approvals/$first.$attribution")"
     if [[ "$driver" == change-workflow.sh ]]; then
-        check_eq "$driver answered: every artifact of the gate carries the same attribution" "supervisor:explicit:Brian" "$(cat "$P/.uncle/workflow/approvals/CHANGE_SPEC.approved-by")"
+        check_eq "$driver answered: every artifact of the gate carries the same attribution" "supervisor:explicit:Brian" "$(cat "$P/.uncle/workflow/approvals/CHANGE_SPEC.delegated-by")"
+        check_eq "$driver answered: delegation never claims a human approval" "" "$(cat "$P/.uncle/workflow/approvals/$first.approved-by")"
     fi
     check_contains "$driver answered: receipt consumed with the request" '"request": "answer this one"' "$(grep '"status": "consumed"' "$P/.uncle/workflow/supervision/gate-answers.jsonl")"
     check_contains "$driver answered: gate_answer event attributes the line" '"answered_by": "supervisor:explicit:Brian"' "$(cat "$P/status.jsonl")"
@@ -401,7 +413,7 @@ for driver in stagegate.sh change-workflow.sh; do
 
     P="$(new_project "standing-$driver")"
     run_answered "$driver" "$P" y standing > /dev/null
-    check_eq "$driver standing: approved-by names standing delegation" "supervisor:standing:Brian" "$(cat "$P/.uncle/workflow/approvals/$first.approved-by")"
+    check_eq "$driver standing: attribution names standing delegation" "supervisor:standing:Brian" "$(cat "$P/.uncle/workflow/approvals/$first.$attribution")"
 
     P="$(new_project "declined-$driver")"
     rc="$(run_answered "$driver" "$P" n match)"
@@ -422,7 +434,14 @@ done
 # Reopen after an edit: the stale digest stays, the new approval is the human's.
 P="$(new_project reopen)"
 run_answered stagegate.sh "$P" y match > /dev/null
-printf 'edited\n' >> "$P/.uncle/docs/REQUIREMENTS_INTERPRETATION.md"
+python3 - "$P/.uncle/workflow/documents/REQUIREMENTS_INTERPRETATION.json" <<'EDIT'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+payload = json.loads(path.read_text())
+payload['sections']['required_functionality'] += ' Edited after approval.'
+path.write_text(json.dumps(payload))
+EDIT
 rc="$(run_driver stagegate.sh "$P" false 1)"
 check_contains "reopen: edited document reopens its gate" "changed after approval" "$(cat "$P/driver.out")"
 check_eq "reopen: the supervisor attribution is not carried to the new decision" "supervisor:explicit:Brian" "$(cat "$P/.uncle/workflow/approvals/REQUIREMENTS_INTERPRETATION.approved-by")"
@@ -438,7 +457,9 @@ check_eq "unattended: approved-by stays unattended" "unattended" "$(cat "$P/.unc
 
 for key in enabled runner model effort max_interventions steering_timeout_seconds stage_time_seconds stage_tokens call_timeout_seconds max_calls_per_run call_max_cost_usd delegate_gates; do
     check_contains "README documents supervision.$key" "supervision.$key" "$(cat "$ROOT/README.md")"
-    check_contains "config.example documents supervision.$key" "supervision.$key" "$(cat "$ROOT/.uncle/config.example")"
+    # config.example was removed; the maintained example is in README.
+    COUNT=$((COUNT + 1))
+    grep -q "^supervision\.$key " "$ROOT/README.md" || fail "README example documents supervision.$key"
 done
 
 echo "supervision-driver: $COUNT checks, $FAILED failed"

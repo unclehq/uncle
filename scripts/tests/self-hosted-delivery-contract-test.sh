@@ -48,6 +48,7 @@ run_block() { # run_block <script> <anchor> <runner> <log_name>
         printf 'agent_delivery=%q\n' "$work/agent-delivery.json"
         printf 'artifact_error=%q\n' "previous rejection reason"
         printf 'UNCLE_RESOLVED_RUNNER=%q\n' "$runner"
+        printf 'schema_args=()\n'
         printf 'effective_prompt=%q\n' "$work/prompt.md"
         printf 'schema_args=()\n'
         printf ': > "$effective_prompt"\n'

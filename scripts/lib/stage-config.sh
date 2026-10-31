@@ -113,7 +113,7 @@ uncle_config_stage() {
         adversarial-review-investigate) printf 'adversarial-review' ;;
         manual-checklist-investigate) printf 'manual-checklist' ;;
         final-audit-investigate) printf 'final-audit' ;;
-        project-plan-investigate|project-plan-section-*) printf 'project-plan' ;;
+        project-plan-investigate|project-plan-section-*|project-plan-stage-duties) printf 'project-plan' ;;
         requirements-investigate) printf 'requirements' ;;
         preflight-investigate) printf 'preflight' ;;
         implementation-investigate) printf 'implementation' ;;
@@ -400,4 +400,38 @@ uncle_stage_network() {
         1|true|yes|on) printf 'true' ;;
         *)             printf 'false' ;;
     esac
+}
+
+# Which CLI runs one stage. An explicit variable always wins over the config
+# file — a driver invoked with WORKFLOW_AGENT_CMD set means it — and the
+# built-in default applies only when the project has no config at all.
+stage_agent_cmd() {
+    local var
+    var="WORKFLOW_AGENT_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
+    if [[ -n "${!var:-}" ]]; then
+        printf '%s' "${!var}"
+    elif [[ -n "${WORKFLOW_AGENT_CMD:-}" ]]; then
+        printf '%s' "$WORKFLOW_AGENT_CMD"
+    else
+        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
+    fi
+}
+
+stage_reviewer_cmd() {
+    local var
+    var="WORKFLOW_REVIEWER_CMD_$(printf '%s' "$1" | tr '[:lower:]-.' '[:upper:]__')"
+    if [[ -n "${!var:-}" ]]; then
+        printf '%s' "${!var}"
+    elif [[ -n "${WORKFLOW_REVIEWER_CMD:-}" ]]; then
+        printf '%s' "$WORKFLOW_REVIEWER_CMD"
+    else
+        uncle_stage_cmd "$1" "${UNCLE_RESOLVED_RUNNER-$(uncle_stage_runner "$1")}"
+    fi
+}
+
+stage_command_overridden() {
+    local side="$1" stage="$2" var global
+    var="WORKFLOW_${side}_CMD_$(printf '%s' "$stage" | tr '[:lower:]-.' '[:upper:]__')"
+    global="WORKFLOW_${side}_CMD"
+    [[ -n "${!var:-}" || -n "${!global:-}" ]]
 }

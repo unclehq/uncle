@@ -87,6 +87,14 @@ snapshot_checklist_groups > /dev/null
 [[ "$(cat "$DIR/groups.txt")" == "MC-001" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
 grep -q 'scheduled alone' "$DIR/README.md"
 
+# An undeclared check remains a barrier even beside explicitly independent
+# checks. Missing a resource declaration never means safe to overlap.
+packet MC-001:none:none MC-002:undeclared:none MC-003:none:none
+snapshot_checklist_groups > /dev/null
+[[ "$(cat "$DIR/groups.txt")" == "MC-001
+MC-002
+MC-003" ]] || { echo "FAIL $0:$LINENO" >&2; exit 1; }
+
 # --- no checklist at all -----------------------------------------------------
 rm -f .uncle/docs/MANUAL_CHECKLIST.md
 rm -f "$STATE_DIR/documents/MANUAL_CHECKLIST.json"

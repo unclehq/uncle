@@ -46,7 +46,7 @@ run_codex() {
     printf '{"schema":"uncle.artifact/v1","kind":"manual-checklist-worker-packet","checks":[{"id":"%s","exact_action":"a","expected_result":"b"}]}\n' "$id" > "$output"
 }
 EOF
-        extract resolve_prompt
+        printf '%s\n' '. "$ROOT/scripts/lib/workflow-paths-change.sh"'
         extract checklist_worker_codex
         extract run_checklist_panel
         printf 'run_checklist_panel base prompts/change/manual-checklist-base.md\necho PANEL_OK\n'

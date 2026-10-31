@@ -32,23 +32,7 @@ check() { # check <name> <expected> <actual>
     if [[ "$2" == "$3" ]]; then ok; else bad "$1" "expected '$2', got '$3'"; fi
 }
 
-extract_fns() {
-    local script="$1" out="$2"
-    shift 2
-    : > "$out"
-    local fn
-    for fn in "$@"; do
-        awk -v fn="$fn" '
-            $0 == fn "() {" { p = 1 }
-            p { print }
-            p && /^\}$/ { exit }
-        ' "$script" >> "$out"
-        printf '\n' >> "$out"
-    done
-    for fn in "$@"; do
-        grep -q "^${fn}() {" "$out" || { echo "FATAL: could not extract $fn"; exit 2; }
-    done
-}
+. "$ROOT/scripts/tests/workflow_fixture.sh"
 
 # --- argument handling ------------------------------------------------------
 
@@ -67,9 +51,7 @@ done
 
 sg="$WORK/sg"
 mkdir -p "$sg/.uncle/workflow/approvals"
-extract_fns "$ROOT/scripts/stagegate.sh" "$sg/fns.sh" \
-    gate_prompt legacy_word_notice upper lower require_file \
-    record_unattended_gate approval_artifact_path review_and_approve
+workflow_fixture_write "$sg/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-app.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ROOT/scripts/lib/workflow-paths-app.sh" "$ROOT/scripts/lib/approval-gates-app.sh"
 cat > "$sg/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -124,21 +106,14 @@ else ok; fi
 
 wv="$WORK/wv"
 mkdir -p "$wv/.uncle/workflow"
-extract_fns "$ROOT/scripts/stagegate.sh" "$wv/fns.sh" \
-    gate_prompt record_unattended_gate
-# The waiver writers moved to a shared lib so both drivers use one copy.
-# extract_fns truncates its output, so collect the lib half separately.
-extract_fns "$ROOT/scripts/lib/waivers.sh" "$wv/fns-waivers.sh" \
-    write_waivers record_waiver
-cat "$wv/fns-waivers.sh" >> "$wv/fns.sh"
+# Source the complete waiver dependency graph, including its read fallback.
+workflow_fixture_write "$wv/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ROOT/scripts/lib/waivers.sh"
 cat > "$wv/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="/nonexistent-so-the-popup-is-skipped"
 STATE_DIR="$PWD/.uncle/workflow"
 UNATTENDED_FILE="$STATE_DIR/unattended-gates"
-# One-liner in the driver, so it is restated rather than extracted.
-waive_file() { printf '%s/waivers/%s' "$STATE_DIR" "$1"; }
 . ./fns.sh
 record_waiver "$@"
 echo "WAIVER_RETURNED"
@@ -168,8 +143,7 @@ else ok; fi
 
 cw="$WORK/cw"
 mkdir -p "$cw/.uncle/workflow/approvals"
-extract_fns "$ROOT/scripts/change-workflow.sh" "$cw/fns.sh" \
-    gate_prompt legacy_word_notice require_file record_unattended_gate approval_artifact_path human_gate
+workflow_fixture_write "$cw/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/prompt-io-change.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ROOT/scripts/lib/workflow-paths-change.sh" "$ROOT/scripts/lib/approval-gates-change.sh"
 cat > "$cw/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -206,11 +180,7 @@ done
 
 ic="$WORK/ic"
 mkdir -p "$ic/.uncle/workflow/approvals"
-extract_fns "$ROOT/scripts/change-workflow.sh" "$ic/fns.sh" \
-    gate_prompt record_unattended_gate implementation_incomplete_choice
-extract_fns "$ROOT/scripts/lib/waivers.sh" "$ic/fns-waivers.sh" \
-    write_waivers record_waiver
-cat "$ic/fns-waivers.sh" >> "$ic/fns.sh"
+workflow_fixture_write "$ic/fns.sh" "$ROOT/scripts/lib/prompt-io.sh" "$ROOT/scripts/lib/workflow-records.sh" "$ROOT/scripts/lib/implementation-gates.sh" "$ROOT/scripts/lib/implementation-gates-change.sh" "$ROOT/scripts/lib/waivers.sh"
 cat > "$ic/gate.sh" <<'HARNESS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -218,9 +188,10 @@ ROOT="/nonexistent-so-the-popup-is-skipped"
 STATE_DIR="$PWD/.uncle/workflow"
 APPROVAL_DIR="$STATE_DIR/approvals"
 UNATTENDED_FILE="$STATE_DIR/unattended-gates"
-waive_file() { printf '%s/waivers/%s' "$STATE_DIR" "$1"; }
-envelope_invalidate() { :; }
-set_state() { :; }
+envelope_invalidate() { echo "INVALIDATE $*" >> "$STATE_DIR/hooks"; }
+set_state() { echo "STATE $*" >> "$STATE_DIR/hooks"; }
+plan_executability_enabled() { return 0; }
+plan_tool() { echo "PLAN $*" >> "$STATE_DIR/hooks"; }
 . ./fns.sh
 status=0
 implementation_incomplete_choice || status=$?
@@ -292,6 +263,36 @@ esac
 if [[ -e "$ic/.uncle/workflow/waivers" ]]; then bad "ic-no-rows-no-waiver-file" "a waiver was written with no rows"
 else ok; fi
 
+# Attended routing retains retry/stop/repair codes and the order of side effects.
+: > "$ic/.uncle/workflow/hooks"
+printf 'AC-1: requires IMPLEMENTED, missing\n' > "$ic/.uncle/workflow/implementation-completion.txt"
+touch "$ic/.uncle/workflow/implementation-completion-repair"
+out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< retry 2>&1)"
+check "ic-retry-returns" "CHOICE_RETURNED 0" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+check "ic-retry-plan-hook" "PLAN retry" "$(cat "$ic/.uncle/workflow/hooks")"
+if [[ -e "$ic/.uncle/workflow/implementation-completion-repair" ]]; then
+    bad "ic-retry-clears-repair" "the retry digest was not cleared"
+else ok; fi
+out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< stop 2>&1)"
+check "ic-stop-returns" "CHOICE_RETURNED 1" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+out="$(cd "$ic" && UNATTENDED=0 bash gate.sh < /dev/null 2>&1)"
+check "ic-eof-returns" "CHOICE_RETURNED 1" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+out="$(cd "$ic" && printf 'waive\nfixture reason\n' | UNATTENDED=0 bash gate.sh 2>&1)"
+check "ic-attended-waiver-returns" "CHOICE_RETURNED 2" "$(printf '%s' "$out" | grep CHOICE_RETURNED)"
+check "ic-attended-waiver-reason" "reason: fixture reason" "$(grep '^reason:' "$ic/.uncle/workflow/waivers/AC-1")"
+printf 'bad row\n' > "$ic/.uncle/workflow/implementation-completion.txt"
+touch "$ic/.uncle/workflow/approvals/CHANGE_SPEC.sha256" "$ic/.uncle/workflow/approvals/CHANGE_PLAN.sha256" \
+    "$ic/.uncle/workflow/implementation-completion-repair"
+: > "$ic/.uncle/workflow/hooks"
+out="$(cd "$ic" && UNATTENDED=0 bash gate.sh <<< repair 2>&1)"
+check "ic-attended-repair-order" "INVALIDATE CHANGE_SPEC
+STATE ANALYZE
+CHOICE_RETURNED 3" "$(cat "$ic/.uncle/workflow/hooks"; printf '%s' "$out" | grep '^CHOICE_RETURNED ')"
+for cleared in approvals/CHANGE_SPEC.sha256 approvals/CHANGE_PLAN.sha256 implementation-completion-repair; do
+    if [[ -e "$ic/.uncle/workflow/$cleared" ]]; then bad "ic-repair-clears-$cleared" "stale file remains"
+    else ok; fi
+done
+
 # --- the issue stays open ---------------------------------------------------
 
 # Closing the originating issue announces outside the repository that this
@@ -310,7 +311,8 @@ for driver in stagegate change-workflow; do
         chmod +x "$d/bin/$tool"
     done
     if [[ "$driver" == stagegate ]]; then col=1; else col=2; fi
-    extract_fns "$ROOT/scripts/$driver.sh" "$d/fns.sh" record_unattended_gate completed_verdict finished_build_line
+    extract_fns "$ROOT/scripts/$driver.sh" "$d/driver-fns.sh" completed_verdict
+    workflow_fixture_write "$d/fns.sh" "$ROOT/scripts/lib/workflow-records.sh" "$d/driver-fns.sh"
     arm="$d/arm.sh"
     awk '/^        COMPLETE\)$/ {p = 1; next} p && /^        \*\)$/ {exit} p {print}' "$ROOT/scripts/$driver.sh" > "$arm"
     cat > "$d/run.sh" <<HARNESS
@@ -328,7 +330,7 @@ DIFF_FILE=DIFF
 GREEN_MD=GREEN
 UNATTENDED=\${UNATTENDED:-0}
 triage_print_actions() { :; }
-change_pr_complete() { echo "change_pr_complete CALLED"; git commit; }
+change_pr_complete() { echo "change_pr_complete CALLED"; git commit --no-gpg-sign; }
 # completed_verdict reads VERDICT_FILE through verdict_file_field, a shared
 # helper that lives in lib/audit-verdict.sh rather than in the driver script
 # itself; extract_fns only pulls functions out of the driver, so it has to be
@@ -345,7 +347,7 @@ HARNESS
     for id in FA-1 FA-2; do
         printf '2026-01-01T00:00:00Z\taudit-finding-skipped\t%s accepted without human review (audit abc)\n' "$id" >> "$d/.uncle/workflow/unattended-gates"
     done
-    out="$(cd "$d" && UNATTENDED=1 PATH="$d/bin:$PATH" run_timeout 60 bash "$d/run.sh" < /dev/null 2>&1)"; rc=$?
+    out="$(cd "$d" && UNATTENDED=1 PATH="$d/bin:$PATH" python3 "$ROOT/scripts/tests/run_with_timeout.py" 60 bash "$d/run.sh" < /dev/null 2>&1)"; rc=$?
     check "$driver-unattended-complete-rc" "0" "$rc"
     if grep -qF "Finished build: verdict=READY skipped=2 path=$d" <<< "$out"; then ok
     else bad "$driver-finished-line" "golden Finished line missing: $out"; fi
@@ -360,7 +362,7 @@ HARNESS
         bad "$driver-no-publish" "git/gh/PR handoff invoked unattended: $(cat "$d/calls.log" 2>/dev/null) $out"
     else ok; fi
     # Attended: no Finished line; the PR handoff still runs (change-workflow).
-    out="$(cd "$d" && UNATTENDED=0 PATH="$d/bin:$PATH" run_timeout 60 bash "$d/run.sh" < /dev/null 2>&1)" || true
+    out="$(cd "$d" && UNATTENDED=0 PATH="$d/bin:$PATH" python3 "$ROOT/scripts/tests/run_with_timeout.py" 60 bash "$d/run.sh" < /dev/null 2>&1)" || true
     if grep -q "Finished build:" <<< "$out"; then bad "$driver-attended-silent" "attended run printed the unattended line"; else ok; fi
     if [[ "$driver" == change-workflow ]]; then
         if grep -q "change_pr_complete CALLED" <<< "$out"; then ok
@@ -451,7 +453,7 @@ $(cat "$arm")
 esac
 done
 HARNESS
-    out="$(cd "$d2" && run_timeout 30 bash "$d2/run.sh" < /dev/null 2>&1)"
+    out="$(cd "$d2" && python3 "$ROOT/scripts/tests/run_with_timeout.py" 30 bash "$d2/run.sh" < /dev/null 2>&1)"
     if [[ "$scenario" == first-attempt ]]; then
         if grep -q '^SET_STATE REPAIR$' <<< "$out"; then ok
         else bad "audit-repair-routes-first" "did not route to REPAIR on a driver-observed regression: $out"; fi

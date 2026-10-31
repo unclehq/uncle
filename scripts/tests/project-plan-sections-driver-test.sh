@@ -10,7 +10,7 @@ fails=0
 export WORKFLOW_PLAN_BLOCKS=0     # this suite covers the Markdown-body packets; project-plan-blocks-driver-test.sh covers typed blocks
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
 
-awk '/^(project_plan_section_run|project_plan_section_finish|project_plan_section_settle|run_project_plan_sections)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
+awk '/^(project_plan_section_run|project_plan_section_finish|project_plan_section_settle|run_project_plan_sections_bounded|run_project_plan_sections)\(\) \{/,/^}/' "$ROOT/scripts/stagegate.sh" > "$TMP/fn.sh"
 check "function extracted" test -s "$TMP/fn.sh"
 
 # Section files a well-behaved worker would write, from the test's own fixture: with trace lines, and without.
@@ -36,6 +36,12 @@ run_case() {   # name mode fixture
         if [[ "${JSON_MODE:-}" == hosted ]]; then stage_supports_structured_output() { return 0; }; fi
         if [[ "${JSON_MODE:-}" == local ]]; then stage_uses_self_hosted() { return 0; }; fi
         run_claude() {   # prompt stage
+            if [[ "$2" == project-plan-stage-duties ]]; then   # the once-per-stage duty step: real .gitignore, real verification
+                printf '%s\n' .env .env.local .DS_Store node_modules/ dist/ build/ .svelte-kit/ .next/ out/ .venv/ __pycache__/ '*.pyc' .pytest_cache/ target/ vendor/ test-results/ playwright-report/ blob-report/ .pw-browsers/ > .gitignore
+                printf '%s\n' '{"type":"result","result":"PROJECT_PLAN_STAGE_COMPLETE"}' > "$LOG_DIR/project-plan-stage-duties.jsonl"
+                echo stage-duties >> "$STATE_DIR/stage-duties-calls"
+                return 0
+            fi
             local worker="${2#project-plan-section-}" parts="$STATE_DIR/project-plan-sections"
             printf '%s %s\n' "$worker" "$(python3 -c 'import time; print("%.2f" % time.time())')" >> "$STATE_DIR/order"
             case "$worker" in
@@ -95,6 +101,8 @@ check "success: returns 0"                         test "$(cat "$w/rc")" == 0
 check "success: plan assembled"                    grep -q '^# Project plan' "$TMP/ok/plan.md"
 check "success: the outline started with the early workers"  bash -c 'head -n8 <<< "$1" | grep -qx outline' _ "$(starts "$TMP/ok")"
 check "success: twenty-two workers ran, no model trace"   bash -c 'test "$(grep -vc " end " "$1")" == 22 && ! grep -q "^trace " "$1"' _ "$w/order"
+check "success: stage duties ran exactly once" test "$(wc -l < "$w/stage-duties-calls" | tr -d " ")" == 1
+check "success: stage duties recorded a receipt" test -s "$w/project-plan-sections/stage-duties.json"
 check "success: section 13 was built by the driver" grep -q '| R-1 | B-1, B-2 | I-1 | C-1 | T-1 | none |' "$TMP/ok/plan.md"
 check "success: nothing started before the outline" test ! -e "$w/violations"
 check "success: phase two ran concurrently"        python3 - "$w/order" <<'PY'
@@ -171,6 +179,18 @@ JSON_MODE=local run_case jlocal ok
 w="$TMP/jlocal/.uncle/workflow"
 check "local json: plan assembled"                test "$(cat "$w/rc")" == 0
 check "local json: packet path, no schema flag"   bash -c '! grep -q "schema=/\|schema=.*schemas" "$1" && grep -q "out=none" "$1"' _ "$w/json-calls"
+
+# Bounded scheduling must render exactly the same canonical artifact, including
+# the one-slot setting and retry/failure paths.
+for jobs in 1 2; do
+    WORKFLOW_SELF_HOSTED_STAGE_JOBS="$jobs" JSON_MODE=local run_case "bounded-$jobs" ok
+    check "bounded $jobs: same assembled artifact" cmp "$TMP/jlocal/plan.md" "$TMP/bounded-$jobs/plan.md"
+done
+WORKFLOW_SELF_HOSTED_STAGE_JOBS=2 JSON_MODE=local run_case localretry silentpacket
+check "bounded retry: plan assembled" test "$(cat "$TMP/localretry/.uncle/workflow/rc")" == 0
+WORKFLOW_SELF_HOSTED_STAGE_JOBS=2 JSON_MODE=local run_case localbad badpacket
+check "bounded invalid packet: no publication" test ! -e "$TMP/localbad/plan.md"
+check "bounded invalid packet: failed" test "$(cat "$TMP/localbad/.uncle/workflow/rc")" != 0
 
 JSON_MODE=hosted run_case jsilent silentpacket
 w="$TMP/jsilent/.uncle/workflow"

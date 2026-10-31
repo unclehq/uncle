@@ -25,9 +25,320 @@ import tempfile
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
+from self_hosted_stream import StreamStopped, assemble as assemble_stream
 
 REJECTED = (400, 404, 405, 415, 422, 501)
 _capabilities = {}
+_request_features = {}          # optional fields learned per Base URL, like schema modes
+
+# Includes the native Ollama schema and token-budget containers. Keep this in
+# step with _final_call/chat: request options cannot weaken their contracts.
+PROTECTED_REQUEST_KEYS = frozenset({
+    'model', 'messages', 'tools', 'tool_choice', 'stream', 'stream_options',
+    'response_format', 'structured_outputs', 'guided_json', 'format', 'options',
+    'max_tokens', 'max_completion_tokens', 'max_output_tokens', 'num_predict',
+})
+
+
+def _parse_request_options(text, source):
+    if '\n' in text or '\r' in text:
+        raise ValueError('%s must be a single-line JSON object' % source)
+    if len(text.encode('utf-8')) > 4096:
+        raise ValueError('%s must be at most 4096 bytes (4 KB)' % source)
+    try:
+        result = json.loads(text)
+        # Python accepts NaN/Infinity (including overflowing exponents); JSON
+        # does not. Never let these produce a malformed request body.
+        json.dumps(result, allow_nan=False)
+    except (ValueError, RecursionError):
+        raise ValueError('%s must be a valid JSON object' % source) from None
+    if not isinstance(result, dict):
+        raise ValueError('%s must be a JSON object' % source)
+    for key in result:
+        if key in PROTECTED_REQUEST_KEYS:
+            raise ValueError('%s contains protected request key %s' % (source, key))
+    return result
+
+
+def request_options(stage=None, config=None):
+    """Resolve one whole object; {} explicitly opts out of inherited options."""
+    from self_hosted import config_stage
+    stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
+    config = _config_values() if config is None else config
+    names = list(dict.fromkeys([stage, config_stage(stage, config)]))
+    for name in names + ['']:
+        var = 'WORKFLOW_SELF_HOSTED_REQUEST_OPTIONS'
+        if name:
+            var += '_' + re.sub(r'[^A-Z0-9]', '_', name.upper())
+        if var in os.environ:
+            return _parse_request_options(os.environ[var], var)
+    for name in names + ['self-hosted']:
+        key = name + '.request-options'
+        if key in config:
+            return _parse_request_options(config[key], key)
+    return {}
+
+
+def configure_request_options(values, stage=None, config=None):
+    """Snapshot and validate at stage start, before tools or server discovery."""
+    if '_request_options' in values:
+        return values
+    stage = os.environ.get('UNCLE_STATUS_STAGE', '') if stage is None else stage
+    return dict(values, _request_options=request_options(stage, config), _request_options_stage=stage)
+
+
+def merge_request_options(body, options):
+    """One-level object merge; Uncle owns existing non-object top-level keys."""
+    result, applied = dict(body), {}
+    for key, value in options.items():
+        if key in PROTECTED_REQUEST_KEYS:
+            raise ValueError('request-options contains protected request key %s' % key)
+        if isinstance(result.get(key), dict) and isinstance(value, dict):
+            result[key] = dict(result[key], **value)
+            applied[key] = value
+        elif key not in result:
+            result[key] = value
+            applied[key] = value
+    return result, applied
+
+
+def _error_detail(error):
+    if not hasattr(error, '_uncle_detail'):
+        error._uncle_detail = error.read().decode('utf-8', errors='replace').lower()
+    return error._uncle_detail
+
+
+def _names_option(detail, options):
+    for key, value in options.items():
+        if key and re.search(r'(?<![\w])' + re.escape(key.lower()) + r'(?![\w])', detail):
+            return True
+        if isinstance(value, dict) and _names_option(detail, value):
+            return True
+    return False
+
+
+def compatible_post(values, body, timeout, url=None):
+    """Apply extras to every turn, with fallback separate from effort/schema."""
+    values = configure_request_options(values)
+    base = values['base_url'].rstrip('/')
+    url = url or base + '/chat/completions'
+    features = _request_features.setdefault(base, {})
+    options = values['_request_options'] if features.get('request_options') is not False else {}
+    request, applied = merge_request_options(body, options)
+    stage = values['_request_options_stage'] or 'self-hosted'
+    keys = ', '.join(json.dumps(key) for key in sorted(applied))
+    if applied:
+        logged = features.setdefault('request_options_logged', set())
+        identity = (stage, tuple(sorted(applied)))
+        if identity not in logged:
+            print('Self hosted [%s]: request options applied: %s.' % (stage, keys), file=sys.stderr)
+            logged.add(identity)
+
+    def disabled():
+        if features.get('request_options') is not False:
+            print('Self hosted [%s]: server rejected request options %s; using a retry without options '
+                  'and omitting them for this Base URL for this process.' % (stage, keys), file=sys.stderr)
+        features['request_options'] = False
+
+    def without_options(candidate):
+        clean = dict(candidate)
+        for key in applied:
+            if key in body:
+                clean[key] = body[key]
+            else:
+                clean.pop(key, None)
+        return clean
+
+    def send(candidate):
+        clean = without_options(candidate)
+        if not applied or features.get('request_options') is False:
+            return post(url, values['api_key'], clean, timeout)
+        try:
+            return post(url, values['api_key'], candidate, timeout)
+        except HTTPError as error:
+            detail = _error_detail(error)
+            if not 400 <= error.code < 500:
+                raise
+            if _names_option(detail, applied):
+                disabled()
+                return post(url, values['api_key'], clean, timeout)
+            # Explicit errors about a different protocol feature belong to
+            # its own fallback. A generic 400 warrants an otherwise-identical
+            # A/B probe, without changing effort or schema during that probe.
+            if error.code != 400 or _names_option(detail, dict.fromkeys((
+                    'reasoning_effort', 'reasoning_content', 'reasoning', 'response_format', 'json_schema',
+                    'structured_outputs', 'guided_json', 'tools', 'tool_choice', 'format', 'stream', 'stream_options'))):
+                raise
+            try:
+                result = post(url, values['api_key'], clean, timeout)
+            except HTTPError:
+                raise error from None  # no evidence against options; retain support
+            disabled()
+            return result
+
+    return _compatible_post(values, request, lambda candidate: streaming_post(
+        url, values['api_key'], candidate, timeout, features, send=send))
+
+
+def option(name, default):
+    """Self-hosted-only option: WORKFLOW_SELF_HOSTED_* overrides .uncle/config."""
+    return os.environ.get('WORKFLOW_SELF_HOSTED_' + name.upper().replace('-', '_'),
+                          _config_values().get('self-hosted.' + name, default)).strip().lower()
+
+
+def positive_option(name, default, minimum=1):
+    value = int(option(name, str(default)))
+    if value < minimum:
+        raise ValueError('self-hosted.%s must be at least %d' % (name, minimum))
+    return value
+
+
+def streaming_post(url, key, body, timeout, features, send=None):
+    """Negotiate SSE and usage independently; never confuse schema rejection with streaming.
+
+    Generic 400s use otherwise-identical probes, and only a successful probe
+    teaches a fallback. Memory is per Base URL for the life of this process.
+    Native Ollama /api/chat keeps its native non-streaming wire format.
+    """
+    send = send or (lambda candidate: post(url, key, candidate, timeout))
+    if not url.endswith('/chat/completions') or features.get('stream') is False:
+        return send(body)
+    candidate = dict(body, stream=True)
+    if features.get('stream_usage') is not False:
+        candidate['stream_options'] = {'include_usage': True}
+    try:
+        return send(candidate)
+    except HTTPError as original:
+        detail = _error_detail(original)
+        if original.code not in REJECTED:
+            raise
+        named = _names_option(detail, {'stream': None, 'stream_options': None, 'include_usage': None})
+        if not named and (original.code != 400 or _names_option(detail, dict.fromkeys((
+                'response_format', 'json_schema', 'structured_outputs', 'guided_json', 'reasoning_effort',
+                'reasoning_content', 'reasoning', 'tools', 'tool_choice', 'format')))):
+            raise
+        if 'stream_options' in candidate:
+            candidate.pop('stream_options')
+            try:
+                result = send(candidate)
+            except StreamStopped:
+                # HTTP/SSE was accepted even though generation itself failed.
+                features['stream_usage'] = False
+                raise
+            except HTTPError as probe:
+                if probe.code not in REJECTED:
+                    raise
+            else:
+                features['stream_usage'] = False
+                return result
+        try:
+            result = send(dict(body, stream=False))
+        except HTTPError:
+            raise original from None
+        features['stream'] = False
+        return result
+
+
+def reasoning_effort(values=None, effort=None):
+    """Resolve Uncle effort to portable OpenAI low/medium/high; off omits the field."""
+    # Off by default: on DeepSeek V4 any reasoning_effort value switches thinking
+    # back on even when a stage's request options turn it off, and the hint showed
+    # no measurable benefit on tool-using requests. Opt in per project.
+    enabled = option('reasoning-effort', 'off')
+    if enabled in ('off', '0', 'false'):
+        return None
+    if enabled not in ('on', '1', 'true'):
+        raise ValueError('self-hosted.reasoning-effort must be on or off')
+    config = _config_values()
+    from self_hosted import config_stage
+    stage = os.environ.get('UNCLE_STATUS_STAGE', '')
+    parent = config_stage(stage, config)
+    for name in dict.fromkeys([stage, parent]):
+        override = os.environ.get('WORKFLOW_EFFORT_' + re.sub(r'[^A-Z0-9]', '_', name.upper()))
+        if override:
+            effort = override
+            break
+    else:
+        effort = (effort or (values or {}).get('effort') or config.get(stage + '.effort') or
+                  config.get(parent + '.effort') or config.get('effort') or 'low')
+    mapping = {'none': 'low', 'minimal': 'low', 'low': 'low', 'medium': 'medium',
+               'high': 'high', 'xhigh': 'high', 'max': 'high'}
+    try:
+        return mapping[effort.strip().lower()]
+    except KeyError:
+        raise ValueError('Unsupported self-hosted effort: %s' % effort) from None
+
+
+def strip_reasoning(text):
+    """Remove only leading thinking, including servers that omit the opening tag."""
+    text = text or ''
+    while text.lstrip().startswith('<think>'):
+        end = text.find('</think>')
+        if end < 0:
+            return ''         # unfinished thinking is never an answer
+        text = text[end + len('</think>'):].lstrip()
+    # Some chat templates already supply <think> to the decoder. Do not strip
+    # a literal tag embedded in an answer (JSON, code or ordinary prose).
+    if re.search(r'(?m)(?:^[ \t]*|\S)</think>', text) and not text.lstrip().startswith(('{', '[', '```')):
+        text = text.split('</think>', 1)[1].lstrip()
+    return text
+
+
+def clean_message(message):
+    result = dict(message)
+    result['content'] = strip_reasoning(result.get('content'))
+    if result.get('tool_calls'):
+        result['tool_calls'] = [dict(call, function=dict(call['function'], arguments=strip_reasoning(
+            call['function'].get('arguments')))) for call in result['tool_calls']]
+    return result
+
+
+def _compatible_post(values, body, send):
+    """Retry optional effort independently of schemas/tools, remembering proven support.
+
+    Reasoning fields stay local unless a server explicitly requires one on tool
+    continuations. Generic errors never opt a server into reasoning replay.
+    """
+    base = values['base_url'].rstrip('/')
+    features = _request_features.setdefault(base, {})
+    original = body
+
+    def prepared():
+        request = dict(original)
+        if features.get('effort') is False:
+            request.pop('reasoning_effort', None)
+        request['messages'] = [{k: v for k, v in message.items()
+                                if k not in ('reasoning', 'reasoning_content') or features.get(k)}
+                               for message in original['messages']]
+        return request
+
+    while True:
+        request = prepared()
+        try:
+            return send(request)
+        except HTTPError as error:
+            if error.code not in REJECTED:
+                raise
+            detail = _error_detail(error)
+            required = next((field for field in ('reasoning_content', 'reasoning')
+                             if re.search(r'\b' + field + r'\b', detail) and
+                             re.search(r'missing|required|must (?:include|provide)', detail) and
+                             not features.get(field) and
+                             any(field in m for m in original['messages'])), None)
+            if required:
+                features[required] = True
+                continue
+            if ('reasoning_effort' not in detail and any(field in detail for field in
+                    ('response_format', 'json_schema', 'structured_outputs', 'guided_json', 'tools'))):
+                raise
+            if 'reasoning_effort' not in request:
+                raise
+            # A successful otherwise-identical retry proves that effort caused
+            # the rejection. If it also fails, keep the original capability.
+            request.pop('reasoning_effort')
+            result = send(request)
+            features['effort'] = False
+            return result
 
 
 class OutputTruncated(ValueError):
@@ -43,15 +354,14 @@ def _no_answer(timeout, limit):
 def request_seconds(stage_seconds=3600):
     """Seconds one model request may take (WORKFLOW_SELF_HOSTED_REQUEST_SECONDS, default 1200).
 
-    Requests are not streamed, so the server says nothing until it has finished:
-    a generation that never stops looked exactly like a hung stage for the whole of
-    the stage timeout.  Twenty minutes covers a large prompt and a long answer.
+    The timeout also covers native/non-streaming fallback and pauses between
+    streamed chunks. Twenty minutes allows a large prompt and a long answer.
     """
     configured = os.environ.get('WORKFLOW_SELF_HOSTED_REQUEST_SECONDS', '').strip()
     return int(configured) if configured else min(int(stage_seconds), 1200)
 
 
-def turn_output_tokens(limit):
+def turn_output_tokens(limit, name=''):
     """Output cap for one tool-loop turn (WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS, default 32768).
 
     A turn is a tool call or a short note.  Using the whole-stage ceiling (64k) let
@@ -60,8 +370,41 @@ def turn_output_tokens(limit):
     call, so the cap must hold a full plan: 16k cut one off mid-document
     (calculator-local, updated-plan); 32k matches the closing-answer cap.
     """
-    configured = os.environ.get('WORKFLOW_SELF_HOSTED_TURN_OUTPUT_TOKENS', '').strip()
-    return min(int(limit), int(configured) if configured else 32768)
+    return output_cap(limit, 'turn-output-tokens', name)
+
+
+def output_cap(limit, option_name, artifact=''):
+    """Environment (stage, parent, global), config in the same order, then defaults."""
+    stage = os.environ.get('UNCLE_STATUS_STAGE', '')
+    config = _config_values()
+    from self_hosted import config_stage
+    names = list(dict.fromkeys(stage_names(stage) + [config_stage(stage, config)]))
+    prefix = 'WORKFLOW_SELF_HOSTED_' + option_name.upper().replace('-', '_')
+    value = None
+    for name in names + ['']:
+        key = prefix + ('_' + re.sub(r'[^A-Z0-9]', '_', name.upper()) if name else '')
+        if os.environ.get(key, '').strip():
+            value = os.environ[key]
+            break
+    if value is None:
+        for name in names + ['self-hosted']:
+            if config.get(name + '.' + option_name):
+                value = config[name + '.' + option_name]
+                break
+    # Small caps are for mechanical packets only. Judgment workers (review
+    # lenses, test review, audit, checklist) may think at length before they
+    # answer, and a small cap cut every lens off mid-thought (run 10).
+    # Applies to tool-loop turns, where the thinking happens; the final
+    # answer keeps upstream's small packet ceiling.
+    judgment = option_name == 'turn-output-tokens' and (
+        artifact.startswith(('adversarial_review', 'test_review', 'final_audit', 'manual_checklist')) or
+        bool(re.search(r'(?:adversarial-review|test-review|final-audit|manual-checklist)', stage)))
+    small = not judgment and (artifact.endswith(('worker_packet', 'ops_packet', 'outline_packet')) or
+                              bool(re.search(r'-worker-(?:edits|resolution|resolve)-', stage)))
+    cap = int(value) if value is not None else (4096 if small else 32768)
+    if cap <= 0:
+        raise ValueError(option_name + ' must be a positive integer')
+    return min(int(limit), cap)
 
 
 # Stages that run hotter than the default.  Requirements interpretation is
@@ -81,12 +424,31 @@ def stage_names(stage):
     return list(dict.fromkeys(names))
 
 
-def _config_values():
-    path = os.environ.get('UNCLE_CONFIG') or os.path.join(os.getcwd(), '.uncle', 'config')
+def _config_values(path=None):
+    path = path or os.environ.get('UNCLE_CONFIG') or os.path.join(os.getcwd(), '.uncle', 'config')
     values = {}
     try:
         with open(path, encoding='utf-8') as stream:
             for line in stream:
+                # JSON strings may contain # and significant whitespace. Only
+                # these new keys use quote-aware comments; other keys retain
+                # their historical parser behavior.
+                parts = line.split(None, 1)
+                if parts and parts[0].endswith('.request-options'):
+                    value = parts[1].rstrip('\r\n') if len(parts) == 2 else ''
+                    quoted = escaped = False
+                    for index, char in enumerate(value):
+                        if escaped:
+                            escaped = False
+                        elif char == '\\' and quoted:
+                            escaped = True
+                        elif char == '"':
+                            quoted = not quoted
+                        elif char == '#' and not quoted:
+                            value = value[:index]
+                            break
+                    values.setdefault(parts[0], value)
+                    continue
                 parts = line.split('#', 1)[0].split(None, 1)
                 if len(parts) == 2:
                     values.setdefault(parts[0], parts[1].strip())
@@ -258,8 +620,8 @@ NETWORK_ERRNOS = {errno.ECONNRESET, errno.ECONNABORTED, errno.EPIPE, errno.EHOST
 def tune_socket(sock):
     """Make a dead path show up in about a minute, not at the end of a 20-minute read.
 
-    A request is not streamed, so a connection can be silent for many minutes while the
-    server generates.  If the network under it dies (a dropped VPN), nothing says so: the
+    A connection can be silent for many minutes during prompt processing or
+    non-streaming fallback. If the network under it dies (a dropped VPN), nothing says so: the
     kernel retransmits into the void and the stage looks hung (three preflight workers sat
     with 100 KB unsent in their sockets).  Keepalive probes and a bound on how long sent
     data may go unacknowledged turn that into a connection error the caller can act on.
@@ -410,7 +772,17 @@ def _via_http1(method, url, data, headers, timeout):
             tune_socket(connection.sock)
             connection.request(method, target, body=data, headers=dict(headers, Connection='keep-alive'))
             response = connection.getresponse()
-            raw = response.read()
+            if 200 <= response.status < 300 and response.headers.get_content_type() == 'text/event-stream':
+                try:
+                    raw = assemble_stream(iter(response.readline, b''))
+                finally:
+                    # [DONE] need not consume the HTTP body terminator. Closing
+                    # also cancels generation immediately on an early stop.
+                    response.close()
+                    connection.close()
+                    connections.pop(key, None)
+            else:
+                raw = response.read()
         except ServerUnreachable:
             raise
         except STALE as error:
@@ -446,8 +818,12 @@ def _via_http2(method, url, data, headers, timeout):
                 client = pool.http2[key] = httpx.Client(
                     http1=parts.scheme == 'https', http2=True, follow_redirects=False)
         try:
-            response = client.request(method, url, content=data, headers=headers,
-                                      timeout=httpx.Timeout(timeout, connect=connect_timeout()))
+            with client.stream(method, url, content=data, headers=headers,
+                               timeout=httpx.Timeout(timeout, connect=connect_timeout())) as response:
+                if response.is_success and response.headers.get('content-type', '').split(';')[0] == 'text/event-stream':
+                    raw = assemble_stream(response.iter_lines())
+                else:
+                    raw = response.read()
         except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError) as error:
             with pool.lock:
                 pool.http2.pop(key, None)
@@ -463,7 +839,7 @@ def _via_http2(method, url, data, headers, timeout):
         except httpx.TransportError as error:
             raise _failure(url, OSError(str(error))) from None
         PROTOCOLS.add(response.http_version)
-        return response.status_code, response.reason_phrase, response.headers, response.content
+        return response.status_code, response.reason_phrase, response.headers, raw
 
 
 def _request(url, api_key, body=None, timeout=30):
@@ -479,7 +855,7 @@ def _request(url, api_key, body=None, timeout=30):
     status, reason, response_headers, raw = transport(method, url, data, headers, timeout)
     if not 200 <= status < 300:
         raise HTTPError(url, status, reason, response_headers, io.BytesIO(raw))
-    return json.loads(raw or b'null')
+    return raw if isinstance(raw, dict) else json.loads(raw or b'null')
 
 
 def detect_flavor(base_url, api_key):
@@ -532,10 +908,12 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
     if mode == 'ollama_format':
         body = {'model': values['model'], 'messages': _flatten(messages), 'stream': False, 'format': schema,
                 'options': {'num_predict': limit, 'temperature': temperature()}}
-        data = post(_origin(base_url) + '/api/chat', key, body, timeout)
+        if effort:
+            body['reasoning_effort'] = effort
+        data = compatible_post(values, body, timeout, url=_origin(base_url) + '/api/chat')
         usage = {'prompt_tokens': data.get('prompt_eval_count', 0), 'completion_tokens': data.get('eval_count', 0)}
         reason = 'length' if data.get('done_reason') == 'length' else 'stop'
-        return data['message']['content'], reason, usage
+        return strip_reasoning(data['message']['content']), reason, usage
     body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False,
             'temperature': temperature()}
     if effort:
@@ -548,32 +926,30 @@ def _final_call(values, messages, schema, name, mode, limit, effort, timeout):
         body['guided_json'] = schema
     elif mode == 'json_object':
         body['response_format'] = {'type': 'json_object'}
-    data = post(base_url + '/chat/completions', key, body, timeout)
+    data = compatible_post(values, body, timeout)
     choice = data['choices'][0]
-    return choice['message'].get('content') or '', choice.get('finish_reason'), data.get('usage') or {}
+    return strip_reasoning(choice['message'].get('content')), choice.get('finish_reason'), data.get('usage') or {}
 
 
-def constrained_completion(values, messages, schema, name, limit, effort='none', timeout=3600, skip=()):
+def constrained_completion(values, messages, schema, name, limit, effort=None, timeout=3600, skip=()):
     """Ask for `schema`-shaped output; returns (text, reason, usage, mode)."""
+    values = configure_request_options(values)
     caps = capabilities(values['base_url'], values['api_key'])
+    effort = reasoning_effort(values, effort)
     last = None
-    # The effort option is not universal either: if every mode refuses the
-    # request with it, ask again without it before giving up.
-    for with_effort in ([effort, ''] if effort else ['']):
-        for mode in caps['modes']:
-            if mode in caps['rejected'] or mode in skip:
-                continue
-            try:
-                text, reason, usage = _final_call(values, messages, schema, name, mode, limit, with_effort, timeout)
-                return text, reason, usage, mode
-            except HTTPError as error:
-                if error.code not in REJECTED:
-                    raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None
-                caps['rejected'].add(mode)
-                last = error
-            except TimeoutError:
-                raise _no_answer(timeout, limit) from None
-        caps['rejected'].clear()
+    for mode in caps['modes']:
+        if mode in caps['rejected'] or mode in skip:
+            continue
+        try:
+            text, reason, usage = _final_call(values, messages, schema, name, mode, limit, effort, timeout)
+            return text, reason, usage, mode
+        except HTTPError as error:
+            if error.code not in REJECTED:
+                raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None
+            caps['rejected'].add(mode)
+            last = error
+        except TimeoutError:
+            raise _no_answer(timeout, limit) from None
     raise ValueError('Model API rejected every request form (HTTP %s); check the model name' % getattr(last, 'code', '?'))
 
 
@@ -649,24 +1025,23 @@ def conforms(value, schema, path='$'):
             conforms(item, schema.get('items', {}), '%s[%d]' % (path, index))
 
 
-def chat(values, messages, tools, limit, effort='none', timeout=3600):
-    """One tool-capable turn at the configured temperature.
-
-    Returns the raw response, or None when the server refuses the request in
-    every form (typically: no tool calling).  Other failures raise.
-    """
-    for with_effort in ([effort, ''] if effort else ['']):
-        body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False,
-                'temperature': temperature()}
-        if tools:
-            body['tools'] = tools
-        if with_effort:
-            body['reasoning_effort'] = with_effort
-        try:
-            return post(values['base_url'].rstrip('/') + '/chat/completions', values['api_key'], body, timeout)
-        except HTTPError as error:
-            if error.code not in REJECTED:
-                raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None
-        except TimeoutError:
-            raise _no_answer(timeout, limit) from None
+def chat(values, messages, tools, limit, effort=None, timeout=3600):
+    """One tool-capable turn; None means the server rejected tool calling."""
+    body = {'model': values['model'], 'messages': messages, 'max_tokens': limit, 'stream': False,
+            'temperature': temperature()}
+    if tools:
+        body['tools'] = tools
+    effort = reasoning_effort(values, effort)
+    if effort:
+        body['reasoning_effort'] = effort
+    try:
+        data = compatible_post(values, body, timeout)
+        for choice in data.get('choices', []):
+            choice['message'] = clean_message(choice['message'])
+        return data
+    except HTTPError as error:
+        if error.code not in REJECTED:
+            raise ValueError('Model API request failed (HTTP %d); check the Base URL, API key and model' % error.code) from None
+    except TimeoutError:
+        raise _no_answer(timeout, limit) from None
     return None

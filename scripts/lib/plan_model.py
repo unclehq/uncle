@@ -629,6 +629,9 @@ def locate(model, key):
 def apply_ops(model, ops, root=None):
     """A new model with every op applied; the first op that names something missing raises PlanError."""
     root = Path.cwd() if root is None else root
+    # An edit answers for what it changes: a quirk the plan already had (run 12's
+    # nested "1." read as a second step 1) must not block an unrelated fix.
+    already = set(validate(model, root=root)[0])
     model = copy.deepcopy(model)
     for op in ops:
         name = op.get('op')
@@ -686,7 +689,7 @@ def apply_ops(model, ops, root=None):
                 fresh['blocks'].append(fresh_ids(model, fresh['id'], block))
         else:
             raise PlanError('unknown op %r' % name)
-    errors, _ = validate(model, root=root)
+    errors = [e for e in validate(model, root=root)[0] if e not in already]
     if errors:
         raise PlanError(errors[0])
     return model

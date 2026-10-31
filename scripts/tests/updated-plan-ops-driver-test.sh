@@ -40,6 +40,8 @@ PY
             local n="${2#updated-plan-worker-edits-}"; [[ "$2" != updated-plan-worker-resolve-* ]] || n=resolve
             printf '%s\n' "$n" >> "$STATE_DIR/starts"
             echo "$2 schema=${UNCLE_OUTPUT_SCHEMA_FILE:-none} out=${UNCLE_STRUCTURED_OUTPUT_PATH:-none} packet=${UNCLE_WORKER_PACKET_PATH:-none} kinds=$(grep -o '"kind":"[a-z-]*"' "$1" | sort -u | tr '\n' ' ')" >> "$STATE_DIR/calls"
+            printf '%s %s %s\n' "$n" "${UNCLE_WORKER_MAX_TURNS:-}" "${UNCLE_UPDATED_PLAN_ANSWER_TOKENS:-}" >> "$STATE_DIR/budgets"
+            if [[ "$mode:$n" == cap:2 ]]; then echo 'answer_cap' >&2; return 1; fi
             sleep 0.2
             [[ "$mode:$n" != fail:2 && "$mode:$n" != fail:2-* && "$mode:$n" != failonce:2 ]] || return 1
             if [[ "$2" == updated-plan-worker-resolve-* ]]; then
@@ -52,6 +54,7 @@ PY
             fi
             python3 -B - "$n" "$mode" "$UNCLE_WORKER_PACKET_PATH" "$1" <<'PY2'
 import json, re, sys
+from pathlib import Path
 n, mode, target, prompt = sys.argv[1:5]
 text = open(prompt).read()
 ids = re.search(r'You own exactly these findings: ([^.]*)\.', text).group(1).split(', ')
@@ -61,7 +64,16 @@ body = {'dispositions': [{'finding': i, 'disposition': 'Accepted', 'reason': 'r'
 if n in ('1', '1-1'):
     body['protected_verification_paths'] = 'tests/a.test.js'
 json.dump(body, open(target, 'w'))
+if mode in ('trailing', 'salvage'):
+    with open(target, 'a') as out:
+        out.write('\n' + json.dumps(dict(body, ops=[])) + '\nDone.')
+if mode == 'printed':
+    first = dict(body, schema='uncle.artifact/v1', kind='updated-plan-edit-ops-packet')
+    log = Path(target).parent.parent / 'logs' / ('updated-plan-worker-edits-' + n + '.jsonl')
+    log.write_text(json.dumps({'type': 'result', 'result': json.dumps(first) + '\n' + json.dumps(dict(first, ops=[]))}) + '\n')
+    Path(target).unlink()
 PY2
+            [[ "$mode" != salvage && "$mode" != printed ]] || return 1
         )
         . "$TMP/fn.sh"
         if [[ "$name" == adaptive ]]; then
@@ -82,6 +94,19 @@ check "success: both edits are in the plan"      bash -c 'grep -q "| B-1 | click
 check "success: untouched section is intact"     grep -q '^Kept\.$' "$doc"
 check "success: every finding has a row"         bash -c 'for n in 1 2 3 4 5 6; do grep -q "AR-$n" "$1" || exit 1; done' _ "$doc"
 check "success: writers got the model, not the plan text" bash -c 'grep -q "## Plan model (JSON)" "$1" && ! grep -q "Base project plan JSON" "$1" && grep -q "updated-plan-edit-ops-packet" "$1"' _ "$w/updated-plan-edits/prompts/1.md"
+
+for mode in trailing salvage printed cap; do
+    run_case "$mode" "$mode" local
+    w="$TMP/$mode/.uncle/workflow"
+    check "$mode: captured or resplit and published" test "$(cat "$w/rc")" == 0
+    check "$mode: successful sibling ran only once" test "$(grep -cx 1 "$w/starts")" == 1
+    check "$mode: captured first packet retains edits" grep -q '| B-1 | click | appended | X1 |' "$TMP/$mode/.uncle/docs/UPDATED_PROJECT_PLAN.md"
+    check "$mode: bounded turns and scaled packet cap" grep -qx '1 3 8704' "$w/budgets"
+    if [[ "$mode" == cap ]]; then
+        check "cap: split only failed group" grep -qx '2-1' "$w/starts"
+        check "cap: split writers get smaller caps" grep -qx '2-1 3 4096' "$w/budgets"
+    fi
+done
 
 run_case failonce failonce
 w="$TMP/failonce/.uncle/workflow"

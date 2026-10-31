@@ -477,7 +477,20 @@ def answer_already_given(text, schema):
     schema check the grammar answer would face is the answer; anything else falls through to the
     closing request as before.
     """
-    for candidate in answer_candidates(text):
+    candidates = answer_candidates(text)
+    # Edit packets sometimes have a second object or status text appended. The first
+    # complete packet still faces exactly the same schema checks as a clean answer.
+    try:
+        body = transport.strip_reasoning(text).strip()
+        if body.startswith('```'):
+            body = body.split('\n', 1)[-1].lstrip()
+        value, _ = json.JSONDecoder().raw_decode(body)
+        if isinstance(value, dict) and value.get('kind') in (
+                'updated-plan-edit-ops-packet', 'updated-plan-resolution-ops-packet'):
+            candidates.insert(0, json.dumps(value))
+    except ValueError:
+        pass
+    for candidate in candidates:
         try:
             value = json.loads(candidate)
             conforms(value, schema)
@@ -854,6 +867,10 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
                     if not policy.write and not policy.shell:
                         offered_tools = None
                     continue
+                if error.reason == 'answer_cap' and os.environ.get('UNCLE_UPDATED_PLAN_ANSWER_TOKENS'):
+                    # The driver resplits only this finding group. Do not repeat the
+                    # same oversized answer inside the worker first.
+                    raise
                 early_stops += 1
                 if early_stops > 1 or learned.soft or time.monotonic() >= deadline:
                     raise
@@ -1038,7 +1055,7 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
             saved = save_truncated('closing-turn', turn_limit, text, None, data.get('usage'))
             raise OutputTruncated('Model output reached the limit of %d tokens for one turn; the response is incomplete.%s'
                                   % (turn_limit, truncation_note(saved)))
-        if not text.strip():
+        if not text.strip() and not os.environ.get('UNCLE_UPDATED_PLAN_ANSWER_TOKENS'):
             # An empty closing message gives the driver nothing to recover a result from.
             messages.append({'role': 'user', 'content': 'Your last reply was empty. Reply now with what you found, what you '
                              'changed and what is still unresolved, in a few plain sentences.'})
@@ -1066,6 +1083,10 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
         if stage is not None:
             stage.final_answer = given
         return given, requests
+    if exhausted and os.environ.get('UNCLE_UPDATED_PLAN_ANSWER_TOKENS'):
+        # The bounded writer has had its tool-free delivery chance. Its driver
+        # retries just this group; no recursive schema-repair tool loop here.
+        raise ValueError('Updated-plan writer exhausted its turns without a valid packet')
     # A full plan already exists even when one field violates the schema.
     # Keep it as a private draft instead of asking the grammar to copy it all.
     # Plain status text still falls through to the initial constrained answer.

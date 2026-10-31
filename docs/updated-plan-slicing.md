@@ -1,0 +1,65 @@
+# Updated-plan edit writers
+
+The ops writer path assigns at most two findings per initial group. The number
+of groups is independent of the dispatcher's concurrency limit: a large review
+queues more small groups instead of enlarging each writer's assignment. The
+existing overlap resolvers and single-finding retries retain their contracts.
+
+Writers receive the complete plan model, verification commands, protected paths,
+and review in a shared prefix, followed by their assigned findings/corrections.
+They are told to deliver immediately without investigation. Keeping the common
+review prefix preserves prefix caching across the protected-path owner and its
+siblings. No input is fetched by a model just to reconstruct this context.
+
+Settings in `.uncle/config`:
+
+| Setting | Default | Meaning |
+| --- | ---: | --- |
+| `updated-plan.group-size` | 2 | Maximum initial findings per ops writer |
+| `updated-plan.writer-turns` | 3 | Writer tool-turn budget |
+| `updated-plan.ops-per-finding` | 4 | Expected operations for answer sizing |
+| `updated-plan.tokens-per-op` | 512 | Token allowance per expected operation |
+
+Environment overrides use `WORKFLOW_UPDATED_PLAN_GROUP_SIZE`,
+`WORKFLOW_UPDATED_PLAN_WRITER_TURNS`, `WORKFLOW_UPDATED_PLAN_OPS_PER_FINDING`,
+and `WORKFLOW_UPDATED_PLAN_TOKENS_PER_OP`. Change workflows accept corresponding
+`updated-change-plan.*` / `WORKFLOW_UPDATED_CHANGE_PLAN_*` overrides, then inherit
+`updated-plan.*`. Environment settings precede config. The older
+`WORKFLOW_UPDATED_PLAN_EDIT_SLICE` and `WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE`
+remain supported when the new group-size environment setting is absent.
+Values must be positive integers.
+
+The derived self-hosted answer cap is
+`max(4096, 1024 + findings * (512 + ops_per_finding * tokens_per_op))`:
+4,096 tokens for one finding, 6,144 for two, 8,704 for three. Existing explicit
+self-hosted turn/final output-token overrides retain precedence, and the model's
+output limit remains an upper bound. A streamed `answer_cap` stop returns to the
+driver immediately; only the failed group is split and retried.
+
+The HTTP runner asks for final delivery without tools when the tool budget is
+exhausted. Other runners use their existing turn-limit controls. The current Codex and
+Kimi adapters discard `--max-turns`; they receive the same prefetched prompts
+and packet salvage but do not gain a hard tool-count ceiling from this change. A completed
+file packet can be salvaged even if the runner exits unsuccessfully afterward;
+the same merge and schema checks still apply. These workers never double their
+turn budget automatically. A complete first edit/resolution object followed by
+another object or text is accepted; malformed JSON is not repaired by capture.
+
+Structural retries operate on the current updated plan. Accepted dispositions
+that unambiguously name a missing path and an implementation step take priority.
+Otherwise, a `name.test.ext` / `name.spec.ext` file can inherit the unique owner
+of a source file with the same basename and extension. Ambiguous gaps get one
+bounded edit-op request containing the implementation steps and affected paths.
+Ownership repairs cannot remove existing ownership or protected paths, change
+commands/dispositions, or edit unrelated ids. Other structural defects receive
+only implementation and verification/test sections plus the execution contract.
+The normal validators run again before approval. Speculative synthesis is never
+reused for a structural retry.
+
+Regression commands:
+
+```sh
+python3 -I scripts/tests/updated-plan-slicing-test.py
+python3 -I scripts/tests/updated-plan-ops-test.py
+bash scripts/run-shell-tests.sh
+```

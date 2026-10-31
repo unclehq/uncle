@@ -2537,6 +2537,14 @@ run_adversarial_review_panel() {
     [[ "${WORKFLOW_ADVERSARIAL_REVIEW_PANEL:-1}" == 1 ]] || return 0
     rm -rf "$directory"
     mkdir -p "$directory/prompts"
+    local slices
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    slices="$(python3 -B "$ROOT/scripts/lib/adversarial_slices.py" count "$(workflow_model_runner adversarial-review REVIEWER)")" || return 1
+    if [[ "$slices" -gt 1 ]]; then
+        . "$ROOT/scripts/lib/adversarial-slices.sh"
+        run_adversarial_review_slices "$directory" "$STATE_DIR/documents/CHANGE_PLAN.json" \
+            "$STATE_DIR/documents/CHANGE_SPEC.json" "$slices" change || return 1
+    else
     for lens in requirements regression security testability; do
         prompt="$directory/prompts/$lens.md"
         output="$directory/$lens.json"
@@ -2552,6 +2560,7 @@ run_adversarial_review_panel() {
     for pid in "${pids[@]}"; do
         wait "$pid" || echo "Adversarial-review worker failed; canonical packet validation will stop the panel." >&2
     done
+    fi
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
     python3 -B "$ROOT/scripts/lib/adversarial_packets.py" . || return 1
     ADVERSARIAL_REVIEW_PROMPT="$directory/adversarial-review-synthesis.md"

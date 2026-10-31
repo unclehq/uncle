@@ -169,6 +169,25 @@ Explicit legacy `stage-jobs` pools retain their previous two-finding adaptive
 size until a granularity setting is selected. Direct writer grouping remains
 with the existing slicing helpers; the slicing lane can consume the accessor.
 
+Adversarial review uses four checklist slices per lens with the small profile,
+for sixteen independent units across the four existing lenses. Large profiles
+and explicit legacy pools keep one request per lens. Set
+`adversarial-review.slices off` (or `1`) to retain the unsliced path, or `2`–`8`
+to select a slice count. `WORKFLOW_ADVERSARIAL_REVIEW_SLICES` wins over the
+runner-specific `WORKFLOW_<RUNNER>_SLICES_ADVERSARIAL_REVIEW`, provider-wide
+`WORKFLOW_<RUNNER>_SLICES`, and config values. Each failed slice retries alone;
+only a fully validated panel publishes the existing lens packets and review.
+Duplicate normalized summaries merge mechanically, retaining evidence and the
+highest severity; distinct findings are retained and colliding local IDs are
+assigned unused IDs in lens/slice order. No model performs the merge.
+
+Self-hosted HTTP slices embed the canonical inputs and answer directly under
+the worker packet schema, with default allowances of 8,192 reasoning tokens and
+4,096 final-answer tokens. Existing `reasoning-output-tokens` and
+`final-output-tokens` stage/provider settings and environment overrides apply.
+Other runners use their existing reviewer transport. The public lens labels,
+review documents, and approval/recovery controls remain unchanged.
+
 `workflow_model_enter STAGE [AGENT|REVIEWER]` runs inside each background unit.
 It acquires a lease from `scripts/lib/unit_scheduler.py` and releases it on exit.
 Overlapping registered fan-outs share the pool, while providers remain separate.

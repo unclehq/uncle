@@ -2448,6 +2448,14 @@ run_adversarial_review_panel() {
         plan_input="$directory/plan-view.json"
         plan_input_note=' That file is the plan as JSON: sections of blocks, with rows, list items and steps that each have an `id`. Cite those ids.'
     fi
+    local slices
+    . "$ROOT/scripts/lib/model-jobs.sh"
+    slices="$(python3 -B "$ROOT/scripts/lib/adversarial_slices.py" count "$(workflow_model_runner adversarial-review REVIEWER)")" || return 1
+    if [[ "$slices" -gt 1 ]]; then
+        . "$ROOT/scripts/lib/adversarial-slices.sh"
+        run_adversarial_review_slices "$directory" "$plan_input" \
+            "$STATE_DIR/documents/REQUIREMENTS_INTERPRETATION.json" "$slices" new || return 1
+    else
     for lens in requirements regression security testability; do
         prompt="$directory/prompts/$lens.md"
         output="$directory/$lens.json"
@@ -2464,6 +2472,7 @@ run_adversarial_review_panel() {
         fi
     done
     [[ "$failed" == 0 ]] || return 1
+    fi
     python3 "$ROOT/scripts/lib/worker_packets.py" "$directory" "$STATE_DIR/documents/ADVERSARIAL_REVIEW_WORKERS.json" --kind adversarial-review-worker-packet --expected requirements regression security testability || return 1
     # Worker packets are already validated, complete, and deduplicated by
     # stable finding ID.  Rendering them directly makes the collated JSON the

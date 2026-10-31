@@ -432,6 +432,8 @@ def output_cap(limit, option_name, artifact=''):
                                                    'section-worker-packet', 'section-model-packet')) or
               bool(re.search(r'-worker-(?:edits|resolution|resolve|section)-', stage))))
     default = 4096 if small else 32768
+    if os.environ.get('UNCLE_ADVERSARIAL_SLICE') == '1':
+        default = 8192 if option_name == 'reasoning-output-tokens' else 4096
     if small and option_name != 'reasoning-output-tokens' and os.environ.get('UNCLE_UPDATED_PLAN_ANSWER_TOKENS'):
         default = int(os.environ['UNCLE_UPDATED_PLAN_ANSWER_TOKENS'])
     cap = int(value) if value is not None else default

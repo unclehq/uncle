@@ -46,6 +46,9 @@ Goals
   Resolver scopes use the conflicting targets and their ancestors, with the same evidence fallback for missing targets.
   Schemas remain inline for runner compatibility, omit redundant keywords and use compact JSON. Per-kind operations, field
   types, existing-id constraints and parent-specific insertion anchors remain enforced.
+  Ownership repair reads legacy heading-form assignments without changing their layout and compares `./path` with `path`.
+  Its grammar lists all candidate typed steps and permits removing only unresolved protected paths; rejected packets receive
+  one retry carrying the exact validation error. Existing ownership, unrelated protected paths and verification commands remain fixed.
 - Overlap between writers is exact (same id, same field), not substring matching.
 - Markdown is rendered from the data, deterministically, for humans only.
 - Every stage that reads the plan (review, implementation, checklists, audits) receives plan JSON, whole or

@@ -15,6 +15,7 @@ import artifact_json
 import plan_model as pm
 import plan_ownership_gap as ownership
 import updated_plan_ops as ops
+from self_hosted_http import conforms
 
 FIXTURE = Path(__file__).with_name('fixtures') / 'run19-structure-scope.json'
 
@@ -40,6 +41,7 @@ class StructureScope(unittest.TestCase):
 
     def write_plan(self, plan, model=None):
         self.plan.write_text(json.dumps(plan))
+        (self.state / 'documents/PROJECT_PLAN.json').write_text(json.dumps(plan))
         self.view.write_text(artifact_json.render_plan(plan, protected=True))
         if model is not None:
             pm.sidecar(self.plan).write_text(json.dumps(model))
@@ -95,6 +97,7 @@ class StructureScope(unittest.TestCase):
                 (self.repair / 'packet.json').write_text(json.dumps(packet))
                 ops.apply_structure_repair(self.repair, self.root)
                 repaired = json.loads((self.repair / 'repaired.json').read_text())
+                self.plan.write_text(json.dumps(repaired))
                 self.view.write_text(artifact_json.render_plan(repaired, protected=True))
                 self.assertEqual(ownership.unowned_protected_paths(
                     self.view, self.root, ['tests/unknown.test.js']), [])
@@ -128,6 +131,56 @@ run_updated_plan_structure_repair "$STATE_DIR/documents/UPDATED_PROJECT_PLAN.jso
         self.assertEqual((self.state / 'calls').read_text().splitlines(), ['call', 'call'])
         self.assertEqual(ownership.unowned_protected_paths(
             self.view, self.root, ['tests/unknown.test.js'], self.state), [])
+
+    def test_repair_schema_permits_every_candidate_and_only_ownership_fields(self):
+        self.write_plan(self.typed_plan())
+        ops.prepare_structure_repair(self.plan, self.root, self.repair, 'no owning implementation step')
+        schema = json.loads((self.repair / 'schema.json').read_text())
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-edit-ops-packet',
+                  'dispositions': [], 'ops': [], 'protected_verification_paths': ''}
+        for identifier in ('step-1', 'step-2'):
+            packet['ops'] = [{'op': 'set_step', 'id': identifier, 'fields': {'owns': ['tests/unknown.test.js']}}]
+            conforms(packet, schema)
+            packet['ops'][0]['fields']['title'] = 'Unrelated rename'
+            with self.assertRaises(ValueError):
+                conforms(packet, schema)
+
+    def test_only_unowned_protected_paths_may_be_removed(self):
+        plan = self.typed_plan()
+        plan['protected_verification_paths'] += '\nsrc/core.js'
+        self.write_plan(plan)
+        ops.prepare_structure_repair(self.plan, self.root, self.repair, 'no owning implementation step')
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-edit-ops-packet',
+                  'dispositions': [], 'ops': [], 'protected_verification_paths': ''}
+        (self.repair / 'packet.json').write_text(json.dumps(packet))
+        with self.assertRaisesRegex(ops.Conflict, 'unrelated verification'):
+            ops.apply_structure_repair(self.repair, self.root)
+        packet['protected_verification_paths'] = 'src/core.js'
+        (self.repair / 'packet.json').write_text(json.dumps(packet))
+        ops.apply_structure_repair(self.repair, self.root)
+        repaired = json.loads((self.repair / 'repaired.json').read_text())
+        self.assertEqual(repaired['protected_verification_paths'], 'src/core.js')
+        self.assertEqual(repaired['narrative'], plan['narrative'])
+
+    def test_retry_is_bounded_and_receives_the_candidate_schema(self):
+        self.write_plan(self.typed_plan())
+        script = '''set -euo pipefail
+ROOT="$1"
+STATE_DIR=.uncle/workflow
+LOG_DIR="$STATE_DIR/logs"
+. "$ROOT/scripts/lib/updated-plan-repair.sh"
+run_claude() {
+    test -s "$UNCLE_WORKER_SCHEMA_FILE"
+    printf 'call\\n' >> "$STATE_DIR/calls"
+    printf '%s\\n' '{"schema":"uncle.artifact/v1","kind":"updated-plan-edit-ops-packet","dispositions":[],"ops":[{"op":"set_step","id":"missing-step","fields":{"owns":"tests/unknown.test.js"}}]}' > "$UNCLE_WORKER_PACKET_PATH"
+}
+run_updated_plan_structure_repair "$STATE_DIR/documents/UPDATED_PROJECT_PLAN.json" 'no owning implementation step' updated-plan
+'''
+        result = subprocess.run(['bash', '-c', script, 'test', str(ROOT)], cwd=self.root,
+                                capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('outside its scope: missing-step', result.stderr)
+        self.assertEqual((self.state / 'calls').read_text().splitlines(), ['call', 'call'])
 
 
 if __name__ == '__main__':

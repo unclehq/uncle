@@ -348,7 +348,7 @@ workflow_model_writer updated-plan run_claude prompt updated-plan-worker-edits-3
 
 
 class ResolverExhaustion(unittest.TestCase):
-    def run_resolvers(self, change):
+    def run_resolvers(self, change, semantic=False, granularity='small'):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -367,6 +367,9 @@ class ResolverExhaustion(unittest.TestCase):
         (root / 'prompt.md').write_text(prompt.prompt(plan, review, workers, change=change))
         stub = order.STUB.replace("if mode == 'resolver-transport' and group == 'G1' and not stage.endswith('-retry'):",
                                  "if mode == 'resolver-transport' and group == 'G1':\n        print('resolver-attempt-%d' % (len(prior) + (2 if stage.endswith('-retry') else 1)), flush=True)")
+        if semantic:
+            stub = stub.replace("invalid = mode == 'resolver-invalid' and group == 'G1' and not stage.endswith('-retry')",
+                                "invalid = mode == 'resolver-invalid' and group == 'G1'")
         (root / 'stub.py').write_text(stub)
         prefix = 'updated_change_plan' if change else 'updated_plan'
         names = [prefix + '_launch_writer', 'run_' + prefix + '_edit_writers']
@@ -381,8 +384,8 @@ stage_supports_structured_output() { return 1; }
 run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
 ''' + 'run_' + prefix + '_edit_writers\n'
         result = subprocess.run(['bash', '-c', script], cwd=root, env=environment(root,
-            SCHEMA_TEST_MODE='resolver-transport', WORKFLOW_UPDATED_PLAN_EDIT_SLICE='3',
-            WORKFLOW_SELF_HOSTED_GRANULARITY='small', WORKFLOW_PREFIX_WARM_SECONDS='0'),
+            SCHEMA_TEST_MODE='resolver-invalid' if semantic else 'resolver-transport', WORKFLOW_UPDATED_PLAN_EDIT_SLICE='3',
+            WORKFLOW_SELF_HOSTED_GRANULARITY=granularity, WORKFLOW_PREFIX_WARM_SECONDS='0'),
             capture_output=True, text=True, timeout=30)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return state, result
@@ -398,6 +401,19 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
                 records = [json.loads(line) for path in state.glob('attempts-*-resolve-G2.jsonl')
                            for line in path.read_text().splitlines()]
                 self.assertEqual(len(records), 1)
+
+    def test_final_semantic_rejection_is_logged_and_terminal_in_both_profiles(self):
+        for change in (False, True):
+            for granularity, attempts in (('small', 3), ('large', 2)):
+                with self.subTest(change=change, granularity=granularity):
+                    state, result = self.run_resolvers(change, semantic=True, granularity=granularity)
+                    self.assertTrue((state / 'updated-plan-writers-exhausted').exists(), result.stdout + result.stderr)
+                    self.assertIn('writer attempts exhausted', (state / 'stop-reason').read_text())
+                    for name in ('UPDATED_PLAN.log', 'UPDATED_PLAN.speculative.log'):
+                        lines = (state / 'logs' / name).read_text().splitlines()
+                        rejections = [line for line in lines if 'resolve-G1' in line and 'schema rejection' in line]
+                        self.assertEqual(len(rejections), attempts, lines)
+                        self.assertTrue(all('B-999' in line for line in rejections), lines)
 
     def test_resolver_retry_and_alternate_keep_separate_failure_evidence(self):
         for change in (False, True):

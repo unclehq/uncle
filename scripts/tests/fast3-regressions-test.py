@@ -149,6 +149,35 @@ class WriterDeadline(unittest.TestCase):
             self.assertEqual(len(server.requests), 1, 'timeout must return to driver before another request')
 
 
+    def test_last_resort_tool_loop_shares_the_writer_deadline(self):
+        spec = importlib.util.spec_from_file_location('http_fixture', ROOT / 'scripts/tests/self-hosted-http-test.py')
+        http = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(http)
+        packet = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-edit-ops-packet',
+                  'dispositions': [], 'ops': []}
+        calls = [{'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': 'read-' + str(i), 'type': 'function', 'function': {
+                'name': 'read_file', 'arguments': '{"path":"input.txt"}'}}]} for i in range(10)]
+        server = http.Server(packet, tool_script=calls, delay=.4)
+        self.addCleanup(server.close)
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+                'UNCLE_CONFIG': str(Path(temp) / 'config'), 'UNCLE_PROJECT_ROOT': temp,
+                'UNCLE_STATUS_STAGE': 'updated-plan-worker-edits-3-1',
+                'UNCLE_UPDATED_PLAN_ANSWER_TOKENS': '4096',
+                'WORKFLOW_SELF_HOSTED_WRITER_SECONDS': '1',
+                'WORKFLOW_SELF_HOSTED_WRITER_SCHEMA_FIRST': 'off',
+                'WORKFLOW_SELF_HOSTED_RESULT_REUSE': 'off',
+                'WORKFLOW_SELF_HOSTED_HTTP2': 'off'}, clear=True):
+            (Path(temp) / 'input.txt').write_text('plan context')
+            start = time.monotonic()
+            with self.assertRaisesRegex(Exception, 'time|budget|deadline'):
+                self_hosted.run_http_agent('agent', {'base_url': server.url, 'api_key': 'stub', 'model': 'stub'},
+                    'Deliver the packet.', Path(temp), schema_kind=packet['kind'], turns=20)
+            self.assertLess(time.monotonic() - start, 3)
+            self.assertGreaterEqual(len(server.requests), 2, 'budget must be shared by several tool turns')
+            self.assertLess(len(server.requests), 10)
+
+
 class WriterFallback(unittest.TestCase):
     run_driver = order.AttemptOrder.run_driver
 

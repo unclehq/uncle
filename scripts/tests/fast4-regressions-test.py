@@ -403,6 +403,7 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
                            cwd=directory, env=environment(directory), check=True)
             candidate.unlink()
             self.assertEqual(len(list(directory.rglob('resolutions-G1*.json'))), 1)
+            (directory / 'resolutions-G1-r9.json').write_text(json.dumps({'resolutions': [archived]}))
             (directory / 'resolutions-G2.json').write_text(json.dumps({'resolutions': [live]}))
             with self.subTest(kind='ops'):
                 self.assertEqual(ops.read_answers(directory, [{'id': 'G1'}, {'id': 'G2'}]), {'G2': live})

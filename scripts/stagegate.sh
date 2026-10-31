@@ -2658,6 +2658,7 @@ run_updated_plan_edit_writers() {
         if [[ "$failed" != 0 ]]; then
             if stage_uses_self_hosted updated-plan AGENT; then
                 : > "$STATE_DIR/updated-plan-writers-exhausted"
+                printf '%s\n' 'updated-plan: writer attempts exhausted' > "$STATE_DIR/stop-reason"
                 echo 'Updated-plan writer attempts exhausted; completed packets retained for diagnosis.' >&2
             fi
             return 1
@@ -2863,11 +2864,13 @@ run_preflight_readonly_worker() {
       UNCLE_WORKER_PACKET_PATH="$output" run_claude "$prompt" "$worker" "Read,Glob,Grep,Bash" ) || status=$?
     if grep -q 'read-only preflight refused' "$LOG_DIR/$worker.jsonl" "$LOG_DIR/$worker.log" 2>/dev/null; then
         : > "$STATE_DIR/preflight-readonly-violation"
+        printf '%s: read-only preflight violation\n' "$worker" > "$STATE_DIR/stop-reason"
         status=1
     fi
     if ! python3 -B "$ROOT/scripts/lib/preflight_readonly.py" check "$scratch" "$worker"; then
         printf '%s: read-only preflight violation; refusing worker output.\n' "$worker" >&2
         : > "$STATE_DIR/preflight-readonly-violation"
+        printf '%s: read-only preflight violation\n' "$worker" > "$STATE_DIR/stop-reason"
         status=1
     fi
     python3 -B "$ROOT/scripts/lib/preflight_readonly.py" remove "$scratch" || status=1

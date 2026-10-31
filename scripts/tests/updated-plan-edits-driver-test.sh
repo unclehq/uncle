@@ -2,6 +2,8 @@
 # run_updated_plan_edit_writers: writers run at the same time, their patches are merged and published,
 # and any failure returns nonzero with nothing published so the single synthesis call can run.
 set -uo pipefail
+# Retain the explicit stop-on-exhaustion compatibility contract.
+export WORKFLOW_UPDATED_PLAN_DEFER_UNAPPLIED=off
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fails=0

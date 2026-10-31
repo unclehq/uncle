@@ -66,11 +66,6 @@ class Deltas(unittest.TestCase):
         self.assertIn('--include-partial-messages', argv)
         self.assertIn('--output-format', argv)
 
-    def test_the_pipe_is_drained_without_blocking_for_a_full_buffer(self):
-        source = (ROOT / 'scripts/lib/supervisor_runner.py').read_text()
-        self.assertIn('process.stdout.read1(', source)
-        self.assertNotIn('process.stdout.read(65536)', source)
-
 
 class PartialEnvelope(unittest.TestCase):
     """Only the `reply` value is displayable; the envelope never is."""

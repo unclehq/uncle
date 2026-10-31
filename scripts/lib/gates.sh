@@ -787,7 +787,7 @@ check_document_budget() {
             supervision_validation_failed document_budget "$file" \
                 "Document budget exceeded: $file ($bytes bytes, $lines lines; limits $max_bytes bytes, $max_lines lines)"
         fi
-        if [[ -t 0 || -n "${UNCLE_STATUS_FILE:-}" || "${WORKFLOW_BUDGET_PROMPT:-0}" == 1 ]]; then
+        if [[ -t 0 || ( -n "${UNCLE_STATUS_FILE:-}" && "${UNCLE_SUPERVISION_HOST:-}" != headless ) || "${WORKFLOW_BUDGET_PROMPT:-0}" == 1 ]]; then
             read -r proposed_bytes proposed_lines <<< "$(awk -v b="$bytes" -v l="$lines" -v mb="$max_bytes" -v ml="$max_lines" 'BEGIN {printf "%.0f %.0f", (b>mb?int((b*1.1+999)/1000)*1000:mb), (l>ml?int((l*1.1+9)/10)*10:ml)}')"
             question="$(printf 'Document budget exceeded: %s. Increase limits from %s bytes / %s lines to %s bytes / %s lines and continue with the preserved document? [Y/N]' "$file" "$max_bytes" "$max_lines" "$proposed_bytes" "$proposed_lines")"
             if declare -f supervision_gate_open > /dev/null; then supervision_gate_open "$question"; fi

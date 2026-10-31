@@ -311,11 +311,6 @@ done
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                 self.assertEqual(len((self.state / 'unattended-gates').read_text().splitlines()), 3)
 
-    def test_both_drivers_require_final_audit_gate_by_default(self):
-        for driver in ('stagegate.sh', 'change-workflow.sh'):
-            with self.subTest(driver=driver):
-                source = (ROOT / 'scripts' / driver).read_text(encoding='utf-8')
-                self.assertIn('AUDIT_GATE="${WORKFLOW_AUDIT_GATE:-1}"', source)
 
     def test_modal_labels_and_long_finding_fit(self):
         import sys

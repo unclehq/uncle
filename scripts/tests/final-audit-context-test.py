@@ -165,7 +165,7 @@ class Audit(unittest.TestCase):
             p.write_text('## Findings\n\n### F1: stale diff\n- **Evidence**: diff is stale\n- **Correction**: regenerate it\n- **Blocks**: YES — evidence is unreliable\n\n## Verdict\n\nNOT READY — stale evidence\n')
             module.validate(p)
             fixed = p.read_text()
-            self.assertIn('| F1 | Unspecified | diff is stale Blocks rationale: evidence is unreliable |', fixed)
+            self.assertIn('| F1 | blocking | stale diff: diff is stale Blocks rationale: evidence is unreliable | Not stated | regenerate it | YES |', fixed)
             self.assertTrue(fixed.rstrip().endswith('NOT READY'))
 
     @unittest.skipUnless(shutil.which('bash'), 'Bash required')

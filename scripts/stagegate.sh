@@ -4836,7 +4836,7 @@ while true; do
             # weak to do both, must fall back to running the plan stage -- not
             # fail a validation of the document it did write.
             rm -f "$STATE_DIR/merged-plan.input"
-            if merged_requirements_plan_enabled && -s .uncle/docs/PROJECT_PLAN.md; then
+            if merged_requirements_plan_enabled && [[ -s .uncle/docs/PROJECT_PLAN.md ]]; then
                 # The interpretation the plan was written against. If the
                 # operator edits it at the gate, the plan beside it is stale and
                 # must be rewritten -- the same rule adoption applies to a
@@ -4869,7 +4869,7 @@ while true; do
             # operator just approved. An edited interpretation means the plan
             # beside it answers a question nobody asked any more.
             merged_plan_usable=0
-            if [[ merged_requirements_plan_enabled && -s .uncle/docs/PROJECT_PLAN.md \
+            if merged_requirements_plan_enabled && [[ -s .uncle/docs/PROJECT_PLAN.md \
                   && -s "$STATE_DIR/merged-plan.input" ]]; then
                 if [[ "$(hash_file "$STATE_DIR/documents/REQUIREMENTS_INTERPRETATION.json")" \
                       == "$(cat "$STATE_DIR/merged-plan.input")" ]]; then

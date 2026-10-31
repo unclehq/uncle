@@ -5,6 +5,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+# The announcements below pin the runners' own defaults, so nothing inherited may change the worker count.
+unset WORKFLOW_VERIFY_JOBS WORKFLOW_PYTHON_TESTS_RUNNER
 fails=0
 check() { local what="$1"; shift; if "$@"; then :; else echo "FAIL: $what"; fails=$((fails + 1)); fi; }
 
@@ -24,7 +26,7 @@ P="$(fixture pass)"
 t0="$(now)"; out="$(bash "$ROOT/scripts/run-python-tests.sh" --project-root "$P" 2>&1)"; rc=$?; t1="$(now)"
 check "all passing: exit 0" test "$rc" == 0
 check "all passing: python summary, not shell" grep -q '^Python suites: 3 passed, 0 failed, 0 skipped\.$' <<< "$out"
-check "all passing: announces what it runs" grep -q '^Running 3 python suites with up to 4 workers\.$' <<< "$out"
+check "all passing: announces what it runs" grep -Eq '^Running 3 python suites with up to [0-9]+ workers\.$' <<< "$out"
 check "suites run at once: two 3 s suites take well under 6 s" python3 -c "import sys; sys.exit(0 if $(secs "$t0" "$t1") < 5.0 else 1)"
 check "files not named *-test.py are never run" test ! -e "$TMP/helper-ran" -a ! -e "$TMP/not-a-suite-ran"
 
@@ -52,7 +54,7 @@ check "a project with no suites fails" bash -c '! bash "$1" --project-root "$2" 
 # parameter and turned its summary into "Pass suites:").
 S="$TMP/shell"; mkdir -p "$S/scripts/tests"; printf '#!/usr/bin/env bash\nexit 0\n' > "$S/scripts/tests/ok-test.sh"
 out="$(bash "$ROOT/scripts/run-shell-tests.sh" --project-root "$S" 2>&1)"
-check "shell runner: its announcement is unchanged" grep -q '^Running 1 shell suites with up to 4 workers\.$' <<< "$out"
+check "shell runner: its announcement is unchanged" grep -Eq '^Running 1 shell suites with up to [0-9]+ workers\.$' <<< "$out"
 check "shell runner: its summary is unchanged" grep -q '^Shell suites: 1 passed, 0 failed, 0 skipped\.$' <<< "$out"
 
 [[ "$fails" == 0 ]] && echo "python-suites-test.sh: all checks passed" || { echo "python-suites-test.sh: $fails failure(s)"; exit 1; }

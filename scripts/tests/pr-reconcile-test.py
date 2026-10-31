@@ -19,4 +19,4 @@ class Tests(unittest.TestCase):
  def test_remote_drift_blocks(self):
   ns['gh']=lambda *a:'[]';ns['remote_sha']=lambda j:'different'
   with self.assertRaises(ValueError):ns['reconcile_absent'](self.j)
-unittest.main()
+if __name__=='__main__': unittest.main()

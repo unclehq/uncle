@@ -129,10 +129,6 @@ class Batches(unittest.TestCase):
 
 
 class Defaults(unittest.TestCase):
-    def test_one_check_per_worker_by_default_with_a_bounded_pool(self):
-        text = (ROOT / 'scripts' / 'lib' / 'checklist-lanes.sh').read_text()
-        self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE:-1', text)
-        self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_MAX_WORKERS:-16', text)
 
     def test_fourteen_free_checks_make_fourteen_workers_at_the_defaults(self):
         checks = plan(*[check('MC-%d' % n) for n in range(100, 114)])

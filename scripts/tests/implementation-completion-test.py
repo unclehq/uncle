@@ -195,11 +195,27 @@ class CompletionTests(unittest.TestCase):
 
     def test_an_earlier_implemented_then_a_later_incomplete_is_still_a_conflict_at_any_position(self):
         for fragments in ([("IMPLEMENTED",), ("INCOMPLETE",)],
-                          [("INCOMPLETE",), ("IMPLEMENTED",), ("INCOMPLETE",)],        # superseded, then regressed
-                          [("IMPLEMENTED",), ("INCOMPLETE",), ("IMPLEMENTED",)]):       # the middle step still disagrees
+                          [("INCOMPLETE",), ("IMPLEMENTED",), ("INCOMPLETE",)]):        # superseded, then regressed
             notes = self.notes(*[self.fragment(("AC-1", status, "x", "y")) for (status,) in fragments])
             with self.assertRaises(ValueError, msg=str(fragments)):
                 completion.json_delivered(notes)
+
+    def test_an_incomplete_between_two_implemented_claims_is_settled_by_the_last_one(self):
+        # Issue 117, AC-1: the test step reported "handler test pending step 3" between the module step's
+        # and the TUI step's IMPLEMENTED claims. Parallel steps cannot see each other; only the last word counts.
+        merged = completion.json_delivered(self.notes(
+            self.fragment(("AC-1", "IMPLEMENTED", "module", "imports")),
+            self.fragment(("AC-1", "INCOMPLETE", "tests", "handler test pending step 3")),
+            self.fragment(("AC-1", "IMPLEMENTED", "tui", "smoke ok"))))
+        self.assertEqual(merged["AC-1"][0], "IMPLEMENTED")
+        self.assertEqual(merged["AC-1"][2], "smoke ok")
+        self.assertEqual(completion.check_rows({"AC-1": ["c", "v"]}, merged), [])
+        # ...but if the last word is itself pending, the row never settles and stays a conflict.
+        with self.assertRaises(ValueError):
+            completion.json_delivered(self.notes(
+                self.fragment(("AC-1", "IMPLEMENTED", "module", "imports")),
+                self.fragment(("AC-1", "INCOMPLETE", "tests", "x")),
+                self.fragment(("AC-1", "IMPLEMENTED", "tui", "Full suite DRIVER PENDING"))))
 
     def test_supersession_only_ever_moves_toward_done_never_hides_a_pending_check(self):
         # A later step that claims IMPLEMENTED while its own evidence says the full suite is still pending is

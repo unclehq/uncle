@@ -23,7 +23,9 @@ class Checks(unittest.TestCase):
             report.write_bytes(b'# Request\noriginal\nnew text  \n\n')
             source.write_bytes(b'x = 2  \n')
             result = subprocess.run([sys.executable, str(HELPER)], cwd=root, capture_output=True)
-            self.assertNotEqual(result.returncode, 0)
+            # Only top-level workflow markdown is this helper's to repair: source whitespace is reported
+            # but must not fail the driver, which would die right after a stage reported success.
+            self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(report.read_bytes(), b'# Request\noriginal\nnew text\n')
             self.assertEqual(source.read_bytes(), b'x = 2  \n')
             self.assertIn(b'source.py', result.stdout)

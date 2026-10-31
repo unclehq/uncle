@@ -395,7 +395,7 @@ The defaults are:
 supervision.enabled true
 supervision.runner claude
 supervision.model sonnet
-supervision.effort medium
+supervision.effort low
 supervision.max_interventions 2
 supervision.steering_timeout_seconds 120
 supervision.stage_time_seconds 1800

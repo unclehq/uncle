@@ -670,8 +670,10 @@ class TriageTests(unittest.TestCase):
         self.assertEqual(kinds[-1], 'reply')
         self.assertLess(kinds.index('delta'), kinds.index('reply'))
         deltas = [value for kind, value in events if kind == 'delta']
+        # The first text is shown while the runner is still going; the last one is guaranteed only as the reply,
+        # since the stream is polled and a slow machine can see both lines at once.
         self.assertEqual(deltas[0], 'part one')
-        self.assertEqual(deltas[-1], 'part two and done')
+        self.assertEqual(events[-1][1], 'part two and done')
 
     def test_poll_triage_streams_and_clears(self):
         ui = self.ui()

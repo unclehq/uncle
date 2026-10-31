@@ -35,7 +35,8 @@ if __name__ == '__main__':
     if not completion_only:
         for group, name in extra_groups.items():
             commands[f'gates-{name}'] = [bash_executable(), sys.argv[1], '--group', str(group)]
-    # Default to one worker per available core, not one per group: measured
+    # Up to 16 workers by default (32 at most, WORKFLOW_TEST_JOBS). Measured at 32 workers the suite was no faster and less
+    # stable; the measurement below was taken when the default was one worker per available core, not one per group: measured
     # directly, "one thread per group" made this slower, not faster, once
     # the rebalance above grew the group count past this machine's core
     # count (22 groups on 14 cores: 429% average CPU and 3:06 wall-clock,
@@ -45,5 +46,5 @@ if __name__ == '__main__':
     # concurrent workers means more contention switching between them, not
     # more throughput. Capped at the group count only so a future, smaller
     # rebalance still runs in one wave instead of an unnecessary queue.
-    default_jobs = min(len(commands), os.cpu_count() or 8)
+    default_jobs = min(len(commands), 16)
     raise SystemExit(run_commands(int(os.environ.get('WORKFLOW_TEST_JOBS', str(default_jobs))), commands))

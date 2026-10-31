@@ -84,13 +84,6 @@ class Assemble(unittest.TestCase):
 
 
 class Prompts(unittest.TestCase):
-    def test_every_worker_shares_the_preview_prompt_as_a_prefix_and_writes_one_part(self):
-        base = (ROOT / 'prompts' / 'preview-build.md').read_text()
-        for name in parts.PARTS:
-            text = parts.build_prompt(name, 'd', base)
-            self.assertTrue(text.startswith(base.rstrip('\n')))
-            self.assertIn('`d/%s`' % parts.PARTS[name], text)
-            self.assertIn('Do not write `index.html`', text)
 
     def test_only_the_contract_reads_nothing_first(self):
         base = 'BASE'

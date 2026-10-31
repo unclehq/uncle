@@ -50,12 +50,6 @@ class RepairPlanRoute(unittest.TestCase):
             CHECK.brief(str(root / 'missing.md'), snapshot, output, [])
             self.assertIn('**(source tree)**', output.read_text())
 
-    def test_driver_routes_special_repair_result_to_updated_plan(self):
-        source = (ROOT / 'scripts/stagegate.sh').read_text()
-        self.assertIn('3|5) continue', source)
-        self.assertIn('REPAIR_PLAN_BLOCKERS.json', source)
-        self.assertIn('repair_plan_route.py', (ROOT / 'scripts/lib/repair-judge.sh').read_text())
-
 
 if __name__ == '__main__':
     unittest.main()

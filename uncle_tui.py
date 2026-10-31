@@ -147,7 +147,8 @@ def _workflow_family():
     tell them apart; this is the authoritative source for that distinction."""
     marker = os.path.join(_project_root(), ".uncle", "workflow", "family")
     try:
-        return open(marker, encoding="utf-8").read().strip()
+        with open(marker, encoding="utf-8") as handle:
+            return handle.read().strip()
     except OSError:
         return ""
 

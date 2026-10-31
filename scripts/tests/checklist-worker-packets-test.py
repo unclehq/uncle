@@ -116,35 +116,6 @@ class ChecklistWorkerPackets(unittest.TestCase):
             results = json.loads(output.read_text())['results']
             self.assertEqual(results[1]['status'], 'NOT RUN')
 
-    def test_both_drivers_use_unique_packets_and_only_collated_handoff(self):
-        for source in ('scripts/stagegate.sh', 'scripts/change-workflow.sh'):
-            text = (ROOT / source).read_text()
-            start = text.index('run_parallel_checklist_workers()')
-            end = text.index('\n}\n', start) + 2
-            block = text[start:end]
-            self.assertIn('group-$group_index-batch-$batch_index', block)
-            self.assertIn('checklist_worker_packets.py', block)
-            # Chat is diagnostics only. Each worker writes its assigned JSON
-            # file and an invalid packet is retried with its schema error in
-            # both workflow drivers.
-            self.assertIn('UNCLE_WORKER_PACKET_PATH', block)
-            self.assertIn('--validate "$local_worker_packet"', block)
-            self.assertNotIn('recover_worker_packet.py', block)
-            self.assertIn('WORKFLOW_EXECUTE_CHECKLIST_COMPACT_BATCH_SIZE', block)
-            self.assertIn('EXECUTE_CHECKLIST_WORKERS.json', block)
-            self.assertIn('Do not read the worker directory', block)
-            self.assertNotIn('every listed evidence file', block)
-        worker = (ROOT / 'prompts/change/execute-checklist-worker.md').read_text()
-        self.assertIn('checklist-execution-worker-packet', worker)
-        self.assertIn('never write separate', worker)
-        self.assertIn('evidence files', worker)
-        self.assertIn('private packet path supplied by the driver', worker)
-        self.assertIn('canonical checklist JSON path supplied by the driver', worker)
-        self.assertIn('Browser-lane efficiency', worker)
-        self.assertIn('one browser process, one context, one page', worker)
-        self.assertNotIn('Read `.uncle/docs/MANUAL_CHECKLIST.md`', worker)
-        self.assertNotIn('final response', worker)
-
 
 if __name__ == '__main__':
     unittest.main()

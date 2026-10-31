@@ -30,6 +30,9 @@ fi
 # and a child forked afterwards.
 cat > "$work/probe.sh" <<'PROBE'
 #!/bin/bash
+# `renice -n` is relative to the process's current niceness, which is not 0 when this suite runs from a
+# backgrounded job (zsh runs those at nice 5) or under a runner that lowers its own priority.
+printf 'base %s\n' "$(ps -o nice= -p $$ | tr -d ' ')"
 ( sleep 0.5; sleep 5 & wait ) > /dev/null 2>&1 &
 job=$!
 renice -n 10 -p "$job" > /dev/null 2>&1 || { echo "renice-failed"; exit 1; }
@@ -43,12 +46,14 @@ wait 2>/dev/null || true
 PROBE
 out="$(/bin/bash "$work/probe.sh")" || fail "probe failed: $out"
 
-[[ "$(printf '%s\n' "$out" | awk '$1=="job"{print $2}')" == 10 ]] \
-    || fail "the background job was not reniced: $out"
+base="$(printf '%s\n' "$out" | awk '$1=="base"{print $2}')"
+expected=$((base + 10)); [[ "$expected" -le 20 ]] || expected=20
+[[ "$(printf '%s\n' "$out" | awk '$1=="job"{print $2}')" == "$expected" ]] \
+    || fail "the background job was not reniced by 10 from $base: $out"
 child="$(printf '%s\n' "$out" | awk '$1=="child"{print $2; exit}')"
 [[ -n "$child" ]] || fail "probe forked no child, so inheritance went untested: $out"
-[[ "$child" == 10 ]] \
-    || fail "a child forked after the renice did not inherit it (nice=$child)"
+[[ "$child" == "$expected" ]] \
+    || fail "a child forked after the renice did not inherit it (nice=$child, expected $expected)"
 
 # Only ever lower. Raising a priority back needs privilege, and a negative
 # value here would make the baseline compete harder, not less.

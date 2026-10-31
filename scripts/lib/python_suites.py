@@ -11,9 +11,27 @@ import glob
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 
 from shell_suites import isolate_git, run_commands
+
+
+def suite_command(path):
+    """How one suite is launched. WORKFLOW_PYTHON_TESTS_RUNNER: `python` (the default), `uv` or `pytest`.
+
+    `uv` runs the same file under uv's interpreter; `pytest` runs it under `uv run --with pytest pytest`. Only the first two keep
+    every suite's own exit status: the plain-script suites collect no pytest tests (exit 5) and some import fixtures from
+    their own directory, so `pytest` is for comparison, not for gating.
+    """
+    mode = os.environ.get('WORKFLOW_PYTHON_TESTS_RUNNER', 'python')
+    uv = shutil.which('uv') if mode in ('uv', 'pytest') else None
+    if not uv:
+        return [sys.executable, '-B', path]
+    if mode == 'uv':
+        return [uv, 'run', '--no-project', '--quiet', 'python', '-B', path]
+    return [uv, 'run', '--no-project', '--quiet', '--with', 'pytest', 'pytest', '-q', '-p', 'no:cacheprovider',
+            '--import-mode=importlib', '-o', 'python_files=*-test.py', path]
 
 
 def run(jobs, suites=()):
@@ -30,7 +48,7 @@ def run(jobs, suites=()):
     isolate_git()
     # Keep suites off the network and the real model cache, as the shell runner does.
     os.environ.setdefault('UNCLE_MODEL_REFRESH', '0')
-    return run_commands(jobs, {path: [sys.executable, '-B', path] for path in files}, kind='python')
+    return run_commands(jobs, {path: suite_command(path) for path in files}, kind='python')
 
 
 if __name__ == '__main__':

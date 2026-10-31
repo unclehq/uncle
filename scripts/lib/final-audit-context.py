@@ -6,6 +6,32 @@ import re
 import sys
 
 
+def fold_title_column(lines, start):
+    """Move a `Finding`/`Title` column into `Evidence`: the canonical audit has no title field, and
+    dropping the column would drop what the reviewer called the finding."""
+    def cells(line):
+        return [c.strip() for c in re.split(r'(?<!\\)\|', line.strip()[1:-1])]
+    header = cells(lines[start])
+    names = [c.strip('*_ ').lower() for c in header]
+    title = next((i for i, n in enumerate(names) if n in ('finding', 'title', 'summary')), None)
+    evidence = names.index('evidence') if 'evidence' in names else None
+    if title is None or evidence is None:
+        return lines
+    out = list(lines)
+    row = start
+    while row < len(out) and out[row].strip().startswith('|') and out[row].strip().endswith('|'):
+        parts = cells(out[row])
+        if len(parts) == len(header) and row >= start + 2 and parts[title]:
+            parts[evidence] = (parts[title] + ': ' + parts[evidence]) if parts[evidence] else parts[title]
+        if len(parts) == len(header) and row != start + 1:
+            parts = [c for i, c in enumerate(parts) if i != title]
+            out[row] = '| ' + ' | '.join(parts) + ' |'
+        elif row == start + 1:
+            out[row] = '|' + '|'.join(['---'] * (len(header) - 1)) + '|'
+        row += 1
+    return out
+
+
 def normalize_findings_shape(text):
     """Coerce a close-but-malformed audit into the exact shape `findings()`
     requires, without touching a finding's content, evidence, or verdict.
@@ -61,7 +87,7 @@ def normalize_findings_shape(text):
                      '|---|---|---|---|---|---|']
             for item in prose:
                 table.append('| %s | %s | %s | %s | %s | %s |' %
-                             (item['id'], 'Unspecified', esc(item['evidence']), 'Not stated',
+                             (item['id'], 'Unspecified', esc(item['title'] + ': ' + item['evidence']), 'Not stated',
                               esc(item['correction']), item['blocks'].upper()))
             return '\n'.join(table + ['', verdict.group(0).upper()]) + '\n'
     table_start = None
@@ -82,6 +108,7 @@ def normalize_findings_shape(text):
     # run -- with the heading present and only the column name wrong. An
     # early return on "heading already there" skipped the column check
     # entirely that second time and let this exact failure straight through.
+    lines = fold_title_column(lines, table_start)
     has_heading = re.search(r'^##\s+Findings\s*$', text, re.M)
     if not has_heading:
         lines[table_start:table_start] = ['## Findings', '']

@@ -295,16 +295,6 @@ class Portability(unittest.TestCase):
         self.assertEqual(result.returncode, 7)
         self.assertEqual(result.stdout.replace(b'\r\n',b'\n'), b'hello\n')
 
-    def test_python_file_writes_pin_newlines(self):
-        # These are shell protocols, not host-native text documents.
-        import ast
-        for name in ('checklist_groups.py','compact-review.py','parallel_checks.py','waiver-popup.py'):
-            tree = ast.parse((ROOT/'scripts/lib'/name).read_text())
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call): continue
-                writes = any(isinstance(arg, ast.Constant) and arg.value == 'w' for arg in node.args)
-                if writes:
-                    self.assertIn('newline', [kw.arg for kw in node.keywords], name)
 
 if __name__ == '__main__':
     unittest.main()

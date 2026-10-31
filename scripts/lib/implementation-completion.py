@@ -103,7 +103,14 @@ def json_delivered(payload):
     # criterion is IMPLEMENTED are merged into one row instead, combining
     # the evidence rather than picking one arbitrarily. Fragments disagreeing
     # on status (one claims IMPLEMENTED, another does not) is a genuine
-    # conflict neither side can resolve by itself, so that still fails.
+    # conflict neither side can resolve by itself, so that still fails --
+    # with one exception, below: a LATER step finishing what an EARLIER step
+    # reported as not done yet. Steps run in order and each reports honestly
+    # for the tree it saw: step 1 builds the module and marks the criterion
+    # INCOMPLETE because "the TUI is not built", step 3 builds the TUI and
+    # marks it IMPLEMENTED. That is progress, not a disagreement (issue 117:
+    # AC-2, then AC-4, each stopped the run at IMPLEMENT, and unattended triage
+    # auto-resumed into the same stop six times, one criterion per pass).
     seen_in_fragment = {}
     merged = {}
     for fragment_index, fragment in enumerate(_fragments(payload)):
@@ -131,6 +138,14 @@ def json_delivered(payload):
             existing = merged.get(identifier)
             if existing is None:
                 merged[identifier] = [status, changed_code, observed]
+                continue
+            if existing[0] == 'INCOMPLETE' and status == 'IMPLEMENTED':
+                # The later claim stands. Its evidence is what establishes the row; the earlier row's evidence
+                # describes what was still missing, so it is dropped, not appended ("TUI not built; tests pass").
+                # What each step changed accumulates: the later step built on the earlier one's code.
+                existing[0] = 'IMPLEMENTED'
+                existing[1] = '; '.join(part for part in (existing[1], changed_code) if part)
+                existing[2] = observed
                 continue
             if existing[0] != status:
                 raise ValueError(

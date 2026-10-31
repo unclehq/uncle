@@ -160,6 +160,67 @@ class CompletionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             completion.json_delivered(notes)
 
+    # ---- a later step finishing what an earlier one honestly reported as not done (issue 117) ----
+
+    @staticmethod
+    def fragment(*rows):
+        return {"schema": "uncle.artifact/v1", "kind": "implementation-notes",
+                "deliveries": [dict(zip(("id", "status", "changed_code", "observed_verification"), row)) for row in rows]}
+
+    def notes(self, *fragments):
+        return {"schema": "uncle.artifact/v1", "kind": "implementation-notes", "fragments": list(fragments)}
+
+    def test_a_later_implemented_supersedes_an_earlier_incomplete(self):
+        merged = completion.json_delivered(self.notes(
+            self.fragment(("AC-2", "INCOMPLETE", "bug_report.py: attribution", "TUI preview not yet built")),
+            self.fragment(("AC-2", "IMPLEMENTED", "uncle_tui.py: preview", "test_preview_confirm_publishes_once: ok"))))
+        status, changed, observed = merged["AC-2"]
+        self.assertEqual(status, "IMPLEMENTED")
+        self.assertEqual(changed, "bug_report.py: attribution; uncle_tui.py: preview", "what each step changed accumulates")
+        self.assertEqual(observed, "test_preview_confirm_publishes_once: ok")
+        self.assertNotIn("not yet built", observed, "the stale 'what is missing' evidence must not survive into an IMPLEMENTED row")
+
+    def test_the_issue_117_shape_four_steps_two_criteria_passes_the_completion_check(self):
+        # Steps 1 and 2 built the module and said the TUI half was not there yet; steps 3 and 4 built it.
+        merged = completion.json_delivered(self.notes(
+            self.fragment(("AC-2", "INCOMPLETE", "a", "TUI not built"), ("AC-4", "INCOMPLETE", "a", "TUI not built")),
+            self.fragment(("AC-2", "INCOMPLETE", "b", "TUI not built"), ("AC-4", "INCOMPLETE", "b", "TUI not built")),
+            self.fragment(("AC-2", "IMPLEMENTED", "c", "preview test: ok"), ("AC-4", "IMPLEMENTED", "c", "confirm test: ok")),
+            self.fragment(("AC-2", "IMPLEMENTED", "d", "attribution test: ok"), ("AC-4", "IMPLEMENTED", "d", "tamper test: ok"))))
+        for criterion in ("AC-2", "AC-4"):
+            self.assertEqual(merged[criterion][0], "IMPLEMENTED", criterion)
+            self.assertNotIn("not built", merged[criterion][2], criterion)
+        required = {"AC-2": ["criterion", "verification"], "AC-4": ["criterion", "verification"]}
+        self.assertEqual(completion.check_rows(required, merged), [])
+
+    def test_an_earlier_implemented_then_a_later_incomplete_is_still_a_conflict_at_any_position(self):
+        for fragments in ([("IMPLEMENTED",), ("INCOMPLETE",)],
+                          [("INCOMPLETE",), ("IMPLEMENTED",), ("INCOMPLETE",)],        # superseded, then regressed
+                          [("IMPLEMENTED",), ("INCOMPLETE",), ("IMPLEMENTED",)]):       # the middle step still disagrees
+            notes = self.notes(*[self.fragment(("AC-1", status, "x", "y")) for (status,) in fragments])
+            with self.assertRaises(ValueError, msg=str(fragments)):
+                completion.json_delivered(notes)
+
+    def test_supersession_only_ever_moves_toward_done_never_hides_a_pending_check(self):
+        # A later step that claims IMPLEMENTED while its own evidence says the full suite is still pending is
+        # demoted to INCOMPLETE before merging, so it supersedes nothing and the criterion stays incomplete.
+        merged = completion.json_delivered(self.notes(
+            self.fragment(("AC-1", "INCOMPLETE", "a", "TUI not built")),
+            self.fragment(("AC-1", "IMPLEMENTED", "b", "Full suite DRIVER PENDING"))))
+        self.assertEqual(merged["AC-1"][0], "INCOMPLETE")
+        self.assertNotEqual(completion.check_rows({"AC-1": ["c", "v"]}, merged), [])
+
+    def test_two_incomplete_fragments_stay_incomplete_and_fail_the_check(self):
+        merged = completion.json_delivered(self.notes(
+            self.fragment(("AC-1", "INCOMPLETE", "a", "not built")), self.fragment(("AC-1", "INCOMPLETE", "b", "still not built"))))
+        self.assertEqual(merged["AC-1"][0], "INCOMPLETE")
+        self.assertNotEqual(completion.check_rows({"AC-1": ["c", "v"]}, merged), [])
+
+    def test_a_row_the_later_step_leaves_without_evidence_does_not_pass(self):
+        merged = completion.json_delivered(self.notes(
+            self.fragment(("AC-1", "INCOMPLETE", "a", "not built")), self.fragment(("AC-1", "IMPLEMENTED", "b", ""))))
+        self.assertNotEqual(completion.check_rows({"AC-1": ["c", "v"]}, merged), [], "IMPLEMENTED still needs observed verification")
+
     def test_driver_pending_row_passes_only_when_explicitly_allowed(self):
         # Live incident, issue 119: a step correctly followed instructions
         # (prompts/change/implement.md) and recorded DRIVER PENDING for a

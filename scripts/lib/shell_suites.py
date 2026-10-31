@@ -42,7 +42,7 @@ def isolate_git():
     os.environ.setdefault('GIT_CONFIG_NOSYSTEM', '1')
 
 
-def run_commands(jobs, commands):
+def run_commands(jobs, commands, kind='shell'):
     """Execute named isolated commands with shared progress and cleanup.
 
     The 1-8 range on run()'s own --jobs flag is a deliberate cap on the full
@@ -63,7 +63,7 @@ def run_commands(jobs, commands):
     def interrupted(*_):
         raise KeyboardInterrupt
     previous = signal.signal(signal.SIGTERM, interrupted)
-    print(f'Running {len(files)} shell suites with up to {jobs} workers.', flush=True)
+    print(f'Running {len(files)} {kind} suites with up to {jobs} workers.', flush=True)
     try:
         with tempfile.TemporaryDirectory(prefix='uncle-shell-tests-') as directory:
             def check(path):
@@ -114,7 +114,7 @@ def run_commands(jobs, commands):
                     for child in active:
                         kill_tree(child)
                 pool.shutdown(wait=True)
-            print(f'Shell suites: {len(files) - failed - skipped} passed, {failed} failed, {skipped} skipped.', flush=True)
+            print(f'{kind.capitalize()} suites: {len(files) - failed - skipped} passed, {failed} failed, {skipped} skipped.', flush=True)
             return int(bool(failed))
     finally:
         signal.signal(signal.SIGTERM, previous)

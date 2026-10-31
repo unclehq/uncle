@@ -17,6 +17,7 @@ this contract) takes the JSON route.
 """
 import importlib.util
 import re
+import sys
 from pathlib import Path
 
 _LIB = Path(__file__).resolve().parent
@@ -27,6 +28,12 @@ def _artifact_json():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _plan_records(payload, project):
+    sys.path.insert(0, str(_LIB))
+    from plan_model import publish_records
+    return publish_records(payload, project)
 
 
 def _fenced_block(heading, lang):
@@ -102,6 +109,7 @@ def export_plan(path, project='.', protected=True):
     dispositions = _parse_dispositions(text)
     if dispositions:
         payload['dispositions'] = dispositions
+    payload = _plan_records(payload, project)
     module.render_plan(payload, protected=protected)  # raises on a malformed table before anything is written
     module.write(project, Path(path).name, payload)
     return payload
@@ -123,6 +131,7 @@ def export_project_plan(path, project='.'):
     narrative = re.sub(r'\n{3,}', '\n\n', text[:commands.start()] + text[commands.end():]).strip()
     payload = {'schema': 'uncle.artifact/v1', 'kind': 'plan', 'narrative': narrative,
                'verification_commands': commands.group(1)}
+    payload = _plan_records(payload, project)
     _artifact_json().render_plan(payload, protected=False)
     _artifact_json().write(project, Path(path).name, payload)
     return payload
@@ -146,6 +155,7 @@ def export_change_plan(path, project='.', require_dispositions=False):
     dispositions = _parse_dispositions(text)
     if dispositions:
         payload['dispositions'] = dispositions
+    payload = _plan_records(payload, project)
     module.render_change_plan(payload, require_dispositions=require_dispositions)
     module.write(project, Path(path).name, payload)
     return payload
@@ -186,6 +196,7 @@ def ingest_plan(path, project='.', protected=True):
         raise ValueError('Invalid plan JSON response: ' + str(error)) from error
     if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'plan':
         raise ValueError('wrong plan JSON schema')
+    payload = _plan_records(payload, project)
     rendered = module.render_plan(payload, protected=protected)
     Path(path).write_text(rendered, encoding='utf-8')
     module.write(project, Path(path).name, dict(payload, schema='uncle.artifact/v1', kind='plan'))
@@ -208,6 +219,7 @@ def canonicalize_json_plan(path, project='.', protected=True):
         raise ValueError('Invalid plan JSON response: ' + str(error)) from error
     if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'plan':
         raise ValueError('wrong plan JSON schema')
+    payload = _plan_records(payload, project)
     module.render_plan(payload, protected=protected)
     module.write(project, Path(path).name, dict(payload, schema='uncle.artifact/v1', kind='plan'))
     return True
@@ -229,6 +241,7 @@ def ingest_change_plan(path, project='.', require_dispositions=False):
         raise ValueError('Invalid change-plan JSON response: ' + str(error)) from error
     if payload.get('schema') != 'uncle.artifact/v1' or payload.get('kind') != 'change-plan':
         raise ValueError('wrong change-plan JSON schema')
+    payload = _plan_records(payload, project)
     rendered = module.render_change_plan(payload, require_dispositions=require_dispositions)
     Path(path).write_text(rendered, encoding='utf-8')
     module.write(project, Path(path).name, dict(payload, schema='uncle.artifact/v1', kind='change-plan'))

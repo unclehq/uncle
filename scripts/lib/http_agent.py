@@ -897,8 +897,11 @@ def _run_agent(values, prompt, policy, limit, turns, usage, final_schema, final_
     # A bounded updated-plan writer has every input in its prompt. Its packet comes
     # straight from one schema-constrained request: valid by construction, with no
     # free-form chat draft to repair (run 13: 10 of 22 writers failed repairing one).
-    schema_first = (final_schema is not None and bool(os.environ.get('UNCLE_UPDATED_PLAN_ANSWER_TOKENS'))
-                    and transport.option('writer-schema-first', 'on') not in ('off', '0', 'false'))
+    schema_first = (final_schema is not None and (
+        (bool(os.environ.get('UNCLE_UPDATED_PLAN_ANSWER_TOKENS'))
+         and transport.option('writer-schema-first', 'on') not in ('off', '0', 'false'))
+        or (os.environ.get('UNCLE_ADVERSARIAL_SLICE') == '1'
+            and final_name == 'adversarial_review_worker_packet')))
     exhausted = False
     warned = False
     for turn_number in range(0 if schema_first else turns):

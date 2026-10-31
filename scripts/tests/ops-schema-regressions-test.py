@@ -278,6 +278,30 @@ class EditGrammarTests(unittest.TestCase):
         self.assert_accepted({'op': 'insert_section', 'after': 's4', 'heading': 'New',
                               'blocks': [{'kind': 'prose', 'text': 'New note.'}]})
 
+    def test_run18_invalid_container_targets_raise_plan_errors_not_key_errors(self):
+        for operation in ('insert_row', 'insert_item'):
+            for target in ('s1', 'B-1', self.table['rows'][0]['id']):
+                edit = {'op': operation, 'target': target, 'new': {'id': 'B-3', 'text': 'New'}}
+                with self.subTest(operation=operation, target=target):
+                    with self.assertRaises(pm.PlanError) as error:
+                        pm.typed_op(self.model, edit)
+                    self.assertIn(target, str(error.exception))
+                    self.assertNotEqual(str(error.exception), "'kind'")
+                self.assert_rejected(edit)
+
+    def test_run18_untyped_table_row_allows_neither_fields_nor_text(self):
+        model = pm.import_markdown('## Notes\n\n| First | Second |\n|---|---|\n| One | Two |\n')
+        identifier = model['sections'][0]['blocks'][0]['rows'][0]['id']
+        self.assertEqual(identifier, 's1.1.r1')
+        for command, factory in (('edit-ops', ws.edit_ops_packet), ('resolve-ops', ws.resolution_ops_packet)):
+            schema = factory(ids=[identifier], model=model)
+            for edit in ({'op': 'set_fields', 'id': identifier, 'fields': {'result': 'New'}},
+                         {'op': 'set_text', 'id': identifier, 'text': 'New'},
+                         {'op': 'set_step', 'id': 'step-4', 'fields': {'text': 'Missing'}}):
+                with self.subTest(command=command, operation=edit), self.assertRaises(ValueError):
+                    conforms(self.packet(command, edit), schema)
+            conforms(self.packet(command, {'op': 'delete', 'id': identifier}), schema)
+
 
 class OwnershipLabelTests(unittest.TestCase):
     LABELS = ('Owns:', '**Owns:**', '**Owns**:', '- Owns:', 'Owns (additional):', '- **Owns**:')
@@ -300,6 +324,17 @@ class OwnershipLabelTests(unittest.TestCase):
         for label in self.LABELS:
             with self.subTest(label=label):
                 self.assert_label('### Step 1: Scaffold', label)
+
+    def test_inline_ownership_and_dependencies_accept_bold_label_colons(self):
+        for label in ('Owns:', '**Owns:**', '**Owns**:', 'Owns (additional):'):
+            with self.subTest(label=label):
+                model = pm.import_markdown('## Implementation order\n\n'
+                    '1. **Scaffold** — Create package. ' + label + ' `package.json`\n\n'
+                    '2. **Storage** — Save. ' + label + ' `src/save.js` **Depends on**: 1\n')
+                self.assertEqual([step['owns'] for step in pm.steps_of(model)],
+                                 [['package.json'], ['src/save.js']])
+                self.assertEqual([step['depends_on'] for step in pm.steps_of(model)], [[], [1]])
+                self.assertEqual(pm.validate(model)[0], [])
 
 
 class LensJudgmentTests(unittest.TestCase):

@@ -81,6 +81,7 @@ check "a second investigate call is a one-shot no-op" "3" "$(grep -c -- '-invest
 # all, reported live against calculator4.
 mkdir -p src && echo '// a repair touched this file' >> src/engine.js
 run_test_review_investigate
+while IFS= read -r bgpid; do [[ -z "$bgpid" ]] || wait "$bgpid" 2>/dev/null || true; done < "$STATE_DIR/test-review-panel/investigate.pids"
 check "a changed tree re-investigates instead of reusing the stale marker" "6" "$(grep -c -- '-investigate	' "$calls_file")"
 
 # --- phase 2 reuses the investigation and never re-investigates ------------

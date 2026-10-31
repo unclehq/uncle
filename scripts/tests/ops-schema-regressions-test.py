@@ -301,6 +301,10 @@ class EditGrammarTests(unittest.TestCase):
                 with self.subTest(command=command, operation=edit), self.assertRaises(ValueError):
                     conforms(self.packet(command, edit), schema)
             conforms(self.packet(command, {'op': 'delete', 'id': identifier}), schema)
+        with self.assertRaises(pm.PlanError) as error:
+            pm.typed_op(model, {'op': 'set_fields', 'id': identifier, 'fields': {'result': 'New'}})
+        self.assertIn('cells', str(error.exception))
+        self.assertNotIn('set_text', str(error.exception))
 
 
 class OwnershipLabelTests(unittest.TestCase):

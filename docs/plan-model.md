@@ -540,7 +540,9 @@ section are unchanged. Existing canonical records remain authoritative.
 An unreadable section, or one whose steps all lack ownership, gets one bounded
 schema extraction request using only that section. The returned records must
 match source lines, name source-owned paths and have valid dependency edges.
-Failure leaves the existing validation and approval gates in control.
+Failure leaves the existing validation and approval gates in control. Recovery attempts
+are cached by section and configuration under `.uncle/workflow/plan-step-recovery`,
+so preview and publication share one attempt.
 
 The following options use existing runner/stage configuration precedence:
 `plan-step-normalize` and `plan-step-recovery` default to `on`,
@@ -548,4 +550,7 @@ The following options use existing runner/stage configuration precedence:
 For example, `updated-plan.plan-step-recovery off` disables recovery for that
 stage; `WORKFLOW_SELF_HOSTED_PLAN_STEP_RECOVERY_UPDATED_PLAN=on` overrides it.
 Native Claude and Codex use their schema flags; self-hosted uses the existing
-constrained-completion transport without exploration or repair turns.
+constrained-completion transport without exploration, repair turns or network
+reconnect retries. The answer-token limit applies to Claude and self-hosted;
+Codex uses the schema and process timeout because its CLI has no answer-token
+limit flag.

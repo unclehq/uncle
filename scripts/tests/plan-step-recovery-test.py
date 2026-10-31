@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -74,10 +75,12 @@ class Recovery(unittest.TestCase):
     def test_bad_answer_falls_back_once_without_rewriting(self):
         for answer in ({'steps': []}, {'steps': [{}]}, dict(steps=[dict(ANSWER['steps'][0], owns=['injected.py'])]),
                        dict(steps=[dict(ANSWER['steps'][0], depends_on=['missing'])])):
+            shutil.rmtree(self.root / '.uncle/workflow/plan-step-recovery', ignore_errors=True)
             with self.subTest(answer=answer), patch.object(recovery, 'request_steps', return_value=answer) as request:
                 result = recovery.normalize_publication(self.text, self.root, 'project-plan')
                 self.assertEqual(result, self.text)
                 request.assert_called_once()
+        shutil.rmtree(self.root / '.uncle/workflow/plan-step-recovery', ignore_errors=True)
         with patch.object(recovery, 'request_steps', side_effect=ValueError('malformed')) as request:
             self.assertEqual(recovery.normalize_publication(self.text, self.root, 'project-plan'), self.text)
             request.assert_called_once()
@@ -88,6 +91,19 @@ class Recovery(unittest.TestCase):
             request.assert_called_once()
             recovery.normalize_publication('# Other\nStep one: irrelevant\n', self.root, 'project-plan')
             request.assert_called_once()
+
+    def test_preview_and_publication_share_one_success_or_failure(self):
+        for answer in (ANSWER, {'steps': []}):
+            shutil.rmtree(self.root / '.uncle/workflow/plan-step-recovery', ignore_errors=True)
+            with self.subTest(answer=answer), patch.object(recovery, 'request_steps', return_value=answer) as request:
+                first = recovery.normalize_publication(self.text, self.root, 'project-plan-investigate')
+                second = recovery.normalize_publication(self.text, self.root, 'project-plan')
+                self.assertEqual(first, second)
+                request.assert_called_once()
+
+    def test_recovery_cannot_omit_a_source_step(self):
+        with self.assertRaisesRegex(ValueError, 'omitted'):
+            recovery.recovered_body(BODY, {'steps': ANSWER['steps'][:1]})
 
     def test_stage_config_and_environment_precedence(self):
         self.config.write_text('runner claude\nproject-plan.plan-step-recovery off\n')
@@ -126,6 +142,23 @@ class Recovery(unittest.TestCase):
             call.assert_called_once()
             self.assertEqual(call.call_args.args[2], recovery.SCHEMA)
             self.assertEqual(call.call_args.args[4], 1024)
+
+    def test_http_recovery_does_not_retry_lost_connections(self):
+        import self_hosted_http as transport
+        def completion(*args, **kwargs):
+            self.assertLessEqual(transport.connect_timeout(), 3)
+            return transport.post('http://stub/v1/chat/completions', 'fake', {}, 3)
+        with patch('self_hosted.settings', return_value={}), \
+                patch.object(transport, 'constrained_completion', side_effect=completion), \
+                patch.object(transport, '_request', side_effect=transport.NetworkLost('lost')) as request, \
+                patch.object(transport, '_outage_mark'), patch.object(transport.time, 'sleep') as sleep:
+            with self.assertRaises(transport.NetworkLost):
+                recovery.request_steps(BODY, self.root, 'project-plan', 'self-hosted', {}, 1024, 3)
+            request.assert_called_once()
+            sleep.assert_not_called()
+        with transport.connection_scope():
+            self.assertIsNone(transport._connections().reconnect_seconds)
+            self.assertEqual(transport.connect_timeout(), 15)
 
     def test_normalization_keeps_fenced_instruction_bytes_idempotent(self):
         text = '## Implementation order\n\n### Step 0: Core\nOwns: `core.py`\n\n```python\nprint(1)\n```\n'

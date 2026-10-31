@@ -246,7 +246,7 @@ def parse_list(lines, block_id):
     steps, _ = plan_steps.extract_body('\n'.join(lines))
     if steps and any(step['owns'] for step in steps):
         for step in steps:
-            for key in ('_task', '_line'):
+            for key in ('_task', '_line', '_heading', '_heading_line'):
                 step.pop(key, None)
         return {'id': block_id, 'kind': 'steps', 'items': steps}
     items = []
@@ -275,7 +275,7 @@ def implementation_blocks(body, section_id):
         return parse_blocks(body, section_id)
     blocks = parse_blocks(prefix, section_id)
     for step in steps:
-        for key in ('_task', '_line'):
+        for key in ('_task', '_line', '_heading', '_heading_line'):
             step.pop(key, None)
     blocks.append({'id': '%s.%d' % (section_id, len(blocks) + 1), 'kind': 'steps', 'items': steps})
     return blocks

@@ -1,10 +1,12 @@
 """Publication-only recovery for implementation sections the deterministic reader cannot read."""
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+import threading
 
 import plan_steps
 from runner_schema import strict_schema, validate
@@ -41,13 +43,23 @@ def request_steps(section, root, stage, runner, config, limit, seconds):
         from self_hosted import settings as connection_settings
         from self_hosted_http import constrained_completion, connection_scope
         values = connection_settings(os.environ.get('UNCLE_CONFIG') or str(Path(root) / '.uncle/config'), stage)
-        with connection_scope():
-            answer, reason, _, _ = constrained_completion(values, [{'role': 'user', 'content': prompt}],
-                                                          SCHEMA, 'plan_steps', limit, timeout=seconds)
+        with connection_scope() as connections:
+            connections.reconnect_seconds = 0
+            connections.connect_seconds = seconds
+            timer = threading.Timer(seconds, connections.abort)
+            timer.daemon = True
+            timer.start()
+            try:
+                answer, reason, _, _ = constrained_completion(values, [{'role': 'user', 'content': prompt}],
+                                                              SCHEMA, 'plan_steps', limit, timeout=seconds)
+                if connections.aborting.is_set():
+                    raise TimeoutError('step extraction timed out')
+            finally:
+                timer.cancel()
         if reason != 'stop':
             raise ValueError('step extraction did not complete')
         return json.loads(answer)
-    model = config.get(parent + '.model', config.get('model', ''))
+    model = config.get(stage + '.model', config.get(parent + '.model', config.get('model', '')))
     with tempfile.TemporaryDirectory(prefix='uncle-plan-steps-') as directory:
         schema = Path(directory) / 'schema.json'
         schema.write_text(json.dumps(strict_schema(SCHEMA)), encoding='utf-8')
@@ -93,6 +105,14 @@ def recovered_body(body, answer):
     starts = [step['line'] - 1 for step in steps]
     if starts != sorted(set(starts)) or starts[-1] >= len(source):
         raise ValueError('invalid source lines')
+    fence = ''
+    for i, line in enumerate(source):
+        marker = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if marker:
+            fence = '' if fence == marker[1][0] else marker[1][0]
+            continue
+        if not fence and re.match(r'^\s*(?:#{1,6}\s+|[-*+]\s+)?(?:\*\*|__)?Step\s+[^:]+:', line, re.I) and i not in starts:
+            raise ValueError('recovery omitted a source step')
     records = []
     for n, step in enumerate(steps, 1):
         start = starts[n - 1]
@@ -100,12 +120,14 @@ def recovered_body(body, answer):
         chunk = '\n'.join(source[start:end])
         if step['title'] not in plan_steps.plain(source[start]):
             raise ValueError('step title is not grounded in its source line')
-        if any(not valid_path(path) or path not in chunk for path in step['owns']):
+        if any(not valid_path(path) or not re.search(r'(?<![\w./*?\[\]@-])' + re.escape(path) + r'(?![\w./*?\[\]@-])', chunk)
+               for path in step['owns']):
             raise ValueError('step ownership is not grounded in its source')
         if any(dep not in labels for dep in step['depends_on']):
             raise ValueError('unknown recovered dependency')
         # Preserve all following prose, including annotations on metadata lines.
-        text = '\n'.join(source[start + 1:end]).strip()
+        suffix = source[start].split(step['title'], 1)[1].lstrip('*_ —–-')
+        text = '\n'.join(([suffix] if suffix else []) + source[start + 1:end]).strip()
         records.append(dict(id='step-%d' % n, number=n, title=step['title'], text=text,
                             owns=step['owns'], depends_on=[labels[dep] for dep in step['depends_on']]))
     from plan_model import validate as validate_plan
@@ -116,6 +138,29 @@ def recovered_body(body, answer):
         raise ValueError(errors[0])
     prefix = '\n'.join(source[:starts[0]]).strip()
     return '\n' + (prefix + '\n\n' if prefix else '') + render_block({'kind': 'steps', 'items': records}) + re.search(r'\s*$', body)[0]
+
+
+def recover_once(body, root, stage, runner, config, limit, seconds):
+    """Preview and publication can see the same packet in different processes."""
+    from self_hosted import config_stage
+    parent = config_stage(stage, config)
+    model = config.get(stage + '.model', config.get(parent + '.model', config.get('model', '')))
+    key = hashlib.sha256(json.dumps([body, parent, runner, model, limit, seconds]).encode()).hexdigest()
+    cache = Path(root) / '.uncle/workflow/plan-step-recovery' / (key + '.json')
+    if cache.is_file():
+        answer = json.loads(cache.read_text(encoding='utf-8'))
+        if answer is None:
+            raise ValueError('step extraction already failed for this section')
+        return recovered_body(body, answer)
+    answer = None
+    try:
+        candidate = request_steps(body, root, stage, runner, config, limit, seconds)
+        recovered = recovered_body(body, candidate)
+        answer = candidate
+        return recovered
+    finally:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(answer) + '\n', encoding='utf-8')
 
 
 def normalize_publication(narrative, root, stage):
@@ -131,8 +176,7 @@ def normalize_publication(narrative, root, stage):
                 try:
                     limit = max(256, min(16384, int(option('plan-step-answer-tokens', '4096'))))
                     seconds = max(1, min(300, int(option('plan-step-seconds', '60'))))
-                    answer = request_steps(body, root, stage, runner, config, limit, seconds)
-                    recovered = recovered_body(body, answer)
+                    recovered = recover_once(body, root, stage, runner, config, limit, seconds)
                     narrative = narrative[:section['body_start']] + recovered + narrative[section['end']:]
                 except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
                     pass  # Existing validation and ownership gates still decide acceptance.

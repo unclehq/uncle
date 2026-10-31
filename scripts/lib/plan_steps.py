@@ -48,7 +48,11 @@ def sections(narrative):
         heading = HEADING.match(line.rstrip('\r\n')) if not fence else None
         if heading:
             implementation = IMPLEMENTATION.match(plain(heading[2]))
-            if active and (implementation or (len(heading[1]) <= active['level'] and not re.match(r'(?:\*\*|__)?Step\s+' + LABEL + r'\b', heading[2], re.I))):
+            following = re.split(r'(?m)^ {0,3}#{1,6}\s', narrative[offset + len(line):], maxsplit=1)[0]
+            document_section = re.match(r'^(?:\d+[.)]\s*)?(?:Requirement traceability|Verification commands|Protected (?:verification )?paths)\b', plain(heading[2]), re.I)
+            step_heading = not document_section and head(line) and (re.match(r'(?:\*\*|__)?Step\s', heading[2], re.I)
+                                          or FIELD.search(line) or FIELD.search(following))
+            if active and (implementation or (len(heading[1]) <= active['level'] and not step_heading)):
                 active['end'] = offset
                 result.append(active)
                 active = None
@@ -64,12 +68,19 @@ def sections(narrative):
 
 def paths(value):
     ticks = re.findall(r'`([^`]+)`', value)
-    values = ticks or [part.strip().split(' ', 1)[0].rstrip('.;:') for part in plain(value).split(',') if part.strip()]
+    values = ticks[:]
+    if not ticks:
+        for part in plain(value).split(','):
+            match = re.fullmatch(r'([^\s]+?)[.;:]?(?:\s+\([^)]*\)[.]?)?', part.strip())
+            if match and match[1].lower() not in ('none', '(none)', 'nothing', 'n/a'):
+                token = match[1].rstrip('.;:')
+                if re.fullmatch(r'[\w./*?\[\]@-]+', token) and token not in ('.', '..', '-'):
+                    values.append(token)
     result = []
     for token in values:
         while token.startswith('./'):
             token = token[2:]
-        if token and not token.startswith('/') and (ticks or '/' in token or '.' in token or token == '*'):
+        if token and not token.startswith('/'):
             result.append(token)
     return result
 
@@ -128,10 +139,16 @@ def table_rows(lines):
 def extract_body(body):
     """Return records and prefix prose. Numbers remain literal for existing numbered plans."""
     lines = body.splitlines()
-    rows = table_rows(lines)
+    visible, fence = [], ''
+    for line in lines:
+        marker = re.match(r'^\s*(`{3,}|~{3,})', line)
+        visible.append('' if fence or marker else line)
+        if marker:
+            fence = '' if fence == marker[1][0] else marker[1][0]
+    rows = table_rows(visible)
     table_labels = {row[0].lower() for row in rows.values()}
     steps, prefix, current, fence, continuation = [], [], None, '', False
-    starts = [len(line) - len(line.lstrip()) for line in lines if head(line)]
+    starts = [len(line) - len(line.lstrip()) for line in visible if head(line)]
     base = min(starts, default=0)
     for i, line in enumerate(lines):
         marker = re.match(r'^\s*(`{3,}|~{3,})', line)
@@ -193,8 +210,8 @@ def extract_body(body):
             if metadata:
                 if remaining.strip(' -*+_'):
                     current['_body'].append(remaining)
-            elif continuation == 'owns' and re.fullmatch(r'\s*(?:[-*+]\s*)?(?:`[^`]+`[,\s]*)+\s*', line):
-                metadata = [('owns', line)]
+            elif continuation == 'owns' and re.fullmatch(r'\s*(?:[-*+]\s*)?(?:`[^`]+`|[\w./*?\[\]@-]+)(?:\s*,\s*(?:`[^`]+`|[\w./*?\[\]@-]+))*\s*,?\s*', line):
+                metadata = [('owns', re.sub(r'^\s*[-*+]\s+', '', line))]
             elif continuation == 'depends_on' and re.fullmatch(r'\s*(?:[-*+]\s*)?(?:Step\s+)?' + LABEL + r'[, \d]*', line, re.I):
                 metadata = [('depends_on', line)]
             else:
@@ -205,6 +222,14 @@ def extract_body(body):
         if current:
             for key, value in metadata:
                 current[key].extend(paths(value) if key == 'owns' else references(value))
+                if key == 'owns':
+                    note = re.sub(r'`[^`]+`', '', value)
+                    if '`' not in value:
+                        for path in paths(value):
+                            note = note.replace(path, '', 1)
+                    note = note.strip(' ,.;:—–-*_')
+                    if note and note.lower() not in ('none', '(none)'):
+                        current['_body'].append(note)
                 continuation = key
     # Alphabetic labels have no numeric identity. Map the whole section in order.
     mapped = any(not s['label'].isdigit() for s in steps)

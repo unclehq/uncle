@@ -87,6 +87,77 @@ PLAN_JSON = re.compile(r'## Base project plan JSON\n```json\n(.*?)\n```\n', re.S
 SECTIONS_ONLY = re.compile(r'## Existing sections in the base plan, in order.*?(?=## Base project plan JSON)', re.S)
 
 
+def option(name, default):
+    """Stage env overrides family env, then stage/family config, then the default."""
+    from self_hosted_http import _config_values
+    config = _config_values()
+    stage = os.environ.get('UNCLE_PLAN_KIND', '')
+    family = 'updated-change-plan' if stage == 'change-plan' else 'updated-plan'
+    names = list(dict.fromkeys([family, 'updated-plan']))
+    for prefix in names:
+        key = 'WORKFLOW_' + (prefix + '-' + name).upper().replace('-', '_')
+        if os.environ.get(key, '').strip():
+            return int(os.environ[key])
+    # Retain existing callers' slice controls.
+    if name == 'group-size':
+        for key in ('WORKFLOW_UPDATED_PLAN_EDIT_SLICE', 'WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE'):
+            if os.environ.get(key, '').strip():
+                return int(os.environ[key])
+    for prefix in names:
+        if config.get(prefix + '.' + name):
+            return int(config[prefix + '.' + name])
+    return default
+
+
+def slices(ids):
+    size = option('group-size', 2)
+    if size < 1:
+        raise Conflict('updated-plan.group-size must be positive')
+    if len(ids) < base.MIN_FINDINGS:
+        return []
+    # Concurrency is the dispatcher's job; a writer-count ceiling must not enlarge slices.
+    return [(str(i // size + 1), ids[i:i + size]) for i in range(0, len(ids), size)]
+
+
+def writer_budget(ids):
+    turns = option('writer-turns', 3)
+    expected_ops = option('ops-per-finding', 4)
+    per_op = option('tokens-per-op', 512)
+    if min(turns, expected_ops, per_op) < 1:
+        raise Conflict('updated-plan writer budgets must be positive')
+    return turns, max(4096, 1024 + len(ids) * (512 + expected_ops * per_op))
+
+
+def first_packet(text):
+    """Decode the first complete packet, leaving validation to the existing consumer.
+
+    Do not scan past a malformed first object into its nested objects or a second answer.
+    """
+    text = text.strip()
+    if text.startswith('```'):
+        text = text.split('\n', 1)[-1].lstrip()
+    value, _ = json.JSONDecoder().raw_decode(text)
+    if not isinstance(value, dict):
+        raise Conflict('expected a JSON packet object')
+    return value
+
+
+def read_packet(path):
+    try:
+        return first_packet(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError) as error:
+        raise Conflict('%s: not a valid packet: %s' % (path, error)) from error
+
+
+def capture_packet(path):
+    path = Path(path)
+    value = read_packet(path)
+    # Merge still checks finding coverage, ops and conflicts. Capture never repairs JSON.
+    if not isinstance(value.get('ops'), list) and not isinstance(value.get('resolutions'), list):
+        raise Conflict('expected an edit or resolution packet')
+    path.write_text(json.dumps(value, ensure_ascii=False) + '\n', encoding='utf-8')
+
+
 def plan_model_of(plan, path=None):
     """The plan's model: the authored sidecar beside its file when that agrees with the narrative, else the narrative imported."""
     return pm.load_model(path) if path else pm.model_of(plan)
@@ -110,11 +181,26 @@ def write_prompt(base_path, ids, output, owns_fields=False, note=None):
     text = SECTIONS_ONLY.sub('', text)
     text = PLAN_JSON.sub(lambda _: '## Plan model (JSON)\n\nEvery `id` below is one you may name.\n```json\n%s\n```\n'
                          % json.dumps({k: v for k, v in model.items()}, ensure_ascii=False, separators=(',', ':')), text)
+    assigned_context = []
+    if ids:
+        for heading in ('Adversarial review findings', 'Collated specialist corrections'):
+            match = re.search(r'## ' + heading + r'[^\n]*\n```json\n(.*?)\n```', text, re.S)
+            if match:
+                value = json.loads(match[1])
+                assigned_context.extend(row for row in value.get('findings', []) if row.get('id') in ids)
+        text += ('\n\nAll plan sections and findings are supplied above. Do not read files, run commands or '
+                 'investigate. Decide and deliver the small packet now; normally one answer is enough.\n')
+    if not CHANGE:
+        original = json.loads(found.group(1))
+        text += '\n\nBase verification contract (preserve unless your findings change it):\n' + json.dumps(
+            {key: original.get(key, '') for key in ('verification_commands', 'protected_verification_paths')}, ensure_ascii=False)
     notes = '' if CHANGE else (base.FIELDS_OWNER if owns_fields else base.FIELDS_OTHER) + base.COMMANDS_NOTE
     if note is None:
         note = SLICE_NOTE % (', '.join(ids), notes)
         if 'Collated specialist corrections' not in text:      # deciding writers: nobody has reviewed the findings first
             text += DECIDE_NOTE
+    if assigned_context:
+        note += '\n\n## Assigned findings and corrections\n```json\n' + json.dumps(assigned_context, ensure_ascii=False) + '\n```\n'
     Path(output).write_text(base.defer_reply_example(text) + note, encoding='utf-8')
 
 
@@ -151,7 +237,7 @@ def decided_ops(slices_path, directory):
     for line in Path(slices_path).read_text(encoding='utf-8').splitlines():
         name, _, ids = line.partition('\t')
         try:
-            delivery = json.loads(Path(directory, name.strip() + '.json').read_text(encoding='utf-8'))
+            delivery = read_packet(Path(directory, name.strip() + '.json'))
         except (OSError, ValueError):
             continue
         rows.append({'finding': ids.strip(), 'ops': delivery.get('ops') or []})
@@ -178,7 +264,7 @@ def write_reconcile_prompt(base_path, slices_path, directory, advisors_path, out
 def late_ops_of(model, path, applied):
     """(typed ops, notes) from the reconciler's packet: every op that clashes with an applied op, or is unusable, is dropped."""
     try:
-        delivery = json.loads(Path(path).read_text(encoding='utf-8'))
+        delivery = read_packet(path)
     except (OSError, ValueError):
         return [], ['the reconciler delivered nothing usable']
     kept, notes = [], []
@@ -327,7 +413,7 @@ def read_answers(directory, groups):
     answers = {}
     for answer in sorted(Path(directory).glob('resolutions-*.json')):
         try:
-            for row in base.read_json(answer).get('resolutions') or []:
+            for row in read_packet(answer).get('resolutions') or []:
                 if isinstance(row, dict) and isinstance(row.get('group'), str):
                     answers[row['group']] = row
         except Conflict:
@@ -362,7 +448,7 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
     except ValueError:
         base_paths = ''
     for name, ids in owners:
-        delivery = base.read_json(Path(directory) / ('%s.json' % name))
+        delivery = read_packet(Path(directory) / ('%s.json' % name))
         by_finding = {}
         for row in delivery.get('dispositions') or []:
             if isinstance(row, dict) and row.get('finding') in ids and row['finding'] not in by_finding:
@@ -416,7 +502,7 @@ def merge(plan_path, slices_path, directory, output, resolutions=None):
         if resolutions is None:
             Path(directory, 'conflicts.json').write_text(json.dumps(groups, indent=2, default=str), encoding='utf-8')
             plan_changes = [dict(row, writer=name) for name, ids in owners
-                            for row in base.read_json(Path(directory) / ('%s.json' % name)).get('dispositions') or []
+                            for row in read_packet(Path(directory) / ('%s.json' % name)).get('dispositions') or []
                             if isinstance(row, dict) and row.get('finding') in ids]
             Path(directory, 'prompts').mkdir(exist_ok=True)
             for group in groups:
@@ -532,13 +618,186 @@ def check_resolutions(plan_path, directory):
     return bad
 
 
+def implementation_steps(model):
+    steps = []
+    for section in model['sections']:
+        for block in section['blocks']:
+            if block['kind'] == 'steps':
+                steps.extend(block['items'])
+            elif block['kind'] == 'list' and re.search(r'implementation order', section['heading'], re.I):
+                for item in block['items']:
+                    match = re.search(r'Owns:\s*([^\n]+)', item['text'])
+                    if item.get('number') and match:
+                        steps.append(dict(item, owns=re.findall(r'`([^`]+)`', match[1]), _inline=True))
+    return steps
+
+
+def ownership_edit(step, paths):
+    if step.get('_inline'):
+        text = re.sub(r'(Owns:\s*)[^\n]+', lambda m: m[1] + ', '.join('`%s`' % p for p in paths), step['text'], count=1)
+        return {'op': 'set_text', 'id': step['id'], 'text': text}
+    return {'op': 'set_step', 'id': step['id'], 'fields': {'owns': ', '.join(paths)}}
+
+
+def ownership_ops(plan, model, gaps):
+    """Only explicit accepted assignments or a uniquely owned source/test pair are automatic."""
+    steps = implementation_steps(model)
+    additions = {}
+    unresolved = []
+    for path in gaps:
+        named = set()
+        for disposition in plan.get('dispositions') or []:
+            if disposition.get('disposition') not in ('Accepted', 'Partially accepted'):
+                continue
+            change = disposition.get('plan_change') or ''
+            if not re.search(r'(?<![\w./-])' + re.escape(path) + r'(?![\w./-])', change):
+                continue
+            named.update(int(n) for n in re.findall(r'\bstep\s+(\d+)\b', change, re.I))
+        candidates = [step for step in steps if step['number'] in named]
+        if not named:
+            # A test basename must pair with exactly one source path and one owner.
+            test = re.fullmatch(r'(.+)\.(?:test|spec)\.(\w+)', Path(path).name)
+            pairs = [(step, owned) for step in steps for owned in step['owns']
+                     if test and Path(owned).name == test[1] + '.' + test[2]
+                     and not any(p in ('tests', 'test', '__tests__') for p in Path(owned).parts)]
+            candidates = [pairs[0][0]] if len(pairs) == 1 else []
+        if len(candidates) != 1 or len(named) > 1:
+            unresolved.append(path)
+            continue
+        step = candidates[0]
+        additions.setdefault(step['id'], list(step['owns'])).append(path)
+    return [ownership_edit(next(s for s in steps if s['id'] == sid), paths)
+            for sid, paths in additions.items()], unresolved
+
+
+def repair_plan(plan, model, operations):
+    typed = [pm.typed_op(model, operation) for operation in operations]
+    revised = pm.apply_ops(model, typed)
+    result = dict(plan, narrative=apply_patch(plan['narrative'], to_patch(model, revised)))
+    # Stale embedded model records must never shadow repaired text.
+    result.pop('sections', None)
+    return result, revised
+
+
+def prepare_structure_repair(plan_path, project, directory, problem):
+    from plan_ownership_gap import unowned_protected_paths
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    plan = base.read_json(plan_path)
+    model = plan_model_of(plan, plan_path)
+    name = Path(plan_path).stem + '.md'
+    protected = (plan.get('protected_verification_paths') or '').splitlines()
+    gaps = unowned_protected_paths(Path(project) / '.uncle/docs' / name, project, protected)
+    operations, unresolved = ownership_ops(plan, model, gaps)
+    if operations:
+        plan, model = repair_plan(plan, model, operations)
+    (directory / 'automatic-ops.json').write_text(json.dumps(operations, indent=2) + '\n')
+    (directory / 'base.json').write_text(json.dumps(plan, indent=2) + '\n')
+    (directory / 'model.json').write_text(json.dumps(model) + '\n')
+    ownership = bool(gaps) or 'owning implementation step' in problem
+    if ownership and not unresolved:
+        (directory / 'repaired.json').write_text(json.dumps(plan, indent=2) + '\n')
+        return 0
+    # Include step ids and their current ownership, plus only relevant sections for
+    # other structural errors. The full plan never becomes a requested output.
+    sections = [section for section in model['sections'] if any(b['kind'] == 'steps' for b in section['blocks']) or re.search(r'implementation order', section['heading'], re.I)
+                or (not ownership and re.search(r'verif|protect|test', section['heading'], re.I))]
+    scope = dict(model, sections=sections)
+    (directory / 'scope.json').write_text(json.dumps({'ids': list(pm.index(scope)), 'gaps': unresolved,
+                                                    'ownership': ownership, 'problem': problem}) + '\n')
+    prompt = ('Repair only the structural defect below using edit ops. Do not read files, run commands or investigate. '
+              'Never return the complete plan or a narrative. All current step ownership and affected sections follow. '
+              'Return one JSON packet: ' + EXAMPLE % (EDIT_OPS_KIND, '') + '\n'
+              'Write dispositions: []; existing dispositions are retained. For an ownership gap use only set_step '
+              'owns edits (set_text for an inline Owns list item) that add the missing paths; do not remove protected paths or existing ownership. '
+              'For other structural defects change only the supplied ids, commands_replace, or protected_verification_paths.\n\n'
+              + OPS_RULES + '\n\nDefect: ' + problem + '\nUnowned paths: ' + json.dumps(unresolved) +
+              '\nCurrent sections and steps:\n' + json.dumps(scope, ensure_ascii=False) +
+              '\nVerification commands:\n' + plan.get('verification_commands', '') +
+              '\nProtected paths:\n' + plan.get('protected_verification_paths', ''))
+    (directory / 'prompt.md').write_text(prompt, encoding='utf-8')
+    return 3
+
+
+def apply_structure_repair(directory, project):
+    from plan_ownership_gap import unowned_protected_paths
+    import artifact_json
+    import tempfile
+    directory = Path(directory)
+    plan = base.read_json(directory / 'base.json')
+    model = base.read_json(directory / 'model.json')
+    scope = base.read_json(directory / 'scope.json')
+    delivery = first_packet((directory / 'packet.json').read_text())
+    from http_agent import conforms
+    from worker_schemas import edit_ops_packet
+    schema = edit_ops_packet()
+    schema['properties']['protected_verification_paths'] = {'type': 'string'}
+    conforms(delivery, schema)
+    if delivery.get('dispositions'):
+        raise Conflict('structural repair must preserve existing dispositions')
+    operations = delivery.get('ops') or []
+    for operation in operations:
+        target = operation.get('id') or operation.get('target')
+        if target not in scope['ids']:
+            raise Conflict('structural repair names an id outside its scope')
+        if scope['ownership']:
+            step = next((s for s in implementation_steps(model) if s['id'] == target), None)
+            if step is None:
+                raise Conflict('ownership repair must name an implementation step')
+            if operation.get('op') == 'set_step' and set(operation.get('fields', {})) == {'owns'}:
+                after = pm.typed_op(model, operation)['owns']
+            elif operation.get('op') == 'set_text' and step.get('_inline'):
+                match = re.search(r'Owns:\s*([^\n]+)', operation.get('text', ''))
+                after = re.findall(r'`([^`]+)`', match[1]) if match else []
+            else:
+                raise Conflict('ownership repair may only add owns paths')
+            if (not set(step['owns']) <= set(after) or not (set(after) - set(step['owns'])) <= set(scope['gaps'])
+                    or operation != ownership_edit(step, after)):
+                raise Conflict('ownership repair changed unrelated paths')
+    result, _ = repair_plan(plan, model, operations)
+    if scope['ownership'] and (delivery.get('commands_replace') or 'protected_verification_paths' in delivery):
+        raise Conflict('ownership repair changed the verification contract')
+    commands = plan.get('verification_commands', '')
+    for edit in delivery.get('commands_replace') or []:
+        old, new = edit['old'], edit['new']
+        if old == '' and commands == '':
+            commands = new
+        elif not old or commands.count(old) != 1:
+            raise Conflict('structural command replacement is not unique')
+        else:
+            commands = commands.replace(old, new, 1)
+    if plan['kind'] == 'plan':
+        result['verification_commands'] = commands
+        result['protected_verification_paths'] = delivery.get('protected_verification_paths', plan.get('protected_verification_paths', ''))
+        rendered = artifact_json.render_plan(result, protected=True)
+    else:
+        rendered = artifact_json.render_change_plan(result, require_dispositions=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        view = Path(tmp) / 'PLAN.md'
+        view.write_text(rendered)
+        if unowned_protected_paths(view, project, (result.get('protected_verification_paths') or '').splitlines()):
+            raise Conflict('structural repair left unowned protected paths')
+    (directory / 'repaired.json').write_text(json.dumps(result, indent=2) + '\n')
+
+
 def main(argv):
     try:
         command, rest = argv[0], argv[1:]
-        if command in ('slices', 'resplit'):
+        if command == 'slices' and len(rest) == 1:
+            for name, ids in slices(base.finding_ids(rest[0])):
+                print('%s\t%s' % (name, ','.join(ids)))
+        elif command == 'resplit':
             return base.main(argv)
-        if command == 'prompt' and len(rest) in (3, 4):
+        elif command == 'budget' and len(rest) == 1:
+            print('%s %s' % writer_budget([i for i in rest[0].split(',') if i]))
+        elif command == 'capture' and len(rest) == 1:
+            capture_packet(rest[0])
+        elif command == 'prompt' and len(rest) in (3, 4):
             write_prompt(rest[0], [i for i in rest[1].split(',') if i], rest[2], owns_fields=len(rest) == 4)
+        elif command == 'repair-prepare' and len(rest) == 4:
+            return prepare_structure_repair(*rest)
+        elif command == 'repair-apply' and len(rest) == 2:
+            apply_structure_repair(*rest)
         elif command == 'reconcile' and len(rest) == 5:
             write_reconcile_prompt(*rest)
         elif command == 'check' and len(rest) == 2:

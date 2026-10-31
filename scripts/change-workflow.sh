@@ -1931,7 +1931,7 @@ run_claude() {
 
     local model="$3"
     local effort="${4:-}"
-    local max_turns="${5:-80}"
+    local max_turns="${UNCLE_WORKER_MAX_TURNS:-${5:-80}}"
     local budget="${6:-}"
     local cmd
     local UNCLE_RESOLVED_RUNNER
@@ -2170,7 +2170,7 @@ STRUCTURED_OUTPUT_CONTRACT
             # model choice, a turn count is not a decision an operator needs
             # to make; double it once, the same bounded-retry shape
             # self_hosted.py already uses for an output-token ceiling.
-            if [[ -z "$turns_retried" ]] && grep -qiE 'maximum number of turns|max.?turns' "$log"; then
+            if [[ -z "${UNCLE_WORKER_MAX_TURNS:-}" && -z "$turns_retried" ]] && grep -qiE 'maximum number of turns|max.?turns' "$log"; then
                 turns_retried=1
                 local larger_turns=$((max_turns * 2))
                 [[ "$larger_turns" -le 200 ]] || larger_turns=200
@@ -2226,7 +2226,7 @@ STRUCTURED_OUTPUT_CONTRACT
             # not a decision an operator needs to make; double it once, the
             # same bounded-retry shape self_hosted.py already uses for an
             # output-token ceiling, before ever treating this as a real stop.
-            if [[ -z "$turns_retried" ]] && printf '%s' "$error_detail$subtype" | grep -qiE 'maximum number of turns|max.?turns'; then
+            if [[ -z "${UNCLE_WORKER_MAX_TURNS:-}" && -z "$turns_retried" ]] && printf '%s' "$error_detail$subtype" | grep -qiE 'maximum number of turns|max.?turns'; then
                 turns_retried=1
                 local larger_turns=$((max_turns * 2))
                 [[ "$larger_turns" -le 200 ]] || larger_turns=200
@@ -2247,7 +2247,7 @@ STRUCTURED_OUTPUT_CONTRACT
 
         if [[ "${#schema_args[@]}" -gt 0 ]]; then
             if ! python3 -B "$ROOT/scripts/lib/structured_output.py" extract "$log" "$UNCLE_STRUCTURED_OUTPUT_PATH"; then
-                if [[ -z "$artifact_retried" ]]; then
+                if [[ -z "${UNCLE_WORKER_MAX_TURNS:-}" && -z "$artifact_retried" ]]; then
                     artifact_retried=1
                     echo "Stage $log_name returned no schema-checked object; retrying once."
                     continue
@@ -2599,10 +2599,23 @@ updated_change_plan_launch_writer() {
         schema_file="$directory/schemas/$name.json"
         python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/CHANGE_PLAN.json" "$schema_file" $owner || return 1
     fi
+    local writer_turns answer_tokens
+    read -r writer_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" budget "$ids")
+    [[ -n "$writer_turns" && -n "$answer_tokens" ]] || return 1
     rm -f "$directory/$name.json"
     ( [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
-      UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-        run_claude "$directory/prompts/$name.md" "updated-change-plan-worker-edits-$name" "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN" ) \
+      export UNCLE_WORKER_MAX_TURNS="$writer_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
+      local writer_status=0
+      ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+        run_claude "$directory/prompts/$name.md" "updated-change-plan-worker-edits-$name" "$MODEL_UPDATED_PLAN" "$EFFORT_UPDATED_PLAN" 60 "$BUDGET_UPDATED_PLAN" ) || writer_status=$?
+      if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then
+          if [[ ! -s "$directory/$name.json" ]]; then
+              python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-change-plan-worker-edits-$name.jsonl" "$directory/$name.json" 2>/dev/null || true
+          fi
+          python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" capture "$directory/$name.json" || exit "$((writer_status == 0 ? 1 : writer_status))"
+      else
+          [[ "$writer_status" == 0 ]] || exit "$writer_status"
+      fi ) \
         > "$LOG_DIR/updated-change-plan-worker-edits-$name.log" 2>&1 &
 }
 
@@ -3658,6 +3671,16 @@ while true; do
             ;;
 
         WAIT_UPDATED_PLAN_APPROVAL)
+            ownership_gaps="$(python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" \
+                .uncle/docs/CHANGE_PLAN.md "$PWD" "$STATE_DIR" 2>/dev/null || true)"
+            if [[ -n "$ownership_gaps" ]]; then
+                [[ ! -e "$STATE_DIR/updated-plan-structure-retried" ]] || exit 1
+                touch "$STATE_DIR/updated-plan-structure-retried"
+                . "$ROOT/scripts/lib/updated-plan-repair.sh"
+                run_updated_plan_structure_repair "$STATE_DIR/documents/CHANGE_PLAN.json" \
+                    'a protected verification path with no owning implementation step' updated-change-plan || exit 1
+                continue
+            fi
             plan_status=0
             plan_assess || plan_status=$?
             case "$plan_status" in 0) ;; 10) continue ;; *) exit 1 ;; esac

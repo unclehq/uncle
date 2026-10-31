@@ -209,7 +209,7 @@ def edit_ops_packet(ids=None, owner=False):
         'ops': {'type': 'array', 'maxItems': 120, 'items': _op(ids)},
         'commands_replace': _commands(),
     }
-    if owner:
+    if owner or os.environ.get('UNCLE_UPDATED_PLAN_STRUCTURE_REPAIR') == '1':
         properties['protected_verification_paths'] = _text(4000)
     return envelope(EDIT_OPS_KIND, properties, ['dispositions', 'ops'] + (['protected_verification_paths'] if owner else []))
 

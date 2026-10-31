@@ -710,16 +710,16 @@ plan_structure_feedback() {
             # one-retry below could send the plan back (runs 11 and 12).
             gaps="$(python3 -B "$ROOT/scripts/lib/plan_ownership_gap.py" "$plan" "$PWD" "${STATE_DIR:-.uncle/workflow}" 2>/dev/null | sed 's/^/- `/; s/$/`/' || true)"
             printf 'These Protected verification paths do not exist yet and no implementation step names them in its `Owns:`:\n\n%s\n\n' "$gaps"
-            printf 'Fix it one of two ways: add each path to the `Owns:` of the step that creates it (a reconcile step'"'"'s `Owns: *` does not count), or, if nothing will create a path, remove it from Protected verification paths. Only list a path as protected when it already exists or a step explicitly owns it. Return the complete corrected plan.\n'
+            printf 'Fix it one of two ways: add each path to the `Owns:` of the step that creates it (a reconcile step'"'"'s `Owns: *` does not count), or, if nothing will create a path, remove it from Protected verification paths. Only list a path as protected when it already exists or a step explicitly owns it. Return only edit ops for these paths and steps; never the complete plan.\n'
             ;;
         'verification commands that run files under .uncle/')
-            printf '`.uncle/config` is uncle'"'"'s own configuration file and `.uncle/` is driver state, so nothing can be created under `.uncle/config/` or `.uncle/tests/`. Put the test runner config and the tests in the project tree (for example `playwright.config.js` and `tests/` at the project root), name them in the `Owns:` of the step that creates them, list them under Protected verification paths, and point the Verification commands at those paths. Return the complete corrected plan.\n' ;;
+            printf '`.uncle/config` is uncle'"'"'s own configuration file and `.uncle/` is driver state, so nothing can be created under `.uncle/config/` or `.uncle/tests/`. Put the test runner config and the tests in the project tree (for example `playwright.config.js` and `tests/` at the project root), name them in the `Owns:` of the step that creates them, list them under Protected verification paths, and point the Verification commands at those paths. Return only edit ops for these paths and steps; never the complete plan.\n' ;;
         'no Verification commands block')
             printf 'The plan needs `## Verification commands` with one fenced block of shell commands, one per line, and nothing else in it.\n' ;;
         'no Protected verification paths block')
             printf 'The plan needs a heading with the words "protected" and "paths", then one fenced block of repository-relative paths, one per line.\n' ;;
         *)
-            printf 'Correct that and return the delivery again in the same shape: dispositions and a patch against the base plan, not the whole plan.\n' ;;
+            printf 'Correct that and return the delivery again in the same shape: edit ops against the current plan, not the whole plan.\n' ;;
     esac
 }
 
@@ -1752,7 +1752,7 @@ run_claude() {
     cmd="$(stage_agent_cmd "$runner_stage")" || return 1
     model="$(stage_model "$log_name")"
     effort="$(stage_effort "$log_name")"
-    turns="$(stage_turns "$log_name")"
+    turns="${UNCLE_WORKER_MAX_TURNS:-$(stage_turns "$log_name")}"
     local turns_retried=""
     local artifact_retried=""
     local artifact_error=""
@@ -1938,7 +1938,7 @@ STRUCTURED_OUTPUT_CONTRACT
             # count is not a decision an operator needs to make; double it
             # once, unattended or not, the same bounded-retry shape
             # self_hosted.py already uses for an output-token ceiling.
-            if [[ -z "$turns_retried" ]] && grep -qiE 'maximum number of turns|max.?turns' "$log"; then
+            if [[ -z "${UNCLE_WORKER_MAX_TURNS:-}" && -z "$turns_retried" ]] && grep -qiE 'maximum number of turns|max.?turns' "$log"; then
                 turns_retried=1
                 local larger_turns=$((turns * 2))
                 [[ "$larger_turns" -le 200 ]] || larger_turns=200
@@ -1955,7 +1955,7 @@ STRUCTURED_OUTPUT_CONTRACT
 
         if [[ "${#schema_args[@]}" -gt 0 ]]; then
             if ! python3 -B "$ROOT/scripts/lib/structured_output.py" extract "$LOG_DIR/${log_name}.jsonl" "$UNCLE_STRUCTURED_OUTPUT_PATH"; then
-                if [[ -z "$artifact_retried" ]]; then
+                if [[ -z "${UNCLE_WORKER_MAX_TURNS:-}" && -z "$artifact_retried" ]]; then
                     artifact_retried=1
                     echo "Stage $log_name returned no schema-checked object; retrying once."
                     continue
@@ -2545,10 +2545,23 @@ updated_plan_launch_writer() {
         schema_file="$directory/schemas/$name.json"
         python3 -B "$ROOT/scripts/lib/worker_schemas.py" "$schema_command" "$STATE_DIR/documents/PROJECT_PLAN.json" "$schema_file" $owner || return 1
     fi
+    local writer_turns answer_tokens
+    read -r writer_turns answer_tokens < <(python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" budget "$ids")
+    [[ -n "$writer_turns" && -n "$answer_tokens" ]] || return 1
     rm -f "$directory/$name.json"
     ( [[ -z "$schema_file" ]] || export UNCLE_OUTPUT_SCHEMA_FILE="$schema_file" UNCLE_STRUCTURED_OUTPUT_PATH="$directory/$name.json"
-      UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
-        run_claude "$directory/prompts/$name.md" "updated-plan-worker-edits-$name" ) \
+      export UNCLE_WORKER_MAX_TURNS="$writer_turns" UNCLE_UPDATED_PLAN_ANSWER_TOKENS="$answer_tokens"
+      local writer_status=0
+      ( UNCLE_WORKER_PACKET_PATH="$directory/$name.json" SESSION_REUSE=0 UNCLE_RUNNER_REUSE=0 PROGRESS_TOTAL=0 \
+        run_claude "$directory/prompts/$name.md" "updated-plan-worker-edits-$name" ) || writer_status=$?
+      if [[ "${WORKFLOW_UPDATED_PLAN_OPS:-1}" == 1 ]]; then
+          if [[ ! -s "$directory/$name.json" ]]; then
+              python3 -B "$ROOT/scripts/lib/structured_output.py" recover "$LOG_DIR/updated-plan-worker-edits-$name.jsonl" "$directory/$name.json" 2>/dev/null || true
+          fi
+          python3 -B "$ROOT/scripts/lib/updated_plan_ops.py" capture "$directory/$name.json" || exit "$((writer_status == 0 ? 1 : writer_status))"
+      else
+          [[ "$writer_status" == 0 ]] || exit "$writer_status"
+      fi ) \
         > "$LOG_DIR/updated-plan-worker-edits-$name.log" 2>&1 &
 }
 
@@ -2969,7 +2982,7 @@ PY
     # response (rather than the sum), without the 20-way request burst of a
     # one-finding fan-out.
     threshold="${WORKFLOW_UPDATED_PLAN_PARALLEL_THRESHOLD:-5}"
-    slice="${WORKFLOW_UPDATED_PLAN_PARALLEL_SLICE:-2}"
+    slice="$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import updated_plan_ops as o; print(o.option("group-size", 2))' "$ROOT/scripts/lib")"
     if [[ "$count" =~ ^[0-9]+$ && "$threshold" =~ ^[0-9]+$ && "$slice" =~ ^[0-9]+$ ]] \
         && (( count >= threshold && slice > 0 && jobs != 1 )); then
         ensure_project_plan_json || return 1
@@ -4130,6 +4143,13 @@ run_stage() {
             python3 "$ROOT/scripts/lib/adversarial-context.py" --render-json . .uncle/docs/ADVERSARIAL_REVIEW.md || exit 1
             ;;
         UPDATED_PLAN)
+            if [[ -s "$STATE_DIR/updated-plan-structure-feedback.md" ]]; then
+                . "$ROOT/scripts/lib/updated-plan-repair.sh"
+                run_updated_plan_structure_repair "$STATE_DIR/documents/UPDATED_PROJECT_PLAN.json" \
+                    "$(cat "$STATE_DIR/updated-plan-structure-feedback.md")" updated-plan || return 1
+                rm -f "$STATE_DIR/updated-plan-structure-feedback.md"
+                return 0
+            fi
             # A review with findings falls through to the normal collated
             # worker panel; a clean review needs no worker calls at all.
             if run_updated_plan_fast_path; then
@@ -4839,7 +4859,9 @@ run_gated_stage() {
     local gate_file="$2"
     local artifact="$3"
 
-    adopt_speculation "$stage" "$gate_file" "$artifact" && return 0
+    if [[ "$stage" != UPDATED_PLAN || ! -s "$STATE_DIR/updated-plan-structure-feedback.md" ]]; then
+        adopt_speculation "$stage" "$gate_file" "$artifact" && return 0
+    fi
     run_stage "$stage"
 }
 

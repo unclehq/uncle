@@ -140,6 +140,8 @@ def config_stage(stage, values):
         return 'final-audit'
     if stage in ('project-plan-investigate', 'project-plan-stage-duties') or stage.startswith('project-plan-section-'):
         return 'project-plan'
+    if stage == 'change-plan-stage-duties':
+        return 'change-plan'     # the change-request counterpart resolves the planner's own profile
     if stage in ('requirements', 'requirements-investigate'):
         # New-app requirements deliberately inherit the project-plan picker.
         # The driver already resolves runner/model/effort that way; the

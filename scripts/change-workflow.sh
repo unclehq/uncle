@@ -423,7 +423,7 @@ change_pr_extras_print() {
 . "$ROOT/scripts/lib/stage-config.sh"
 . "$ROOT/scripts/lib/parallel-implement.sh"
 . "$ROOT/scripts/lib/module-interfaces-stage.sh"
-. "$ROOT/scripts/lib/early-baseline.sh"
+. "$ROOT/scripts/lib/change-plan-duties-stage.sh"
 . "$ROOT/scripts/lib/triage.sh"
 
 . "$ROOT/scripts/lib/implementation-gates.sh"
@@ -3480,6 +3480,13 @@ while true; do
 
             run_planning_stage || exit 1
 
+            set_state CHANGE_PLAN_DUTIES
+            ;;
+
+        CHANGE_PLAN_DUTIES)
+            # One consistency check over the finished plan before anyone approves it; its own timed stage and fail-open
+            # (scripts/lib/change-plan-duties-stage.sh).
+            change_plan_duties_stage || true
             set_state WAIT_ANALYSIS_APPROVAL
             ;;
 

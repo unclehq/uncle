@@ -4,7 +4,6 @@ import copy
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -218,6 +217,32 @@ class EditGrammarTests(unittest.TestCase):
                 self.assertEqual(ws.main([command, str(self.plan), str(output)]), 0)
                 conforms(self.packet(command, operation), json.loads(output.read_text()))
 
+    def test_every_plan_row_kind_uses_its_own_field_names_and_types(self):
+        for kind, fields in pm.ROW_KINDS.items():
+            row = {field: [] if listed else 'value' for field, _, listed, _ in fields}
+            row['id'] = 'row-1'
+            model = {'title': 'Plan', 'intro': '', 'sections': [
+                {'id': 's1', 'heading': 'Rows', 'blocks': [
+                    {'id': 's1.1', 'kind': 'rows', 'row_kind': kind, 'rows': [row]}]}]}
+            for command, factory in (('edit-ops', ws.edit_ops_packet), ('resolve-ops', ws.resolution_ops_packet)):
+                schema = factory(ids=['row-1', 's1.1'], model=model)
+                for field, _, listed, _ in fields:
+                    if field == 'id':
+                        continue
+                    with self.subTest(kind=kind, field=field, command=command):
+                        operation = {'op': 'set_fields', 'id': 'row-1',
+                                     'fields': {field: ['updated'] if listed else 'updated'}}
+                        conforms(self.packet(command, operation), schema)
+                        pm.typed_op(model, operation)
+                        operation['fields'][field] = [17] if listed else ['invalid scalar']
+                        with self.assertRaises(ValueError):
+                            conforms(self.packet(command, operation), schema)
+                for field in ('id', 'made_up_field'):
+                    with self.subTest(kind=kind, forbidden=field, command=command):
+                        with self.assertRaises(ValueError):
+                            conforms(self.packet(command, {'op': 'set_fields', 'id': 'row-1',
+                                                           'fields': {field: 'renamed'}}), schema)
+
 
 class LensJudgmentTests(unittest.TestCase):
     def setUp(self):
@@ -334,6 +359,21 @@ class LensJudgmentTests(unittest.TestCase):
             self.assertEqual(len(findings), 2)
             self.assertIn('validation', findings[0]['summary'])
             self.assertIn('concurrent', findings[1]['summary'])
+
+    def test_later_stronger_duplicate_retains_actionable_evidence(self):
+        for lens in adversarial_slices.AREAS:
+            for number in range(1, 5):
+                self.packet(lens, number, [{
+                    'id': 'AR-001', 'summary': lens + ' missing boundary validation for B-1',
+                    'evidence': ('B-1: negative quantity -1 reaches storage and produces a negative total.'
+                                 if number == 4 else 'B-1: validation gap.'),
+                    'severity': 'Critical' if number == 4 else 'Low'}])
+        adversarial_slices.merge(self.root, 4)
+        for lens in adversarial_slices.AREAS:
+            findings = json.loads((self.root / (lens + '.json')).read_text())['findings']
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0]['severity'], 'Critical')
+            self.assertIn('negative quantity -1 reaches storage', findings[0]['evidence'])
 
 
 if __name__ == '__main__':

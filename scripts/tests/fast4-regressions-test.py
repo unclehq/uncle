@@ -293,6 +293,100 @@ class ProgressDeadline(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 3)
 
 
+class ResolverExhaustion(unittest.TestCase):
+    def run_resolvers(self, change):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        state = root / '.uncle/workflow'
+        (state / 'logs').mkdir(parents=True)
+        (state / 'documents').mkdir()
+        (root / '.uncle/docs').mkdir()
+        plan = {'schema': 'uncle.artifact/v1', 'kind': 'change-plan' if change else 'plan',
+                'narrative': order.NARRATIVE, 'verification_commands': 'true',
+                'protected_verification_paths': 'tests/a.test.js'}
+        review = {'schema': 'uncle.artifact/v1', 'kind': 'adversarial-review',
+                  'findings': [{'id': 'AR-%d' % n} for n in range(1, 7)]}
+        workers = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-worker-packets', 'workers': [], 'findings': []}
+        (state / 'documents' / ('CHANGE_PLAN.json' if change else 'PROJECT_PLAN.json')).write_text(json.dumps(plan))
+        (state / 'documents/ADVERSARIAL_REVIEW.json').write_text(json.dumps(review))
+        (root / 'prompt.md').write_text(prompt.prompt(plan, review, workers, change=change))
+        stub = order.STUB.replace("if mode == 'resolver-transport' and group == 'G1' and not stage.endswith('-retry'):",
+                                 "if mode == 'resolver-transport' and group == 'G1':\n        print('resolver-attempt-%d' % (len(prior) + (2 if stage.endswith('-retry') else 1)), flush=True)")
+        (root / 'stub.py').write_text(stub)
+        prefix = 'updated_change_plan' if change else 'updated_plan'
+        names = [prefix + '_launch_writer', 'run_' + prefix + '_edit_writers']
+        if not change:
+            names.append('updated_plan_warm_prefix')
+        script = functions('change-workflow.sh' if change else 'stagegate.sh', names) + r'''
+UPDATED_PLAN_PROMPT="$PWD/prompt.md"
+MODEL_UPDATED_PLAN=m; EFFORT_UPDATED_PLAN=low; BUDGET_UPDATED_PLAN=
+UPDATED_PLAN_ADVISOR_PIDS=()
+stage_uses_self_hosted() { return 0; }
+stage_supports_structured_output() { return 1; }
+run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
+''' + 'run_' + prefix + '_edit_writers\n'
+        result = subprocess.run(['bash', '-c', script], cwd=root, env=environment(root,
+            SCHEMA_TEST_MODE='resolver-transport', WORKFLOW_UPDATED_PLAN_EDIT_SLICE='3',
+            WORKFLOW_SELF_HOSTED_GRANULARITY='small', WORKFLOW_PREFIX_WARM_SECONDS='0'),
+            capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        return state, result
+
+    def test_exhausted_resolvers_record_terminal_failure_and_keep_sibling(self):
+        for change in (False, True):
+            with self.subTest(change=change):
+                state, result = self.run_resolvers(change)
+                self.assertTrue((state / 'updated-plan-writers-exhausted').exists(), result.stdout + result.stderr)
+                self.assertIn('writer attempts exhausted', (state / 'stop-reason').read_text())
+                directory = state / ('updated-change-plan-edits' if change else 'updated-plan-edits')
+                self.assertTrue((directory / 'resolutions-G2.json').exists())
+                records = [json.loads(line) for path in state.glob('attempts-*-resolve-G2.jsonl')
+                           for line in path.read_text().splitlines()]
+                self.assertEqual(len(records), 1)
+
+    def test_resolver_retry_and_alternate_keep_separate_failure_evidence(self):
+        for change in (False, True):
+            with self.subTest(change=change):
+                state, result = self.run_resolvers(change)
+                text = '\n'.join(path.read_text() for path in (state / 'logs').glob('*resolve-G1*.log'))
+                for n in (1, 2, 3):
+                    self.assertIn('resolver-attempt-%d' % n, text, result.stdout + result.stderr)
+                for name in ('UPDATED_PLAN.log', 'UPDATED_PLAN.speculative.log'):
+                    self.assertIn('resolve-G1', (state / 'logs' / name).read_text())
+
+
+
+class WriterConcurrency(unittest.TestCase):
+    def test_both_drivers_cap_writers_below_provider_pool(self):
+        original_run = subprocess.run
+        for change in (False, True):
+            with self.subTest(change=change):
+                ended = {}
+                def run(*args, **kwargs):
+                    result = original_run(*args, **kwargs)
+                    if args and args[0] == ['bash', 'run.sh']:
+                        state = Path(kwargs['cwd']) / '.uncle/workflow'
+                        ended.update({p.name.removeprefix('ended-'): int(p.read_text()) for p in state.glob('ended-*')})
+                    return result
+                stub = order.STUB + "\ntime.sleep(1)\n(root / ('ended-' + stage)).write_text(str(time.monotonic_ns()))\n"
+                with patch.object(order, 'STUB', stub), patch.object(order.subprocess, 'run', side_effect=run):
+                    rows = order.AttemptOrder().run_driver(change=change, overrides={
+                        'WORKFLOW_SELF_HOSTED_MAX_CONCURRENCY': '24',
+                        'WORKFLOW_SELF_HOSTED_WRITER_JOBS': '2', 'WORKFLOW_UPDATED_PLAN_EDIT_SLICE': '1'})
+                writers = [row for row in rows if '-edits-' in row['stage']]
+                self.assertEqual(len(writers), 6)
+                events = sorted([(row['started'], 1) for row in writers] +
+                                [(ended[row['stage']], -1) for row in writers])
+                active = peak = 0
+                for _, delta in events:
+                    active += delta
+                    peak = max(active, peak)
+                self.assertEqual(active, 0)
+                self.assertLessEqual(peak, 2)
+
+
+
 class AttemptEvidence(unittest.TestCase):
     def run_writers(self, change=False):
         temporary = tempfile.TemporaryDirectory()

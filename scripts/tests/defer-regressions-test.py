@@ -63,12 +63,16 @@ if 'AR-022' in ids:
         ops = [{'op': 'set_fields', 'id': 'B-1', 'fields': {'failure': 'CONFLICT-022'}}]
 elif 'AR-023' in ids:
     ops = [{'op': 'set_fields', 'id': 'B-1', 'fields': {'failure': 'CONFLICT-023'}}]
-elif any(i in ids for i in ('AR-002', 'AR-003')):
+elif 'AR-001' not in ids and any(i in ids for i in ('AR-002', 'AR-003')):
     ops = []
 else:
     ops = [{'op': 'set_fields', 'id': 'B-2', 'fields': {'failure': 'SIBLING-APPLIED'}}]
 body = {'dispositions': [{'finding': i, 'disposition': 'Accepted', 'reason': 'apply', 'plan_change': 'row'} for i in ids],
         'ops': ops, 'protected_verification_paths': 'tests/a.test.js'}
+if os.environ.get('WORKFLOW_UPDATED_PLAN_OPS') == '0':
+    body.pop('ops')
+    body['patch'] = {'replace_text': [{'heading': '## Observable behaviors',
+        'old': '| B-2 | key | same | same | UB-2 |', 'new': '| B-2 | key | same | SIBLING-APPLIED | UB-2 |'}]} if 'AR-001' in ids else {}
 Path(os.environ['UNCLE_WORKER_PACKET_PATH']).write_text(json.dumps(body))
 '''
 
@@ -162,7 +166,7 @@ packet['ops'] = [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/cor
         rows = {r['finding']: r for r in canonical['dispositions']}
         self.assertEqual(rows['AR-001']['disposition'], 'Accepted')
         self.assertIn('SIBLING-APPLIED', markdown)
-        self.assertEqual(len(rows), 3 + len(deferred))
+        self.assertEqual(set(rows), {'AR-001', 'AR-002', 'AR-003'} | set(deferred))
         for finding in deferred:
             self.assertEqual(rows[finding]['disposition'], 'Deferred', rows)
             self.assertIn(cause.lower(), rows[finding]['reason'].lower())
@@ -203,6 +207,14 @@ packet['ops'] = [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/cor
                     root, result, calls, _ = self.run_driver(change=change, runner=runner)
                     self.assert_published(root, result, change)
                     self.assertEqual(sum('AR-022' in c['ids'] for c in calls), 3)
+
+    def test_text_patch_delivery_also_publishes_deferred_findings(self):
+        for change in (False, True):
+            with self.subTest(change=change):
+                root, result, calls, _ = self.run_driver(change=change,
+                    overrides={'WORKFLOW_UPDATED_PLAN_OPS': '0'})
+                self.assert_published(root, result, change)
+                self.assertEqual(sum('AR-022' in c['ids'] for c in calls), 3)
 
     def test_exhausted_resolvers_defer_only_the_conflicting_findings(self):
         for change in (False, True):
@@ -279,6 +291,15 @@ packet['ops'] = [{'op': 'set_step', 'id': 'step-2', 'fields': {'owns': ['src/cor
                     self.assertLess(elapsed, 12)
                     self.assertEqual(sum('AR-022' in c['ids'] for c in calls), 1)
                     self.assertFalse((root / '.uncle/workflow/late-child-write').exists())
+    def test_resplitting_a_timed_out_group_does_not_reset_finding_deadlines(self):
+        for change in (False, True):
+            with self.subTest(change=change):
+                root, result, calls, elapsed = self.run_driver(change=change, mode='slow', overrides={
+                    'WORKFLOW_UPDATED_PLAN_FINDING_SECONDS': '2', 'WORKFLOW_UPDATED_PLAN_EDIT_SLICE': '2'})
+                self.assert_published(root, result, change, cause='wall', deferred=('AR-003', 'AR-022'))
+                self.assertLess(elapsed, 12)
+                self.assertEqual(sum('AR-022' in c['ids'] for c in calls), 1)
+
 
 
 class PreflightStops(unittest.TestCase):

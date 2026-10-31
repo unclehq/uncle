@@ -9,10 +9,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 LENSES = ('requirements', 'regression', 'security', 'testability')
 KIND = 'adversarial-review-worker-packet'
+sys.path.insert(0, str(ROOT / 'scripts/lib'))
+import http_agent
+import self_hosted
 
 STUB = r'''
 import fcntl, json, os, pathlib, re, sys, time
@@ -219,6 +223,109 @@ class PanelTests(unittest.TestCase):
         self.assertEqual(len(calls), 12)
         self.assertEqual((state.parent / 'docs/ADVERSARIAL_REVIEW.md').read_text(),
                          '## Overall assessment\n\nNo findings.\n')
+
+
+class SchemaTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        env = patch.dict(os.environ, {'UNCLE_CONFIG': str(self.root / 'config'),
+                                     'UNCLE_PROJECT_ROOT': str(self.root)}, clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+        self.values = {'base_url': 'http://unused.invalid/v1', 'api_key': 'fixture', 'model': 'fixture'}
+        self.packet = {'schema': 'uncle.artifact/v1', 'kind': KIND, 'findings': []}
+        self.schema = self_hosted.REVIEWER_SCHEMAS[KIND]
+
+    def run_review(self):
+        return http_agent.run_agent(self.values, 'All review inputs are inline.', http_agent.Policy(self.root),
+                                    32768, turns=3, final_schema=self.schema,
+                                    final_name='adversarial_review_worker_packet')
+
+    def test_slice_starts_with_one_constrained_answer_and_no_tool_draft(self):
+        with patch.dict(os.environ, {'UNCLE_ADVERSARIAL_SLICE': '1'}), \
+                patch.object(http_agent, 'chat', side_effect=AssertionError('slice opened an unbounded tool loop')), \
+                patch.object(http_agent, 'constrained_completion',
+                             return_value=(json.dumps(self.packet), 'stop', {}, 'json_schema')) as constrained:
+            text, requests = self.run_review()
+        self.assertEqual(json.loads(text), self.packet)
+        self.assertEqual((requests, constrained.call_count), (1, 1))
+        self.assertEqual(constrained.call_args.kwargs.get('skip', ()), ())
+
+    def test_unsliced_review_keeps_existing_tool_path(self):
+        reply = {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(self.packet)},
+                              'finish_reason': 'stop'}]}
+        with patch.object(http_agent, 'chat', return_value=reply) as chat, \
+                patch.object(http_agent, 'constrained_completion') as constrained:
+            text, requests = self.run_review()
+        self.assertEqual(json.loads(text), self.packet)
+        self.assertEqual((requests, chat.call_count, constrained.call_count), (1, 1, 0))
+
+
+class MergeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / 'slices').mkdir()
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith(('WORKFLOW_', 'UNCLE_'))}
+        self.env['UNCLE_CONFIG'] = str(self.root / 'config')
+
+    def command(self, *args):
+        return subprocess.run([sys.executable, '-I', str(ROOT / 'scripts/lib/adversarial_slices.py'), *map(str, args)],
+                              env=self.env, capture_output=True, text=True, timeout=10)
+
+    def packet(self, lens, number, findings, kind=KIND):
+        path = self.root / 'slices' / f'{lens}-{number}.json'
+        path.write_text(json.dumps({'schema': 'uncle.artifact/v1', 'kind': kind, 'findings': findings}))
+        return path
+
+    def finding(self, summary, evidence='REQ-1', severity='Medium'):
+        return {'id': 'AR-001', 'summary': summary, 'evidence': evidence, 'severity': severity}
+
+    def test_dedupe_combines_evidence_and_keeps_strongest_severity(self):
+        for lens in LENSES:
+            self.packet(lens, 1, [self.finding('Missing input validation.', 'REQ-1', 'Low')])
+            self.packet(lens, 2, [self.finding('missing INPUT validation!', 'REQ-2', 'Critical')])
+            self.packet(lens, 3, [self.finding('Missing rollback.', 'STEP-2')])
+        result = self.command('merge', self.root, 3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for lens in LENSES:
+            findings = json.loads((self.root / (lens + '.json')).read_text())['findings']
+            self.assertEqual(len(findings), 2)
+            self.assertEqual([f['id'] for f in findings], ['AR-001', 'AR-002'])
+            self.assertEqual(findings[0]['severity'].lower(), 'critical')
+            self.assertIn('REQ-1', findings[0]['evidence'])
+            self.assertIn('REQ-2', findings[0]['evidence'])
+            self.assertEqual(findings[1]['summary'], 'Missing rollback.')
+
+    def test_different_observations_with_same_local_id_are_not_fused(self):
+        for lens in LENSES:
+            self.packet(lens, 1, [self.finding('Lost save.'), self.finding('Missing cancel.')])
+            self.packet(lens, 2, [])
+        result = self.command('merge', self.root, 2)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for lens in LENSES:
+            findings = json.loads((self.root / (lens + '.json')).read_text())['findings']
+            self.assertEqual([f['summary'] for f in findings], ['Lost save.', 'Missing cancel.'])
+            self.assertEqual(len({f['id'] for f in findings}), 2)
+
+    def test_wrong_kind_and_blank_finding_are_rejected(self):
+        for kind, finding in (('test-review-worker-packet', self.finding('A defect.')),
+                              (KIND, self.finding('   '))):
+            with self.subTest(kind=kind, finding=finding):
+                path = self.packet('requirements', 1, [finding], kind)
+                self.assertNotEqual(self.command('validate', path).returncode, 0)
+
+    def test_missing_last_slice_cannot_publish_partial_lenses(self):
+        for lens in LENSES:
+            self.packet(lens, 1, [])
+            if lens != 'testability':
+                self.packet(lens, 2, [])
+        result = self.command('merge', self.root, 2)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any((self.root / (lens + '.json')).exists() for lens in LENSES))
 
 
 if __name__ == '__main__':

@@ -28,6 +28,7 @@ match = re.fullmatch(r'adversarial-review-worker-(requirements|regression|securi
 assert match, name
 lens, number, retry = match.groups()
 number = int(number or 0)
+print(name, flush=True)
 with (root / 'calls').open('a') as stream:
     fcntl.flock(stream, fcntl.LOCK_EX)
     stream.write(json.dumps({'name': name, 'prompt': pathlib.Path(prompt).read_text(),
@@ -142,6 +143,14 @@ class PanelTests(unittest.TestCase):
         rows += ['## Overall assessment', '', 'Review findings require disposition.', '']
         self.assertEqual((state.parent / 'docs/ADVERSARIAL_REVIEW.md').read_text(), '\n'.join(rows))
 
+    def assert_lens_logs(self, state, count):
+        for lens in LENSES:
+            log = state / 'logs' / ('adversarial-review-worker-' + lens + '.log')
+            self.assertTrue(log.is_file(), 'missing historical lens log: ' + str(log))
+            content = log.read_text()
+            for number in range(1, count + 1):
+                self.assertIn(f'adversarial-review-worker-{lens}-slice-{number}', content)
+
     def test_claude_codex_default_packets_and_document_unchanged(self):
         for driver in ('stagegate', 'change-workflow'):
             for runner in ('claude', 'codex'):
@@ -161,6 +170,7 @@ class PanelTests(unittest.TestCase):
                 self.assertEqual(len(calls), 16)
                 self.assertTrue(all('-slice-' in c['name'] and c['marker'] == '1' for c in calls))
                 self.assert_document(state)
+                self.assert_lens_logs(state, 4)
 
     def test_slice_requests_are_concurrent(self):
         for driver in ('stagegate', 'change-workflow'):
@@ -232,6 +242,9 @@ class PanelTests(unittest.TestCase):
                 for artifact in ('ADVERSARIAL_REVIEW.json', 'ADVERSARIAL_REVIEW_WORKERS.json'):
                     self.assertFalse((state / 'documents' / artifact).exists())
                 self.assertFalse((state.parent / 'docs/ADVERSARIAL_REVIEW.md').exists())
+                self.assert_lens_logs(state, 3)
+                self.assertIn('regression-slice-2-retry',
+                              (state / 'logs/adversarial-review-worker-regression.log').read_text())
 
     def test_completion_order_cannot_change_ids(self):
         result, state, calls = self.run_panel(config='adversarial-review.slices 3\n', mode='reverse')

@@ -180,6 +180,55 @@ class PreflightSnapshotMetadata(unittest.TestCase):
                         preflight_readonly.main(['remove', str(staged)])
 
 
+class PreflightFallback(unittest.TestCase):
+    def test_fallback_publishes_only_validated_document_and_keeps_concurrent_edits(self):
+        text = ('# Preflight\n\n## Acceptance gate\n| ID | Required | Status | Evidence |\n'
+                '|---|---|---|---|\n| PF-1 | YES | PASS | Checked runtime |\n')
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+                'UNCLE_CONFIG': str(Path(temp) / 'config'), 'UNCLE_PROJECT_ROOT': temp,
+                'UNCLE_STATUS_STAGE': 'preflight-investigate'}, clear=True):
+            root = Path(temp).resolve()
+            (root / 'input').write_text('before implementation')
+            seen = []
+            def investigate(side, values, prompt, staged, **kwargs):
+                seen.append(staged)
+                self.assertFalse(staged.is_relative_to(root))
+                self.assertEqual((staged / 'input').read_text(), 'before implementation')
+                (staged / 'input').write_text('incidental scratch change')
+                (staged / 'unexpected').write_text('must not publish')
+                (root / 'input').write_text('concurrent implementation')
+                target = staged / '.uncle/workflow/preflight-investigation.md'
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text)
+                return 'diagnostic only', 1
+            with patch.object(self_hosted, 'run_http_agent', side_effect=investigate):
+                self.assertEqual(self_hosted.run_opencode('agent', {}, 'Probe.', root,
+                                 stage='preflight-investigate'), ('diagnostic only', 1))
+            self.assertEqual((root / 'input').read_text(), 'concurrent implementation')
+            self.assertEqual((root / '.uncle/workflow/preflight-investigation.md').read_text(), text)
+            self.assertFalse((root / 'unexpected').exists())
+            self.assertFalse((root / '.uncle/workflow/documents').exists())
+            self.assertTrue(all(not path.exists() for path in seen))
+
+    def test_invalid_fallback_never_replaces_previous_investigation(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+                'UNCLE_CONFIG': str(Path(temp) / 'config'), 'UNCLE_PROJECT_ROOT': temp,
+                'UNCLE_STATUS_STAGE': 'preflight-investigate'}, clear=True):
+            root = Path(temp)
+            target = root / '.uncle/workflow/preflight-investigation.md'
+            target.parent.mkdir(parents=True)
+            target.write_text('previous accepted document')
+            def investigate(side, values, prompt, staged, **kwargs):
+                candidate = staged / '.uncle/workflow/preflight-investigation.md'
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                candidate.write_text('# Incomplete')
+                return '', 1
+            with patch.object(self_hosted, 'run_http_agent', side_effect=investigate):
+                with self.assertRaises(ValueError):
+                    self_hosted.run_opencode('agent', {}, 'Probe.', root, stage='preflight-investigate')
+            self.assertEqual(target.read_text(), 'previous accepted document')
+
+
 class GenericFields(unittest.TestCase):
     def test_run22_wrong_fields_are_not_accepted_by_generic_packet_schemas(self):
         for factory in (worker_schemas.edit_ops_packet, worker_schemas.resolution_ops_packet):

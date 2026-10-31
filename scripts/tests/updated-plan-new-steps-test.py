@@ -40,8 +40,11 @@ class NewSteps(unittest.TestCase):
         (self.directory / 'slices.tsv').write_text('1\tAR-1\n2\tAR-2\n')
         self.packet('1', [])
         self.packet('2', [])
-        self.addCleanup(patch.stopall)
-        patch.dict(os.environ, {'WORKFLOW_UPDATED_PLAN_FAST_MERGE': '0', 'WORKFLOW_UPDATED_PLAN_DRIVER_CONTRACT': '0'}).start()
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('UNCLE_', 'WORKFLOW_'))}
+        env['UNCLE_CONFIG'] = str(self.directory / 'config')
+        environment = patch.dict(os.environ, env, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
 
     def packet(self, name, operations):
         value = {'schema': 'uncle.artifact/v1', 'kind': schemas.EDIT_OPS_KIND,
@@ -157,9 +160,10 @@ class NewSteps(unittest.TestCase):
         self.assertEqual(steps[6]['depends_on'], [6])
         self.assertEqual(steps[7]['depends_on'], [6])
 
-    def test_strict_schema_accepts_step_without_numbers_and_rejects_model_assigned_ids(self):
+    def test_schemas_accept_steps_without_numbers_and_reject_model_assigned_ids(self):
         packet = self.packet('1', [self.insert()])
-        for schema in (schemas.edit_ops_packet(model=self.model), schemas.resolution_ops_packet(model=self.model)):
+        for schema in (schemas.edit_ops_packet(model=self.model), schemas.resolution_ops_packet(model=self.model),
+                       schemas.edit_ops_packet(), schemas.resolution_ops_packet()):
             with self.subTest(kind=schema['properties']['kind']):
                 value = packet if 'ops' in schema['properties'] else {
                     'schema': 'uncle.artifact/v1', 'kind': schemas.RESOLUTION_OPS_KIND,
@@ -170,6 +174,15 @@ class NewSteps(unittest.TestCase):
                 operation['new'].update(id='step-4', number=4)
                 with self.assertRaises(ValueError):
                     conforms(invalid, schema)
+
+    def test_scoped_insertion_can_reference_an_uneditable_dependency(self):
+        scope = schemas.scoped_ids(self.model, ['step-3'])
+        schema = schemas.edit_ops_packet(scope, model=self.model)
+        packet = self.packet('1', [self.insert(depends=['step-6'])])
+        conforms(packet, schema)
+        packet['ops'] = [{'op': 'set_step', 'id': 'step-6', 'fields': {'text': 'outside scope'}}]
+        with self.assertRaises(ValueError):
+            conforms(packet, schema)
 
 
 if __name__ == '__main__':

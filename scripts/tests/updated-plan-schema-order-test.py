@@ -37,8 +37,10 @@ resolver = '-resolve-' in stage
 record = root / ('attempts-' + stage + '.jsonl')
 prior = [json.loads(line) for line in record.read_text().splitlines()] if record.exists() else []
 ops = (schema['properties']['resolutions']['items']['properties']['ops'] if resolver else schema['properties']['ops'])
+variants = ops['items'].get('anyOf', [ops['items']])
+strict = not any('enum' in variant.get('properties', {}).get('op', {}) for variant in variants)
 with record.open('a') as out:
-    out.write(json.dumps({'stage': stage, 'strict': 'anyOf' in ops['items'], 'prompt': text, 'started': time.monotonic_ns()}) + '\\n')
+    out.write(json.dumps({'stage': stage, 'strict': strict, 'prompt': text, 'started': time.monotonic_ns()}) + '\\n')
 if resolver:
     group = re.search(r'^## Group (G[0-9]+)', text, re.M).group(1)
     # Only G1 needs repair; G2 must survive untouched.
@@ -158,10 +160,11 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
 
     def test_hosted_runners_keep_scoped_schema(self):
         for change in (False, True):
-            with self.subTest(change=change):
-                rows = self.run_driver(change=change, runner='hosted')
-                self.assertEqual(len(rows), 2)
-                self.assertTrue(all(row['strict'] for row in rows))
+            for runner in ('hosted', 'file'):
+                with self.subTest(change=change, runner=runner):
+                    rows = self.run_driver(change=change, runner=runner)
+                    self.assertEqual(len(rows), 2)
+                    self.assertTrue(all(row['strict'] for row in rows))
 
     def test_config_always_and_env_override_use_existing_precedence(self):
         for change in (False, True):
@@ -171,6 +174,16 @@ run_claude() { python3 -I "$PWD/stub.py" "$1" "$2"; }
                 rows = self.run_driver(change=change, config='updated-plan.strict-schema always\n',
                                        overrides={'WORKFLOW_UPDATED_PLAN_STRICT_SCHEMA': 'retry'})
                 self.assertTrue(all(not row['strict'] for row in rows))
+
+    def test_change_stage_setting_overrides_family_and_env_overrides_config(self):
+        config = 'updated-plan.strict-schema always\nupdated-change-plan.strict-schema retry\n'
+        rows = self.run_driver(change=True, config=config)
+        self.assertTrue(all(not row['strict'] for row in rows))
+        rows = self.run_driver(change=True, config=config, overrides={'WORKFLOW_UPDATED_PLAN_STRICT_SCHEMA': 'always'})
+        self.assertTrue(all(row['strict'] for row in rows))
+        rows = self.run_driver(change=True, config=config, overrides={
+            'WORKFLOW_UPDATED_PLAN_STRICT_SCHEMA': 'always', 'WORKFLOW_UPDATED_CHANGE_PLAN_STRICT_SCHEMA': 'retry'})
+        self.assertTrue(all(not row['strict'] for row in rows))
 
 
 if __name__ == '__main__':

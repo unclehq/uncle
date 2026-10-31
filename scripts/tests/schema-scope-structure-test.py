@@ -87,17 +87,19 @@ class StructureScope(unittest.TestCase):
                          'a protected verification path with no owning implementation step'), 3)
         scope = json.loads((self.repair / 'scope.json').read_text())
         self.assertTrue({'step-1', 'step-2'} <= set(scope['ids']))
-        packet = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-edit-ops-packet',
-                  'dispositions': [], 'ops': [{'op': 'set_step', 'id': 'step-2',
-                  'fields': {'owns': './src/ui.js, ./tests/unknown.test.js'}}]}
-        (self.repair / 'packet.json').write_text(json.dumps(packet))
-        ops.apply_structure_repair(self.repair, self.root)
-        repaired = json.loads((self.repair / 'repaired.json').read_text())
-        self.view.write_text(artifact_json.render_plan(repaired, protected=True))
-        self.assertEqual(ownership.unowned_protected_paths(
-            self.view, self.root, ['tests/unknown.test.js']), [])
-        self.assertIn('`src/ui.js`', repaired['narrative'])
-        self.assertNotIn('./tests/unknown.test.js', repaired['narrative'])
+        for owns in ('./src/ui.js, ./tests/unknown.test.js', ['./src/ui.js', './tests/unknown.test.js']):
+            with self.subTest(owns=owns):
+                packet = {'schema': 'uncle.artifact/v1', 'kind': 'updated-plan-edit-ops-packet',
+                          'dispositions': [], 'ops': [{'op': 'set_step', 'id': 'step-2',
+                          'fields': {'owns': owns}}]}
+                (self.repair / 'packet.json').write_text(json.dumps(packet))
+                ops.apply_structure_repair(self.repair, self.root)
+                repaired = json.loads((self.repair / 'repaired.json').read_text())
+                self.view.write_text(artifact_json.render_plan(repaired, protected=True))
+                self.assertEqual(ownership.unowned_protected_paths(
+                    self.view, self.root, ['tests/unknown.test.js']), [])
+                self.assertIn('`src/ui.js`', repaired['narrative'])
+                self.assertNotIn('./tests/unknown.test.js', repaired['narrative'])
 
     def test_out_of_scope_delivery_gets_one_retry_with_the_reason(self):
         self.write_plan(self.typed_plan())
